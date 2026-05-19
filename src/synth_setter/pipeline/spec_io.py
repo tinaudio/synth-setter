@@ -27,12 +27,14 @@ import tempfile
 from pathlib import Path
 
 from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME
-from synth_setter.pipeline.r2_io import upload_to_uri
+from synth_setter.pipeline.file_uri import local_path_from_arg
+from synth_setter.pipeline.r2_io import downloaded_to_tempfile, is_r2_uri, upload_to_uri
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 
 __all__ = [
     "find_input_specs",
     "local_spec_path",
+    "read_spec_text",
     "upload_spec",
     "write_spec_locally",
 ]
@@ -41,6 +43,22 @@ __all__ = [
 # per ``storage-provenance-spec.md`` §3a — the local mirror always sits under
 # ``output_dir/data/`` regardless of where R2 puts the prefix root.
 _LOCAL_DATA_DIRNAME = "data"
+
+
+def read_spec_text(spec_uri: str) -> str:
+    """Read spec JSON text from a bare path, ``file://`` URI, or ``r2://`` URI.
+
+    R2 URIs are fetched via rclone (requires ``RCLONE_CONFIG_R2_*`` env vars)
+    to a tempfile and read before cleanup; bare paths and ``file://`` URIs
+    are read in place.
+
+    :param spec_uri: Local filesystem path, ``file://`` URI, or ``r2://`` URI.
+    :returns: The JSON text content of the spec file.
+    """
+    if is_r2_uri(spec_uri):
+        with downloaded_to_tempfile(spec_uri) as local_path:
+            return local_path.read_text()
+    return local_path_from_arg(spec_uri).read_text()
 
 
 def local_spec_path(spec: DatasetSpec, output_dir: Path) -> Path:

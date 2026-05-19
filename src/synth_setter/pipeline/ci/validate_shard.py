@@ -44,9 +44,10 @@ from synth_setter.data.vst.shapes import (
     mel_dataset_shape,
     param_array_dataset_shape,
 )
-from synth_setter.pipeline.r2_io import downloaded_to_tempfile, is_r2_uri
+from synth_setter.pipeline.r2_io import downloaded_to_tempfile
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from synth_setter.pipeline.schemas.spec import EXTENSION_TO_OUTPUT_FORMAT, DatasetSpec
+from synth_setter.pipeline.spec_io import read_spec_text
 
 _TAR_METADATA_MEMBER = "metadata.json"
 _TAR_NPY_NAME_RE = re.compile(r"^(?P<batch_key>\d{8})\.(?P<field>[^./]+)\.npy$")
@@ -323,17 +324,14 @@ def _load_npy_member(tar: tarfile.TarFile, name: str) -> np.ndarray | str:
 
 
 def _load_spec(spec_arg: str) -> DatasetSpec:
-    """Load a spec from a local path or ``r2://bucket/key`` URI.
+    """Load a spec from a local path, ``file://`` URI, or ``r2://`` URI.
 
-    :param spec_arg: Either a local filesystem path or an ``r2://...`` URI pointing
-        at the spec JSON file.
+    :param spec_arg: Local filesystem path, ``file://`` URI, or ``r2://...`` URI
+        pointing at the spec JSON file.
     :returns: Parsed ``DatasetSpec`` instance.
     :rtype: DatasetSpec
     """
-    if is_r2_uri(spec_arg):
-        with downloaded_to_tempfile(spec_arg) as local_path:
-            return DatasetSpec.model_validate_json(local_path.read_text())
-    return DatasetSpec.model_validate_json(Path(spec_arg).read_text())
+    return DatasetSpec.model_validate_json(read_spec_text(spec_arg))
 
 
 def validate_all_shards_from_r2(spec: DatasetSpec) -> list[str]:
@@ -358,11 +356,14 @@ def validate_all_shards_from_r2(spec: DatasetSpec) -> list[str]:
 def main() -> None:
     """CLI entry point: validate every shard referenced by a spec.
 
-    The single argument is a spec JSON path or `r2://bucket/key.json` URI.
-    Each shard listed in `spec.shards` is fetched from R2 and validated.
+    The single argument is a spec JSON path, a ``file://`` URI, or an
+    ``r2://bucket/key.json`` URI. Each shard listed in ``spec.shards`` is
+    fetched from R2 and validated.
     """
     if len(sys.argv) != 2:
-        sys.stderr.write(f"Usage: {sys.argv[0]} <spec.json|r2://bucket/spec.json>\n")
+        sys.stderr.write(
+            f"Usage: {sys.argv[0]} <spec.json|file:///abs/path/spec.json|r2://bucket/spec.json>\n"
+        )
         sys.exit(1)
 
     spec_arg = sys.argv[1]

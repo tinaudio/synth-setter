@@ -171,6 +171,45 @@ def _multi_shard_spec(tmp_path: Path, n: int = 3) -> DatasetSpec:
 
 
 # ---------------------------------------------------------------------------
+# load_spec_from_uri — local path, file:// URI, r2:// URI dispatch
+# ---------------------------------------------------------------------------
+
+
+class TestLoadSpecFromUri:
+    """``load_spec_from_uri`` accepts bare paths, ``file://`` URIs, and ``r2://`` URIs."""
+
+    def test_bare_local_path_is_read_directly(self, spec: DatasetSpec, tmp_path: Path) -> None:
+        """A non-URI argument is treated as a filesystem path.
+
+        :param spec: Fixture-provided ``DatasetSpec``.
+        :param tmp_path: Pytest tmp dir for the local spec JSON.
+        """
+        from synth_setter.cli.generate_dataset import load_spec_from_uri
+
+        spec_path = tmp_path / "spec.json"
+        spec_path.write_text(spec.model_dump_json())
+
+        loaded = load_spec_from_uri(str(spec_path))
+
+        assert loaded.task_name == spec.task_name
+
+    def test_file_uri_is_read_from_local_disk(self, spec: DatasetSpec, tmp_path: Path) -> None:
+        """A ``file://`` URI is decoded to a local path and read directly.
+
+        :param spec: Fixture-provided ``DatasetSpec``.
+        :param tmp_path: Pytest tmp dir for the local spec JSON.
+        """
+        from synth_setter.cli.generate_dataset import load_spec_from_uri
+
+        spec_path = tmp_path / "spec.json"
+        spec_path.write_text(spec.model_dump_json())
+
+        loaded = load_spec_from_uri(spec_path.as_uri())
+
+        assert loaded.task_name == spec.task_name
+
+
+# ---------------------------------------------------------------------------
 # run — full flow orchestration
 # ---------------------------------------------------------------------------
 

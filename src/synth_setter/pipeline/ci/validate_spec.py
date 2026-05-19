@@ -9,15 +9,14 @@ from __future__ import annotations
 
 import json
 import sys
-from pathlib import Path
 from typing import Any
 
-from synth_setter.pipeline.r2_io import downloaded_to_tempfile, is_r2_uri
 from synth_setter.pipeline.schemas.spec import (
     OUTPUT_FORMAT_TO_EXTENSION,
     DatasetSpec,
     RenderConfig,
 )
+from synth_setter.pipeline.spec_io import read_spec_text
 
 # Required keys are derived from the model so adding a field to ``DatasetSpec``
 # (including computed_fields, which serialize on dump) automatically tightens
@@ -120,26 +119,19 @@ def validate_test_values(spec: dict[str, Any]) -> list[str]:
     return errors
 
 
-def _read_spec_text(spec_arg: str) -> str:
-    """Read spec JSON text from a local path or `r2://bucket/key` URI."""
-    if is_r2_uri(spec_arg):
-        with downloaded_to_tempfile(spec_arg) as local_path:
-            return local_path.read_text()
-    return Path(spec_arg).read_text()
-
-
 def main() -> None:
-    """CLI entry point: validate a spec JSON file (local path or r2:// URI)."""
+    """CLI entry point: validate a spec JSON file (local path, file:// URI, or r2:// URI)."""
     if len(sys.argv) < 2:
         sys.stderr.write(
-            f"Usage: {sys.argv[0]} <spec.json|r2://bucket/key.json> [--test-values]\n"
+            f"Usage: {sys.argv[0]} "
+            "<spec.json|file:///abs/path/spec.json|r2://bucket/key.json> [--test-values]\n"
         )
         sys.exit(1)
 
     spec_arg = sys.argv[1]
     run_test_values = "--test-values" in sys.argv
 
-    spec = json.loads(_read_spec_text(spec_arg))
+    spec = json.loads(read_spec_text(spec_arg))
 
     errors = validate_structure(spec)
     if not errors:

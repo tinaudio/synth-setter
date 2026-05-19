@@ -24,3 +24,6 @@ RCLONE_REMOTE = "r2"
 # ``r2://bucket/key``; ``r2_io.to_rclone_path`` translates to rclone's
 # ``r2:bucket/key`` form at the subprocess boundary.
 R2_URI_SCHEME = f"{RCLONE_REMOTE}://"
+
+# RFC 8089 local-file URI scheme — parsed by ``pipeline.file_uri``.
+FILE_URI_SCHEME = "file://"
