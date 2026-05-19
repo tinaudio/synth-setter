@@ -1,4 +1,12 @@
-"""Tests for synth_setter.pipeline.r2_io — rclone-backed R2 I/O helpers."""
+"""Tests for synth_setter.pipeline.r2_io — rclone-backed R2 I/O helpers.
+
+State-based tests use the ``fake_r2_remote`` fixture (see ``tests/pipeline/
+conftest.py``): rclone runs against a local-typed remote rooted at a tmp dir,
+so each test asserts on the filesystem state after the helper runs instead of
+on the rclone argv list. Two narrow argv-shape tests survive (the reliability-
+flag set on ``upload_to_uri`` and the ``lsf --format=s`` shape on
+``object_size``) to pin invariants state-based tests cannot observe.
+"""
 
 from __future__ import annotations
 
@@ -55,18 +63,49 @@ class TestToRclonePath:
 class TestDownloadToPath:
     """Tests for download_to_path — file→file copy."""
 
-    def test_invokes_rclone_copyto_with_checksum(self, tmp_path: Path) -> None:
-        """Verifies the rclone command shape (copyto + --checksum + URI translation)."""
+    def test_lands_remote_bytes_at_local_path(self, fake_r2_remote: Path, tmp_path: Path) -> None:
+        """Downloading writes the remote object's bytes verbatim to ``dest_path``.
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        :param tmp_path: Pytest tmp dir used for the download destination.
+        """
+        remote_obj = fake_r2_remote / "bucket" / "key.json"
+        remote_obj.parent.mkdir(parents=True)
+        remote_obj.write_text('{"ok": true}')
         dest = tmp_path / "out.json"
-        with patch.object(r2_io.subprocess, "check_call") as mock_call:
-            r2_io.download_to_path("r2://bucket/key.json", dest)
-        args = mock_call.call_args[0][0]
-        assert args[:3] == ["rclone", "copyto", "--checksum"]
-        assert args[3] == "r2:bucket/key.json"
-        assert args[4] == str(dest)
+
+        r2_io.download_to_path("r2://bucket/key.json", dest)
+
+        assert dest.read_text() == '{"ok": true}'
+
+    def test_preserves_destination_filename_not_source_basename(
+        self, fake_r2_remote: Path, tmp_path: Path
+    ) -> None:
+        """``copyto`` (not ``copy``) keeps the destination filename as-is.
+
+        ``rclone copy`` would treat ``dest`` as a directory and write the source
+        basename inside it; ``copyto`` preserves the destination filename verbatim.
+        The dest's filename differs from the source's on purpose so the wrong-verb
+        regression would surface as a missing file.
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        :param tmp_path: Pytest tmp dir used for the download destination.
+        """
+        remote_obj = fake_r2_remote / "bucket" / "src-name.json"
+        remote_obj.parent.mkdir(parents=True)
+        remote_obj.write_text("{}")
+        dest = tmp_path / "different-name.json"
+
+        r2_io.download_to_path("r2://bucket/src-name.json", dest)
+
+        assert dest.is_file()
+        assert dest.read_text() == "{}"
 
     def test_rejects_non_r2_uri(self, tmp_path: Path) -> None:
-        """A local-path source is rejected — caller must branch on is_r2_uri."""
+        """A local-path source is rejected — caller must branch on is_r2_uri.
+
+        :param tmp_path: Pytest tmp dir used to build a local destination path.
+        """
         with pytest.raises(ValueError, match="not an r2:// URI"):
             r2_io.download_to_path("local-spec.json", tmp_path / "out.json")
 
@@ -74,8 +113,59 @@ class TestDownloadToPath:
 class TestUploadToUri:
     """Tests for upload_to_uri — file→file upload with reliability flags."""
 
-    def test_invokes_rclone_copyto_with_reliability_flags(self, tmp_path: Path) -> None:
-        """Upload command includes -vv, --contimeout, --timeout, --retries, --checksum."""
+    def test_lands_local_bytes_at_remote_uri(self, fake_r2_remote: Path, tmp_path: Path) -> None:
+        """Upload writes the local file's bytes to the URI's path under the bucket.
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        :param tmp_path: Pytest tmp dir used for the upload source file.
+        """
+        src = tmp_path / "in.json"
+        src.write_text('{"payload": 42}')
+
+        r2_io.upload_to_uri(src, "r2://bucket/nested/key.json")
+
+        assert (fake_r2_remote / "bucket" / "nested" / "key.json").read_text() == '{"payload": 42}'
+
+    def test_preserves_destination_filename_not_source_basename(
+        self, fake_r2_remote: Path, tmp_path: Path
+    ) -> None:
+        """``copyto`` (not ``copy``) keeps the destination object name as-is.
+
+        ``rclone copy`` would treat the URI as a directory and write the source
+        basename inside it. The dest's last segment differs from the source's
+        so the wrong-verb regression would surface as a missing object.
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        :param tmp_path: Pytest tmp dir used for the upload source file.
+        """
+        src = tmp_path / "src-name.json"
+        src.write_text("{}")
+
+        r2_io.upload_to_uri(src, "r2://bucket/different-name.json")
+
+        assert (fake_r2_remote / "bucket" / "different-name.json").is_file()
+        assert not (fake_r2_remote / "bucket" / "different-name.json" / "src-name.json").exists()
+
+    def test_rejects_non_r2_uri(self, tmp_path: Path) -> None:
+        """A local-path destination is rejected.
+
+        :param tmp_path: Pytest tmp dir used to build a local source path.
+        """
+        with pytest.raises(ValueError, match="not an r2:// URI"):
+            r2_io.upload_to_uri(tmp_path / "in.json", "local-dest.json")
+
+    def test_command_carries_rclone_reliability_flags(self, tmp_path: Path) -> None:
+        """Pin the rclone reliability-flag set on upload.
+
+        State-based tests cover the file-landing contract but cannot observe the
+        ``-vv / --checksum / --contimeout / --timeout / --retries`` flags. Losing
+        any of them is a silent correctness regression (e.g. dropping
+        ``--checksum`` would let half-uploaded objects pass; dropping
+        ``--retries`` would surface transient network blips as hard failures).
+        One mock-based argv assertion guards the invariant.
+
+        :param tmp_path: Pytest tmp dir used for the upload source file.
+        """
         src = tmp_path / "in.json"
         src.write_text("{}")
         with patch.object(r2_io.subprocess, "check_call") as mock_call:
@@ -87,45 +177,44 @@ class TestUploadToUri:
         assert "--contimeout=30s" in args
         assert "--timeout=300s" in args
         assert "--retries=3" in args
-        assert args[-2] == str(src)
-        assert args[-1] == "r2:bucket/key.json"
-
-    def test_rejects_non_r2_uri(self, tmp_path: Path) -> None:
-        """A local-path destination is rejected."""
-        with pytest.raises(ValueError, match="not an r2:// URI"):
-            r2_io.upload_to_uri(tmp_path / "in.json", "local-dest.json")
 
 
 class TestDownloadedToTempfile:
     """Tests for the downloaded_to_tempfile context manager."""
 
-    def test_yields_local_path_named_after_uri_basename(self) -> None:
-        """Yielded path name matches URI's last segment; tempdir is cleaned on exit."""
+    def test_yields_local_path_named_after_uri_basename(self, fake_r2_remote: Path) -> None:
+        """Yielded path name matches URI's last segment; tempdir is cleaned on exit.
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        """
+        remote_obj = fake_r2_remote / "bucket" / "path" / "spec.json"
+        remote_obj.parent.mkdir(parents=True)
+        remote_obj.write_text('{"ok": true}')
         seen: list[Path] = []
 
-        def fake_check_call(args: list[str]) -> None:
-            Path(args[-1]).write_text('{"ok": true}')
-
-        with patch.object(r2_io.subprocess, "check_call", side_effect=fake_check_call):
-            with r2_io.downloaded_to_tempfile("r2://bucket/path/spec.json") as local:
-                seen.append(local)
-                assert local.name == "spec.json"
-                assert local.read_text() == '{"ok": true}'
+        with r2_io.downloaded_to_tempfile("r2://bucket/path/spec.json") as local:
+            seen.append(local)
+            assert local.name == "spec.json"
+            assert local.read_text() == '{"ok": true}'
 
         assert not seen[0].exists()
 
-    def test_cleanup_runs_even_on_exception(self) -> None:
-        """If the with-block raises, the tempdir is still cleaned up."""
+    def test_cleanup_runs_even_on_exception(self, fake_r2_remote: Path) -> None:
+        """If the with-block raises, the tempdir is still cleaned up.
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        :raises RuntimeError: Deliberately raised inside the ``with`` block to
+            exercise the cleanup-on-exception path.
+        """
+        remote_obj = fake_r2_remote / "bucket" / "spec.json"
+        remote_obj.parent.mkdir(parents=True)
+        remote_obj.write_text("{}")
         seen: list[Path] = []
 
-        def fake_check_call(args: list[str]) -> None:
-            Path(args[-1]).write_text("{}")
-
-        with patch.object(r2_io.subprocess, "check_call", side_effect=fake_check_call):
-            with pytest.raises(RuntimeError, match="boom"):
-                with r2_io.downloaded_to_tempfile("r2://bucket/spec.json") as local:
-                    seen.append(local)
-                    raise RuntimeError("boom")
+        with pytest.raises(RuntimeError, match="boom"):
+            with r2_io.downloaded_to_tempfile("r2://bucket/spec.json") as local:
+                seen.append(local)
+                raise RuntimeError("boom")
 
         assert not seen[0].exists()
 
@@ -149,7 +238,15 @@ class TestShardUri:
 
 
 class TestObjectSize:
-    """Tests for object_size — existence + size probe via `rclone lsf --format=s`."""
+    """Tests for object_size — existence + size probe via `rclone lsf --format=s`.
+
+    Present and zero-size cases are state-based against the fake-local remote.
+    Absent and probe-failure cases stay mock-based: on R2 ``lsf`` returns empty
+    stdout for a missing key (the bucket exists, the key does not); on the
+    local backend the parent directory may not exist, so ``lsf`` exits non-zero
+    instead — a behavior divergence the fixture deliberately leaves outside
+    its coverage (see issue #1124's "Out of scope" note).
+    """
 
     @staticmethod
     def _mock_run(stdout: str) -> MagicMock:
@@ -159,20 +256,35 @@ class TestObjectSize:
         completed.returncode = 0
         return completed
 
-    def test_present_returns_int_size(self) -> None:
-        """A non-empty integer stdout means the object exists; return its size in bytes."""
-        with patch.object(r2_io.subprocess, "run", return_value=self._mock_run("12345\n")):
-            assert r2_io.object_size("r2://bucket/key.h5") == 12345
+    def test_present_returns_int_size(self, fake_r2_remote: Path) -> None:
+        """A present object returns its size in bytes.
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        """
+        obj = fake_r2_remote / "bucket" / "key.h5"
+        obj.parent.mkdir(parents=True)
+        obj.write_bytes(b"x" * 12345)
+
+        assert r2_io.object_size("r2://bucket/key.h5") == 12345
+
+    def test_zero_size_returns_zero(self, fake_r2_remote: Path) -> None:
+        """A zero-byte object exists; return 0 (callers decide whether to treat as present).
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        """
+        obj = fake_r2_remote / "bucket" / "key.h5"
+        obj.parent.mkdir(parents=True)
+        obj.write_bytes(b"")
+
+        assert r2_io.object_size("r2://bucket/key.h5") == 0
 
     def test_absent_returns_none(self) -> None:
-        """Empty stdout means the object is missing; return None."""
+        """Empty stdout means the object is missing; return None.
+
+        R2-specific behavior — see class docstring for why this stays mock-based.
+        """
         with patch.object(r2_io.subprocess, "run", return_value=self._mock_run("")):
             assert r2_io.object_size("r2://bucket/key.h5") is None
-
-    def test_zero_size_returns_zero(self) -> None:
-        """A zero-byte object exists; return 0 (callers decide whether to treat as present)."""
-        with patch.object(r2_io.subprocess, "run", return_value=self._mock_run("0\n")):
-            assert r2_io.object_size("r2://bucket/key.h5") == 0
 
     def test_probe_failure_propagates(self) -> None:
         """Non-zero rclone exit raises CalledProcessError — fail-fast on env issues."""
@@ -182,7 +294,13 @@ class TestObjectSize:
                 r2_io.object_size("r2://bucket/key.h5")
 
     def test_invokes_rclone_lsf_format_s(self) -> None:
-        """Probe argv shape: rclone lsf --format=s <translated path>."""
+        """Probe argv shape: rclone lsf --format=s <translated path>.
+
+        Pins the ``lsf --format=s`` probe shape; the state-based ``present``/
+        ``zero_size`` tests above exercise the happy paths but cannot observe
+        the exact argv, and a wrong flag here would silently break the absent
+        detection (which relies on empty stdout).
+        """
         with patch.object(r2_io.subprocess, "run", return_value=self._mock_run("42")) as mock_run:
             r2_io.object_size("r2://bucket/path/key.h5")
         args = mock_run.call_args[0][0]

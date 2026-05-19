@@ -1,11 +1,16 @@
-"""Tests for synth_setter.pipeline.ci.validate_shard."""
+"""Tests for synth_setter.pipeline.ci.validate_shard.
+
+R2-side tests use the ``fake_r2_remote`` fixture (see ``tests/pipeline/
+conftest.py``) so ``downloaded_to_tempfile`` runs real rclone against a local-
+typed remote rooted at a tmp dir; each test seeds the fake bucket with the
+shard files it expects ``validate_all_shards_from_r2`` to download.
+"""
 
 from __future__ import annotations
 
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import patch
 
 import h5py
 import numpy as np
@@ -175,42 +180,64 @@ class TestValidateShard:
 # ---------------------------------------------------------------------------
 
 
+def _seed_r2_shards(
+    fake_r2_remote: Path,
+    spec: DatasetSpec,
+    *,
+    contents: bytes | None = None,
+) -> None:
+    """Populate the fake R2 bucket with every shard listed in ``spec.shards``.
+
+    If ``contents`` is None, writes a valid HDF5 shard sized to the spec's
+    ``samples_per_shard``; otherwise writes the literal bytes (used by the
+    invalid-shard tests to seed garbage that fails HDF5 open).
+
+    :param fake_r2_remote: The fake-local R2 root yielded by the fixture.
+    :param spec: Dataset spec whose ``shards`` and ``r2`` drive the seeded paths.
+    :param contents: Optional override bytes. When None, generates valid HDF5.
+    """
+    bucket_dir = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
+    bucket_dir.mkdir(parents=True, exist_ok=True)
+    for shard in spec.shards:
+        target = bucket_dir / shard.filename
+        if contents is None:
+            _create_shard(target, shard_size=spec.render.samples_per_shard)
+        else:
+            target.write_bytes(contents)
+
+
 class TestValidateAllShardsFromR2:
     """Tests for validate_all_shards_from_r2 — iterates spec.shards via R2."""
 
-    def test_all_valid_returns_no_errors(self, real_spec: DatasetSpec, tmp_path: Path) -> None:
-        """When every shard downloads valid HDF5, returns []."""
-        spec = real_spec
+    def test_all_valid_returns_no_errors(
+        self, real_spec: DatasetSpec, fake_r2_remote: Path
+    ) -> None:
+        """When every shard downloads valid HDF5, returns [].
 
-        def fake_check_call(args: list[str]) -> None:
-            # Simulate rclone copyto: write a valid shard to dest path
-            _create_shard(Path(args[-1]), shard_size=spec.render.samples_per_shard)
+        :param real_spec: Fixture-provided ``DatasetSpec``.
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        """
+        _seed_r2_shards(fake_r2_remote, real_spec)
 
-        with patch(
-            "synth_setter.pipeline.r2_io.subprocess.check_call", side_effect=fake_check_call
-        ):
-            errors = validate_all_shards_from_r2(spec)
+        errors = validate_all_shards_from_r2(real_spec)
 
         assert errors == []
 
     def test_invalid_shard_error_carries_shard_filename(
-        self, real_spec: DatasetSpec, tmp_path: Path
+        self, real_spec: DatasetSpec, fake_r2_remote: Path
     ) -> None:
-        """Validation errors are prefixed with the shard filename."""
-        spec = real_spec
+        """Validation errors are prefixed with the shard filename.
 
-        def fake_check_call(args: list[str]) -> None:
-            # Write garbage so shard fails HDF5 open
-            Path(args[-1]).write_bytes(b"garbage")
+        :param real_spec: Fixture-provided ``DatasetSpec``.
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        """
+        _seed_r2_shards(fake_r2_remote, real_spec, contents=b"garbage")
 
-        with patch(
-            "synth_setter.pipeline.r2_io.subprocess.check_call", side_effect=fake_check_call
-        ):
-            errors = validate_all_shards_from_r2(spec)
+        errors = validate_all_shards_from_r2(real_spec)
 
         assert errors  # at least one error
         # First spec.shards filename appears in the error string
-        assert any(spec.shards[0].filename in e for e in errors)
+        assert any(real_spec.shards[0].filename in e for e in errors)
 
 
 class TestMain:
@@ -233,45 +260,53 @@ class TestMain:
         assert exc_info.value.code == 1
 
     def test_cli_exits_zero_when_all_shards_valid(
-        self, real_spec: DatasetSpec, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        real_spec: DatasetSpec,
+        tmp_path: Path,
+        fake_r2_remote: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Valid spec + R2-served valid shards → exit 0."""
+        """Valid spec + R2-served valid shards → exit 0.
+
+        :param real_spec: Fixture-provided ``DatasetSpec``.
+        :param tmp_path: Pytest tmp dir for the local spec JSON.
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        :param monkeypatch: Pytest fixture used to set ``sys.argv``.
+        """
         from synth_setter.pipeline.ci.validate_shard import main
 
-        spec = real_spec
         spec_json_path = tmp_path / "spec.json"
-        spec_json_path.write_text(spec.model_dump_json())
-
-        def fake_check_call(args: list[str]) -> None:
-            _create_shard(Path(args[-1]), shard_size=spec.render.samples_per_shard)
+        spec_json_path.write_text(real_spec.model_dump_json())
+        _seed_r2_shards(fake_r2_remote, real_spec)
 
         monkeypatch.setattr(sys, "argv", ["validate_shard", str(spec_json_path)])
-        with patch(
-            "synth_setter.pipeline.r2_io.subprocess.check_call", side_effect=fake_check_call
-        ):
-            with pytest.raises(SystemExit) as exc_info:
-                main()
+        with pytest.raises(SystemExit) as exc_info:
+            main()
 
         assert exc_info.value.code == 0
 
     def test_cli_exits_one_when_a_shard_is_invalid(
-        self, real_spec: DatasetSpec, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        real_spec: DatasetSpec,
+        tmp_path: Path,
+        fake_r2_remote: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """If any shard in spec.shards fails validation, exit 1."""
+        """If any shard in spec.shards fails validation, exit 1.
+
+        :param real_spec: Fixture-provided ``DatasetSpec``.
+        :param tmp_path: Pytest tmp dir for the local spec JSON.
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        :param monkeypatch: Pytest fixture used to set ``sys.argv``.
+        """
         from synth_setter.pipeline.ci.validate_shard import main
 
-        spec = real_spec
         spec_json_path = tmp_path / "spec.json"
-        spec_json_path.write_text(spec.model_dump_json())
-
-        def fake_check_call(args: list[str]) -> None:
-            Path(args[-1]).write_bytes(b"garbage")
+        spec_json_path.write_text(real_spec.model_dump_json())
+        _seed_r2_shards(fake_r2_remote, real_spec, contents=b"garbage")
 
         monkeypatch.setattr(sys, "argv", ["validate_shard", str(spec_json_path)])
-        with patch(
-            "synth_setter.pipeline.r2_io.subprocess.check_call", side_effect=fake_check_call
-        ):
-            with pytest.raises(SystemExit) as exc_info:
-                main()
+        with pytest.raises(SystemExit) as exc_info:
+            main()
 
         assert exc_info.value.code == 1

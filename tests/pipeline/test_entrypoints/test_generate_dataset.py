@@ -14,7 +14,11 @@ The entrypoint's public surface:
 
 Tests monkeypatch ``write_spec_locally`` / ``upload_spec`` /
 ``ensure_r2_env_loaded`` / ``_rclone_copy`` / ``subprocess.check_call`` and
-assert on recorded call args + ordering.
+assert on recorded call args + ordering. The shard-landing test uses the
+``fake_r2_remote`` fixture (see ``tests/pipeline/conftest.py``) so the upload
+goes through real rclone against a local-typed remote; the surrounding
+orchestration tests keep their mock-based call-count + ordering assertions
+since those don't touch the rclone command shape that issue #1124 targets.
 """
 
 from __future__ import annotations
@@ -68,6 +72,30 @@ def _materialize_shard(args: list[str]) -> int:
     output_file.parent.mkdir(parents=True, exist_ok=True)
     output_file.write_bytes(b"")
     return 0
+
+
+# Captured at import time so the rclone-passthrough side-effect below can
+# call the real subprocess.check_call without recursing back through any
+# patch that targets the same symbol the production code uses.
+_REAL_CHECK_CALL = subprocess.check_call
+
+
+def _materialize_or_passthrough_rclone(args: list[str]) -> int:
+    """Dispatch on the first argv element: rclone calls fall through to real subprocess.
+
+    The state-based ``test_uploads_shard_to_r2_after_generation`` patches the
+    same ``subprocess.check_call`` symbol the renderer AND the rclone shard
+    upload both go through, so this side-effect distinguishes them: renderer
+    calls write the expected shard file (as ``_materialize_shard`` does);
+    rclone calls invoke the real binary (via ``_REAL_CHECK_CALL``) so the
+    upload actually lands a file on the fake-local remote.
+
+    :param args: argv list passed to ``subprocess.check_call``.
+    :returns: 0 on renderer simulation; rclone's exit code on the real subprocess.
+    """
+    if args and args[0] == "rclone":
+        return _REAL_CHECK_CALL(args)  # noqa: S603 — test-only passthrough
+    return _materialize_shard(args)
 
 
 def _base_spec_kwargs(tmp_path: Path, **overrides: object) -> dict[str, object]:
@@ -195,23 +223,32 @@ class TestRun:
             assert VST_HEADLESS_WRAPPER not in args
             assert args[1] == "src/synth_setter/data/vst/generate_vst_dataset.py"
 
-    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
-    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_uploads_shard_to_r2_after_generation(
         self,
-        mock_rclone: MagicMock,
-        mock_check_call: MagicMock,
         spec: DatasetSpec,
+        fake_r2_remote: Path,
     ) -> None:
-        """Rclone is invoked once per shard (run() uploads shards only, not the spec)."""
-        mock_check_call.side_effect = _materialize_shard
-        run(spec)
+        """Shard lands at the R2 URI implied by ``spec.r2`` and the shard's filename.
 
-        rclone_calls = mock_rclone.call_args_list
-        assert len(rclone_calls) == 1
-        shard_src, shard_dest = rclone_calls[0][0]
-        assert "shard-000000.h5" in shard_src
-        assert shard_dest == f"r2:{spec.r2.bucket}/{spec.r2.prefix}"
+        State-based: ``_rclone_copy`` is not patched — the real ``rclone copy`` runs
+        against the fake-local R2 remote rooted at ``fake_r2_remote``, and the test
+        asserts on the materialized object on disk. The renderer subprocess
+        ``check_call`` is still patched so we don't actually shell out to the VST
+        generator; its side effect writes the same empty HDF5 file that the
+        renderer would.
+
+        :param spec: Fixture-provided ``DatasetSpec``.
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        """
+        # Real rclone copies require a real source file; patch only the renderer.
+        with patch(
+            "synth_setter.cli.generate_dataset.subprocess.check_call",
+            side_effect=_materialize_or_passthrough_rclone,
+        ):
+            run(spec)
+
+        landed = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / spec.shards[0].filename
+        assert landed.is_file()
 
     @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
     @patch("synth_setter.cli.generate_dataset._rclone_copy")
