@@ -212,9 +212,8 @@ class TestRun:
     ) -> None:
         """Prefix the VST subprocess with ``run-linux-vst-headless.sh`` on Linux.
 
-        X11 bootstrap lives at the audio-rendering boundary (this subprocess) so the
-        docker_entrypoint click CLI can stay X11-agnostic — idle and passthrough modes don't pay
-        the Xvfb startup cost. The wrapper is Linux-only (Xvfb is a Linux X11 server); on macOS and
+        X11 bootstrap lives at the audio-rendering boundary (this subprocess), keeping the outer
+        pipeline X11-agnostic. The wrapper is Linux-only (Xvfb is a Linux X11 server); on macOS and
         other platforms the generator is invoked directly without a wrapper prefix.
         """
         mock_check_call.side_effect = _materialize_shard

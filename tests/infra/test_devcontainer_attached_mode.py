@@ -1,15 +1,13 @@
 """Invariant 1: devcontainer starts in attached mode (PID 1 doesn't exit).
 
 A developer must be able to `Attach to Container` and have a shell. That
-requires the container's MODE env var to put `docker_entrypoint.py` into the
-`idle` subcommand (which execs `sleep infinity`), plus the standard
-devcontainer fields (`postCreateCommand`, `remoteUser`, `workspaceFolder`).
-The `--env-file` runArg lets credentials reach the container.
+requires the standard devcontainer fields (`postCreateCommand`, `remoteUser`,
+`workspaceFolder`). The `--env-file` runArg lets credentials reach the
+container.
 """
 
 from __future__ import annotations
 
-import ast
 import json
 from pathlib import Path
 
@@ -25,7 +23,7 @@ def _load(path: Path) -> dict:
 def test_every_devcontainer_sets_mode_idle_for_attached_pid1(
     devcontainer_json_paths: list[Path],
 ) -> None:
-    """containerEnv.MODE == 'idle' so docker_entrypoint.py execs sleep infinity."""
+    """containerEnv.MODE == 'idle' (legacy invariant from the click-CLI entrypoint era)."""
     for path in devcontainer_json_paths:
         config = _load(path)
         container_env = config.get("containerEnv", {})
@@ -81,26 +79,3 @@ def test_every_devcontainer_run_args_includes_env_file_attached_mode(
         assert env_file_index + 1 < len(run_args), (
             f"{path}: '--env-file' must be followed by a path"
         )
-
-
-@pytest.mark.infra
-def test_docker_entrypoint_idle_mode_blocks_attached_mode(project_root: Path) -> None:
-    """docker_entrypoint.py's idle command must exec `sleep infinity` (not exit).
-
-    Narrowed to the idle function's AST body — substring matches on the whole
-    file would pass even if `sleep`/`infinity` only appeared in a docstring.
-    """
-    entrypoint = project_root / "src" / "synth_setter" / "tools" / "docker_entrypoint.py"
-    tree = ast.parse(entrypoint.read_text())
-    idle_fn: ast.FunctionDef | None = next(
-        (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "idle"),
-        None,
-    )
-    assert idle_fn is not None, (
-        "src/synth_setter/tools/docker_entrypoint.py: missing `idle` function"
-    )
-    body_strings = [node.value for node in ast.walk(idle_fn) if isinstance(node, ast.Constant)]
-    assert "sleep" in body_strings and "infinity" in body_strings, (
-        f"src/synth_setter/tools/docker_entrypoint.py: idle() must exec `sleep infinity` so PID 1 stays alive "
-        f"for attached-mode; constants found in idle() body: {body_strings!r}"
-    )

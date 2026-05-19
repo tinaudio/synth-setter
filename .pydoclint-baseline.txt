@@ -525,32 +525,6 @@ src/synth_setter/pipeline/skypilot_launch.py
     DOC101: Function `_cancel_job`: Docstring contains fewer arguments than in function signature.
     DOC103: Function `_cancel_job`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [job_name: str].
 --------------------
-src/synth_setter/tools/docker_entrypoint.py
-    DOC101: Function `cli`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `cli`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [ctx: click.Context].
-    DOC501: Function `cli` has raise statements, but the docstring does not have a "Raises" section
-    DOC503: Function `cli` exceptions in the "Raises" section in the docstring do not match those in the function body. Raised exceptions in the docstring: []. Raised exceptions in the body: ['click.UsageError'].
-    DOC101: Function `_exec_or_click_error`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `_exec_or_click_error`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [argv: list[str], program: str].
-    DOC501: Function `_exec_or_click_error` has raise statements, but the docstring does not have a "Raises" section
-    DOC503: Function `_exec_or_click_error` exceptions in the "Raises" section in the docstring do not match those in the function body. Raised exceptions in the docstring: []. Raised exceptions in the body: ['click.ClickException'].
-    DOC101: Function `passthrough`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `passthrough`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [args: tuple[str, ...]].
-    DOC501: Function `passthrough` has raise statements, but the docstring does not have a "Raises" section
-    DOC503: Function `passthrough` exceptions in the "Raises" section in the docstring do not match those in the function body. Raised exceptions in the docstring: []. Raised exceptions in the body: ['click.ClickException'].
-    DOC101: Function `generate_dataset`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `generate_dataset`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [spec_path_or_uri: str].
-    DOC501: Function `generate_dataset` has raise statements, but the docstring does not have a "Raises" section
-    DOC503: Function `generate_dataset` exceptions in the "Raises" section in the docstring do not match those in the function body. Raised exceptions in the docstring: []. Raised exceptions in the body: ['click.ClickException'].
-    DOC101: Function `render_eval`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `render_eval`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [spec_path: Path].
-    DOC501: Function `render_eval` has raise statements, but the docstring does not have a "Raises" section
-    DOC503: Function `render_eval` exceptions in the "Raises" section in the docstring do not match those in the function body. Raised exceptions in the docstring: []. Raised exceptions in the body: ['click.ClickException'].
-    DOC101: Function `train`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `train`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [spec_path: Path].
-    DOC501: Function `train` has raise statements, but the docstring does not have a "Raises" section
-    DOC503: Function `train` exceptions in the "Raises" section in the docstring do not match those in the function body. Raised exceptions in the docstring: []. Raised exceptions in the body: ['click.ClickException'].
---------------------
 src/synth_setter/tools/surge_xt_interactive.py
     DOC601: Class `MidiMessageProtocol`: Class docstring contains fewer class attributes than actual class attributes.  (Please read https://jsh9.github.io/pydoclint/checking_class_attributes.html on how to correctly document class attributes.)
     DOC603: Class `MidiMessageProtocol`: Class docstring attributes are different from actual class attributes. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Attributes in the class definition but not in the docstring: [type: str]. (Please read https://jsh9.github.io/pydoclint/checking_class_attributes.html on how to correctly document class attributes.)
@@ -880,8 +854,6 @@ tests/infra/test_devcontainer_attached_mode.py
     DOC103: Function `test_every_devcontainer_has_workspace_folder_attached_mode`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [devcontainer_json_paths: list[Path]].
     DOC101: Function `test_every_devcontainer_run_args_includes_env_file_attached_mode`: Docstring contains fewer arguments than in function signature.
     DOC103: Function `test_every_devcontainer_run_args_includes_env_file_attached_mode`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [devcontainer_json_paths: list[Path]].
-    DOC101: Function `test_docker_entrypoint_idle_mode_blocks_attached_mode`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `test_docker_entrypoint_idle_mode_blocks_attached_mode`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [project_root: Path].
 --------------------
 tests/infra/test_gh_auth_flow.py
     DOC101: Function `test_post_create_references_token_env_var_for_gh_auth_flow`: Docstring contains fewer arguments than in function signature.
@@ -1710,50 +1682,6 @@ tests/test_logging_utils.py
 tests/test_properties.py
     DOC101: Function `test_arbitrary_dict_does_not_crash_omegaconf`: Docstring contains fewer arguments than in function signature.
     DOC103: Function `test_arbitrary_dict_does_not_crash_omegaconf`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [random_dict: dict[str, int | str | None | float]].
---------------------
-tests/tools/test_docker_entrypoint.py
-    DOC201: Function `entrypoint` does not have a return section in docstring
-    DOC203: Function `entrypoint` return type(s) in docstring not consistent with the return annotation. Return annotation has 1 type(s); docstring return section has 0 type(s).
-    DOC201: Function `runner` does not have a return section in docstring
-    DOC203: Function `runner` return type(s) in docstring not consistent with the return annotation. Return annotation has 1 type(s); docstring return section has 0 type(s).
-    DOC201: Function `_valid_spec_payload` does not have a return section in docstring
-    DOC203: Function `_valid_spec_payload` return type(s) in docstring not consistent with the return annotation. Return annotation has 1 type(s); docstring return section has 0 type(s).
-    DOC101: Function `_write_spec_file`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `_write_spec_file`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [payload: dict[str, Any] | str | None, tmp_path: Path].
-    DOC201: Function `_write_spec_file` does not have a return section in docstring
-    DOC203: Function `_write_spec_file` return type(s) in docstring not consistent with the return annotation. Return annotation has 1 type(s); docstring return section has 0 type(s).
-    DOC101: Method `TestCliGroup.test_no_subcommand_exits_nonzero`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `TestCliGroup.test_no_subcommand_exits_nonzero`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [entrypoint: ModuleType, runner: CliRunner].
-    DOC101: Method `TestIdle.test_idle_execs_sleep_infinity`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `TestIdle.test_idle_execs_sleep_infinity`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [entrypoint: ModuleType, runner: CliRunner].
-    DOC101: Method `TestIdle.test_idle_exec_failure_becomes_click_exception`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `TestIdle.test_idle_exec_failure_becomes_click_exception`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [entrypoint: ModuleType, runner: CliRunner].
-    DOC101: Method `TestPassthrough.test_passthrough_with_args_execs_them`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `TestPassthrough.test_passthrough_with_args_execs_them`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [entrypoint: ModuleType, runner: CliRunner].
-    DOC101: Method `TestPassthrough.test_passthrough_accepts_unknown_flags_without_delimiter`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `TestPassthrough.test_passthrough_accepts_unknown_flags_without_delimiter`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [entrypoint: ModuleType, runner: CliRunner].
-    DOC101: Method `TestPassthrough.test_passthrough_exec_failure_becomes_click_exception`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `TestPassthrough.test_passthrough_exec_failure_becomes_click_exception`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [entrypoint: ModuleType, runner: CliRunner].
-    DOC101: Method `TestPassthrough.test_passthrough_no_args_exits_nonzero_with_error`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `TestPassthrough.test_passthrough_no_args_exits_nonzero_with_error`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [entrypoint: ModuleType, runner: CliRunner].
-    DOC101: Method `TestGenerateDataset.test_happy_path_parses_spec_and_calls_run`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `TestGenerateDataset.test_happy_path_parses_spec_and_calls_run`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [entrypoint: ModuleType, runner: CliRunner, tmp_path: Path].
-    DOC101: Method `TestGenerateDataset.test_happy_path_calls_os_exit_zero_after_run`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `TestGenerateDataset.test_happy_path_calls_os_exit_zero_after_run`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [entrypoint: ModuleType, runner: CliRunner, tmp_path: Path].
-    DOC101: Method `TestGenerateDataset.test_failed_spec_load_does_not_call_os_exit`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `TestGenerateDataset.test_failed_spec_load_does_not_call_os_exit`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [entrypoint: ModuleType, runner: CliRunner, tmp_path: Path].
-    DOC101: Method `TestGenerateDataset.test_missing_spec_flag_exits_two`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `TestGenerateDataset.test_missing_spec_flag_exits_two`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [entrypoint: ModuleType, runner: CliRunner].
-    DOC101: Method `TestGenerateDataset.test_malformed_json_spec_exits_nonzero_without_calling_run`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `TestGenerateDataset.test_malformed_json_spec_exits_nonzero_without_calling_run`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [entrypoint: ModuleType, runner: CliRunner, tmp_path: Path].
-    DOC101: Method `TestGenerateDataset.test_invalid_spec_shape_exits_nonzero_without_calling_run`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `TestGenerateDataset.test_invalid_spec_shape_exits_nonzero_without_calling_run`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [entrypoint: ModuleType, runner: CliRunner, tmp_path: Path].
-    DOC101: Method `TestGenerateDataset.test_binary_spec_file_exits_nonzero_without_calling_run`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `TestGenerateDataset.test_binary_spec_file_exits_nonzero_without_calling_run`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [entrypoint: ModuleType, runner: CliRunner, tmp_path: Path].
-    DOC101: Method `TestRenderEval.test_render_eval_fails_loudly_with_issue_pointer`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `TestRenderEval.test_render_eval_fails_loudly_with_issue_pointer`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [entrypoint: ModuleType, runner: CliRunner, tmp_path: Path].
-    DOC101: Method `TestTrain.test_train_fails_loudly_with_issue_pointer`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `TestTrain.test_train_fails_loudly_with_issue_pointer`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [entrypoint: ModuleType, runner: CliRunner, tmp_path: Path].
 --------------------
 tests/tools/test_surge_xt_interactive.py
     DOC201: Function `surge_xt_interactive` does not have a return section in docstring

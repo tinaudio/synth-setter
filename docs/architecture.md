@@ -91,7 +91,7 @@ synth-setter/
 │   │   ├── skypilot_launch.py  # SkyPilot launcher CLI
 │   │   └── constants.py    #     Shared constants (`INPUT_SPEC_FILENAME`)
 │   ├── evaluation/         #   predict_vst_audio, compute_audio_metrics (library code called by cli/eval.py)
-│   └── tools/              #   `python -m` utilities (surge_xt_interactive, plot_param2tok, docker_entrypoint, ...)
+│   └── tools/              #   `python -m` utilities (surge_xt_interactive, plot_param2tok, ...)
 │
 ├── configs/                # Hydra YAML configs (and SkyPilot Task templates under compute/)
 │   ├── dataset.yaml        #   Root dataset-generation config (entrypoint mirrors train.yaml / eval.yaml)

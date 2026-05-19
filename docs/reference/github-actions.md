@@ -67,7 +67,7 @@ For GitHub Actions concepts, see [GitHub's docs](https://docs.github.com/en/acti
 **Reusable workflow calls (`workflow_call`):**
 
 - `test-spec-materialization` calls `spec-materialization`
-- `test-dataset-generation` calls `generate-dataset-shards` (per provider for `skypilot-local` / `runpod` / `oci`) and `validate-dataset-shards` (per provider for the validate matrix). The `local` cell stays inline — it doesn't go through the reusable; it runs `synth_setter.pipeline.ci.materialize_spec` + `src/synth_setter/tools/docker_entrypoint.py generate_dataset` inside the dev-snapshot image on the GH runner.
+- `test-dataset-generation` calls `generate-dataset-shards` (per provider for `skypilot-local` / `runpod` / `oci`) and `validate-dataset-shards` (per provider for the validate matrix).
 
 **Workflow-run triggers (`workflow_run`):**
 

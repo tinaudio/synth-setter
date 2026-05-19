@@ -118,9 +118,7 @@ ______________________________________________________________________
 The RunPod template exists today (data-pipeline smoke). Vast.ai template not yet implemented.
 
 **RunPod** (`configs/compute/runpod-template.yaml`) — landed. Abridged
-shape (see the file for the full template; the `os._exit(0)` workaround for
-[#735](https://github.com/tinaudio/synth-setter/issues/735) lives inside the
-`generate_dataset` subcommand of `src/synth_setter/tools/docker_entrypoint.py`):
+shape (see the file for the full template):
 
 The launcher injects `image_id` per-launch via `--worker-image-tag` (default `dev-snapshot`) for non-OCI backends, so the template no longer carries a literal `image_id: docker:tinaudio/synth-setter:dev-snapshot`:
 
@@ -261,4 +259,4 @@ This document does not duplicate content from authoritative sources. Consult the
 | Training architecture                 | `training-pipeline.md`       | Phase plan, design decisions, stage definitions                |
 | Data pipeline config → spec flow      | `data-pipeline.md` §14       | Schema design, materialization, validation boundaries          |
 | Eval pipeline architecture            | `eval-pipeline.md`           | Three-stage pipeline, R2 integration, config pinning           |
-| Docker image contract                 | `docker-spec.md`             | Entrypoint modes, env vars, image targets                      |
+| Docker image contract                 | `docker.md`                  | Image targets, env vars, run patterns                          |

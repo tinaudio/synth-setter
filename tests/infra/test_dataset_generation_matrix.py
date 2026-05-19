@@ -2,10 +2,10 @@
 
 The PR exercises both `hdf5` and `wds` shard formats through the same generate +
 validate plumbing. These tests parse `test-dataset-generation.yml` and assert
-that the `output_format` axis is wired into both the `generate-local` and
-`generate-launcher` strategy matrices, and that cluster names + spec URIs are
-namespaced by `matrix.output_format` so the matrix cells don't collide on the
-launcher's R2 spec key.
+that the `output_format` axis is wired into the `generate-launcher` strategy
+matrix, and that cluster names + spec URIs are namespaced by
+`matrix.output_format` so the matrix cells don't collide on the launcher's R2
+spec key.
 
 Kept as a stand-alone YAML parse (no `act`) so the assertion runs on every CI
 worker without needing the `act` binary on PATH.
@@ -19,7 +19,7 @@ import pytest
 import yaml
 
 WORKFLOW_RELATIVE_PATH = Path(".github") / "workflows" / "test-dataset-generation.yml"
-LAUNCHER_JOBS = ("generate-local", "generate-launcher")
+LAUNCHER_JOBS = ("generate-launcher",)
 
 
 @pytest.fixture(scope="module")
@@ -38,7 +38,7 @@ def test_generate_job_has_output_format_matrix_axis(workflow: dict, job_name: st
     """Assert both generate jobs declare an `output_format` strategy.matrix axis.
 
     :param workflow: Parsed workflow YAML from the module-scoped fixture.
-    :param job_name: One of `generate-local` / `generate-launcher` (parametrized).
+    :param job_name: The generate job (parametrized; currently `generate-launcher`).
     """
     job = workflow["jobs"][job_name]
     matrix = job["strategy"]["matrix"]
@@ -53,7 +53,7 @@ def test_generate_job_cluster_name_includes_output_format(workflow: dict, job_na
     """Assert cluster name interpolates `matrix.output_format` so the cells diverge.
 
     :param workflow: Parsed workflow YAML from the module-scoped fixture.
-    :param job_name: One of `generate-local` / `generate-launcher` (parametrized).
+    :param job_name: The generate job (parametrized; currently `generate-launcher`).
     """
     job = workflow["jobs"][job_name]
     cluster_template = _cluster_name_template(job, job_name)
@@ -136,13 +136,11 @@ def _cluster_name_template(job: dict, job_name: str) -> str:
     """Return the cluster_name interpolation string for a generate job.
 
     :param job: Parsed job dict.
-    :param job_name: `generate-local` reads `env.CLUSTER_NAME`; the launcher variant
-        reads `with.cluster_name` (reusable workflow input).
+    :param job_name: Job name. The launcher job reads `with.cluster_name`
+        (reusable workflow input).
     :returns: Raw `${{ ... }}` template string, unresolved.
     :rtype: str
     """
-    if job_name == "generate-local":
-        return job["env"]["CLUSTER_NAME"]
     return job["with"]["cluster_name"]
 
 

@@ -409,16 +409,13 @@ RUN uv pip install --no-deps -e .
 # Run not-slow unit tests (mocked subprocess + LocalFakeUploader — no VST or R2 needed)
 RUN pytest -k "not slow" -v
 
-COPY src/synth_setter/tools/docker_entrypoint.py /usr/local/bin/entrypoint.py
-RUN chmod +x /usr/local/bin/entrypoint.py
 # No ENTRYPOINT: SkyPilot's RunPod backend launches the pod with
-# `dockerArgs: "bash -c '<base64-setup>'"`, and a baked-in click-CLI
-# ENTRYPOINT would prepend `python entrypoint.py`, turning that into
-#   python entrypoint.py bash -c '...'
-# which crashes with `Error: No such command 'bash'` before SkyPilot can
-# SSH in. Default CMD is /bin/bash so `docker run img` (no args) lands in
-# a shell. Callers that want the click CLI invoke it explicitly:
-#   docker run img python /usr/local/bin/entrypoint.py generate_dataset --spec /path/spec.json
+# `dockerArgs: "bash -c '<base64-setup>'"`, and a baked-in ENTRYPOINT would
+# prepend the entrypoint program, turning that into
+#   <entrypoint> bash -c '...'
+# which crashes before SkyPilot can SSH in. Default CMD is /bin/bash so
+# `docker run img` (no args) lands in a shell. Callers invoke specific
+# console scripts (`synth-setter-generate-dataset`, etc.) explicitly.
 CMD ["/bin/bash"]
 
 # ==========================================

@@ -172,9 +172,6 @@ ignore = ["E501", "S101"]
 "src/synth_setter/tools/paramspec_to_table.py" = ["E402", "T201", "D102", "D103", "D107"]
 "src/synth_setter/tools/plot_param2tok.py" = ["E402", "E741", "F841", "T201", "D102", "D103", "D107"]
 "src/synth_setter/evaluation/predict_vst_audio.py" = ["E402", "F841", "D102", "D103", "D107"]
-# S603/S606/S607: idle/passthrough use os.execvp by design — replace-process
-# semantics so Docker SIGTERM reaches the exec'd PID 1.
-"src/synth_setter/tools/docker_entrypoint.py" = ["S603", "S606", "S607", "D102", "D103", "D107"]
 # S603/S607: rclone subprocess calls use CLI args (user-controlled, not untrusted input).
 # T201: click.echo used for CLI output.
 "src/synth_setter/pipeline/data/r2_report.py" = ["S603", "S607", "T201", "D102", "D103", "D107"]
@@ -200,7 +197,6 @@ ignore = ["E501", "S101"]
 "tests/test_benchmarks.py" = ["ANN001", "D102", "D103", "D107"]
 "tests/test_compare_baseline_configs.py" = ["D102", "D103", "D107"]
 "tests/test_configs.py" = ["ANN001", "D102", "D103", "D107"]
-"tests/tools/test_docker_entrypoint.py" = ["D102", "D103", "D107"]
 "tests/test_logging_utils.py" = ["D102", "D103", "D107"]
 "src/synth_setter/cli/eval.py" = ["E402", "F841", "D102", "D103", "D107"]
 # ANN001: directory-wide ignore for legacy untyped function args under synth_setter/models/.

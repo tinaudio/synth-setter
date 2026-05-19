@@ -19,8 +19,6 @@ docs:
         covers: "Dockerfile stages, base images, layer structure, BuildKit secret mounts, devcontainer-tools stage"
       - pattern: ".devcontainer/Dockerfile"
         covers: "Dev container wrapper over devcontainer-tools stage, per-developer customization"
-      - pattern: "src/synth_setter/tools/docker_entrypoint.py"
-        covers: "Click-based Python ENTRYPOINT — subcommand dispatch (idle, passthrough, generate_dataset, render_eval, train) with per-mode --spec parsing"
       - pattern: "src/synth_setter/pipeline/schemas/image_config.py"
         covers: "Pydantic model fields, validation behavior, strict/forbid semantics"
       - pattern: "configs/image/**"
@@ -32,17 +30,6 @@ docs:
         covers: "Headless X11 bootstrap, Xvfb setup, LIBGL_ALWAYS_SOFTWARE"
       - pattern: ".github/workflows/docker-build-validation.yml"
         covers: "CI steps, required secrets, tag scheme, smoke test flow, devcontainer-tools publish"
-
-  # ── Docker spec (the contract doc) ──────────────────────────────
-  - doc: docs/reference/docker-spec.md
-    description: Image target contract, entrypoint modes, env var spec
-    sources:
-      - pattern: "src/synth_setter/tools/docker_entrypoint.py"
-        covers: "Click-based Python ENTRYPOINT — subcommand dispatch with per-mode --spec, exit codes, error handling"
-      - pattern: "docker/**"
-        covers: "Target names, stage dependencies, what each target produces"
-      - pattern: "src/synth_setter/pipeline/schemas/image_config.py"
-        covers: "ImageConfig fields that define the target contract"
 
   # ── W&B integration reference ───────────────────────────────────
   - doc: docs/reference/wandb-integration.md
@@ -101,9 +88,7 @@ docs:
       - pattern: "configs/compute/runpod-template.yaml"
         covers: "SkyPilot Task YAML for RunPod: resources block, image_id injected per-launch by the launcher (`--worker-image-tag`, default `dev-snapshot`) via `_override_image_id`, env-var injection (RCLONE_CONFIG_R2_*), R2-URI spec contract (WORKER_SPEC_URI consumed by load_spec_from_uri in the worker)"
       - pattern: "configs/compute/oci-cpu-template.yaml"
-        covers: "SkyPilot Task YAML for OCI CPU: resources block (Flex shape, no image_id — OCI rejects `docker:<image>`, so `_override_image_id` skips OCI Resources and the worker image is fed via the `WORKER_IMAGE` env), docker-in-run worker invocation, --privileged hammer for Xvfb/dbus (#776), delegates WORKER_GIT_REF checkout + uv install to `scripts/sync_worker_checkout.sh`, then `python -m synth_setter.tools.docker_entrypoint generate_dataset` against the synced checkout."
-      - pattern: "src/synth_setter/tools/docker_entrypoint.py"
-        covers: "Container entrypoint click CLI invoked by RunPod and OCI run: blocks against the synced checkout (`python -m synth_setter.tools.docker_entrypoint generate_dataset --spec $WORKER_SPEC_URI`); the same module is also baked at `/usr/local/bin/entrypoint.py` for use in non-checkout contexts. The generate_dataset subcommand parses --spec into DatasetSpec, calls run(), then forces interpreter exit (#735 defensive workaround) to bypass any lingering atexit hangs."
+        covers: "SkyPilot Task YAML for OCI CPU: resources block (Flex shape, no image_id — OCI rejects `docker:<image>`, so `_override_image_id` skips OCI Resources and the worker image is fed via the `WORKER_IMAGE` env), docker-in-run worker invocation, --privileged hammer for Xvfb/dbus (#776), delegates WORKER_GIT_REF checkout + uv install to `scripts/sync_worker_checkout.sh`, then invokes `synth-setter-generate-dataset-from-hydra` against the synced checkout."
       - pattern: "docker/ubuntu22_04/ensure_plugin_symlinks.sh"
         covers: "Idempotent helper that recreates the plugins/<plugin>.vst3 symlink that the Dockerfile bakes but that GHA workflows destroy when they bind-mount $(pwd) over /home/build/synth-setter. Reads SYNTH_SETTER_PLUGIN_PATH (default /usr/lib/vst3/Surge XT.vst3)."
       - pattern: "scripts/sync_worker_checkout.sh"
@@ -113,7 +98,7 @@ docs:
       - pattern: "docker/ubuntu22_04/run-linux-vst-headless.sh"
         covers: "Headless wrapper cleanup contract on RunPod (drop exec on dbus-run-session, </dev/null detach on backgrounded daemons, wait + pkill -P $$ to reap orphan grandchildren); load-bearing for SkyPilot's job-status reporter to observe SSH-pipe EOF"
       - pattern: ".github/workflows/test-dataset-generation.yml"
-        covers: "End-to-end smoke matrixed over `local` (PR default, in-runner container, no SkyPilot) + RunPod + OCI (manual dispatch): generate → validate-spec → validate-shard, per-provider artifacts. Cred bootstrap is gated on SKYPILOT_API_SERVER_ENDPOINT — see #785."
+        covers: "End-to-end smoke matrixed over `skypilot-local` (PR default, kind cluster) + RunPod + OCI (manual dispatch): generate → validate-spec → validate-shard, per-provider artifacts. Cred bootstrap is gated on SKYPILOT_API_SERVER_ENDPOINT — see #785."
       - pattern: ".github/workflows/test-skypilot-debug.yml"
         covers: "Permanent diagnostic matrix for the SkyPilot+RunPod path (workflow_dispatch only). Same cred-bootstrap gate as test-dataset-generation: writer is invoked iff SKYPILOT_API_SERVER_ENDPOINT is unset."
       - pattern: ".github/workflows/test-skypilot-local.yml"
@@ -121,7 +106,7 @@ docs:
       - pattern: "configs/compute/local-debug-rclone-template.yaml"
         covers: "SkyPilot Task YAML for the kubernetes backend (no `image_id`, defers to SkyPilot's stock kube image). Setup installs rclone; run uploads a sentinel file to R2 with the same flags the production worker uses. Used by test-skypilot-local.yml."
       - pattern: "configs/compute/local-template.yaml"
-        covers: "SkyPilot Task YAML for the kind/kubernetes 'local' provider (production-path local smoke, distinct from local-debug-rclone-template.yaml). Resources block sized for GHA-kind allocatable (cpus 1+, memory 4+, no disk_size); run: block invokes sync_worker_checkout.sh then docker_entrypoint.py generate_dataset. Spec object is keyed by job-name (skypilot-launcher-specs/<job>.json)."
+        covers: "SkyPilot Task YAML for the kind/kubernetes 'local' provider (production-path local smoke, distinct from local-debug-rclone-template.yaml). Resources block sized for GHA-kind allocatable (cpus 1+, memory 4+, no disk_size); run: block invokes sync_worker_checkout.sh then `synth-setter-generate-dataset-from-hydra`. Spec object is keyed by job-name (skypilot-launcher-specs/<job>.json)."
       - pattern: "scripts/skypilot/capture-state.sh"
         covers: "Best-effort kube-apiserver + controller on-pod sky_logs snapshot called from generate-dataset-shards.yaml (skypilot-local row) before `sky local down` reaps the kind cluster. Captures pod describes, events, controller logs, and the controller's provision.log so scheduling-side hangs are diagnosable post-mortem (#876). Bash-3.2 portable so the same script runs on macOS CI."
       - pattern: "pyproject.toml"
@@ -349,8 +334,6 @@ docs:
   #       scope: "rclone"
   #     - pattern: "src/synth_setter/pipeline/data/r2_report.py"
   #       covers: "rclone ls command, --size-threshold-gib, CLI usage"
-  #     - pattern: "src/synth_setter/tools/docker_entrypoint.py"
-  #       covers: "Post-shard-validation upload trigger (future)"
   #     - pattern: "docs/design/storage-provenance-spec.md"
   #       covers: "R2 bucket layout, path conventions, --checksum rule"
   #       scope: "rclone-rules"

@@ -267,8 +267,7 @@ across lines to "satisfy" the rule is not.
   deletions, not exclude-list edits.
 - `# noqa` / `# nosec` only with a justification comment explaining why.
   For `D401` on placeholder command stubs that genuinely name a noun (not
-  an action), `# noqa: D401` is acceptable — there are two existing
-  examples in `src/synth_setter/tools/docker_entrypoint.py`.
+  an action), `# noqa: D401` is acceptable.
 - If a file requires functional changes to pass lint (e.g., unused
   imports that are actually used dynamically), skip it and leave a
   comment on [#938](https://github.com/tinaudio/synth-setter/issues/938)

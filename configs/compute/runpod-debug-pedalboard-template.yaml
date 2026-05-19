@@ -8,9 +8,8 @@
 # cleanly-exiting process."
 #
 # This is the canary for bug #3 in #735 (Python interpreter shutdown
-# hang). Once the underlying thread leak is fixed at its source and the
-# `os._exit(0)` workaround in src/synth_setter/tools/docker_entrypoint.py is reverted,
-# this variant should still pass — proving the fix.
+# hang). Once the underlying thread leak is fixed at its source, this
+# variant should still pass — proving the fix.
 
 resources:
   cloud: runpod

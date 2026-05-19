@@ -190,7 +190,7 @@ The block-scalar should contain only commands. The reader who wants to know *why
     - `stages/` — generate and finalize stage logic (planned — [#72](https://github.com/tinaudio/synth-setter/issues/72))
     - `backends/` — compute providers: local, RunPod (planned — [#71](https://github.com/tinaudio/synth-setter/issues/71))
   - `evaluation/` — `predict_vst_audio`, `compute_audio_metrics` library code called by `cli/eval.py` (Phase 4).
-  - `tools/` — `python -m` utilities (`surge_xt_interactive`, `plot_param2tok`, `docker_entrypoint`, ...; Phase 4).
+  - `tools/` — `python -m` utilities (`surge_xt_interactive`, `plot_param2tok`, ...; Phase 4).
 - `scripts/` — SkyPilot / CI shell tooling under `skypilot/` and `ci/` subdirectories. `sync_worker_checkout.sh` is intentionally kept at the bare root (SkyPilot bake-lag bootstrap; see [5992aff](https://github.com/tinaudio/synth-setter/commit/5992aff)).
 - `configs/` — Hydra YAML configs. `dataset.yaml` is the top-level datagen entrypoint config (mirrors `train.yaml` / `eval.yaml`); see `configs/dataset.yaml`'s `defaults:` for its composition groups
 - `tests/` — mirrors `src/synth_setter/` (including `tests/pipeline/` for `src/synth_setter/pipeline/`)

@@ -5,9 +5,6 @@
 How to build, run, and debug Docker images for the synth-setter training
 pipeline. Intended for developers working locally or in CI environments.
 
-For the image target contract, entrypoint modes, and env var spec, see
-[docker-spec.md](docker-spec.md).
-
 ______________________________________________________________________
 
 ## 1. Setup
@@ -27,7 +24,7 @@ ______________________________________________________________________
 
 The target R2 bucket is **not** an env var — it is a required field on
 `DatasetSpec.r2.bucket` and flows into the container via the materialized
-spec passed to `generate_dataset --spec`.
+spec consumed by the dataset-generation entrypoint.
 
 ```bash
 # Source credentials into current shell
@@ -38,12 +35,11 @@ set -a && source .env && set +a
 
 The image contains no baked credentials and is safe to publish on public
 registries. All credentials flow in at runtime via environment variables;
-dispatch and dataset-run configuration flow via CLI args (subcommand +
-`--spec`). This table enumerates the credentials and required overrides
-callers **must** supply at `docker run` time — the **single source of
-truth** for that contract. Baked defaults (e.g. `SYNTH_SETTER_PLUGIN_PATH`)
-that callers may override are listed under
-[docker-spec.md § Baked ENV vars](docker-spec.md#baked-env-vars-available-at-runtime).
+dispatch and dataset-run configuration flow via CLI args. This table
+enumerates the credentials and required overrides callers **must** supply
+at `docker run` time — the **single source of truth** for that contract.
+`SYNTH_SETTER_PLUGIN_PATH` is baked at `/usr/lib/vst3/Surge XT.vst3` and
+may be overridden via `-e`.
 
 | Env var                              | Consumer  | Required for       | Notes                                       |
 | ------------------------------------ | --------- | ------------------ | ------------------------------------------- |
@@ -86,7 +82,7 @@ After building, verify the image works:
 
 ```bash
 docker run --rm synth-setter:dev-snapshot \
-  python /usr/local/bin/entrypoint.py passthrough python -c "import torch; print('torch', torch.__version__)"
+  python -c "import torch; print('torch', torch.__version__)"
 ```
 
 ______________________________________________________________________
@@ -185,80 +181,58 @@ ______________________________________________________________________
 
 ### Entrypoint
 
-`dev-snapshot` has **no baked `ENTRYPOINT`** (dropped in
-[#721](https://github.com/tinaudio/synth-setter/pull/721) so SkyPilot's
-RunPod backend, which prepends its own `bash -lc` invocation, doesn't
-end up exec'ing our click group with stray argv). Callers invoke the
-click group explicitly:
-
-The click CLI is copied to `/usr/local/bin/entrypoint.py` (see
-`docker/ubuntu22_04/Dockerfile`). Invoke it via:
-
-```bash
-docker run --rm synth-setter:dev-snapshot \
-  python /usr/local/bin/entrypoint.py <subcommand> [...]
-```
-
-The click group has five subcommands (`idle`, `passthrough`,
-`generate_dataset`, `render_eval`, `train`); a subcommand is required —
-the group fails loudly if invoked with none. See
-[docker-spec.md](docker-spec.md) for the full table.
-
-Prefer `docker run --env-file .env` over `set -a && source .env` to avoid
-polluting your host shell:
+`dev-snapshot` has **no baked `ENTRYPOINT`**, and the default `CMD` is
+`/bin/bash`. Callers run the console scripts shipped by the installed
+`synth_setter` package directly:
 
 ```bash
 docker run --rm --env-file .env synth-setter:dev-snapshot \
-  python /usr/local/bin/entrypoint.py passthrough ...
+  synth-setter-generate-dataset experiment=<name>
 ```
 
-### `idle` — debug shell
+Available console scripts (declared in `pyproject.toml`'s
+`[project.scripts]`): `synth-setter-train`, `synth-setter-eval`,
+`synth-setter-generate-dataset`, `synth-setter-generate-dataset-from-hydra`,
+`synth-setter-spec-uri`.
+
+Prefer `docker run --env-file .env` over `set -a && source .env` to avoid
+polluting your host shell.
+
+### Debug shell
 
 ```bash
-docker run -d --name debug synth-setter:dev-snapshot \
-  python /usr/local/bin/entrypoint.py idle
-docker exec -it debug bash
-# Clean up when done
-docker stop debug && docker rm debug
+docker run --rm -it synth-setter:dev-snapshot bash
 ```
 
-### `passthrough` — run a command
+### Running ad-hoc commands
+
+`docker run` with trailing argv executes the argv inside the container.
+Add `--env-file .env` for any invocation that needs R2 (`rclone` operations)
+or W&B logging.
 
 ```bash
-# Run a one-off command (no creds needed — just a torch import)
 docker run --rm synth-setter:dev-snapshot \
-  python /usr/local/bin/entrypoint.py passthrough \
   python -c "import torch; print(torch.cuda.is_available())"
 ```
 
-> **Note:** add `--env-file .env` to any passthrough invocation that needs
-> R2 (`rclone` operations) or W&B logging. `passthrough` with no trailing
-> argv fails loudly (non-zero exit) — there is no silent-no-op mode.
-
 ### `generate_dataset` — VST dataset generation
 
-Generates one or more VST dataset shards (looping over `spec.shards`) via `generate_vst_dataset.py` under
-headless X11 (Xvfb). The click entrypoint itself is X11-agnostic; the
-headless bootstrap (`docker/ubuntu22_04/run-linux-vst-headless.sh`) is applied
-inside `synth_setter.cli.generate_dataset.run()` at the
-audio-rendering boundary, wrapping only the generator subprocess — so
-`idle` and `passthrough` don't pay the Xvfb startup cost.
-
-Pass the materialized spec via `--spec <path>`. All dataset-run
-configuration, including the target R2 bucket, lives in that spec
-(`DatasetSpec.r2.bucket`).
+Generates one or more VST dataset shards (looping over `spec.shards`) via
+`generate_vst_dataset.py` under headless X11 (Xvfb). The headless bootstrap
+(`docker/ubuntu22_04/run-linux-vst-headless.sh`) is applied inside
+`synth_setter.cli.generate_dataset.run()` at the audio-rendering boundary,
+wrapping only the generator subprocess.
 
 **Required env vars:** See § Runtime environment variables above. For
-this subcommand you need the 5 `RCLONE_CONFIG_R2_*` vars (for rclone
+dataset generation you need the 5 `RCLONE_CONFIG_R2_*` vars (for rclone
 auth) and `WANDB_API_KEY` (if W&B logging is enabled in the dataset
 config).
 
 ```bash
 docker run --rm \
   --env-file .env \
-  -v "$(pwd)/run-metadata:/run-metadata" \
   synth-setter:dev-snapshot \
-  python /usr/local/bin/entrypoint.py generate_dataset --spec /run-metadata/input_spec.json
+  synth-setter-generate-dataset experiment=generate_dataset/smoke-shard
 ```
 
 The example assumes your `.env` already contains the 5 `RCLONE_CONFIG_R2_*`
@@ -304,14 +278,13 @@ jq -r .r2.prefix input_spec.json
 
 ### Headless VST
 
-VST3 plugins (Surge XT) require an X11 display. For `generate_dataset`,
+VST3 plugins (Surge XT) require an X11 display. For dataset generation,
 X11 is bootstrapped automatically around the generator subprocess inside
-`run()`. For ad-hoc VST work through `passthrough`, prepend the headless
-wrapper to your command:
+`run()`. For ad-hoc VST work, prepend the headless wrapper to your command:
 
 ```bash
 docker run --rm synth-setter:dev-snapshot \
-  passthrough docker/ubuntu22_04/run-linux-vst-headless.sh \
+  docker/ubuntu22_04/run-linux-vst-headless.sh \
     python -c "
       from pedalboard import VST3Plugin
       p = VST3Plugin('/usr/lib/vst3/Surge XT.vst3')
@@ -408,8 +381,7 @@ ______________________________________________________________________
 docker exec -it <container> bash
 
 # Start a fresh interactive debug session (drops into a shell)
-docker run --rm -it synth-setter:dev-snapshot \
-  python /usr/local/bin/entrypoint.py passthrough bash
+docker run --rm -it synth-setter:dev-snapshot bash
 ```
 
 ### OOM during builds
@@ -443,41 +415,10 @@ docker buildx prune
 To clear the remote registry cache, delete the `buildcache` tag from Docker Hub
 (Settings → Tags → `buildcache` → Delete).
 
-### Entrypoint errors
-
-| Error                                    | Cause                               | Fix                                                                                            |
-| ---------------------------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `Missing subcommand`                     | Ran the image with no subcommand    | Append one of: `idle`, `passthrough <cmd>`, `generate_dataset --spec <path>`                   |
-| `No such command 'X'`                    | Typo in subcommand name             | Use one of `idle`, `passthrough`, `generate_dataset`, `render_eval`, `train`                   |
-| `passthrough requires a command to exec` | Ran `passthrough` with no argv      | Append the command and its args after `passthrough`                                            |
-| `Unable to read spec at ...`             | `--spec` path is missing/unreadable | Confirm the path exists inside the container (bind mount + filename)                           |
-| `Invalid spec at ...`                    | Spec JSON fails pydantic validation | Re-materialize the spec; see `synth_setter.pipeline.ci.materialize_spec` (CI bootstrap script) |
-
 ______________________________________________________________________
 
-## 6. Scoped and planned modes
+## 6. Cross-references
 
-### Scoped — validated on experiment branch, pending port to main
-
-- **MODE=generate-shards** ([#407](https://github.com/tinaudio/synth-setter/issues/407)) — multi-shard parallel VST
-  dataset generation with R2 upload. Replaces `generate_dataset` (which becomes
-  deprecated, [#411](https://github.com/tinaudio/synth-setter/issues/411)).
-  See [data-pipeline.md](../design/data-pipeline.md) § Generate stage.
-- **MODE=finalize-shards** ([#408](https://github.com/tinaudio/synth-setter/issues/408)) — download shards from R2,
-  reshard into train/val/test, compute normalization stats, upload.
-- **MODE=train** ([#409](https://github.com/tinaudio/synth-setter/issues/409)) — download dataset from R2, run
-  `src/synth_setter/cli/train.py` via Hydra, upload checkpoints. Currently handled manually.
-
-### Planned — not yet implemented
-
-- **MODE=eval** ([#410](https://github.com/tinaudio/synth-setter/issues/410)) — download checkpoint + dataset,
-  run evaluation, upload results. Counterpart to `MODE=train`.
-
-______________________________________________________________________
-
-## 7. Cross-references
-
-- [docker-spec.md](docker-spec.md) — image target contract, entrypoint spec, env vars
 - rclone.md (planned — [#310](https://github.com/tinaudio/synth-setter/issues/310)) — R2 setup, Docker credential baking
 - [wandb-integration.md](wandb-integration.md) — W&B logging and auth
 - [data-pipeline.md](../design/data-pipeline.md) — pipeline architecture, worker provisioning
