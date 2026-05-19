@@ -2,8 +2,8 @@
 
 After every push to a PR branch, drive the readiness loop until the PR clears
 the four gates below. **Do not stop after the first push.** "I pushed the fix"
-is not the same as "the PR is ready." The summary line in
-[`AGENTS.md`](../AGENTS.md#prs) points here for the full procedure.
+is not the same as "the PR is ready." The summary line in the project's
+`AGENTS.md` (under `## PRs`) points here for the full procedure.
 
 ## The four gates
 
