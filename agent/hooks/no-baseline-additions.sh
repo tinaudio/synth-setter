@@ -68,9 +68,8 @@ print(count_rows(proposed))
 PY
 )
 
-  readarray -t _counts <<<"$counts"
-  old_count="${_counts[0]}"
-  new_count="${_counts[1]}"
+  # `read` (not `readarray`) so macOS bash 3.2 works. Each line is one integer.
+  { IFS= read -r old_count; IFS= read -r new_count; } <<<"$counts"
 
   # Arithmetic context is safe here: both operands are integer row counts emitted
   # by the Python block, and set -e tolerates the `(( ))` exit because BLOCK is
