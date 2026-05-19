@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779165130871,
+  "lastUpdate": 1779165921707,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -3438,6 +3438,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.038555264472961426,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "634276fe37cb382a37b829199852a53b234ab3fd",
+          "message": "chore(lint): fix DOC10x/20x docstrings across 21 tests/ files (#1112)\n\nAdds :param <fixture>: lines to every test docstring that previously\nsuppressed pydoclint with inline # noqa: DOC101/DOC103/DOC201/DOC203\nacross 21 test files (~140 test functions). Drops the suppressions.\nNo test body or signature changes.\n\nMirrors the docstring shape established by the pilot PR #1108\n(tests/schemas/test_paths_config.py).\n\nThis is the last phase of the inline-DOC-noqa cleanup chain. With this\nPR and the sibling Cluster A PR merged, make count-doc-noqa GATE=1\npasses (src=0, tests=0).\n\nRefs #1106",
+          "timestamp": "2026-05-19T00:24:19-04:00",
+          "tree_id": "07081ad9b2d802f6ef9b5c220d89fd0997a4a4a1",
+          "url": "https://github.com/tinaudio/synth-setter/commit/634276fe37cb382a37b829199852a53b234ab3fd"
+        },
+        "date": 1779165920828,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.7883636951446533,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 5.501246190245729,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.02593347802758217,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.03003627061843872,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.4162440299987793,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 11.704700648666678,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.112651824951172,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.647747170533985,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.02762124501168728,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.03714334964752197,
             "unit": "1-cos"
           },
           {
