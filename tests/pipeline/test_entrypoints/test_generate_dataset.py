@@ -262,7 +262,9 @@ class TestRun:
         """
         run(spec)
 
-        args = _renderer_argv_lists(patched_subprocess)[0]
+        renderer_calls = _renderer_argv_lists(patched_subprocess)
+        assert len(renderer_calls) == 1
+        args = renderer_calls[0]
         if sys.platform == "linux":
             assert args[0] == VST_HEADLESS_WRAPPER
             assert args[2] == "src/synth_setter/data/vst/generate_vst_dataset.py"
@@ -412,40 +414,69 @@ class TestRun:
         self,
         fake_r2_remote: Path,
         tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Each shard's local HDF5 is unlinked after upload to bound disk to one shard.
+        """Each shard's local HDF5 is unlinked between its upload and the next render.
 
-        Mid-flight verification: when the dispatcher's renderer branch runs for
-        shard N+1, every prior shard's local source file (recorded by the
-        rclone branch at copy time) must already be gone — production calls
-        ``shard_path.unlink()`` immediately after ``_rclone_copy`` returns.
-        Without this check the test would degrade to a tautology (the outer
-        ``tempfile.TemporaryDirectory`` cleanup wipes the dir wholesale on
-        ``run()`` return, so post-run absence proves nothing).
+        Verifies the disk-bounding invariant via an interleaved event stream
+        (renderer / rclone / unlink). For every shard the test asserts the
+        per-shard sequence ``(renderer, rclone, unlink)`` on the same path —
+        which proves both ordering (shard N is unlinked *before* shard N+1's
+        renderer runs) and final-shard coverage (the last shard's unlink is
+        recorded, not masked by the outer ``TemporaryDirectory`` teardown).
 
         :param fake_r2_remote: Local-typed R2 remote rooted at a tmp dir.
         :param tmp_path: Pytest tmp dir used by ``_multi_shard_spec``.
+        :param monkeypatch: Used to wrap ``Path.unlink`` with a call-recording
+            spy that delegates to the real implementation.
         """
         spec = _multi_shard_spec(tmp_path, n=3)
-        prior_local_paths: list[Path] = []
+        events: list[tuple[str, Path]] = []
 
-        def _track_unlink(args: list[str]) -> int:
+        def _record_dispatcher(args: list[str]) -> int:
             if args and args[0] == "rclone":
-                # rclone copy argv ends with [src, dest]; record src for the
-                # next-renderer unlink check.
-                prior_local_paths.append(Path(args[-2]))
+                # rclone copy argv ends with [src, dest]; the src is the
+                # just-rendered shard's local path.
+                events.append(("rclone", Path(args[-2])))
                 return _REAL_CHECK_CALL(args)
-            for prior in prior_local_paths:
-                assert not prior.exists(), f"local shard not unlinked: {prior}"
+            out_path = Path(args[_find_script_index(args) + 1])
+            events.append(("renderer", out_path))
             return _materialize_shard(args)
+
+        real_unlink = Path.unlink
+
+        def _spy_unlink(self: Path, missing_ok: bool = False) -> None:
+            events.append(("unlink", self))
+            real_unlink(self, missing_ok=missing_ok)
+
+        monkeypatch.setattr(Path, "unlink", _spy_unlink)
 
         with patch(
             "synth_setter.cli.generate_dataset.subprocess.check_call",
-            side_effect=_track_unlink,
+            side_effect=_record_dispatcher,
         ):
             run(spec)
 
-        assert len(prior_local_paths) == 3
+        # Restrict unlink events to those targeting an uploaded shard source —
+        # the spy captures every Path.unlink in-process, but only shard-source
+        # unlinks are part of the disk-bounding contract under test.
+        upload_sources = [p for kind, p in events if kind == "rclone"]
+        shard_paths = set(upload_sources)
+        shard_events = [
+            (kind, p)
+            for kind, p in events
+            if kind in ("renderer", "rclone") or (kind == "unlink" and p in shard_paths)
+        ]
+        expected = [
+            entry
+            for src in upload_sources
+            for entry in (("renderer", src), ("rclone", src), ("unlink", src))
+        ]
+        assert len(upload_sources) == 3
+        assert shard_events == expected, (
+            "per-shard sequence (renderer, rclone, unlink) was not maintained: "
+            f"got {shard_events!r}, expected {expected!r}"
+        )
         for shard in spec.shards:
             assert (fake_r2_remote / spec.r2.bucket / spec.r2.prefix / shard.filename).is_file()
 
