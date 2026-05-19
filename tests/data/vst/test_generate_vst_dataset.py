@@ -1196,7 +1196,7 @@ def test_generate_sample_retries_when_only_fixed_note_params(
     assert sample.note_params == _HARDCODED_NOTE_PARAMS
 
 
-def _install_fake_render_params(  # noqa: DOC203
+def _install_fake_render_params(
     monkeypatch: pytest.MonkeyPatch,
     spec: ParamSpec,
     *,
@@ -1238,7 +1238,7 @@ def _install_fake_render_params(  # noqa: DOC203
 
 
 @pytest.mark.parametrize("num_retries", [0, 1, 3])
-def test_generate_sample_warmups_once_regardless_of_retries(  # noqa: DOC101,DOC103
+def test_generate_sample_warmups_once_regardless_of_retries(
     monkeypatch: pytest.MonkeyPatch, num_retries: int
 ) -> None:
     """``warmup=True`` invokes ``warmup_plugin`` exactly once across K loudness retries.
@@ -1249,6 +1249,9 @@ def test_generate_sample_warmups_once_regardless_of_retries(  # noqa: DOC101,DOC
     primitive must still fire at most once across the whole ``generate_sample``
     call — otherwise N retries blow past the ~3-4-calls-per-process budget.
     Asserts behavior (warm-up call count) rather than the ``warmup`` kwarg.
+
+    :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
+    :param num_retries: Parametrized ``num_retries`` value under test.
     """
     from synth_setter.data.vst import generate_vst_dataset
 
@@ -1272,7 +1275,7 @@ def test_generate_sample_warmups_once_regardless_of_retries(  # noqa: DOC101,DOC
 
 
 @pytest.mark.parametrize("num_retries", [0, 1, 3])
-def test_generate_sample_with_warmup_false_never_warms_across_retries(  # noqa: DOC101,DOC103
+def test_generate_sample_with_warmup_false_never_warms_across_retries(
     monkeypatch: pytest.MonkeyPatch, num_retries: int
 ) -> None:
     """``warmup=False`` is a hard zero: no ``warmup_plugin`` call regardless of retries.
@@ -1280,6 +1283,9 @@ def test_generate_sample_with_warmup_false_never_warms_across_retries(  # noqa: 
     Off-switch invariant — the caller asked for no warm-up, so the loudness
     retry loop must not re-introduce one. This is the symmetrical guarantee to
     ``test_generate_sample_warmups_once_regardless_of_retries``.
+
+    :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
+    :param num_retries: Parametrized ``num_retries`` value under test.
     """
     from synth_setter.data.vst import generate_vst_dataset
 
@@ -1302,7 +1308,7 @@ def test_generate_sample_with_warmup_false_never_warms_across_retries(  # noqa: 
     assert warmup_mock.call_count == 0
 
 
-def test_generate_sample_with_warmup_true_no_retries_warms_exactly_once(  # noqa: DOC101,DOC103
+def test_generate_sample_with_warmup_true_no_retries_warms_exactly_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Strict equality at zero retries: ``warmup_plugin`` fires once, not at least once.
@@ -1311,6 +1317,8 @@ def test_generate_sample_with_warmup_true_no_retries_warms_exactly_once(  # noqa
     warm-up primitive is invoked exactly once. Without this, a regression that
     silently double-warmed on the success path could slip past the retry tests
     (which only exercise the retry branch).
+
+    :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
     """
     from synth_setter.data.vst import generate_vst_dataset
 

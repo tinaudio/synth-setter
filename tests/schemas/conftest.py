@@ -35,12 +35,16 @@ def clean_global_hydra() -> Iterator[None]:
     )
 
 
-def _to_dict(node: Any) -> dict[str, Any]:  # noqa: DOC101,DOC103,DOC201,DOC203
-    """Resolve an OmegaConf node to ``dict[str, Any]`` for ``model_validate``."""
+def _to_dict(node: Any) -> dict[str, Any]:
+    """Resolve an OmegaConf node to ``dict[str, Any]`` for ``model_validate``.
+
+    :param node: OmegaConf container to resolve.
+    :return: Plain ``dict[str, Any]`` representation.
+    """
     return cast("dict[str, Any]", OmegaConf.to_container(node, resolve=False))
 
 
-def compose_train_cfg(  # noqa: DOC101,DOC103,DOC201,DOC203
+def compose_train_cfg(
     *,
     overrides: list[str] | None = None,
     return_hydra_config: bool = False,
@@ -50,6 +54,10 @@ def compose_train_cfg(  # noqa: DOC101,DOC103,DOC201,DOC203
     Default overrides pin ``data=ksin model=ffn trainer=cpu`` so the suite
     doesn't depend on root-config ``???`` sentinels; caller overrides are
     appended after.
+
+    :param overrides: Extra Hydra overrides appended after the defaults.
+    :param return_hydra_config: Forwarded to ``hydra.compose``.
+    :return: Composed config as a plain ``dict[str, Any]``.
     """
     selected_overrides = list(_DEFAULT_OVERRIDES)
     if overrides is not None:
@@ -63,11 +71,15 @@ def compose_train_cfg(  # noqa: DOC101,DOC103,DOC201,DOC203
     return _to_dict(cfg)
 
 
-def compose_subtree(group: str, name: str) -> dict[str, Any]:  # noqa: DOC101,DOC103,DOC201,DOC203
+def compose_subtree(group: str, name: str) -> dict[str, Any]:
     """Compose ``train.yaml`` with ``<group>=<name>`` selected and return that subtree.
 
     The subtree must be a dict; groups that compose to ``None`` (e.g.
     ``callbacks/none.yaml``) are unsupported and surfaced via assertion.
+
+    :param group: Hydra config group name (e.g. ``data``, ``model``).
+    :param name: Group member to select (e.g. ``ksin``, ``ffn``).
+    :return: The composed subtree at ``group`` as a ``dict[str, Any]``.
     """
     cfg_dict = compose_train_cfg(overrides=[f"{group}={name}"])
     subtree = cfg_dict[group]

@@ -65,10 +65,13 @@ class TestExtractRendererVersion:
 class TestLoadPluginNoWarmup:
     """``load_plugin`` is a pure loader — never calls ``show_editor`` by itself."""
 
-    def test_load_plugin_does_not_call_show_editor(  # noqa: DOC101,DOC103
+    def test_load_plugin_does_not_call_show_editor(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``load_plugin`` only constructs ``VST3Plugin``; warm-up lives in ``warmup_plugin``."""
+        """``load_plugin`` only constructs ``VST3Plugin``; warm-up lives in ``warmup_plugin``.
+
+        :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
+        """
         fake_plugin = MagicMock()
         monkeypatch.setattr(core, "VST3Plugin", lambda _path: fake_plugin)
 
@@ -101,10 +104,13 @@ class TestRenderParamsPreloadedPlugin:
         fake.process.side_effect = lambda *a, **kw: np.zeros(audio_shape, dtype=np.float32)
         return fake
 
-    def test_preloaded_plugin_bypasses_load_and_preset(  # noqa: DOC101,DOC103
+    def test_preloaded_plugin_bypasses_load_and_preset(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """When ``plugin`` is supplied, ``load_plugin`` and ``load_preset`` are not called."""
+        """When ``plugin`` is supplied, ``load_plugin`` and ``load_preset`` are not called.
+
+        :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
+        """
         load_calls: list[str] = []
         preset_calls: list[tuple[object, str]] = []
         monkeypatch.setattr(
@@ -138,10 +144,13 @@ class TestRenderParamsPreloadedPlugin:
         # The pre-loaded plugin is what ran the render.
         assert preloaded.process.called
 
-    def test_no_plugin_kwarg_reloads_per_call(  # noqa: DOC101,DOC103
+    def test_no_plugin_kwarg_reloads_per_call(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Without ``plugin``, ``render_params`` still loads the plugin and preset per call."""
+        """Without ``plugin``, ``render_params`` still loads the plugin and preset per call.
+
+        :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
+        """
         fake_plugin = self._fake_plugin(audio_shape=(2, 16))
         load_calls: list[str] = []
 
@@ -172,10 +181,13 @@ class TestRenderParamsPreloadedPlugin:
         assert load_calls == ["plugins/Surge XT.vst3"]
         assert preset_calls == [(fake_plugin, "presets/surge-base.vstpreset")]
 
-    def test_warmup_kwarg_runs_warmup_plugin_after_load(  # noqa: DOC101,DOC103
+    def test_warmup_kwarg_runs_warmup_plugin_after_load(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``warmup=True`` calls ``warmup_plugin`` on the freshly-loaded plugin."""
+        """``warmup=True`` calls ``warmup_plugin`` on the freshly-loaded plugin.
+
+        :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
+        """
         fake_plugin = self._fake_plugin(audio_shape=(2, 16))
         warmup_calls: list[object] = []
 
@@ -200,10 +212,13 @@ class TestRenderParamsPreloadedPlugin:
 
         assert warmup_calls == [fake_plugin]
 
-    def test_warmup_kwarg_runs_warmup_on_supplied_plugin(  # noqa: DOC101,DOC103
+    def test_warmup_kwarg_runs_warmup_on_supplied_plugin(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``warmup=True`` with a cached plugin warms the cached instance, not a fresh load."""
+        """``warmup=True`` with a cached plugin warms the cached instance, not a fresh load.
+
+        :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
+        """
         cached = self._fake_plugin(audio_shape=(2, 16))
         warmup_calls: list[object] = []
 

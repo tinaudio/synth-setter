@@ -43,17 +43,26 @@ def _sine(seconds: float = 1.0, freq: float = 440.0, amplitude: float = 0.5) -> 
     return (amplitude * np.sin(2 * np.pi * freq * t)).astype(np.float32).reshape(1, -1)
 
 
-def _write_wav(path: Path, audio: np.ndarray) -> None:  # noqa: DOC101,DOC103
-    """Write a ``(channels, N)`` array to ``path`` as a 44.1 kHz WAV file."""
+def _write_wav(path: Path, audio: np.ndarray) -> None:
+    """Write a ``(channels, N)`` array to ``path`` as a 44.1 kHz WAV file.
+
+    :param path: Destination filesystem path for the WAV.
+    :param audio: ``(channels, N)`` float32 audio to write.
+    """
     channels = audio.shape[0]
     with AudioFile(str(path), "w", _SR, channels) as f:
         f.write(audio)
 
 
-def _make_sample_dir(  # noqa: DOC101,DOC103,DOC201,DOC203
-    parent: Path, name: str, target: np.ndarray, pred: np.ndarray
-) -> Path:
-    """Create a ``sample_<name>`` directory with ``target.wav`` and ``pred.wav``."""
+def _make_sample_dir(parent: Path, name: str, target: np.ndarray, pred: np.ndarray) -> Path:
+    """Create a ``sample_<name>`` directory with ``target.wav`` and ``pred.wav``.
+
+    :param parent: Parent directory under which the sample directory is created.
+    :param name: Sample identifier (becomes the ``sample_<name>`` directory suffix).
+    :param target: ``target.wav`` audio array.
+    :param pred: ``pred.wav`` audio array.
+    :return: Path of the created sample directory.
+    """
     sample_dir = parent / f"sample_{name}"
     sample_dir.mkdir(parents=True, exist_ok=True)
     _write_wav(sample_dir / "target.wav", target)
@@ -62,8 +71,11 @@ def _make_sample_dir(  # noqa: DOC101,DOC103,DOC201,DOC203
 
 
 @pytest.fixture(autouse=True)
-def _reset_module_caches(monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: DOC101,DOC103
-    """Reset module-level ``scatter`` and ``pesto_model`` caches per test."""
+def _reset_module_caches(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reset module-level ``scatter`` and ``pesto_model`` caches per test.
+
+    :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
+    """
     monkeypatch.setattr(cam, "scatter", None, raising=True)
     monkeypatch.setattr(cam, "pesto_model", None, raising=True)
 
@@ -114,27 +126,39 @@ def test_compute_rms_quiet_nonzero_inputs_return_zero() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_subdir_matches_pattern_with_both_files_returns_true(tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-    """Both ``target.wav`` and ``pred.wav`` present → True."""
+def test_subdir_matches_pattern_with_both_files_returns_true(tmp_path: Path) -> None:
+    """Both ``target.wav`` and ``pred.wav`` present → True.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
     (tmp_path / "target.wav").touch()
     (tmp_path / "pred.wav").touch()
     assert subdir_matches_pattern(tmp_path) is True
 
 
-def test_subdir_matches_pattern_missing_target_returns_false(tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-    """Missing ``target.wav`` → False."""
+def test_subdir_matches_pattern_missing_target_returns_false(tmp_path: Path) -> None:
+    """Missing ``target.wav`` → False.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
     (tmp_path / "pred.wav").touch()
     assert subdir_matches_pattern(tmp_path) is False
 
 
-def test_subdir_matches_pattern_missing_pred_returns_false(tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-    """Missing ``pred.wav`` → False."""
+def test_subdir_matches_pattern_missing_pred_returns_false(tmp_path: Path) -> None:
+    """Missing ``pred.wav`` → False.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
     (tmp_path / "target.wav").touch()
     assert subdir_matches_pattern(tmp_path) is False
 
 
-def test_subdir_matches_pattern_empty_dir_returns_false(tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-    """Empty directory → False."""
+def test_subdir_matches_pattern_empty_dir_returns_false(tmp_path: Path) -> None:
+    """Empty directory → False.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
     assert subdir_matches_pattern(tmp_path) is False
 
 
@@ -143,8 +167,11 @@ def test_subdir_matches_pattern_empty_dir_returns_false(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_find_possible_subdirs_returns_only_matching_dirs(tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-    """Returns only subdirectories that contain both ``target.wav`` and ``pred.wav``."""
+def test_find_possible_subdirs_returns_only_matching_dirs(tmp_path: Path) -> None:
+    """Returns only subdirectories that contain both ``target.wav`` and ``pred.wav``.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
     good = tmp_path / "sample_0"
     good.mkdir()
     (good / "target.wav").touch()
@@ -158,8 +185,11 @@ def test_find_possible_subdirs_returns_only_matching_dirs(tmp_path: Path) -> Non
     assert result == [good]
 
 
-def test_find_possible_subdirs_skips_files(tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-    """Files in ``audio_dir`` are not considered candidate subdirectories."""
+def test_find_possible_subdirs_skips_files(tmp_path: Path) -> None:
+    """Files in ``audio_dir`` are not considered candidate subdirectories.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
     (tmp_path / "stray.wav").touch()
     good = tmp_path / "sample_0"
     good.mkdir()
@@ -170,8 +200,11 @@ def test_find_possible_subdirs_skips_files(tmp_path: Path) -> None:  # noqa: DOC
     assert result == [good]
 
 
-def test_find_possible_subdirs_empty_dir_returns_empty_list(tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-    """No subdirectories → empty list."""
+def test_find_possible_subdirs_empty_dir_returns_empty_list(tmp_path: Path) -> None:
+    """No subdirectories → empty list.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
     assert find_possible_subdirs(tmp_path) == []
 
 
@@ -191,10 +224,12 @@ def test_compute_mel_specs_returns_one_spec_per_mel_param() -> None:
     ("idx", "expected_n_mels"),
     [(0, 32), (1, 64), (2, 128)],
 )
-def test_compute_mel_specs_spec_has_expected_n_mels(  # noqa: DOC101,DOC103
-    idx: int, expected_n_mels: int
-) -> None:
-    """Each spec has finite values and the expected number of mel rows."""
+def test_compute_mel_specs_spec_has_expected_n_mels(idx: int, expected_n_mels: int) -> None:
+    """Each spec has finite values and the expected number of mel rows.
+
+    :param idx: Parametrized ``idx`` value under test.
+    :param expected_n_mels: Parametrized ``expected_n_mels`` value under test.
+    """
     audio = _sine(seconds=0.5)
     specs = compute_mel_specs(audio[0])
     assert specs[idx].shape[-2] == expected_n_mels
@@ -356,8 +391,11 @@ def test_compute_sot_different_inputs_is_finite_and_nonnegative() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_compute_metrics_on_dir_returns_expected_keys(tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-    """End-to-end on a single sample dir returns finite ``mss/wmfcc/sot/rms``."""
+def test_compute_metrics_on_dir_returns_expected_keys(tmp_path: Path) -> None:
+    """End-to-end on a single sample dir returns finite ``mss/wmfcc/sot/rms``.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
     sample_dir = _make_sample_dir(tmp_path, "0", _sine(seconds=0.5), _sine(seconds=0.5))
     metrics = compute_metrics_on_dir(sample_dir)
     assert set(metrics.keys()) == {"mss", "wmfcc", "sot", "rms"}
@@ -365,8 +403,11 @@ def test_compute_metrics_on_dir_returns_expected_keys(tmp_path: Path) -> None:  
         assert np.isfinite(value)
 
 
-def test_compute_metrics_on_dir_identical_files_yields_perfect_scores(tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-    """Identical target/pred → mss/wmfcc/sot ≈ 0 and rms == 1."""
+def test_compute_metrics_on_dir_identical_files_yields_perfect_scores(tmp_path: Path) -> None:
+    """Identical target/pred → mss/wmfcc/sot ≈ 0 and rms == 1.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
     audio = _sine(seconds=0.5)
     sample_dir = _make_sample_dir(tmp_path, "0", audio, audio)
     metrics = compute_metrics_on_dir(sample_dir)
@@ -381,8 +422,11 @@ def test_compute_metrics_on_dir_identical_files_yields_perfect_scores(tmp_path: 
 # ---------------------------------------------------------------------------
 
 
-def test_compute_metrics_writes_csv_with_expected_index_and_columns(tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-    """Writes a ``metrics-<pid>.csv`` with the trailing ``_N`` suffix as the row index."""
+def test_compute_metrics_writes_csv_with_expected_index_and_columns(tmp_path: Path) -> None:
+    """Writes a ``metrics-<pid>.csv`` with the trailing ``_N`` suffix as the row index.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
     audio_root = tmp_path / "audio"
     audio_root.mkdir()
     output_dir = tmp_path / "out"
@@ -413,8 +457,11 @@ def test_compute_metrics_writes_csv_with_expected_index_and_columns(tmp_path: Pa
 
 
 @pytest.mark.slow
-def test_main_writes_metrics_and_aggregated_csvs(tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-    """End-to-end Click CLI run produces ``metrics.csv`` and ``aggregated_metrics.csv``."""
+def test_main_writes_metrics_and_aggregated_csvs(tmp_path: Path) -> None:
+    """End-to-end Click CLI run produces ``metrics.csv`` and ``aggregated_metrics.csv``.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
     audio_root = tmp_path / "audio"
     audio_root.mkdir()
     metrics_dir = tmp_path / "metrics"

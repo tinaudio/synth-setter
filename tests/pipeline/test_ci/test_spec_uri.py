@@ -10,10 +10,13 @@ from synth_setter.pipeline.ci.spec_uri import compute_spec_uri, main
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 
 
-def _write_spec(  # noqa: DOC101,DOC103,DOC201,DOC203
-    tmp_path: Path, bucket: str = "intermediate-data"
-) -> Path:
-    """Materialize a minimal DatasetSpec JSON under ``tmp_path/input_spec.json``."""
+def _write_spec(tmp_path: Path, bucket: str = "intermediate-data") -> Path:
+    """Materialize a minimal DatasetSpec JSON under ``tmp_path/input_spec.json``.
+
+    :param tmp_path: Directory under which ``input_spec.json`` is written.
+    :param bucket: R2 bucket name baked into the spec.
+    :return: Path to the written ``input_spec.json``.
+    """
     spec = DatasetSpec(
         task_name="ci-task",
         output_format="hdf5",
@@ -42,16 +45,22 @@ def _write_spec(  # noqa: DOC101,DOC103,DOC201,DOC203
 class TestComputeSpecUri:
     """``compute_spec_uri`` builds the launcher's per-job R2 URI from spec + cluster."""
 
-    def test_returns_canonical_launcher_uri(self, tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-        """URI matches ``r2://<bucket>/skypilot-launcher-specs/<cluster>.json`` exactly."""
+    def test_returns_canonical_launcher_uri(self, tmp_path: Path) -> None:
+        """URI matches ``r2://<bucket>/skypilot-launcher-specs/<cluster>.json`` exactly.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
         spec_path = _write_spec(tmp_path)
         assert (
             compute_spec_uri(spec_path, "my-cluster-7")
             == "r2://intermediate-data/skypilot-launcher-specs/my-cluster-7.json"
         )
 
-    def test_legacy_flat_spec_still_resolves(self, tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-        """Specs already in R2 with flat ``r2_bucket`` keys still parse + emit URI."""
+    def test_legacy_flat_spec_still_resolves(self, tmp_path: Path) -> None:
+        """Specs already in R2 with flat ``r2_bucket`` keys still parse + emit URI.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
         legacy_text = tmp_path / "legacy.json"
         legacy_text.write_text(
             '{"task_name":"t","run_id":"t-20260328T120000000Z",'
@@ -75,33 +84,47 @@ class TestComputeSpecUri:
 class TestMainCli:
     """CLI entrypoint surface: argv handling, error paths, stdout shape."""
 
-    def test_prints_uri_to_stdout(  # noqa: DOC101,DOC103
+    def test_prints_uri_to_stdout(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """Happy path: argv resolves spec + cluster → exactly one URI line on stdout."""
+        """Happy path: argv resolves spec + cluster → exactly one URI line on stdout.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param monkeypatch: Pytest fixture used to set ``sys.argv``.
+        :param capsys: Pytest fixture capturing stdout/stderr.
+        """
         spec_path = _write_spec(tmp_path)
         monkeypatch.setattr("sys.argv", ["synth-setter-spec-uri", str(spec_path), "cluster-z"])
         main()
         out = capsys.readouterr().out.strip()
         assert out == "r2://intermediate-data/skypilot-launcher-specs/cluster-z.json"
 
-    def test_missing_args_exits_one(  # noqa: DOC101,DOC103
+    def test_missing_args_exits_one(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """Wrong-arity invocation surfaces a one-line usage error + exit 1."""
+        """Wrong-arity invocation surfaces a one-line usage error + exit 1.
+
+        :param monkeypatch: Pytest fixture used to set ``sys.argv``.
+        :param capsys: Pytest fixture capturing stdout/stderr.
+        """
         monkeypatch.setattr("sys.argv", ["synth-setter-spec-uri"])
         with pytest.raises(SystemExit) as exc:
             main()
         assert exc.value.code == 1
         assert "Usage:" in capsys.readouterr().err
 
-    def test_missing_spec_file_exits_two(  # noqa: DOC101,DOC103
+    def test_missing_spec_file_exits_two(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """A non-existent spec path exits 2 with a path-named error."""
+        """A non-existent spec path exits 2 with a path-named error.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param monkeypatch: Pytest fixture used to set ``sys.argv``.
+        :param capsys: Pytest fixture capturing stdout/stderr.
+        """
         missing = tmp_path / "missing.json"
         monkeypatch.setattr("sys.argv", ["synth-setter-spec-uri", str(missing), "cluster-a"])
         with pytest.raises(SystemExit) as exc:
@@ -109,13 +132,18 @@ class TestMainCli:
         assert exc.value.code == 2
         assert str(missing) in capsys.readouterr().err
 
-    def test_invalid_json_exits_three_without_traceback(  # noqa: DOC101,DOC103
+    def test_invalid_json_exits_three_without_traceback(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """Malformed JSON surfaces as exit 3 + one-line stderr (no traceback)."""
+        """Malformed JSON surfaces as exit 3 + one-line stderr (no traceback).
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param monkeypatch: Pytest fixture used to set ``sys.argv``.
+        :param capsys: Pytest fixture capturing stdout/stderr.
+        """
         bad = tmp_path / "broken.json"
         bad.write_text("{not-json")
         monkeypatch.setattr("sys.argv", ["synth-setter-spec-uri", str(bad), "cluster-b"])
@@ -126,13 +154,18 @@ class TestMainCli:
         assert str(bad) in err
         assert "Traceback" not in err
 
-    def test_schema_violation_exits_three_without_traceback(  # noqa: DOC101,DOC103
+    def test_schema_violation_exits_three_without_traceback(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """JSON that parses but fails DatasetSpec validation also exits 3."""
+        """JSON that parses but fails DatasetSpec validation also exits 3.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param monkeypatch: Pytest fixture used to set ``sys.argv``.
+        :param capsys: Pytest fixture capturing stdout/stderr.
+        """
         bad = tmp_path / "invalid.json"
         bad.write_text('{"task_name": "t"}')
         monkeypatch.setattr("sys.argv", ["synth-setter-spec-uri", str(bad), "cluster-c"])

@@ -25,8 +25,11 @@ _VALID_OPTIMIZER = {
 }
 
 
-def _all_model_config_names() -> list[str]:  # noqa: DOC201,DOC203
-    """Return YAML stems for every top-level model config (skipping subgroup dirs)."""
+def _all_model_config_names() -> list[str]:
+    """Return YAML stems for every top-level model config (skipping subgroup dirs).
+
+    :return: Sorted list of YAML stems found in ``configs/model/``.
+    """
     names = sorted(p.stem for p in _MODEL_CONFIG_DIR.glob("*.yaml"))
     assert names, f"no model YAMLs found under {_MODEL_CONFIG_DIR} — has the layout changed?"
     return names
@@ -36,8 +39,11 @@ class TestModelConfigAcceptsEveryConfig:
     """Every shipped model YAML must validate against ``ModelConfig``."""
 
     @pytest.mark.parametrize("model_name", _all_model_config_names())
-    def test_model_yaml_validates(self, model_name: str) -> None:  # noqa: DOC101,DOC103
-        """The composed ``model`` subtree validates as ``ModelConfig``."""
+    def test_model_yaml_validates(self, model_name: str) -> None:
+        """The composed ``model`` subtree validates as ``ModelConfig``.
+
+        :param model_name: Parametrized YAML stem under ``configs/model/``.
+        """
         model_subtree = compose_subtree("model", model_name)
         parsed = ModelConfig.model_validate(model_subtree)
         assert parsed.target_

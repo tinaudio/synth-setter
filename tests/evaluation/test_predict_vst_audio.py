@@ -38,14 +38,27 @@ _CHANNELS = 2
 _SAMPLES = 1024
 
 
-def _noise(channels: int, samples: int, *, seed: int = 0) -> np.ndarray:  # noqa: DOC101,DOC103,DOC201,DOC203
-    """Deterministic ``(channels, samples)`` float32 noise — non-silent input for librosa."""
+def _noise(channels: int, samples: int, *, seed: int = 0) -> np.ndarray:
+    """Deterministic ``(channels, samples)`` float32 noise — non-silent input for librosa.
+
+    :param channels: Number of audio channels.
+    :param samples: Number of audio samples per channel.
+    :param seed: Seed for the RNG to keep outputs deterministic.
+    :return: ``(channels, samples)`` float32 noise array.
+    """
     rng = np.random.default_rng(seed)
     return rng.standard_normal((channels, samples)).astype(np.float32)
 
 
-def _sine(channels: int, samples: int, *, freq: float, sr: float) -> np.ndarray:  # noqa: DOC101,DOC103,DOC201,DOC203
-    """Constant-amplitude sine, broadcast across all channels — non-silent and band-limited."""
+def _sine(channels: int, samples: int, *, freq: float, sr: float) -> np.ndarray:
+    """Constant-amplitude sine, broadcast across all channels — non-silent and band-limited.
+
+    :param channels: Number of audio channels.
+    :param samples: Number of audio samples per channel.
+    :param freq: Sine frequency in Hz.
+    :param sr: Sample rate in Hz.
+    :return: ``(channels, samples)`` float32 sine array.
+    """
     t = np.arange(samples, dtype=np.float32) / sr
     tone = 0.5 * np.sin(2 * np.pi * freq * t).astype(np.float32)
     return np.broadcast_to(tone, (channels, samples)).copy()
@@ -92,8 +105,11 @@ def test_make_spectrogram_pure_tone_peaks_near_expected_mel_bin() -> None:
 # ---------- write_spectrograms ----------
 
 
-def test_write_spectrograms_writes_png_to_disk(tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-    """A non-empty PNG (PNG magic bytes) should appear at ``save_path``."""
+def test_write_spectrograms_writes_png_to_disk(tmp_path: Path) -> None:
+    """A non-empty PNG (PNG magic bytes) should appear at ``save_path``.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
     out = tmp_path / "spec.png"
 
     write_spectrograms(_noise(2, 4096, seed=1), _noise(2, 4096, seed=2), _SR, str(out))
@@ -102,8 +118,11 @@ def test_write_spectrograms_writes_png_to_disk(tmp_path: Path) -> None:  # noqa:
     assert out.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
 
 
-def test_write_spectrograms_closes_figure_to_avoid_leaks(tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-    """Each call closes its figure — otherwise the render loop leaks one per sample."""
+def test_write_spectrograms_closes_figure_to_avoid_leaks(tmp_path: Path) -> None:
+    """Each call closes its figure — otherwise the render loop leaks one per sample.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
     plt.close("all")
     write_spectrograms(
         _noise(2, 4096, seed=1), _noise(2, 4096, seed=2), _SR, str(tmp_path / "spec.png")
@@ -115,15 +134,22 @@ def test_write_spectrograms_closes_figure_to_avoid_leaks(tmp_path: Path) -> None
 # ---------- params_to_csv ----------
 
 
-def _sample_param_dicts(seed: int = 0) -> tuple[dict[str, float], dict[str, float]]:  # noqa: DOC101,DOC103,DOC201,DOC203
-    """Deterministic ``(synth_params, note_params)`` pair via ``_PARAM_SPEC.decode``."""
+def _sample_param_dicts(seed: int = 0) -> tuple[dict[str, float], dict[str, float]]:
+    """Deterministic ``(synth_params, note_params)`` pair via ``_PARAM_SPEC.decode``.
+
+    :param seed: Seed for the per-call RNG.
+    :return: ``(synth_params, note_params)`` dict pair decoded from a random encoding.
+    """
     rng = np.random.default_rng(seed)
     encoded = rng.random(len(_PARAM_SPEC)).astype(np.float32)
     return _PARAM_SPEC.decode(encoded)
 
 
-def test_params_to_csv_writes_pred_and_target_columns(tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-    """Both dicts populated → CSV holds a row per pred key with finite values in both columns."""
+def test_params_to_csv_writes_pred_and_target_columns(tmp_path: Path) -> None:
+    """Both dicts populated → CSV holds a row per pred key with finite values in both columns.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
     pred_s, pred_n = _sample_param_dicts(seed=0)
     tgt_s, tgt_n = _sample_param_dicts(seed=1)
     out = tmp_path / "params.csv"
@@ -137,8 +163,11 @@ def test_params_to_csv_writes_pred_and_target_columns(tmp_path: Path) -> None:  
     assert bool(df["target"].notna().all())
 
 
-def test_params_to_csv_none_target_leaves_target_column_nan(tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-    """The CLI's ``--no-params`` path passes ``None`` past the source's stricter annotation."""
+def test_params_to_csv_none_target_leaves_target_column_nan(tmp_path: Path) -> None:
+    """The CLI's ``--no-params`` path passes ``None`` past the source's stricter annotation.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
     pred_s, pred_n = _sample_param_dicts()
     out = tmp_path / "params.csv"
 
@@ -152,20 +181,31 @@ def test_params_to_csv_none_target_leaves_target_column_nan(tmp_path: Path) -> N
 # ---------- main (click CLI) ----------
 
 
-def _fake_render(*_args: object, **_kwargs: object) -> np.ndarray:  # noqa: DOC101,DOC103,DOC201,DOC203
-    """Stand-in for ``render_params`` — only the ``(channels, samples)`` shape contract matters."""
+def _fake_render(*_args: object, **_kwargs: object) -> np.ndarray:
+    """Stand-in for ``render_params`` — only the ``(channels, samples)`` shape contract matters.
+
+    :param \\*_args: Ignored positional arguments forwarded by callers.
+    :param \\*\\*_kwargs: Ignored keyword arguments forwarded by callers.
+    :return: ``(_CHANNELS, _SAMPLES)`` float32 audio array.
+    """
     rng = np.random.default_rng(42)
     return rng.standard_normal((_CHANNELS, _SAMPLES)).astype(np.float32)
 
 
-def _write_batch(  # noqa: DOC101,DOC103
+def _write_batch(
     pred_dir: Path,
     *,
     index: int,
     batch_size: int,
     with_target_params: bool,
 ) -> None:
-    """Write the ``.pt`` files one ``PredictionWriter`` batch would produce."""
+    """Write the ``.pt`` files one ``PredictionWriter`` batch would produce.
+
+    :param pred_dir: Destination directory for the ``.pt`` files.
+    :param index: Batch index that becomes the ``pred-<index>.pt`` suffix.
+    :param batch_size: Number of rows per batch tensor.
+    :param with_target_params: When True, also write ``target-params-<index>.pt``.
+    """
     rng = np.random.default_rng(index)
     # ``main`` rescales pred params via ``(x + 1) / 2`` — so the fixture must live on [-1, 1].
     encoded = (rng.random((batch_size, len(_PARAM_SPEC))) * 2 - 1).astype(np.float32)
@@ -179,36 +219,56 @@ def _write_batch(  # noqa: DOC101,DOC103
 
 
 @pytest.fixture()
-def runner() -> CliRunner:  # noqa: DOC201,DOC203
-    """Fresh click ``CliRunner`` per test."""
+def runner() -> CliRunner:
+    """Fresh click ``CliRunner`` per test.
+
+    :return: A fresh ``CliRunner`` instance.
+    """
     return CliRunner()
 
 
 @pytest.fixture()
-def pred_dir(tmp_path: Path) -> Path:  # noqa: DOC101,DOC103,DOC201,DOC203
-    """Empty ``preds/`` subdirectory ready for ``_write_batch`` calls."""
+def pred_dir(tmp_path: Path) -> Path:
+    """Empty ``preds/`` subdirectory ready for ``_write_batch`` calls.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :return: Path of the created ``preds/`` directory.
+    """
     d = tmp_path / "preds"
     d.mkdir()
     return d
 
 
 @pytest.fixture()
-def out_dir(tmp_path: Path) -> Path:  # noqa: DOC101,DOC103,DOC201,DOC203
+def out_dir(tmp_path: Path) -> Path:
     """``out/`` path the CLI will create.
 
     Not pre-created — the CLI does that.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :return: Path of the planned ``out/`` directory.
     """
     return tmp_path / "out"
 
 
 @pytest.fixture(autouse=True)
-def _patch_render_params(monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: DOC101,DOC103
-    """Replace the VST3 render call with the in-process ``_fake_render`` stub."""
+def _patch_render_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replace the VST3 render call with the in-process ``_fake_render`` stub.
+
+    :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
+    """
     monkeypatch.setattr(predict_vst_audio, "render_params", _fake_render)
 
 
-def _invoke_main(runner: CliRunner, pred_dir: Path, out_dir: Path, *extra: str) -> Result:  # noqa: DOC101,DOC103,DOC201,DOC203
-    """Invoke ``main`` with the standard small-audio test options plus any ``extra`` flags."""
+def _invoke_main(runner: CliRunner, pred_dir: Path, out_dir: Path, *extra: str) -> Result:
+    """Invoke ``main`` with the standard small-audio test options plus any ``extra`` flags.
+
+    :param runner: Click ``CliRunner`` driving the invocation.
+    :param pred_dir: Directory passed as the first CLI positional.
+    :param out_dir: Directory passed as the second CLI positional.
+    :param \\*extra: Additional CLI flags appended verbatim.
+    :return: The ``Result`` produced by ``runner.invoke``.
+    """
     return runner.invoke(
         main,
         [
@@ -224,10 +284,15 @@ def _invoke_main(runner: CliRunner, pred_dir: Path, out_dir: Path, *extra: str) 
     )
 
 
-def test_main_no_params_writes_pred_target_csv_and_spectrogram(  # noqa: DOC101,DOC103
+def test_main_no_params_writes_pred_target_csv_and_spectrogram(
     runner: CliRunner, pred_dir: Path, out_dir: Path
 ) -> None:
-    """``--no-params`` path produces pred.wav, target.wav, spec.png, and params.csv per sample."""
+    """``--no-params`` path produces pred.wav, target.wav, spec.png, and params.csv per sample.
+
+    :param runner: Parametrized ``runner`` value under test.
+    :param pred_dir: Parametrized ``pred_dir`` value under test.
+    :param out_dir: Parametrized ``out_dir`` value under test.
+    """
     _write_batch(pred_dir, index=0, batch_size=2, with_target_params=False)
 
     result = _invoke_main(runner, pred_dir, out_dir, "--no-params")
@@ -239,10 +304,15 @@ def test_main_no_params_writes_pred_target_csv_and_spectrogram(  # noqa: DOC101,
             assert (sample_dir / name).is_file(), f"missing {name} under {sample_dir}"
 
 
-def test_main_skip_spectrogram_suppresses_png(  # noqa: DOC101,DOC103
+def test_main_skip_spectrogram_suppresses_png(
     runner: CliRunner, pred_dir: Path, out_dir: Path
 ) -> None:
-    """``--skip-spectrogram`` keeps the wav/csv outputs but skips the matplotlib render."""
+    """``--skip-spectrogram`` keeps the wav/csv outputs but skips the matplotlib render.
+
+    :param runner: Parametrized ``runner`` value under test.
+    :param pred_dir: Parametrized ``pred_dir`` value under test.
+    :param out_dir: Parametrized ``out_dir`` value under test.
+    """
     _write_batch(pred_dir, index=0, batch_size=1, with_target_params=False)
     plt.close("all")
 
@@ -258,10 +328,16 @@ def test_main_skip_spectrogram_suppresses_png(  # noqa: DOC101,DOC103
     assert plt.get_fignums() == []
 
 
-def test_main_rerender_target_renders_pred_and_target_per_sample(  # noqa: DOC101,DOC103
+def test_main_rerender_target_renders_pred_and_target_per_sample(
     runner: CliRunner, pred_dir: Path, out_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``-t`` triggers a second ``render_params`` call per sample to re-synthesise the target."""
+    """``-t`` triggers a second ``render_params`` call per sample to re-synthesise the target.
+
+    :param runner: Parametrized ``runner`` value under test.
+    :param pred_dir: Parametrized ``pred_dir`` value under test.
+    :param out_dir: Parametrized ``out_dir`` value under test.
+    :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
+    """
     calls: list[object] = []
 
     def _counting_render(*args: object, **_kwargs: object) -> np.ndarray:
@@ -284,10 +360,15 @@ def test_main_rerender_target_renders_pred_and_target_per_sample(  # noqa: DOC10
         assert bool(df["target"].notna().all())
 
 
-def test_main_multiple_batches_produce_contiguous_sample_indices(  # noqa: DOC101,DOC103
+def test_main_multiple_batches_produce_contiguous_sample_indices(
     runner: CliRunner, pred_dir: Path, out_dir: Path
 ) -> None:
-    """``current_offset`` accumulates across pred files so sample dirs don't collide."""
+    """``current_offset`` accumulates across pred files so sample dirs don't collide.
+
+    :param runner: Parametrized ``runner`` value under test.
+    :param pred_dir: Parametrized ``pred_dir`` value under test.
+    :param out_dir: Parametrized ``out_dir`` value under test.
+    """
     _write_batch(pred_dir, index=0, batch_size=2, with_target_params=False)
     _write_batch(pred_dir, index=1, batch_size=3, with_target_params=False)
 

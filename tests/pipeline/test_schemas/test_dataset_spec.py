@@ -124,10 +124,11 @@ class TestRenderConfig:
             cfg = RenderConfig(**{**_valid_render_kwargs(), "velocity": valid})
             assert cfg.velocity == valid
 
-    def test_cadence_defaults_off_darwin(  # noqa: DOC101,DOC103
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Off Darwin: both cadences default to "render" (historical per-render behaviour)."""
+    def test_cadence_defaults_off_darwin(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Off Darwin: both cadences default to "render" (historical per-render behaviour).
+
+        :param monkeypatch: Pytest fixture used to stub ``_current_platform``.
+        """
         monkeypatch.setattr(
             "synth_setter.pipeline.schemas.spec._current_platform", lambda: "linux"
         )
@@ -135,10 +136,11 @@ class TestRenderConfig:
         assert cfg.plugin_reload_cadence == "render"
         assert cfg.gui_toggle_cadence == "render"
 
-    def test_gui_toggle_default_is_never_on_darwin(  # noqa: DOC101,DOC103
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Default factory yields "never" on Darwin so bare RenderConfig() constructs (#714)."""
+    def test_gui_toggle_default_is_never_on_darwin(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Default factory yields "never" on Darwin so bare RenderConfig() constructs (#714).
+
+        :param monkeypatch: Pytest fixture used to stub ``_current_platform``.
+        """
         monkeypatch.setattr(
             "synth_setter.pipeline.schemas.spec._current_platform", lambda: "darwin"
         )
@@ -158,10 +160,11 @@ class TestRenderConfig:
         assert cfg.plugin_reload_cadence == "once"
         assert cfg.gui_toggle_cadence == "never"
 
-    def test_gui_toggle_render_rejected_on_darwin(  # noqa: DOC101,DOC103
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """``gui_toggle_cadence="render"`` on Darwin raises (SIGTRAP after ~3-4 calls — #714)."""
+    def test_gui_toggle_render_rejected_on_darwin(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``gui_toggle_cadence="render"`` on Darwin raises (SIGTRAP after ~3-4 calls — #714).
+
+        :param monkeypatch: Pytest fixture used to stub ``_current_platform``.
+        """
         monkeypatch.setattr(
             "synth_setter.pipeline.schemas.spec._current_platform", lambda: "darwin"
         )
@@ -172,10 +175,14 @@ class TestRenderConfig:
             RenderConfig(**{**_valid_render_kwargs(), "gui_toggle_cadence": "render"})
 
     @pytest.mark.parametrize("cadence", ["never", "once"])
-    def test_gui_toggle_never_and_once_accepted_on_darwin(  # noqa: DOC101,DOC103
+    def test_gui_toggle_never_and_once_accepted_on_darwin(
         self, monkeypatch: pytest.MonkeyPatch, cadence: str
     ) -> None:
-        """``"never"`` and ``"once"`` are the only valid gui_toggle settings on Darwin."""
+        """``"never"`` and ``"once"`` are the only valid gui_toggle settings on Darwin.
+
+        :param monkeypatch: Pytest fixture used to stub ``_current_platform``.
+        :param cadence: Parametrized ``gui_toggle_cadence`` value under test.
+        """
         monkeypatch.setattr(
             "synth_setter.pipeline.schemas.spec._current_platform", lambda: "darwin"
         )
@@ -183,10 +190,14 @@ class TestRenderConfig:
         assert cfg.gui_toggle_cadence == cadence
 
     @pytest.mark.parametrize("cadence", ["never", "once", "render"])
-    def test_gui_toggle_all_values_accepted_off_darwin(  # noqa: DOC101,DOC103
+    def test_gui_toggle_all_values_accepted_off_darwin(
         self, monkeypatch: pytest.MonkeyPatch, cadence: str
     ) -> None:
-        """All three gui_toggle values are accepted on Linux/Windows — gate is darwin-only."""
+        """All three gui_toggle values are accepted on Linux/Windows — gate is darwin-only.
+
+        :param monkeypatch: Pytest fixture used to stub ``_current_platform``.
+        :param cadence: Parametrized ``gui_toggle_cadence`` value under test.
+        """
         monkeypatch.setattr(
             "synth_setter.pipeline.schemas.spec._current_platform", lambda: "linux"
         )
@@ -194,10 +205,14 @@ class TestRenderConfig:
         assert cfg.gui_toggle_cadence == cadence
 
     @pytest.mark.parametrize("cadence", ["once", "render"])
-    def test_plugin_reload_cadence_both_values_accepted_on_darwin(  # noqa: DOC101,DOC103
+    def test_plugin_reload_cadence_both_values_accepted_on_darwin(
         self, monkeypatch: pytest.MonkeyPatch, cadence: str
     ) -> None:
-        """``plugin_reload_cadence`` accepts both "once" and "render" on Darwin."""
+        """``plugin_reload_cadence`` accepts both "once" and "render" on Darwin.
+
+        :param monkeypatch: Pytest fixture used to stub ``_current_platform``.
+        :param cadence: Parametrized ``plugin_reload_cadence`` value under test.
+        """
         monkeypatch.setattr(
             "synth_setter.pipeline.schemas.spec._current_platform", lambda: "darwin"
         )
@@ -702,8 +717,12 @@ class TestSpecConstructionStaysPedalboardFree:
 class TestLegacyFlatR2Compat:
     """Legacy flat ``r2_*`` keys on input must promote into the nested ``r2`` model."""
 
-    def _legacy_kwargs(self, **overrides: Any) -> dict[str, Any]:  # noqa: DOC101,DOC103,DOC201,DOC203
-        """Return spec kwargs that mirror a pre-migration input dict (flat r2_* keys)."""
+    def _legacy_kwargs(self, **overrides: Any) -> dict[str, Any]:
+        """Return spec kwargs that mirror a pre-migration input dict (flat r2_* keys).
+
+        :param \\*\\*overrides: Per-call key overrides merged into the legacy kwargs.
+        :return: Spec-kwargs dict with flat ``r2_*`` keys.
+        """
         kwargs: dict[str, Any] = {
             "task_name": "ci-smoke-test",
             "output_format": "hdf5",
@@ -715,17 +734,23 @@ class TestLegacyFlatR2Compat:
         kwargs.update(overrides)
         return kwargs
 
-    def test_legacy_r2_bucket_only_promotes_and_derives_prefix(  # noqa: DOC101,DOC103
+    def test_legacy_r2_bucket_only_promotes_and_derives_prefix(
         self, patch_runtime_io: None
     ) -> None:
-        """Pre-migration spec with only ``r2_bucket`` → derived prefix lands on ``r2.prefix``."""
+        """Pre-migration spec with only ``r2_bucket`` → derived prefix lands on ``r2.prefix``.
+
+        :param patch_runtime_io: Fixture stubbing git/time/runtime IO.
+        """
         spec = DatasetSpec(**self._legacy_kwargs())
         assert spec.r2.bucket == "intermediate-data"
         assert spec.r2.prefix_root == "data"
         assert spec.r2.prefix == "data/ci-smoke-test/ci-smoke-test-20260328T120000000Z/"
 
-    def test_all_three_legacy_keys_promote_into_nested_r2(self, patch_runtime_io: None) -> None:  # noqa: DOC101,DOC103
-        """Full legacy triple promotes into ``r2`` and preserves explicit ``r2_prefix``."""
+    def test_all_three_legacy_keys_promote_into_nested_r2(self, patch_runtime_io: None) -> None:
+        """Full legacy triple promotes into ``r2`` and preserves explicit ``r2_prefix``.
+
+        :param patch_runtime_io: Fixture stubbing git/time/runtime IO.
+        """
         spec = DatasetSpec(
             **self._legacy_kwargs(
                 r2_prefix_root="experiments",
@@ -736,19 +761,24 @@ class TestLegacyFlatR2Compat:
         assert spec.r2.prefix_root == "experiments"
         assert spec.r2.prefix == "experiments/legacy/custom/"
 
-    def test_mixed_nested_and_legacy_input_raises(self, patch_runtime_io: None) -> None:  # noqa: DOC101,DOC103
-        """Mixing ``r2`` and any legacy key is ambiguous — must fail-fast."""
+    def test_mixed_nested_and_legacy_input_raises(self, patch_runtime_io: None) -> None:
+        """Mixing ``r2`` and any legacy key is ambiguous — must fail-fast.
+
+        :param patch_runtime_io: Fixture stubbing git/time/runtime IO.
+        """
         with pytest.raises(ValidationError, match="both nested 'r2' and legacy flat keys"):
             DatasetSpec(
                 **self._legacy_kwargs(r2={"bucket": "intermediate-data"}),
             )
 
-    def test_legacy_json_specs_round_trip_in_new_form(self, patch_runtime_io: None) -> None:  # noqa: DOC101,DOC103
+    def test_legacy_json_specs_round_trip_in_new_form(self, patch_runtime_io: None) -> None:
         """Old input_spec.json files in R2 parse + re-emit in the new nested shape.
 
         Worker reconstruction contract: an old JSON spec (flat keys) parses
         identically to a freshly-materialized spec; re-serializing produces
         the new nested form so the next round-trip is on the new shape.
+
+        :param patch_runtime_io: Fixture stubbing git/time/runtime IO.
         """
         import json as _json
 

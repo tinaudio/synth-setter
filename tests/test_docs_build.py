@@ -52,8 +52,11 @@ _PAGE_TO_MODELS: dict[str, tuple[type, ...]] = {
 }
 
 
-def _expected_field_anchors() -> list[tuple[str, type, str]]:  # noqa: DOC201,DOC203
-    """Build ``(page, model, field_name)`` tuples for every typed field on every model."""
+def _expected_field_anchors() -> list[tuple[str, type, str]]:
+    """Build ``(page, model, field_name)`` tuples for every typed field on every model.
+
+    :return: List of ``(page, model, field_name)`` triples for parametrization.
+    """
     triples: list[tuple[str, type, str]] = []
     for page, models in _PAGE_TO_MODELS.items():
         for model in models:
@@ -66,21 +69,29 @@ assert _PAGE_TO_MODELS, "_PAGE_TO_MODELS is empty — config-reference page map 
 assert _expected_field_anchors(), "_expected_field_anchors() is empty — no fields to verify"
 
 
-def _anchor_pattern(model: type, field_name: str) -> re.Pattern[str]:  # noqa: DOC101,DOC103,DOC201,DOC203
+def _anchor_pattern(model: type, field_name: str) -> re.Pattern[str]:
     """Compile a regex for the ``id="<module>.<Class>.<field>"`` anchor mkdocstrings emits.
 
     Matches the structural anchor (not a bare substring) so short field names
     (``lr``, ``test``, ``train``) don't false-positive on HTML/CSS/JS context.
+
+    :param model: Pydantic model class hosting the field.
+    :param field_name: Name of the field being documented.
+    :return: Compiled regex matching the expected mkdocstrings anchor id.
     """
     fqn = re.escape(f"{model.__module__}.{model.__name__}.{field_name}")
     return re.compile(rf'id="{fqn}"')
 
 
 @pytest.fixture(scope="session")
-def built_site(  # noqa: DOC101,DOC103,DOC201,DOC203
+def built_site(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> Path:
-    """Run ``mkdocs build --strict`` once per session and return the site dir."""
+    """Run ``mkdocs build --strict`` once per session and return the site dir.
+
+    :param tmp_path_factory: Pytest session-scoped tmp-path factory.
+    :return: Path to the built mkdocs site directory.
+    """
     site_dir = tmp_path_factory.mktemp("mkdocs-site")
     try:
         subprocess.run(  # noqa: S603
@@ -106,11 +117,15 @@ def built_site(  # noqa: DOC101,DOC103,DOC201,DOC203
     return site_dir
 
 
-def _read_page_html(built_site: Path, page: str) -> str:  # noqa: DOC101,DOC103,DOC201,DOC203
+def _read_page_html(built_site: Path, page: str) -> str:
     """Read ``<built_site>/<page>/index.html`` with an actionable miss message.
 
     Pre-asserts ``is_file()`` so a missing page surfaces as a readable
     assertion instead of a bare ``FileNotFoundError`` from ``read_text``.
+
+    :param built_site: Root directory of the built mkdocs site.
+    :param page: Page subpath under the built site (no trailing slash).
+    :return: HTML text of the page's ``index.html``.
     """
     page_html = built_site / page / "index.html"
     assert page_html.is_file(), (
@@ -121,14 +136,22 @@ def _read_page_html(built_site: Path, page: str) -> str:  # noqa: DOC101,DOC103,
 
 
 @pytest.fixture(scope="session")
-def page_html_cache(built_site: Path) -> dict[str, str]:  # noqa: DOC101,DOC103,DOC201,DOC203
-    """Memoised HTML text for each config-reference page."""
+def page_html_cache(built_site: Path) -> dict[str, str]:
+    """Memoised HTML text for each config-reference page.
+
+    :param built_site: Session-scoped built mkdocs site directory.
+    :return: Mapping ``page -> page_html`` for every documented page.
+    """
     return {page: _read_page_html(built_site, page) for page in _PAGE_TO_MODELS}
 
 
 @pytest.mark.parametrize("page", list(_PAGE_TO_MODELS))
-def test_docs_page_emitted(built_site: Path, page: str) -> None:  # noqa: DOC101,DOC103
-    """Each config-reference page exists in the built site."""
+def test_docs_page_emitted(built_site: Path, page: str) -> None:
+    """Each config-reference page exists in the built site.
+
+    :param built_site: Session-scoped built mkdocs site directory.
+    :param page: Parametrized page subpath under the built site.
+    """
     page_html = built_site / page / "index.html"
     assert page_html.is_file(), f"{page_html} missing from built site"
 
@@ -138,10 +161,16 @@ def test_docs_page_emitted(built_site: Path, page: str) -> None:  # noqa: DOC101
     _expected_field_anchors(),
     ids=lambda v: v if isinstance(v, str) else getattr(v, "__name__", repr(v)),
 )
-def test_docs_page_renders_pydantic_field_anchor(  # noqa: DOC101,DOC103
+def test_docs_page_renders_pydantic_field_anchor(
     page_html_cache: dict[str, str], page: str, model: type, field: str
 ) -> None:
-    """Every typed field on every documented model gets its own anchor heading."""
+    """Every typed field on every documented model gets its own anchor heading.
+
+    :param page_html_cache: Session-cached mapping of page -> rendered HTML.
+    :param page: Parametrized page subpath.
+    :param model: Parametrized pydantic model class.
+    :param field: Parametrized field name on ``model``.
+    """
     assert page in page_html_cache, f"{page} missing from built site — see test_docs_page_emitted"
     page_html = page_html_cache[page]
     pattern = _anchor_pattern(model, field)
@@ -151,10 +180,13 @@ def test_docs_page_renders_pydantic_field_anchor(  # noqa: DOC101,DOC103
     )
 
 
-def test_docs_train_config_renders_field_description(  # noqa: DOC101,DOC103
+def test_docs_train_config_renders_field_description(
     page_html_cache: dict[str, str],
 ) -> None:
-    """``TrainConfig.task_name``'s ``Field(description=...)`` text renders in the page."""
+    """``TrainConfig.task_name``'s ``Field(description=...)`` text renders in the page.
+
+    :param page_html_cache: Session-cached mapping of page -> rendered HTML.
+    """
     description = TrainConfig.model_fields["task_name"].description
     assert description, "TrainConfig.task_name has no Field(description=...) to spot-check"
     page_html = page_html_cache["config_reference/train_config"]

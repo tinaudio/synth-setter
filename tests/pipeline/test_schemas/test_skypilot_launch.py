@@ -40,14 +40,20 @@ class TestValidation:
     """Pydantic field validators reject invalid combinations early."""
 
     @pytest.mark.parametrize("bad", [0, -1, -100])
-    def test_non_positive_num_workers_rejected(self, bad: int) -> None:  # noqa: DOC101,DOC103
-        """Any worker count below 1 surfaces as ValidationError naming the offending value."""
+    def test_non_positive_num_workers_rejected(self, bad: int) -> None:
+        """Any worker count below 1 surfaces as ValidationError naming the offending value.
+
+        :param bad: Parametrized non-positive worker count.
+        """
         with pytest.raises(ValidationError, match="num_workers must be >= 1"):
             SkypilotLaunchConfig(num_workers=bad)
 
     @pytest.mark.parametrize("blank", ["", "   ", "\t\n"])
-    def test_blank_api_server_rejected(self, blank: str) -> None:  # noqa: DOC101,DOC103
-        """Empty or whitespace-only api_server is rejected to surface typos loudly."""
+    def test_blank_api_server_rejected(self, blank: str) -> None:
+        """Empty or whitespace-only api_server is rejected to surface typos loudly.
+
+        :param blank: Parametrized blank/whitespace-only api_server value.
+        """
         with pytest.raises(ValidationError, match="api_server must be a non-empty URL"):
             SkypilotLaunchConfig(api_server=blank)
 

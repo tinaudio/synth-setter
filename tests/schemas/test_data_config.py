@@ -23,8 +23,11 @@ from tests.schemas.conftest import compose_subtree
 _DATA_CONFIG_DIR = Path(__file__).resolve().parents[2] / "configs" / "data"
 
 
-def _all_data_config_names() -> list[str]:  # noqa: DOC201,DOC203
-    """Return the YAML stem of every direct data config under ``configs/data/``."""
+def _all_data_config_names() -> list[str]:
+    """Return the YAML stem of every direct data config under ``configs/data/``.
+
+    :return: Sorted list of YAML stems found in ``configs/data/``.
+    """
     names = sorted(p.stem for p in _DATA_CONFIG_DIR.glob("*.yaml"))
     assert names, f"no data YAMLs found under {_DATA_CONFIG_DIR} — has the layout changed?"
     return names
@@ -34,8 +37,11 @@ class TestDataConfigAcceptsEveryConfig:
     """Every shipped data YAML must validate against ``DataConfig``."""
 
     @pytest.mark.parametrize("data_name", _all_data_config_names())
-    def test_data_yaml_validates(self, data_name: str) -> None:  # noqa: DOC101,DOC103
-        """The composed ``data`` subtree validates as ``DataConfig``."""
+    def test_data_yaml_validates(self, data_name: str) -> None:
+        """The composed ``data`` subtree validates as ``DataConfig``.
+
+        :param data_name: Parametrized YAML stem under ``configs/data/``.
+        """
         data_subtree = compose_subtree("data", data_name)
         parsed = DataConfig.model_validate(data_subtree)
         assert parsed.target_
@@ -50,11 +56,14 @@ class TestDataConfigAcceptsEveryConfig:
 class TestPathsConfigResolvedInterpolation:
     """A real resolved ``PROJECT_ROOT`` must round-trip through ``NonBlankStr``."""
 
-    def test_paths_resolved_with_env_var(  # noqa: DOC101,DOC103
+    def test_paths_resolved_with_env_var(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """``${oc.env:PROJECT_ROOT}`` resolves to a real path and validates as non-blank."""
+        """``${oc.env:PROJECT_ROOT}`` resolves to a real path and validates as non-blank.
+
+        :param monkeypatch: Pytest fixture used to set ``PROJECT_ROOT``.
+        """
         monkeypatch.setenv("PROJECT_ROOT", "/tmp/x")  # noqa: S108
         # output_dir / work_dir overridden because ``${hydra:runtime.*}`` is
         # only populated at fit time, not at compose time.

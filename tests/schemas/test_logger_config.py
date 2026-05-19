@@ -17,8 +17,11 @@ from tests.schemas.conftest import compose_subtree
 _LOGGER_CONFIG_DIR = Path(__file__).resolve().parents[2] / "configs" / "logger"
 
 
-def _all_logger_config_names() -> list[str]:  # noqa: DOC201,DOC203
-    """Return the YAML stem of every direct logger config under ``configs/logger/``."""
+def _all_logger_config_names() -> list[str]:
+    """Return the YAML stem of every direct logger config under ``configs/logger/``.
+
+    :return: Sorted list of YAML stems found in ``configs/logger/``.
+    """
     names = sorted(p.stem for p in _LOGGER_CONFIG_DIR.glob("*.yaml"))
     assert names, f"no logger YAMLs found under {_LOGGER_CONFIG_DIR} — has the layout changed?"
     return names
@@ -28,8 +31,11 @@ class TestLoggerConfigAcceptsEveryComposition:
     """Every shipped logger group must validate against ``LoggerConfig``."""
 
     @pytest.mark.parametrize("logger_name", _all_logger_config_names())
-    def test_logger_yaml_validates(self, logger_name: str) -> None:  # noqa: DOC101,DOC103
-        """The composed ``logger`` subtree validates as ``LoggerConfig``."""
+    def test_logger_yaml_validates(self, logger_name: str) -> None:
+        """The composed ``logger`` subtree validates as ``LoggerConfig``.
+
+        :param logger_name: Parametrized YAML stem under ``configs/logger/``.
+        """
         logger_subtree = compose_subtree("logger", logger_name)
         parsed = LoggerConfig.model_validate(logger_subtree)
         assert parsed.root

@@ -2598,7 +2598,7 @@ class TestLaunchOneRank:
 # ---------------------------------------------------------------------------
 
 
-def _write_runpod_yaml(  # noqa: DOC101,DOC103,DOC201,DOC203
+def _write_runpod_yaml(
     tmp_path: Path,
     *,
     include_run: bool = False,
@@ -2609,6 +2609,11 @@ def _write_runpod_yaml(  # noqa: DOC101,DOC103,DOC201,DOC203
     ``include_run=True`` adds a default ``run:`` block (``echo existing``).
     ``run_body`` overrides the run body — pass a multiline string with
     ``${WORKER_CMD}`` to exercise the sentinel-substitution path.
+
+    :param tmp_path: Directory under which ``compute.yaml`` is written.
+    :param include_run: When ``True``, add a default ``run:`` block.
+    :param run_body: Override the run body verbatim (multiline allowed).
+    :return: Path to the written ``compute.yaml``.
     """
     yaml_text = (
         "resources:\n"
@@ -2626,8 +2631,12 @@ def _write_runpod_yaml(  # noqa: DOC101,DOC103,DOC201,DOC203
     return path
 
 
-def _build_spec(fake_plugin: Path) -> DatasetSpec:  # noqa: DOC101,DOC103,DOC201,DOC203
-    """Build a DatasetSpec wired to ``fake_plugin`` for the dispatch tests."""
+def _build_spec(fake_plugin: Path) -> DatasetSpec:
+    """Build a DatasetSpec wired to ``fake_plugin`` for the dispatch tests.
+
+    :param fake_plugin: Path passed through as ``render.plugin_path``.
+    :return: A ``DatasetSpec`` ready for dispatch-path tests.
+    """
     return DatasetSpec(
         task_name="test-dispatch",
         train_val_test_sizes=(10000, 0, 0),
@@ -2653,24 +2662,33 @@ def _build_spec(fake_plugin: Path) -> DatasetSpec:  # noqa: DOC101,DOC103,DOC201
 class TestLoadComputeTemplateWithCmd:
     """``_load_compute_template_with_cmd`` injects cmd as run and rejects pre-existing runs."""
 
-    def test_cmd_is_injected_when_yaml_has_no_run(self, tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-        """Without a pre-existing run: block, the loaded doc's run: equals cmd."""
+    def test_cmd_is_injected_when_yaml_has_no_run(self, tmp_path: Path) -> None:
+        """Without a pre-existing run: block, the loaded doc's run: equals cmd.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
         from synth_setter.pipeline.skypilot_launch import _load_compute_template_with_cmd
 
         template = _write_runpod_yaml(tmp_path, include_run=False)
         doc = _load_compute_template_with_cmd(template, "echo hello")
         assert doc["run"] == "echo hello"
 
-    def test_existing_run_block_without_sentinel_raises(self, tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-        """A pre-existing run: with no sentinel + non-empty cmd is a conflict, not a silent override."""
+    def test_existing_run_block_without_sentinel_raises(self, tmp_path: Path) -> None:
+        """A pre-existing run: with no sentinel + non-empty cmd is a conflict, not a silent override.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
         from synth_setter.pipeline.skypilot_launch import _load_compute_template_with_cmd
 
         template = _write_runpod_yaml(tmp_path, include_run=True)
         with pytest.raises(ValueError, match="has a non-empty `run:` block"):
             _load_compute_template_with_cmd(template, "echo hello")
 
-    def test_sentinel_in_run_block_substitutes_cmd(self, tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-        """A template with ${WORKER_CMD} in run: substitutes cmd; scaffolding survives."""
+    def test_sentinel_in_run_block_substitutes_cmd(self, tmp_path: Path) -> None:
+        """A template with ${WORKER_CMD} in run: substitutes cmd; scaffolding survives.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
         from synth_setter.pipeline.skypilot_launch import _load_compute_template_with_cmd
 
         template = _write_runpod_yaml(
@@ -2685,8 +2703,11 @@ class TestLoadComputeTemplateWithCmd:
         assert doc["run"].startswith("sudo docker run --rm")
         assert doc["run"].rstrip().endswith('"echo hello && exec foo"')
 
-    def test_non_string_run_block_raises(self, tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-        """A non-string run: (e.g. a list) is a malformed template, raise before substitute."""
+    def test_non_string_run_block_raises(self, tmp_path: Path) -> None:
+        """A non-string run: (e.g. a list) is a malformed template, raise before substitute.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
         from synth_setter.pipeline.skypilot_launch import _load_compute_template_with_cmd
 
         path = tmp_path / "bad_run.yaml"
@@ -2694,15 +2715,21 @@ class TestLoadComputeTemplateWithCmd:
         with pytest.raises(ValueError, match="`run:` must be a string"):
             _load_compute_template_with_cmd(path, "x")
 
-    def test_missing_template_raises_file_not_found(self, tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-        """Mistyped path surfaces a FileNotFoundError, not a confusing parse error downstream."""
+    def test_missing_template_raises_file_not_found(self, tmp_path: Path) -> None:
+        """Mistyped path surfaces a FileNotFoundError, not a confusing parse error downstream.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
         from synth_setter.pipeline.skypilot_launch import _load_compute_template_with_cmd
 
         with pytest.raises(FileNotFoundError):
             _load_compute_template_with_cmd(tmp_path / "missing.yaml", "x")
 
-    def test_non_mapping_top_level_raises(self, tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-        """A YAML whose top level is a list, not a mapping, is rejected at load time."""
+    def test_non_mapping_top_level_raises(self, tmp_path: Path) -> None:
+        """A YAML whose top level is a list, not a mapping, is rejected at load time.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
         from synth_setter.pipeline.skypilot_launch import _load_compute_template_with_cmd
 
         path = tmp_path / "bad.yaml"
@@ -2725,19 +2752,27 @@ class TestDetectProviderFromDoc:
         ],
         ids=["flat-runpod", "any-of-oci", "kubernetes-as-local", "k8s-alias", "case-insensitive"],
     )
-    def test_supported_clouds_map_to_provider(  # noqa: DOC101,DOC103
+    def test_supported_clouds_map_to_provider(
         self,
         tmp_path: Path,
         doc: dict[str, object],
         expected_provider: str,
     ) -> None:
-        """Each supported `resources.cloud` shape maps to the expected cred-bootstrap provider."""
+        """Each supported `resources.cloud` shape maps to the expected cred-bootstrap provider.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param doc: Parametrized parsed-YAML mapping under test.
+        :param expected_provider: Parametrized expected provider name.
+        """
         from synth_setter.pipeline.skypilot_launch import _detect_provider_from_doc
 
         assert _detect_provider_from_doc(doc, source=tmp_path / "x.yaml") == expected_provider
 
-    def test_unknown_cloud_raises(self, tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-        """An unsupported cloud surfaces as a ValueError naming the offending value."""
+    def test_unknown_cloud_raises(self, tmp_path: Path) -> None:
+        """An unsupported cloud surfaces as a ValueError naming the offending value.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
         from synth_setter.pipeline.skypilot_launch import _detect_provider_from_doc
 
         doc: dict[str, object] = {"resources": {"cloud": "aws"}}
@@ -2748,8 +2783,11 @@ class TestDetectProviderFromDoc:
 class TestDispatchViaSkypilot:
     """``dispatch_via_skypilot`` rejects degenerate cfgs and threads per-rank fanout through."""
 
-    def test_missing_compute_template_raises(self, fake_plugin: Path) -> None:  # noqa: DOC101,DOC103
-        """``compute_template=None`` is the "don't dispatch" sentinel — calling here is a bug."""
+    def test_missing_compute_template_raises(self, fake_plugin: Path) -> None:
+        """``compute_template=None`` is the "don't dispatch" sentinel — calling here is a bug.
+
+        :param fake_plugin: Fixture-provided fake VST3 plugin path.
+        """
         from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
         from synth_setter.pipeline.skypilot_launch import dispatch_via_skypilot
 
@@ -2758,8 +2796,12 @@ class TestDispatchViaSkypilot:
         with pytest.raises(ValueError, match="compute_template"):
             dispatch_via_skypilot(spec, sky_cfg)
 
-    def test_missing_cmd_raises(self, tmp_path: Path, fake_plugin: Path) -> None:  # noqa: DOC101,DOC103
-        """No cmd → no run block on the worker → we refuse to launch a no-op task."""
+    def test_missing_cmd_raises(self, tmp_path: Path, fake_plugin: Path) -> None:
+        """No cmd → no run block on the worker → we refuse to launch a no-op task.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param fake_plugin: Fixture-provided fake VST3 plugin path.
+        """
         from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
         from synth_setter.pipeline.skypilot_launch import dispatch_via_skypilot
 
@@ -2769,13 +2811,18 @@ class TestDispatchViaSkypilot:
         with pytest.raises(ValueError, match="cmd"):
             dispatch_via_skypilot(spec, sky_cfg)
 
-    def test_yaml_run_block_conflicts_with_cmd(  # noqa: DOC101,DOC103
+    def test_yaml_run_block_conflicts_with_cmd(
         self,
         tmp_path: Path,
         fake_plugin: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """End-to-end conflict guard: YAML run + sky_cfg.cmd raises before any SkyPilot side effect."""
+        """End-to-end conflict guard: YAML run + sky_cfg.cmd raises before any SkyPilot side effect.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param fake_plugin: Fixture-provided fake VST3 plugin path.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        """
         from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
         from synth_setter.pipeline.skypilot_launch import dispatch_via_skypilot
 
@@ -2786,7 +2833,7 @@ class TestDispatchViaSkypilot:
             dispatch_via_skypilot(spec, sky_cfg)
         mock_sky.jobs.launch.assert_not_called()
 
-    def test_missing_worker_env_raises(  # noqa: DOC101,DOC103
+    def test_missing_worker_env_raises(
         self,
         tmp_path: Path,
         fake_plugin: Path,
@@ -2798,6 +2845,11 @@ class TestDispatchViaSkypilot:
         The autouse ``clear_worker_env_from_process`` fixture already strips these keys,
         but re-asserting via ``monkeypatch.delenv`` keeps the contract explicit if that
         fixture ever changes.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param fake_plugin: Fixture-provided fake VST3 plugin path.
+        :param local_spec_dir: Fixture-provided local spec directory.
+        :param monkeypatch: Pytest fixture used to clear env keys.
         """
         from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
         from synth_setter.pipeline.skypilot_launch import (
@@ -2818,7 +2870,7 @@ class TestDispatchViaSkypilot:
         with pytest.raises(ValueError, match="No worker env vars resolved"):
             dispatch_via_skypilot(spec, sky_cfg)
 
-    def test_end_to_end_dispatch_uses_cmd_as_run_block(  # noqa: DOC101,DOC103
+    def test_end_to_end_dispatch_uses_cmd_as_run_block(
         self,
         tmp_path: Path,
         fake_plugin: Path,
@@ -2827,7 +2879,15 @@ class TestDispatchViaSkypilot:
         mock_sky: MagicMock,
         patch_materialize_io: None,  # noqa: ARG002
     ) -> None:
-        """Happy-path dispatch: sky.Task.from_yaml_config receives a doc whose ``run`` is sky_cfg.cmd."""
+        """Happy-path dispatch: sky.Task.from_yaml_config receives a doc whose ``run`` is sky_cfg.cmd.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param fake_plugin: Fixture-provided fake VST3 plugin path.
+        :param env_file: Fixture-provided worker env file path.
+        :param local_spec_dir: Fixture-provided local spec directory.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        :param patch_materialize_io: Fixture stubbing materialize-side IO.
+        """
         from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
         from synth_setter.pipeline.skypilot_launch import dispatch_via_skypilot
 
@@ -2848,7 +2908,7 @@ class TestDispatchViaSkypilot:
         passed_doc = mock_sky.Task.from_yaml_config.call_args.args[0]
         assert passed_doc["run"] == cmd
 
-    def test_dispatch_failure_raises_runtime_error(  # noqa: DOC101,DOC103
+    def test_dispatch_failure_raises_runtime_error(
         self,
         tmp_path: Path,
         fake_plugin: Path,
@@ -2857,7 +2917,15 @@ class TestDispatchViaSkypilot:
         mock_sky: MagicMock,
         patch_materialize_io: None,  # noqa: ARG002
     ) -> None:
-        """A non-success tail rc surfaces as a RuntimeError naming the failed rank."""
+        """A non-success tail rc surfaces as a RuntimeError naming the failed rank.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param fake_plugin: Fixture-provided fake VST3 plugin path.
+        :param env_file: Fixture-provided worker env file path.
+        :param local_spec_dir: Fixture-provided local spec directory.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        :param patch_materialize_io: Fixture stubbing materialize-side IO.
+        """
         from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
         from synth_setter.pipeline.skypilot_launch import dispatch_via_skypilot
 
@@ -2876,7 +2944,7 @@ class TestDispatchViaSkypilot:
         with pytest.raises(RuntimeError, match="worker.* failed"):
             dispatch_via_skypilot(spec, sky_cfg)
 
-    def test_multi_worker_fans_out_one_task_per_rank(  # noqa: DOC101,DOC103
+    def test_multi_worker_fans_out_one_task_per_rank(
         self,
         tmp_path: Path,
         fake_plugin: Path,
@@ -2885,7 +2953,15 @@ class TestDispatchViaSkypilot:
         mock_sky: MagicMock,
         patch_materialize_io: None,  # noqa: ARG002
     ) -> None:
-        """`num_workers=N` builds N tasks with -rN job-name suffixes, per the fan-out contract."""
+        """`num_workers=N` builds N tasks with -rN job-name suffixes, per the fan-out contract.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param fake_plugin: Fixture-provided fake VST3 plugin path.
+        :param env_file: Fixture-provided worker env file path.
+        :param local_spec_dir: Fixture-provided local spec directory.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        :param patch_materialize_io: Fixture stubbing materialize-side IO.
+        """
         from synth_setter.pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
         from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
         from synth_setter.pipeline.skypilot_launch import dispatch_via_skypilot
@@ -2926,7 +3002,7 @@ class TestDispatchViaSkypilot:
         ],
         ids=["job-name-with-slash", "image-tag-with-space"],
     )
-    def test_input_validation_raises_before_disk_or_network(  # noqa: DOC101,DOC103
+    def test_input_validation_raises_before_disk_or_network(
         self,
         tmp_path: Path,
         fake_plugin: Path,
@@ -2938,7 +3014,18 @@ class TestDispatchViaSkypilot:
         value: str,
         match: str,
     ) -> None:
-        """Malformed launcher params surface as ValueError before any SkyPilot submission."""
+        """Malformed launcher params surface as ValueError before any SkyPilot submission.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param fake_plugin: Fixture-provided fake VST3 plugin path.
+        :param env_file: Fixture-provided worker env file path.
+        :param local_spec_dir: Fixture-provided local spec directory.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        :param patch_materialize_io: Fixture stubbing materialize-side IO.
+        :param field: Parametrized launcher-config field under test.
+        :param value: Parametrized malformed value for ``field``.
+        :param match: Parametrized regex expected in the ValidationError.
+        """
         from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
         from synth_setter.pipeline.skypilot_launch import dispatch_via_skypilot
 
@@ -2957,7 +3044,7 @@ class TestDispatchViaSkypilot:
             dispatch_via_skypilot(spec, sky_cfg)
         mock_sky.jobs.launch.assert_not_called()
 
-    def test_job_name_falls_back_to_task_name_prefix_when_unset(  # noqa: DOC101,DOC103
+    def test_job_name_falls_back_to_task_name_prefix_when_unset(
         self,
         tmp_path: Path,
         fake_plugin: Path,
@@ -2966,7 +3053,15 @@ class TestDispatchViaSkypilot:
         mock_sky: MagicMock,
         patch_materialize_io: None,  # noqa: ARG002
     ) -> None:
-        """job_name=None derives the synth-setter-smoke-<task_name[:8]> fallback."""
+        """job_name=None derives the synth-setter-smoke-<task_name[:8]> fallback.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param fake_plugin: Fixture-provided fake VST3 plugin path.
+        :param env_file: Fixture-provided worker env file path.
+        :param local_spec_dir: Fixture-provided local spec directory.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        :param patch_materialize_io: Fixture stubbing materialize-side IO.
+        """
         from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
         from synth_setter.pipeline.skypilot_launch import dispatch_via_skypilot
 
@@ -2986,7 +3081,7 @@ class TestDispatchViaSkypilot:
         # spec.task_name=="test-dispatch" → first 8 chars round-trip into the suffix.
         assert submitted.endswith(spec.task_name[:8])
 
-    def test_api_server_and_local_are_mutually_exclusive(  # noqa: DOC101,DOC103
+    def test_api_server_and_local_are_mutually_exclusive(
         self,
         tmp_path: Path,
         fake_plugin: Path,
@@ -2995,7 +3090,15 @@ class TestDispatchViaSkypilot:
         mock_sky: MagicMock,
         patch_materialize_io: None,  # noqa: ARG002
     ) -> None:
-        """Setting both api_server and local raises before any launch — opposite dispatch modes."""
+        """Setting both api_server and local raises before any launch — opposite dispatch modes.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param fake_plugin: Fixture-provided fake VST3 plugin path.
+        :param env_file: Fixture-provided worker env file path.
+        :param local_spec_dir: Fixture-provided local spec directory.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        :param patch_materialize_io: Fixture stubbing materialize-side IO.
+        """
         from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
         from synth_setter.pipeline.skypilot_launch import dispatch_via_skypilot
 

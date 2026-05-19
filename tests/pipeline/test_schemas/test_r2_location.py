@@ -9,8 +9,12 @@ from synth_setter.pipeline.schemas.r2_location import R2Location
 from synth_setter.pipeline.schemas.spec import ShardSpec
 
 
-def _shard(filename: str = "shard-000042.h5") -> ShardSpec:  # noqa: DOC101,DOC103,DOC201,DOC203
-    """Return a minimal ``ShardSpec`` for URI-construction tests."""
+def _shard(filename: str = "shard-000042.h5") -> ShardSpec:
+    """Return a minimal ``ShardSpec`` for URI-construction tests.
+
+    :param filename: Shard filename to embed in the spec.
+    :return: A ``ShardSpec`` with fixed shard_id/seed.
+    """
     return ShardSpec(shard_id=42, filename=filename, seed=42)
 
 
@@ -170,8 +174,11 @@ class TestR2LocationLayoutHelpers:
         )
 
     @pytest.mark.parametrize("split", ["train", "val", "test"])
-    def test_split_uri(self, split: str) -> None:  # noqa: DOC101,DOC103
-        """``split_uri(<split>)`` returns ``<prefix><split>.h5`` for each split."""
+    def test_split_uri(self, split: str) -> None:
+        """``split_uri(<split>)`` returns ``<prefix><split>.h5`` for each split.
+
+        :param split: Parametrized split name (``train``/``val``/``test``).
+        """
         loc = R2Location(bucket="intermediate-data", prefix="data/run/")
         assert loc.split_uri(split) == f"r2://intermediate-data/data/run/{split}.h5"
 

@@ -45,15 +45,21 @@ PYDOCLINT_EXCLUDE_REGEX = r"""(?x)
 """
 
 
-def test_extract_exclude_regex_reads_pydoclint_table(tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-    """The regex is loaded from the project's pyproject.toml verbatim."""
+def test_extract_exclude_regex_reads_pydoclint_table(tmp_path: Path) -> None:
+    """The regex is loaded from the project's pyproject.toml verbatim.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_text("[tool.pydoclint]\nexclude = '''" + PYDOCLINT_EXCLUDE_REGEX + "'''\n")
     assert guard.load_exclude_regex(pyproject).pattern == PYDOCLINT_EXCLUDE_REGEX
 
 
-def test_extract_exclude_regex_errors_when_pyproject_lacks_section(tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-    """A pyproject without the pydoclint section is a configuration error, not a silent pass."""
+def test_extract_exclude_regex_errors_when_pyproject_lacks_section(tmp_path: Path) -> None:
+    """A pyproject without the pydoclint section is a configuration error, not a silent pass.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_text("[project]\nname = 'demo'\n")
     with pytest.raises(KeyError):
@@ -211,8 +217,11 @@ def test_find_new_defs_does_not_count_no_newline_marker_toward_line_numbers() ->
     assert findings == [("src/eval.py", "added_after_marker", 11)]
 
 
-def test_main_exits_zero_when_no_findings(tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-    """`main` exits 0 and prints nothing for a clean diff."""
+def test_main_exits_zero_when_no_findings(tmp_path: Path) -> None:
+    """`main` exits 0 and prints nothing for a clean diff.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_text("[tool.pydoclint]\nexclude = '''" + PYDOCLINT_EXCLUDE_REGEX + "'''\n")
     clean_diff = (
@@ -227,10 +236,14 @@ def test_main_exits_zero_when_no_findings(tmp_path: Path) -> None:  # noqa: DOC1
     assert exit_code == 0
 
 
-def test_main_exits_one_and_prints_findings_when_violation_present(  # noqa: DOC101,DOC103
+def test_main_exits_one_and_prints_findings_when_violation_present(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """`main` exits 1 and reports each finding with file:line: name."""
+    """`main` exits 1 and reports each finding with file:line: name.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param capsys: Pytest fixture capturing stdout/stderr.
+    """
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_text("[tool.pydoclint]\nexclude = '''" + PYDOCLINT_EXCLUDE_REGEX + "'''\n")
     violation_diff = (

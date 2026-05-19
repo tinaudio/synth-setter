@@ -17,8 +17,11 @@ from tests.schemas.conftest import compose_subtree
 _TRAINER_CONFIG_DIR = Path(__file__).resolve().parents[2] / "configs" / "trainer"
 
 
-def _all_trainer_config_names() -> list[str]:  # noqa: DOC201,DOC203
-    """Return the YAML stem of every direct trainer config under ``configs/trainer/``."""
+def _all_trainer_config_names() -> list[str]:
+    """Return the YAML stem of every direct trainer config under ``configs/trainer/``.
+
+    :return: Sorted list of YAML stems found in ``configs/trainer/``.
+    """
     names = sorted(p.stem for p in _TRAINER_CONFIG_DIR.glob("*.yaml"))
     assert names, f"no trainer YAMLs found under {_TRAINER_CONFIG_DIR} — has the layout changed?"
     return names
@@ -28,8 +31,11 @@ class TestTrainerConfigAcceptsEveryConfig:
     """Every shipped trainer YAML must validate against ``TrainerConfig``."""
 
     @pytest.mark.parametrize("trainer_name", _all_trainer_config_names())
-    def test_trainer_yaml_validates(self, trainer_name: str) -> None:  # noqa: DOC101,DOC103
-        """The composed ``trainer`` subtree validates as ``TrainerConfig``."""
+    def test_trainer_yaml_validates(self, trainer_name: str) -> None:
+        """The composed ``trainer`` subtree validates as ``TrainerConfig``.
+
+        :param trainer_name: Parametrized YAML stem under ``configs/trainer/``.
+        """
         trainer_subtree = compose_subtree("trainer", trainer_name)
         parsed = TrainerConfig.model_validate(trainer_subtree)
         assert parsed.target_

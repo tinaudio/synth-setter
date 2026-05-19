@@ -56,7 +56,7 @@ _ALL_TENSOR_KEYS = ("audio", "mel_spec", "m2l", "params", "noise")
 
 
 @contextlib.contextmanager
-def _set_up_module(**kwargs: object) -> Iterator[SurgeDataModule]:  # noqa: DOC101,DOC103,DOC404
+def _set_up_module(**kwargs: object) -> Iterator[SurgeDataModule]:
     """Construct a ``SurgeDataModule`` from ``**kwargs``, ``setup``, yield, then ``teardown``.
 
     Encapsulates the setup/teardown try/finally pattern every
@@ -65,7 +65,9 @@ def _set_up_module(**kwargs: object) -> Iterator[SurgeDataModule]:  # noqa: DOC1
     h5py file when one was opened, since ``teardown`` only closes the three
     train/val/test splits.
 
+    :param \\*\\*kwargs: Forwarded to ``SurgeDataModule``.
     :yields: The set-up datamodule for assertion work inside the ``with`` block.
+    :ytype: SurgeDataModule
     """
     module = SurgeDataModule(**kwargs)  # type: ignore[arg-type]
     module.setup()
@@ -214,8 +216,11 @@ def single_h5(tmp_path: Path) -> Path:
 class TestSurgeXTDatasetFakeMode:
     """``fake=True`` skips HDF5 entirely and returns randomly-generated tensors."""
 
-    def test_fake_mode_does_not_open_h5_file(self, tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-        """``fake=True`` accepts a nonexistent path because ``__init__`` never reads it."""
+    def test_fake_mode_does_not_open_h5_file(self, tmp_path: Path) -> None:
+        """``fake=True`` accepts a nonexistent path because ``__init__`` never reads it.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
         missing = tmp_path / "does-not-exist.h5"
         dataset = SurgeXTDataset(missing, batch_size=4, fake=True)
         assert dataset.dataset_file is None
@@ -324,13 +329,19 @@ class TestSurgeXTDatasetFakeMode:
 class TestSurgeXTDatasetH5Mode:
     """HDF5-backed path: indexing, type conversion, OT routing, normalization."""
 
-    def test_len_equals_num_rows_floor_divided_by_batch_size(self, single_h5: Path) -> None:  # noqa: DOC101,DOC103
-        """``__len__`` uses integer division — 8 rows / batch_size 3 == 2 batches."""
+    def test_len_equals_num_rows_floor_divided_by_batch_size(self, single_h5: Path) -> None:
+        """``__len__`` uses integer division — 8 rows / batch_size 3 == 2 batches.
+
+        :param single_h5: Fixture-provided single-shard HDF5 path.
+        """
         dataset = SurgeXTDataset(single_h5, batch_size=3, ot=False)
         assert len(dataset) == 8 // 3
 
-    def test_getitem_int_returns_batch_size_slice(self, single_h5: Path) -> None:  # noqa: DOC101,DOC103
-        """Integer index ``i`` reads rows ``[i*B : i*B+B]`` from each dataset."""
+    def test_getitem_int_returns_batch_size_slice(self, single_h5: Path) -> None:
+        """Integer index ``i`` reads rows ``[i*B : i*B+B]`` from each dataset.
+
+        :param single_h5: Fixture-provided single-shard HDF5 path.
+        """
         dataset = SurgeXTDataset(
             single_h5, batch_size=2, ot=False, use_saved_mean_and_variance=False
         )
@@ -338,24 +349,33 @@ class TestSurgeXTDatasetH5Mode:
         assert _unwrap(item["params"]).shape[0] == 2
         assert _unwrap(item["mel_spec"]).shape[0] == 2
 
-    def test_getitem_tuple_returns_explicit_slice(self, single_h5: Path) -> None:  # noqa: DOC101,DOC103
-        """A 2-tuple index ``(lo, hi)`` selects rows ``[lo:hi]`` directly."""
+    def test_getitem_tuple_returns_explicit_slice(self, single_h5: Path) -> None:
+        """A 2-tuple index ``(lo, hi)`` selects rows ``[lo:hi]`` directly.
+
+        :param single_h5: Fixture-provided single-shard HDF5 path.
+        """
         dataset = SurgeXTDataset(
             single_h5, batch_size=2, ot=False, use_saved_mean_and_variance=False
         )
         item = dataset[(1, 5)]
         assert _unwrap(item["params"]).shape[0] == 4
 
-    def test_getitem_sequence_falls_through_to_ds_fancy_indexing(self, single_h5: Path) -> None:  # noqa: DOC101,DOC103
-        """A non-int / non-2-tuple index falls through to ``ds[idx]`` fancy indexing."""
+    def test_getitem_sequence_falls_through_to_ds_fancy_indexing(self, single_h5: Path) -> None:
+        """A non-int / non-2-tuple index falls through to ``ds[idx]`` fancy indexing.
+
+        :param single_h5: Fixture-provided single-shard HDF5 path.
+        """
         dataset = SurgeXTDataset(
             single_h5, batch_size=2, ot=False, use_saved_mean_and_variance=False
         )
         item = dataset[[0, 2, 4]]
         assert _unwrap(item["params"]).shape[0] == 3
 
-    def test_repeat_first_batch_ignores_idx(self, single_h5: Path) -> None:  # noqa: DOC101,DOC103
-        """``repeat_first_batch=True`` always returns the first ``batch_size`` rows."""
+    def test_repeat_first_batch_ignores_idx(self, single_h5: Path) -> None:
+        """``repeat_first_batch=True`` always returns the first ``batch_size`` rows.
+
+        :param single_h5: Fixture-provided single-shard HDF5 path.
+        """
         dataset = SurgeXTDataset(
             single_h5,
             batch_size=3,
@@ -367,8 +387,11 @@ class TestSurgeXTDatasetH5Mode:
         later = dataset[2]
         assert torch.equal(_unwrap(first["params"]), _unwrap(later["params"]))
 
-    def test_returned_tensors_are_float32(self, single_h5: Path) -> None:  # noqa: DOC101,DOC103
-        """All numeric tensors come back as ``torch.float32`` for AMP compatibility."""
+    def test_returned_tensors_are_float32(self, single_h5: Path) -> None:
+        """All numeric tensors come back as ``torch.float32`` for AMP compatibility.
+
+        :param single_h5: Fixture-provided single-shard HDF5 path.
+        """
         dataset = SurgeXTDataset(
             single_h5,
             batch_size=2,
@@ -382,8 +405,11 @@ class TestSurgeXTDatasetH5Mode:
         for key in _ALL_TENSOR_KEYS:
             assert _unwrap(item[key]).dtype == torch.float32, key
 
-    def test_returned_tensors_are_contiguous(self, single_h5: Path) -> None:  # noqa: DOC101,DOC103
-        """Every populated tensor is ``.contiguous()`` so downstream cuda copies are cheap."""
+    def test_returned_tensors_are_contiguous(self, single_h5: Path) -> None:
+        """Every populated tensor is ``.contiguous()`` so downstream cuda copies are cheap.
+
+        :param single_h5: Fixture-provided single-shard HDF5 path.
+        """
         dataset = SurgeXTDataset(
             single_h5,
             batch_size=2,
@@ -397,22 +423,31 @@ class TestSurgeXTDatasetH5Mode:
         for key in _ALL_TENSOR_KEYS:
             assert _unwrap(item[key]).is_contiguous(), f"{key} not contiguous"
 
-    def test_read_audio_false_returns_none_audio(self, single_h5: Path) -> None:  # noqa: DOC101,DOC103
-        """``read_audio=False`` (default) leaves the ``audio`` slot at ``None``."""
+    def test_read_audio_false_returns_none_audio(self, single_h5: Path) -> None:
+        """``read_audio=False`` (default) leaves the ``audio`` slot at ``None``.
+
+        :param single_h5: Fixture-provided single-shard HDF5 path.
+        """
         dataset = SurgeXTDataset(
             single_h5, batch_size=2, ot=False, use_saved_mean_and_variance=False
         )
         item = dataset[0]
         assert item["audio"] is None
 
-    def test_read_mel_false_returns_none_mel(self, single_h5: Path) -> None:  # noqa: DOC101,DOC103
-        """``read_mel=False`` drops the ``mel_spec`` slot, even with stats on disk."""
+    def test_read_mel_false_returns_none_mel(self, single_h5: Path) -> None:
+        """``read_mel=False`` drops the ``mel_spec`` slot, even with stats on disk.
+
+        :param single_h5: Fixture-provided single-shard HDF5 path.
+        """
         dataset = SurgeXTDataset(single_h5, batch_size=2, ot=False, read_mel=False)
         item = dataset[0]
         assert item["mel_spec"] is None
 
-    def test_read_m2l_true_returns_m2l_tensor(self, single_h5: Path) -> None:  # noqa: DOC101,DOC103
-        """``read_m2l=True`` reads the ``music2latent`` dataset under the ``m2l`` key."""
+    def test_read_m2l_true_returns_m2l_tensor(self, single_h5: Path) -> None:
+        """``read_m2l=True`` reads the ``music2latent`` dataset under the ``m2l`` key.
+
+        :param single_h5: Fixture-provided single-shard HDF5 path.
+        """
         dataset = SurgeXTDataset(
             single_h5,
             batch_size=2,
@@ -422,8 +457,11 @@ class TestSurgeXTDatasetH5Mode:
         )
         assert _unwrap(dataset[0]["m2l"]).shape == (2, _M2L_DIM_1, _M2L_DIM_2)
 
-    def test_rescale_params_centers_to_minus_one_to_one(self, single_h5: Path) -> None:  # noqa: DOC101,DOC103
-        """``rescale_params=True`` applies ``p * 2 - 1`` element-wise before tensor conversion."""
+    def test_rescale_params_centers_to_minus_one_to_one(self, single_h5: Path) -> None:
+        """``rescale_params=True`` applies ``p * 2 - 1`` element-wise before tensor conversion.
+
+        :param single_h5: Fixture-provided single-shard HDF5 path.
+        """
         dataset_raw = SurgeXTDataset(
             single_h5,
             batch_size=2,
@@ -442,8 +480,11 @@ class TestSurgeXTDatasetH5Mode:
         rescaled = _unwrap(dataset_rescaled[0]["params"])
         assert torch.allclose(rescaled, raw * 2 - 1)
 
-    def test_mel_spec_normalized_with_loaded_stats(self, tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-        """When ``stats.npz`` is loaded, mel is returned as ``(mel - mean) / std``."""
+    def test_mel_spec_normalized_with_loaded_stats(self, tmp_path: Path) -> None:
+        """When ``stats.npz`` is loaded, mel is returned as ``(mel - mean) / std``.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
         h5_path = tmp_path / "train.h5"
         _write_h5_shard(h5_path, num_rows=4, mel_fill=3.0)
         _write_stats(tmp_path, mean=1.0, std=2.0)
@@ -457,8 +498,11 @@ class TestSurgeXTDatasetH5Mode:
         expected = (3.0 - 1.0) / 2.0
         assert torch.allclose(mel, torch.full_like(mel, expected))
 
-    def test_no_stats_load_when_disabled(self, tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-        """``use_saved_mean_and_variance=False`` skips the npz read, even if it's missing."""
+    def test_no_stats_load_when_disabled(self, tmp_path: Path) -> None:
+        """``use_saved_mean_and_variance=False`` skips the npz read, even if it's missing.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
         h5_path = tmp_path / "train.h5"
         _write_h5_shard(h5_path, num_rows=4)
         dataset = SurgeXTDataset(
@@ -470,15 +514,21 @@ class TestSurgeXTDatasetH5Mode:
         assert dataset.mean is None
         assert dataset.std is None
 
-    def test_missing_stats_file_raises_file_not_found(self, tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-        """``use_saved_mean_and_variance=True`` with no sibling ``stats.npz`` errors clearly."""
+    def test_missing_stats_file_raises_file_not_found(self, tmp_path: Path) -> None:
+        """``use_saved_mean_and_variance=True`` with no sibling ``stats.npz`` errors clearly.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
         h5_path = tmp_path / "train.h5"
         _write_h5_shard(h5_path, num_rows=4)
         with pytest.raises(FileNotFoundError, match="stats.npz"):
             SurgeXTDataset(h5_path, batch_size=2, ot=False, use_saved_mean_and_variance=True)
 
-    def test_get_stats_file_path_is_sibling_of_dataset(self, tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-        """The static helper returns ``parent_dir / 'stats.npz'`` for any input layout."""
+    def test_get_stats_file_path_is_sibling_of_dataset(self, tmp_path: Path) -> None:
+        """The static helper returns ``parent_dir / 'stats.npz'`` for any input layout.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
         # str input
         assert SurgeXTDataset.get_stats_file_path(str(tmp_path / "train.h5")) == (
             tmp_path / "stats.npz"
@@ -489,8 +539,11 @@ class TestSurgeXTDatasetH5Mode:
         nested = tmp_path / "shard0" / "data.h5"
         assert SurgeXTDataset.get_stats_file_path(nested) == tmp_path / "shard0" / "stats.npz"
 
-    def test_no_ot_does_not_call_hungarian_match(self, single_h5: Path) -> None:  # noqa: DOC101,DOC103
-        """``ot=False`` short-circuits before ``_hungarian_match`` is invoked."""
+    def test_no_ot_does_not_call_hungarian_match(self, single_h5: Path) -> None:
+        """``ot=False`` short-circuits before ``_hungarian_match`` is invoked.
+
+        :param single_h5: Fixture-provided single-shard HDF5 path.
+        """
         with patch("synth_setter.data.surge_datamodule._hungarian_match") as mock_match:
             dataset = SurgeXTDataset(
                 single_h5,
@@ -501,8 +554,11 @@ class TestSurgeXTDatasetH5Mode:
             _ = dataset[0]
         mock_match.assert_not_called()
 
-    def test_ot_true_calls_hungarian_match_with_all_four_tensors(self, single_h5: Path) -> None:  # noqa: DOC101,DOC103
-        """``ot=True`` routes through ``_hungarian_match(noise, params, mel_spec, audio)``."""
+    def test_ot_true_calls_hungarian_match_with_all_four_tensors(self, single_h5: Path) -> None:
+        """``ot=True`` routes through ``_hungarian_match(noise, params, mel_spec, audio)``.
+
+        :param single_h5: Fixture-provided single-shard HDF5 path.
+        """
         with patch(
             "synth_setter.data.surge_datamodule._hungarian_match",
             side_effect=lambda noise, params, *args: (noise, params, *args),
@@ -536,8 +592,11 @@ class TestSurgeXTDatasetH5Mode:
             _AUDIO_SAMPLES,
         )
 
-    def test_ot_with_disabled_modalities_passes_none_through(self, single_h5: Path) -> None:  # noqa: DOC101,DOC103
-        """``_hungarian_match`` still receives ``None`` placeholders when modalities are off."""
+    def test_ot_with_disabled_modalities_passes_none_through(self, single_h5: Path) -> None:
+        """``_hungarian_match`` still receives ``None`` placeholders when modalities are off.
+
+        :param single_h5: Fixture-provided single-shard HDF5 path.
+        """
         with patch(
             "synth_setter.data.surge_datamodule._hungarian_match",
             side_effect=lambda noise, params, *args: (noise, params, *args),
@@ -561,8 +620,11 @@ class TestSurgeXTDatasetH5Mode:
         assert item["mel_spec"] is None
         assert item["audio"] is None
 
-    def test_returned_dict_always_exposes_full_key_set(self, single_h5: Path) -> None:  # noqa: DOC101,DOC103
-        """Every ``__getitem__`` return dict exposes the same five-key contract."""
+    def test_returned_dict_always_exposes_full_key_set(self, single_h5: Path) -> None:
+        """Every ``__getitem__`` return dict exposes the same five-key contract.
+
+        :param single_h5: Fixture-provided single-shard HDF5 path.
+        """
         dataset = SurgeXTDataset(
             single_h5,
             batch_size=2,
@@ -748,28 +810,40 @@ class TestShiftedBatchSampler:
 class TestSurgeDataModule:
     """Lightning datamodule: setup / dataloaders / teardown wiring."""
 
-    def test_init_stores_dataset_root_as_path(self, tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-        """``dataset_root`` is normalized to ``pathlib.Path`` even when passed as a str."""
+    def test_init_stores_dataset_root_as_path(self, tmp_path: Path) -> None:
+        """``dataset_root`` is normalized to ``pathlib.Path`` even when passed as a str.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
         module = SurgeDataModule(dataset_root=str(tmp_path))
         assert module.dataset_root == tmp_path
         assert isinstance(module.dataset_root, Path)
 
-    def test_setup_creates_train_val_test_splits(self, dataset_root: Path) -> None:  # noqa: DOC101,DOC103
-        """``setup()`` opens the three required splits and exposes them as attrs."""
+    def test_setup_creates_train_val_test_splits(self, dataset_root: Path) -> None:
+        """``setup()`` opens the three required splits and exposes them as attrs.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
         with _set_up_module(dataset_root=dataset_root, batch_size=2, ot=False) as module:
             assert isinstance(module.train_dataset, SurgeXTDataset)
             assert isinstance(module.val_dataset, SurgeXTDataset)
             assert isinstance(module.test_dataset, SurgeXTDataset)
 
-    def test_setup_without_predict_file_leaves_predict_none(self, dataset_root: Path) -> None:  # noqa: DOC101,DOC103
-        """``predict_file=None`` leaves ``predict_dataset`` as ``None``."""
+    def test_setup_without_predict_file_leaves_predict_none(self, dataset_root: Path) -> None:
+        """``predict_file=None`` leaves ``predict_dataset`` as ``None``.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
         with _set_up_module(dataset_root=dataset_root, batch_size=2, ot=False) as module:
             assert module.predict_dataset is None
 
-    def test_setup_with_predict_file_builds_predict_dataset_with_audio(  # noqa: DOC101,DOC103
+    def test_setup_with_predict_file_builds_predict_dataset_with_audio(
         self, dataset_root: Path
     ) -> None:
-        """``predict_file`` set: predict-split dataset opens with ``read_audio=True``."""
+        """``predict_file`` set: predict-split dataset opens with ``read_audio=True``.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
         with _set_up_module(
             dataset_root=dataset_root,
             batch_size=2,
@@ -779,15 +853,21 @@ class TestSurgeDataModule:
             assert isinstance(module.predict_dataset, SurgeXTDataset)
             assert module.predict_dataset.read_audio is True
 
-    def test_setup_val_and_test_force_ot_false(self, dataset_root: Path) -> None:  # noqa: DOC101,DOC103
-        """``setup`` hard-codes ``ot=False`` on val/test even when the module is ``ot=True``."""
+    def test_setup_val_and_test_force_ot_false(self, dataset_root: Path) -> None:
+        """``setup`` hard-codes ``ot=False`` on val/test even when the module is ``ot=True``.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
         with _set_up_module(dataset_root=dataset_root, batch_size=2, ot=True) as module:
             assert module.train_dataset.ot is True
             assert module.val_dataset.ot is False
             assert module.test_dataset.ot is False
 
-    def test_conditioning_mel_routes_to_mel_reads(self, dataset_root: Path) -> None:  # noqa: DOC101,DOC103
-        """``conditioning='mel'`` toggles ``read_mel=True`` / ``read_m2l=False`` on every split."""
+    def test_conditioning_mel_routes_to_mel_reads(self, dataset_root: Path) -> None:
+        """``conditioning='mel'`` toggles ``read_mel=True`` / ``read_m2l=False`` on every split.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
         with _set_up_module(
             dataset_root=dataset_root, batch_size=2, ot=False, conditioning="mel"
         ) as module:
@@ -795,8 +875,11 @@ class TestSurgeDataModule:
                 assert split.read_mel is True
                 assert split.read_m2l is False
 
-    def test_conditioning_m2l_routes_to_m2l_reads(self, dataset_root: Path) -> None:  # noqa: DOC101,DOC103
-        """``conditioning='m2l'`` flips the read flags to the music2latent channel."""
+    def test_conditioning_m2l_routes_to_m2l_reads(self, dataset_root: Path) -> None:
+        """``conditioning='m2l'`` flips the read flags to the music2latent channel.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
         with _set_up_module(
             dataset_root=dataset_root, batch_size=2, ot=False, conditioning="m2l"
         ) as module:
@@ -804,8 +887,11 @@ class TestSurgeDataModule:
                 assert split.read_mel is False
                 assert split.read_m2l is True
 
-    def test_conditioning_m2l_also_routes_predict_split(self, dataset_root: Path) -> None:  # noqa: DOC101,DOC103
-        """``predict_dataset`` follows the same conditioning routing as train/val/test."""
+    def test_conditioning_m2l_also_routes_predict_split(self, dataset_root: Path) -> None:
+        """``predict_dataset`` follows the same conditioning routing as train/val/test.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
         with _set_up_module(
             dataset_root=dataset_root,
             batch_size=2,
@@ -817,8 +903,11 @@ class TestSurgeDataModule:
             assert module.predict_dataset.read_mel is False
             assert module.predict_dataset.read_m2l is True
 
-    def test_train_dataloader_uses_shifted_batch_sampler(self, dataset_root: Path) -> None:  # noqa: DOC101,DOC103
-        """``train_dataloader`` wires the ``ShiftedBatchSampler`` (not the global random one)."""
+    def test_train_dataloader_uses_shifted_batch_sampler(self, dataset_root: Path) -> None:
+        """``train_dataloader`` wires the ``ShiftedBatchSampler`` (not the global random one).
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
         with _set_up_module(
             dataset_root=dataset_root,
             batch_size=2,
@@ -832,8 +921,11 @@ class TestSurgeDataModule:
             assert loader.num_workers == 0
             assert loader.pin_memory is False
 
-    def test_val_test_dataloaders_have_no_shuffle_sampler(self, dataset_root: Path) -> None:  # noqa: DOC101,DOC103
-        """Val/test loaders use the default no-shuffle ``SequentialSampler``."""
+    def test_val_test_dataloaders_have_no_shuffle_sampler(self, dataset_root: Path) -> None:
+        """Val/test loaders use the default no-shuffle ``SequentialSampler``.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
         with _set_up_module(
             dataset_root=dataset_root,
             batch_size=2,
@@ -846,8 +938,11 @@ class TestSurgeDataModule:
             assert isinstance(val_loader.sampler, torch.utils.data.SequentialSampler)
             assert isinstance(test_loader.sampler, torch.utils.data.SequentialSampler)
 
-    def test_dataloader_num_workers_and_pin_memory_propagate(self, dataset_root: Path) -> None:  # noqa: DOC101,DOC103
-        """``num_workers`` / ``pin_memory`` kwargs are passed verbatim to every DataLoader."""
+    def test_dataloader_num_workers_and_pin_memory_propagate(self, dataset_root: Path) -> None:
+        """``num_workers`` / ``pin_memory`` kwargs are passed verbatim to every DataLoader.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
         with _set_up_module(
             dataset_root=dataset_root,
             batch_size=2,
@@ -863,10 +958,13 @@ class TestSurgeDataModule:
                 assert loader.num_workers == 2
                 assert loader.pin_memory is True
 
-    def test_predict_dataloader_returns_dataloader_when_predict_file_set(  # noqa: DOC101,DOC103
+    def test_predict_dataloader_returns_dataloader_when_predict_file_set(
         self, dataset_root: Path
     ) -> None:
-        """``predict_dataloader`` wraps the predict split in a no-shuffle loader."""
+        """``predict_dataloader`` wraps the predict split in a no-shuffle loader.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
         with _set_up_module(
             dataset_root=dataset_root,
             batch_size=2,
@@ -877,11 +975,14 @@ class TestSurgeDataModule:
             assert isinstance(loader, torch.utils.data.DataLoader)
             assert isinstance(loader.sampler, torch.utils.data.SequentialSampler)
 
-    def test_predict_dataloader_propagates_num_workers_and_pin_memory(  # noqa: DOC101,DOC103
+    def test_predict_dataloader_propagates_num_workers_and_pin_memory(
         self, dataset_root: Path
     ) -> None:
         """``num_workers`` / ``pin_memory`` reach the predict loader too (separate construction
-        path)."""
+        path).
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
         with _set_up_module(
             dataset_root=dataset_root,
             batch_size=2,
@@ -894,8 +995,11 @@ class TestSurgeDataModule:
             assert loader.num_workers == 2
             assert loader.pin_memory is True
 
-    def test_teardown_closes_open_h5_handles(self, dataset_root: Path) -> None:  # noqa: DOC101,DOC103
-        """``teardown`` closes the three split files so the next setup can reopen them."""
+    def test_teardown_closes_open_h5_handles(self, dataset_root: Path) -> None:
+        """``teardown`` closes the three split files so the next setup can reopen them.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
         module = SurgeDataModule(dataset_root=dataset_root, batch_size=2, ot=False)
         module.setup()
         module.teardown()
@@ -904,8 +1008,11 @@ class TestSurgeDataModule:
         assert not module.val_dataset.dataset_file
         assert not module.test_dataset.dataset_file
 
-    def test_fake_mode_setup_does_not_require_dataset_files(self, tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-        """``fake=True`` setup never touches the dataset_root, so a fresh dir is enough."""
+    def test_fake_mode_setup_does_not_require_dataset_files(self, tmp_path: Path) -> None:
+        """``fake=True`` setup never touches the dataset_root, so a fresh dir is enough.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
         with _set_up_module(
             dataset_root=tmp_path,
             batch_size=2,
@@ -917,8 +1024,11 @@ class TestSurgeDataModule:
             assert module.val_dataset.fake is True
             assert module.test_dataset.fake is True
 
-    def test_fake_mode_train_dataloader_yields_well_shaped_items(self, tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-        """End-to-end smoke: fake-mode train loader iterates and produces sane shapes."""
+    def test_fake_mode_train_dataloader_yields_well_shaped_items(self, tmp_path: Path) -> None:
+        """End-to-end smoke: fake-mode train loader iterates and produces sane shapes.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
         with _set_up_module(
             dataset_root=tmp_path,
             batch_size=2,

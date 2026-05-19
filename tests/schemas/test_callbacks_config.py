@@ -18,8 +18,11 @@ from tests.schemas.conftest import compose_train_cfg
 _CALLBACKS_CONFIG_DIR = Path(__file__).resolve().parents[2] / "configs" / "callbacks"
 
 
-def _all_callback_config_names() -> list[str]:  # noqa: DOC201,DOC203
-    """Return every callback YAML stem under ``configs/callbacks/``."""
+def _all_callback_config_names() -> list[str]:
+    """Return every callback YAML stem under ``configs/callbacks/``.
+
+    :return: Sorted list of YAML stems found in ``configs/callbacks/``.
+    """
     names = sorted(p.stem for p in _CALLBACKS_CONFIG_DIR.glob("*.yaml"))
     assert names, (
         f"no callback YAMLs found under {_CALLBACKS_CONFIG_DIR} — "
@@ -28,10 +31,14 @@ def _all_callback_config_names() -> list[str]:  # noqa: DOC201,DOC203
     return names
 
 
-def _compose_callbacks_subtree(  # noqa: DOC101,DOC103,DOC201,DOC203
+def _compose_callbacks_subtree(
     callbacks_name: str,
 ) -> dict[str, object] | None:
-    """Compose with ``callbacks=<name>``; returns dict, or ``None`` for ``none.yaml``."""
+    """Compose with ``callbacks=<name>``; returns dict, or ``None`` for ``none.yaml``.
+
+    :param callbacks_name: Name of the callbacks YAML under ``configs/callbacks/``.
+    :return: Composed ``callbacks`` subtree as a dict, or ``None`` for ``none.yaml``.
+    """
     cfg_dict = compose_train_cfg(overrides=[f"callbacks={callbacks_name}"])
     return cfg_dict["callbacks"]
 
@@ -44,8 +51,11 @@ class TestCallbacksConfigAcceptsEveryComposition:
     """
 
     @pytest.mark.parametrize("callbacks_name", _all_callback_config_names())
-    def test_callbacks_yaml_validates(self, callbacks_name: str) -> None:  # noqa: DOC101,DOC103
-        """The composed ``callbacks`` subtree validates as ``CallbacksConfig``."""
+    def test_callbacks_yaml_validates(self, callbacks_name: str) -> None:
+        """The composed ``callbacks`` subtree validates as ``CallbacksConfig``.
+
+        :param callbacks_name: Parametrized YAML stem under ``configs/callbacks/``.
+        """
         callbacks_subtree = _compose_callbacks_subtree(callbacks_name)
         if not isinstance(callbacks_subtree, dict):
             pytest.skip(

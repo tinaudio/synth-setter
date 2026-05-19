@@ -21,11 +21,14 @@ from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from synth_setter.pipeline.schemas.spec import RenderConfig
 
 
-def _smoke_render_cfg(**overrides: object) -> RenderConfig:  # noqa: DOC101,DOC103,DOC201,DOC203
+def _smoke_render_cfg(**overrides: object) -> RenderConfig:
     """Build a syntactically-valid ``RenderConfig`` for CPU-only tests.
 
     No I/O happens against ``plugin_path`` or ``preset_path`` in these tests
     — they only need to be non-blank strings.
+
+    :param \\*\\*overrides: Per-call overrides merged into the default kwargs.
+    :return: A ``RenderConfig`` ready for the writer tests.
     """
     kwargs: dict[str, object] = {
         "plugin_path": "plugins/Surge XT.vst3",
@@ -80,12 +83,14 @@ def test_shard_metadata_from_render_round_trips_through_json() -> None:
     assert rehydrated == meta
 
 
-def _run_main_with_argv(argv: list[str]) -> None:  # noqa: DOC101,DOC103
+def _run_main_with_argv(argv: list[str]) -> None:
     """Invoke ``generate_vst_dataset.main`` with ``argv`` patched in.
 
     The pydantic-settings CLI reads ``sys.argv`` directly via ``CliApp.run``,
     so tests need to swap the process argv around the call. Imports the entry
     inside the helper so a single import failure doesn't poison the module.
+
+    :param argv: Parametrized ``argv`` value under test.
     """
     from synth_setter.data.vst.generate_vst_dataset import main
 
@@ -96,11 +101,14 @@ def _run_main_with_argv(argv: list[str]) -> None:  # noqa: DOC101,DOC103
 # Shared CLI argv prefix for the dispatcher tests below. Built from the same
 # ``RenderConfig`` field set the CLI binding inherits, so adding a render-config
 # field auto-extends the prefix.
-def _cli_argv(data_file: str) -> list[str]:  # noqa: DOC101,DOC103,DOC201,DOC203
+def _cli_argv(data_file: str) -> list[str]:
     """Build a CLI argv that parses cleanly into a ``RenderConfig`` + ``data_file``.
 
     All values mirror ``_smoke_render_cfg`` so the parsed config is round-trip
     equal to it. The ``argv[0]`` is a stand-in program name (not used).
+
+    :param data_file: Path threaded into argv as the positional data_file arg.
+    :return: A list of argv tokens suitable for ``_run_main_with_argv``.
     """
     return [
         "generate_vst_dataset",
@@ -133,8 +141,11 @@ def _cli_argv(data_file: str) -> list[str]:  # noqa: DOC101,DOC103,DOC201,DOC203
     ]
 
 
-def test_main_dispatches_h5_suffix_to_make_hdf5_dataset(tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-    """``data_file=foo.h5`` routes to ``make_hdf5_dataset`` (not the wds writer)."""
+def test_main_dispatches_h5_suffix_to_make_hdf5_dataset(tmp_path: Path) -> None:
+    """``data_file=foo.h5`` routes to ``make_hdf5_dataset`` (not the wds writer).
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
     data_file = tmp_path / "shard-000000.h5"
 
     with (
@@ -150,8 +161,11 @@ def test_main_dispatches_h5_suffix_to_make_hdf5_dataset(tmp_path: Path) -> None:
     assert h5_args[0] == str(data_file)
 
 
-def test_main_dispatches_tar_suffix_to_make_wds_dataset(tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-    """``data_file=foo.tar`` routes to ``make_wds_dataset`` (not the h5 writer)."""
+def test_main_dispatches_tar_suffix_to_make_wds_dataset(tmp_path: Path) -> None:
+    """``data_file=foo.tar`` routes to ``make_wds_dataset`` (not the h5 writer).
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
     data_file = tmp_path / "shard-000000.tar"
 
     with (
@@ -166,8 +180,11 @@ def test_main_dispatches_tar_suffix_to_make_wds_dataset(tmp_path: Path) -> None:
     assert wds_args[0] == str(data_file)
 
 
-def test_main_rejects_unknown_suffix(tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-    """``data_file=foo.bin`` raises ``SystemExit`` rather than silently picking a writer."""
+def test_main_rejects_unknown_suffix(tmp_path: Path) -> None:
+    """``data_file=foo.bin`` raises ``SystemExit`` rather than silently picking a writer.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
     data_file = tmp_path / "shard-000000.bin"
 
     with (
@@ -181,7 +198,7 @@ def test_main_rejects_unknown_suffix(tmp_path: Path) -> None:  # noqa: DOC101,DO
     mock_wds.assert_not_called()
 
 
-def _stub_render_dependencies(  # noqa: DOC101,DOC103,DOC201,DOC203
+def _stub_render_dependencies(
     monkeypatch: pytest.MonkeyPatch,
     *,
     load_plugin_calls: list[dict[str, object]],
@@ -194,6 +211,12 @@ def _stub_render_dependencies(  # noqa: DOC101,DOC103,DOC201,DOC203
     ``cached_plugin_holder`` is supplied, the MagicMock returned by the fake
     ``load_plugin`` is appended to it so tests can assert identity-equality
     against the instance threaded into per-render calls.
+
+    :param monkeypatch: Pytest fixture used to patch module-level callables.
+    :param load_plugin_calls: List receiving the path argument of each fake ``load_plugin`` call.
+    :param load_preset_calls: List receiving the kwargs of each fake ``load_preset`` call.
+    :param cached_plugin_holder: When supplied, the fake plugin instance is appended to this list.
+    :return: List of kwargs dicts captured from each ``generate_sample`` invocation.
     """
     captured: list[dict[str, object]] = []
 
@@ -217,10 +240,13 @@ def _stub_render_dependencies(  # noqa: DOC101,DOC103,DOC201,DOC203
     return captured
 
 
-def test_render_in_batches_caches_plugin_when_reload_cadence_is_once(  # noqa: DOC101,DOC103
+def test_render_in_batches_caches_plugin_when_reload_cadence_is_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``plugin_reload_cadence="once"`` loads the plugin once and reuses the same instance."""
+    """``plugin_reload_cadence="once"`` loads the plugin once and reuses the same instance.
+
+    :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
+    """
     n = 4
     render_cfg = _smoke_render_cfg(
         samples_per_shard=n,
@@ -258,10 +284,13 @@ def test_render_in_batches_caches_plugin_when_reload_cadence_is_once(  # noqa: D
     assert sum(len(batch) for batch, _ in flushed) == n
 
 
-def test_render_in_batches_reloads_plugin_per_render_when_reload_cadence_is_render(  # noqa: DOC101,DOC103
+def test_render_in_batches_reloads_plugin_per_render_when_reload_cadence_is_render(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``plugin_reload_cadence="render"`` (default) leaves the plugin to be loaded per call."""
+    """``plugin_reload_cadence="render"`` (default) leaves the plugin to be loaded per call.
+
+    :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
+    """
     n = 3
     render_cfg = _smoke_render_cfg(
         samples_per_shard=n,
@@ -295,10 +324,13 @@ def test_render_in_batches_reloads_plugin_per_render_when_reload_cadence_is_rend
         assert call_kwargs["warmup"] is False
 
 
-def test_render_in_batches_warmup_once_runs_first_render_only(  # noqa: DOC101,DOC103
+def test_render_in_batches_warmup_once_runs_first_render_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``gui_toggle_cadence="once"`` sets warmup=True on the first render only."""
+    """``gui_toggle_cadence="once"`` sets warmup=True on the first render only.
+
+    :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
+    """
     n = 4
     render_cfg = _smoke_render_cfg(
         samples_per_shard=n,
@@ -325,10 +357,13 @@ def test_render_in_batches_warmup_once_runs_first_render_only(  # noqa: DOC101,D
     assert warmup_flags == [True, False, False, False]
 
 
-def test_render_in_batches_warmup_render_runs_every_render(  # noqa: DOC101,DOC103
+def test_render_in_batches_warmup_render_runs_every_render(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``gui_toggle_cadence="render"`` sets warmup=True on every render."""
+    """``gui_toggle_cadence="render"`` sets warmup=True on every render.
+
+    :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
+    """
     # The Darwin validator rejects gui_toggle_cadence="render" (SIGTRAP, #714);
     # force the non-Darwin path so the schema constructs on macOS CI hosts too.
     monkeypatch.setattr(
@@ -359,10 +394,13 @@ def test_render_in_batches_warmup_render_runs_every_render(  # noqa: DOC101,DOC1
     assert all(c["warmup"] is True for c in captured)
 
 
-def test_render_in_batches_warmup_never_skips_all_renders(  # noqa: DOC101,DOC103
+def test_render_in_batches_warmup_never_skips_all_renders(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``gui_toggle_cadence="never"`` keeps warmup=False on every render."""
+    """``gui_toggle_cadence="never"`` keeps warmup=False on every render.
+
+    :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
+    """
     n = 3
     render_cfg = _smoke_render_cfg(
         samples_per_shard=n,
@@ -388,10 +426,13 @@ def test_render_in_batches_warmup_never_skips_all_renders(  # noqa: DOC101,DOC10
     assert all(c["warmup"] is False for c in captured)
 
 
-def test_render_in_batches_once_once_warms_once_and_caches_plugin(  # noqa: DOC101,DOC103
+def test_render_in_batches_once_once_warms_once_and_caches_plugin(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``("once","once")`` — load + warm once, reuse the same plugin instance throughout."""
+    """``("once","once")`` — load + warm once, reuse the same plugin instance throughout.
+
+    :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
+    """
     n = 4
     render_cfg = _smoke_render_cfg(
         samples_per_shard=n,
@@ -426,10 +467,13 @@ def test_render_in_batches_once_once_warms_once_and_caches_plugin(  # noqa: DOC1
         assert call_kwargs["plugin"] is cached
 
 
-def test_render_in_batches_once_render_warms_every_render_with_cached_plugin(  # noqa: DOC101,DOC103
+def test_render_in_batches_once_render_warms_every_render_with_cached_plugin(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``("once","render")`` — cached plugin, warmup on every render across the shard."""
+    """``("once","render")`` — cached plugin, warmup on every render across the shard.
+
+    :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
+    """
     monkeypatch.setattr(
         "synth_setter.pipeline.schemas.spec._current_platform", lambda: "linux"
     )
@@ -477,17 +521,22 @@ def test_render_in_batches_once_render_warms_every_render_with_cached_plugin(  #
 _RENDERER_FAKE_AUDIO_SHAPE = (2, 16000 * 4)
 
 
-def _silent_render() -> object:  # noqa: DOC201,DOC203
-    """Return a silent stereo render shaped for the test ``_smoke_render_cfg``."""
+def _silent_render() -> object:
+    """Return a silent stereo render shaped for the test ``_smoke_render_cfg``.
+
+    :return: Zero-filled stereo audio array shaped like a real render.
+    """
     import numpy as np
 
     return np.zeros(_RENDERER_FAKE_AUDIO_SHAPE, dtype=np.float32)
 
 
-def _loud_render() -> object:  # noqa: DOC201,DOC203
+def _loud_render() -> object:
     """Return a loud stereo render shaped for the test ``_smoke_render_cfg``.
 
     A 440 Hz sine at half-scale comfortably clears the ``-55 dB`` loudness gate.
+
+    :return: 440 Hz sine wave stereo audio array shaped like a real render.
     """
     import numpy as np
 
@@ -497,7 +546,7 @@ def _loud_render() -> object:  # noqa: DOC201,DOC203
     return np.stack([sine, sine], axis=0)
 
 
-def _install_writer_level_fakes(  # noqa: DOC203
+def _install_writer_level_fakes(
     monkeypatch: pytest.MonkeyPatch,
     *,
     retry_on_first_sample: int,
@@ -553,7 +602,7 @@ def _install_writer_level_fakes(  # noqa: DOC203
     return warmup_mock, fake_spec
 
 
-def test_render_in_batches_once_cadence_survives_intra_sample_retries(  # noqa: DOC101,DOC103
+def test_render_in_batches_once_cadence_survives_intra_sample_retries(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``gui_toggle_cadence="once"`` warms exactly once even when sample 0 retries twice.
@@ -565,6 +614,8 @@ def test_render_in_batches_once_cadence_survives_intra_sample_retries(  # noqa: 
     would re-warm and silently blow past the per-shard budget. Asserts the
     observable side effect (``warmup_plugin`` call count) across the full
     shard, not the kwarg the writer hands to ``generate_sample``.
+
+    :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
     """
     n = 3
     retries = 2
@@ -590,7 +641,7 @@ def test_render_in_batches_once_cadence_survives_intra_sample_retries(  # noqa: 
     assert warmup_mock.call_count == 1
 
 
-def test_render_in_batches_render_cadence_warms_once_per_generate_sample_call(  # noqa: DOC101,DOC103
+def test_render_in_batches_render_cadence_warms_once_per_generate_sample_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``gui_toggle_cadence="render"`` warms once per ``generate_sample`` call, not per retry.
@@ -601,6 +652,8 @@ def test_render_in_batches_render_cadence_warms_once_per_generate_sample_call(  
     internal ``warmup = False`` reset (line 129 of ``generate_vst_dataset.py``)
     is cadence-agnostic, so sample 0's silent retries do NOT re-warm — total
     warm-ups equals the sample count, not the render-attempt count.
+
+    :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
     """
     monkeypatch.setattr(
         "synth_setter.pipeline.schemas.spec._current_platform", lambda: "linux"
