@@ -370,7 +370,12 @@ def main(
         local=local,
     )
 
-    dispatch_via_skypilot(spec, sky_cfg, spec_uri=spec_uri)
+    try:
+        dispatch_via_skypilot(spec, sky_cfg, spec_uri=spec_uri)
+    except (ValueError, RuntimeError) as exc:
+        # Surface dispatch_via_skypilot's documented raises (cfg-shape, worker submission)
+        # as a clean click error rather than an uncaught traceback.
+        raise click.ClickException(str(exc)) from exc
 
 
 def _find_unique_spec_path(command_for_error: str) -> Path:
