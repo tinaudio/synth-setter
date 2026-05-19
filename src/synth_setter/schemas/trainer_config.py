@@ -19,8 +19,45 @@ from synth_setter.schemas._types import NonBlankStr, StrictAllowExtraModel
 __all__ = ["TrainerConfig"]
 
 
-class TrainerConfig(StrictAllowExtraModel):  # noqa: DOC601,DOC603
-    """One of the YAMLs under ``configs/trainer/``; other kwargs ride ``extra="allow"``."""
+class TrainerConfig(StrictAllowExtraModel):
+    """One of the YAMLs under ``configs/trainer/``; other kwargs ride ``extra="allow"``.
+
+    .. attribute :: target_
+
+        Fully-qualified ``lightning.pytorch.trainer.Trainer`` class path.
+
+    .. attribute :: default_root_dir
+
+        Where Lightning writes logs and checkpoints when no logger overrides it.
+
+    .. attribute :: accelerator
+
+        Hardware backend (``cpu``, ``gpu``, ``mps``, ``tpu``, ``auto``).
+
+    .. attribute :: devices
+
+        Number of devices on the chosen accelerator.
+
+    .. attribute :: log_every_n_steps
+
+        Logging cadence (steps) for training metrics.
+
+    .. attribute :: val_check_interval
+
+        Cadence of validation runs.
+
+    .. attribute :: gradient_clip_val
+
+        Maximum gradient L2 norm before clipping.
+
+    .. attribute :: check_val_every_n_epoch
+
+        Run validation every N epochs (``None`` → step-based).
+
+    .. attribute :: deterministic
+
+        Force deterministic ops where Lightning supports it.
+    """
 
     target_: NonBlankStr = Field(
         alias="_target_",

@@ -387,7 +387,7 @@ def _can_derive_prefix(data: dict[str, Any], r2: dict[str, Any]) -> bool:
     return True
 
 
-class DatasetSpec(BaseModel):  # noqa: DOC601,DOC603
+class DatasetSpec(BaseModel):
     """Unified dataset specification — config + materialized runtime in one model.
 
     Construction story:
@@ -401,6 +401,55 @@ class DatasetSpec(BaseModel):  # noqa: DOC601,DOC603
     Strict mode is on (the model is a trust boundary for JSON-from-R2);
     ``extra="forbid"`` plus the per-field validators keep the boundary tight.
     Frozen so the materialized artifact is immutable post-construction.
+
+    .. attribute :: model_config
+
+        Pydantic model config sentinel — see ``ConfigDict(...)`` below for active settings.
+
+    .. attribute :: task_name
+
+        Dataset config identifier; prefix of ``run_id`` and ``r2.prefix``.
+
+    .. attribute :: output_format
+
+        Shard container format (``hdf5`` writes ``.h5``, ``wds`` writes ``.tar``).
+
+    .. attribute :: train_val_test_sizes
+
+        Sample counts per split; each entry must be a multiple of
+        ``render.samples_per_shard``.
+
+    .. attribute :: train_val_test_seeds
+
+        Reserved for per-sample seeding (#884); must be ``None``.
+
+    .. attribute :: base_seed
+
+        Seed used to derive per-shard ``ShardSpec.seed`` values.
+
+    .. attribute :: render
+
+        Nested ``RenderConfig`` carrying every per-shard renderer input.
+
+    .. attribute :: git_sha
+
+        Commit SHA of the launcher's working tree at construction.
+
+    .. attribute :: is_repo_dirty
+
+        Whether the launcher's working tree had uncommitted changes.
+
+    .. attribute :: created_at
+
+        UTC timestamp when the spec was first constructed.
+
+    .. attribute :: run_id
+
+        Deterministic W&B run ID derived from ``task_name`` and ``created_at``.
+
+    .. attribute :: r2
+
+        Nested R2 storage location (bucket + prefix_root + materialized prefix).
     """
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid", validate_default=True)

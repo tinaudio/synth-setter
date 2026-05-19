@@ -14,8 +14,29 @@ from synth_setter.schemas._types import NonBlankStr, StrictAllowExtraModel
 __all__ = ["PathsConfig"]
 
 
-class PathsConfig(StrictAllowExtraModel):  # noqa: DOC601,DOC603
-    """Path layout consumed via ``${paths.<name>}`` interpolation across configs."""
+class PathsConfig(StrictAllowExtraModel):
+    """Path layout consumed via ``${paths.<name>}`` interpolation across configs.
+
+    .. attribute :: root_dir
+
+        Project root.
+
+    .. attribute :: data_dir
+
+        Default datamodule data root, ``${paths.root_dir}/data/``.
+
+    .. attribute :: log_dir
+
+        Logger root, ``${paths.root_dir}/logs/``.
+
+    .. attribute :: output_dir
+
+        Per-run output dir resolved from ``${hydra:runtime.output_dir}``.
+
+    .. attribute :: work_dir
+
+        Hydra's launch-time working directory, ``${hydra:runtime.cwd}``.
+    """
 
     root_dir: NonBlankStr = Field(
         description=(

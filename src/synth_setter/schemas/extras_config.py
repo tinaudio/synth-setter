@@ -20,8 +20,25 @@ __all__ = ["ExtrasConfig"]
 _FLOAT32_MATMUL_PRECISIONS: tuple[str, ...] = ("highest", "high", "medium")
 
 
-class ExtrasConfig(StrictAllowExtraModel):  # noqa: DOC601,DOC603
-    """Startup toggles consumed by ``synth_setter.utils.extras(cfg)``."""
+class ExtrasConfig(StrictAllowExtraModel):
+    """Startup toggles consumed by ``synth_setter.utils.extras(cfg)``.
+
+    .. attribute :: ignore_warnings
+
+        If ``True``, ``synth_setter.utils.extras`` silences Python ``warnings``.
+
+    .. attribute :: enforce_tags
+
+        If ``True``, ``extras`` prompts on startup when no ``tags`` are set.
+
+    .. attribute :: print_config
+
+        Pretty-print the composed Hydra config tree at startup using Rich.
+
+    .. attribute :: float32_matmul_precision
+
+        Passed to ``torch.set_float32_matmul_precision``.
+    """
 
     ignore_warnings: StrictBool = Field(
         default=False,

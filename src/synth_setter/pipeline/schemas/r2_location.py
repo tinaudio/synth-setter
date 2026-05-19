@@ -37,13 +37,29 @@ if TYPE_CHECKING:
 __all__ = ["R2Location"]
 
 
-class R2Location(BaseModel):  # noqa: DOC601,DOC603
+class R2Location(BaseModel):
     """R2 storage location: bucket + prefix_root + materialized prefix.
 
     Strict + frozen at the trust boundary — the same JSON-from-R2 round-trip
     contract that ``DatasetSpec`` honors. Field validators reject blanks and
     enforce the ``prefix`` trailing slash so rclone never receives
     ``r2:bucket/prefixshardname`` (concatenation trap).
+
+    .. attribute :: model_config
+
+        Pydantic model config sentinel — see ``ConfigDict(...)`` below for active settings.
+
+    .. attribute :: bucket
+
+        Cloudflare R2 bucket name where shards and metadata are written.
+
+    .. attribute :: prefix_root
+
+        Top-level prefix segment under the bucket.
+
+    .. attribute :: prefix
+
+        Full R2 object prefix (``<root>/<task_name>/<run_id>/``); must end with ``/``.
     """
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")

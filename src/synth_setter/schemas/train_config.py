@@ -27,12 +27,44 @@ def _default_tags() -> list[str]:
     return ["dev"]
 
 
-class TrainConfig(StrictAllowExtraModel):  # noqa: DOC601,DOC603
+class TrainConfig(StrictAllowExtraModel):
     """Top-level training config composed from ``configs/train.yaml``.
 
     Defaults below mirror ``configs/train.yaml``. Hydra-managed subtrees
     (``data``, ``model``, ``trainer``, ...) pass through via ``extra="allow"``
     — ``TrainConfig()`` does not reconstruct them on its own.
+
+    .. attribute :: task_name
+
+        Logical name for this training run.
+
+    .. attribute :: tags
+
+        Free-form tags propagated to the logger (wandb / TensorBoard).
+
+    .. attribute :: train
+
+        Run the fit loop.
+
+    .. attribute :: test
+
+        Run the test loop on the best checkpoint after fit.
+
+    .. attribute :: ckpt_path
+
+        Path to a Lightning checkpoint to resume from.
+
+    .. attribute :: seed
+
+        Seed forwarded to ``lightning.seed_everything``.
+
+    .. attribute :: optimized_metric
+
+        Name of the callback metric returned to Hydra for sweeps.
+
+    .. attribute :: watch_gradients
+
+        If truthy, attaches a gradient watcher to the logger.
     """
 
     task_name: NonBlankStr = Field(
