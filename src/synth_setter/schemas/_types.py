@@ -24,7 +24,7 @@ class StrictAllowExtraModel(BaseModel):
 
     .. attribute :: model_config
 
-        Pydantic config: ``strict=True``, ``extra="allow"``, ``populate_by_name=True``.
+        Pydantic model config sentinel — see ``ConfigDict(...)`` below for active settings.
     """
 
     model_config = ConfigDict(strict=True, extra="allow", populate_by_name=True)

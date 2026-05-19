@@ -404,7 +404,7 @@ class DatasetSpec(BaseModel):
 
     .. attribute :: model_config
 
-        Pydantic config: ``strict=True``, ``frozen=True``, ``extra="forbid"``, ``validate_default=True``.
+        Pydantic model config sentinel — see ``ConfigDict(...)`` below for active settings.
 
     .. attribute :: task_name
 

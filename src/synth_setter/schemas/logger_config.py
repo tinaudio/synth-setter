@@ -40,7 +40,7 @@ class LoggerConfig(RootModel[dict[NonBlankStr, LoggerInstance]]):
 
     .. attribute :: model_config
 
-        Pydantic config: ``strict=True``.
+        Pydantic model config sentinel — see ``ConfigDict(...)`` below for active settings.
     """
 
     model_config = ConfigDict(strict=True)
