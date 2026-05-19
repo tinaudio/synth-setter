@@ -276,7 +276,7 @@ docs:
       - pattern: "tests/integration/**"
         covers: "End-to-end launcher-against-real-R2 integration tests with a stubbed VST renderer subprocess (`integration_r2` marker) — fast PR-tier alternative to the kind + dev-snapshot matrix in `test-dataset-generation.yml`. Run by `test-local-launcher-roundtrip.yml` on same-repo PRs."
       - pattern: ".github/workflows/test-local-launcher-roundtrip.yml"
-        covers: "Fast PR-tier (~8-10 min) lane for `tests/integration/`: launcher `run()` end-to-end against real R2 with the VST renderer subprocess stubbed; no kind, no sky.launch, no dev-snapshot image pull. Gated on same-repo PRs (forks skipped). Unique per-run R2 prefix + best-effort rclone purge teardown. PR #1170; tracks #1164."
+        covers: "Fast PR-tier (~8-10 min) lane for `tests/integration/`: invokes the `synth-setter-generate-dataset` CLI entrypoint (`cli.generate_dataset.main()`, which then calls `run()` internally) end-to-end against real R2 with the VST renderer subprocess stubbed; no kind, no sky.launch, no dev-snapshot image pull. Gated on same-repo PRs (forks skipped). Unique per-run R2 prefix + best-effort rclone purge teardown. PR #1170; tracks #1164."
 
   # ── macOS VM provisioning (Tart) ────────────────────────────────
   - doc: docs/getting-started.md

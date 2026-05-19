@@ -55,6 +55,7 @@ from synth_setter.pipeline.schemas.spec import (
     EXTENSION_TO_OUTPUT_FORMAT,
     DatasetSpec,
 )
+from tests.helpers.subprocess_args import find_script_index
 
 pytestmark = [pytest.mark.integration_r2, pytest.mark.r2, pytest.mark.slow]
 
@@ -102,23 +103,6 @@ def _r2_reachable() -> bool:
     except (subprocess.CalledProcessError, FileNotFoundError):
         return False
     return True
-
-
-def _find_script_index(args: list[str]) -> int:
-    """Locate generate_vst_dataset.py in subprocess args, with a clear failure on miss.
-
-    The args layout depends on platform — ``[wrapper, python, script, output, ...]``
-    on Linux, ``[python, script, output, ...]`` elsewhere — so callers locate the
-    script by name rather than fixed index.
-
-    :param args: argv list passed to a patched ``subprocess.check_call``.
-    :returns: Index of the entry that ends with ``generate_vst_dataset.py``.
-    :raises AssertionError: No entry in ``args`` ends with the script name.
-    """
-    for i, a in enumerate(args):
-        if a.endswith("generate_vst_dataset.py"):
-            return i
-    raise AssertionError(f"generate_vst_dataset.py not found in subprocess args: {args}")
 
 
 def _write_dummy_h5_shard(output_path: Path, spec: DatasetSpec) -> None:
@@ -216,7 +200,7 @@ def _stub_renderer(spec: DatasetSpec) -> Callable[[list[str]], int]:
     def _side_effect(args: list[str]) -> int:
         if args and args[0] == "rclone":
             return _REAL_CHECK_CALL(args)  # noqa: S603 — passthrough to real rclone
-        script_idx = _find_script_index(args)
+        script_idx = find_script_index(args)
         output_file = Path(args[script_idx + 1])
         output_file.parent.mkdir(parents=True, exist_ok=True)
         fmt = EXTENSION_TO_OUTPUT_FORMAT.get(output_file.suffix)
