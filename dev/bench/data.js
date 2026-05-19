@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779232204395,
+  "lastUpdate": 1779232206265,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -6470,6 +6470,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 11.250076897800005,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "43a355ca0b535b76789e46681076552a7d9b116f",
+          "message": "feat(testing): add fast launcher roundtrip test (alternative to test-dataset-generation matrix) (#1170)\n\n* feat(testing): add local launcher → real-R2 roundtrip integration test\n\nAdds `tests/integration/test_local_launcher_roundtrip.py` and a dedicated\n`.github/workflows/test-local-launcher-roundtrip.yml` workflow that runs\n`cli.generate_dataset.main` end-to-end against real Cloudflare R2 with\nthe VST3 renderer subprocess stubbed. Covers spec materialize → R2\nupload, worker rank/world partitioning, real rclone shard upload, the\nskip-existing probe (#750), and the existing `pipeline.ci`\nvalidate-spec / validate-shard helpers — without spinning up kind,\nsky.launch, or pulling the dev-snapshot image. The stubbed renderer\nwrites deterministic zero-valued HDF5 / WDS tar shards whose shapes\nmatch the production writers' source-of-truth shape helpers, so the\nvalidators accept them.\n\nThe test is gated on a `rclone lsd r2:` auth ping so contributor / fork\nPR runs auto-skip rather than failing on missing creds. A unique\n`ci-roundtrip/<run_id>/<run_attempt>/<uuid>/` R2 prefix per run isolates\nconcurrent CI; a best-effort `rclone purge` finalizer cleans up even on\ntest failure.\n\nRefs #1164.\n\n* fix(testing): use +r2.prefix override (struct-add) in roundtrip test\n\n``r2.prefix`` is not in ``configs/r2/default.yaml`` (which exposes only\n``bucket`` and ``prefix_root``); ``DatasetSpec``'s validator derives the\nprefix at construction. Hydra struct-mode therefore rejects a plain\n``r2.prefix=<value>`` override with \"Key 'prefix' is not in struct\" —\nthe override needs ``+r2.prefix=<value>`` to add the new key into the\n``r2`` sub-tree before ``DatasetSpec._normalize_r2_input`` promotes the\nnested dict.\n\nCaught by /pr-checkbox verification: composing the test's argv against\nthe real Hydra config tree reproduces the failure before CI does.\n\n* docs(testing): register test-local-launcher-roundtrip + tests/integration\n\nDoc-drift fixes from #1170 (drift-by-omission only — the PR is purely\nadditive):\n\n- github-actions.md: add Pipeline-table row for test-local-launcher-\n  roundtrip; extend the R2_* secrets' \"Used by\" columns to include it.\n- testing.md: add a row for tests/integration/ under §1 categories;\n  add a bullet for the new workflow under §2 CI selectors.\n- doc-map.yaml: cover tests/integration/** and the new workflow file\n  under docs/reference/testing.md.\n\nRefs #1170\n\n* docs(testing): clarify _r2_reachable/_unique_r2_prefix docstrings, add r2 marker\n\nAddress PR #1170 Copilot review:\n- `_r2_reachable`: drop \"unauthenticated\" — the `r2:` remote is configured\n  via `RCLONE_CONFIG_R2_*`, so `rclone lsd r2:` is credentialled and the\n  exit code reflects cred validity, not a guest probe.\n- `_unique_r2_prefix`: docstring no longer claims the prefix is \"stable\"\n  for repeated pytest runs — the uuid nonce intentionally makes it unique\n  per-invocation (so the two parametrizations in one CI run, and concurrent\n  local debug runs, don't collide). The `local`/`0` placeholders still\n  group dev artifacts under a recognizable parent for bulk purging.\n- Apply `pytest.mark.r2` in addition to `integration_r2` so `pytest -m r2`\n  selects this alongside the other R2-dependent tests (test_r2_report.py).\n\nRefs #1164\n\n* docs(testing): clarify why local-launcher-roundtrip installs [torch,dev]\n\nThe previous comment claimed torch/pedalboard/skypilot are not needed\nbecause the renderer is stubbed — but tests/conftest.py imports torch\nat module top, so pytest collection requires torch even though the\nlauncher itself doesn't reach into it. Update the comment to reflect\nthis constraint and the actual reason [torch,dev] stays.\n\n* docs(testing): address Copilot review on PR #1170 (CLI naming + dedupe helper)\n\n- docs/reference/github-actions.md, docs/doc-map.yaml: name the\n  CLI entrypoint (`synth-setter-generate-dataset` /\n  `cli.generate_dataset.main()`) instead of the inner `run()` so the\n  rows match the surface the new lane actually invokes (comments\n  #3269953030, #3269953056).\n- tests/helpers/subprocess_args.py: extract `find_script_index`\n  (previously duplicated in `tests/integration/test_local_launcher_roundtrip.py`\n  and `tests/pipeline/test_entrypoints/test_generate_dataset.py`) so a\n  future change to the renderer script name / argv layout updates\n  both lanes from one source (comment #3269953080).\n\n`Refs #1164`",
+          "timestamp": "2026-05-19T18:49:25-04:00",
+          "tree_id": "fc0e36af898a2f3f9be8eaeb45e73ca2979bb91a",
+          "url": "https://github.com/tinaudio/synth-setter/commit/43a355ca0b535b76789e46681076552a7d9b116f"
+        },
+        "date": 1779232205949,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 2.1513941287994385,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 3.0437448946386576,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.010399005375802517,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.03406250476837158,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 1.4391483068466187,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 12.484208950799996,
             "unit": "seconds"
           }
         ]
