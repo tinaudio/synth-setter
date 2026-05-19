@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779158237215,
+  "lastUpdate": 1779163277570,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -3270,6 +3270,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.038181960582733154,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5036e86f4d7467cdb712a529ba7124df0a9889b4",
+          "message": "chore(lint): fix DOC10x/20x/50x docstrings in Cluster B (35 sites) (#1109)\n\n* chore(lint): fix DOC101/103/201/203/501/503 docstrings in Cluster B\n\nAdds missing :param:/:return:/:rtype:/:raises: sections to ~35 Sphinx\ndocstrings across 8 files in src/ that previously suppressed pydoclint\nwith inline # noqa. Drops the suppressions. No signature, body, or\nconfig changes.\n\nCluster A (DOC601/DOC603 on Pydantic class lines) is handled by a\nsibling PR.\n\nRefs #1106\n\n* chore(lint): drop redundant :rtype: lines + disable pydoclint check-return-types\n\nThe previous commit added 34 :rtype: lines that just echoed the existing\n-> return annotation. Per CR feedback on #1109, the annotation is the\nsingle source of truth — the :rtype: lines were pure noise.\n\nThis commit:\n\n- Strips all 34 :rtype: lines from the 8 src/ files touched by the\n  previous commit. No functional change; the :return:/:returns:\n  description sections remain.\n- Flips [tool.pydoclint].check-return-types from true to false so\n  future PRs can omit :rtype: cleanly. DOC201 still requires a\n  :return: description section; only the type-echo is dropped.\n\nPydoclint passes across src/ + tests/ with the flag flipped. Pre-existing\n:rtype: lines elsewhere in src/ (vst/, models/, etc.) are left untouched\n— they're outside #1109's scope.\n\nRefs #1106",
+          "timestamp": "2026-05-19T03:47:07Z",
+          "tree_id": "a3968bbf4c01a39c2b5a2eae5a2897776cc84a69",
+          "url": "https://github.com/tinaudio/synth-setter/commit/5036e86f4d7467cdb712a529ba7124df0a9889b4"
+        },
+        "date": 1779163276513,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 4.354447841644287,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 5.9907361177098934,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.032695237547159195,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.04355978965759277,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.2577590942382812,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 11.890942518250005,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.588438987731934,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.603956854343414,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.03529353812336922,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.048793137073516846,
             "unit": "1-cos"
           },
           {
