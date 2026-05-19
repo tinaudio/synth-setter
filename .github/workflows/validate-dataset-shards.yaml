@@ -66,15 +66,17 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq rclone
 
       # synth_setter.pipeline.ci.validate_spec imports OUTPUT_FORMAT_TO_EXTENSION from
-      # synth_setter.pipeline.schemas.spec, which transitively loads pydantic at module top.
-      # Keep the runner-side env minimal: install the project with --no-deps
-      # (the full [project.dependencies] would drag in torch, skypilot, librosa,
-      # etc.), then add pydantic in a second command so its own required
-      # `pydantic-core` resolves.
+      # synth_setter.pipeline.schemas.spec (transitively pulls pydantic at module
+      # top), and indirectly imports r2_io.py (transitively pulls python-dotenv
+      # at module top via `ensure_r2_env_loaded` in #1120). Keep the runner-side
+      # env minimal: install the project with --no-deps (the full
+      # [project.dependencies] would drag in torch, skypilot, librosa, etc.),
+      # then add the two top-level imports above so their own required
+      # transitive deps resolve. Long-term cleanup tracked at #1139.
       - name: Install validate_spec runtime deps
         run: |
           pip install --no-deps -e .
-          pip install "pydantic>=2,<3"
+          pip install "pydantic>=2,<3" python-dotenv
 
       - name: Validate spec structure
         run: python3 -m synth_setter.pipeline.ci.validate_spec "${{ inputs.spec_uri }}"
