@@ -328,14 +328,19 @@ def test_launcher_roundtrip_with_stubbed_renderer(
     #     resolves "1.0.0-test" without loading a real .so
     #   - render.renderer_version → same value so the constraint check passes
     #   - r2.prefix → the unique ci_r2_prefix so cleanup can purge a tight scope
-    #   - created_at → fixed timestamp for determinism
+    #     (uses ``+`` because ``prefix`` is not in ``configs/r2/default.yaml``;
+    #     ``DatasetSpec``'s ``_normalize_r2_input`` then promotes the nested
+    #     ``r2`` dict into the ``R2Location`` field, prefix included).
+    #   - created_at → fixed timestamp for determinism (``+`` because the key
+    #     is not in ``configs/dataset.yaml``; matches how the production
+    #     launcher pins it on the worker side in ``_build_worker_cmd``).
     fixed_created_at = datetime(2026, 5, 19, 0, 0, 0, tzinfo=timezone.utc).isoformat()
     argv = [
         "synth-setter-generate-dataset",
         f"experiment={experiment}",
         f"render.plugin_path={TEST_PLUGIN_VST3}",
         f"render.renderer_version={TEST_PLUGIN_VERSION}",
-        f"r2.prefix={ci_r2_prefix}",
+        f"+r2.prefix={ci_r2_prefix}",
         f"+created_at={fixed_created_at}",
     ]
     monkeypatch.setattr("sys.argv", argv)
