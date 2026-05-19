@@ -29,7 +29,7 @@
       },
       {
         "matcher": "Edit|Write",
-        "description": "No-yaml-run-comments: on Edit/Write of .github/workflows/*.yml or configs/compute/*.yaml, blocks the call if the post-edit content has any `#`-comment line inside a `run: |` / `setup: |` block scalar. The block scalar body is bash; stray quotes/backticks inside a comment have caused unintended shell expansion. Goal: keep comments above the step, not inside it.",
+        "description": "No-yaml-run-comments: on Edit/Write of .github/workflows/*.{yml,yaml} or configs/compute/*.{yml,yaml}, blocks the call if the post-edit content has any `#`-comment line inside a `run: |` / `setup: |` block scalar. The block scalar body is bash; stray quotes/backticks inside a comment have caused unintended shell expansion. Goal: keep comments above the step, not inside it.",
         "hooks": [
           {
             "type": "command",

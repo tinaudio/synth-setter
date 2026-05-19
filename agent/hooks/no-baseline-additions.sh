@@ -19,7 +19,7 @@ main() {
   # leak a non-2 exit that bypasses the contract documented in the header.
   trap 'log "internal failure on line $LINENO; blocking"; echo "BLOCKED: no-baseline-additions hit an internal error (line $LINENO); fix the hook or report it." >&2; exit 2' ERR
 
-  local input file_path counts old_count new_count
+  local input file_path counts old_count new_count stderr_file scanner_stderr_line
   input=$(cat)
   # Fail closed: a silent fail-open is the bug class this gate exists to prevent.
   if ! file_path=$(jq -r '.tool_input.file_path // empty' <<<"$input" 2>/dev/null); then
@@ -33,8 +33,12 @@ main() {
     *) exit 0 ;;
   esac
 
+  stderr_file=$(mktemp -t no-baseline-additions.XXXXXX)
+  # shellcheck disable=SC2064  # expand stderr_file at trap-install time so the cleanup path is fixed.
+  trap "rm -f '$stderr_file'" EXIT
+
   # Missing baseline → OLD_COUNT=0 so delete+Write recreate cannot bypass the gate.
-  counts=$(HOOK_INPUT="$input" SRC_PATH="$file_path" python3 - <<'PY'
+  counts=$(HOOK_INPUT="$input" SRC_PATH="$file_path" python3 - <<'PY' 2>"$stderr_file"
 import json, os, pathlib, sys
 
 payload = json.loads(os.environ["HOOK_INPUT"])
@@ -51,8 +55,11 @@ else:
     if old and old in current:
         proposed = current.replace(old, new, 1)
     else:
+        # LOG: prefix routes through the hook's file log so the user-facing
+        # stderr stays clean on allowed edits. The Edit tool itself rejects a
+        # missing old_string, so the gate doesn't need to surface it here.
         print(
-            "note: Edit old_string not found in current content; row count unchanged",
+            "LOG:Edit old_string not found in current content; row count unchanged",
             file=sys.stderr,
         )
         proposed = current
@@ -67,6 +74,16 @@ print(count_rows(current))
 print(count_rows(proposed))
 PY
 )
+
+  # Replay the scanner's log channel through the hook log. Non-LOG: stderr
+  # (real crashes) re-emerges as-is so the ERR trap can surface it.
+  while IFS= read -r scanner_stderr_line; do
+    if [[ "$scanner_stderr_line" == LOG:* ]]; then
+      log "${scanner_stderr_line#LOG:}"
+    else
+      printf '%s\n' "$scanner_stderr_line" >&2
+    fi
+  done < "$stderr_file"
 
   # `read` (not `readarray`) so macOS bash 3.2 works. Each line is one integer.
   { IFS= read -r old_count; IFS= read -r new_count; } <<<"$counts"
