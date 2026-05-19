@@ -84,9 +84,9 @@ def find_input_specs(data_dir: Path) -> list[Path]:
 
     Globs the canonical local layout
     ``<data_dir>/<task_name>/<run_id>/metadata/input_spec.json``
-    (mirrors ``local_spec_path``'s structure under ``output_dir/data/``). Used
-    by the @hydra.main entrypoint to discover already-materialized specs to
-    re-upload or re-validate.
+    (mirrors ``local_spec_path``'s structure under ``output_dir/data/``).
+    Intended for the @hydra.main entrypoint to discover already-materialized
+    specs to re-upload or re-validate; not yet wired in ``cli/generate_dataset.py``.
 
     :param data_dir: Local ``data/`` directory (typically
         ``cfg.paths.output_dir / "data"``).
