@@ -3,8 +3,25 @@
 # comment for its contract. Sourced by every hook; intentionally omits
 # `set -euo pipefail` so each caller chooses its own error-handling regime.
 
-REVIEWS_DIR=".agent-reviews"
+# REVIEWS_DIR/HOOK_LOG resolve to absolute paths in the main repo via
+# `git rev-parse --git-common-dir`, so a hook that `cd`s into an isolated
+# worktree still writes its report where the receiving agent session can read
+# it. Falls back to cwd when outside a git tree (test sandboxes).
+_repo_root_for_hooks() {
+  local common_dir parent
+  common_dir=$(git rev-parse --git-common-dir 2>/dev/null) || return 1
+  case "$common_dir" in
+    /*) parent=$(dirname "$common_dir") ;;
+    *)  parent=$(cd "$(dirname "$common_dir")" 2>/dev/null && pwd) ;;
+  esac
+  [[ -n "$parent" ]] || return 1
+  printf '%s\n' "$parent"
+}
+
+_REPO_ROOT_FOR_HOOKS=$(_repo_root_for_hooks 2>/dev/null || pwd)
+REVIEWS_DIR="${_REPO_ROOT_FOR_HOOKS}/.agent-reviews"
 HOOK_LOG="${REVIEWS_DIR}/.hook.log"
+WORKTREES_DIR="${REVIEWS_DIR}/worktrees"
 
 ensure_reviews_dir() {
   mkdir -p "$REVIEWS_DIR"
@@ -88,10 +105,12 @@ has_skill() {
 
 run_agent_prompt() {
   # Usage: run_agent_prompt <prompt>
-  # Routes the prompt through the available headless agent CLI. AGENT_HEADLESS
-  # (`claude` or `codex`) overrides auto-detection; otherwise prefer claude,
-  # fall back to codex, fail loud (exit 127) if neither is installed.
+  # Routes the prompt through the available headless agent CLI, wrapped in
+  # `timeout` so a hung agent surfaces as exit 124 instead of an open-ended
+  # hang the harness must SIGKILL. AGENT_HEADLESS (`claude`|`codex`) overrides
+  # auto-detection; AGENT_TIMEOUT_SECS overrides the default 900s ceiling.
   local prompt="$1" cli="${AGENT_HEADLESS:-}" candidate
+  local timeout_secs="${AGENT_TIMEOUT_SECS:-900}"
   if [[ -z "$cli" ]]; then
     for candidate in claude codex; do
       if command -v "$candidate" >/dev/null 2>&1; then
@@ -101,14 +120,56 @@ run_agent_prompt() {
     done
   fi
   case "$cli" in
-    claude) claude -p "$prompt" ;;
-    codex)  codex exec "$prompt" ;;
+    claude) timeout "$timeout_secs" claude -p "$prompt" ;;
+    codex)  timeout "$timeout_secs" codex exec "$prompt" ;;
     *)
       printf 'No supported headless agent CLI found; install claude or codex (AGENT_HEADLESS=%s).\n' \
         "${AGENT_HEADLESS:-}" >&2
       return 127
       ;;
   esac
+}
+
+make_isolated_worktree() {
+  # Usage: make_isolated_worktree <slug> <head_sha>
+  # Creates a detached worktree at $head_sha under $WORKTREES_DIR. Echoes the
+  # worktree path on stdout; returns non-zero (no output) on failure. Caller
+  # must register cleanup via trap (see remove_worktree). The headless agent
+  # the hook spawns runs inside this worktree so its `git checkout` / commit /
+  # push commands can't reach into the user's primary checkout.
+  local slug="$1" sha="$2" wt
+  ensure_reviews_dir
+  mkdir -p "$WORKTREES_DIR"
+  wt="${WORKTREES_DIR}/${slug}-${sha:0:7}-$(gen_id)"
+  if git worktree add --detach "$wt" "$sha" >/dev/null 2>&1; then
+    printf '%s\n' "$wt"
+    return 0
+  fi
+  return 1
+}
+
+remove_worktree() {
+  # Usage: remove_worktree <path>
+  # Best-effort cleanup; safe to call on a missing path. Prunes the
+  # registration so `git worktree list` doesn't accrete dangling entries.
+  local wt="$1"
+  [[ -n "$wt" ]] || return 0
+  if [[ -d "$wt" ]]; then
+    git worktree remove --force "$wt" >/dev/null 2>&1 || rm -rf "$wt"
+  fi
+  git worktree prune >/dev/null 2>&1 || true
+}
+
+sweep_stale_worktrees() {
+  # Usage: sweep_stale_worktrees <slug> [max_age_minutes]
+  # Removes leaked <slug>-* worktrees the EXIT trap missed (e.g. when the
+  # harness SIGKILL'd the hook at its timeout ceiling). max_age default 30.
+  local slug="$1" max_age="${2:-30}" wt
+  [[ -d "$WORKTREES_DIR" ]] || return 0
+  while IFS= read -r -d '' wt; do
+    log "sweeping stale worktree: $wt"
+    remove_worktree "$wt"
+  done < <(find "$WORKTREES_DIR" -maxdepth 1 -type d -name "${slug}-*" -mmin "+${max_age}" -print0 2>/dev/null)
 }
 
 run_review() {
