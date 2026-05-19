@@ -382,6 +382,117 @@ class TestCli:
         assert result.exit_code != 0
         mock_sky.jobs.launch.assert_not_called()
 
+    @pytest.mark.parametrize(
+        "inner",
+        [
+            ["synth-setter-generate-dataset", "experiment=foo"],
+            ["/venv/main/bin/synth-setter-generate-dataset", "experiment=foo"],
+            ["python", "-m", "synth_setter.cli.generate_dataset", "experiment=foo"],
+            ["python3", "-m", "synth_setter.cli.generate_dataset", "experiment=foo"],
+        ],
+        ids=[
+            "bare-console-script",
+            "absolute-path-to-console-script",
+            "python -m module",
+            "python3 -m module",
+        ],
+    )
+    def test_rejects_dispatch_owning_inner_command(
+        self,
+        inner: list[str],
+        env_file: Path,
+        template_yaml: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        mock_sky: MagicMock,
+    ) -> None:
+        """Reject ``synth-setter-generate-dataset`` (and its python -m form) before subprocess.
+
+        The launcher's verbatim worker re-execution would otherwise either
+        re-materialize a fresh spec on each worker or attempt to dispatch a
+        second time. Catching the misuse at the CLI surface is cheaper than
+        debugging it from a failed managed-job run.
+
+        :param inner: Parametrized inner-command argv covering bare console
+            script, absolute-path console script, and ``python(3) -m`` forms.
+        :param env_file: Fixture-provided worker env file path.
+        :param template_yaml: Fixture-provided compute template path.
+        :param monkeypatch: Used to pin ``subprocess.check_call`` so an
+            accidental fall-through to subprocess execution would be visible
+            as a test failure rather than running the real entrypoint.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        """
+        check_call_calls: list[list[str]] = []
+        monkeypatch.setattr(
+            "synth_setter.pipeline.skypilot_launch.subprocess.check_call",
+            lambda args, **_kwargs: (check_call_calls.append(list(args)), 0)[1],
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "--template",
+                str(template_yaml),
+                "--env-file",
+                str(env_file),
+                "--",
+                *inner,
+            ],
+        )
+
+        assert result.exit_code != 0
+        assert "synth-setter-generate-dataset" in result.output
+        assert "skypilot_launch.compute_template" in result.output
+        assert check_call_calls == []
+        mock_sky.jobs.launch.assert_not_called()
+
+    def test_allows_non_dispatch_owning_inner_command(
+        self,
+        cwd_with_spec: tuple[Path, Path, DatasetSpec],
+        env_file: Path,
+        template_yaml: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        mock_sky: MagicMock,
+    ) -> None:
+        """A ``synth-setter-*`` entry point that does NOT own dispatch is accepted.
+
+        ``synth-setter-spec-uri`` is a read-only console script (it emits the
+        canonical R2 URI for an input_spec and does not call
+        ``dispatch_via_skypilot``), so it must pass the guardrail. This pins
+        the guardrail to the actual ``_DISPATCH_OWNING_ENTRYPOINTS`` set
+        rather than the broader ``synth-setter-*`` prefix.
+
+        :param cwd_with_spec: Fixture providing a CWD pre-populated with a
+            canonical input_spec.json.
+        :param env_file: Fixture-provided worker env file path.
+        :param template_yaml: Fixture-provided compute template path.
+        :param monkeypatch: Pytest fixture for env/attribute mocking.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        """
+        check_call_calls: list[list[str]] = []
+        monkeypatch.setattr(
+            "synth_setter.pipeline.skypilot_launch.subprocess.check_call",
+            lambda args, **_kwargs: (check_call_calls.append(list(args)), 0)[1],
+        )
+        _stub_check_output_returns_uri(monkeypatch, "r2://intermediate-data/run/input_spec.json")
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "--template",
+                str(template_yaml),
+                "--env-file",
+                str(env_file),
+                "--",
+                "synth-setter-spec-uri",
+                "some-arg",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert check_call_calls == [["synth-setter-spec-uri", "some-arg"]]
+
     def test_runs_inner_command_via_subprocess(
         self,
         cwd_with_spec: tuple[Path, Path, DatasetSpec],
@@ -417,12 +528,12 @@ class TestCli:
                 "--env-file",
                 str(env_file),
                 "--",
-                "synth-setter-generate-dataset",
+                "materialize-input-spec",
                 "experiment=foo",
             ],
         )
         assert result.exit_code == 0, result.output
-        assert check_call_calls == [["synth-setter-generate-dataset", "experiment=foo"]]
+        assert check_call_calls == [["materialize-input-spec", "experiment=foo"]]
 
     def test_invokes_spec_uri_cli_with_discovered_path(
         self,
@@ -458,7 +569,7 @@ class TestCli:
                 "--env-file",
                 str(env_file),
                 "--",
-                "synth-setter-generate-dataset",
+                "materialize-input-spec",
             ],
         )
         assert result.exit_code == 0, result.output
@@ -498,7 +609,7 @@ class TestCli:
                 "--env-file",
                 str(env_file),
                 "--",
-                "synth-setter-generate-dataset",
+                "materialize-input-spec",
             ],
         )
         assert result.exit_code == 0, result.output
@@ -541,7 +652,7 @@ class TestCli:
                 "--env-file",
                 str(env_file),
                 "--",
-                "synth-setter-generate-dataset",
+                "materialize-input-spec",
             ],
         )
         assert result.exit_code != 0
@@ -586,7 +697,7 @@ class TestCli:
                 "--env-file",
                 str(env_file),
                 "--",
-                "synth-setter-generate-dataset",
+                "materialize-input-spec",
             ],
         )
         assert result.exit_code != 0
@@ -626,7 +737,7 @@ class TestCli:
                 "--env-file",
                 str(env_file),
                 "--",
-                "synth-setter-generate-dataset",
+                "materialize-input-spec",
             ],
         )
         assert result.exit_code != 0
@@ -685,7 +796,7 @@ class TestCli:
                 "--env-file",
                 str(env_file),
                 "--",
-                "synth-setter-generate-dataset",
+                "materialize-input-spec",
             ],
         )
 

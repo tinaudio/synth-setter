@@ -1,12 +1,39 @@
-"""Launch a `generate_dataset` run on RunPod, OCI, or local kind via SkyPilot managed jobs.
+"""Ad-hoc SkyPilot launcher for arbitrary operator-supplied commands.
 
-Provider-neutral entrypoint: the same binary launches against
+**This is not the standard dispatch path for the project's CLI entrypoints.**
+The `synth-setter-*` console scripts (currently `synth-setter-generate-dataset`,
+with more to follow) already carry their own `skypilot_launch.compute_template`
+configuration — point that field at a `configs/compute/*.yaml` and the
+entrypoint dispatches via SkyPilot on its own (see
+`synth_setter.cli.generate_dataset.main` and
+`configs/skypilot_launch/default.yaml`). Use this module only when no such
+entrypoint exists for the command you want to run on a SkyPilot worker.
+
+Concretely, this CLI:
+
+1. Shells out (via `subprocess.check_call`) to whatever inner command the
+   operator passes after `--`. That command is expected to materialize a
+   canonical `data/<task>/<run>/metadata/input_spec.json` and upload it to
+   R2 — anything else is fine, but discovery in step 2 will fail without it.
+2. Discovers the unique materialized `input_spec.json` under `<repo_root>/data`
+   and asks the `synth-setter-spec-uri` console script for its canonical R2 URI.
+3. Hands the spec + URI off to ``dispatch_via_skypilot``, which provisions
+   workers via `sky.jobs.launch`, forwards the URI as `WORKER_SPEC_URI`, and
+   re-executes the same inner command verbatim on each worker.
+
+Because step 3 re-uses the operator's argv verbatim, the inner command must
+be safe to run identically on the launcher host and on every worker rank.
+The set of ``synth-setter-*`` entry points listed in
+``_DISPATCH_OWNING_ENTRYPOINTS`` is rejected at the CLI surface — they own
+their own ``cfg.skypilot_launch.compute_template`` config and would
+self-recursively dispatch.
+
+Provider-neutral: the same binary launches against
 `configs/compute/runpod-template.yaml`, `configs/compute/oci-cpu-template.yaml`,
 or `configs/compute/local-template.yaml` (kubernetes-via-`sky local up`).
-Forwards worker env via `task.update_envs` — including the canonical spec
-URI as `WORKER_SPEC_URI` — and submits each rank's task to the SkyPilot
-managed-jobs controller via `sky.jobs.launch` (#749 explains why
-`task.update_file_mounts` is avoided). See
+Worker env is forwarded via `task.update_envs` (#749 explains why
+`task.update_file_mounts` is avoided), and each rank's task is submitted to
+the SkyPilot managed-jobs controller — see
 https://docs.skypilot.co/en/stable/reference/api.html#sky.jobs.launch
 
 By default the launcher waits for `sky.jobs.launch` + `sky.stream_and_get` to
@@ -23,8 +50,7 @@ Managed jobs differ from cluster-level launches:
   There's no per-job autostop window or explicit `down=True` to set — terminal
   status (success / failure / cancel) releases the underlying compute.
 - The user-facing identifier is the managed-job *name* (passed to `sky.jobs.*`
-  via `name=`), not a cluster name. The launcher's `--cluster-name` flag is the
-  job name in this mode.
+  via `name=`), not a cluster name.
 
 Per-backend image handling (driven by `--worker-image-tag`):
 - RunPod: each Resources entry's `image_id` is pinned to `docker:<image>` before the
@@ -128,6 +154,30 @@ DEFAULT_ENV_FILE = REPO_ROOT / ".env"
 _LOCAL_DATA_DIR = REPO_ROOT / "data"
 
 _SPEC_URI_CLI = "synth-setter-spec-uri"
+
+# ``synth-setter-*`` console scripts that already own SkyPilot dispatch via
+# ``cfg.skypilot_launch.compute_template``. Routing one of these through the
+# ad-hoc launcher would either re-materialize a fresh spec on each worker
+# (losing alignment with the canonical ``input_spec.json`` this launcher just
+# discovered) or attempt to dispatch a second time, so reject the misuse early
+# with a pointer to the standard path.
+#
+# Keep this set in sync with ``[project.scripts]`` in ``pyproject.toml``: every
+# entry here must correspond to a console script whose ``main()`` calls
+# ``dispatch_via_skypilot``. The worker-side ``-from-hydra`` siblings do not
+# dispatch and are intentionally absent.
+_DISPATCH_OWNING_ENTRYPOINTS: frozenset[str] = frozenset(
+    {
+        "synth-setter-generate-dataset",
+    }
+)
+
+# ``python -m <module>`` equivalents of the entries above. The value is the
+# console-script name we recommend in the error message; keep the value in
+# sync with ``_DISPATCH_OWNING_ENTRYPOINTS``.
+_DISPATCH_OWNING_MODULES: dict[str, str] = {
+    "synth_setter.cli.generate_dataset": "synth-setter-generate-dataset",
+}
 
 # `sky local up` uses the kubernetes backend; map both spellings.
 _CLOUD_TO_PROVIDER: dict[str, str] = {
@@ -319,19 +369,20 @@ def main(
     local: bool,
     command: tuple[str, ...],
 ) -> None:
-    """Run an inner generator ``command`` then dispatch its spec to SkyPilot.
+    """Run an arbitrary inner ``command`` then dispatch its spec to SkyPilot.
 
-    Shells out to ``command`` (typically the ``synth-setter-generate-dataset``
-    console script), which writes the canonical
-    ``data/<task>/<run>/metadata/input_spec.json`` and uploads it to R2. The
-    launcher then discovers that local spec, asks ``synth-setter-spec-uri``
-    for its canonical R2 URI, and hands both off to ``dispatch_via_skypilot``
-    for the SkyPilot fan-out.
+    Shells out to ``command`` so it materializes the canonical
+    ``data/<task>/<run>/metadata/input_spec.json`` and uploads it to R2; the
+    launcher then resolves the spec's R2 URI via ``synth-setter-spec-uri`` and
+    hands off to ``dispatch_via_skypilot``, which re-executes ``command``
+    verbatim on each worker. See the module docstring for when an
+    entrypoint-owned ``skypilot_launch.compute_template`` is the right tool
+    instead.
 
     Pass the inner command after the launcher's own options::
 
         python -m synth_setter.pipeline.skypilot_launch --template ... -- \\
-            synth-setter-generate-dataset experiment=foo
+            <arbitrary-command-that-materializes-an-input_spec.json>
 
     :param template_path: Path to the SkyPilot task YAML template.
     :param env_file_path: Path to a KEY=VALUE env file for worker env resolution.
@@ -340,10 +391,19 @@ def main(
     :param tail: When True, tail managed-job logs and cancel every job on exit.
     :param api_server: Remote SkyPilot API server URL; mutually exclusive with ``local``.
     :param local: Force local SDK dispatch; mutually exclusive with ``api_server``.
-    :param command: The inner generator command to run before dispatch.
+    :param command: The inner command to run before dispatch. Must materialize
+        a canonical ``input_spec.json`` and be safe to re-execute verbatim on
+        each worker. ``synth-setter-*`` entry points that own their own
+        SkyPilot dispatch (listed in ``_DISPATCH_OWNING_ENTRYPOINTS``) are
+        rejected with a pointer to the standard path.
+    :raises click.ClickException: ``command`` is empty, names a
+        dispatch-owning ``synth-setter-*`` entry point, or the inner
+        subprocess fails / does not materialize exactly one spec.
     """
     if not command:
         raise click.ClickException("an inner command is required (pass it after `--`)")
+
+    _reject_dispatch_owning_inner_command(command)
 
     # cwd=REPO_ROOT pins the inner command's relative-path lookups (e.g. the
     # default `.env`) to the same anchor _LOCAL_DATA_DIR uses for spec discovery,
@@ -357,10 +417,10 @@ def main(
 
     sky_cfg = SkypilotLaunchConfig(
         compute_template=str(template_path),
-        # cmd is the inner worker command; threaded through ``dispatch_via_skypilot``
-        # into the YAML run: block on each rank. shlex.join preserves argv
-        # boundaries so paths with spaces or shell metacharacters survive the
-        # single-string round-trip into the worker's bash invocation.
+        # shlex.join preserves argv boundaries so paths with spaces or shell
+        # metacharacters survive the single-string round-trip into the
+        # worker's bash ``run:`` block. See the module docstring for why the
+        # operator's argv is reused verbatim rather than rebuilt from spec.
         cmd=shlex.join(command),
         env_file=str(env_file_path),
         num_workers=num_workers,
@@ -423,6 +483,46 @@ def _resolve_spec_uri(spec_path: Path) -> str:
         [_SPEC_URI_CLI, str(spec_path)]  # noqa: S607 — entry-point on PATH after `pip install -e .`
     )
     return raw.decode().strip()
+
+
+def _reject_dispatch_owning_inner_command(command: tuple[str, ...]) -> None:
+    """Reject inner commands that own their own SkyPilot dispatch.
+
+    See ``_DISPATCH_OWNING_ENTRYPOINTS`` for the motivation. Recognizes both
+    bare-console-script invocations (``synth-setter-generate-dataset ...``,
+    matched by ``Path(argv[0]).name`` so absolute-path invocations are caught
+    too) and ``python[3] -m synth_setter.cli.<module>`` invocations (matched
+    against ``_DISPATCH_OWNING_MODULES``).
+
+    :param command: The operator-supplied inner command tuple.
+    :raises click.ClickException: ``command`` invokes a known dispatch-owning
+        console script or module; the message names the standard path.
+    """
+    head = Path(command[0]).name
+    if head in _DISPATCH_OWNING_ENTRYPOINTS:
+        raise click.ClickException(
+            f"{head!r} already owns its own SkyPilot dispatch via "
+            "`cfg.skypilot_launch.compute_template` — running it through this "
+            "ad-hoc launcher would either re-materialize a fresh spec on each "
+            "worker or attempt to dispatch a second time. Invoke it directly "
+            f"with that field set instead: `{head} ... "
+            "skypilot_launch.compute_template=<path-to-compute-template.yaml>`. "
+            "See the module docstring for the standard-vs-ad-hoc boundary."
+        )
+    if head in {"python", "python3"} and len(command) >= 3 and command[1] == "-m":
+        module = command[2]
+        if module in _DISPATCH_OWNING_MODULES:
+            recommended = _DISPATCH_OWNING_MODULES[module]
+            raise click.ClickException(
+                f"`python -m {module}` is the same entry point as "
+                f"{recommended!r}, which already owns its own SkyPilot "
+                "dispatch via `cfg.skypilot_launch.compute_template` — running "
+                "it through this ad-hoc launcher would either re-materialize a "
+                "fresh spec on each worker or attempt to dispatch a second "
+                f"time. Invoke `{recommended}` directly with that field set "
+                "instead. See the module docstring for the standard-vs-ad-hoc "
+                "boundary."
+            )
 
 
 def _override_image_id(task: sky.Task, worker_image: str) -> None:
