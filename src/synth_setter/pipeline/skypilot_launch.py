@@ -373,9 +373,8 @@ def main(
     try:
         dispatch_via_skypilot(spec, sky_cfg, spec_uri=spec_uri)
     except (ValueError, RuntimeError) as exc:
-        # dispatch_via_skypilot raises ValueError for cfg-shape problems (missing cmd,
-        # bad worker_image_tag) and RuntimeError for worker submission failures.
-        # Surface both as a clean click error rather than an uncaught traceback.
+        # Surface dispatch_via_skypilot's documented raises (cfg-shape, worker submission)
+        # as a clean click error rather than an uncaught traceback.
         raise click.ClickException(str(exc)) from exc
 
 
