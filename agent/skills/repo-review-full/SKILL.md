@@ -46,8 +46,10 @@ Report the helper's `html_url` back to the user along with a one-line summary (`
 
 ## When to use the no-comments sibling instead
 
-`/repo-review-full-no-comments` runs the same Steps 1–6 but prints the
-aggregated report to the user instead of posting inline comments. Reach for it
-when you want a local dry-run of the review (no GitHub side effects), when
-you're iterating on a PR before it's ready for reviewers, or when posting
-publicly is undesirable for any reason.
+`/repo-review-full-no-comments` runs the same analysis pipeline (delegating
+Steps 3–6 to the shared file; it owns Steps 1–2 itself so it can also run
+against a local branch with no PR open) but prints the aggregated report to
+the user instead of posting inline comments. Reach for it when you want a
+local dry-run of the review (no GitHub side effects), as a pre-PR gate before
+the branch is pushed, when you're iterating on a PR before it's ready for
+reviewers, or when posting publicly is undesirable for any reason.
