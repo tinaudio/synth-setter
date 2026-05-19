@@ -404,7 +404,7 @@ class TestCli:
         check_call_calls: list[list[str]] = []
         monkeypatch.setattr(
             "synth_setter.pipeline.skypilot_launch.subprocess.check_call",
-            lambda args: (check_call_calls.append(list(args)), 0)[1],
+            lambda args, **_kwargs: (check_call_calls.append(list(args)), 0)[1],
         )
         _stub_check_output_returns_uri(monkeypatch, "r2://intermediate-data/run/input_spec.json")
 
@@ -443,7 +443,7 @@ class TestCli:
         _, spec_path, _ = cwd_with_spec
         monkeypatch.setattr(
             "synth_setter.pipeline.skypilot_launch.subprocess.check_call",
-            lambda _args: 0,
+            lambda _args, **_kwargs: 0,
         )
         spec_uri_calls = _stub_check_output_returns_uri(
             monkeypatch, "r2://intermediate-data/run/input_spec.json"
@@ -484,7 +484,7 @@ class TestCli:
         """
         monkeypatch.setattr(
             "synth_setter.pipeline.skypilot_launch.subprocess.check_call",
-            lambda _args: 0,
+            lambda _args, **_kwargs: 0,
         )
         canonical_uri = "r2://intermediate-data/test-dispatch/run/input_spec.json"
         _stub_check_output_returns_uri(monkeypatch, canonical_uri)
@@ -528,7 +528,7 @@ class TestCli:
         )
         monkeypatch.setattr(
             "synth_setter.pipeline.skypilot_launch.subprocess.check_call",
-            lambda _args: 0,
+            lambda _args, **_kwargs: 0,
         )
         # No check_output stub — we expect to fail before reaching it.
 
@@ -574,7 +574,7 @@ class TestCli:
 
         monkeypatch.setattr(
             "synth_setter.pipeline.skypilot_launch.subprocess.check_call",
-            lambda _args: 0,
+            lambda _args, **_kwargs: 0,
         )
 
         runner = CliRunner()
@@ -609,7 +609,7 @@ class TestCli:
         """
         import subprocess as _subprocess
 
-        def _raising(args: list[str]) -> int:
+        def _raising(args: list[str], **_kwargs: Any) -> int:
             raise _subprocess.CalledProcessError(returncode=2, cmd=args)
 
         monkeypatch.setattr(

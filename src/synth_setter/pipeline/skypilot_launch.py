@@ -43,6 +43,7 @@ from __future__ import annotations
 import functools
 import os
 import re
+import shlex
 import subprocess
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -224,7 +225,7 @@ def _run_cred_bootstrap(*, provider: str, env_file_path: Path | None = None) -> 
         click.echo(result.stderr, err=True)
 
 
-@click.command(context_settings={"ignore_unknown_options": True, "allow_interspersed_args": False})
+@click.command(context_settings={"allow_interspersed_args": False})
 @click.option(
     "--template",
     "template_path",
@@ -344,7 +345,11 @@ def main(
     if not command:
         raise click.ClickException("an inner command is required (pass it after `--`)")
 
-    subprocess.check_call(list(command))  # noqa: S603 — operator-supplied command, intentional passthrough
+    # cwd=REPO_ROOT pins the inner command's relative-path lookups (e.g. the
+    # default `.env`) to the same anchor _LOCAL_DATA_DIR uses for spec discovery,
+    # so an operator invoking the launcher from outside the repo doesn't have
+    # the inner generator silently fall back to a missing CWD-relative .env.
+    subprocess.check_call(list(command), cwd=str(REPO_ROOT))  # noqa: S603 — operator-supplied command, intentional passthrough
 
     spec_path = _find_unique_spec_path(command_for_error=command[0])
     spec_uri = _resolve_spec_uri(spec_path)
@@ -353,8 +358,10 @@ def main(
     sky_cfg = SkypilotLaunchConfig(
         compute_template=str(template_path),
         # cmd is the inner worker command; threaded through ``dispatch_via_skypilot``
-        # into the YAML run: block on each rank.
-        cmd=" ".join(command),
+        # into the YAML run: block on each rank. shlex.join preserves argv
+        # boundaries so paths with spaces or shell metacharacters survive the
+        # single-string round-trip into the worker's bash invocation.
+        cmd=shlex.join(command),
         env_file=str(env_file_path),
         num_workers=num_workers,
         worker_image_tag=worker_image_tag,
