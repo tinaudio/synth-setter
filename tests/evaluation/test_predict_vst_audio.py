@@ -360,6 +360,33 @@ def test_main_rerender_target_renders_pred_and_target_per_sample(
         assert bool(df["target"].notna().all())
 
 
+def test_main_target_params_on_disk_without_rerender_does_not_crash(
+    runner: CliRunner, pred_dir: Path, out_dir: Path
+) -> None:
+    """Targets-on-disk + ``rerender_target=False`` must complete without crashing.
+
+    Regression guard for ``UnboundLocalError`` at the ``params_to_csv`` call
+    site: when ``target-params-{i}.pt`` is present but ``--rerender_target``
+    is not passed, ``target_synth_params`` / ``target_note_params`` were never
+    bound but were still referenced by the ``target_params is not None`` arm
+    of the call-site conditional.
+
+    :param runner: Parametrized ``runner`` value under test.
+    :param pred_dir: Parametrized ``pred_dir`` value under test.
+    :param out_dir: Parametrized ``out_dir`` value under test.
+    """
+    _write_batch(pred_dir, index=0, batch_size=2, with_target_params=True)
+
+    result = _invoke_main(runner, pred_dir, out_dir, "--skip-spectrogram")
+
+    assert result.exit_code == 0, result.output
+    for j in range(2):
+        sample_dir = out_dir / f"sample_{j}"
+        assert (sample_dir / "pred.wav").is_file()
+        assert (sample_dir / "target.wav").is_file()
+        assert (sample_dir / "params.csv").is_file()
+
+
 def test_main_multiple_batches_produce_contiguous_sample_indices(
     runner: CliRunner, pred_dir: Path, out_dir: Path
 ) -> None:

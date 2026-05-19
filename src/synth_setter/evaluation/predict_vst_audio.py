@@ -181,6 +181,9 @@ def main(
                 preset_path=preset_path,
             )
 
+            target_synth_params: dict[str, float] | None = None
+            target_note_params: dict[str, float] | None = None
+
             out_target = os.path.join(sample_dir, "target.wav")
             if rerender_target and target_params is not None:
                 target_params_ = target_params[j].numpy()
