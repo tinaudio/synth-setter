@@ -23,7 +23,14 @@ from collections.abc import Iterator
 # subject like "feat: docs generated with sphinx-build" does not match. Group
 # 1 captures the trailer key for clean reporting.
 _CO_AUTHORED_BY = re.compile(r"(?:^|\\n|\n)\s*(Co-Authored-By:)", re.IGNORECASE)
-_GENERATED_WITH = re.compile(r"(?:^|\\n|\n)\s*(Generated with)", re.IGNORECASE)
+# ``Generated with`` is only an agent attribution when followed on the same
+# line by an agent-product name. Plain "Generated with sphinx-build" or
+# "Generated with the docs job" is a legitimate body line.
+_GENERATED_WITH = re.compile(
+    r"(?:^|\\n|\n)\s*(Generated with)[^\r\n]{0,80}?"
+    r"\b(Claude|Anthropic|Cursor|Copilot|ChatGPT|GPT-?\d|Codex|Gemini|Bard)\b",
+    re.IGNORECASE,
+)
 _CLAUDE_ATTRIBUTION = re.compile(
     r"(?:^|\\n|\n)\s*[A-Za-z-]+:\s*Claude\s+(?:Code|Opus|Sonnet|Haiku)\b"
 )
@@ -57,28 +64,62 @@ def _tokenize(cmd: str) -> list[str]:
         ]
 
 
+_GIT_LEVEL_OPTION_RE = re.compile(r"^(-[a-zA-Z]|--[a-zA-Z][a-zA-Z0-9_-]*)(=.*)?$")
+_GIT_LEVEL_VALUE_OPTS = frozenset({"-c", "-C", "--git-dir", "--work-tree", "--namespace"})
+
+
+def _find_commit_subcommand(tokens: list[str], git_idx: int) -> int | None:
+    """Return the index of the ``commit`` token following ``git`` at ``git_idx``.
+
+    Skips ``git``-level options between ``git`` and the subcommand (``-c key=val``,
+    ``--git-dir=.git``, ``--work-tree path``, etc.) so ``git -c gpg.sign=false commit``
+    is still recognised. Returns ``None`` if no ``commit`` subcommand is found
+    before a metachar or end-of-tokens.
+
+    :param tokens: Tokenized command.
+    :param git_idx: Index of the ``git`` token.
+    :returns: Index of the ``commit`` subcommand, or ``None``.
+    """
+    j = git_idx + 1
+    while j < len(tokens) and tokens[j] not in _METACHARS:
+        tok = tokens[j]
+        if tok == "commit":
+            return j
+        if not _GIT_LEVEL_OPTION_RE.match(tok):
+            return None
+        if tok in _GIT_LEVEL_VALUE_OPTS and j + 1 < len(tokens):
+            # Space-separated value form (e.g. `-c key=val`, `--git-dir .git`).
+            j += 2
+            continue
+        j += 1
+    return None
+
+
 def _commit_arg_slices(tokens: list[str]) -> Iterator[tuple[int, int]]:
     """Yield each ``[start, end)`` slice of tokens belonging to a ``git commit`` argv.
 
     A slice ends at a shell metachar token (``&&`` / ``||`` / ``;`` / ``|`` /
     ``&``) or at end-of-tokens, so a downstream ``grep -n`` after ``&&`` is not
-    mistaken for ``git commit -n``.
+    mistaken for ``git commit -n``. ``git`` options between ``git`` and
+    ``commit`` (e.g. ``git -c gpg.sign=false commit``) are skipped.
 
     :param tokens: Tokenized command.
     :yields: ``(start, end)`` index pairs into ``tokens``.
     :ytype: tuple[int, int]
     """
     i = 0
-    while i < len(tokens) - 1:
-        if tokens[i] == "git" and tokens[i + 1] == "commit":
-            start = i + 2
-            j = start
-            while j < len(tokens) and tokens[j] not in _METACHARS:
-                j += 1
-            yield start, j
-            i = j
-        else:
-            i += 1
+    while i < len(tokens):
+        if tokens[i] == "git":
+            commit_idx = _find_commit_subcommand(tokens, i)
+            if commit_idx is not None:
+                start = commit_idx + 1
+                j = start
+                while j < len(tokens) and tokens[j] not in _METACHARS:
+                    j += 1
+                yield start, j
+                i = j
+                continue
+        i += 1
 
 
 def _iter_commit_argvs(tokens: list[str]) -> Iterator[list[str]]:
@@ -92,13 +133,22 @@ def _iter_commit_argvs(tokens: list[str]) -> Iterator[list[str]]:
         yield tokens[start:end]
 
 
+# ``git commit`` short flags whose value attaches inline (``-S<keyid>``,
+# ``-C<commit>``, etc.). When the cluster starts with one of these, the
+# remainder is the value — not additional bundled flags — so ``n`` in the
+# value (``-Sandykey``) is not a ``-n``.
+_VALUE_ATTACHING_SHORT_FLAGS = frozenset({"S", "C", "c", "F", "m", "u", "t"})
+
+
 def _has_no_verify_short_flag(argv: list[str]) -> bool:
     """Return True if ``argv`` has ``-n`` or any bundled short flag containing ``n``.
 
     Short flags cluster: ``git commit -nm "msg"`` tokenizes as
     ``["-nm", "msg"]``, so a bare ``"-n" in argv`` misses it. Stops scanning at
     the ``--`` end-of-options marker, and skips long flags (``--no-foo``) and
-    positional args.
+    positional args. When a cluster begins with a value-attaching short flag
+    (``-S<keyid>``, ``-C<commit>``, etc.), only the first letter is treated as
+    a flag — the rest is its value.
 
     :param argv: ``git commit`` argv slice.
     :returns: True if a no-verify-equivalent short flag is present.
@@ -108,7 +158,14 @@ def _has_no_verify_short_flag(argv: list[str]) -> bool:
             return False
         if tok.startswith("--"):
             continue
-        if len(tok) >= 2 and tok[0] == "-" and "n" in tok[1:] and tok[1:].isalpha():
+        if len(tok) < 2 or tok[0] != "-":
+            continue
+        cluster = tok[1:]
+        if not cluster.isalpha():
+            continue
+        if cluster[0] in _VALUE_ATTACHING_SHORT_FLAGS:
+            cluster = cluster[0]
+        if "n" in cluster:
             return True
     return False
 

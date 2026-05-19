@@ -6,6 +6,10 @@ on stdin and emits one tab-delimited violation per line on stdout:
 the BLOCKED message; this module only locates offenders so the Edit/Write tool
 call is gated before it lands content where a stray ``'``/`` ` ``/``$``/``\\``
 inside a block-scalar comment would trigger shell expansion on the runner.
+
+Violations are reported only when the edit *introduces* them. Pre-existing
+comments in the file are subtracted from the post-edit set so legacy violations
+do not lock the file against unrelated edits or comment-removal edits.
 """
 
 from __future__ import annotations
@@ -59,28 +63,60 @@ def _scan(lines: list[str]) -> list[tuple[int, str, int, str]]:
     return violations
 
 
-def _post_edit_content(payload: dict) -> str | None:
-    """Synthesise the content the tool call would commit.
+def _edit_contents(payload: dict) -> tuple[str, str] | None:
+    """Return ``(pre_edit, post_edit)`` text for the tool call.
 
     :param payload: Parsed PreToolUse JSON envelope.
-    :returns: Post-edit text, or ``None`` when the Edit target file is missing
-        (the Edit tool itself will then reject the call — we just skip scanning).
+    :returns: ``(pre, post)`` strings, or ``None`` when the Edit target file is
+        missing (the Edit tool itself will then reject the call — we just skip
+        scanning). For Write, ``pre`` is the existing file content if any.
     """
     tool_name = payload.get("tool_name", "")
     tool_input = payload.get("tool_input", {})
-    if tool_name == "Write":
-        return tool_input.get("content", "")
     file_path = tool_input.get("file_path", "")
     path = pathlib.Path(file_path)
+    pre = path.read_text() if path.is_file() else ""
+    if tool_name == "Write":
+        return pre, tool_input.get("content", "")
     if not path.is_file():
         sys.stderr.write(f"LOG:Edit target {file_path} not found; skipping scan\n")
         return None
-    content = path.read_text()
     old = tool_input.get("old_string", "")
     new = tool_input.get("new_string", "")
-    if old and old in content:
-        content = content.replace(old, new, 1)
-    return content
+    if old and old in pre:
+        count = -1 if tool_input.get("replace_all") else 1
+        post = pre.replace(old, new, count)
+    else:
+        post = pre
+    return pre, post
+
+
+def _new_violations(
+    pre: list[tuple[int, str, int, str]], post: list[tuple[int, str, int, str]]
+) -> list[tuple[int, str, int, str]]:
+    """Return post-edit violations not accounted for by a matching pre-edit one.
+
+    Multiset diff by ``(block_key, text)`` so line-number shifts don't cause the
+    same comment to look "new". A pre-existing violation with matching key and
+    text consumes one instance from the post-edit set.
+
+    :param pre: Violations found in the file before the edit.
+    :param post: Violations found after the synthesised edit.
+    :returns: Violations attributable to this edit, in document order.
+    """
+    pre_counts: dict[tuple[str, str], int] = {}
+    for _, block_key, _, text in pre:
+        key = (block_key, text)
+        pre_counts[key] = pre_counts.get(key, 0) + 1
+    new: list[tuple[int, str, int, str]] = []
+    for entry in post:
+        _, block_key, _, text = entry
+        key = (block_key, text)
+        if pre_counts.get(key, 0) > 0:
+            pre_counts[key] -= 1
+            continue
+        new.append(entry)
+    return new
 
 
 def main() -> int:
@@ -90,11 +126,14 @@ def main() -> int:
         lines.
     """
     payload = json.loads(sys.stdin.read())
-    content = _post_edit_content(payload)
-    if content is None:
+    contents = _edit_contents(payload)
+    if contents is None:
         return 0
+    pre_text, post_text = contents
+    pre_violations = _scan(pre_text.splitlines())
+    post_violations = _scan(post_text.splitlines())
     out = sys.stdout
-    for lineno, key, header_lineno, text in _scan(content.splitlines()):
+    for lineno, key, header_lineno, text in _new_violations(pre_violations, post_violations):
         out.write(f"{lineno}\t{key}\t{header_lineno}\t{text}\n")
     return 0
 

@@ -15,10 +15,12 @@ readonly SCRIPT_DIR
 # shellcheck disable=SC1091
 source "${SCRIPT_DIR}/_lib.sh"
 
-# Re-scope regex: matches `git commit` at command start or after a shell
-# control character. Defensive against the handler-level `if:` filter firing
-# more broadly than expected.
-readonly GIT_COMMIT_RE='(^[[:space:]]*|[;|&`(][[:space:]]*)git[[:space:]]+commit([[:space:]]|$)'
+# Re-scope regex: matches `git ... commit` where the slot between `git` and
+# `commit` is empty or holds only `git`-level option tokens (e.g. `-c key=val`,
+# `--git-dir=.git`). Required because the handler-level `if: "Bash(git commit *)"`
+# is a literal-prefix permission rule that does NOT match `git -c X commit ...`;
+# this hook is broadened to `Bash(git*)` and the wrapper re-scopes here.
+readonly GIT_COMMIT_RE='(^[[:space:]]*|[;|&`(][[:space:]]*)git([[:space:]]+(-[a-zA-Z]|--[a-zA-Z][a-zA-Z0-9_-]*)(=[^[:space:]]*)?([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+commit([[:space:]]|$)'
 
 main() {
   # Any unexpected failure (Python crash, jq parse, etc.) must block — never
