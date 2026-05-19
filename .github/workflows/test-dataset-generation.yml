@@ -28,10 +28,11 @@ name: Test Dataset Generation
 #
 # Provider matrix policy (computed in the `setup` job):
 #   * schedule (hourly `0 * * * *`)    → skypilot-local × {hdf5, wds}.
-#                                        PR presubmit coverage moved to
+#                                        PR presubmit coverage moves to
 #                                        `test-local-launcher-roundtrip.yml`
-#                                        (#1170); this workflow is now
-#                                        schedule + dispatch only.
+#                                        in #1170 (open at time of writing);
+#                                        this workflow is now schedule +
+#                                        dispatch only.
 #   * schedule (weekly `0 7 * * 0`)    → all providers (skypilot-local +
 #                                        runpod + oci) × {hdf5, wds} —
 #                                        the only paid-capacity coverage
@@ -59,8 +60,9 @@ name: Test Dataset Generation
 on:
   # Two cron axes (#1164, #1170):
   #   * `0 * * * *` (top of every hour) — skypilot-local × {hdf5, wds}. Keeps
-  #     the launcher / kind / R2 path under near-continuous coverage now that
-  #     PR-presubmit duty has moved to test-local-launcher-roundtrip.yml.
+  #     the launcher / kind / R2 path under near-continuous coverage; PR-presubmit
+  #     duty for that round-trip lives in test-local-launcher-roundtrip.yml
+  #     (lands via #1170).
   #   * `0 7 * * 0` (Sunday 07:00 UTC = ~midnight Pacific Sat→Sun) — full
   #     provider matrix (skypilot-local + runpod + oci) × {hdf5, wds}.
   #     Only paid-capacity touch outside manual dispatch; gives us weekly
@@ -92,10 +94,10 @@ on:
           - runpod
           - oci
   # No `pull_request` trigger: presubmit coverage of the launcher / R2
-  # round-trip path moved to `test-local-launcher-roundtrip.yml` (#1170), which
-  # runs in ~8-10 min on ubuntu-latest. This workflow is intentionally schedule
-  # + dispatch only — the full launcher-on-kind-on-runner path is too expensive
-  # to fire per PR.
+  # round-trip path moves to `test-local-launcher-roundtrip.yml` (added in
+  # #1170, open at time of writing), which runs in ~8-10 min on ubuntu-latest.
+  # This workflow is intentionally schedule + dispatch only — the full
+  # launcher-on-kind-on-runner path is too expensive to fire per PR.
 
 permissions:
   contents: read

@@ -100,7 +100,7 @@ docs:
       - pattern: "docker/ubuntu22_04/run-linux-vst-headless.sh"
         covers: "Headless wrapper cleanup contract on RunPod (drop exec on dbus-run-session, </dev/null detach on backgrounded daemons, wait + pkill -P $$ to reap orphan grandchildren); load-bearing for SkyPilot's job-status reporter to observe SSH-pipe EOF"
       - pattern: ".github/workflows/test-dataset-generation.yml"
-        covers: "End-to-end smoke matrixed over `skypilot-local` (PR default, kind cluster) + RunPod + OCI (manual dispatch): generate → validate-spec → validate-shard, per-provider artifacts. PR rows are `wds` only; nightly `schedule` (`0 7 * * *`) restores `hdf5` coverage (#1164). Cred bootstrap is gated on SKYPILOT_API_SERVER_ENDPOINT — see #785."
+        covers: "End-to-end smoke matrixed over `skypilot-local` (kind cluster) + RunPod + OCI: generate → validate-spec → validate-shard, per-provider artifacts. No `pull_request` trigger after #1164/#1170 — presubmit launcher / R2 round-trip duty moves to test-local-launcher-roundtrip.yml. Hourly `schedule` (`0 * * * *`) runs `skypilot-local × {hdf5, wds}`; weekly `schedule` (`0 7 * * 0`) runs all providers × `{hdf5, wds}` (only paid-capacity touch outside manual dispatch). Cred bootstrap is gated on SKYPILOT_API_SERVER_ENDPOINT — see #785."
       - pattern: ".github/workflows/test-skypilot-debug.yml"
         covers: "Permanent diagnostic matrix for the SkyPilot+RunPod path (workflow_dispatch only). Same cred-bootstrap gate as test-dataset-generation: writer is invoked iff SKYPILOT_API_SERVER_ENDPOINT is unset."
       - pattern: ".github/workflows/test-skypilot-local.yml"
