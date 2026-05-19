@@ -149,8 +149,7 @@ _SPEC_URI_STDOUT_SENTINEL = "::synth-setter-spec-uri::"
 # CI-mode env-var gate. When set to one of `_CI_MODE_TRUTHY_VALUES` (case-
 # insensitive), the launcher writes the managed-jobs controller-resource shrink
 # into ~/.sky/config.yaml so the controller pod fits on a GHA-kind cluster.
-# This replaces a per-run YAML write in `generate-dataset-shards.yaml`. Dev
-# machines running `sky local up` against a real-sized kind don't set this.
+# Dev machines running `sky local up` against a real-sized kind don't set this.
 _CI_MODE_ENV = "SYNTH_SETTER_CI_MODE"
 
 # Truthy values for `_CI_MODE_ENV`. Any other value (including "0", "false",
@@ -175,10 +174,9 @@ def _ensure_ci_sky_config() -> None:
     Activated when ``SYNTH_SETTER_CI_MODE`` is one of ``1``, ``true``, ``yes``,
     or ``on`` (case-insensitive). Writes ``~/.sky/config.yaml`` with the
     pre-baked shrink so the controller pod fits on a GHA-kind cluster.
-    Idempotent — overwrites the file each call (per-run YAML write moved from
-    ``generate-dataset-shards.yaml``). Any other value (including ``0``,
-    ``false``, or unset) is a no-op so an operator who happens to export
-    ``SYNTH_SETTER_CI_MODE=0`` doesn't accidentally clobber a local
+    Idempotent — overwrites the file each call. Any other value (including
+    ``0``, ``false``, or unset) is a no-op so an operator who happens to
+    export ``SYNTH_SETTER_CI_MODE=0`` doesn't accidentally clobber a local
     ``~/.sky/config.yaml``.
     """
     if os.environ.get(_CI_MODE_ENV, "").strip().lower() not in _CI_MODE_TRUTHY_VALUES:
@@ -195,9 +193,8 @@ def _emit_spec_uri(spec_uri: str) -> None:
 
     The test-dataset-generation workflow tees the launcher's stdout to a log
     file and greps for ``_SPEC_URI_STDOUT_SENTINEL`` to populate the
-    workflow's ``spec_uri`` output — replacing the bash compose+install step
-    that re-ran ``synth-setter-spec-uri`` on the host. ``click.echo`` rather
-    than ``print`` keeps the launcher's output stream conventions unified.
+    workflow's ``spec_uri`` output. ``click.echo`` rather than ``print``
+    keeps the launcher's output stream conventions unified.
 
     :param spec_uri: Canonical ``r2://`` URI of the materialized spec.
     """

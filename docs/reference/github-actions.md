@@ -137,7 +137,7 @@ Or use the Actions tab UI.
 
 ### Concurrency
 
-`release` and `cpu-slow` use concurrency groups (both `cancel-in-progress: false`). Runs **queue** rather than cancel — back-to-back pushes to main produce sequential releases and sequential slow-test runs, not coalesced ones. `test-dataset-generation` uses a `cancel-in-progress: true` group whose key is `${{ github.workflow }}-${{ github.ref }}${{ github.event_name == 'workflow_dispatch' && format('-{0}', github.run_id) || '' }}` — on PR/push the suffix segment is empty so stacked pushes still coalesce on `<workflow>-<ref>` (and superseded runs are cancelled), but on `workflow_dispatch` the key gains a `-<run_id>` suffix so manual re-dispatches to the same ref don't cancel an in-flight original (#1167). Other CI workflows have no concurrency configured.
+`release` and `cpu-slow` use concurrency groups (both `cancel-in-progress: false`). Runs **queue** rather than cancel — back-to-back pushes to main produce sequential releases and sequential slow-test runs, not coalesced ones. `test-dataset-generation` uses a `cancel-in-progress: true` group whose key is `${{ github.workflow }}-${{ github.ref }}${{ github.event_name == 'workflow_dispatch' && format('-{0}', github.run_id) || '' }}` — on PR/push the suffix segment is empty so stacked pushes still coalesce on `<workflow>-<ref>` (and superseded runs are cancelled), but on `workflow_dispatch` the key gains a `-<run_id>` suffix so manual re-dispatches to the same ref don't cancel an in-flight original. Other CI workflows have no concurrency configured.
 
 ### GPU runner torch pin
 

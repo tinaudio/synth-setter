@@ -8,11 +8,11 @@
 # `run:` here would be rejected by _load_compute_template_with_cmd.
 #
 # The launcher detects `cloud: kubernetes` and SKIPS its cred bootstrap —
-# kind needs no compute creds. The launcher writes a managed-jobs
-# controller-resource shrink to ~/.sky/config.yaml when CI sets
-# `SYNTH_SETTER_CI_MODE=1` (see `_ensure_ci_sky_config` in
+# kind needs no compute creds. When `SYNTH_SETTER_CI_MODE` is truthy the
+# launcher writes a managed-jobs controller-resource shrink to
+# ~/.sky/config.yaml (`_ensure_ci_sky_config` in
 # `src/synth_setter/pipeline/skypilot_launch.py`) so the controller fits
-# on GHA's kind cluster — see PR #876 / #1167.
+# on GHA's kind cluster (#876).
 #
 # Image: `tinaudio/synth-setter:<worker-image-tag>` is loaded into the kind
 # cluster via `kind load docker-image` ahead of launch. `image_id` is set
