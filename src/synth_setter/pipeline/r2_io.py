@@ -33,11 +33,15 @@ def is_r2_uri(uri: str) -> bool:
     return uri.startswith(R2_URI_SCHEME)
 
 
-def to_rclone_path(r2_uri: str) -> str:  # noqa: DOC101,DOC103,DOC201,DOC203,DOC501,DOC503
+def to_rclone_path(r2_uri: str) -> str:
     """Convert an `r2://bucket/key` URI to rclone's `r2:bucket/key` syntax.
 
-    Raises ValueError if `r2_uri` is not an r2:// URI — callers should branch
-    on `is_r2_uri` before calling.
+    Callers should branch on `is_r2_uri` before calling.
+
+    :param r2_uri: Canonical ``r2://bucket/key`` URI string.
+    :return: ``r2:bucket/key`` rclone-form path string.
+    :rtype: str
+    :raises ValueError: ``r2_uri`` is not an ``r2://`` URI.
     """
     if not is_r2_uri(r2_uri):
         raise ValueError(f"not an r2:// URI: {r2_uri!r}")

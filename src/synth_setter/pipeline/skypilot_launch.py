@@ -811,7 +811,7 @@ def _cancel_job(job_name: str) -> None:
         click.echo(f"[{job_name}] cancel failed: {exc}")
 
 
-def _detect_provider_from_doc(doc: dict[str, object], source: Path) -> str:  # noqa: DOC203
+def _detect_provider_from_doc(doc: dict[str, object], source: Path) -> str:
     """Detect the cred-bootstrap provider from an already-parsed YAML mapping.
 
     In-memory counterpart of ``_detect_provider``; same rules (flat
@@ -821,6 +821,7 @@ def _detect_provider_from_doc(doc: dict[str, object], source: Path) -> str:  # n
     :param doc: Parsed top-level YAML mapping for a SkyPilot Task.
     :param source: Path the doc was loaded from; used only in error messages.
     :return: ``--provider`` flag for the cred-bootstrap script.
+    :rtype: str
     :raises ValueError: ``resources`` is missing/malformed or names an
         unsupported cloud.
     """
@@ -861,7 +862,7 @@ def _detect_provider_from_doc(doc: dict[str, object], source: Path) -> str:  # n
 _WORKER_CMD_SENTINEL = "${WORKER_CMD}"
 
 
-def _load_compute_template_with_cmd(template_path: Path, cmd: str) -> dict[str, object]:  # noqa: DOC203
+def _load_compute_template_with_cmd(template_path: Path, cmd: str) -> dict[str, object]:
     """Load ``template_path`` as YAML and inject ``cmd`` into the ``run:`` block.
 
     Three branches based on the template's existing ``run:``:
@@ -877,6 +878,7 @@ def _load_compute_template_with_cmd(template_path: Path, cmd: str) -> dict[str, 
     :param template_path: Path to a SkyPilot Task YAML.
     :param cmd: Bash command to inject.
     :return: The parsed YAML dict with ``run`` populated.
+    :rtype: dict[str, object]
     :raises FileNotFoundError: ``template_path`` does not point to a file.
     :raises ValueError: top-level YAML is not a mapping, or the template's
         ``run:`` is non-empty and lacks the sentinel.
@@ -911,7 +913,7 @@ def _load_compute_template_with_cmd(template_path: Path, cmd: str) -> dict[str, 
     )
 
 
-def _launch_one_rank_from_doc(  # noqa: DOC203
+def _launch_one_rank_from_doc(
     rank: int,
     *,
     job_names: list[str],
@@ -930,6 +932,7 @@ def _launch_one_rank_from_doc(  # noqa: DOC203
     :param worker_image: Resolved ``repo:tag`` Docker image reference.
     :param task_doc: Parsed compute YAML dict (with ``run`` already injected).
     :return: SkyPilot-assigned ``job_id`` for this rank.
+    :rtype: int
     :raises RuntimeError: ``sky.jobs.launch`` / ``sky.stream_and_get`` yielded
         no ``job_id``.
     """
@@ -957,7 +960,7 @@ def _launch_one_rank_from_doc(  # noqa: DOC203
     return job_ids[0]
 
 
-def _run_workers_from_doc(  # noqa: DOC203
+def _run_workers_from_doc(
     worker_env_base: dict[str, str],
     task_doc: dict[str, object],
     job_names: list[str],
@@ -975,6 +978,7 @@ def _run_workers_from_doc(  # noqa: DOC203
     :param tail: If True, tail logs and cancel all jobs. If False, detach after launch.
     :return: List with one rc per rank in ``job_names`` order — ``0`` = success,
         non-zero = failure (``-1`` for a half-submitted launch).
+    :rtype: list[int]
     """
     worker_image = f"{_WORKER_IMAGE_REPO}:{worker_image_tag}"
     launch_get_job_id = functools.partial(

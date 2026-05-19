@@ -256,7 +256,7 @@ def spec_from_cfg(cfg: DictConfig) -> DatasetSpec:
     return DatasetSpec(**spec_kwargs)
 
 
-def _sky_cfg_from_dataset_cfg(cfg: DictConfig) -> SkypilotLaunchConfig:  # noqa: DOC203
+def _sky_cfg_from_dataset_cfg(cfg: DictConfig) -> SkypilotLaunchConfig:
     """Validate the ``skypilot_launch`` sub-tree of a composed dataset cfg.
 
     Rejects operator-supplied ``cmd`` — it is launcher-internal (built from
@@ -266,6 +266,7 @@ def _sky_cfg_from_dataset_cfg(cfg: DictConfig) -> SkypilotLaunchConfig:  # noqa:
     :param cfg: Composed dataset cfg.
     :return: Validated config with ``cmd`` unset; the entrypoint populates it
         later via ``model_copy(update=...)``.
+    :rtype: SkypilotLaunchConfig
     :raises TypeError: ``cfg.skypilot_launch`` did not resolve to a mapping.
     :raises ValueError: operator supplied ``skypilot_launch.cmd`` from Hydra.
     """
@@ -281,7 +282,7 @@ def _sky_cfg_from_dataset_cfg(cfg: DictConfig) -> SkypilotLaunchConfig:  # noqa:
     return SkypilotLaunchConfig(**sky_kwargs)
 
 
-def _build_worker_cmd(overrides: list[str], spec: DatasetSpec) -> str:  # noqa: DOC203
+def _build_worker_cmd(overrides: list[str], spec: DatasetSpec) -> str:
     """Reconstruct the worker-side bash command that re-enters Hydra via from_hydra.
 
     Each override is shell-quoted individually so spaces/metachars survive bash
@@ -299,6 +300,7 @@ def _build_worker_cmd(overrides: list[str], spec: DatasetSpec) -> str:  # noqa: 
     :param spec: Launcher's ``DatasetSpec``; runtime fields are pinned into
         the worker overrides for compose determinism.
     :return: Bash one-liner suitable for use as a ``sky.Task`` ``run:`` block.
+    :rtype: str
     """
     pinned_overrides = [f"+created_at={spec.created_at.isoformat()}"]
     all_overrides = list(overrides) + pinned_overrides
@@ -312,8 +314,12 @@ def _build_worker_cmd(overrides: list[str], spec: DatasetSpec) -> str:  # noqa: 
 
 
 @hydra.main(version_base="1.3", config_path="../../../configs", config_name="dataset")
-def from_hydra(cfg: DictConfig) -> None:  # noqa: DOC101,DOC103
-    """Worker-side @hydra.main entry: build the spec and render it in-process."""
+def from_hydra(cfg: DictConfig) -> None:
+    """Worker-side @hydra.main entry: build the spec and render it in-process.
+
+    :param cfg: Composed Hydra dataset cfg supplied by ``@hydra.main`` from
+        the worker's argv overrides.
+    """
     run(spec_from_cfg(cfg))
 
 

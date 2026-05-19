@@ -63,15 +63,21 @@ class R2Location(BaseModel):  # noqa: DOC601,DOC603
 
     @field_validator("bucket")
     @classmethod
-    def _bucket_must_not_be_blank(cls, value: str) -> str:  # noqa: DOC101,DOC103,DOC201,DOC203,DOC501,DOC503
-        """Reject blank buckets so rclone never receives a malformed ``r2:/...`` destination."""
+    def _bucket_must_not_be_blank(cls, value: str) -> str:
+        """Reject blank buckets so rclone never receives a malformed ``r2:/...`` destination.
+
+        :param value: Candidate ``bucket`` value pre-validation.
+        :return: ``value`` unchanged when non-blank.
+        :rtype: str
+        :raises ValueError: ``value`` is blank/whitespace-only.
+        """
         if not value.strip():
             raise ValueError("r2.bucket must not be blank")
         return value
 
     @field_validator("prefix_root")
     @classmethod
-    def _prefix_root_must_not_be_blank(cls, value: str) -> str:  # noqa: DOC101,DOC103,DOC201,DOC203,DOC501,DOC503
+    def _prefix_root_must_not_be_blank(cls, value: str) -> str:
         """Reject blank/slash-only prefix roots; normalize leading/trailing whitespace.
 
         ``make_r2_prefix`` strips leading/trailing ``/`` and then rejects an empty
@@ -85,6 +91,11 @@ class R2Location(BaseModel):  # noqa: DOC601,DOC603
         ``make_r2_prefix`` to handle), so a caller passing ``" data "`` doesn't
         end up with ``" data /task/run/"`` as the derived prefix. Catching this
         here keeps error attribution at the ``r2.prefix_root`` boundary.
+
+        :param value: Candidate ``prefix_root`` value pre-validation.
+        :return: ``value`` with surrounding whitespace stripped.
+        :rtype: str
+        :raises ValueError: ``value`` is blank or slash-only after stripping.
         """
         stripped = value.strip()
         if not stripped.strip("/").strip():
@@ -93,13 +104,19 @@ class R2Location(BaseModel):  # noqa: DOC601,DOC603
 
     @field_validator("prefix")
     @classmethod
-    def _prefix_must_end_with_slash(cls, value: str) -> str:  # noqa: DOC101,DOC103,DOC201,DOC203,DOC501,DOC503
-        """Reject prefixes lacking a trailing ``/`` so rclone never gets ".../prefixfilename"."""
+    def _prefix_must_end_with_slash(cls, value: str) -> str:
+        """Reject prefixes lacking a trailing ``/`` so rclone never gets ".../prefixfilename".
+
+        :param value: Candidate ``prefix`` value pre-validation.
+        :return: ``value`` unchanged when it ends with ``/``.
+        :rtype: str
+        :raises ValueError: ``value`` does not end with ``/``.
+        """
         if not value.endswith("/"):
             raise ValueError(f"r2.prefix must end with '/' (got: {value!r})")
         return value
 
-    def uri(self, key: str) -> str:  # noqa: DOC203
+    def uri(self, key: str) -> str:
         """Return the canonical ``r2://<bucket>/<key>`` URI for the given object key.
 
         ``key`` is an absolute object key under the bucket, **not** relative to
@@ -107,28 +124,31 @@ class R2Location(BaseModel):  # noqa: DOC601,DOC603
 
         :param key: Absolute object key (e.g. ``skypilot-launcher-specs/job-1.json``).
         :returns: ``r2://<bucket>/<key>`` URI string.
+        :rtype: str
         """
         return f"{R2_URI_SCHEME}{self.bucket}/{key}"
 
-    def rclone_prefix(self) -> str:  # noqa: DOC203
+    def rclone_prefix(self) -> str:
         """Return the rclone-form destination ``r2:<bucket>/<prefix>`` for ``rclone copy``.
 
         rclone's CLI takes ``r2:bucket/key`` (no ``//``); see
         ``r2_io.to_rclone_path`` for the URI→rclone-form translator.
 
         :returns: ``r2:<bucket>/<prefix>`` string for use as an rclone destination.
+        :rtype: str
         """
         return f"{RCLONE_REMOTE}:{self.bucket}/{self.prefix}"
 
-    def _under_prefix(self, name: str) -> str:  # noqa: DOC203
+    def _under_prefix(self, name: str) -> str:
         """Build ``r2://<bucket>/<prefix><name>`` — the canonical under-prefix URI shape.
 
         :param name: Relative key under ``self.prefix`` (may contain ``/``).
         :returns: ``r2://<bucket>/<prefix><name>`` URI string.
+        :rtype: str
         """
         return f"{R2_URI_SCHEME}{self.bucket}/{self.prefix}{name}"
 
-    def shard_uri(self, shard: ShardSpec) -> str:  # noqa: DOC203
+    def shard_uri(self, shard: ShardSpec) -> str:
         """Return the canonical R2 URI for ``shard``: ``r2://<bucket>/<prefix><filename>``.
 
         :param shard: A ``ShardSpec`` whose ``filename`` lives directly under
@@ -136,47 +156,52 @@ class R2Location(BaseModel):  # noqa: DOC601,DOC603
             shards under a ``shards/`` subdirectory; this helper's API stays
             stable across that migration.
         :returns: ``r2://<bucket>/<prefix><shard.filename>`` URI string.
+        :rtype: str
         """
         return self._under_prefix(shard.filename)
 
-    def input_spec_uri(self) -> str:  # noqa: DOC203
+    def input_spec_uri(self) -> str:
         """R2 URI of the frozen ``input_spec.json`` (the materialized ``DatasetSpec``).
 
         Currently lives flat at ``<prefix>input_spec.json``; future state (#385)
         relocates it under ``<prefix>metadata/input_spec.json``.
 
         :returns: ``r2://<bucket>/<prefix>input_spec.json`` URI string.
+        :rtype: str
         """
         return self._under_prefix(INPUT_SPEC_FILENAME)
 
-    def config_yaml_uri(self) -> str:  # noqa: DOC203
+    def config_yaml_uri(self) -> str:
         """R2 URI of the frozen Hydra-pipeline-config provenance copy (``config.yaml``).
 
         Currently flat; future state (#385) places it under ``metadata/``.
 
         :returns: ``r2://<bucket>/<prefix>config.yaml`` URI string.
+        :rtype: str
         """
         return self._under_prefix("config.yaml")
 
-    def dataset_card_uri(self) -> str:  # noqa: DOC203
+    def dataset_card_uri(self) -> str:
         """R2 URI of the self-describing dataset card (``dataset.json``, planned — #74).
 
         Currently flat; future state (#385) places it under ``metadata/``.
 
         :returns: ``r2://<bucket>/<prefix>dataset.json`` URI string.
+        :rtype: str
         """
         return self._under_prefix("dataset.json")
 
-    def dataset_complete_marker_uri(self) -> str:  # noqa: DOC203
+    def dataset_complete_marker_uri(self) -> str:
         """R2 URI of the ``dataset.complete`` completion marker (written last by finalize).
 
         Currently flat; future state (#385) places it under ``metadata/``.
 
         :returns: ``r2://<bucket>/<prefix>dataset.complete`` URI string.
+        :rtype: str
         """
         return self._under_prefix("dataset.complete")
 
-    def split_uri(self, split: str) -> str:  # noqa: DOC203
+    def split_uri(self, split: str) -> str:
         """R2 URI of a split virtual-dataset file (``train.h5`` / ``val.h5`` / ``test.h5``).
 
         Reshard produces these locally today; the URI is where they land once
@@ -184,20 +209,22 @@ class R2Location(BaseModel):  # noqa: DOC601,DOC603
 
         :param split: One of ``"train"``, ``"val"``, ``"test"``.
         :returns: ``r2://<bucket>/<prefix><split>.h5`` URI string.
+        :rtype: str
         """
         return self._under_prefix(f"{split}.h5")
 
-    def stats_uri(self) -> str:  # noqa: DOC203
+    def stats_uri(self) -> str:
         """R2 URI of ``stats.npz`` (normalization statistics).
 
         Stats are written locally today; the URI is where finalize uploads
         them (#408).
 
         :returns: ``r2://<bucket>/<prefix>stats.npz`` URI string.
+        :rtype: str
         """
         return self._under_prefix("stats.npz")
 
-    def worker_staged_shard_uri(  # noqa: DOC203
+    def worker_staged_shard_uri(
         self,
         shard_id: int,
         worker_id: str,
@@ -216,12 +243,13 @@ class R2Location(BaseModel):  # noqa: DOC601,DOC603
         :param attempt_uuid: Per-attempt UUID distinguishing retries.
         :param ext: File extension with leading dot (``".h5"`` or ``".tar"``).
         :returns: ``r2://<bucket>/<prefix>metadata/workers/shards/shard-NNNNNN/<worker>-<attempt>.<ext>``.
+        :rtype: str
         """
         return self._under_prefix(
             f"metadata/workers/shards/shard-{shard_id:06d}/{worker_id}-{attempt_uuid}{ext}"
         )
 
-    def worker_attempt_report_uri(self, worker_id: str, attempt_uuid: str) -> str:  # noqa: DOC203
+    def worker_attempt_report_uri(self, worker_id: str, attempt_uuid: str) -> str:
         """R2 URI of a per-attempt worker report under ``metadata/workers/attempts/``.
 
         Future state (#406): workers write a ``report.json`` for each attempt
@@ -231,6 +259,7 @@ class R2Location(BaseModel):  # noqa: DOC601,DOC603
         :param worker_id: Worker identifier issued by the launcher.
         :param attempt_uuid: Per-attempt UUID distinguishing retries.
         :returns: ``r2://<bucket>/<prefix>metadata/workers/attempts/<worker>-<attempt>/report.json``.
+        :rtype: str
         """
         return self._under_prefix(
             f"metadata/workers/attempts/{worker_id}-{attempt_uuid}/report.json"
