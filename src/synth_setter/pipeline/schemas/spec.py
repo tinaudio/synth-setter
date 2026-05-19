@@ -4,7 +4,7 @@
 config or runtime-materialized artifact. Hydra composes a dict from groups;
 the entrypoint constructs ``DatasetSpec`` directly from that dict on line 1
 of ``main``. Runtime fields (``git_sha``, ``created_at``, ``run_id``,
-``r2_prefix``) auto-fill via ``default_factory`` when missing and pass through
+``r2.prefix``) auto-fill via ``default_factory`` when missing and pass through
 when present (worker reconstruction from JSON). ``shards``/``num_shards``/
 ``num_params`` are computed deterministically from layout + render fields.
 """
@@ -335,7 +335,7 @@ class DatasetSpec(BaseModel):  # noqa: DOC601,DOC603
 
     - Hydra composes a dict from groups.
     - ``DatasetSpec(**dict)`` runs validation; runtime fields (git_sha,
-      created_at, run_id, r2_prefix, is_repo_dirty) auto-fill via
+      created_at, run_id, r2.prefix, is_repo_dirty) auto-fill via
       ``default_factory`` when missing and pass through when present.
     - Workers re-validate ``model_dump_json()`` from R2 and get an equal model.
 
@@ -350,7 +350,7 @@ class DatasetSpec(BaseModel):  # noqa: DOC601,DOC603
     task_name: str = Field(
         description=(
             "Dataset config identifier; becomes the prefix of ``run_id`` and the "
-            "config-id path segment of ``r2_prefix`` (``<root>/<task_name>/<run_id>/``)."
+            "config-id path segment of ``r2.prefix`` (``<root>/<task_name>/<run_id>/``)."
         )
     )
     output_format: Literal["hdf5", "wds"] = Field(
@@ -541,7 +541,7 @@ class DatasetSpec(BaseModel):  # noqa: DOC601,DOC603
     @field_validator("task_name")
     @classmethod
     def _task_name_must_not_be_blank(cls, value: str) -> str:
-        """Reject blank ``task_name`` so derived run_id / r2_prefix are never empty-prefixed."""
+        """Reject blank ``task_name`` so derived run_id / r2.prefix are never empty-prefixed."""
         if not value.strip():
             raise ValueError("task_name must not be blank")
         return value
