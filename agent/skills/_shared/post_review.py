@@ -22,8 +22,12 @@ Input format on stdin:
     }
 
 The submitted review uses event=COMMENT so threads stay open (not approved or
-rejected). Verified end-to-end on PR #777 — see that PR's description for the
-trace.
+rejected).
+
+Typical invocation::
+
+    python3 agent/skills/_shared/post_review.py < payload.json
+    python3 agent/skills/_shared/post_review.py --dry-run < payload.json
 """
 
 from __future__ import annotations
@@ -300,14 +304,14 @@ def build_review_payload(
     }
 
 
-def submit_review(repo: str, pr_number: int, payload: dict[str, object]) -> dict:
+def submit_review(repo: str, pr_number: int, payload: dict[str, object]) -> dict[str, object]:
     """POST the review and return the parsed response.
 
     :param repo: GitHub repository in `owner/name` form.
     :param pr_number: Pull request number.
     :param payload: GitHub review API payload.
     :returns: Parsed JSON response from GitHub.
-    :rtype: dict
+    :rtype: dict[str, object]
     """
     payload_json = json.dumps(payload)
     result = subprocess.run(  # noqa: S603
@@ -377,7 +381,8 @@ def main() -> int:
         return 0
 
     response = submit_review(repo, pr_number, payload)
-    sys.stdout.write(response.get("html_url", json.dumps(response)))
+    html_url = response.get("html_url")
+    sys.stdout.write(html_url if isinstance(html_url, str) else json.dumps(response))
     sys.stdout.write("\n")
     return 0
 

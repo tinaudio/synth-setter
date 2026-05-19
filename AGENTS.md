@@ -300,7 +300,7 @@ The bad version forces the reader to ask "Hydra migration of *what*?" — the pr
 
 Before every `gh pr create`, run `/repo-review-full-no-comments` and iterate on every BLOCK and WARN finding (fix the code, or document in the PR body why the finding is intentional). Open the PR only after the review report comes back clean.
 
-A `PreToolUse` hook in `.claude/settings.json` (handler script `agent/hooks/pre-pr-review-gate.sh`) enforces this — `gh pr create` is blocked unless the command contains the literal `REVIEW_FULL_DONE=1` (anywhere in the line). Recommended form is a trailing comment, which preserves the other `gh pr create` hooks (doc-drift, pr-checkbox, taxonomy verification):
+A `PreToolUse` hook in the agent's settings (Claude registers it in `.claude/settings.json`; handler script `agent/hooks/pre-pr-review-gate.sh`) enforces this — `gh pr create` is blocked unless the command contains the literal `REVIEW_FULL_DONE=1` (anywhere in the line). Recommended form is a trailing comment, which preserves the other `gh pr create` hooks (doc-drift, pr-checkbox, taxonomy verification):
 
 ```bash
 gh pr create --title "..." --body "..."  # REVIEW_FULL_DONE=1

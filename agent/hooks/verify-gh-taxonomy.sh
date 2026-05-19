@@ -117,7 +117,10 @@ if [[ "$MODE" == "hierarchy" ]]; then
   fi
 else
   # Extract the GitHub URL (PR or issue) and check if it's synth-setter
-  GITHUB_URL=$(echo "$TOOL_RESPONSE" | grep -oE 'https://github.com/[^/]+/[^/]+/(pull|issues)/[0-9]+' | head -1)
+  # `grep` returns 1 if no URL is found; `head` then propagates non-zero under
+  # `set -o pipefail`, which would abort before the `-z` no-op check. `|| true`
+  # keeps the no-URL path graceful.
+  GITHUB_URL=$(echo "$TOOL_RESPONSE" | grep -oE 'https://github.com/[^/]+/[^/]+/(pull|issues)/[0-9]+' | head -1 || true)
   if [[ -z "$GITHUB_URL" ]]; then exit 0; fi
   if ! echo "$GITHUB_URL" | grep -q 'synth-setter'; then
     exit 0
@@ -302,10 +305,11 @@ check_epic_lineage() {
 # MODE: pr — runs after `gh pr create`
 # ===========================================================================
 if [[ "$MODE" == "pr" ]]; then
-  # Step 1: Extract PR number from the tool response URL.
-  PR_URL=$(echo "$TOOL_RESPONSE" | grep -oE 'https://github.com/[^/]+/[^/]+/pull/[0-9]+' | head -1)
+  # Step 1: Extract PR number from the tool response URL. `|| true` keeps the
+  # no-URL path graceful under `set -o pipefail` (see GITHUB_URL above).
+  PR_URL=$(echo "$TOOL_RESPONSE" | grep -oE 'https://github.com/[^/]+/[^/]+/pull/[0-9]+' | head -1 || true)
   if [[ -z "$PR_URL" ]]; then exit 0; fi
-  PR_NUM=$(echo "$PR_URL" | grep -oE '[0-9]+$')
+  PR_NUM=$(echo "$PR_URL" | grep -oE '[0-9]+$' || true)
 
   # Step 2: Check the PR body for issue references (Fixes/Closes/Refs #N).
   # Without a linked issue, the pr-metadata-gate CI workflow will fail.
@@ -360,10 +364,11 @@ if [[ "$MODE" == "pr" ]]; then
 # MODE: issue — runs after `gh issue create`
 # ===========================================================================
 elif [[ "$MODE" == "issue" ]]; then
-  # Extract the issue number from the tool response URL.
-  ISSUE_URL=$(echo "$TOOL_RESPONSE" | grep -oE 'https://github.com/[^/]+/[^/]+/issues/[0-9]+' | head -1)
+  # Extract the issue number from the tool response URL. `|| true` keeps the
+  # no-URL path graceful under `set -o pipefail` (see GITHUB_URL above).
+  ISSUE_URL=$(echo "$TOOL_RESPONSE" | grep -oE 'https://github.com/[^/]+/[^/]+/issues/[0-9]+' | head -1 || true)
   if [[ -z "$ISSUE_URL" ]]; then exit 0; fi
-  ISSUE_NUM=$(echo "$ISSUE_URL" | grep -oE '[0-9]+$')
+  ISSUE_NUM=$(echo "$ISSUE_URL" | grep -oE '[0-9]+$' || true)
 
   # Check the CI minimum three. At this point, issue type is often not yet
   # set because `gh issue create` can't set it — it requires a separate

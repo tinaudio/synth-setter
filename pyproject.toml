@@ -179,11 +179,6 @@ ignore = ["E501", "S101"]
 # T201: click.echo used for CLI output.
 "src/synth_setter/pipeline/data/r2_report.py" = ["S603", "S607", "T201", "D102", "D103", "D107"]
 "src/synth_setter/pipeline/data/reshard.py" = ["T201"]
-# .claude/skills/_shared/post_review.py: CLI helper that shells out to `gh` and
-# prints html_url on success. S603/S607 are the bandit warnings for subprocess
-# with a partial path — `gh` is on PATH by design (same pattern used by the
-# r2_report.py exemption above).
-".claude/skills/_shared/post_review.py" = ["T201", "S603", "S607"]
 "src/synth_setter/pipeline/data/rewrite_to_latest.py" = ["ANN001", "D102", "D103", "D107"]
 "src/synth_setter/tools/surge_xt_interactive.py" = ["D102", "D103", "D107"]
 "src/synth_setter/data/audio_datamodule.py" = ["D102", "D103", "D107"]
