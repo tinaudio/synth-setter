@@ -632,6 +632,70 @@ class TestCli:
         assert result.exit_code != 0
         mock_sky.jobs.launch.assert_not_called()
 
+    @pytest.mark.parametrize(
+        "raise_type",
+        [ValueError, RuntimeError],
+    )
+    def test_dispatch_error_surfaces_as_click_exception(
+        self,
+        cwd_with_spec: tuple[Path, Path, DatasetSpec],
+        env_file: Path,
+        template_yaml: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        mock_sky: MagicMock,
+        raise_type: type[Exception],
+    ) -> None:
+        """Surface ``dispatch_via_skypilot`` errors as a clean ``click.ClickException``.
+
+        ``dispatch_via_skypilot`` raises ``ValueError`` for cfg-shape errors and ``RuntimeError`` for
+        worker submission failures. Both should reach the operator as a one-line ``click.ClickException``
+        rather than as an uncaught traceback.
+
+        :param cwd_with_spec: Fixture providing a CWD pre-populated with a canonical input_spec.json.
+        :param env_file: Fixture-provided worker env file path.
+        :param template_yaml: Fixture-provided compute template path.
+        :param monkeypatch: Pytest fixture for env/attribute mocking.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        :param raise_type: Parametrized exception class to simulate from dispatch.
+        """
+        _stub_check_output_returns_uri(monkeypatch, "r2://bucket/canonical/input_spec.json")
+
+        def _no_op(*_args: Any, **_kwargs: Any) -> None:
+            return None
+
+        monkeypatch.setattr(
+            "synth_setter.pipeline.skypilot_launch.subprocess.check_call",
+            _no_op,
+        )
+
+        def _raising_dispatch(*_args: Any, **_kwargs: Any) -> None:
+            raise raise_type("simulated dispatch failure")
+
+        monkeypatch.setattr(
+            "synth_setter.pipeline.skypilot_launch.dispatch_via_skypilot",
+            _raising_dispatch,
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "--template",
+                str(template_yaml),
+                "--env-file",
+                str(env_file),
+                "--",
+                "synth-setter-generate-dataset",
+            ],
+        )
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, SystemExit), (
+            f"expected SystemExit (ClickException) but got "
+            f"{type(result.exception).__name__ if result.exception else 'None'}"
+        )
+        assert "simulated dispatch failure" in result.output
+
     def test_drops_old_experiment_and_hydra_override_surface(self) -> None:
         """The breaking-change PR drops ``--experiment``, ``--spec-out``, ``--job-name`` flags.
 
