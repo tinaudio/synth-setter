@@ -135,7 +135,7 @@ class R2Location(BaseModel):
         ``key`` is an absolute object key under the bucket, **not** relative to
         ``self.prefix``. Use :meth:`shard_uri` for keys inside ``self.prefix``.
 
-        :param key: Absolute object key (e.g. ``skypilot-launcher-specs/job-1.json``).
+        :param key: Absolute object key (e.g. ``data/cfg-1/run-9/input_spec.json``).
         :returns: ``r2://<bucket>/<key>`` URI string.
         """
         return f"{R2_URI_SCHEME}{self.bucket}/{key}"

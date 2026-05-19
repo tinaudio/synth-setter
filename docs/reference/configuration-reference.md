@@ -38,7 +38,7 @@ configs/experiment/generate_dataset/{id}.yaml → Hydra compose against configs/
     → spec_io.upload_spec(spec) → R2 at {r2.prefix}input_spec.json (one canonical write per main())
     → branch on sky_cfg.compute_template:
         ├─ None: run(spec) — renders + uploads shards
-        └─ set:  dispatch_via_skypilot — launcher transport upload (skypilot-launcher-specs/),
+        └─ set:  dispatch_via_skypilot — injects spec.r2.input_spec_uri() as WORKER_SPEC_URI;
                  worker pod runs run(spec) which renders + uploads shards (no spec re-upload)
 ```
 
@@ -48,7 +48,7 @@ configs/experiment/generate_dataset/{id}.yaml → Hydra compose against configs/
 - Spec is the reproducibility unit and reconciliation target
 - **Config drift protection (planned):** the design doc specifies that re-passing `--config` for a `run_id` that already has a spec should error — but this is not yet enforced. The current implementation always generates a new `run_id` and writes a fresh spec. Tracked in [#386](https://github.com/tinaudio/synth-setter/issues/386).
 - **Path note:** `storage-provenance-spec.md` §3a documents the target path as `metadata/input_spec.json`, but the current implementation uploads to `{r2.prefix}input_spec.json` (`r2.prefix` already ends in `/` — see `make_r2_prefix` in `src/synth_setter/pipeline/schemas/prefix.py`; no `metadata/` subdirectory). Tracked in [#385](https://github.com/tinaudio/synth-setter/issues/385).
-- **Launcher transport copy:** The SkyPilot launcher additionally writes a copy of the same spec to `r2://{bucket}/skypilot-launcher-specs/{job_name}.json` and injects that URI as `WORKER_SPEC_URI` into the worker pod's env (workaround for [#749](https://github.com/tinaudio/synth-setter/issues/749), where SkyPilot's RunPod backend rejects programmatic `task.update_file_mounts`). The launcher copy is **transport only** — the canonical provenance copy at `{r2.prefix}input_spec.json` is written by `spec_io.upload_spec`, called once from `main()` on the launcher host (before the dispatch branch fires). Workers do not re-upload the spec; the canonical key is present before any worker boots. See `storage-provenance-spec.md` §3a "Materialized spec: three destinations" for the consumer table.
+- **Worker env:** `dispatch_via_skypilot` injects the canonical `spec.r2.input_spec_uri()` as `WORKER_SPEC_URI` into each worker pod's env. The canonical provenance copy at `{r2.prefix}input_spec.json` is written by `spec_io.upload_spec`, called once from `main()` on the launcher host before the dispatch branch fires, so the URI resolves before any worker boots. Workers do not re-upload the spec. See `storage-provenance-spec.md` §3a "Materialized spec: two destinations" for the consumer table.
 
 Reference: `data-pipeline.md` §14.5
 
@@ -94,7 +94,7 @@ configs/compute/{provider}-template.yaml (SkyPilot Task YAML — no `run:` block
 ```
 
 - Separate from Hydra in *consumer* (SkyPilot's `Task.from_yaml` reads the compute template), not in *composition* — the launcher itself uses Hydra's `compose()` to build the `DatasetSpec` from `configs/dataset.yaml` + the named experiment.
-- Launcher takes the task template + an `--experiment <name>`, composes the `DatasetSpec` via Hydra, uploads its JSON to R2 (under `skypilot-launcher-specs/<job>.json`), and forwards the `r2://` URI to the worker via `task.update_envs(WORKER_SPEC_URI=...)` — primarily for downstream validate-time consumers (validate-spec / validate-shard CI jobs read it off the workflow output). R2 is used instead of `task.update_file_mounts` because the SkyPilot RunPod backend rejects programmatic file_mounts with a pubkey-overflow error (see [#749](https://github.com/tinaudio/synth-setter/issues/749)). The worker itself doesn't fetch the JSON — `_build_worker_cmd` pins the same Hydra overrides the launcher composed with, and the `from_hydra` entrypoint rebuilds the spec from those.
+- Launcher takes the task template + an `--experiment <name>`, composes the `DatasetSpec` via Hydra, and forwards the canonical `r2://` URI (from `spec.r2.input_spec_uri()`, written by `spec_io.upload_spec` in `cli/generate_dataset.py`'s `main()`) to each worker via `task.update_envs(WORKER_SPEC_URI=...)` — primarily for downstream validate-time consumers (validate-spec / validate-shard CI jobs read it off the workflow output). `task.update_file_mounts` is avoided because the SkyPilot RunPod backend rejects programmatic file_mounts with a pubkey-overflow error (see [#749](https://github.com/tinaudio/synth-setter/issues/749)). The worker itself doesn't fetch the JSON — `_build_worker_cmd` pins the same Hydra overrides the launcher composed with, and the `from_hydra` entrypoint rebuilds the spec from those.
 - Invoked via: `python -m synth_setter.pipeline.skypilot_launch --experiment <name> --template <yaml>` (trailing positional args, e.g. `render.plugin_path=...`, are forwarded to Hydra `compose` as overrides).
 
 Reference: `training-pipeline.md` Appendix D
@@ -156,14 +156,14 @@ envs:
 # `_load_compute_template_with_cmd`.
 ```
 
-The launcher uploads the materialized spec to R2 (under
-`r2://{bucket}/skypilot-launcher-specs/<job>.json`) rather than using
-`task.update_file_mounts(...)` — see [#749](https://github.com/tinaudio/synth-setter/issues/749).
-The spec URI is still made available to the worker pod as the
-`WORKER_SPEC_URI` env var (consumed by the CI validate-spec / validate-shard
-jobs, which read it via the workflow output rather than off the pod); the
-worker process itself re-builds the spec via Hydra compose on the injected
-overrides rather than fetching the JSON at boot.
+The canonical spec is uploaded to R2 by `cli/generate_dataset.py`'s `main()`
+(via `spec_io.upload_spec`) before dispatch; `task.update_file_mounts(...)`
+is avoided per [#749](https://github.com/tinaudio/synth-setter/issues/749).
+The canonical URI (`spec.r2.input_spec_uri()`) is forwarded to the worker
+pod as the `WORKER_SPEC_URI` env var (consumed by the CI validate-spec /
+validate-shard jobs, which read it via the workflow output rather than off
+the pod); the worker process itself re-builds the spec via Hydra compose on
+the injected overrides rather than fetching the JSON at boot.
 
 **Vast.ai** (`configs/compute/vast-template.yaml`) — planned, not implemented:
 

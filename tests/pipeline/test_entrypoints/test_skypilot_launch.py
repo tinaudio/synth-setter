@@ -123,10 +123,10 @@ def clear_worker_env_from_process(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture(autouse=True)
 def mock_rclone_subprocess(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Globally no-op the rclone subprocess that `upload_spec_to_r2` would invoke.
+    """Globally no-op any rclone subprocess the launcher might shell out to.
 
-    Tests that explicitly want to assert on the rclone command shape override this
-    by setting their own side_effect on `subprocess.check_call`.
+    Defensive — keeps tests hermetic even if a code path under test later starts invoking rclone
+    directly.
     """
     monkeypatch.setattr(
         "synth_setter.pipeline.skypilot_launch.subprocess.check_call",
@@ -513,7 +513,7 @@ class TestMainCli:
         assert forwarded["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "key"
         assert forwarded["RCLONE_CONFIG_R2_ENDPOINT"].startswith("https://")
 
-    def test_spec_uri_forwarded_to_worker_env_after_r2_upload(
+    def test_launcher_does_not_use_file_mounts(
         self,
         experiment: str,
         fake_plugin: Path,
@@ -522,20 +522,17 @@ class TestMainCli:
         patch_materialize_io: None,
         local_spec_dir: Path,
         mock_sky: MagicMock,
-        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Verify the spec lands at the canonical R2 path with WORKER_SPEC_URI injected.
+        """The launcher must not call ``task.update_file_mounts(...)`` (#749 workaround).
 
-        The spec is uploaded to ``r2://<bucket>/skypilot-launcher-specs/<cluster>.json`` and the
-        launcher injects that URI into the worker's env via ``WORKER_SPEC_URI``. The launcher
-        does NOT call ``task.update_file_mounts(...)`` (#749 workaround).
+        :param experiment: Fixture-provided experiment name.
+        :param fake_plugin: Fixture-provided fake VST3 plugin path.
+        :param template_yaml: Fixture-provided compute template path.
+        :param env_file: Fixture-provided worker env file path.
+        :param patch_materialize_io: Fixture stubbing materialize-side IO.
+        :param local_spec_dir: Fixture-provided local spec directory.
+        :param mock_sky: Mocked ``sky`` module from fixture.
         """
-        rclone_invocations: list[list[str]] = []
-        monkeypatch.setattr(
-            "synth_setter.pipeline.skypilot_launch.subprocess.check_call",
-            lambda args: rclone_invocations.append(args),
-        )
-
         result = _invoke(
             experiment,
             template_yaml,
@@ -547,19 +544,43 @@ class TestMainCli:
         assert result.exit_code == 0, result.output
 
         task = mock_sky.Task.from_yaml.return_value
-        task.update_envs.assert_called_once()
-        forwarded = task.update_envs.call_args.args[0]
-        assert (
-            forwarded[WORKER_SPEC_URI_ENV]
-            == "r2://intermediate-data/skypilot-launcher-specs/smoke-job-1.json"
-        )
-
-        assert len(rclone_invocations) == 1
-        cmd = rclone_invocations[0]
-        assert cmd[:2] == ["rclone", "copyto"]
-        assert cmd[-1] == "r2:intermediate-data/skypilot-launcher-specs/smoke-job-1.json"
-
         task.update_file_mounts.assert_not_called()
+
+    def test_worker_env_carries_canonical_spec_uri(
+        self,
+        experiment: str,
+        fake_plugin: Path,
+        template_yaml: Path,
+        env_file: Path,
+        patch_materialize_io: None,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """``WORKER_SPEC_URI`` is forwarded as the spec's canonical under-prefix URI.
+
+        :param experiment: Fixture-provided experiment name.
+        :param fake_plugin: Fixture-provided fake VST3 plugin path.
+        :param template_yaml: Fixture-provided compute template path.
+        :param env_file: Fixture-provided worker env file path.
+        :param patch_materialize_io: Fixture stubbing materialize-side IO.
+        :param local_spec_dir: Fixture-provided local spec directory.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        """
+        result = _invoke(
+            experiment,
+            template_yaml,
+            env_file,
+            "--job-name",
+            "smoke-job-1",
+            fake_plugin=fake_plugin,
+        )
+        assert result.exit_code == 0, result.output
+
+        task = mock_sky.Task.from_yaml.return_value
+        forwarded = task.update_envs.call_args.args[0]
+        spec_uri = forwarded[WORKER_SPEC_URI_ENV]
+        assert spec_uri.startswith("r2://")
+        assert spec_uri.endswith("/input_spec.json")
 
     def test_launch_submits_by_managed_job_name(
         self,
@@ -1455,48 +1476,6 @@ class TestNumWorkersFanOut:
         for env in forwarded:
             assert env["SYNTH_SETTER_NUM_WORKERS"] == "3"
             assert env["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "key"
-            assert env["WORKER_SPEC_URI"] == (
-                "r2://intermediate-data/skypilot-launcher-specs/smoke-job-1.json"
-            )
-
-    def test_three_workers_upload_spec_only_once(
-        self,
-        experiment: str,
-        fake_plugin: Path,
-        template_yaml: Path,
-        env_file: Path,
-        patch_materialize_io: None,
-        local_spec_dir: Path,
-        mock_sky: MagicMock,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Verify spec is uploaded to R2 once and shared across all ranks via one prefix.
-
-        Single ``r2.prefix`` so the partition is one logical dataset, not three.
-        """
-        self._setup_n_workers_mock(mock_sky, n=3)
-        rclone_invocations: list[list[str]] = []
-        monkeypatch.setattr(
-            "synth_setter.pipeline.skypilot_launch.subprocess.check_call",
-            lambda args: rclone_invocations.append(args),
-        )
-
-        result = _invoke(
-            experiment,
-            template_yaml,
-            env_file,
-            "--job-name",
-            "smoke-job-1",
-            "--num-workers",
-            "3",
-            fake_plugin=fake_plugin,
-        )
-
-        assert result.exit_code == 0, result.output
-        assert len(rclone_invocations) == 1
-        assert rclone_invocations[0][-1] == (
-            "r2:intermediate-data/skypilot-launcher-specs/smoke-job-1.json"
-        )
 
     def test_one_worker_failure_among_three_fails_launcher_after_full_cancel_under_tail(
         self,
@@ -1949,7 +1928,7 @@ class TestRunCredBootstrap:
 
 
 # ---------------------------------------------------------------------------
-# main() bridges RCLONE_CONFIG_R2_* into os.environ before upload_spec_to_r2
+# main() bridges RCLONE_CONFIG_R2_* into os.environ for downstream rclone usage
 # ---------------------------------------------------------------------------
 
 
@@ -2365,10 +2344,8 @@ class TestDispatchMode:
 class TestWorkerEnvToOsEnvironBridge:
     """Verify ``main()`` bridges ``RCLONE_CONFIG_R2_*`` from worker_env into ``os.environ``.
 
-    ``upload_spec_to_r2``'s ``rclone copyto`` subprocess inherits them this way.
-
     Local-dev ``--env-file`` paths populate worker_env without exporting; without this bridge
-    rclone would see no creds.
+    any rclone subprocess spawned downstream would see no creds.
     """
 
     def test_env_file_prefixed_keys_bridge_to_os_environ(
@@ -2384,7 +2361,8 @@ class TestWorkerEnvToOsEnvironBridge:
     ) -> None:
         """Verify prefixed names from ``--env-file`` are copied into ``os.environ``.
 
-        These get bridged before the rclone subprocess runs, even though they are not exported.
+        Observed via ``_detect_provider``, which main() calls after the bridge — any
+        downstream rclone subprocess inherits os.environ at that point.
         """
         env_file = tmp_path / "prefixed.env"
         env_file.write_text(
@@ -2394,16 +2372,17 @@ class TestWorkerEnvToOsEnvironBridge:
         )
         captured: dict[str, str] = {}
 
-        def fake_rclone(args: list[str]) -> None:
+        def capture_environ(_task: Path) -> str:
             for key in (
                 "RCLONE_CONFIG_R2_ACCESS_KEY_ID",
                 "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY",
                 "RCLONE_CONFIG_R2_ENDPOINT",
             ):
                 captured[key] = os.environ.get(key, "<unset>")
+            return "runpod"
 
         monkeypatch.setattr(
-            "synth_setter.pipeline.skypilot_launch.subprocess.check_call", fake_rclone
+            "synth_setter.pipeline.skypilot_launch._detect_provider", capture_environ
         )
 
         result = _invoke(
@@ -3138,15 +3117,8 @@ class TestDispatchViaSkypilot:
         local_spec_dir: Path,
         mock_sky: MagicMock,
         patch_materialize_io: None,  # noqa: ARG002
-        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """The kwarg-supplied ``spec_uri`` lands in worker env verbatim — not upload's return.
-
-        PR-2 contract: ``dispatch_via_skypilot`` derives ``WORKER_SPEC_URI`` from its
-        ``spec_uri`` kwarg, not from ``upload_spec_to_r2``'s return value. The legacy
-        ``upload_spec_to_r2`` call still runs (it's removed in PR-4), so this test forces
-        the upload helper to return a sentinel string and asserts the worker env carries
-        the kwarg-supplied canonical URI instead.
+        """The kwarg-supplied ``spec_uri`` lands in worker env verbatim.
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
         :param fake_plugin: Fixture-provided fake VST3 plugin path.
@@ -3154,19 +3126,9 @@ class TestDispatchViaSkypilot:
         :param local_spec_dir: Fixture-provided local spec directory.
         :param mock_sky: Mocked ``sky`` module from fixture.
         :param patch_materialize_io: Fixture stubbing materialize-side IO.
-        :param monkeypatch: Pytest fixture used to patch the upload helper.
         """
         from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
         from synth_setter.pipeline.skypilot_launch import dispatch_via_skypilot
-
-        # Make the legacy upload return a value distinct from the kwarg, so the
-        # worker env's WORKER_SPEC_URI can only match one of them — proving the
-        # source is the kwarg, not the upload result.
-        legacy_upload_uri = "r2://intermediate-data/skypilot-launcher-specs/legacy.json"
-        monkeypatch.setattr(
-            "synth_setter.pipeline.skypilot_launch.upload_spec_to_r2",
-            lambda spec, job_name: legacy_upload_uri,
-        )
 
         template = _write_runpod_yaml(tmp_path)
         spec = _build_spec(fake_plugin)
@@ -3179,9 +3141,7 @@ class TestDispatchViaSkypilot:
 
         dispatch_via_skypilot(spec, sky_cfg, spec_uri=_DISPATCH_SPEC_URI)
 
-        # update_envs is called per rank; this single-worker case has one call.
         update_envs_calls = mock_sky.Task.from_yaml_config.return_value.update_envs.call_args_list
         assert len(update_envs_calls) == 1
         forwarded = update_envs_calls[0].args[0]
         assert forwarded[WORKER_SPEC_URI_ENV] == _DISPATCH_SPEC_URI
-        assert forwarded[WORKER_SPEC_URI_ENV] != legacy_upload_uri

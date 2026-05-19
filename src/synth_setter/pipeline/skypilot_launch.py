@@ -3,10 +3,11 @@
 Provider-neutral entrypoint: the same binary launches against
 `configs/compute/runpod-template.yaml`, `configs/compute/oci-cpu-template.yaml`,
 or `configs/compute/local-template.yaml` (kubernetes-via-`sky local up`).
-Materializes a spec, ships it via R2 (file_mounts blocked by #749), forwards
-worker env via `task.update_envs`, and submits each rank's task to the SkyPilot
-managed-jobs controller via `sky.jobs.launch` (see
-https://docs.skypilot.co/en/stable/reference/api.html#sky.jobs.launch).
+Forwards worker env via `task.update_envs` — including the canonical spec
+URI as `WORKER_SPEC_URI` — and submits each rank's task to the SkyPilot
+managed-jobs controller via `sky.jobs.launch` (#749 explains why
+`task.update_file_mounts` is avoided). See
+https://docs.skypilot.co/en/stable/reference/api.html#sky.jobs.launch
 
 By default the launcher waits for `sky.jobs.launch` + `sky.stream_and_get` to
 return a managed-job id per rank (the controller has accepted the job), prints
@@ -23,8 +24,7 @@ Managed jobs differ from cluster-level launches:
   status (success / failure / cancel) releases the underlying compute.
 - The user-facing identifier is the managed-job *name* (passed to `sky.jobs.*`
   via `name=`), not a cluster name. The launcher's `--cluster-name` flag is the
-  job name in this mode; the same value still keys the per-launch R2 spec
-  upload.
+  job name in this mode.
 
 Per-backend image handling (driven by `--worker-image-tag`):
 - RunPod: each Resources entry's `image_id` is pinned to `docker:<image>` before the
@@ -59,9 +59,8 @@ from hydra import compose, initialize_config_dir
 from hydra.errors import HydraException
 
 from synth_setter.cli.generate_dataset import spec_from_cfg
-from synth_setter.pipeline.constants import LAUNCHER_SPEC_R2_PREFIX, WORKER_SPEC_URI_ENV
+from synth_setter.pipeline.constants import WORKER_SPEC_URI_ENV
 from synth_setter.pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
-from synth_setter.pipeline.r2_io import to_rclone_path
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 
@@ -76,7 +75,7 @@ _DOCKER_TAG_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$")
 _WORKER_GIT_REF_RE = re.compile(r"^[0-9a-f]{7,40}$")
 
 # Validates --job-name (and the derived fallback): k8s-label subset — interpolated into a
-# tempfile path and an R2 key, so path-separator-free and ≤63 chars. See #876.
+# tempfile path and the SkyPilot managed-job name, so path-separator-free and ≤63 chars. See #876.
 _JOB_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$")
 
 # Forwarded via task.update_envs; each resolved from .env then process env.
@@ -326,44 +325,6 @@ def _run_cred_bootstrap(*, provider: str, env_file_path: Path | None = None) -> 
         click.echo(result.stderr, err=True)
 
 
-def upload_spec_to_r2(spec: DatasetSpec, job_name: str) -> str:
-    """Upload `spec` to R2 under a per-job key; return the `r2://bucket/key` URI.
-
-    Uses `rclone copyto` (configured via `RCLONE_CONFIG_R2_*` in process env)
-    to put the spec at `r2:{spec.r2.bucket}/skypilot-launcher-specs/{job_name}.json`.
-    The worker pod's env will get `WORKER_SPEC_URI` pointing at the same URI;
-    the worker downloads via `load_spec_from_uri` before parsing.
-
-    Workaround for #749: SkyPilot's RunPod backend rejects programmatic
-    `task.update_file_mounts(...)` with a pubkey-overflow at pod-create time,
-    so the launcher ships the spec via R2 instead.
-    """
-    spec_key = f"{LAUNCHER_SPEC_R2_PREFIX}/{job_name}.json"
-    spec_uri = spec.r2.uri(spec_key)
-    rclone_dest = to_rclone_path(spec_uri)
-    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
-        f.write(spec.model_dump_json(indent=2))
-        local_path = f.name
-    try:
-        # `copyto` (vs `copy`) treats the destination as a file path, not a
-        # directory — the source-basename-preservation behavior of `copy` would
-        # land us at `r2:bucket/skypilot-launcher-specs/<job>.json/<tmpname>`
-        # which the worker can't address by URI.
-        args = [  # noqa: S607 — rclone resolved by host's PATH
-            "rclone",
-            "copyto",
-            "--checksum",
-            local_path,
-            rclone_dest,
-        ]
-        # S603 safe: local tempfile path + R2 dest whose job_name is _JOB_NAME_RE-validated
-        # in main() before this function is ever called.
-        subprocess.check_call(args)  # noqa: S603
-    finally:
-        Path(local_path).unlink(missing_ok=True)
-    return spec_uri
-
-
 def _warn_if_deprecated_cluster_name() -> None:
     """Warn to stderr if the deprecated ``--cluster-name`` alias was used in argv.
 
@@ -549,7 +510,9 @@ def main(
             f"Expected at least one of: {', '.join(_SECRET_WORKER_ENV_KEYS)}."
         )
 
-    # rclone subprocess inherits os.environ; mirror launcher-resolved values so .env wins.
+    # Defensive: mirror RCLONE_CONFIG_R2_* into os.environ so any downstream subprocess
+    # (e.g. SkyPilot's storage backend) inherits credentials when .env populated worker_env
+    # without exporting them.
     for key, value in worker_env.items():
         if key.startswith("RCLONE_CONFIG_R2_"):
             os.environ[key] = value
@@ -563,7 +526,7 @@ def main(
     base_job_name = job_name or f"synth-setter-smoke-{spec.task_name[:8]}"
     # Re-validate the derived default: spec.task_name is only checked for non-blank, so a
     # value containing `/` or `..` would otherwise propagate into the local tempfile path
-    # and the R2 object key (path-traversal hardening).
+    # (path-traversal hardening).
     if not _JOB_NAME_RE.fullmatch(base_job_name):
         raise click.ClickException(
             f"derived job name {base_job_name!r} must match [A-Za-z0-9][A-Za-z0-9_-]{{0,62}} "
@@ -584,12 +547,7 @@ def main(
     if provider != "local":
         _run_cred_bootstrap(provider=provider, env_file_path=env_file_path)
 
-    # One spec upload, shared across all ranks. Spec is keyed by base job name (no -rN
-    # suffix) so all workers in a fan-out group download from the same R2 object and see the
-    # same r2_prefix — this is what makes the partition cohere as one logical dataset.
-    spec_uri = upload_spec_to_r2(spec, job_name=base_job_name)
-    click.echo(f"Spec uploaded to {spec_uri}")
-    worker_env[WORKER_SPEC_URI_ENV] = spec_uri
+    worker_env[WORKER_SPEC_URI_ENV] = spec.r2.input_spec_uri()
 
     # Kubernetes-specific: SkyPilot 0.12 caches enabled-clouds in-process; a
     # CLI `sky check` doesn't always populate the cache the SDK reads, and
@@ -1004,11 +962,11 @@ def dispatch_via_skypilot(
     :param spec: Validated dataset spec to render on the worker(s).
     :param sky_cfg: Validated launcher configuration (compute_template + cmd required).
     :param spec_uri: Canonical R2 URI of the materialized spec — injected into each
-        worker's env as ``WORKER_SPEC_URI`` so a future worker (#1115 / #1116) can
-        read from the same object ``main()`` just uploaded. The dispatched cmd
-        today rebuilds the spec from Hydra overrides and does not yet consume
-        this env var. Pass ``spec.r2.input_spec_uri()`` (not
-        ``spec.r2.uri(INPUT_SPEC_FILENAME)`` — that omits the run prefix).
+        worker's env as ``WORKER_SPEC_URI``. The dispatched cmd rebuilds the spec
+        from Hydra overrides and does not consume this env var; downstream
+        validate-time consumers read it via the workflow output. Pass
+        ``spec.r2.input_spec_uri()`` (not ``spec.r2.uri(INPUT_SPEC_FILENAME)`` —
+        that omits the run prefix).
     :raises ValueError: degenerate ``sky_cfg``, conflicting ``cmd``/``run:`` pair,
         or unresolved worker env vars.
     :raises RuntimeError: one or more ranks did not reach the SUCCEEDED terminal status.
@@ -1053,7 +1011,9 @@ def dispatch_via_skypilot(
             f"Expected at least one of: {', '.join(_SECRET_WORKER_ENV_KEYS)}."
         )
 
-    # rclone subprocess inherits os.environ; mirror launcher-resolved values so .env wins.
+    # Defensive: mirror RCLONE_CONFIG_R2_* into os.environ so any downstream subprocess
+    # (e.g. SkyPilot's storage backend) inherits credentials when .env populated worker_env
+    # without exporting them.
     for key, value in worker_env.items():
         if key.startswith("RCLONE_CONFIG_R2_"):
             os.environ[key] = value
@@ -1070,10 +1030,6 @@ def dispatch_via_skypilot(
     if provider != "local":
         _run_cred_bootstrap(provider=provider, env_file_path=env_file_path)
 
-    # Legacy upload still runs for older CI workflows that read its URI;
-    # the worker env is now sourced from the canonical kwarg. Removed in #1116.
-    legacy_upload_uri = upload_spec_to_r2(spec, job_name=base_job_name)
-    click.echo(f"Spec uploaded to {legacy_upload_uri} (legacy)")
     worker_env[WORKER_SPEC_URI_ENV] = spec_uri
 
     if provider == "local":

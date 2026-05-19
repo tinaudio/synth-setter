@@ -3,9 +3,9 @@
 The PR exercises both `hdf5` and `wds` shard formats through the same generate +
 validate plumbing. These tests parse `test-dataset-generation.yml` and assert
 that the `output_format` axis is wired into the `generate-launcher` strategy
-matrix, and that cluster names + spec URIs are namespaced by
-`matrix.output_format` so the matrix cells don't collide on the launcher's R2
-spec key.
+matrix, that cluster names are namespaced by `matrix.output_format` so the
+matrix cells don't collide on per-cell R2 prefixes, and that the validate
+job consumes the launcher's canonical `spec_uri` output.
 
 Kept as a stand-alone YAML parse (no `act`) so the assertion runs on every CI
 worker without needing the `act` binary on PATH.
@@ -63,15 +63,16 @@ def test_generate_job_cluster_name_includes_output_format(workflow: dict, job_na
     )
 
 
-def test_validate_spec_uri_includes_output_format(workflow: dict) -> None:
-    """Assert the validate job's spec_uri template namespaces by matrix.output_format.
+def test_validate_spec_uri_consumes_generate_launcher_output(workflow: dict) -> None:
+    """Assert the validate job's spec_uri reads from ``needs.generate-launcher.outputs.spec_uri``.
 
     :param workflow: Parsed workflow YAML from the module-scoped fixture.
     """
     validate = workflow["jobs"]["validate"]
     spec_uri = validate["with"]["spec_uri"]
-    assert "matrix.output_format" in spec_uri, (
-        f"validate.with.spec_uri does not interpolate matrix.output_format — got: {spec_uri!r}"
+    assert "needs.generate-launcher.outputs.spec_uri" in spec_uri, (
+        f"validate.with.spec_uri does not consume the launcher's canonical spec_uri output — "
+        f"got: {spec_uri!r}"
     )
 
 

@@ -35,7 +35,7 @@ on:
         type: string
         default: "dev-snapshot"
       spec_uri:
-        description: "r2:// URI of the materialized spec to validate. Accepts either the canonical under-prefix form (r2://<bucket>/<prefix>input_spec.json) or, while #1115 retirement is in progress, the legacy launcher transport form (r2://<bucket>/skypilot-launcher-specs/<cluster_name>.json) — test-dataset-generation.yml still passes the latter."
+        description: "r2:// URI of the materialized spec to validate (canonical under-prefix form: r2://<bucket>/<prefix>input_spec.json)."
         required: true
         type: string
 

@@ -120,13 +120,11 @@ class TestR2LocationURIMethods:
     def test_uri_under_arbitrary_key(self) -> None:
         """``uri(key)`` is ``r2://<bucket>/<key>`` regardless of ``prefix``.
 
-        Used by the launcher for top-level keys like ``skypilot-launcher-specs/<job>.json``
-        that live outside the spec's own data prefix.
+        ``key`` is treated as absolute; ``self.prefix`` is not prepended.
         """
         loc = R2Location(bucket="intermediate-data", prefix="data/run/")
         assert (
-            loc.uri("skypilot-launcher-specs/job-1.json")
-            == "r2://intermediate-data/skypilot-launcher-specs/job-1.json"
+            loc.uri("other-prefix/job-1.json") == "r2://intermediate-data/other-prefix/job-1.json"
         )
 
     def test_rclone_prefix_uses_rclone_form(self) -> None:

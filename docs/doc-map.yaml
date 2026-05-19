@@ -86,7 +86,7 @@ docs:
     description: SkyPilot launcher for the data pipeline (RunPod + OCI smoke)
     sources:
       - pattern: "src/synth_setter/pipeline/skypilot_launch.py"
-        covers: "SkyPilot launcher CLI, materialize → upload-spec-to-R2 → sky.jobs.launch (managed-jobs SDK) flow, --tail/--no-tail mode split (default --no-tail: _run_workers_detached waits for the controller to return a job_id per rank then prints `sky jobs logs --name` / `sky jobs cancel --name` commands and exits, leaving the controller's terminal-status lifecycle as the safety net; --tail: _run_workers_tail invokes sky.jobs.tail_logs(follow=True) and cancels every job in finally), per-launch R2 spec key keyed by the base (unsuffixed) job name — multi-worker fan-out shares one spec object across ranks (skypilot-launcher-specs/<base_job_name>.json) rather than uploading once per -rN — file_mounts deliberately avoided, see #749"
+        covers: "SkyPilot launcher CLI; sky.jobs.launch managed-jobs SDK flow; --tail/--no-tail split (detached prints `sky jobs logs --name` and exits; tail streams via sky.jobs.tail_logs and cancels in finally). WORKER_SPEC_URI sourced from `spec.r2.input_spec_uri()`; file_mounts avoided (#749)."
       - pattern: "configs/compute/runpod-template.yaml"
         covers: "SkyPilot Task YAML for RunPod: resources block, image_id injected per-launch by the launcher (`--worker-image-tag`, default `dev-snapshot`) via `_override_image_id`, env-var injection (RCLONE_CONFIG_R2_*), R2-URI spec contract (WORKER_SPEC_URI consumed by load_spec_from_uri in the worker)"
       - pattern: "configs/compute/oci-cpu-template.yaml"
@@ -108,7 +108,7 @@ docs:
       - pattern: "configs/compute/local-debug-rclone-template.yaml"
         covers: "SkyPilot Task YAML for the kubernetes backend (no `image_id`, defers to SkyPilot's stock kube image). Setup installs rclone; run uploads a sentinel file to R2 with the same flags the production worker uses. Used by test-skypilot-local.yml."
       - pattern: "configs/compute/local-template.yaml"
-        covers: "SkyPilot Task YAML for the kind/kubernetes 'local' provider (production-path local smoke, distinct from local-debug-rclone-template.yaml). Resources block sized for GHA-kind allocatable (cpus 1+, memory 4+, no disk_size); run: block invokes sync_worker_checkout.sh then `synth-setter-generate-dataset-from-hydra`. Spec object is keyed by job-name (skypilot-launcher-specs/<job>.json)."
+        covers: "SkyPilot Task YAML for the kind/kubernetes 'local' provider (production-path smoke, distinct from local-debug-rclone-template.yaml). Resources sized for GHA-kind allocatable; run: invokes sync_worker_checkout.sh then `synth-setter-generate-dataset-from-hydra`. `WORKER_SPEC_URI` carries the canonical input_spec.json URI for validate-time consumers; the worker rebuilds the spec from pinned Hydra overrides."
       - pattern: "scripts/skypilot/capture-state.sh"
         covers: "Best-effort kube-apiserver + controller on-pod sky_logs snapshot called from generate-dataset-shards.yaml (skypilot-local row) before `sky local down` reaps the kind cluster. Captures pod describes, events, controller logs, and the controller's provision.log so scheduling-side hangs are diagnosable post-mortem (#876). Bash-3.2 portable so the same script runs on macOS CI."
       - pattern: "pyproject.toml"

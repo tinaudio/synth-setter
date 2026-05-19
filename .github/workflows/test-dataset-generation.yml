@@ -18,14 +18,12 @@ name: Test Dataset Generation
 # captures the script's stdout via `subprocess.run(capture_output=True)` so a
 # `tee`'d caller workflow can't leak secrets.
 #
-# Stage handoff is via R2: each generate job writes both the canonical
+# Stage handoff is via R2: each generate job writes the canonical
 # under-prefix copy at `r2://<bucket>/<prefix>input_spec.json` (the spec's
-# own self-described URI, emitted by `synth-setter-spec-uri`) and a
-# transport copy at the legacy `r2://<bucket>/skypilot-launcher-specs/
-# <cluster_name>.json` key. The validate job below intentionally reads the
-# launcher transport copy while the #1115 retirement is in progress; PR-4
-# flips it to consume the canonical `spec_uri` output. The run-metadata
-# artifact upload remains for debugging, but it's no longer load-bearing.
+# own self-described URI, emitted by `synth-setter-spec-uri`). The validate
+# job below consumes `needs.generate-launcher.outputs.spec_uri`. The
+# run-metadata artifact upload remains for debugging, but it's no longer
+# load-bearing.
 #
 # Provider matrix policy (computed in the `setup` job):
 #   * pull_request (same repo) → skypilot-local only
@@ -295,15 +293,11 @@ jobs:
       artifact_name: test-run-metadata-${{ matrix.provider }}-${{ matrix.output_format }}
     secrets: inherit
 
-  # validate-spec + validate-shard pull the spec from R2 directly. The URI is
-  # constructed deterministically from the per-cell cluster_name pattern
-  # (matching the launcher transport copy that generate-launcher's launcher
-  # writes to). This intentionally diverges from the canonical `spec_uri`
-  # output emitted by `synth-setter-spec-uri` while #1115 retirement is in
-  # progress; PR-4 flips this wiring to consume `needs.generate-launcher.
-  # outputs.spec_uri`. `if: !cancelled()` decouples each provider × output_format
-  # cell from the OTHER cells' generate outcomes — RunPod transients won't skip
-  # OCI validation, and an hdf5 failure won't skip wds.
+  # validate-spec + validate-shard pull the spec from R2 directly via the
+  # canonical `spec_uri` output emitted by `synth-setter-spec-uri`. `if:
+  # !cancelled()` decouples each provider × output_format cell from the OTHER
+  # cells' generate outcomes — RunPod transients won't skip OCI validation,
+  # and an hdf5 failure won't skip wds.
   validate:
     name: Validate ${{ matrix.provider }} / ${{ matrix.output_format }} dataset
     needs: [setup, generate-launcher]
@@ -316,5 +310,5 @@ jobs:
     uses: ./.github/workflows/validate-dataset-shards.yaml
     with:
       image_tag: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
-      spec_uri: r2://${{ needs.setup.outputs.r2_bucket }}/skypilot-launcher-specs/synth-setter-smoke-${{ matrix.provider }}-${{ matrix.output_format }}-${{ github.run_id }}-${{ github.run_attempt }}.json
+      spec_uri: ${{ needs.generate-launcher.outputs.spec_uri }}
     secrets: inherit

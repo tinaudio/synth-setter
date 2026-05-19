@@ -54,7 +54,7 @@ class TestComputeSpecUri:
         spec = DatasetSpec.model_validate_json(spec_path.read_text())
         assert compute_spec_uri(spec_path) == spec.r2.input_spec_uri()
 
-    def test_uri_lives_under_prefix_not_launcher_prefix(self, tmp_path: Path) -> None:
+    def test_uri_is_canonical_under_prefix(self, tmp_path: Path) -> None:
         """The returned URI is the canonical ``<prefix>input_spec.json`` form.
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
@@ -63,7 +63,6 @@ class TestComputeSpecUri:
         uri = compute_spec_uri(spec_path)
         assert uri.startswith("r2://intermediate-data/")
         assert uri.endswith("/input_spec.json")
-        assert "skypilot-launcher-specs" not in uri
 
     def test_legacy_flat_spec_still_resolves(self, tmp_path: Path) -> None:
         """Specs already in R2 with flat ``r2_bucket`` keys still parse + emit URI.

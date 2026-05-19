@@ -70,7 +70,7 @@ on:
         default: "run-metadata"
     outputs:
       spec_uri:
-        description: "r2:// URI where the launcher uploaded the materialized spec. Consumed by validate-dataset-shards.yaml."
+        description: "Canonical r2:// URI of the materialized spec (under-prefix `input_spec.json`). Consumed by validate-dataset-shards.yaml."
         value: ${{ jobs.generate.outputs.spec_uri }}
   workflow_dispatch:
     inputs:
@@ -406,8 +406,7 @@ jobs:
 
       # `synth-setter-spec-uri` emits the spec's canonical under-prefix R2 URI
       # so validate-dataset-shards.yaml can pull it directly from R2 instead
-      # of via the run-metadata artifact. The launcher-key transport URI used
-      # by `upload_spec_to_r2` is being retired — see #1115.
+      # of via the run-metadata artifact.
       #
       # The console script lives in the project package. The skypilot-local row
       # has it via "Install launcher deps" above; runpod/oci runs do not, since

@@ -84,7 +84,7 @@ For GitHub Actions concepts, see [GitHub's docs](https://docs.github.com/en/acti
 
 **Artifact chains (`upload-artifact` → `download-artifact`):**
 
-- `test-dataset-generation` writes a per-provider `test-run-metadata-<provider>` artifact for failure debugging only; the `validate-dataset-shards` jobs read the spec directly from R2 at the launcher transport copy `r2://<bucket>/skypilot-launcher-specs/<cluster_name>.json` while the #1115 retirement is in progress. `generate-dataset-shards` already emits the canonical under-prefix URI `r2://<bucket>/<prefix>input_spec.json` (computed by `synth-setter-spec-uri`) as its `spec_uri` output; a follow-up PR flips `test-dataset-generation`'s `validate` job to consume that output instead of the transport copy.
+- `test-dataset-generation` writes a per-provider `test-run-metadata-<provider>` artifact for failure debugging only; the `validate-dataset-shards` jobs read the spec directly from R2 at the canonical under-prefix URI `r2://<bucket>/<prefix>input_spec.json` (computed by `synth-setter-spec-uri`) — passed through as `generate-dataset-shards`'s `spec_uri` output and consumed by `test-dataset-generation`'s `validate` job via `needs.generate-launcher.outputs.spec_uri`.
 - `spec-materialization` uploads spec → `test-spec-materialization` downloads and validates
 
 ## Secrets & variables
