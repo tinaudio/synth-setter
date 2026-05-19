@@ -1,21 +1,19 @@
 name: Generate Dataset Shards
 
-# Reusable workflow that owns one provider's launcher invocation. Callers fan
-# out across providers (see test-dataset-generation.yml) and pass per-provider
-# values via inputs. Behavior is identical to the inline blocks this replaced —
-# inputs are simple passthroughs to `synth_setter.pipeline.skypilot_launch` flags
-# plus the artifact-name knob the validate-dataset-shards.yaml downstream
-# expects to find on disk.
+# Reusable workflow that owns one provider's generate_dataset invocation.
+# Callers fan out across providers (see test-dataset-generation.yml) and pass
+# per-provider values via inputs. All providers drive `synth-setter-generate-dataset`
+# with a `skypilot_launch.compute_template=...` Hydra override.
 #
 # Provider-specific behavior:
 #   * `skypilot-local` — provisions a kind cluster on the runner via
 #     `sky local up`, loads the dev-snapshot image into kind, writes the
 #     managed-jobs controller-resource shrink into ~/.sky/config.yaml so the
-#     controller pod fits on kind, and invokes the launcher against
-#     `configs/compute/local-template.yaml` (cloud: kubernetes). The launcher
-#     skips its cred bootstrap for the local provider. Always tears down kind
-#     in `if: always()`.
-#   * `runpod` / `oci` — in-container launcher invocation against the matching
+#     controller pod fits on kind, then invokes against
+#     `configs/compute/local-template.yaml`. The launcher detects
+#     `cloud: kubernetes` and skips its cred bootstrap. Always tears down
+#     kind in `if: always()`.
+#   * `runpod` / `oci` — in-container invocation against the matching
 #     `configs/compute/*-template.yaml`. The launcher's `_run_cred_bootstrap`
 #     writes provider creds inside the container; if SKYPILOT_API_SERVER_ENDPOINT
 #     is set, the bootstrap is skipped (the remote API server holds creds).
@@ -233,19 +231,22 @@ jobs:
           YAML
           chmod 600 "${HOME}/.sky/config.yaml"
 
-      # `--local` flips the launcher's local-vs-remote dispatch (#841); today's
-      # skypilot-local caller passes it `true` to clear any inherited
-      # SKYPILOT_API_SERVER_ENDPOINT. `num_workers: '1'` overrides the config
-      # because the kind cluster can't host parallel workers (#843). The
-      # argument array is built conditionally so optional flags don't expand
-      # to empty strings.
-      # 20-min step cap: if the launcher (sky.jobs SDK) hangs, fail-fast and
-      # let the `if: always()` `Snapshot sky logs` step run, instead of
-      # burning the full 60-min job timeout before logs are uploaded.
-      # NOTE: step-level timeout sends SIGKILL — Python `finally` blocks in the
-      # launcher are bypassed. Operators may need `sky jobs cancel --name <job-name>`
-      # manually after a timeout. See #876.
-      - name: Run launcher against local-template (skypilot-local row)
+      # `skypilot_launch.local=true` flips the launcher's local-vs-remote dispatch
+      # (#841); the skypilot-local caller sets it to clear any inherited
+      # SKYPILOT_API_SERVER_ENDPOINT. `skypilot_launch.num_workers=1` overrides
+      # the config default because the kind cluster can't host parallel workers
+      # (#843). The override array is built conditionally so optional flags
+      # don't expand to empty strings.
+      #
+      # materialize_spec runs first to produce input_spec.json for the
+      # downstream `Compute spec_uri output` step (the Hydra entrypoint has no
+      # `--spec-out` equivalent) and as a run-metadata debug artifact.
+      #
+      # 20-min step cap caps a hung launcher so the `if: always()` log-snapshot
+      # step still runs. NOTE: step-level timeout sends SIGKILL — `finally`
+      # blocks are bypassed; operators may need to `sky jobs cancel` manually.
+      # See #876.
+      - name: Run synth-setter-generate-dataset against local-template (skypilot-local row)
         if: ${{ inputs.provider == 'skypilot-local' }}
         timeout-minutes: 20
         env:
@@ -261,25 +262,26 @@ jobs:
           INPUT_NUM_WORKERS: ${{ inputs.num_workers }}
         run: |
           set -euo pipefail
-          ARGS=(
-            --experiment "$CONFIG_PATH"
-            --template configs/compute/local-template.yaml
-            --job-name "$CLUSTER_NAME"
-            --worker-image-tag "$IMAGE_TAG"
-            --spec-out "${RUN_METADATA_DIR}/input_spec.json"
+          python -m synth_setter.pipeline.ci.materialize_spec \
+            "$CONFIG_PATH" "${RUN_METADATA_DIR}"
+          chmod 0644 "${RUN_METADATA_DIR}/input_spec.json"
+          OVERRIDES=(
+            "experiment=$CONFIG_PATH"
+            "skypilot_launch.compute_template=configs/compute/local-template.yaml"
+            "skypilot_launch.job_name=$CLUSTER_NAME"
+            "skypilot_launch.worker_image_tag=$IMAGE_TAG"
           )
           if [[ "$INPUT_LOCAL" == "true" ]]; then
-            ARGS+=(--local)
+            OVERRIDES+=("skypilot_launch.local=true")
           fi
           if [[ -n "$INPUT_NUM_WORKERS" ]]; then
-            ARGS+=(--num-workers "$INPUT_NUM_WORKERS")
+            OVERRIDES+=("skypilot_launch.num_workers=$INPUT_NUM_WORKERS")
           fi
           if [[ "$INPUT_TAIL" == "true" ]]; then
-            ARGS+=(--tail)
+            OVERRIDES+=("skypilot_launch.tail=true")
           fi
-          python -m synth_setter.pipeline.skypilot_launch "${ARGS[@]}" \
+          synth-setter-generate-dataset "${OVERRIDES[@]}" \
             2>&1 | tee "${RUN_METADATA_DIR}/generate.log"
-          chmod 0644 "${RUN_METADATA_DIR}/input_spec.json"
 
       # Capture controller-side state (apiserver + on-pod provision.log) before
       # `sky local down` reaps the kind cluster. See scripts/skypilot/capture-state.sh
@@ -319,14 +321,15 @@ jobs:
           echo "=== snapshot sizes ==="
           du -sh "${RUN_METADATA_DIR}/sky_logs" "${RUN_METADATA_DIR}/sky_api_server_logs" 2>/dev/null || true
 
-      # ----- runpod / oci row: in-container launcher
-      # Optional launcher flags are pre-rendered into env-var strings on the
-      # outer step (so GHA expression evaluation stays out of the bash
+      # ----- runpod / oci row: in-container synth-setter-generate-dataset
+      # Optional Hydra overrides are pre-rendered into env-var strings at the
+      # outer step (keeping GHA expression evaluation out of the bash
       # block-scalar) and expanded unquoted inside docker so empty values
-      # disappear. SKYPILOT_API_SERVER_ENDPOINT (when the secret is set)
-      # routes the launcher to the remote API server through the env-passthrough
-      # branch of `_apply_dispatch_mode`; pass `local: true` to override.
-      - name: Launch SkyPilot job (inside container; streams logs + blocks until done)
+      # disappear. SKYPILOT_API_SERVER_ENDPOINT (when set) routes the launcher
+      # to the remote API server; pass `local: true` to override. materialize_spec
+      # runs first inside the container to write /run-metadata/input_spec.json
+      # for the spec_uri output step.
+      - name: Run synth-setter-generate-dataset (runpod / oci row; in container)
         if: ${{ inputs.provider == 'runpod' || inputs.provider == 'oci' }}
         env:
           SKYPILOT_API_SERVER_ENDPOINT: ${{ secrets.SKYPILOT_API_SERVER_ENDPOINT }}
@@ -344,9 +347,9 @@ jobs:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
           WORKER_GIT_REF: ${{ github.event.pull_request.head.sha || github.sha }}
-          NUM_WORKERS_FLAG: ${{ inputs.num_workers != '' && format('--num-workers {0}', inputs.num_workers) || '' }}
-          TAIL_FLAG: ${{ inputs.tail && '--tail' || '' }}
-          LOCAL_FLAG: ${{ inputs.local && '--local' || '' }}
+          NUM_WORKERS_OVERRIDE: ${{ inputs.num_workers != '' && format('skypilot_launch.num_workers={0}', inputs.num_workers) || '' }}
+          TAIL_OVERRIDE: ${{ inputs.tail && 'skypilot_launch.tail=true' || '' }}
+          LOCAL_OVERRIDE: ${{ inputs.local && 'skypilot_launch.local=true' || '' }}
         run: |
           set -euo pipefail
           docker run --rm \
@@ -370,24 +373,23 @@ jobs:
             -e RCLONE_CONFIG_R2_ENDPOINT \
             -e R2_ACCOUNT_ID \
             -e WANDB_API_KEY \
-            -e NUM_WORKERS_FLAG \
-            -e TAIL_FLAG \
-            -e LOCAL_FLAG \
+            -e NUM_WORKERS_OVERRIDE \
+            -e TAIL_OVERRIDE \
+            -e LOCAL_OVERRIDE \
             "${IMAGE}" \
             bash -c '
               set -euo pipefail
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
               bash docker/ubuntu22_04/ensure_plugin_symlinks.sh
-              python -m synth_setter.pipeline.skypilot_launch \
-                --experiment "$CONFIG_PATH" \
-                --template "$TEMPLATE" \
-                --job-name "$CLUSTER_NAME" \
-                --worker-image-tag "$IMAGE_TAG" \
-                --spec-out /tmp/input_spec.json \
-                $LOCAL_FLAG $NUM_WORKERS_FLAG $TAIL_FLAG
-              cp /tmp/input_spec.json /run-metadata/input_spec.json
+              python -m synth_setter.pipeline.ci.materialize_spec "$CONFIG_PATH" /run-metadata
               chmod 0644 /run-metadata/input_spec.json
+              synth-setter-generate-dataset \
+                "experiment=$CONFIG_PATH" \
+                "skypilot_launch.compute_template=$TEMPLATE" \
+                "skypilot_launch.job_name=$CLUSTER_NAME" \
+                "skypilot_launch.worker_image_tag=$IMAGE_TAG" \
+                $LOCAL_OVERRIDE $NUM_WORKERS_OVERRIDE $TAIL_OVERRIDE
             ' \
             2>&1 | tee "${RUN_METADATA_DIR}/generate.log"
 
@@ -406,6 +408,13 @@ jobs:
       # key derived from `cluster_name`. Surface that URI as a job/workflow
       # output so validate-dataset-shards.yaml can pull it directly from R2
       # instead of via the run-metadata artifact.
+      #
+      # The console script lives in the project package. The skypilot-local row
+      # has it via "Install launcher deps" above; runpod/oci runs do not, since
+      # their workers run remotely. The fallback `pip install` covers that case
+      # — invoking via `docker run "${IMAGE}"` is not safe here because the
+      # pulled `dev-snapshot` tag can race the per-PR image build (the workflow
+      # pulls before docker-image-build.yml has pushed the PR's tag).
       - name: Compute spec_uri output
         id: spec_uri
         env:
@@ -413,9 +422,10 @@ jobs:
         run: |
           set -euo pipefail
           SPEC_PATH="${RUN_METADATA_DIR}/input_spec.json"
-          R2_BUCKET=
-          R2_BUCKET=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['r2_bucket'])" "${SPEC_PATH}")
-          SPEC_URI="r2://${R2_BUCKET}/skypilot-launcher-specs/${CLUSTER_NAME}.json"
+          if ! command -v synth-setter-spec-uri >/dev/null 2>&1; then
+            python3 -m pip install --quiet -e .
+          fi
+          SPEC_URI=$(synth-setter-spec-uri "${SPEC_PATH}" "${CLUSTER_NAME}")
           echo "spec_uri=${SPEC_URI}" >> "${GITHUB_OUTPUT}"
           echo "spec_uri: ${SPEC_URI}"
 

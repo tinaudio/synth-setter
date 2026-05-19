@@ -280,7 +280,7 @@ jobs:
           experiment = os.environ['DATASET_CONFIG']
           with initialize_config_dir(version_base='1.3', config_dir=cfg_dir):
               cfg = compose(config_name='dataset', overrides=[f'experiment={experiment}'])
-          print(cfg.r2_bucket)
+          print(cfg.r2.bucket)
           ")
           echo "r2_bucket=${R2_BUCKET}" >> "${GITHUB_OUTPUT}"
           echo "r2_bucket: ${R2_BUCKET}"

@@ -26,7 +26,7 @@ ______________________________________________________________________
   - `WANDB_API_KEY` (W&B credential)
 
 The target R2 bucket is **not** an env var — it is a required field on
-`DatasetSpec.r2_bucket` and flows into the container via the materialized
+`DatasetSpec.r2.bucket` and flows into the container via the materialized
 spec passed to `generate_dataset --spec`.
 
 ```bash
@@ -57,9 +57,9 @@ that callers may override are listed under
 rclone's native env-var config automatically builds the `r2` remote
 inside the container from the `RCLONE_CONFIG_R2_*` variables — no
 `rclone.conf` file is read or written. The bucket name is **not** part
-of the rclone remote config: it lives in `DatasetSpec.r2_bucket`
-and `generate_dataset.py` interpolates it into upload paths
-(`r2:${spec.r2_bucket}/...`).
+of the rclone remote config: it lives in `DatasetSpec.r2.bucket` and
+`generate_dataset.py` interpolates it into upload paths via
+`spec.r2.rclone_prefix()` (`r2:${spec.r2.bucket}/${spec.r2.prefix}`).
 
 The build uses **no** BuildKit secrets. The repository is public, so
 source fetches (both the tarball and the in-image git clone) happen
@@ -124,7 +124,11 @@ Node.js + `@anthropic-ai/claude-code` installed system-wide, a non-root
 `uv pip install` and editable installs work without sudo, and adds a
 `/commandhistory` directory (owned by `dev`) that
 `.devcontainer/{cpu,gpu}/devcontainer.json` mounts as a named volume so bash
-history survives container rebuilds. The same devcontainer configs also
+history survives container rebuilds. The same configs also mount a
+`synth-setter-tmux-resurrect` named volume at
+`/home/dev/.local/share/tmux/resurrect` so tmux sessions saved by
+tmux-continuum (configured in `.devcontainer/tmux.conf`) survive container
+rebuilds for the default `dev` user. The same devcontainer configs also
 overlay `/home/build/synth-setter/plugins` with an anonymous volume so the
 baked `plugins/Surge XT.vst3` symlink survives the workspace bind mount —
 without it, the host's gitignored `plugins/` would shadow the baked file and
@@ -242,7 +246,7 @@ audio-rendering boundary, wrapping only the generator subprocess — so
 
 Pass the materialized spec via `--spec <path>`. All dataset-run
 configuration, including the target R2 bucket, lives in that spec
-(`DatasetSpec.r2_bucket`).
+(`DatasetSpec.r2.bucket`).
 
 **Required env vars:** See § Runtime environment variables above. For
 this subcommand you need the 5 `RCLONE_CONFIG_R2_*` vars (for rclone
@@ -293,7 +297,7 @@ jq . input_spec.json
 grep -c "Saving sample" generate.log
 
 # Find the R2 location for this run
-jq .r2_prefix input_spec.json
+jq -r .r2.prefix input_spec.json
 ```
 
 **Retention:** 7 days (GitHub Actions default).

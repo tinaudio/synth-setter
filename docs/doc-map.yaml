@@ -72,17 +72,19 @@ docs:
       - pattern: "src/synth_setter/cli/generate_dataset.py"
         covers: "Dataset generation entrypoint, sequential multi-shard MVP with R2 skip-existing probe (worker-side resumability MVP, #750), and the @hydra.main CLI (`python -m synth_setter.cli.generate_dataset experiment=<id>`) composed from configs/dataset.yaml"
       - pattern: ".github/workflows/generate-dataset-shards.yaml"
-        covers: "Reusable launcher fan-out across providers (skypilot-local kind, runpod, oci); per-provider artifact upload; emits a `spec_uri` workflow output (deterministic from the workflow's `cluster_name` input (forwarded to the launcher as `--job-name`) + the materialized spec's `r2_bucket`) consumed by validate-dataset-shards"
+        covers: "Reusable launcher fan-out across providers (skypilot-local kind, runpod, oci); per-provider artifact upload; emits a `spec_uri` workflow output (deterministic from the workflow's `cluster_name` input (forwarded to the launcher as `--job-name`) + the materialized spec's `r2.bucket`, extracted by the `synth-setter-spec-uri` console script — see `src/synth_setter/pipeline/ci/spec_uri.py`) consumed by validate-dataset-shards"
       - pattern: ".github/workflows/validate-dataset-shards.yaml"
         covers: "Reusable spec + shard validation downstream of generate-dataset-shards; takes the `spec_uri` (r2://) emitted by generate-dataset-shards as its `spec_uri` input"
       - pattern: "src/synth_setter/pipeline/ci/**"
-        covers: "CI validation scripts, spec materialization, shard validation"
+        covers: "CI validation scripts, spec materialization, shard validation, and per-job spec-URI extraction (`spec_uri.py` / `synth-setter-spec-uri`)"
       - pattern: "src/synth_setter/pipeline/r2_io.py"
         covers: "rclone-backed R2 helpers — URI handling, download, upload, size probe; single rclone call site shared by ci validators, the worker entrypoint's skip-existing probe, and the generate-local workflow upload step"
       - pattern: "src/synth_setter/pipeline/constants.py"
-        covers: "Input spec filename constant"
+        covers: "Input spec filename, rclone remote name, and canonical `r2://` URI scheme constants"
+      - pattern: "src/synth_setter/pipeline/schemas/r2_location.py"
+        covers: "`R2Location` nested R2-storage model (bucket + prefix_root + prefix) plus `uri()` / `rclone_prefix()` / `shard_uri()` helpers — the single source of R2 URI construction"
       - pattern: "src/synth_setter/pipeline/schemas/spec.py"
-        covers: "DatasetSpec, RenderConfig, ShardSpec; OUTPUT_FORMAT_TO_EXTENSION / EXTENSION_TO_OUTPUT_FORMAT inverse-pair dispatch maps (DatasetSpec is built by spec_from_cfg in cli/generate_dataset.py from a Hydra-composed cfg; the suffix-dispatch maps are consumed by the renderer CLI's main() in data/vst/generate_vst_dataset.py — main() reads Path(data_file).suffix, looks it up in EXTENSION_TO_OUTPUT_FORMAT, and calls writers.make_hdf5_dataset or writers.make_wds_dataset)"
+        covers: "DatasetSpec (carries a nested `R2Location` via the `r2` field), RenderConfig, ShardSpec; OUTPUT_FORMAT_TO_EXTENSION / EXTENSION_TO_OUTPUT_FORMAT inverse-pair dispatch maps (DatasetSpec is built by spec_from_cfg in cli/generate_dataset.py from a Hydra-composed cfg; the suffix-dispatch maps are consumed by the renderer CLI's main() in data/vst/generate_vst_dataset.py — main() reads Path(data_file).suffix, looks it up in EXTENSION_TO_OUTPUT_FORMAT, and calls writers.make_hdf5_dataset or writers.make_wds_dataset)"
       - pattern: "src/synth_setter/pipeline/schemas/shard_metadata.py"
         covers: "ShardMetadata — strict pydantic sidecar payload written into wds tar shards as metadata.json and into HDF5 shards as audio.attrs; mirrored across both formats by make_hdf5_dataset / make_wds_dataset in writers.py."
       - pattern: "src/synth_setter/data/vst/writers.py"
@@ -135,7 +137,7 @@ docs:
       - pattern: "src/synth_setter/pipeline/data/r2_report.py"
         covers: "R2 listing commands, shard status reporting, path parsing"
       - pattern: "configs/dataset/*.yaml"
-        covers: "r2_bucket value, storage configuration"
+        covers: "`r2` group (`bucket` + `prefix_root`) for the nested `R2Location` field on `DatasetSpec`"
       - pattern: "src/synth_setter/cli/generate_dataset.py"
         covers: "rclone upload of spec and shard files, R2 path construction"
         scope: "rclone"
@@ -203,17 +205,17 @@ docs:
         covers: "Local dev targets — install (uv + .venv + deps + pre-commit), install-surge-xt (download + md5 verify + extract Surge XT VST3), SURGE_XT_VERSION + related vars"
         scope: "local-dev"
       - pattern: ".devcontainer/cpu/devcontainer.json"
-        covers: "CPU dev container config — remoteUser, mounts (bash-history named volume + plugins/ anonymous overlay), --env-file .env, initializeCommand, postCreateCommand, VS Code terminal profile defaulting to tmux"
+        covers: "CPU dev container config — remoteUser, mounts (bash-history named volume + tmux-resurrect named volume + plugins/ anonymous overlay), --env-file .env, initializeCommand, postCreateCommand, VS Code terminal profile defaulting to tmux"
       - pattern: ".devcontainer/gpu/devcontainer.json"
-        covers: "GPU dev container config — remoteUser, mounts (bash-history named volume + plugins/ anonymous overlay), --env-file .env, initializeCommand, postCreateCommand, VS Code terminal profile defaulting to tmux"
+        covers: "GPU dev container config — remoteUser, mounts (bash-history named volume + tmux-resurrect named volume + plugins/ anonymous overlay), --env-file .env, initializeCommand, postCreateCommand, VS Code terminal profile defaulting to tmux"
       - pattern: ".devcontainer/root_gpu/devcontainer.json"
         covers: "Root-user GPU dev container variant — remoteUser defaults to root, docker-in-docker + act features, --gpus all, VS Code terminal profile defaulting to tmux"
       - pattern: ".devcontainer/tmux.conf"
-        covers: "tmux config installed to ~/.tmux.conf by post-create.sh — mouse mode, true color, 1-indexed windows, larger scrollback, vi copy mode, intuitive split keys"
+        covers: "tmux config installed to ~/.tmux.conf by post-create.sh — mouse mode, true color, 1-indexed windows, larger scrollback, vi copy mode, intuitive split keys, TPM plugin manager + tmux-resurrect + tmux-continuum (auto-restore on, 5-min save interval, resurrect state pinned to ~/.local/share/tmux/resurrect so the named volume can persist it)"
       - pattern: ".devcontainer/initialize.sh"
         covers: "Host-side initializeCommand — refuses pointer-file `.git` (worktree/submodule/--separate-git-dir), ensures .env exists"
       - pattern: ".devcontainer/post-create.sh"
-        covers: "First-run setup — git safety, pre-commit install, root-to-dev privilege drop, install ~/.tmux.conf for both root and dev users"
+        covers: "First-run setup — git safety, pre-commit install, root-to-dev privilege drop, install ~/.tmux.conf for both root and dev users, bootstrap TPM in $HOME/.tmux/plugins/tpm and install tmux plugins (tmux-resurrect, tmux-continuum) non-interactively for both root and dev users"
       - pattern: "configs/logger/many_loggers.yaml"
         covers: "Default logger compose — referenced in §4c for enable/disable workflow"
         scope: "wandb-config"
@@ -250,7 +252,7 @@ docs:
       - pattern: "src/synth_setter/pipeline/schemas/prefix.py"
         covers: "DatasetConfigId, DatasetRunId, R2Prefix, make_r2_prefix()"
       - pattern: "src/synth_setter/pipeline/constants.py"
-        covers: "R2 bucket name, INPUT_SPEC_FILENAME constant"
+        covers: "INPUT_SPEC_FILENAME constant"
 
   # ── Testing primer ──────────────────────────────────────────────
   - doc: docs/reference/testing.md
@@ -309,6 +311,25 @@ docs:
       - pattern: "src/synth_setter/data/vst/shapes.py"
         covers: "Source of truth for the (channels, n_mels, n_frames) trailing-dims of mel_spec output and (channels, time_samples) trailing-dims of audio output written by make_hdf5_dataset"
         scope: "interactive"
+
+  # ── Config reference (autogenerated mkdocstrings pages) ────────
+  - doc: docs/config_reference/dataset_spec.md
+    description: Autogenerated Pydantic field reference for DatasetSpec / RenderConfig / ShardSpec
+    sources:
+      - pattern: "src/synth_setter/pipeline/schemas/spec.py"
+        covers: "DatasetSpec / RenderConfig / ShardSpec Field(description=...) one-liners rendered by mkdocstrings + griffe-pydantic"
+
+  - doc: docs/config_reference/image_config.md
+    description: Autogenerated Pydantic field reference for ImageConfig
+    sources:
+      - pattern: "src/synth_setter/pipeline/schemas/image_config.py"
+        covers: "ImageConfig Field(description=...) one-liners rendered by mkdocstrings + griffe-pydantic"
+
+  - doc: docs/config_reference/shard_metadata.md
+    description: Autogenerated Pydantic field reference for ShardMetadata
+    sources:
+      - pattern: "src/synth_setter/pipeline/schemas/shard_metadata.py"
+        covers: "ShardMetadata Field(description=...) one-liners rendered by mkdocstrings + griffe-pydantic"
 
   # ── CI triage agent operator notes (local-only invocation) ──────
   - doc: .github/triage/README.md

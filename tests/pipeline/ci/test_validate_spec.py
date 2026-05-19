@@ -31,9 +31,11 @@ def _make_valid_spec(*, output_format: str = "hdf5", **overrides: object) -> dic
         "base_seed": 42,
         "num_params": 92,
         "num_shards": 3,
-        "r2_bucket": "intermediate-data",
-        "r2_prefix_root": "data",
-        "r2_prefix": "data/test/test-20260328T120000000Z/",
+        "r2": {
+            "bucket": "intermediate-data",
+            "prefix_root": "data",
+            "prefix": "data/test/test-20260328T120000000Z/",
+        },
         "render": {
             "plugin_path": "plugins/Surge XT.vst3",
             "preset_path": "presets/surge-base.vstpreset",
@@ -46,6 +48,8 @@ def _make_valid_spec(*, output_format: str = "hdf5", **overrides: object) -> dic
             "min_loudness": -55.0,
             "samples_per_render_batch": 32,
             "samples_per_shard": 32,
+            "plugin_reload_cadence": "render",
+            "gui_toggle_cadence": "never",
         },
         "shards": [
             {"shard_id": i, "filename": f"shard-{i:06d}{ext}", "seed": 42 + i} for i in range(3)
@@ -95,17 +99,19 @@ class TestValidateStructure:
         errors = validate_structure(spec)
         assert any("output_format" in e and "parquet" in e for e in errors)
 
-    def test_missing_r2_prefix_root_returns_error(self) -> None:
-        """Spec missing r2_prefix_root (a DatasetSpec model field) is rejected.
+    def test_missing_r2_block_returns_error(self) -> None:
+        """Spec missing the top-level ``r2`` block (a DatasetSpec model field) is rejected.
 
-        Locks the model-derived required set: r2_prefix_root is defined on
-        DatasetSpec with a default, so the hand-rolled required list used to
-        miss it. The derived set surfaces it.
+        Pins the model-derived required set: ``r2`` is the nested
+        ``R2Location`` field that replaced the flat ``r2_bucket`` /
+        ``r2_prefix_root`` / ``r2_prefix`` keys. The structural validator
+        derives the required set from the model, so adding/removing fields
+        on ``DatasetSpec`` automatically tightens/loosens the check.
         """
         spec = _make_valid_spec()
-        del spec["r2_prefix_root"]
+        del spec["r2"]
         errors = validate_structure(spec)
-        assert any("missing" in e and "r2_prefix_root" in e for e in errors)
+        assert any("missing" in e and "r2" in e for e in errors)
 
     def test_required_top_level_fields_match_dataset_spec_model(self) -> None:
         """Required top-level set is derived from DatasetSpec, not hand-mirrored."""

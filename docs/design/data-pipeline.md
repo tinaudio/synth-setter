@@ -210,6 +210,8 @@ What if reconciliation itself has a bug — e.g., it validates a corrupt shard a
 
 ## 5. Stage Definitions
 
+> **Implementation status — future state.** The two-stage `generate` → `finalize` model, the `metadata/workers/` staging prefix, the shard-lifecycle markers (`.rendering` / `.valid` / `.invalid` / `.promoted`), and the canonical-promotion step into `data/{dataset_config_id}/{dataset_wandb_run_id}/shards/` (see [storage-provenance-spec.md §3a](storage-provenance-spec.md#3a-data-generation) for the authoritative path) are all **planned design**, not current behavior. The MVP worker (`src/synth_setter/cli/generate_dataset.py`) writes shards directly to `data/<task_name>/<run_id>/` and there is no finalize stage. Tracked in [#406](https://github.com/tinaudio/synth-setter/issues/406) (CLAUDE.md / design-doc reconciliation) and [#72](https://github.com/tinaudio/synth-setter/issues/72) (Phase 5 Pipeline CLI). Treat the rest of this section, §6 R2 File Structure, and §7 Design Decisions as the target architecture.
+
 The pipeline has two stages. Each is an independent command with well-defined inputs and outputs.
 
 | Stage        | Command                 | Input                                     | Output                                                                        | Compute                        |
@@ -282,6 +284,8 @@ Each worker container runs with `MODE=generate-shards` — the entrypoint mode I
 ```
 
 ### R2 File Structure
+
+> **Future state — current workers write directly to `data/<task_name>/<run_id>/`; the `metadata/workers/` staging prefix and the `finalize`-driven promotion into `data/{dataset_config_id}/{dataset_wandb_run_id}/shards/` (see [storage-provenance-spec.md §3a](storage-provenance-spec.md#3a-data-generation) for the authoritative path) do not yet exist in code. See [#406](https://github.com/tinaudio/synth-setter/issues/406).**
 
 The canonical R2 bucket layout — root path, top-level prefixes, and per-workflow contents — is defined in [storage-provenance-spec.md §2](storage-provenance-spec.md#2-r2-bucket-layout) and [§3a](storage-provenance-spec.md#3a-data-generation). The data pipeline writes under `data/{dataset_config_id}/{dataset_wandb_run_id}/`: workers stage shards and per-attempt artifacts under `metadata/workers/`, and `finalize` is the only writer to `shards/`, `train.h5`/`val.h5`/`test.h5` (or `*.tar` for WebDataset), `stats.npz`, and `metadata/dataset.{json,complete}`. Datasets are immutable once `metadata/dataset.complete` exists; new versions require a new `dataset_wandb_run_id`.
 
@@ -381,6 +385,8 @@ $ rclone ls r2:bucket/{run_id}/metadata/workers/shards/shard-000042/
 ## 7. Design Decisions
 
 ### 7.1 Storage as the Source of Truth
+
+> **Future state — current workers write shards directly to `data/<task_name>/<run_id>/` with no staging prefix and no finalize promotion step. See [#406](https://github.com/tinaudio/synth-setter/issues/406).**
 
 The pipeline uses R2 as both the data layer and the coordination layer. Integrity is guaranteed by content hashes. Workers write shard files and markers to a **staging prefix** (`metadata/workers/shards/`). Finalize validates staged shards and **promotes** them to the **canonical prefix** (`data/shards/`). This separation ensures workers never write to the canonical data path, and finalized data is stable once promoted.
 
@@ -604,6 +610,8 @@ Design target ([#103](https://github.com/tinaudio/synth-setter/issues/103)) adds
 **Quarantine:** Workers that fail local validation upload the corrupt shard directly to `metadata/workers/shards/shard-{id}/quarantine/{worker}-{attempt}.h5` with an `.invalid` marker, preserving the evidence for debugging. `generate`/`status` sees the shard as missing (no `.valid` marker) and assigns it on the next run.
 
 ### 7.6 Finalize Workflow
+
+> **Future state — there is no finalize command in code today. The MVP worker writes shards directly to the canonical run prefix and does not promote, write `dataset.complete`, or compute `stats.npz` from R2 contents. Tracked in [#72](https://github.com/tinaudio/synth-setter/issues/72) (Phase 5 Pipeline CLI) and [#406](https://github.com/tinaudio/synth-setter/issues/406).**
 
 01. **Check for `dataset.complete`** — if present and all canonical outputs exist, print "already finalized" and exit 0
 02. **Read spec** from R2
@@ -1200,6 +1208,15 @@ class RenderConfig(BaseModel):
     min_loudness: float
     samples_per_render_batch: int
     samples_per_shard: int
+    plugin_reload_cadence: Literal["once", "render"] = "render"
+    # Platform-aware default via Field(default_factory=...): "never" on Darwin
+    # (show_editor SIGTRAPs after ~3-4 calls, #714), "render" elsewhere
+    # (preserves historical per-render warm-up). An explicit
+    # gui_toggle_cadence="render" is still rejected on Darwin by a
+    # model_validator.
+    gui_toggle_cadence: Literal["never", "once", "render"] = Field(
+        default_factory=_default_gui_toggle_cadence
+    )
 
 class DatasetSpec(BaseModel):
     """Unified dataset specification — input config + materialized runtime in one model."""
@@ -1213,21 +1230,21 @@ class DatasetSpec(BaseModel):
     train_val_test_sizes: tuple[int, int, int]
     train_val_test_seeds: tuple[int, int, int]
     base_seed: int
-    r2_bucket: str
-    r2_prefix_root: str = DEFAULT_R2_PREFIX_ROOT
-
-    # Sub-model
+    # Sub-models
     render: RenderConfig
+    # R2 storage (nested R2Location: ``bucket`` / ``prefix_root`` / ``prefix`` —
+    # see ``src/synth_setter/pipeline/schemas/r2_location.py``).
+    r2: R2Location = Field(default_factory=_default_r2_location)
 
     # Runtime fields. All five auto-fill via ``default_factory`` when missing on
-    # input; ``run_id`` / ``r2_prefix`` use the data-aware factories that derive
-    # from already-validated ``task_name`` + ``created_at``. JSON-loaded values
-    # pass through unchanged (workers reuse materialization-time values).
+    # input; ``run_id`` / ``r2.prefix`` use the data-aware factories (``_default_run_id``,
+    # and ``_fill_default_r2_prefix`` invoked from the ``mode='before'`` model
+    # validator) that derive from already-validated ``task_name`` + ``created_at``.
+    # JSON-loaded values pass through unchanged (workers reuse materialization-time values).
     git_sha: str = Field(default_factory=lambda: _get_git_sha())
     is_repo_dirty: bool = Field(default_factory=lambda: _is_repo_dirty())
     created_at: datetime = Field(default_factory=lambda: _utc_now())
     run_id: str = Field(default_factory=_default_run_id)
-    r2_prefix: str = Field(default_factory=_default_r2_prefix)
 
     # Computed: @computed_field + @cached_property — emitted by model_dump and
     # stripped on input (see _strip_computed_field_keys) so JSON round-trip works.
@@ -1361,9 +1378,9 @@ On first `generate` (`python -m synth_setter.cli.generate_dataset experiment=<id
 
 1. Hydra composes the experiment against `configs/dataset.yaml`, yielding an `OmegaConf` `DictConfig`.
 2. `spec_from_cfg(cfg)` flattens the composed groups and constructs a Pydantic `DatasetSpec` (`strict=True`, `frozen=True`) in one shot — the same model used for the on-R2 artifact.
-3. Runtime fields (`run_id`, `r2_prefix`, `created_at`, `git_sha`, `is_repo_dirty`) auto-fill via `default_factory` when absent. `run_id` is `{task_name}-{YYYYMMDDTHHMMSSsssZ}` (millisecond precision); `r2_prefix` is `data/{task_name}/{run_id}/`. `renderer_version` is set by the configured renderer's pin; the worker re-derives via `extract_renderer_version` and refuses to render on mismatch.
+3. Runtime fields (`run_id`, `r2`, `created_at`, `git_sha`, `is_repo_dirty`) auto-fill via `default_factory` when absent. `run_id` is `{task_name}-{YYYYMMDDTHHMMSSsssZ}` (millisecond precision); `r2.prefix` is `data/{task_name}/{run_id}/`. `renderer_version` is set by the configured renderer's pin; the worker re-derives via `extract_renderer_version` and refuses to render on mismatch.
 4. Computed fields (`shards`, `num_shards`, `num_params`) derive deterministically from layout + render fields.
-5. Upload the JSON-serialized `DatasetSpec` to R2 (`<r2_prefix>/input_spec.json`).
+5. Upload the JSON-serialized `DatasetSpec` to R2 (`<r2.prefix>/input_spec.json`).
 6. Proceed with reconciliation.
 
 **Dirty repo handling (planned):** `is_repo_dirty` is captured in the spec, but the design's auto-upload of `git diff` to `metadata/run_diff.patch` is not yet implemented in `generate_dataset` — captured here as the intended behavior so a dirty repo's exact code state can be reconstructed during rapid ML research iteration.
@@ -1404,7 +1421,7 @@ src/
       validate_shard.py # Shard validation (valid HDF5, full per-dataset shapes via synth_setter.data.vst.shapes — not just row count); iterates spec.shards via R2
       load_image_config.py # Resolve Docker image configuration for the launcher
 
-    constants.py        # Well-known filenames and paths (R2_BUCKET, etc.)
+    constants.py        # Well-known filenames (INPUT_SPEC_FILENAME)
     r2_io.py            # rclone-backed R2 helpers (URI handling, download, upload, size probe)
     skypilot_launch.py  # Click CLI wrapping SkyPilot launch; composes a DatasetSpec via `--experiment <id>` + ad-hoc Hydra overrides
 

@@ -35,8 +35,11 @@ ______________________________________________________________________
 intermediate-data/
 ├── data/{dataset_config_id}/{dataset_wandb_run_id}/
 ├── train/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/
-└── eval/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/{eval_config_id}/{eval_wandb_run_id}/
+├── eval/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/{eval_config_id}/{eval_wandb_run_id}/
+└── skypilot-launcher-specs/{job_name}.json   # Transport-only; not part of the dataset footprint. See §3a "Materialized spec: two destinations".
 ```
+
+The first three prefixes (`data/`, `train/`, `eval/`) are the canonical per-run dataset footprint. `skypilot-launcher-specs/` is a transport-only queue used by the SkyPilot launcher to ship the materialized `DatasetSpec` into the worker pod (workaround for [#749](https://github.com/tinaudio/synth-setter/issues/749)); it is documented for completeness here but does not belong to any single dataset and is not consumed by training or evaluation.
 
 ______________________________________________________________________
 
@@ -44,29 +47,40 @@ ______________________________________________________________________
 
 ### 3a. Data Generation
 
-> **Implementation status:** The layout below is the target architecture. The current MVP uses a flat structure: spec and all shards upload directly to `data/{config_id}/{run_id}/`.
+> **Implementation status:** The layout below is the target architecture. The current MVP uses a flat structure: spec and all shards upload directly to `data/{config_id}/{run_id}/`. The `metadata/workers/` staging prefix and the `finalize` promotion step are **future state** — see [#406](https://github.com/tinaudio/synth-setter/issues/406).
 
 ```
 data/{dataset_config_id}/{dataset_wandb_run_id}/
-├── shards/
+├── shards/                  # Future state — no shards/ subdir exists yet; current workers upload shard files directly under the run prefix root. #406
 │   ├── shard-000000.h5
 │   └── ...
-├── metadata/
+├── metadata/                # Future state — current `input_spec.json` lives flat at the run prefix root. #385
 │   ├── config.yaml          # Frozen pipeline config (provenance copy)
-│   ├── input_spec.json      # Frozen input specification (authoritative)
+│   ├── input_spec.json      # Frozen input specification (authoritative; currently at `<run_prefix>input_spec.json` — `r2_prefix` already ends in `/`)
 │   ├── dataset.json         # Self-describing dataset card
 │   ├── dataset.complete     # Completion marker
-│   └── workers/             # Worker staging area
+│   └── workers/             # Future state — worker staging area; current workers write shards directly to `data/{config_id}/{run_id}/`. #406
 │       ├── shards/{shard_id}/{worker_id}-{attempt_uuid}.*
 │       └── attempts/{worker_id}-{attempt_uuid}/report.json
 ├── train.h5, val.h5, test.h5  # Split virtual datasets
 └── stats.npz                   # Normalization statistics
 ```
 
-- Workers may only write under `metadata/workers/`
-- `shards/` is written only by finalize
+- Workers may only write under `metadata/workers/` *(future state — current workers write directly to `data/{config_id}/{run_id}/`; see [#406](https://github.com/tinaudio/synth-setter/issues/406))*
+- `shards/` is written only by finalize *(future state — current workers write directly into the run prefix; finalize stage does not yet exist, see [#406](https://github.com/tinaudio/synth-setter/issues/406))*
 - All `rclone` operations use `--checksum`
-- Datasets are immutable once `dataset.complete` exists. New versions require a new `dataset_wandb_run_id`.
+- Datasets are immutable once `dataset.complete` exists. New versions require a new `dataset_wandb_run_id`. *(future state — completion-marker handling lands with finalize, [#406](https://github.com/tinaudio/synth-setter/issues/406))*
+
+#### Materialized spec: two destinations, two purposes
+
+The `DatasetSpec` JSON is uploaded to R2 from two distinct call sites, with two distinct purposes. This split is intentional, not a duplication bug:
+
+| Writer                                                                            | R2 key                                    | Purpose                                                                                                                                                                                                                                                                                                 | Consumers                                                                                                                                                                                                                                                                       |
+| --------------------------------------------------------------------------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Worker (`src/synth_setter/cli/generate_dataset.py`'s `run()`)                     | `{spec.r2_prefix}input_spec.json`         | **Provenance**: the canonical, authoritative frozen spec, archived next to the shards it parameterized. The same object that §3a's table lists as "Input spec" (target path `metadata/input_spec.json` — flat under `r2_prefix` today per [#385](https://github.com/tinaudio/synth-setter/issues/385)). | None at runtime yet. Long-lived archive for post-hoc inspection / re-validation. The future `finalize` stage and `status` command ([#406](https://github.com/tinaudio/synth-setter/issues/406), [#72](https://github.com/tinaudio/synth-setter/issues/72)) will read this copy. |
+| Launcher (`src/synth_setter/pipeline/skypilot_launch.py`'s `upload_spec_to_r2()`) | `skypilot-launcher-specs/{job_name}.json` | **Transport**: ships the spec from the launcher host into the SkyPilot/RunPod worker pod. Workaround for [#749](https://github.com/tinaudio/synth-setter/issues/749) (SkyPilot's RunPod backend rejects `task.update_file_mounts(...)` with a pubkey-overflow at pod create).                           | The worker, via `WORKER_SPEC_URI` consumed by `synth_setter.tools.docker_entrypoint`'s `generate_dataset` subcommand. The `validate-spec` / `validate-shard` CI workflows also read this copy via the `spec_uri` output of `generate-dataset-shards.yaml`.                      |
+
+The launcher's `skypilot-launcher-specs/` prefix is **outside** the canonical `data/{dataset_config_id}/{dataset_wandb_run_id}/` tree on purpose — it's a per-job transport queue, not part of the dataset's R2 footprint. Keep the worker's archival upload distinct from the launcher's transport upload; do not consolidate them.
 
 ### 3b. Training
 

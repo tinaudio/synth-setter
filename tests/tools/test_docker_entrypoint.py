@@ -96,6 +96,7 @@ def _valid_spec_payload() -> dict[str, Any]:
             "min_loudness": -55.0,
             "samples_per_render_batch": 32,
             "samples_per_shard": 10000,
+            "gui_toggle_cadence": "never",
         },
     }
 
@@ -282,7 +283,7 @@ class TestGenerateDataset:
         assert len(captured) == 1
         parsed = captured[0]
         assert parsed.run_id == payload["run_id"]
-        assert parsed.r2_bucket == payload["r2_bucket"]
+        assert parsed.r2.bucket == payload["r2_bucket"]
         assert parsed.render.samples_per_shard == payload["render"]["samples_per_shard"]
         assert parsed.shards[0].filename == "shard-000000.h5"
 

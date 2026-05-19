@@ -169,6 +169,9 @@ checkpoints/
 # Advisory reports written by .claude/hooks/doc-drift.sh and pr-review-resolver.sh
 .agent-reviews/
 
+# Local working notes written by qrspi skills and research/plan tooling
+thoughts/
+
 # Git worktrees
 .worktrees/
 /worktrees/

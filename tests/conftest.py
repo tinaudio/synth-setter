@@ -47,6 +47,8 @@ _SURGE_SILENCE_PEAK_THRESHOLD = 1e-4
 _VST_SUBPROCESS_TIMEOUT_SECONDS = 600
 
 NUM_FIXTURE_SAMPLES = 5
+
+
 # Bootstraps Xvfb + xsettingsd + dbus for VST3 plugin init; resolved relative
 # to the container WORKDIR (``/home/build/synth-setter``) baked in the image.
 # X11 wrapping lives at the audio-rendering boundary (the subprocess call),

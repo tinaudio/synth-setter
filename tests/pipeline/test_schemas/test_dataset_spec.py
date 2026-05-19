@@ -37,13 +37,18 @@ def _valid_render_kwargs(plugin_path: str = "/fake/Plugin.vst3") -> dict[str, An
 
 
 def _valid_spec_kwargs(plugin_path: str = "/fake/Plugin.vst3", **overrides: Any) -> dict[str, Any]:
-    """Return DatasetSpec kwargs that build a 3-shard hdf5 spec by default."""
+    """Return DatasetSpec kwargs that build a 3-shard hdf5 spec by default.
+
+    Uses the nested ``r2`` shape (post-R2Location-migration). The back-compat
+    shim that promotes legacy flat ``r2_bucket`` / ``r2_prefix_root`` /
+    ``r2_prefix`` keys lives in its own test class (``TestLegacyFlatR2Compat``).
+    """
     kwargs: dict[str, Any] = {
         "task_name": "ci-smoke-test",
         "output_format": "hdf5",
         "train_val_test_sizes": [300, 0, 0],
         "base_seed": 42,
-        "r2_bucket": "intermediate-data",
+        "r2": {"bucket": "intermediate-data"},
         "render": _valid_render_kwargs(plugin_path),
     }
     kwargs.update(overrides)
@@ -119,6 +124,92 @@ class TestRenderConfig:
             cfg = RenderConfig(**{**_valid_render_kwargs(), "velocity": valid})
             assert cfg.velocity == valid
 
+    def test_cadence_defaults_off_darwin(  # noqa: DOC101,DOC103
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Off Darwin: both cadences default to "render" (historical per-render behaviour)."""
+        monkeypatch.setattr(
+            "synth_setter.pipeline.schemas.spec._current_platform", lambda: "linux"
+        )
+        cfg = RenderConfig(**_valid_render_kwargs())
+        assert cfg.plugin_reload_cadence == "render"
+        assert cfg.gui_toggle_cadence == "render"
+
+    def test_gui_toggle_default_is_never_on_darwin(  # noqa: DOC101,DOC103
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Default factory yields "never" on Darwin so bare RenderConfig() constructs (#714)."""
+        monkeypatch.setattr(
+            "synth_setter.pipeline.schemas.spec._current_platform", lambda: "darwin"
+        )
+        cfg = RenderConfig(**_valid_render_kwargs())
+        assert cfg.gui_toggle_cadence == "never"
+        assert cfg.plugin_reload_cadence == "render"
+
+    def test_once_reload_with_never_warmup_accepted(self) -> None:
+        """``("once", "never")`` — the "load once, skip warm-up" mode — constructs cleanly."""
+        cfg = RenderConfig(
+            **{
+                **_valid_render_kwargs(),
+                "plugin_reload_cadence": "once",
+                "gui_toggle_cadence": "never",
+            }
+        )
+        assert cfg.plugin_reload_cadence == "once"
+        assert cfg.gui_toggle_cadence == "never"
+
+    def test_gui_toggle_render_rejected_on_darwin(  # noqa: DOC101,DOC103
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``gui_toggle_cadence="render"`` on Darwin raises (SIGTRAP after ~3-4 calls — #714)."""
+        monkeypatch.setattr(
+            "synth_setter.pipeline.schemas.spec._current_platform", lambda: "darwin"
+        )
+        with pytest.raises(
+            ValidationError,
+            match=r'gui_toggle_cadence="render" is not supported on Darwin',
+        ):
+            RenderConfig(**{**_valid_render_kwargs(), "gui_toggle_cadence": "render"})
+
+    @pytest.mark.parametrize("cadence", ["never", "once"])
+    def test_gui_toggle_never_and_once_accepted_on_darwin(  # noqa: DOC101,DOC103
+        self, monkeypatch: pytest.MonkeyPatch, cadence: str
+    ) -> None:
+        """``"never"`` and ``"once"`` are the only valid gui_toggle settings on Darwin."""
+        monkeypatch.setattr(
+            "synth_setter.pipeline.schemas.spec._current_platform", lambda: "darwin"
+        )
+        cfg = RenderConfig(**{**_valid_render_kwargs(), "gui_toggle_cadence": cadence})
+        assert cfg.gui_toggle_cadence == cadence
+
+    @pytest.mark.parametrize("cadence", ["never", "once", "render"])
+    def test_gui_toggle_all_values_accepted_off_darwin(  # noqa: DOC101,DOC103
+        self, monkeypatch: pytest.MonkeyPatch, cadence: str
+    ) -> None:
+        """All three gui_toggle values are accepted on Linux/Windows — gate is darwin-only."""
+        monkeypatch.setattr(
+            "synth_setter.pipeline.schemas.spec._current_platform", lambda: "linux"
+        )
+        cfg = RenderConfig(**{**_valid_render_kwargs(), "gui_toggle_cadence": cadence})
+        assert cfg.gui_toggle_cadence == cadence
+
+    @pytest.mark.parametrize("cadence", ["once", "render"])
+    def test_plugin_reload_cadence_both_values_accepted_on_darwin(  # noqa: DOC101,DOC103
+        self, monkeypatch: pytest.MonkeyPatch, cadence: str
+    ) -> None:
+        """``plugin_reload_cadence`` accepts both "once" and "render" on Darwin."""
+        monkeypatch.setattr(
+            "synth_setter.pipeline.schemas.spec._current_platform", lambda: "darwin"
+        )
+        cfg = RenderConfig(
+            **{
+                **_valid_render_kwargs(),
+                "plugin_reload_cadence": cadence,
+                "gui_toggle_cadence": "never",
+            }
+        )
+        assert cfg.plugin_reload_cadence == cadence
+
 
 # ---------------------------------------------------------------------------
 # DatasetSpec — construction & runtime-field auto-fill
@@ -129,14 +220,14 @@ class TestDatasetSpecConstruction:
     """Tests for DatasetSpec construction and runtime-field auto-fill."""
 
     def test_fresh_construction_fills_runtime_fields(self, patch_runtime_io: None) -> None:
-        """Default construction populates git_sha, created_at, run_id, r2_prefix from factories."""
+        """Default construction populates git_sha, created_at, run_id, r2.prefix from factories."""
         spec = DatasetSpec(**_valid_spec_kwargs())
 
         assert spec.git_sha == "abc123def456"
         assert spec.is_repo_dirty is False
         assert spec.created_at == FIXED_NOW
         assert spec.run_id == "ci-smoke-test-20260328T120000000Z"
-        assert spec.r2_prefix == "data/ci-smoke-test/ci-smoke-test-20260328T120000000Z/"
+        assert spec.r2.prefix == "data/ci-smoke-test/ci-smoke-test-20260328T120000000Z/"
 
     def test_run_id_uses_explicit_value_when_present(self, patch_runtime_io: None) -> None:
         """An explicit run_id in the input dict passes through instead of being regenerated."""
@@ -144,19 +235,25 @@ class TestDatasetSpecConstruction:
         assert spec.run_id == "custom-run-id-001"
 
     def test_r2_prefix_uses_explicit_value_when_present(self, patch_runtime_io: None) -> None:
-        """An explicit r2_prefix in the input dict passes through instead of being recomputed."""
-        spec = DatasetSpec(**_valid_spec_kwargs(r2_prefix="custom/prefix/here/"))
-        assert spec.r2_prefix == "custom/prefix/here/"
+        """An explicit r2.prefix in the input dict passes through instead of being recomputed."""
+        spec = DatasetSpec(
+            **_valid_spec_kwargs(
+                r2={"bucket": "intermediate-data", "prefix": "custom/prefix/here/"}
+            )
+        )
+        assert spec.r2.prefix == "custom/prefix/here/"
 
     def test_r2_prefix_root_default_is_data(self, patch_runtime_io: None) -> None:
-        """Default ``r2_prefix_root`` produces a prefix beginning with ``data/``."""
+        """Default ``r2.prefix_root`` produces a prefix beginning with ``data/``."""
         spec = DatasetSpec(**_valid_spec_kwargs())
-        assert spec.r2_prefix.startswith("data/")
+        assert spec.r2.prefix.startswith("data/")
 
     def test_r2_prefix_root_custom_threads_through(self, patch_runtime_io: None) -> None:
-        """A custom ``r2_prefix_root`` threads through into the materialized prefix."""
-        spec = DatasetSpec(**_valid_spec_kwargs(r2_prefix_root="experiments"))
-        assert spec.r2_prefix.startswith("experiments/")
+        """A custom ``r2.prefix_root`` threads through into the materialized prefix."""
+        spec = DatasetSpec(
+            **_valid_spec_kwargs(r2={"bucket": "intermediate-data", "prefix_root": "experiments"})
+        )
+        assert spec.r2.prefix.startswith("experiments/")
 
     def test_dataset_spec_strict_rejects_extra_fields(self, patch_runtime_io: None) -> None:
         """Unknown top-level keys are rejected at the trust boundary."""
@@ -178,31 +275,37 @@ class TestDatasetSpecValidators:
     """Tests for DatasetSpec field-level and cross-field validators."""
 
     def test_r2_bucket_blank_raises(self, patch_runtime_io: None) -> None:
-        """Blank or whitespace-only r2_bucket raises (rclone would receive a malformed URI)."""
+        """Blank or whitespace-only ``r2.bucket`` raises (rclone would receive a malformed URI)."""
         for blank in ("", "   ", "\t\n"):
-            with pytest.raises(ValidationError, match="r2_bucket must not be blank"):
-                DatasetSpec(**_valid_spec_kwargs(r2_bucket=blank))
+            with pytest.raises(ValidationError, match=r"r2\.bucket must not be blank"):
+                DatasetSpec(**_valid_spec_kwargs(r2={"bucket": blank}))
 
     def test_task_name_blank_raises(self, patch_runtime_io: None) -> None:
-        """Blank task_name raises (derived run_id / r2_prefix would be empty-prefixed)."""
+        """Blank task_name raises (derived run_id / r2.prefix would be empty-prefixed)."""
         with pytest.raises(ValidationError, match="task_name must not be blank"):
             DatasetSpec(**_valid_spec_kwargs(task_name="   "))
 
     def test_r2_prefix_root_blank_raises(self, patch_runtime_io: None) -> None:
-        """Blank ``r2_prefix_root`` raises.
+        """Blank ``r2.prefix_root`` raises.
 
-        Prevents derived ``r2_prefix`` from starting with a stray ``/``.
+        Prevents derived ``r2.prefix`` from starting with a stray ``/``.
         """
         for blank in ("", "   ", "\t\n"):
-            with pytest.raises(ValidationError, match="r2_prefix_root must not be blank"):
-                DatasetSpec(**_valid_spec_kwargs(r2_prefix_root=blank))
+            with pytest.raises(
+                ValidationError, match=r"r2\.prefix_root must not be blank or slash-only"
+            ):
+                DatasetSpec(
+                    **_valid_spec_kwargs(r2={"bucket": "intermediate-data", "prefix_root": blank})
+                )
 
     def test_explicit_r2_prefix_missing_trailing_slash_raises(
         self, patch_runtime_io: None
     ) -> None:
-        """An explicit r2_prefix lacking the trailing ``/`` raises (rclone path concat trap)."""
-        with pytest.raises(ValidationError, match="r2_prefix must end with"):
-            DatasetSpec(**_valid_spec_kwargs(r2_prefix="data/no/slash"))
+        """An explicit ``r2.prefix`` missing the trailing ``/`` raises (concat trap)."""
+        with pytest.raises(ValidationError, match=r"r2\.prefix must end with"):
+            DatasetSpec(
+                **_valid_spec_kwargs(r2={"bucket": "intermediate-data", "prefix": "data/no/slash"})
+            )
 
     def test_split_size_not_multiple_of_samples_per_shard_raises(
         self, patch_runtime_io: None
@@ -275,12 +378,12 @@ class TestDatasetSpecValidators:
         assert spec.train_val_test_seeds is None
 
     def test_explicit_empty_r2_prefix_raises(self, patch_runtime_io: None) -> None:
-        """Empty ``r2_prefix`` raises via the ``_r2_prefix_must_end_with_slash`` validator.
+        """Empty ``r2.prefix`` raises via the ``_prefix_must_end_with_slash`` validator.
 
         The default_factory is bypassed when a value is supplied.
         """
-        with pytest.raises(ValidationError, match="r2_prefix must end with"):
-            DatasetSpec(**_valid_spec_kwargs(r2_prefix=""))
+        with pytest.raises(ValidationError, match=r"r2\.prefix must end with"):
+            DatasetSpec(**_valid_spec_kwargs(r2={"bucket": "intermediate-data", "prefix": ""}))
 
     def test_z_suffixed_created_at_string_parses(self, patch_runtime_io: None) -> None:
         """``model_dump_json``'s ``Z``-suffixed UTC timestamps round-trip on Python 3.10.
@@ -390,7 +493,7 @@ class TestDatasetSpecRoundTrip:
     """Tests for ``model_dump_json`` → ``model_validate_json`` round-trip preservation."""
 
     def test_json_round_trip_preserves_runtime_fields(self, patch_runtime_io: None) -> None:
-        """git_sha, is_repo_dirty, created_at, run_id, r2_prefix all survive a JSON round-trip."""
+        """git_sha, is_repo_dirty, created_at, run_id, r2 all survive a JSON round-trip."""
         spec = DatasetSpec(**_valid_spec_kwargs())
         json_str = spec.model_dump_json()
         restored = DatasetSpec.model_validate_json(json_str)
@@ -399,7 +502,7 @@ class TestDatasetSpecRoundTrip:
         assert restored.is_repo_dirty == spec.is_repo_dirty
         assert restored.created_at == spec.created_at
         assert restored.run_id == spec.run_id
-        assert restored.r2_prefix == spec.r2_prefix
+        assert restored.r2 == spec.r2
 
     def test_json_round_trip_preserves_shards(self, patch_runtime_io: None) -> None:
         """Computed ``shards`` / ``num_shards`` round-trip identically through JSON."""
@@ -561,13 +664,14 @@ class TestSpecConstructionStaysPedalboardFree:
             "from synth_setter.pipeline.schemas.spec import DatasetSpec\n"
             "spec = DatasetSpec(\n"
             "    task_name='ci', output_format='hdf5', train_val_test_sizes=[1, 0, 0],\n"
-            "    base_seed=0, r2_bucket='b',\n"
+            "    base_seed=0, r2={'bucket': 'b'},\n"
             "    render={\n"
             "        'plugin_path': '/tmp/x.vst3', 'preset_path': '/tmp/x.vstpreset',\n"
             "        'param_spec_name': 'surge_simple', 'renderer_version': 'v1',\n"
             "        'sample_rate': 16000, 'channels': 1, 'velocity': 64,\n"
             "        'signal_duration_seconds': 1.0, 'min_loudness': -30.0,\n"
             "        'samples_per_render_batch': 1, 'samples_per_shard': 1,\n"
+            "        'gui_toggle_cadence': 'never',\n"
             "    },\n"
             ")\n"
             "_ = spec.num_params\n"
@@ -586,3 +690,81 @@ class TestSpecConstructionStaysPedalboardFree:
             f"pedalboard leaked into spec serialization:\n"
             f"stdout={result.stdout}\nstderr={result.stderr}"
         )
+
+
+# ---------------------------------------------------------------------------
+# DatasetSpec — back-compat shim for legacy flat r2_bucket / r2_prefix_root /
+# r2_prefix keys (input_spec.json files materialized before the R2Location
+# migration must still parse and re-emit in the new shape).
+# ---------------------------------------------------------------------------
+
+
+class TestLegacyFlatR2Compat:
+    """Legacy flat ``r2_*`` keys on input must promote into the nested ``r2`` model."""
+
+    def _legacy_kwargs(self, **overrides: Any) -> dict[str, Any]:  # noqa: DOC101,DOC103,DOC201,DOC203
+        """Return spec kwargs that mirror a pre-migration input dict (flat r2_* keys)."""
+        kwargs: dict[str, Any] = {
+            "task_name": "ci-smoke-test",
+            "output_format": "hdf5",
+            "train_val_test_sizes": [300, 0, 0],
+            "base_seed": 42,
+            "r2_bucket": "intermediate-data",
+            "render": _valid_render_kwargs(),
+        }
+        kwargs.update(overrides)
+        return kwargs
+
+    def test_legacy_r2_bucket_only_promotes_and_derives_prefix(  # noqa: DOC101,DOC103
+        self, patch_runtime_io: None
+    ) -> None:
+        """Pre-migration spec with only ``r2_bucket`` → derived prefix lands on ``r2.prefix``."""
+        spec = DatasetSpec(**self._legacy_kwargs())
+        assert spec.r2.bucket == "intermediate-data"
+        assert spec.r2.prefix_root == "data"
+        assert spec.r2.prefix == "data/ci-smoke-test/ci-smoke-test-20260328T120000000Z/"
+
+    def test_all_three_legacy_keys_promote_into_nested_r2(self, patch_runtime_io: None) -> None:  # noqa: DOC101,DOC103
+        """Full legacy triple promotes into ``r2`` and preserves explicit ``r2_prefix``."""
+        spec = DatasetSpec(
+            **self._legacy_kwargs(
+                r2_prefix_root="experiments",
+                r2_prefix="experiments/legacy/custom/",
+            )
+        )
+        assert spec.r2.bucket == "intermediate-data"
+        assert spec.r2.prefix_root == "experiments"
+        assert spec.r2.prefix == "experiments/legacy/custom/"
+
+    def test_mixed_nested_and_legacy_input_raises(self, patch_runtime_io: None) -> None:  # noqa: DOC101,DOC103
+        """Mixing ``r2`` and any legacy key is ambiguous — must fail-fast."""
+        with pytest.raises(ValidationError, match="both nested 'r2' and legacy flat keys"):
+            DatasetSpec(
+                **self._legacy_kwargs(r2={"bucket": "intermediate-data"}),
+            )
+
+    def test_legacy_json_specs_round_trip_in_new_form(self, patch_runtime_io: None) -> None:  # noqa: DOC101,DOC103
+        """Old input_spec.json files in R2 parse + re-emit in the new nested shape.
+
+        Worker reconstruction contract: an old JSON spec (flat keys) parses
+        identically to a freshly-materialized spec; re-serializing produces
+        the new nested form so the next round-trip is on the new shape.
+        """
+        import json as _json
+
+        spec = DatasetSpec(**self._legacy_kwargs())
+        # Emulate an old input_spec.json: nested computed-field keys stripped + flat r2_* present.
+        round_trip = spec.model_dump(mode="json")
+        round_trip.pop("r2")
+        round_trip["r2_bucket"] = "intermediate-data"
+        round_trip["r2_prefix_root"] = "data"
+        round_trip["r2_prefix"] = "data/ci-smoke-test/ci-smoke-test-20260328T120000000Z/"
+        restored = DatasetSpec.model_validate_json(_json.dumps(round_trip))
+
+        assert restored.r2.bucket == "intermediate-data"
+        assert restored.r2.prefix == "data/ci-smoke-test/ci-smoke-test-20260328T120000000Z/"
+        assert "r2" in restored.model_dump_json()
+        # Re-emitted JSON does not contain the legacy flat keys.
+        emitted = _json.loads(restored.model_dump_json())
+        for legacy_key in ("r2_bucket", "r2_prefix_root", "r2_prefix"):
+            assert legacy_key not in emitted

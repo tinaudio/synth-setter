@@ -14,6 +14,16 @@ on:
       - "mkdocs.yml"
       - "pyproject.toml"
       - "src/synth_setter/pipeline/schemas/spec.py"
+      - "src/synth_setter/schemas/**"
+      - ".github/workflows/docs.yml"
+  # PR builds run build-docs only (no Pages deploy) — see #967.
+  pull_request:
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "pyproject.toml"
+      - "src/synth_setter/pipeline/schemas/spec.py"
+      - "src/synth_setter/schemas/**"
       - ".github/workflows/docs.yml"
   workflow_dispatch:
   # Redeploy after the benchmark workflow pushes new chart data to gh-pages.
@@ -26,10 +36,10 @@ on:
     types: [completed]
     branches: [main]
 
+# Least-privilege default; ``pages: write`` / ``id-token: write`` live only
+# on ``deploy-docs`` so PR runs (including from forks) can't reach Pages.
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 # Serialize Pages deploys: cancel-in-progress: false lets an in-flight deploy
 # finish (avoids a half-published site) while still queuing the next one.
@@ -38,12 +48,46 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deploy-docs:
+  # PR-only build smoke check; deploy-docs handles publishing on push/main.
+  build-docs:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # Skip on workflow_run when the upstream run didn't succeed — otherwise
-    # we'd republish stale chart data after a failed bench run.
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    # Pinned so a future workflow-level grant can't silently re-broaden this job.
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout docs source
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+          cache: "pip"
+          cache-dependency-path: pyproject.toml
+
+      - name: Install docs and dev extras
+        run: pip install -e '.[docs,dev]'
+
+      # Two pytest invocations because the conftest hygiene differs per path — see PR #1065.
+      - name: Run schema tests (preserves tests/schemas/conftest.py)
+        run: pytest tests/schemas/ -q --confcutdir=tests/schemas
+
+      - name: Build site and run docs-build integration test
+        run: pytest tests/test_docs_build.py -q --noconftest
+
+  # Skips: pull_request (covered by build-docs), failed workflow_run (would
+  # republish stale bench data), workflow_dispatch off main (no feature-branch
+  # publishing).
+  deploy-docs:
+    if: github.event_name != 'pull_request' && (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success') && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
 
     environment:
       name: github-pages
@@ -58,6 +102,7 @@ jobs:
         with:
           python-version: "3.10"
           cache: "pip"
+          cache-dependency-path: pyproject.toml
 
       - name: Install docs extras
         run: pip install -e '.[docs]'
@@ -65,14 +110,8 @@ jobs:
       - name: Build site
         run: mkdocs build --strict
 
-      # gh-pages is the benchmark-action's persistence layer; only its
-      # dev/bench/ subtree is republished by the next step. The probe lets a
-      # fresh repo (no gh-pages branch yet) deploy docs without bench while
-      # still failing the workflow loudly on transient errors — explicitly
-      # discriminating HTTP 404 (branch absent, intended soft-skip) from
-      # 5xx / network / auth failures (fail loud). A blanket
-      # `continue-on-error: true` on the checkout, or a `2>&1`-swallowing
-      # probe, would deploy without the chart on a transient blip.
+      # Discriminate 404 (branch absent, soft-skip) from 5xx/auth (fail loud);
+      # a blanket continue-on-error on the checkout would mask transient blips.
       - name: Probe gh-pages branch existence
         id: probe_ghpages
         env:
@@ -97,9 +136,8 @@ jobs:
           ref: gh-pages
           path: gh-pages-data
 
-      # rm -rf before cp avoids the cp -R nested-directory hazard: if
-      # site/dev/bench already exists (mkdocs emits there in the future, or
-      # this step is re-run), cp -R would create site/dev/bench/bench/.
+      # rm -rf before cp -R; otherwise an existing site/dev/bench would
+      # nest the copy as site/dev/bench/bench/.
       - name: Merge benchmark chart into site
         if: steps.probe_ghpages.outputs.exists == 'true'
         run: |

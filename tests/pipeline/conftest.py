@@ -15,7 +15,7 @@ def _make_dataset_spec_kwargs(plugin_path: str = "plugins/Surge XT.vst3") -> dic
         "output_format": "hdf5",
         "train_val_test_sizes": [440000, 20000, 20000],
         "base_seed": 42,
-        "r2_bucket": "intermediate-data",
+        "r2": {"bucket": "intermediate-data"},
         "render": {
             "plugin_path": plugin_path,
             "preset_path": "presets/surge-base.vstpreset",
@@ -28,6 +28,8 @@ def _make_dataset_spec_kwargs(plugin_path: str = "plugins/Surge XT.vst3") -> dic
             "min_loudness": -55.0,
             "samples_per_render_batch": 32,
             "samples_per_shard": 10000,
+            # Darwin-portable (#714).
+            "gui_toggle_cadence": "never",
         },
     }
 

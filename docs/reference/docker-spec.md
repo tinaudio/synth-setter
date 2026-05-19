@@ -28,7 +28,7 @@ group with five subcommands. Each spec-taking subcommand deserializes its
 
 `generate_dataset` does **not** consume any env vars for its dispatch
 inputs. All dataset-run configuration — including the R2 bucket
-(`DatasetSpec.r2_bucket`) — flows in through the materialized
+(`DatasetSpec.r2.bucket`) — flows in through the materialized
 spec at `--spec`.
 
 > **Note:** `generate_dataset` is the current MVP (sequential multi-shard, single-worker). It will be deprecated when `generate-shards` lands on main ([#411](https://github.com/tinaudio/synth-setter/issues/411)).
@@ -140,8 +140,9 @@ distributed parallelism is tracked in [#407](https://github.com/tinaudio/synth-s
 rclone's native env-var config synthesizes the `r2` remote in-memory from
 the 5 `RCLONE_CONFIG_R2_*` vars — no `rclone.conf` file is read or written.
 The bucket name is **not** part of the rclone remote config: it comes
-from `DatasetSpec.r2_bucket` and is interpolated into upload
-paths by `generate_dataset.py` (`r2:${spec.r2_bucket}/...`).
+from `DatasetSpec.r2.bucket` and is interpolated into upload paths by
+`generate_dataset.py` (via `spec.r2.rclone_prefix()`, which yields
+`r2:${spec.r2.bucket}/${spec.r2.prefix}`).
 
 ______________________________________________________________________
 

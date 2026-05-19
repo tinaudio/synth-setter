@@ -25,7 +25,8 @@ from tests.helpers.run_if import RunIf
 
 # Experiments cycled through the Surge XT VST smoke tests below. Single source of truth so
 # the parametrize lists on the two ``test_train_*_surge_xt`` tests cannot drift apart.
-_SURGE_SMOKE_EXPERIMENTS = ("surge/fake_oracle", "surge/ffn_full")
+_ORACLE_EXPERIMENT = "surge/fake_oracle"
+_SURGE_SMOKE_EXPERIMENTS = (_ORACLE_EXPERIMENT, "surge/ffn_full")
 
 # TODO(#40): add @pytest.mark.ram gate for memory-intensive CPU tests test_train_fast_dev_run
 
@@ -192,7 +193,7 @@ def test_cfg_surge_xt_global_wires_param_spec(param_spec_name: str) -> None:
     cfg = _build_surge_xt_smoke_cfg(
         accelerator="cpu",
         param_spec_name=param_spec_name,
-        experiment="surge/fake_oracle",
+        experiment=_ORACLE_EXPERIMENT,
     )
     assert cfg.model.net.d_out == len(param_specs[param_spec_name])
     assert cfg.callbacks.log_per_param_mse.param_spec == param_spec_name
@@ -201,16 +202,19 @@ def test_cfg_surge_xt_global_wires_param_spec(param_spec_name: str) -> None:
 @pytest.mark.requires_vst
 @pytest.mark.slow
 @pytest.mark.parametrize("experiment_name", _SURGE_SMOKE_EXPERIMENTS, indirect=True)
-def test_train_surge_xt(cfg_surge_xt: DictConfig) -> None:
+def test_train_surge_xt(cfg_surge_xt: DictConfig, experiment_name: str) -> None:
     """Run training of the Surge XT model on the smoke test fixture, across both experiments.
 
     Asserts the trainer advanced and produced a finite ``train/loss`` — catches silent
     no-op trainers and NaN/Inf regressions that a bare ``train()`` call would not. The
-    ``surge/fake_oracle`` leg is a wiring smoke check (the oracle's loss is identically
-    zero by construction); meaningful loss-progression coverage comes from the
-    ``surge/ffn_full`` leg.
+    ``surge/fake_oracle`` leg additionally pins ``train/loss`` to exactly zero (the
+    oracle constructs its loss as ``0.0 * net(mel_spec).sum()`` — any drift means the
+    oracle stopped being an oracle); meaningful loss-progression coverage comes from
+    the ``surge/ffn_full`` leg.
 
     :param cfg_surge_xt: Surge XT training config (parametrized over experiment).
+    :param experiment_name: Hydra experiment override the cfg was built from — drives
+        the oracle-specific tight bound below.
     """
     HydraConfig().set_config(cfg_surge_xt)
     metric_dict, object_dict = train(cfg_surge_xt)
@@ -228,6 +232,11 @@ def test_train_surge_xt(cfg_surge_xt: DictConfig) -> None:
         loss = metric_dict[key]
         assert torch.isfinite(loss).all(), f"{key} is not finite: {loss}"
 
+    if experiment_name == _ORACLE_EXPERIMENT:
+        for key in loss_keys:
+            loss_value = metric_dict[key].item()
+            assert loss_value == 0.0, f"oracle {key} not exactly zero: {loss_value}"
+
 
 @pytest.mark.requires_vst
 @pytest.mark.slow
@@ -237,6 +246,7 @@ def test_train_eval_surge_xt(
     cfg_surge_xt: DictConfig,
     cfg_surge_xt_eval: DictConfig,
     param_spec_name: str,
+    experiment_name: str,
 ) -> None:
     """End-to-end smoke test: train Surge XT briefly on a small fixture dataset, then run standalone eval on the saved checkpoint.
 
@@ -247,6 +257,8 @@ def test_train_eval_surge_xt(
         wired for — passed to ``predict_vst_audio.py`` so the script's decode layout matches
         the predicted tensor's encoding (mismatched specs go off-the-end and crash with
         ``can only convert an array of size 1 to a Python scalar``).
+    :param experiment_name: Hydra experiment override the cfg was built from — drives
+        the oracle-specific tight audio-metric bounds at the end of the test.
     """
     from click.testing import CliRunner
     from pedalboard.io import AudioFile
@@ -289,6 +301,17 @@ def test_train_eval_surge_xt(
     for i in range(NUM_FIXTURE_SAMPLES):
         pred = torch.load(predictions_dir / f"pred-{i}.pt", weights_only=True)
         assert torch.isfinite(pred).all(), f"pred-{i}.pt contains NaN/Inf"
+
+        # The oracle's ``predict_step`` returns ``batch["params"]`` verbatim, so the
+        # saved prediction tensor must be bit-identical to the saved target params.
+        # This is the strongest oracle invariant — pinning it here isolates regressions
+        # in ``predict_step`` from the noisier downstream audio metrics (which absorb
+        # Surge XT's per-voice render jitter and would mask a small deviation).
+        if experiment_name == _ORACLE_EXPERIMENT:
+            target_params = torch.load(
+                predictions_dir / f"target-params-{i}.pt", weights_only=True
+            )
+            assert torch.equal(pred, target_params), f"oracle pred-{i}.pt != target-params-{i}.pt"
 
     # Render predicted params through the Surge XT VST to per-sample audio directories.
     # `-t` (`--rerender_target`) re-synthesizes target.wav from the stored target_params instead
@@ -371,3 +394,15 @@ def test_train_eval_surge_xt(
         assert expected["columns"].issubset(metrics_df.columns)
         numeric = metrics_df[sorted(expected["columns"])].to_numpy()
         assert np.isfinite(numeric).all(), f"{metrics_file} contains NaN/Inf:\n{metrics_df}"
+
+    if experiment_name == _ORACLE_EXPERIMENT:
+        # Surge XT injects per-voice render jitter (oscillator phase, noise seed)
+        # even with bit-identical params, so the audio metrics don't collapse to
+        # zero — bounds absorb that jitter while still failing on a real regression.
+        per_sample = pd.read_csv(metrics_dir / "metrics.csv")
+        assert per_sample["mss"].max() < 15.0, f"oracle mss too high: {per_sample['mss'].tolist()}"
+        assert per_sample["wmfcc"].max() < 30.0, (
+            f"oracle wmfcc too high: {per_sample['wmfcc'].tolist()}"
+        )
+        assert per_sample["sot"].max() < 0.5, f"oracle sot too high: {per_sample['sot'].tolist()}"
+        assert per_sample["rms"].min() > 0.95, f"oracle rms too low: {per_sample['rms'].tolist()}"

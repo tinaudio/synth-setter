@@ -15,6 +15,48 @@ set -euo pipefail
 _devc_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 install -m 0644 "$_devc_dir/tmux.conf" "$HOME/.tmux.conf"
 
+# TPM (tmux plugin manager) bootstrap + plugin install. tmux.conf declares
+# tmux-resurrect/tmux-continuum via `set -g @plugin` lines; TPM's run line at
+# the bottom of tmux.conf loads them at tmux start. Plugins live per-$HOME, so
+# this runs once for root and again after the runuser exec below for `dev`.
+_tpm_dir="$HOME/.tmux/plugins/tpm"
+if [ -d "$_tpm_dir/.git" ]; then
+  git -C "$_tpm_dir" pull --ff-only --quiet \
+    || echo "WARNING: failed to update TPM in $_tpm_dir; using existing checkout." >&2
+else
+  git clone --quiet --depth 1 https://github.com/tmux-plugins/tpm "$_tpm_dir" \
+    || echo "WARNING: failed to clone TPM into $_tpm_dir; tmux plugins won't load until re-run." >&2
+fi
+
+# tmux-resurrect state dir. devcontainer.json mounts the
+# `synth-setter-tmux-resurrect` named volume at the dev user's path
+# (/home/dev/.local/share/tmux/resurrect); the mount is dev-only by design, so
+# DEVCONTAINER_USER=root sessions land on the non-mounted root path and won't
+# survive rebuilds. mkdir is a no-op when the volume is mounted.
+mkdir -p "$HOME/.local/share/tmux/resurrect"
+
+# Non-interactive plugin install equivalent to hitting prefix+I inside tmux.
+# Stdout is discarded (TPM is chatty on success); stderr is preserved so a
+# real failure surfaces the underlying git/clone error. The warning catches
+# the broader cases (e.g. egress blocked); users can always rerun prefix+I.
+#
+# TPM's helpers call `tmux start-server` at script-load time (see
+# scripts/helpers/plugin_functions.sh:_tpm_path) without -L, which would
+# otherwise bind /tmp/tmux-$UID/default. If a tmux server is already running
+# on that path — as happens when this script is rerun manually inside an
+# active devcontainer — the bind() replaces the on-disk socket dirent and
+# orphans the existing server (sessions stay alive in-kernel but become
+# unreachable). Override TMUX_TMPDIR to a throwaway dir so TPM's internal
+# tmux invocation lands on its own socket and can't touch the user's.
+if [ -x "$_tpm_dir/bin/install_plugins" ]; then
+  _tpm_tmpdir="$(mktemp -d)"
+  TMUX_TMPDIR="$_tpm_tmpdir" "$_tpm_dir/bin/install_plugins" >/dev/null \
+    || echo "WARNING: TPM install_plugins failed; run prefix+I inside tmux after start." >&2
+  TMUX_TMPDIR="$_tpm_tmpdir" tmux kill-server 2>/dev/null || true
+  rm -rf "$_tpm_tmpdir"
+  unset _tpm_tmpdir
+fi
+
 # Drop to `dev` when invoked as root so workspace mutations (git config
 # --local, pre-commit install → .git/hooks/*) don't land root-owned in the
 # bind-mounted workspace. Both opt-in DEVCONTAINER_USER=root sessions and

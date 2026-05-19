@@ -1,6 +1,5 @@
 import json
 import plistlib
-import sys
 import threading
 from pathlib import Path
 from typing import Optional, Tuple
@@ -54,28 +53,36 @@ def extract_renderer_version(plugin_path: Path) -> str:
 
 
 def load_plugin(plugin_path: str) -> VST3Plugin:
-    """Load a VST3 plugin (with a brief editor warmup on non-Darwin — see comment below for
-    rationale)."""
+    """Load a VST3 plugin instance.
+
+    No warm-up — see ``warmup_plugin``.
+    """
     logger.info(f"Loading plugin {plugin_path}")
     p = VST3Plugin(plugin_path)
     logger.info(f"Plugin {plugin_path} loaded")
-    # show_editor accumulates AppKit/CGS commit-handler state per call in
-    # unbundled python and triggers SIGTRAP after ~3-4 plugin reloads on
-    # Darwin (#714). The post-load process() flush in render_params is
-    # sufficient to commit Surge XT's preset state — see preset-coverage
-    # audit on #714 for the empirical justification.
-    if sys.platform != "darwin":
-        logger.info("Preparing plugin for preset load...")
-        close_editor = threading.Event()
-        timer = threading.Timer(_EDITOR_INIT_DELAY_SECONDS, close_editor.set)
-        timer.daemon = True
-        timer.start()
-        try:
-            p.show_editor(close_editor)
-        finally:
-            timer.cancel()
-            close_editor.set()  # defensive: ensure show_editor unblocks even if Timer fails
     return p
+
+
+def warmup_plugin(plugin: VST3Plugin) -> None:
+    """Run the ``show_editor`` warm-up to nudge the plugin's commit-handler state.
+
+    Side-effect only; the plugin must already be loaded. Callers are responsible
+    for not exceeding the empirical ~3-4 calls-per-process threshold on Darwin
+    (#714) — ``RenderConfig.gui_toggle_cadence`` enforces this for the renderer
+    paths by rejecting ``"render"`` on Darwin.
+
+    :param plugin: A loaded VST3 plugin; ``show_editor`` is invoked once on it.
+    """
+    logger.info("Warming up plugin via show_editor (commit-handler state)...")
+    close_editor = threading.Event()
+    timer = threading.Timer(_EDITOR_INIT_DELAY_SECONDS, close_editor.set)
+    timer.daemon = True
+    timer.start()
+    try:
+        plugin.show_editor(close_editor)
+    finally:
+        timer.cancel()
+        close_editor.set()  # defensive: ensure show_editor unblocks even if Timer fails
 
 
 def load_preset(plugin: VST3Plugin, preset_path: str) -> None:
@@ -104,15 +111,25 @@ def render_params(
     sample_rate: float,
     channels: int,
     preset_path: Optional[str] = None,
+    *,
+    plugin: Optional[VST3Plugin] = None,
+    warmup: bool = False,
 ) -> np.ndarray:
-    """Render a single audio sample by loading the plugin fresh per call.
+    """Render a single audio sample; reuse ``plugin`` if supplied, else load fresh.
 
-    Reloads the plugin on every call to work around stale-state bug #489. This incurs an extra
-    plugin-load per render; see #705 for the perf follow-up.
+    The flush sequence runs every call (preset-state determinism, #489). When
+    ``plugin`` is supplied, ``plugin_path`` / ``preset_path`` are ignored; the
+    caller owns load + preset placement. When ``warmup`` is True, ``warmup_plugin``
+    runs after loading (or directly on the supplied plugin) and before the flush
+    sequence. See #705 for the load-once-per-shard motivation.
     """
-    plugin = load_plugin(plugin_path)
-    if preset_path is not None:
-        load_preset(plugin, preset_path)
+    if plugin is None:
+        plugin = load_plugin(plugin_path)
+        if preset_path is not None:
+            load_preset(plugin, preset_path)
+
+    if warmup:
+        warmup_plugin(plugin)
 
     logger.debug("post-load flush")
     plugin.process([], 32.0, sample_rate, channels, 2048, True)  # flush

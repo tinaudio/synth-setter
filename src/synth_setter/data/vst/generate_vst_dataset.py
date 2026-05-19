@@ -8,6 +8,7 @@ import librosa
 import numpy as np
 import rootutils
 from loguru import logger
+from pedalboard import VST3Plugin
 from pyloudnorm import Meter
 from pydantic_settings import BaseSettings, CliApp, CliPositionalArg, SettingsConfigDict
 
@@ -77,6 +78,9 @@ def generate_sample(
     preset_path: str,
     fixed_synth_params: dict[str, float] | None = None,
     fixed_note_params: dict[str, int | tuple[float, float]] | None = None,
+    *,
+    plugin: VST3Plugin | None = None,
+    warmup: bool = False,
 ) -> VSTDataSample:
     """Render a single VST sample.
 
@@ -88,6 +92,14 @@ def generate_sample(
     so re-sampling note params alone almost never lifts a silent patch above
     ``min_loudness`` and the loop would run forever. When only ``fixed_note_params``
     is supplied, the synth is re-sampled each retry and the loop remains meaningful.
+
+    :param plugin: Forwarded to ``render_params``; when set, the renderer
+        skips ``load_plugin``/``load_preset``.
+    :param warmup: Forwarded to ``render_params``; runs the ``show_editor``
+        warm-up on the plugin used for this render (newly loaded or cached).
+        Applied at most once per ``generate_sample`` call — the loudness-gate
+        retry loop drops ``warmup`` to ``False`` after the first attempt so a
+        retrying sample never exceeds the per-shard cadence budget (#714).
     """
     while True:
         if fixed_synth_params is None or fixed_note_params is None:
@@ -111,7 +123,10 @@ def generate_sample(
             sample_rate,
             channels,
             preset_path=preset_path,
+            plugin=plugin,
+            warmup=warmup,
         )
+        warmup = False
 
         meter = Meter(sample_rate)
         loudness = meter.integrated_loudness(output.T)

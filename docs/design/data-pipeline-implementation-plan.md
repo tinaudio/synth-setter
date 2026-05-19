@@ -6,6 +6,17 @@
 > are not yet created. Phases 3-6 are not started. Storage layer, validation,
 > reconciliation, compute backend, and CLI modules do not exist yet.
 >
+> **`metadata/workers/` + finalize are future state.** Every reference to the
+> `metadata/workers/` staging prefix, the shard-lifecycle markers
+> (`.rendering` / `.valid` / `.invalid` / `.promoted`), and the
+> `pipeline.cli finalize` promotion step in this document describes the target
+> architecture, not current behavior. The MVP worker
+> (`src/synth_setter/cli/generate_dataset.py`) writes shards directly to
+> `data/<task_name>/<run_id>/` with no staging or finalize. Tracked in
+> [#406](https://github.com/tinaudio/synth-setter/issues/406) (CLAUDE.md /
+> design-doc reconciliation) and [#72](https://github.com/tinaudio/synth-setter/issues/72)
+> (Phase 5 Pipeline CLI).
+>
 > **Canonical design:** [data-pipeline.md](data-pipeline.md)
 > **Tracking:** #74
 > **Issue tracking:** [github-taxonomy.md](github-taxonomy.md)
@@ -109,7 +120,8 @@ sample_rate: 44100
 shard_size: 10000
 num_shards: 48
 base_seed: 42
-r2_bucket: intermediate-data
+r2:
+  bucket: intermediate-data
 
 splits:
   train: 44
@@ -259,7 +271,7 @@ Sub-issues: [#18](https://github.com/tinaudio/synth-setter/issues/18) (config-dr
 - `DatasetConfig` (Pydantic strict): validates raw YAML input. Fields match config schema (§4).
   `output_format` defaults to `"hdf5"` if missing from config.
 - `DatasetPipelineSpec` (frozen, strict): `run_id` (was `dataset_wandb_run_id` in plan),
-  `r2_prefix`, `created_at`, `code_version`, `is_repo_dirty`,
+  `r2` (nested `R2Location`), `created_at`, `code_version`, `is_repo_dirty`,
   `param_spec`, `renderer_version`, `output_format` (`"hdf5"` or `"wds"`), `sample_rate`,
   `shard_size`, `base_seed`, `num_params`, `splits`, `plugin_path`, `preset_path`,
   `channels`, `velocity`, `signal_duration_seconds`, `min_loudness`,

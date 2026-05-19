@@ -55,13 +55,15 @@ def _smoke_spec() -> DatasetSpec:
         min_loudness=-55.0,
         samples_per_render_batch=32,
         samples_per_shard=10000,
+        # Darwin-portable (#714).
+        gui_toggle_cadence="never",
     )
     return DatasetSpec(
         task_name="ci-smoke-test",
         output_format="hdf5",
         train_val_test_sizes=(440000, 20000, 20000),
         base_seed=42,
-        r2_bucket="intermediate-data",
+        r2={"bucket": "intermediate-data"},  # type: ignore[arg-type]
         render=render_cfg,
     )
 

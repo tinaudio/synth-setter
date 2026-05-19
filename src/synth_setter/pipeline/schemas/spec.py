@@ -4,7 +4,7 @@
 config or runtime-materialized artifact. Hydra composes a dict from groups;
 the entrypoint constructs ``DatasetSpec`` directly from that dict on line 1
 of ``main``. Runtime fields (``git_sha``, ``created_at``, ``run_id``,
-``r2_prefix``) auto-fill via ``default_factory`` when missing and pass through
+``r2.prefix``) auto-fill via ``default_factory`` when missing and pass through
 when present (worker reconstruction from JSON). ``shards``/``num_shards``/
 ``num_params`` are computed deterministically from layout + render fields.
 """
@@ -12,6 +12,7 @@ when present (worker reconstruction from JSON). ``shards``/``num_shards``/
 from __future__ import annotations
 
 import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
 from functools import cached_property
 from typing import Any, Literal
@@ -31,14 +32,26 @@ from synth_setter.pipeline.schemas.prefix import (
     make_dataset_wandb_run_id,
     make_r2_prefix,
 )
+from synth_setter.pipeline.schemas.r2_location import R2Location
 
 __all__ = [
     "EXTENSION_TO_OUTPUT_FORMAT",
     "OUTPUT_FORMAT_TO_EXTENSION",
     "DatasetSpec",
+    "R2Location",
     "RenderConfig",
     "ShardSpec",
 ]
+
+# Flat-form keys promoted into the nested ``r2`` dict by the back-compat shim.
+# Maps the legacy top-level key → the nested ``R2Location`` field. Anchored
+# here (not on ``DatasetSpec``) so the dict literal is the source of truth and
+# can't drift from the validator that consumes it.
+_LEGACY_FLAT_R2_KEYS: dict[str, str] = {
+    "r2_bucket": "bucket",
+    "r2_prefix_root": "prefix_root",
+    "r2_prefix": "prefix",
+}
 
 # Source-of-truth mapping from ``output_format`` to shard filename suffix.
 # Adding a format means adding a row here; missing entries surface as KeyError
@@ -109,14 +122,39 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _current_platform() -> str:  # noqa: DOC201,DOC203
+    """Return ``sys.platform`` via a patchable indirection (tests patch this, not ``sys``)."""
+    return sys.platform
+
+
+_GuiToggleCadence = Literal["never", "once", "render"]
+_PluginReloadCadence = Literal["once", "render"]
+
+
+def _default_gui_toggle_cadence() -> _GuiToggleCadence:  # noqa: DOC201,DOC203
+    """Return ``"never"`` on Darwin (validator rejects ``"render"`` — #714), else ``"render"``.
+
+    Non-Darwin keeps the historical per-render warm-up so this config switch
+    doesn't change production behaviour; ``"once"`` is opt-in.
+    """
+    return "never" if _current_platform() == "darwin" else "render"
+
+
 class ShardSpec(BaseModel):
     """Per-shard identity and pre-computed derived values."""
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
-    shard_id: int
-    filename: str
-    seed: int
+    shard_id: int = Field(
+        description="Logical shard index (0-based), independent of compute infrastructure."
+    )
+    filename: str = Field(
+        description=(
+            "Shard filename including the format-specific suffix "
+            "(``shard-NNNNNN.h5`` or ``shard-NNNNNN.tar``)."
+        )
+    )
+    seed: int = Field(description="Per-shard RNG seed, derived as ``base_seed + shard_id``.")
 
 
 class RenderConfig(BaseModel):
@@ -130,17 +168,58 @@ class RenderConfig(BaseModel):
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
-    plugin_path: str
-    preset_path: str
-    param_spec_name: str
-    renderer_version: str
-    sample_rate: int
-    channels: int
-    velocity: int
-    signal_duration_seconds: float
-    min_loudness: float
-    samples_per_render_batch: int = 32
-    samples_per_shard: int
+    plugin_path: str = Field(
+        description="Filesystem path to the VST3 plugin bundle the worker loads."
+    )
+    preset_path: str = Field(
+        description=(
+            "Filesystem path to the ``.fxp``/``.vstpreset`` baseline preset loaded before "
+            "random parameter override."
+        )
+    )
+    param_spec_name: str = Field(
+        description=(
+            "Key into the in-process param-spec registry; resolved inside the worker, "
+            "not the launcher."
+        )
+    )
+    renderer_version: str = Field(
+        description="Renderer code-path version stamp recorded in shard provenance."
+    )
+    sample_rate: int = Field(description="Audio sample rate in Hz.")
+    channels: int = Field(description="Audio channel count.")
+    velocity: int = Field(description="MIDI velocity used for every render in this run (0-127).")
+    signal_duration_seconds: float = Field(
+        description="Duration of each rendered audio sample, in seconds."
+    )
+    min_loudness: float = Field(
+        description="Per-sample loudness floor; renders quieter than this are rejected/retried."
+    )
+    samples_per_render_batch: int = Field(
+        default=32,
+        description="Batch size the renderer uses inside a shard.",
+    )
+    samples_per_shard: int = Field(
+        description="Samples written per shard; each split size must be a multiple of this."
+    )
+    plugin_reload_cadence: _PluginReloadCadence = Field(
+        default="render",
+        description=(
+            'How often to reload the plugin within a shard: ``"once"`` loads + applies '
+            'the preset once per shard and reuses the cached instance; ``"render"`` '
+            "(default, historical per-#489 behaviour) reloads on every render."
+        ),
+    )
+    gui_toggle_cadence: _GuiToggleCadence = Field(
+        default_factory=_default_gui_toggle_cadence,
+        description=(
+            'How often to run the ``show_editor`` warm-up on the plugin: ``"never"`` '
+            'skips it entirely, ``"once"`` runs it once per shard, ``"render"`` runs '
+            "it before every render (default on non-Darwin, matching historical "
+            'per-render warm-up). Darwin rejects ``"render"`` (SIGTRAP after ~3-4 '
+            'calls, #714); the default factory yields ``"never"`` on Darwin.'
+        ),
+    )
 
     @model_validator(mode="after")
     def _ranges_must_be_sane(self) -> RenderConfig:
@@ -163,6 +242,22 @@ class RenderConfig(BaseModel):
             raise ValueError("renderer_version must not be blank")
         return self
 
+    @model_validator(mode="after")
+    def _gui_toggle_cadence_forbids_render_on_darwin(self) -> RenderConfig:  # noqa: DOC201,DOC203,DOC501,DOC503
+        """Reject ``gui_toggle_cadence="render"`` on Darwin (SIGTRAP after ~3-4 calls, #714).
+
+        ``"once"`` is permitted because a single ``show_editor`` call sits below
+        the empirical SIGTRAP threshold.
+        """
+        if self.gui_toggle_cadence == "render" and _current_platform() == "darwin":
+            raise ValueError(
+                'gui_toggle_cadence="render" is not supported on Darwin: '
+                "show_editor accumulates AppKit/CGS commit-handler state per "
+                "call in unbundled python and triggers SIGTRAP after ~3-4 "
+                'plugin reloads (#714). Use "once" or "never" on Darwin.'
+            )
+        return self
+
 
 # Names paired with ``train_val_test_sizes`` indices in error messages.
 _SPLIT_LABELS: tuple[str, str, str] = ("train", "val", "test")
@@ -175,23 +270,125 @@ def _default_run_id(data: dict[str, Any]) -> str:
     )
 
 
-def _default_r2_prefix(data: dict[str, Any]) -> str:
-    """Compute the R2 object prefix from already-validated layout fields."""
-    return make_r2_prefix(
+def _default_r2_location(data: dict[str, Any]) -> dict[str, Any]:  # noqa: DOC203
+    """Build a partial ``r2`` dict (no ``bucket``) when the ``r2`` field was omitted.
+
+    The DatasetSpec model_validator promotes the legacy flat keys and fills
+    partial ``r2`` dicts before this factory ever fires — this path covers the
+    "no ``r2`` block at all" case. ``bucket`` is intentionally omitted so the
+    nested ``R2Location`` validator fails with Pydantic's standard missing-
+    required-field error on ``r2.bucket`` (rather than this factory inventing
+    a placeholder that would mask the real misconfiguration).
+
+    :param data: Already-validated DatasetSpec field data exposed to the factory.
+    :returns: Dict shaped like ``R2Location.model_fields`` minus ``bucket``;
+        ``R2Location`` validation then raises the missing-field error.
+    """
+    return {
+        "prefix_root": DEFAULT_R2_PREFIX_ROOT,
+        "prefix": make_r2_prefix(
+            DatasetConfigId(data["task_name"]),
+            data["run_id"],
+            prefix_root=DEFAULT_R2_PREFIX_ROOT,
+        ),
+    }
+
+
+def _coerce_created_at_to_datetime(value: Any) -> datetime | None:  # noqa: DOC203
+    """Best-effort parse of ``created_at`` for pre-validation prefix derivation.
+
+    The ``mode='before'`` model validator sees raw input — Python datetimes for
+    in-process construction, ISO strings for JSON-loaded specs.
+
+    :param value: Raw ``created_at`` input from the user dict (datetime, string, or other).
+    :returns: A tz-aware UTC datetime when parsing succeeds, else ``None``. ``None``
+        signals the caller to fall back to the field's ``default_factory`` so the
+        ``created_at`` field validator can surface the proper error attribution.
+    """
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        candidate = value[:-1] + "+00:00" if value.endswith("Z") else value
+        try:
+            parsed = datetime.fromisoformat(candidate)
+        except ValueError:
+            return None
+    else:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
+        return None
+    return parsed
+
+
+def _fill_default_r2_prefix(  # noqa: DOC203
+    data: dict[str, Any], r2: dict[str, Any]
+) -> dict[str, Any]:
+    """Return a copy of ``r2`` with ``prefix`` derived from layout fields when missing.
+
+    Mirrors the prior ``_default_r2_prefix`` factory exactly:
+    ``<prefix_root>/<task_name>/<run_id>/``. ``run_id`` and ``created_at`` are
+    materialized in ``data`` when absent (using the same factories the field
+    defaults would have used), so the worker's JSON-round-trip preservation
+    contract holds end-to-end: any value derived here is observed by the
+    field validators too. The shim falls back to the caller's ``r2`` unchanged
+    whenever it can't safely build a prefix — every such path leaves a
+    downstream validator (on ``created_at``, ``task_name``, ``prefix_root``)
+    in charge of the error attribution.
+
+    :param data: Raw input dict to ``DatasetSpec`` (mutated in-place when run_id /
+        created_at need filling so the field defaults observe the same value).
+    :param r2: Raw nested ``r2`` sub-dict (may be missing ``prefix``).
+    :returns: A ``r2`` dict either filled with a derived ``prefix`` or returned
+        verbatim when prefix derivation is not safely available.
+    """
+    if not _can_derive_prefix(data, r2):
+        return r2
+    if data.get("created_at") is None:
+        data["created_at"] = _utc_now()
+    if not data.get("run_id"):
+        created_at = _coerce_created_at_to_datetime(data["created_at"])
+        if created_at is None:
+            return r2
+        data["run_id"] = make_dataset_wandb_run_id(
+            DatasetConfigId(data["task_name"]), timestamp=created_at
+        )
+    filled = dict(r2)
+    filled["prefix"] = make_r2_prefix(
         DatasetConfigId(data["task_name"]),
         data["run_id"],
-        prefix_root=data["r2_prefix_root"],
+        prefix_root=filled.get("prefix_root", DEFAULT_R2_PREFIX_ROOT),
     )
+    return filled
 
 
-class DatasetSpec(BaseModel):
+def _can_derive_prefix(data: dict[str, Any], r2: dict[str, Any]) -> bool:  # noqa: DOC203
+    """Return True when layout fields can produce a derived ``prefix`` cleanly.
+
+    Defers cases that would otherwise trip ``make_r2_prefix`` (blank task_name,
+    blank prefix_root) to the field validators downstream so the right boundary
+    surfaces the error.
+
+    :param data: Raw input dict to ``DatasetSpec``.
+    :param r2: Raw nested ``r2`` sub-dict.
+    :returns: ``True`` iff prefix derivation will succeed without raising.
+    """
+    task_name = data.get("task_name")
+    if not isinstance(task_name, str) or not task_name.strip():
+        return False
+    prefix_root = r2.get("prefix_root", DEFAULT_R2_PREFIX_ROOT)
+    if not isinstance(prefix_root, str) or not prefix_root.strip("/").strip():
+        return False
+    return True
+
+
+class DatasetSpec(BaseModel):  # noqa: DOC601,DOC603
     """Unified dataset specification — config + materialized runtime in one model.
 
     Construction story:
 
     - Hydra composes a dict from groups.
     - ``DatasetSpec(**dict)`` runs validation; runtime fields (git_sha,
-      created_at, run_id, r2_prefix, is_repo_dirty) auto-fill via
+      created_at, run_id, r2.prefix, is_repo_dirty) auto-fill via
       ``default_factory`` when missing and pass through when present.
     - Workers re-validate ``model_dump_json()`` from R2 and get an equal model.
 
@@ -200,35 +397,120 @@ class DatasetSpec(BaseModel):
     Frozen so the materialized artifact is immutable post-construction.
     """
 
-    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid", validate_default=True)
 
-    # Layout fields. Splits are stored as immutable tuples so the frozen-model
-    # guarantee carries through to the contents; JSON-loaded values arrive as
-    # lists and get coerced via ``_splits_list_to_tuple`` below.
-    task_name: str
-    output_format: Literal["hdf5", "wds"]
-    train_val_test_sizes: tuple[int, int, int]
-    # Reserved for per-sample seeding (#884); not implemented. Accepts only
-    # ``None`` — any non-None value (yaml, JSON, or in-process) raises
-    # ``NotImplementedError`` at construction. See ``_reject_train_val_test_seeds``.
-    train_val_test_seeds: tuple[int, int, int] | None = None
-    base_seed: int
-    r2_bucket: str
-    r2_prefix_root: str = DEFAULT_R2_PREFIX_ROOT
+    # Splits stored as immutable tuples; JSON lists are coerced by _splits_list_to_tuple.
+    task_name: str = Field(
+        description=(
+            "Dataset config identifier; becomes the prefix of ``run_id`` and the "
+            "config-id path segment of ``r2.prefix`` (``<root>/<task_name>/<run_id>/``)."
+        )
+    )
+    output_format: Literal["hdf5", "wds"] = Field(
+        description=(
+            "Shard container format; ``hdf5`` writes ``.h5``, ``wds`` writes WebDataset ``.tar``."
+        )
+    )
+    train_val_test_sizes: tuple[int, int, int] = Field(
+        description=(
+            "Sample counts per split; each entry must be a multiple of "
+            "``render.samples_per_shard``."
+        )
+    )
+    # Enforced by _reject_train_val_test_seeds.
+    train_val_test_seeds: tuple[int, int, int] | None = Field(
+        default=None,
+        description=(
+            "Reserved for per-sample seeding (#884); must be ``None`` until implemented — "
+            "any non-None value raises ``NotImplementedError`` at construction."
+        ),
+    )
+    base_seed: int = Field(
+        description="Seed used to derive per-shard ``ShardSpec.seed`` values (``base_seed + shard_id``)."
+    )
 
-    # Sub-model
-    render: RenderConfig
+    render: RenderConfig = Field(
+        description="Nested ``RenderConfig`` carrying every per-shard renderer input."
+    )
 
-    # Auto-filled runtime fields. The factory runs only when the field is
-    # missing on input — JSON-loaded specs preserve the materialization-time
-    # values workers must reuse. The lambdas around ``_get_git_sha`` etc.
-    # defer the lookup to call time so tests that ``monkeypatch.setattr`` on
-    # the module attribute reach this resolution path.
-    git_sha: str = Field(default_factory=lambda: _get_git_sha())
-    is_repo_dirty: bool = Field(default_factory=lambda: _is_repo_dirty())
-    created_at: datetime = Field(default_factory=lambda: _utc_now())
-    run_id: str = Field(default_factory=_default_run_id)
-    r2_prefix: str = Field(default_factory=_default_r2_prefix)
+    # Auto-filled runtime fields: factories fire only when the value is missing on
+    # input, so JSON-loaded specs preserve materialization-time values. The lambda
+    # wrappers defer lookup so ``monkeypatch.setattr`` on the module attr is
+    # honored at call time.
+    git_sha: str = Field(
+        default_factory=lambda: _get_git_sha(),
+        description=(
+            "Commit SHA of the launcher's working tree at construction; sentinel "
+            "``git-unavailable`` when not in a git repo."
+        ),
+    )
+    is_repo_dirty: bool = Field(
+        default_factory=lambda: _is_repo_dirty(),
+        description=(
+            "Whether the launcher's working tree had uncommitted changes at construction."
+        ),
+    )
+    created_at: datetime = Field(
+        default_factory=lambda: _utc_now(),
+        description=(
+            "UTC timestamp when the spec was first constructed; preserved across "
+            "worker round-trips via JSON."
+        ),
+    )
+    run_id: str = Field(
+        default_factory=_default_run_id,
+        description="Deterministic W&B run ID derived from ``task_name`` and ``created_at``.",
+    )
+    r2: R2Location = Field(
+        # Returns a dict that Pydantic re-validates as R2Location via
+        # ``validate_default=True``; pyright doesn't see the coercion.
+        default_factory=_default_r2_location,  # type: ignore[arg-type]
+        description=(
+            "Nested R2 storage location (bucket + prefix_root + materialized prefix). "
+            "Replaces the legacy flat ``r2_bucket`` / ``r2_prefix_root`` / ``r2_prefix`` "
+            "fields; the model validator promotes legacy-form input dicts into this shape."
+        ),
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_r2_input(cls, data: Any) -> Any:  # noqa: DOC203
+        """Promote legacy flat ``r2_bucket`` / ``r2_prefix_root`` / ``r2_prefix`` into ``r2``.
+
+        Back-compat shim for materialized ``input_spec.json`` files already
+        written to R2 before the nested ``R2Location`` migration. Mixed input
+        (any legacy key AND an explicit ``r2``) is rejected — promotion would
+        otherwise have to pick a precedence rule with no good answer. After
+        promotion the missing ``prefix`` is filled from layout fields the same
+        way the previous flat ``_default_r2_prefix`` factory did.
+
+        :param data: Raw input to the validator (typically a dict; pass-through otherwise).
+        :returns: Same input unchanged if no normalization is needed; otherwise a
+            new dict with legacy keys promoted under ``r2`` and ``prefix`` filled.
+        :raises ValueError: ``data`` contains both nested ``r2`` AND any legacy flat
+            ``r2_*`` key — that combination is ambiguous and must be rewritten.
+        """
+        if not isinstance(data, dict):
+            return data
+        legacy_present = {k for k in _LEGACY_FLAT_R2_KEYS if k in data}
+        if legacy_present and "r2" in data:
+            raise ValueError(
+                f"DatasetSpec received both nested 'r2' and legacy flat keys "
+                f"{sorted(legacy_present)}; pass one shape, not both"
+            )
+        if not legacy_present and "r2" not in data:
+            return data
+        data = dict(data)
+        if legacy_present:
+            promoted: dict[str, Any] = {}
+            for legacy_key, nested_key in _LEGACY_FLAT_R2_KEYS.items():
+                if legacy_key in data:
+                    promoted[nested_key] = data.pop(legacy_key)
+            data["r2"] = promoted
+        r2 = data["r2"]
+        if isinstance(r2, dict) and "prefix" not in r2:
+            data["r2"] = _fill_default_r2_prefix(data, r2)
+        return data
 
     @model_validator(mode="before")
     @classmethod
@@ -309,34 +591,10 @@ class DatasetSpec(BaseModel):
                 )
         return value
 
-    @field_validator("r2_prefix")
-    @classmethod
-    def _r2_prefix_must_end_with_slash(cls, value: str) -> str:
-        """Reject prefixes lacking a trailing ``/`` so rclone never gets ".../prefixfilename"."""
-        if not value.endswith("/"):
-            raise ValueError(f"r2_prefix must end with '/' (got: {value!r})")
-        return value
-
-    @field_validator("r2_bucket")
-    @classmethod
-    def _r2_bucket_must_not_be_blank(cls, value: str) -> str:
-        """Reject blank buckets so rclone never receives a malformed ``r2:/...`` destination."""
-        if not value.strip():
-            raise ValueError("r2_bucket must not be blank")
-        return value
-
-    @field_validator("r2_prefix_root")
-    @classmethod
-    def _r2_prefix_root_must_not_be_blank(cls, value: str) -> str:
-        """Reject blank prefix roots so derived ``r2_prefix`` doesn't start with a stray ``/``."""
-        if not value.strip():
-            raise ValueError("r2_prefix_root must not be blank")
-        return value
-
     @field_validator("task_name")
     @classmethod
     def _task_name_must_not_be_blank(cls, value: str) -> str:
-        """Reject blank ``task_name`` so derived run_id / r2_prefix are never empty-prefixed."""
+        """Reject blank ``task_name`` so derived run_id / r2.prefix are never empty-prefixed."""
         if not value.strip():
             raise ValueError("task_name must not be blank")
         return value

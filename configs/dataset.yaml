@@ -11,6 +11,7 @@ defaults:
   - r2: default
   - paths: default
   - hydra: default
+  - skypilot_launch: default
   - experiment: ???
 
 task_name: ???
@@ -24,6 +25,7 @@ output_format: hdf5
 base_seed: 42
 
 train_val_test_sizes: ???
-
-r2_bucket: ${r2.bucket}
-r2_prefix_root: ${r2.prefix_root}
+# ``r2:`` lands here from the ``r2: default`` group composition above. Its
+# shape (``bucket`` + ``prefix_root``) matches the nested ``R2Location`` model
+# on ``DatasetSpec``; the spec's ``prefix`` is filled by the model validator
+# from ``task_name`` + ``run_id`` at construction.

@@ -70,14 +70,16 @@ def _base_spec_kwargs(tmp_path: Path, **overrides: object) -> dict[str, object]:
     kwargs: dict[str, object] = {
         "task_name": "test-dataset",
         "run_id": "test-dataset-20260328T120000000Z",
-        "r2_prefix": "data/test-dataset/test-dataset-20260328T120000000Z/",
         "created_at": datetime(2026, 3, 28, 12, 0, 0, tzinfo=timezone.utc),
         "git_sha": "a" * 40,
         "is_repo_dirty": False,
         "output_format": "hdf5",
         "train_val_test_sizes": [10000, 0, 0],
         "base_seed": 42,
-        "r2_bucket": "intermediate-data",
+        "r2": {
+            "bucket": "intermediate-data",
+            "prefix": "data/test-dataset/test-dataset-20260328T120000000Z/",
+        },
         "render": {
             "plugin_path": str(TEST_PLUGIN_VST3),
             "preset_path": "presets/surge-base.vstpreset",
@@ -90,6 +92,7 @@ def _base_spec_kwargs(tmp_path: Path, **overrides: object) -> dict[str, object]:
             "min_loudness": -55.0,
             "samples_per_render_batch": 32,
             "samples_per_shard": 10000,
+            "gui_toggle_cadence": "never",
         },
     }
     kwargs.update(overrides)
@@ -160,7 +163,7 @@ class TestRun:
         # into the prefix directory preserves the basename → final object
         # key is `{prefix}{INPUT_SPEC_FILENAME}`.
         assert spec_src.endswith(INPUT_SPEC_FILENAME)
-        assert spec_dest == f"r2:{spec.r2_bucket}/{spec.r2_prefix}"
+        assert spec_dest == f"r2:{spec.r2.bucket}/{spec.r2.prefix}"
 
     @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
     @patch("synth_setter.cli.generate_dataset._rclone_copy")
@@ -241,7 +244,7 @@ class TestRun:
         assert len(rclone_calls) == 2
         shard_src, shard_dest = rclone_calls[1][0]
         assert "shard-000000.h5" in shard_src
-        assert shard_dest == f"r2:{spec.r2_bucket}/{spec.r2_prefix}"
+        assert shard_dest == f"r2:{spec.r2.bucket}/{spec.r2.prefix}"
 
     @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
     @patch("synth_setter.cli.generate_dataset._rclone_copy")
@@ -626,7 +629,7 @@ class TestRun:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Probe is called once per assigned shard with the full object URI under r2_prefix."""
+        """Probe is called once per assigned shard with the full object URI under r2.prefix."""
         spec = _multi_shard_spec(tmp_path, n=3)
         probed_uris: list[str] = []
 
@@ -640,7 +643,7 @@ class TestRun:
         run(spec)
 
         assert probed_uris == [
-            f"r2://{spec.r2_bucket}/{spec.r2_prefix}{shard.filename}" for shard in spec.shards
+            f"r2://{spec.r2.bucket}/{spec.r2.prefix}{shard.filename}" for shard in spec.shards
         ]
 
     @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
@@ -777,11 +780,12 @@ class TestSpecFromCfg:
     """``spec_from_cfg`` drops Hydra-only groups and constructs a DatasetSpec."""
 
     def test_drops_non_spec_groups(self, valid_dataset_spec_kwargs: dict[str, object]) -> None:
-        """``data``, ``r2``, ``paths``, ``hydra`` are dropped so strict validation passes.
+        """``data``, ``paths``, ``hydra`` are dropped so strict validation passes.
 
         DatasetSpec is configured with ``extra="forbid"``; if any of these groups leaked through,
         construction would raise on the unknown field. The assertion is implicit in the absence
-        of a ValidationError.
+        of a ValidationError. After the ``R2Location`` migration ``r2`` is *not* dropped —
+        it composes from ``configs/r2/default.yaml`` directly into ``DatasetSpec.r2``.
         """
         from omegaconf import OmegaConf
 
@@ -789,7 +793,6 @@ class TestSpecFromCfg:
 
         cfg_dict: dict[str, object] = dict(valid_dataset_spec_kwargs)
         cfg_dict["data"] = {"sample_rate": 16000}
-        cfg_dict["r2"] = {"bucket": "intermediate-data", "prefix_root": "data/"}
         cfg_dict["paths"] = {"root_dir": "/fake-root"}
         cfg_dict["hydra"] = {"runtime": {"output_dir": "/fake-out"}}
 
@@ -797,28 +800,237 @@ class TestSpecFromCfg:
 
         assert spec.task_name == valid_dataset_spec_kwargs["task_name"]
 
-    def test_resolves_interpolations_before_dropping_groups(
+    def test_r2_group_flows_into_nested_r2_field(  # noqa: DOC101,DOC103
         self, valid_dataset_spec_kwargs: dict[str, object]
     ) -> None:
-        """``${r2.bucket}`` interpolation is resolved before the ``r2`` group is dropped.
+        """The ``r2`` group composes directly into ``DatasetSpec.r2`` (no flat-key indirection).
 
-        Mirrors the production composition: ``configs/dataset.yaml`` has
-        ``r2_bucket: ${r2.bucket}`` and the ``r2`` group is only present for that interpolation.
-        Dropping ``r2`` before resolving would lose the bucket value.
+        Mirrors the production composition after the ``R2Location`` migration:
+        ``configs/dataset.yaml`` no longer interpolates flat ``r2_bucket`` /
+        ``r2_prefix_root`` keys — the group's content lands at ``cfg.r2`` and
+        passes through to ``DatasetSpec.r2``.
         """
         from omegaconf import OmegaConf
 
         from synth_setter.cli.generate_dataset import spec_from_cfg
 
         kwargs = dict(valid_dataset_spec_kwargs)
-        kwargs["r2_bucket"] = "${r2.bucket}"
-        kwargs["r2"] = {"bucket": "interpolated-bucket"}
+        kwargs["r2"] = {"bucket": "from-group-bucket", "prefix_root": "data"}
 
         spec = spec_from_cfg(OmegaConf.create(kwargs))
 
-        assert spec.r2_bucket == "interpolated-bucket"
+        assert spec.r2.bucket == "from-group-bucket"
+        assert spec.r2.prefix_root == "data"
 
 
 # PROJECT_ROOT-bootstrap behavior is exercised end-to-end by tests/pipeline/test_configs/
 # test_experiment_yamls.py — those tests fail with an InterpolationResolutionError if the
 # module's import-time `rootutils.setup_root(...)` ever stops setting PROJECT_ROOT.
+
+
+# ---------------------------------------------------------------------------
+# _build_worker_cmd — shell-quoted cmd injection for sky.Task.run
+# ---------------------------------------------------------------------------
+
+
+class TestBuildWorkerCmd:
+    """The worker cmd reconstructs the operator's Hydra invocation under bash."""
+
+    @pytest.fixture()
+    def spec(self, tmp_path: Path) -> DatasetSpec:  # noqa: DOC101,DOC103,DOC201,DOC203
+        """Reusable DatasetSpec for worker-cmd construction (no I/O — pure kwargs)."""
+        return DatasetSpec(**_base_spec_kwargs(tmp_path))  # type: ignore[arg-type]
+
+    def test_cmd_uses_from_hydra_console_script(self, spec: DatasetSpec) -> None:  # noqa: DOC101,DOC103
+        """The worker reproduces the composition by re-entering the from_hydra entry point."""
+        from synth_setter.cli.generate_dataset import _build_worker_cmd
+
+        cmd = _build_worker_cmd(["experiment=foo"], spec)
+        assert "synth-setter-generate-dataset-from-hydra" in cmd
+        assert "experiment=foo" in cmd
+
+    def test_cmd_cds_to_worker_repo_root_not_launcher_repo(  # noqa: DOC101,DOC103
+        self, spec: DatasetSpec
+    ) -> None:
+        """Cd target is the worker checkout, not the launcher's path."""
+        from synth_setter.cli.generate_dataset import _WORKER_REPO_ROOT, _build_worker_cmd
+
+        cmd = _build_worker_cmd([], spec)
+        assert cmd.startswith(f"cd {_WORKER_REPO_ROOT}")
+        assert _WORKER_REPO_ROOT == "/home/build/synth-setter"
+
+    def test_cmd_runs_sync_worker_checkout_before_exec(  # noqa: DOC101,DOC103
+        self, spec: DatasetSpec
+    ) -> None:
+        """sync_worker_checkout.sh bypasses dev-snapshot bake-lag when WORKER_GIT_REF is set."""
+        from synth_setter.cli.generate_dataset import _build_worker_cmd
+
+        cmd = _build_worker_cmd([], spec)
+        sync_idx = cmd.find("bash scripts/sync_worker_checkout.sh")
+        exec_idx = cmd.find("exec synth-setter-generate-dataset-from-hydra")
+        assert sync_idx != -1, f"sync step missing from cmd: {cmd!r}"
+        assert exec_idx != -1, f"exec step missing from cmd: {cmd!r}"
+        assert sync_idx < exec_idx, "sync_worker_checkout must run before exec"
+
+    def test_cmd_pins_spec_created_at_via_hydra_override(  # noqa: DOC101,DOC103
+        self, spec: DatasetSpec
+    ) -> None:
+        """Worker compose must inherit launcher's created_at to land on the same r2.prefix."""
+        from synth_setter.cli.generate_dataset import _build_worker_cmd
+
+        cmd = _build_worker_cmd([], spec)
+        # `+key=value` is Hydra's add-key syntax; spec.created_at.isoformat() goes in verbatim
+        # (no surrounding quotes added by shlex when the value has no shell metachars).
+        assert f"+created_at={spec.created_at.isoformat()}" in cmd
+
+    def test_cmd_shell_quotes_overrides_with_spaces(  # noqa: DOC101,DOC103
+        self, spec: DatasetSpec
+    ) -> None:
+        """Spaces and special chars in an override survive bash interpretation in run:."""
+        from synth_setter.cli.generate_dataset import _build_worker_cmd
+
+        cmd = _build_worker_cmd(["task_name=value with space"], spec)
+        # shlex.quote wraps the whole assignment in single quotes; the bare-word form
+        # would be split into two argv items by bash.
+        assert "'task_name=value with space'" in cmd
+
+    def test_cmd_handles_empty_operator_overrides(  # noqa: DOC101,DOC103
+        self, spec: DatasetSpec
+    ) -> None:
+        """No operator overrides → cmd is just cd + sync + exec + pinned-runtime override."""
+        from synth_setter.cli.generate_dataset import _build_worker_cmd
+
+        cmd = _build_worker_cmd([], spec)
+        assert cmd.startswith("cd ")
+        assert " && exec synth-setter-generate-dataset-from-hydra " in cmd
+        # No bash-interpretable trailing whitespace that would surface as an empty argv item.
+        assert cmd == cmd.rstrip()
+
+
+# ---------------------------------------------------------------------------
+# main — dispatching CLI entry: local vs SkyPilot
+# ---------------------------------------------------------------------------
+
+
+class TestMainDispatchBranches:
+    """``main()`` composes the dataset cfg from argv, then dispatches local or via SkyPilot."""
+
+    @pytest.fixture(autouse=True)
+    def _set_default_skypilot_env(self, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: DOC101,DOC103
+        """Set single-worker rank/world env so the local branch's run() succeeds."""
+        monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+        monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+
+    def test_compute_template_null_calls_run_locally(  # noqa: DOC101,DOC103
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """compute_template=null routes to run(spec) with a DatasetSpec; dispatch stays unused."""
+        import synth_setter.cli.generate_dataset as gd
+        import synth_setter.pipeline.skypilot_launch as sl
+
+        # Use a real experiment so cfg.skypilot_launch resolves; override the plugin path
+        # to the test VST3 so run() — which we replace below — sees the right spec shape.
+        argv = [
+            "synth-setter-generate-dataset",
+            "experiment=generate_dataset/smoke-shard",
+            f"render.plugin_path={TEST_PLUGIN_VST3}",
+        ]
+        monkeypatch.setattr("sys.argv", argv)
+
+        recorded: dict[str, object] = {}
+
+        def _fake_run(spec: object) -> None:
+            recorded["spec"] = spec
+
+        def _dispatch_must_not_fire(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("dispatch_via_skypilot must not be called on the local branch")
+
+        monkeypatch.setattr(gd, "run", _fake_run)
+        monkeypatch.setattr(sl, "dispatch_via_skypilot", _dispatch_must_not_fire)
+
+        gd.main()
+
+        spec = recorded.get("spec")
+        assert isinstance(spec, DatasetSpec)
+        assert spec.render.plugin_path == str(TEST_PLUGIN_VST3)
+
+    def test_compute_template_set_calls_dispatch_via_skypilot(  # noqa: DOC101,DOC103
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """compute_template=<path> routes through dispatch_via_skypilot with cmd populated."""
+        import synth_setter.cli.generate_dataset as gd
+        import synth_setter.pipeline.skypilot_launch as sl
+
+        # A bare-minimum compute YAML the loader will accept (resources + envs, no run:).
+        template = tmp_path / "template.yaml"
+        template.write_text("resources:\n  cloud: runpod\nenvs:\n  X: ''\n")
+
+        argv = [
+            "synth-setter-generate-dataset",
+            "experiment=generate_dataset/smoke-shard",
+            f"render.plugin_path={TEST_PLUGIN_VST3}",
+            f"skypilot_launch.compute_template={template}",
+        ]
+        monkeypatch.setattr("sys.argv", argv)
+
+        recorded: dict[str, object] = {}
+
+        def _fake_dispatch(spec: object, sky_cfg: object) -> None:
+            recorded["spec"] = spec
+            recorded["sky_cfg"] = sky_cfg
+
+        monkeypatch.setattr(sl, "dispatch_via_skypilot", _fake_dispatch)
+
+        def _run_must_not_fire(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("run must not be called on the dispatch branch")
+
+        monkeypatch.setattr(gd, "run", _run_must_not_fire)
+
+        gd.main()
+
+        assert "sky_cfg" in recorded
+        sky_cfg = recorded["sky_cfg"]
+        assert sky_cfg.compute_template == str(template)  # type: ignore[attr-defined]
+        assert sky_cfg.cmd is not None  # type: ignore[attr-defined]
+        # Every operator-supplied override (sans argv[0]) round-trips into the worker cmd
+        # so the worker reproduces this composition byte-for-byte.
+        for override in argv[1:]:
+            assert override in sky_cfg.cmd, (  # type: ignore[attr-defined]
+                f"override {override!r} missing from worker cmd: {sky_cfg.cmd!r}"  # type: ignore[attr-defined]
+            )
+
+    def test_operator_supplied_cmd_is_rejected(  # noqa: DOC101,DOC103
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A `+skypilot_launch.cmd=…` override is rejected before any dispatch fires.
+
+        Uses Hydra's `+key=value` add-syntax because the key isn't in
+        configs/skypilot_launch/default.yaml (struct-mode would otherwise reject it before our
+        guard runs).
+        """
+        import synth_setter.cli.generate_dataset as gd
+        import synth_setter.pipeline.skypilot_launch as sl
+
+        argv = [
+            "synth-setter-generate-dataset",
+            "experiment=generate_dataset/smoke-shard",
+            f"render.plugin_path={TEST_PLUGIN_VST3}",
+            "+skypilot_launch.cmd=rm -rf /",
+        ]
+        monkeypatch.setattr("sys.argv", argv)
+
+        def _run_must_not_fire(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("run must not be called when cmd is rejected")
+
+        def _dispatch_must_not_fire(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("dispatch_via_skypilot must not be called when cmd is rejected")
+
+        monkeypatch.setattr(gd, "run", _run_must_not_fire)
+        monkeypatch.setattr(sl, "dispatch_via_skypilot", _dispatch_must_not_fire)
+
+        with pytest.raises(ValueError, match="skypilot_launch.cmd is launcher-internal"):
+            gd.main()

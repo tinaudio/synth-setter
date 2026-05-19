@@ -1,6 +1,1346 @@
 # CHANGELOG
 
 
+## v5.3.0 (2026-05-19)
+
+### Chores
+
+- **claude**: Gitignore qrspi thoughts/ working directory
+  ([#1102](https://github.com/tinaudio/synth-setter/pull/1102),
+  [`3c160a6`](https://github.com/tinaudio/synth-setter/commit/3c160a6fae04c25acbfcceacc3d17cb3663e0189))
+
+The thoughts/ directory is where the qrspi suite of skills and research_codebase / create_plan /
+  thoughts-locator / thoughts-analyzer tooling write local working notes (research, plans, design
+  docs). It is developer-local state, not source code.
+
+Add it under the existing # Claude Code section alongside .claude/ and .agent-reviews/.
+
+Closes #1101
+
+- **devcontainer**: Persist tmux sessions across rebuilds via tmux-continuum + TPM
+  ([#1104](https://github.com/tinaudio/synth-setter/pull/1104),
+  [`42b1e48`](https://github.com/tinaudio/synth-setter/commit/42b1e4829afa6b3d1a822b8249259b5ca47b93a1))
+
+* feat(devcontainer): persist tmux sessions across rebuilds via tmux-continuum + TPM
+
+Wire TPM (tmux plugin manager) plus tmux-resurrect and tmux-continuum into the devcontainer so a
+  `Rebuild Container` no longer wipes open tmux windows/panes/layouts. The resurrect state dir lives
+  on a named docker volume (synth-setter-tmux-resurrect) mounted at the standard XDG path, so
+  snapshots survive container recreation.
+
+post-create.sh clones TPM into $HOME/.tmux/plugins/tpm and runs install_plugins non-interactively,
+  so users don't need to hit prefix+I on first launch. The install is run once per $HOME (both the
+  root and the runuser→dev pass), matching the existing tmux.conf install flow.
+
+Refs #1103. Builds on #1048 (tmux as default terminal) and #1053 (per-user tmux.conf install via
+  post-create.sh).
+
+* fix(devcontainer): address local-review findings on tmux-continuum setup
+
+- tmux.conf: document why @continuum-save-interval is 5 (vs default 15). - post-create.sh: keep TPM
+  install_plugins stderr visible so the underlying git/clone error surfaces when install fails (was
+  2>&1'd away). - post-create.sh: note that the resurrect named volume is dev-user only
+  (DEVCONTAINER_USER=root sessions land on the unmounted root path). - doc-map.yaml +
+  docs/reference/docker.md: enumerate the new synth-setter-tmux-resurrect named volume and the
+  TPM/continuum plugin set under the relevant covers: entries.
+
+Refs #1103.
+
+* fix(devcontainer): isolate TPM install_plugins from user's tmux socket
+
+TPM's helpers (scripts/helpers/plugin_functions.sh:_tpm_path) shell out to `tmux start-server` at
+  module-load time without -L, which binds the default /tmp/tmux-$UID/default socket. When
+  post-create.sh is rerun manually inside an already-running devcontainer (e.g. while verifying
+  changes locally before opening this PR), that bind() replaces the on-disk socket dirent and
+  orphans the user's running tmux server — existing sessions stay alive in-kernel but no new `tmux`
+  invocation can reach them. VS Code then reports "terminal process /usr/bin/tmux 'new-session'
+  failed to launch (exit code: 1)".
+
+Wrap install_plugins with TMUX_TMPDIR=$(mktemp -d) so its internal `tmux start-server` lands on a
+  throwaway socket directory, then kill that ephemeral server and clean up. The user's default
+  socket is untouched.
+
+### Features
+
+- **pipeline**: Nest R2Location into DatasetSpec
+  ([#1099](https://github.com/tinaudio/synth-setter/pull/1099),
+  [`2fce8a2`](https://github.com/tinaudio/synth-setter/commit/2fce8a2ed239af0bfb512b4001c5a4bcc6be0eda))
+
+* feat(pipeline): nest R2Location into DatasetSpec with URI helpers
+
+Replaces the flat ``r2_bucket`` / ``r2_prefix_root`` / ``r2_prefix`` fields on ``DatasetSpec`` with
+  a single nested ``r2: R2Location`` model carrying typed URI-construction helpers (``uri``,
+  ``rclone_prefix``, ``shard_uri``). A model validator on ``DatasetSpec`` promotes legacy-form input
+  dicts and JSON-loaded specs already in R2 into the new shape so existing ``input_spec.json`` files
+  still parse and re-emit on the new shape.
+
+Folds in three related cleanups that touch the same call-site set:
+
+- Centralize ``R2_URI_SCHEME = "r2://"`` and ``RCLONE_REMOTE = "r2"`` in
+  ``synth_setter.pipeline.constants``; ``r2_io._to_rclone_path`` is promoted to public
+  ``to_rclone_path`` and used by ``skypilot_launch.upload_spec_to_r2`` instead of inline rclone-form
+  string concatenation. - ``configs/r2/default.yaml`` is the source of the nested ``r2`` block.
+  ``configs/dataset.yaml`` drops its flat-key interpolations; the ``10-1k-shards`` experiment
+  override uses the nested form (``r2.bucket: experiments``). - Workflow
+  ``generate-dataset-shards.yaml`` replaces its inline ``python3 -c "..."`` one-liner with a new
+  ``synth-setter-spec-uri`` console script that reads ``input_spec.json`` and emits the canonical
+  ``r2://bucket/skypilot-launcher-specs/<cluster>.json`` URI.
+
+Refs #121
+
+* ci(pipeline): update test-dataset-generation workflow to nested cfg.r2.bucket
+
+The setup step's inline ``python3 -c`` script still read ``cfg.r2_bucket`` — that flat key was
+  removed by the R2Location migration. Switch to ``cfg.r2.bucket`` so the workflow's R2 bucket
+  output resolves under the nested config shape.
+
+* docs(pipeline): nest r2_bucket/r2_prefix refs into r2.bucket/r2.prefix
+
+* refactor(pipeline): address PR #1099 Copilot review feedback
+
+- Clarify R2Location module docstring: ``prefix`` is required on the model; derivation happens at
+  the DatasetSpec ``mode='before'`` validator, not inside R2Location itself. - Tighten
+  ``_default_r2_location`` docstring to say "build a partial r2 dict" and explicitly state that
+  ``bucket`` is intentionally omitted so the nested R2Location validator surfaces the
+  missing-required-field error. - Move ``_LAUNCHER_SPEC_R2_PREFIX`` into ``pipeline/constants.py``
+  as ``LAUNCHER_SPEC_R2_PREFIX`` and import it from both ``skypilot_launch`` and ``ci/spec_uri`` so
+  the launcher and the CI URI helper cannot drift. - ``ci/spec_uri.main`` now catches ``OSError`` /
+  ``ValueError`` / ``ValidationError`` from ``compute_spec_uri`` and exits 3 with a one-line stderr
+  message instead of letting the traceback escape — the docstring already promised a clean non-zero
+  exit on invalid spec content. Adds two regression tests (malformed JSON, schema violation).
+
+* feat(pipeline): expose canonical R2 layout via R2Location URI helpers
+
+Adds per-object URI methods to R2Location for every well-known file in the dataset-run layout (per
+  docs/design/storage-provenance-spec.md §2): input_spec_uri, config_yaml_uri, dataset_card_uri,
+  dataset_complete_marker_uri, split_uri, stats_uri, worker_staged_shard_uri,
+  worker_attempt_report_uri.
+
+All helpers route through a new _under_prefix(name) private method so flat to nested layout
+  migrations (#385 for metadata/, #406 for shards/ and metadata/workers/) can happen in one place
+  without touching call sites.
+
+The class docstring embeds the canonical layout tree from the storage-provenance spec, with
+  #385/#406 annotations on the two subdirectories documented as future state.
+
+* docs(pipeline): point R2Location at storage-provenance-spec instead of duplicating the tree
+
+The module docstring embedded a 13-line ASCII tree of the R2 object layout, plus two paragraphs
+  explaining DatasetSpec's flat-form back-compat promotion. Both already live in authoritative
+  sources — the tree in docs/design/storage-provenance-spec.md §2 + §3a (which calls itself the
+  authoritative source for R2 paths), and the prefix-derivation / flat-form promotion in
+  DatasetSpec's r2-field description and its _normalize_r2_input / _default_r2_location /
+  _fill_default_r2_prefix docstrings in spec.py.
+
+Replace both with one-line pointers to those canonical sources. Net -18 lines and the layout tree
+  now has exactly one source of truth.
+
+Refs #1099
+
+* fix(pipeline): reject whitespace-wrapped slash-only r2.prefix_root
+
+The prior validator did .strip("/") then .strip(), so values like " / " passed: ".strip('/')" left
+  the spaces, then ".strip()" collapsed to "/" which is truthy. Swap the order so whitespace is
+  removed first, then slashes — " / " → "/" → "" → rejected.
+
+Adds a regression test covering " / ", "\t//\n", and " /// ".
+
+Refs #1099 review (Copilot)
+
+* fix(pipeline): strip whitespace from r2.prefix_root and run spec-uri in docker
+
+Two follow-ups from Copilot's review of 2db4f07:
+
+- R2Location.prefix_root validator now returns value.strip() so a caller passing ' data ' doesn't
+  survive into make_r2_prefix (which only strips slashes) as ' data /<task>/<run>/'. Reject path
+  (blank or slash-only after whitespace + slash strip) is unchanged. -
+  generate-dataset-shards.yaml's 'Compute spec_uri output' step now runs synth-setter-spec-uri
+  inside the already-pulled docker image. The console script is installed in the image for every
+  provider; on the runner it was only available on the skypilot-local row, so runpod/oci jobs would
+  have failed with command-not-found.
+
+* ci(pipeline): run spec-uri on the runner, not in the pulled image
+
+The previous attempt invoked synth-setter-spec-uri via docker run against the pulled dev-snapshot
+  image to address a Copilot review comment about runpod/oci not pre-installing the project package
+  on the runner. That introduced a race: test-dataset-generation.yml's "Pull image" step runs in
+  parallel with the per-PR docker-image-build.yml, so the pulled dev-snapshot tag is whatever was
+  previously pushed (typically main) and the brand-new synth-setter-spec-uri console script is not
+  in it. The failing CI step exits 127 with "executable file not found in $PATH".
+
+Switch to running on the runner. The skypilot-local row has the package already installed via
+  "Install launcher deps"; runpod/oci runs fall through to a minimal `python3 -m pip install -e .`
+  guarded by command -v. No docker dependency, no race.
+
+* fix(pipeline): reject slash-wrapped whitespace in r2.prefix_root
+
+The previous validator stripped surrounding whitespace then checked that the slash-stripped result
+  was non-empty. A value like "/ /" (slashes wrapping a lone space, no surrounding whitespace)
+  passed: stripped = "/ /" strip("/") = " " not " " = False and survived into make_r2_prefix as " "
+  — yielding a malformed prefix like " /<task>/<run>/" with an embedded space.
+
+Add a final strip() on the slash-stripped value so any combination of slashes-and-whitespace
+  collapses to "" and is rejected. Existing non-empty values ("data", " data ", "sub/data") still
+  pass.
+
+* ci(pipeline): lighten spec-uri runner fallback; clarify LAUNCHER_SPEC_R2_PREFIX
+
+The generate-dataset-shards.yaml `Compute spec_uri output` step previously fell back to `pip install
+  -e .` on the runner to get the `synth-setter-spec-uri` console script for the runpod/oci rows.
+  That drags in the entire project dependency tree (torch, pedalboard, skypilot, ...) on a path that
+  only needs pydantic and stdlib. Switch the fallback to `pip install pydantic>=2` + `PYTHONPATH=src
+  python3 -m synth_setter.pipeline.ci.spec_uri ...`, matching the module's actual import footprint.
+
+Also tighten the docstring above `LAUNCHER_SPEC_R2_PREFIX` in `pipeline/constants.py`: the launcher
+  uploads a per-job transport copy named `<job_name>.json` under this prefix, not `input_spec.json`.
+  The previous wording implied the object key was `input_spec.json` at this location, which is the
+  local materialized filename rather than the uploaded key.
+
+Addresses Copilot review comments on PR #1099.
+
+* Revert "ci(pipeline): switch spec-uri runner fallback to PYTHONPATH+module"
+
+Reverts only the workflow portion of eb29780. The reviewer (Copilot comment 3263224461) suggested
+  replacing the `pip install -e .` fallback with `PYTHONPATH=src python3 -m
+  synth_setter.pipeline.ci.spec_uri`, but the maintainer's stated preference is to keep ad-hoc
+  inline invocations out of the workflow and route through the official `synth-setter-spec-uri`
+  console-script entrypoint (reply on 3263224461). Restore the `pip install -e .` fallback so the
+  workflow keeps using the registered console script unconditionally.
+
+The `LAUNCHER_SPEC_R2_PREFIX` comment fix from eb29780 stays — it was a pure docstring
+  clarification, independent of the workflow change.
+
+* docs(pipeline): update spec.py docstrings to nested r2.prefix paths
+
+DatasetSpec docstring, the task_name field description, and the _task_name_must_not_be_blank
+  validator docstring still referenced the old flat r2_prefix field after the R2Location migration.
+  Repoint them at the nested r2.prefix path so the prose matches the schema. Same pass on the module
+  docstring.
+
+The legacy flat key names that remain (_LEGACY_FLAT_R2_KEYS mapping, back-compat shim docstrings,
+  _fill_default_r2_prefix helper name) are deliberate: they describe legacy-key promotion paths and
+  historical factory names, not the live field surface.
+
+
+## v5.2.0 (2026-05-19)
+
+### Chores
+
+- **pipeline**: Document R2 path sources, mark finalize as future-state
+  ([#1094](https://github.com/tinaudio/synth-setter/pull/1094),
+  [`9ad779a`](https://github.com/tinaudio/synth-setter/commit/9ad779aeff61d92c1b7552182ea81d9e66242519))
+
+* docs(architecture): fix stale R2-bucket-in-constants claim
+
+pipeline/constants.py holds only INPUT_SPEC_FILENAME — the R2 bucket name lives in
+  configs/r2/default.yaml (interpolated into DatasetSpec via Hydra), not in constants.py. Update the
+  directory-structure callout to match what the file actually contains.
+
+Refs #121
+
+* docs(design): mark metadata/workers/ + finalize as future-state
+
+The design docs (data-pipeline.md, data-pipeline-implementation-plan.md, storage-provenance-spec.md)
+  describe a staging layout under `metadata/workers/` plus a `finalize` stage that promotes shards
+  into `data/shards/`. The current MVP worker (`src/synth_setter/cli/generate_dataset.py`) writes
+  shards directly to `data/<task_name>/<run_id>/` and there is no finalize stage in code yet.
+
+Add explicit "Future state — see #406" banners and inline annotations on every section that
+  describes the staging-and-promote model so readers don't mistake the planned architecture for
+  current behavior. Annotate the storage-provenance-spec.md §3a tree and bullets identifying which
+  paths are current vs. future state.
+
+Tracking: #406 (CLAUDE.md / design-doc reconciliation), #72 (Phase 5 Pipeline CLI).
+
+Refs #406 Refs #72 Refs #121
+
+* docs(design): clarify dual materialized-spec locations
+
+The DatasetSpec JSON is uploaded to R2 from two call sites with two distinct purposes:
+
+1. Worker (`src/synth_setter/cli/generate_dataset.py:181-191`) writes to
+  `{spec.r2_prefix}input_spec.json` — the canonical provenance copy archived next to the shards it
+  parameterized. 2. Launcher (`src/synth_setter/pipeline/skypilot_launch.py:342-344`) writes to
+  `skypilot-launcher-specs/{job_name}.json` and injects that URI as `WORKER_SPEC_URI` — pure
+  transport, workaround for #749 (SkyPilot's RunPod backend rejects programmatic
+  `task.update_file_mounts`).
+
+Both copies are intentional and serve different roles. CI workflows (`validate-spec`,
+  `validate-shard`) currently read the launcher copy via the `spec_uri` output of
+  `generate-dataset-shards.yaml`; the worker copy is the long-lived archive that the future
+  `finalize` / `status` commands will read.
+
+Document the split in `storage-provenance-spec.md` §3a (new subsection "Materialized spec: two
+  destinations") and add a pointer bullet in `configuration-reference.md` §2.1 so future readers
+  don't try to consolidate them.
+
+Refs #121 Refs #385
+
+* docs(design): drop stale R2 bucket constant claims from layout + doc-map
+
+* docs(design): align future-state shard path with per-run prefix
+
+Address Copilot review feedback on #1094:
+
+- storage-provenance-spec.md §3a tree: clarify the 'shards/' annotation to say no shards/ subdir
+  exists yet (current workers upload shard files directly under the run prefix root), instead of the
+  ambiguous 'directly here' phrasing. - data-pipeline.md §5 and §6 future-state banners: replace the
+  ambiguous 'data/shards/' path with the authoritative per-run prefix
+  'data/{dataset_config_id}/{dataset_wandb_run_id}/shards/' from storage-provenance-spec.md §3a,
+  with a back-link for traceability.
+
+Refs #121 Refs #385 Refs #406
+
+* docs(design): drop ambiguous slash from {r2_prefix} input_spec paths
+
+`make_r2_prefix` returns a string already ending in `/`, so `{r2_prefix}/input_spec.json` reads like
+  it would produce a double-slashed key. Standardize the docs to `{r2_prefix}input_spec.json` (the
+  form already used in the storage-provenance-spec §3a consumer table) and add a one-line pointer to
+  `make_r2_prefix` so the trailing-slash convention is discoverable.
+
+* docs(design): add skypilot-launcher-specs/ to R2 bucket layout §2
+
+Address Copilot's low-confidence suggestion on #1094: §2 "R2 Bucket Layout" previously enumerated
+  only the canonical `data/`, `train/`, `eval/` prefixes, but §3a introduces
+  `skypilot-launcher-specs/` as a transport-only top-level prefix. List it under §2 (with a footnote
+  that it is transport-only and not part of the dataset footprint) so the authoritative layout doc
+  is internally consistent.
+
+### Documentation
+
+- Add TrainConfig + ModelConfig pydantic schemas to mkdocs
+  ([#1065](https://github.com/tinaudio/synth-setter/pull/1065),
+  [`9a02b65`](https://github.com/tinaudio/synth-setter/commit/9a02b65f9771405a26b0a3b2301f9d78d8c72676))
+
+* internal-feat(docs): add TrainConfig + ModelConfig pydantic schemas to mkdocs
+
+Add ``synth_setter.schemas`` — a sibling to the existing ``synth_setter.pipeline.schemas`` package —
+  carrying pydantic models that document the training-time Hydra configs:
+
+- ``TrainConfig`` validates the top-level ``configs/train.yaml`` composition. - ``ModelConfig`` +
+  ``OptimizerConfig`` + ``SchedulerConfig`` validate every YAML under ``configs/model/``.
+
+The models use ``strict=True, extra="allow"`` so they refuse silent type coercion on the typed
+  scalar surface while letting Hydra-composed subtrees (``data``, ``trainer``, ``callbacks``, ...)
+  pass through. ``mkdocstrings`` + ``griffe-pydantic`` render the per-field ``description=`` strings
+  into two new auto-generated pages under ``docs/config_reference/``.
+
+Verification:
+
+- ``tests/schemas/`` asserts every shipped composition of ``train.yaml`` and every YAML under
+  ``configs/model/`` validates against the schemas, plus rejects bad inputs (blank ``task_name``,
+  non-bool ``train``, negative ``seed``, negative ``lr``, negative ``weight_decay``, blank
+  ``scheduler._target_``, missing ``lr``). - ``tests/test_docs_build.py`` runs ``mkdocs build
+  --strict`` end-to-end and asserts each pydantic field name renders in its page HTML — drift
+  between the schemas and the published pages fails at PR time. - ``.github/workflows/docs.yml``
+  gains a ``build-docs`` job that runs on pull_request events. It installs ``[docs,dev]``, builds
+  the site with ``--strict``, and runs both ``tests/test_docs_build.py`` and ``tests/schemas/`` so
+  the field-rendering assertions actually execute in CI.
+
+Refs #936
+
+* fix(ci): use --noconftest in build-docs to skip lightning-importing conftest
+
+The ``build-docs`` job installs only ``[docs,dev]`` to keep the install lightweight; the top-level
+  ``tests/conftest.py`` eagerly imports ``lightning`` via ``synth_setter.utils``, which crashes
+  pytest collection on this slim env. The docs-build tests don't depend on any conftest fixtures —
+  each test sets up its own Hydra context — so ``--noconftest`` is the minimal fix.
+
+* fix(docs): address Copilot review comments on TrainConfig docs PR
+
+Four findings from the Copilot review:
+
+1. ``TrainConfig`` class docstring overstated what ``TrainConfig()`` with no kwargs produces — only
+  the typed scalar surface, not the full Hydra-composed tree. Reworded to make the scalar-only scope
+  explicit. 2. ``build-docs`` CI job ran ``mkdocs build --strict`` twice — once standalone and once
+  inside the pytest session fixture. Dropped the standalone step; the pytest run already invokes
+  ``mkdocs build --strict`` itself and asserts on the rendered HTML. 3. ``tests/test_docs_build.py``
+  used a bare substring search for field names, which would false-positive on short names like
+  ``lr``, ``test``, ``train`` if they appeared anywhere in HTML/CSS/JS context. Switched to matching
+  the structural ``id="module.Class.field"`` anchor mkdocstrings emits for each field heading. 4.
+  ``_EXPECTED_FIELDS_BY_PAGE`` was hard-coded, so a field rename on the schema would silently keep
+  the test green. Now derived from ``model.model_fields`` at runtime — adding/removing/renaming a
+  typed field is automatically reflected in the expected anchor set.
+
+* fix(ci): scope pytest conftest exclusion narrowly per Copilot review
+
+The previous ``--noconftest`` flag was too broad — it disabled all ``conftest.py`` discovery in the
+  build-docs CI run, including ``tests/schemas/conftest.py`` which provides the
+  ``clean_global_hydra`` autouse fixture. Tests passed by accident (each ``with initialize(...)``
+  block already cleans up on its own), but the safety net for partial / xdist races was gone.
+
+Split into two pytest invocations:
+
+1. ``tests/schemas/`` runs with ``--confcutdir=tests/schemas`` so pytest stops conftest discovery at
+  the package boundary — ``tests/schemas/ conftest.py`` still loads, ``tests/conftest.py`` (which
+  imports lightning) doesn't. 2. ``tests/test_docs_build.py`` keeps ``--noconftest`` since it's
+  self-contained and has no package-local conftest to preserve.
+
+* internal-feat(docs): cover remaining train.yaml composition groups in mkdocs
+
+Extends the config-reference site to the other defaults: from configs/train.yaml beyond TrainConfig
+  + ModelConfig. Adds pydantic schemas (and rendered mkdocs pages) for DataConfig, TrainerConfig,
+  PathsConfig, ExtrasConfig, plus CallbacksConfig + LoggerConfig as RootModel wrappers around
+  dict[str, CallbackInstance | LoggerInstance].
+
+Same trust-boundary convention as the existing schemas: strict=True with extra="allow" on every
+  model, so Hydra-composed subtrees pass through but a StrictBool / NonBlankStr / PositiveInt
+  mismatch fails at compose time instead of corrupting a downstream call. The hydra/ composition
+  group is intentionally skipped — configs/hydra/default.yaml only sets partial overrides on Hydra's
+  own internal config and Hydra owns that schema.
+
+Behavioural tests under tests/schemas/ parametrize each shipped YAML in the group and assert it
+  validates; negative cases pin the typed-scalar constraints. tests/test_docs_build.py is extended
+  so the docs-render assertions actually exercise every new typed field across all six new pages.
+
+* fix(docs): address Copilot review on extended config-reference PR
+
+Three findings from the post-push review of ed00233:
+
+* tests/schemas/test_callbacks_config.py — every YAML under configs/callbacks/ is a valid
+  ``callbacks=<name>`` selection (Hydra treats group leaves as selectable too), not only the
+  multi-callback compositions ``default``/``default_surge``/``eval_surge``. Switched the helper to
+  iterate all stems except ``none`` (which composes to ``None`` and short-circuits in
+  ``instantiate_callbacks``); coverage grows from 3 to 14 callback YAMLs.
+
+* .github/workflows/docs.yml — moved ``pages: write`` / ``id-token: write`` off the workflow-level
+  ``permissions:`` and onto ``deploy-docs`` only. ``build-docs`` (the PR-only job) now runs with
+  ``contents: read``, so Pages-write isn't granted on the PR path — including PRs from forks.
+
+* tests/test_docs_build.py — ``test_docs_page_renders_pydantic_field_anchor`` now asserts the page
+  file exists before reading it, so a missing page surfaces as a pytest assertion (pointing at
+  ``test_docs_page_emitted``) rather than the raw ``FileNotFoundError`` from ``read_text``.
+
+* internal-fix(schemas): address 41/45 review-round findings on PR #1065
+
+Schemas package - Introduce ``StrictAllowExtraModel`` base in ``_types.py``; every config schema
+  inherits it instead of repeating the trust-boundary ``ConfigDict`` - Tighten ``NonBlankStr`` on
+  three fields where blanks would silently break downstream: ``trainer.default_root_dir``,
+  ``train.ckpt_path``, ``train.optimized_metric`` - Drop YAML-value claims baked into field
+  descriptions (``trainer.log_every_n_steps``, ``val_check_interval``, ``gradient_clip_val``,
+  ``model.compile``); behavior-only wording - Replace ``lambda`` default for ``train.tags`` with
+  named ``_default_tags`` - Extract ``_FLOAT32_MATMUL_PRECISIONS`` constant in ``extras_config`` -
+  ``__init__.py``: drop list-enumeration docstring drift, add cross-package pointer to
+  ``synth_setter.pipeline.schemas``, mark ``_types`` private - Docstring on ``TrainConfig`` now
+  explicit that it's documentation-first (not enforced at runtime by ``cli/train.py`` today)
+
+Tests - ``tests/schemas/conftest.py``: add ``compose_train_cfg`` / ``compose_subtree`` /
+  ``_to_dict`` helpers; strengthen ``clean_global_hydra`` with post-yield leak assertion; document
+  ``--confcutdir`` requirement - Every ``test_*_config.py`` switches to the shared compose helpers,
+  removing duplicated ``initialize`` / ``compose`` / ``to_container`` / ``cast`` boilerplate - Add
+  ``assert isinstance(parsed, ...)`` after positive ``model_validate`` calls so the contract is
+  explicit, not "did not raise" - Replace exact-value assertions (``log_every_n_steps == 100``,
+  etc.) with type / range / property checks - Add blank-string negative tests for the three
+  newly-``NonBlankStr`` fields - Drop hard-coded callback-names spot-check; the parametrized
+  validation across every shipped YAML already covers it - Replace ``_NON_DICT_CALLBACK_CONFIGS``
+  closed-set filter with dict-at-discovery check + ``pytest.skip(rationale)`` - Extract
+  ``_VALID_TARGET`` constant in ``test_model_config`` - Add positive interpolation-resolution test
+  for ``${oc.env:...}`` on ``PathsConfig``
+
+tests/test_docs_build.py - Mark module ``pytest.mark.slow`` (it shells out to ``mkdocs build
+  --strict``) - Add ``page_html_cache`` session fixture to amortize per-(page, model, field) HTML
+  reads - Add spot-check that ``Field(description=...)`` text actually renders in the built page
+  (catches mkdocstrings dropping descriptions) - Defensive non-empty asserts on ``_PAGE_TO_MODELS``
+  and ``_expected_field_anchors()`` - Switch ``subprocess.run`` to ``check=True`` + ``try/except
+  CalledProcessError`` - Collapse 11-line essay above ``_PAGE_TO_MODELS`` to 3 lines
+
+.github/workflows/docs.yml - Collapse 16-line pytest rationale to one-line pointer (rationale moves
+  to ``tests/schemas/conftest.py`` docstring) - Add ``cache-dependency-path: pyproject.toml`` to
+  ``deploy-docs`` (matches ``build-docs``) - Guard ``workflow_dispatch`` deploys to ``main`` so
+  feature-branch dispatch can't publish
+
+Skipped with explicit approval (responses posted inline): - code-health #5 (pydantic re-export
+  module) — soft suggestion; would add indirection - tdd-impl #6 (collect-errors test pattern) —
+  current parametrization gives more precise pytest signal - ml-pipeline #2 (schemas/ package
+  rename) — cross-cutting; follow-up - ml-pipeline #5 (RootModel | None contract change) — schemas
+  aren't runtime-validated today, no observable benefit
+
+Refs #967
+
+* chore(docs): tighten comment hygiene on config-reference + schemas
+
+Apply /comment-hygiene rewrites across the new docs/config_reference/*.md,
+  src/synth_setter/schemas/*, the schemas test suite, and the docs workflow:
+
+- Cut the multi-paragraph page intros in docs/config_reference/*.md down to one short framing
+  paragraph before the ::: mkdocstrings directive; per-field detail already comes from
+  Field(description=...) via griffe. - Drop "Per-field descriptions live on the Field definitions
+  below" and similar boilerplate from class docstrings (rendered output already shows the fields, so
+  the line is filler). - Tighten module docstrings on each schema to the contract one line + one
+  short clarifying line. - Trim multi-sentence test docstrings to one line where the assertion
+  carries the rest, and drop the inline essays inside test_data_config's PROJECT_ROOT round-trip
+  case. - Collapse the 4-6 line comment blocks above docs.yml steps to one-line pointers; CLAUDE.md
+  no-comments-in-run-blocks rule was already clean.
+
+No behavioural changes: 96 schema tests + 48 docs-build tests still pass.
+
+* internal-fix(schemas): address 3 remaining Copilot review threads on PR #1065
+
+Three of Copilot's six remaining unresolved threads still applied to post-rebase code; the other
+  three were outdated against earlier commits (_all_callback_config_names already globs every leaf
+  yaml; workflow permissions already job-scoped — both fixed in 231fc3b).
+
+- tests/schemas/conftest.py: reword clean_global_hydra docstring to match assert-only teardown (the
+  previous "before and after" wording implied a missing clear-on-teardown). -
+  tests/schemas/test_callbacks_config.py: drop the stale "validates as an empty RootModel" inline
+  comment — none.yaml composes to None and is filtered by the pytest.skip above, never reaching
+  model_validate. - tests/test_docs_build.py: route page_html_cache through a helper that
+  pre-asserts the page exists with an actionable message, so a missing page surfaces as a readable
+  assertion instead of a bare FileNotFoundError from read_text.
+
+* internal-fix(schemas): address 3 new Copilot findings on 23e06ac
+
+Copilot's post-push review on 23e06ac flagged three new substantive concerns; all three apply and
+  are fixed here.
+
+- src/synth_setter/schemas/callbacks_config.py: clarify module docstring so it no longer conflates
+  schema validation (requires _target_) with the runtime helper's leniency (skips entries that lack
+  _target_). - src/synth_setter/schemas/{callbacks_config,logger_config}.py: pin
+  ConfigDict(strict=True) on the CallbacksConfig and LoggerConfig RootModel wrappers. They weren't
+  inheriting StrictAllowExtraModel's strict=True, which left a coercion gap (non-string keys,
+  dict-vs-str inputs) at the root level even though the inner instance classes are strict. -
+  tests/test_docs_build.py: add config_reference/dataset_spec to _PAGE_TO_MODELS so the existing
+  dataset-spec page is also covered by the schema↔docs drift assertion. +14 anchor checks (158
+  total).
+
+- **schemas**: Expand nested mkdocs config coverage
+  ([#1086](https://github.com/tinaudio/synth-setter/pull/1086),
+  [`0ed970b`](https://github.com/tinaudio/synth-setter/commit/0ed970b3e91225aec0108cf0c243770123ebdeac))
+
+* docs(schemas): describe every Pydantic Field; expand nested mkdocs models
+
+Fills the two gaps in the config-reference site that #936 explicitly deferred as separate quality
+  passes:
+
+1. Every plain field on DatasetSpec, RenderConfig, ShardSpec, ImageConfig, and ShardMetadata now
+  carries a `Field(description="...")` one-liner. griffe-pydantic surfaces these as per-field
+  docstrings on the rendered mkdocs site so each field reads as `name: type — one-line description`
+  instead of just `name: type`. 2. Nested model references (`render: RenderConfig`, `shards:
+  tuple[ShardSpec, ...]`) now expand on the dataset-spec page — added ``::: ...RenderConfig`` and
+  ``::: ...ShardSpec`` sections so their fields render below DatasetSpec with working anchor links.
+
+Also enables the `griffe_pydantic` extension under the mkdocstrings handler in `mkdocs.yml` (without
+  it, `description=` on a Pydantic Field is invisible to mkdocstrings' default griffe analyzer).
+  Adds new pages for ImageConfig and ShardMetadata and wires both into the Config Reference nav.
+
+No runtime behavior change — `description=` is read-only Pydantic metadata that surfaces in JSON
+  schema / validation errors / docs. All 114 schema tests continue to pass. The mandatory
+  tdd/code-health/simplify trio for non-docs code edits is a no-op here: the .py edits are
+  metadata-only and have no behavior to test.
+
+Refs #936
+
+* docs(schemas): trim filler in field descriptions; guard with regression test
+
+Iteration on the prior commit following `/repo-review-full-no-comments` findings (deduped across
+  code-health, comment-hygiene, tdd-implementation, and synth-setter-project-standards):
+
+- Drop "; mirrors RenderConfig.X" filler suffix from every ShardMetadata field — the class docstring
+  already states the relationship, the per- field repetition just creates a drift surface. - Drop ";
+  must be positive" / "; must be >= 1" tails that duplicated the RenderConfig validator behavior on
+  sample_rate, channels, signal_duration_seconds, and samples_per_shard. - Drop the literal
+  "(default ``data``)" parenthetical from r2_prefix_root — griffe-pydantic renders the symbolic
+  default (DEFAULT_R2_PREFIX_ROOT) on the docs site already. - Trim inline comments above
+  DatasetSpec.train_val_test_seeds and the auto-filled runtime block — they now duplicated the new
+  descriptions. - Drop the `# Sub-model` decorative banner and trim ImageConfig.{class docstring,
+  github_sha, issue_number, image_config_id} filler ("uniquely names this image config", "is
+  associated with"). - Add tests/pipeline/test_schemas/test_field_descriptions.py — a parametrized
+  regression-guard asserting every public field on every config model has a non-empty
+  `Field(description=...)`. Pins the contract that the mkdocs config-reference site stays populated
+  without pinning the wording (so refactors that drop a description fail here instead of silently
+  regressing the rendered page).
+
+Net effect: ~30 fewer lines in the schemas, 42 new parametrized tests (156 total schema tests, all
+  passing).
+
+* docs(schemas): fix task_name r2_prefix wording; register pages in doc-map
+
+Addresses the two doc-drift findings flagged on PR #1086:
+
+- The `task_name` description claimed it "becomes the leading path component of `r2_prefix` and
+  `run_id`". That's only true for `run_id` (`{task_name}-{ts}`); in `r2_prefix` the leading
+  component is `prefix_root` (default `data`) per `make_r2_prefix`'s output format
+  `<root>/<task_name>/<run_id>/`. Reword to: "becomes the prefix of `run_id` and the config-id path
+  segment of `r2_prefix`". - The three new `docs/config_reference/*.md` pages weren't registered in
+  `docs/doc-map.yaml`. Add a "Config reference (autogenerated)" block so future doc-drift checks
+  track them against their schema sources.
+
+* docs(schemas): drop duplicate manual headings above ::: directives
+
+mkdocstrings has show_root_heading: true in mkdocs.yml, so the ::: directive already emits an h2
+  root heading for each documented model. The manual `## ModelName` Markdown headings above each
+  directive created a second h2 with a competing anchor (e.g. `#imageconfig` vs
+  `#synth_setter.pipeline.schemas.image_config.ImageConfig`).
+
+### Features
+
+- **vst**: Plugin/gui lifecycle cadence flags on RenderConfig
+  ([#1084](https://github.com/tinaudio/synth-setter/pull/1084),
+  [`6d72949`](https://github.com/tinaudio/synth-setter/commit/6d72949e975a4a4eaad1361927ad83d8049a1530))
+
+* internal-feat(pipeline): add reload/open_gui per-render lifecycle flags to RenderConfig
+
+* internal-fix(pipeline): platform-aware open_gui default + patchable platform helper
+
+Addresses Copilot review feedback on PR #1084:
+
+- ``RenderConfig.open_gui_every_render`` now defaults via a platform-aware factory: ``False`` on
+  Darwin, ``True`` elsewhere. Bare Hydra render configs (e.g. ``configs/render/surge_xt.yaml``) that
+  omit the field construct cleanly on macOS instead of tripping
+  ``_open_gui_every_render_forbidden_on_darwin``. Explicit ``open_gui_every_render=True`` on Darwin
+  is still rejected. - Replace direct ``sys.platform`` reads in ``spec.py`` with a patchable
+  ``_current_platform()`` helper so tests can override the platform inside ``spec`` without mutating
+  the real ``sys.platform`` (the previous ``monkeypatch.setattr("...sys.platform", "linux")`` leaked
+  into every other consumer of ``sys.platform`` in the same interpreter — including the
+  ``surge_xt_smoke_datasets`` fixture's headless-wrapper decision). - Drop the autouse
+  ``_force_non_darwin_render_config_platform`` fixture in ``tests/conftest.py``; the new
+  platform-aware default makes the whole-suite override unnecessary, and Darwin-gate tests patch
+  ``_current_platform`` directly instead. - Add a regression test that bare ``RenderConfig()``
+  constructs on Darwin with ``open_gui_every_render=False``.
+
+* chore(metrics): tighten docstrings/comments per iteration-2 review
+
+Iteration-2 /repo-review-full-no-comments WARN cleanup: - Collapse _current_platform and
+  _default_open_gui_every_render docstrings to one-liners pointing at #714. - Collapse the
+  RenderConfig lifecycle-knobs inline comment to a pointer. - Tighten
+  test_open_gui_default_is_false_on_darwin docstring. - Rename
+  test_reload_plugin_every_render_is_platform_independent_on_darwin to
+  test_reload_plugin_every_render_both_values_accepted_on_darwin so the name reflects what the test
+  actually covers (Darwin only, not full platform-independence). - Update RenderConfig sketch in
+  data-pipeline.md to note the platform-aware default. - Reframe the surge_xt_smoke_datasets Darwin
+  CLI-arg comment in terms of the subprocess's validator, not local RenderConfig construction.
+
+* chore(pipeline): drop now-redundant Darwin CLI override; sync design-doc snippet
+
+Two Copilot review comments on PR #1084:
+
+- tests/conftest.py: the `if sys.platform == "darwin": ... append("--open_gui_every_render=False")`
+  block in `surge_xt_smoke_datasets` was added to satisfy the subprocess's `RenderConfig` validator
+  on Darwin hosts. Now that `open_gui_every_render` defaults to `False` on Darwin via
+  `Field(default_factory=_default_open_gui_every_render)`, the subprocess constructs cleanly without
+  the override — drop the dead branch. - docs/design/data-pipeline.md: the `RenderConfig` snippet
+  showed `open_gui_every_render: bool = True` with a trailing comment, which misrepresents the
+  platform-aware default. Update the snippet to
+  `Field(default_factory=_default_open_gui_every_render)` with a comment block describing the actual
+  `False on Darwin / True elsewhere` semantics and the rejection of explicit `True` on Darwin.
+
+Refs #705
+
+* feat(metrics): wire reload/open_gui per-render flags into the renderer
+
+PR #1084 added two boolean fields to RenderConfig (reload_plugin_every_render,
+  open_gui_every_render) but the renderer did not yet read them — load_plugin was unconditional and
+  the show_editor warm-up was forced on every non-Darwin load. This commit makes the flags
+  user-facing:
+
+- load_plugin gains open_gui: bool = True; skipping the warm-up is now selectable per call (Darwin
+  already skips unconditionally). - render_params gains optional plugin and open_gui kwargs. When
+  plugin is supplied, load_plugin and load_preset are skipped (the caller owns lifecycle); the
+  existing flush/reset sequence still runs, preserving the per-#489 stale-state mitigation. -
+  generate_sample plumbs plugin and open_gui through to render_params. - writers._render_in_batches
+  branches on reload_plugin_every_render: False loads the plugin and applies the preset once per
+  shard, holds the instance across all renders, and threads open_gui to that single load —
+  eliminating the ~7s plugin-load overhead per sample (#705). True preserves the historical
+  per-render reload.
+
+Tests: - TestLoadPluginOpenGui in tests/data/vst/test_core.py asserts the open_gui kwarg gates the
+  show_editor warm-up on non-Darwin and remains a no-op on Darwin. - TestRenderParamsPreloadedPlugin
+  pins the cached-plugin bypass. - test_render_in_batches_caches_plugin_when_reload_is_false /
+  ..._reloads_plugin_per_render_when_reload_is_true pin the writer- level lifecycle decision. - New
+  requires_vst equivalence test test_reload_per_render_matches_cached_plugin renders the same patch
+  N times each way and asserts audio-metric equivalence — the load-bearing safety check for #705's
+  load-once optimisation.
+
+Refs #705 Refs #1084
+
+* refactor(pipeline): replace lifecycle booleans with cadence literals
+
+The two RenderConfig flags introduced in PR #1084 were named in a way that broke down on the
+  cached-plugin path wired up in the previous commit: `open_gui_every_render` is a per-render
+  adjective but the cached path opens the GUI at most once per shard. This commit replaces the
+  booleans with cadence literals whose values are explicit about how often each lifecycle event
+  fires:
+
+- `reload_plugin_every_render: bool` → `plugin_reload_cadence: Literal["once", "render"] =
+  "render"`. - `open_gui_every_render: bool` → `gui_toggle_cadence: Literal["never", "once",
+  "render"]` with a platform-aware default factory ("never" on Darwin, "once" elsewhere). "once" is
+  the new safer default — one warm-up per shard rather than per render. The Darwin validator now
+  rejects only "render" because a single show_editor call sits below the empirical SIGTRAP threshold
+  (#714).
+
+`load_plugin` and `warmup_plugin` are now separate primitives in `data/vst/core.py`: `load_plugin`
+  only constructs the VST3 instance, and `warmup_plugin` runs the show_editor warm-up on a supplied
+  plugin. The Darwin-unconditional skip that used to live inside `load_plugin` moves to the schema
+  validator, so the cadence machinery can faithfully mean "call show_editor once on Darwin" when
+  configured to do so.
+
+`render_params` / `generate_sample` / `_generate_sample_for_index` swap their `open_gui` kwarg for
+  `warmup`. `_render_in_batches` reads the two cadence fields, holds a `warmup_done` flag across the
+  shard's render loop, and threads `warmup=<per-render decision>` into each sample generation. All
+  six (plugin_reload × gui_toggle) combinations are expressible and tested at the writer-loop level.
+
+Test fixtures across the project (pipeline conftests, validators, schema tests, generate_dataset
+  entrypoint tests, docker-entrypoint tests) move from `open_gui_every_render=False` to
+  `gui_toggle_cadence="never"`. The schema-level tests in
+  `tests/pipeline/test_schemas/test_dataset_spec.py` are rewritten to cover the new cadence default
+  matrix and Darwin rejection.
+
+The pydoclint baseline is regenerated to reflect the renamed attribute list in the existing
+  RenderConfig DOC603 row and the updated render_params DOC103 row — no rows added; net -4 rows
+  after picking up prior cleanups in models/components/embed_pool.py.
+
+This commit also folds in the small Tier-A review-polish items that naturally live with the rewrite:
+  shorter docstrings on the renamed APIs, identity-asserted captured plugins in the writer tests,
+  finite + non-silence guards on the requires_vst equivalence test, two extra writer-level tests
+  covering the new "once" and "never" gui cadences.
+
+* test(metrics): monkeypatch _current_platform in gui_toggle="render" writer test
+
+`test_render_in_batches_warmup_render_runs_every_render` constructs a `RenderConfig` with
+  `gui_toggle_cadence="render"`, which the darwin-rejection validator (#714) refuses on macOS hosts.
+  The existing schema-validator tests already monkeypatch
+  `synth_setter.pipeline.schemas.spec._current_platform` to "linux" to exercise the non-Darwin code
+  path; do the same here so the test runs identically on macos-latest and ubuntu-latest CI workers.
+
+Found via the macos-latest, 3.10 job on
+  https://github.com/tinaudio/synth-setter/actions/runs/26041089946
+
+Refs #1084
+
+* chore(metrics): clarify warmup_plugin log message
+
+The log message 'Preparing plugin for preset load...' was misleading: the warm-up runs after
+  load_preset in render_params, not before. Replace with a message describing the actual purpose
+  (show_editor commit-handler state nudge per #714).
+
+* fix(metrics): drop warmup after first attempt inside generate_sample
+
+The writer's gui_toggle_cadence="once" semantics expect at most one show_editor warm-up per shard,
+  but the loudness retry loop inside generate_sample forwarded warmup=warmup unchanged into
+  render_params on every iteration. A sample 0 that retried N times would call warmup_plugin N times
+  — silently breaking the once-per-shard budget and re-introducing the #714 Darwin SIGTRAP failure
+  mode when the user opts into gui_toggle_cadence="once" on Darwin.
+
+Setting warmup=False after the first render_params call pins warm-up to the first attempt regardless
+  of retries. Regression test test_generate_sample_warmup_only_applies_on_first_attempt asserts the
+  captured warmup args are [True, False] on a silent-then-loud render pair.
+
+Refs #714
+
+* chore(metrics): preserve historical non-Darwin warm-up via "render" default
+
+Per review feedback on PR #1084: this PR should be a config-knob-only change and not alter
+  production behaviour. The previous default "once" was a behaviour change — it took the historical
+  per-render warm-up off by default on non-Darwin. Flip ``_default_gui_toggle_cadence`` to return
+  ``"render"`` on non-Darwin so the default keeps the warm-up behaviour identical to pre-PR runs;
+  ``"once"`` remains available as opt-in. Darwin still defaults to ``"never"`` (the validator
+  rejects ``"render"`` per #714).
+
+Updates the schema docstring, the matching ``test_cadence_defaults_off_darwin`` assertion, and the
+  design-doc snippet to match.
+
+Refs #1084 Refs #705
+
+* test(metrics): strengthen warmup/cadence behavioral test coverage
+
+Replace the implementation-detail-pinning warmup test with parametrized behavioral tests that count
+  ``warmup_plugin`` invocations rather than asserting on the ``warmup=`` kwarg list. Adds matrix
+  gaps for cadence combos ``("once","once")`` and ``("once","render")`` plus writer-level cross-cuts
+  that let the real ``generate_sample`` run and stub at ``render_params``, catching a regression in
+  the retry-loop's ``warmup = False`` reset that pure kwarg-passthrough tests would miss.
+
+Mutation-verified by temporarily removing line 129's ``warmup = False``: the four invariant-pinning
+  tests (``test_generate_sample_warmups_once_regardless_of_retries[1|3]``,
+  ``test_render_in_batches_once_cadence_survives_intra_sample_retries``,
+  ``test_render_in_batches_render_cadence_warms_once_per_generate_sample_call``) all failed with the
+  bug present and passed once restored.
+
+Refs #1084 Refs #714 Refs #705
+
+### Internal-Feat
+
+- **pipeline**: Hydra-driven generate_dataset SkyPilot dispatch + CI migration
+  ([#1083](https://github.com/tinaudio/synth-setter/pull/1083),
+  [`2060b53`](https://github.com/tinaudio/synth-setter/commit/2060b53fe08bfd70ae9a48481bf5370b6ba4ef18))
+
+* internal-feat(pipeline): Hydra-driven generate_dataset SkyPilot dispatch
+
+Add a single user-facing entry point that composes the dataset cfg from sys.argv overrides and
+  dispatches the run either in-process (default) or via SkyPilot when
+  cfg.skypilot_launch.compute_template is set.
+
+- New SkypilotLaunchConfig Pydantic schema (compute_template / cmd / env_file / job_name /
+  num_workers / worker_image_tag / tail / api_server / local). - New
+  configs/skypilot_launch/default.yaml Hydra group; wired into dataset.yaml. - Split
+  synth_setter.cli.generate_dataset into: * main() — new console script
+  (synth-setter-generate-dataset), programmatic compose + branch on compute_template. * from_hydra()
+  — renamed @hydra.main entry, exposed as the new synth-setter-generate-dataset-from-hydra script
+  and invoked as the worker-side cmd. - New dispatch_via_skypilot(spec, sky_cfg) in
+  synth_setter.pipeline.skypilot_launch: loads the compute YAML, refuses to silently drop an
+  existing run: block when cmd is set, injects cmd as run:, and fans out per-rank via
+  sky.Task.from_yaml_config + existing helpers. - Click CLI in skypilot_launch.py is unchanged so
+  its existing tests/CI flow keep passing.
+
+Tests: SkypilotLaunchConfig validation, _load_compute_template_with_cmd cmd-vs-run conflict guard,
+  _detect_provider_from_doc, dispatch_via_skypilot happy path + failure modes, main() local vs
+  SkyPilot branches, _build_worker_cmd shell-quoting.
+
+Refs #922
+
+* review: address iteration-1 /repo-review-full-no-comments findings
+
+- Reject operator-supplied skypilot_launch.cmd in _sky_cfg_from_dataset_cfg (defense-in-depth: Hydra
+  struct-mode already rejects undeclared keys, but +skypilot_launch.cmd=... bypasses that — explicit
+  guard catches the injection surface the schema's cmd field exposes). - Trim
+  configs/skypilot_launch/default.yaml header (6 lines → 3) and the dispatch_via_skypilot ASCII
+  banner (12 lines → 1) per comment-hygiene. - Rewrite _build_worker_cmd's .rstrip() trick as an
+  explicit conditional join. - Trim _NON_SPEC_KEYS prose and the _REPO_ROOT 'parents[3] climbs ...'
+  enumeration.
+
+Tests: - TestBuildWorkerCmd.test_cmd_handles_empty_overrides now pins cd-prefix + exec-segment + no
+  trailing whitespace. -
+  TestMainDispatchBranches.test_compute_template_set_calls_dispatch_via_skypilot asserts every
+  override (not just experiment=...) round-trips into the worker cmd; new
+  test_operator_supplied_cmd_is_rejected pins the +-override guard. - Replace lambda+generator-throw
+  run-stub with a named _run_must_not_fire helper. - TestDetectProviderFromDoc collapses to a single
+  parametrized happy-path test covering runpod, oci, kubernetes, k8s alias, and case-insensitive
+  matching. - TestDispatchViaSkypilot gains: * test_multi_worker_fans_out_one_task_per_rank
+  (per-rank fan-out + env injection with num_workers=3), *
+  test_input_validation_raises_before_disk_or_network (parametrized job_name + worker_image_tag
+  malformed inputs), * test_api_server_and_local_are_mutually_exclusive, *
+  test_missing_worker_env_raises now monkeypatches.delenv each _SECRET_WORKER_ENV_KEYS rather than
+  relying on the autouse stripper. - Schema validation tests now parametrize over multiple bad
+  inputs (0/-1/-100 for num_workers; '', ' ', '\t\n' for api_server) and pin the offending field
+  name in the extra-fields-rejected error.
+
+* review: address iteration-2 /repo-review-full-no-comments findings
+
+Comment-hygiene trims: - from_hydra docstring: 6 lines → 1 line (was essay-restating main's
+  docstring). - dispatch_via_skypilot docstring: 25 lines → 9 lines (drop 6-step numbered procedure
+  that restated the function body; keep caller invariants + raises). - main docstring: drop
+  redundant final paragraph restating the if/else branch. - SkypilotLaunchConfig class docstring: 7
+  lines → 1 line. - Schema module docstring: 11 lines → 5 lines. - Trim 'paths.*' workaround comment
+  from 5 lines to 2. - Trim 'sky+click pull in heavy provider SDKs' second clause (redundant).
+
+Test contracts: - test_compute_template_null_calls_run_locally now asserts isinstance(spec,
+  DatasetSpec) and that spec.render.plugin_path round-trips, instead of just pinning that run was
+  called. - test_operator_supplied_cmd_is_rejected now monkeypatches both gd.run and
+  dispatch_via_skypilot to AssertionError-raising stubs so a future regression that flips the guard
+  order is caught. - test_yaml_run_block_conflicts_with_cmd asserts
+  mock_sky.jobs.launch.assert_not_called() to pin the no-side-effect half of the conflict-guard
+  contract. - New test_job_name_falls_back_to_task_name_prefix_when_unset covers the base_job_name
+  derivation branch when sky_cfg.job_name=None.
+
+* review: drop banner above dispatch_via_skypilot section
+
+iter-3 comment-hygiene flagged the C9 decorative banner above dispatch_via_skypilot as out-of-style
+  for src/synth_setter/pipeline/skypilot_launch.py (no other banner separators exist in that file).
+  The test files have established banner conventions per their existing 7-banner pattern, so banners
+  there are kept for local-style consistency.
+
+* internal-feat(ci): drive generate-dataset-shards via synth-setter-generate-dataset
+
+Migrate the reusable `.github/workflows/generate-dataset-shards.yaml` from the click CLI (`python -m
+  synth_setter.pipeline.skypilot_launch`) to the Hydra-first `synth-setter-generate-dataset`
+  entrypoint introduced earlier in this PR. The skypilot-local and runpod rows now drive dispatch
+  through `skypilot_launch.*` Hydra overrides; OCI keeps the click CLI because its sub-docker
+  template `run:` block (forced by the OCI backend's rejection of `image_id: docker:<image>`) can't
+  be replaced by the new dispatch's cmd injection without further work.
+
+To make the migration actually work end-to-end:
+
+- Anchor `_build_worker_cmd`'s `cd` target on the worker image's WORKDIR
+  (`/home/build/synth-setter`), not the launcher's `_REPO_ROOT`. The two paths only coincide when
+  the launcher itself runs inside dev-snapshot; for the skypilot-local row the launcher runs on the
+  bare GH-actions runner and `_REPO_ROOT` resolves to `/home/runner/...`, which doesn't exist on the
+  kind worker pod. - Inline `bash scripts/sync_worker_checkout.sh` into the worker cmd so PR-CI
+  workers fetch the PR head over the image-baked checkout (the bake-lag bypass the existing
+  templates' `run:` blocks did manually). - Strip the `run:` block from
+  `configs/compute/local-template.yaml` and `configs/compute/runpod-template.yaml` —
+  `_load_compute_template_with_cmd` refuses to silently shadow a template's existing `run:` when the
+  dispatcher has a `cmd` to inject. `oci-cpu-template.yaml` keeps its `run:` (the OCI sub-docker
+  shim). - Materialize the spec via `synth_setter.pipeline.ci.materialize_spec` before dispatch so
+  the downstream `Compute spec_uri output` step still has an `input_spec.json` from which to read
+  `r2_bucket`.
+
+Tests: extend `TestBuildWorkerCmd` with two assertions pinning the new cd target and the
+  sync-before-exec ordering.
+
+* internal-fix(pipeline): pin worker created_at + ${WORKER_CMD} substitution for OCI
+
+Two fixes that together let every provider in generate-dataset-shards.yaml drive the new Hydra
+  entrypoint:
+
+1) `_build_worker_cmd(overrides, spec)` now injects
+  `+created_at='<launcher_spec.created_at.isoformat()>'` into the worker overrides. Without it, the
+  worker's `from_hydra` re-compose hits `DatasetSpec.created_at`'s `default_factory=lambda:
+  _utc_now()` and lands on a different `r2_prefix` than the launcher's spec — the cause of the
+  `validate-shards` failures on the prior CI run (launcher spec wrote
+  `data/smoke-shard/smoke-shard-20260518T130455778Z/`, worker uploaded to
+  `data/smoke-shard/smoke-shard-20260518T130800988Z/`). `run_id` and `r2_prefix` derive from
+  `created_at` in `DatasetSpec`'s default factories, so pinning just that one field is sufficient.
+
+2) `_load_compute_template_with_cmd` gains a third branch: if the template's existing `run:` block
+  contains the literal `${WORKER_CMD}` sentinel, the launcher's cmd substitutes into the sentinel
+  and the surrounding shell scaffolding survives. Without the sentinel, a non-empty `run:` still
+  refuses (unchanged). `configs/compute/oci-cpu-template.yaml`'s sub-docker `run:` now uses `bash -c
+  "${WORKER_CMD}"`, which means OCI runs the same `synth-setter-generate-dataset` flow as runpod /
+  skypilot-local — the OCI workflow row in `generate-dataset-shards.yaml` folds back into the runpod
+  row, both calling `synth-setter-generate-dataset` with
+  `skypilot_launch.compute_template=configs/compute/<provider>-template.yaml`.
+
+Tests:
+
+- `TestBuildWorkerCmd::test_cmd_pins_spec_created_at_via_hydra_override` — the pinned `+created_at=`
+  override appears in the worker cmd. -
+  `TestLoadComputeTemplateWithCmd::test_sentinel_in_run_block_substitutes_cmd` — the
+  sentinel-substitution path lands cmd in place and leaves surrounding scaffolding intact. -
+  `TestLoadComputeTemplateWithCmd::test_existing_run_block_without_sentinel_raises` — refusal path
+  renamed and still active. - `TestLoadComputeTemplateWithCmd::test_non_string_run_block_raises` —
+  malformed templates raise before substitute attempts.
+
+* chore(comments): tighten comment hygiene across the dispatch + workflow surface
+
+Sweep of new/modified comments and docstrings against the project's comment-hygiene rules:
+
+- Drop multi-paragraph essays from module/function docstrings where the rationale was either already
+  in the code or task-stale ("Mirrors X / Lives at module level so tests can exercise it" patterns).
+  - Collapse 17- and 7-line comment blocks (e.g. the module docstring of
+  src/synth_setter/cli/generate_dataset.py and the _WORKER_REPO_ROOT header) into the WHY-only lines
+  that aren't already obvious from the code. - Compress the runpod / local / oci compute-template
+  headers — the prior versions restated facts that _load_compute_template_with_cmd already enforces
+  in code (no-`run:` / sentinel / refuse). - Trim docstring restatements in the matching test files.
+
+Net diff: −195 / +120 across 9 files; load-bearing WHY-comments (the `created_at` pinning rationale
+  in _build_worker_cmd, the OCI template's cloud-init / apt-lock setup notes, and the workflow's
+  20-min SIGKILL note) are preserved. No code or behavior changes.
+
+make format clean; tests/pipeline + tests/tools 577 passed / 4 skipped.
+
+
+## v5.1.1 (2026-05-18)
+
+### Bug Fixes
+
+- **docker**: Install jq in dev-base so claude-hooks pytest tests pass
+  ([#1082](https://github.com/tinaudio/synth-setter/pull/1082),
+  [`ac48e4f`](https://github.com/tinaudio/synth-setter/commit/ac48e4f113dfb73bf951da4bb38df16c7bb7a9ea))
+
+The pre-PR review gate hook in `.claude/settings.json` invokes `jq` to extract the tool-call command
+  from stdin. The behavioural tests in `tests/claude_hooks/test_settings_hooks.py` re-run the inline
+  hook body via `bash -c`, so the test environment must provide `jq`.
+
+`pytest -k "not slow"` runs in the Docker `dev-base` stage, which only installed `git
+  ca-certificates`. `jq` arrived one stage later in `devcontainer-tools`, so the unit-test step in
+  CI saw `jq: command not found`, the cmd-extraction substitution silently produced an empty string,
+  and the gate's BLOCKED branch fired — failing
+  `test_pre_pr_gate_allows_when_token_in_trailing_comment` with rc=2.
+
+Install jq in dev-base instead. devcontainer-tools still inherits it via `FROM dev-base`, so the
+  duplicate entry there is dropped.
+
+Refs #1081
+
+### Chores
+
+- **claude-md**: Gate gh pr create behind /repo-review-full
+  ([#1073](https://github.com/tinaudio/synth-setter/pull/1073),
+  [`843b058`](https://github.com/tinaudio/synth-setter/commit/843b05806aa3970a41e1835b3c0ae660a0e3dc8f))
+
+* chore(claude-md): add pre-PR review gate hook
+
+Add a PreToolUse hook on `gh pr create` (.claude/settings.json) that blocks PR creation unless the
+  command line contains the literal `REVIEW_FULL_DONE=1`. The token is intentionally honor-system —
+  it forces a pause to invoke `/repo-review-full-no-comments` and iterate on its BLOCK/WARN findings
+  before opening a PR.
+
+The `if` filter uses the same regex as the existing doc-drift hook so both fire on the same set of
+  commands. The acknowledgment is matched anywhere in the command (substring) rather than just at
+  start, so the recommended form is a trailing comment — that keeps `gh pr create ...` at the start
+  of the line and preserves the existing doc-drift, pr-checkbox, and taxonomy-verification
+  PostToolUse hooks:
+
+gh pr create --title ... --body ... # REVIEW_FULL_DONE=1
+
+Also adds a `### Pre-PR Review Gate` sub-section in CLAUDE.md so the convention is discoverable to
+  other contributors.
+
+Refs #151
+
+* Potential fix for pull request finding
+
+Co-authored-by: Copilot Autofix powered by AI <175728472+Copilot@users.noreply.github.com>
+
+---------
+
+- **claude-md**: Place hook if: inside handler to scope Bash gates
+  ([#1079](https://github.com/tinaudio/synth-setter/pull/1079),
+  [`8efd0f9`](https://github.com/tinaudio/synth-setter/commit/8efd0f99ca586bd2d2da3a6fb7f52b58c01a0333))
+
+* chore(claude-md): place hook if: inside handler to scope Bash gates
+
+The `if:` field at the matcher-entry level is silently ignored by Claude Code — it is only honored
+  inside a hook handler (sibling of `type`/ `command`). As a result, three Bash hooks intended to
+  gate `gh pr create`, `git push`, and `git commit` were firing on every Bash tool call. In
+  particular, the pre-PR review gate blocked even read-only commands like `gh pr view` and `ls`.
+
+Move each `if:` inside its hook handler and switch the two shell-grep-style values to Claude Code
+  permission-rule syntax (`Bash(gh pr create *)`, `Bash(git push *)`), which is the only form
+  honored at the handler level.
+
+Add `tests/claude_hooks/test_settings_hooks.py`: * schema regression — no matcher-entry-level `if:`
+  (the bug) * defensive type check on handler `if:` values * parameterised assertion that the four
+  scoped handlers carry their expected permission-rule scopes * behavioural tests on the
+  pre-PR-create gate body (blocks without the REVIEW_FULL_DONE=1 token, allows with it as a trailing
+  comment) and on the branch-print hook body.
+
+* chore(claude-md): apply pre-PR review polish
+
+Address WARNs surfaced by the parallel-fan-out review against the local diff (zero BLOCKs across
+  code-health, synth-setter-project-standards, python-style, tdd-implementation, comment-hygiene):
+
+* test_handler_if_values_use_permission_rule_syntax: tighten the shape check from "(" in value and
+  value.endswith(")") to a regex matching Tool(pattern). Catches typos like "(foo bar)" or "Bash"
+  that the loose check would have passed. * test_pre_pr_gate_allows_when_token_in_trailing_comment:
+  swap the exact stderr == "" assertion for the looser "BLOCKED" not in stderr, so the test pins the
+  negative behaviour the gate actually contracts for, not the bonus property of writing nothing on
+  the pass path. * _run_inline_hook: move the noqa rationale into a comment spelling out the trust
+  boundary (settings.json is maintainer-controlled; do not reuse against untrusted paths). *
+  .claude/settings.json doc-drift and pr-review-resolver descriptions: drop the bare "asyncRewake."
+  sentence fragment (the JSON key is the source of truth) and the "re-validates with its own regex"
+  implementation-detail bake-in that would rot if either script switched matching strategies.
+
+* chore(claude-md): tighten _find_handler to assert exactly one matcher hit
+
+Address Copilot review on PR 1079: the previous helper returned the first matcher entry whose
+  description contained the lookup substring, silently masking duplicates. Switch to
+  collect-then-raise-if-not-1 so copy/paste or overly broad descriptions fail loudly in tests.
+
+Use explicit ``raise AssertionError`` (not ``assert``) so pydoclint's DOC502 stays happy with the
+  ``:raises AssertionError:`` docstring entry.
+
+Refs #1078
+
+- **lint**: Clean up embed_pool.py ([#1037](https://github.com/tinaudio/synth-setter/pull/1037),
+  [`525b520`](https://github.com/tinaudio/synth-setter/commit/525b520ecf2c1419d07e2784dce4039e94af023b))
+
+### Documentation
+
+- **claude-md**: Freeze lint exception lists; require fixing lint over suppressing it
+  ([#1070](https://github.com/tinaudio/synth-setter/pull/1070),
+  [`ff001f9`](https://github.com/tinaudio/synth-setter/commit/ff001f985e5792237b469b230e455dc8f18d5813))
+
+* docs(claude-md): freeze lint exception lists; require fixing lint over suppressing it
+
+Adds a hard rule under "Formatting & Linting" forbidding new entries to the four lint exception
+  surfaces:
+
+- .pydoclint-baseline.txt - pyproject.toml's [tool.ruff.lint.per-file-ignores] / extend-exclude -
+  .pre-commit-config.yaml per-hook exclude: regexes - pyrightconfig.json "exclude" paths
+
+These lists pin the existing legacy debt at baseline-capture time and are append-frozen. The only
+  allowed edits are removals via the /lint-cleanup workflow (tracked by #25 and #938). Also adds a
+  cross-reference bullet to the "Don't" section so the rule surfaces in the same place as the other
+  hard rules.
+
+Refs #25 Refs #938
+
+* docs(claude-md): address Copilot review feedback on lint-freeze section
+
+Per PR #1070 review:
+
+- Fix [tool.ruff].extend-exclude path (was incorrectly nested under [tool.ruff.lint]) in both the
+  freeze table and the Don't bullet. - Replace inaccurate pre-commit hook examples (mypy doesn't
+  exist; pydoclint's exclude lives in pyproject.toml, not as a per-hook exclude) with real hooks:
+  pyright/interrogate/shellcheck/mdformat/ codespell. - Point at .github/agents/lint-cleanup.md (the
+  canonical runbook) instead of the .claude/agents/lint-cleanup.md stub, and note the shim
+  relationship. - Use /pull/1044 (the PR) instead of /issues/1044 to match the rest of the repo's
+  references. - Make the maintainer-escalation paragraph an explicit, single escalation path
+  (pre-approval recorded on the tracking issue *before* the PR is opened) so it no longer
+  contradicts the absolute "only removals" rule.
+
+- **claude-md**: Wire comment-hygiene skill into repo-review
+  ([#1075](https://github.com/tinaudio/synth-setter/pull/1075),
+  [`40413c8`](https://github.com/tinaudio/synth-setter/commit/40413c8a877bacdbeb35f8c4ccfcc8b4920eed8b))
+
+* feat(claude-md): wire comment-hygiene skill into repo-review
+
+Wires the new tinaudio-synth-setter-skills:comment-hygiene plugin skill (tinaudio/skills#83) into
+  the three places the repo-review workflow needs to know about it:
+
+1. CLAUDE.md "Code Review" canonical checklist — adds the skill as item #8, alongside the existing
+  seven, with its scope (12 items, *.py + *.{yml,yaml} + docs/doc-map.yaml) and its distinguishing
+  feature (emits suggested rewrites, not just diagnostics).
+
+2. .claude/skills/_shared/repo-review-full-analysis.md - Step 3 selection table: file-pattern ->
+  skill rows now route *.py, .github/workflows/*.{yml,yaml}, configs/*.{yml,yaml}, and
+  docs/doc-map.yaml through comment-hygiene. A dedup note is added since multiple rows can select
+  the same skill but should only spawn one fan-out agent. - Step 5 tag table: adds the
+  comment-hygiene short-form tag for the [<skill>:<severity>] comment-body prefix.
+
+3. .claude/skills/repo-review/SKILL.md (MVP) - the existing inline [comment-hygiene] block had two
+  rules; expanded to mirror the plugin's C1-C12 schema so external contributors and plugin-less
+  environments get the same checklist surface (without bloating the MVP - defer per-finding
+  Before/After rewrites to the plugin).
+
+No code edits to existing comments/docstrings in this PR - that cleanup sweep is a follow-up once
+  the skill starts firing in CI.
+
+Refs #1074
+
+* fix(claude-md): doc-drift cleanup — narrow comment-hygiene YAML scope
+
+Two real drifts surfaced by /doc-drift on the prior commit:
+
+1. CLAUDE.md entry #8 said the skill applies to "*.py + *.{yml,yaml} + docs/doc-map.yaml", but the
+  analysis.md selection table only covers .github/workflows/*.{yml,yaml} + configs/**/*.{yml,yaml} +
+  docs/doc-map.yaml. A reader would expect repo-root YAMLs like .pre-commit-config.yaml to be in
+  scope — they aren't. Narrowed the parenthetical to match the analysis-table rules.
+
+2. .claude/skills/repo-review/SKILL.md called the MVP listing a "highest-signal subset" but it
+  enumerates all 12 BLOCK/WARN rules. The actual omission is the plugin's per-finding Before/After
+  rewrites and the two NIT-severity items. Reworded to reflect that.
+
+Also added a one-line coordination note to CLAUDE.md #8 that the plugin must be installed for
+  /repo-review-full to actually fan out the agent (the wiring is intentionally ahead of the plugin's
+  GA, so this is forward-looking documentation).
+
+### Testing
+
+- **datamodule**: Add behavioral coverage for surge_datamodule
+  ([#1047](https://github.com/tinaudio/synth-setter/pull/1047),
+  [`2c0bacf`](https://github.com/tinaudio/synth-setter/commit/2c0bacf2389db8f6fbade416ae6e26f25da76e70))
+
+- **datamodule**: Add tests for ot module (hungarian matching + collate fns)
+  ([#1052](https://github.com/tinaudio/synth-setter/pull/1052),
+  [`f75c525`](https://github.com/tinaudio/synth-setter/commit/f75c525233448a4663cc06d25c4ea7f44b82b7be))
+
+- **eval**: Add test coverage for compute_audio_metrics
+  ([#1064](https://github.com/tinaudio/synth-setter/pull/1064),
+  [`0f54f55`](https://github.com/tinaudio/synth-setter/commit/0f54f555cd06c6b555de9f52d870a4c374dc42b7))
+
+* test(eval): add behavioral coverage for compute_audio_metrics
+
+Extend the existing compute_rms tests with end-to-end behavioral coverage of every public function
+  in src/synth_setter/evaluation/compute_audio_metrics.py.
+
+Fast tests cover: subdir_matches_pattern, find_possible_subdirs, compute_mel_specs, compute_mss,
+  compute_mfcc, compute_wmfcc, get_stft, batched_wasserstein_distance_np, compute_sot,
+  compute_metrics_on_dir, and compute_metrics.
+
+Slow tests (@pytest.mark.slow) exercise the real models / CLI: compute_jtfs, compute_jtfs_distance,
+  get_pesto_activations, compute_f0, and the click CLI main. An autouse fixture resets the
+  module-level scatter / pesto_model caches per test, and one slow test pins the shape-only key
+  behavior of the scatter cache so any future refactor that re-keys it trips loudly.
+
+* test(eval): address review findings on compute_audio_metrics tests
+
+Addresses prioritized WARNs from /repo-review-full-no-comments:
+
+- P1.1: replace manual module-global mutation with monkeypatch.setattr fixture (raising=True traps
+  future renames). - P1.3: consolidate compute_audio_metrics imports into a single block; ruff/isort
+  then split main-as-alias into its own block. - P1.4: parametrize compute_mel_specs shape test by
+  (idx, expected_n_mels) so each n_mels gets a named failure; keep a separate cardinality test. -
+  P2.6: trim "Do not modify" banner to a one-line pointer to #899. - P2.7: rewrite
+  test_get_stft_averages_channels to use two different mono signals so the test actually exercises
+  channel averaging. - P2.8: use exact == 0.0 (not pytest.approx) for identical Wasserstein hists. -
+  P2.10: add np.isfinite assertions to compute_mel_specs and compute_mfcc tests.
+
+* test(eval): use array-aware assertion for identical-hists Wasserstein
+
+Addresses Copilot review on #1064 line 311 — replace `assert batched_wasserstein_distance_np(hist,
+  hist) == 0.0` with `np.testing.assert_array_equal(..., [0.0])` to match the sibling batch-dim
+  test's idiom and avoid relying on numpy's implicit 1-element-array-to-scalar bool conversion
+  (which would silently break if hist gained a second row).
+
+Refs #1067
+
+- **eval**: Add test coverage for predict_vst_audio
+  ([#1060](https://github.com/tinaudio/synth-setter/pull/1060),
+  [`ebbf745`](https://github.com/tinaudio/synth-setter/commit/ebbf745b1c91f7eecd9304a3963cdbe0566557c9))
+
+Adds tests for the three pure helpers (make_spectrogram, write_spectrograms, params_to_csv) plus the
+  click main entrypoint with render_params patched out, so the suite runs CPU-only under test-fast.
+
+Refs #1047
+
+- **training**: Add SurgeFakeOracleModule for oracle-baseline smoke tests
+  ([#1069](https://github.com/tinaudio/synth-setter/pull/1069),
+  [`5c67c1a`](https://github.com/tinaudio/synth-setter/commit/5c67c1a381294f0dd03a2ff2d92aa53db649e6a3))
+
+* feat(training): add SurgeFakeOracleModule for oracle-baseline smoke tests
+
+Drop-in replacement for SurgeFeedForwardModule that returns batch["params"] as its prediction —
+  perfect inversion by construction. Two uses:
+
+1. Smoke-tests the train/eval pipeline end-to-end at trivial cost (no real model forward), and is
+  now the experiment behind the cfg_surge_xt_global fixture (tests/conftest.py) so
+  test_train_surge_xt / test_train_eval_surge_xt exercise the oracle instead of the AST-based
+  ffn_full. 2. Establishes a downstream-metrics ceiling — any divergence between oracle audio and
+  ground truth in compute_audio_metrics is necessarily a pipeline issue, not a model issue.
+
+The module preserves SurgeFeedForwardModule's public surface so swapping it in via Hydra (override
+  /model: surge_fake_oracle) requires no caller-side changes: same __init__ signature (incl.
+  compile/scheduler/warmup_steps), same 4-tuple model_step shape, same (preds, batch) tuple from
+  predict_step (unpacked by PredictionWriter.write_on_batch_end), and the same {"param_mse",
+  "per_param_mse"} dict from validation_step / test_step that LogPerParamMSE.on_validation_batch_end
+  reads.
+
+The fake net carries one nn.Parameter so configure_optimizers has something to optimize and
+  loss.backward() succeeds; the loss is 0.0 * net(mel).sum(), which is zero but grad-bearing.
+  compile defaults to false (torch.compile on a trivial net is wasteful and adds CI flake risk).
+
+configs/experiment/surge/test-mps.yaml is updated in lockstep so the
+  test_test_mps_yaml_matches_cfg_surge_xt_global drift guard stays green. The new module is added to
+  pyrightconfig.json / .pre-commit-config.yaml pyright excludes, matching the existing
+  surge_ff_module convention (self.hparams attribute access).
+
+* docs(testing): update conftest+testing.md to refer to fake_oracle smoke fixture
+
+Updates three stale references introduced by the surge/ffn_full → surge/fake_oracle smoke-fixture
+  swap: - tests/conftest.py: _build_surge_xt_smoke_cfg docstring now names the fake_oracle
+  experiment, not ffn_full. - docs/reference/testing.md §4: rewrite the 'Surge XT FFN tests' /
+  experiment=surge/ffn_full bullet to describe the oracle stand-in and why it isolates the smoke
+  tests from real-model state. - docs/reference/testing.md §2 (test-mps.yml row): drop the
+  FFN-forward-pass framing; the MPS lane now hosts the oracle, not the FFN.
+
+* internal-fix(training): tighten SurgeFakeOracleModule annotations + pin grad-path invariant
+
+Address review findings from /repo-review-full-no-comments on PR #1069:
+
+- Type annotations: optimizer/scheduler were annotated as instances, but the Hydra _partial_ wiring
+  passes factories. Fix to Callable[..., torch.optim.Optimizer] / Callable[...,
+  torch.optim.lr_scheduler.LRScheduler] | None and drop the matching # type: ignore[arg-type] in the
+  test helper. - compile=False: keep the parameter name (parity with SurgeFeedForwardModule so Hydra
+  config-swap works without an alias layer) but document the builtin-shadow with a # noqa: A002
+  comment. - setup(stage): del stage to match the explicit unused-param pattern used by
+  validation_step/test_step/FakeOracleNet.forward elsewhere in the module. -
+  test_training_step_returns_zero_loss_with_grad now asserts module.net.dummy.grad is not None after
+  .backward() — pins the grad-path invariant that the loss = 0.0 * self.net(mel_spec).sum()
+  expression exists to satisfy. A refactor that silently drops self.net from model_step would
+  produce a detached zero loss that still passes backward(), but would land no grad on the dummy
+  parameter; this assertion catches that.
+
+* internal-fix(training): drop SurgeFakeOracleModule from pyright exclude list
+
+Address Copilot review of PR #1069 (commit 460cee1):
+
+The new module was added to pyright's exclude in both pyrightconfig.json and .pre-commit-config.yaml
+  to match the legacy pattern set by SurgeFeedForwardModule (Lightning's self.hparams.foo attribute
+  access trips pyright). Copilot correctly flagged this as silently shrinking the type-check surface
+  for a brand-new file.
+
+Fix in this file alone (sister modules unchanged): - Switch self.hparams.X to self.hparams["X"]
+  indexing — equivalent at runtime, but pyright sees a plain dict access rather than the
+  AttributeDict's typed-as-MutableMapping attribute set. - Replace self.trainer.model.parameters()
+  with self.parameters(). The module owns self.net, so this is the same set of parameters without
+  the Optional[Trainer.model] None-check pyright otherwise demands. - Hoist
+  self.hparams["warmup_steps"] and self.hparams["scheduler"] into local variables once at the top of
+  configure_optimizers so the branch logic reads cleanly.
+
+Result: pyright is clean on the file with no excludes, no type: ignore, and no behavioral changes
+  (verified with test_train_surge_xt[cpu] and the full unit suite).
+
+* Update surge_fake_oracle_module.py
+
+- **training**: Assert on fake oracle model eval losses
+  ([#1080](https://github.com/tinaudio/synth-setter/pull/1080),
+  [`ffd6359`](https://github.com/tinaudio/synth-setter/commit/ffd635945f6eb4355b8aa9fd94de828dad38613d))
+
+* test(training): assert oracle eval losses + audio metrics are near-zero
+
+`SurgeFakeOracleModule` is a perfect-inversion oracle by construction: `train/loss = 0.0 *
+  net(mel_spec).sum() == 0` exactly, and its prediction is `batch["params"]` verbatim (so
+  `pred_params == target_params` bit-for-bit). The existing smoke tests only assert those values are
+  *finite* — a future regression that silently breaks the oracle (e.g. dummy-param drift, params no
+  longer aliased) could leave the tests green.
+
+Tighten the `surge/fake_oracle` legs of both parametrized smoke tests:
+
+- `test_train_surge_xt`: pin every `train/loss*` metric to exactly `0.0`. -
+  `test_train_eval_surge_xt`: read the per-sample audio metrics (`mss`, `wmfcc`, `sot`, `rms` from
+  `metrics.csv`) and assert each column stays within bounds the oracle should comfortably hit
+  (mss/wmfcc/sot upper-bound, rms cosine-sim lower-bound). Bounds are sized to ~3x the worst-case
+  observed across eight local sweeps — they absorb Surge XT's per-voice initialization jitter
+  (oscillator phase, noise seed), while a real-model regression blows through every column.
+
+Both legs continue to run for both experiments; the new tight assertions are gated on
+  `experiment_name == "surge/fake_oracle"` so the `surge/ffn_full` leg (untrained real net) is
+  unaffected.
+
+Refs #30
+
+* test(training): address review feedback for oracle-bounds test
+
+- Add `_ORACLE_EXPERIMENT` constant so the in-test gate strings stay in lockstep with
+  `_SURGE_SMOKE_EXPERIMENTS` (rename safety: a future experiment rename can't leave the oracle-only
+  `if` branches as silently-dead code). - Move the strongest oracle invariant (`pred-i.pt`
+  bit-equals `target-params-i.pt`) next to where the prediction tensors are loaded, so an
+  `predict_step` regression fails before the noisier downstream VST-render metrics get a chance to
+  mask it. - Flatten the `("upper"|"lower", bound)` dispatch table to four explicit per-metric
+  assertions — no test logic to harbor its own bugs. - Trim the rationale comment to keep the WHY
+  (VST jitter) and drop the perishable PR-description numbers (sweep count, headroom multiplier,
+  observed ffn_full magnitudes).
+
+* docs(testing): update surge_xt smoke-test description for oracle invariants
+
+The `surge/fake_oracle` leg of `test_train_*_surge_xt` is no longer a bare "wiring smoke check" — it
+  now asserts exact-zero `train/loss`, bit-identical `pred-{i}.pt` vs `target-params-{i}.pt`, and
+  tight per-sample audio-metric bounds. Update the parenthetical so the reference doc matches what
+  the parametrized test actually pins.
+
+- **training**: Parametrize surge_xt smoke fixture over experiment_name
+  ([#1071](https://github.com/tinaudio/synth-setter/pull/1071),
+  [`c2dc7ac`](https://github.com/tinaudio/synth-setter/commit/c2dc7ac39a9e9989ac0df55031cea19696b45df1))
+
+* test(training): parametrize surge_xt smoke fixture over experiment_name
+
+Add an indirect-opt-in `experiment_name` fixture (mirroring the existing `param_spec_name` pattern)
+  so the Surge XT smoke fixture composes its cfg against either `surge/fake_oracle` or
+  `surge/ffn_full`. `test_train_surge_xt` and `test_train_eval_surge_xt` now run once per experiment
+  via `@pytest.mark.parametrize("experiment_name", _SURGE_SMOKE_EXPERIMENTS, indirect=True)`; other
+  consumers of `cfg_surge_xt` are unaffected.
+
+Adds `configs/experiment/surge/test-mps-ffn.yaml` as the lockstep YAML sibling to `test-mps.yaml`
+  for the FFN experiment, and parametrizes `test_test_mps_yaml_matches_cfg_surge_xt_global` over
+  `(experiment, yaml)` pairs so the cfg-shape drift guard covers both experiments.
+
+Refs #1068
+
+* docs(testing): document experiment_name parametrize axis in testing primer
+
+Doc-drift fixes surfaced by the doc-drift advisory after parametrizing the Surge XT smoke fixture
+  over experiment_name:
+
+- docs/reference/testing.md: list experiment_name alongside accelerator and param_spec_name as a
+  third indirect axis; reframe the oracle gloss as describing the default leg; mention
+  surge/ffn_full coverage. - docs/doc-map.yaml: add `experiment_name parametrize` to the conftest.py
+  covers list so doc-drift owns this fixture's documentation. - tests/conftest.py: update :param
+  cfg_surge_xt_global: docstrings on cfg_surge_xt and cfg_surge_xt_eval to name all three indirect
+  axes. - configs/experiment/surge/test-mps.yaml: spell out experiment_name in the header signature;
+  cross-reference test-mps-ffn.yaml as the FFN sibling.
+
+* refactor(configs): rename test-mps.yaml to test-mps-fake-oracle.yaml; require param_spec override
+
+Two cfg-hygiene fixes for the MPS smoke YAMLs:
+
+1. `param_spec: ???` in both YAMLs. Previously the YAMLs baked
+  `callbacks.log_per_param_mse.param_spec: surge_4` even though `_build_surge_xt_smoke_cfg` always
+  overwrites it from the run's `param_spec_name`. Promoting to a mandatory override makes the YAML's
+  contract symmetric with `model.net.d_out: ???`: production callers must supply both; smoke fixture
+  supplies both. The cfg-equality test now reads the resolved value from the fixture and passes it
+  as a Hydra override.
+
+2. Rename `configs/experiment/surge/test-mps.yaml` → `test-mps-fake-oracle.yaml`. The file's
+  `override /model: surge_fake_oracle` and `run_name: fake_oracle` / `tags: [surge, oracle]` content
+  was misleading under the generic-looking `test-mps` name. Now both MPS smoke YAMLs are clearly
+  experiment-suffixed (`test-mps-fake-oracle.yaml`, `test-mps-ffn.yaml`), mirroring the
+  parametrize-pair names in `test_test_mps_yaml_matches_cfg_surge_xt_global`.
+
+Updates: cfg-equality test parametrize pair, conftest.py docstring + inline comment refs,
+  docs/reference/testing.md, the FFN sibling's cross-reference header.
+
+
 ## v5.1.0 (2026-05-16)
 
 ### Chores
