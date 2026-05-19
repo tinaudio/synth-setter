@@ -1086,6 +1086,10 @@ def test_trailer_hook_finding_does_not_contain_embedded_newlines(
         },
     )
     assert result.returncode == 2, (result.returncode, result.stderr)
+    # Precondition asserts give a focused failure when the BLOCKED message is
+    # restructured, instead of an IndexError stack trace from the split below.
+    assert "Findings:" in result.stderr, result.stderr
+    assert "Rules" in result.stderr, result.stderr
     findings_block = result.stderr.split("Findings:", 1)[1].split("Rules", 1)[0]
     finding_lines = [line for line in findings_block.splitlines() if line.strip()]
     for line in finding_lines:
@@ -1100,6 +1104,10 @@ def test_yaml_run_hook_description_documents_both_extensions() -> None:
     ``configs/compute/*.{yml,yaml}``. A description naming only one extension
     per directory misleads users into surprise when the other fires.
     """
+    # _find_handler enforces "exactly one matcher entry" — call it first so a
+    # description rename trips a focused AssertionError there, not a silent
+    # StopIteration here.
+    _find_handler("No-yaml-run-comments")
     matcher_entry = next(
         entry
         for entry in _matcher_entries()
