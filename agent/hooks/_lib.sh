@@ -116,17 +116,34 @@ run_agent_prompt() {
       fi
     done
   fi
+  # GNU coreutils ships as `timeout` on Linux and `gtimeout` on macOS
+  # (Homebrew). With neither on PATH, fall back to an unwrapped run and log —
+  # an operator can install coreutils to re-enable the hung-agent SIGKILL.
   # `--kill-after=10` SIGKILLs a child that ignores the SIGTERM the soft
   # timeout sends — grandchildren the agent CLI spawned otherwise survive.
+  local timeout_bin=""
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_bin="timeout"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_bin="gtimeout"
+  else
+    log "no GNU timeout/gtimeout on PATH; running agent without timeout enforcement"
+  fi
+  local -a cmd
   case "$cli" in
-    claude) timeout --kill-after=10 "$timeout_secs" claude -p "$prompt" ;;
-    codex)  timeout --kill-after=10 "$timeout_secs" codex exec "$prompt" ;;
+    claude) cmd=(claude -p "$prompt") ;;
+    codex)  cmd=(codex exec "$prompt") ;;
     *)
       printf 'No supported headless agent CLI found; install claude or codex (AGENT_HEADLESS=%s).\n' \
         "${AGENT_HEADLESS:-}" >&2
       return 127
       ;;
   esac
+  if [[ -n "$timeout_bin" ]]; then
+    "$timeout_bin" --kill-after=10 "$timeout_secs" "${cmd[@]}"
+  else
+    "${cmd[@]}"
+  fi
 }
 
 emit_rewake_stamp() {

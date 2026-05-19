@@ -79,12 +79,19 @@ WT=$(make_isolated_worktree "resolver" "$HEAD_SHA") || {
 trap 'remove_worktree "$WT"' EXIT
 cd "$WT"
 
+# You run in a detached worktree pinned to ${BRANCH}'s captured HEAD. The
+# branch itself is checked out in the user's primary worktree, so
+# `git checkout ${BRANCH}` will fail (git forbids the same branch in two
+# worktrees) and `git push` with no args has no upstream. Commit on the
+# detached HEAD, then publish with `git push origin HEAD:${BRANCH}`.
+WORKTREE_NOTE="Running in a detached worktree pinned to ${BRANCH} (HEAD ${HEAD_SHA:0:7}). Do not run \`git checkout ${BRANCH}\` — the branch is already checked out in the user's main worktree. Commit on the detached HEAD; push with \`git push origin HEAD:${BRANCH}\`."
+
 if has_skill pr-review-resolver; then
   log "using pr-review-resolver skill"
-  PROMPT="Use the pr-review-resolver skill for PR #${PR} on branch ${BRANCH} (HEAD ${HEAD_SHA:0:7})."
+  PROMPT="Use the pr-review-resolver skill for PR #${PR} on branch ${BRANCH} (HEAD ${HEAD_SHA:0:7}). ${WORKTREE_NOTE}"
 else
   log "pr-review-resolver skill not found, using fallback prompt"
-  PROMPT="PR #${PR} on branch ${BRANCH} (HEAD ${HEAD_SHA:0:7}). Fetch review comments with 'gh pr view ${PR} --json reviews,comments' and 'gh api repos/{owner}/{repo}/pulls/${PR}/comments'. Address each actionable comment; reply inline to each comment you addressed with the fix commit SHA. Ignore nits unless trivial."
+  PROMPT="PR #${PR} on branch ${BRANCH} (HEAD ${HEAD_SHA:0:7}). Fetch review comments with 'gh pr view ${PR} --json reviews,comments' and 'gh api repos/{owner}/{repo}/pulls/${PR}/comments'. Address each actionable comment; reply inline to each comment you addressed with the fix commit SHA. Ignore nits unless trivial. ${WORKTREE_NOTE}"
 fi
 
 META=$(printf 'PR: #%s\nBranch: %s\nHEAD: %s\n' "$PR" "$BRANCH" "$HEAD_SHA")
