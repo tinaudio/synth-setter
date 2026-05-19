@@ -44,8 +44,6 @@ import functools
 import os
 import re
 import subprocess
-import sys
-import tempfile
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -55,15 +53,12 @@ import sky
 import sky.jobs  # managed-jobs SDK: sky.jobs.launch / tail_logs / cancel
 import yaml
 from dotenv import dotenv_values
-from hydra import compose, initialize_config_dir
-from hydra.errors import HydraException
 
-from synth_setter.cli.generate_dataset import spec_from_cfg
 from synth_setter.pipeline.constants import WORKER_SPEC_URI_ENV
 from synth_setter.pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
 from synth_setter.pipeline.schemas.spec import DatasetSpec
-from synth_setter.pipeline.spec_io import upload_spec
+from synth_setter.pipeline.spec_io import find_input_specs
 
 _WORKER_IMAGE_ENV = "WORKER_IMAGE"
 _WORKER_IMAGE_REPO = "tinaudio/synth-setter"
@@ -119,42 +114,19 @@ _CRED_BOOTSTRAP_SCRIPT = (
 _TAIL_LOGS_RC_SUCCESS = 0
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-CONFIG_DIR = REPO_ROOT / "configs"
-DEFAULT_EXPERIMENT = "generate_dataset/smoke-shard"
 DEFAULT_TEMPLATE = REPO_ROOT / "configs" / "compute" / "runpod-template.yaml"
 DEFAULT_ENV_FILE = REPO_ROOT / ".env"
 
+# Local mirror anchor: the inner generator command writes
+# ``<repo_root>/data/<task>/<run>/metadata/input_spec.json`` via
+# ``cli/generate_dataset.py::main()``'s ``write_spec_locally(spec, _REPO_ROOT)``.
+# The CLI globs this directory after the subprocess returns to find the spec
+# the generator just materialized; anchoring at REPO_ROOT (not CWD) keeps the
+# launcher's discovery aligned with the generator's write site regardless of
+# where the operator invoked it from.
+_LOCAL_DATA_DIR = REPO_ROOT / "data"
 
-def _compose_dataset_spec(experiment: str, overrides: list[str]) -> DatasetSpec:
-    """Build DatasetSpec via Hydra compose for the named experiment + ad-hoc overrides.
-
-    Uses programmatic ``initialize_config_dir`` + ``compose`` rather than ``@hydra.main`` so
-    the launcher's click CLI keeps owning argv parsing. ``cfg.paths.*`` are pinned to the repo
-    root because programmatic ``compose()`` doesn't populate ``hydra.runtime.output_dir`` (only
-    ``@hydra.main`` does), and ``paths.output_dir = ${hydra:runtime.output_dir}`` would
-    otherwise fail to resolve.
-    """
-    try:
-        with initialize_config_dir(version_base="1.3", config_dir=str(CONFIG_DIR)):
-            cfg = compose(
-                config_name="dataset",
-                overrides=[f"experiment={experiment}", *overrides],
-            )
-    except HydraException as exc:
-        # Unknown experiment or malformed override surfaces here; convert the Hydra
-        # traceback into a one-line CLI error so the launcher reads as a normal click failure.
-        raise click.ClickException(
-            f"Hydra compose failed for experiment {experiment!r}: {exc}"
-        ) from exc
-    cfg.paths.root_dir = str(REPO_ROOT)
-    cfg.paths.output_dir = str(REPO_ROOT)
-    cfg.paths.work_dir = str(REPO_ROOT)
-    return spec_from_cfg(cfg)
-
-
-# Local directory for the materialized spec written before R2 upload. Tempdir
-# so concurrent launches on the same host don't collide.
-LOCAL_SPEC_DIR = Path(tempfile.gettempdir())
+_SPEC_URI_CLI = "synth-setter-spec-uri"
 
 # `sky local up` uses the kubernetes backend; map both spellings.
 _CLOUD_TO_PROVIDER: dict[str, str] = {
@@ -210,80 +182,6 @@ def resolve_worker_env(env_file: Path | None) -> dict[str, str]:
     return resolved
 
 
-def _detect_provider(template_path: Path) -> str:
-    """Return the cred-bootstrap `--provider` flag for a Task YAML's first cloud.
-
-    Reads the YAML directly (rather than going through `sky.Task.from_yaml`) so
-    each rank's task instantiation isn't burdened with an extra detection load
-    and so test fixtures don't need an extra side_effect slot for a probe Task.
-    Handles both the flat `resources: { cloud: X }` shape (RunPod, kubernetes)
-    and the `resources: { any_of: [{ cloud: X }, ...] }` shape (OCI Flex).
-    """
-    with template_path.open(encoding="utf-8") as f:
-        doc = yaml.safe_load(f)
-    if not isinstance(doc, dict):
-        raise click.ClickException(
-            f"Could not detect cloud from {template_path}; "
-            "expected a YAML mapping with a `resources` key, got empty/non-mapping content."
-        )
-    resources = doc.get("resources") or {}
-    if not isinstance(resources, dict):
-        raise click.ClickException(
-            f"Could not detect cloud from {template_path}; expected `resources` to be a mapping."
-        )
-    cloud_value = resources.get("cloud")
-    if cloud_value is None:
-        any_of = resources.get("any_of") or []
-        if not isinstance(any_of, list):
-            raise click.ClickException(
-                f"Could not detect cloud from {template_path}; "
-                "expected `resources.any_of` to be a list."
-            )
-        if any_of:
-            first = any_of[0]
-            if not isinstance(first, dict):
-                raise click.ClickException(
-                    f"Could not detect cloud from {template_path}; "
-                    "expected `resources.any_of[0]` to be a mapping."
-                )
-            cloud_value = first.get("cloud")
-    if not isinstance(cloud_value, str):
-        raise click.ClickException(
-            f"Could not detect cloud from {template_path}; "
-            "expected resources.cloud (str) or resources.any_of[0].cloud (str)."
-        )
-    provider = _CLOUD_TO_PROVIDER.get(cloud_value.strip().lower())
-    if provider is None:
-        raise click.ClickException(
-            f"Unsupported cloud {cloud_value!r} in {template_path}; cred bootstrap "
-            "supports runpod, oci, and local (kubernetes) only"
-        )
-    return provider
-
-
-def _apply_dispatch_mode(api_server: str | None, local: bool) -> None:
-    """Apply the launcher's explicit dispatch-mode selection to ``os.environ``.
-
-    This function is the sole enforcer of the ``--api-server`` / ``--local`` contract —
-    Click does not natively gate mutually-exclusive options, so the runtime check below
-    is what catches both CLI users and programmatic callers. ``--api-server`` exports
-    ``SKYPILOT_API_SERVER_ENDPOINT`` (after stripping surrounding whitespace; blank values
-    rejected) so all subsequent ``sky.*`` calls dispatch to the remote server.
-    ``--local`` clears that env var so an inherited value can't accidentally route
-    remote (the failure mode #841 captures). Neither flag passed → leave the env
-    untouched (backward-compat).
-    """
-    if api_server is not None and local:
-        raise click.ClickException("--api-server and --local are mutually exclusive")
-    if api_server is not None:
-        stripped = api_server.strip()
-        if not stripped:
-            raise click.ClickException("--api-server must be a non-empty URL")
-        os.environ[_SKYPILOT_API_SERVER_ENV] = stripped
-    elif local:
-        os.environ.pop(_SKYPILOT_API_SERVER_ENV, None)
-
-
 def _run_cred_bootstrap(*, provider: str, env_file_path: Path | None = None) -> None:
     """Invoke `scripts/skypilot/write_provider_creds.sh` for `provider`.
 
@@ -326,39 +224,7 @@ def _run_cred_bootstrap(*, provider: str, env_file_path: Path | None = None) -> 
         click.echo(result.stderr, err=True)
 
 
-def _warn_if_deprecated_cluster_name() -> None:
-    """Warn to stderr if the deprecated ``--cluster-name`` alias was used in argv.
-
-    Click accepts both ``--job-name`` and ``--cluster-name`` (the latter as a
-    legacy alias). The two names share a Python parameter, so Click itself
-    can't tell us which spelling the caller used — inspect ``sys.argv`` to
-    detect the alias and emit a one-line deprecation notice. Cheap, contained,
-    and easy to unit-test by manipulating argv via Click's ``CliRunner``.
-    """
-    if any(a == "--cluster-name" or a.startswith("--cluster-name=") for a in sys.argv[1:]):
-        click.echo(
-            "DEPRECATION: --cluster-name is deprecated and will be removed in a "
-            "future release; use --job-name instead.",
-            err=True,
-        )
-
-
-@click.command()
-@click.option(
-    "--experiment",
-    "experiment",
-    type=str,
-    default=DEFAULT_EXPERIMENT,
-    show_default=True,
-    help=(
-        "Datagen experiment name (e.g. `generate_dataset/smoke-shard`). Resolved "
-        "as Hydra `compose(config_name='dataset', overrides=[f'experiment={name}'])` "
-        "against `configs/dataset.yaml`. Use trailing positional args for ad-hoc Hydra "
-        "overrides, e.g. `--experiment generate_dataset/ci-materialize-test "
-        "render.plugin_path=/path/to/Plugin.vst3`."
-    ),
-)
-@click.argument("hydra_overrides", nargs=-1, type=click.UNPROCESSED)
+@click.command(context_settings={"ignore_unknown_options": True, "allow_interspersed_args": False})
 @click.option(
     "--template",
     "template_path",
@@ -382,41 +248,17 @@ def _warn_if_deprecated_cluster_name() -> None:
     ),
 )
 @click.option(
-    "--job-name",
-    "--cluster-name",
-    "job_name",
-    type=str,
-    default=None,
-    help=(
-        "Managed-job name (used both as the SkyPilot job identifier and as the R2 key "
-        "prefix for the per-launch spec upload). Default: "
-        "synth-setter-smoke-<first 8 chars of spec.task_name>. Multi-worker fan-out appends "
-        "`-r{i}` per rank. Must match [A-Za-z0-9][A-Za-z0-9_-]{0,62}. "
-        "Alias: --cluster-name (deprecated)."
-    ),
-)
-@click.option(
-    "--spec-out",
-    "spec_out",
-    type=click.Path(dir_okay=False, path_type=Path),
-    default=None,
-    help=(
-        "Where to write the materialized spec JSON. Default: a per-launch path under "
-        "$TMPDIR (avoids parallel-run collisions on a shared host)."
-    ),
-)
-@click.option(
     "--num-workers",
     type=int,
-    default=None,
+    default=1,
+    show_default=True,
     help=(
-        "Number of independent managed jobs to fan out in parallel. Defaults to 1 when "
-        "omitted; worker count is a launcher concern and is not read from the dataset spec. "
-        "RunPod and OCI don't support num_nodes>1 for this workload, so we synthesize "
-        "multi-worker partitioning by launching N independent managed jobs and injecting "
-        "SYNTH_SETTER_WORKER_RANK / SYNTH_SETTER_NUM_WORKERS per rank. Each rank downloads "
-        "the same materialized spec and uses synth_setter.pipeline.partitioning.get_my_shards to slice "
-        "its share."
+        "Number of independent managed jobs to fan out in parallel. Worker count is a launcher "
+        "concern and is not read from the dataset spec. RunPod and OCI don't support num_nodes>1 "
+        "for this workload, so we synthesize multi-worker partitioning by launching N independent "
+        "managed jobs and injecting SYNTH_SETTER_WORKER_RANK / SYNTH_SETTER_NUM_WORKERS per rank. "
+        "Each rank downloads the same materialized spec and uses "
+        "synth_setter.pipeline.partitioning.get_my_shards to slice its share."
     ),
 )
 @click.option(
@@ -441,10 +283,7 @@ def _warn_if_deprecated_cluster_name() -> None:
         "`--no-tail` waits for `sky.jobs.launch` + `sky.stream_and_get` to return a job_id per "
         "rank (the controller has accepted the job), prints the `sky jobs logs` / "
         "`sky jobs cancel` commands the operator can run, and exits without tailing logs and "
-        "without cancelling successfully-submitted jobs — the controller's terminal-status "
-        "lifecycle is the safety net. Half-submitted jobs (whose `sky.jobs.launch`/"
-        "`sky.stream_and_get` raised or yielded no job_id) are still cancelled in `--no-tail` "
-        "so the controller doesn't accumulate orphan state."
+        "without cancelling successfully-submitted jobs."
     ),
 )
 @click.option(
@@ -453,10 +292,8 @@ def _warn_if_deprecated_cluster_name() -> None:
     type=str,
     default=None,
     help=(
-        "Dispatch to this remote SkyPilot API server URL. Sets SKYPILOT_API_SERVER_ENDPOINT in "
-        "the launcher's process env so all sky.* calls go to the remote server, and skips the "
-        "local cred bootstrap (the remote server holds provider creds). Mutually exclusive with "
-        "--local. When neither is passed the existing env var (if any) is honored."
+        "Dispatch to this remote SkyPilot API server URL. Mutually exclusive with --local. "
+        "When neither is passed the existing SKYPILOT_API_SERVER_ENDPOINT (if any) is honored."
     ),
 )
 @click.option(
@@ -466,135 +303,115 @@ def _warn_if_deprecated_cluster_name() -> None:
     default=False,
     help=(
         "Force local SDK dispatch. Clears SKYPILOT_API_SERVER_ENDPOINT from the launcher's "
-        "process env so an inherited value can't accidentally route remote (#841), and runs "
-        "the local cred bootstrap. Mutually exclusive with --api-server."
+        "process env so an inherited value can't accidentally route remote (#841). "
+        "Mutually exclusive with --api-server."
     ),
 )
+@click.argument("command", nargs=-1, type=click.UNPROCESSED, required=True)
 def main(
-    experiment: str,
-    hydra_overrides: tuple[str, ...],
     template_path: Path,
     env_file_path: Path,
-    job_name: str | None,
-    spec_out: Path | None,
-    num_workers: int | None,
+    num_workers: int,
     worker_image_tag: str,
     tail: bool,
     api_server: str | None,
     local: bool,
+    command: tuple[str, ...],
 ) -> None:
-    """Launch the smoke `generate_dataset` run via SkyPilot (RunPod or OCI per `--template`)."""
-    _warn_if_deprecated_cluster_name()
-    _apply_dispatch_mode(api_server=api_server, local=local)
+    """Run an inner generator ``command`` then dispatch its spec to SkyPilot.
 
-    if job_name is not None and not _JOB_NAME_RE.fullmatch(job_name):
-        raise click.ClickException(
-            "--job-name must match [A-Za-z0-9][A-Za-z0-9_-]{0,62} "
-            "(alphanumerics, underscore, dash; ≤63 chars; no path separators); "
-            f"got {job_name!r}"
-        )
+    The CLI no longer composes the dataset spec itself. Instead it shells out
+    to ``command`` (typically the ``synth-setter-generate-dataset`` console
+    script), which is responsible for writing the canonical
+    ``data/<task>/<run>/metadata/input_spec.json`` and uploading it to R2.
+    The launcher then discovers that local spec, asks
+    ``synth-setter-spec-uri`` for its canonical R2 URI, and hands both off to
+    ``dispatch_via_skypilot`` for the SkyPilot fan-out.
 
-    if num_workers is not None and num_workers < 1:
-        raise click.ClickException(f"--num-workers must be >= 1, got {num_workers}")
+    Pass the inner command after the launcher's own options::
 
-    if not _DOCKER_TAG_RE.fullmatch(worker_image_tag):
-        raise click.ClickException(
-            f"--worker-image-tag must match OCI tag grammar [A-Za-z0-9_][A-Za-z0-9_.-]{{0,127}}; "
-            f"got {worker_image_tag!r}"
-        )
+        python -m synth_setter.pipeline.skypilot_launch --template ... -- \\
+            synth-setter-generate-dataset experiment=foo
 
-    worker_env = resolve_worker_env(env_file_path)
-    if not any(k in worker_env for k in _SECRET_WORKER_ENV_KEYS):
-        raise click.ClickException(
-            "No worker env vars resolved. Set the rclone-R2 keys in process env "
-            f"(e.g. via `docker run -e RCLONE_CONFIG_R2_*=...`) or populate {env_file_path}. "
-            f"Expected at least one of: {', '.join(_SECRET_WORKER_ENV_KEYS)}."
-        )
+    :param template_path: Path to the SkyPilot task YAML template.
+    :param env_file_path: Path to a KEY=VALUE env file for worker env resolution.
+    :param num_workers: Number of independent managed jobs to fan out in parallel.
+    :param worker_image_tag: Worker Docker image tag under ``tinaudio/synth-setter``.
+    :param tail: When True, tail managed-job logs and cancel every job on exit.
+    :param api_server: Remote SkyPilot API server URL; mutually exclusive with ``local``.
+    :param local: Force local SDK dispatch; mutually exclusive with ``api_server``.
+    :param command: The inner generator command to run before dispatch.
+    """
+    if not command:
+        raise click.ClickException("an inner command is required (pass it after `--`)")
 
-    # Defensive: mirror RCLONE_CONFIG_R2_* into os.environ so any downstream subprocess
-    # (e.g. SkyPilot's storage backend) inherits credentials when .env populated worker_env
-    # without exporting them.
-    for key, value in worker_env.items():
-        if key.startswith("RCLONE_CONFIG_R2_"):
-            os.environ[key] = value
+    subprocess.check_call(list(command))  # noqa: S603 — operator-supplied command, intentional passthrough
 
-    spec = _compose_dataset_spec(experiment, list(hydra_overrides))
+    spec_path = _find_unique_spec_path(command_for_error=command[0])
+    spec_uri = _resolve_spec_uri(spec_path)
+    spec = DatasetSpec.model_validate_json(spec_path.read_text(encoding="utf-8"))
 
-    # `--num-workers` overrides the launcher default of 1. Worker count is a
-    # launcher concern and lives outside the dataset spec.
-    resolved_num_workers = num_workers if num_workers is not None else 1
-
-    base_job_name = job_name or f"synth-setter-smoke-{spec.task_name[:8]}"
-    # Re-validate the derived default: spec.task_name is only checked for non-blank, so a
-    # value containing `/` or `..` would otherwise propagate into the local tempfile path
-    # (path-traversal hardening).
-    if not _JOB_NAME_RE.fullmatch(base_job_name):
-        raise click.ClickException(
-            f"derived job name {base_job_name!r} must match [A-Za-z0-9][A-Za-z0-9_-]{{0,62}} "
-            "(spec.task_name contains characters not allowed in a job name; "
-            "pass --job-name explicitly or fix spec.task_name)"
-        )
-
-    # Per-job filename so parallel launches (CI matrix, local dev concurrent with CI on
-    # the same host) don't clobber one another's spec.
-    local_spec_path = spec_out or LOCAL_SPEC_DIR / f"skypilot-launch-smoke-{base_job_name}.json"
-    local_spec_path.parent.mkdir(parents=True, exist_ok=True)
-    # Pin encoding so JSON output is locale-independent (workers/CI run with varied locales).
-    local_spec_path.write_text(spec.model_dump_json(indent=2), encoding="utf-8")
-    click.echo(f"Materialized spec to {local_spec_path}")
-
-    # Local provider (kind) needs no compute creds; CI writes the controller-resource shrink. See #876.
-    provider = _detect_provider(template_path)
-    if provider != "local":
-        _run_cred_bootstrap(provider=provider, env_file_path=env_file_path)
-
-    # Mirror cli/generate_dataset.py::main(): upload the canonical spec to its
-    # `spec.r2.input_spec_uri()` so the forwarded WORKER_SPEC_URI points at a
-    # real R2 object. Required by validate-spec / validate-shard consumers and
-    # by any worker that fetches the spec at boot. RCLONE_CONFIG_R2_* was
-    # already exported to os.environ above.
-    spec_uri = upload_spec(spec)
-    click.echo(f"Spec uploaded to {spec_uri}")
-    worker_env[WORKER_SPEC_URI_ENV] = spec_uri
-
-    # Kubernetes-specific: SkyPilot 0.12 caches enabled-clouds in-process; a
-    # CLI `sky check` doesn't always populate the cache the SDK reads, and
-    # `sky.jobs.launch` (like `sky.launch`) raises NoCloudAccessError on a fresh
-    # runner. Calling `sky.check.check` in-process before launch is the documented
-    # workaround (test-skypilot-local.yml). RunPod/OCI source creds from disk on every launch.
-    if provider == "local":
-        # Deferred so non-kubernetes runs (RunPod / OCI) skip the sky.check submodule import.
-        import sky.check
-
-        sky.check.check(clouds=["kubernetes"], quiet=False)
-
-    # Single-worker keeps the unsuffixed managed-job name (the value passed to
-    # `sky.jobs.launch(name=...)`) for backward compatibility with debug workflows / CI
-    # dashboards that key off it; multi-worker appends -rN per rank.
-    job_names = (
-        [base_job_name]
-        if resolved_num_workers == 1
-        else [f"{base_job_name}-r{i}" for i in range(resolved_num_workers)]
-    )
-
-    rcs = _run_workers(
-        worker_env_base=worker_env,
-        template_path=template_path,
-        job_names=job_names,
+    sky_cfg = SkypilotLaunchConfig(
+        compute_template=str(template_path),
+        # cmd is the inner worker command; threaded through ``dispatch_via_skypilot``
+        # into the YAML run: block on each rank.
+        cmd=" ".join(command),
+        env_file=str(env_file_path),
+        num_workers=num_workers,
         worker_image_tag=worker_image_tag,
         tail=tail,
+        api_server=api_server,
+        local=local,
     )
 
-    failed = [
-        (job_names[i], rcs[i])
-        for i in range(resolved_num_workers)
-        if rcs[i] != _TAIL_LOGS_RC_SUCCESS
-    ]
-    if failed:
+    dispatch_via_skypilot(spec, sky_cfg, spec_uri=spec_uri)
+
+
+def _find_unique_spec_path(command_for_error: str) -> Path:
+    """Return the single ``input_spec.json`` under ``data/``, else raise.
+
+    ``find_input_specs`` is permissive (returns ``[]`` when nothing matches and
+    a sorted list when many do). The launcher needs exactly-one semantics: a
+    missing spec means the inner command silently skipped materialization, and
+    multiple specs leave us unable to pick deterministically.
+
+    :param command_for_error: First token of the inner command, surfaced in the
+        no-spec error message to point operators back at the right subprocess.
+    :returns: Path to the unique materialized ``input_spec.json``.
+    :raises click.ClickException: zero or multiple specs found.
+    """
+    specs = find_input_specs(_LOCAL_DATA_DIR)
+    if not specs:
         raise click.ClickException(
-            f"{len(failed)} of {resolved_num_workers} worker(s) failed: "
-            + ", ".join(f"{name}(rc={rc})" for name, rc in failed)
+            f"no input_spec.json found under {_LOCAL_DATA_DIR}/ after running "
+            f"{command_for_error!r}; the inner command must materialize the canonical "
+            "spec via synth_setter.pipeline.spec_io.write_spec_locally"
         )
+    if len(specs) > 1:
+        formatted = ", ".join(str(p) for p in specs)
+        raise click.ClickException(
+            f"expected exactly one input_spec.json under {_LOCAL_DATA_DIR}/; "
+            f"found {len(specs)}: {formatted}. Clean stale runs from data/ or "
+            "run with a fresh working tree."
+        )
+    return specs[0]
+
+
+def _resolve_spec_uri(spec_path: Path) -> str:
+    """Shell out to ``synth-setter-spec-uri`` to compute the canonical R2 URI.
+
+    Keeping the URI derivation in a console script (rather than re-deriving it
+    here from ``DatasetSpec.r2.input_spec_uri()``) means the launcher and the
+    rest of the pipeline share one validator path — any spec-schema drift
+    fails loud in the same place.
+
+    :param spec_path: Local path to the materialized ``input_spec.json``.
+    :returns: The trimmed ``spec.r2.input_spec_uri()`` stdout line.
+    """
+    raw = subprocess.check_output(  # noqa: S603 — in-repo console script, arg is a validated Path
+        [_SPEC_URI_CLI, str(spec_path)]  # noqa: S607 — entry-point on PATH after `pip install -e .`
+    )
+    return raw.decode().strip()
 
 
 def _override_image_id(task: sky.Task, worker_image: str) -> None:
@@ -619,81 +436,6 @@ def _override_image_id(task: sky.Task, worker_image: str) -> None:
             continue
         new_resources.append(res.copy(image_id=docker_ref))
     task.set_resources(type(task.resources)(new_resources))
-
-
-def _run_workers(
-    worker_env_base: dict[str, str],
-    template_path: Path,
-    job_names: list[str],
-    worker_image_tag: str,
-    tail: bool,
-) -> list[int]:
-    """Dispatch to the tail- or detach-mode runner; return one rc per rank.
-
-    :param worker_env_base: Env dict forwarded to every rank (rank/world keys are added per call).
-    :param template_path: SkyPilot Task YAML to instantiate per rank.
-    :param job_names: One managed-job name per rank; ``len()`` defines the world size.
-    :param worker_image_tag: Docker image tag under tinaudio/synth-setter to inject.
-    :param tail: If True, tail logs and cancel all jobs. If False, detach after launch.
-    :return: List with one entry per rank in ``job_names`` order. ``0`` = success;
-        ``-1`` = launch/stream raised before the rank's work finished;
-        any other non-zero = job failure (with ``tail=True``, the value comes from
-        ``sky.jobs.tail_logs``).
-    """
-    worker_image = f"{_WORKER_IMAGE_REPO}:{worker_image_tag}"
-    launch_get_job_id = functools.partial(
-        _launch_one_rank,
-        job_names=job_names,
-        worker_env_base=worker_env_base,
-        worker_image=worker_image,
-        template_path=template_path,
-    )
-    if tail:
-        return _run_workers_tail(job_names, launch_get_job_id)
-    return _run_workers_detached(job_names, launch_get_job_id)
-
-
-def _launch_one_rank(
-    rank: int,
-    *,
-    job_names: list[str],
-    worker_env_base: dict[str, str],
-    worker_image: str,
-    template_path: Path,
-) -> int:
-    """Submit rank ``rank``'s managed job and return its ``job_id``.
-
-    Used by ``_run_workers`` to fan out per-rank launches; lives at module level
-    rather than as a closure so it can be tested directly without re-running
-    the parent ``_run_workers`` setup.
-
-    Raises ``click.ClickException`` if ``sky.jobs.launch`` / ``sky.stream_and_get``
-    yields no ``job_id``.
-    """
-    num_workers = len(job_names)
-    job_name = job_names[rank]
-    env_for_rank = {
-        **worker_env_base,
-        WORKER_RANK_ENV_VAR: str(rank),
-        NUM_WORKERS_ENV_VAR: str(num_workers),
-        _WORKER_IMAGE_ENV: worker_image,
-    }
-    task = sky.Task.from_yaml(str(template_path))
-    _override_image_id(task, worker_image)
-    task.update_envs(env_for_rank)
-    click.echo(f"[{job_name}] submitting rank={rank}/{num_workers}")
-    launch_request_id = sky.jobs.launch(task, name=job_name)
-    launch_result = sky.stream_and_get(launch_request_id)
-    if launch_result is None:
-        raise click.ClickException(
-            f"[{job_name}] sky.jobs.launch returned None (no submission handle)"
-        )
-    job_ids = launch_result[0]
-    if not job_ids or job_ids[0] is None:
-        raise click.ClickException(
-            f"[{job_name}] sky.jobs.launch returned no job_id (empty/null job_ids list)"
-        )
-    return job_ids[0]
 
 
 def _run_workers_tail(job_names: list[str], launch_get_job_id: Callable[[int], int]) -> list[int]:

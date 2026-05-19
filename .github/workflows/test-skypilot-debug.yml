@@ -360,6 +360,12 @@ jobs:
       # via subprocess.run) and bridges RCLONE_CONFIG_R2_* from worker_env
       # into os.environ before invoking rclone. No manual rclone-prefix
       # exports needed here.
+      # PR #1117 made the launcher CLI a passthrough that delegates spec
+      # materialization to an inner command. The production smoke path lives
+      # in `synth-setter-generate-dataset` (cli/generate_dataset.py), which
+      # already does materialize -> upload -> dispatch_via_skypilot end-to-end
+      # via Hydra. Call it directly here instead of double-dispatching through
+      # the launcher CLI wrapper.
       - name: Run launcher (launcher-runner mode)
         if: matrix.mode == 'launcher-runner'
         env:
@@ -376,15 +382,14 @@ jobs:
           LOG_PATH: /tmp/debug-pure-sky-${{ matrix.cluster_suffix }}.log
         run: |
           set -euo pipefail
-          python -m synth_setter.pipeline.skypilot_launch \
-            --experiment "$CONFIG_PATH" \
-            --template "$TEMPLATE" \
-            --job-name "$CLUSTER_NAME" \
-            --tail \
+          synth-setter-generate-dataset \
+            "experiment=$CONFIG_PATH" \
+            "skypilot_launch.compute_template=$TEMPLATE" \
+            "skypilot_launch.job_name=$CLUSTER_NAME" \
+            skypilot_launch.tail=true \
             2>&1 | tee "$LOG_PATH"
 
       # Same as launcher-runner but inside the dev-snapshot container.
-      # The launcher's internal cred-bootstrap is the single source of truth.
       - name: Run launcher (launcher-docker mode)
         if: matrix.mode == 'launcher-docker'
         env:
@@ -418,11 +423,11 @@ jobs:
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
               bash docker/ubuntu22_04/ensure_plugin_symlinks.sh
-              python -m synth_setter.pipeline.skypilot_launch \
-                --experiment "$CONFIG_PATH" \
-                --template "$TEMPLATE" \
-                --job-name "$CLUSTER_NAME" \
-                --tail
+              synth-setter-generate-dataset \
+                "experiment=$CONFIG_PATH" \
+                "skypilot_launch.compute_template=$TEMPLATE" \
+                "skypilot_launch.job_name=$CLUSTER_NAME" \
+                skypilot_launch.tail=true
             ' \
             2>&1 | tee "$LOG_PATH"
 
