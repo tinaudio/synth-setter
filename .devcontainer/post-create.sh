@@ -28,15 +28,19 @@ else
     || echo "WARNING: failed to clone TPM into $_tpm_dir; tmux plugins won't load until re-run." >&2
 fi
 
-# tmux-resurrect state dir — devcontainer.json mounts a named volume here so
-# saved sessions survive container rebuilds. mkdir is a no-op when mounted.
+# tmux-resurrect state dir. devcontainer.json mounts the
+# `synth-setter-tmux-resurrect` named volume at the dev user's path
+# (/home/dev/.local/share/tmux/resurrect); the mount is dev-only by design, so
+# DEVCONTAINER_USER=root sessions land on the non-mounted root path and won't
+# survive rebuilds. mkdir is a no-op when the volume is mounted.
 mkdir -p "$HOME/.local/share/tmux/resurrect"
 
 # Non-interactive plugin install equivalent to hitting prefix+I inside tmux.
-# Tolerate failure (e.g. egress blocked); a warning is enough since users can
-# always run prefix+I later from inside tmux.
+# Stdout is discarded (TPM is chatty on success); stderr is preserved so a
+# real failure surfaces the underlying git/clone error. The warning catches
+# the broader cases (e.g. egress blocked); users can always rerun prefix+I.
 if [ -x "$_tpm_dir/bin/install_plugins" ]; then
-  "$_tpm_dir/bin/install_plugins" >/dev/null 2>&1 \
+  "$_tpm_dir/bin/install_plugins" >/dev/null \
     || echo "WARNING: TPM install_plugins failed; run prefix+I inside tmux after start." >&2
 fi
 

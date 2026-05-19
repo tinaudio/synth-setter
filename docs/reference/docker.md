@@ -124,7 +124,11 @@ Node.js + `@anthropic-ai/claude-code` installed system-wide, a non-root
 `uv pip install` and editable installs work without sudo, and adds a
 `/commandhistory` directory (owned by `dev`) that
 `.devcontainer/{cpu,gpu}/devcontainer.json` mounts as a named volume so bash
-history survives container rebuilds. The same devcontainer configs also
+history survives container rebuilds. The same configs also mount a
+`synth-setter-tmux-resurrect` named volume at
+`/home/dev/.local/share/tmux/resurrect` so tmux sessions saved by
+tmux-continuum (configured in `.devcontainer/tmux.conf`) survive container
+rebuilds for the default `dev` user. The same devcontainer configs also
 overlay `/home/build/synth-setter/plugins` with an anonymous volume so the
 baked `plugins/Surge XT.vst3` symlink survives the workspace bind mount —
 without it, the host's gitignored `plugins/` would shadow the baked file and
