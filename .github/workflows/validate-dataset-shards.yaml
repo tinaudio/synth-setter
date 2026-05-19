@@ -35,7 +35,7 @@ on:
         type: string
         default: "dev-snapshot"
       spec_uri:
-        description: "r2:// URI of the materialized spec to validate (e.g. r2://intermediate-data/skypilot-launcher-specs/<cluster_name>.json)."
+        description: "r2:// URI of the materialized spec to validate (e.g. r2://<bucket>/<prefix>input_spec.json)."
         required: true
         type: string
 

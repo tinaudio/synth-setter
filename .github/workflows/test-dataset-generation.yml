@@ -18,10 +18,14 @@ name: Test Dataset Generation
 # captures the script's stdout via `subprocess.run(capture_output=True)` so a
 # `tee`'d caller workflow can't leak secrets.
 #
-# Stage handoff is via R2: each generate job uploads the spec to
-# `r2://<bucket>/skypilot-launcher-specs/<cluster_name>.json`, and the
-# validate job pulls from the same path. The run-metadata artifact upload
-# remains for debugging, but it's no longer load-bearing.
+# Stage handoff is via R2: each generate job writes both the canonical
+# under-prefix copy at `r2://<bucket>/<prefix>input_spec.json` (the spec's
+# own self-described URI, emitted by `synth-setter-spec-uri`) and a
+# transport copy at the legacy `r2://<bucket>/skypilot-launcher-specs/
+# <cluster_name>.json` key. The validate job below intentionally reads the
+# launcher transport copy while the #1115 retirement is in progress; PR-4
+# flips it to consume the canonical `spec_uri` output. The run-metadata
+# artifact upload remains for debugging, but it's no longer load-bearing.
 #
 # Provider matrix policy (computed in the `setup` job):
 #   * pull_request (same repo) → skypilot-local only
@@ -293,10 +297,13 @@ jobs:
 
   # validate-spec + validate-shard pull the spec from R2 directly. The URI is
   # constructed deterministically from the per-cell cluster_name pattern
-  # (matching what generate-launcher's launcher writes to). `if: !cancelled()`
-  # decouples each provider × output_format cell from the OTHER cells' generate
-  # outcomes — RunPod transients won't skip OCI validation, and an hdf5 failure
-  # won't skip wds.
+  # (matching the launcher transport copy that generate-launcher's launcher
+  # writes to). This intentionally diverges from the canonical `spec_uri`
+  # output emitted by `synth-setter-spec-uri` while #1115 retirement is in
+  # progress; PR-4 flips this wiring to consume `needs.generate-launcher.
+  # outputs.spec_uri`. `if: !cancelled()` decouples each provider × output_format
+  # cell from the OTHER cells' generate outcomes — RunPod transients won't skip
+  # OCI validation, and an hdf5 failure won't skip wds.
   validate:
     name: Validate ${{ matrix.provider }} / ${{ matrix.output_format }} dataset
     needs: [setup, generate-launcher]
