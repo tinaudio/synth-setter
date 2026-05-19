@@ -32,7 +32,11 @@ ______________________________________________________________________
 ```
 configs/experiment/generate_dataset/{id}.yaml → Hydra compose against configs/dataset.yaml
   → spec_from_cfg(cfg) → DatasetSpec (frozen, Pydantic, the spec ON R2)
-    → uploaded to R2 as {r2.prefix}input_spec.json (model.model_dump_json())
+    → spec_io.write_spec_locally(spec, Path(cfg.paths.output_dir))
+        → <output_dir>/data/<task_name>/<run_id>/metadata/input_spec.json (operator-side artifact)
+    → branch on sky_cfg.compute_template:
+        ├─ None: run(spec) — calls spec_io.upload_spec → R2 at {r2.prefix}input_spec.json
+        └─ set:  dispatch_via_skypilot — launcher transport upload + worker's run() uploads canonical
 ```
 
 - Input is mutable, human-authored YAML under `configs/experiment/generate_dataset/`
@@ -41,7 +45,7 @@ configs/experiment/generate_dataset/{id}.yaml → Hydra compose against configs/
 - Spec is the reproducibility unit and reconciliation target
 - **Config drift protection (planned):** the design doc specifies that re-passing `--config` for a `run_id` that already has a spec should error — but this is not yet enforced. The current implementation always generates a new `run_id` and writes a fresh spec. Tracked in [#386](https://github.com/tinaudio/synth-setter/issues/386).
 - **Path note:** `storage-provenance-spec.md` §3a documents the target path as `metadata/input_spec.json`, but the current implementation uploads to `{r2.prefix}input_spec.json` (`r2.prefix` already ends in `/` — see `make_r2_prefix` in `src/synth_setter/pipeline/schemas/prefix.py`; no `metadata/` subdirectory). Tracked in [#385](https://github.com/tinaudio/synth-setter/issues/385).
-- **Launcher transport copy:** The SkyPilot launcher additionally writes a second copy of the same spec to `r2://{bucket}/skypilot-launcher-specs/{job_name}.json` and injects that URI as `WORKER_SPEC_URI` into the worker pod's env (workaround for [#749](https://github.com/tinaudio/synth-setter/issues/749), where SkyPilot's RunPod backend rejects programmatic `task.update_file_mounts`). The launcher copy is **transport only** — the canonical provenance copy is the worker's `{r2.prefix}input_spec.json`. See `storage-provenance-spec.md` §3a "Materialized spec: two destinations" for the consumer table.
+- **Launcher transport copy:** The SkyPilot launcher additionally writes a copy of the same spec to `r2://{bucket}/skypilot-launcher-specs/{job_name}.json` and injects that URI as `WORKER_SPEC_URI` into the worker pod's env (workaround for [#749](https://github.com/tinaudio/synth-setter/issues/749), where SkyPilot's RunPod backend rejects programmatic `task.update_file_mounts`). The launcher copy is **transport only** — the canonical provenance copy at `{r2.prefix}input_spec.json` is written by `spec_io.upload_spec`, called from the worker's `run()` on every path (local-run inline, or dispatch-then-worker). The runner-side `main()` only writes the local file today; a later phase of the workflow-spec-upload-delegation series will also upload from `main()` once rclone env loading is threaded out of `dispatch_via_skypilot`. See `storage-provenance-spec.md` §3a "Materialized spec: three destinations" for the consumer table.
 
 Reference: `data-pipeline.md` §14.5
 

@@ -29,13 +29,16 @@ rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
 from synth_setter.data.vst.core import extract_renderer_version  # noqa: E402
 from synth_setter.pipeline import r2_io  # noqa: E402
-from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME  # noqa: E402
 from synth_setter.pipeline.partitioning import (  # noqa: E402
     get_my_shards,
     read_rank_world_from_env,
 )
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig  # noqa: E402
 from synth_setter.pipeline.schemas.spec import DatasetSpec, ShardSpec  # noqa: E402
+from synth_setter.pipeline.spec_io import (  # noqa: E402
+    upload_spec,
+    write_spec_locally,
+)
 
 # Composed-config keys that aren't DatasetSpec fields (interpolation sources, Hydra
 # runtime, dispatch-mode sub-trees). See configs/dataset.yaml for the live set.
@@ -183,14 +186,8 @@ def run(spec: DatasetSpec) -> None:
 
     with tempfile.TemporaryDirectory() as work_dir_str:
         work_dir = Path(work_dir_str)
-        # rclone copy preserves the source basename, and the local file is already
-        # named INPUT_SPEC_FILENAME — so the prefix-directory destination lands at
-        # `{prefix}{INPUT_SPEC_FILENAME}` without a double-name.
-        spec_path = work_dir / INPUT_SPEC_FILENAME
-        spec_path.write_text(spec.model_dump_json(indent=2))
-        logger.info(f"spec written: {spec_path}")
-        _rclone_copy(str(spec_path), r2_dest_prefix)
-        logger.info(f"spec uploaded -> {r2_dest_prefix}")
+        r2_uri = upload_spec(spec)
+        logger.info(f"spec uploaded -> {r2_uri}")
 
         rendered = 0
         skipped = 0
@@ -343,9 +340,15 @@ def main() -> None:
     spec = spec_from_cfg(cfg)
     sky_cfg = _sky_cfg_from_dataset_cfg(cfg)
 
+    spec_path = write_spec_locally(spec, Path(cfg.paths.output_dir))
+    logger.info(f"wrote local spec to {spec_path}")
+
     if sky_cfg.compute_template is None:
         run(spec)
         return
+
+    # Runner-side R2 upload deferred — rclone env loads inside
+    # dispatch_via_skypilot, after this point. See workflow-spec-upload-delegation series.
 
     # Deferred import — SkyPilot pulls heavy provider SDKs on import.
     from synth_setter.pipeline.skypilot_launch import dispatch_via_skypilot
