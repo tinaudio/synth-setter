@@ -12,6 +12,7 @@ when present (worker reconstruction from JSON). ``shards``/``num_shards``/
 from __future__ import annotations
 
 import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
 from functools import cached_property
 from typing import Any, Literal
@@ -109,6 +110,24 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _current_platform() -> str:  # noqa: DOC201,DOC203
+    """Return ``sys.platform`` via a patchable indirection (tests patch this, not ``sys``)."""
+    return sys.platform
+
+
+_GuiToggleCadence = Literal["never", "once", "render"]
+_PluginReloadCadence = Literal["once", "render"]
+
+
+def _default_gui_toggle_cadence() -> _GuiToggleCadence:  # noqa: DOC201,DOC203
+    """Return ``"never"`` on Darwin (validator rejects ``"render"`` — #714), else ``"render"``.
+
+    Non-Darwin keeps the historical per-render warm-up so this config switch
+    doesn't change production behaviour; ``"once"`` is opt-in.
+    """
+    return "never" if _current_platform() == "darwin" else "render"
+
+
 class ShardSpec(BaseModel):
     """Per-shard identity and pre-computed derived values."""
 
@@ -171,6 +190,24 @@ class RenderConfig(BaseModel):
     samples_per_shard: int = Field(
         description="Samples written per shard; each split size must be a multiple of this."
     )
+    plugin_reload_cadence: _PluginReloadCadence = Field(
+        default="render",
+        description=(
+            'How often to reload the plugin within a shard: ``"once"`` loads + applies '
+            'the preset once per shard and reuses the cached instance; ``"render"`` '
+            "(default, historical per-#489 behaviour) reloads on every render."
+        ),
+    )
+    gui_toggle_cadence: _GuiToggleCadence = Field(
+        default_factory=_default_gui_toggle_cadence,
+        description=(
+            'How often to run the ``show_editor`` warm-up on the plugin: ``"never"`` '
+            'skips it entirely, ``"once"`` runs it once per shard, ``"render"`` runs '
+            "it before every render (default on non-Darwin, matching historical "
+            'per-render warm-up). Darwin rejects ``"render"`` (SIGTRAP after ~3-4 '
+            'calls, #714); the default factory yields ``"never"`` on Darwin.'
+        ),
+    )
 
     @model_validator(mode="after")
     def _ranges_must_be_sane(self) -> RenderConfig:
@@ -191,6 +228,22 @@ class RenderConfig(BaseModel):
             raise ValueError("param_spec_name must not be blank")
         if not self.renderer_version.strip():
             raise ValueError("renderer_version must not be blank")
+        return self
+
+    @model_validator(mode="after")
+    def _gui_toggle_cadence_forbids_render_on_darwin(self) -> RenderConfig:  # noqa: DOC201,DOC203,DOC501,DOC503
+        """Reject ``gui_toggle_cadence="render"`` on Darwin (SIGTRAP after ~3-4 calls, #714).
+
+        ``"once"`` is permitted because a single ``show_editor`` call sits below
+        the empirical SIGTRAP threshold.
+        """
+        if self.gui_toggle_cadence == "render" and _current_platform() == "darwin":
+            raise ValueError(
+                'gui_toggle_cadence="render" is not supported on Darwin: '
+                "show_editor accumulates AppKit/CGS commit-handler state per "
+                "call in unbundled python and triggers SIGTRAP after ~3-4 "
+                'plugin reloads (#714). Use "once" or "never" on Darwin.'
+            )
         return self
 
 

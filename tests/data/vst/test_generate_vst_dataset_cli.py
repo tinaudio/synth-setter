@@ -55,6 +55,8 @@ def _smoke_spec() -> DatasetSpec:
         min_loudness=-55.0,
         samples_per_render_batch=32,
         samples_per_shard=10000,
+        # Darwin-portable (#714).
+        gui_toggle_cadence="never",
     )
     return DatasetSpec(
         task_name="ci-smoke-test",

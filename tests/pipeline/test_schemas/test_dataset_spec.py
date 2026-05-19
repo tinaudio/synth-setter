@@ -119,6 +119,92 @@ class TestRenderConfig:
             cfg = RenderConfig(**{**_valid_render_kwargs(), "velocity": valid})
             assert cfg.velocity == valid
 
+    def test_cadence_defaults_off_darwin(  # noqa: DOC101,DOC103
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Off Darwin: both cadences default to "render" (historical per-render behaviour)."""
+        monkeypatch.setattr(
+            "synth_setter.pipeline.schemas.spec._current_platform", lambda: "linux"
+        )
+        cfg = RenderConfig(**_valid_render_kwargs())
+        assert cfg.plugin_reload_cadence == "render"
+        assert cfg.gui_toggle_cadence == "render"
+
+    def test_gui_toggle_default_is_never_on_darwin(  # noqa: DOC101,DOC103
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Default factory yields "never" on Darwin so bare RenderConfig() constructs (#714)."""
+        monkeypatch.setattr(
+            "synth_setter.pipeline.schemas.spec._current_platform", lambda: "darwin"
+        )
+        cfg = RenderConfig(**_valid_render_kwargs())
+        assert cfg.gui_toggle_cadence == "never"
+        assert cfg.plugin_reload_cadence == "render"
+
+    def test_once_reload_with_never_warmup_accepted(self) -> None:
+        """``("once", "never")`` — the "load once, skip warm-up" mode — constructs cleanly."""
+        cfg = RenderConfig(
+            **{
+                **_valid_render_kwargs(),
+                "plugin_reload_cadence": "once",
+                "gui_toggle_cadence": "never",
+            }
+        )
+        assert cfg.plugin_reload_cadence == "once"
+        assert cfg.gui_toggle_cadence == "never"
+
+    def test_gui_toggle_render_rejected_on_darwin(  # noqa: DOC101,DOC103
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``gui_toggle_cadence="render"`` on Darwin raises (SIGTRAP after ~3-4 calls — #714)."""
+        monkeypatch.setattr(
+            "synth_setter.pipeline.schemas.spec._current_platform", lambda: "darwin"
+        )
+        with pytest.raises(
+            ValidationError,
+            match=r'gui_toggle_cadence="render" is not supported on Darwin',
+        ):
+            RenderConfig(**{**_valid_render_kwargs(), "gui_toggle_cadence": "render"})
+
+    @pytest.mark.parametrize("cadence", ["never", "once"])
+    def test_gui_toggle_never_and_once_accepted_on_darwin(  # noqa: DOC101,DOC103
+        self, monkeypatch: pytest.MonkeyPatch, cadence: str
+    ) -> None:
+        """``"never"`` and ``"once"`` are the only valid gui_toggle settings on Darwin."""
+        monkeypatch.setattr(
+            "synth_setter.pipeline.schemas.spec._current_platform", lambda: "darwin"
+        )
+        cfg = RenderConfig(**{**_valid_render_kwargs(), "gui_toggle_cadence": cadence})
+        assert cfg.gui_toggle_cadence == cadence
+
+    @pytest.mark.parametrize("cadence", ["never", "once", "render"])
+    def test_gui_toggle_all_values_accepted_off_darwin(  # noqa: DOC101,DOC103
+        self, monkeypatch: pytest.MonkeyPatch, cadence: str
+    ) -> None:
+        """All three gui_toggle values are accepted on Linux/Windows — gate is darwin-only."""
+        monkeypatch.setattr(
+            "synth_setter.pipeline.schemas.spec._current_platform", lambda: "linux"
+        )
+        cfg = RenderConfig(**{**_valid_render_kwargs(), "gui_toggle_cadence": cadence})
+        assert cfg.gui_toggle_cadence == cadence
+
+    @pytest.mark.parametrize("cadence", ["once", "render"])
+    def test_plugin_reload_cadence_both_values_accepted_on_darwin(  # noqa: DOC101,DOC103
+        self, monkeypatch: pytest.MonkeyPatch, cadence: str
+    ) -> None:
+        """``plugin_reload_cadence`` accepts both "once" and "render" on Darwin."""
+        monkeypatch.setattr(
+            "synth_setter.pipeline.schemas.spec._current_platform", lambda: "darwin"
+        )
+        cfg = RenderConfig(
+            **{
+                **_valid_render_kwargs(),
+                "plugin_reload_cadence": cadence,
+                "gui_toggle_cadence": "never",
+            }
+        )
+        assert cfg.plugin_reload_cadence == cadence
+
 
 # ---------------------------------------------------------------------------
 # DatasetSpec — construction & runtime-field auto-fill
@@ -568,6 +654,7 @@ class TestSpecConstructionStaysPedalboardFree:
             "        'sample_rate': 16000, 'channels': 1, 'velocity': 64,\n"
             "        'signal_duration_seconds': 1.0, 'min_loudness': -30.0,\n"
             "        'samples_per_render_batch': 1, 'samples_per_shard': 1,\n"
+            "        'gui_toggle_cadence': 'never',\n"
             "    },\n"
             ")\n"
             "_ = spec.num_params\n"

@@ -28,6 +28,8 @@ def _make_dataset_spec_kwargs(plugin_path: str = "plugins/Surge XT.vst3") -> dic
             "min_loudness": -55.0,
             "samples_per_render_batch": 32,
             "samples_per_shard": 10000,
+            # Darwin-portable (#714).
+            "gui_toggle_cadence": "never",
         },
     }
 

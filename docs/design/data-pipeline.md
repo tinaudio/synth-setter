@@ -1208,6 +1208,15 @@ class RenderConfig(BaseModel):
     min_loudness: float
     samples_per_render_batch: int
     samples_per_shard: int
+    plugin_reload_cadence: Literal["once", "render"] = "render"
+    # Platform-aware default via Field(default_factory=...): "never" on Darwin
+    # (show_editor SIGTRAPs after ~3-4 calls, #714), "render" elsewhere
+    # (preserves historical per-render warm-up). An explicit
+    # gui_toggle_cadence="render" is still rejected on Darwin by a
+    # model_validator.
+    gui_toggle_cadence: Literal["never", "once", "render"] = Field(
+        default_factory=_default_gui_toggle_cadence
+    )
 
 class DatasetSpec(BaseModel):
     """Unified dataset specification — input config + materialized runtime in one model."""

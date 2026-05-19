@@ -8,7 +8,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import h5py
 import hdf5plugin  # noqa: F401  side-effect: registers Blosc2 filter for h5py reads
@@ -19,7 +19,7 @@ import pytest
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.evaluation.compute_audio_metrics import compute_mss, compute_rms, compute_sot, compute_wmfcc
 from synth_setter.data.vst import param_specs
-from synth_setter.data.vst.core import render_params
+from synth_setter.data.vst.core import load_plugin, load_preset, render_params
 from synth_setter.data.vst.param_spec import ParamSpec
 from synth_setter.data.vst.writers import make_hdf5_dataset
 
@@ -63,6 +63,8 @@ def _render_cfg(
         min_loudness=min_loudness,
         samples_per_render_batch=samples_per_render_batch if samples_per_render_batch is not None else num_samples,
         samples_per_shard=num_samples,
+        # Darwin-portable: never run the editor warm-up (#714).
+        gui_toggle_cadence="never",
     )
 
 # Phase-robust audio similarity thresholds for replayed-params vs. candidates.
@@ -993,6 +995,72 @@ def test_show_editor_warmup_does_not_change_rendered_audio() -> None:
             )
 
 
+@pytest.mark.slow
+@pytest.mark.requires_vst
+@skip_no_vst
+def test_reload_per_render_matches_cached_plugin() -> None:
+    """Cached-plugin renders match reload-per-render renders within audio thresholds.
+
+    Safety pin for ``plugin_reload_cadence="once"`` on the surge_xt path (#705).
+    """
+    n_renders = 3
+    pitch = _HARDCODED_NOTE_PARAMS["pitch"]
+    note_window = _HARDCODED_NOTE_PARAMS["note_start_and_end"]
+    assert isinstance(pitch, int)
+    assert isinstance(note_window, tuple)
+
+    def _render_n_reload() -> list[np.ndarray]:
+        return [
+            render_params(
+                _PLUGIN_PATH,
+                _HARDCODED_SYNTH_PARAMS,
+                pitch,
+                _VELOCITY,
+                note_window,
+                _DURATION,
+                _SAMPLE_RATE,
+                _CHANNELS,
+                preset_path=_PRESET_PATH,
+            )
+            for _ in range(n_renders)
+        ]
+
+    def _render_n_cached() -> list[np.ndarray]:
+        plugin = load_plugin(_PLUGIN_PATH)
+        load_preset(plugin, _PRESET_PATH)
+        return [
+            render_params(
+                _PLUGIN_PATH,
+                _HARDCODED_SYNTH_PARAMS,
+                pitch,
+                _VELOCITY,
+                note_window,
+                _DURATION,
+                _SAMPLE_RATE,
+                _CHANNELS,
+                preset_path=_PRESET_PATH,
+                plugin=plugin,
+            )
+            for _ in range(n_renders)
+        ]
+
+    reloaded = _render_n_reload()
+    cached = _render_n_cached()
+
+    for label, batch in (("reloaded", reloaded), ("cached", cached)):
+        for k, audio in enumerate(batch):
+            assert np.isfinite(audio).all(), f"{label}[{k}] contains NaN/Inf"
+            assert np.abs(audio).max() > _AUDIO_PEAK_SILENCE_FLOOR, (
+                f"{label}[{k}] is silent (peak {np.abs(audio).max():.2e})"
+            )
+
+    for i, target in enumerate(reloaded):
+        for j, pred in enumerate(cached):
+            _assert_audio_metrics_within_thresholds(
+                target, pred, label=f"reloaded[{i}] vs cached[{j}]"
+            )
+
+
 def test_make_dataset_raises_when_fixed_params_list_is_too_short(
     tmp_path: Path,
 ) -> None:
@@ -1126,6 +1194,143 @@ def test_generate_sample_retries_when_only_fixed_note_params(
     # Exhausted both render outputs ⇒ retried exactly once.
     assert next(render_outputs, None) is None
     assert sample.note_params == _HARDCODED_NOTE_PARAMS
+
+
+def _install_fake_render_params(  # noqa: DOC203
+    monkeypatch: pytest.MonkeyPatch,
+    spec: ParamSpec,
+    *,
+    num_retries: int,
+) -> MagicMock:
+    """Patch ``render_params`` with a fake that honors the ``warmup`` contract.
+
+    The fake delegates warm-up to a tracked ``warmup_plugin`` mock whenever it
+    receives ``warmup=True``, then returns silent audio for the first
+    ``num_retries`` calls and loud audio thereafter. ``param_spec.sample`` is
+    patched in lockstep so each retry has fresh params to consume.
+
+    Returning the warmup mock lets callers assert on the observable side
+    effect — the editor being opened — rather than on the kwarg passed
+    through to ``render_params``.
+
+    :param monkeypatch: Active monkeypatch fixture from the calling test.
+    :param spec: ``ParamSpec`` whose ``sample`` is replayed by the fake.
+    :param num_retries: Number of silent (rejected) renders before a loud one.
+    :returns: The ``warmup_plugin`` mock used by the fake ``render_params``.
+    """
+    from synth_setter.data.vst import generate_vst_dataset
+
+    warmup_mock = MagicMock(name="warmup_plugin")
+    render_outputs = iter([_silent_audio()] * num_retries + [_loud_audio()])
+
+    def _fake_render_params(*_args: object, **kwargs: object) -> np.ndarray:
+        if kwargs.get("warmup"):
+            warmup_mock()
+        return next(render_outputs)
+
+    monkeypatch.setattr(generate_vst_dataset, "render_params", _fake_render_params)
+
+    sample_returns = iter(
+        [(_HARDCODED_SYNTH_PARAMS, _HARDCODED_NOTE_PARAMS)] * (num_retries + 1)
+    )
+    monkeypatch.setattr(spec, "sample", lambda: next(sample_returns))
+    return warmup_mock
+
+
+@pytest.mark.parametrize("num_retries", [0, 1, 3])
+def test_generate_sample_warmups_once_regardless_of_retries(  # noqa: DOC101,DOC103
+    monkeypatch: pytest.MonkeyPatch, num_retries: int
+) -> None:
+    """``warmup=True`` invokes ``warmup_plugin`` exactly once across K loudness retries.
+
+    Regression for the Darwin SIGTRAP failure mode (#714): with
+    ``gui_toggle_cadence="once"`` the writer passes ``warmup=True`` exactly once
+    per shard, but if the first sample retries on the loudness gate, the
+    primitive must still fire at most once across the whole ``generate_sample``
+    call — otherwise N retries blow past the ~3-4-calls-per-process budget.
+    Asserts behavior (warm-up call count) rather than the ``warmup`` kwarg.
+    """
+    from synth_setter.data.vst import generate_vst_dataset
+
+    spec = param_specs[_SPEC_NAME]
+    warmup_mock = _install_fake_render_params(monkeypatch, spec, num_retries=num_retries)
+
+    generate_vst_dataset.generate_sample(
+        plugin_path=_PLUGIN_PATH,
+        velocity=_VELOCITY,
+        signal_duration_seconds=_DURATION,
+        sample_rate=_SAMPLE_RATE,
+        channels=_CHANNELS,
+        min_loudness=_MIN_LOUDNESS,
+        param_spec=spec,
+        preset_path=_PRESET_PATH,
+        fixed_synth_params=None,
+        fixed_note_params=_HARDCODED_NOTE_PARAMS,
+        warmup=True,
+    )
+    assert warmup_mock.call_count == 1
+
+
+@pytest.mark.parametrize("num_retries", [0, 1, 3])
+def test_generate_sample_with_warmup_false_never_warms_across_retries(  # noqa: DOC101,DOC103
+    monkeypatch: pytest.MonkeyPatch, num_retries: int
+) -> None:
+    """``warmup=False`` is a hard zero: no ``warmup_plugin`` call regardless of retries.
+
+    Off-switch invariant — the caller asked for no warm-up, so the loudness
+    retry loop must not re-introduce one. This is the symmetrical guarantee to
+    ``test_generate_sample_warmups_once_regardless_of_retries``.
+    """
+    from synth_setter.data.vst import generate_vst_dataset
+
+    spec = param_specs[_SPEC_NAME]
+    warmup_mock = _install_fake_render_params(monkeypatch, spec, num_retries=num_retries)
+
+    generate_vst_dataset.generate_sample(
+        plugin_path=_PLUGIN_PATH,
+        velocity=_VELOCITY,
+        signal_duration_seconds=_DURATION,
+        sample_rate=_SAMPLE_RATE,
+        channels=_CHANNELS,
+        min_loudness=_MIN_LOUDNESS,
+        param_spec=spec,
+        preset_path=_PRESET_PATH,
+        fixed_synth_params=None,
+        fixed_note_params=_HARDCODED_NOTE_PARAMS,
+        warmup=False,
+    )
+    assert warmup_mock.call_count == 0
+
+
+def test_generate_sample_with_warmup_true_no_retries_warms_exactly_once(  # noqa: DOC101,DOC103
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Strict equality at zero retries: ``warmup_plugin`` fires once, not at least once.
+
+    The "happy path" pin — when the first render passes the loudness gate, the
+    warm-up primitive is invoked exactly once. Without this, a regression that
+    silently double-warmed on the success path could slip past the retry tests
+    (which only exercise the retry branch).
+    """
+    from synth_setter.data.vst import generate_vst_dataset
+
+    spec = param_specs[_SPEC_NAME]
+    warmup_mock = _install_fake_render_params(monkeypatch, spec, num_retries=0)
+
+    generate_vst_dataset.generate_sample(
+        plugin_path=_PLUGIN_PATH,
+        velocity=_VELOCITY,
+        signal_duration_seconds=_DURATION,
+        sample_rate=_SAMPLE_RATE,
+        channels=_CHANNELS,
+        min_loudness=_MIN_LOUDNESS,
+        param_spec=spec,
+        preset_path=_PRESET_PATH,
+        fixed_synth_params=None,
+        fixed_note_params=_HARDCODED_NOTE_PARAMS,
+        warmup=True,
+    )
+    assert warmup_mock.call_count == 1
 
 
 @pytest.mark.slow

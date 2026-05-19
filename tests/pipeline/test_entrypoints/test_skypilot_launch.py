@@ -1065,6 +1065,7 @@ class TestJobNameValidation:
                     "min_loudness": -55.0,
                     "samples_per_render_batch": 1,
                     "samples_per_shard": 1,
+                    "gui_toggle_cadence": "never",
                 },
             }
         )

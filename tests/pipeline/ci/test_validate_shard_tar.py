@@ -86,6 +86,7 @@ def real_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> DatasetSpec:
             "min_loudness": -55.0,
             "samples_per_render_batch": 32,
             "samples_per_shard": 10,
+            "gui_toggle_cadence": "never",
         },  # type: ignore[arg-type]
     )
 
