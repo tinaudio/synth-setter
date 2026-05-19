@@ -3,16 +3,20 @@
 Wraps `rclone` with a small set of typed helpers so worker, launcher, and CI
 validation code can share one implementation. Resolution of `r2:` is left to
 the caller's environment — the standard `RCLONE_CONFIG_R2_*` vars must be set
-when any of these functions runs.
+when any of these functions runs; ``ensure_r2_env_loaded`` is the load + validate
++ auth-check entry point callers use to set them up.
 """
 
 from __future__ import annotations
 
+import os
 import subprocess
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+
+from dotenv import dotenv_values
 
 from synth_setter.pipeline.constants import R2_URI_SCHEME, RCLONE_REMOTE
 
@@ -20,12 +24,75 @@ __all__ = [
     "R2_URI_SCHEME",
     "download_to_path",
     "downloaded_to_tempfile",
+    "ensure_r2_env_loaded",
     "is_r2_uri",
     "object_size",
     "shard_uri",
     "to_rclone_path",
     "upload_to_uri",
 ]
+
+# Keys rclone needs to authenticate to R2. Type and provider are defaulted by the
+# launcher (s3 / Cloudflare); the three below are secrets that must come from a
+# .env file or process env — no built-in default.
+_SECRET_R2_ENV_KEYS: tuple[str, ...] = (
+    "RCLONE_CONFIG_R2_ACCESS_KEY_ID",
+    "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY",
+    "RCLONE_CONFIG_R2_ENDPOINT",
+)
+
+
+def ensure_r2_env_loaded(env_file: Path | None = None) -> None:
+    """Load ``RCLONE_CONFIG_R2_*`` from ``env_file`` into ``os.environ``; validate.
+
+    Two-step pre-flight that callers run once before invoking any other helper
+    in this module:
+
+    1. If ``env_file`` is provided and exists on disk, mirror every key
+       prefixed with ``RCLONE_CONFIG_R2_`` from that dotenv file into
+       ``os.environ`` (dotenv values overwrite — matches the launcher's
+       precedence so the same view applies on every entry point).
+    2. Verify the three secret keys in ``_SECRET_R2_ENV_KEYS`` are present in
+       process env, then run ``rclone lsd r2:`` as an auth ping. Either check
+       failing raises ``RuntimeError`` with an actionable message.
+
+    No-op on the dotenv step if ``env_file`` is ``None`` or doesn't exist; the
+    presence+auth check still runs against whatever ``os.environ`` already has.
+
+    :param env_file: Optional dotenv file to merge into ``os.environ`` first
+        (typically ``sky_cfg.env_file``).
+    :raises RuntimeError: A required secret key is unset after the load, or
+        ``rclone lsd r2:`` exits non-zero (bad creds, network, etc.).
+    """
+    if env_file is not None and env_file.is_file():
+        for key, value in dotenv_values(env_file).items():
+            if key and key.startswith("RCLONE_CONFIG_R2_") and value is not None:
+                os.environ[key] = value
+
+    missing = [k for k in _SECRET_R2_ENV_KEYS if k not in os.environ]
+    if missing:
+        where = str(env_file) if env_file is not None else "<env_file not set>"
+        raise RuntimeError(
+            f"R2 credentials missing from process env after dotenv load: {', '.join(missing)}. "
+            f"Set RCLONE_CONFIG_R2_* in process env (e.g. `docker run -e ...=...`) "
+            f"or populate {where}."
+        )
+
+    # Auth ping — fail fast on bad creds instead of letting the first real
+    # operation fail several seconds in. Cheap (<1 RTT to R2) and unambiguous:
+    # `rclone lsd r2:` lists buckets visible to the configured creds.
+    result = subprocess.run(  # noqa: S603 — args are literal strings
+        ["rclone", "lsd", "r2:", "--contimeout=10s", "--timeout=30s"],  # noqa: S607
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        stderr_excerpt = result.stderr.strip().splitlines()[-1][:200] if result.stderr else ""
+        raise RuntimeError(
+            "rclone failed to authenticate to R2 with the resolved credentials "
+            f"(exit {result.returncode}): {stderr_excerpt}"
+        )
 
 
 def is_r2_uri(uri: str) -> bool:

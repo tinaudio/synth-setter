@@ -1,13 +1,20 @@
 """Tests for synth_setter.cli.generate_dataset — spec-driven run.
 
-The entrypoint's public surface is a single ``run(spec)`` function that:
-  1. Uploads the spec to R2 via ``spec_io.upload_spec`` (canonical key).
-  2. For each shard in ``spec.shards``, shells out to ``generate_vst_dataset.py``
-     to render it, uploads to R2 at ``r2:{bucket}/{prefix}/``, and unlinks the
-     local file.
+The entrypoint's public surface:
 
-Tests monkeypatch ``upload_spec``, ``_rclone_copy``, and
-``subprocess.check_call`` and assert on recorded call args + ordering.
+- ``main()``: launcher-side orchestrator. Composes the cfg, writes the local
+  ``input_spec.json`` mirror, runs ``r2_io.ensure_r2_env_loaded`` (dotenv +
+  auth ping), uploads the canonical spec via ``spec_io.upload_spec``, then
+  either calls ``run(spec)`` inline (local-run) or dispatches to a SkyPilot
+  worker pod.
+- ``run(spec)``: per-rank renderer. For each owned shard in ``spec.shards``,
+  shells out to ``generate_vst_dataset.py``, uploads the shard to R2 at
+  ``r2:{bucket}/{prefix}/``, and unlinks the local file. No longer uploads
+  the spec — ``main()`` does that once on the launcher host.
+
+Tests monkeypatch ``write_spec_locally`` / ``upload_spec`` /
+``ensure_r2_env_loaded`` / ``_rclone_copy`` / ``subprocess.check_call`` and
+assert on recorded call args + ordering.
 """
 
 from __future__ import annotations
@@ -118,7 +125,10 @@ def _multi_shard_spec(tmp_path: Path, n: int = 3) -> DatasetSpec:
 
 
 class TestRun:
-    """Run() orchestrates: upload spec via spec_io → generate → upload shard."""
+    """Run() orchestrates: generate → upload shard, per owned shard.
+
+    No spec upload.
+    """
 
     @pytest.fixture(autouse=True)
     def _set_default_skypilot_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -141,64 +151,6 @@ class TestRun:
         ``monkeypatch.setattr`` on ``pipeline.r2_io.object_size``.
         """
         monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda *_a, **_k: None)
-
-    @pytest.fixture(autouse=True)
-    def _stub_upload_spec(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Stub ``upload_spec`` so ``run()`` doesn't shell out to rclone.
-
-        Spec upload moved from inline ``_rclone_copy`` to the
-        ``spec_io.upload_spec`` helper; tests that previously counted
-        spec uploads on ``_rclone_copy`` now assert via the module-level mock
-        accessed as ``gd.upload_spec``.
-
-        :param monkeypatch: Pytest fixture used to patch the helper.
-        """
-        mock = MagicMock(return_value="r2://stub-bucket/stub-key/input_spec.json")
-        monkeypatch.setattr("synth_setter.cli.generate_dataset.upload_spec", mock)
-
-    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
-    @patch("synth_setter.cli.generate_dataset._rclone_copy")
-    def test_uploads_spec_via_helper(
-        self,
-        mock_rclone: MagicMock,
-        mock_check_call: MagicMock,
-        spec: DatasetSpec,
-    ) -> None:
-        """``run()`` delegates spec upload to ``spec_io.upload_spec(spec)``.
-
-        :param mock_rclone: Patched ``_rclone_copy`` (unused in this test, but
-            present to suppress the real shard upload).
-        :param mock_check_call: Patched ``subprocess.check_call`` so the renderer
-            never shells out.
-        :param spec: Fixture-provided single-shard ``DatasetSpec``.
-        """
-        import synth_setter.cli.generate_dataset as gd
-
-        mock_check_call.side_effect = _materialize_shard
-        run(spec)
-
-        gd.upload_spec.assert_called_once_with(spec)  # type: ignore[attr-defined]
-
-    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
-    @patch("synth_setter.cli.generate_dataset._rclone_copy")
-    def test_spec_upload_precedes_shard_generation(
-        self,
-        mock_rclone: MagicMock,
-        mock_check_call: MagicMock,
-        spec: DatasetSpec,
-    ) -> None:
-        """Spec is uploaded via the helper before the shard-generating subprocess runs."""
-        import synth_setter.cli.generate_dataset as gd
-
-        mock_check_call.side_effect = _materialize_shard
-        manager = MagicMock()
-        manager.attach_mock(gd.upload_spec, "upload_spec")  # type: ignore[arg-type]
-        manager.attach_mock(mock_check_call, "check_call")
-
-        run(spec)
-
-        call_names = [c[0] for c in manager.mock_calls]
-        assert call_names.index("upload_spec") < call_names.index("check_call")
 
     @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
     @patch("synth_setter.cli.generate_dataset._rclone_copy")
@@ -251,7 +203,7 @@ class TestRun:
         mock_check_call: MagicMock,
         spec: DatasetSpec,
     ) -> None:
-        """Rclone is invoked once per shard (spec upload now uses the spec_io helper)."""
+        """Rclone is invoked once per shard (run() uploads shards only, not the spec)."""
         mock_check_call.side_effect = _materialize_shard
         run(spec)
 
@@ -314,42 +266,16 @@ class TestRun:
 
     @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
     @patch("synth_setter.cli.generate_dataset._rclone_copy")
-    def test_spec_uploaded_exactly_once_for_multi_shard_run(
-        self,
-        mock_rclone: MagicMock,
-        mock_check_call: MagicMock,
-        tmp_path: Path,
-    ) -> None:
-        """Spec is uploaded once per run; per-shard rclone calls remain unchanged."""
-        import synth_setter.cli.generate_dataset as gd
-
-        spec = _multi_shard_spec(tmp_path, n=3)
-        mock_check_call.side_effect = _materialize_shard
-
-        run(spec)
-
-        gd.upload_spec.assert_called_once()  # type: ignore[attr-defined]
-        assert mock_rclone.call_count == 3
-
-    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
-    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_each_shard_uploaded_after_its_render(
         self,
         mock_rclone: MagicMock,
         mock_check_call: MagicMock,
         tmp_path: Path,
     ) -> None:
-        """Render and upload are interleaved per shard: render0, upload0, render1, upload1, ...
-
-        The spec is uploaded once via ``upload_spec`` before the loop;
-        thereafter ``check_call`` (render) and ``rclone`` (shard upload) alternate.
-        """
-        import synth_setter.cli.generate_dataset as gd
-
+        """Render and upload are interleaved per shard: render0, upload0, render1, upload1, ..."""
         spec = _multi_shard_spec(tmp_path, n=3)
         mock_check_call.side_effect = _materialize_shard
         manager = MagicMock()
-        manager.attach_mock(gd.upload_spec, "upload_spec")  # type: ignore[arg-type]
         manager.attach_mock(mock_rclone, "rclone")
         manager.attach_mock(mock_check_call, "check_call")
 
@@ -357,7 +283,6 @@ class TestRun:
 
         call_names = [c[0] for c in manager.mock_calls]
         assert call_names == [
-            "upload_spec",
             "check_call",  # render shard 0
             "rclone",  # upload shard 0
             "check_call",  # render shard 1
@@ -431,14 +356,12 @@ class TestRun:
         Catches a generator bug at the rendering boundary instead of letting it surface as a less-
         direct rclone "source not found" further down the pipeline.
         """
-        import synth_setter.cli.generate_dataset as gd
 
         mock_check_call.return_value = 0
 
         with pytest.raises(RuntimeError, match="did not write expected shard file"):
             run(spec)
 
-        gd.upload_spec.assert_called_once()  # type: ignore[attr-defined]
         mock_rclone.assert_not_called()
 
     @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
@@ -453,7 +376,6 @@ class TestRun:
 
         This prevents emitting a shard tagged with the wrong renderer_version.
         """
-        import synth_setter.cli.generate_dataset as gd
 
         kwargs = _base_spec_kwargs(tmp_path)
         kwargs["render"] = {**kwargs["render"], "renderer_version": "999.999.999"}  # type: ignore[dict-item]
@@ -463,7 +385,6 @@ class TestRun:
             run(spec)
         mock_rclone.assert_not_called()
         mock_check_call.assert_not_called()
-        gd.upload_spec.assert_not_called()  # type: ignore[attr-defined]
 
     @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
     @patch("synth_setter.cli.generate_dataset._rclone_copy")
@@ -479,7 +400,6 @@ class TestRun:
         Removes the silent-default smell where a worker invoked without partition env would
         otherwise duplicate every shard across every node.
         """
-        import synth_setter.cli.generate_dataset as gd
 
         monkeypatch.delenv("SYNTH_SETTER_WORKER_RANK", raising=False)
         monkeypatch.delenv("SYNTH_SETTER_NUM_WORKERS", raising=False)
@@ -492,7 +412,6 @@ class TestRun:
         assert "SYNTH_SETTER_NUM_WORKERS" in message
         mock_rclone.assert_not_called()
         mock_check_call.assert_not_called()
-        gd.upload_spec.assert_not_called()  # type: ignore[attr-defined]
 
     @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
     @patch("synth_setter.cli.generate_dataset._rclone_copy")
@@ -544,28 +463,7 @@ class TestRun:
 
     @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
     @patch("synth_setter.cli.generate_dataset._rclone_copy")
-    def test_spec_uploaded_exactly_once_independent_of_partition(
-        self,
-        mock_rclone: MagicMock,
-        mock_check_call: MagicMock,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Spec upload is partition-independent: every worker uploads it exactly once."""
-        import synth_setter.cli.generate_dataset as gd
-
-        monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "1")
-        monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "2")
-        spec = _multi_shard_spec(tmp_path, n=3)
-        mock_check_call.side_effect = _materialize_shard
-
-        run(spec)
-
-        gd.upload_spec.assert_called_once()  # type: ignore[attr-defined]
-
-    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
-    @patch("synth_setter.cli.generate_dataset._rclone_copy")
-    def test_excess_worker_renders_no_shards_but_still_uploads_spec(
+    def test_excess_worker_renders_no_shards(
         self,
         mock_rclone: MagicMock,
         mock_check_call: MagicMock,
@@ -574,11 +472,14 @@ class TestRun:
     ) -> None:
         """When world > num_shards, the excess workers exit cleanly without rendering.
 
-        A 4-node partition over 3 shards leaves worker 3 with an empty range — it must still upload
-        the spec (idempotent) but render zero shards.
-        """
-        import synth_setter.cli.generate_dataset as gd
+        A 4-node partition over 3 shards leaves worker 3 with an empty range — it renders zero
+        shards and makes no rclone calls.
 
+        :param mock_rclone: Patched ``_rclone_copy`` (must not be called).
+        :param mock_check_call: Patched ``subprocess.check_call`` (must not be called).
+        :param tmp_path: Pytest tmp dir used by ``_multi_shard_spec``.
+        :param monkeypatch: Pytest fixture used to set partition env vars.
+        """
         monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "3")
         monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "4")
         spec = _multi_shard_spec(tmp_path, n=3)
@@ -587,7 +488,6 @@ class TestRun:
 
         mock_check_call.assert_not_called()
         mock_rclone.assert_not_called()
-        gd.upload_spec.assert_called_once()  # type: ignore[attr-defined]
 
     # Skip-existing-shards — see #750.
 
@@ -601,15 +501,11 @@ class TestRun:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Object present (size > 0) → renderer is not invoked, shard upload is not attempted."""
-        import synth_setter.cli.generate_dataset as gd
-
         monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda *_a, **_k: 12345)
 
         run(spec)
 
         mock_check_call.assert_not_called()
-        # Spec is still uploaded via the helper; no per-shard rclone call happens.
-        gd.upload_spec.assert_called_once()  # type: ignore[attr-defined]
         mock_rclone.assert_not_called()
 
     @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
@@ -967,17 +863,21 @@ class TestMainDispatchBranches:
 
     @pytest.fixture(autouse=True)
     def _stub_spec_io_in_main(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Stub the spec_io helpers ``main()`` invokes so tests don't shell out to rclone.
+        """Stub the spec_io helpers + ``ensure_r2_env_loaded`` so ``main()`` doesn't shell out.
 
-        Tests access the mocks via ``gd.write_spec_locally`` and
-        ``gd.upload_spec`` to keep test signatures stable for pydoclint.
+        Tests access the mocks via ``gd.write_spec_locally``,
+        ``gd.upload_spec``, and ``gd.r2_io.ensure_r2_env_loaded`` to keep test
+        signatures stable for pydoclint.
 
         :param monkeypatch: Pytest fixture used to patch the helpers.
         """
+        import synth_setter.cli.generate_dataset as gd
+
         write_mock = MagicMock(side_effect=lambda spec, out: Path(out) / "input_spec.json")
         upload_mock = MagicMock(return_value="r2://stub-bucket/stub-key/input_spec.json")
         monkeypatch.setattr("synth_setter.cli.generate_dataset.write_spec_locally", write_mock)
         monkeypatch.setattr("synth_setter.cli.generate_dataset.upload_spec", upload_mock)
+        monkeypatch.setattr(gd.r2_io, "ensure_r2_env_loaded", MagicMock(return_value=None))
 
     def test_compute_template_null_calls_run_locally(
         self,
@@ -1104,15 +1004,13 @@ class TestMainDispatchBranches:
 
 
 class TestMainSpecPersistence:
-    """``main()`` writes the local spec; spec R2 upload is deferred to ``run()``.
+    """``main()`` writes the local spec, loads R2 env, uploads the canonical spec on every path.
 
-    Both branches behave the same w.r.t. the canonical R2 upload: the local-run
-    branch calls ``run(spec)`` which uploads via ``upload_spec``, and the
-    dispatch branch hands off to ``dispatch_via_skypilot`` which lets the worker
-    pod run ``run(spec)`` — same call site, same R2 key. The runner-side R2
-    upload from ``main()`` is deferred to a later phase of the
-    workflow-spec-upload-delegation series (rclone env loads inside
-    ``dispatch_via_skypilot``), so neither branch uploads from ``main()`` today.
+    The R2 upload is launcher-side and happens once per ``main()`` invocation:
+    after the local write, before the local-run / dispatch branch is taken.
+    Workers in the dispatch path no longer re-upload the spec (the worker's
+    ``run(spec)`` writes shards only); the canonical R2 object exists before
+    any worker boots.
     """
 
     @pytest.fixture(autouse=True)
@@ -1126,10 +1024,11 @@ class TestMainSpecPersistence:
 
     @pytest.fixture(autouse=True)
     def _stub_run_and_spec_io(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Stub the in-process ``run()`` and the spec_io helpers ``main()`` calls.
+        """Stub ``run()``, the spec_io helpers, and ``r2_io.ensure_r2_env_loaded``.
 
-        Tests assert via the module-level mocks ``gd.write_spec_locally``
-        and ``gd.upload_spec`` to keep test signatures stable for pydoclint.
+        Tests assert via the module-level mocks ``gd.write_spec_locally``,
+        ``gd.upload_spec``, and ``gd.r2_io.ensure_r2_env_loaded`` to keep test
+        signatures stable for pydoclint.
 
         :param monkeypatch: Pytest fixture used to patch module-level callables.
         """
@@ -1146,6 +1045,7 @@ class TestMainSpecPersistence:
             "upload_spec",
             MagicMock(return_value="r2://stub-bucket/stub-key/input_spec.json"),
         )
+        monkeypatch.setattr(gd.r2_io, "ensure_r2_env_loaded", MagicMock(return_value=None))
 
     @staticmethod
     def _dispatch_argv(template_path: Path) -> list[str]:
@@ -1194,10 +1094,8 @@ class TestMainSpecPersistence:
         assert isinstance(called_spec, DatasetSpec)
         assert isinstance(called_out, Path)
 
-    def test_local_run_does_not_upload_spec_from_main(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Local-run branch must not double-upload — ``run()`` does it.
+    def test_local_run_uploads_spec_from_main(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Local-run branch uploads the spec from ``main()`` exactly once.
 
         :param monkeypatch: Pytest fixture used to patch ``sys.argv``.
         """
@@ -1212,19 +1110,14 @@ class TestMainSpecPersistence:
 
         gd.main()
 
-        gd.upload_spec.assert_not_called()  # type: ignore[attr-defined]
+        gd.upload_spec.assert_called_once()  # type: ignore[attr-defined]
+        called_spec = gd.upload_spec.call_args[0][0]  # type: ignore[attr-defined]
+        assert isinstance(called_spec, DatasetSpec)
 
-    def test_dispatch_branch_does_not_upload_spec_from_main(
+    def test_dispatch_branch_uploads_spec_from_main(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """Dispatch branch defers the runner-side R2 upload to a later phase.
-
-        Runner-side ``upload_spec`` from ``main()`` requires
-        ``RCLONE_CONFIG_R2_*`` env which currently only loads inside
-        ``dispatch_via_skypilot``. Until that env handling is restructured
-        (later phase of the workflow-spec-upload-delegation series), the
-        canonical R2 object is written by the launcher's existing transport
-        upload and the worker's ``run()`` — not by ``main()``.
+        """Dispatch branch also uploads from ``main()`` — worker no longer re-uploads.
 
         :param monkeypatch: Pytest fixture used to patch ``sys.argv``.
         :param tmp_path: Pytest fixture providing a fresh test directory.
@@ -1238,5 +1131,30 @@ class TestMainSpecPersistence:
 
         gd.main()
 
-        gd.upload_spec.assert_not_called()  # type: ignore[attr-defined]
+        gd.upload_spec.assert_called_once()  # type: ignore[attr-defined]
         gd.write_spec_locally.assert_called_once()  # type: ignore[attr-defined]
+
+    def test_main_ensures_r2_env_loaded_before_upload(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``ensure_r2_env_loaded`` runs before ``upload_spec`` so creds are in place.
+
+        :param monkeypatch: Pytest fixture used to patch ``sys.argv``.
+        """
+        import synth_setter.cli.generate_dataset as gd
+
+        argv = [
+            "synth-setter-generate-dataset",
+            "experiment=generate_dataset/smoke-shard",
+            f"render.plugin_path={TEST_PLUGIN_VST3}",
+        ]
+        monkeypatch.setattr("sys.argv", argv)
+
+        manager = MagicMock()
+        manager.attach_mock(gd.r2_io.ensure_r2_env_loaded, "ensure_env")  # type: ignore[arg-type]
+        manager.attach_mock(gd.upload_spec, "upload_spec")  # type: ignore[arg-type]
+
+        gd.main()
+
+        call_names = [c[0] for c in manager.mock_calls]
+        assert call_names.index("ensure_env") < call_names.index("upload_spec")

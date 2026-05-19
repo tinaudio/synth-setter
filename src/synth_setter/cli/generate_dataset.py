@@ -142,12 +142,14 @@ def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -
 
 
 def run(spec: DatasetSpec) -> None:
-    """Upload the spec to R2 once, then render+upload each owned shard in turn.
+    """Render+upload each owned shard in turn.
 
-    Spec serialization, spec upload, and the renderer-version constraint check
-    happen once pre-loop. Each shard is rendered, uploaded, and unlinked before
-    moving on — bounding local disk to one shard at a time. Subprocesses
-    fail-fast: later shards are not attempted on subprocess error.
+    Spec upload no longer happens here — ``main()`` writes the canonical R2
+    copy once on the launcher host before either calling ``run(spec)`` inline
+    (local-run) or dispatching to a SkyPilot worker pod that re-enters via
+    ``from_hydra`` → ``run(spec)``. Each shard is rendered, uploaded, and
+    unlinked before moving on — bounding local disk to one shard at a time.
+    Subprocesses fail-fast: later shards are not attempted on subprocess error.
 
     Before each render, R2 is probed for the shard's destination object: if it already exists with
     non-zero size, the shard is skipped (resumability MVP — see #750). The probe uses
@@ -186,8 +188,6 @@ def run(spec: DatasetSpec) -> None:
 
     with tempfile.TemporaryDirectory() as work_dir_str:
         work_dir = Path(work_dir_str)
-        r2_uri = upload_spec(spec)
-        logger.info(f"spec uploaded -> {r2_uri}")
 
         rendered = 0
         skipped = 0
@@ -346,12 +346,19 @@ def main() -> None:
     spec_path = write_spec_locally(spec, _REPO_ROOT)
     logger.info(f"wrote local spec to {spec_path}")
 
+    # Load + validate R2 creds once for the whole run, then upload the
+    # canonical spec from this single launcher-side site. Both branches benefit:
+    # local-run uses the just-loaded env for run()'s shard uploads, and the
+    # dispatch branch lets the worker boot already pointing at an existing
+    # canonical object (no per-rank re-write).
+    env_file = Path(sky_cfg.env_file).expanduser() if sky_cfg.env_file else None
+    r2_io.ensure_r2_env_loaded(env_file)
+    r2_uri = upload_spec(spec)
+    logger.info(f"spec uploaded -> {r2_uri}")
+
     if sky_cfg.compute_template is None:
         run(spec)
         return
-
-    # Runner-side R2 upload deferred — rclone env loads inside
-    # dispatch_via_skypilot, after this point. See workflow-spec-upload-delegation series.
 
     # Deferred import — SkyPilot pulls heavy provider SDKs on import.
     from synth_setter.pipeline.skypilot_launch import dispatch_via_skypilot

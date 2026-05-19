@@ -196,3 +196,139 @@ class TestObjectSize:
         """Local paths are rejected via _to_rclone_path."""
         with pytest.raises(ValueError, match="not an r2:// URI"):
             r2_io.object_size("local/key.h5")
+
+
+def _set_all_r2_secrets(monkeypatch: pytest.MonkeyPatch, suffix: str = "from-env") -> None:
+    """Populate `RCLONE_CONFIG_R2_*` secrets so `ensure_r2_env_loaded` finds them.
+
+    :param monkeypatch: Pytest fixture used to set env vars.
+    :param suffix: Value suffix (lets one targeted test distinguish dotenv vs os.environ origin).
+    """
+    monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", f"id-{suffix}")
+    monkeypatch.setenv("RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", f"secret-{suffix}")
+    monkeypatch.setenv("RCLONE_CONFIG_R2_ENDPOINT", f"endpoint-{suffix}")
+
+
+class TestEnsureR2EnvLoaded:
+    """`ensure_r2_env_loaded` dotenv-loads + validates + auth-pings rclone.
+
+    Tests focus on contract behaviors (no-op without file, missing keys raises, bad auth raises).
+    One isolated test confirms the load mechanism actually delivers env values to the rclone
+    subprocess; remaining tests don't repeat that process-state introspection.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clear_r2_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Drop any `RCLONE_CONFIG_R2_*` keys so each test starts from a known state.
+
+        :param monkeypatch: Pytest fixture used to remove env vars.
+        """
+        import os
+
+        for key in list(os.environ):
+            if key.startswith("RCLONE_CONFIG_R2_"):
+                monkeypatch.delenv(key, raising=False)
+
+    def test_dotenv_values_reach_the_rclone_subprocess(self, tmp_path: Path) -> None:
+        """An env_file's secrets are visible in the rclone auth-ping's environment.
+
+        Captures ``os.environ`` at the moment ``subprocess.run`` is invoked — that's
+        the contract boundary, and the only place we need to verify it.
+
+        :param tmp_path: Pytest tmp dir for the env_file.
+        """
+        import os
+
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "RCLONE_CONFIG_R2_ACCESS_KEY_ID=id-from-file\n"
+            "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=secret-from-file\n"
+            "RCLONE_CONFIG_R2_ENDPOINT=endpoint-from-file\n"
+        )
+        captured: dict[str, str] = {}
+
+        def _capture(*_a: object, **_kw: object) -> subprocess.CompletedProcess[str]:
+            captured.update(os.environ)
+            return subprocess.CompletedProcess(args=[], returncode=0)
+
+        with patch.object(r2_io.subprocess, "run", side_effect=_capture):
+            r2_io.ensure_r2_env_loaded(env_file)
+
+        assert captured["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "id-from-file"
+
+    def test_missing_secret_keys_raises_actionable_error(self) -> None:
+        """Missing R2 secret keys raise an actionable RuntimeError.
+
+        No env_file and no ``RCLONE_CONFIG_R2_*`` in os.environ → the function
+        names all three missing keys in its error message.
+        """
+        with pytest.raises(RuntimeError, match="R2 credentials missing") as excinfo:
+            r2_io.ensure_r2_env_loaded(env_file=None)
+        msg = str(excinfo.value)
+        for key in (
+            "RCLONE_CONFIG_R2_ACCESS_KEY_ID",
+            "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY",
+            "RCLONE_CONFIG_R2_ENDPOINT",
+        ):
+            assert key in msg
+
+    def test_auth_ping_failure_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Rclone non-zero exit on the auth ping → RuntimeError with stderr excerpt.
+
+        :param monkeypatch: Pytest fixture used to populate secrets.
+        """
+        _set_all_r2_secrets(monkeypatch)
+
+        with patch.object(r2_io.subprocess, "run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=1, stdout="", stderr="Forbidden: invalid credentials"
+            )
+            with pytest.raises(RuntimeError, match="rclone failed to authenticate"):
+                r2_io.ensure_r2_env_loaded(env_file=None)
+
+    def test_auth_ping_invoked_with_lsd_root(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The auth ping is `rclone lsd r2:` (bucket-list against the configured remote).
+
+        :param monkeypatch: Pytest fixture used to populate secrets.
+        """
+        _set_all_r2_secrets(monkeypatch)
+
+        with patch.object(r2_io.subprocess, "run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0)
+            r2_io.ensure_r2_env_loaded(env_file=None)
+
+        args = mock_run.call_args[0][0]
+        assert args[:3] == ["rclone", "lsd", "r2:"]
+
+    def test_no_env_file_uses_process_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``env_file=None`` skips dotenv; succeeds when os.environ already has the keys.
+
+        This is the GHA / ``docker run -e ...`` case — vars are injected by the
+        runtime and no ``.env`` file is on disk.
+
+        :param monkeypatch: Pytest fixture used to populate secrets.
+        """
+        _set_all_r2_secrets(monkeypatch)
+
+        with patch.object(r2_io.subprocess, "run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0)
+            r2_io.ensure_r2_env_loaded(env_file=None)
+
+        mock_run.assert_called_once()
+
+    def test_missing_env_file_uses_process_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A non-existent ``env_file`` path is treated as 'no file' — falls back to os.environ.
+
+        :param tmp_path: Pytest tmp dir for the (non-existent) env_file path.
+        :param monkeypatch: Pytest fixture used to populate secrets in os.environ.
+        """
+        _set_all_r2_secrets(monkeypatch)
+        nonexistent = tmp_path / "missing.env"
+
+        with patch.object(r2_io.subprocess, "run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0)
+            r2_io.ensure_r2_env_loaded(nonexistent)
+
+        mock_run.assert_called_once()
