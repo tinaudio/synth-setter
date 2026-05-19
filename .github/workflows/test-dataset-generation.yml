@@ -6,11 +6,12 @@ name: Test Dataset Generation
 #   * `skypilot-local` — invokes `generate-dataset-shards.yaml` with
 #     `local: true, num_workers: '1'` to provision a kind cluster on the
 #     runner, load dev-snapshot into kind, and launch against
-#     `configs/compute/local-template.yaml`. PR default — exercises the same
-#     launcher / cred-bootstrap path as the cloud providers, closing the #806
-#     unification gap. No billable capacity.
+#     `configs/compute/local-template.yaml`. Hourly schedule default —
+#     exercises the same launcher / cred-bootstrap path as the cloud providers,
+#     closing the #806 unification gap. No billable capacity.
 #   * `runpod` / `oci` — invoke `generate-dataset-shards.yaml` against the
-#     matching cloud template. Manual dispatch only. See
+#     matching cloud template. Run weekly via the `0 7 * * 0` cron and on
+#     demand via `workflow_dispatch`. See
 #     docs/design/skypilot-compute-integration.md.
 #
 # Every row lets the launcher invoke the cred-bootstrap script
@@ -26,13 +27,18 @@ name: Test Dataset Generation
 # load-bearing.
 #
 # Provider matrix policy (computed in the `setup` job):
-#   * pull_request (same repo) → skypilot-local × wds only (#1164 — hdf5
-#                                moved to the nightly schedule below)
-#   * pull_request (fork)      → empty (forks can't read secrets)
-#   * schedule                 → skypilot-local × {hdf5, wds} (daily 07:00 UTC)
-#   * workflow_dispatch        → respect `inputs.provider`
-#                                (all = skypilot-local + runpod + oci;
-#                                 or skypilot-local / runpod / oci)
+#   * schedule (hourly `0 * * * *`)    → skypilot-local × {hdf5, wds}.
+#                                        PR presubmit coverage moved to
+#                                        `test-local-launcher-roundtrip.yml`
+#                                        (#1170); this workflow is now
+#                                        schedule + dispatch only.
+#   * schedule (weekly `0 7 * * 0`)    → all providers (skypilot-local +
+#                                        runpod + oci) × {hdf5, wds} —
+#                                        the only paid-capacity coverage
+#                                        outside manual dispatch.
+#   * workflow_dispatch                → respect `inputs.provider`
+#                                        (all = skypilot-local + runpod + oci;
+#                                         or skypilot-local / runpod / oci)
 #
 # Required secrets:
 #   RCLONE_CONFIG_R2_ACCESS_KEY_ID, RCLONE_CONFIG_R2_SECRET_ACCESS_KEY,
@@ -51,12 +57,20 @@ name: Test Dataset Generation
 #     the cred-bootstrap because the remote API server (#785) holds creds.
 
 on:
-  # Nightly run restores hdf5 coverage that we no longer pay for on every PR
-  # (#1164). 07:00 UTC = ~midnight Pacific so results are ready before the
-  # workday. The `setup` job's matrix branch for `schedule` runs both hdf5 and
-  # wds against skypilot-local.
+  # Two cron axes (#1164, #1170):
+  #   * `0 * * * *` (top of every hour) — skypilot-local × {hdf5, wds}. Keeps
+  #     the launcher / kind / R2 path under near-continuous coverage now that
+  #     PR-presubmit duty has moved to test-local-launcher-roundtrip.yml.
+  #   * `0 7 * * 0` (Sunday 07:00 UTC = ~midnight Pacific Sat→Sun) — full
+  #     provider matrix (skypilot-local + runpod + oci) × {hdf5, wds}.
+  #     Only paid-capacity touch outside manual dispatch; gives us weekly
+  #     RunPod / OCI signal so credential rot or backend regressions surface
+  #     before someone needs to dispatch a real cloud run.
+  # The setup job branches on `github.event.schedule` to map each cron to the
+  # right (providers, output_formats) pair.
   schedule:
-    - cron: "0 7 * * *"
+    - cron: "0 * * * *"
+    - cron: "0 7 * * 0"
   workflow_dispatch:
     inputs:
       dataset_config:
@@ -68,7 +82,7 @@ on:
         required: false
         default: "dev-snapshot"
       provider:
-        description: "Provider(s) to launch on (manual runs only; PR runs use skypilot-local)"
+        description: "Provider(s) to launch on (manual override; the hourly cron always uses skypilot-local and the weekly cron uses all three)"
         required: false
         type: choice
         default: all
@@ -77,89 +91,52 @@ on:
           - skypilot-local
           - runpod
           - oci
-  # Trigger paths are intentionally narrow — this workflow burns runner minutes
-  # (skypilot-local kind cluster + dev-snapshot image pull). Only list paths
-  # whose changes can plausibly break dataset generation. In particular:
-  #
-  #   * `pyproject.toml` is NOT listed. The worker container pulls the
-  #     pre-built `dev-snapshot` image, so dep bumps don't reach the worker
-  #     side from here. The launcher side IS affected (the `skypilot-local`
-  #     row runs `uv pip install --system -e .` in
-  #     `generate-dataset-shards.yaml`'s "Install launcher deps" step), so
-  #     pyproject changes that break that install would fail this workflow
-  #     too — but they would fail `test.yml` (also `pip install -e .`) and
-  #     `docker-build-validation.yml` (rebuilds the image) FIRST. We accept
-  #     that redundant coverage in exchange for not firing on the steady
-  #     stream of lint / test / dev-only pyproject changes (mutmut, gitlint,
-  #     ruff config, dev-only deps) that were the largest source of
-  #     false-positive runs.
-  #   * `configs/experiment/**` is narrowed to `generate_dataset/**` — the
-  #     other subdirs (surge/fm/kosc/...) are training experiments and don't
-  #     feed this workflow's Hydra compose.
-  #   * `src/synth_setter/pipeline/schemas/**` is enumerated to the specific
-  #     files actually imported by the generation path (`spec.py`, `prefix.py`).
-  #     `shard_metadata.py` is downstream-only; `image_config.py` is consumed
-  #     by `pipeline/ci/load_image_config.py` for `docker-build-validation.yml`,
-  #     not by anything `test-dataset-generation` invokes.
-  pull_request:
-    paths:
-      - "src/synth_setter/data/vst/**"
-      - "src/synth_setter/pipeline/schemas/spec.py"
-      - "src/synth_setter/pipeline/schemas/prefix.py"
-      - "configs/experiment/generate_dataset/**"
-      - "configs/dataset.yaml"
-      - "configs/render/**"
-      - "configs/r2/**"
-      - "configs/compute/**"
-      - "src/synth_setter/cli/generate_dataset.py"
-      - "src/synth_setter/pipeline/ci/**"
-      - "src/synth_setter/pipeline/r2_io.py"
-      - "docker/ubuntu22_04/run-linux-vst-headless.sh"
-      - "docker/ubuntu22_04/ensure_plugin_symlinks.sh"
-      - "scripts/sync_worker_checkout.sh"
-      - "scripts/skypilot/write_provider_creds.sh"
-      - "src/synth_setter/pipeline/skypilot_launch.py"
-      - ".github/workflows/test-dataset-generation.yml"
-      - ".github/workflows/generate-dataset-shards.yaml"
-      - ".github/workflows/validate-dataset-shards.yaml"
+  # No `pull_request` trigger: presubmit coverage of the launcher / R2
+  # round-trip path moved to `test-local-launcher-roundtrip.yml` (#1170), which
+  # runs in ~8-10 min on ubuntu-latest. This workflow is intentionally schedule
+  # + dispatch only — the full launcher-on-kind-on-runner path is too expensive
+  # to fire per PR.
 
 permissions:
   contents: read
 
-# Coalesce stacked PR pushes — saves runner minutes on `local` PRs and
-# avoids burning RunPod/OCI capacity on superseded `workflow_dispatch` runs.
+# Per-trigger concurrency keys. With hourly + weekly schedules on the same
+# `refs/heads/main`, a single workflow-level group would let an hourly tick
+# cancel an in-flight weekly all-providers (runpod + oci) run mid-flight,
+# burning paid capacity without producing a result. Mixing
+# `github.event.schedule` (the cron string, only set on schedule events) into
+# the group separates the hourly and weekly axes; falling back to
+# `github.event_name` keeps `workflow_dispatch` in its own group too.
+# `cancel-in-progress: true` is still desirable per-group so a re-scheduled
+# tick of the same cron supersedes a stuck prior run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event.schedule || github.event_name }}
   cancel-in-progress: true
 
 jobs:
   # Compute the provider list at runtime, plus the R2 bucket the validate
   # job will pull specs and shards from. Outputs:
   #   * `providers`           — provider matrix (drives generate + validate).
-  #   * `output_formats`      — shard-format axis. On pull_request only `wds`
-  #                             runs (hdf5 demoted to nightly per #1164 — wds is
-  #                             the cheaper of the two and exercises the same
-  #                             kind/launcher/R2 path). On `schedule` both
-  #                             `hdf5` and `wds` run against skypilot-local,
-  #                             restoring daily coverage of the hdf5 path.
-  #                             On workflow_dispatch the matrix collapses to the
-  #                             single format the dispatched config resolves to
-  #                             — a single config hardcodes one `output_format`,
-  #                             and the spec-format cross-check would otherwise
-  #                             fail the non-matching cell.
+  #   * `output_formats`      — shard-format axis. On the hourly schedule and
+  #                             the weekly schedule both `hdf5` and `wds` run;
+  #                             on workflow_dispatch the matrix collapses to
+  #                             the single format the dispatched config
+  #                             resolves to — a single config hardcodes one
+  #                             `output_format`, and the spec-format cross-check
+  #                             would otherwise fail the non-matching cell.
   #   * `r2_bucket`           — Cloudflare R2 bucket name (from
   #                             configs/image/dev-snapshot.yaml). Used to
   #                             construct the spec_uri the validate job pulls.
   #
   # Policy:
-  #   * pull_request (same repo) → skypilot-local only (free; exercises the
-  #     unified launcher path on a local kind cluster) × wds only.
-  #   * pull_request (fork)      → empty (forks can't read secrets).
-  #   * schedule                 → skypilot-local × {hdf5, wds} — daily hdf5
-  #     coverage that PRs no longer pay for.
-  #   * workflow_dispatch        → respect `inputs.provider`. `all` expands to
-  #     skypilot-local + runpod + oci. Format is whatever the dispatched
-  #     experiment config compiles to.
+  #   * schedule, cron `0 * * * *` (hourly)  → skypilot-local × {hdf5, wds}.
+  #     Free coverage of the unified launcher / kind / R2 path.
+  #   * schedule, cron `0 7 * * 0` (weekly)  → all providers (skypilot-local +
+  #     runpod + oci) × {hdf5, wds}. Only paid-capacity touch outside dispatch;
+  #     surfaces credential rot or backend regressions on the cloud providers.
+  #   * workflow_dispatch                    → respect `inputs.provider`. `all`
+  #     expands to skypilot-local + runpod + oci. Format is whatever the
+  #     dispatched experiment config compiles to.
   #
   # Empty array → downstream matrices skip naturally; no `has_jobs` flag.
   setup:
@@ -185,15 +162,14 @@ jobs:
         run: pip install "hydra-core==1.3.2" "hydra-colorlog==1.2.0"
 
       # Provider axis:
-      #   pull_request (same repo) → skypilot-local
-      #   schedule                 → skypilot-local (nightly hdf5 + wds)
-      #   workflow_dispatch        → respect inputs.provider
-      #   anything else (e.g. fork PR) → empty array → downstream matrices skip
+      #   schedule, cron `0 * * * *` (hourly) → skypilot-local
+      #   schedule, cron `0 7 * * 0` (weekly) → skypilot-local + runpod + oci
+      #   workflow_dispatch                   → respect inputs.provider
+      #   anything else                       → empty array → downstream skips
       #
       # Output-format axis:
-      #   pull_request → wds only (hdf5 demoted to nightly per #1164)
-      #   schedule     → both hdf5 and wds (restores pre-#1164 coverage daily)
-      #   workflow_dispatch → single format derived by Hydra-composing the
+      #   schedule (either cron) → both hdf5 and wds
+      #   workflow_dispatch      → single format derived by Hydra-composing the
       #     dispatched experiment config; the cell whose `matrix.output_format`
       #     doesn't match would deterministically fail the spec-format
       #     cross-check, so collapse the matrix to that one format.
@@ -202,19 +178,29 @@ jobs:
       # temp file so a missing-experiment / config-typing / missing-key failure
       # surfaces in the action log instead of leaving operators with only
       # "Process completed with exit code 1".
+      #
+      # An unknown `SCHEDULE_CRON` (someone adding a third cron without
+      # updating this dispatch) falls through to the empty-array branch so
+      # the matrix renders as a no-op rather than silently running the wrong
+      # axes; the explicit echo to stderr makes the misconfig visible in the
+      # action log.
       - id: matrix
         env:
           EVENT_NAME: ${{ github.event_name }}
+          SCHEDULE_CRON: ${{ github.event.schedule }}
           PROVIDER_INPUT: ${{ inputs.provider || 'all' }}
-          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-          REPO: ${{ github.repository }}
           DISPATCH_DATASET_CONFIG: ${{ inputs.dataset_config || 'generate_dataset/smoke-shard' }}
         run: |
           set -euo pipefail
-          if [[ "${EVENT_NAME}" == "pull_request" && "${PR_HEAD_REPO}" == "${REPO}" ]]; then
-            providers='["skypilot-local"]'
-          elif [[ "${EVENT_NAME}" == "schedule" ]]; then
-            providers='["skypilot-local"]'
+          if [[ "${EVENT_NAME}" == "schedule" ]]; then
+            case "${SCHEDULE_CRON}" in
+              "0 * * * *")  providers='["skypilot-local"]' ;;
+              "0 7 * * 0")  providers='["skypilot-local","runpod","oci"]' ;;
+              *)
+                echo "::warning ::Unknown schedule cron '${SCHEDULE_CRON}' — emitting empty matrix" >&2
+                providers='[]'
+                ;;
+            esac
           elif [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
             case "${PROVIDER_INPUT}" in
               skypilot-local) providers='["skypilot-local"]' ;;
@@ -227,8 +213,6 @@ jobs:
           fi
           if [[ "${providers}" == "[]" ]]; then
             output_formats='[]'
-          elif [[ "${EVENT_NAME}" == "pull_request" ]]; then
-            output_formats='["wds"]'
           elif [[ "${EVENT_NAME}" == "schedule" ]]; then
             output_formats='["hdf5","wds"]'
           else
@@ -266,7 +250,7 @@ jobs:
         env:
           DATASET_CONFIG: >-
             ${{
-              (github.event_name == 'pull_request' || github.event_name == 'schedule')
+              github.event_name == 'schedule'
                 && 'generate_dataset/smoke-shard'
                 || (inputs.dataset_config || 'generate_dataset/smoke-shard')
             }}
@@ -304,7 +288,7 @@ jobs:
       provider: ${{ matrix.provider }}
       dataset_config: >-
         ${{
-          (github.event_name == 'pull_request' || github.event_name == 'schedule')
+          github.event_name == 'schedule'
             && (matrix.output_format == 'wds'
                 && 'generate_dataset/smoke-shard-wds'
                 || 'generate_dataset/smoke-shard')
