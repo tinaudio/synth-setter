@@ -81,10 +81,10 @@ def test_setup_emits_output_formats_with_both_rows(workflow: dict) -> None:
 
     :param workflow: Parsed workflow YAML from the module-scoped fixture.
     """
-    compose_step = _find_step(workflow["jobs"]["setup"]["steps"], step_id="compose")
-    run_script = compose_step["run"]
+    matrix_step = _find_step(workflow["jobs"]["setup"]["steps"], step_id="matrix")
+    run_script = matrix_step["run"]
     assert "hdf5" in run_script and "wds" in run_script, (
-        "setup.compose step must emit both 'hdf5' and 'wds' in its output_formats list"
+        "setup.matrix step must emit both 'hdf5' and 'wds' in its output_formats list"
     )
     assert "output_formats" in workflow["jobs"]["setup"]["outputs"], (
         "setup.outputs is missing the `output_formats` key consumed by downstream jobs"
@@ -92,15 +92,16 @@ def test_setup_emits_output_formats_with_both_rows(workflow: dict) -> None:
 
 
 def test_setup_compose_step_branches_on_event_name(workflow: dict) -> None:
-    """Assert `setup.compose` sets `output_formats` in all three event-name branches.
+    """Assert `setup.matrix` sets `output_formats` in all three event-name branches.
 
-    The bash logic in `setup.compose` has three branches that each must assign
+    The bash logic in `setup.matrix` has three branches that each must assign
     `output_formats`:
 
-    1. ``providers == '[]'`` (fork PR / unsupported event) → ``output_formats='[]'``.
-    2. ``pull_request`` (same-repo) → both rows: ``output_formats='["hdf5","wds"]'``.
+    1. ``providers == '[]'`` (unsupported event) → ``output_formats='[]'``.
+    2. ``schedule`` (hourly or weekly cron) → both rows:
+       ``output_formats='["hdf5","wds"]'``.
     3. ``workflow_dispatch`` → collapse to the single format the dispatched
-       experiment resolves to, via Hydra compose of ``DATASET_CONFIG``.
+       experiment resolves to, via Hydra compose of ``DISPATCH_DATASET_CONFIG``.
 
     A future edit that drops one branch (e.g. accidentally removing the
     workflow_dispatch fallback or the providers-empty short-circuit) would
@@ -110,25 +111,25 @@ def test_setup_compose_step_branches_on_event_name(workflow: dict) -> None:
 
     :param workflow: Parsed workflow YAML from the module-scoped fixture.
     """
-    compose_step = _find_step(workflow["jobs"]["setup"]["steps"], step_id="compose")
-    run_script = compose_step["run"]
+    matrix_step = _find_step(workflow["jobs"]["setup"]["steps"], step_id="matrix")
+    run_script = matrix_step["run"]
 
     assert "output_formats='[]'" in run_script, (
-        "setup.compose is missing the providers-empty branch that emits an empty "
-        "output_formats list — without it, fork-PR runs would leave the output unset."
+        "setup.matrix is missing the providers-empty branch that emits an empty "
+        "output_formats list — without it, unsupported-event runs would leave the output unset."
     )
     assert 'output_formats=\'["hdf5","wds"]\'' in run_script, (
-        "setup.compose is missing the pull_request branch that emits both hdf5 and wds "
-        "rows — without it, PR-time CI would never exercise the new wds matrix cell."
+        "setup.matrix is missing the schedule branch that emits both hdf5 and wds "
+        "rows — without it, scheduled CI would never exercise the wds matrix cell."
     )
     assert "DATASET_CONFIG" in run_script and "compose" in run_script, (
-        "setup.compose is missing the workflow_dispatch fallback that composes the "
+        "setup.matrix is missing the workflow_dispatch fallback that composes the "
         "dispatched experiment with Hydra to resolve a single output_format — "
         "without it, dispatch runs would fall through to an unset output_formats."
     )
-    assert 'output_formats="[\\"${COMPOSED_FORMAT}\\"]"' in run_script, (
-        "setup.compose's workflow_dispatch branch must assign output_formats from the "
-        "Hydra-composed COMPOSED_FORMAT — without that assignment, dispatch runs "
+    assert 'output_formats="[\\"${DISPATCH_FORMAT}\\"]"' in run_script, (
+        "setup.matrix's workflow_dispatch branch must assign output_formats from the "
+        "Hydra-composed DISPATCH_FORMAT — without that assignment, dispatch runs "
         "would leave output_formats unset and break fromJSON downstream."
     )
 
