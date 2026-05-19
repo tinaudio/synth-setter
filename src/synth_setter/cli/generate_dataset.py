@@ -340,7 +340,10 @@ def main() -> None:
     spec = spec_from_cfg(cfg)
     sky_cfg = _sky_cfg_from_dataset_cfg(cfg)
 
-    spec_path = write_spec_locally(spec, Path(cfg.paths.output_dir))
+    # _REPO_ROOT (not cfg.paths.output_dir) is the anchor: the paths.* pins
+    # above are defensive shims for ${hydra:runtime.output_dir} resolution,
+    # not the operator-side artifact root.
+    spec_path = write_spec_locally(spec, _REPO_ROOT)
     logger.info(f"wrote local spec to {spec_path}")
 
     if sky_cfg.compute_template is None:

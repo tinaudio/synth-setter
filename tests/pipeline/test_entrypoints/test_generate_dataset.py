@@ -1104,11 +1104,15 @@ class TestMainDispatchBranches:
 
 
 class TestMainSpecPersistence:
-    """``main()`` writes the canonical local spec; uploads only on the dispatch branch.
+    """``main()`` writes the local spec; spec R2 upload is deferred to ``run()``.
 
-    The local-run branch delegates the spec upload to ``run()`` to avoid a
-    redundant rclone round-trip — only the dispatch path uploads from the
-    launcher (the worker's ``run()`` re-uploads, idempotent at the canonical key).
+    Both branches behave the same w.r.t. the canonical R2 upload: the local-run
+    branch calls ``run(spec)`` which uploads via ``upload_spec``, and the
+    dispatch branch hands off to ``dispatch_via_skypilot`` which lets the worker
+    pod run ``run(spec)`` — same call site, same R2 key. The runner-side R2
+    upload from ``main()`` is deferred to a later phase of the
+    workflow-spec-upload-delegation series (rclone env loads inside
+    ``dispatch_via_skypilot``), so neither branch uploads from ``main()`` today.
     """
 
     @pytest.fixture(autouse=True)
