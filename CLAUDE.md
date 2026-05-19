@@ -31,13 +31,15 @@ writing:
   next sentence adds nothing real, the whole docstring goes.
 - **Let blank lines separate sections.** No `# ===== SECTION =====` or
   `# ----- foo -----` banners.
-- **Put YAML comments above the `- name:` step.** Inside `run: |` /
-  `setup: |` block scalars the body is bash; a `PreToolUse` hook blocks
-  `#`-lines there.
-- **Reach for `:param:` / `:returns:` only when they add what the type
-  hint can't.** Pydoclint still requires field lists for Pydantic classes
-  and validators with `raise` paths — follow the skill's syntax notes
-  (`.. attribute ::`, no `:param cls:` / `:param self:`, no `:rtype:`).
+- **Put YAML comments above the step list item** (the `- ...` entry).
+  Inside `run: |` / `setup: |` block scalars the body is bash; a
+  `PreToolUse` hook blocks `#`-lines there.
+- **Include `:param:` / `:returns:` / `:raises:` whenever pydoclint
+  expects them.** In those field lists, add semantics the signature can't
+  show — constraints, units, invariants, edge cases, or rationale — and
+  do not repeat the parameter name, type, or obvious return details.
+  Follow the skill's syntax notes (`.. attribute ::`, no `:param cls:` /
+  `:param self:`, no `:rtype:`).
 
 When in doubt, write less. Reviewers will ask for a comment if they need
 one; they rarely ask for fewer.
