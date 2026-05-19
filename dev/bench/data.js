@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779155121898,
+  "lastUpdate": 1779155124474,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -5612,6 +5612,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 15.52750480520001,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6d72949e975a4a4eaad1361927ad83d8049a1530",
+          "message": "feat(vst): plugin/GUI lifecycle cadence flags on RenderConfig (#1084)\n\n* internal-feat(pipeline): add reload/open_gui per-render lifecycle flags to RenderConfig\n\n* internal-fix(pipeline): platform-aware open_gui default + patchable platform helper\n\nAddresses Copilot review feedback on PR #1084:\n\n- ``RenderConfig.open_gui_every_render`` now defaults via a platform-aware\n  factory: ``False`` on Darwin, ``True`` elsewhere. Bare Hydra render configs\n  (e.g. ``configs/render/surge_xt.yaml``) that omit the field construct\n  cleanly on macOS instead of tripping ``_open_gui_every_render_forbidden_on_darwin``.\n  Explicit ``open_gui_every_render=True`` on Darwin is still rejected.\n- Replace direct ``sys.platform`` reads in ``spec.py`` with a patchable\n  ``_current_platform()`` helper so tests can override the platform inside\n  ``spec`` without mutating the real ``sys.platform`` (the previous\n  ``monkeypatch.setattr(\"...sys.platform\", \"linux\")`` leaked into every\n  other consumer of ``sys.platform`` in the same interpreter — including\n  the ``surge_xt_smoke_datasets`` fixture's headless-wrapper decision).\n- Drop the autouse ``_force_non_darwin_render_config_platform`` fixture in\n  ``tests/conftest.py``; the new platform-aware default makes the\n  whole-suite override unnecessary, and Darwin-gate tests patch\n  ``_current_platform`` directly instead.\n- Add a regression test that bare ``RenderConfig()`` constructs on Darwin\n  with ``open_gui_every_render=False``.\n\n* chore(metrics): tighten docstrings/comments per iteration-2 review\n\nIteration-2 /repo-review-full-no-comments WARN cleanup:\n- Collapse _current_platform and _default_open_gui_every_render docstrings\n  to one-liners pointing at #714.\n- Collapse the RenderConfig lifecycle-knobs inline comment to a pointer.\n- Tighten test_open_gui_default_is_false_on_darwin docstring.\n- Rename test_reload_plugin_every_render_is_platform_independent_on_darwin\n  to test_reload_plugin_every_render_both_values_accepted_on_darwin so the\n  name reflects what the test actually covers (Darwin only, not full\n  platform-independence).\n- Update RenderConfig sketch in data-pipeline.md to note the platform-aware\n  default.\n- Reframe the surge_xt_smoke_datasets Darwin CLI-arg comment in terms of\n  the subprocess's validator, not local RenderConfig construction.\n\n* chore(pipeline): drop now-redundant Darwin CLI override; sync design-doc snippet\n\nTwo Copilot review comments on PR #1084:\n\n- tests/conftest.py: the `if sys.platform == \"darwin\": ... append(\"--open_gui_every_render=False\")` block in `surge_xt_smoke_datasets` was added to satisfy the subprocess's `RenderConfig` validator on Darwin hosts. Now that `open_gui_every_render` defaults to `False` on Darwin via `Field(default_factory=_default_open_gui_every_render)`, the subprocess constructs cleanly without the override — drop the dead branch.\n- docs/design/data-pipeline.md: the `RenderConfig` snippet showed `open_gui_every_render: bool = True` with a trailing comment, which misrepresents the platform-aware default. Update the snippet to `Field(default_factory=_default_open_gui_every_render)` with a comment block describing the actual `False on Darwin / True elsewhere` semantics and the rejection of explicit `True` on Darwin.\n\nRefs #705\n\n* feat(metrics): wire reload/open_gui per-render flags into the renderer\n\nPR #1084 added two boolean fields to RenderConfig\n(reload_plugin_every_render, open_gui_every_render) but the renderer did\nnot yet read them — load_plugin was unconditional and the show_editor\nwarm-up was forced on every non-Darwin load. This commit makes the flags\nuser-facing:\n\n- load_plugin gains open_gui: bool = True; skipping the warm-up is now\n  selectable per call (Darwin already skips unconditionally).\n- render_params gains optional plugin and open_gui kwargs. When plugin\n  is supplied, load_plugin and load_preset are skipped (the caller owns\n  lifecycle); the existing flush/reset sequence still runs, preserving\n  the per-#489 stale-state mitigation.\n- generate_sample plumbs plugin and open_gui through to render_params.\n- writers._render_in_batches branches on reload_plugin_every_render:\n  False loads the plugin and applies the preset once per shard, holds\n  the instance across all renders, and threads open_gui to that single\n  load — eliminating the ~7s plugin-load overhead per sample (#705).\n  True preserves the historical per-render reload.\n\nTests:\n- TestLoadPluginOpenGui in tests/data/vst/test_core.py asserts the\n  open_gui kwarg gates the show_editor warm-up on non-Darwin and\n  remains a no-op on Darwin.\n- TestRenderParamsPreloadedPlugin pins the cached-plugin bypass.\n- test_render_in_batches_caches_plugin_when_reload_is_false /\n  ..._reloads_plugin_per_render_when_reload_is_true pin the writer-\n  level lifecycle decision.\n- New requires_vst equivalence test\n  test_reload_per_render_matches_cached_plugin renders the same patch\n  N times each way and asserts audio-metric equivalence — the\n  load-bearing safety check for #705's load-once optimisation.\n\nRefs #705\nRefs #1084\n\n* refactor(pipeline): replace lifecycle booleans with cadence literals\n\nThe two RenderConfig flags introduced in PR #1084 were named in a way\nthat broke down on the cached-plugin path wired up in the previous\ncommit: `open_gui_every_render` is a per-render adjective but the\ncached path opens the GUI at most once per shard. This commit replaces\nthe booleans with cadence literals whose values are explicit about how\noften each lifecycle event fires:\n\n- `reload_plugin_every_render: bool` →\n  `plugin_reload_cadence: Literal[\"once\", \"render\"] = \"render\"`.\n- `open_gui_every_render: bool` →\n  `gui_toggle_cadence: Literal[\"never\", \"once\", \"render\"]` with a\n  platform-aware default factory (\"never\" on Darwin, \"once\" elsewhere).\n  \"once\" is the new safer default — one warm-up per shard rather than\n  per render. The Darwin validator now rejects only \"render\" because a\n  single show_editor call sits below the empirical SIGTRAP threshold\n  (#714).\n\n`load_plugin` and `warmup_plugin` are now separate primitives in\n`data/vst/core.py`: `load_plugin` only constructs the VST3 instance,\nand `warmup_plugin` runs the show_editor warm-up on a supplied plugin.\nThe Darwin-unconditional skip that used to live inside `load_plugin`\nmoves to the schema validator, so the cadence machinery can faithfully\nmean \"call show_editor once on Darwin\" when configured to do so.\n\n`render_params` / `generate_sample` / `_generate_sample_for_index` swap\ntheir `open_gui` kwarg for `warmup`. `_render_in_batches` reads the two\ncadence fields, holds a `warmup_done` flag across the shard's render\nloop, and threads `warmup=<per-render decision>` into each sample\ngeneration. All six (plugin_reload × gui_toggle) combinations are\nexpressible and tested at the writer-loop level.\n\nTest fixtures across the project (pipeline conftests, validators,\nschema tests, generate_dataset entrypoint tests, docker-entrypoint\ntests) move from `open_gui_every_render=False` to\n`gui_toggle_cadence=\"never\"`. The schema-level tests in\n`tests/pipeline/test_schemas/test_dataset_spec.py` are rewritten to\ncover the new cadence default matrix and Darwin rejection.\n\nThe pydoclint baseline is regenerated to reflect the renamed attribute\nlist in the existing RenderConfig DOC603 row and the updated\nrender_params DOC103 row — no rows added; net -4 rows after picking up\nprior cleanups in models/components/embed_pool.py.\n\nThis commit also folds in the small Tier-A review-polish items that\nnaturally live with the rewrite: shorter docstrings on the renamed\nAPIs, identity-asserted captured plugins in the writer tests, finite +\nnon-silence guards on the requires_vst equivalence test, two extra\nwriter-level tests covering the new \"once\" and \"never\" gui cadences.\n\nRefs #705\nRefs #1084\n\n* test(metrics): monkeypatch _current_platform in gui_toggle=\"render\" writer test\n\n`test_render_in_batches_warmup_render_runs_every_render` constructs a\n`RenderConfig` with `gui_toggle_cadence=\"render\"`, which the\ndarwin-rejection validator (#714) refuses on macOS hosts. The existing\nschema-validator tests already monkeypatch\n`synth_setter.pipeline.schemas.spec._current_platform` to \"linux\" to\nexercise the non-Darwin code path; do the same here so the test runs\nidentically on macos-latest and ubuntu-latest CI workers.\n\nFound via the macos-latest, 3.10 job on\nhttps://github.com/tinaudio/synth-setter/actions/runs/26041089946\n\nRefs #1084\n\n* chore(metrics): clarify warmup_plugin log message\n\nThe log message 'Preparing plugin for preset load...' was misleading:\nthe warm-up runs after load_preset in render_params, not before.\nReplace with a message describing the actual purpose (show_editor\ncommit-handler state nudge per #714).\n\n* fix(metrics): drop warmup after first attempt inside generate_sample\n\nThe writer's gui_toggle_cadence=\"once\" semantics expect at most one\nshow_editor warm-up per shard, but the loudness retry loop inside\ngenerate_sample forwarded warmup=warmup unchanged into render_params on\nevery iteration. A sample 0 that retried N times would call\nwarmup_plugin N times — silently breaking the once-per-shard budget and\nre-introducing the #714 Darwin SIGTRAP failure mode when the user opts\ninto gui_toggle_cadence=\"once\" on Darwin.\n\nSetting warmup=False after the first render_params call pins warm-up\nto the first attempt regardless of retries. Regression test\ntest_generate_sample_warmup_only_applies_on_first_attempt asserts the\ncaptured warmup args are [True, False] on a silent-then-loud render\npair.\n\nRefs #714\n\n* chore(metrics): preserve historical non-Darwin warm-up via \"render\" default\n\nPer review feedback on PR #1084: this PR should be a config-knob-only change\nand not alter production behaviour. The previous default \"once\" was a\nbehaviour change — it took the historical per-render warm-up off by default\non non-Darwin. Flip ``_default_gui_toggle_cadence`` to return ``\"render\"`` on\nnon-Darwin so the default keeps the warm-up behaviour identical to pre-PR\nruns; ``\"once\"`` remains available as opt-in. Darwin still defaults to\n``\"never\"`` (the validator rejects ``\"render\"`` per #714).\n\nUpdates the schema docstring, the matching ``test_cadence_defaults_off_darwin``\nassertion, and the design-doc snippet to match.\n\nRefs #1084\nRefs #705\n\n* test(metrics): strengthen warmup/cadence behavioral test coverage\n\nReplace the implementation-detail-pinning warmup test with parametrized\nbehavioral tests that count ``warmup_plugin`` invocations rather than\nasserting on the ``warmup=`` kwarg list. Adds matrix gaps for cadence\ncombos ``(\"once\",\"once\")`` and ``(\"once\",\"render\")`` plus writer-level\ncross-cuts that let the real ``generate_sample`` run and stub at\n``render_params``, catching a regression in the retry-loop's\n``warmup = False`` reset that pure kwarg-passthrough tests would miss.\n\nMutation-verified by temporarily removing line 129's ``warmup = False``:\nthe four invariant-pinning tests\n(``test_generate_sample_warmups_once_regardless_of_retries[1|3]``,\n``test_render_in_batches_once_cadence_survives_intra_sample_retries``,\n``test_render_in_batches_render_cadence_warms_once_per_generate_sample_call``)\nall failed with the bug present and passed once restored.\n\nRefs #1084\nRefs #714\nRefs #705",
+          "timestamp": "2026-05-18T21:31:26-04:00",
+          "tree_id": "ffa55f3c3e6561efcbe2adb19f6e68c20a5cd6a5",
+          "url": "https://github.com/tinaudio/synth-setter/commit/6d72949e975a4a4eaad1361927ad83d8049a1530"
+        },
+        "date": 1779155124006,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 2.8013298511505127,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 3.7396349242329596,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.01431632786989212,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.010173678398132324,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 1.7550944089889526,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 13.976698943299999,
             "unit": "seconds"
           }
         ]
