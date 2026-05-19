@@ -1,35 +1,104 @@
 ---
 name: repo-review-full-no-comments
 description: |-
-  Multi-skill PR review (same fan-out as `/repo-review-full`) that prints the
+  Multi-skill review (same fan-out as `/repo-review-full`) that prints the
   aggregated BLOCK/WARN report to the user instead of posting inline comments
-  on GitHub. Use this for a dry run, for iterating on a PR before reviewers see
-  it, or any time GitHub side effects are undesirable. Requires the
-  tinaudio-synth-setter-skills plugin.
+  on GitHub. Works against either an open PR or a local branch that has not
+  been pushed yet — use it as a pre-PR gate or whenever GitHub side effects
+  are undesirable. Requires the tinaudio-synth-setter-skills plugin.
 ---
 
-# repo-review-full-no-comments — Multi-Skill PR Review Without Posting
+# repo-review-full-no-comments — Multi-Skill Review Without Posting
 
-Same analysis as `/repo-review-full`. The only difference is the final delivery
-step: this skill renders the findings inline in chat instead of submitting a
-GitHub review.
+Same analysis as `/repo-review-full`, with two differences:
+
+1. The final delivery step renders findings inline in chat instead of
+   submitting a GitHub review.
+2. A PR is **not** required. If no PR exists for the current branch, this skill
+   reviews the local branch vs. the default branch.
 
 You MUST complete every step in order.
 
-## Steps 1–6: Run the shared analysis pipeline
+## Step 1: Resolve the target (PR or local branch)
 
-Read and follow `agent/skills/_shared/repo-review-full-analysis.md` Steps 1
-through 6. That file owns PR resolution, PR-health inspection, skill selection,
-the parallel fan-out, finding aggregation, and the findings-JSON construction.
+Pick whichever mode applies. Steps 3–6 work the same once the metadata is in
+hand.
+
+**PR mode.** Use this when the caller passed an explicit `<N>`, or when
+`gh pr view --json number` resolves a PR for the current branch:
+
+```bash
+gh pr view <N> --repo "$(gh repo view --json nameWithOwner -q .nameWithOwner)" \
+  --json number,headRefOid,baseRefOid,files,title,headRefName,mergeable,mergeStateStatus,statusCheckRollup
+```
+
+This is the exact call from `agent/skills/_shared/repo-review-full-analysis.md`
+Step 1 — use that file's guidance for parsing it.
+
+**Local-branch mode.** Use this when no `<N>` was passed AND
+`gh pr view --json number` fails / returns nothing for the current branch.
+Derive the same fields from local git:
+
+```bash
+base_ref=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)
+base_sha=$(git merge-base HEAD "origin/${base_ref}")
+head_sha=$(git rev-parse HEAD)
+head_ref=$(git rev-parse --abbrev-ref HEAD)
+# File list with status (for tdd-refactor R-detection in Step 3)
+git diff --name-status "${base_sha}..${head_sha}"
+```
+
+Build a synthetic metadata object equivalent to the `gh pr view` JSON:
+
+- `number`: `null` — no PR yet; use the branch name in any user-facing text.
+- `headRefOid`: `head_sha`
+- `baseRefOid`: `base_sha`
+- `headRefName`: `head_ref`
+- `title`: `git log -1 --pretty=%s` (informational only).
+- `files`: parsed `git diff --name-status` output.
+- `mergeable`, `mergeStateStatus`, `statusCheckRollup`: **not available** — Step
+  2 handles this.
+
+If there are zero changed files between `base_sha` and `head_sha`, stop and
+reply `PASS — no diff vs ${base_ref}`.
+
+## Step 2: Inspect PR health
+
+**PR mode.** Follow `agent/skills/_shared/repo-review-full-analysis.md` Step 2
+exactly as written (merge conflicts + failing checks).
+
+**Local-branch mode.** Skip the GitHub-side `mergeable` and `statusCheckRollup`
+checks — they don't exist pre-PR. Do not synthesize PR-health BLOCKs and do not
+emit a `## PR health` section in Step 6's JSON. Instead, Step 6 prepends a
+one-line caveat to the `review_body` so the user knows merge/CI health was not
+verified.
+
+## Steps 3–6: Run the shared analysis pipeline
+
+Read and follow `agent/skills/_shared/repo-review-full-analysis.md` Steps 3
+through 6 using the metadata from Step 1 above. The shared file owns skill
+selection, the parallel fan-out, finding aggregation, and the findings-JSON
+construction; it is mode-agnostic.
 
 When the shared file says "the calling skill," that's this skill:
 
 - Use `repo-review-full-no-comments` as the calling-skill name in any
-  `[<calling-skill>:block]` prefixes inside the `## PR health` bullets.
+  `[<calling-skill>:block]` prefixes inside the `## PR health` bullets (PR mode
+  only — local-branch mode has no PR-health bullets).
+
 - Write the findings JSON to `/tmp/repo-review-full-no-comments-findings.json`.
-- Phrase the `review_body` lead-in to reflect that nothing has been posted — the
-  user is reading the findings directly. For example:
-  `Multi-skill dry-run review of PR #<N> — <K> parallel passes (<list of skills>). Findings below; no inline comments posted.`
+
+- For `pr_number` in the JSON: use the resolved PR number in PR mode, or the
+  branch name string (e.g. `"feat/foo"`) in local-branch mode.
+
+- Phrase the `review_body` lead-in to reflect what was reviewed and that
+  nothing was posted. In PR mode, write:
+
+  > Multi-skill dry-run review of PR #\<N> — \<K> parallel passes (\<list of skills>). Findings below; no inline comments posted.
+
+  In local-branch mode, write:
+
+  > Multi-skill dry-run review of branch \<head_ref> vs \<base_ref> (no PR yet) — \<K> parallel passes (\<list of skills>). Findings below; no inline comments posted. Merge/CI health not checked — rerun after opening the PR for that.
 
 Return here once Step 6 has produced the JSON payload on disk.
 
@@ -42,7 +111,7 @@ Instead, transform the JSON payload at `/tmp/repo-review-full-no-comments-findin
 into a Markdown report and print it as your reply to the user. Use this layout:
 
 ```markdown
-# repo-review-full-no-comments — PR #<N>
+# repo-review-full-no-comments — <target>
 
 <review_body verbatim, including the `## PR health` section if present>
 
@@ -58,9 +127,17 @@ into a Markdown report and print it as your reply to the user. Use this layout:
 ## Summary
 
 - B BLOCK, W WARN across K skills
-- PR-health flags: <M merge-conflict / F failing-check>  (omit if zero)
-- Run `/repo-review-full <N>` to post these as inline review comments.
+- PR-health flags: <M merge-conflict / F failing-check>  (omit if zero or in local-branch mode)
+- <next-step tip>
 ```
+
+For `<target>` in the header, use `PR #<N>` in PR mode or
+`branch <head_ref>` in local-branch mode.
+
+For `<next-step tip>` in the Summary section, use:
+
+- PR mode: `Run /repo-review-full <N> to post these as inline review comments.`
+- Local-branch mode: `Open a PR, then run /repo-review-full to post these as inline review comments.`
 
 Rules for the rendering:
 
