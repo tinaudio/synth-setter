@@ -76,17 +76,18 @@ class R2Location(BaseModel):  # noqa: DOC601,DOC603
 
         ``make_r2_prefix`` strips leading/trailing ``/`` and then rejects an empty
         result, so a value like ``"////"`` would otherwise survive this validator
-        and crash later inside the prefix factory. Whitespace is stripped *first*
-        so values like ``" / "`` (whitespace around a lone slash) are also caught;
-        otherwise ``strip("/")`` would leave the spaces, then ``strip()`` would
-        collapse to ``"/"`` and pass. The stored value is the whitespace-stripped
-        form (slashes preserved for ``make_r2_prefix`` to handle), so a caller
-        passing ``" data "`` doesn't end up with ``" data /task/run/"`` as the
-        derived prefix. Catching this here keeps error attribution at the
-        ``r2.prefix_root`` boundary.
+        and crash later inside the prefix factory. Surrounding whitespace is
+        stripped first, then slashes are stripped, then any remaining whitespace
+        is stripped — catching ``" / "`` (whitespace-wrapped slash) AND ``"/ /"``
+        (slashes-wrapping-whitespace), both of which would otherwise survive a
+        single-pass strip and produce a malformed derived prefix. The stored
+        value is the whitespace-stripped form (slashes preserved for
+        ``make_r2_prefix`` to handle), so a caller passing ``" data "`` doesn't
+        end up with ``" data /task/run/"`` as the derived prefix. Catching this
+        here keeps error attribution at the ``r2.prefix_root`` boundary.
         """
         stripped = value.strip()
-        if not stripped.strip("/"):
+        if not stripped.strip("/").strip():
             raise ValueError("r2.prefix_root must not be blank or slash-only")
         return stripped
 

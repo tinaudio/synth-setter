@@ -69,6 +69,20 @@ class TestR2LocationConstruction:
             ):
                 R2Location(bucket="b", prefix_root=value, prefix="data/x/y/")
 
+    def test_slash_wrapped_whitespace_prefix_root_raises(self) -> None:
+        """Values that are effectively whitespace once slashes are stripped are rejected.
+
+        Regression: a value like ``"/ /"`` survives ``str.strip()`` (no surrounding
+        whitespace) and ``str.strip("/")`` leaves a lone space (truthy), so the
+        prior validator passed it through. Stripping whitespace again after the
+        slash strip catches the case.
+        """
+        for value in ("/ /", "/\t/", "// //"):
+            with pytest.raises(
+                ValidationError, match=r"r2\.prefix_root must not be blank or slash-only"
+            ):
+                R2Location(bucket="b", prefix_root=value, prefix="data/x/y/")
+
     def test_prefix_root_strips_surrounding_whitespace(self) -> None:
         """Leading/trailing whitespace is stripped from the stored value.
 
