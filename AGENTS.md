@@ -1,462 +1,166 @@
 # AGENTS.md
 
+Canonical agent instructions for synth-setter. Shared by Claude and Codex.
+
 ## Project
 
-synth-setter: Synth inversion, sound matching and preset exploration tools
+synth-setter: synth inversion, sound matching, preset exploration tools.
+Python 3.10+, PyTorch Lightning, Hydra, distributed data pipeline on
+SkyPilot-managed compute (RunPod + OCI), stored in Cloudflare R2.
+Architecture: [docs/architecture.md](docs/architecture.md).
 
-- Python 3.10+, PyTorch Lightning, Hydra configs
-- Data pipeline: distributed shard generation on SkyPilot-managed compute (RunPod + OCI), stored in Cloudflare R2
-- Design doc: `docs/design/data-pipeline.md`
+## Always
 
-## Code Standards
+- **Always work in an isolated git worktree.** Branch switching and stash
+  conflicts have caused lost work and accidental commits to wrong branches.
+  Use `git worktree add` (or `isolation: "worktree"` when spawning subagents).
+  The main checkout is read-only — `git log`, exploration, `rclone ls`. Never
+  edit files there.
+- **Always verify the branch before push.** Run `git branch --show-current`
+  and confirm it matches the target PR branch. A hook prints the branch on
+  every `git commit`; don't ignore it.
+- **Never commit without explicit permission.** The user opts in. Pre-commit
+  hooks must not be skipped — see [`### Commits`](#commits).
+- **Never run `make docker-*` or RunPod commands without asking.** These
+  spend money and burn cluster state.
 
-### Formatting & Linting (enforced by pre-commit)
+## Writing code
 
-- **Ruff format** (line-length=99)
-- **Ruff** — rule set in `pyproject.toml` under `[tool.ruff.lint].select` (currently
-  pycodestyle E/W, pyflakes F, isort I, bandit S, T-series, pyupgrade UP, `ANN001`, and
-  pydocstyle `D102`/`D103`/`D107` for must-have-docstring on public methods, functions,
-  and `__init__` — closes pydoclint's missing-docstring blind spot)
-- Run `make format` before committing
-
-#### Lint Exception Lists Are Closed — Fix The Lint, Don't Suppress It
-
-The following files pin the *existing* legacy lint debt at the moment the baselines were
-captured. They are append-frozen — **no PR may add a new entry to any of them**:
-
-| File                      | Frozen list                                                                                   | Cleanup tracker                                             |
-| ------------------------- | --------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| `.pydoclint-baseline.txt` | every row in the file (one pinned pydoclint violation each)                                   | [#938](https://github.com/tinaudio/synth-setter/issues/938) |
-| `pyproject.toml`          | `[tool.ruff.lint.per-file-ignores]` and `[tool.ruff].extend-exclude`                          | [#25](https://github.com/tinaudio/synth-setter/issues/25)   |
-| `.pre-commit-config.yaml` | every per-hook `exclude:` regex (pyright, interrogate, shellcheck, mdformat, codespell, etc.) | [#25](https://github.com/tinaudio/synth-setter/issues/25)   |
-| `pyrightconfig.json`      | every path under `"exclude"`                                                                  | [#25](https://github.com/tinaudio/synth-setter/issues/25)   |
-
-**The hard rule.** If your PR's diff *adds* a row, path, glob, or regex to any list
-above, the PR must be rewritten. There are no exceptions for "the file is legacy,"
-"the lint isn't related to my change," "it's a one-line suppression," or "I'll clean
-it up in a follow-up." If a check fails on a file your PR introduces or touches, the
-remediation is to **fix the underlying lint**, not to register the file as exempt.
-
-The *only* allowed edits to these lists are **removals** — graduating a file out of
-exemption as part of the `/lint-cleanup` workflow (one file per PR, `chore(lint):`
-prefix, `Refs #938` for pydoclint baseline rows, `Refs #25` for the other lists). See
-[`.github/agents/lint-cleanup.md`](.github/agents/lint-cleanup.md) for the canonical
-workflow (the `.claude/agents/lint-cleanup.md` entry point is a thin shim that
-delegates to it).
-
-`[tool.pydoclint].exclude` in `pyproject.toml` is infra-only after
-[#1044](https://github.com/tinaudio/synth-setter/pull/1044) and must not be edited
-at all — pydoclint cleanup happens via baseline-row deletions, never exclude-list
-edits.
-
-**Escalation path (the one and only exception).** If you genuinely believe a new
-entry is warranted — for example, a vendored third-party file that cannot be edited —
-the additions ban is lifted *only* by explicit pre-approval from a maintainer,
-recorded on the tracking issue ([#938](https://github.com/tinaudio/synth-setter/issues/938)
-for pydoclint, [#25](https://github.com/tinaudio/synth-setter/issues/25) for the
-others) *before* the PR is opened. Open the PR without that recorded approval and the
-hard rule above applies: it must be rewritten. Do not add the entry first and explain
-after the fact in the PR description.
-
-### Commit Messages
-
-Conventional commits, enforced by gitlint (`.gitlint` config). Prefix matters for semantic versioning:
-
-**Version-bumping prefixes:**
-
-- `feat:` → **minor** bump. New user-facing capability (new model, new pipeline stage, new CLI command). The feature must be usable after this commit.
-- `fix:` / `perf:` / `revert:` → **patch** bump. Bug fixes, performance improvements, and reverts (reverts are roll-forwards on an append-only main).
-- `feat!:` or `BREAKING CHANGE:` footer → **major** bump. Coordinate with a maintainer.
-
-**No-bump prefixes:**
-
-- `internal-feat:` → new code building toward a feature not yet exposed to users (new internal API, new module, new config schema). Use this when a feature is being built across multiple PRs and this PR adds real, tested code — but the feature isn't user-facing yet. No version bump.
-- `internal-fix:` → fix to internal code not yet exposed to users. No version bump.
-- `monitoring:`, `docs:`, `chore:`, `ci:`, `test:`, `refactor:`, `style:`, `build:` → no version bump.
-
-**When to use which:**
-
-- Each PR should leave main in a valid state — no dead code, no unhooked partial implementations.
-- If the PR adds new tested code that will be consumed later, use `internal-feat:`.
-- The PR that wires everything together and makes the feature user-facing uses `feat:`.
-- Don't contort prefixes to avoid bumps. If it's user-facing, it's `feat:`.
-
-#### Commit Scopes
-
-The optional `(scope)` after the prefix names the **specific component** being changed, not the broad area. Reach for the narrowest accurate scope before falling back to a wider one — `fix(metrics):` is more useful in `git log` than `fix(pipeline):` when only the normalization-stats writer changed, even though that writer lives structurally under the data pipeline.
-
-Non-exhaustive table of common synth-setter scopes:
-
-| Scope        | Meaning                                                                                                                    |
-| ------------ | -------------------------------------------------------------------------------------------------------------------------- |
-| `metrics`    | Mel/audio metric tooling, normalization-stats computation/writer (`src/synth_setter/pipeline/data/stats.py`, `stats.npz`,) |
-| `pipeline`   | Broader distributed data-pipeline code under `src/synth_setter/pipeline/` (stats-writer code uses `metrics`)               |
-| `datamodule` | Lightning datamodules (`src/synth_setter/data/*_datamodule.py`)                                                            |
-| `training`   | Training entrypoint and `src/synth_setter/cli/train.py` / training loop code                                               |
-| `eval`       | Evaluation entrypoint and `src/synth_setter/cli/eval.py` / evaluation harness                                              |
-| `configs`    | Hydra YAML configs under `configs/`                                                                                        |
-| `layout`     | Package-layout / src-layout moves (the [#784](https://github.com/tinaudio/synth-setter/issues/784) migration line)         |
-| `claude-md`  | Edits to `AGENTS.md` itself                                                                                                |
-| `ci`         | GitHub Actions workflows, CI scripts                                                                                       |
-| `docker`     | Dockerfiles, devcontainer configs, image build setup                                                                       |
-| `deps`       | Dependency bumps (`pyproject.toml`, lockfiles)                                                                             |
-
-**`metrics`, not `pipeline`, for stats-writer changes.** Any change touching `src/synth_setter/pipeline/data/stats.py`, `stats.npz` schema/handling, or other mel/audio normalization-stats tooling uses `(metrics)` as its scope — even though the module lives structurally under `src/synth_setter/pipeline/data/` and the data it produces is consumed by the broader pipeline. The rule is "narrowest accurate scope": `metrics` is more specific than `pipeline` and makes the log easier to scan.
-
-Formatting follows the same convention as the title example under [`### PR Titles`](#pr-titles) (`feat(pipeline)!: complete dataset_spec Hydra migration; remove load_dataset_spec_yaml`): conventional prefix, scope in parentheses, optional `!` for breaking, then a colon and the human-readable subject.
-
-### Writing Code
-
-- Write readable code. Prefer clarity over cleverness.
-- Type-annotate all function signatures. Avoid `Any` — use `Union`, `Optional`, or specific types.
-- No bare `except:` — always catch specific exceptions.
-- Pydantic `BaseModel` with `strict=True` at trust boundaries (config parsing, JSON from R2, worker reports). Dataclasses for internal typed containers.
-- Keep functions short and single-purpose. If a function needs a comment explaining what a block does, extract it.
-- Use `structlog` for logging in pipeline code. Use Python's `logging` module elsewhere.
+- Pydantic `BaseModel(strict=True)` at trust boundaries (config parsing, JSON
+  from R2, worker reports). Dataclasses for internal typed containers.
+- `structlog` in pipeline code; stdlib `logging` elsewhere.
 - All `rclone` operations use `--checksum`.
+- Run `make format` before committing. Pre-commit (ruff, ruff-format,
+  pydoclint, prettier, mdformat, gitlint) is authoritative; suppressing
+  rules to make CI green is forbidden — see
+  [`### Lint exceptions are append-frozen`](#lint-exceptions-are-append-frozen).
 
-#### Comment Hygiene: Don't Bake Values Into Comments
+## Testing
 
-Comments that restate values, counts, or list contents go stale the moment the code changes. The code is the source of truth — name it, don't mirror it.
+- `make test-fast` is the default CPU loop; `@pytest.mark.slow` for slow.
+- Test names: `test_<what>_<condition>_<expected>`.
+- Mutation testing: [docs/testing/mutmut.md](docs/testing/mutmut.md).
 
-- **Don't restate constant values.** Next to `num_samples = 6`, never write `# 6 samples (12 renders total)`. Reference the symbol (`each stage renders num_samples times`) or describe behavior without numbers.
+## Design defaults
 
-- **Don't bake in counts the code already reports.** `# 29 review comments triaged` or `# 5 metric series` belongs in a PR description (a snapshot in time), not in a docstring or inline comment that lives next to the data and will drift the next time someone adds an item. Prefer "the metric series listed below" or reference the data source.
+YAGNI. Start minimal, expand only when asked. Don't introduce a new class,
+config schema, or pattern speculatively — ask "do we need this *now*?" and
+default to no. Refactoring follows real needs, not anticipated ones. Present
+a plan before writing code for any non-trivial change.
 
-- **Don't enumerate list contents in prose.** Next to `THINGS = ["a", "b", "c"]`, never write `# three things: a, b, and c` — both the count and the contents will mismatch the list within a release. The list is the source of truth; a comment can name the *category*, not its contents.
+## Mandatory skills for code changes
 
-- **Keep comments terse — typically one short line.** Multi-sentence prose explanations inline are a smell. If a comment would need more than ~2 lines to be useful, that's a signal the context belongs in a GitHub issue, not in the source. Make the inline comment a one-line pointer to the issue.
+Whenever an agent modifies non-documentation code (anything other than `.md` /
+`docs/` edits), invoke in order:
 
-  ```python
-  # Bad — multi-sentence essay inline:
-  # We use os._exit(0) here instead of sys.exit(0) because SkyPilot's
-  # job runner wraps the process in a shell that doesn't propagate the
-  # exit code correctly when atexit handlers raise during interpreter
-  # shutdown — see the long investigation in the PR description.
-  os._exit(0)
+1. `/tdd-implementation` — drive the change test-first.
+2. `/code-health` — review and clean up the result.
+3. `/simplify` — final reuse and efficiency pass.
 
-  # Good — one-line pointer to the issue with the full context:
-  # Workaround for atexit-during-shutdown hang — see #735.
-  os._exit(0)
-  ```
+Pure docs edits are exempt; no other exemptions.
 
-- **Don't narrate history.** A comment, docstring, or doc page describes the **current** state, not the path that got there. Phrasings to avoid: "previously...", "used to...", "was X, now Y", "renamed from...", "migrated from...", "moved from...", "no longer...", "formerly...", "(was X in v1)", "post-#NNNN this became...". `git log` is the source for history; if the *rationale* for current behavior matters, point at an issue (`# Workaround for X — see #N`) rather than narrating the journey.
+## Commits
 
-  ```python
-  # Bad — narrates the migration:
-  # Previously read from YAML via load_dataset_spec_yaml; spec is now composed
-  # from Hydra defaults (#887) and load_dataset_spec_yaml was removed in #917.
+- Conventional commits, gitlint-enforced. `internal-feat:` / `internal-fix:`
+  for unreleased code (no version bump). Picking the right scope is a
+  skill-bound decision — invoke `/github-taxonomy` or its scope guidance when
+  composing a commit subject.
+- **Never `--no-verify` / `-n`.** Pre-commit and gitlint must run. Hooks
+  work inside worktrees.
+- **Never add `Co-Authored-By` trailers** or agent-attribution footers
+  ("Generated with …", "Claude …", etc.).
+- A `PreToolUse` hook (`agent/hooks/git-commit-trailer-check.sh`) blocks
+  violations; if a hook fails, fix the underlying cause — don't bypass.
 
-  # Good — describes only the current behavior, with a pointer for context:
-  # DatasetSpec is composed from Hydra defaults — see configs/dataset.yaml.
-  ```
+## Lint exceptions are append-frozen
 
-  Same rule for docstrings and for prose in `docs/`. If you catch yourself writing "previously" or "no longer" in a design or reference doc, rewrite the paragraph in the present tense. If the historical decision is worth keeping at all, record it in a clearly marked "Background" or "Rejected alternatives" section — never woven into the description of current behavior.
+`.pydoclint-baseline.txt` (#938), `pyproject.toml`'s
+`[tool.ruff.lint.per-file-ignores]` / `[tool.ruff].extend-exclude`,
+`.pre-commit-config.yaml` per-hook `exclude:` regexes, and
+`pyrightconfig.json`'s `"exclude"` are **append-frozen**. The only allowed
+edit is a **removal** via the `/lint-cleanup` workflow (one file per PR,
+`chore(lint):` prefix). `[tool.pydoclint].exclude` is infra-only after #1044
+and must not be edited at all.
 
-- Still write comments for: WHY a non-obvious choice was made, hidden invariants, workarounds (with bug ID), and surprising behavior.
+A `PreToolUse` hook (`agent/hooks/no-baseline-additions.sh`) blocks new rows
+in `.pydoclint-baseline.txt`. If a check fails on a file your PR touches,
+the remediation is to fix the underlying lint — never register the file as
+exempt.
 
-#### No Comments Inside YAML `run:` Block-Scalars
+## YAML `run:` block scalars are bash
 
-YAML block-scalars passed to bash — i.e. `run: |` blocks in **GitHub Actions workflow YAML** (`.github/workflows/*.{yml,yaml}`) and **SkyPilot Task YAML** (`configs/compute/*.yaml`'s `run:` and `setup:` blocks) — render without syntax highlighting in most YAML viewers and are visually indistinguishable from "real" command lines once they reach bash. Stray `'`, `` ` ``, `$`, or `\` inside a comment have caused unintended shell quoting / expansion in the past.
+In GitHub Actions workflows (`.github/workflows/*.{yml,yaml}`) and SkyPilot
+task configs (`configs/compute/*.yaml`'s `run:` / `setup:` blocks), comments
+go **above** the step, never inside the block scalar. The block-scalar body
+is bash and stray `'`, `` ` ``, `$`, or `\` inside a comment has caused
+unintended shell expansion. A `PreToolUse` hook
+(`agent/hooks/no-yaml-run-comments.sh`) enforces this.
 
-**Rule:** put comments *above* the block-scalar, not inside it.
+## PRs
 
-```yaml
-# Bad — comments INSIDE the run: block:
-- name: Pin image tag
-  run: |
-    # The template's image_id defaults to dev-snapshot; pin it to the
-    # tag this run was dispatched with.
-    sed -i "s|...dev-snapshot|...${IMAGE_TAG}|" configs/compute/runpod-template.yaml
+- **Every PR body links a taxonomy-compliant issue** via `Closes #N`,
+  `Fixes #N`, `Refs #N`, or `Part of #N`. Use `Refs #N` for partial fixes
+  (`Fixes` auto-closes). Every issue traces to an Epic via Phase → Task /
+  Bug / Feature. See `/github-taxonomy`.
+- **PR titles stand alone.** Name the specific subject, not just the action:
+  reviewers and `git log` readers don't open the issue. `/github-taxonomy`
+  has the canonical title rule and examples.
+- **Pre-PR review gate.** Before `gh pr create`, run
+  `/repo-review-full-no-comments` and address every BLOCK/WARN (fix code or
+  document why it's intentional). A `PreToolUse` hook
+  (`agent/hooks/pre-pr-review-gate.sh`) blocks `gh pr create` until the
+  command carries `REVIEW_FULL_DONE=1` — recommended as a trailing comment
+  so other gh-pr-create hooks still fire.
+- **Readiness is four AND-ed gates:** CI green ∧ `mergeable=MERGEABLE` ∧
+  every review comment has an inline reply ∧ no new Copilot comments since
+  the last push. The full procedure (poll-loops, Copilot re-request,
+  endpoints to check) lives in `/pr-preflight`.
+- **Always reply inline** on each open PR review comment (humans + Copilot),
+  with a fix-commit SHA or justification. Use `/pr-review-resolver`.
+- **Verification evidence** for each behavioral claim goes through
+  `/pr-checkbox`.
+- **In chat**, use full markdown hyperlinks for PR/issue references:
+  `[#N](https://github.com/tinaudio/synth-setter/issues/N)`. In PR / issue
+  bodies, use bare `Fixes #N` so GitHub auto-close works.
 
-# Good — comments ABOVE the step:
-# Pin the template's image_id from its default (`dev-snapshot`) to the tag
-# this run was dispatched with, so the worker pulls the same image we just
-# smoke-tested locally in the prior step.
-- name: Pin image tag
-  run: |
-    sed -i "s|...dev-snapshot|...${IMAGE_TAG}|" configs/compute/runpod-template.yaml
-```
+## Code review
 
-Same rule for SkyPilot `run:`/`setup:` blocks — put rationale comments at the YAML structural level (above the `run:` key), not inside the block-scalar.
+Local skills wrap the review workflow:
 
-The block-scalar should contain only commands. The reader who wants to know *why* a command exists looks at the comment block above the step or above the `run:` key — outside the bash interpretation surface.
+- `/repo-review` (MVP, single agent, inline checklist).
+- `/repo-review-full` (parallel agents, posts inline review comments).
+- `/repo-review-full-no-comments` (same fan-out, renders to chat — pre-PR
+  gate uses this).
 
-### Testing
-
-- **pytest** with strict markers. Run `make test-fast` for quick tests (CPU-only; excludes slow, gpu, mps, requires_vst).
-- Mark slow tests with `@pytest.mark.slow`.
-- Write tests for new code. Test behavior, not implementation details.
-- Use descriptive test names: `test_<what>_<condition>_<expected>`.
-
-### Architecture
-
-- `src/synth_setter/` — ML code (models, data modules, training, evaluation, dataset-generation entrypoint, utilities) and the distributed data pipeline. PEP src-layout package landed by the layout migration ([#784](https://github.com/tinaudio/synth-setter/issues/784)).
-  - `cli/` — `@hydra.main` entrypoints (`train`, `eval`, `generate_dataset`), each exposed as a `synth-setter-*` console script via `[project.scripts]`.
-  - `data/`, `models/`, `utils/`, `metrics.py` — ML code (Phase 2, [#989](https://github.com/tinaudio/synth-setter/issues/989)).
-  - `pipeline/` — distributed data pipeline (Phase 3, [#995](https://github.com/tinaudio/synth-setter/issues/995); `python -m synth_setter.pipeline` planned — [#72](https://github.com/tinaudio/synth-setter/issues/72)).
-    - `schemas/` — Pydantic models (`DatasetSpec` + `RenderConfig` in `spec.py`, `prefix`, `image_config`; planned: report, card, sample — [#74](https://github.com/tinaudio/synth-setter/issues/74))
-    - `ci/` — CI validation scripts (materialize_spec, validate_shard, validate_spec, load_image_config)
-    - `data/` — dataset-shaping utilities (reshard, rewrite_to_latest, stats, r2_report; Phase 4, [#1005](https://github.com/tinaudio/synth-setter/issues/1005))
-    - `constants.py` — shared constants (R2 bucket, spec filename)
-    - `skypilot_launch.py` — SkyPilot launcher CLI for the distributed pipeline
-    - `stages/` — generate and finalize stage logic (planned — [#72](https://github.com/tinaudio/synth-setter/issues/72))
-    - `backends/` — compute providers: local, RunPod (planned — [#71](https://github.com/tinaudio/synth-setter/issues/71))
-  - `evaluation/` — `predict_vst_audio`, `compute_audio_metrics` library code called by `cli/eval.py` (Phase 4).
-  - `tools/` — `python -m` utilities (`surge_xt_interactive`, `plot_param2tok`, ...; Phase 4).
-- `scripts/` — SkyPilot / CI shell tooling under `skypilot/` and `ci/` subdirectories. `sync_worker_checkout.sh` is intentionally kept at the bare root (SkyPilot bake-lag bootstrap; see [5992aff](https://github.com/tinaudio/synth-setter/commit/5992aff)).
-- `configs/` — Hydra YAML configs. `dataset.yaml` is the top-level datagen entrypoint config (mirrors `train.yaml` / `eval.yaml`); see `configs/dataset.yaml`'s `defaults:` for its composition groups
-- `tests/` — mirrors `src/synth_setter/` (including `tests/pipeline/` for `src/synth_setter/pipeline/`)
-- `docs/design/` — design documents
-
-### Git Workflow
-
-- **Always use isolated git worktrees** for feature work, bug fixes, and PRs. Never edit files directly on a development branch in the main working tree — branch switching and stash conflicts cause lost work and accidental commits to wrong branches.
-- Use `isolation: "worktree"` when spawning subagents that write code or create commits.
-- The main working tree should only be used for read-only operations (exploration, `git log`, `rclone ls`, etc.).
-- When using an agent's Agent tool with `isolation: "worktree"`, the worktree is automatically cleaned up if the agent makes no changes. If changes are made, the worktree path and branch are returned for review. For manually created worktrees, clean up with `git worktree remove` when done.
-- After `git add -f`, always run `make format` before committing.
-- Always verify the correct git branch before pushing commits. Run `git branch --show-current` and confirm it matches the target PR branch before any push.
-- **Epic traceability:** Every issue must trace to an Epic via the sub-issue hierarchy (Epic → Phase → Task/Bug/Feature). There are no standalone tasks — all work items need a home. PRs that reference orphan issues lose epic traceability.
-- **PR metadata hooks:** The `github-taxonomy` skill enforces taxonomy compliance (type, label, milestone, epic lineage) before every `gh pr create`. The CI workflow `pr-metadata-gate.yaml` provides a second check.
-
-### Pipeline-Specific Rules
-
-- R2 is the source of truth for pipeline state — not metadata or reports.
-- Workers only write under `metadata/workers/`. Finalize only writes to `data/`.
-- Shard validation is tiered: workers do full 4-check, finalize does structural.
-- Never write to `data/shards/` except in finalize.
-- Shard IDs are logical (`shard-000042`), deterministic, infrastructure-independent.
-
-## Code Review
-
-Three project-local skills package the review workflow:
-
-- **`/repo-review`** (MVP, default) — single agent, inline core checklist sourced from this AGENTS.md's hard rules. See `agent/skills/repo-review/SKILL.md` for the authoritative checklist. No plugin dependency — works on a fresh clone, in CI, for external contributors.
-- **`/repo-review-full`** (heavyweight) — fans out one parallel agent per applicable plugin checklist and posts every BLOCK/WARN as an unresolved inline review comment. Selection rules and the analysis pipeline live in `agent/skills/_shared/repo-review-full-analysis.md`; `agent/skills/repo-review-full/SKILL.md` is a thin shim that delegates Steps 1–6 to the shared file and handles only the final post step. Requires the `tinaudio-synth-setter-skills` plugin.
-- **`/repo-review-full-no-comments`** (dry run) — same fan-out and aggregation as `/repo-review-full`, but renders the findings to chat instead of posting on GitHub. Works against either an open PR or a local branch that has not been pushed yet — use it as a pre-PR gate, when iterating on a PR pre-review, when GitHub side effects are undesirable, or to preview what `/repo-review-full` would post. See `agent/skills/repo-review-full-no-comments/SKILL.md`.
-
-`/repo-review` and `/repo-review-full` aggregate BLOCK/WARN findings, prefix each with `[<skill>:<severity>]`, and post every one as an individual unresolved inline review comment via `agent/skills/_shared/post_review.py`. The helper anchors each finding to a line in the diff's hunks; findings whose natural line is outside the hunks fall back to the nearest in-hunk line on the same file with a cross-ref note in the body, and findings on files entirely outside the diff are rolled into the top-level review body. `/repo-review-full-no-comments` skips this submission step entirely.
-
-Canonical checklist reference (full content lives in the plugin):
-
-1. `tdd-implementation` — TDD compliance (16 items)
-2. `code-health` — code quality (24 items)
-3. `ml-data-pipeline` — ML pipeline (12 items)
-4. `synth-setter-project-standards` — project-specific (30 items)
-5. `python-style` — Google Python Style Guide (21 items)
-6. `shell-style` — Google Shell Style Guide (19 items, `.sh` files + bash inside YAML `run:` blocks)
-7. `ml-test` — ML testing (25 items, model/pipeline test code)
-8. `comment-hygiene` — Inline-text hygiene (12 items; `*.py` + `.github/workflows/*.{yml,yaml}` + `configs/**/*.{yml,yaml}` + `docs/doc-map.yaml`: `#`-comments, docstrings, doc-map entries; emits suggested rewrites for every finding). Requires the `tinaudio-synth-setter-skills` plugin to be installed — `/repo-review-full` will fail-loud if the skill isn't resolvable.
-
-Review all changed code against every applicable checklist. Skip style issues (Ruff handles formatting and linting).
+See [`agent/skills/repo-review/SKILL.md`](agent/skills/repo-review/SKILL.md)
+and the shared analysis in
+[`agent/skills/_shared/repo-review-full-analysis.md`](agent/skills/_shared/repo-review-full-analysis.md).
 
 ## Refactoring
 
-When refactoring or moving code, always grep ALL file types (not just .py) for references to the old path/name before considering the task complete. Include .yaml/.yml, .md, .json, .toml, .sh, and Dockerfile.
+When moving or renaming code, grep ALL file types — not just `.py`. Include
+`.yaml`/`.yml`, `.md`, `.json`, `.toml`, `.sh`, and `Dockerfile`. Use
+`/tdd-refactor`, which exhaustively discovers references and pins the
+contract.
 
-## Design Principles
+## GPU verification
 
-Before implementing a new abstraction or design pattern, confirm the scope and abstraction level with the user. Prefer YAGNI — start minimal and expand only when asked. Do not over-engineer models or specs.
-
-## Implementation Approach
-
-- Always prefer the simplest viable implementation first. No extra abstractions, no speculative generality unless explicitly asked for or specified by design doc.
-- Present a plan before writing code. Wait for approval.
-- If you're tempted to introduce a new class, config schema, or architectural pattern, ask: "Do we need this now, or is this speculative?" Default to no.
-- Refactoring comes later, driven by real needs, not anticipated ones.
-
-### Mandatory Skills for Code Changes
-
-Whenever an agent implements or modifies non-documentation code (anything other than pure `.md` or `docs/` edits), the agent MUST invoke, in order:
-
-1. `/tdd-implementation` — drive the change test-first.
-2. `/code-health` — review and clean up the resulting code.
-3. `/simplify` — final reuse and efficiency pass.
-
-`/tdd-implementation` and `/code-health` ship in the `tinaudio-synth-setter-skills` plugin (same source as `/repo-review-full`); `/simplify` is an agent built-in. None are defined locally under `agent/skills/`. If the plugin or built-in is not available in the current environment, note the gap in your response rather than silently skipping the step.
-
-Pure documentation edits (`.md` files, `docs/`) are exempt. There are no other exemptions — this is a hard rule, not a suggestion.
-
-## Workflow Rules
-
-### Commits & Hooks
-
-- Never add `Co-Authored-By` trailers to commit messages.
-- Never use `--no-verify` when committing — hooks work in worktrees and must not be skipped.
-- After force-pushing (squash, amend, rewrite) to a PR branch, update the PR title and description with `gh pr edit` to match.
-
-### PR & Issue References
-
-- Every PR body must link a taxonomy-compliant issue via `Closes #N`, `Fixes #N`, `Refs #N`, or `Part of #N`.
-- Use `Refs #N` (not `Fixes #N` or `Closes #N`) when a PR is a workaround or partial fix — `Fixes` auto-closes the issue.
-- In chat responses, use full markdown hyperlinks for PR/issue references: `[#N](https://github.com/tinaudio/synth-setter/issues/N)`. In PR/issue bodies, use bare `Fixes #N` / `Closes #N` / `Refs #N` so GitHub auto-close works.
-- Never add "generated with an agent" or similar attribution footers to PRs, commits, issues, or comments.
-
-### PR Titles
-
-A PR title must stand on its own. A reader who is familiar with the project but has not opened the linked issue should be able to tell from the title alone *what part of the system the PR touches and what concrete change it makes*. Reviewers, release-notes consumers, and people scanning `git log` rarely click through to the issue — the title is the only context many of them get.
-
-- **Name the specific subject, not just the action.** If the PR migrates *one specific schema or component*, say which one. "Complete migration" or "fix bug" without a noun is not enough.
-- **Don't rely on the issue, PR body, or commit list to disambiguate.** If the title would be ambiguous without that context, it is ambiguous, period.
-- **Keep the conventional commit prefix and scope.** The added context goes in the human-readable subject after the colon, not in the scope. The scope is a stable component identifier (`pipeline`, `claude-md`); the specific subject lives in the words after the colon.
-- **Stay under the gitlint title limit.** If the natural phrasing won't fit, shorten the action verb ("complete" → "finish", "remove" → "drop") or tighten the subject's phrasing — but never drop the specific subject itself to save characters.
-
-Example:
-
-- Bad: `feat(pipeline)!: complete Hydra migration; remove load_dataset_spec_yaml`
-- Good: `feat(pipeline)!: complete dataset_spec Hydra migration; remove load_dataset_spec_yaml`
-
-The bad version forces the reader to ask "Hydra migration of *what*?" — the project has had several. The good version answers that question in the title.
-
-### Pre-PR Review Gate
-
-Before every `gh pr create`, run `/repo-review-full-no-comments` and iterate on every BLOCK and WARN finding (fix the code, or document in the PR body why the finding is intentional). Open the PR only after the review report comes back clean.
-
-A `PreToolUse` hook in the agent's settings (Claude registers it in `.claude/settings.json`; handler script `agent/hooks/pre-pr-review-gate.sh`) enforces this — `gh pr create` is blocked unless the command contains the literal `REVIEW_FULL_DONE=1` (anywhere in the line). Recommended form is a trailing comment, which preserves the other `gh pr create` hooks (doc-drift, pr-checkbox, taxonomy verification):
-
-```bash
-gh pr create --title "..." --body "..."  # REVIEW_FULL_DONE=1
-```
-
-The token is honor-system — it forces a pause to invoke the skill, not unbypassable security. If you genuinely don't need a review for this change (rare; usually pure docs touch-ups already exempt from the mandatory skills), the token still has to be present and the PR description should say why review was skipped.
-
-### PR Readiness
-
-**Hard gate (all four must hold).** A PR is **not** ready — for review, merge, or hand-off — until every one of these holds. They are AND-ed; failing any one means not ready.
-
-1. **CI is fully green** — every required AND optional check passing. Pending, errored, or failing all count as not ready.
-2. **`mergeable=MERGEABLE`** — `gh pr view <N> --json mergeable -q .mergeable` must report `MERGEABLE`. `UNKNOWN` (GitHub still computing) and `CONFLICTING` both fail this gate; keep polling `UNKNOWN` until it resolves.
-3. **Every open review comment has an inline reply** — every unresolved review thread (human reviewers AND Copilot) has either a code change linked by commit SHA or an inline reply with justification. See `### PR Review Comments` below for the reply mechanics.
-4. **Copilot has produced no new comments since the last push** — Copilot re-reviews after every push, usually within ~60s. Verify both the inline-comments endpoint and the top-level reviews endpoint (procedure below).
-
-"PR mergeable" alone is **not** the gate — green CI is a separate, equally-hard precondition. "I pushed the fix" is not the same as "the PR is ready." After pushing, iterate until all four conditions are satisfied — use `/loop` (e.g. `/loop 2m gh pr checks <N>`) or repeated polling, do not stop at the first push:
-
-1. Push the change.
-
-2. Wait for CI to finish: `gh pr checks <N> --watch` or `/loop` the checks command.
-
-3. If any check fails, diagnose, fix, push again, return to step 2.
-
-4. Check mergeability with `gh pr view <N> --json mergeable -q .mergeable`. If `CONFLICTING`, rebase or merge the base branch, resolve the conflict, push, return to step 2. If `UNKNOWN`, GitHub hasn't finished computing — wait and poll again. Only `MERGEABLE` clears this step.
-
-5. Reply inline to every open review comment — list them with `gh api repos/<OWNER>/<REPO>/pulls/<N>/comments --paginate`. If a reply required a code change, push and return to step 2. Use `/pr-review-resolver` to drive this systematically.
-
-6. Wait for Copilot to complete its post-push review (~60s, but allow up to 15 minutes). Two endpoints matter here: inline review comments live at `/pulls/<N>/comments`, and top-level review summaries (including a "no findings" note) live at `/pulls/<N>/reviews`. Check both:
-
-   ```bash
-   # Inline review comments (per-line nits)
-   gh api repos/<OWNER>/<REPO>/pulls/<N>/comments --paginate \
-     --jq '[.[] | select(.user.login | test("[Cc]opilot")) | {id, path, line, body}]'
-   # Top-level reviews (overall summary, including a no-findings note)
-   gh api repos/<OWNER>/<REPO>/pulls/<N>/reviews --paginate \
-     --jq '[.[] | select(.user.login | test("[Cc]opilot")) | {id, state, submitted_at, body}]'
-   ```
-
-   If Copilot left new unaddressed inline comments, **or** a new top-level review with actionable content (`state=COMMENTED`/`CHANGES_REQUESTED` with a non-empty body that isn't just a "no findings" note), return to step 5 and address it the same way you would inline comments. If 15 minutes have elapsed since the push and Copilot has produced neither an inline comment nor a top-level review note explicitly stating it has no findings, treat the auto-review as not triggered and manually re-request it before continuing — see step 6a below.
-
-   **Step 6a — Manually re-request a Copilot review** when step 6's 15-minute window elapses with no Copilot activity. Try in this order, stopping at the first one that succeeds:
-
-   1. Re-request via the reviewers API (equivalent of clicking the re-request button):
-      ```bash
-      gh api --method POST \
-        /repos/<OWNER>/<REPO>/pulls/<N>/requested_reviewers \
-        -f 'reviewers[]=copilot-pull-request-reviewer[bot]'
-      ```
-      If that errors, confirm the exact bot slug your org uses with `gh pr view <N> --json reviewRequests,reviews` and retry with the correct login.
-   2. If the reviewers API still won't take Copilot as a reviewer, force a re-trigger with an empty commit (works when Copilot is wired to run on push rather than as a requested reviewer):
-      ```bash
-      git commit --allow-empty -m "chore: trigger copilot review"
-      git push
-      ```
-      Pushing restarts the readiness loop — return to step 2.
-
-   After re-requesting, wait another ~60s (allow up to 15 minutes again) and re-check Copilot's comments. Repeat at most once; if Copilot still produces nothing after a manual re-request, record that in the PR thread and move on.
-
-7. Only when checks are all green AND `mergeable=MERGEABLE` AND every review comment has an inline reply AND Copilot has produced no new comments since the last push (or has been confirmed silent via step 6a) is the PR ready.
-
-This applies whether the PR is yours or one you were asked to drive across the finish line.
-
-### PR Verification
-
-- `/pr-checkbox` is verification-only — look for existing branches/PRs and run checks, never plan implementation.
-- Each verification step gets a checkbox (`- [ ]` / `- [x]`) with the command run and its console output as evidence.
-- Size output appropriately: small (\<20 lines) inline, medium (20-100) in a PR comment, large (100+) in a Gist linked from a comment.
-- Only tick `[x]` if the result unambiguously passes.
-
-### GPU Verification
-
-Before skipping a GPU-gated check with "no GPU available" or similar, run BOTH probes and paste their output into the SKIP rationale:
+Before claiming "no GPU available", run both probes and paste the output:
 
 ```bash
 nvidia-smi --query-gpu=name,memory.free --format=csv,noheader
 python3 -c "import torch; print('cuda:', torch.cuda.is_available(), 'count:', torch.cuda.device_count())"
 ```
 
-Only skip as "no GPU available" if both probes indicate no usable CUDA GPU: `nvidia-smi` exits non-zero and `torch.cuda.is_available()` returns `False`. If the probes disagree, do not call it "no GPU available" — document it as an environment/setup mismatch (for example, driver/tooling visibility vs. PyTorch CUDA availability) and include both outputs in the rationale. "I assumed there's no GPU" is not justification — the assumption has been wrong before.
-
-### PR Review Comments
-
-- Always reply to PR review comments after pushing a fix — never push silently.
-- Reply **inline on the specific review comment** that the change addresses (using `gh api repos/{owner}/{repo}/pulls/comments/{comment_id}/replies` or the equivalent threaded reply), not as a generic top-level PR comment. One inline reply per comment addressed.
-- Link the specific fix commit SHA in the reply (e.g., "Fixed in abc1234").
-- If a pushed change addresses multiple review comments, post a separate inline reply on each — do not consolidate them into a single comment elsewhere on the PR.
-
-### GitHub Project
-
-- Select the GitHub project by name (`"synth-setter"`) or known ID (`PVT_kwDOD6Bkms4BSS3h`) — never use `nodes[0]` or array index.
-
-## Don't
-
-- Don't modify `.env` (contains real credentials).
-- Don't commit `.env`, credentials, or API keys.
-- Don't commit without explicit permission.
-- Don't run `make docker-*` or RunPod commands without asking first.
-- Don't add unnecessary abstractions — only abstract when there are two concrete uses.
-- Don't add comments to code you didn't change.
-- Don't add new entries to lint exception lists to make CI green — `.pydoclint-baseline.txt`, `pyproject.toml`'s `[tool.ruff.lint.per-file-ignores]` / `[tool.ruff].extend-exclude`, `.pre-commit-config.yaml` per-hook `exclude:` regexes, and `pyrightconfig.json`'s `"exclude"` are append-frozen. Fix the lint. See [`#### Lint Exception Lists Are Closed`](#lint-exception-lists-are-closed--fix-the-lint-dont-suppress-it).
+Only skip if BOTH report no usable GPU. If they disagree, document it as an
+environment/setup mismatch — not "no GPU available".
 
 ## Commands
 
 ```bash
-make test-fast         # Quick CPU-only tests (excludes slow, gpu, mps, requires_vst)
-make test-full-cpu     # All CPU tests (slow + requires_vst included; gpu/mps excluded)
-make test-full-gpu     # GPU + CPU tests (mps excluded). Serial.
-make test-full-mps     # MPS + CPU tests (gpu excluded). Serial.
-make test-vst-cpu      # VST-only suite (requires_vst, slow included; gpu/mps excluded)
-make format            # Run all pre-commit hooks
-make mutmut            # Mutation testing (slow; see [tool.mutmut] in pyproject.toml)
-make clean             # Clean autogenerated files
-make help              # Show all targets
+make test-fast       # CPU-only fast tests
+make test-full-cpu   # all CPU tests
+make test-full-gpu   # GPU + CPU, serial
+make format          # pre-commit hooks
+make help            # everything else
 ```
-
-### Mutation Testing
-
-`make mutmut` runs [mutmut](https://github.com/boxed/mutmut) v3 against the
-modules listed under `[tool.mutmut].paths_to_mutate` in `pyproject.toml`.
-mutmut copies those paths into a `mutants/` sandbox and strips the real
-`src/` off `sys.path`, so any module a test imports transitively must come
-along via `also_copy` — that's why `also_copy = ["src/synth_setter/"]`
-includes the *whole* package, not just the mutated subdirs. If a new
-`synth_setter.*` import is introduced into a mutmut-target test path and
-the new module sits outside `paths_to_mutate`, `also_copy` already covers
-it; only revisit this config when adding a *new* top-level mutate path
-under `src/`.
-
-mutmut also drives subprocesses via `os.fork()` and runs tests under
-`MUTANT_UNDER_TEST=stats`. Tests that shell out to `python -m …` therefore
-inherit that env var and crash mutmut's trampoline (`mutmut.config is None`
-in any fresh interpreter). Keep mutmut-target tests in-process — use
-argparse/click's parser directly with `capsys`/`CliRunner`, not
-`subprocess.run([sys.executable, "-m", …])`. The historical offender
-(`test_cli_help_advertises_mask_degenerate_bins_flag` in
-`tests/pipeline/data/test_stats.py`) is the template.
-
-Run mutmut **on Linux** (CI workflow `.github/workflows/mutmut.yaml`,
-`workflow_dispatch` + weekly cron). On macOS, the parent process imports
-`torch` / `h5py` / `hydra` from `tests/conftest.py` during stats
-collection; Apple's fork-safety check then SIGSEGVs every forked child,
-so local `make mutmut` runs report mass segfaults that don't reflect
-real test outcomes. The Makefile target sets
-`OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES` to soften this, but the
-authoritative end-to-end run is the CI job.

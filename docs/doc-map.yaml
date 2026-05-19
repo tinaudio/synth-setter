@@ -350,3 +350,16 @@ docs:
   #       covers: "Promotion script, W&B artifact download, GitHub Release creation"
   #     - pattern: ".github/workflows/promote.yml"
   #       covers: "Promotion workflow, manual trigger, dry-run mode"
+
+  # ── Mutation testing reference ──────────────────────────────────
+  - doc: docs/testing/mutmut.md
+    description: Mutation testing reference
+    sources:
+      - pattern: "pyproject.toml"
+        covers: "[tool.mutmut] paths_to_mutate / also_copy configuration"
+        scope: "mutmut"
+      - pattern: ".github/workflows/mutmut.yaml"
+        covers: "Authoritative CI run (Linux, workflow_dispatch + weekly cron)"
+      - pattern: "Makefile"
+        covers: "make mutmut target, OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES soft macOS workaround"
+        scope: "mutmut"

@@ -18,6 +18,26 @@
         ]
       },
       {
+        "matcher": "Edit|Write",
+        "description": "No-baseline-additions: on Edit/Write of .pydoclint-baseline.txt, blocks the call if the post-edit line count exceeds the current count. The file is append-frozen (#938); only removals are allowed. Goal: enforce the lint-cleanup contract at the tool boundary instead of relying on the agent to remember the AGENTS.md rule.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash agent/hooks/no-baseline-additions.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "description": "No-yaml-run-comments: on Edit/Write of .github/workflows/*.yml or configs/compute/*.yaml, blocks the call if the post-edit content has any `#`-comment line inside a `run: |` / `setup: |` block scalar. The block scalar body is bash; stray quotes/backticks inside a comment have caused unintended shell expansion. Goal: keep comments above the step, not inside it.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash agent/hooks/no-yaml-run-comments.sh"
+          }
+        ]
+      },
+      {
         "matcher": "Bash",
         "description": "Branch safety: echoes the current branch name before any git commit. Prints DETACHED HEAD when not on a branch. Goal: catch accidental commits to the wrong branch.",
         "hooks": [
@@ -25,6 +45,18 @@
             "type": "command",
             "if": "Bash(git commit *)",
             "command": "branch=$(git branch --show-current 2>/dev/null || true); if [[ -z \"$branch\" ]]; then branch=\"DETACHED HEAD\"; fi; echo \"Committing to branch: $branch\" >&2"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "description": "Git-commit-trailer-check: on git commit, blocks the call if argv to git commit carries --no-verify / -n, or the message body carries a Co-Authored-By trailer or an agent-attribution footer ('Generated with ...', 'Claude ...', noreply@anthropic.com). Tokenizes with shlex so downstream commands chained with && / || / ; / | are not mistakenly scoped. Goal: keep agent-attribution trailers and verification bypasses out of the history at the tool boundary.",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(git commit *)",
+            "timeout": 10,
+            "command": "bash agent/hooks/git-commit-trailer-check.sh"
           }
         ]
       },
