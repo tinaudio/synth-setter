@@ -68,7 +68,6 @@ class R2Location(BaseModel):  # noqa: DOC601,DOC603
 
         :param value: Candidate ``bucket`` value pre-validation.
         :return: ``value`` unchanged when non-blank.
-        :rtype: str
         :raises ValueError: ``value`` is blank/whitespace-only.
         """
         if not value.strip():
@@ -94,7 +93,6 @@ class R2Location(BaseModel):  # noqa: DOC601,DOC603
 
         :param value: Candidate ``prefix_root`` value pre-validation.
         :return: ``value`` with surrounding whitespace stripped.
-        :rtype: str
         :raises ValueError: ``value`` is blank or slash-only after stripping.
         """
         stripped = value.strip()
@@ -109,7 +107,6 @@ class R2Location(BaseModel):  # noqa: DOC601,DOC603
 
         :param value: Candidate ``prefix`` value pre-validation.
         :return: ``value`` unchanged when it ends with ``/``.
-        :rtype: str
         :raises ValueError: ``value`` does not end with ``/``.
         """
         if not value.endswith("/"):
@@ -124,7 +121,6 @@ class R2Location(BaseModel):  # noqa: DOC601,DOC603
 
         :param key: Absolute object key (e.g. ``skypilot-launcher-specs/job-1.json``).
         :returns: ``r2://<bucket>/<key>`` URI string.
-        :rtype: str
         """
         return f"{R2_URI_SCHEME}{self.bucket}/{key}"
 
@@ -135,7 +131,6 @@ class R2Location(BaseModel):  # noqa: DOC601,DOC603
         ``r2_io.to_rclone_path`` for the URI→rclone-form translator.
 
         :returns: ``r2:<bucket>/<prefix>`` string for use as an rclone destination.
-        :rtype: str
         """
         return f"{RCLONE_REMOTE}:{self.bucket}/{self.prefix}"
 
@@ -144,7 +139,6 @@ class R2Location(BaseModel):  # noqa: DOC601,DOC603
 
         :param name: Relative key under ``self.prefix`` (may contain ``/``).
         :returns: ``r2://<bucket>/<prefix><name>`` URI string.
-        :rtype: str
         """
         return f"{R2_URI_SCHEME}{self.bucket}/{self.prefix}{name}"
 
@@ -156,7 +150,6 @@ class R2Location(BaseModel):  # noqa: DOC601,DOC603
             shards under a ``shards/`` subdirectory; this helper's API stays
             stable across that migration.
         :returns: ``r2://<bucket>/<prefix><shard.filename>`` URI string.
-        :rtype: str
         """
         return self._under_prefix(shard.filename)
 
@@ -167,7 +160,6 @@ class R2Location(BaseModel):  # noqa: DOC601,DOC603
         relocates it under ``<prefix>metadata/input_spec.json``.
 
         :returns: ``r2://<bucket>/<prefix>input_spec.json`` URI string.
-        :rtype: str
         """
         return self._under_prefix(INPUT_SPEC_FILENAME)
 
@@ -177,7 +169,6 @@ class R2Location(BaseModel):  # noqa: DOC601,DOC603
         Currently flat; future state (#385) places it under ``metadata/``.
 
         :returns: ``r2://<bucket>/<prefix>config.yaml`` URI string.
-        :rtype: str
         """
         return self._under_prefix("config.yaml")
 
@@ -187,7 +178,6 @@ class R2Location(BaseModel):  # noqa: DOC601,DOC603
         Currently flat; future state (#385) places it under ``metadata/``.
 
         :returns: ``r2://<bucket>/<prefix>dataset.json`` URI string.
-        :rtype: str
         """
         return self._under_prefix("dataset.json")
 
@@ -197,7 +187,6 @@ class R2Location(BaseModel):  # noqa: DOC601,DOC603
         Currently flat; future state (#385) places it under ``metadata/``.
 
         :returns: ``r2://<bucket>/<prefix>dataset.complete`` URI string.
-        :rtype: str
         """
         return self._under_prefix("dataset.complete")
 
@@ -209,7 +198,6 @@ class R2Location(BaseModel):  # noqa: DOC601,DOC603
 
         :param split: One of ``"train"``, ``"val"``, ``"test"``.
         :returns: ``r2://<bucket>/<prefix><split>.h5`` URI string.
-        :rtype: str
         """
         return self._under_prefix(f"{split}.h5")
 
@@ -220,7 +208,6 @@ class R2Location(BaseModel):  # noqa: DOC601,DOC603
         them (#408).
 
         :returns: ``r2://<bucket>/<prefix>stats.npz`` URI string.
-        :rtype: str
         """
         return self._under_prefix("stats.npz")
 
@@ -243,7 +230,6 @@ class R2Location(BaseModel):  # noqa: DOC601,DOC603
         :param attempt_uuid: Per-attempt UUID distinguishing retries.
         :param ext: File extension with leading dot (``".h5"`` or ``".tar"``).
         :returns: ``r2://<bucket>/<prefix>metadata/workers/shards/shard-NNNNNN/<worker>-<attempt>.<ext>``.
-        :rtype: str
         """
         return self._under_prefix(
             f"metadata/workers/shards/shard-{shard_id:06d}/{worker_id}-{attempt_uuid}{ext}"
@@ -259,7 +245,6 @@ class R2Location(BaseModel):  # noqa: DOC601,DOC603
         :param worker_id: Worker identifier issued by the launcher.
         :param attempt_uuid: Per-attempt UUID distinguishing retries.
         :returns: ``r2://<bucket>/<prefix>metadata/workers/attempts/<worker>-<attempt>/report.json``.
-        :rtype: str
         """
         return self._under_prefix(
             f"metadata/workers/attempts/{worker_id}-{attempt_uuid}/report.json"

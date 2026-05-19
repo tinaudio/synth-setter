@@ -23,7 +23,6 @@ def _default_tags() -> list[str]:
     """Return the placeholder ``["dev"]`` tag list.
 
     :return: Single-element list ``["dev"]``.
-    :rtype: list[str]
     """
     return ["dev"]
 

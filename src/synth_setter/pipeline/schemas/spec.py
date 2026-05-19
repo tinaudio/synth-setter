@@ -126,7 +126,6 @@ def _current_platform() -> str:
     """Return ``sys.platform`` via a patchable indirection (tests patch this, not ``sys``).
 
     :return: Current ``sys.platform`` string.
-    :rtype: str
     """
     return sys.platform
 
@@ -142,7 +141,6 @@ def _default_gui_toggle_cadence() -> _GuiToggleCadence:
     doesn't change production behaviour; ``"once"`` is opt-in.
 
     :return: ``"never"`` on Darwin, otherwise ``"render"``.
-    :rtype: _GuiToggleCadence
     """
     return "never" if _current_platform() == "darwin" else "render"
 
@@ -257,7 +255,6 @@ class RenderConfig(BaseModel):
         the empirical SIGTRAP threshold.
 
         :return: ``self`` unchanged when the combination is permitted.
-        :rtype: RenderConfig
         :raises ValueError: ``gui_toggle_cadence="render"`` combined with Darwin.
         """
         if self.gui_toggle_cadence == "render" and _current_platform() == "darwin":
@@ -294,7 +291,6 @@ def _default_r2_location(data: dict[str, Any]) -> dict[str, Any]:
     :param data: Already-validated DatasetSpec field data exposed to the factory.
     :returns: Dict shaped like ``R2Location.model_fields`` minus ``bucket``;
         ``R2Location`` validation then raises the missing-field error.
-    :rtype: dict[str, Any]
     """
     return {
         "prefix_root": DEFAULT_R2_PREFIX_ROOT,
@@ -316,7 +312,6 @@ def _coerce_created_at_to_datetime(value: Any) -> datetime | None:
     :returns: A tz-aware UTC datetime when parsing succeeds, else ``None``. ``None``
         signals the caller to fall back to the field's ``default_factory`` so the
         ``created_at`` field validator can surface the proper error attribution.
-    :rtype: datetime | None
     """
     if isinstance(value, datetime):
         parsed = value
@@ -351,7 +346,6 @@ def _fill_default_r2_prefix(data: dict[str, Any], r2: dict[str, Any]) -> dict[st
     :param r2: Raw nested ``r2`` sub-dict (may be missing ``prefix``).
     :returns: A ``r2`` dict either filled with a derived ``prefix`` or returned
         verbatim when prefix derivation is not safely available.
-    :rtype: dict[str, Any]
     """
     if not _can_derive_prefix(data, r2):
         return r2
@@ -383,7 +377,6 @@ def _can_derive_prefix(data: dict[str, Any], r2: dict[str, Any]) -> bool:
     :param data: Raw input dict to ``DatasetSpec``.
     :param r2: Raw nested ``r2`` sub-dict.
     :returns: ``True`` iff prefix derivation will succeed without raising.
-    :rtype: bool
     """
     task_name = data.get("task_name")
     if not isinstance(task_name, str) or not task_name.strip():
@@ -500,7 +493,6 @@ class DatasetSpec(BaseModel):  # noqa: DOC601,DOC603
         :param data: Raw input to the validator (typically a dict; pass-through otherwise).
         :returns: Same input unchanged if no normalization is needed; otherwise a
             new dict with legacy keys promoted under ``r2`` and ``prefix`` filled.
-        :rtype: Any
         :raises ValueError: ``data`` contains both nested ``r2`` AND any legacy flat
             ``r2_*`` key — that combination is ambiguous and must be rewritten.
         """

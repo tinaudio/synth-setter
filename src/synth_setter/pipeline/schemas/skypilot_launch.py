@@ -33,7 +33,6 @@ class SkypilotLaunchConfig(BaseModel):  # noqa: DOC601,DOC603
 
         :param v: Candidate ``num_workers`` value pre-validation.
         :return: ``v`` unchanged when ``>= 1``.
-        :rtype: int
         :raises ValueError: ``v`` is less than 1.
         """
         if v < 1:
@@ -47,7 +46,6 @@ class SkypilotLaunchConfig(BaseModel):  # noqa: DOC601,DOC603
 
         :param v: Candidate ``api_server`` value pre-validation (``None`` permitted).
         :return: ``None`` when input is ``None``; else ``v`` with whitespace stripped.
-        :rtype: str | None
         :raises ValueError: ``v`` is a non-``None`` string that is blank/whitespace-only.
         """
         if v is None:

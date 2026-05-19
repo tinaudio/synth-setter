@@ -266,7 +266,6 @@ def _sky_cfg_from_dataset_cfg(cfg: DictConfig) -> SkypilotLaunchConfig:
     :param cfg: Composed dataset cfg.
     :return: Validated config with ``cmd`` unset; the entrypoint populates it
         later via ``model_copy(update=...)``.
-    :rtype: SkypilotLaunchConfig
     :raises TypeError: ``cfg.skypilot_launch`` did not resolve to a mapping.
     :raises ValueError: operator supplied ``skypilot_launch.cmd`` from Hydra.
     """
@@ -300,7 +299,6 @@ def _build_worker_cmd(overrides: list[str], spec: DatasetSpec) -> str:
     :param spec: Launcher's ``DatasetSpec``; runtime fields are pinned into
         the worker overrides for compose determinism.
     :return: Bash one-liner suitable for use as a ``sky.Task`` ``run:`` block.
-    :rtype: str
     """
     pinned_overrides = [f"+created_at={spec.created_at.isoformat()}"]
     all_overrides = list(overrides) + pinned_overrides

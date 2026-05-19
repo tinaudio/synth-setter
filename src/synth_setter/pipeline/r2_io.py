@@ -40,7 +40,6 @@ def to_rclone_path(r2_uri: str) -> str:
 
     :param r2_uri: Canonical ``r2://bucket/key`` URI string.
     :return: ``r2:bucket/key`` rclone-form path string.
-    :rtype: str
     :raises ValueError: ``r2_uri`` is not an ``r2://`` URI.
     """
     if not is_r2_uri(r2_uri):

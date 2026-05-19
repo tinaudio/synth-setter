@@ -45,7 +45,6 @@ def compute_spec_uri(spec_path: Path, cluster_name: str) -> str:
     :param spec_path: Local path to a materialized ``input_spec.json``.
     :param cluster_name: SkyPilot managed-job name forwarded as ``--job-name``.
     :returns: ``r2://<bucket>/skypilot-launcher-specs/<cluster>.json`` URI string.
-    :rtype: str
     """
     spec = DatasetSpec.model_validate_json(spec_path.read_text())
     return spec.r2.uri(f"{LAUNCHER_SPEC_R2_PREFIX}/{cluster_name}.json")
