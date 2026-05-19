@@ -17,6 +17,10 @@ clean-logs: ## Clean logs
 format: ## Run pre-commit hooks
 	pre-commit run -a
 
+GATE ?=
+count-doc-noqa: ## Count inline `# noqa: DOC*` under src/ + tests/. Use GATE=1 to fail if non-zero.
+	@scripts/ci/count_doc_noqa.sh $(if $(GATE),--gate,)
+
 sync: ## Merge changes from main branch to your current branch
 	git pull
 	git pull origin main
