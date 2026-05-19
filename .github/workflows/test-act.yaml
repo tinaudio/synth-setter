@@ -101,55 +101,10 @@ jobs:
           act workflow_dispatch -W .github/workflows/generate-dataset-shards.yaml -n
           act workflow_dispatch -W .github/workflows/validate-dataset-shards.yaml -n
 
-      # Real-run the data-pipeline chain via act with provider=local —
-      # dropping `-n` lets `setup` populate `$GITHUB_OUTPUT` so the dynamic
-      # matrix resolves. Fork PRs skip (R2 secrets unavailable to forks).
-      # Four act-only knobs paper over real act-vs-GHA divergences without
-      # touching the production workflow:
-      #   * `--env PIP_BREAK_SYSTEM_PACKAGES=1` — catthehacker's python3.12
-      #     ships PEP 668's externally-managed marker; the workflow's
-      #     `pip install hydra-core ...` works on real GHA but fails under
-      #     act without the override.
-      #   * `--container-options "-v /tmp:/tmp"` — `generate-local` mkdir's
-      #     /tmp/run-metadata-local inside the act runner and then does a
-      #     host-daemon `docker run -v /tmp/run-metadata-local:/run-metadata`.
-      #     Without /tmp shared host↔runner, the spec lands on the host but
-      #     the in-runner `Validate spec exists` step (which reads from the
-      #     runner namespace) can't see it.
-      #   * `--artifact-server-path` — `actions/upload-artifact@v4` needs
-      #     `ACTIONS_RUNTIME_TOKEN`; act issues one only when its local
-      #     artifact server is enabled via this flag.
-      #   * `--matrix output_format:hdf5` — act runs every matrix cell
-      #     against the same act-runner container, so the parallel
-      #     `actions/setup-python@v6` invocations from `hdf5` and `wds`
-      #     race on `/opt/hostedtoolcache/Python`'s cleanup hook and
-      #     both fail (Directory not empty / cd: bin/: No such file or
-      #     directory). Real GHA gives each matrix cell its own runner,
-      #     so this is purely an act limitation. Restrict the regression
-      #     guard to one cell — the per-cell validate-shards behavior
-      #     itself is exercised by the real GHA matrix on every PR.
-      - name: Real-run test-dataset-generation chain via act (provider=local)
-        if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository }}
-        env:
-          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
-          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
-          RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
-        run: |
-          set -euo pipefail
-          umask 077
-          secrets_file="$(mktemp)"
-          artifact_dir="$(mktemp -d)"
-          trap 'rm -rf "${secrets_file}" "${artifact_dir}"' EXIT
-          {
-            printf 'RCLONE_CONFIG_R2_ACCESS_KEY_ID=%s\n' "${RCLONE_CONFIG_R2_ACCESS_KEY_ID}"
-            printf 'RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=%s\n' "${RCLONE_CONFIG_R2_SECRET_ACCESS_KEY}"
-            printf 'RCLONE_CONFIG_R2_ENDPOINT=%s\n' "${RCLONE_CONFIG_R2_ENDPOINT}"
-          } > "${secrets_file}"
-          act workflow_dispatch \
-            -W .github/workflows/test-dataset-generation.yml \
-            --input provider=local \
-            --matrix output_format:hdf5 \
-            --secret-file "${secrets_file}" \
-            --env PIP_BREAK_SYSTEM_PACKAGES=1 \
-            --container-options "-v /tmp:/tmp" \
-            --artifact-server-path "${artifact_dir}"
+      # The historical real-run step that exercised the inline `generate-local`
+      # job against a kind cluster via act was retired alongside that job in
+      # #1110. The launcher-side workflow chain remains covered by:
+      #   * the dry-run + setup-job act invocations above (parse + reusable contract);
+      #   * the real GHA skypilot-local matrix cell in test-dataset-generation.yml
+      #     (full end-to-end on every PR), which is the same path the dropped
+      #     real-run step targeted.

@@ -136,18 +136,25 @@ envs:
   RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ""
   RCLONE_CONFIG_R2_ENDPOINT: ""
   WANDB_API_KEY: ""
-  WORKER_SPEC_URI: ""                 # set by the launcher to r2://<bucket>/skypilot-launcher-specs/<job>.json
+  WORKER_GIT_REF: ""                  # PR-CI bake-lag bypass for sync_worker_checkout.sh
+  SYNTH_SETTER_WORKER_RANK: ""        # per-rank partition (synthesized by _run_workers per cell)
+  SYNTH_SETTER_NUM_WORKERS: ""
 
-run: |
-  set -euo pipefail
-  cd /home/build/synth-setter
-  bash scripts/sync_worker_checkout.sh
-  exec python /usr/local/bin/entrypoint.py generate_dataset --spec "$WORKER_SPEC_URI"
+# No `run:` block — the launcher's `_build_worker_cmd` constructs the cd +
+# sync_worker_checkout.sh + `exec synth-setter-generate-dataset-from-hydra
+# <pinned hydra overrides>` one-liner and injects it via the Task's `run`
+# field at dispatch time. Adding a `run:` block here is rejected by
+# `_load_compute_template_with_cmd`.
 ```
 
 The launcher uploads the materialized spec to R2 (under
 `r2://{bucket}/skypilot-launcher-specs/<job>.json`) rather than using
 `task.update_file_mounts(...)` — see [#749](https://github.com/tinaudio/synth-setter/issues/749).
+The spec URI is still made available to the worker pod as the
+`WORKER_SPEC_URI` env var (consumed by the CI validate-spec / validate-shard
+jobs, which read it via the workflow output rather than off the pod); the
+worker process itself re-builds the spec via Hydra compose on the injected
+overrides rather than fetching the JSON at boot.
 
 **Vast.ai** (`configs/compute/vast-template.yaml`) — planned, not implemented:
 
