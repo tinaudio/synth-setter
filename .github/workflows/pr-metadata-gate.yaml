@@ -27,6 +27,7 @@ jobs:
             echo "::error::Failed to fetch PR body from GitHub API"
             exit 1
           }
+          PR_BODY_SANITIZED=$(printf '%s' "$PR_BODY" | sed -E -e 's/`[^`]*`//g' -e 's/\[#[0-9]+\]\([^)]*\)//g')
           echo "::endgroup::"
 
           # --- Linked issue check ---
@@ -57,7 +58,7 @@ jobs:
           LINKED_ISSUES=$(( CONNECTED - DISCONNECTED ))
 
           # Check body for any issue/PR references (#N)
-          BODY_REFS=$(echo "$PR_BODY" | grep -coE '#[0-9]+') || {
+          BODY_REFS=$(echo "$PR_BODY_SANITIZED" | grep -coE '#[0-9]+') || {
             rc=$?
             if [ "$rc" -eq 1 ]; then
               BODY_REFS=0  # No matches found — expected case
@@ -86,7 +87,7 @@ jobs:
           done
 
           # From PR body: extract #N references (exclude the PR's own number)
-          BODY_ISSUE_NUMS=$(echo "$PR_BODY" | grep -oE '#[0-9]+' | tr -d '#' | sort -un) || true
+          BODY_ISSUE_NUMS=$(echo "$PR_BODY_SANITIZED" | grep -oE '#[0-9]+' | tr -d '#' | sort -un) || true
           for num in $BODY_ISSUE_NUMS; do
             if [ "$num" != "$PR_NUMBER" ]; then
               ISSUE_NUMBERS+=("$num")
@@ -220,6 +221,7 @@ jobs:
             echo "::error::Failed to fetch PR body; cannot perform epic lineage check."
             exit 1
           }
+          PR_BODY_SANITIZED=$(printf '%s' "$PR_BODY" | sed -E -e 's/`[^`]*`//g' -e 's/\[#[0-9]+\]\([^)]*\)//g')
 
           ISSUE_NUMBERS=()
 
@@ -229,7 +231,7 @@ jobs:
             ISSUE_NUMBERS+=("$num")
           done
 
-          BODY_ISSUE_NUMS=$(echo "$PR_BODY" | grep -oE '#[0-9]+' | tr -d '#' | sort -un) || true
+          BODY_ISSUE_NUMS=$(echo "$PR_BODY_SANITIZED" | grep -oE '#[0-9]+' | tr -d '#' | sort -un) || true
           for num in $BODY_ISSUE_NUMS; do
             if [ "$num" != "$PR_NUMBER" ]; then
               ISSUE_NUMBERS+=("$num")
