@@ -1004,8 +1004,10 @@ def dispatch_via_skypilot(
     :param spec: Validated dataset spec to render on the worker(s).
     :param sky_cfg: Validated launcher configuration (compute_template + cmd required).
     :param spec_uri: Canonical R2 URI of the materialized spec — injected into each
-        worker's env as ``WORKER_SPEC_URI`` so the worker downloads from the same
-        object ``main()`` just uploaded. Use ``spec.r2.input_spec_uri()`` (not
+        worker's env as ``WORKER_SPEC_URI`` so a future worker (PR-3 / PR-4) can
+        read from the same object ``main()`` just uploaded. The dispatched cmd
+        today rebuilds the spec from Hydra overrides and does not yet consume
+        this env var. Pass ``spec.r2.input_spec_uri()`` (not
         ``spec.r2.uri(INPUT_SPEC_FILENAME)`` — that omits the run prefix).
     :raises ValueError: degenerate ``sky_cfg``, conflicting ``cmd``/``run:`` pair,
         or unresolved worker env vars.

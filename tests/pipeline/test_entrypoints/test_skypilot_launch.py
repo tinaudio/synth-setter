@@ -2631,10 +2631,10 @@ def _write_runpod_yaml(
     return path
 
 
-# Canonical-path spec URI used by the dispatch tests. Mirrors what
-# ``spec.r2.input_spec_uri()`` would resolve to for ``_build_spec``'s fixture
-# spec (prefix `data/<task_name>/<created_at>/`); kept as a fixed string in
-# tests because the dispatch function only sees the kwarg, not the spec field.
+# Sentinel spec URI passed as the dispatch kwarg in tests. Shape mirrors
+# ``input_spec_uri()`` (``r2://<bucket>/<prefix>input_spec.json``) but the
+# prefix segment is arbitrary — ``dispatch_via_skypilot`` only sees the kwarg
+# string and never reads it back from the spec.
 _DISPATCH_SPEC_URI = "r2://intermediate-data/data/run/input_spec.json"
 
 
