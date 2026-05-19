@@ -238,18 +238,19 @@ jobs:
       # (#843). The override array is built conditionally so optional flags
       # don't expand to empty strings.
       #
-      # After the run, the canonical `data/<task>/<run>/metadata/input_spec.json`
-      # written by `synth-setter-generate-dataset` is copied to
-      # `${RUN_METADATA_DIR}/input_spec.json` so the downstream
-      # `Compute spec_uri output` step emits a URI with the *same* run_id that
-      # was actually uploaded to R2. Running `materialize_spec` separately would
-      # generate a *different* run_id (timestamps drift) and break the chain.
+      # `synth-setter-generate-dataset` writes the canonical spec to
+      # `<workspace>/data/<task>/<run>/metadata/input_spec.json` via
+      # `write_spec_locally` and uploads that exact file to R2 (single source of
+      # truth — both the spec_uri output and downstream validate consume the
+      # same run_id). The step output `spec_path` resolves that file so later
+      # steps don't have to repeat the glob.
       #
       # 20-min step cap caps a hung launcher so the `if: always()` log-snapshot
       # step still runs. NOTE: step-level timeout sends SIGKILL — `finally`
       # blocks are bypassed; operators may need to `sky jobs cancel` manually.
       # See #876.
       - name: Run synth-setter-generate-dataset against local-template (skypilot-local row)
+        id: gen_local
         if: ${{ inputs.provider == 'skypilot-local' }}
         timeout-minutes: 20
         env:
@@ -282,18 +283,14 @@ jobs:
           fi
           synth-setter-generate-dataset "${OVERRIDES[@]}" \
             2>&1 | tee "${RUN_METADATA_DIR}/generate.log"
-          # Copy the canonical spec to RUN_METADATA_DIR so the spec_uri output
-          # step (which lives outside this conditional) reads the *uploaded*
-          # run_id, not a freshly-generated one.
           shopt -s nullglob
-          canonical=("${GITHUB_WORKSPACE}"/data/*/*/metadata/input_spec.json)
-          if [[ "${#canonical[@]}" -ne 1 ]]; then
-            echo "::error::expected exactly one materialized spec under data/*/*/metadata/, found ${#canonical[@]}"
-            printf '%s\n' "${canonical[@]}"
+          specs=("${GITHUB_WORKSPACE}"/data/*/*/metadata/input_spec.json)
+          if [[ "${#specs[@]}" -ne 1 ]]; then
+            echo "::error::expected exactly one materialized spec under data/*/*/metadata/, found ${#specs[@]}"
+            printf '%s\n' "${specs[@]}"
             exit 1
           fi
-          cp "${canonical[0]}" "${RUN_METADATA_DIR}/input_spec.json"
-          chmod 0644 "${RUN_METADATA_DIR}/input_spec.json"
+          echo "spec_path=${specs[0]}" >> "${GITHUB_OUTPUT}"
 
       # Capture controller-side state (apiserver + on-pod provision.log) before
       # `sky local down` reaps the kind cluster. See scripts/skypilot/capture-state.sh
@@ -338,12 +335,12 @@ jobs:
       # outer step (keeping GHA expression evaluation out of the bash
       # block-scalar) and expanded unquoted inside docker so empty values
       # disappear. SKYPILOT_API_SERVER_ENDPOINT (when set) routes the launcher
-      # to the remote API server; pass `local: true` to override. After the run,
-      # the canonical `data/<task>/<run>/metadata/input_spec.json` written inside
-      # the container is copied to /run-metadata/input_spec.json so the
-      # downstream `Compute spec_uri output` step emits a URI with the same
-      # run_id that was uploaded to R2.
+      # to the remote API server; pass `local: true` to override. The workspace
+      # is mounted at /home/build/synth-setter, so the canonical spec the CLI
+      # writes inside the container is the same host-side file the outer step
+      # resolves as `spec_path`.
       - name: Run synth-setter-generate-dataset (runpod / oci row; in container)
+        id: gen_docker
         if: ${{ inputs.provider == 'runpod' || inputs.provider == 'oci' }}
         env:
           SKYPILOT_API_SERVER_ENDPOINT: ${{ secrets.SKYPILOT_API_SERVER_ENDPOINT }}
@@ -402,24 +399,30 @@ jobs:
                 "skypilot_launch.job_name=$CLUSTER_NAME" \
                 "skypilot_launch.worker_image_tag=$IMAGE_TAG" \
                 $LOCAL_OVERRIDE $NUM_WORKERS_OVERRIDE $TAIL_OVERRIDE
-              shopt -s nullglob
-              canonical=(/home/build/synth-setter/data/*/*/metadata/input_spec.json)
-              if [[ "${#canonical[@]}" -ne 1 ]]; then
-                echo "::error::expected exactly one materialized spec under data/*/*/metadata/, found ${#canonical[@]}"
-                printf "%s\n" "${canonical[@]}"
-                exit 1
-              fi
-              cp "${canonical[0]}" /run-metadata/input_spec.json
-              chmod 0644 /run-metadata/input_spec.json
             ' \
             2>&1 | tee "${RUN_METADATA_DIR}/generate.log"
+          # The docker mount mirrors workspace -> /home/build/synth-setter, so
+          # the spec the CLI wrote inside the container is the same host file.
+          shopt -s nullglob
+          specs=("${GITHUB_WORKSPACE}"/data/*/*/metadata/input_spec.json)
+          if [[ "${#specs[@]}" -ne 1 ]]; then
+            echo "::error::expected exactly one materialized spec under data/*/*/metadata/, found ${#specs[@]}"
+            printf '%s\n' "${specs[@]}"
+            exit 1
+          fi
+          echo "spec_path=${specs[0]}" >> "${GITHUB_OUTPUT}"
 
+      # SPEC_PATH is the canonical spec the CLI wrote (via `write_spec_locally`)
+      # and uploaded to R2 — same file, same run_id, single source of truth.
+      # Exactly one of `gen_local` / `gen_docker` ran (matrix branches are
+      # `if:`-gated), so only one of the outputs is non-empty.
       - name: Validate spec exists
+        env:
+          SPEC_PATH: ${{ steps.gen_local.outputs.spec_path || steps.gen_docker.outputs.spec_path }}
         run: |
           set -euo pipefail
-          SPEC_PATH="${RUN_METADATA_DIR}/input_spec.json"
-          if [[ ! -f "${SPEC_PATH}" ]]; then
-            echo "::error::input_spec.json not found at ${SPEC_PATH}"
+          if [[ -z "${SPEC_PATH}" || ! -f "${SPEC_PATH}" ]]; then
+            echo "::error::input_spec.json not found at ${SPEC_PATH:-<unset>}"
             exit 1
           fi
           echo "=== Materialized Spec (${PROVIDER}) ==="
@@ -437,9 +440,10 @@ jobs:
       # pulls before docker-image-build.yml has pushed the PR's tag).
       - name: Compute spec_uri output
         id: spec_uri
+        env:
+          SPEC_PATH: ${{ steps.gen_local.outputs.spec_path || steps.gen_docker.outputs.spec_path }}
         run: |
           set -euo pipefail
-          SPEC_PATH="${RUN_METADATA_DIR}/input_spec.json"
           if ! command -v synth-setter-spec-uri >/dev/null 2>&1; then
             python3 -m pip install --quiet -e .
           fi
@@ -447,11 +451,15 @@ jobs:
           echo "spec_uri=${SPEC_URI}" >> "${GITHUB_OUTPUT}"
           echo "spec_uri: ${SPEC_URI}"
 
+      # Pull the canonical spec into the debug artifact alongside generate.log
+      # / sky_logs so operators don't have to chase R2 to inspect the run.
       - name: Upload run metadata
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.artifact_name }}
-          path: /tmp/run-metadata-${{ inputs.provider }}/
+          path: |
+            /tmp/run-metadata-${{ inputs.provider }}/
+            ${{ github.workspace }}/data/*/*/metadata/input_spec.json
           retention-days: 7
           if-no-files-found: warn
