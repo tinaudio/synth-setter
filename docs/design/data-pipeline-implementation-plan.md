@@ -270,7 +270,7 @@ Sub-issues: [#18](https://github.com/tinaudio/synth-setter/issues/18) (config-dr
 
 - `DatasetConfig` (Pydantic strict): validates raw YAML input. Fields match config schema (§4).
   `output_format` defaults to `"hdf5"` if missing from config.
-- `DatasetPipelineSpec` (frozen, strict): `run_id` (was `dataset_wandb_run_id` in plan),
+- `DatasetPipelineSpec` (frozen, strict): `run_id`,
   `r2` (nested `R2Location`), `created_at`, `code_version`, `is_repo_dirty`,
   `param_spec`, `renderer_version`, `output_format` (`"hdf5"` or `"wds"`), `sample_rate`,
   `shard_size`, `base_seed`, `num_params`, `splits`, `plugin_path`, `preset_path`,
@@ -976,8 +976,8 @@ no workers launched.
 **GP4. Plugin-path validation belongs on the worker, not the launcher.**
 The launcher path is interpreter-only (the SkyPilot launcher in
 `src/synth_setter/pipeline/skypilot_launch.py` cannot load a VST3 plugin — no X11),
-so `materialize_spec` no longer extracts `renderer_version` from the plugin bundle and
-no longer enforces a `plugin_path.exists()` precondition. Pin `renderer_version` to
+so `materialize_spec` neither extracts `renderer_version` from the plugin bundle nor
+enforces a `plugin_path.exists()` precondition. Pin `renderer_version` to
 `SURGE_XT_RENDERER_VERSION` at materialization; the worker calls
 `extract_renderer_version` against the actual plugin before rendering and raises a clear
 mismatch error if the running plugin disagrees with the spec. This pushes plugin-bundle

@@ -5,13 +5,13 @@ Reference for the per-run audio-similarity metrics published by
 to the benchmark chart at
 **<https://tinaudio.github.io/synth-setter/dev/bench/>**.
 
-`gh-pages` is now a **data store**, not the served branch: the
-`benchmark-action` keeps appending entries to `gh-pages/dev/bench/data.js`
-as before, but `gh-pages` itself is no longer rendered by Pages. The
-[`docs`](../../.github/workflows/docs.yml) workflow (Phase 2 of the docs
-pipeline) reads `gh-pages/dev/bench/`, merges it into the deployed
+`gh-pages` serves as a **data store**, not the served branch: the
+`benchmark-action` appends entries to `gh-pages/dev/bench/data.js`, and
+Pages serves the deployed mkdocs site rather than `gh-pages` directly.
+The [`docs`](../../.github/workflows/docs.yml) workflow (Phase 2 of the
+docs pipeline) reads `gh-pages/dev/bench/`, merges it into the deployed
 mkdocs site under `/dev/bench/`, and publishes via
-`actions/deploy-pages@v4`. The chart URL is unchanged.
+`actions/deploy-pages@v4`.
 
 ## Purpose
 

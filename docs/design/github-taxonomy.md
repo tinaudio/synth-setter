@@ -45,7 +45,7 @@ Issues are classified using GitHub's native Issue Types (org-level):
 
 Types are set on the issue itself, filterable in issue lists, and show distinct icons.
 
-**Hierarchy types** (Epic, Phase) define structure. **Work types** (Task, Bug, Feature) are orthogonal — a Task under a Phase is what was previously called a "step".
+**Hierarchy types** (Epic, Phase) define structure. **Work types** (Task, Bug, Feature) are orthogonal — a Task under a Phase fills the role of a single execution step.
 
 ## 3. Hierarchy
 

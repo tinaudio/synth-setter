@@ -942,16 +942,16 @@ Why it doesn't work:
 
 ### 9.2 Simultaneous Launch with Finalize-as-Waiter
 
-**Rejected (was the original design).** Co-launch generation workers and a finalize worker simultaneously. The finalize worker polls R2, waiting for all shards before merging. Worker status files are the authoritative record.
+**Rejected.** Co-launch generation workers and a finalize worker simultaneously. The finalize worker polls R2, waiting for all shards before merging. Worker status files are the authoritative record.
 
-- **Status files as authority is fragile.** A worker could report success but fail to upload. The finalize worker trusts the status and either merges incomplete data or hangs forever.
+- **Status files as authority is fragile.** A worker can report success but fail to upload. The finalize worker trusts the status and either merges incomplete data or hangs forever.
 - **The finalize worker as a waiter wastes money.** A worker sitting idle for 30-60 minutes polling R2 costs compute time for no work.
 - **Infrastructure-derived shard names break resumability.** Naming shards `shard-{pod_id}-{attempt_id}-{seq}` means retries produce different filenames.
-- **No reconciliation means no partial retry.** If 3 of 10 workers fail, the only option was to rerun everything.
+- **No reconciliation means no partial retry.** If 3 of 10 workers fail, the only option is to rerun everything.
 
 ### 9.3 ComputeBackend with Task Lifecycle Management
 
-**Rejected (was the original interface).** The first draft of `ComputeBackend` had `submit()` and `check_tasks()` — the latter polling provider APIs for task status.
+**Rejected.** Give `ComputeBackend` a `submit()` plus `check_tasks()` pair, where `check_tasks()` polls provider APIs for task status.
 
 - **Provider task state is unreliable.** RunPod can report "running" for a worker that OOM-killed 10 minutes ago.
 - **It duplicates reconciliation.** Storage already answers "is this shard done?" ([§7.1](#71-storage-as-the-source-of-truth)). Adding a second, weaker signal creates two sources of truth.
@@ -964,7 +964,7 @@ Why it doesn't work:
 
 ### 9.5 `make status` as Provider-Status Command
 
-**Rejected (was the original monitoring approach).** The first draft described `make status` as showing live pod status from RunPod's API.
+**Rejected.** Have `make status` show live pod status from RunPod's API.
 
 - **Provider APIs answer the wrong question.** "Is the worker running?" ≠ "are the shards done?" Storage answers the right question ([§7.1](#71-storage-as-the-source-of-truth)).
 - **Not portable.** Polling RunPod workers is RunPod-specific.
@@ -972,7 +972,7 @@ Why it doesn't work:
 
 ### 9.6 CLI Flags as Run Configuration
 
-**Rejected (was the original approach).** Run configuration via Make variables: `make generate PARAM_SPEC=... SHARD_SIZE=... NUM_SHARDS=...`.
+**Rejected.** Run configuration via Make variables: `make generate PARAM_SPEC=... SHARD_SIZE=... NUM_SHARDS=...`.
 
 - **Not versionable.** Exact flags exist only in shell history.
 - **Drift silently.** Same command with slightly different flag = different dataset, no detection.
