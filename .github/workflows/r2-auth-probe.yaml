@@ -13,6 +13,15 @@ name: R2 Auth Probe
 # `validate-dataset-shards.yaml`):
 #   RCLONE_CONFIG_R2_ACCESS_KEY_ID, RCLONE_CONFIG_R2_SECRET_ACCESS_KEY,
 #   RCLONE_CONFIG_R2_ENDPOINT.
+#
+# The probe deliberately does NOT set RCLONE_CONFIG_R2_TYPE or
+# RCLONE_CONFIG_R2_PROVIDER — that mirrors the env shape the failing
+# `generate-dataset-shards.yaml` skypilot-local step passes to
+# `synth-setter-generate-dataset`, which is where the
+# `didn't find section in config file` error originates. Without the
+# type/provider fragments, rclone's env-override convention cannot assemble
+# a complete remote definition and `rclone lsd r2:` fails.
+# `ensure_r2_env_loaded` is responsible for defaulting these.
 
 on:
   workflow_dispatch:
@@ -38,8 +47,6 @@ jobs:
     # runner minutes. Same gating pattern as `test-skypilot-local.yml`.
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository }}
     env:
-      RCLONE_CONFIG_R2_TYPE: s3
-      RCLONE_CONFIG_R2_PROVIDER: Cloudflare
       RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
       RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
       RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
