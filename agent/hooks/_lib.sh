@@ -112,30 +112,42 @@ run_agent_prompt() {
 }
 
 run_review() {
-  # Usage: run_review <slug> <meta> <prompt> <review_file> <stderr_file> <dry_run>
+  # Usage: run_review <slug> <meta> <prompt> [<dry_run_env_var>]
   #
-  # Orchestrates the DRY_RUN-vs-headless-agent dispatch shared by doc-drift.sh
-  # and pr-review-resolver.sh. On success: writes the agent's stdout to
-  # `<review_file>` and removes `<stderr_file>`. On failure: writes a verbose
-  # report (slug, meta block, exit code, prompt, stderr tail). Returns 0 in
-  # both cases — the caller decides the hook's own exit code.
+  # Owns the DRY_RUN-vs-headless-agent dispatch shared by doc-drift.sh and
+  # pr-review-resolver.sh. Generates the report path (`.agent-reviews/<slug>-<uuid>.md`),
+  # invokes the headless agent (or writes a stub under dry-run), and on
+  # failure writes a verbose report with the exit code, prompt, and stderr
+  # tail. Echoes the resulting report path on stdout so the caller can
+  # surface it. Always returns 0 — the caller decides the hook's own exit.
   #
-  # `<slug>`        short name used in the report header (e.g. "doc-drift").
-  # `<meta>`        printf-ready block of "Key: value" lines (one per line).
-  # `<prompt>`      text passed to run_agent_prompt; stubbed under dry-run.
-  # `<review_file>` final report path (overwritten).
-  # `<stderr_file>` scratch file for captured stderr; deleted at end.
-  # `<dry_run>`     "1" skips the agent and writes a stub report.
-  local slug="$1" meta="$2" prompt="$3" review_file="$4" stderr_file="$5" dry_run="$6"
-  local exit_code
+  # `<slug>`             short name used in the report header and filename
+  #                      (e.g. "doc-drift", "pr-review-resolver").
+  # `<meta>`             printf-ready block of "Key: value" lines.
+  # `<prompt>`           text passed to run_agent_prompt; stubbed under dry-run.
+  # `<dry_run_env_var>`  optional name of the env var that gates dry-run mode
+  #                      (e.g. "DOC_DRIFT_DRY_RUN"); if its value is "1" the
+  #                      stub branch fires. Omit for non-dry-run-capable hooks.
+  local slug="$1" meta="$2" prompt="$3" dry_run_var="${4:-}"
+  local review_id review_file stderr_file dry_run exit_code
+  review_id=$(gen_id)
+  review_file="${REVIEWS_DIR}/${slug}-${review_id}.md"
+  stderr_file="${REVIEWS_DIR}/${slug}-${review_id}.stderr"
+  dry_run=0
+  if [[ -n "$dry_run_var" ]]; then
+    # Bash indirect expansion to read the named env var; defaults to 0.
+    dry_run="${!dry_run_var:-0}"
+  fi
   if [[ "$dry_run" == "1" ]]; then
     log "DRY_RUN: writing stub report"
     printf '# %s (dry-run)\n%s\n## Prompt\n%s\n' "$slug" "$meta" "$prompt" > "$review_file"
+    printf '%s\n' "$review_file"
     return 0
   fi
   log "invoking headless agent"
   if run_agent_prompt "$prompt" > "$review_file" 2>"$stderr_file"; then
     rm -f "$stderr_file"
+    printf '%s\n' "$review_file"
     return 0
   fi
   exit_code=$?
@@ -151,5 +163,6 @@ run_review() {
     printf '\n```\n'
   } > "$review_file"
   rm -f "$stderr_file"
+  printf '%s\n' "$review_file"
   return 0
 }

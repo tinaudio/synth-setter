@@ -50,12 +50,8 @@ ${DIFF_FILES}
 Report findings as \"file:line — issue — suggested fix\". If no drift is found, state that explicitly."
 fi
 
-REVIEW_ID=$(gen_id)
-REVIEW_FILE="${REVIEWS_DIR}/doc-drift-${REVIEW_ID}.md"
-STDERR_FILE="${REVIEWS_DIR}/doc-drift-${REVIEW_ID}.stderr"
 META=$(printf 'PR: #%s\nBranch: %s\nBase: %s\n' "$PR" "$BRANCH" "$BASE_BRANCH")
-
-run_review "doc-drift" "$META" "$PROMPT" "$REVIEW_FILE" "$STDERR_FILE" "${DOC_DRIFT_DRY_RUN:-0}"
+REVIEW_FILE=$(run_review "doc-drift" "$META" "$PROMPT" "DOC_DRIFT_DRY_RUN")
 
 log "wrote ${REVIEW_FILE}"
 

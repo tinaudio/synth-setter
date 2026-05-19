@@ -69,12 +69,8 @@ else
   PROMPT="PR #${PR} on branch ${BRANCH}. Fetch review comments with 'gh pr view ${PR} --json reviews,comments' and 'gh api repos/{owner}/{repo}/pulls/${PR}/comments'. Address each actionable comment; reply inline to each comment you addressed with the fix commit SHA. Ignore nits unless trivial."
 fi
 
-REVIEW_ID=$(gen_id)
-REVIEW_FILE="${REVIEWS_DIR}/pr-review-resolver-${REVIEW_ID}.md"
-STDERR_FILE="${REVIEWS_DIR}/pr-review-resolver-${REVIEW_ID}.stderr"
 META=$(printf 'PR: #%s\nBranch: %s\n' "$PR" "$BRANCH")
-
-run_review "pr-review-resolver" "$META" "$PROMPT" "$REVIEW_FILE" "$STDERR_FILE" "${RESOLVER_DRY_RUN:-0}"
+REVIEW_FILE=$(run_review "pr-review-resolver" "$META" "$PROMPT" "RESOLVER_DRY_RUN")
 
 log "wrote ${REVIEW_FILE}"
 

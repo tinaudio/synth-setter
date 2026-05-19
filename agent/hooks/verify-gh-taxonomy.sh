@@ -37,10 +37,9 @@ emit_advisory() {
 # ---------------------------------------------------------------------------
 query_issue_metadata() {
   # Usage: query_issue_metadata <issue_number>
-  # Emits one tab-delimited line: <type>\t<labels>\t<milestone>\t<has_domain>.
-  # Callers consume it via `IFS=$'\t' read -r type labels milestone has_domain
-  # < <(query_issue_metadata $n)`. Tab is safe — GitHub label/title/type
-  # values can't contain tabs.
+  # Emits one JSON object on stdout: `{type, labels, milestone, has_domain}`.
+  # Callers extract fields via `jq -r '.type'` etc. — explicit named access
+  # avoids the positional-order coupling of a TSV contract.
   local issue_num="$1" result type labels milestone has_domain=false dl
   # shellcheck disable=SC2016
   result=$(gh api graphql -f query='
@@ -60,24 +59,37 @@ query_issue_metadata() {
   for dl in "${DOMAIN_LABELS[@]}"; do
     if echo "$labels" | grep -q "$dl"; then has_domain=true; break; fi
   done
-  printf '%s\t%s\t%s\t%s\n' "$type" "$labels" "$milestone" "$has_domain"
+  jq -n \
+    --arg type "$type" \
+    --arg labels "$labels" \
+    --arg milestone "$milestone" \
+    --argjson has_domain "$has_domain" \
+    '{type:$type, labels:$labels, milestone:$milestone, has_domain:$has_domain}'
 }
 
 check_ci_minimum() {
   # Usage: check_ci_minimum <type> <has_domain> <milestone>
-  # Returns: space-separated list of missing fields, or empty string if all set.
-  local type="$1" has_domain="$2" milestone="$3" missing=""
-  [[ -z "$type" ]] && missing="${missing} issue-type"
-  [[ "$has_domain" == "false" ]] && missing="${missing} domain-label"
-  [[ -z "$milestone" ]] && missing="${missing} milestone"
-  echo "$missing"
+  # Echoes a comma-separated list of missing fields (e.g. "issue-type, milestone"),
+  # or empty string if all three are set. Callers interpolate directly into
+  # user-facing error strings.
+  local type="$1" has_domain="$2" milestone="$3"
+  local missing=()
+  [[ -z "$type" ]] && missing+=("issue-type")
+  [[ "$has_domain" == "false" ]] && missing+=("domain-label")
+  [[ -z "$milestone" ]] && missing+=("milestone")
+  if [[ "${#missing[@]}" -gt 0 ]]; then
+    local IFS=', '
+    echo "${missing[*]}"
+  fi
 }
 
 check_project_fields() {
   # Usage: check_project_fields <issue_number>
-  # Returns: space-separated list of missing fields ("project-board",
-  # "priority"), or empty string if both are set.
-  local issue_num="$1" node_id project_result on_board has_priority missing=""
+  # Echoes a comma-separated list of missing fields ("project-board, priority"
+  # or "priority"), or empty if both are set. Returns the bare list with no
+  # leading space so callers can interpolate cleanly into error strings.
+  local issue_num="$1" node_id project_result on_board has_priority
+  local missing=()
   # shellcheck disable=SC2016
   node_id=$(gh api graphql -f query='
     query($owner: String!, $repo: String!, $number: Int!) {
@@ -88,7 +100,7 @@ check_project_fields() {
   ' -f owner="$OWNER" -f repo="$REPO" -F number="$issue_num" \
     --jq '.data.repository.issue.id' 2>/dev/null || echo "")
   if [[ -z "$node_id" ]]; then
-    echo " project-board priority"
+    echo "project-board, priority"
     return
   fi
   # shellcheck disable=SC2016
@@ -115,17 +127,20 @@ check_project_fields() {
   ' -f id="$node_id" 2>/dev/null || echo "{}")
   on_board=$(echo "$project_result" | jq -r '.data.node.projectItems.nodes | length' 2>/dev/null || echo "0")
   if [[ "$on_board" == "0" ]]; then
-    missing="${missing} project-board priority"
+    missing+=("project-board" "priority")
   else
     has_priority=$(echo "$project_result" | jq -r '
       [.data.node.projectItems.nodes[].fieldValues.nodes[]
         | select(.field.name == "Priority")
         | .name] | length' 2>/dev/null || echo "0")
     if [[ "$has_priority" == "0" ]]; then
-      missing="${missing} priority"
+      missing+=("priority")
     fi
   fi
-  echo "$missing"
+  if [[ "${#missing[@]}" -gt 0 ]]; then
+    local IFS=', '
+    echo "${missing[*]}"
+  fi
 }
 
 check_epic_lineage() {
@@ -168,7 +183,7 @@ check_epic_lineage() {
 # ---------------------------------------------------------------------------
 mode_pr() {
   # Usage: mode_pr <tool_response>
-  local tool_response="$1" pr_url pr_num pr_body issue_nums issue_num
+  local tool_response="$1" pr_url pr_num pr_body issue_nums issue_num metadata
   local type milestone has_domain ci_missing lineage project_missing warnings=""
   pr_url=$(echo "$tool_response" | grep -oE 'https://github.com/[^/]+/[^/]+/pull/[0-9]+' | head -1 || true)
   [[ -z "$pr_url" ]] && return 0
@@ -196,12 +211,13 @@ mode_pr() {
   # (BLOCK if missing), then project board + priority (WARN if missing).
   while IFS= read -r issue_num; do
     [[ -z "$issue_num" ]] && continue
-    # `_` discards the labels column; check_ci_minimum needs only the
-    # has_domain flag, which query_issue_metadata pre-computes from labels.
-    IFS=$'\t' read -r type _ milestone has_domain < <(query_issue_metadata "$issue_num")
+    metadata=$(query_issue_metadata "$issue_num")
+    type=$(echo "$metadata" | jq -r '.type')
+    milestone=$(echo "$metadata" | jq -r '.milestone')
+    has_domain=$(echo "$metadata" | jq -r '.has_domain')
     ci_missing=$(check_ci_minimum "$type" "$has_domain" "$milestone")
     if [[ -n "$ci_missing" ]]; then
-      emit_block "Issue #${issue_num} is missing taxonomy metadata:${ci_missing}. Fix before the pr-metadata-gate CI check fails."
+      emit_block "Issue #${issue_num} is missing taxonomy metadata: ${ci_missing}. Fix before the pr-metadata-gate CI check fails."
       return 0
     fi
     lineage=$(check_epic_lineage "$issue_num")
@@ -211,7 +227,7 @@ mode_pr() {
     fi
     project_missing=$(check_project_fields "$issue_num")
     if [[ -n "$project_missing" ]]; then
-      warnings="${warnings}Issue #${issue_num} is missing:${project_missing}. "
+      warnings="${warnings}Issue #${issue_num} is missing: ${project_missing}. "
     fi
   done <<< "$issue_nums"
 
@@ -224,16 +240,19 @@ mode_pr() {
 
 mode_issue() {
   # Usage: mode_issue <tool_response>
-  local tool_response="$1" issue_url issue_num type milestone has_domain ci_missing
+  local tool_response="$1" issue_url issue_num metadata type milestone has_domain ci_missing
   issue_url=$(echo "$tool_response" | grep -oE 'https://github.com/[^/]+/[^/]+/issues/[0-9]+' | head -1 || true)
   [[ -z "$issue_url" ]] && return 0
   issue_num=$(echo "$issue_url" | grep -oE '[0-9]+$' || true)
   [[ -z "$issue_num" ]] && return 0
 
-  IFS=$'\t' read -r type _ milestone has_domain < <(query_issue_metadata "$issue_num")
+  metadata=$(query_issue_metadata "$issue_num")
+  type=$(echo "$metadata" | jq -r '.type')
+  milestone=$(echo "$metadata" | jq -r '.milestone')
+  has_domain=$(echo "$metadata" | jq -r '.has_domain')
   ci_missing=$(check_ci_minimum "$type" "$has_domain" "$milestone")
   if [[ -n "$ci_missing" ]]; then
-    emit_block "Issue #${issue_num} is missing taxonomy metadata:${ci_missing}. Set these now before proceeding. Then add to sub-issue hierarchy, project board, and set priority."
+    emit_block "Issue #${issue_num} is missing taxonomy metadata: ${ci_missing}. Set these now before proceeding. Then add to sub-issue hierarchy, project board, and set priority."
     return 0
   fi
   # CI minimum is satisfied, but `gh issue create` can't set issue type —
@@ -286,8 +305,28 @@ mode_hierarchy() {
 # ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
+is_synth_setter() {
+  # Usage: is_synth_setter <mode> <command> <tool_response>
+  # Returns 0 if the command targets the synth-setter repo, 1 otherwise.
+  #
+  # The hook lives in this repo but agents may run `gh pr create` from a
+  # sibling clone; we extract the actual GitHub URL from the response and
+  # check the repo path. Plain `grep` on the response is unsafe — Bash tool
+  # output includes "Shell cwd was reset to .../synth-setter" on every cwd
+  # change. For addSubIssue the URL isn't in the response, so we inspect the
+  # GraphQL query in the command string.
+  local mode="$1" command="$2" tool_response="$3" github_url
+  if [[ "$mode" == "hierarchy" ]]; then
+    echo "$command" | grep -qE 'owner.*synth-setter|repo.*synth-setter'
+    return $?
+  fi
+  github_url=$(echo "$tool_response" | grep -oE 'https://github.com/[^/]+/[^/]+/(pull|issues)/[0-9]+' | head -1 || true)
+  [[ -z "$github_url" ]] && return 1
+  echo "$github_url" | grep -q 'synth-setter'
+}
+
 main() {
-  local input command mode tool_response github_url
+  local input command mode tool_response
   input=$(cat)
   command=$(echo "$input" | jq -r '.tool_input.command // empty' 2>/dev/null || echo "")
 
@@ -300,18 +339,7 @@ main() {
 
   tool_response=$(echo "$input" | jq -r '.tool_response // empty' 2>/dev/null || echo "")
 
-  # Scope: only act on commands that targeted synth-setter. The hook lives in
-  # this repo but agents may run `gh pr create` from a sibling clone; we
-  # extract the actual GitHub URL from the response and check the repo path.
-  # Plain grep on the response is unsafe — Bash tool output includes
-  # "Shell cwd was reset to .../synth-setter" on every cwd change.
-  if [[ "$mode" == "hierarchy" ]]; then
-    echo "$command" | grep -qE 'owner.*synth-setter|repo.*synth-setter' || return 0
-  else
-    github_url=$(echo "$tool_response" | grep -oE 'https://github.com/[^/]+/[^/]+/(pull|issues)/[0-9]+' | head -1 || true)
-    [[ -z "$github_url" ]] && return 0
-    echo "$github_url" | grep -q 'synth-setter' || return 0
-  fi
+  is_synth_setter "$mode" "$command" "$tool_response" || return 0
 
   case "$mode" in
     pr)        mode_pr "$tool_response" ;;
