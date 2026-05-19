@@ -67,6 +67,18 @@ query_issue_metadata() {
     '{type:$type, labels:$labels, milestone:$milestone, has_domain:$has_domain}'
 }
 
+strip_markdown_issue_links() {
+  # Usage: strip_markdown_issue_links "<pr-body>"
+  # Removes `[#N](url)` markdown links from a PR body and prints the result.
+  # GitHub's "Copy link" UI on a review comment yields
+  # `[#3269588963](https://.../discussion_r3269588963)` — the bracket text is
+  # a 10-digit *comment* ID, not an issue number, and the surrounding regex
+  # would otherwise fetch it as a bogus issue. Bare `#N` references survive.
+  # The same regex is inlined in .github/workflows/pr-metadata-gate.yaml;
+  # keep them in sync. Regression: PR #1163 failing run 26126477593.
+  printf '%s' "$1" | sed -E 's/\[#[0-9]+\]\([^)]*\)//g'
+}
+
 check_ci_minimum() {
   # Usage: check_ci_minimum <type> <has_domain> <milestone>
   # Echoes a comma-and-space-separated list of missing fields (e.g.
@@ -200,10 +212,7 @@ mode_pr() {
   # Check the PR body for issue references (Fixes/Closes/Refs #N). Without a
   # linked issue, the pr-metadata-gate CI workflow will fail.
   pr_body=$(gh pr view "$pr_num" --repo "${OWNER}/${REPO}" --json body --jq '.body' 2>/dev/null || echo "")
-  # Strip [#N](url) markdown links before extracting refs: those typically point
-  # at review-comment IDs (10-digit `discussion_r…` URLs), not real issues, and
-  # would otherwise be fetched as bogus issue numbers. Mirrors pr-metadata-gate.yaml.
-  pr_body_sanitized=$(printf '%s' "$pr_body" | sed -E 's/\[#[0-9]+\]\([^)]*\)//g')
+  pr_body_sanitized=$(strip_markdown_issue_links "$pr_body")
   issue_nums=$(echo "$pr_body_sanitized" | grep -oE '(Fixes|Closes|Refs|fixes|closes|refs) #[0-9]+' \
     | grep -oE '[0-9]+' | sort -un | grep -v "^${pr_num}$" || true)
   # Fallback: any bare #N reference (markdown-linked refs were stripped above).
