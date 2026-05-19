@@ -1,0 +1,66 @@
+name: R2 Auth Probe
+
+# Fast (<60s) repro of the rclone-R2-auth code path exercised by
+# `synth_setter.pipeline.r2_io.ensure_r2_env_loaded`. The only other workflow
+# that hits this path is `test-dataset-generation.yml` via the skypilot-local
+# matrix, which takes ~7-8 minutes because it's downstream of the full
+# `generate_dataset` SkyPilot launcher — too slow for an investigation loop.
+#
+# Triggers narrowly on PRs touching the files that drive the auth path, and
+# on `workflow_dispatch` for manual probes.
+#
+# Required secrets (same set as `test-dataset-generation.yml` /
+# `validate-dataset-shards.yaml`):
+#   RCLONE_CONFIG_R2_ACCESS_KEY_ID, RCLONE_CONFIG_R2_SECRET_ACCESS_KEY,
+#   RCLONE_CONFIG_R2_ENDPOINT.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "src/synth_setter/pipeline/r2_io.py"
+      - "src/synth_setter/pipeline/constants.py"
+      - ".github/workflows/r2-auth-probe.yaml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  r2-auth-probe:
+    name: rclone R2 auth probe
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      RCLONE_CONFIG_R2_TYPE: s3
+      RCLONE_CONFIG_R2_PROVIDER: Cloudflare
+      RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+      RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+      RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Install rclone
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq rclone
+
+      # Mirror `validate-dataset-shards.yaml`'s install step exactly so the
+      # runner-side env is comparable to the existing failing job: project
+      # with --no-deps (skip torch/skypilot/librosa) plus pydantic and
+      # python-dotenv, which `ensure_r2_env_loaded` imports directly.
+      - name: Install ensure_r2_env_loaded runtime deps
+        run: |
+          pip install --no-deps -e .
+          pip install "pydantic>=2,<3" "python-dotenv>=1"
+
+      - name: Probe ensure_r2_env_loaded
+        run: |
+          python3 -c "from synth_setter.pipeline.r2_io import ensure_r2_env_loaded; ensure_r2_env_loaded()"
