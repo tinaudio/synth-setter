@@ -67,7 +67,7 @@ docs:
       - pattern: "src/synth_setter/pipeline/r2_io.py"
         covers: "rclone-backed R2 helpers — URI handling, download, upload, size probe; single rclone call site shared by CI validators and the worker entrypoint's skip-existing probe"
       - pattern: "src/synth_setter/pipeline/spec_io.py"
-        covers: "`input_spec.json` write/upload helpers (`local_spec_path`, `write_spec_locally`, `upload_spec`) — sole call site for writing the operator-side local mirror at `<output_dir>/data/<task_name>/<run_id>/metadata/input_spec.json` and the R2 copy at `spec.r2.input_spec_uri()`; called from `cli/generate_dataset.py`'s `main()` and `run()`."
+        covers: "`input_spec.json` write/upload helpers (`local_spec_path`, `write_spec_locally`, `upload_spec`) — sole call site for writing the operator-side local mirror at `<repo_root>/data/<task_name>/<run_id>/metadata/input_spec.json` (runner anchors at `_REPO_ROOT`, not Hydra's runtime output dir) and the R2 copy at `spec.r2.input_spec_uri()`; called from `cli/generate_dataset.py`'s `main()` and `run()`."
       - pattern: "src/synth_setter/pipeline/constants.py"
         covers: "Input spec filename, rclone remote name, and canonical `r2://` URI scheme constants"
       - pattern: "src/synth_setter/pipeline/schemas/r2_location.py"
@@ -129,7 +129,7 @@ docs:
         covers: "rclone upload of spec and shard files, R2 path construction"
         scope: "rclone"
       - pattern: "src/synth_setter/pipeline/spec_io.py"
-        covers: "`input_spec.json` writers — `write_spec_locally` materializes the operator-side local mirror at `<output_dir>/data/<task_name>/<run_id>/metadata/input_spec.json` (anticipating §3a's `metadata/` target layout); `upload_spec` writes the R2 copy at `spec.r2.input_spec_uri()` (flat MVP path per #385)."
+        covers: "`input_spec.json` writers — `write_spec_locally` materializes the operator-side local mirror at `<repo_root>/data/<task_name>/<run_id>/metadata/input_spec.json` (runner anchors at `_REPO_ROOT`, anticipating §3a's `metadata/` target layout); `upload_spec` writes the R2 copy at `spec.r2.input_spec_uri()` (flat MVP path per #385)."
       - pattern: "src/synth_setter/pipeline/constants.py"
         covers: "INPUT_SPEC_FILENAME constant"
 
