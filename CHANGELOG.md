@@ -1,6 +1,42 @@
 # CHANGELOG
 
 
+## v6.2.0 (2026-05-19)
+
+### Features
+
+- **pipeline**: Accept file:// URIs in spec_uri loaders
+  ([#1161](https://github.com/tinaudio/synth-setter/pull/1161),
+  [`94ef9d0`](https://github.com/tinaudio/synth-setter/commit/94ef9d0f6bddb8d824530a0aa3047f0f56c958ed))
+
+* feat(pipeline): accept file:// URIs in spec_uri loaders
+
+The spec-loading callsites in cli/generate_dataset.py, pipeline/ci/validate_spec.py, and
+  pipeline/ci/validate_shard.py now accept file:///abs/path/spec.json alongside the existing
+  bare-path and r2:// shapes. The new pipeline.file_uri module owns the RFC 8089 parser (empty /
+  localhost authorities, percent-decoded path, non-localhost host + empty path rejected), and
+  pipeline.spec_io.read_spec_text centralizes the r2 vs local dispatch so the three consumers share
+  one branch instead of duplicating it.
+
+FILE_URI_SCHEME lives next to R2_URI_SCHEME in pipeline.constants.
+
+Refs #603
+
+* refactor(pipeline): scheme-based spec_uri dispatch + explicit bare-path support
+
+Replaces the prefix-check dispatcher in ``spec_io.read_spec_text`` with a ``urlparse``-based scheme
+  detector, matching the convention used by rclone, fsspec, Hadoop FS, and Arrow:
+
+- has-scheme → route to the matching backend (``file`` → local read via ``file_uri_to_path``; ``r2``
+  → rclone download) - no-scheme → treat as a local path resolved against the process CWD - any
+  other scheme → ``ValueError`` so typos (e.g. ``s3://``) fail loudly
+
+The unused ``local_path_from_arg`` helper is dropped now that ``read_spec_text`` is the single
+  dispatcher; this also seals the ``Path("r2://...")`` foot-gun the helper exposed.
+
+New tests pin the bare-relative-path resolution and unsupported-scheme rejection paths.
+
+
 ## v6.1.0 (2026-05-19)
 
 ### Chores
