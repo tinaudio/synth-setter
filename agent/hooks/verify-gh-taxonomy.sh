@@ -69,15 +69,20 @@ query_issue_metadata() {
 
 strip_markdown_issue_links() {
   # Usage: strip_markdown_issue_links "<pr-body>"
-  # Outputs: sanitized body on stdout. Removes `[#N](url)` markdown links so
-  # the surrounding `#[0-9]+` regex doesn't pick up 10-digit review-comment
-  # IDs (GitHub's "Copy link" UI on a Copilot review comment yields
-  # `[#3269588963](https://.../discussion_r3269588963)`); bare `#N` refs
-  # survive. Same regex is inlined in .github/workflows/pr-metadata-gate.yaml;
-  # keep them in sync. Regression: PR #1163 failing run 26126477593.
+  # Outputs: sanitized body on stdout. Strips two classes of pattern so the
+  # surrounding `#[0-9]+` regex doesn't fetch them as bogus issues:
+  #   1. Inline code spans `\`...\`` — refs cited inside backticks are part
+  #      of prose ("comment IDs like \`#3269588963\`"), not links.
+  #   2. `[#N](url)` markdown links — GitHub's "Copy link" UI on a Copilot
+  #      review comment yields `[#3269588963](.../discussion_r3269588963)`.
+  # Bare `#N` references outside code spans survive.
+  # Same regexes are inlined in .github/workflows/pr-metadata-gate.yaml;
+  # keep them in sync. Regressions: PR #1163 failing run 26126477593 (case
+  # 2), PR #1171 failing run 26127785920 (case 1).
   # NOTE: agent/hooks/test.sh slices this function with awk anchored on
   # `^}$` — preserve the bare brace style or update the awk slice.
-  printf '%s' "$1" | sed -E 's/\[#[0-9]+\]\([^)]*\)//g'
+  # shellcheck disable=SC2016  # backticks are literal sed delimiters, not subshells
+  printf '%s' "$1" | sed -E -e 's/`[^`]*`//g' -e 's/\[#[0-9]+\]\([^)]*\)//g'
 }
 
 check_ci_minimum() {

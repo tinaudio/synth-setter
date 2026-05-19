@@ -27,7 +27,7 @@ jobs:
             echo "::error::Failed to fetch PR body from GitHub API"
             exit 1
           }
-          PR_BODY_SANITIZED=$(printf '%s' "$PR_BODY" | sed -E 's/\[#[0-9]+\]\([^)]*\)//g')
+          PR_BODY_SANITIZED=$(printf '%s' "$PR_BODY" | sed -E -e 's/`[^`]*`//g' -e 's/\[#[0-9]+\]\([^)]*\)//g')
           echo "::endgroup::"
 
           # --- Linked issue check ---
@@ -221,7 +221,7 @@ jobs:
             echo "::error::Failed to fetch PR body; cannot perform epic lineage check."
             exit 1
           }
-          PR_BODY_SANITIZED=$(printf '%s' "$PR_BODY" | sed -E 's/\[#[0-9]+\]\([^)]*\)//g')
+          PR_BODY_SANITIZED=$(printf '%s' "$PR_BODY" | sed -E -e 's/`[^`]*`//g' -e 's/\[#[0-9]+\]\([^)]*\)//g')
 
           ISSUE_NUMBERS=()
 

@@ -531,21 +531,38 @@ T_taxonomy_strip_markdown_issue_links_preserves_bare_refs() {
 }
 it "verify-gh-taxonomy: strip_markdown_issue_links preserves bare #N references" T_taxonomy_strip_markdown_issue_links_preserves_bare_refs
 
+T_taxonomy_strip_markdown_issue_links_drops_code_span_refs() {
+  # Regression for PR #1171 run 26127785920: the PR body cited comment IDs
+  # inside backticked code spans (e.g. `#3269588963` in prose, `#1157, #1165,
+  # #3269588963, ...` in an enum), not in `[#N](url)` markdown links. The
+  # markdown-only strip from #1163 missed those, so the gate re-failed.
+  # Inline code spans are prose-as-text, never the way a real issue ref is
+  # written — strip the whole span before extraction.
+  local body result
+  body=$'## Summary\n\nCloses #42. Comment IDs like `#3269588963` are not issues.\n`enum: #1157, #3269588963, #3269589002`\nRefs #99'
+  result=$(run_strip_markdown_issue_links "$body" | grep -oE '#[0-9]+' | sort -u | tr '\n' ' ')
+  [[ "$result" == "#42 #99 " ]] || {
+    echo "expected '#42 #99 ' (refs in code spans stripped), got: '$result'"
+    return 1
+  }
+}
+it "verify-gh-taxonomy: strip_markdown_issue_links removes #N refs inside backticked code spans (PR #1171 regression)" T_taxonomy_strip_markdown_issue_links_drops_code_span_refs
+
 T_taxonomy_workflow_inlines_same_sanitize_regex_as_hook() {
   # Drift guard: the bash hook and pr-metadata-gate.yaml each carry their own
-  # copy of the `[#N](url)` strip regex. Pin the workflow to have the exact
-  # `sed` expression once per job; a unilateral edit to either side fails here.
+  # copy of the sanitization sed pipeline. Pin the workflow to have the exact
+  # expression once per job; a unilateral edit to either side fails here.
   local workflow="$REPO_ROOT/.github/workflows/pr-metadata-gate.yaml"
   local expected count
-  expected="sed -E 's/\\[#[0-9]+\\]\\([^)]*\\)//g'"
+  expected="sed -E -e 's/\`[^\`]*\`//g' -e 's/\\[#[0-9]+\\]\\([^)]*\\)//g'"
   count=$(grep -cF "$expected" "$workflow") || count=0
   [[ "$count" -eq 2 ]] || {
-    echo "expected pr-metadata-gate.yaml to contain the strip-[#N](url) sed expression exactly 2x (once per job), found ${count}."
+    echo "expected pr-metadata-gate.yaml to contain the sanitize sed pipeline exactly 2x (once per job), found ${count}."
     echo "If you intentionally changed the workflow regex, mirror the change in strip_markdown_issue_links() in verify-gh-taxonomy.sh and update this test."
     return 1
   }
 }
-it "verify-gh-taxonomy: pr-metadata-gate.yaml inlines the same [#N](url) strip regex (drift guard)" T_taxonomy_workflow_inlines_same_sanitize_regex_as_hook
+it "verify-gh-taxonomy: pr-metadata-gate.yaml inlines the same sanitize sed pipeline (drift guard)" T_taxonomy_workflow_inlines_same_sanitize_regex_as_hook
 
 T_taxonomy_check_ci_minimum_joins_with_comma_space() {
   # Unit test for the comma-space join in check_ci_minimum + check_project_fields.
