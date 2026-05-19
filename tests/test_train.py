@@ -315,9 +315,7 @@ def test_train_eval_surge_xt(
 
     # Render predicted params through the Surge XT VST to per-sample audio directories.
     # `-t` (`--rerender_target`) re-synthesizes target.wav from the stored target_params instead
-    # of the saved target audio. Also works around an `UnboundLocalError` in
-    # `src/synth_setter/evaluation/predict_vst_audio.py` where `target_synth_params` is referenced in the default
-    # path without being defined outside the `rerender_target` branch (see #672).
+    # of the saved target audio.
     audio_dir = tmp_path / "audio"
     runner = CliRunner()
 
