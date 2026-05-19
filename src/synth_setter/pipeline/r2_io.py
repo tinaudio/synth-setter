@@ -16,8 +16,6 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from dotenv import dotenv_values
-
 from synth_setter.pipeline.constants import R2_URI_SCHEME, RCLONE_REMOTE
 
 __all__ = [
@@ -65,6 +63,10 @@ def ensure_r2_env_loaded(env_file: Path | None = None) -> None:
         ``rclone lsd r2:`` exits non-zero (bad creds, network, etc.).
     """
     if env_file is not None and env_file.is_file():
+        # Lazy import so importing this module (e.g. from validate_spec.py in
+        # the lean --no-deps CI env) does not pull python-dotenv. Refs #1120.
+        from dotenv import dotenv_values
+
         for key, value in dotenv_values(env_file).items():
             if key and key.startswith("RCLONE_CONFIG_R2_") and value is not None:
                 os.environ[key] = value
