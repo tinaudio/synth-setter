@@ -295,6 +295,7 @@ def test_all_parameters_receive_gradients(  # noqa: DOC101,DOC103
 ) -> None:
     """Every network parameter receives a non-zero gradient after one training_step + backward."""
     module = _make_module(net=tiny_net, optimizer=opt_partial)
+    _patch_log(module)
     loss = module.training_step(batch, 0)  # type: ignore[arg-type]
     loss.backward()
     missing: list[str] = []
@@ -342,6 +343,7 @@ def test_training_step_returns_scalar_with_grad(  # noqa: DOC101,DOC103
 ) -> None:
     """training_step returns a scalar tensor wired into autograd."""
     module = _make_module(net=tiny_net, optimizer=opt_partial)
+    _patch_log(module)
     loss = module.training_step(batch, 0)  # type: ignore[arg-type]
     assert loss.ndim == 0
     assert loss.requires_grad
@@ -351,6 +353,13 @@ def test_training_step_returns_scalar_with_grad(  # noqa: DOC101,DOC103
 # --------------------------------------------------------------------------- #
 # Section D — Validation / test step wire-up (MT9, MT25)
 # --------------------------------------------------------------------------- #
+
+
+def _patch_log(module: KSinFeedForwardModule) -> MagicMock:  # noqa: DOC101,DOC103,DOC201,DOC203
+    """Replace ``module.log`` with a mock so ``*_step`` runs without an attached Trainer."""
+    log_mock = MagicMock()
+    module.log = log_mock  # type: ignore[method-assign]
+    return log_mock
 
 
 def _patch_metrics_and_log(  # noqa: DOC101,DOC103,DOC201,DOC203
@@ -363,14 +372,13 @@ def _patch_metrics_and_log(  # noqa: DOC101,DOC103,DOC201,DOC203
         "test_lsd": MagicMock(spec=torchmetrics.Metric),
         "test_chamfer": MagicMock(spec=torchmetrics.Metric),
         "test_lad": MagicMock(spec=torchmetrics.Metric),
-        "log": MagicMock(),
+        "log": _patch_log(module),
     }
     module.val_lsd = mocks["val_lsd"]
     module.val_chamfer = mocks["val_chamfer"]
     module.test_lsd = mocks["test_lsd"]
     module.test_chamfer = mocks["test_chamfer"]
     module.test_lad = mocks["test_lad"]
-    module.log = mocks["log"]  # type: ignore[method-assign]
     return mocks
 
 
@@ -558,6 +566,7 @@ def test_overfit_single_batch_with_mse_loss(  # noqa: DOC101,DOC103
     net = ResidualMLPBlock(in_dim=_SIGNAL_LENGTH, hidden_dim=64, out_dim=_NUM_PARAMS)
     optimizer = functools.partial(torch.optim.Adam, lr=3e-4)
     module = _make_module(net=net, loss_fn="mse", optimizer=optimizer)
+    _patch_log(module)
     x = torch.randn(_BATCH_SIZE, _SIGNAL_LENGTH)
     y = torch.rand(_BATCH_SIZE, _NUM_PARAMS)
     batch = (x, y, synth_fn)
