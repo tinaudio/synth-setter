@@ -88,8 +88,10 @@ When the shared file says "the calling skill," that's this skill:
 
 - Write the findings JSON to `/tmp/repo-review-full-no-comments-findings.json`.
 
-- For `pr_number` in the JSON: use the resolved PR number in PR mode, or the
-  branch name string (e.g. `"feat/foo"`) in local-branch mode.
+- For `pr_number` in the JSON: use the resolved PR number in PR mode, or
+  `null` in local-branch mode. Do not place branch names in `pr_number`; keep
+  branch/target details in `review_body` and, if the shared JSON builder
+  supports it, a separate metadata field such as `target`.
 
 - Phrase the `review_body` lead-in to reflect what was reviewed and that
   nothing was posted. In PR mode, write:
