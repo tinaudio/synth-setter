@@ -56,7 +56,7 @@ from synth_setter.pipeline.schemas.spec import (
     DatasetSpec,
 )
 
-pytestmark = [pytest.mark.integration_r2, pytest.mark.slow]
+pytestmark = [pytest.mark.integration_r2, pytest.mark.r2, pytest.mark.slow]
 
 # Mirror tests/pipeline/test_entrypoints/test_generate_dataset.py: a real
 # VST3 bundle with a deterministic Contents/moduleinfo.json so
@@ -80,10 +80,15 @@ def _r2_reachable() -> bool:
 
     Mirrors the gating pattern in ``tests/pipeline/data/test_r2_report.py`` so
     a contributor running locally without R2 creds auto-skips this test
-    rather than failing on the first rclone subprocess.
+    rather than failing on the first rclone subprocess. The ``r2:`` remote
+    is configured via ``RCLONE_CONFIG_R2_*`` env vars (set by the workflow
+    from repo secrets, or by the contributor's local rclone config); the
+    listing is authenticated and the exit code is what indicates whether
+    those creds are present and valid.
 
-    :returns: ``True`` when rclone resolves and an unauthenticated ``lsd`` succeeds;
-        ``False`` if rclone is absent or the listing exits non-zero.
+    :returns: ``True`` when rclone resolves and the configured ``r2:`` remote
+        accepts a credentialled ``lsd``; ``False`` if rclone is absent or
+        the listing exits non-zero (no/invalid creds, network down, etc.).
     """
     if shutil.which("rclone") is None:
         return False
@@ -233,8 +238,12 @@ def _unique_r2_prefix() -> str:
 
     The full triple keeps concurrent CI runs isolated even on re-runs: the
     same ``run_id`` paired with a bumped ``run_attempt`` lands under a fresh
-    leaf. Locally (no ``GITHUB_*`` env) the placeholders ``local`` / ``0``
-    keep the path stable for repeated `pytest` invocations during dev.
+    leaf, and the trailing uuid nonce keeps the two parametrizations
+    (``hdf5`` / ``wds``) in the same run apart. Locally (no ``GITHUB_*``
+    env) the placeholders ``local`` / ``0`` keep dev artifacts grouped
+    under a recognizable ``ci-roundtrip/local/0/`` parent that can be
+    purged in bulk; each ``pytest`` invocation still gets a fresh uuid
+    leaf so concurrent local runs don't collide.
 
     :returns: Trailing-slash-terminated R2 prefix string suitable for use as
         a ``r2.prefix=`` Hydra override and as an ``rclone purge`` target.
