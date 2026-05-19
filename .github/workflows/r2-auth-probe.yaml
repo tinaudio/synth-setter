@@ -62,14 +62,14 @@ jobs:
       - name: Install rclone
         run: sudo apt-get update -qq && sudo apt-get install -y -qq rclone
 
-      # Mirror `validate-dataset-shards.yaml`'s install step exactly so the
-      # runner-side env is comparable to the existing failing job: project
-      # with --no-deps (skip torch/skypilot/librosa) plus pydantic and
-      # python-dotenv, which `ensure_r2_env_loaded` imports directly.
+      # Mirror `validate-dataset-shards.yaml`'s minimal-install pattern (project
+      # with --no-deps to skip torch/skypilot/librosa), but only add the deps
+      # `ensure_r2_env_loaded` actually imports: python-dotenv. (Unlike
+      # `validate_spec`, this probe's entry point does not pull in pydantic.)
       - name: Install ensure_r2_env_loaded runtime deps
         run: |
           pip install --no-deps -e .
-          pip install "pydantic>=2,<3" "python-dotenv>=1"
+          pip install "python-dotenv>=1"
 
       - name: Probe ensure_r2_env_loaded
         run: |
