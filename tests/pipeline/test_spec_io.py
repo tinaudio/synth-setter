@@ -323,3 +323,58 @@ class TestFindInputSpecs:
         metadata_dir.mkdir(parents=True, exist_ok=True)
         (metadata_dir / "report.json").write_text("{}", encoding="utf-8")
         assert spec_io.find_input_specs(data_dir) == []
+
+
+class TestReadSpecText:
+    """``spec_io.read_spec_text`` dispatches across r2://, file://, and bare paths."""
+
+    def test_bare_local_path_reads_file_directly(self, tmp_path: Path) -> None:
+        """A non-URI argument is read directly as a filesystem path.
+
+        :param tmp_path: Pytest tmp dir.
+        """
+        spec_path = tmp_path / "spec.json"
+        spec_path.write_text('{"hello": "world"}')
+
+        assert spec_io.read_spec_text(str(spec_path)) == '{"hello": "world"}'
+
+    def test_file_uri_reads_local_file(self, tmp_path: Path) -> None:
+        """A ``file://`` URI is decoded to a local path and read.
+
+        :param tmp_path: Pytest tmp dir.
+        """
+        spec_path = tmp_path / "spec.json"
+        spec_path.write_text('{"hello": "from-file-uri"}')
+
+        assert spec_io.read_spec_text(spec_path.as_uri()) == '{"hello": "from-file-uri"}'
+
+    def test_r2_uri_downloads_via_r2_io(self) -> None:
+        """An ``r2://`` URI dispatches through ``r2_io.downloaded_to_tempfile``."""
+
+        def fake_check_call(args: list[str]) -> None:
+            Path(args[-1]).write_text('{"hello": "from-r2"}')
+
+        with patch(
+            "synth_setter.pipeline.r2_io.subprocess.check_call", side_effect=fake_check_call
+        ):
+            text = spec_io.read_spec_text("r2://bucket/spec.json")
+
+        assert text == '{"hello": "from-r2"}'
+
+    def test_bare_relative_path_resolves_against_cwd(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A bare relative path is read against the process CWD (rclone/fsspec convention).
+
+        :param tmp_path: Pytest tmp dir used as the working directory for this test.
+        :param monkeypatch: Pytest fixture used to ``chdir`` into ``tmp_path``.
+        """
+        (tmp_path / "relative-spec.json").write_text('{"hello": "from-cwd"}')
+        monkeypatch.chdir(tmp_path)
+
+        assert spec_io.read_spec_text("relative-spec.json") == '{"hello": "from-cwd"}'
+
+    def test_unsupported_scheme_is_rejected_with_value_error(self) -> None:
+        """An unsupported scheme (e.g. ``s3://``) raises a clear ``ValueError``."""
+        with pytest.raises(ValueError, match="unsupported spec_uri scheme 's3'"):
+            spec_io.read_spec_text("s3://bucket/spec.json")

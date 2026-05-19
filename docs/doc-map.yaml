@@ -59,7 +59,7 @@ docs:
       - pattern: "src/synth_setter/cli/generate_dataset.py"
         covers: "Dataset generation entrypoint, sequential multi-shard MVP with R2 skip-existing probe (worker-side resumability MVP, #750), and the @hydra.main CLI (`python -m synth_setter.cli.generate_dataset experiment=<id>`) composed from configs/dataset.yaml"
       - pattern: ".github/workflows/generate-dataset-shards.yaml"
-        covers: "Reusable launcher fan-out across providers (skypilot-local kind, runpod, oci); per-provider artifact upload; emits a `spec_uri` workflow output (the materialized spec's canonical under-prefix `input_spec.json` URI, emitted by the launcher on stdout as a `::synth-setter-spec-uri::<uri>` sentinel — constant `_SPEC_URI_STDOUT_SENTINEL` in `src/synth_setter/pipeline/skypilot_launch.py` — and grepped from the tee'd generate.log) consumed by validate-dataset-shards"
+        covers: "Reusable launcher fan-out across providers (skypilot-local kind, runpod, oci); per-provider artifact upload; emits a `spec_uri` workflow output (the materialized spec's canonical under-prefix `input_spec.json` URI, computed by the `synth-setter-spec-uri` console script — see `src/synth_setter/pipeline/ci/spec_uri.py`) consumed by validate-dataset-shards"
       - pattern: ".github/workflows/validate-dataset-shards.yaml"
         covers: "Reusable spec + shard validation downstream of generate-dataset-shards; takes the `spec_uri` (r2://) emitted by generate-dataset-shards as its `spec_uri` input"
       - pattern: "src/synth_setter/pipeline/ci/**"
@@ -83,10 +83,10 @@ docs:
 
   # ── SkyPilot compute integration design doc ─────────────────────
   - doc: docs/design/skypilot-compute-integration.md
-    description: SkyPilot launcher for the data pipeline (RunPod + OCI smoke)
+    description: SkyPilot dispatch for the data pipeline — standard entrypoint path + ad-hoc launcher (RunPod + OCI smoke)
     sources:
       - pattern: "src/synth_setter/pipeline/skypilot_launch.py"
-        covers: "SkyPilot launcher CLI; sky.jobs.launch managed-jobs SDK flow; --tail/--no-tail split (detached prints `sky jobs logs --name` and exits; tail streams via sky.jobs.tail_logs and cancels in finally). WORKER_SPEC_URI sourced from `spec.r2.input_spec_uri()`; file_mounts avoided (#749). `dispatch_via_skypilot` is the chokepoint hit by both entrypoints (click `main` and `cli/generate_dataset.py:main`): it writes the managed-jobs controller shrink via `_ensure_ci_sky_config` when `SYNTH_SETTER_CI_MODE` is truthy (kind/CI smoke, #876), and emits the canonical spec URI on stdout as `::synth-setter-spec-uri::<uri>` via `_emit_spec_uri` for the CI workflow to grep."
+        covers: "Ad-hoc SkyPilot launcher CLI for arbitrary operator commands; also hosts `dispatch_via_skypilot`, the shared library the standard `synth-setter-*` dispatch path calls into. sky.jobs.launch managed-jobs SDK flow; --tail/--no-tail split (detached prints `sky jobs logs --name` and exits; tail streams via sky.jobs.tail_logs and cancels in finally). `dispatch_via_skypilot` receives a `spec_uri` from the caller (standard path passes `spec.r2.input_spec_uri()`; ad-hoc launcher resolves it via the `synth-setter-spec-uri` console script in `_resolve_spec_uri`) and forwards it as `WORKER_SPEC_URI`; file_mounts avoided (#749)."
       - pattern: "configs/compute/runpod-template.yaml"
         covers: "SkyPilot Task YAML for RunPod: resources block, image_id injected per-launch by the launcher (`--worker-image-tag`, default `dev-snapshot`) via `_override_image_id`, env-var injection (RCLONE_CONFIG_R2_*), R2-URI spec contract (WORKER_SPEC_URI consumed by load_spec_from_uri in the worker)"
       - pattern: "configs/compute/oci-cpu-template.yaml"
@@ -96,11 +96,11 @@ docs:
       - pattern: "scripts/sync_worker_checkout.sh"
         covers: "Shared `git fetch + checkout WORKER_GIT_REF` + `uv pip install -e .[torch]` helper called by both runpod-template.yaml and oci-cpu-template.yaml run: blocks. No-op when WORKER_GIT_REF is unset (operators); when set, full transitive resolve handles PRs that add new top-level packages."
       - pattern: "scripts/skypilot/write_provider_creds.sh"
-        covers: "Per-provider cred writer: PROVIDER=runpod writes ~/.runpod/config.toml; PROVIDER=oci writes ~/.oci/config + ~/.oci/oci_api_key.pem (SkyPilot's OCI backend defaults to the root compartment when oci.default.compartment_ocid is unset, so ~/.sky/config.yaml is no longer managed here — see #876). The kind/kubernetes 'local' provider's controller shrink is written by the launcher's `_ensure_ci_sky_config` when `SYNTH_SETTER_CI_MODE` is truthy; the launcher skips this script for kind. Mode 600 via umask 077; require_var fails closed on missing secrets."
+        covers: "Per-provider cred writer extracted from the test-dataset-generation workflow heredoc: PROVIDER=runpod writes ~/.runpod/config.toml; PROVIDER=oci writes ~/.oci/config + ~/.oci/oci_api_key.pem (SkyPilot's OCI backend defaults to the root compartment when oci.default.compartment_ocid is unset, so ~/.sky/config.yaml is no longer managed here — see #876). The kind / kubernetes 'local' provider is handled directly in the CI workflow; the launcher skips this script for that case. Mode 600 via umask 077; require_var fails closed on missing secrets."
       - pattern: "docker/ubuntu22_04/run-linux-vst-headless.sh"
         covers: "Headless wrapper cleanup contract on RunPod (drop exec on dbus-run-session, </dev/null detach on backgrounded daemons, wait + pkill -P $$ to reap orphan grandchildren); load-bearing for SkyPilot's job-status reporter to observe SSH-pipe EOF"
       - pattern: ".github/workflows/test-dataset-generation.yml"
-        covers: "End-to-end smoke matrixed over `skypilot-local` (PR default, kind cluster) + RunPod + OCI (manual dispatch): generate → validate-spec → validate-shard, per-provider artifacts. Cred bootstrap is gated on SKYPILOT_API_SERVER_ENDPOINT — see #785."
+        covers: "End-to-end smoke matrixed over `skypilot-local` (kind cluster) + RunPod + OCI: generate → validate-spec → validate-shard, per-provider artifacts. No `pull_request` trigger after #1164/#1170 — presubmit launcher / R2 round-trip duty moves to test-local-launcher-roundtrip.yml. Hourly `schedule` (`0 * * * *`) runs `skypilot-local × {hdf5, wds}`; weekly `schedule` (`0 7 * * 0`) runs all providers × `{hdf5, wds}` (only paid-capacity touch outside manual dispatch). Cred bootstrap is gated on SKYPILOT_API_SERVER_ENDPOINT — see #785."
       - pattern: ".github/workflows/test-skypilot-debug.yml"
         covers: "Permanent diagnostic matrix for the SkyPilot+RunPod path (workflow_dispatch only). Same cred-bootstrap gate as test-dataset-generation: writer is invoked iff SKYPILOT_API_SERVER_ENDPOINT is unset."
       - pattern: ".github/workflows/test-skypilot-local.yml"
@@ -273,6 +273,10 @@ docs:
         covers: "Headless X11/Xvfb wrapper bootstrapped by test-full-* / test-vst-cpu on Linux"
       - pattern: "tests/infra/**"
         covers: "Devcontainer + GHA invariant tests — attached-mode MODE=idle, gh-auth flow, no baked secrets, post-create budget, act --list parse"
+      - pattern: "tests/integration/**"
+        covers: "End-to-end launcher-against-real-R2 integration tests with a stubbed VST renderer subprocess (`integration_r2` marker) — fast PR-tier alternative to the kind + dev-snapshot matrix in `test-dataset-generation.yml`. Run by `test-local-launcher-roundtrip.yml` on same-repo PRs."
+      - pattern: ".github/workflows/test-local-launcher-roundtrip.yml"
+        covers: "Fast PR-tier (~8-10 min) lane for `tests/integration/`: invokes the `synth-setter-generate-dataset` CLI entrypoint (`cli.generate_dataset.main()`, which then calls `run()` internally) end-to-end against real R2 with the VST renderer subprocess stubbed; no kind, no sky.launch, no dev-snapshot image pull. Gated on same-repo PRs (forks skipped). Unique per-run R2 prefix + best-effort rclone purge teardown. PR #1170; tracks #1164."
 
   # ── macOS VM provisioning (Tart) ────────────────────────────────
   - doc: docs/getting-started.md

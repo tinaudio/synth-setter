@@ -285,6 +285,32 @@ class TestMain:
 
         assert exc_info.value.code == 0
 
+    def test_cli_accepts_file_uri_for_spec_arg(
+        self,
+        real_spec: DatasetSpec,
+        tmp_path: Path,
+        fake_r2_remote: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A ``file://`` URI for the spec arg loads the same as a bare path → exit 0.
+
+        :param real_spec: Fixture-provided ``DatasetSpec``.
+        :param tmp_path: Pytest tmp dir for the local spec JSON.
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        :param monkeypatch: Pytest fixture used to set ``sys.argv``.
+        """
+        from synth_setter.pipeline.ci.validate_shard import main
+
+        spec_json_path = tmp_path / "spec.json"
+        spec_json_path.write_text(real_spec.model_dump_json())
+        _seed_r2_shards(fake_r2_remote, real_spec)
+
+        monkeypatch.setattr(sys, "argv", ["validate_shard", spec_json_path.as_uri()])
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+
+        assert exc_info.value.code == 0
+
     def test_cli_exits_one_when_a_shard_is_invalid(
         self,
         real_spec: DatasetSpec,

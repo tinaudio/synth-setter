@@ -42,6 +42,7 @@ from synth_setter.cli.generate_dataset import (
     run,
 )
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
+from tests.helpers.subprocess_args import find_script_index
 
 # Reusable VST3 bundle with a real Contents/moduleinfo.json so
 # extract_renderer_version (called by run) returns a deterministic version
@@ -52,19 +53,6 @@ TEST_PLUGIN_VST3 = Path(__file__).resolve().parent.parent / "fixtures" / "TestPl
 TEST_PLUGIN_VERSION = "1.0.0-test"
 
 
-def _find_script_index(args: list[str]) -> int:
-    """Locate generate_vst_dataset.py in subprocess args, with a clear failure on miss.
-
-    The args layout depends on platform — `[wrapper, python, script, output, ...]` on Linux
-    versus `[python, script, output, ...]` elsewhere — so callers locate the script by name
-    rather than fixed index.
-    """
-    for i, a in enumerate(args):
-        if a.endswith("generate_vst_dataset.py"):
-            return i
-    raise AssertionError(f"generate_vst_dataset.py not found in subprocess args: {args}")
-
-
 def _materialize_shard(args: list[str]) -> int:
     """subprocess.check_call side effect that writes the expected shard file.
 
@@ -72,7 +60,7 @@ def _materialize_shard(args: list[str]) -> int:
     HDF5 to its output path. Tests that don't supply this side effect would trip the
     `shard_path.is_file()` check in `_render_and_upload_shard`.
     """
-    script_idx = _find_script_index(args)
+    script_idx = find_script_index(args)
     output_file = Path(args[script_idx + 1])
     output_file.parent.mkdir(parents=True, exist_ok=True)
     output_file.write_bytes(b"")
@@ -168,6 +156,45 @@ def _multi_shard_spec(tmp_path: Path, n: int = 3) -> DatasetSpec:
         train_val_test_sizes=[10000 * n, 0, 0],
     )
     return DatasetSpec(**kwargs)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# load_spec_from_uri — local path, file:// URI, r2:// URI dispatch
+# ---------------------------------------------------------------------------
+
+
+class TestLoadSpecFromUri:
+    """``load_spec_from_uri`` accepts bare paths, ``file://`` URIs, and ``r2://`` URIs."""
+
+    def test_bare_local_path_is_read_directly(self, spec: DatasetSpec, tmp_path: Path) -> None:
+        """A non-URI argument is treated as a filesystem path.
+
+        :param spec: Fixture-provided ``DatasetSpec``.
+        :param tmp_path: Pytest tmp dir for the local spec JSON.
+        """
+        from synth_setter.cli.generate_dataset import load_spec_from_uri
+
+        spec_path = tmp_path / "spec.json"
+        spec_path.write_text(spec.model_dump_json())
+
+        loaded = load_spec_from_uri(str(spec_path))
+
+        assert loaded.task_name == spec.task_name
+
+    def test_file_uri_is_read_from_local_disk(self, spec: DatasetSpec, tmp_path: Path) -> None:
+        """A ``file://`` URI is decoded to a local path and read directly.
+
+        :param spec: Fixture-provided ``DatasetSpec``.
+        :param tmp_path: Pytest tmp dir for the local spec JSON.
+        """
+        from synth_setter.cli.generate_dataset import load_spec_from_uri
+
+        spec_path = tmp_path / "spec.json"
+        spec_path.write_text(spec.model_dump_json())
+
+        loaded = load_spec_from_uri(spec_path.as_uri())
+
+        assert loaded.task_name == spec.task_name
 
 
 # ---------------------------------------------------------------------------
@@ -367,7 +394,7 @@ class TestRun:
         renderer_calls = _renderer_argv_lists(patched_subprocess)
         assert len(renderer_calls) == 3
         rendered_filenames = [
-            Path(args[_find_script_index(args) + 1]).name for args in renderer_calls
+            Path(args[find_script_index(args) + 1]).name for args in renderer_calls
         ]
         assert rendered_filenames == [s.filename for s in spec.shards]
         # State-based proof: every shard landed in the fake remote.
@@ -439,7 +466,7 @@ class TestRun:
                 # just-rendered shard's local path.
                 events.append(("rclone", Path(args[-2])))
                 return _REAL_CHECK_CALL(args)
-            out_path = Path(args[_find_script_index(args) + 1])
+            out_path = Path(args[find_script_index(args) + 1])
             events.append(("renderer", out_path))
             return _materialize_shard(args)
 
@@ -618,7 +645,7 @@ class TestRun:
         run(spec)
 
         rendered_filenames = [
-            Path(args[_find_script_index(args) + 1]).name
+            Path(args[find_script_index(args) + 1]).name
             for args in _renderer_argv_lists(patched_subprocess)
         ]
         assert rendered_filenames == [spec.shards[0].filename, spec.shards[1].filename]
@@ -650,7 +677,7 @@ class TestRun:
         run(spec)
 
         rendered_filenames = [
-            Path(args[_find_script_index(args) + 1]).name
+            Path(args[find_script_index(args) + 1]).name
             for args in _renderer_argv_lists(patched_subprocess)
         ]
         assert rendered_filenames == [spec.shards[2].filename]
@@ -812,7 +839,7 @@ class TestRun:
         run(spec)
 
         rendered_filenames = [
-            Path(args[_find_script_index(args) + 1]).name
+            Path(args[find_script_index(args) + 1]).name
             for args in _renderer_argv_lists(patched_subprocess)
         ]
         assert rendered_filenames == ["shard-000001.h5", "shard-000002.h5"]

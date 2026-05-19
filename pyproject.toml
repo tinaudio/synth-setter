@@ -1,6 +1,6 @@
 [project]
 name = "synth-setter"
-version = "6.0.0"
+version = "6.2.0"
 description = "Studying the effect of permutation symmetry on audio synthesiser parameter inference."
 authors = [{name = "Khaled Tinubu"}, {name = "tinaudio"}]
 readme = "README.md"
@@ -108,6 +108,8 @@ synth-setter-spec-uri = "synth_setter.pipeline.ci.spec_uri:main"
 
 
 
+
+
 [tool.setuptools.packages.find]
 # PEP src-layout: the only Python package this project ships is `synth_setter`,
 # living at src/synth_setter/. Setuptools discovers subpackages automatically.
@@ -138,6 +140,7 @@ markers = [
   "benchmark: performance benchmarks",
   "requires_vst: requires a VST plugin binary (Surge XT) — skipped unless plugin is present",
   "r2: tests requiring R2/rclone access",
+  "integration_r2: end-to-end launcher→R2 integration tests (auto-skipped without R2 creds; run in their own GHA workflow)",
   "docker_smoke: smoke tests that run inside the built Docker image",
   "network: tests that may make outbound network calls (e.g. `git fetch`)",
   "infra: tests that assert invariants of the devcontainer + GitHub Actions configuration",
