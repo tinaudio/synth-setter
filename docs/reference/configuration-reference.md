@@ -85,28 +85,22 @@ Reference: `eval-pipeline.md` §4–5
 
 ```
 configs/compute/{provider}-template.yaml (SkyPilot Task YAML — no `run:` block)
-  → inner generator command (operator-supplied; the spec-materializer step)
-    writes data/<task>/<run>/metadata/input_spec.json AND uploads it to R2
-    (the launcher itself does not upload — see the inner-command contract below)
-  → launcher script (synth_setter.pipeline.skypilot_launch)
-    discovers that local spec, resolves its canonical R2 URI via
-    `_resolve_spec_uri(spec_path)` (shells out to the
-    `synth-setter-spec-uri` console script), forwards the same command
+  → inner generator command (operator-supplied) materializes
+    data/<task>/<run>/metadata/input_spec.json AND uploads it to R2
+  → launcher (synth_setter.pipeline.skypilot_launch) discovers the spec,
+    resolves its canonical R2 URI via `_resolve_spec_uri` (which shells out
+    to the `synth-setter-spec-uri` console script), forwards the command
     verbatim into the SkyPilot task `run:`, and hands off to
-    `dispatch_via_skypilot` — which emits the URI on stdout via
-    `_emit_spec_uri` (`::synth-setter-spec-uri::<uri>`) for the CI
-    workflow to grep, builds the worker run-cmd, and submits the
-    SkyPilot job
+    `dispatch_via_skypilot`, which emits `::synth-setter-spec-uri::<uri>`
+    on stdout and submits the SkyPilot job
     → SkyPilot provisions pod (RunPod, Vast.ai planned, …)
-      → pod runs the same inner command, which **should** read `WORKER_SPEC_URI` to
-        skip re-materialization and reuse the canonical spec uploaded above
-        (aspirational — see contract bullet (c) and #1160 for why the default
-        `synth-setter-generate-dataset` does not yet honor this)
+      → pod runs the same inner command, which **should** read `WORKER_SPEC_URI`
+        to skip re-materialization (aspirational — see #1160)
 ```
 
-- Separate from Hydra in *consumer* (SkyPilot's `Task.from_yaml` reads the compute template), not in *composition* — Hydra composition lives in the inner generator command (`synth-setter-generate-dataset`), not in the launcher.
-- The launcher's CLI is a thin passthrough: it takes the task template + an inner generator command (passed after `--`), runs that command via `subprocess.check_call` so it materializes the canonical `data/<task>/<run>/metadata/input_spec.json` and uploads it to R2 via `spec_io.upload_spec`. The launcher then discovers the unique materialized spec via `find_input_specs(<repo_root>/data)`, resolves its canonical R2 URI via `_resolve_spec_uri` (shells out to the `synth-setter-spec-uri` console script), and forwards that `r2://` URI to each worker via `task.update_envs(WORKER_SPEC_URI=...)` — primarily for downstream validate-time consumers (validate-spec / validate-shard CI jobs read it off the workflow output). The same command string is threaded into the SkyPilot task's `run:` block (via `shlex.join`) so the worker re-enters the same code path. `dispatch_via_skypilot` re-emits the URI on stdout via `_emit_spec_uri` for the CI workflow to grep into its `spec_uri` output. `task.update_file_mounts` is avoided because the SkyPilot RunPod backend rejects programmatic file_mounts with a pubkey-overflow error (see [#749](https://github.com/tinaudio/synth-setter/issues/749)). The worker itself doesn't fetch the JSON — `_build_worker_cmd` pins the same Hydra overrides the inner command composed with, and the `from_hydra` entrypoint rebuilds the spec from those.
-- **Inner-command contract**: the operator's command must (a) materialize exactly one canonical `data/<task>/<run>/metadata/input_spec.json`, (b) upload that spec to its canonical R2 URI (the launcher does not upload — it only resolves the URI via `synth-setter-spec-uri` and forwards it as `WORKER_SPEC_URI`), and (c) re-enter deterministically when executed on the worker (e.g. by reading `WORKER_SPEC_URI` to skip re-composition / re-upload). The default `synth-setter-generate-dataset` console script does **not** yet satisfy (c) — it re-composes Hydra and runs the local pipeline or dispatches recursively — so it is not currently a valid inner command for `python -m synth_setter.pipeline.skypilot_launch`. The production path that uses it directly (`cli/generate_dataset.py::main()` → `dispatch_via_skypilot`) is the canonical entry point until a materialize-only mode lands; see the launcher-CLI follow-up issue tracked in #1160.
+- Separate from Hydra in *consumer* (SkyPilot's `Task.from_yaml` reads the compute template), not in *composition* — Hydra composition lives in the inner generator command, not in the launcher.
+- The launcher is a thin passthrough: it runs the inner command via `subprocess.check_call` (the inner command writes the canonical `input_spec.json` and uploads to R2 via `spec_io.upload_spec` — the launcher itself never uploads), discovers the resulting spec via `find_input_specs(<repo_root>/data)`, resolves the canonical R2 URI via `_resolve_spec_uri`, and forwards it to each worker via `task.update_envs(WORKER_SPEC_URI=...)`. The same command string is threaded into the task's `run:` (via `shlex.join`) so the worker re-enters the same code path. `dispatch_via_skypilot` emits the URI on stdout as `::synth-setter-spec-uri::<uri>` for the CI workflow to grep. `task.update_file_mounts` is avoided because the RunPod backend rejects programmatic file_mounts with a pubkey-overflow error ([#749](https://github.com/tinaudio/synth-setter/issues/749)).
+- **Inner-command contract**: the operator's command must (a) materialize exactly one canonical `input_spec.json`, (b) upload it to its canonical R2 URI (the launcher does not upload), and (c) re-enter deterministically on the worker (e.g. by reading `WORKER_SPEC_URI` to skip re-composition). `synth-setter-generate-dataset` does not yet satisfy (c) — see #1160. The production path uses it directly (`cli/generate_dataset.py::main()` → `dispatch_via_skypilot`) until a materialize-only mode lands.
 - Invoked via: `python -m synth_setter.pipeline.skypilot_launch --template <yaml> -- <inner generator command>`. The launcher's options precede `--`; everything after is the operator-supplied inner command, passed through verbatim to `subprocess.check_call`.
 
 Reference: `training-pipeline.md` Appendix D

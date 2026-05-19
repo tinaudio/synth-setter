@@ -4,9 +4,8 @@
 #
 # Providers (gated on --provider runpod | oci): the local (kubernetes / kind)
 # provider needs no compute auth — the launcher skips this script for that
-# case. The managed-jobs controller-resource shrink to ~/.sky/config.yaml
-# is written by the launcher's `_ensure_ci_sky_config()` when
-# SYNTH_SETTER_CI_MODE is truthy; the CI workflow only flips that env var.
+# case. The kind controller shrink (~/.sky/config.yaml) is written by the
+# launcher's `_ensure_ci_sky_config` when SYNTH_SETTER_CI_MODE is truthy.
 #
 # Required env:
 #   RCLONE_CONFIG_R2_ACCESS_KEY_ID

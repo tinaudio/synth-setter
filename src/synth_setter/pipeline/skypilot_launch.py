@@ -139,27 +139,17 @@ _CLOUD_TO_PROVIDER: dict[str, str] = {
 
 _SKYPILOT_API_SERVER_ENV = "SKYPILOT_API_SERVER_ENDPOINT"
 
-# Stdout sentinel the launcher prints once the canonical spec URI is known.
-# Captured by the test-dataset-generation workflow's `tee`'d log to populate
-# the workflow's `spec_uri` output without re-deriving it in bash. Format is a
-# single line `::synth-setter-spec-uri::<uri>` so a `grep` over the log file
-# is unambiguous.
+# Single-line stdout marker the CI workflow greps out of the tee'd launcher
+# log to populate its `spec_uri` output without re-running spec-uri derivation.
 _SPEC_URI_STDOUT_SENTINEL = "::synth-setter-spec-uri::"
 
-# CI-mode env-var gate. When set to one of `_CI_MODE_TRUTHY_VALUES` (case-
-# insensitive), the launcher writes the managed-jobs controller-resource shrink
-# into ~/.sky/config.yaml so the controller pod fits on a GHA-kind cluster.
-# Dev machines running `sky local up` against a real-sized kind don't set this.
+# CI-mode gate. Truthy → write the managed-jobs controller shrink so the
+# controller pod fits on GHA-kind. Operator local-dev leaves this unset.
 _CI_MODE_ENV = "SYNTH_SETTER_CI_MODE"
-
-# Truthy values for `_CI_MODE_ENV`. Any other value (including "0", "false",
-# "no", "off", or the unset case) is treated as disabled — matches the
-# docstring/comment promise that "0" doesn't accidentally trigger CI mode.
 _CI_MODE_TRUTHY_VALUES = frozenset({"1", "true", "yes", "on"})
 
-# Pre-baked managed-jobs controller resource floor for the GHA-kind cluster.
-# SkyPilot's default (cpus: 4+, memory: 4x) doesn't fit in the ~1950m
-# allocatable CPU after kube-system + sky-jobs-controller. See PR #876.
+# SkyPilot's default (cpus: 4+, memory: 4x) doesn't fit in GHA-kind's
+# ~1950m allocatable CPU after kube-system. See PR #876.
 _CI_SKY_CONFIG_YAML = """jobs:
   controller:
     resources:
@@ -169,15 +159,12 @@ _CI_SKY_CONFIG_YAML = """jobs:
 
 
 def _ensure_ci_sky_config() -> None:
-    """Write the managed-jobs controller shrink config when CI mode is on.
+    """Write ``~/.sky/config.yaml`` with the controller shrink when CI mode is truthy.
 
-    Activated when ``SYNTH_SETTER_CI_MODE`` is one of ``1``, ``true``, ``yes``,
-    or ``on`` (case-insensitive). Writes ``~/.sky/config.yaml`` with the
-    pre-baked shrink so the controller pod fits on a GHA-kind cluster.
-    Idempotent — overwrites the file each call. Any other value (including
-    ``0``, ``false``, or unset) is a no-op so an operator who happens to
-    export ``SYNTH_SETTER_CI_MODE=0`` doesn't accidentally clobber a local
-    ``~/.sky/config.yaml``.
+    Truthy = ``SYNTH_SETTER_CI_MODE`` ∈ {1, true, yes, on} (case-insensitive).
+    Any other value (including ``0``, ``false``, unset) is a no-op, so an
+    operator who exports ``SYNTH_SETTER_CI_MODE=0`` doesn't clobber a local
+    config.
     """
     if os.environ.get(_CI_MODE_ENV, "").strip().lower() not in _CI_MODE_TRUTHY_VALUES:
         return
@@ -189,12 +176,7 @@ def _ensure_ci_sky_config() -> None:
 
 
 def _emit_spec_uri(spec_uri: str) -> None:
-    """Print the canonical spec URI on a stdout sentinel line.
-
-    The test-dataset-generation workflow tees the launcher's stdout to a log
-    file and greps for ``_SPEC_URI_STDOUT_SENTINEL`` to populate the
-    workflow's ``spec_uri`` output. ``click.echo`` rather than ``print``
-    keeps the launcher's output stream conventions unified.
+    """Print ``::synth-setter-spec-uri::<uri>`` for the CI workflow to grep.
 
     :param spec_uri: Canonical ``r2://`` URI of the materialized spec.
     """
@@ -383,11 +365,11 @@ def main(
     """Run an inner generator ``command`` then dispatch its spec to SkyPilot.
 
     Shells out to ``command`` (typically the ``synth-setter-generate-dataset``
-    console script), which writes the canonical
-    ``data/<task>/<run>/metadata/input_spec.json`` and uploads it to R2. The
-    launcher then discovers that local spec, asks ``synth-setter-spec-uri``
-    for its canonical R2 URI, and hands both off to ``dispatch_via_skypilot``
-    for the SkyPilot fan-out.
+    console script), which writes ``data/<task>/<run>/metadata/input_spec.json``
+    and uploads it to R2. The launcher then discovers that local spec, resolves
+    its canonical R2 URI via ``_resolve_spec_uri`` (which shells out to the
+    ``synth-setter-spec-uri`` console script), and hands both off to
+    ``dispatch_via_skypilot`` for the SkyPilot fan-out.
 
     Pass the inner command after the launcher's own options::
 
@@ -798,13 +780,9 @@ def dispatch_via_skypilot(
     if not sky_cfg.cmd:
         raise ValueError("dispatch_via_skypilot requires sky_cfg.cmd to be set")
 
-    # CI-mode shrink and spec-uri marker live at the single dispatch chokepoint
-    # rather than the click `main()` so both entrypoints — operator-side
-    # `python -m synth_setter.pipeline.skypilot_launch` and CI's
-    # `synth-setter-generate-dataset` (`cli/generate_dataset.py:main`) — hit
-    # them. The shrink must land before any sky.* call (controller pod is
-    # provisioned on the first sky.jobs.launch); the marker emits as early as
-    # possible so a later dispatch failure still leaves it in the tee'd log.
+    # Single dispatch chokepoint hit by both entrypoints (click `main` and
+    # `cli/generate_dataset.py:main`). Shrink lands before any sky.* call;
+    # marker emits before dispatch so a failure still leaves it in the log.
     _ensure_ci_sky_config()
     _emit_spec_uri(spec_uri)
 
