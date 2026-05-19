@@ -238,9 +238,12 @@ jobs:
       # (#843). The override array is built conditionally so optional flags
       # don't expand to empty strings.
       #
-      # materialize_spec runs first to produce input_spec.json for the
-      # downstream `Compute spec_uri output` step (the Hydra entrypoint has no
-      # `--spec-out` equivalent) and as a run-metadata debug artifact.
+      # After the run, the canonical `data/<task>/<run>/metadata/input_spec.json`
+      # written by `synth-setter-generate-dataset` is copied to
+      # `${RUN_METADATA_DIR}/input_spec.json` so the downstream
+      # `Compute spec_uri output` step emits a URI with the *same* run_id that
+      # was actually uploaded to R2. Running `materialize_spec` separately would
+      # generate a *different* run_id (timestamps drift) and break the chain.
       #
       # 20-min step cap caps a hung launcher so the `if: always()` log-snapshot
       # step still runs. NOTE: step-level timeout sends SIGKILL — `finally`
@@ -262,9 +265,6 @@ jobs:
           INPUT_NUM_WORKERS: ${{ inputs.num_workers }}
         run: |
           set -euo pipefail
-          python -m synth_setter.pipeline.ci.materialize_spec \
-            "$CONFIG_PATH" "${RUN_METADATA_DIR}"
-          chmod 0644 "${RUN_METADATA_DIR}/input_spec.json"
           OVERRIDES=(
             "experiment=$CONFIG_PATH"
             "skypilot_launch.compute_template=configs/compute/local-template.yaml"
@@ -282,6 +282,18 @@ jobs:
           fi
           synth-setter-generate-dataset "${OVERRIDES[@]}" \
             2>&1 | tee "${RUN_METADATA_DIR}/generate.log"
+          # Copy the canonical spec to RUN_METADATA_DIR so the spec_uri output
+          # step (which lives outside this conditional) reads the *uploaded*
+          # run_id, not a freshly-generated one.
+          shopt -s nullglob
+          canonical=("${GITHUB_WORKSPACE}"/data/*/*/metadata/input_spec.json)
+          if [[ "${#canonical[@]}" -ne 1 ]]; then
+            echo "::error::expected exactly one materialized spec under data/*/*/metadata/, found ${#canonical[@]}"
+            printf '%s\n' "${canonical[@]}"
+            exit 1
+          fi
+          cp "${canonical[0]}" "${RUN_METADATA_DIR}/input_spec.json"
+          chmod 0644 "${RUN_METADATA_DIR}/input_spec.json"
 
       # Capture controller-side state (apiserver + on-pod provision.log) before
       # `sky local down` reaps the kind cluster. See scripts/skypilot/capture-state.sh
@@ -326,9 +338,11 @@ jobs:
       # outer step (keeping GHA expression evaluation out of the bash
       # block-scalar) and expanded unquoted inside docker so empty values
       # disappear. SKYPILOT_API_SERVER_ENDPOINT (when set) routes the launcher
-      # to the remote API server; pass `local: true` to override. materialize_spec
-      # runs first inside the container to write /run-metadata/input_spec.json
-      # for the spec_uri output step.
+      # to the remote API server; pass `local: true` to override. After the run,
+      # the canonical `data/<task>/<run>/metadata/input_spec.json` written inside
+      # the container is copied to /run-metadata/input_spec.json so the
+      # downstream `Compute spec_uri output` step emits a URI with the same
+      # run_id that was uploaded to R2.
       - name: Run synth-setter-generate-dataset (runpod / oci row; in container)
         if: ${{ inputs.provider == 'runpod' || inputs.provider == 'oci' }}
         env:
@@ -382,14 +396,21 @@ jobs:
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
               bash docker/ubuntu22_04/ensure_plugin_symlinks.sh
-              python -m synth_setter.pipeline.ci.materialize_spec "$CONFIG_PATH" /run-metadata
-              chmod 0644 /run-metadata/input_spec.json
               synth-setter-generate-dataset \
                 "experiment=$CONFIG_PATH" \
                 "skypilot_launch.compute_template=$TEMPLATE" \
                 "skypilot_launch.job_name=$CLUSTER_NAME" \
                 "skypilot_launch.worker_image_tag=$IMAGE_TAG" \
                 $LOCAL_OVERRIDE $NUM_WORKERS_OVERRIDE $TAIL_OVERRIDE
+              shopt -s nullglob
+              canonical=(/home/build/synth-setter/data/*/*/metadata/input_spec.json)
+              if [[ "${#canonical[@]}" -ne 1 ]]; then
+                echo "::error::expected exactly one materialized spec under data/*/*/metadata/, found ${#canonical[@]}"
+                printf "%s\n" "${canonical[@]}"
+                exit 1
+              fi
+              cp "${canonical[0]}" /run-metadata/input_spec.json
+              chmod 0644 /run-metadata/input_spec.json
             ' \
             2>&1 | tee "${RUN_METADATA_DIR}/generate.log"
 
