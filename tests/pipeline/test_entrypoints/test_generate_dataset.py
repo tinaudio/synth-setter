@@ -12,19 +12,24 @@ The entrypoint's public surface:
   ``r2:{bucket}/{prefix}/``, and unlinks the local file. No longer uploads
   the spec — ``main()`` does that once on the launcher host.
 
-Tests monkeypatch ``write_spec_locally`` / ``upload_spec`` /
-``ensure_r2_env_loaded`` / ``_rclone_copy`` / ``subprocess.check_call`` and
-assert on recorded call args + ordering. The shard-landing test uses the
-``fake_r2_remote`` fixture (see ``tests/pipeline/conftest.py``) so the upload
-goes through real rclone against a local-typed remote; the surrounding
-orchestration tests keep their mock-based call-count + ordering assertions
-since those don't touch the rclone command shape that issue #1124 targets.
+``TestRun`` tests share a ``patched_subprocess`` fixture that pulls in
+``fake_r2_remote`` (see ``tests/pipeline/conftest.py``) and patches
+``subprocess.check_call`` with the ``_materialize_or_passthrough_rclone``
+dispatcher: renderer calls write the expected empty shard file (mirroring the
+contract of ``generate_vst_dataset.py``); rclone calls fall through to the
+real binary against the local-typed remote. Orchestration assertions
+(call counts, render/upload ordering, partitioning) are state-based —
+asserting on materialized objects under ``fake_r2_remote`` — rather than
+introspecting an ``_rclone_copy`` mock. ``main()`` tests still stub
+``write_spec_locally`` / ``upload_spec`` / ``ensure_r2_env_loaded`` to keep
+the cfg-composition surface isolated from R2.
 """
 
 from __future__ import annotations
 
 import subprocess
 import sys
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -83,12 +88,12 @@ _REAL_CHECK_CALL = subprocess.check_call
 def _materialize_or_passthrough_rclone(args: list[str]) -> int:
     """Dispatch on the first argv element: rclone calls fall through to real subprocess.
 
-    The state-based ``test_uploads_shard_to_r2_after_generation`` patches the
-    same ``subprocess.check_call`` symbol the renderer AND the rclone shard
-    upload both go through, so this side-effect distinguishes them: renderer
-    calls write the expected shard file (as ``_materialize_shard`` does);
-    rclone calls invoke the real binary (via ``_REAL_CHECK_CALL``) so the
-    upload actually lands a file on the fake-local remote.
+    Every state-based ``TestRun`` test patches the same ``subprocess.check_call``
+    symbol the renderer AND the rclone shard upload both go through, so this
+    side-effect distinguishes them: renderer calls write the expected shard
+    file (as ``_materialize_shard`` does); rclone calls invoke the real binary
+    (via ``_REAL_CHECK_CALL``) so the upload actually lands a file on the
+    fake-local remote.
 
     :param args: argv list passed to ``subprocess.check_call``.
     :returns: 0 on renderer simulation; rclone's exit code on the real subprocess.
@@ -96,6 +101,24 @@ def _materialize_or_passthrough_rclone(args: list[str]) -> int:
     if args and args[0] == "rclone":
         return _REAL_CHECK_CALL(args)  # noqa: S603 — test-only passthrough
     return _materialize_shard(args)
+
+
+def _renderer_argv_lists(mock: MagicMock) -> list[list[str]]:
+    """Return argv lists from non-rclone calls recorded by a patched ``check_call``.
+
+    The dispatcher routes both renderer and rclone invocations through one
+    ``subprocess.check_call`` mock, so tests that want to introspect just the
+    renderer args (script path, flag set, headless wrapper) filter the
+    interleaved call list through this helper.
+
+    :param mock: A patched ``subprocess.check_call`` mock.
+    :returns: argv lists from invocations whose first element is not ``"rclone"``.
+    """
+    return [
+        call.args[0]
+        for call in mock.call_args_list
+        if not (call.args and call.args[0] and call.args[0][0] == "rclone")
+    ]
 
 
 def _base_spec_kwargs(tmp_path: Path, **overrides: object) -> dict[str, object]:
@@ -180,30 +203,51 @@ class TestRun:
         """
         monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda *_a, **_k: None)
 
-    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
-    @patch("synth_setter.cli.generate_dataset._rclone_copy")
+    @pytest.fixture()
+    def patched_subprocess(self, fake_r2_remote: Path) -> Iterator[MagicMock]:  # noqa: ARG002
+        """Patch ``subprocess.check_call`` with the renderer/rclone dispatcher.
+
+        Pulls in ``fake_r2_remote`` (consumed by the rclone passthrough — see
+        ``_materialize_or_passthrough_rclone``) so rclone copies land on the
+        local-typed remote rooted at the tmp dir instead of hitting real R2.
+        Yielding the mock lets tests introspect ``call_args_list`` (typically
+        via ``_renderer_argv_lists`` to filter out interleaved rclone calls)
+        and override ``side_effect`` per-test when a failure or no-write
+        renderer is needed.
+
+        :param fake_r2_remote: Local-typed R2 remote root (fixture-activation
+            only — referenced via the ARG002 noqa).
+        :yields MagicMock: Patched ``subprocess.check_call`` mock.
+        """
+        with patch(
+            "synth_setter.cli.generate_dataset.subprocess.check_call",
+            side_effect=_materialize_or_passthrough_rclone,
+        ) as mock_check_call:
+            yield mock_check_call
+
     def test_invokes_generate_vst_dataset_with_spec_derived_args(
         self,
-        mock_rclone: MagicMock,
-        mock_check_call: MagicMock,
+        patched_subprocess: MagicMock,
         spec: DatasetSpec,
     ) -> None:
-        """subprocess.check_call invokes generate_vst_dataset.py with spec-derived args."""
-        mock_check_call.side_effect = _materialize_shard
+        """subprocess.check_call invokes generate_vst_dataset.py with spec-derived args.
+
+        :param patched_subprocess: Subprocess dispatcher used to introspect the
+            single renderer call's argv.
+        :param spec: Fixture-provided ``DatasetSpec``.
+        """
         run(spec)
 
-        mock_check_call.assert_called_once()
-        args = mock_check_call.call_args[0][0]
+        renderer_calls = _renderer_argv_lists(patched_subprocess)
+        assert len(renderer_calls) == 1
+        args = renderer_calls[0]
         # args = [VST_HEADLESS_WRAPPER (linux only), python, generate_vst_dataset.py, ...]
         assert any("generate_vst_dataset.py" in a for a in args)
         assert str(spec.render.samples_per_shard) in args
 
-    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
-    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_shard_generation_runs_under_headless_vst_wrapper(
         self,
-        mock_rclone: MagicMock,
-        mock_check_call: MagicMock,
+        patched_subprocess: MagicMock,
         spec: DatasetSpec,
     ) -> None:
         """Prefix the VST subprocess with ``run-linux-vst-headless.sh`` on Linux.
@@ -211,11 +255,14 @@ class TestRun:
         X11 bootstrap lives at the audio-rendering boundary (this subprocess), keeping the outer
         pipeline X11-agnostic. The wrapper is Linux-only (Xvfb is a Linux X11 server); on macOS and
         other platforms the generator is invoked directly without a wrapper prefix.
+
+        :param patched_subprocess: Subprocess dispatcher used to introspect the
+            renderer argv (looking for the headless-wrapper prefix on Linux).
+        :param spec: Fixture-provided ``DatasetSpec``.
         """
-        mock_check_call.side_effect = _materialize_shard
         run(spec)
 
-        args = mock_check_call.call_args[0][0]
+        args = _renderer_argv_lists(patched_subprocess)[0]
         if sys.platform == "linux":
             assert args[0] == VST_HEADLESS_WRAPPER
             assert args[2] == "src/synth_setter/data/vst/generate_vst_dataset.py"
@@ -227,208 +274,271 @@ class TestRun:
         self,
         spec: DatasetSpec,
         fake_r2_remote: Path,
+        patched_subprocess: MagicMock,  # noqa: ARG002
     ) -> None:
         """Shard lands at the R2 URI implied by ``spec.r2`` and the shard's filename.
 
-        State-based: ``_rclone_copy`` is not patched — the real ``rclone copy`` runs
-        against the fake-local R2 remote rooted at ``fake_r2_remote``, and the test
-        asserts on the materialized object on disk. The renderer subprocess
-        ``check_call`` is still patched so we don't actually shell out to the VST
-        generator; its side effect writes the same empty HDF5 file that the
-        renderer would.
+        State-based: no mock on ``_rclone_copy`` — the real ``rclone copy`` runs
+        against the fake-local R2 remote rooted at ``fake_r2_remote``, and the
+        test asserts on the materialized object on disk. The renderer subprocess
+        ``check_call`` is patched via the shared ``patched_subprocess`` fixture
+        so we don't actually shell out to the VST generator; the dispatcher's
+        renderer branch writes the same empty HDF5 file that the renderer would.
 
         :param spec: Fixture-provided ``DatasetSpec``.
         :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        :param patched_subprocess: Fixture-activation only (handles the
+            ``subprocess.check_call`` patch).
         """
-        # Real rclone copies require a real source file; patch only the renderer.
-        with patch(
-            "synth_setter.cli.generate_dataset.subprocess.check_call",
-            side_effect=_materialize_or_passthrough_rclone,
-        ):
-            run(spec)
+        run(spec)
 
         landed = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / spec.shards[0].filename
         assert landed.is_file()
 
-    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
-    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_subprocess_failure_propagates(
         self,
-        mock_rclone: MagicMock,
-        mock_check_call: MagicMock,
+        patched_subprocess: MagicMock,
         spec: DatasetSpec,
+        fake_r2_remote: Path,
     ) -> None:
-        """CalledProcessError from generate_vst_dataset propagates to caller."""
-        mock_check_call.side_effect = subprocess.CalledProcessError(1, "generate_vst_dataset.py")
+        """CalledProcessError from generate_vst_dataset propagates to caller.
+
+        :param patched_subprocess: Subprocess dispatcher; overridden here to
+            unconditionally raise so the renderer call short-circuits.
+        :param spec: Fixture-provided ``DatasetSpec``.
+        :param fake_r2_remote: Local-typed rclone remote — asserted empty since
+            no shard should land when the renderer fails.
+        """
+        patched_subprocess.side_effect = subprocess.CalledProcessError(
+            1, "generate_vst_dataset.py"
+        )
 
         with pytest.raises(subprocess.CalledProcessError):
             run(spec)
 
-    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
-    @patch("synth_setter.cli.generate_dataset._rclone_copy")
+        # No rclone copy reached the fake remote.
+        assert not (fake_r2_remote / spec.r2.bucket / spec.r2.prefix).exists()
+
     def test_rclone_failure_propagates(
         self,
-        mock_rclone: MagicMock,
-        mock_check_call: MagicMock,
+        patched_subprocess: MagicMock,  # noqa: ARG002
         spec: DatasetSpec,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """CalledProcessError from rclone (shard upload path) propagates to caller."""
-        mock_check_call.side_effect = _materialize_shard
-        mock_rclone.side_effect = subprocess.CalledProcessError(1, "rclone")
+        """CalledProcessError from rclone (shard upload path) propagates to caller.
+
+        Forces a real rclone failure by pointing the ``r2:`` remote at a
+        nonexistent backend type. The renderer side of the dispatcher still
+        materializes the shard file (so the source-existence check passes);
+        ``rclone copy`` then raises ``CalledProcessError`` when it tries to
+        construct the destination backend.
+
+        :param patched_subprocess: Fixture-activation only (the renderer path
+            still materializes the shard so the rclone source exists).
+        :param spec: Fixture-provided ``DatasetSpec``.
+        :param monkeypatch: Used to invalidate the ``r2:`` remote type so the
+            real rclone subprocess exits non-zero on the copy.
+        """
+        monkeypatch.setenv("RCLONE_CONFIG_R2_TYPE", "this-backend-does-not-exist")
 
         with pytest.raises(subprocess.CalledProcessError):
             run(spec)
 
-    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
-    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_run_with_three_shards_renders_each_shard(
         self,
-        mock_rclone: MagicMock,
-        mock_check_call: MagicMock,
+        patched_subprocess: MagicMock,
+        fake_r2_remote: Path,
         tmp_path: Path,
     ) -> None:
-        """Multi-shard run invokes generate_vst_dataset.py once per shard, in order."""
+        """Multi-shard run invokes generate_vst_dataset.py once per shard, in order.
+
+        :param patched_subprocess: Dispatcher mock; ``_renderer_argv_lists``
+            filters out rclone calls so we can introspect the per-shard
+            output-path argv.
+        :param fake_r2_remote: All three shards should land in this remote.
+        :param tmp_path: Pytest tmp dir used by ``_multi_shard_spec``.
+        """
         spec = _multi_shard_spec(tmp_path, n=3)
-        mock_check_call.side_effect = _materialize_shard
 
         run(spec)
 
-        assert mock_check_call.call_count == 3
-        rendered_filenames = []
-        for call in mock_check_call.call_args_list:
-            args = call[0][0]
-            output_file = args[_find_script_index(args) + 1]
-            rendered_filenames.append(Path(output_file).name)
+        renderer_calls = _renderer_argv_lists(patched_subprocess)
+        assert len(renderer_calls) == 3
+        rendered_filenames = [
+            Path(args[_find_script_index(args) + 1]).name for args in renderer_calls
+        ]
         assert rendered_filenames == [s.filename for s in spec.shards]
+        # State-based proof: every shard landed in the fake remote.
+        for shard in spec.shards:
+            assert (fake_r2_remote / spec.r2.bucket / spec.r2.prefix / shard.filename).is_file()
 
-    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
-    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_each_shard_uploaded_after_its_render(
         self,
-        mock_rclone: MagicMock,
-        mock_check_call: MagicMock,
+        fake_r2_remote: Path,  # noqa: ARG002
         tmp_path: Path,
     ) -> None:
-        """Render and upload are interleaved per shard: render0, upload0, render1, upload1, ..."""
+        """Render and upload are interleaved per shard: render0, upload0, render1, upload1, ...
+
+        :param fake_r2_remote: Fixture-activation only — the rclone passthrough
+            in the custom dispatcher needs the local-typed remote.
+        :param tmp_path: Pytest tmp dir used by ``_multi_shard_spec``.
+        """
         spec = _multi_shard_spec(tmp_path, n=3)
-        mock_check_call.side_effect = _materialize_shard
-        manager = MagicMock()
-        manager.attach_mock(mock_rclone, "rclone")
-        manager.attach_mock(mock_check_call, "check_call")
+        events: list[str] = []
 
-        run(spec)
+        def _record_dispatcher(args: list[str]) -> int:
+            if args and args[0] == "rclone":
+                events.append("rclone")
+                return _REAL_CHECK_CALL(args)
+            events.append("renderer")
+            return _materialize_shard(args)
 
-        call_names = [c[0] for c in manager.mock_calls]
-        assert call_names == [
-            "check_call",  # render shard 0
-            "rclone",  # upload shard 0
-            "check_call",  # render shard 1
-            "rclone",  # upload shard 1
-            "check_call",  # render shard 2
-            "rclone",  # upload shard 2
+        with patch(
+            "synth_setter.cli.generate_dataset.subprocess.check_call",
+            side_effect=_record_dispatcher,
+        ):
+            run(spec)
+
+        assert events == [
+            "renderer",  # shard 0
+            "rclone",
+            "renderer",  # shard 1
+            "rclone",
+            "renderer",  # shard 2
+            "rclone",
         ]
 
-    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
-    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_local_shard_file_removed_after_upload(
         self,
-        mock_rclone: MagicMock,
-        mock_check_call: MagicMock,
+        fake_r2_remote: Path,
         tmp_path: Path,
     ) -> None:
-        """Each shard's local HDF5 is unlinked after upload to bound disk to one shard."""
+        """Each shard's local HDF5 is unlinked after upload to bound disk to one shard.
+
+        Mid-flight verification: when the dispatcher's renderer branch runs for
+        shard N+1, every prior shard's local source file (recorded by the
+        rclone branch at copy time) must already be gone — production calls
+        ``shard_path.unlink()`` immediately after ``_rclone_copy`` returns.
+        Without this check the test would degrade to a tautology (the outer
+        ``tempfile.TemporaryDirectory`` cleanup wipes the dir wholesale on
+        ``run()`` return, so post-run absence proves nothing).
+
+        :param fake_r2_remote: Local-typed R2 remote rooted at a tmp dir.
+        :param tmp_path: Pytest tmp dir used by ``_multi_shard_spec``.
+        """
         spec = _multi_shard_spec(tmp_path, n=3)
-        mock_check_call.side_effect = _materialize_shard
-        uploaded_paths: list[Path] = []
+        prior_local_paths: list[Path] = []
 
-        def _record_upload(src: str, dest: str) -> None:
-            uploaded_paths.append(Path(src))
+        def _track_unlink(args: list[str]) -> int:
+            if args and args[0] == "rclone":
+                # rclone copy argv ends with [src, dest]; record src for the
+                # next-renderer unlink check.
+                prior_local_paths.append(Path(args[-2]))
+                return _REAL_CHECK_CALL(args)
+            for prior in prior_local_paths:
+                assert not prior.exists(), f"local shard not unlinked: {prior}"
+            return _materialize_shard(args)
 
-        mock_rclone.side_effect = _record_upload
+        with patch(
+            "synth_setter.cli.generate_dataset.subprocess.check_call",
+            side_effect=_track_unlink,
+        ):
+            run(spec)
 
-        run(spec)
+        assert len(prior_local_paths) == 3
+        for shard in spec.shards:
+            assert (fake_r2_remote / spec.r2.bucket / spec.r2.prefix / shard.filename).is_file()
 
-        assert len(uploaded_paths) == 3
-        for shard_path in uploaded_paths:
-            assert not shard_path.exists(), f"shard file still on disk after run: {shard_path}"
-
-    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
-    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_subprocess_failure_in_second_shard_propagates_immediately(
         self,
-        mock_rclone: MagicMock,
-        mock_check_call: MagicMock,
+        fake_r2_remote: Path,
         tmp_path: Path,
     ) -> None:
-        """Mid-loop subprocess failure raises immediately; later shards are not attempted."""
+        """Mid-loop subprocess failure raises immediately; later shards are not attempted.
+
+        :param fake_r2_remote: Local-typed R2 remote — asserted to contain only
+            shard 0 (rclone runs for it; shard 1's renderer raises; shard 2
+            never runs).
+        :param tmp_path: Pytest tmp dir used by ``_multi_shard_spec``.
+        """
         spec = _multi_shard_spec(tmp_path, n=3)
-        # First call materializes shard 0's file (so the existence check passes and the loop
-        # advances to shard 1); second call raises mid-loop; third call must never run.
-        call_count = 0
+        renderer_call_count = 0
 
         def _side_effect(args: list[str]) -> int:
-            nonlocal call_count
-            call_count += 1
-            if call_count == 2:
+            nonlocal renderer_call_count
+            if args and args[0] == "rclone":
+                return _REAL_CHECK_CALL(args)
+            renderer_call_count += 1
+            if renderer_call_count == 2:
                 raise subprocess.CalledProcessError(1, "generate_vst_dataset.py")
             return _materialize_shard(args)
 
-        mock_check_call.side_effect = _side_effect
+        with patch(
+            "synth_setter.cli.generate_dataset.subprocess.check_call",
+            side_effect=_side_effect,
+        ):
+            with pytest.raises(subprocess.CalledProcessError):
+                run(spec)
 
-        with pytest.raises(subprocess.CalledProcessError):
-            run(spec)
+        assert renderer_call_count == 2
+        # State-based proof of fail-fast: only shard 0 landed in R2.
+        bucket_prefix = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
+        assert (bucket_prefix / spec.shards[0].filename).is_file()
+        assert not (bucket_prefix / spec.shards[1].filename).exists()
+        assert not (bucket_prefix / spec.shards[2].filename).exists()
 
-        assert mock_check_call.call_count == 2
-
-    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
-    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_subprocess_exits_zero_without_writing_shard_raises(
         self,
-        mock_rclone: MagicMock,
-        mock_check_call: MagicMock,
+        fake_r2_remote: Path,
         spec: DatasetSpec,
     ) -> None:
         """If the renderer exits 0 but never wrote the expected shard file, fail loudly.
 
         Catches a generator bug at the rendering boundary instead of letting it surface as a less-
         direct rclone "source not found" further down the pipeline.
+
+        :param fake_r2_remote: Local-typed R2 remote — must remain empty since
+            no shard file is written and rclone is therefore never invoked.
+        :param spec: Fixture-provided ``DatasetSpec``.
         """
+        # Renderer-only side effect: return 0 without writing the shard file,
+        # so the ``shard_path.is_file()`` guard raises before any rclone call.
+        with patch(
+            "synth_setter.cli.generate_dataset.subprocess.check_call",
+            return_value=0,
+        ):
+            with pytest.raises(RuntimeError, match="did not write expected shard file"):
+                run(spec)
 
-        mock_check_call.return_value = 0
+        assert not (fake_r2_remote / spec.r2.bucket / spec.r2.prefix).exists()
 
-        with pytest.raises(RuntimeError, match="did not write expected shard file"):
-            run(spec)
-
-        mock_rclone.assert_not_called()
-
-    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
-    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_renderer_version_mismatch_raises_before_uploads(
         self,
-        mock_rclone: MagicMock,
-        mock_check_call: MagicMock,
+        patched_subprocess: MagicMock,
+        fake_r2_remote: Path,
         tmp_path: Path,
     ) -> None:
         """Fail before any rclone/subprocess work when plugin version disagrees with spec.
 
         This prevents emitting a shard tagged with the wrong renderer_version.
-        """
 
+        :param patched_subprocess: Subprocess dispatcher; asserted never invoked.
+        :param fake_r2_remote: Local-typed R2 remote — asserted empty.
+        :param tmp_path: Pytest tmp dir used by ``_base_spec_kwargs``.
+        """
         kwargs = _base_spec_kwargs(tmp_path)
         kwargs["render"] = {**kwargs["render"], "renderer_version": "999.999.999"}  # type: ignore[dict-item]
         spec = DatasetSpec(**kwargs)  # type: ignore[arg-type]
 
         with pytest.raises(RuntimeError, match="Renderer version mismatch"):
             run(spec)
-        mock_rclone.assert_not_called()
-        mock_check_call.assert_not_called()
+        patched_subprocess.assert_not_called()
+        assert not (fake_r2_remote / spec.r2.bucket / spec.r2.prefix).exists()
 
-    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
-    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_run_raises_when_skypilot_env_missing(
         self,
-        mock_rclone: MagicMock,
-        mock_check_call: MagicMock,
+        patched_subprocess: MagicMock,
+        fake_r2_remote: Path,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -436,8 +546,12 @@ class TestRun:
 
         Removes the silent-default smell where a worker invoked without partition env would
         otherwise duplicate every shard across every node.
-        """
 
+        :param patched_subprocess: Subprocess dispatcher; asserted never invoked.
+        :param fake_r2_remote: Local-typed R2 remote — asserted empty.
+        :param tmp_path: Pytest tmp dir used by ``_multi_shard_spec``.
+        :param monkeypatch: Used to unset the rank/world env vars.
+        """
         monkeypatch.delenv("SYNTH_SETTER_WORKER_RANK", raising=False)
         monkeypatch.delenv("SYNTH_SETTER_NUM_WORKERS", raising=False)
         spec = _multi_shard_spec(tmp_path, n=3)
@@ -447,63 +561,77 @@ class TestRun:
         message = str(excinfo.value)
         assert "SYNTH_SETTER_WORKER_RANK" in message
         assert "SYNTH_SETTER_NUM_WORKERS" in message
-        mock_rclone.assert_not_called()
-        mock_check_call.assert_not_called()
+        patched_subprocess.assert_not_called()
+        assert not (fake_r2_remote / spec.r2.bucket / spec.r2.prefix).exists()
 
-    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
-    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_rank_0_of_2_renders_only_first_half_of_shards(
         self,
-        mock_rclone: MagicMock,
-        mock_check_call: MagicMock,
+        patched_subprocess: MagicMock,
+        fake_r2_remote: Path,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Worker 0 of a 2-node partition with 3 shards renders shards 0 and 1 only."""
+        """Worker 0 of a 2-node partition with 3 shards renders shards 0 and 1 only.
+
+        :param patched_subprocess: Subprocess dispatcher used to introspect
+            renderer argv.
+        :param fake_r2_remote: Local-typed R2 remote — asserted to contain only
+            shards 0 and 1.
+        :param tmp_path: Pytest tmp dir used by ``_multi_shard_spec``.
+        :param monkeypatch: Used to set the rank/world env vars.
+        """
         monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
         monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "2")
         spec = _multi_shard_spec(tmp_path, n=3)
-        mock_check_call.side_effect = _materialize_shard
 
         run(spec)
 
-        rendered_filenames = []
-        for call in mock_check_call.call_args_list:
-            args = call[0][0]
-            output_file = args[_find_script_index(args) + 1]
-            rendered_filenames.append(Path(output_file).name)
+        rendered_filenames = [
+            Path(args[_find_script_index(args) + 1]).name
+            for args in _renderer_argv_lists(patched_subprocess)
+        ]
         assert rendered_filenames == [spec.shards[0].filename, spec.shards[1].filename]
+        bucket_prefix = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
+        assert (bucket_prefix / spec.shards[0].filename).is_file()
+        assert (bucket_prefix / spec.shards[1].filename).is_file()
+        assert not (bucket_prefix / spec.shards[2].filename).exists()
 
-    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
-    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_rank_1_of_2_renders_only_remaining_shard(
         self,
-        mock_rclone: MagicMock,
-        mock_check_call: MagicMock,
+        patched_subprocess: MagicMock,
+        fake_r2_remote: Path,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Worker 1 of a 2-node partition with 3 shards renders shard 2 only."""
+        """Worker 1 of a 2-node partition with 3 shards renders shard 2 only.
+
+        :param patched_subprocess: Subprocess dispatcher used to introspect
+            renderer argv.
+        :param fake_r2_remote: Local-typed R2 remote — asserted to contain only
+            shard 2.
+        :param tmp_path: Pytest tmp dir used by ``_multi_shard_spec``.
+        :param monkeypatch: Used to set the rank/world env vars.
+        """
         monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "1")
         monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "2")
         spec = _multi_shard_spec(tmp_path, n=3)
-        mock_check_call.side_effect = _materialize_shard
 
         run(spec)
 
-        rendered_filenames = []
-        for call in mock_check_call.call_args_list:
-            args = call[0][0]
-            output_file = args[_find_script_index(args) + 1]
-            rendered_filenames.append(Path(output_file).name)
+        rendered_filenames = [
+            Path(args[_find_script_index(args) + 1]).name
+            for args in _renderer_argv_lists(patched_subprocess)
+        ]
         assert rendered_filenames == [spec.shards[2].filename]
+        bucket_prefix = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
+        assert not (bucket_prefix / spec.shards[0].filename).exists()
+        assert not (bucket_prefix / spec.shards[1].filename).exists()
+        assert (bucket_prefix / spec.shards[2].filename).is_file()
 
-    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
-    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_excess_worker_renders_no_shards(
         self,
-        mock_rclone: MagicMock,
-        mock_check_call: MagicMock,
+        patched_subprocess: MagicMock,
+        fake_r2_remote: Path,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -512,8 +640,8 @@ class TestRun:
         A 4-node partition over 3 shards leaves worker 3 with an empty range — it renders zero
         shards and makes no rclone calls.
 
-        :param mock_rclone: Patched ``_rclone_copy`` (must not be called).
-        :param mock_check_call: Patched ``subprocess.check_call`` (must not be called).
+        :param patched_subprocess: Subprocess dispatcher; asserted never invoked.
+        :param fake_r2_remote: Local-typed R2 remote — asserted empty.
         :param tmp_path: Pytest tmp dir used by ``_multi_shard_spec``.
         :param monkeypatch: Pytest fixture used to set partition env vars.
         """
@@ -523,73 +651,95 @@ class TestRun:
 
         run(spec)
 
-        mock_check_call.assert_not_called()
-        mock_rclone.assert_not_called()
+        patched_subprocess.assert_not_called()
+        assert not (fake_r2_remote / spec.r2.bucket / spec.r2.prefix).exists()
 
     # Skip-existing-shards — see #750.
 
-    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
-    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_run_skips_render_when_shard_already_in_r2(
         self,
-        mock_rclone: MagicMock,
-        mock_check_call: MagicMock,
+        patched_subprocess: MagicMock,
+        fake_r2_remote: Path,
         spec: DatasetSpec,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Object present (size > 0) → renderer is not invoked, shard upload is not attempted."""
+        """Object present (size > 0) → renderer is not invoked, shard upload is not attempted.
+
+        :param patched_subprocess: Subprocess dispatcher; asserted never invoked.
+        :param fake_r2_remote: Local-typed R2 remote — asserted empty (the
+            probe stub returns "present" without seeding an actual file).
+        :param spec: Fixture-provided ``DatasetSpec``.
+        :param monkeypatch: Used to override the probe to claim the shard is
+            already in R2.
+        """
         monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda *_a, **_k: 12345)
 
         run(spec)
 
-        mock_check_call.assert_not_called()
-        mock_rclone.assert_not_called()
+        patched_subprocess.assert_not_called()
+        assert not (fake_r2_remote / spec.r2.bucket / spec.r2.prefix).exists()
 
-    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
-    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_run_renders_when_object_absent(
         self,
-        mock_rclone: MagicMock,
-        mock_check_call: MagicMock,
+        patched_subprocess: MagicMock,
+        fake_r2_remote: Path,
         spec: DatasetSpec,
     ) -> None:
         """Object absent (None) → render proceeds as before.
 
         Relies on the autouse ``_default_shard_absent_in_r2`` fixture's default of None.
-        """
-        mock_check_call.side_effect = _materialize_shard
 
+        :param patched_subprocess: Subprocess dispatcher; renderer is asserted
+            to fire exactly once.
+        :param fake_r2_remote: Local-typed R2 remote — shard should land here.
+        :param spec: Fixture-provided ``DatasetSpec``.
+        """
         run(spec)
 
-        mock_check_call.assert_called_once()
+        renderer_calls = _renderer_argv_lists(patched_subprocess)
+        assert len(renderer_calls) == 1
+        assert (
+            fake_r2_remote / spec.r2.bucket / spec.r2.prefix / spec.shards[0].filename
+        ).is_file()
 
-    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
-    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_run_renders_when_object_zero_size(
         self,
-        mock_rclone: MagicMock,
-        mock_check_call: MagicMock,
+        patched_subprocess: MagicMock,
+        fake_r2_remote: Path,
         spec: DatasetSpec,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Zero-byte object is treated as absent — defensive against half-uploaded objects."""
+        """Zero-byte object is treated as absent — defensive against half-uploaded objects.
+
+        :param patched_subprocess: Subprocess dispatcher; renderer is asserted
+            to fire exactly once.
+        :param fake_r2_remote: Local-typed R2 remote — shard should land here.
+        :param spec: Fixture-provided ``DatasetSpec``.
+        :param monkeypatch: Used to override the probe to report 0 bytes.
+        """
         monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda *_a, **_k: 0)
-        mock_check_call.side_effect = _materialize_shard
 
         run(spec)
 
-        mock_check_call.assert_called_once()
+        renderer_calls = _renderer_argv_lists(patched_subprocess)
+        assert len(renderer_calls) == 1
+        assert (
+            fake_r2_remote / spec.r2.bucket / spec.r2.prefix / spec.shards[0].filename
+        ).is_file()
 
-    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
-    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_run_skip_path_probes_full_object_uri_per_shard(
         self,
-        mock_rclone: MagicMock,
-        mock_check_call: MagicMock,
+        patched_subprocess: MagicMock,  # noqa: ARG002
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Probe is called once per assigned shard with the full object URI under r2.prefix."""
+        """Probe is called once per assigned shard with the full object URI under r2.prefix.
+
+        :param patched_subprocess: Fixture-activation only (renderer
+            materializes shards so rclone copies have a valid source).
+        :param tmp_path: Pytest tmp dir used by ``_multi_shard_spec``.
+        :param monkeypatch: Used to install the probe-URI capture stub.
+        """
         spec = _multi_shard_spec(tmp_path, n=3)
         probed_uris: list[str] = []
 
@@ -598,7 +748,6 @@ class TestRun:
             return None
 
         monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", _probe)
-        mock_check_call.side_effect = _materialize_shard
 
         run(spec)
 
@@ -606,52 +755,64 @@ class TestRun:
             f"r2://{spec.r2.bucket}/{spec.r2.prefix}{shard.filename}" for shard in spec.shards
         ]
 
-    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
-    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_run_renders_only_absent_shards_in_mixed_run(
         self,
-        mock_rclone: MagicMock,
-        mock_check_call: MagicMock,
+        patched_subprocess: MagicMock,
+        fake_r2_remote: Path,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Mid-run resumption: shard 0 already in R2, shards 1 and 2 absent → render only 1 and 2."""
+        """Mid-run resumption: shard 0 already in R2, shards 1 and 2 absent → render only 1 and 2.
+
+        :param patched_subprocess: Subprocess dispatcher used to introspect
+            renderer argv.
+        :param fake_r2_remote: Local-typed R2 remote — shards 1 and 2 land
+            here; shard 0 does not (it was reported "present" by the probe).
+        :param tmp_path: Pytest tmp dir used by ``_multi_shard_spec``.
+        :param monkeypatch: Used to install the per-shard probe stub.
+        """
         spec = _multi_shard_spec(tmp_path, n=3)
 
         def _present_only_for_shard_0(uri: str) -> int | None:
             return 9999 if uri.endswith("shard-000000.h5") else None
 
         monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", _present_only_for_shard_0)
-        mock_check_call.side_effect = _materialize_shard
 
         run(spec)
 
-        rendered_filenames = []
-        for call in mock_check_call.call_args_list:
-            args = call[0][0]
-            output_file = args[_find_script_index(args) + 1]
-            rendered_filenames.append(Path(output_file).name)
+        rendered_filenames = [
+            Path(args[_find_script_index(args) + 1]).name
+            for args in _renderer_argv_lists(patched_subprocess)
+        ]
         assert rendered_filenames == ["shard-000001.h5", "shard-000002.h5"]
+        bucket_prefix = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
+        assert not (bucket_prefix / "shard-000000.h5").exists()
+        assert (bucket_prefix / "shard-000001.h5").is_file()
+        assert (bucket_prefix / "shard-000002.h5").is_file()
 
     @patch("synth_setter.cli.generate_dataset.logger")
-    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
-    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_run_logs_summary_with_rendered_and_skipped_counts(
         self,
-        mock_rclone: MagicMock,
-        mock_check_call: MagicMock,
         mock_logger: MagicMock,
+        patched_subprocess: MagicMock,  # noqa: ARG002
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """End-of-run summary reports rendered/skipped counts over the assigned range."""
+        """End-of-run summary reports rendered/skipped counts over the assigned range.
+
+        :param mock_logger: Patched ``generate_dataset.logger`` for capturing
+            the summary line.
+        :param patched_subprocess: Fixture-activation only (renderer
+            materializes shards so rclone copies have a valid source).
+        :param tmp_path: Pytest tmp dir used by ``_multi_shard_spec``.
+        :param monkeypatch: Used to install the per-shard probe stub.
+        """
         spec = _multi_shard_spec(tmp_path, n=3)
 
         def _present_only_for_shard_0(uri: str) -> int | None:
             return 9999 if uri.endswith("shard-000000.h5") else None
 
         monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", _present_only_for_shard_0)
-        mock_check_call.side_effect = _materialize_shard
 
         run(spec)
 
@@ -661,16 +822,19 @@ class TestRun:
         assert "rendered=2" in summary_lines[0]
         assert "skipped=1" in summary_lines[0]
 
-    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
-    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_run_probe_failure_propagates(
         self,
-        mock_rclone: MagicMock,
-        mock_check_call: MagicMock,
+        patched_subprocess: MagicMock,
         spec: DatasetSpec,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A non-zero rclone exit during the probe propagates as CalledProcessError."""
+        """A non-zero rclone exit during the probe propagates as CalledProcessError.
+
+        :param patched_subprocess: Subprocess dispatcher; asserted never
+            invoked (the probe failure raises before any render/upload).
+        :param spec: Fixture-provided ``DatasetSpec``.
+        :param monkeypatch: Used to install the raising probe stub.
+        """
 
         def _raise(*_a: object, **_k: object) -> None:
             raise subprocess.CalledProcessError(1, ["rclone", "lsf"])
@@ -680,7 +844,7 @@ class TestRun:
         with pytest.raises(subprocess.CalledProcessError):
             run(spec)
 
-        mock_check_call.assert_not_called()
+        patched_subprocess.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
