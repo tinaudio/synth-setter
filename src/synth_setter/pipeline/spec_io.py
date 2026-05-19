@@ -1,4 +1,4 @@
-"""``input_spec.json`` write/upload helpers.
+"""``input_spec.json`` write/upload/discover helpers.
 
 The frozen ``DatasetSpec`` is written to two well-known locations every run:
 
@@ -14,7 +14,10 @@ subdirectory. The R2 destination is the MVP flat shape that
 (``<r2_prefix_root>/<task_name>/<run_id>/<INPUT_SPEC_FILENAME>``); migrating
 the R2 object under ``metadata/`` is tracked by #385.
 
-All three helpers are idempotent: re-running the same operator command
+``find_input_specs`` is the inverse of ``local_spec_path`` — given the local
+``data/`` root, it discovers every spec written there.
+
+The write/upload helpers are idempotent: re-running the same operator command
 rewrites the same bytes to the same path / key.
 """
 
@@ -28,6 +31,7 @@ from synth_setter.pipeline.r2_io import upload_to_uri
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 
 __all__ = [
+    "find_input_specs",
     "local_spec_path",
     "upload_spec",
     "write_spec_locally",
@@ -73,6 +77,23 @@ def write_spec_locally(spec: DatasetSpec, output_dir: Path) -> Path:
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(spec.model_dump_json(indent=2), encoding="utf-8")
     return target
+
+
+def find_input_specs(data_dir: Path) -> list[Path]:
+    """Return every ``input_spec.json`` under ``data_dir/<task>/<run>/metadata/``.
+
+    Globs the canonical local layout
+    ``<data_dir>/<task_name>/<run_id>/metadata/input_spec.json``
+    (mirrors ``local_spec_path``'s structure under ``output_dir/data/``). Used
+    by the @hydra.main entrypoint to discover already-materialized specs to
+    re-upload or re-validate.
+
+    :param data_dir: Local ``data/`` directory (typically
+        ``cfg.paths.output_dir / "data"``).
+    :returns: Sorted list of matching ``input_spec.json`` paths. Empty if
+        ``data_dir`` does not exist or has no matches.
+    """
+    return sorted(data_dir.glob(f"*/*/metadata/{INPUT_SPEC_FILENAME}"))
 
 
 def upload_spec(spec: DatasetSpec) -> str:

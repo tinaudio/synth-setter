@@ -237,3 +237,89 @@ class TestUploadSpec:
         assert "--timeout=300s" in args
         assert "--retries=3" in args
         assert args[-1] == r2_io.to_rclone_path(spec.r2.input_spec_uri())
+
+
+def _touch_spec(data_dir: Path, task: str, run_id: str) -> Path:
+    """Create an empty ``input_spec.json`` under ``data_dir/<task>/<run_id>/metadata/``.
+
+    :param data_dir: Parent ``data/`` directory.
+    :param task: Task name segment.
+    :param run_id: Run id segment.
+    :returns: Path to the created file.
+    """
+    spec_path = data_dir / task / run_id / "metadata" / INPUT_SPEC_FILENAME
+    spec_path.parent.mkdir(parents=True, exist_ok=True)
+    spec_path.write_text("{}", encoding="utf-8")
+    return spec_path
+
+
+class TestFindInputSpecs:
+    """``find_input_specs`` discovers ``data/<task>/<run>/metadata/input_spec.json`` files."""
+
+    def test_returns_empty_list_when_data_dir_missing(self, tmp_path: Path) -> None:
+        """A non-existent ``data_dir`` returns ``[]`` (no exception).
+
+        :param tmp_path: Pytest tmp dir.
+        """
+        assert spec_io.find_input_specs(tmp_path / "does-not-exist") == []
+
+    def test_returns_empty_list_when_no_specs_present(self, tmp_path: Path) -> None:
+        """An existing but empty ``data_dir`` returns ``[]``.
+
+        :param tmp_path: Pytest tmp dir.
+        """
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        assert spec_io.find_input_specs(data_dir) == []
+
+    def test_finds_single_spec(self, tmp_path: Path) -> None:
+        """One matching spec file is returned in a single-element list.
+
+        :param tmp_path: Pytest tmp dir.
+        """
+        data_dir = tmp_path / "data"
+        expected = _touch_spec(data_dir, "task-a", "task-a-20260519T120000000Z")
+        assert spec_io.find_input_specs(data_dir) == [expected]
+
+    def test_returns_sorted_matches(self, tmp_path: Path) -> None:
+        """Multiple matches are returned in sorted order for determinism.
+
+        :param tmp_path: Pytest tmp dir.
+        """
+        data_dir = tmp_path / "data"
+        b = _touch_spec(data_dir, "task-b", "task-b-20260519T120000000Z")
+        a = _touch_spec(data_dir, "task-a", "task-a-20260519T120000000Z")
+        c = _touch_spec(data_dir, "task-a", "task-a-20260519T130000000Z")
+        assert spec_io.find_input_specs(data_dir) == [a, c, b]
+
+    def test_ignores_specs_outside_glob_depth(self, tmp_path: Path) -> None:
+        """Specs not at ``data/<task>/<run>/metadata/input_spec.json`` depth are skipped.
+
+        :param tmp_path: Pytest tmp dir.
+        """
+        data_dir = tmp_path / "data"
+        # Too shallow — directly under data_dir.
+        shallow = data_dir / INPUT_SPEC_FILENAME
+        shallow.parent.mkdir(parents=True, exist_ok=True)
+        shallow.write_text("{}", encoding="utf-8")
+        # Too deep — extra level under metadata/.
+        deep = data_dir / "task" / "run" / "metadata" / "nested" / INPUT_SPEC_FILENAME
+        deep.parent.mkdir(parents=True, exist_ok=True)
+        deep.write_text("{}", encoding="utf-8")
+        # Missing the ``metadata/`` segment.
+        sibling = data_dir / "task" / "run" / INPUT_SPEC_FILENAME
+        sibling.parent.mkdir(parents=True, exist_ok=True)
+        sibling.write_text("{}", encoding="utf-8")
+
+        assert spec_io.find_input_specs(data_dir) == []
+
+    def test_ignores_non_input_spec_files_in_metadata(self, tmp_path: Path) -> None:
+        """Other JSON files under ``metadata/`` are not returned.
+
+        :param tmp_path: Pytest tmp dir.
+        """
+        data_dir = tmp_path / "data"
+        metadata_dir = data_dir / "task" / "run" / "metadata"
+        metadata_dir.mkdir(parents=True, exist_ok=True)
+        (metadata_dir / "report.json").write_text("{}", encoding="utf-8")
+        assert spec_io.find_input_specs(data_dir) == []

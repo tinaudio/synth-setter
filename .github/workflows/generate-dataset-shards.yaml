@@ -404,10 +404,12 @@ jobs:
           echo "=== Materialized Spec (${PROVIDER}) ==="
           head -20 "${SPEC_PATH}"
 
-      # The launcher's `upload_spec_to_r2` writes the spec at a deterministic
-      # key derived from `cluster_name`. Surface that URI as a job/workflow
-      # output so validate-dataset-shards.yaml can pull it directly from R2
-      # instead of via the run-metadata artifact.
+      # `synth-setter-spec-uri` emits the spec's canonical under-prefix R2 URI
+      # so validate-dataset-shards.yaml can pull it directly from R2 instead
+      # of via the run-metadata artifact. The launcher-key transport URI used
+      # by `upload_spec_to_r2` is being retired (see #1115 / PR-4); until that
+      # lands, SPEC_PATH here still points at the *local* materialized spec
+      # — the URI emitted is the canonical destination, not the launcher key.
       #
       # The console script lives in the project package. The skypilot-local row
       # has it via "Install launcher deps" above; runpod/oci runs do not, since
@@ -417,15 +419,13 @@ jobs:
       # pulls before docker-image-build.yml has pushed the PR's tag).
       - name: Compute spec_uri output
         id: spec_uri
-        env:
-          CLUSTER_NAME: ${{ steps.cluster.outputs.name }}
         run: |
           set -euo pipefail
           SPEC_PATH="${RUN_METADATA_DIR}/input_spec.json"
           if ! command -v synth-setter-spec-uri >/dev/null 2>&1; then
             python3 -m pip install --quiet -e .
           fi
-          SPEC_URI=$(synth-setter-spec-uri "${SPEC_PATH}" "${CLUSTER_NAME}")
+          SPEC_URI=$(synth-setter-spec-uri "${SPEC_PATH}")
           echo "spec_uri=${SPEC_URI}" >> "${GITHUB_OUTPUT}"
           echo "spec_uri: ${SPEC_URI}"
 
