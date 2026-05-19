@@ -19,8 +19,25 @@ from synth_setter.schemas._types import NonBlankStr, StrictAllowExtraModel
 __all__ = ["ModelConfig", "OptimizerConfig", "SchedulerConfig"]
 
 
-class OptimizerConfig(StrictAllowExtraModel):  # noqa: DOC601,DOC603
-    """Partial torch optimizer; the LightningModule binds model params at call time."""
+class OptimizerConfig(StrictAllowExtraModel):
+    """Partial torch optimizer; the LightningModule binds model params at call time.
+
+    .. attribute :: target_
+
+        Fully-qualified torch optimizer class path.
+
+    .. attribute :: partial_
+
+        Whether Hydra returns a partial.
+
+    .. attribute :: lr
+
+        Learning rate (must be positive).
+
+    .. attribute :: weight_decay
+
+        L2 weight-decay coefficient (must be non-negative).
+    """
 
     target_: NonBlankStr = Field(
         alias="_target_",
@@ -38,8 +55,17 @@ class OptimizerConfig(StrictAllowExtraModel):  # noqa: DOC601,DOC603
     )
 
 
-class SchedulerConfig(StrictAllowExtraModel):  # noqa: DOC601,DOC603
-    """Partial torch LR scheduler; ``scheduler: null`` maps to ``None`` instead."""
+class SchedulerConfig(StrictAllowExtraModel):
+    """Partial torch LR scheduler; ``scheduler: null`` maps to ``None`` instead.
+
+    .. attribute :: target_
+
+        Fully-qualified LR-scheduler class path.
+
+    .. attribute :: partial_
+
+        Whether Hydra returns a partial.
+    """
 
     target_: NonBlankStr = Field(
         alias="_target_",
@@ -52,8 +78,25 @@ class SchedulerConfig(StrictAllowExtraModel):  # noqa: DOC601,DOC603
     )
 
 
-class ModelConfig(StrictAllowExtraModel):  # noqa: DOC601,DOC603
-    """One of the YAMLs under ``configs/model/``; variant kwargs via ``extra="allow"``."""
+class ModelConfig(StrictAllowExtraModel):
+    """One of the YAMLs under ``configs/model/``; variant kwargs via ``extra="allow"``.
+
+    .. attribute :: target_
+
+        Fully-qualified ``LightningModule`` class path.
+
+    .. attribute :: optimizer
+
+        Partial torch optimizer config (see ``OptimizerConfig``).
+
+    .. attribute :: scheduler
+
+        Partial LR scheduler config, or ``null`` to run without a scheduler.
+
+    .. attribute :: compile
+
+        Whether to wrap the module in ``torch.compile`` at setup time.
+    """
 
     target_: NonBlankStr = Field(
         alias="_target_",

@@ -16,11 +16,15 @@ __all__ = ["NonBlankStr", "StrictAllowExtraModel"]
 NonBlankStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
-class StrictAllowExtraModel(BaseModel):  # noqa: DOC601,DOC603
+class StrictAllowExtraModel(BaseModel):
     """Trust-boundary base: ``strict=True`` + ``extra="allow"`` + alias-by-name.
 
     Diverges from ``pipeline.schemas``' ``extra="forbid"`` because training
     configs are composed from many Hydra subtrees whose keys vary per variant.
+
+    .. attribute :: model_config
+
+        Pydantic config: ``strict=True``, ``extra="allow"``, ``populate_by_name=True``.
     """
 
     model_config = ConfigDict(strict=True, extra="allow", populate_by_name=True)

@@ -13,8 +13,13 @@ from synth_setter.schemas._types import NonBlankStr, StrictAllowExtraModel
 __all__ = ["DataConfig"]
 
 
-class DataConfig(StrictAllowExtraModel):  # noqa: DOC601,DOC603
-    """One of the YAMLs under ``configs/data/``; only ``_target_`` is typed."""
+class DataConfig(StrictAllowExtraModel):
+    """One of the YAMLs under ``configs/data/``; only ``_target_`` is typed.
+
+    .. attribute :: target_
+
+        Fully-qualified ``LightningDataModule`` class path.
+    """
 
     target_: NonBlankStr = Field(
         alias="_target_",

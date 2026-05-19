@@ -11,8 +11,49 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, field_validator
 
 
-class SkypilotLaunchConfig(BaseModel):  # noqa: DOC601,DOC603
-    """Validated SkyPilot launch parameters consumed by dispatch_via_skypilot."""
+class SkypilotLaunchConfig(BaseModel):
+    """Validated SkyPilot launch parameters consumed by dispatch_via_skypilot.
+
+    .. attribute :: model_config
+
+        Pydantic config: ``strict=True``, ``frozen=True``, ``extra="forbid"``.
+
+    .. attribute :: compute_template
+
+        Path to the SkyPilot compute-template YAML.
+
+    .. attribute :: cmd
+
+        Override command passed to the worker entrypoint.
+
+    .. attribute :: env_file
+
+        Path to an ``.env`` file forwarded to workers.
+
+    .. attribute :: job_name
+
+        SkyPilot job name (shown in ``sky status``).
+
+    .. attribute :: num_workers
+
+        Number of worker replicas to launch.
+
+    .. attribute :: worker_image_tag
+
+        Docker image tag pulled by each worker.
+
+    .. attribute :: tail
+
+        Whether to tail logs after launch.
+
+    .. attribute :: api_server
+
+        SkyPilot API server URL override.
+
+    .. attribute :: local
+
+        Run the job on the local SkyPilot context instead of remote.
+    """
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
