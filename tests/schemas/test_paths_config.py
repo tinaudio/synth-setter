@@ -41,8 +41,11 @@ class TestPathsConfigRejectsBadInputs:
     """Validators must reject blank overrides on every path field."""
 
     @pytest.mark.parametrize("field", list(_VALID_PATHS))
-    def test_blank_field_rejected(self, field: str) -> None:  # noqa: DOC101,DOC103
-        """Each path field rejects whitespace-only overrides."""
+    def test_blank_field_rejected(self, field: str) -> None:
+        """Each path field rejects whitespace-only overrides.
+
+        :param field: Parametrized name of the ``PathsConfig`` attribute under test.
+        """
         bad = {**_VALID_PATHS, field: "   "}
         with pytest.raises(ValidationError, match="at least 1 character"):
             PathsConfig.model_validate(bad)
