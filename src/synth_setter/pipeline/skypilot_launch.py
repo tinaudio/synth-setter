@@ -63,6 +63,7 @@ from synth_setter.pipeline.constants import WORKER_SPEC_URI_ENV
 from synth_setter.pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
 from synth_setter.pipeline.schemas.spec import DatasetSpec
+from synth_setter.pipeline.spec_io import upload_spec
 
 _WORKER_IMAGE_ENV = "WORKER_IMAGE"
 _WORKER_IMAGE_REPO = "tinaudio/synth-setter"
@@ -547,7 +548,14 @@ def main(
     if provider != "local":
         _run_cred_bootstrap(provider=provider, env_file_path=env_file_path)
 
-    worker_env[WORKER_SPEC_URI_ENV] = spec.r2.input_spec_uri()
+    # Mirror cli/generate_dataset.py::main(): upload the canonical spec to its
+    # `spec.r2.input_spec_uri()` so the forwarded WORKER_SPEC_URI points at a
+    # real R2 object. Required by validate-spec / validate-shard consumers and
+    # by any worker that fetches the spec at boot. RCLONE_CONFIG_R2_* was
+    # already exported to os.environ above.
+    spec_uri = upload_spec(spec)
+    click.echo(f"Spec uploaded to {spec_uri}")
+    worker_env[WORKER_SPEC_URI_ENV] = spec_uri
 
     # Kubernetes-specific: SkyPilot 0.12 caches enabled-clouds in-process; a
     # CLI `sky check` doesn't always populate the cache the SDK reads, and

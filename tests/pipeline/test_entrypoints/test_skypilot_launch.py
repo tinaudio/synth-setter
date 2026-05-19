@@ -135,6 +135,22 @@ def mock_rclone_subprocess(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def mock_upload_spec(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    """No-op the canonical ``upload_spec`` so the launcher's spec upload is hermetic.
+
+    Returns the canonical URI from the spec it was called with so existing assertions on
+    ``WORKER_SPEC_URI`` shape stay valid. Tests asserting the upload happened access the mock
+    via the returned ``MagicMock``.
+
+    :param monkeypatch: Pytest fixture used to swap out the launcher's ``upload_spec`` ref.
+    :returns: The patched ``upload_spec`` ``MagicMock``.
+    """
+    upload_mock = MagicMock(side_effect=lambda spec: spec.r2.input_spec_uri())
+    monkeypatch.setattr("synth_setter.pipeline.skypilot_launch.upload_spec", upload_mock)
+    return upload_mock
+
+
+@pytest.fixture(autouse=True)
 def mock_cred_bootstrap(monkeypatch: pytest.MonkeyPatch) -> None:
     """No-op `_run_cred_bootstrap` and `_detect_provider` by default.
 
@@ -581,6 +597,49 @@ class TestMainCli:
         spec_uri = forwarded[WORKER_SPEC_URI_ENV]
         assert spec_uri.startswith("r2://")
         assert spec_uri.endswith("/input_spec.json")
+
+    def test_main_uploads_canonical_spec_before_dispatch(
+        self,
+        experiment: str,
+        fake_plugin: Path,
+        template_yaml: Path,
+        env_file: Path,
+        patch_materialize_io: None,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+        mock_upload_spec: MagicMock,
+    ) -> None:
+        """``main()`` calls ``upload_spec(spec)`` so ``WORKER_SPEC_URI`` resolves in R2.
+
+        Pins the launcher's spec-upload contract: ``WORKER_SPEC_URI`` cannot point at a URI that
+        doesn't exist in R2 (otherwise downstream validate-spec / worker-side spec fetchers see a
+        404). Mirrors ``cli/generate_dataset.py::main()``'s canonical upload site.
+
+        :param experiment: Fixture-provided experiment name.
+        :param fake_plugin: Fixture-provided fake VST3 plugin path.
+        :param template_yaml: Fixture-provided compute template path.
+        :param env_file: Fixture-provided worker env file path.
+        :param patch_materialize_io: Fixture stubbing materialize-side IO.
+        :param local_spec_dir: Fixture-provided local spec directory.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        :param mock_upload_spec: Mocked ``upload_spec`` from autouse fixture.
+        """
+        result = _invoke(
+            experiment,
+            template_yaml,
+            env_file,
+            "--job-name",
+            "smoke-job-1",
+            fake_plugin=fake_plugin,
+        )
+        assert result.exit_code == 0, result.output
+
+        mock_upload_spec.assert_called_once()
+        uploaded_spec = mock_upload_spec.call_args.args[0]
+        assert isinstance(uploaded_spec, DatasetSpec)
+        task = mock_sky.Task.from_yaml.return_value
+        forwarded = task.update_envs.call_args.args[0]
+        assert forwarded[WORKER_SPEC_URI_ENV] == uploaded_spec.r2.input_spec_uri()
 
     def test_launch_submits_by_managed_job_name(
         self,
