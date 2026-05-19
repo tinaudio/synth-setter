@@ -169,20 +169,30 @@ class TestUploadSpec:
         assert result == spec.r2.input_spec_uri()
 
     def test_cleans_up_tempfile_on_success(self, spec: DatasetSpec, fake_r2_remote: Path) -> None:
-        """No leftover ``spec_io`` tempfile remains in ``tempfile.gettempdir()`` after success.
+        """The exact tempfile passed to rclone is unlinked after a successful copy.
 
-        Stronger guard than the previous mock-based version: the cleanup runs
-        on the production tempfile path with no patching of the subprocess
-        boundary, so a regression that "leaks" the file or accidentally moves
-        cleanup behind the subprocess call would still be caught.
+        Captures the source path via a pass-through wrapper around the real
+        ``subprocess.check_call`` (so the rclone copy still lands the spec on the
+        fake-local remote), then asserts the captured path no longer exists.
+        The capture is per-test so it's safe under ``pytest -n auto`` — unlike a
+        ``tempfile.gettempdir()`` glob, which races with sibling workers writing
+        their own ``tmp*.json`` files in the shared system tempdir.
 
         :param spec: Fixture-provided ``DatasetSpec``.
         :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
         """
-        before = _spec_io_tempfile_count()
-        spec_io.upload_spec(spec)
-        after = _spec_io_tempfile_count()
-        assert after == before
+        captured_src: list[str] = []
+        real_check_call = subprocess.check_call
+
+        def _capture_then_passthrough(args: list[str]) -> None:
+            captured_src.append(args[-2])
+            real_check_call(args)
+
+        with patch.object(r2_io.subprocess, "check_call", side_effect=_capture_then_passthrough):
+            spec_io.upload_spec(spec)
+
+        assert captured_src, "rclone was not invoked"
+        assert not Path(captured_src[0]).exists()
 
     def test_cleans_up_tempfile_on_rclone_failure(self, spec: DatasetSpec) -> None:
         """Tempfile is removed even when rclone raises CalledProcessError.
@@ -227,18 +237,3 @@ class TestUploadSpec:
         assert "--timeout=300s" in args
         assert "--retries=3" in args
         assert args[-1] == r2_io.to_rclone_path(spec.r2.input_spec_uri())
-
-
-def _spec_io_tempfile_count() -> int:
-    """Return the number of ``upload_spec`` tempfiles currently in ``tempfile.gettempdir()``.
-
-    ``upload_spec`` uses ``NamedTemporaryFile(suffix=".json")``, which generates
-    a ``tmpXXXXXXXX.json``-shaped path in the system tempdir. A leak would
-    bump this count after the call.
-
-    :returns: Count of ``tmp*.json`` entries in ``tempfile.gettempdir()``.
-    """
-    import tempfile
-
-    tmpdir = Path(tempfile.gettempdir())
-    return sum(1 for p in tmpdir.glob("tmp*.json"))
