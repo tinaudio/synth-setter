@@ -26,8 +26,10 @@ name: Test Dataset Generation
 # load-bearing.
 #
 # Provider matrix policy (computed in the `setup` job):
-#   * pull_request (same repo) → skypilot-local only
+#   * pull_request (same repo) → skypilot-local × wds only (#1164 — hdf5
+#                                moved to the nightly schedule below)
 #   * pull_request (fork)      → empty (forks can't read secrets)
+#   * schedule                 → skypilot-local × {hdf5, wds} (daily 07:00 UTC)
 #   * workflow_dispatch        → respect `inputs.provider`
 #                                (all = skypilot-local + runpod + oci;
 #                                 or skypilot-local / runpod / oci)
