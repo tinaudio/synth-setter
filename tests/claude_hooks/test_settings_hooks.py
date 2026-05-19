@@ -1451,11 +1451,12 @@ def test_baseline_hook_does_not_pollute_stderr_on_allowed_edit(
 def test_trailer_hook_finding_does_not_contain_embedded_newlines(
     trailer_hook_command: str,
 ) -> None:
-    """Each Findings entry is one tight line — no leaked ``\\n`` from regex anchors.
+    """Each Findings entry is one tight ``<label>\\t<match>`` line.
 
-    Trailer regexes anchor on ``(?:^|\\n|\\\\n)\\s*``, so ``m.group(0)`` includes
-    the leading newline / whitespace context. The scanner must collapse those
-    before emitting the finding or the BLOCKED Findings block renders garbled.
+    Trailer regexes anchor on ``(?:^|\\n|\\\\n)\\s*``, so ``m.group(0)``
+    includes the leading newline / whitespace context. The scanner must
+    collapse those before emitting the finding or the BLOCKED Findings
+    block renders garbled across multiple lines.
 
     :param trailer_hook_command: Hook command body fixture.
     """
@@ -1474,9 +1475,13 @@ def test_trailer_hook_finding_does_not_contain_embedded_newlines(
     assert "Rules" in result.stderr, result.stderr
     findings_block = result.stderr.split("Findings:", 1)[1].split("Rules", 1)[0]
     finding_lines = [line for line in findings_block.splitlines() if line.strip()]
+    # Each finding renders as "  <label>\t<match>". A continuation line from a
+    # multi-line m.group(0) capture would lack the tab; the literal `\n`
+    # check catches the escaped-newline variant the trailer regexes match on.
+    assert finding_lines, "expected at least one finding line"
     for line in finding_lines:
+        assert "\t" in line, f"finding line missing label/match tab: {line!r}"
         assert "\\n" not in line, f"escaped newline leaked into finding: {line!r}"
-        assert "\n" not in line.rstrip(), f"raw newline leaked into finding: {line!r}"
 
 
 def test_yaml_run_hook_description_documents_both_extensions() -> None:
