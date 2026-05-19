@@ -23,9 +23,8 @@ from collections.abc import Iterator
 # subject like "feat: docs generated with sphinx-build" does not match. Group
 # 1 captures the trailer key for clean reporting.
 _CO_AUTHORED_BY = re.compile(r"(?:^|\\n|\n)\s*(Co-Authored-By:)", re.IGNORECASE)
-# ``Generated with`` is only an agent attribution when followed on the same
-# line by an agent-product name. Plain "Generated with sphinx-build" or
-# "Generated with the docs job" is a legitimate body line.
+# Match only when an agent-product name follows ``Generated with`` on the
+# same line, so bodies like "Generated with sphinx-build" stay legitimate.
 _GENERATED_WITH = re.compile(
     r"(?:^|\\n|\n)\s*(Generated with)[^\r\n]{0,80}?"
     r"\b(Claude|Anthropic|Cursor|Copilot|ChatGPT|GPT-?\d|Codex|Gemini|Bard)\b",
@@ -134,10 +133,14 @@ def _iter_commit_argvs(tokens: list[str]) -> Iterator[list[str]]:
 
 
 # ``git commit`` short flags whose value attaches inline (``-S<keyid>``,
-# ``-C<commit>``, etc.). When the cluster starts with one of these, the
-# remainder is the value — not additional bundled flags — so ``n`` in the
-# value (``-Sandykey``) is not a ``-n``.
-_VALUE_ATTACHING_SHORT_FLAGS = frozenset({"S", "C", "c", "F", "m", "u", "t"})
+# ``-C<commit>``, ``-c<commit>``, ``-F<file>``, ``-m<msg>``). When the cluster
+# starts with one of these, the remainder is the value — not additional
+# bundled flags — so ``n`` in the value (``-Sandykey``) is not a ``-n``.
+# ``-u``/``-t`` are intentionally excluded: their value is optional and they
+# are overwhelmingly used bare (``-u`` == ``--untracked-files``), so a
+# hand-typed ``-un`` is far more likely to mean ``-u -n`` than ``-u`` with
+# value ``n`` — better to keep the fail-closed default and block.
+_VALUE_ATTACHING_SHORT_FLAGS = frozenset({"S", "C", "c", "F", "m"})
 
 
 def _has_no_verify_short_flag(argv: list[str]) -> bool:

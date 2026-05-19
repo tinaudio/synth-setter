@@ -15,13 +15,6 @@ readonly SCRIPT_DIR
 # shellcheck disable=SC1091
 source "${SCRIPT_DIR}/_lib.sh"
 
-# Re-scope regex: matches `git ... commit` where the slot between `git` and
-# `commit` is empty or holds only `git`-level option tokens (e.g. `-c key=val`,
-# `--git-dir=.git`). Required because the handler-level `if: "Bash(git commit *)"`
-# is a literal-prefix permission rule that does NOT match `git -c X commit ...`;
-# this hook is broadened to `Bash(git*)` and the wrapper re-scopes here.
-readonly GIT_COMMIT_RE='(^[[:space:]]*|[;|&`(][[:space:]]*)git([[:space:]]+(-[a-zA-Z]|--[a-zA-Z][a-zA-Z0-9_-]*)(=[^[:space:]]*)?([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+commit([[:space:]]|$)'
-
 main() {
   # Any unexpected failure (Python crash, jq parse, etc.) must block — never
   # leak a non-2 exit that bypasses the contract documented in the header.
@@ -39,12 +32,11 @@ main() {
     exit 2
   fi
 
-  if ! grep -qE "$GIT_COMMIT_RE" <<<"$cmd"; then
-    exit 0
-  fi
-
-  # Pipe the command on stdin to the Python scanner so argv slicing can
-  # distinguish `git commit -n` from a downstream `grep -n`.
+  # The Python scanner is the authoritative parser — it uses shlex, so it
+  # tracks quoted-value forms like `git -c user.name="A B" commit` that an
+  # ERE pre-filter cannot. Non-commit invocations produce empty stdout (no
+  # commit slice found), so this also serves as the fast-path for
+  # `git status`, `git log`, etc.
   findings=$(printf '%s' "$cmd" | python3 "${SCRIPT_DIR}/git_commit_trailer_check.py")
 
   if [[ -n "$findings" ]]; then

@@ -7,9 +7,9 @@ the BLOCKED message; this module only locates offenders so the Edit/Write tool
 call is gated before it lands content where a stray ``'``/`` ` ``/``$``/``\\``
 inside a block-scalar comment would trigger shell expansion on the runner.
 
-Violations are reported only when the edit *introduces* them. Pre-existing
-comments in the file are subtracted from the post-edit set so legacy violations
-do not lock the file against unrelated edits or comment-removal edits.
+Only violations newly introduced by the edit are reported: the scanner
+diffs the pre-edit and post-edit violation multisets so unrelated edits to
+files with existing block-scalar comments pass through.
 """
 
 from __future__ import annotations
@@ -63,6 +63,22 @@ def _scan(lines: list[str]) -> list[tuple[int, str, int, str]]:
     return violations
 
 
+def _safe_read(path: pathlib.Path) -> str:
+    """Return ``path``'s text, or ``""`` on any OSError.
+
+    Permission denied / EISDIR / ENOTDIR turn into "empty pre-edit" rather
+    than a Python traceback that the shell trap would re-format as an
+    opaque internal-error block.
+
+    :param path: File to read.
+    :returns: File contents, or ``""`` if the file is unreadable or missing.
+    """
+    try:
+        return path.read_text()
+    except OSError:
+        return ""
+
+
 def _edit_contents(payload: dict) -> tuple[str, str] | None:
     """Return ``(pre_edit, post_edit)`` text for the tool call.
 
@@ -75,7 +91,7 @@ def _edit_contents(payload: dict) -> tuple[str, str] | None:
     tool_input = payload.get("tool_input", {})
     file_path = tool_input.get("file_path", "")
     path = pathlib.Path(file_path)
-    pre = path.read_text() if path.is_file() else ""
+    pre = _safe_read(path) if path.is_file() else ""
     if tool_name == "Write":
         return pre, tool_input.get("content", "")
     if not path.is_file():

@@ -146,9 +146,9 @@ def test_handler_if_values_use_permission_rule_syntax() -> None:
 _EXPECTED_HANDLER_SCOPES: tuple[tuple[str, str], ...] = (
     ("Branch safety", "Bash(git commit *)"),
     ("Doc-drift advisory review", "Bash(gh pr create *)"),
-    # Broader than `Bash(git commit *)` so the harness still fires the hook on
-    # `git -c <opt>=<val> commit ...` and other git-level option forms; the hook
-    # wrapper re-scopes to actual commits inside.
+    # `Bash(git*)` so the harness still fires the hook on `git -c X=Y commit
+    # ...` (git-level options before the subcommand); the wrapper defers to
+    # the Python scanner, which re-scopes to actual commit invocations.
     ("Git-commit-trailer-check", "Bash(git*)"),
     ("PR review resolver", "Bash(git push *)"),
     ("Pre-PR review gate", "Bash(gh pr create *)"),
@@ -1074,9 +1074,8 @@ def test_yaml_run_hook_allows_edit_removing_comment(
 ) -> None:
     """An Edit that *removes* a pre-existing block-scalar comment is allowed.
 
-    Earlier the scanner only looked at the post-edit content, so an edit
-    deleting one of three identical comments via ``replace_all=true`` was
-    rejected because two stale comments remained in the synthesised content.
+    Exercises the ``replace_all=true`` path: every matched occurrence must
+    be subtracted from the post-edit violation set before the diff is taken.
 
     :param yaml_run_hook_command: Hook command body fixture.
     :param tmp_path: pytest tmp_path.
@@ -1108,9 +1107,8 @@ def test_yaml_run_hook_allows_edit_removing_comment(
 def test_trailer_hook_catches_dash_c_option_before_commit(trailer_hook_command: str) -> None:
     """``git -c <opt>=<val> commit -n`` is blocked despite the option between git and commit.
 
-    Pre-fix, the wrapper regex required ``git`` immediately followed by
-    ``commit`` and the Python slicer used the same shape, so the entire gate
-    was bypassed by any git-level option (``-c``, ``--git-dir``, ...).
+    The Python slicer walks past git-level option tokens (``-c``, ``--git-dir``,
+    ``--work-tree``, ``--namespace``) before locating the ``commit`` subcommand.
 
     :param trailer_hook_command: Hook command body fixture.
     """
@@ -1125,8 +1123,8 @@ def test_trailer_hook_catches_dash_c_option_before_commit(trailer_hook_command: 
 def test_trailer_hook_catches_dash_c_with_co_authored_by(trailer_hook_command: str) -> None:
     """``git -c X=Y commit -m "...Co-Authored-By: ..."`` is blocked.
 
-    Covers the trailer-scan path of the same bypass; the wrapper must still drill into the message
-    body once the slicer finds the commit subcommand.
+    The trailer-scan path runs once the slicer skips git-level options to
+    find the ``commit`` subcommand.
 
     :param trailer_hook_command: Hook command body fixture.
     """
@@ -1149,8 +1147,7 @@ def test_trailer_hook_allows_dash_S_keyid_with_n(trailer_hook_command: str) -> N
     """``git commit -S<keyid> -m "..."`` with an alpha keyid containing ``n`` is allowed.
 
     The inline gpg-sign keyid is the *value* of ``-S``, not a bundle of
-    additional flags. Pre-fix the bundled-flag check mistook ``Sandykey`` for
-    a ``-n`` cluster and blocked the commit.
+    additional flags.
 
     :param trailer_hook_command: Hook command body fixture.
     """
@@ -1166,9 +1163,8 @@ def test_trailer_hook_still_blocks_bundled_n_after_value_attaching_flag(
 ) -> None:
     """``-anSkey`` (bundled ``-a -n -S<keyid>``) still trips the no-verify check.
 
-    Pins the value-attaching-flag fix: ``-S`` only swallows the *rest* of the
-    cluster when it sits at the start. With ``-a -n`` before it, the ``n``
-    is still a real ``-n`` flag.
+    ``-S`` only consumes the rest of a cluster when it sits at the cluster
+    start; here the leading ``-a -n`` keep their flag meaning.
 
     :param trailer_hook_command: Hook command body fixture.
     """
@@ -1183,9 +1179,8 @@ def test_trailer_hook_still_blocks_bundled_n_after_value_attaching_flag(
 def test_trailer_hook_allows_generated_with_non_agent_tool(trailer_hook_command: str) -> None:
     """A body line ``Generated with sphinx-build manually`` is allowed.
 
-    The attribution rule targets agent-emitted footers like ``Generated with
-    Claude Code``. Pre-fix the regex matched any line starting with
-    ``Generated with``, so legitimate docs commits were blocked.
+    The attribution rule requires an agent-product name (``Claude``,
+    ``Copilot``, ...) on the same line within ~80 chars.
 
     :param trailer_hook_command: Hook command body fixture.
     """
@@ -1224,12 +1219,10 @@ def test_trailer_hook_blocks_generated_with_any_agent_keyword(
 
 
 def test_baseline_hook_honours_replace_all(baseline_hook_command: str, tmp_path: Path) -> None:
-    """An Edit with ``replace_all: true`` is row-counted as if every occurrence is replaced.
+    """An Edit with ``replace_all: true`` is row-counted at every occurrence.
 
-    Pre-fix the inline Python always passed ``count=1`` to ``str.replace``, so
-    a ``replace_all`` edit that introduced one new row per occurrence reported
-    the row delta of a single replacement. The block direction stayed right
-    incidentally, but the reported counts in the BLOCKED message were wrong.
+    The synthesised post-edit content reflects all replacements so the BLOCKED message reports the
+    actual proposed row count.
 
     :param baseline_hook_command: Hook command body fixture.
     :param tmp_path: pytest tmp_path.
@@ -1251,3 +1244,119 @@ def test_baseline_hook_honours_replace_all(baseline_hook_command: str, tmp_path:
     assert result.returncode == 2, (result.returncode, result.stderr)
     assert "Proposed rows: 6" in result.stderr
     assert "Current rows: 3" in result.stderr
+
+
+def test_trailer_hook_passes_non_commit_git_command(trailer_hook_command: str) -> None:
+    """``git status`` (and other non-commit git commands) fast-paths through.
+
+    The handler ``if:`` is broadened to ``Bash(git*)``; the hook must exit 0
+    for any git invocation that is not a commit.
+
+    :param trailer_hook_command: Hook command body fixture.
+    """
+    result = _run_hook_command(
+        trailer_hook_command,
+        {"tool_input": {"command": "git status"}},
+    )
+    assert result.returncode == 0, (result.returncode, result.stderr)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        pytest.param('git --git-dir=.git commit -n -m "x"', id="git-dir-equals"),
+        pytest.param('git --work-tree /tmp commit -n -m "x"', id="work-tree-space"),
+        pytest.param('git -c user.name="Foo Bar" commit -n -m "x"', id="dash-c-quoted-value"),
+    ],
+)
+def test_trailer_hook_catches_no_verify_through_various_git_level_options(
+    trailer_hook_command: str, command: str
+) -> None:
+    """Other git-level option forms (``--git-dir``, ``--work-tree``, quoted ``-c``) also gate.
+
+    Pins the Python slicer's option-skipping logic across the value-bearing
+    long options and the shlex-quoted short option that an ERE alone cannot
+    parse.
+
+    :param trailer_hook_command: Hook command body fixture.
+    :param command: ``git`` invocation carrying the option form under test.
+    """
+    result = _run_hook_command(trailer_hook_command, {"tool_input": {"command": command}})
+    assert result.returncode == 2, (result.returncode, result.stderr)
+    assert "BLOCKED" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "agent_keyword",
+    ["Codex", "Bard", "GPT-4", "GPT4"],
+)
+def test_trailer_hook_blocks_generated_with_additional_agent_keywords(
+    trailer_hook_command: str, agent_keyword: str
+) -> None:
+    """Additional agents in the ``Generated with`` alternation are blocked.
+
+    :param trailer_hook_command: Hook command body fixture.
+    :param agent_keyword: Agent-product name appended after ``Generated with``.
+    """
+    result = _run_hook_command(
+        trailer_hook_command,
+        {"tool_input": {"command": f'git commit -m "feat: x\n\nGenerated with {agent_keyword}"'}},
+    )
+    assert result.returncode == 2, (result.returncode, result.stderr)
+    assert "BLOCKED" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "cluster",
+    [pytest.param("-un", id="dash-u-n"), pytest.param("-tn", id="dash-t-n")],
+)
+def test_trailer_hook_blocks_un_and_tn_bundles(trailer_hook_command: str, cluster: str) -> None:
+    """``-un`` / ``-tn`` are read as ``-u -n`` / ``-t -n``, not as value-attaching forms.
+
+    ``-u`` and ``-t`` are excluded from the value-attaching short-flag set
+    because their bare form is the common usage; treating their tail as a
+    value would silently bypass ``-n`` detection.
+
+    :param trailer_hook_command: Hook command body fixture.
+    :param cluster: Short-flag cluster under test.
+    """
+    result = _run_hook_command(
+        trailer_hook_command,
+        {"tool_input": {"command": f'git commit {cluster} -m "feat: x"'}},
+    )
+    assert result.returncode == 2, (result.returncode, result.stderr)
+    assert "BLOCKED" in result.stderr
+
+
+def test_yaml_run_hook_blocks_new_comment_when_legacy_one_is_preserved(
+    yaml_run_hook_command: str, tmp_path: Path
+) -> None:
+    """An Edit that preserves a legacy comment AND introduces a new one blocks on the new one.
+
+    Verifies the multiset diff: subtracting one legacy entry must not also
+    consume an unrelated new entry.
+
+    :param yaml_run_hook_command: Hook command body fixture.
+    :param tmp_path: pytest tmp_path.
+    """
+    workflow_dir = tmp_path / ".github" / "workflows"
+    workflow_dir.mkdir(parents=True)
+    workflow = workflow_dir / "test.yml"
+    workflow.write_text(
+        "jobs:\n  test:\n    steps:\n      - run: |\n"
+        "          # legacy comment\n          echo hi\n"
+    )
+    result = _run_hook_command(
+        yaml_run_hook_command,
+        {
+            "tool_name": "Edit",
+            "tool_input": {
+                "file_path": str(workflow),
+                "old_string": "          echo hi\n",
+                "new_string": "          # newly introduced\n          echo hi\n",
+            },
+        },
+    )
+    assert result.returncode == 2, (result.returncode, result.stderr)
+    assert "BLOCKED" in result.stderr
+    assert "newly introduced" in result.stderr
