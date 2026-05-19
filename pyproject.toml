@@ -1,6 +1,6 @@
 [project]
 name = "synth-setter"
-version = "5.3.0"
+version = "5.4.0"
 description = "Studying the effect of permutation symmetry on audio synthesiser parameter inference."
 authors = [{name = "Khaled Tinubu"}, {name = "tinaudio"}]
 readme = "README.md"
@@ -90,6 +90,7 @@ synth-setter-eval = "synth_setter.cli.eval:main"
 synth-setter-generate-dataset = "synth_setter.cli.generate_dataset:main"
 synth-setter-generate-dataset-from-hydra = "synth_setter.cli.generate_dataset:from_hydra"
 synth-setter-spec-uri = "synth_setter.pipeline.ci.spec_uri:main"
+
 
 
 

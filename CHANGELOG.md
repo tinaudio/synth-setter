@@ -1,6 +1,250 @@
 # CHANGELOG
 
 
+## v5.4.0 (2026-05-19)
+
+### Chores
+
+- Delete obsolete docker_entrypoint.py + audit refs
+  ([#1118](https://github.com/tinaudio/synth-setter/pull/1118),
+  [`08f320c`](https://github.com/tinaudio/synth-setter/commit/08f320c24b637798d22bcfff8a488955c288c2fa))
+
+- **devcontainer**: Persist root-user tmux sessions across rebuilds
+  ([#1123](https://github.com/tinaudio/synth-setter/pull/1123),
+  [`2d67cc8`](https://github.com/tinaudio/synth-setter/commit/2d67cc88fc76ed6b20e79d156853fb1808d04cbe))
+
+* chore(devcontainer): persist root-user tmux sessions across rebuilds
+
+PR #1104 wired up tmux-continuum + TPM but only mounted a named volume at
+  /home/dev/.local/share/tmux/resurrect, so DEVCONTAINER_USER=root sessions (whose $HOME=/root)
+  snapshot to a non-persistent path and lose state on Rebuild Container. devcontainer.json mount
+  syntax doesn't support ${localEnv:...} in mount targets, so add a second named volume mounted at
+  /root/.local/share/tmux/resurrect alongside the dev one.
+
+- .devcontainer/{cpu,gpu}/devcontainer.json — add synth-setter-tmux-resurrect-root mount. -
+  .devcontainer/post-create.sh — drop the now-stale "mount is dev-only; root sessions won't survive
+  rebuilds" caveat. - docs/doc-map.yaml + docs/reference/docker.md — enumerate both named volumes
+  under the relevant covers.
+
+Closes #1121. Refs #1103, #1104.
+
+* Potential fix for pull request finding
+
+Co-authored-by: Copilot Autofix powered by AI <175728472+Copilot@users.noreply.github.com>
+
+---------
+
+- **lint**: Add count-doc-noqa script and Makefile target
+  ([#1107](https://github.com/tinaudio/synth-setter/pull/1107),
+  [`68a4fff`](https://github.com/tinaudio/synth-setter/commit/68a4fff1d738dd8fb1d19d06539d56cb4d1a63c8))
+
+Counter prints `src=<N> tests=<N>` for inline `# noqa: DOC*` suppressions under src/ and tests/.
+  With `GATE=1`, the Makefile target exits non-zero if either count is positive — used by phases 2–5
+  of the inline-noqa cleanup chain.
+
+Refs #1106
+
+- **lint**: Document 15 Pydantic schemas via .. attribute :: blocks
+  ([#1111](https://github.com/tinaudio/synth-setter/pull/1111),
+  [`c0730bc`](https://github.com/tinaudio/synth-setter/commit/c0730bc6da262f89a6a1fdb48cb28b24c93b6809))
+
+* chore(lint): document 15 Pydantic schema classes via .. attribute ::
+
+Drops the # noqa: DOC601,DOC603 suppression from every Pydantic class in src/ and adds a sphinx ..
+  attribute :: <name> block per declared field.
+
+The :ivar: alias commonly used in sphinx docs does NOT satisfy pydoclint 0.8.3's
+  check-class-attributes — only .. attribute :: blocks (with the description indented under the
+  directive) are recognized. Empirically confirmed: changing the .. attribute :: blocks to :ivar:
+  syntax re-fires DOC601 in the same file. Going with .. attribute :: because it works and matches
+  the official sphinx-style class-attribute directive
+  (https://www.sphinx-doc.org/en/master/usage/domains/python.html).
+
+Field(description=...) text remains the canonical multi-line prose surface; the .. attribute ::
+  block carries a short, one-clause summary mirroring the first sentence of Field(description=...).
+
+This is the last src/ phase of the inline-DOC-noqa cleanup chain. Combined with PRs
+  #1107/#1108/#1109 it drives src/ DOC noqas to zero (make count-doc-noqa shows src=0 on this
+  commit).
+
+Refs #1106
+
+* chore(lint): abstract model_config docstring text to avoid ConfigDict drift
+
+Doc-drift review flagged that the .. attribute :: model_config blocks duplicated each class's
+  ConfigDict(...) arguments verbatim (e.g. 'Pydantic config: strict=True, frozen=True,
+  extra=\"forbid\"'). Per CLAUDE.md '#### Comment Hygiene: Don't bake values into comments', the
+  ConfigDict(...) call is the canonical source — restating its arguments in prose would drift
+  silently on any future tweak.
+
+Replace the literal-args text with 'Pydantic model config sentinel — see ``ConfigDict(...)`` below
+  for active settings.' across all 6 sites.
+
+- **lint**: Fix DOC10x/20x docstrings across 21 tests/ files
+  ([#1112](https://github.com/tinaudio/synth-setter/pull/1112),
+  [`634276f`](https://github.com/tinaudio/synth-setter/commit/634276fe37cb382a37b829199852a53b234ab3fd))
+
+Adds :param <fixture>: lines to every test docstring that previously suppressed pydoclint with
+  inline # noqa: DOC101/DOC103/DOC201/DOC203 across 21 test files (~140 test functions). Drops the
+  suppressions. No test body or signature changes.
+
+Mirrors the docstring shape established by the pilot PR #1108 (tests/schemas/test_paths_config.py).
+
+This is the last phase of the inline-DOC-noqa cleanup chain. With this PR and the sibling Cluster A
+  PR merged, make count-doc-noqa GATE=1 passes (src=0, tests=0).
+
+Refs #1106
+
+- **lint**: Fix DOC10x/20x/50x docstrings in Cluster B (35 sites)
+  ([#1109](https://github.com/tinaudio/synth-setter/pull/1109),
+  [`5036e86`](https://github.com/tinaudio/synth-setter/commit/5036e86f4d7467cdb712a529ba7124df0a9889b4))
+
+* chore(lint): fix DOC101/103/201/203/501/503 docstrings in Cluster B
+
+Adds missing :param:/:return:/:rtype:/:raises: sections to ~35 Sphinx docstrings across 8 files in
+  src/ that previously suppressed pydoclint with inline # noqa. Drops the suppressions. No
+  signature, body, or config changes.
+
+Cluster A (DOC601/DOC603 on Pydantic class lines) is handled by a sibling PR.
+
+Refs #1106
+
+* chore(lint): drop redundant :rtype: lines + disable pydoclint check-return-types
+
+The previous commit added 34 :rtype: lines that just echoed the existing -> return annotation. Per
+  CR feedback on #1109, the annotation is the single source of truth — the :rtype: lines were pure
+  noise.
+
+This commit:
+
+- Strips all 34 :rtype: lines from the 8 src/ files touched by the previous commit. No functional
+  change; the :return:/:returns: description sections remain. - Flips
+  [tool.pydoclint].check-return-types from true to false so future PRs can omit :rtype: cleanly.
+  DOC201 still requires a :return: description section; only the type-echo is dropped.
+
+Pydoclint passes across src/ + tests/ with the flag flipped. Pre-existing :rtype: lines elsewhere in
+  src/ (vst/, models/, etc.) are left untouched — they're outside #1109's scope.
+
+- **lint**: Pilot — fix DOC101/103 in tests/schemas/test_paths_config.py
+  ([#1108](https://github.com/tinaudio/synth-setter/pull/1108),
+  [`fd887f0`](https://github.com/tinaudio/synth-setter/commit/fd887f0451ca747e82a440ad331320baf3fa3adc))
+
+Adds :param field: line to the parametrized test_blank_field_rejected docstring and drops the #
+  noqa: DOC101,DOC103 suppression. Pilot for a sibling bulk PR covering the remaining 21 tests/
+  files with DOC noqas.
+
+Refs #1106
+
+### Features
+
+- **pipeline**: Spec_io helpers + runner writes local input_spec.json, run() uploads to R2
+  ([#1120](https://github.com/tinaudio/synth-setter/pull/1120),
+  [`31d3b3f`](https://github.com/tinaudio/synth-setter/commit/31d3b3f991399fa86152e3f73fc666dca0b71a4c))
+
+* feat(pipeline): spec_io helpers + runner writes local input_spec.json, run() uploads to R2
+
+Phase 1 / Wave 1 of the workflow-spec-upload-delegation series. Adds the `pipeline.spec_io` module
+  with three pure helpers — `local_spec_path`, `write_spec_locally`, `upload_spec` — and wires them
+  into `generate_dataset.main` so the runner writes a local `input_spec.json` on every path
+  (operator-side artifact, anticipating §3a's `metadata/` target layout). The worker's `run()`
+  uploads to the R2 destination via `upload_spec` (idempotent at the key — same content + same key =
+  no-op overwrite).
+
+Runner-side R2 upload from `main()` is deferred to a later phase — `RCLONE_CONFIG_R2_*` env loading
+  currently happens inside `dispatch_via_skypilot`, after `main()`. Threading rclone env handling
+  out is its own change.
+
+Implementation notes:
+
+- `upload_spec` reuses `r2_io.upload_to_uri` so the rclone flag set (checksum / timeout / retry)
+  lives in one place. - The R2 URI is built via the existing `R2Location.input_spec_uri()`. - The
+  `Path(__file__).parents[3]` repo-root traversal in `cli/generate_dataset.py` is flagged as a
+  brittle pattern; a codebase-wide sweep follow-up is tracked in #1122.
+
+Test plan:
+
+- `make test-fast` green - `tests/pipeline/test_spec_io.py` covers all three helpers (12 tests) -
+  `tests/pipeline/test_entrypoints/test_generate_dataset.py` covers the `main()` integration via
+  `TestMainSpecPersistence`
+
+Closes #1113 Refs #385 Refs #603
+
+* fix(pipeline): address Copilot d9faf03 re-review — stale doc consumers, stale test docstring,
+  _REPO_ROOT anchor
+
+- storage-provenance-spec.md §3a "Materialized spec" table, launcher transport row: replace stale
+  "worker consumes WORKER_SPEC_URI via docker_entrypoint" with the post-#1118 reality — the worker
+  rebuilds the spec via from_hydra/spec_from_cfg, and the env var is informational on the pod
+  (load-bearing only for validate-spec / validate-shard CI). (Copilot #3267015974)
+
+- tests/pipeline/test_entrypoints/test_generate_dataset.py: TestMainSpecPersistence class docstring
+  no longer claims main() uploads on the dispatch branch — both branches assert
+  upload_spec.assert_not_called() because the runner-side upload was deferred in the bc4646c ->
+  d9faf03 squash. (Copilot #3267016094)
+
+- cli/generate_dataset.py main(): pass _REPO_ROOT directly to write_spec_locally instead of
+  round-tripping through cfg.paths.output_dir, which is a defensive shim pinned to _REPO_ROOT two
+  lines above for ${hydra:runtime.output_dir} resolution. Removes the WTF where "output_dir" is read
+  but doesn't carry that meaning. (Copilot #3267016144)
+
+Refs #1113 Refs #603
+
+* feat(pipeline): main()-side canonical R2 upload via ensure_r2_env_loaded
+
+### Refactoring
+
+- **agent-hooks**: Harden agent/hooks/* and expand test.sh (PR #1085 follow-ups)
+  ([#1119](https://github.com/tinaudio/synth-setter/pull/1119),
+  [`e44f8bd`](https://github.com/tinaudio/synth-setter/commit/e44f8bde97764d4bdba5a8f174fc34963d5256b5))
+
+- **claude-md**: Share agent hooks and review skills
+  ([#1085](https://github.com/tinaudio/synth-setter/pull/1085),
+  [`fb6af8f`](https://github.com/tinaudio/synth-setter/commit/fb6af8f039500a3b337be2bc35a869939e0a6333))
+
+* refactor(claude-md): share agent hooks and review skills
+
+* fix(agent-hooks): address PR review feedback
+
+* fix(agent-hooks): address review feedback on PR #1085
+
+Block / correctness: - edit-write.sh: make `format`/`test` modes non-fatal — guard jq parse with `||
+  true`, add `|| true` to every formatter and pytest pipeline, and `exit 0` at the end of both
+  modes. Under `set -euo pipefail` these previously aborted the hook silently on ruff/pytest
+  non-zero (Copilot #3263516862; shell-style BLOCK #3263553051 + #3263553057; synth-setter WARN
+  #3263553083). - verify-gh-taxonomy.sh: append `|| true` to the GITHUB_URL / PR_URL / ISSUE_URL
+  extraction pipelines (and their trailing `grep -oE '[0-9]+$'` number extractions). `grep` returns
+  1 with no match; `head | pipefail` then aborts the script before the documented `[[ -z "$VAR" ]];
+  then exit 0` no-op check fires (Copilot #3263516877; shell-style WARN #3263553145).
+
+Stale-reference cleanups (tdd-refactor): - chmod +x agent/hooks/pre-pr-review-gate.sh (was 644 vs
+  siblings' 755). - tests/claude_hooks/test_settings_hooks.py:242 fixture docstring now cites
+  agent/hooks/pre-pr-review-gate.sh, not .claude/hooks/... - AGENTS.md:303 rewords the Pre-PR Review
+  Gate paragraph to be agent-agnostic ("the agent's settings (Claude registers it in
+  .claude/settings.json; ...)") rather than pinning the mechanism to Claude alone. - pyproject.toml:
+  remove the stale `.claude/skills/_shared/post_review.py` per-file-ignore entry — that path is now
+  a 13-line runpy shim that triggers none of T201/S603/S607. The canonical implementation lives at
+  agent/skills/_shared/post_review.py and uses inline `# noqa: S603` plus `shutil.which("gh")`. Per
+  CLAUDE.md, removals from append-frozen lists are the only allowed edits — this is one (Refs #25).
+
+Easy WARN nits: - agent/skills/_shared/post_review.py: drop the baked-in "Verified end-to-end on PR
+  #777" reference; replace with a typical-invocation example block. Type submit_review's return as
+  `dict[str, object]` (was bare `dict`) and narrow `html_url` in main() to a `str` via `isinstance`
+  so the new annotation type-checks under pyright. - tests/claude_hooks/test_settings_hooks.py:
+  tighten _EXPECTED_HANDLER_SCOPES and _EXPECTED_SHARED_HOOK_COMMANDS to `tuple[tuple[str, str],
+  ...]` (immutable, matches the CAPS_WITH_UNDER constant convention). Shorten the _find_handler
+  docstring to fit the 99-char PY21 limit.
+
+Test-quality cleanup: - Delete `test_edit_write_handlers_do_not_parse_file_path_with_grep` — it
+  asserted on literal strings in the command body (a change-detector). The behavior it claimed to
+  test ("file_path extraction robust against quoted file_path text in payload content") is already
+  covered by `test_credential_guard_uses_tool_input_file_path_not_embedded_text`.
+
+Test suite: 17 passed (was 18, dropped the change-detector); agent/hooks/test.sh 18 passed;
+  pre-commit clean (ruff format, pyright, pydoclint, shellcheck, mdformat, codespell all green).
+
+Refs #25
+
+
 ## v5.3.0 (2026-05-19)
 
 ### Chores
