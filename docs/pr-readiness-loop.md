@@ -55,10 +55,15 @@ push.
 
    ```bash
    gh api repos/<OWNER>/<REPO>/pulls/<N>/comments --paginate \
-     --jq '[.[] | select(.user.login | test("[Cc]opilot")) | {id, path, line, body}]'
+     --jq '[.[] | select(.user.login | test("[Cc]opilot")) | {id, path, line, created_at, commit_id, body}]'
    gh api repos/<OWNER>/<REPO>/pulls/<N>/reviews --paginate \
-     --jq '[.[] | select(.user.login | test("[Cc]opilot")) | {id, state, submitted_at, body}]'
+     --jq '[.[] | select(.user.login | test("[Cc]opilot")) | {id, state, submitted_at, commit_id, body}]'
    ```
+
+   `created_at` (inline) and `submitted_at` (review) let you filter to
+   comments newer than your last push timestamp; `commit_id` lets you filter
+   to comments anchored to the just-pushed SHA (`git rev-parse HEAD`). Use
+   either to distinguish fresh findings from already-addressed ones.
 
    If Copilot left new unaddressed inline comments **or** a new top-level
    review with actionable content (`state=COMMENTED` / `CHANGES_REQUESTED`
