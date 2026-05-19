@@ -32,32 +32,47 @@ __all__ = [
     "upload_to_uri",
 ]
 
-# Keys rclone needs to authenticate to R2. Type and provider are defaulted by the
-# launcher (s3 / Cloudflare); the three below are secrets that must come from a
-# .env file or process env — no built-in default.
+# Keys rclone needs to authenticate to R2. The three below are secrets that must
+# come from a .env file or process env — no built-in default.
 _SECRET_R2_ENV_KEYS: tuple[str, ...] = (
     "RCLONE_CONFIG_R2_ACCESS_KEY_ID",
     "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY",
     "RCLONE_CONFIG_R2_ENDPOINT",
 )
 
+# Structural keys rclone's env-override convention needs to assemble a complete
+# remote definition. Without them `rclone lsd r2:` reports
+# "didn't find section in config file" even when the three secrets above are
+# populated. Defaulted here (not required from callers) so steps that wire only
+# the secrets — e.g. the skypilot-local matrix in `generate-dataset-shards.yaml`
+# — still get a working `r2:` remote. setdefault preserves caller overrides.
+_R2_STRUCTURAL_DEFAULTS: dict[str, str] = {
+    "RCLONE_CONFIG_R2_TYPE": "s3",
+    "RCLONE_CONFIG_R2_PROVIDER": "Cloudflare",
+}
+
 
 def ensure_r2_env_loaded(env_file: Path | None = None) -> None:
     """Load ``RCLONE_CONFIG_R2_*`` from ``env_file`` into ``os.environ``; validate.
 
-    Two-step pre-flight that callers run once before invoking any other helper
+    Three-step pre-flight that callers run once before invoking any other helper
     in this module:
 
     1. If ``env_file`` is provided and exists on disk, mirror every key
        prefixed with ``RCLONE_CONFIG_R2_`` from that dotenv file into
        ``os.environ`` (dotenv values overwrite — matches the launcher's
        precedence so the same view applies on every entry point).
-    2. Verify the three secret keys in ``_SECRET_R2_ENV_KEYS`` are present in
+    2. Default ``RCLONE_CONFIG_R2_TYPE=s3`` and ``RCLONE_CONFIG_R2_PROVIDER=Cloudflare``
+       into ``os.environ`` if unset. rclone's env-override convention needs both to
+       assemble a complete remote definition; without them ``rclone lsd r2:``
+       reports ``didn't find section in config file``. Caller values win.
+    3. Verify the three secret keys in ``_SECRET_R2_ENV_KEYS`` are present in
        process env, then run ``rclone lsd r2:`` as an auth ping. Either check
        failing raises ``RuntimeError`` with an actionable message.
 
     No-op on the dotenv step if ``env_file`` is ``None`` or doesn't exist; the
-    presence+auth check still runs against whatever ``os.environ`` already has.
+    defaulting + presence+auth checks still run against whatever ``os.environ``
+    already has.
 
     :param env_file: Optional dotenv file to merge into ``os.environ`` first
         (typically ``sky_cfg.env_file``).
@@ -68,6 +83,9 @@ def ensure_r2_env_loaded(env_file: Path | None = None) -> None:
         for key, value in dotenv_values(env_file).items():
             if key and key.startswith("RCLONE_CONFIG_R2_") and value is not None:
                 os.environ[key] = value
+
+    for key, default in _R2_STRUCTURAL_DEFAULTS.items():
+        os.environ.setdefault(key, default)
 
     missing = [k for k in _SECRET_R2_ENV_KEYS if k not in os.environ]
     if missing:

@@ -450,3 +450,57 @@ class TestEnsureR2EnvLoaded:
             r2_io.ensure_r2_env_loaded(nonexistent)
 
         mock_run.assert_called_once()
+
+    def test_defaults_type_and_provider_when_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """`TYPE=s3` / `PROVIDER=Cloudflare` are defaulted into env when callers don't set them.
+
+        rclone's env-override convention (`RCLONE_CONFIG_<remote>_<key>`) needs a complete
+        remote definition — without ``TYPE`` and ``PROVIDER`` it reports
+        ``didn't find section in config file``. Callers that set only the three secrets
+        (the failing matrix step in ``generate-dataset-shards.yaml``) hit this. The function
+        defaults the structural keys in-process so the auth ping sees a usable remote.
+
+        :param monkeypatch: Pytest fixture used to populate secrets.
+        """
+        import os
+
+        _set_all_r2_secrets(monkeypatch)
+        captured: dict[str, str] = {}
+
+        def _capture(*_a: object, **_kw: object) -> subprocess.CompletedProcess[str]:
+            captured.update(os.environ)
+            return subprocess.CompletedProcess(args=[], returncode=0)
+
+        with patch.object(r2_io.subprocess, "run", side_effect=_capture):
+            r2_io.ensure_r2_env_loaded(env_file=None)
+
+        assert captured["RCLONE_CONFIG_R2_TYPE"] == "s3"
+        assert captured["RCLONE_CONFIG_R2_PROVIDER"] == "Cloudflare"
+
+    def test_does_not_overwrite_caller_provided_type_and_provider(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A caller's ``TYPE`` / ``PROVIDER`` win — the defaults only fill the unset case.
+
+        Preserves the rclone env-override design: callers (e.g. a future non-Cloudflare
+        S3-compatible backend) can override the structural keys without having to opt out
+        of ``ensure_r2_env_loaded``.
+
+        :param monkeypatch: Pytest fixture used to populate env vars.
+        """
+        import os
+
+        _set_all_r2_secrets(monkeypatch)
+        monkeypatch.setenv("RCLONE_CONFIG_R2_TYPE", "caller-type")
+        monkeypatch.setenv("RCLONE_CONFIG_R2_PROVIDER", "caller-provider")
+        captured: dict[str, str] = {}
+
+        def _capture(*_a: object, **_kw: object) -> subprocess.CompletedProcess[str]:
+            captured.update(os.environ)
+            return subprocess.CompletedProcess(args=[], returncode=0)
+
+        with patch.object(r2_io.subprocess, "run", side_effect=_capture):
+            r2_io.ensure_r2_env_loaded(env_file=None)
+
+        assert captured["RCLONE_CONFIG_R2_TYPE"] == "caller-type"
+        assert captured["RCLONE_CONFIG_R2_PROVIDER"] == "caller-provider"
