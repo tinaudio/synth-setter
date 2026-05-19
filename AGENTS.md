@@ -140,6 +140,19 @@ Comments that restate values, counts, or list contents go stale the moment the c
   os._exit(0)
   ```
 
+- **Don't narrate history.** A comment, docstring, or doc page describes the **current** state, not the path that got there. Phrasings to avoid: "previously...", "used to...", "was X, now Y", "renamed from...", "migrated from...", "moved from...", "no longer...", "formerly...", "(was X in v1)", "post-#NNNN this became...". Git log is the source for history; if the *rationale* for current behavior matters, point at an issue (`# Workaround for X — see #N`) rather than narrating the journey.
+
+  ```python
+  # Bad — narrates the migration:
+  # Previously read from YAML via load_dataset_spec_yaml; spec is now composed
+  # from Hydra defaults (#887) and load_dataset_spec_yaml was removed in #917.
+
+  # Good — describes only the current behavior, with a pointer for context:
+  # DatasetSpec is composed from Hydra defaults — see configs/dataset.yaml.
+  ```
+
+  Same rule for docstrings and for prose in `docs/`. If you catch yourself writing "previously" or "no longer" in a design or reference doc, rewrite the paragraph in the present tense. If the historical decision is worth keeping at all, record it in a clearly marked "Background" or "Rejected alternatives" section — never woven into the description of current behavior.
+
 - Still write comments for: WHY a non-obvious choice was made, hidden invariants, workarounds (with bug ID), and surprising behavior.
 
 #### No Comments Inside YAML `run:` Block-Scalars
