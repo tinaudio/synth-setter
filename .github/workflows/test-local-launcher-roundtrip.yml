@@ -85,12 +85,15 @@ jobs:
       - name: Install rclone
         run: sudo apt-get update -qq && sudo apt-get install -y -qq rclone
 
-      # The launcher (synth_setter.cli.generate_dataset) and the validate
-      # helpers (synth_setter.pipeline.ci.validate_*) need pydantic, hydra,
-      # h5py, librosa, loguru, python-dotenv, rootutils, pyloudnorm; the
-      # renderer subprocess is stubbed in the test so torch/pedalboard/
-      # skypilot are not needed. Install with [torch,dev] anyway — it
-      # matches test.yml's setup and avoids a separate slim-dep manifest.
+      # Install with [torch,dev]. Slimmer install paths (e.g. the
+      # `--no-deps` pattern in validate-dataset-shards.yaml) don't work
+      # here because tests/conftest.py imports torch at module top, so
+      # pytest collection requires torch to be importable even though
+      # the launcher itself doesn't pull torch in. [dev] supplies pytest;
+      # [torch] satisfies conftest. pedalboard is a base dep (pulled in
+      # by synth_setter.data.vst.core, which the launcher imports for
+      # extract_renderer_version); the stub avoids the headless Surge
+      # render path but not the import.
       - name: Install project deps
         run: uv pip install --system -e ".[torch,dev]"
 
