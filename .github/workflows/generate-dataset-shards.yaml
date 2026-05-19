@@ -409,21 +409,23 @@ jobs:
       # output so validate-dataset-shards.yaml can pull it directly from R2
       # instead of via the run-metadata artifact.
       #
-      # The console script lives in the project package, which isn't installed
-      # on the runner for runpod/oci (only the skypilot-local row installs it).
-      # Invoke it inside the already-pulled image — it's installed there for
-      # every provider — and mount the run-metadata dir read-only so the
-      # container can read input_spec.json.
+      # The console script lives in the project package. The skypilot-local row
+      # has it via "Install launcher deps" above; runpod/oci runs do not, since
+      # their workers run remotely. The fallback `pip install` covers that case
+      # — invoking via `docker run "${IMAGE}"` is not safe here because the
+      # pulled `dev-snapshot` tag can race the per-PR image build (the workflow
+      # pulls before docker-image-build.yml has pushed the PR's tag).
       - name: Compute spec_uri output
         id: spec_uri
         env:
           CLUSTER_NAME: ${{ steps.cluster.outputs.name }}
         run: |
           set -euo pipefail
-          SPEC_URI=$(docker run --rm \
-            -v "${RUN_METADATA_DIR}:/run-metadata:ro" \
-            "${IMAGE}" \
-            synth-setter-spec-uri /run-metadata/input_spec.json "${CLUSTER_NAME}")
+          SPEC_PATH="${RUN_METADATA_DIR}/input_spec.json"
+          if ! command -v synth-setter-spec-uri >/dev/null 2>&1; then
+            python3 -m pip install --quiet -e .
+          fi
+          SPEC_URI=$(synth-setter-spec-uri "${SPEC_PATH}" "${CLUSTER_NAME}")
           echo "spec_uri=${SPEC_URI}" >> "${GITHUB_OUTPUT}"
           echo "spec_uri: ${SPEC_URI}"
 
