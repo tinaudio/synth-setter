@@ -42,7 +42,7 @@ jobs:
   r2-auth-probe:
     name: rclone R2 auth probe
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 5
     # Fork PRs can't see repo secrets, so the probe would always fail and burn
     # runner minutes. Same gating pattern as `test-skypilot-local.yml`.
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository }}
