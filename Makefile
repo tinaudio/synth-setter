@@ -149,8 +149,6 @@ install-surge-xt: ## Download Surge XT VST3 into plugins/ (skipped if already pr
 # coverage runs reproduce CI output (xml report feeds Codecov; html is for
 # local browsing).
 coverage: ## Run tests with coverage report
-	pip install uv
-	uv pip install pytest-cov[toml]
 	pytest --cov=src --cov-branch --cov-report=xml --cov-report=term-missing --cov-report=html -m "not slow and not gpu and not mps"
 
 benchmark: ## Run performance benchmarks
