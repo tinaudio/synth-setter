@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PreToolUse Bash(git commit *) gate. Exits 0 (clean / not git commit) or 2
+# PreToolUse Bash(git*) gate. Exits 0 (clean / not git commit) or 2
 # (forbidden --no-verify/-n flag or Co-Authored-By / agent-attribution trailer).
 set -euo pipefail
 
@@ -14,11 +14,6 @@ readonly SCRIPT_DIR
 # shellcheck source=agent/hooks/_lib.sh
 # shellcheck disable=SC1091
 source "${SCRIPT_DIR}/_lib.sh"
-
-# Re-scope regex: matches `git commit` at command start or after a shell
-# control character. Defensive against the handler-level `if:` filter firing
-# more broadly than expected.
-readonly GIT_COMMIT_RE='(^[[:space:]]*|[;|&`(][[:space:]]*)git[[:space:]]+commit([[:space:]]|$)'
 
 main() {
   # Any unexpected failure (Python crash, jq parse, etc.) must block — never
@@ -37,12 +32,11 @@ main() {
     exit 2
   fi
 
-  if ! grep -qE "$GIT_COMMIT_RE" <<<"$cmd"; then
-    exit 0
-  fi
-
-  # Pipe the command on stdin to the Python scanner so argv slicing can
-  # distinguish `git commit -n` from a downstream `grep -n`.
+  # The Python scanner is the authoritative parser — it uses shlex, so it
+  # tracks quoted-value forms like `git -c user.name="A B" commit` that an
+  # ERE pre-filter cannot. Non-commit invocations produce empty stdout (no
+  # commit slice found), so this also serves as the fast-path for
+  # `git status`, `git log`, etc.
   findings=$(printf '%s' "$cmd" | python3 "${SCRIPT_DIR}/git_commit_trailer_check.py")
 
   if [[ -n "$findings" ]]; then
