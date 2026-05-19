@@ -120,7 +120,7 @@
       },
       {
         "matcher": "Bash",
-        "description": "Doc-drift advisory review: on gh pr create, runs a headless agent session invoking the doc-drift skill (or an inline fallback referencing docs/doc-map.yaml) against git diff against the default branch. Output saved to .agent-reviews/doc-drift-<uuid>.md. On headless agent failure, writes a verbose error report (stderr tail + exit code) and still wakes the session. The `if` guard scopes the hook to gh pr create at the handler level; doc-drift.sh re-validates the command itself. Advisory only — does not block.",
+        "description": "Doc-drift advisory review: on gh pr create, runs a headless agent session invoking the doc-drift skill (or an inline fallback referencing docs/doc-map.yaml) against git diff against the default branch. The headless agent runs in a detached worktree pinned to the captured HEAD so it cannot mutate the user's primary checkout, and is bounded by AGENT_TIMEOUT_SECS (default 800s, with --kill-after=10 inside the harness 900s ceiling). Output saved to .agent-reviews/doc-drift-<uuid>.md in the main repo. Rewake stderr stamps origin HEAD so receivers can detect cross-session leaks (see AGENTS.md). On headless agent failure, writes a verbose error report (stderr tail + exit code) and still wakes the session. The `if` guard scopes the hook to gh pr create at the handler level; doc-drift.sh re-validates the command itself. Advisory only — does not block.",
         "hooks": [
           {
             "type": "command",
@@ -134,7 +134,7 @@
       },
       {
         "matcher": "Bash",
-        "description": "PR review resolver: on git push (excluding main/master), waits RESOLVER_SLEEP_SECS (default 360s) for CI and reviewers to settle, then runs the pr-review-resolver skill (or inline fallback) headlessly. Per-branch lockfile dedupes stacked pushes (last push wins). On headless agent failure, writes a verbose error report and still wakes the session. The `if` guard scopes the hook to git push at the handler level; pr-review-resolver.sh re-validates the command itself. Advisory only — does not block.",
+        "description": "PR review resolver: on git push (excluding main/master), resolves the branch's PR up front (exits early if none), then waits RESOLVER_SLEEP_SECS (default 360s) for CI and reviewers to settle and runs the pr-review-resolver skill (or inline fallback) headlessly. The headless agent runs in a detached worktree pinned to the captured HEAD so it cannot mutate the user's primary checkout, and is bounded by AGENT_TIMEOUT_SECS (default 800s, plus --kill-after=10; fits inside the harness 1200s ceiling after the 360s sleep). Per-branch lockfile dedupes stacked pushes (last push wins). Reports land in .agent-reviews/pr-review-resolver-<uuid>.md in the main repo; rewake stderr stamps origin HEAD so receivers can detect cross-session leaks (see AGENTS.md). On headless agent failure, writes a verbose error report and still wakes the session. The `if` guard scopes the hook to git push at the handler level; pr-review-resolver.sh re-validates the command itself. Advisory only — does not block.",
         "hooks": [
           {
             "type": "command",

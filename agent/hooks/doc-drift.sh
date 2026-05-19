@@ -10,7 +10,7 @@
 #
 # Env overrides: DOC_DRIFT_DRY_RUN=1 skips the agent call;
 # AGENT_HEADLESS=claude|codex pins the CLI; AGENT_TIMEOUT_SECS bounds the
-# headless run (default 900s).
+# headless run (default 800s).
 set -euo pipefail
 
 export HOOK_NAME="doc-drift"

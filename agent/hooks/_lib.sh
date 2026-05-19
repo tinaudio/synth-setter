@@ -100,12 +100,14 @@ has_skill() {
 
 run_agent_prompt() {
   # Usage: run_agent_prompt <prompt>
-  # Routes the prompt through the available headless agent CLI, wrapped in
-  # `timeout` so a hung agent surfaces as exit 124 instead of an open-ended
-  # hang the harness must SIGKILL. AGENT_HEADLESS (`claude`|`codex`) overrides
-  # auto-detection; AGENT_TIMEOUT_SECS overrides the default 900s ceiling.
+  # Wraps the headless CLI in `timeout` so a hung agent surfaces as exit 124.
+  # Default 800s leaves headroom inside both harness ceilings: doc-drift's
+  # 900s (800 + 10 kill-after = 810 < 900) and pr-review-resolver's
+  # 1200s after a 360s sleep (360 + 800 + 10 = 1170 < 1200). Operators
+  # raising AGENT_TIMEOUT_SECS must check the matching .claude/settings.json
+  # `timeout` field or the harness will SIGKILL.
   local prompt="$1" cli="${AGENT_HEADLESS:-}" candidate
-  local timeout_secs="${AGENT_TIMEOUT_SECS:-900}"
+  local timeout_secs="${AGENT_TIMEOUT_SECS:-800}"
   if [[ -z "$cli" ]]; then
     for candidate in claude codex; do
       if command -v "$candidate" >/dev/null 2>&1; then

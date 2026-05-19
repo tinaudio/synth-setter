@@ -20,7 +20,7 @@
 #
 # Env overrides: RESOLVER_SLEEP_SECS overrides the 360s wait (tests use 1s);
 # RESOLVER_DRY_RUN=1 skips the agent call; AGENT_HEADLESS=claude|codex pins
-# the CLI; AGENT_TIMEOUT_SECS bounds the headless run (default 900s).
+# the CLI; AGENT_TIMEOUT_SECS bounds the headless run (default 800s).
 set -euo pipefail
 
 export HOOK_NAME="pr-review-resolver"
