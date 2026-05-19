@@ -320,13 +320,12 @@ def main(
 ) -> None:
     """Run an inner generator ``command`` then dispatch its spec to SkyPilot.
 
-    The CLI no longer composes the dataset spec itself. Instead it shells out
-    to ``command`` (typically the ``synth-setter-generate-dataset`` console
-    script), which is responsible for writing the canonical
-    ``data/<task>/<run>/metadata/input_spec.json`` and uploading it to R2.
-    The launcher then discovers that local spec, asks
-    ``synth-setter-spec-uri`` for its canonical R2 URI, and hands both off to
-    ``dispatch_via_skypilot`` for the SkyPilot fan-out.
+    Shells out to ``command`` (typically the ``synth-setter-generate-dataset``
+    console script), which writes the canonical
+    ``data/<task>/<run>/metadata/input_spec.json`` and uploads it to R2. The
+    launcher then discovers that local spec, asks ``synth-setter-spec-uri``
+    for its canonical R2 URI, and hands both off to ``dispatch_via_skypilot``
+    for the SkyPilot fan-out.
 
     Pass the inner command after the launcher's own options::
 
