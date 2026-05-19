@@ -353,7 +353,7 @@ docs:
 
   # ── Mutation testing reference ──────────────────────────────────
   - doc: docs/testing/mutmut.md
-    description: Mutation testing reference
+    description: Mutmut v3 config, also_copy invariant, fork-safety gotchas
     sources:
       - pattern: "pyproject.toml"
         covers: "[tool.mutmut] paths_to_mutate / also_copy configuration"
@@ -361,5 +361,5 @@ docs:
       - pattern: ".github/workflows/mutmut.yaml"
         covers: "Authoritative CI run (Linux, workflow_dispatch + weekly cron)"
       - pattern: "Makefile"
-        covers: "make mutmut target, OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES soft macOS workaround"
+        covers: "make mutmut target; macOS fork-safety workaround"
         scope: "mutmut"

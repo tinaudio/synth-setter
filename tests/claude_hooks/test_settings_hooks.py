@@ -1,8 +1,5 @@
-"""Tests pinning Claude hook ``settings.json`` scoping and runtime behaviour.
+"""Invariant: each Bash hook handler that scopes itself uses Claude Code permission-rule ``if:`` syntax (e.g. ``Bash(gh pr create *)``) at the handler level, and the body of each hook honours its documented exit contract.
 
-Invariant: each Bash hook handler that scopes itself uses Claude Code
-permission-rule ``if:`` syntax (e.g. ``Bash(gh pr create *)``) at the handler
-level, and the body of each hook honours its documented exit contract.
 Schema reference: https://code.claude.com/docs/en/hooks.md.
 """
 
@@ -75,11 +72,27 @@ def _run_hook_command(
     :param stdin_payload: JSON payload sent to the hook on stdin.
     :returns: Completed subprocess result with captured stdout/stderr and exit code.
     """
-    # Trust boundary: command_body comes from the repo's checked-in settings.json
-    # (maintainer-controlled). Do not reuse this helper against untrusted paths.
+    # Trust boundary: command_body comes from maintainer-controlled settings.json.
     return subprocess.run(  # noqa: S603
         ["bash", "-c", command_body],  # noqa: S607 — bash is a hard requirement of the harness
         input=json.dumps(stdin_payload),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _run_hook_command_raw(command_body: str, raw_stdin: str) -> subprocess.CompletedProcess[str]:
+    """Run a hook ``command`` body with raw (un-JSON-encoded) stdin.
+
+    :param command_body: The shell command body from a hook handler.
+    :param raw_stdin: Raw text written verbatim to the hook's stdin.
+    :returns: Completed subprocess result with captured stdout/stderr and exit code.
+    """
+    # Trust boundary: command_body comes from maintainer-controlled settings.json.
+    return subprocess.run(  # noqa: S603
+        ["bash", "-c", command_body],  # noqa: S607 — bash is a hard requirement of the harness
+        input=raw_stdin,
         capture_output=True,
         text=True,
         check=False,
@@ -132,23 +145,35 @@ def test_handler_if_values_use_permission_rule_syntax() -> None:
 
 _EXPECTED_HANDLER_SCOPES: tuple[tuple[str, str], ...] = (
     ("Branch safety", "Bash(git commit *)"),
-    ("Git-commit-trailer-check", "Bash(git commit *)"),
-    ("Pre-PR review gate", "Bash(gh pr create *)"),
     ("Doc-drift advisory review", "Bash(gh pr create *)"),
+    ("Git-commit-trailer-check", "Bash(git commit *)"),
     ("PR review resolver", "Bash(git push *)"),
+    ("Pre-PR review gate", "Bash(gh pr create *)"),
 )
 
 _EXPECTED_SHARED_HOOK_COMMANDS: tuple[tuple[str, str], ...] = (
-    ("Credential protection", "bash agent/hooks/edit-write.sh credential-protect"),
-    ("No-baseline-additions", "bash agent/hooks/no-baseline-additions.sh"),
-    ("No-yaml-run-comments", "bash agent/hooks/no-yaml-run-comments.sh"),
-    ("Git-commit-trailer-check", "bash agent/hooks/git-commit-trailer-check.sh"),
     ("Auto-format", "bash agent/hooks/edit-write.sh format"),
     ("Auto-test", "bash agent/hooks/edit-write.sh test"),
-    ("Taxonomy verification", "bash agent/hooks/verify-gh-taxonomy.sh"),
+    ("Credential protection", "bash agent/hooks/edit-write.sh credential-protect"),
     ("Doc-drift advisory review", "bash agent/hooks/doc-drift.sh"),
+    ("Git-commit-trailer-check", "bash agent/hooks/git-commit-trailer-check.sh"),
+    ("No-baseline-additions", "bash agent/hooks/no-baseline-additions.sh"),
+    ("No-yaml-run-comments", "bash agent/hooks/no-yaml-run-comments.sh"),
     ("PR review resolver", "bash agent/hooks/pr-review-resolver.sh"),
+    ("Taxonomy verification", "bash agent/hooks/verify-gh-taxonomy.sh"),
 )
+
+
+def _workflow_with_run_body(body: str) -> str:
+    """Wrap step body lines in minimal workflow scaffolding.
+
+    :param body: Lines (each terminated with ``\\n``) to inject under ``steps:``.
+        Callers supply the step (including the ``- name:``/``run: |`` header) and
+        any block-scalar body, so the helper can serve both inside-run-block and
+        above-step test cases.
+    :returns: A complete workflow YAML string suitable for the yaml-run hook.
+    """
+    return "name: test\non: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n" + body
 
 
 @pytest.mark.parametrize(("description_substring", "expected_if"), _EXPECTED_HANDLER_SCOPES)
@@ -351,13 +376,7 @@ def test_yaml_run_hook_blocks_comment_inside_run_block(yaml_run_hook_command: st
 
     :param yaml_run_hook_command: Hook command body fixture.
     """
-    content = (
-        "name: test\n"
-        "on: push\n"
-        "jobs:\n"
-        "  test:\n"
-        "    runs-on: ubuntu-latest\n"
-        "    steps:\n"
+    content = _workflow_with_run_body(
         "      - name: bad\n"
         "        run: |\n"
         "          # this comment is inside the run block — BAD\n"
@@ -380,13 +399,7 @@ def test_yaml_run_hook_allows_comment_above_step(yaml_run_hook_command: str) -> 
 
     :param yaml_run_hook_command: Hook command body fixture.
     """
-    content = (
-        "name: test\n"
-        "on: push\n"
-        "jobs:\n"
-        "  test:\n"
-        "    runs-on: ubuntu-latest\n"
-        "    steps:\n"
+    content = _workflow_with_run_body(
         "      # this comment is correctly above the step\n"
         "      - name: good\n"
         "        run: |\n"
@@ -407,13 +420,8 @@ def test_yaml_run_hook_allows_shebang_inside_run_block(yaml_run_hook_command: st
 
     :param yaml_run_hook_command: Hook command body fixture.
     """
-    content = (
-        "jobs:\n"
-        "  test:\n"
-        "    steps:\n"
-        "      - run: |\n"
-        "          #!/usr/bin/env bash\n"
-        "          echo hi\n"
+    content = _workflow_with_run_body(
+        "      - run: |\n          #!/usr/bin/env bash\n          echo hi\n"
     )
     result = _run_hook_command(
         yaml_run_hook_command,
@@ -500,24 +508,37 @@ def test_trailer_hook_does_not_false_positive_on_chained_grep_n(
     assert result.returncode == 0, (result.returncode, result.stderr)
 
 
-def test_trailer_hook_blocks_co_authored_by_trailer(trailer_hook_command: str) -> None:
-    """A ``Co-Authored-By:`` trailer in the ``-m`` body is blocked.
+@pytest.mark.parametrize(
+    ("command_str", "expected_substring"),
+    [
+        pytest.param(
+            'git commit -m "feat: x\n\nCo-Authored-By: Claude <noreply@anthropic.com>"',
+            "Co-Authored-By",
+            id="co-authored-by-trailer",
+        ),
+        pytest.param(
+            'git commit -m "feat: x via noreply@anthropic.com"',
+            "BLOCKED",
+            id="noreply-email",
+        ),
+    ],
+)
+def test_trailer_hook_blocks_forbidden_trailer_in_message_body(
+    trailer_hook_command: str, command_str: str, expected_substring: str
+) -> None:
+    """Forbidden trailers inside a ``-m`` body are blocked.
 
     :param trailer_hook_command: Hook command body fixture.
+    :param command_str: ``git commit`` command whose body carries the offender.
+    :param expected_substring: Substring that must appear in stderr.
     """
     result = _run_hook_command(
         trailer_hook_command,
-        {
-            "tool_input": {
-                "command": (
-                    'git commit -m "feat: x\n\nCo-Authored-By: Claude <noreply@anthropic.com>"'
-                )
-            }
-        },
+        {"tool_input": {"command": command_str}},
     )
     assert result.returncode == 2, (result.returncode, result.stderr)
     assert "BLOCKED" in result.stderr
-    assert "Co-Authored-By" in result.stderr
+    assert expected_substring in result.stderr
 
 
 def test_trailer_hook_blocks_generated_with_footer(trailer_hook_command: str) -> None:
@@ -573,10 +594,7 @@ def test_trailer_hook_allows_bundled_short_flag_without_n(trailer_hook_command: 
 
 
 def test_trailer_hook_allows_claude_model_name_in_subject(trailer_hook_command: str) -> None:
-    """A subject naming a Claude model (no trailer context) is NOT flagged.
-
-    Verifies the over-broad-regex fix: ``feat(eval): tokeniser for Claude Sonnet
-    4.5`` is a legitimate subject. Only attribution-shaped trailers should fire.
+    """A subject that names a Claude model (with no trailer key) is not flagged.
 
     :param trailer_hook_command: Hook command body fixture.
     """
@@ -585,18 +603,6 @@ def test_trailer_hook_allows_claude_model_name_in_subject(trailer_hook_command: 
         {"tool_input": {"command": 'git commit -m "feat(eval): tokeniser for Claude Sonnet 4.5"'}},
     )
     assert result.returncode == 0, (result.returncode, result.stderr)
-
-
-def test_trailer_hook_blocks_noreply_email(trailer_hook_command: str) -> None:
-    """A ``noreply@anthropic.com`` email anywhere in the body is blocked.
-
-    :param trailer_hook_command: Hook command body fixture.
-    """
-    result = _run_hook_command(
-        trailer_hook_command,
-        {"tool_input": {"command": 'git commit -m "feat: x via noreply@anthropic.com"'}},
-    )
-    assert result.returncode == 2, (result.returncode, result.stderr)
 
 
 def test_trailer_hook_blocks_dash_F_file_with_trailer(
@@ -622,28 +628,25 @@ def test_trailer_hook_fails_closed_on_malformed_json(trailer_hook_command: str) 
 
     :param trailer_hook_command: Hook command body fixture.
     """
-    # _run_hook_command always JSON-encodes its payload, so bypass it here and
-    # send raw invalid JSON directly on stdin.
-    result = subprocess.run(  # noqa: S603
-        ["bash", "-c", trailer_hook_command],  # noqa: S607
-        input="not valid json",
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    result = _run_hook_command_raw(trailer_hook_command, "not valid json")
     assert result.returncode == 2, (result.returncode, result.stderr)
     assert "BLOCKED" in result.stderr
 
 
-@pytest.mark.parametrize("metachar", ["&&", "||", ";", "|", "&"])
+_METACHAR_PARAMS = [
+    pytest.param("&&", id="and"),
+    pytest.param("||", id="or"),
+    pytest.param(";", id="semicolon"),
+    pytest.param("|", id="pipe"),
+    pytest.param("&", id="ampersand"),
+]
+
+
+@pytest.mark.parametrize("metachar", _METACHAR_PARAMS)
 def test_trailer_hook_does_not_false_positive_on_chained_grep_n_metachars(
     trailer_hook_command: str, metachar: str
 ) -> None:
-    """Every shell metachar terminating ``git commit``'s argv slice is honored.
-
-    Regression coverage: a future tokenizer that drops one of the five
-    metachars from the slicing set would silently start mis-attributing a
-    downstream ``grep -n`` as a ``commit -n`` violation.
+    """Every shell metachar terminating ``git commit``'s argv slice is honoured.
 
     :param trailer_hook_command: Hook command body fixture.
     :param metachar: Shell metachar to chain after the commit.
@@ -655,7 +658,7 @@ def test_trailer_hook_does_not_false_positive_on_chained_grep_n_metachars(
     assert result.returncode == 0, (result.returncode, result.stderr)
 
 
-@pytest.mark.parametrize("metachar", ["&&", "||", ";", "|", "&"])
+@pytest.mark.parametrize("metachar", _METACHAR_PARAMS)
 def test_trailer_hook_handles_no_whitespace_metachar_chain(
     trailer_hook_command: str, metachar: str
 ) -> None:
@@ -753,13 +756,7 @@ def test_baseline_hook_fails_closed_on_malformed_json(baseline_hook_command: str
 
     :param baseline_hook_command: Hook command body fixture.
     """
-    result = subprocess.run(  # noqa: S603
-        ["bash", "-c", baseline_hook_command],  # noqa: S607
-        input="not valid json",
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    result = _run_hook_command_raw(baseline_hook_command, "not valid json")
     assert result.returncode == 2, (result.returncode, result.stderr)
     assert "BLOCKED" in result.stderr
 
@@ -832,12 +829,206 @@ def test_yaml_run_hook_fails_closed_on_malformed_json(yaml_run_hook_command: str
 
     :param yaml_run_hook_command: Hook command body fixture.
     """
-    result = subprocess.run(  # noqa: S603
-        ["bash", "-c", yaml_run_hook_command],  # noqa: S607
-        input="not valid json",
-        capture_output=True,
-        text=True,
-        check=False,
+    result = _run_hook_command_raw(yaml_run_hook_command, "not valid json")
+    assert result.returncode == 2, (result.returncode, result.stderr)
+    assert "BLOCKED" in result.stderr
+
+
+def test_trailer_hook_blocks_message_equals_form(trailer_hook_command: str) -> None:
+    """``git commit --message=<body>`` (= form, not space-separated) is blocked.
+
+    :param trailer_hook_command: Hook command body fixture.
+    """
+    result = _run_hook_command(
+        trailer_hook_command,
+        {
+            "tool_input": {
+                "command": (
+                    'git commit --message="feat: x\n\nCo-Authored-By: Claude <noreply@anthropic.com>"'
+                )
+            }
+        },
+    )
+    assert result.returncode == 2, (result.returncode, result.stderr)
+    assert "BLOCKED" in result.stderr
+
+
+def test_trailer_hook_blocks_file_equals_form(trailer_hook_command: str, tmp_path: Path) -> None:
+    """``git commit --file=<path>`` whose file contains a forbidden trailer is blocked.
+
+    :param trailer_hook_command: Hook command body fixture.
+    :param tmp_path: pytest tmp_path.
+    """
+    msg_file = tmp_path / "msg.txt"
+    msg_file.write_text("feat: x\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n")
+    result = _run_hook_command(
+        trailer_hook_command,
+        {"tool_input": {"command": f"git commit --file={msg_file}"}},
+    )
+    assert result.returncode == 2, (result.returncode, result.stderr)
+    assert "BLOCKED" in result.stderr
+
+
+def test_trailer_hook_blocks_heredoc_trailer_in_raw_command(trailer_hook_command: str) -> None:
+    """Heredoc-bodied commits fall back to raw-command scanning and still block.
+
+    When no ``-m``/``-F`` body is recoverable from argv (heredoc /
+    ``$(cat msg.txt)``), the hook scans the raw command via anchored trailer
+    regexes — a ``Co-Authored-By:`` line in the heredoc body must still trip.
+
+    :param trailer_hook_command: Hook command body fixture.
+    """
+    cmd = "git commit <<EOF\nfeat: x\n\nCo-Authored-By: Claude\nEOF"
+    result = _run_hook_command(trailer_hook_command, {"tool_input": {"command": cmd}})
+    assert result.returncode == 2, (result.returncode, result.stderr)
+    assert "BLOCKED" in result.stderr
+
+
+def test_trailer_hook_allows_positional_n_after_double_dash(trailer_hook_command: str) -> None:
+    """``git commit -- -n`` (positional ``-n`` after ``--``) is not ``--no-verify``.
+
+    :param trailer_hook_command: Hook command body fixture.
+    """
+    result = _run_hook_command(
+        trailer_hook_command,
+        {"tool_input": {"command": "git commit -- -n"}},
+    )
+    assert result.returncode == 0, (result.returncode, result.stderr)
+
+
+def test_trailer_hook_handles_unbalanced_quotes_fallback(trailer_hook_command: str) -> None:
+    """An unterminated-quote command triggers the shlex fallback path cleanly.
+
+    With no trailer-shaped substring in the (raw) command, the fallback must not mis-attribute and
+    the hook should exit 0.
+
+    :param trailer_hook_command: Hook command body fixture.
+    """
+    result = _run_hook_command(
+        trailer_hook_command,
+        {"tool_input": {"command": 'git commit -m "feat: x'}},
+    )
+    assert result.returncode == 0, (result.returncode, result.stderr)
+
+
+def test_trailer_hook_blocks_lowercase_generated_with_in_trailer_position(
+    trailer_hook_command: str,
+) -> None:
+    """Lowercase ``generated with`` in trailer position is blocked (IGNORECASE).
+
+    :param trailer_hook_command: Hook command body fixture.
+    """
+    result = _run_hook_command(
+        trailer_hook_command,
+        {"tool_input": {"command": 'git commit -m "feat: x\n\ngenerated with claude code"'}},
+    )
+    assert result.returncode == 2, (result.returncode, result.stderr)
+    assert "BLOCKED" in result.stderr
+
+
+def test_trailer_hook_does_not_block_generated_with_in_subject(
+    trailer_hook_command: str,
+) -> None:
+    """``generated with`` in the subject line (no preceding newline) is not flagged.
+
+    Pins the anchoring fix: trailer regexes require ``(?:^|\\n|\\\\n)\\s*`` before
+    the key, so ``fix: docs generated with sphinx-build`` is a clean subject.
+
+    :param trailer_hook_command: Hook command body fixture.
+    """
+    result = _run_hook_command(
+        trailer_hook_command,
+        {"tool_input": {"command": 'git commit -m "fix: docs generated with sphinx-build"'}},
+    )
+    assert result.returncode == 0, (result.returncode, result.stderr)
+
+
+def test_trailer_hook_blocks_direct_claude_attribution_trailer(
+    trailer_hook_command: str,
+) -> None:
+    """Direct positive test for the ``[A-Za-z-]+:\\s*Claude\\s+(Code|Opus|Sonnet|Haiku)`` regex.
+
+    :param trailer_hook_command: Hook command body fixture.
+    """
+    result = _run_hook_command(
+        trailer_hook_command,
+        {"tool_input": {"command": 'git commit -m "feat: x\n\nAuthor: Claude Code"'}},
+    )
+    assert result.returncode == 2, (result.returncode, result.stderr)
+    assert "BLOCKED" in result.stderr
+
+
+def test_baseline_hook_allows_equal_count_edit(baseline_hook_command: str, tmp_path: Path) -> None:
+    """An Edit that swaps rows (NEW_COUNT == OLD_COUNT) is allowed — strict ``>`` boundary.
+
+    :param baseline_hook_command: Hook command body fixture.
+    :param tmp_path: pytest tmp_path.
+    """
+    baseline = tmp_path / ".pydoclint-baseline.txt"
+    baseline.write_text("path/a.py:1:1: DOC101\npath/b.py:2:2: DOC102\n")
+    result = _run_hook_command(
+        baseline_hook_command,
+        {
+            "tool_name": "Edit",
+            "tool_input": {
+                "file_path": str(baseline),
+                "old_string": "path/a.py:1:1: DOC101\npath/b.py:2:2: DOC102\n",
+                "new_string": "path/c.py:3:3: DOC103\npath/d.py:4:4: DOC104\n",
+            },
+        },
+    )
+    assert result.returncode == 0, (result.returncode, result.stderr)
+
+
+def test_yaml_run_hook_blocks_compute_config_path(yaml_run_hook_command: str) -> None:
+    """A `#`-comment inside a ``run: |`` block in ``configs/compute/*.yaml`` is blocked.
+
+    :param yaml_run_hook_command: Hook command body fixture.
+    """
+    content = _workflow_with_run_body(
+        "      - name: bad\n"
+        "        run: |\n"
+        "          # bad inline comment inside run block\n"
+        "          echo hi\n"
+    )
+    result = _run_hook_command(
+        yaml_run_hook_command,
+        {
+            "tool_name": "Write",
+            "tool_input": {"file_path": "configs/compute/foo.yaml", "content": content},
+        },
+    )
+    assert result.returncode == 2, (result.returncode, result.stderr)
+    assert "BLOCKED" in result.stderr
+
+
+def test_yaml_run_hook_blocks_comment_in_map_key_run_block(yaml_run_hook_command: str) -> None:
+    """Map-key ``run: |`` (no leading ``- ``) with a body comment is blocked.
+
+    Only the list-marker form (``- run: |``) was previously exercised; this
+    pins the bare map-key form where the body is indented deeper than the
+    ``run:`` key column.
+
+    :param yaml_run_hook_command: Hook command body fixture.
+    """
+    content = (
+        "name: test\n"
+        "on: push\n"
+        "jobs:\n"
+        "  test:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - name: bad\n"
+        "        run: |\n"
+        "          # this is a bad comment inside a map-key run block\n"
+        "          echo hi\n"
+    )
+    result = _run_hook_command(
+        yaml_run_hook_command,
+        {
+            "tool_name": "Write",
+            "tool_input": {"file_path": ".github/workflows/test.yml", "content": content},
+        },
     )
     assert result.returncode == 2, (result.returncode, result.stderr)
     assert "BLOCKED" in result.stderr

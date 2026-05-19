@@ -62,9 +62,8 @@ Pure docs edits are exempt; no other exemptions.
 ## Commits
 
 - Conventional commits, gitlint-enforced. `internal-feat:` / `internal-fix:`
-  for unreleased code (no version bump). Picking the right scope is a
-  skill-bound decision — invoke `/github-taxonomy` or its scope guidance when
-  composing a commit subject.
+  for unreleased code (no version bump).
+- Scope is skill-bound — see `/github-taxonomy`.
 - **Never `--no-verify` / `-n`.** Pre-commit and gitlint must run. Hooks
   work inside worktrees.
 - **Never add `Co-Authored-By` trailers** or agent-attribution footers
@@ -111,10 +110,9 @@ unintended shell expansion. A `PreToolUse` hook
   (`agent/hooks/pre-pr-review-gate.sh`) blocks `gh pr create` until the
   command carries `REVIEW_FULL_DONE=1` — recommended as a trailing comment
   so other gh-pr-create hooks still fire.
-- **Readiness is four AND-ed gates:** CI green ∧ `mergeable=MERGEABLE` ∧
-  every review comment has an inline reply ∧ no new Copilot comments since
-  the last push. The full procedure (poll-loops, Copilot re-request,
-  endpoints to check) lives in `/pr-preflight`.
+- **Readiness gates:** CI green ∧ `mergeable=MERGEABLE` ∧ every review
+  comment has an inline reply ∧ no fresh Copilot findings — see
+  `/pr-preflight`.
 - **Always reply inline** on each open PR review comment (humans + Copilot),
   with a fix-commit SHA or justification. Use `/pr-review-resolver`.
 - **Verification evidence** for each behavioral claim goes through

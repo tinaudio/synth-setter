@@ -13,10 +13,10 @@ strips the real `src/` off `sys.path`. Any module a test imports transitively
 must come along via `also_copy`. `also_copy = ["src/synth_setter/"]` therefore
 includes the *whole* package, not just the mutated subdirs.
 
-When adding a new `synth_setter.*` import into a mutmut-target test path and
-the new module sits outside `paths_to_mutate`, `also_copy` already covers it.
 Only revisit the `[tool.mutmut]` config when adding a *new* top-level mutate
-path under `src/`.
+path under `src/`. All other `synth_setter.*` imports are covered
+automatically — `also_copy` already pulls in any module added outside
+`paths_to_mutate`.
 
 ## Keep mutmut-target tests in-process
 

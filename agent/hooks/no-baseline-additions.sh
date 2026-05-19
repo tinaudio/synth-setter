@@ -1,39 +1,41 @@
 #!/usr/bin/env bash
-# no-baseline-additions.sh — PreToolUse Edit/Write gate keeping
-# .pydoclint-baseline.txt append-frozen (AGENTS.md "Lint Exception Lists Are
-# Closed", tracked in #938). Other append-frozen lists deferred to a follow-up.
-# Reads tool-call JSON on stdin; exits 0 (out of scope or row count <= current)
-# or 2 (proposed row count exceeds current).
+# no-baseline-additions.sh — PreToolUse gate keeping .pydoclint-baseline.txt
+# append-frozen (AGENTS.md "Lint Exception Lists Are Closed", #938).
+# Reads tool-call JSON on stdin; exits 0 (out of scope or row count <=) or 2.
 set -euo pipefail
 
-export HOOK_NAME="no-baseline-additions"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC2034  # read by log() in _lib.sh via ${HOOK_NAME:-unknown}
+readonly HOOK_NAME="no-baseline-additions"
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+readonly SCRIPT_DIR
+
+[[ -f "${SCRIPT_DIR}/_lib.sh" ]] || { echo "BLOCKED: missing _lib.sh" >&2; exit 2; }
 # shellcheck source=agent/hooks/_lib.sh
 # shellcheck disable=SC1091
 source "${SCRIPT_DIR}/_lib.sh"
 
-# Any unexpected failure (Python crash, jq parse, etc.) must block — never
-# leak a non-2 exit that bypasses the contract documented in the header.
-trap 'log "internal failure on line $LINENO; blocking"; echo "BLOCKED: no-baseline-additions hit an internal error (line $LINENO); fix the hook or report it." >&2; exit 2' ERR
+main() {
+  # Any unexpected failure (Python crash, jq parse, etc.) must block — never
+  # leak a non-2 exit that bypasses the contract documented in the header.
+  trap 'log "internal failure on line $LINENO; blocking"; echo "BLOCKED: no-baseline-additions hit an internal error (line $LINENO); fix the hook or report it." >&2; exit 2' ERR
 
-INPUT=$(cat)
-# Fail closed: a silent fail-open is the bug class this gate exists to prevent.
-if ! FILE_PATH=$(jq -r '.tool_input.file_path // empty' <<<"$INPUT" 2>/dev/null); then
-  log "jq parse failed; blocking conservatively"
-  echo "BLOCKED: no-baseline-additions could not parse tool-call JSON." >&2
-  exit 2
-fi
+  local input file_path counts old_count new_count
+  input=$(cat)
+  # Fail closed: a silent fail-open is the bug class this gate exists to prevent.
+  if ! file_path=$(jq -r '.tool_input.file_path // empty' <<<"$input" 2>/dev/null); then
+    log "jq parse failed; blocking conservatively"
+    echo "BLOCKED: no-baseline-additions could not parse tool-call JSON." >&2
+    exit 2
+  fi
 
-case "$FILE_PATH" in
-  .pydoclint-baseline.txt|*/.pydoclint-baseline.txt) ;;
-  *) exit 0 ;;
-esac
+  case "$file_path" in
+    .pydoclint-baseline.txt|*/.pydoclint-baseline.txt) ;;
+    *) exit 0 ;;
+  esac
 
-# `OLD_COUNT=0` when the baseline file doesn't exist. Treating a missing file
-# as "out of scope" would create a bypass: delete + Write recreates the file
-# unchecked. With OLD_COUNT=0, any Write that includes baseline rows blocks.
-COUNTS=$(HOOK_INPUT="$INPUT" SRC_PATH="$FILE_PATH" python3 - <<'PY'
-import json, os, pathlib
+  # Missing baseline → OLD_COUNT=0 so delete+Write recreate cannot bypass the gate.
+  counts=$(HOOK_INPUT="$input" SRC_PATH="$file_path" python3 - <<'PY'
+import json, os, pathlib, sys
 
 payload = json.loads(os.environ["HOOK_INPUT"])
 tool_name = payload.get("tool_name", "")
@@ -46,7 +48,14 @@ if tool_name == "Write":
 else:
     old = tool.get("old_string", "")
     new = tool.get("new_string", "")
-    proposed = current.replace(old, new, 1) if old and old in current else current
+    if old and old in current:
+        proposed = current.replace(old, new, 1)
+    else:
+        print(
+            "note: Edit old_string not found in current content; row count unchanged",
+            file=sys.stderr,
+        )
+        proposed = current
 
 
 def count_rows(text):
@@ -59,21 +68,28 @@ print(count_rows(proposed))
 PY
 )
 
-OLD_COUNT=$(printf '%s\n' "$COUNTS" | sed -n '1p')
-NEW_COUNT=$(printf '%s\n' "$COUNTS" | sed -n '2p')
+  readarray -t _counts <<<"$counts"
+  old_count="${_counts[0]}"
+  new_count="${_counts[1]}"
 
-if (( NEW_COUNT > OLD_COUNT )); then
-  log "blocking baseline addition: ${OLD_COUNT} -> ${NEW_COUNT}"
-  cat >&2 <<EOF
+  # Arithmetic context is safe here: both operands are integer row counts emitted
+  # by the Python block, and set -e tolerates the `(( ))` exit because BLOCK is
+  # the intended behaviour when the comparison is true.
+  if (( new_count > old_count )); then
+    log "blocking baseline addition: ${old_count} -> ${new_count}"
+    cat >&2 <<EOF
 BLOCKED: .pydoclint-baseline.txt is append-frozen (#938).
-  Current rows: ${OLD_COUNT}
-  Proposed rows: ${NEW_COUNT}
+  Current rows: ${old_count}
+  Proposed rows: ${new_count}
 
 The remediation for a new pydoclint violation is to fix the underlying
 docstring, not to register the file as exempt. See AGENTS.md for the
 escalation path (rare, maintainer pre-approval on #938 required).
 EOF
-  exit 2
-fi
+    exit 2
+  fi
 
-exit 0
+  exit 0
+}
+
+main "$@"

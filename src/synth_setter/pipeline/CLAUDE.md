@@ -15,12 +15,16 @@ this file is the imperative rule sheet.
 - **Never write to `data/shards/` outside finalize.** Workers stage shards
   under `metadata/workers/<worker-id>/` and finalize moves them.
 - **Shard IDs are logical and deterministic.** `shard-000042` is computed
-  from the input spec, never from worker ID, hostname, or wall-clock time.
-  Infrastructure-independent IDs are what make reconciliation work.
+  from the input spec, never from worker ID, hostname, or wall-clock time
+  (infrastructure-independent IDs are what make reconciliation work).
 
 ## Validation tiers
 
-- **Workers** run the full 4-check shard validation before upload.
+- **Workers** run the full 4-check shard validation before upload:
+  - Structural — opens as HDF5.
+  - Shape — datasets match the expected shape.
+  - Value — values are finite and within bounds.
+  - Row count — sample count matches `render.samples_per_shard`.
 - **Finalize** runs structural validation only (the workers' full check is the
   trust anchor; finalize must not re-run it on every shard).
 
@@ -30,7 +34,6 @@ this file is the imperative rule sheet.
   trust boundaries (R2 JSON, worker reports, Hydra-composed specs).
 - `pipeline/data/` utilities are CLI-callable via `python -m`. Add tests under
   `tests/pipeline/data/` mirroring the source layout.
-- `rclone` calls always use `--checksum` (no exceptions — see AGENTS.md).
 
 ## See also
 
