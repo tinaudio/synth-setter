@@ -137,12 +137,17 @@ Source of truth: a `.env` file at the repo root.
 ```bash
 cp .env.example .env
 $EDITOR .env  # fill in RCLONE_CONFIG_R2_* + WANDB_API_KEY
-python -m synth_setter.pipeline.skypilot_launch \
-    --template configs/compute/runpod-template.yaml \
-    -- synth-setter-generate-dataset experiment=generate_dataset/smoke-shard
+# Canonical local-dev path: invoke synth-setter-generate-dataset directly. It
+# composes Hydra, materializes + uploads the spec, and (with
+# skypilot_launch.compute_template set in the config) dispatches via SkyPilot.
+synth-setter-generate-dataset \
+    experiment=generate_dataset/smoke-shard \
+    skypilot_launch.compute_template=configs/compute/runpod-template.yaml
 ```
 
 The launcher finds `<repo_root>/.env`, parses it via `python-dotenv`, and resolves all keys from there. Process env is a non-event because `.env` wins per key — useful when you have stale shell exports.
+
+> **Note on `python -m synth_setter.pipeline.skypilot_launch -- …`.** The launcher CLI accepts an arbitrary inner command via the trailing `--` separator, but the inner command must (a) materialize exactly one canonical `data/<task>/<run>/metadata/input_spec.json`, and (b) re-enter deterministically on the worker (the same string is threaded into the SkyPilot task's `run:` block via `shlex.join`). The default `synth-setter-generate-dataset` console script does **not** yet satisfy (b) — it re-composes Hydra fresh and would either run the pipeline locally on the worker or recursively dispatch — so it is not currently a valid inner command for this entrypoint. Use the canonical `synth-setter-generate-dataset` path shown above until a materialize-only mode lands (follow-up to #1117).
 
 #### CI story
 
