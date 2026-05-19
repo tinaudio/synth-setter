@@ -15,6 +15,31 @@ set -euo pipefail
 _devc_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 install -m 0644 "$_devc_dir/tmux.conf" "$HOME/.tmux.conf"
 
+# TPM (tmux plugin manager) bootstrap + plugin install. tmux.conf declares
+# tmux-resurrect/tmux-continuum via `set -g @plugin` lines; TPM's run line at
+# the bottom of tmux.conf loads them at tmux start. Plugins live per-$HOME, so
+# this runs once for root and again after the runuser exec below for `dev`.
+_tpm_dir="$HOME/.tmux/plugins/tpm"
+if [ -d "$_tpm_dir/.git" ]; then
+  git -C "$_tpm_dir" pull --ff-only --quiet \
+    || echo "WARNING: failed to update TPM in $_tpm_dir; using existing checkout." >&2
+else
+  git clone --quiet --depth 1 https://github.com/tmux-plugins/tpm "$_tpm_dir" \
+    || echo "WARNING: failed to clone TPM into $_tpm_dir; tmux plugins won't load until re-run." >&2
+fi
+
+# tmux-resurrect state dir — devcontainer.json mounts a named volume here so
+# saved sessions survive container rebuilds. mkdir is a no-op when mounted.
+mkdir -p "$HOME/.local/share/tmux/resurrect"
+
+# Non-interactive plugin install equivalent to hitting prefix+I inside tmux.
+# Tolerate failure (e.g. egress blocked); a warning is enough since users can
+# always run prefix+I later from inside tmux.
+if [ -x "$_tpm_dir/bin/install_plugins" ]; then
+  "$_tpm_dir/bin/install_plugins" >/dev/null 2>&1 \
+    || echo "WARNING: TPM install_plugins failed; run prefix+I inside tmux after start." >&2
+fi
+
 # Drop to `dev` when invoked as root so workspace mutations (git config
 # --local, pre-commit install → .git/hooks/*) don't land root-owned in the
 # bind-mounted workspace. Both opt-in DEVCONTAINER_USER=root sessions and
