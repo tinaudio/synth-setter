@@ -124,6 +124,13 @@ unintended shell expansion. A `PreToolUse` hook
   [`docs/pr-readiness-loop.md`](docs/pr-readiness-loop.md).
 - **Always reply inline** on each open PR review comment (humans + Copilot),
   with a fix-commit SHA or justification. Use `/pr-review-resolver`.
+- **Advisory rewakes carry an origin-HEAD stamp.** The `pr-review-resolver`
+  and `doc-drift` PostToolUse hooks run their headless agents in detached
+  worktrees and re-enter the session via `asyncRewake` with a line like
+  `pr-review-resolver report for PR #N (branch X, origin HEAD <sha7>) at <path>`. Before acting on one, compare `<sha7>` to `git rev-parse HEAD`.
+  If they differ the advisory crossed sessions (it was queued by a prior
+  agent's push/PR-create that finished after that session ended) — read
+  the report for context, but do not treat it as work for the current PR.
 - **Verification evidence** for each behavioral claim goes through
   `/pr-checkbox`.
 - **In chat**, use full markdown hyperlinks for PR/issue references:
