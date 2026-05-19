@@ -28,11 +28,9 @@ else
     || echo "WARNING: failed to clone TPM into $_tpm_dir; tmux plugins won't load until re-run." >&2
 fi
 
-# tmux-resurrect state dir. devcontainer.json mounts the
-# `synth-setter-tmux-resurrect` named volume at the dev user's path
-# (/home/dev/.local/share/tmux/resurrect); the mount is dev-only by design, so
-# DEVCONTAINER_USER=root sessions land on the non-mounted root path and won't
-# survive rebuilds. mkdir is a no-op when the volume is mounted.
+# tmux-resurrect state dir. devcontainer.json mounts a per-user named volume
+# at $HOME/.local/share/tmux/resurrect for both dev and root, so this mkdir
+# is a no-op when mounted and the sessions saved here survive rebuilds.
 mkdir -p "$HOME/.local/share/tmux/resurrect"
 
 # Non-interactive plugin install equivalent to hitting prefix+I inside tmux.
