@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779165128544,
+  "lastUpdate": 1779165130871,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -6041,6 +6041,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 16.598325565800007,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "fb6af8f039500a3b337be2bc35a869939e0a6333",
+          "message": "refactor(claude-md): share agent hooks and review skills (#1085)\n\n* refactor(claude-md): share agent hooks and review skills\n\n* fix(agent-hooks): address PR review feedback\n\n* fix(agent-hooks): address review feedback on PR #1085\n\nBlock / correctness:\n- edit-write.sh: make `format`/`test` modes non-fatal — guard jq parse with\n  `|| true`, add `|| true` to every formatter and pytest pipeline, and `exit 0`\n  at the end of both modes. Under `set -euo pipefail` these previously aborted\n  the hook silently on ruff/pytest non-zero (Copilot #3263516862; shell-style\n  BLOCK #3263553051 + #3263553057; synth-setter WARN #3263553083).\n- verify-gh-taxonomy.sh: append `|| true` to the GITHUB_URL / PR_URL /\n  ISSUE_URL extraction pipelines (and their trailing `grep -oE '[0-9]+$'`\n  number extractions). `grep` returns 1 with no match; `head | pipefail` then\n  aborts the script before the documented `[[ -z \"$VAR\" ]]; then exit 0` no-op\n  check fires (Copilot #3263516877; shell-style WARN #3263553145).\n\nStale-reference cleanups (tdd-refactor):\n- chmod +x agent/hooks/pre-pr-review-gate.sh (was 644 vs siblings' 755).\n- tests/claude_hooks/test_settings_hooks.py:242 fixture docstring now cites\n  agent/hooks/pre-pr-review-gate.sh, not .claude/hooks/...\n- AGENTS.md:303 rewords the Pre-PR Review Gate paragraph to be agent-agnostic\n  (\"the agent's settings (Claude registers it in .claude/settings.json; ...)\")\n  rather than pinning the mechanism to Claude alone.\n- pyproject.toml: remove the stale `.claude/skills/_shared/post_review.py`\n  per-file-ignore entry — that path is now a 13-line runpy shim that triggers\n  none of T201/S603/S607. The canonical implementation lives at\n  agent/skills/_shared/post_review.py and uses inline `# noqa: S603` plus\n  `shutil.which(\"gh\")`. Per CLAUDE.md, removals from append-frozen lists are\n  the only allowed edits — this is one (Refs #25).\n\nEasy WARN nits:\n- agent/skills/_shared/post_review.py: drop the baked-in \"Verified end-to-end\n  on PR #777\" reference; replace with a typical-invocation example block.\n  Type submit_review's return as `dict[str, object]` (was bare `dict`) and\n  narrow `html_url` in main() to a `str` via `isinstance` so the new annotation\n  type-checks under pyright.\n- tests/claude_hooks/test_settings_hooks.py: tighten _EXPECTED_HANDLER_SCOPES\n  and _EXPECTED_SHARED_HOOK_COMMANDS to `tuple[tuple[str, str], ...]`\n  (immutable, matches the CAPS_WITH_UNDER constant convention). Shorten the\n  _find_handler docstring to fit the 99-char PY21 limit.\n\nTest-quality cleanup:\n- Delete `test_edit_write_handlers_do_not_parse_file_path_with_grep` — it\n  asserted on literal strings in the command body (a change-detector). The\n  behavior it claimed to test (\"file_path extraction robust against quoted\n  file_path text in payload content\") is already covered by\n  `test_credential_guard_uses_tool_input_file_path_not_embedded_text`.\n\nTest suite: 17 passed (was 18, dropped the change-detector); agent/hooks/test.sh\n18 passed; pre-commit clean (ruff format, pyright, pydoclint, shellcheck,\nmdformat, codespell all green).\n\nRefs #25",
+          "timestamp": "2026-05-19T00:19:23-04:00",
+          "tree_id": "8d4a1429fd654e42086e83a7a0d6908358167d89",
+          "url": "https://github.com/tinaudio/synth-setter/commit/fb6af8f039500a3b337be2bc35a869939e0a6333"
+        },
+        "date": 1779165130223,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 2.6028144359588623,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 2.909631634503603,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.015621241182088852,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.07231682538986206,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 1.1129473447799683,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 10.232948863999997,
             "unit": "seconds"
           }
         ]
