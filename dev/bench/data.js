@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779155124474,
+  "lastUpdate": 1779158235006,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -3186,6 +3186,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.04456889629364014,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2fce8a2ed239af0bfb512b4001c5a4bcc6be0eda",
+          "message": "feat(pipeline): nest R2Location into DatasetSpec (#1099)\n\n* feat(pipeline): nest R2Location into DatasetSpec with URI helpers\n\nReplaces the flat ``r2_bucket`` / ``r2_prefix_root`` / ``r2_prefix`` fields on\n``DatasetSpec`` with a single nested ``r2: R2Location`` model carrying typed\nURI-construction helpers (``uri``, ``rclone_prefix``, ``shard_uri``). A model\nvalidator on ``DatasetSpec`` promotes legacy-form input dicts and JSON-loaded\nspecs already in R2 into the new shape so existing ``input_spec.json`` files\nstill parse and re-emit on the new shape.\n\nFolds in three related cleanups that touch the same call-site set:\n\n- Centralize ``R2_URI_SCHEME = \"r2://\"`` and ``RCLONE_REMOTE = \"r2\"`` in\n  ``synth_setter.pipeline.constants``; ``r2_io._to_rclone_path`` is promoted\n  to public ``to_rclone_path`` and used by ``skypilot_launch.upload_spec_to_r2``\n  instead of inline rclone-form string concatenation.\n- ``configs/r2/default.yaml`` is the source of the nested ``r2`` block.\n  ``configs/dataset.yaml`` drops its flat-key interpolations; the\n  ``10-1k-shards`` experiment override uses the nested form\n  (``r2.bucket: experiments``).\n- Workflow ``generate-dataset-shards.yaml`` replaces its inline\n  ``python3 -c \"...\"`` one-liner with a new ``synth-setter-spec-uri`` console\n  script that reads ``input_spec.json`` and emits the canonical\n  ``r2://bucket/skypilot-launcher-specs/<cluster>.json`` URI.\n\nRefs #121\n\n* ci(pipeline): update test-dataset-generation workflow to nested cfg.r2.bucket\n\nThe setup step's inline ``python3 -c`` script still read ``cfg.r2_bucket`` —\nthat flat key was removed by the R2Location migration. Switch to ``cfg.r2.bucket``\nso the workflow's R2 bucket output resolves under the nested config shape.\n\n* docs(pipeline): nest r2_bucket/r2_prefix refs into r2.bucket/r2.prefix\n\n* refactor(pipeline): address PR #1099 Copilot review feedback\n\n- Clarify R2Location module docstring: ``prefix`` is required on the model;\n  derivation happens at the DatasetSpec ``mode='before'`` validator, not\n  inside R2Location itself.\n- Tighten ``_default_r2_location`` docstring to say \"build a partial r2 dict\"\n  and explicitly state that ``bucket`` is intentionally omitted so the\n  nested R2Location validator surfaces the missing-required-field error.\n- Move ``_LAUNCHER_SPEC_R2_PREFIX`` into ``pipeline/constants.py`` as\n  ``LAUNCHER_SPEC_R2_PREFIX`` and import it from both ``skypilot_launch``\n  and ``ci/spec_uri`` so the launcher and the CI URI helper cannot drift.\n- ``ci/spec_uri.main`` now catches ``OSError`` / ``ValueError`` /\n  ``ValidationError`` from ``compute_spec_uri`` and exits 3 with a\n  one-line stderr message instead of letting the traceback escape — the\n  docstring already promised a clean non-zero exit on invalid spec\n  content. Adds two regression tests (malformed JSON, schema violation).\n\nRefs #121\n\n* feat(pipeline): expose canonical R2 layout via R2Location URI helpers\n\nAdds per-object URI methods to R2Location for every well-known file in\nthe dataset-run layout (per docs/design/storage-provenance-spec.md §2):\ninput_spec_uri, config_yaml_uri, dataset_card_uri,\ndataset_complete_marker_uri, split_uri, stats_uri,\nworker_staged_shard_uri, worker_attempt_report_uri.\n\nAll helpers route through a new _under_prefix(name) private method so\nflat to nested layout migrations (#385 for metadata/, #406 for shards/\nand metadata/workers/) can happen in one place without touching call\nsites.\n\nThe class docstring embeds the canonical layout tree from the\nstorage-provenance spec, with #385/#406 annotations on the two\nsubdirectories documented as future state.\n\nRefs #121\n\n* docs(pipeline): point R2Location at storage-provenance-spec instead of duplicating the tree\n\nThe module docstring embedded a 13-line ASCII tree of the R2 object\nlayout, plus two paragraphs explaining DatasetSpec's flat-form back-compat\npromotion. Both already live in authoritative sources — the tree in\ndocs/design/storage-provenance-spec.md §2 + §3a (which calls itself the\nauthoritative source for R2 paths), and the prefix-derivation / flat-form\npromotion in DatasetSpec's r2-field description and its\n_normalize_r2_input / _default_r2_location / _fill_default_r2_prefix\ndocstrings in spec.py.\n\nReplace both with one-line pointers to those canonical sources. Net\n-18 lines and the layout tree now has exactly one source of truth.\n\nRefs #1099\n\n* fix(pipeline): reject whitespace-wrapped slash-only r2.prefix_root\n\nThe prior validator did .strip(\"/\") then .strip(), so values like\n\" / \" passed: \".strip('/')\" left the spaces, then \".strip()\"\ncollapsed to \"/\" which is truthy. Swap the order so whitespace is\nremoved first, then slashes — \" / \" → \"/\" → \"\" → rejected.\n\nAdds a regression test covering \" / \", \"\\t//\\n\", and \"  ///  \".\n\nRefs #1099 review (Copilot)\n\n* fix(pipeline): strip whitespace from r2.prefix_root and run spec-uri in docker\n\nTwo follow-ups from Copilot's review of 2db4f07:\n\n- R2Location.prefix_root validator now returns value.strip() so a caller\n  passing ' data ' doesn't survive into make_r2_prefix (which only strips\n  slashes) as ' data /<task>/<run>/'. Reject path (blank or slash-only\n  after whitespace + slash strip) is unchanged.\n- generate-dataset-shards.yaml's 'Compute spec_uri output' step now runs\n  synth-setter-spec-uri inside the already-pulled docker image. The\n  console script is installed in the image for every provider; on the\n  runner it was only available on the skypilot-local row, so runpod/oci\n  jobs would have failed with command-not-found.\n\nRefs #121\n\n* ci(pipeline): run spec-uri on the runner, not in the pulled image\n\nThe previous attempt invoked synth-setter-spec-uri via docker run against\nthe pulled dev-snapshot image to address a Copilot review comment about\nrunpod/oci not pre-installing the project package on the runner. That\nintroduced a race: test-dataset-generation.yml's \"Pull image\" step runs\nin parallel with the per-PR docker-image-build.yml, so the pulled\ndev-snapshot tag is whatever was previously pushed (typically main) and\nthe brand-new synth-setter-spec-uri console script is not in it. The\nfailing CI step exits 127 with \"executable file not found in $PATH\".\n\nSwitch to running on the runner. The skypilot-local row has the package\nalready installed via \"Install launcher deps\"; runpod/oci runs fall\nthrough to a minimal `python3 -m pip install -e .` guarded by command -v.\nNo docker dependency, no race.\n\nRefs #121\n\n* fix(pipeline): reject slash-wrapped whitespace in r2.prefix_root\n\nThe previous validator stripped surrounding whitespace then checked that\nthe slash-stripped result was non-empty. A value like \"/ /\" (slashes\nwrapping a lone space, no surrounding whitespace) passed:\n  stripped     = \"/ /\"\n  strip(\"/\")   = \" \"\n  not \" \"      = False\nand survived into make_r2_prefix as \" \" — yielding a malformed prefix\nlike \" /<task>/<run>/\" with an embedded space.\n\nAdd a final strip() on the slash-stripped value so any combination of\nslashes-and-whitespace collapses to \"\" and is rejected. Existing\nnon-empty values (\"data\", \" data \", \"sub/data\") still pass.\n\nRefs #121\n\n* ci(pipeline): lighten spec-uri runner fallback; clarify LAUNCHER_SPEC_R2_PREFIX\n\nThe generate-dataset-shards.yaml `Compute spec_uri output` step previously\nfell back to `pip install -e .` on the runner to get the\n`synth-setter-spec-uri` console script for the runpod/oci rows. That drags\nin the entire project dependency tree (torch, pedalboard, skypilot, ...)\non a path that only needs pydantic and stdlib. Switch the fallback to\n`pip install pydantic>=2` + `PYTHONPATH=src python3 -m\nsynth_setter.pipeline.ci.spec_uri ...`, matching the module's actual\nimport footprint.\n\nAlso tighten the docstring above `LAUNCHER_SPEC_R2_PREFIX` in\n`pipeline/constants.py`: the launcher uploads a per-job transport copy\nnamed `<job_name>.json` under this prefix, not `input_spec.json`. The\nprevious wording implied the object key was `input_spec.json` at this\nlocation, which is the local materialized filename rather than the\nuploaded key.\n\nAddresses Copilot review comments on PR #1099.\n\nRefs #121\n\n* Revert \"ci(pipeline): switch spec-uri runner fallback to PYTHONPATH+module\"\n\nReverts only the workflow portion of eb29780. The reviewer (Copilot\ncomment 3263224461) suggested replacing the `pip install -e .` fallback\nwith `PYTHONPATH=src python3 -m synth_setter.pipeline.ci.spec_uri`, but\nthe maintainer's stated preference is to keep ad-hoc inline invocations\nout of the workflow and route through the official `synth-setter-spec-uri`\nconsole-script entrypoint (reply on 3263224461). Restore the\n`pip install -e .` fallback so the workflow keeps using the registered\nconsole script unconditionally.\n\nThe `LAUNCHER_SPEC_R2_PREFIX` comment fix from eb29780 stays — it was a\npure docstring clarification, independent of the workflow change.\n\nRefs #121\n\n* docs(pipeline): update spec.py docstrings to nested r2.prefix paths\n\nDatasetSpec docstring, the task_name field description, and the\n_task_name_must_not_be_blank validator docstring still referenced the\nold flat r2_prefix field after the R2Location migration. Repoint them\nat the nested r2.prefix path so the prose matches the schema. Same\npass on the module docstring.\n\nThe legacy flat key names that remain (_LEGACY_FLAT_R2_KEYS mapping,\nback-compat shim docstrings, _fill_default_r2_prefix helper name) are\ndeliberate: they describe legacy-key promotion paths and historical\nfactory names, not the live field surface.\n\nRefs #1099",
+          "timestamp": "2026-05-18T22:24:07-04:00",
+          "tree_id": "bd673e4b85e8726f5bce2ecc3b6100b09951a890",
+          "url": "https://github.com/tinaudio/synth-setter/commit/2fce8a2ed239af0bfb512b4001c5a4bcc6be0eda"
+        },
+        "date": 1779158234068,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.897343635559082,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.212760104089975,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.024818239733576775,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.031800925731658936,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.4183924198150635,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 10.632135031499999,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.36366081237793,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.593044396769256,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.031141653656959534,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.038181960582733154,
             "unit": "1-cos"
           },
           {
