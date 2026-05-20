@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779258914702,
+  "lastUpdate": 1779260604254,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -3858,6 +3858,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.03417485952377319,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c34c92ea4d92552e0d8d5c5ef6537c9678295639",
+          "message": "feat(data-pipeline): wire editor_held_open into _render_in_batches for always_on (#1192)\n\n* feat(data-pipeline): wire editor_held_open into _render_in_batches for always_on\n\nReplace the Wave 1 ``NotImplementedError`` guard with the held-open editor\nimplementation:\n\n- Add ``editor_held_open(plugin)`` context manager in ``data/vst/core.py``.\n  Runs ``plugin.show_editor(close_event)`` on a daemon background thread;\n  on ``__exit__`` sets the event, joins the thread (bounded by\n  ``_EDITOR_JOIN_TIMEOUT_SECONDS = 2.0``), and re-raises any exception the\n  editor thread captured (already logged at the moment of failure via\n  ``logger.exception``).\n- ``_render_in_batches`` wraps the shard loop in\n  ``editor_held_open(cached_plugin) if hold_open else nullcontext()`` so\n  every legacy cadence keeps the no-context-manager path.\n- Strip the Wave 1 transient note from the field description (the schema\n  description is now accurate at runtime).\n- Three new ``TestEditorHeldOpen`` unit tests (opens-and-closes, log +\n  re-raise on editor crash, join-timeout-no-deadlock) plus two writer\n  tests (always_on enters held-open scope with cached plugin; legacy\n  cadences leave it untouched).\n- Refresh the pydoclint baseline entry for ``render_params`` whose\n  parameter types were normalised to PEP 604 (``Optional`` → ``| None``,\n  ``Tuple`` → ``tuple``) by ruff's UP autofixer when the unused legacy\n  typing imports were removed.\n\nRefs #1187\n\n* fix(data-pipeline): tighten editor_held_open per review feedback\n\nAddress Wave 2 review WARNs/BLOCK:\n\n- Narrow ``except BaseException`` to ``except Exception`` so KeyboardInterrupt\n  / SystemExit propagate naturally through the editor thread.\n- Add ``logger.warning`` when ``editor_thread.is_alive()`` after the bounded\n  join — closes the silent-leak observability gap (was a join-timeout-and-\n  forget).\n- Replace the defensive ``cached_plugin is not None`` ternary in\n  ``_render_in_batches`` with an explicit ``RuntimeError`` that names the\n  responsible validator. A future regression that loosens the schema gate\n  now fails loud instead of silently falling back to ``nullcontext()``.\n- Tighten the join-timeout test to also assert the leak-warning fires,\n  pinning the new observability behaviour.\n\nRefs #1191\n\n* fix(data-pipeline): body-exception wins in editor_held_open + broaden cadence test\n\nAddress Wave 2 Copilot review comments:\n\n1. ``editor_held_open`` no longer masks a body-exception when the editor\n   thread also raised. Use ``sys.exc_info()`` inside ``finally`` to detect\n   the body-exception case and surface the captured editor exception only\n   when the body succeeded — re-raising during an active body exception\n   would clobber it (raise-in-finally wins). When both raise, the editor\n   crash is recorded via ``logger.error`` so it is not lost.\n2. New ``test_body_exception_wins_over_editor_exception`` pins the\n   precedence rule and the structured-error-log fallback.\n3. Broaden ``test_render_in_batches_non_always_on_does_not_open_held_open_scope``\n   to parametrize over ``never`` / ``once`` / ``render`` so the docstring\n   (\"every legacy cadence leaves editor_held_open untouched\") matches the\n   assertions.\n\nRefs #1191\n\n* fix(testing): pin platform in non_always_on cadence parametrize\n\nThe cadence parametrize added in 6eefcac includes ``\"render\"``, which the\nDarwin gate validator (#714) rejects at ``RenderConfig`` construction. The\ntest was passing on Linux runners but failing on the macOS matrix job.\nMonkeypatch ``_current_platform`` to ``\"linux\"`` so the test exercises all\nthree cadences on every runner — the writer wiring it covers is\nplatform-agnostic; the validator gate is exercised separately in\n``tests/pipeline/test_schemas/test_dataset_spec.py``.\n\nRefs #1191",
+          "timestamp": "2026-05-20T02:48:49-04:00",
+          "tree_id": "97b85135296d9ee62879929c9f67a45e1a4333c0",
+          "url": "https://github.com/tinaudio/synth-setter/commit/c34c92ea4d92552e0d8d5c5ef6537c9678295639"
+        },
+        "date": 1779260603146,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 4.254957675933838,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.241696003577672,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.03252509981393814,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.029647409915924072,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.3649516105651855,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 12.324534666583332,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.32166862487793,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.877504865424708,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.03252509981393814,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.02971184253692627,
             "unit": "1-cos"
           },
           {
