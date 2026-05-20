@@ -97,6 +97,9 @@ on:
       spec_uri:
         description: "Canonical r2:// URI of the materialized spec (under-prefix `input_spec.json`). Consumed by validate-dataset-shards.yaml."
         value: ${{ jobs.generate.outputs.spec_uri }}
+      run_id:
+        description: "Generate stage's run_id, parsed from the spec_uri's `data/<task>/<run_id>/` segment. Consumed by finalize-dataset.yaml so finalize composes against the same R2 prefix."
+        value: ${{ jobs.generate.outputs.run_id }}
   workflow_dispatch:
     inputs:
       provider:
@@ -159,6 +162,7 @@ jobs:
     timeout-minutes: 60
     outputs:
       spec_uri: ${{ steps.spec_uri.outputs.spec_uri }}
+      run_id: ${{ steps.spec_uri.outputs.run_id }}
     env:
       IMAGE_TAG: ${{ inputs.image_tag }}
       IMAGE: tinaudio/synth-setter:${{ inputs.image_tag }}
@@ -589,6 +593,11 @@ jobs:
       # returns 1 on no-match; with `set -euo pipefail` an unmasked grep
       # failure would skip the explicit empty-check below and surface a
       # confusing pipe-failure instead of the friendly `::error::` message).
+      # Also parses the penultimate path segment of the spec_uri as `run_id`
+      # (per the `data/<task>/<run_id>/input_spec.json` shape `make_r2_prefix`
+      # produces in pipeline/schemas/prefix.py); the chained finalize job
+      # consumes it as a Hydra `run_id=<value>` override so finalize composes
+      # against the same R2 prefix generate wrote.
       - name: Extract spec_uri from launcher log
         id: spec_uri
         run: |
@@ -600,8 +609,15 @@ jobs:
             echo "::error::launcher did not emit a ::synth-setter-spec-uri:: marker; see generate.log"
             exit 1
           fi
+          RUN_ID=$(printf '%s\n' "${SPEC_URI}" | awk -F/ '{print $(NF-1)}')
+          if [[ -z "${RUN_ID}" ]]; then
+            echo "::error::could not parse run_id from spec_uri=${SPEC_URI}"
+            exit 1
+          fi
           echo "spec_uri=${SPEC_URI}" >> "${GITHUB_OUTPUT}"
+          echo "run_id=${RUN_ID}" >> "${GITHUB_OUTPUT}"
           echo "spec_uri: ${SPEC_URI}"
+          echo "run_id: ${RUN_ID}"
 
       # Always validate the freshly-uploaded shards against the
       # `check_shard_contracts` contract before this workflow returns.
@@ -643,3 +659,21 @@ jobs:
             ${{ github.workspace }}/data/*/*/metadata/input_spec.json
           retention-days: 7
           if-no-files-found: warn
+
+  # Unconditional finalize chain. Mirrors how validate is wired by the
+  # downstream caller (test-dataset-generation.yml's `validate` job) but at
+  # the reusable's own level so every caller — cron, PR-presubmit, manual
+  # dispatch — gets finalize for free without opt-in plumbing. Output format
+  # is informational here (drives only artifact naming); the CLI re-reads it
+  # from the composed `DatasetSpec`. `env_ref` is the SHA the runner already
+  # checked out for generate, so finalize sees the same code.
+  finalize:
+    name: Run finalize_dataset (${{ inputs.provider }})
+    needs: generate
+    uses: ./.github/workflows/finalize-dataset.yaml
+    with:
+      provider: ${{ inputs.provider }}
+      config_path: ${{ inputs.dataset_config }}
+      run_id: ${{ needs.generate.outputs.run_id }}
+      env_ref: ${{ github.event.pull_request.head.sha || github.sha }}
+    secrets: inherit

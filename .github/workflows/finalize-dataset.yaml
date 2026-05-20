@@ -1,0 +1,135 @@
+name: Finalize Dataset
+
+# Reusable workflow that runs `synth-setter-finalize-dataset` against an
+# already-generated run prefix on R2. Callers (cron via
+# `generate-dataset-shards.yaml`, PR-presubmit via
+# `test-dataset-finalization.yml`) pass per-run values through inputs.
+#
+# `synth-setter-finalize-dataset` is a thin CLI: it programmatically composes
+# `configs/dataset.yaml` with `experiment=<config_path>`, derives the same
+# `r2.prefix` shape (`data/<task_name>/<run_id>/`) generate used, downloads
+# the shards, builds the split / stats artifacts, and writes
+# `dataset.complete` last (so a re-run against a finalized prefix is a no-op).
+# Bare-runner install — no docker, no SkyPilot path. The `provider` input is
+# carried so callers can keep their per-provider matrices but the body is
+# identical across providers.
+#
+# Required secrets (callers should `secrets: inherit`):
+#   RCLONE_CONFIG_R2_ACCESS_KEY_ID, RCLONE_CONFIG_R2_SECRET_ACCESS_KEY,
+#   RCLONE_CONFIG_R2_ENDPOINT — same R2 credentials the generate stage uses.
+
+on:
+  workflow_call:
+    inputs:
+      provider:
+        description: "Provider tag for log/artifact naming (skypilot-local, runpod, oci, or pr-presubmit). Body is provider-agnostic."
+        required: true
+        type: string
+      config_path:
+        description: "Hydra experiment name under configs/experiment/ (must match the value passed to generate)."
+        required: true
+        type: string
+      output_format:
+        description: "Dataset output format (`hdf5` or `wds`); informational, drives only artifact naming. The CLI re-reads the format from the composed `DatasetSpec`."
+        required: false
+        type: string
+        default: ""
+      run_id:
+        description: "Generate stage's run_id. Pinned via `run_id=<value>` Hydra override so finalize targets the same `data/<task>/<run_id>/` prefix generate wrote."
+        required: true
+        type: string
+      env_ref:
+        description: "Git ref / SHA the runner should check out (typically the PR head SHA)."
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: "Provider tag (informational)"
+        required: false
+        type: string
+        default: pr-presubmit
+      config_path:
+        description: "Hydra experiment name (e.g. `generate_dataset/smoke-shard`)"
+        required: true
+        type: string
+        default: "generate_dataset/smoke-shard"
+      output_format:
+        description: "Dataset output format"
+        required: true
+        type: choice
+        default: hdf5
+        options:
+          - hdf5
+          - wds
+      run_id:
+        description: "Generate stage's run_id; finalize composes against the same prefix"
+        required: true
+        type: string
+      env_ref:
+        description: "Git ref / SHA to check out"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  finalize:
+    name: Run finalize_dataset (${{ inputs.provider }} / ${{ inputs.output_format }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RCLONE_CONFIG_R2_TYPE: s3
+      RCLONE_CONFIG_R2_PROVIDER: Cloudflare
+      RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+      RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+      RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+      HYDRA_FULL_ERROR: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.env_ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install rclone
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq rclone
+
+      # `[torch,dev]` is the smallest install that imports finalize cleanly:
+      # `pipeline.data.reshard` pulls h5py / numpy via the base deps, and the
+      # entrypoint imports `cli.generate_dataset.spec_from_cfg` which transitively
+      # touches the torch-gated `data/` package. `--system` installs into the
+      # runner Python so `synth-setter-finalize-dataset` resolves on PATH.
+      - name: Install project deps
+        run: uv pip install --system -e ".[torch,dev]"
+
+      - name: Run synth-setter-finalize-dataset
+        env:
+          CONFIG_PATH: ${{ inputs.config_path }}
+          RUN_ID: ${{ inputs.run_id }}
+        run: |
+          set -euo pipefail
+          synth-setter-finalize-dataset \
+            "experiment=${CONFIG_PATH}" \
+            "run_id=${RUN_ID}" \
+            2>&1 | tee finalize.log
+
+      - name: Upload finalize log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: finalize-log-${{ inputs.provider }}-${{ inputs.output_format }}
+          path: finalize.log
+          if-no-files-found: warn
+          retention-days: 7

@@ -1,0 +1,178 @@
+name: Test Dataset Finalization
+
+# PR-presubmit caller that runs generate + finalize on the smallest smoke
+# configs end-to-end against real Cloudflare R2, then asserts the canonical
+# finalize artifacts land at the run prefix. Triggers on changes to the
+# finalize / generate code path and the workflow files themselves so we
+# exercise the chain before merge instead of waiting for the cron tick.
+#
+# Matrix:
+#   * { output_format: hdf5, config_path: generate_dataset/smoke-shard }
+#   * { output_format: wds,  config_path: generate_dataset/smoke-shard-wds }
+#
+# Each row calls `generate-dataset-shards.yaml` (which itself chains
+# `finalize-dataset.yaml`), then a follow-up `verify-artifacts` job runs
+# `rclone ls` against the same prefix and pins:
+#   * `dataset.complete` + `stats.npz` for both formats.
+#   * `train.h5` for the hdf5 row (the smoke configs use
+#     `train_val_test_sizes=[12, 0, 0]`; val/test are pruned).
+#
+# Required secrets (forwarded through `secrets: inherit`):
+#   RCLONE_CONFIG_R2_ACCESS_KEY_ID, RCLONE_CONFIG_R2_SECRET_ACCESS_KEY,
+#   RCLONE_CONFIG_R2_ENDPOINT, R2_ACCOUNT_ID — the same R2 set the upstream
+#   `test-dataset-generation.yml` cron uses.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "src/synth_setter/cli/finalize_dataset.py"
+      - "src/synth_setter/cli/generate_dataset.py"
+      - "src/synth_setter/pipeline/data/reshard.py"
+      - "src/synth_setter/pipeline/schemas/r2_location.py"
+      - "src/synth_setter/pipeline/schemas/spec.py"
+      - ".github/workflows/finalize-dataset.yaml"
+      - ".github/workflows/generate-dataset-shards.yaml"
+      - ".github/workflows/test-dataset-finalization.yml"
+      - "tests/integration/test_finalize_dataset_r2.py"
+      - "tests/integration/test_finalize_artifact_oracle.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'auto' }}
+  cancel-in-progress: true
+
+jobs:
+  smoke-pipeline:
+    name: Generate + finalize smoke (${{ matrix.output_format }})
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - output_format: hdf5
+            config_path: generate_dataset/smoke-shard
+            task_name: smoke-shard
+          - output_format: wds
+            config_path: generate_dataset/smoke-shard-wds
+            task_name: smoke-shard-wds
+    uses: ./.github/workflows/generate-dataset-shards.yaml
+    with:
+      provider: skypilot-local
+      dataset_config: ${{ matrix.config_path }}
+      image_tag: dev-snapshot
+      cluster_name: synth-setter-finalize-pr-${{ github.event.pull_request.number || github.run_id }}-${{ matrix.output_format }}-${{ github.run_attempt }}
+      num_workers: "1"
+      tail: true
+      local: true
+      artifact_name: finalize-presubmit-${{ matrix.output_format }}
+    secrets: inherit
+
+  verify-artifacts:
+    name: Verify finalize artifacts (${{ matrix.output_format }})
+    needs: smoke-pipeline
+    if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - output_format: hdf5
+            config_path: generate_dataset/smoke-shard
+            task_name: smoke-shard
+          - output_format: wds
+            config_path: generate_dataset/smoke-shard-wds
+            task_name: smoke-shard-wds
+    env:
+      RCLONE_CONFIG_R2_TYPE: s3
+      RCLONE_CONFIG_R2_PROVIDER: Cloudflare
+      RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+      RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+      RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+      HYDRA_FULL_ERROR: "1"
+      SPEC_URI: ${{ needs.smoke-pipeline.outputs.spec_uri }}
+      RUN_ID: ${{ needs.smoke-pipeline.outputs.run_id }}
+      OUTPUT_FORMAT: ${{ matrix.output_format }}
+      TASK_NAME: ${{ matrix.task_name }}
+      CONFIG_PATH: ${{ matrix.config_path }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Install rclone
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq rclone
+
+      # Resolves `spec.r2.bucket` from the same composed config the chained
+      # generate + finalize used, so the `rclone ls` prefix lines up with what
+      # finalize actually wrote (rather than hardcoding `intermediate-data`).
+      - name: Resolve R2 bucket from dataset config
+        id: bucket
+        run: |
+          set -euo pipefail
+          pip install "hydra-core==1.3.2" "hydra-colorlog==1.2.0" "pydantic>=2,<3" --quiet
+          R2_BUCKET=$(python3 <<'PY'
+          import os
+          from pathlib import Path
+          from hydra import compose, initialize_config_dir
+          cfg_dir = str(Path.cwd() / "configs")
+          experiment = os.environ["CONFIG_PATH"]
+          with initialize_config_dir(version_base="1.3", config_dir=cfg_dir):
+              cfg = compose(config_name="dataset", overrides=[f"experiment={experiment}"])
+          print(cfg.r2.bucket)
+          PY
+          )
+          echo "r2_bucket=${R2_BUCKET}" >> "${GITHUB_OUTPUT}"
+          echo "r2_bucket: ${R2_BUCKET}"
+
+      # Operator ask on PR #1202: list the run prefix and assert finalize
+      # wrote `dataset.complete`, `stats.npz`, and `train.h5` (hdf5 only;
+      # val.h5 / test.h5 are pruned because the smoke configs ship
+      # train-only `train_val_test_sizes=[12, 0, 0]`).
+      - name: rclone ls run prefix and pin required artifacts
+        env:
+          R2_BUCKET: ${{ steps.bucket.outputs.r2_bucket }}
+        run: |
+          set -euo pipefail
+          PREFIX="r2:${R2_BUCKET}/data/${TASK_NAME}/${RUN_ID}/"
+          echo "checking ${PREFIX}"
+          rclone ls "${PREFIX}" --max-depth 1 | tee artifacts.txt
+          required="dataset.complete stats.npz"
+          if [ "${OUTPUT_FORMAT}" = "hdf5" ]; then
+            required="${required} train.h5"
+          fi
+          missing=""
+          for f in $required; do
+            if ! grep -qE "[[:space:]]${f}\$" artifacts.txt; then
+              missing="${missing} ${f}"
+            fi
+          done
+          if [ -n "${missing}" ]; then
+            echo "::error::missing finalize artifacts at ${PREFIX}:${missing}"
+            exit 1
+          fi
+          echo "all required artifacts present at ${PREFIX}"
+
+      # Exercises the operator's stated invariant — the fake_oracle predicts
+      # `batch["params"]` verbatim, so audio metrics on the finalized dataset
+      # stay inside the same bounds `tests/test_train.py::test_train_eval_surge_xt`
+      # pins for the oracle leg. Helper auto-skips when R2 is unreachable.
+      - name: Install project deps for oracle helper
+        run: pip install -e ".[torch,dev]"
+
+      - name: Run finalize-artifact oracle helper
+        env:
+          R2_BUCKET: ${{ steps.bucket.outputs.r2_bucket }}
+          FINALIZE_RUN_PREFIX: r2:${{ steps.bucket.outputs.r2_bucket }}/data/${{ matrix.task_name }}/${{ needs.smoke-pipeline.outputs.run_id }}/
+        run: |
+          set -euo pipefail
+          pytest tests/integration/test_finalize_artifact_oracle.py \
+            -m "integration_r2" \
+            -vv -s
