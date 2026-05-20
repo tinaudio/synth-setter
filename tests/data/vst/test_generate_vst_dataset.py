@@ -8,6 +8,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 from unittest.mock import MagicMock, patch
 
 import h5py
@@ -49,6 +50,9 @@ def _render_cfg(
     num_samples: int,
     samples_per_render_batch: int | None = None,
     min_loudness: float = _MIN_LOUDNESS,
+    *,
+    plugin_reload_cadence: Literal["once", "render"] = "render",
+    gui_toggle_cadence: Literal["never", "once", "render", "always_on"] = "never",
 ) -> RenderConfig:
     """Build a RenderConfig with this module's test defaults.
 
@@ -56,6 +60,19 @@ def _render_cfg(
     ``samples_per_render_batch`` defaults to the same so each test renders in a single batch.
     ``min_loudness`` defaults to ``_MIN_LOUDNESS`` and can be lowered (e.g. to
     ``-inf``) to disable the loudness gate during replay runs — see #489.
+    ``gui_toggle_cadence`` defaults to ``"never"`` (Darwin-portable, #714);
+    ``"always_on"`` requires ``plugin_reload_cadence="once"`` per schema validator.
+
+    :param num_samples: Total samples to render in the shard.
+    :param samples_per_render_batch: Per-batch sample count; ``None`` selects
+        single-batch behaviour by matching ``num_samples``.
+    :param min_loudness: Loudness-gate floor in dB; lower values disable the
+        gate for replay runs (see #489).
+    :param plugin_reload_cadence: Pinned to ``"once"`` for held-open editor
+        scenarios; defaults to the historical per-render reload.
+    :param gui_toggle_cadence: Editor warm-up cadence; ``"never"`` is the
+        Darwin-portable default, ``"always_on"`` exercises the held-open path.
+    :return: ``RenderConfig`` populated with the module's test defaults.
     """
     return RenderConfig(
         plugin_path=_PLUGIN_PATH,
@@ -71,8 +88,8 @@ def _render_cfg(
         if samples_per_render_batch is not None
         else num_samples,
         samples_per_shard=num_samples,
-        # Darwin-portable: never run the editor warm-up (#714).
-        gui_toggle_cadence="never",
+        plugin_reload_cadence=plugin_reload_cadence,
+        gui_toggle_cadence=gui_toggle_cadence,
     )
 
 

@@ -25,56 +25,21 @@ import pytest
 
 from synth_setter.data.vst import core
 from synth_setter.data.vst.writers import make_hdf5_dataset
-from synth_setter.pipeline.schemas.spec import RenderConfig
 
 _ = hdf5plugin  # keep type checkers from flagging the side-effect import
 
 from tests.data.vst.test_generate_vst_dataset import (  # noqa: E402  pinned canonical patch
     _HARDCODED_NOTE_PARAMS,
     _HARDCODED_SYNTH_PARAMS,
+    _render_cfg,
 )
 
 _PLUGIN_PATH = os.environ.get("SYNTH_SETTER_PLUGIN_PATH") or "plugins/Surge XT.vst3"
-_PRESET_PATH = "presets/surge-base.vstpreset"
-_SAMPLE_RATE = 44100
-_CHANNELS = 2
-_DURATION = 4.0
-_VELOCITY = 100
-_MIN_LOUDNESS = -55.0
-_SPEC_NAME = "surge_xt"
-_RENDERER_VERSION = "1.3.4"
 
 skip_no_vst = pytest.mark.skipif(
     not Path(_PLUGIN_PATH).exists(),
     reason=f"VST plugin not found at {_PLUGIN_PATH}",
 )
-
-
-def _render_cfg(num_samples: int, samples_per_render_batch: int) -> RenderConfig:
-    """Build a held-open ``RenderConfig`` with the integration-test defaults.
-
-    :param num_samples: Total samples in the shard.
-    :param samples_per_render_batch: Per-batch size; setting this smaller than
-        ``num_samples`` forces multiple flush callbacks inside the held-open
-        scope (the cross-flush invariant the test is here to defend).
-    :return: A ``RenderConfig`` pinned to the ``always_on`` + ``once`` pairing
-        required by the schema validator.
-    """
-    return RenderConfig(
-        plugin_path=_PLUGIN_PATH,
-        preset_path=_PRESET_PATH,
-        param_spec_name=_SPEC_NAME,
-        renderer_version=_RENDERER_VERSION,
-        sample_rate=_SAMPLE_RATE,
-        channels=_CHANNELS,
-        velocity=_VELOCITY,
-        signal_duration_seconds=_DURATION,
-        min_loudness=_MIN_LOUDNESS,
-        samples_per_render_batch=samples_per_render_batch,
-        samples_per_shard=num_samples,
-        plugin_reload_cadence="once",
-        gui_toggle_cadence="always_on",
-    )
 
 
 @pytest.mark.slow
@@ -97,7 +62,14 @@ def test_always_on_renders_small_shard_end_to_end(
         is observable (loguru does not propagate to ``caplog``).
     """
     num_samples = 4
-    render_cfg = _render_cfg(num_samples=num_samples, samples_per_render_batch=2)
+    # ``always_on`` requires ``plugin_reload_cadence="once"`` per schema validator;
+    # batch=2 forces a mid-shard flush so the cross-flush invariant is exercised.
+    render_cfg = _render_cfg(
+        num_samples=num_samples,
+        samples_per_render_batch=2,
+        plugin_reload_cadence="once",
+        gui_toggle_cadence="always_on",
+    )
     out = tmp_path / "shard-000000.h5"
     fixed_synth = [_HARDCODED_SYNTH_PARAMS] * num_samples
     fixed_note = [_HARDCODED_NOTE_PARAMS] * num_samples

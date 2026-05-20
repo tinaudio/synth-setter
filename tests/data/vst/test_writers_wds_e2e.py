@@ -23,19 +23,10 @@ import webdataset as wds
 
 from synth_setter.data.vst.writers import make_hdf5_dataset, make_wds_dataset
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
-from synth_setter.pipeline.schemas.spec import RenderConfig
 
 _ = hdf5plugin  # keep type checkers from flagging the side-effect import
 
 _PLUGIN_PATH = os.environ.get("SYNTH_SETTER_PLUGIN_PATH") or "plugins/Surge XT.vst3"
-_PRESET_PATH = "presets/surge-base.vstpreset"
-_SAMPLE_RATE = 44100
-_CHANNELS = 2
-_DURATION = 4.0
-_VELOCITY = 100
-_MIN_LOUDNESS = -55.0
-_SPEC_NAME = "surge_xt"
-_RENDERER_VERSION = "1.3.4"
 
 skip_no_vst = pytest.mark.skipif(
     not Path(_PLUGIN_PATH).exists(),
@@ -52,31 +43,8 @@ from tests.data.vst.test_generate_vst_dataset import (
     _HARDCODED_SYNTH_PARAMS,
     _MEL_MEAN_ABS_MAX,
     _assert_audio_metrics_within_thresholds,
+    _render_cfg,
 )
-
-
-def _render_cfg(num_samples: int, samples_per_render_batch: int | None = None) -> RenderConfig:
-    """Build a ``RenderConfig`` with this module's test defaults.
-
-    :param num_samples: Total samples to render per shard.
-    :param samples_per_render_batch: Per-batch sample count (defaults to ``num_samples``).
-    :return: A ``RenderConfig`` populated with the test-defaults.
-    """
-    return RenderConfig(
-        plugin_path=_PLUGIN_PATH,
-        preset_path=_PRESET_PATH,
-        param_spec_name=_SPEC_NAME,
-        renderer_version=_RENDERER_VERSION,
-        sample_rate=_SAMPLE_RATE,
-        channels=_CHANNELS,
-        velocity=_VELOCITY,
-        signal_duration_seconds=_DURATION,
-        min_loudness=_MIN_LOUDNESS,
-        samples_per_render_batch=samples_per_render_batch if samples_per_render_batch is not None else num_samples,
-        samples_per_shard=num_samples,
-        # Darwin-portable: never run the editor warm-up (#714).
-        gui_toggle_cadence="never",
-    )
 
 
 def _tar_members(tar_path: Path) -> dict[str, bytes]:
