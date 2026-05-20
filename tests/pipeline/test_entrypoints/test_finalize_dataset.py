@@ -20,6 +20,14 @@ import numpy as np
 import pytest
 
 from synth_setter.cli import finalize_dataset
+from synth_setter.data.vst.shapes import (
+    AUDIO_FIELD,
+    MEL_SPEC_FIELD,
+    PARAM_ARRAY_FIELD,
+    audio_dataset_shape,
+    mel_dataset_shape,
+    param_array_dataset_shape,
+)
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 
 _FIXED_NOW = datetime(2026, 5, 20, 12, 0, 0, tzinfo=timezone.utc)
@@ -202,12 +210,25 @@ def _seed_shard_files(remote_root: Path, spec: DatasetSpec) -> None:
     :param spec: Spec whose ``shards`` define the filenames to seed.
     """
     remote_root.mkdir(parents=True, exist_ok=True)
-    shard_size = spec.render.samples_per_shard
+    render = spec.render
+    audio_shape = audio_dataset_shape(
+        render.samples_per_shard,
+        render.channels,
+        render.sample_rate,
+        render.signal_duration_seconds,
+    )
+    mel_shape = mel_dataset_shape(
+        render.samples_per_shard,
+        render.channels,
+        render.sample_rate,
+        render.signal_duration_seconds,
+    )
+    param_shape = param_array_dataset_shape(render.samples_per_shard, spec.num_params)
     for shard in spec.shards:
         with h5py.File(remote_root / shard.filename, "w") as f:
-            f.create_dataset("audio", shape=(shard_size, 2, 64), dtype=np.float32)
-            f.create_dataset("mel_spec", shape=(shard_size, 2, 8, 8), dtype=np.float32)
-            f.create_dataset("param_array", shape=(shard_size, 12), dtype=np.float32)
+            f.create_dataset(AUDIO_FIELD, shape=audio_shape, dtype=np.float32)
+            f.create_dataset(MEL_SPEC_FIELD, shape=mel_shape, dtype=np.float32)
+            f.create_dataset(PARAM_ARRAY_FIELD, shape=param_shape, dtype=np.float32)
 
 
 def _stage_for(uploads: dict[str, Path], destination_uri: str, tmp_path: Path) -> Path:
@@ -244,12 +265,15 @@ def test_hdf5_finalize_produces_train_consumable_layout(
     _seed_shard_files(r2_stand_in, spec)
 
     uploads: dict[str, Path] = {}
-    # ``download_to_path`` is file→file (``rclone copyto``): ``dst`` is the
-    # exact local path, not a directory. ``r2_uri`` carries the basename.
-    monkeypatch.setattr(
-        "synth_setter.pipeline.r2_io.download_to_path",
-        lambda r2_uri, dst: shutil.copy(r2_stand_in / Path(r2_uri).name, Path(dst)),
-    )
+    downloaded_uris: list[str] = []
+
+    def fake_download(r2_uri: str, dst: Path) -> None:
+        # ``download_to_path`` is file→file (``rclone copyto``): ``dst`` is the
+        # exact local path, not a directory. ``r2_uri`` carries the basename.
+        downloaded_uris.append(r2_uri)
+        shutil.copy(r2_stand_in / Path(r2_uri).name, Path(dst))
+
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.download_to_path", fake_download)
     monkeypatch.setattr(
         "synth_setter.pipeline.r2_io.upload",
         lambda src, dst: shutil.copy(src, _stage_for(uploads, dst, tmp_path)),
@@ -268,6 +292,10 @@ def test_hdf5_finalize_produces_train_consumable_layout(
     work_dir.mkdir()
     finalize_dataset.finalize_hdf5(spec, work_dir)
 
+    # Every shard (not just train) is downloaded — reshard needs them all to
+    # produce val/test splits; a regression that narrowed to train would
+    # silently drop val/test outputs.
+    assert downloaded_uris == [spec.r2.shard_uri(shard) for shard in spec.shards]
     for split in ("train", "val", "test"):
         with h5py.File(uploads[spec.r2.split_h5_uri(split)], "r") as f:
             assert {"audio", "mel_spec", "param_array"} <= set(f.keys())
@@ -322,9 +350,14 @@ def test_main_hdf5_branch_uploads_marker_last(
 
     finalize_dataset.main()
 
-    assert upload_order[-1] == main_spec.r2.dataset_complete_marker_uri()
-    assert main_spec.r2.stats_uri() in upload_order
-    assert main_spec.r2.split_h5_uri("train") in upload_order
+    marker_uri = main_spec.r2.dataset_complete_marker_uri()
+    marker_index = upload_order.index(marker_uri)
+    # Marker strictly later than every artifact URI — the
+    # ``pipeline/CLAUDE.md`` invariant ("never leave a marker without
+    # artifacts") generalizes to splits-with-val-test, not just train.
+    assert marker_index == len(upload_order) - 1
+    for artifact_uri in (main_spec.r2.stats_uri(), main_spec.r2.split_h5_uri("train")):
+        assert upload_order.index(artifact_uri) < marker_index
 
 
 def test_finalize_hdf5_raises_on_empty_train_split(
@@ -351,6 +384,48 @@ def test_finalize_hdf5_raises_on_empty_train_split(
     spec = _build_hdf5_smoke_spec(task_name="empty-train-hdf5", train_val_test_sizes=(0, 4, 4))
     with pytest.raises(ValueError, match="train split is empty"):
         finalize_dataset.finalize_hdf5(spec, tmp_path)
+
+
+def test_finalize_hdf5_propagates_stats_failure_before_marker_upload(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A ``get_stats_hdf5`` failure surfaces and no split/stats/marker upload runs.
+
+    ``get_stats_hdf5`` raises on degenerate bins (see
+    ``synth_setter.pipeline.data.stats._check_degenerate_bins``); finalize
+    must propagate the error rather than swallow it and proceed to upload
+    ``dataset.complete``. Drives ``finalize_hdf5`` directly so the assertion
+    is local to the stats step.
+
+    :param monkeypatch: Pytest fixture used to install transport + stats stubs.
+    :param tmp_path: Pytest tmp dir; hosts the fake R2 root + scratch work_dir.
+    """
+    spec = _build_hdf5_smoke_spec(task_name="stats-raises-hdf5")
+    r2_stand_in = tmp_path / "r2"
+    _seed_shard_files(r2_stand_in, spec)
+
+    uploaded: list[str] = []
+    monkeypatch.setattr(
+        "synth_setter.pipeline.r2_io.download_to_path",
+        lambda r2_uri, dst: shutil.copy(r2_stand_in / Path(r2_uri).name, Path(dst)),
+    )
+    monkeypatch.setattr(
+        "synth_setter.pipeline.r2_io.upload",
+        lambda src, dst: uploaded.append(dst),
+    )
+
+    def boom(train_h5_path: str) -> None:
+        del train_h5_path
+        raise RuntimeError("degenerate bins")
+
+    monkeypatch.setattr("synth_setter.cli.finalize_dataset.get_stats_hdf5", boom)
+
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    with pytest.raises(RuntimeError, match="degenerate bins"):
+        finalize_dataset.finalize_hdf5(spec, work_dir)
+
+    assert uploaded == []
 
 
 def _compose_smoke_hdf5_spec() -> DatasetSpec:

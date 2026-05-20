@@ -98,8 +98,14 @@ def finalize_hdf5(spec: DatasetSpec, work_dir: Path) -> None:
     """Download every shard, reshard into split files, compute stats, upload all artifacts.
 
     Materializes ``input_spec.json`` sibling to the shards so reshard's
-    default spec-path resolution works without a ``--spec`` override. Stats
-    land at ``work_dir / "stats.npz"`` per ``SurgeXTDataset.get_stats_file_path``.
+    default spec-path resolution works without a ``--spec`` override.
+    ``get_stats_hdf5`` writes ``work_dir / "stats.npz"`` (path derived via
+    ``SurgeXTDataset.get_stats_file_path(train.h5)``); the post-call
+    ``assert`` pins that contract so a future drift in the derivation
+    surfaces here rather than as a missing upload source. Structural
+    validation (per ``pipeline/CLAUDE.md``) is delegated to the h5py opens
+    performed inside ``reshard._write_split`` — finalize never re-runs the
+    workers' full four-check pass.
 
     :param spec: Validated dataset spec (``output_format == "hdf5"``).
     :param work_dir: Scratch directory; shards, splits, stats and the spec
@@ -119,17 +125,27 @@ def finalize_hdf5(spec: DatasetSpec, work_dir: Path) -> None:
     for shard in spec.shards:
         r2_io.download_to_path(spec.r2.shard_uri(shard), work_dir / shard.filename)
     (work_dir / INPUT_SPEC_FILENAME).write_text(spec.model_dump_json(indent=2), encoding="utf-8")
-    reshard.main.callback(dataset_root=work_dir, spec_uri=None)  # type: ignore[misc]
+    # Click's stub types ``.callback`` as ``Optional[Callable]``; assert
+    # before invocation so the call is statically typed without ``type: ignore``.
+    assert reshard.main.callback is not None  # noqa: S101 — narrows Click's Optional callback type
+    reshard.main.callback(dataset_root=work_dir, spec_uri=None)
     get_stats_hdf5(str(work_dir / "train.h5"))
+    stats_npz = work_dir / STATS_NPZ_FILENAME
+    assert stats_npz.is_file(), (  # noqa: S101 — pin get_stats_hdf5's implicit output-path contract
+        f"get_stats_hdf5 did not write {stats_npz}; check "
+        f"SurgeXTDataset.get_stats_file_path derivation."
+    )
     # Reshard prunes empty splits — only upload the ones it actually wrote.
     # Iterate ``split_shard_ranges`` (Split-typed keys) so split_h5_uri's
     # Literal narrowing holds without a cast.
     for split in spec.split_shard_ranges:
         split_h5 = work_dir / f"{split}.h5"
         if split_h5.exists():
-            r2_io.upload(split_h5, spec.r2.split_h5_uri(split))
-    r2_io.upload(work_dir / STATS_NPZ_FILENAME, spec.r2.stats_uri())
-    logger.info("uploaded h5 splits + stats to {}", spec.r2.rclone_prefix())
+            split_uri = spec.r2.split_h5_uri(split)
+            r2_io.upload(split_h5, split_uri)
+            logger.info("uploaded {} to {}", split_h5.name, split_uri)
+    r2_io.upload(stats_npz, spec.r2.stats_uri())
+    logger.info("uploaded stats to {}", spec.r2.stats_uri())
 
 
 def main() -> None:
