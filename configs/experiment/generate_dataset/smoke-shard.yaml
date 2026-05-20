@@ -22,7 +22,3 @@ render:
   # `render.gui_toggle_cadence=<cell>` overrides against this experiment
   # without flipping the platform-aware default in `configs/render/surge_xt.yaml`.
   gui_toggle_cadence: never
-  # Pinned to `once` so the matrix's `always_on` cells satisfy the
-  # `_always_on_requires_plugin_reload_once` cross-field validator in
-  # `RenderConfig`; the other cells accept `once` and stay valid.
-  plugin_reload_cadence: once

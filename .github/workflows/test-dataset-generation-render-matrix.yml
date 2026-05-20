@@ -11,19 +11,47 @@ name: Test Dataset Generation (Render-Config Matrix)
 # dispatch (#1187) surfaces at PR time instead of waiting for the
 # nightly cron.
 #
-# Matrix axes (8 cells = 4 x 2, all fan-out in parallel):
-#   * cadence — every value of the ``_GuiToggleCadence`` Literal in
-#     ``src/synth_setter/pipeline/schemas/spec.py``. ``always_on`` is the
-#     cell that exercises ``run_with_editor_held_open`` end-to-end;
-#     ``never`` / ``once`` / ``render`` keep the other warm-up paths
-#     under PR-time coverage.
+# Two jobs cover complementary contracts:
+#
+#   * ``generate`` — positive matrix. 6 cells (``never`` / ``once`` /
+#     ``render``) x (``hdf5`` / ``wds``) running through the
+#     ``generate-dataset-shards.yaml`` reusable workflow. ``always_on`` is
+#     intentionally NOT in this matrix: combining it with the schema's
+#     default ``plugin_reload_cadence="render"`` is a configuration error
+#     that the ``RenderConfig._always_on_requires_plugin_reload_once``
+#     validator rejects at spec construction (``src/synth_setter/pipeline/
+#     schemas/spec.py``). Per-cell ``hydra_overrides`` could opt in to
+#     ``always_on`` + ``plugin_reload_cadence=once`` here, but the
+#     end-to-end ``always_on`` render path is already covered by
+#     ``test_always_on_renders_small_shard_end_to_end`` in
+#     ``test-vst-slow.yml`` against a real Surge XT plugin.
+#
+#   * ``validator_rejects_always_on`` — contract job. 2 inline cells
+#     (``always_on``) x (``hdf5`` / ``wds``) invoking
+#     ``synth-setter-generate-dataset`` directly with ``continue-on-error``
+#     and asserting both that the CLI exited non-zero AND that the
+#     ``_always_on_requires_plugin_reload_once`` validator message was
+#     surfaced. The cells run inline (no docker / no kind) because the
+#     validator fires during ``spec_from_cfg`` before any side effect, so a
+#     plain python install is sufficient and far cheaper than the reusable
+#     workflow's compute setup. The reusable workflow can't host this
+#     contract directly because step-level ``continue-on-error`` doesn't
+#     compose into a reusable-workflow caller and the matrix needs to
+#     observe per-cell failure.
+#
+# Matrix axes for the positive ``generate`` job (6 cells = 3 x 2, all
+# fan-out in parallel):
+#   * cadence — three of the four ``_GuiToggleCadence`` Literal values in
+#     ``src/synth_setter/pipeline/schemas/spec.py``. ``never`` / ``once`` /
+#     ``render`` keep the warm-up paths under PR-time coverage;
+#     ``always_on`` lives in the contract job above.
 #   * output_format — ``hdf5`` and ``wds``. Injected via the reusable's
 #     ``hydra_overrides`` input rather than a sibling experiment file so
 #     the matrix stays a single ``smoke-shard`` base.
 #
 # ``RenderConfig.parallel`` (#1189) coverage stays on the existing weekly
 # cron in ``test-dataset-generation.yml`` (the nightly-parallel-smoke config
-# would not fit under the 40-min step cap once multiplied by 8 cells).
+# would not fit under the 40-min step cap once multiplied by the cells).
 #
 # Validation of the produced shards is intentionally out of scope here:
 # ``needs.<job>.outputs.spec_uri`` from a matrix-strategy reusable workflow
@@ -35,7 +63,9 @@ name: Test Dataset Generation (Render-Config Matrix)
 #
 # Required secrets (forwarded via ``secrets: inherit``):
 #   RCLONE_CONFIG_R2_ACCESS_KEY_ID, RCLONE_CONFIG_R2_SECRET_ACCESS_KEY,
-#   RCLONE_CONFIG_R2_ENDPOINT, R2_ACCOUNT_ID — every cell (R2 upload).
+#   RCLONE_CONFIG_R2_ENDPOINT, R2_ACCOUNT_ID — positive ``generate`` cells
+#   (R2 upload). The contract job needs no secrets — it fails before
+#   ``ensure_r2_env_loaded`` is called.
 
 on:
   workflow_dispatch:
@@ -72,7 +102,7 @@ jobs:
       # own pass/fail signal even if a sibling cell aborts.
       fail-fast: false
       matrix:
-        cadence: [never, once, render, always_on]
+        cadence: [never, once, render]
         output_format: [hdf5, wds]
     uses: ./.github/workflows/generate-dataset-shards.yaml
     with:
@@ -86,3 +116,74 @@ jobs:
       artifact_name: render-matrix-run-metadata-${{ matrix.cadence }}-${{ matrix.output_format }}-${{ strategy.job-index }}
       hydra_overrides: render.gui_toggle_cadence=${{ matrix.cadence }} output_format=${{ matrix.output_format }}
     secrets: inherit
+
+  # Contract job — asserts ``RenderConfig._always_on_requires_plugin_reload_once``
+  # rejects ``gui_toggle_cadence="always_on"`` combined with the schema's
+  # default ``plugin_reload_cadence="render"``. The reusable workflow can't
+  # host this (step-level ``continue-on-error`` doesn't compose into a
+  # reusable-workflow caller, and the matrix needs to observe per-cell
+  # failure), so the CLI runs inline. The validator fires inside
+  # ``spec_from_cfg`` before ``ensure_r2_env_loaded``, so no cloud creds or
+  # docker image are required.
+  validator_rejects_always_on:
+    name: Validator rejects always_on (cadence=always_on / ${{ matrix.output_format }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        output_format: [hdf5, wds]
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "pyproject.toml"
+
+      # ``-e .`` pulls Hydra + Pydantic — enough to import
+      # ``synth_setter.cli.generate_dataset:main`` and exercise
+      # ``spec_from_cfg``. Skip ``[torch,dev]`` so the contract job stays
+      # well under a minute.
+      - name: Install package (validator only)
+        run: uv pip install --system -e .
+
+      # ``continue-on-error`` keeps the matrix cell green so the next step
+      # can assert the failure. ``PIPESTATUS[0]`` captures the launcher
+      # exit (the ``| tee`` tail returns 0 even when the launcher raises).
+      - name: Run generate-dataset (must fail for always_on + default reload cadence)
+        id: cli
+        continue-on-error: true
+        env:
+          HYDRA_FULL_ERROR: "1"
+        run: |
+          set -uo pipefail
+          synth-setter-generate-dataset \
+            experiment=generate_dataset/smoke-shard \
+            render.gui_toggle_cadence=always_on \
+            output_format=${{ matrix.output_format }} \
+            2>&1 | tee cli.log
+          echo "cli_exit=${PIPESTATUS[0]}" >> "${GITHUB_OUTPUT}"
+
+      - name: Assert validator rejected the combination
+        env:
+          CLI_EXIT: ${{ steps.cli.outputs.cli_exit }}
+        run: |
+          set -euo pipefail
+          if [[ "${CLI_EXIT}" == "0" ]]; then
+            echo "::error::expected synth-setter-generate-dataset to exit non-zero on gui_toggle_cadence=always_on with default plugin_reload_cadence (=render); got exit 0. The _always_on_requires_plugin_reload_once validator did not fire."
+            exit 1
+          fi
+          if ! grep -q 'gui_toggle_cadence="always_on" requires plugin_reload_cadence="once"' cli.log; then
+            echo "::error::CLI exited non-zero (${CLI_EXIT}) but the _always_on_requires_plugin_reload_once validator message was not surfaced; some other failure masked the contract under test."
+            cat cli.log
+            exit 1
+          fi
+          echo "validator raised as expected (exit=${CLI_EXIT})"

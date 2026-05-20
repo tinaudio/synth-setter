@@ -278,6 +278,29 @@ class TestRenderConfig:
                 }
             )
 
+    def test_always_on_with_default_plugin_reload_cadence_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``"always_on"`` without an explicit ``plugin_reload_cadence`` hits the schema default.
+
+        Pins the contract: callers that opt into ``always_on`` must also set
+        ``plugin_reload_cadence="once"`` — relying on the schema default
+        (``"render"``) is a configuration error and surfaces at construction,
+        not at render time.
+
+        :param monkeypatch: Pytest fixture used to stub ``_current_platform``.
+        """
+        monkeypatch.setattr(
+            "synth_setter.pipeline.schemas.spec._current_platform", lambda: "linux"
+        )
+        kwargs = _valid_render_kwargs()
+        kwargs.pop("plugin_reload_cadence", None)
+        with pytest.raises(
+            ValidationError,
+            match=r'gui_toggle_cadence="always_on" requires plugin_reload_cadence="once"',
+        ):
+            RenderConfig(**{**kwargs, "gui_toggle_cadence": "always_on"})
+
     def test_always_on_accepted_on_darwin(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """``"always_on"`` is permitted on Darwin (single open, below #714 threshold).
 
