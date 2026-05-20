@@ -3,25 +3,27 @@ name: Test Dataset Generation (Render-Config Matrix)
 # Per-PR matrix exercise of ``test-dataset-generation`` across the render-side
 # code paths a PR can regress. The base config is ``smoke-shard`` (the only
 # experiment whose 12-sample volume fits comfortably under the reusable's
-# 20-min step cap); cells fan out across ``render.gui_toggle_cadence`` and
-# ``output_format`` so a regression in the ``editor_held_open`` handshake
-# (#1198, #1204), the ``always_on`` gui-toggle cadence (#1187), or the
-# wds writer surfaces on the PR that introduces it instead of the next
+# step cap); cells fan out across ``render.gui_toggle_cadence`` and
+# ``output_format``. The matrix exercises ``run_with_editor_held_open``
+# (main thread blocks in ``show_editor``, render worker runs the loop)
+# under each ``gui_toggle_cadence`` and ``output_format`` combination, so
+# a regression in either the thread inversion (#1204) or the cadence
+# dispatch (#1187) surfaces at PR time instead of waiting for the
 # nightly cron.
 #
 # Matrix axes (8 cells = 4 x 2, all fan-out in parallel):
 #   * cadence — every value of the ``_GuiToggleCadence`` Literal in
 #     ``src/synth_setter/pipeline/schemas/spec.py``. ``always_on`` is the
-#     cell #1204 specifically guards against the held-open handshake
-#     regression; ``never`` / ``once`` / ``render`` keep the other warm-up
-#     paths under PR-time coverage.
+#     cell that exercises ``run_with_editor_held_open`` end-to-end;
+#     ``never`` / ``once`` / ``render`` keep the other warm-up paths
+#     under PR-time coverage.
 #   * output_format — ``hdf5`` and ``wds``. Injected via the reusable's
 #     ``hydra_overrides`` input rather than a sibling experiment file so
 #     the matrix stays a single ``smoke-shard`` base.
 #
 # ``RenderConfig.parallel`` (#1189) coverage stays on the existing weekly
 # cron in ``test-dataset-generation.yml`` (the nightly-parallel-smoke config
-# would not fit under the 20-min step cap once multiplied by 8 cells).
+# would not fit under the 40-min step cap once multiplied by 8 cells).
 #
 # Validation of the produced shards is intentionally out of scope here:
 # ``needs.<job>.outputs.spec_uri`` from a matrix-strategy reusable workflow

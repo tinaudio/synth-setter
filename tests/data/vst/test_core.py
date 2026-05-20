@@ -11,6 +11,7 @@ import pytest
 
 from synth_setter.data.vst import core
 from synth_setter.data.vst.core import (
+    RenderWorkerLeaked,
     extract_renderer_version,
     load_plugin,
     render_params,
@@ -163,10 +164,19 @@ class TestRunWithEditorHeldOpen:
 
         assert worker_ran.is_set()
 
-    def test_join_timeout_does_not_deadlock(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """A worker that ignores the close event surfaces a leak warning, not a deadlock.
+    def test_run_with_editor_held_open_raises_on_worker_leak(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A worker that outlives the join window after ``show_editor`` returns raises.
 
-        :param monkeypatch: Tightens ``_EDITOR_JOIN_TIMEOUT_SECONDS`` and stubs
+        Simulates the leak case: ``show_editor`` returns immediately and the
+        worker body keeps running past ``_EDITOR_JOIN_TIMEOUT_SECONDS``. The
+        helper must raise ``RenderWorkerLeaked`` rather than logging-and-
+        returning, so callers like ``_render_in_batches`` cannot continue
+        while renders are still in flight on the background thread.
+
+        :param monkeypatch: Tightens ``_EDITOR_JOIN_TIMEOUT_SECONDS`` so the
+            slow body outlives the join window deterministically; stubs
             ``core.logger`` so the leak-warning assertion is observable.
         """
         monkeypatch.setattr(core, "_EDITOR_JOIN_TIMEOUT_SECONDS", 0.1)
@@ -178,13 +188,12 @@ class TestRunWithEditorHeldOpen:
         worker_release = threading.Event()
 
         def body() -> None:
-            # Outlive the join window; release at the end so the daemon
-            # eventually exits and pytest does not see a leaked thread.
             worker_release.wait(timeout=5.0)
 
         start = time.monotonic()
         try:
-            core.run_with_editor_held_open(fake_plugin, body)
+            with pytest.raises(RenderWorkerLeaked, match="still alive"):
+                core.run_with_editor_held_open(fake_plugin, body)
         finally:
             worker_release.set()
         elapsed = time.monotonic() - start
@@ -192,7 +201,68 @@ class TestRunWithEditorHeldOpen:
         # 1s slack over the 0.1s timeout to absorb CI scheduler jitter.
         assert elapsed < 1.0
         assert fake_logger.warning.call_count == 1
-        assert "did not drain" in fake_logger.warning.call_args.args[0]
+        assert "RenderWorkerLeaked" in fake_logger.warning.call_args.args[0]
+
+    def test_run_with_editor_held_open_propagates_body_exception_even_on_slow_finish(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Body exceptions take precedence over the leak signal.
+
+        A body that raises must surface its own exception even when the
+        worker takes long enough to be at risk of tripping the leak path —
+        the body reached a terminal state, so the caller sees the real
+        failure rather than a synthetic ``RenderWorkerLeaked``.
+
+        :param monkeypatch: Tightens ``_EDITOR_JOIN_TIMEOUT_SECONDS`` so the
+            test exercises the precedence rule near the join boundary.
+        """
+        monkeypatch.setattr(core, "_EDITOR_JOIN_TIMEOUT_SECONDS", 1.0)
+        fake_plugin = MagicMock()
+        fake_plugin.show_editor.side_effect = lambda event: event.wait(timeout=5.0)
+
+        def body() -> None:
+            time.sleep(0.05)
+            raise ValueError("body slow-failed")
+
+        with pytest.raises(ValueError, match="body slow-failed"):
+            core.run_with_editor_held_open(fake_plugin, body)
+
+    def test_run_with_editor_held_open_no_silent_none_return(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``None`` from a clean body returns; an empty-result clean exit raises distinctly.
+
+        Two paths share the ``not result`` shape: a body that returns
+        explicit ``None`` (legitimate) and a worker that exited without
+        producing a value or capturing an exception (a bug — the body must
+        either return or raise). The first must propagate ``None``; the
+        second must raise ``RenderWorkerLeaked`` with a message that
+        distinguishes it from the join-timeout case.
+
+        :param monkeypatch: Stubs ``threading.Thread`` for the empty-result
+            branch so the helper observes ``not result`` with a dead worker.
+        """
+        fake_plugin = MagicMock()
+        fake_plugin.show_editor.side_effect = lambda event: event.wait(timeout=5.0)
+
+        assert core.run_with_editor_held_open(fake_plugin, lambda: None) is None
+
+        class _DeadThread:
+            def __init__(self, *_args: object, **_kwargs: object) -> None: ...
+
+            def start(self) -> None: ...
+
+            def join(self, timeout: float | None = None) -> None: ...
+
+            def is_alive(self) -> bool:
+                return False
+
+        monkeypatch.setattr(core.threading, "Thread", _DeadThread)
+        fake_plugin_empty = MagicMock()
+        fake_plugin_empty.show_editor.return_value = None
+
+        with pytest.raises(RenderWorkerLeaked, match="without producing a result"):
+            core.run_with_editor_held_open(fake_plugin_empty, lambda: "ignored")
 
 
 class TestRenderParamsPreloadedPlugin:

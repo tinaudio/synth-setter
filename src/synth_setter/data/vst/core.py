@@ -13,12 +13,25 @@ from pedalboard.io import AudioFile
 
 # How long the editor stays open before we signal it to close.
 _EDITOR_INIT_DELAY_SECONDS = 0.5
-# Upper bound on how long ``run_with_editor_held_open`` waits for the render
-# worker to drain after ``show_editor`` returns; a generous safety net for the
-# held-open path (#1187), not a normal-case timing parameter.
+# Hard ceiling on how long ``run_with_editor_held_open`` waits for the render
+# worker to drain after ``show_editor`` returns; exceeding it raises
+# ``RenderWorkerLeaked`` (#1204) so the helper never returns with a live
+# worker thread.
 _EDITOR_JOIN_TIMEOUT_SECONDS = 2.0
 
 _BodyResult = TypeVar("_BodyResult")
+
+
+class RenderWorkerLeaked(RuntimeError):
+    """Render worker outlived the join window — body never reached a terminal state.
+
+    Raised by ``run_with_editor_held_open`` when ``show_editor`` returns but the
+    worker thread is still alive past ``_EDITOR_JOIN_TIMEOUT_SECONDS``, or when
+    the worker exited without capturing a result or exception. Either branch
+    means the helper cannot honour its "returns whatever body() returned"
+    contract; surfacing it as an exception keeps the caller from treating an
+    in-flight or empty render as success (#1204).
+    """
 
 
 def extract_renderer_version(plugin_path: Path) -> str:
@@ -96,11 +109,13 @@ def run_with_editor_held_open(plugin: VST3Plugin, body: Callable[[], _BodyResult
     """Invoke ``body()`` on a worker thread while the caller blocks in ``plugin.show_editor``.
 
     Pedalboard 0.9.x requires ``show_editor`` to run on the process main
-    thread; the worker handles renders so the editor stays realised for the
-    duration of ``body()`` (#1187). Worker exceptions propagate to the caller
-    after ``show_editor`` returns. If the worker outlives the
-    ``_EDITOR_JOIN_TIMEOUT_SECONDS`` join window after the close event is set,
-    a warning records the leak.
+    thread; a daemon worker handles renders so the editor stays realised for
+    the duration of ``body()`` (#1187). Worker exceptions propagate to the
+    caller after ``show_editor`` returns and take precedence over the leak
+    signal so a body that raised while finishing slowly still surfaces its
+    own exception. The helper never returns with a live worker thread:
+    ``BodyResult`` is delivered only when the worker reached a terminal state
+    inside the join window; any other outcome raises ``RenderWorkerLeaked``.
 
     :param plugin: A loaded VST3 plugin whose editor is realised for the call.
     :param body: Callable executed on the worker thread; its return value is
@@ -109,6 +124,9 @@ def run_with_editor_held_open(plugin: VST3Plugin, body: Callable[[], _BodyResult
     :raises BaseException: Re-raised from the worker thread if ``body()``
         raised — typically a ``RuntimeError`` from the VST3 host or a render
         failure.
+    :raises RenderWorkerLeaked: Worker outlived ``_EDITOR_JOIN_TIMEOUT_SECONDS``
+        after the close event was set, or exited without producing a result
+        or exception (no body return value can be surfaced safely).
     """
     close_editor = threading.Event()
     result: list[_BodyResult] = []
@@ -122,25 +140,31 @@ def run_with_editor_held_open(plugin: VST3Plugin, body: Callable[[], _BodyResult
         finally:
             close_editor.set()
 
-    worker = threading.Thread(target=_worker, name="render-worker")
+    worker = threading.Thread(target=_worker, name="render-worker", daemon=True)
     worker.start()
     try:
         plugin.show_editor(close_editor)
     finally:
         close_editor.set()
         worker.join(timeout=_EDITOR_JOIN_TIMEOUT_SECONDS)
-        if worker.is_alive():
-            logger.warning(
-                "render-worker did not drain within {}s; thread leaks (reaped at process exit)",
-                _EDITOR_JOIN_TIMEOUT_SECONDS,
-            )
     if captured:
         exc: BaseException = captured[0]
         raise exc
+    if worker.is_alive():
+        logger.warning(
+            "render-worker did not drain within {}s — raising RenderWorkerLeaked"
+            " (the body must complete or raise before show_editor returns)",
+            _EDITOR_JOIN_TIMEOUT_SECONDS,
+        )
+        raise RenderWorkerLeaked(
+            f"render-worker still alive after {_EDITOR_JOIN_TIMEOUT_SECONDS}s join window;"
+            " body did not complete or raise before show_editor returned"
+        )
     if not result:
-        # Worker outlived the join window without completing — the leak warning above
-        # records this; there's no body return value to surface.
-        return None  # type: ignore[return-value]
+        raise RenderWorkerLeaked(
+            "render-worker exited without producing a result or exception;"
+            " body() must either return or raise"
+        )
     return result[0]
 
 

@@ -357,14 +357,15 @@ jobs:
       # same run_id). The step output `spec_path` resolves that file so later
       # steps don't have to repeat the glob.
       #
-      # 20-min step cap caps a hung launcher so the `if: always()` log-snapshot
-      # step still runs. NOTE: step-level timeout sends SIGKILL — `finally`
-      # blocks are bypassed; operators may need to `sky jobs cancel` manually.
-      # See #876.
+      # 40-min step cap accommodates the 8-cell render-matrix cells (#1204)
+      # without leaving headroom-too-thin for a hung launcher to surface; the
+      # cap still bounds a hung launcher so the `if: always()` log-snapshot
+      # step runs. NOTE: step-level timeout sends SIGKILL — `finally` blocks
+      # are bypassed; operators may need to `sky jobs cancel` manually. See #876.
       - name: Run synth-setter-generate-dataset against local-template (skypilot-local row)
         id: gen_local
         if: ${{ inputs.provider == 'skypilot-local' }}
-        timeout-minutes: 20
+        timeout-minutes: 40
         env:
           RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
           RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
