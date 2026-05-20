@@ -451,8 +451,12 @@ class TestReshardShardIdOrdering:
         )
 
         def fake_loader(_uri: str) -> DatasetSpec:
-            # ``shards`` is a computed property; swap it on a real spec instance.
-            object.__setattr__(spec, "__dict__", {**spec.__dict__, "shards": reversed_shards})
+            # ``shards`` is a ``@cached_property``; the cached value lives in the
+            # instance ``__dict__`` once accessed. Mutate that single entry
+            # in-place so other Pydantic-managed state stays untouched.
+            # ``cast`` because Pydantic's stubs type ``__dict__`` as
+            # ``MappingProxyType``; at runtime ``BaseModel.__dict__`` is a real dict.
+            cast("dict[str, Any]", spec.__dict__)["shards"] = reversed_shards
             return spec
 
         monkeypatch.setattr(_reshard_module, "load_spec_from_uri", fake_loader)
@@ -681,6 +685,43 @@ class TestReshardAtomicWrite:
         result = runner.invoke(_reshard_module.main, [str(tmp_path)], catch_exceptions=False)
 
         assert result.exit_code != 0
+        _assert_no_outputs(tmp_path)
+
+    def test_rename_phase_failure_unlinks_previously_renamed_splits(
+        self,
+        tmp_path: Path,
+        patch_runtime_io: None,
+        runner: CliRunner,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A mid-rename failure must also unlink any final outputs already in place.
+
+        Every staging write succeeds, then the rename loop fails on
+        ``.tmp-val.h5`` after ``.tmp-train.h5`` has already been renamed to
+        ``train.h5``. The cleanup must remove that already-landed ``train.h5``
+        too, otherwise the across-splits atomicity guarantee is a lie.
+
+        :param tmp_path: Per-test dataset root.
+        :param patch_runtime_io: Deterministic spec runtime stubs.
+        :param runner: Click test runner.
+        :param monkeypatch: Used to wrap ``Path.replace`` to fail on the second call.
+        """
+        spec = DatasetSpec(**_spec_kwargs(20, 10, 10, samples_per_shard=10))
+        _materialize_dataset(tmp_path, spec)
+        original_replace = Path.replace
+
+        def failing_replace(self: Path, target: Path) -> Path:
+            if self.name == ".tmp-val.h5":
+                raise OSError("simulated rename failure on val")
+            return original_replace(self, target)
+
+        monkeypatch.setattr(Path, "replace", failing_replace)
+
+        result = runner.invoke(_reshard_module.main, [str(tmp_path)])
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, OSError)
+        # train.h5 was renamed before val failed; cleanup must roll it back.
         _assert_no_outputs(tmp_path)
 
 

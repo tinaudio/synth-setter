@@ -194,7 +194,7 @@ def _build_splits(
     }
 
 
-def _stage_and_commit_splits(  # noqa: DOC503
+def _stage_and_commit_splits(  # noqa: DOC501,DOC503
     dataset_root: Path,
     splits: dict[str, list[Path]],
     shard_size: int,
@@ -202,33 +202,35 @@ def _stage_and_commit_splits(  # noqa: DOC503
 ) -> None:
     """Stage every non-empty split under ``.tmp-<split>.h5``, then atomically rename.
 
-    Across-splits atomicity: every staging write succeeds before any rename;
-    any in-flight failure unlinks every staging file before re-raising. So no
-    ``{train,val,test}.h5`` ever appears unless every output file was
-    successfully created.
+    Across-splits atomicity: every staging write succeeds before any rename
+    runs, and any failure during *either* phase unlinks every staging file
+    plus every final output already renamed in this call before re-raising.
+    So no ``{train,val,test}.h5`` ever appears unless every output file was
+    successfully created. Exceptions from :mod:`h5py` (during staging) and
+    :meth:`pathlib.Path.replace` (during rename) propagate raw — only the
+    cleanup is added on top.
 
     :param dataset_root: Directory that holds both the input shards and the outputs.
     :param splits: Per-split shard lists from :func:`_build_splits`.
     :param shard_size: ``samples_per_shard`` for every shard.
     :param tails: Per-dataset trailing shape from :func:`_check_shard_contracts`.
-    :raises click.ClickException: Propagated from h5py via ``main``'s contract;
-        listed for pydoclint completeness only — the staging cleanup happens
-        for *any* exception (including ``KeyboardInterrupt``).
     """
     nonempty = [(name, paths) for name, paths in splits.items() if paths]
     staging_paths = [dataset_root / f"{_STAGING_PREFIX}{name}.h5" for name, _ in nonempty]
+    final_paths = [dataset_root / f"{name}.h5" for name, _ in nonempty]
+    renamed: list[Path] = []
     try:
         for (name, paths), staging in zip(nonempty, staging_paths, strict=True):
             click.echo(f"{name}: {len(paths)} shards")
             _write_split(staging, paths, shard_size, tails)
-        for (name, _), staging in zip(nonempty, staging_paths, strict=True):
-            staging.replace(dataset_root / f"{name}.h5")
+        for staging, final in zip(staging_paths, final_paths, strict=True):
+            staging.replace(final)
+            renamed.append(final)
     except BaseException:
-        # Any failure between the first staging open and the last rename leaves
-        # zero ``.tmp-*.h5`` files behind; previously-renamed splits cannot land
-        # because every rename happens after every stage succeeds.
         for staging in staging_paths:
             staging.unlink(missing_ok=True)
+        for final in renamed:
+            final.unlink(missing_ok=True)
         raise
 
 
