@@ -134,7 +134,6 @@ jobs:
           mkdir -p "${RUN_METADATA_DIR}"
           docker run --rm \
             -v "${{ github.workspace }}:/home/build/synth-setter" \
-            -v "${RUN_METADATA_DIR}:/run-metadata" \
             -e RCLONE_CONFIG_R2_TYPE \
             -e RCLONE_CONFIG_R2_PROVIDER \
             -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
