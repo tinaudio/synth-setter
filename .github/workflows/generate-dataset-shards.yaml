@@ -9,7 +9,10 @@ name: Generate Dataset Shards
 # tokens appended to the launcher invocation. Tokens must not contain embedded
 # spaces; the docker (runpod/oci) row expands `$HYDRA_OVERRIDES_EXTRA` unquoted
 # inside the worker container, so any whitespace inside a token splits it into
-# separate arguments. Used by the render-config matrix to fan over
+# separate arguments. The "Validate hydra_overrides" step rejects any input
+# that doesn't match `^[A-Za-z0-9._=,/-]*( [A-Za-z0-9._=,/-]+)*$` so shell
+# metacharacters (`;`, `&&`, `|`, `$()`, ...) can't ride through the unquoted
+# docker expansion. Used by the render-config matrix to fan over
 # `render.gui_toggle_cadence` and `output_format` without pre-baking one
 # Hydra experiment per cell.
 #
@@ -77,7 +80,7 @@ on:
         type: string
         default: "run-metadata"
       hydra_overrides:
-        description: "Extra whitespace-separated Hydra `key=value` overrides appended to the launcher invocation (e.g. `render.gui_toggle_cadence=always_on output_format=wds`). Tokens must not contain embedded spaces — the docker (runpod/oci) row expands this variable unquoted into the worker container, so any whitespace inside a token splits it into separate arguments."
+        description: "Extra whitespace-separated Hydra `key=value` overrides appended to the launcher invocation (e.g. `render.gui_toggle_cadence=always_on output_format=wds`). Validated against `^[A-Za-z0-9._=,/-]*( [A-Za-z0-9._=,/-]+)*$` — any shell metacharacter (`;`, `&&`, `|`, `$()`, ...) fails the workflow because the docker (runpod/oci) row expands `$HYDRA_OVERRIDES_EXTRA` unquoted inside the worker container."
         required: false
         type: string
         default: ""
@@ -132,7 +135,7 @@ on:
         type: string
         default: "run-metadata"
       hydra_overrides:
-        description: "Extra whitespace-separated Hydra `key=value` overrides appended to the launcher invocation (e.g. `render.gui_toggle_cadence=always_on output_format=wds`). Tokens must not contain embedded spaces — the docker (runpod/oci) row expands this variable unquoted into the worker container."
+        description: "Extra whitespace-separated Hydra `key=value` overrides appended to the launcher invocation (e.g. `render.gui_toggle_cadence=always_on output_format=wds`). Validated against `^[A-Za-z0-9._=,/-]*( [A-Za-z0-9._=,/-]+)*$` — any shell metacharacter fails the workflow because the docker row expands the variable unquoted inside the worker container."
         required: false
         type: string
         default: ""
@@ -156,6 +159,22 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      # Reject hydra_overrides containing anything outside the allowed character
+      # class. The docker (runpod/oci) row expands `$HYDRA_OVERRIDES_EXTRA`
+      # unquoted inside `bash -c`, so an unrestricted value like
+      # `render.gui_toggle_cadence=always_on; rm -rf /` would be interpreted as
+      # shell syntax on the worker. Validating at the entry point fails both
+      # provider branches before the unquoted expansion can run.
+      - name: Validate hydra_overrides
+        env:
+          INPUT_HYDRA_OVERRIDES: ${{ inputs.hydra_overrides }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s\n' "$INPUT_HYDRA_OVERRIDES" | grep -Eq '^[A-Za-z0-9._=,/-]*( [A-Za-z0-9._=,/-]+)*$'; then
+            echo "::error::hydra_overrides contains disallowed characters; only [A-Za-z0-9._=,/-] tokens separated by single spaces are allowed. See workflow header for the validation regex."
+            exit 1
+          fi
 
       # Resolve cluster_name: caller-provided value wins; empty falls back to a
       # manual-default that includes run_id + run_attempt so concurrent manual
