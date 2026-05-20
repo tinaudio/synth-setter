@@ -674,27 +674,16 @@ tests/_baseline_worktree.py
 tests/conftest.py
     DOC101: Function `_validate_surge_dataset`: Docstring contains fewer arguments than in function signature.
     DOC103: Function `_validate_surge_dataset`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [num_samples: int, path: Path].
-    DOC203: Function `cfg_train_global` return type(s) in docstring not consistent with the return annotation. Return annotation types: ['DictConfig']; docstring return section types: ['']
-    DOC203: Function `cfg_eval_global` return type(s) in docstring not consistent with the return annotation. Return annotation types: ['DictConfig']; docstring return section types: ['']
-    DOC203: Function `cfg_train` return type(s) in docstring not consistent with the return annotation. Return annotation types: ['DictConfig']; docstring return section types: ['']
     DOC402: Function `cfg_train` has "yield" statements, but the docstring does not have a "Yields" section
     DOC404: Function `cfg_train` yield type(s) in docstring not consistent with the return annotation. Return annotation exists, but docstring "yields" section does not exist or has 0 type(s).
-    DOC203: Function `cfg_eval` return type(s) in docstring not consistent with the return annotation. Return annotation types: ['DictConfig']; docstring return section types: ['']
     DOC402: Function `cfg_eval` has "yield" statements, but the docstring does not have a "Yields" section
     DOC404: Function `cfg_eval` yield type(s) in docstring not consistent with the return annotation. Return annotation exists, but docstring "yields" section does not exist or has 0 type(s).
-    DOC203: Function `accelerator` return type(s) in docstring not consistent with the return annotation. Return annotation types: ['str']; docstring return section types: ['']
-    DOC203: Function `param_spec_name` return type(s) in docstring not consistent with the return annotation. Return annotation types: ['str']; docstring return section types: ['']
-    DOC203: Function `_build_surge_xt_smoke_cfg` return type(s) in docstring not consistent with the return annotation. Return annotation types: ['DictConfig']; docstring return section types: ['']
-    DOC203: Function `cfg_surge_xt_global` return type(s) in docstring not consistent with the return annotation. Return annotation types: ['DictConfig']; docstring return section types: ['']
-    DOC203: Function `surge_xt_smoke_datasets` return type(s) in docstring not consistent with the return annotation. Return annotation types: ['Path']; docstring return section types: ['']
     DOC101: Function `cfg_surge_xt`: Docstring contains fewer arguments than in function signature.
     DOC103: Function `cfg_surge_xt`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [surge_xt_smoke_datasets: Path].
-    DOC203: Function `cfg_surge_xt` return type(s) in docstring not consistent with the return annotation. Return annotation types: ['DictConfig']; docstring return section types: ['']
     DOC402: Function `cfg_surge_xt` has "yield" statements, but the docstring does not have a "Yields" section
     DOC404: Function `cfg_surge_xt` yield type(s) in docstring not consistent with the return annotation. Return annotation exists, but docstring "yields" section does not exist or has 0 type(s).
     DOC101: Function `cfg_surge_xt_eval`: Docstring contains fewer arguments than in function signature.
     DOC103: Function `cfg_surge_xt_eval`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [surge_xt_smoke_datasets: Path].
-    DOC203: Function `cfg_surge_xt_eval` return type(s) in docstring not consistent with the return annotation. Return annotation types: ['DictConfig']; docstring return section types: ['']
     DOC402: Function `cfg_surge_xt_eval` has "yield" statements, but the docstring does not have a "Yields" section
     DOC404: Function `cfg_surge_xt_eval` yield type(s) in docstring not consistent with the return annotation. Return annotation exists, but docstring "yields" section does not exist or has 0 type(s).
     DOC101: Function `pytest_addoption`: Docstring contains fewer arguments than in function signature.

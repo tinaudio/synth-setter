@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 import h5py
@@ -234,6 +235,49 @@ def cfg_eval(cfg_eval_global: DictConfig, tmp_path: Path) -> DictConfig:
 
     with open_dict(cfg):
         cfg.paths.output_dir = str(tmp_path)
+        cfg.paths.log_dir = str(tmp_path)
+
+    yield cfg
+
+    GlobalHydra.instance().clear()
+
+
+@pytest.fixture(scope="package")
+def cfg_dataset_global() -> DictConfig:
+    """Build a default Hydra DictConfig for ``generate_dataset``.
+
+    Omits ``return_hydra_config=True`` so the ``hydra.*`` sub-tree (whose
+    ``sweep.subdir`` interpolates the runtime-only ``${hydra.job.num}``) does
+    not leak in and break ``spec_from_cfg``'s ``resolve=True`` round-trip.
+
+    :return: A DictConfig composed from ``configs/dataset.yaml`` with
+        ``experiment=generate_dataset/smoke-shard`` so every required (``???``)
+        field is populated.
+    """
+    with initialize(version_base="1.3", config_path="../configs"):
+        cfg = compose(
+            config_name="dataset",
+            overrides=["experiment=generate_dataset/smoke-shard"],
+        )
+        with open_dict(cfg):
+            cfg.paths.root_dir = str(rootutils.find_root(indicator=".project-root"))
+    return cfg
+
+
+@pytest.fixture(scope="function")
+def cfg_dataset(cfg_dataset_global: DictConfig, tmp_path: Path) -> Iterator[DictConfig]:
+    """Build on top of ``cfg_dataset_global()`` and redirect paths into ``tmp_path``.
+
+    :param cfg_dataset_global: The package-scoped dataset DictConfig to copy.
+    :param tmp_path: The per-test temporary path used as output/work/log root.
+
+    :yields DictConfig: ``paths.{output_dir,work_dir,log_dir}`` pinned to
+        ``tmp_path``; teardown clears Hydra's global singleton.
+    """
+    cfg = cfg_dataset_global.copy()
+    with open_dict(cfg):
+        cfg.paths.output_dir = str(tmp_path)
+        cfg.paths.work_dir = str(tmp_path)
         cfg.paths.log_dir = str(tmp_path)
 
     yield cfg
