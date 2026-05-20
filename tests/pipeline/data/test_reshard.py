@@ -646,6 +646,34 @@ class TestReshardShardContractValidation:
         assert "audio" in result.output
         _assert_no_outputs(tmp_path)
 
+    def test_unopenable_hdf5_file_fails_loud(
+        self,
+        tmp_path: Path,
+        patch_runtime_io: None,
+        runner: CliRunner,
+    ) -> None:
+        """A shard that exists but is not a valid HDF5 surfaces as a ClickException.
+
+        Pins that ``h5py.File`` OSError on a truncated/garbage file is caught
+        at the trust boundary and re-raised as a ClickException naming the
+        offending shard — rather than propagating a raw OSError traceback.
+
+        :param tmp_path: Per-test dataset root.
+        :param patch_runtime_io: Deterministic spec runtime stubs.
+        :param runner: Click test runner.
+        """
+        spec = DatasetSpec(**_spec_kwargs(20, 10, 10, samples_per_shard=10))
+        _materialize_dataset(tmp_path, spec)
+        corrupted_path = tmp_path / spec.shards[0].filename
+        corrupted_path.write_bytes(b"not an hdf5 file")
+
+        result = runner.invoke(_reshard_module.main, [str(tmp_path)], catch_exceptions=False)
+
+        assert result.exit_code != 0
+        assert str(corrupted_path) in result.output
+        assert "not a valid HDF5" in result.output
+        _assert_no_outputs(tmp_path)
+
 
 class TestReshardAtomicWrite:
     """A failure inside ``_write_split`` leaves zero artifacts under ``dataset_root``.

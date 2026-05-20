@@ -74,6 +74,15 @@ def check_shards_present(shard_paths: list[Path]) -> None:
 def check_shard_ids_match_spec_order(spec: DatasetSpec) -> None:
     """Catch a tampered spec whose ``shards[i].shard_id`` no longer equals ``i``.
 
+    ``DatasetSpec.shards`` is a ``@cached_property`` computed from the spec's
+    other fields, so JSON-loaded specs are safe by construction — Pydantic
+    strips computed-field keys from input. The guard exists for the
+    in-memory path: a caller that mutates ``spec.__dict__['shards']`` (e.g.
+    a test fixture, a one-off migration script, or any downstream helper
+    that rebinds the cached list) can quietly reorder shards before
+    ``check_shard_contracts`` is reached. The split slicing in ``reshard``
+    then assigns the wrong rows to the wrong split with no fail-loud.
+
     :param spec: Loaded ``DatasetSpec``.
     :raises click.ClickException: If any shard's ``shard_id`` disagrees with its index.
     """
@@ -101,11 +110,16 @@ def check_shard_contracts(
     :param samples_per_shard: Required leading-axis length for every dataset.
     :returns: Trailing shape for each required dataset key.
     :raises click.ClickException: With the offending shard, key, and observed
-        value (shape, dtype, or row count).
+        value (shape, dtype, or row count); or naming the shard when ``h5py``
+        rejects the file as not valid HDF5 (truncated, wrong magic, etc.).
     """
     expected_tails: dict[str, tuple[int, ...]] = {}
     for shard in shard_paths:
-        with h5py.File(shard, "r") as f:
+        try:
+            handle = h5py.File(shard, "r")
+        except OSError as exc:
+            raise click.ClickException(f"shard {shard} is not a valid HDF5 file: {exc}") from exc
+        with handle as f:
             for key in DATASET_FIELD_NAMES:
                 if key not in f:
                     raise click.ClickException(
