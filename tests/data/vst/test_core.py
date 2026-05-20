@@ -167,45 +167,54 @@ class TestEditorHeldOpen:
     def test_waits_for_editor_thread_start_before_yield(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``editor_started`` is set before the ``with`` body runs — see #1198.
+        """``with`` body entry is gated on the start handshake — see #1198.
 
-        Without the handshake the body can begin before the editor thread
-        enters ``show_editor``. We delay the thread's start so a body that
-        ran immediately would observe ``inside_show_editor`` unset; the
-        handshake forces the wait, so the assertion sees it set.
+        The fake editor thread blocks behind ``release_start`` before
+        running ``_run_editor``, so without the handshake the body would
+        enter while ``editor_started`` is still unset. The body's entry
+        timestamp must therefore land after ``release_start`` was set,
+        which is the only signal that unblocks ``editor_started.wait``.
 
-        :param monkeypatch: Wraps ``threading.Thread`` to delay ``start`` and
-            expose the race the handshake closes.
+        :param monkeypatch: Wraps ``threading.Thread`` so the editor
+            thread's target blocks on a gate; isolates the timing
+            contract from scheduler luck.
         """
         fake_plugin = MagicMock()
-        inside_show_editor = threading.Event()
+        fake_plugin.show_editor.side_effect = lambda event: event.wait(timeout=5.0)
 
-        def block_inside_show_editor(event: threading.Event) -> None:
-            inside_show_editor.set()
-            event.wait(timeout=5.0)
-
-        fake_plugin.show_editor.side_effect = block_inside_show_editor
-
+        release_start = threading.Event()
         real_thread_cls = threading.Thread
 
-        def make_delayed_thread(*args: object, **kwargs: object) -> threading.Thread:
-            t = real_thread_cls(*args, **kwargs)  # type: ignore[arg-type]
-            original_start = t.start
+        def make_gated_thread(*args: object, **kwargs: object) -> threading.Thread:
+            user_target = kwargs.pop("target", None)
 
-            def delayed_start() -> None:
-                def deferred() -> None:
-                    time.sleep(0.05)
-                    original_start()
+            def gated_target() -> None:
+                release_start.wait(timeout=5.0)
+                if callable(user_target):
+                    user_target()
 
-                real_thread_cls(target=deferred, daemon=True).start()
+            return real_thread_cls(*args, target=gated_target, **kwargs)  # type: ignore[arg-type]
 
-            t.start = delayed_start  # type: ignore[method-assign]
-            return t
+        monkeypatch.setattr(threading, "Thread", make_gated_thread)
 
-        monkeypatch.setattr(threading, "Thread", make_delayed_thread)
+        release_at: list[float] = []
+
+        def release_after_delay() -> None:
+            time.sleep(0.1)
+            release_at.append(time.monotonic())
+            release_start.set()
+
+        releaser = real_thread_cls(target=release_after_delay, daemon=True)
+        releaser.start()
 
         with core.editor_held_open(fake_plugin):
-            assert inside_show_editor.is_set()
+            t_body_entered = time.monotonic()
+
+        releaser.join(timeout=1.0)
+        assert release_at, "releaser did not run"
+        assert t_body_entered >= release_at[0], (
+            "with-body entered before the start handshake fired"
+        )
 
     def test_slow_start_warns_and_proceeds(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Editor thread that misses the start handshake logs a warning and the body still runs.
