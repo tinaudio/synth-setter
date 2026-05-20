@@ -82,6 +82,11 @@ def _patch_render_params(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_cli_writes_expected_wav_layout(fixture_pred_dir: Path, tmp_path: Path) -> None:
     """Every input row produces a ``sample_<i>/`` dir with both ``pred.wav`` and ``target.wav``.
 
+    Asserts the *negative* effects of the two suppression flags as well: under
+    ``--skip-spectrogram`` no ``spec.png`` appears, and under ``--no-params`` the
+    ``target`` column in ``params.csv`` is NaN (the file itself is still written —
+    pinned by ``test_cli_writes_params_csv``-adjacent contracts).
+
     :param fixture_pred_dir: Session-scoped pred-tensor dir from ``conftest.py``.
     :param tmp_path: Pytest fixture providing a fresh test directory.
     """
@@ -94,6 +99,13 @@ def test_cli_writes_expected_wav_layout(fixture_pred_dir: Path, tmp_path: Path) 
     for sample in sample_dirs:
         assert (sample / "pred.wav").is_file(), f"missing pred.wav under {sample}"
         assert (sample / "target.wav").is_file(), f"missing target.wav under {sample}"
+        assert not (sample / "spec.png").exists(), (
+            f"--skip-spectrogram should suppress spec.png; found at {sample / 'spec.png'}"
+        )
+        params_df = pd.read_csv(sample / "params.csv", index_col=0)
+        assert bool(params_df["target"].isna().all()), (
+            f"--no-params should leave the target column NaN; got {params_df['target'].tolist()}"
+        )
 
 
 def test_cli_writes_params_csv(fixture_pred_dir: Path, tmp_path: Path) -> None:
