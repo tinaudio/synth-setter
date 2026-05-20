@@ -252,10 +252,21 @@ def _render_in_batches(
     :param fixed_synth_params_list: Optional pre-set synth params, indexed in write order.
     :param fixed_note_params_list: Optional pre-set note params, indexed in write order.
     :param flush_batch: Called with ``(batch, batch_start_idx)`` to persist each batch.
+    :raises NotImplementedError: ``gui_toggle_cadence="always_on"`` — schema-only
+        until the held-open editor wiring lands (#1187).
     """
     num_samples = render_cfg.samples_per_shard
     sample_batch: list[VSTDataSample] = []
     sample_batch_start = start_idx
+    if render_cfg.gui_toggle_cadence == "always_on":
+        # Wave 1 ships the schema literal; the held-open editor wiring lands in
+        # the follow-up PR. Raise here so a spec composed in the gap can't be
+        # silently downgraded to "never" and persisted to R2 (#1187).
+        raise NotImplementedError(
+            'gui_toggle_cadence="always_on" is not yet wired into the renderer; '
+            "pick another gui_toggle_cadence value (see RenderConfig schema for "
+            "the platform-specific allowed set) until the follow-up PR lands."
+        )
     # plugin_reload_cadence="once": load + preset once per shard, reuse instance (#705).
     # "render" (default): cached_plugin stays None; each render reloads (#489 historical).
     cached_plugin: VST3Plugin | None = None
@@ -349,15 +360,13 @@ def make_hdf5_dataset(
     param_spec = param_specs[render_cfg.param_spec_name]
     meta = _shard_metadata_from_render(render_cfg)
     with h5py.File(hdf5_file, "a") as h5:
-        audio_dataset, mel_dataset, param_dataset, start_idx = (
-            create_datasets_and_get_start_idx(
-                hdf5_file=h5,
-                num_samples=render_cfg.samples_per_shard,
-                channels=render_cfg.channels,
-                sample_rate=render_cfg.sample_rate,
-                signal_duration_seconds=render_cfg.signal_duration_seconds,
-                num_params=len(param_spec),
-            )
+        audio_dataset, mel_dataset, param_dataset, start_idx = create_datasets_and_get_start_idx(
+            hdf5_file=h5,
+            num_samples=render_cfg.samples_per_shard,
+            channels=render_cfg.channels,
+            sample_rate=render_cfg.sample_rate,
+            signal_duration_seconds=render_cfg.signal_duration_seconds,
+            num_params=len(param_spec),
         )
 
         _validate_fixed_params_lengths(
