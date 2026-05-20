@@ -38,17 +38,36 @@ def main(dataset_root: Path, spec_uri: str | None) -> None:
     :param dataset_root: Directory containing the shard files named by ``spec.shards``.
     :param spec_uri: Optional local path or ``r2://`` URI for the DatasetSpec;
         defaults to ``<dataset_root>/input_spec.json``.
-    :raises click.ClickException: If any ``spec.train_val_test_sizes`` entry is not
-        evenly divisible by ``spec.render.samples_per_shard``.
+    :raises click.ClickException: If the spec cannot be located, parsed, or
+        declares a non-HDF5 ``output_format``; or if any
+        ``spec.train_val_test_sizes`` entry is not divisible by
+        ``spec.render.samples_per_shard``.
     """
-    spec = load_spec_from_uri(spec_uri or str(dataset_root / INPUT_SPEC_FILENAME))
+    resolved_uri = spec_uri or str(dataset_root / INPUT_SPEC_FILENAME)
+    try:
+        spec = load_spec_from_uri(resolved_uri)
+    except FileNotFoundError as exc:
+        raise click.ClickException(f"DatasetSpec not found at {resolved_uri}: {exc}") from exc
+    except ValueError as exc:
+        # Unsupported scheme from ``read_spec_text`` and pydantic ValidationError
+        # (a ValueError subclass) for malformed / stale specs both land here.
+        raise click.ClickException(f"DatasetSpec at {resolved_uri} is invalid: {exc}") from exc
+
+    if spec.output_format != "hdf5":
+        # reshard wires HDF5 VirtualSources; ``output_format='wds'`` would yield
+        # ``.tar`` shards that would surface as a confusing FileNotFoundError
+        # mid-loop on the first ``h5py.File(...)`` open.
+        raise click.ClickException(
+            f"reshard only supports output_format='hdf5'; spec at {resolved_uri} "
+            f"declares output_format={spec.output_format!r}."
+        )
 
     shard_size = spec.render.samples_per_shard
     bad = [sz for sz in spec.train_val_test_sizes if sz % shard_size != 0]
     if bad:
-        # DatasetSpec._split_sizes_must_be_multiples_of_samples_per_shard normally
-        # rejects this at parse time; this guard catches the case where a stale
-        # spec from R2 predates that validator.
+        # Defensive backstop for the SimpleNamespace test path. Real
+        # ``DatasetSpec`` instances are already rejected at parse time by
+        # ``_split_sizes_must_be_multiples_of_samples_per_shard``.
         raise click.ClickException(
             f"spec.train_val_test_sizes={list(spec.train_val_test_sizes)} contains "
             f"sizes not divisible by spec.render.samples_per_shard={shard_size}: "

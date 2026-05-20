@@ -30,8 +30,8 @@ FIXED_NOW = datetime(2026, 5, 18, 12, 0, 0, tzinfo=timezone.utc)
 def _render_kwargs(samples_per_shard: int) -> dict[str, Any]:
     """Return RenderConfig kwargs with the given ``samples_per_shard``.
 
-    :param samples_per_shard: Sample count per shard, exercised by reshard's
-        spec-vs-flag agreement check.
+    :param samples_per_shard: Sample count per shard; drives reshard's
+        per-split shard count via ``size // samples_per_shard``.
     :returns: Dict suitable as ``render`` input for ``DatasetSpec``.
     :rtype: dict[str, Any]
     """
@@ -247,7 +247,7 @@ class TestReshardSpecPath:
         patch_runtime_io: None,
         runner: CliRunner,
     ) -> None:
-        """A dataset root without ``input_spec.json`` exits non-zero.
+        """A dataset root without ``input_spec.json`` exits with a user-oriented message.
 
         :param tmp_path: Pytest tmp_path fixture for the dataset root.
         :param patch_runtime_io: Spec runtime-factory stub fixture.
@@ -258,6 +258,9 @@ class TestReshardSpecPath:
         result = runner.invoke(_reshard_module.main, [str(tmp_path)])
 
         assert result.exit_code != 0
+        # ClickException surfaces a clean ``Error: ...`` message, not a raw traceback.
+        assert "DatasetSpec not found" in result.output
+        assert result.exception is None or isinstance(result.exception, SystemExit)
 
 
 class TestReshardRemovedFlagsRejected:
@@ -312,6 +315,7 @@ class TestReshardSplitDivisibility:
         """
         tmp_path.mkdir(exist_ok=True)
         bad_spec = SimpleNamespace(
+            output_format="hdf5",
             render=SimpleNamespace(samples_per_shard=10),
             train_val_test_sizes=(15, 10, 10),  # 15 % 10 != 0
             shards=(),
@@ -322,6 +326,35 @@ class TestReshardSplitDivisibility:
 
         assert result.exit_code != 0
         assert "divisible" in result.output.lower() or "samples_per_shard" in result.output
+
+
+class TestReshardOutputFormatGuard:
+    """Reshard only supports ``output_format='hdf5'``; ``wds`` must be rejected early."""
+
+    def test_wds_output_format_rejected_with_clickexception(
+        self,
+        tmp_path: Path,
+        runner: CliRunner,
+    ) -> None:
+        """A WDS-format spec exits non-zero before any shard open attempt.
+
+        :param tmp_path: Pytest tmp_path fixture for the dataset root.
+        :param runner: Click test runner fixture.
+        """
+        tmp_path.mkdir(exist_ok=True)
+        wds_spec = SimpleNamespace(
+            output_format="wds",
+            render=SimpleNamespace(samples_per_shard=10),
+            train_val_test_sizes=(20, 10, 10),
+            shards=(),
+        )
+
+        with mock.patch.object(_reshard_module, "load_spec_from_uri", return_value=wds_spec):
+            result = runner.invoke(_reshard_module.main, [str(tmp_path)])
+
+        assert result.exit_code != 0
+        assert "output_format" in result.output
+        assert "hdf5" in result.output
 
 
 class TestReshardR2SpecUri:
@@ -345,9 +378,7 @@ class TestReshardR2SpecUri:
         (tmp_path / INPUT_SPEC_FILENAME).unlink()
         spec_uri = "r2://intermediate-data/data/foo/input_spec.json"
 
-        with mock.patch.object(
-            _reshard_module, "load_spec_from_uri", return_value=spec
-        ) as loader:
+        with mock.patch.object(_reshard_module, "load_spec_from_uri", return_value=spec) as loader:
             result = runner.invoke(
                 _reshard_module.main,
                 [str(tmp_path), "--spec", spec_uri],
@@ -382,15 +413,9 @@ class TestReshardVirtualDatasetIdentity:
         for i, shard in enumerate(spec.shards):
             fill = float(i + 1)
             with h5py.File(tmp_path / shard.filename, "w") as f:
-                f.create_dataset(
-                    "audio", data=np.full((sps, 2, 64), fill, dtype=np.float32)
-                )
-                f.create_dataset(
-                    "mel_spec", data=np.full((sps, 2, 8, 8), fill, dtype=np.float32)
-                )
-                f.create_dataset(
-                    "param_array", data=np.full((sps, 12), fill, dtype=np.float32)
-                )
+                f.create_dataset("audio", data=np.full((sps, 2, 64), fill, dtype=np.float32))
+                f.create_dataset("mel_spec", data=np.full((sps, 2, 8, 8), fill, dtype=np.float32))
+                f.create_dataset("param_array", data=np.full((sps, 12), fill, dtype=np.float32))
 
         result = runner.invoke(_reshard_module.main, [str(tmp_path)], catch_exceptions=False)
         assert result.exit_code == 0, result.output
