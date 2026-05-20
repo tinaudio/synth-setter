@@ -324,6 +324,7 @@ patch_tags = ["fix", "perf", "revert"]
 source = ["src/synth_setter", "scripts/ci"]
 branch = true
 parallel = true
+concurrency = ["thread", "multiprocessing"]
 relative_files = true
 omit = ["**/__main__.py"]
 
