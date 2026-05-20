@@ -407,7 +407,7 @@ T_gate_size_boundary_199_blocks() {
   path=$(gate_sentinel_path "$head_sha")
   mkdir -p "$(dirname "$path")"
   printf 'x%.0s' {1..199} > "$path"
-  actual_size=$(stat -c %s "$path")
+  actual_size=$(stat -c %s "$path" 2>/dev/null || stat -f %z "$path")
   [[ "$actual_size" == "199" ]] || { echo "fixture size wrong: $actual_size"; return 1; }
   out=$(echo "{\"tool_input\":{\"command\":\"gh pr create --title x --body y  # REVIEW_FULL=$path\"}}" | bash agent/hooks/pre-pr-review-gate.sh 2>"$stderr_file"; echo "EXIT:$?")
   [[ "$(last_exit_line "$out")" == "EXIT:2" ]] || { echo "expected EXIT:2 at 199B, got: $out"; return 1; }
@@ -423,7 +423,7 @@ T_gate_size_boundary_200_passes() {
   path=$(gate_sentinel_path "$head_sha")
   mkdir -p "$(dirname "$path")"
   printf 'x%.0s' {1..200} > "$path"
-  actual_size=$(stat -c %s "$path")
+  actual_size=$(stat -c %s "$path" 2>/dev/null || stat -f %z "$path")
   [[ "$actual_size" == "200" ]] || { echo "fixture size wrong: $actual_size"; return 1; }
   out=$(echo "{\"tool_input\":{\"command\":\"gh pr create --title x --body y  # REVIEW_FULL=$path\"}}" | bash agent/hooks/pre-pr-review-gate.sh 2>&1; echo "EXIT:$?")
   [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0 at 200B, got: $out"; return 1; }

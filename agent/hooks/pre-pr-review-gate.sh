@@ -115,8 +115,15 @@ if [[ ! -f "$REVIEW_PATH" ]]; then
   block "REVIEW_FULL path does not point at a file: $REVIEW_PATH"
 fi
 
-# `stat -c %s` reads only inode metadata; cheap regardless of file size.
-review_size=$(stat -c %s "$REVIEW_PATH")
+# Inode-metadata size read (no file contents touched). GNU `stat -c %s`
+# vs BSD/macOS `stat -f %z` — try the GNU form first and fall back; both
+# return a bare integer suitable for `-lt`.
+if ! review_size=$(stat -c %s "$REVIEW_PATH" 2>/dev/null); then
+  review_size=$(stat -f %z "$REVIEW_PATH" 2>/dev/null || echo "")
+fi
+if [[ -z "$review_size" ]]; then
+  block "could not stat REVIEW_FULL path: $REVIEW_PATH"
+fi
 if [[ "$review_size" -lt "$MIN_REVIEW_BYTES" ]]; then
   block "REVIEW_FULL file is suspiciously small (${review_size} < ${MIN_REVIEW_BYTES} bytes — likely a touch-bypass): $REVIEW_PATH"
 fi
