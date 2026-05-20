@@ -147,7 +147,7 @@ scaffolding.)
     responsible for materializing data/<task>/<run>/metadata/input_spec.json
     and uploading it to R2 (the launcher itself does not upload)
     → discovers the unique materialized spec via find_input_specs(<repo_root>/data)
-    → resolves its canonical R2 URI via the `synth-setter-spec-uri` console script
+    → parses the discovered spec once and reads its R2 URI off spec.r2.input_spec_uri()
     → hands off to dispatch_via_skypilot, which forwards the URI as WORKER_SPEC_URI
       and re-executes the same operator command verbatim on each worker rank
 ```
@@ -156,8 +156,9 @@ scaffolding.)
 - **Inner-command contract** (the operator-supplied command must satisfy all
   three): (a) materialize exactly one canonical
   `data/<task>/<run>/metadata/input_spec.json`; (b) upload that spec to its
-  canonical R2 URI (the launcher itself does not upload — it only resolves the
-  URI via `synth-setter-spec-uri` and forwards it as `WORKER_SPEC_URI`);
+  canonical R2 URI (the launcher itself does not upload — it parses the
+  discovered spec once, reads `spec.r2.input_spec_uri()`, and forwards it as
+  `WORKER_SPEC_URI`);
   (c) re-enter deterministically on each worker (the same command string is
   threaded into the SkyPilot task's `run:` block via `shlex.join`, so it must
   be safe to run identically on the launcher host and every worker rank).
