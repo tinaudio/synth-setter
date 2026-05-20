@@ -93,8 +93,6 @@ jobs:
       RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
       RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
       HYDRA_FULL_ERROR: "1"
-      SPEC_URI: ${{ needs.smoke-pipeline.outputs.spec_uri }}
-      RUN_ID: ${{ needs.smoke-pipeline.outputs.run_id }}
       OUTPUT_FORMAT: ${{ matrix.output_format }}
       TASK_NAME: ${{ matrix.task_name }}
       CONFIG_PATH: ${{ matrix.config_path }}
@@ -109,6 +107,30 @@ jobs:
 
       - name: Install rclone
         run: sudo apt-get update -qq && sudo apt-get install -y -qq rclone
+
+      # Per-matrix-cell run metadata. `needs.smoke-pipeline.outputs.run_id`
+      # flattens to one cell's value when the upstream is a matrix job (GHA
+      # limitation), so verify-wds would otherwise resolve under the hdf5 cell's
+      # run_id. Download this matrix entry's own run-metadata artifact instead
+      # and read run_id from its ``input_spec.json``.
+      - name: Download smoke-pipeline run metadata for this matrix cell
+        uses: actions/download-artifact@v4
+        with:
+          name: finalize-presubmit-${{ matrix.output_format }}
+          path: cell-meta/
+
+      - name: Parse run_id from this matrix cell's input_spec.json
+        id: run_id
+        run: |
+          set -euo pipefail
+          SPEC_JSON=$(find cell-meta -name input_spec.json -print -quit)
+          if [[ -z "${SPEC_JSON}" ]]; then
+            echo "::error::could not find input_spec.json under cell-meta/"
+            exit 1
+          fi
+          RUN_ID=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['run_id'])" "${SPEC_JSON}")
+          echo "run_id=${RUN_ID}" >> "${GITHUB_OUTPUT}"
+          echo "run_id: ${RUN_ID}"
 
       # Resolves `spec.r2.bucket` from the same composed config the chained
       # generate + finalize used, so the `rclone ls` prefix lines up with what
@@ -139,6 +161,7 @@ jobs:
       - name: rclone ls run prefix and pin required artifacts
         env:
           R2_BUCKET: ${{ steps.bucket.outputs.r2_bucket }}
+          RUN_ID: ${{ steps.run_id.outputs.run_id }}
         run: |
           set -euo pipefail
           PREFIX="r2:${R2_BUCKET}/data/${TASK_NAME}/${RUN_ID}/"
@@ -170,7 +193,7 @@ jobs:
       - name: Run finalize-artifact oracle helper
         env:
           R2_BUCKET: ${{ steps.bucket.outputs.r2_bucket }}
-          FINALIZE_RUN_PREFIX: r2:${{ steps.bucket.outputs.r2_bucket }}/data/${{ matrix.task_name }}/${{ needs.smoke-pipeline.outputs.run_id }}/
+          FINALIZE_RUN_PREFIX: r2:${{ steps.bucket.outputs.r2_bucket }}/data/${{ matrix.task_name }}/${{ steps.run_id.outputs.run_id }}/
         run: |
           set -euo pipefail
           pytest tests/integration/test_finalize_artifact_oracle.py \
