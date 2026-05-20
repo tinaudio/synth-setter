@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779257555910,
+  "lastUpdate": 1779258911505,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -3774,6 +3774,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.03438544273376465,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1e4bd94139760fe3245323b8a9852c1a6d89b27d",
+          "message": "feat(pipeline): synth-setter-finalize-dataset entrypoint + wds branch (#1186)\n\n* feat(pipeline): synth-setter-finalize-dataset entrypoint + wds branch\n\nWires the post-generate finalize stage as a console script that mirrors\ngenerate-dataset's operator-side shape (programmatic Hydra compose, single\nDatasetSpec input). Phase 1 ships the wds branch end-to-end; the hdf5\nbranch is a NotImplementedError stub (Phase 2).\n\nSurface additions reused by Phase 2 / Phase 3:\n\n- ``Split = Literal[\"train\",\"val\",\"test\"]`` alias colocated with\n  ``_SPLIT_LABELS`` in ``spec.py``.\n- ``DatasetSpec.split_shard_ranges`` cached property returning\n  ``{split: (lo, hi)}`` half-open ranges derived from\n  ``train_val_test_sizes // render.samples_per_shard``.\n- ``R2Location.split_uri`` split into ``split_h5_uri(split: Split)`` and\n  ``split_wds_brace_uri(shard_range)``; the wds variant returns the\n  ``r2://.../shard-{LO..HI}.tar`` brace pattern a webdataset reader\n  ingests natively.\n- ``r2_io.upload(source, destination_uri)`` source-tolerant helper —\n  delegates to ``upload_to_uri`` for local paths and runs ``rclone copyto``\n  between two ``r2:`` paths for R2-to-R2 copies.\n- ``r2_io.is_r2_reachable()`` promotes the auth-probe pattern previously\n  duplicated in ``test_local_launcher_roundtrip._r2_reachable`` (refactored\n  to use the new helper) so test-side R2 gating has one source of truth.\n\nThe wds finalize body downloads only the train-split shards (via\n``spec.split_shard_ranges[\"train\"]``), runs ``get_stats_wds`` over them,\nuploads ``stats.npz`` to ``spec.r2.stats_uri()``, then writes the\n``dataset.complete`` marker strictly last per\n``pipeline/CLAUDE.md`` invariants.\n\nTests:\n\n- Unit: ``tests/pipeline/test_entrypoints/test_finalize_dataset.py`` runs\n  ``main()`` against the real ``smoke-shard-wds`` experiment with rclone\n  stubbed, asserts upload order is ``stats.npz`` → ``dataset.complete``,\n  and pins the hdf5 stub's NotImplementedError.\n- Integration: ``tests/integration/test_finalize_dataset_r2.py``\n  (``integration_r2`` marker) stages a tiny wds shard on the configured\n  ``r2:`` remote and exercises the full finalize body end-to-end; skips\n  via ``r2_io.is_r2_reachable`` when creds are absent.\n- Schema: split_h5_uri / split_wds_brace_uri / split_shard_ranges all\n  covered in ``test_r2_location`` / ``test_dataset_spec``.\n\nCloses #1182\n\n* fixup: address repo-review BLOCK + high-signal WARN findings\n\n- finalize_dataset.main(): skip body when dataset.complete already exists at\n  the run prefix (idempotency gate; ``r2_io.object_size`` probe).\n- finalize_wds: stream per-shard download → fold → unlink via the new\n  ``stats.stream_stats_wds(Iterable[Path])`` helper; peak local disk stays at\n  one shard regardless of split size.\n- stats.py: extract ``_fold_shard_into_welford`` + ``stream_stats_wds``;\n  ``get_stats_wds`` now delegates so the directory + streaming entry points\n  share one implementation.\n- r2_io.upload: reject ``Path(\"r2://...\")`` (and the collapsed ``r2:/`` form)\n  with TypeError so source-type dispatch is unambiguous.\n- r2_io.is_r2_reachable: shutil hoisted to the module imports.\n- R2Location.split_wds_brace_uri: raise ValueError when ``lo == hi`` instead of\n  silently emitting a malformed ``shard-{000003..000002}.tar`` brace.\n- Magic filenames (``dataset.complete``, ``stats.npz``) hoisted to\n  ``pipeline/constants.py``; ``R2Location`` + ``finalize_dataset`` import from\n  the one source of truth.\n- finalize_dataset docstrings: drop \"Phase 2\" / \"this slice\" narration per\n  comment-hygiene C5/C11; describe current behavior only.\n- Tests:\n  - Tightened upload-destination assertions to compare against full\n    ``spec.r2.stats_uri()`` / ``dataset_complete_marker_uri()`` (BLOCK #3).\n  - Added direct unit tests for ``is_r2_reachable`` covering rclone-on-PATH +\n    success, rclone-on-PATH + failure, rclone missing from PATH (BLOCK #4).\n  - Added multi-shard finalize_wds test asserting every shard URI is\n    downloaded, plus a peak-disk-invariant test that asserts at most one\n    shard sits in work_dir at a time.\n  - Added Path-rejection test for r2_io.upload.\n  - Added empty-range test for split_wds_brace_uri.\n  - Integration test now downloads stats.npz back and validates the\n    ``{mean, std}`` schema + asserts the marker is zero-byte.\n  - Idempotency test confirms a second invocation against a finalized prefix\n    does zero work.\n\n* test(ci): extend validate_spec valid-spec fixture with split_shard_ranges\n\nPR #1186's new ``DatasetSpec.split_shard_ranges`` computed_field is\nincluded in ``_REQUIRED_TOP_LEVEL_FIELDS`` by ``validate_spec.py``\n(auto-derived from ``DatasetSpec.model_computed_fields``), so the\nexisting ``_make_valid_spec`` fixture is now structurally invalid until\nit carries the split-range dict.\n\n* fixup: address PR #1186 Copilot review (3 inline comments)\n\n- r2_io.is_r2_reachable: require all three ``_SECRET_R2_ENV_KEYS`` in\n  ``os.environ`` before the rclone probe so the predicate matches\n  ``ensure_r2_env_loaded``'s contract; otherwise a test gating on\n  ``is_r2_reachable`` could pass the gate via a user's local rclone\n  config and then hit ``RuntimeError`` from the env-key check downstream\n  (Copilot #3271348167).\n- finalize_dataset.finalize_wds: raise ``ValueError`` early when the\n  train split is empty (``split_shard_ranges[\"train\"]`` has lo == hi)\n  instead of surfacing a misleading\n  ``FileNotFoundError(\"stream_stats_wds received no shard paths\")``\n  (Copilot #3271348204).\n- finalize_dataset.finalize_wds docstring: clarify that the brace-URI\n  helper applies only to non-empty splits and callers must check\n  ``lo < hi`` first (Copilot #3271348211).\n- Tests: extend the two existing ``is_r2_reachable`` tests to set the\n  three secret env keys (so the new precondition path is exercised),\n  add a ``test_returns_false_when_secret_env_keys_missing`` regression\n  guard, and add ``test_finalize_wds_raises_on_empty_train_split``.",
+          "timestamp": "2026-05-20T06:20:46Z",
+          "tree_id": "f6d291363e1f464648abcd4d85a0d8c252655cab",
+          "url": "https://github.com/tinaudio/synth-setter/commit/1e4bd94139760fe3245323b8a9852c1a6d89b27d"
+        },
+        "date": 1779258910679,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.5753109455108643,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.689289522320032,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.024698685854673386,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.025855600833892822,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.4191296100616455,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 11.69724172366667,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 3.9935638904571533,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.701316864663968,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.02878296561539173,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.03417485952377319,
             "unit": "1-cos"
           },
           {
