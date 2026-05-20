@@ -11,6 +11,7 @@ import pytest
 
 from synth_setter.data.vst import core
 from synth_setter.data.vst.core import (
+    RenderWorkerLeaked,
     extract_renderer_version,
     load_plugin,
     render_params,
@@ -92,13 +93,35 @@ class TestWarmupPlugin:
         fake_plugin.show_editor.assert_called_once()
 
 
-class TestEditorHeldOpen:
-    """``editor_held_open`` opens the plugin editor on a background thread for the ``with``
-    body."""
+class TestRunWithEditorHeldOpen:
+    """``run_with_editor_held_open`` runs ``body()`` on a worker while the caller blocks in
+    ``show_editor``."""
 
-    def test_opens_once_and_closes_on_exit(self) -> None:
-        """``show_editor`` is called once on a background thread; close_event set on
-        ``__exit__``."""
+    def test_body_runs_on_worker_thread_and_returns_value(self) -> None:
+        """``body()`` runs off the caller thread; its return value propagates.
+
+        Captures the thread identity inside ``body`` and asserts it differs
+        from the calling thread — pedalboard requires ``show_editor`` on the
+        caller (main) thread, so the render work MUST execute elsewhere.
+        """
+        fake_plugin = MagicMock()
+        fake_plugin.show_editor.side_effect = lambda event: event.wait(timeout=5.0)
+
+        caller_ident = threading.get_ident()
+        body_ident: list[int] = []
+
+        def body() -> str:
+            body_ident.append(threading.get_ident())
+            return "done"
+
+        result = core.run_with_editor_held_open(fake_plugin, body)
+
+        assert result == "done"
+        assert body_ident and body_ident[0] != caller_ident
+        fake_plugin.show_editor.assert_called_once()
+
+    def test_close_event_is_set_after_body_returns(self) -> None:
+        """The event passed to ``show_editor`` is set so the main thread unblocks."""
         fake_plugin = MagicMock()
         captured_event: list[threading.Event] = []
 
@@ -108,85 +131,138 @@ class TestEditorHeldOpen:
 
         fake_plugin.show_editor.side_effect = record_event
 
-        with core.editor_held_open(fake_plugin):
-            pass
+        core.run_with_editor_held_open(fake_plugin, lambda: None)
 
-        fake_plugin.show_editor.assert_called_once()
         assert len(captured_event) == 1
         assert captured_event[0].is_set()
 
-    def test_logs_and_reraises_thread_exception(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """An exception in ``show_editor`` is logged immediately and re-raised at ``__exit__``.
+    def test_body_exception_propagates_after_show_editor_returns(self) -> None:
+        """An exception raised inside ``body`` propagates to the caller."""
+        fake_plugin = MagicMock()
+        fake_plugin.show_editor.side_effect = lambda event: event.wait(timeout=5.0)
 
-        :param monkeypatch: Stubs ``core.logger`` so the log call can be observed
-            (loguru does not propagate to ``caplog``'s stdlib handler).
-        """
+        def body() -> None:
+            raise ValueError("render failed")
+
+        with pytest.raises(ValueError, match="render failed"):
+            core.run_with_editor_held_open(fake_plugin, body)
+
+        fake_plugin.show_editor.assert_called_once()
+
+    def test_show_editor_exception_propagates_through_finally(self) -> None:
+        """A ``show_editor`` failure on the caller thread surfaces; the worker is joined."""
         fake_plugin = MagicMock()
         fake_plugin.show_editor.side_effect = RuntimeError("xserver gone")
-        fake_logger = MagicMock()
-        monkeypatch.setattr(core, "logger", fake_logger)
+
+        worker_ran = threading.Event()
+
+        def body() -> None:
+            worker_ran.set()
 
         with pytest.raises(RuntimeError, match="xserver gone"):
-            with core.editor_held_open(fake_plugin):
-                time.sleep(0.05)  # let the editor thread run + raise
+            core.run_with_editor_held_open(fake_plugin, body)
 
-        assert fake_logger.exception.call_count == 1
-        assert "vst-editor-window crashed" in fake_logger.exception.call_args.args[0]
+        assert worker_ran.is_set()
 
-    def test_body_exception_wins_over_editor_exception(
+    def test_run_with_editor_held_open_raises_on_worker_leak(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """If both the ``with`` body and the editor thread raise, the body's exception propagates.
+        """A worker that outlives the join window after ``show_editor`` returns raises.
 
-        Re-raising the captured editor exception inside the ``finally`` clause
-        would otherwise mask the body exception (raise-in-finally wins). The
-        editor crash still gets a structured error log so it is not lost.
+        Simulates the leak case: ``show_editor`` returns immediately and the
+        worker body keeps running past ``_EDITOR_JOIN_TIMEOUT_SECONDS``. The
+        helper must raise ``RenderWorkerLeaked`` rather than logging-and-
+        returning, so callers like ``_render_in_batches`` cannot continue
+        while renders are still in flight on the background thread.
 
-        :param monkeypatch: Stubs ``core.logger`` so the editor crash log can
-            be observed.
-        :raises ValueError: Intentionally raised inside the ``with`` body to
-            exercise the body-wins precedence path under test.
-        """
-        fake_plugin = MagicMock()
-        fake_plugin.show_editor.side_effect = RuntimeError("editor crashed")
-        fake_logger = MagicMock()
-        monkeypatch.setattr(core, "logger", fake_logger)
-
-        with pytest.raises(ValueError, match="body crashed"):
-            with core.editor_held_open(fake_plugin):
-                time.sleep(0.05)  # let the editor thread run + raise
-                raise ValueError("body crashed")
-
-        # editor crash still surfaces via the structured error log so it is
-        # not lost when the body exception takes precedence.
-        assert any(
-            "also crashed during body exception" in str(call.args[0])
-            for call in fake_logger.error.call_args_list
-        )
-
-    def test_join_timeout_does_not_deadlock(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """If ``show_editor`` ignores the close event, ``__exit__`` returns within the timeout.
-
-        :param monkeypatch: Tightens ``_EDITOR_JOIN_TIMEOUT_SECONDS`` and stubs
+        :param monkeypatch: Tightens ``_EDITOR_JOIN_TIMEOUT_SECONDS`` so the
+            slow body outlives the join window deterministically; stubs
             ``core.logger`` so the leak-warning assertion is observable.
         """
         monkeypatch.setattr(core, "_EDITOR_JOIN_TIMEOUT_SECONDS", 0.1)
         fake_logger = MagicMock()
         monkeypatch.setattr(core, "logger", fake_logger)
         fake_plugin = MagicMock()
-        fake_plugin.show_editor.side_effect = lambda _event: time.sleep(2.0)
+        fake_plugin.show_editor.return_value = None
+
+        worker_release = threading.Event()
+
+        def body() -> None:
+            worker_release.wait(timeout=5.0)
 
         start = time.monotonic()
-        with core.editor_held_open(fake_plugin):
-            pass
+        try:
+            with pytest.raises(RenderWorkerLeaked, match="still alive"):
+                core.run_with_editor_held_open(fake_plugin, body)
+        finally:
+            worker_release.set()
         elapsed = time.monotonic() - start
 
-        # 1s slack over the 0.1s timeout to absorb CI scheduler jitter; still
-        # an order of magnitude under the 2.0s `show_editor` sleep so a
-        # regression to "wait for the thread" would fail this assertion.
+        # 1s slack over the 0.1s timeout to absorb CI scheduler jitter.
         assert elapsed < 1.0
         assert fake_logger.warning.call_count == 1
-        assert "did not drain" in fake_logger.warning.call_args.args[0]
+        assert "RenderWorkerLeaked" in fake_logger.warning.call_args.args[0]
+
+    def test_run_with_editor_held_open_propagates_body_exception_even_on_slow_finish(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Body exceptions take precedence over the leak signal.
+
+        A body that raises must surface its own exception even when the
+        worker takes long enough to be at risk of tripping the leak path —
+        the body reached a terminal state, so the caller sees the real
+        failure rather than a synthetic ``RenderWorkerLeaked``.
+
+        :param monkeypatch: Tightens ``_EDITOR_JOIN_TIMEOUT_SECONDS`` so the
+            test exercises the precedence rule near the join boundary.
+        """
+        monkeypatch.setattr(core, "_EDITOR_JOIN_TIMEOUT_SECONDS", 1.0)
+        fake_plugin = MagicMock()
+        fake_plugin.show_editor.side_effect = lambda event: event.wait(timeout=5.0)
+
+        def body() -> None:
+            time.sleep(0.05)
+            raise ValueError("body slow-failed")
+
+        with pytest.raises(ValueError, match="body slow-failed"):
+            core.run_with_editor_held_open(fake_plugin, body)
+
+    def test_run_with_editor_held_open_no_silent_none_return(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``None`` from a clean body returns; an empty-result clean exit raises distinctly.
+
+        Two paths share the ``not result`` shape: a body that returns
+        explicit ``None`` (legitimate) and a worker that exited without
+        producing a value or capturing an exception (a bug — the body must
+        either return or raise). The first must propagate ``None``; the
+        second must raise ``RenderWorkerLeaked`` with a message that
+        distinguishes it from the join-timeout case.
+
+        :param monkeypatch: Stubs ``threading.Thread`` for the empty-result
+            branch so the helper observes ``not result`` with a dead worker.
+        """
+        fake_plugin = MagicMock()
+        fake_plugin.show_editor.side_effect = lambda event: event.wait(timeout=5.0)
+
+        assert core.run_with_editor_held_open(fake_plugin, lambda: None) is None
+
+        class _DeadThread:
+            def __init__(self, *_args: object, **_kwargs: object) -> None: ...
+
+            def start(self) -> None: ...
+
+            def join(self, timeout: float | None = None) -> None: ...
+
+            def is_alive(self) -> bool:
+                return False
+
+        monkeypatch.setattr(core.threading, "Thread", _DeadThread)
+        fake_plugin_empty = MagicMock()
+        fake_plugin_empty.show_editor.return_value = None
+
+        with pytest.raises(RenderWorkerLeaked, match="without producing a result"):
+            core.run_with_editor_held_open(fake_plugin_empty, lambda: "ignored")
 
 
 class TestRenderParamsPreloadedPlugin:

@@ -1,0 +1,170 @@
+name: Test Dataset Generation (Render-Config Matrix)
+
+# Per-PR matrix exercise of ``test-dataset-generation`` across the
+# ``RenderConfig`` cross-field validator surface. The base config is
+# ``smoke-shard`` (the only experiment whose 12-sample volume fits under the
+# reusable's step cap); cells fan out across the two cadence fields the
+# validator pairs — ``render.gui_toggle_cadence`` and
+# ``render.plugin_reload_cadence``. A regression in either the thread
+# inversion (#1204), the cadence dispatch (#1187), or the validator itself
+# (``src/synth_setter/pipeline/schemas/spec.py::RenderConfig
+# ._always_on_requires_plugin_reload_once``) surfaces at PR time instead of
+# waiting for the nightly cron.
+#
+# Two jobs cover complementary contracts:
+#
+#   * ``generate`` — positive matrix. 7 cells = 4 ``gui_toggle_cadence``
+#     values x 2 ``plugin_reload_cadence`` values minus the single
+#     ``always_on`` + ``render`` rejection cell. Each cell runs through the
+#     ``generate-dataset-shards.yaml`` reusable workflow and exercises the
+#     inline ``validate_all_shards_from_r2`` step (#1224). The legitimate
+#     ``always_on`` path (``always_on`` + ``once``) is in the matrix.
+#
+#   * ``validator_rejects_always_on_render`` — contract job. Single inline
+#     cell invoking ``synth-setter-generate-dataset`` directly with
+#     ``continue-on-error`` and asserting both that the CLI exited non-zero
+#     AND that the ``_always_on_requires_plugin_reload_once`` validator
+#     message was surfaced. The cell runs inline (no docker / no kind)
+#     because the validator fires during ``spec_from_cfg`` before any side
+#     effect, so a plain python install is sufficient and far cheaper than
+#     the reusable workflow's compute setup. The reusable workflow can't
+#     host this contract directly because step-level ``continue-on-error``
+#     doesn't compose into a reusable-workflow caller.
+#
+# ``output_format`` is fixed at ``hdf5`` for every cell — it's the
+# more-mature finalize path (#1202) and the inline shard-validate step
+# (#1224) exercises the format the same way regardless. Re-adding
+# ``output_format`` as a matrix axis is tracked in #1226.
+#
+# ``RenderConfig.parallel`` (#1189) coverage stays on the existing weekly
+# cron in ``test-dataset-generation.yml`` (the nightly-parallel-smoke config
+# would not fit under the 40-min step cap once multiplied by the cells).
+#
+# Required secrets (forwarded via ``secrets: inherit``):
+#   RCLONE_CONFIG_R2_ACCESS_KEY_ID, RCLONE_CONFIG_R2_SECRET_ACCESS_KEY,
+#   RCLONE_CONFIG_R2_ENDPOINT, R2_ACCOUNT_ID — positive ``generate`` cells
+#   (R2 upload + shard validate). The contract job needs no secrets — it
+#   fails before ``ensure_r2_env_loaded`` is called.
+
+on:
+  workflow_dispatch:
+    inputs:
+      docker_image_tag:
+        description: "Docker image tag (e.g. dev-snapshot, dev-snapshot-<sha>)"
+        required: false
+        default: "dev-snapshot"
+  pull_request:
+    paths:
+      - "src/synth_setter/data/vst/**"
+      - "src/synth_setter/data/render_config.py"
+      - "src/synth_setter/pipeline/schemas/spec.py"
+      - "src/synth_setter/cli/generate_dataset.py"
+      - "configs/experiment/generate_dataset/**"
+      - "configs/render/**"
+      - ".github/workflows/test-dataset-generation-render-matrix.yml"
+      - ".github/workflows/generate-dataset-shards.yaml"
+
+permissions:
+  contents: read
+
+# Stacked PR pushes coalesce on the same ref; manual dispatches stay distinct
+# by mixing ``run_id`` so a re-run against the same SHA does not self-cancel.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'auto' }}
+  cancel-in-progress: true
+
+jobs:
+  generate:
+    name: Generate (smoke-shard / gui=${{ matrix.gui_toggle_cadence }} / reload=${{ matrix.plugin_reload_cadence }})
+    strategy:
+      # One broken cell must not mask others — every cell still emits its
+      # own pass/fail signal even if a sibling cell aborts.
+      fail-fast: false
+      matrix:
+        gui_toggle_cadence: [never, once, render, always_on]
+        plugin_reload_cadence: [once, render]
+        # ``always_on`` + ``render`` is the validator's rejection contract;
+        # it lives in ``validator_rejects_always_on_render`` below.
+        exclude:
+          - gui_toggle_cadence: always_on
+            plugin_reload_cadence: render
+    uses: ./.github/workflows/generate-dataset-shards.yaml
+    with:
+      provider: skypilot-local
+      dataset_config: generate_dataset/smoke-shard
+      image_tag: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
+      cluster_name: synth-setter-render-matrix-${{ strategy.job-index }}-${{ github.run_id }}-${{ github.run_attempt }}
+      num_workers: "1"
+      tail: true
+      local: true
+      artifact_name: render-matrix-run-metadata-${{ matrix.gui_toggle_cadence }}-${{ matrix.plugin_reload_cadence }}-${{ strategy.job-index }}
+      hydra_overrides: render.gui_toggle_cadence=${{ matrix.gui_toggle_cadence }} render.plugin_reload_cadence=${{ matrix.plugin_reload_cadence }} output_format=hdf5
+    secrets: inherit
+
+  # Contract job — asserts ``RenderConfig._always_on_requires_plugin_reload_once``
+  # rejects ``gui_toggle_cadence="always_on"`` combined with
+  # ``plugin_reload_cadence="render"`` (the only ``non-once`` value, also the
+  # schema default). The reusable workflow can't host this (step-level
+  # ``continue-on-error`` doesn't compose into a reusable-workflow caller),
+  # so the CLI runs inline. The validator fires inside ``spec_from_cfg``
+  # before ``ensure_r2_env_loaded``, so no cloud creds or docker image are
+  # required.
+  validator_rejects_always_on_render:
+    name: Validator rejects always_on + render
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "pyproject.toml"
+
+      # ``-e .`` pulls Hydra + Pydantic — enough to import
+      # ``synth_setter.cli.generate_dataset:main`` and exercise
+      # ``spec_from_cfg``. Skip ``[torch,dev]`` so the contract job stays
+      # well under a minute.
+      - name: Install package (validator only)
+        run: uv pip install --system -e .
+
+      # ``continue-on-error`` keeps the cell green so the next step can
+      # assert the failure. ``PIPESTATUS[0]`` captures the launcher exit
+      # (the ``| tee`` tail returns 0 even when the launcher raises).
+      - name: Run generate-dataset (must fail for always_on + render)
+        id: cli
+        continue-on-error: true
+        env:
+          HYDRA_FULL_ERROR: "1"
+        run: |
+          set -uo pipefail
+          synth-setter-generate-dataset \
+            experiment=generate_dataset/smoke-shard \
+            render.gui_toggle_cadence=always_on \
+            render.plugin_reload_cadence=render \
+            output_format=hdf5 \
+            2>&1 | tee cli.log
+          echo "cli_exit=${PIPESTATUS[0]}" >> "${GITHUB_OUTPUT}"
+
+      - name: Assert validator rejected the combination
+        env:
+          CLI_EXIT: ${{ steps.cli.outputs.cli_exit }}
+        run: |
+          set -euo pipefail
+          if [[ "${CLI_EXIT}" == "0" ]]; then
+            echo "::error::expected synth-setter-generate-dataset to exit non-zero on gui_toggle_cadence=always_on with plugin_reload_cadence=render; got exit 0. The _always_on_requires_plugin_reload_once validator did not fire."
+            exit 1
+          fi
+          if ! grep -q 'gui_toggle_cadence="always_on" requires plugin_reload_cadence="once"' cli.log; then
+            echo "::error::CLI exited non-zero (${CLI_EXIT}) but the _always_on_requires_plugin_reload_once validator message was not surfaced; some other failure masked the contract under test."
+            cat cli.log
+            exit 1
+          fi
+          echo "validator raised as expected (exit=${CLI_EXIT})"

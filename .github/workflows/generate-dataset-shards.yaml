@@ -1,9 +1,29 @@
 name: Generate Dataset Shards
 
-# Reusable workflow that owns one provider's generate_dataset invocation.
-# Callers fan out across providers (see test-dataset-generation.yml) and pass
-# per-provider values via inputs. All providers drive `synth-setter-generate-dataset`
-# with a `skypilot_launch.compute_template=...` Hydra override.
+# Reusable workflow that owns one provider's generate_dataset invocation and
+# unconditionally validates the resulting shards against
+# `synth_setter.pipeline.ci.validate_shard` before returning. Callers fan out
+# across providers (see test-dataset-generation.yml) and pass per-provider
+# values via inputs. All providers drive `synth-setter-generate-dataset` with
+# a `skypilot_launch.compute_template=...` Hydra override.
+#
+# Validation is always-on (no opt-in flag): every caller of this workflow
+# gets shard-contract enforcement. This closes the contract-drift gap that
+# #1214 hit on the float16/float32 dtype mismatch — generate-only success
+# is no longer sufficient; shards must also pass the
+# `check_shard_contracts` contract. Workflow rename to reflect the new
+# behaviour is tracked at #1224.
+#
+# Optional `hydra_overrides` input — whitespace-separated Hydra `key=value`
+# tokens appended to the launcher invocation. Tokens must not contain embedded
+# spaces; the docker (runpod/oci) row expands `$HYDRA_OVERRIDES_EXTRA` unquoted
+# inside the worker container, so any whitespace inside a token splits it into
+# separate arguments. The "Validate hydra_overrides" step rejects any input
+# that doesn't match `^[A-Za-z0-9._=,/-]*( [A-Za-z0-9._=,/-]+)*$` so shell
+# metacharacters (`;`, `&&`, `|`, `$()`, ...) can't ride through the unquoted
+# docker expansion. Used by the render-config matrix to fan over
+# `render.gui_toggle_cadence` and `output_format` without pre-baking one
+# Hydra experiment per cell.
 #
 # Provider-specific behavior:
 #   * `skypilot-local` — provisions a kind cluster on the runner via
@@ -68,6 +88,11 @@ on:
         required: false
         type: string
         default: "run-metadata"
+      hydra_overrides:
+        description: "Extra whitespace-separated Hydra `key=value` overrides appended to the launcher invocation (e.g. `render.gui_toggle_cadence=always_on output_format=wds`). Validated against `^[A-Za-z0-9._=,/-]*( [A-Za-z0-9._=,/-]+)*$` — any shell metacharacter (`;`, `&&`, `|`, `$()`, ...) fails the workflow because the docker (runpod/oci) row expands `$HYDRA_OVERRIDES_EXTRA` unquoted inside the worker container."
+        required: false
+        type: string
+        default: ""
     outputs:
       spec_uri:
         description: "Canonical r2:// URI of the materialized spec (under-prefix `input_spec.json`). Consumed by validate-dataset-shards.yaml."
@@ -118,6 +143,11 @@ on:
         required: false
         type: string
         default: "run-metadata"
+      hydra_overrides:
+        description: "Extra whitespace-separated Hydra `key=value` overrides appended to the launcher invocation (e.g. `render.gui_toggle_cadence=always_on output_format=wds`). Validated against `^[A-Za-z0-9._=,/-]*( [A-Za-z0-9._=,/-]+)*$` — any shell metacharacter fails the workflow because the docker row expands the variable unquoted inside the worker container."
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -138,6 +168,33 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      # Reject hydra_overrides containing anything outside the allowed character
+      # class. The docker (runpod/oci) row expands `$HYDRA_OVERRIDES_EXTRA`
+      # unquoted inside `bash -c`, so an unrestricted value like
+      # `render.gui_toggle_cadence=always_on; rm -rf /` would be interpreted as
+      # shell syntax on the worker. Validating at the entry point fails both
+      # provider branches before the unquoted expansion can run.
+      #
+      # Bash `[[ ... =~ ... ]]` is whole-input by default (no `m` modifier), so a
+      # payload like `key=v$'\n'; rm -rf /` can't bypass via a passing first line
+      # the way a line-oriented `grep -Eq` would. The explicit newline/CR guard
+      # rejects multi-line input before regex matching so the error message points
+      # at the right failure mode.
+      - name: Validate hydra_overrides
+        env:
+          INPUT_HYDRA_OVERRIDES: ${{ inputs.hydra_overrides }}
+        run: |
+          set -euo pipefail
+          REGEX='^[A-Za-z0-9._=,/-]*( [A-Za-z0-9._=,/-]+)*$'
+          if [[ "$INPUT_HYDRA_OVERRIDES" == *$'\n'* || "$INPUT_HYDRA_OVERRIDES" == *$'\r'* ]]; then
+            echo "::error::hydra_overrides contains newline/carriage-return; only single-line input is accepted."
+            exit 1
+          fi
+          if ! [[ "$INPUT_HYDRA_OVERRIDES" =~ $REGEX ]]; then
+            echo "::error::hydra_overrides contains disallowed characters; only [A-Za-z0-9._=,/-] tokens separated by single spaces are allowed. See workflow header for the validation regex."
+            exit 1
+          fi
 
       # Resolve cluster_name: caller-provided value wins; empty falls back to a
       # manual-default that includes run_id + run_attempt so concurrent manual
@@ -309,14 +366,15 @@ jobs:
       # same run_id). The step output `spec_path` resolves that file so later
       # steps don't have to repeat the glob.
       #
-      # 20-min step cap caps a hung launcher so the `if: always()` log-snapshot
-      # step still runs. NOTE: step-level timeout sends SIGKILL — `finally`
-      # blocks are bypassed; operators may need to `sky jobs cancel` manually.
-      # See #876.
+      # 40-min step cap accommodates the 8-cell render-matrix cells (#1204)
+      # without leaving headroom-too-thin for a hung launcher to surface; the
+      # cap still bounds a hung launcher so the `if: always()` log-snapshot
+      # step runs. NOTE: step-level timeout sends SIGKILL — `finally` blocks
+      # are bypassed; operators may need to `sky jobs cancel` manually. See #876.
       - name: Run synth-setter-generate-dataset against local-template (skypilot-local row)
         id: gen_local
         if: ${{ inputs.provider == 'skypilot-local' }}
-        timeout-minutes: 20
+        timeout-minutes: 40
         env:
           RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
           RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
@@ -328,6 +386,7 @@ jobs:
           INPUT_LOCAL: ${{ inputs.local }}
           INPUT_TAIL: ${{ inputs.tail }}
           INPUT_NUM_WORKERS: ${{ inputs.num_workers }}
+          INPUT_HYDRA_OVERRIDES: ${{ inputs.hydra_overrides }}
           SYNTH_SETTER_CI_MODE: "1"
         run: |
           set -euo pipefail
@@ -345,6 +404,10 @@ jobs:
           fi
           if [[ "$INPUT_TAIL" == "true" ]]; then
             OVERRIDES+=("skypilot_launch.tail=true")
+          fi
+          if [[ -n "$INPUT_HYDRA_OVERRIDES" ]]; then
+            read -ra HYDRA_EXTRA <<< "$INPUT_HYDRA_OVERRIDES"
+            OVERRIDES+=("${HYDRA_EXTRA[@]}")
           fi
           synth-setter-generate-dataset "${OVERRIDES[@]}" \
             2>&1 | tee "${RUN_METADATA_DIR}/generate.log"
@@ -448,6 +511,7 @@ jobs:
           NUM_WORKERS_OVERRIDE: ${{ inputs.num_workers != '' && format('skypilot_launch.num_workers={0}', inputs.num_workers) || '' }}
           TAIL_OVERRIDE: ${{ inputs.tail && 'skypilot_launch.tail=true' || '' }}
           LOCAL_OVERRIDE: ${{ inputs.local && 'skypilot_launch.local=true' || '' }}
+          HYDRA_OVERRIDES_EXTRA: ${{ inputs.hydra_overrides }}
         run: |
           set -euo pipefail
           docker run --rm \
@@ -474,6 +538,7 @@ jobs:
             -e NUM_WORKERS_OVERRIDE \
             -e TAIL_OVERRIDE \
             -e LOCAL_OVERRIDE \
+            -e HYDRA_OVERRIDES_EXTRA \
             "${IMAGE}" \
             bash -c '
               set -euo pipefail
@@ -485,7 +550,7 @@ jobs:
                 "skypilot_launch.compute_template=$TEMPLATE" \
                 "skypilot_launch.job_name=$CLUSTER_NAME" \
                 "skypilot_launch.worker_image_tag=$IMAGE_TAG" \
-                $LOCAL_OVERRIDE $NUM_WORKERS_OVERRIDE $TAIL_OVERRIDE
+                $LOCAL_OVERRIDE $NUM_WORKERS_OVERRIDE $TAIL_OVERRIDE $HYDRA_OVERRIDES_EXTRA
             ' \
             2>&1 | tee "${RUN_METADATA_DIR}/generate.log"
           shopt -s nullglob
@@ -537,6 +602,34 @@ jobs:
           fi
           echo "spec_uri=${SPEC_URI}" >> "${GITHUB_OUTPUT}"
           echo "spec_uri: ${SPEC_URI}"
+
+      # Always validate the freshly-uploaded shards against the
+      # `check_shard_contracts` contract before this workflow returns.
+      # `validate_all_shards_from_r2(spec)` (in
+      # src/synth_setter/pipeline/ci/validate_shard.py) iterates `spec.shards`
+      # and pulls each HDF5 from R2 for the structural + shape + value +
+      # row-count checks. Runs inside the dev-snapshot image (already pulled
+      # above for runpod/oci, locally loaded into kind for skypilot-local) so
+      # h5py / numpy are available without a host-side install. Re-pulling
+      # the image when only kind has it is a no-op against the docker cache.
+      - name: Validate all shards from R2
+        env:
+          SPEC_URI: ${{ steps.spec_uri.outputs.spec_uri }}
+          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "${{ github.workspace }}:/home/build/synth-setter:ro" \
+            -e RCLONE_CONFIG_R2_TYPE=s3 \
+            -e RCLONE_CONFIG_R2_PROVIDER=Cloudflare \
+            -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
+            -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
+            -e RCLONE_CONFIG_R2_ENDPOINT \
+            -e SPEC_URI \
+            "${IMAGE}" \
+            python3 -m synth_setter.pipeline.ci.validate_shard "$SPEC_URI"
 
       # Pull the canonical spec into the debug artifact alongside generate.log
       # / sky_logs so operators don't have to chase R2 to inspect the run.

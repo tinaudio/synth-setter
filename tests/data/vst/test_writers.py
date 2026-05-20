@@ -8,10 +8,8 @@ the new wds e2e tests in ``test_writers_wds_e2e.py``.
 
 from __future__ import annotations
 
-import contextlib
 import sys
-import threading
-from collections.abc import Iterator
+from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -427,14 +425,14 @@ def test_render_in_batches_warmup_never_skips_all_renders(
     assert all(c["warmup"] is False for c in captured)
 
 
-def test_render_in_batches_always_on_holds_editor_open_across_all_renders(
+def test_render_in_batches_always_on_runs_loop_via_run_with_editor_held_open(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``gui_toggle_cadence="always_on"`` wraps the loop in ``editor_held_open(cached_plugin)``.
+    """``gui_toggle_cadence="always_on"`` hands the render loop to ``run_with_editor_held_open``.
 
-    Asserts the context manager is entered once with the cached plugin, the loop
-    runs for all samples, ``warmup_plugin`` never fires per render, and the
-    held-open scope closes after the loop.
+    Asserts the helper is invoked once with the cached plugin, the body
+    callable executes, the loop runs for all samples, and ``warmup_plugin``
+    never fires per render.
 
     :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
     """
@@ -452,20 +450,13 @@ def test_render_in_batches_always_on_holds_editor_open_across_all_renders(
         load_preset_calls=[],
         cached_plugin_holder=cached_plugin_holder,
     )
-    held_open_calls: list[object] = []
-    close_events: list[threading.Event] = []
+    held_open_plugins: list[object] = []
 
-    @contextlib.contextmanager
-    def fake_held_open(plugin: object) -> Iterator[None]:
-        held_open_calls.append(plugin)
-        event = threading.Event()
-        close_events.append(event)
-        try:
-            yield
-        finally:
-            event.set()
+    def fake_run(plugin: object, body: Callable[[], object]) -> object:
+        held_open_plugins.append(plugin)
+        return body()
 
-    monkeypatch.setattr(writers, "editor_held_open", fake_held_open)
+    monkeypatch.setattr(writers, "run_with_editor_held_open", fake_run)
 
     _render_in_batches(
         render_cfg=render_cfg,
@@ -476,24 +467,66 @@ def test_render_in_batches_always_on_holds_editor_open_across_all_renders(
         flush_batch=lambda _batch, _start: None,
     )
 
-    assert len(held_open_calls) == 1
-    assert held_open_calls[0] is cached_plugin_holder[0]
-    assert close_events[0].is_set()
+    assert len(held_open_plugins) == 1
+    assert held_open_plugins[0] is cached_plugin_holder[0]
     assert len(captured) == n
     assert all(c["warmup"] is False for c in captured)
 
 
+def test_render_in_batches_always_on_propagates_worker_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Any exception raised by ``run_with_editor_held_open`` escapes ``_render_in_batches``.
+
+    Mirrors the intent of the deleted ``EditorStartTimeout`` propagation pin:
+    the upstream loop must not swallow exceptions from the held-open scope,
+    or a failed editor bring-up would silently degrade to no-editor renders
+    and defeat the always_on contract.
+
+    :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
+    """
+    n = 3
+    render_cfg = _smoke_render_cfg(
+        samples_per_shard=n,
+        samples_per_render_batch=n,
+        plugin_reload_cadence="once",
+        gui_toggle_cadence="always_on",
+    )
+    captured = _stub_render_dependencies(
+        monkeypatch,
+        load_plugin_calls=[],
+        load_preset_calls=[],
+    )
+
+    def raising_run(_plugin: object, _body: Callable[[], object]) -> object:
+        raise RuntimeError("show_editor failed")
+
+    monkeypatch.setattr(writers, "run_with_editor_held_open", raising_run)
+
+    with pytest.raises(RuntimeError, match="show_editor failed"):
+        _render_in_batches(
+            render_cfg=render_cfg,
+            param_spec=MagicMock(name="param_spec"),
+            start_idx=0,
+            fixed_synth_params_list=None,
+            fixed_note_params_list=None,
+            flush_batch=lambda _batch, _start: None,
+        )
+
+    assert captured == []
+
+
 @pytest.mark.parametrize("legacy_cadence", ["never", "once", "render"])
-def test_render_in_batches_non_always_on_does_not_open_held_open_scope(
+def test_render_in_batches_non_always_on_skips_run_with_editor_held_open(
     monkeypatch: pytest.MonkeyPatch, legacy_cadence: str
 ) -> None:
-    """Every legacy ``gui_toggle_cadence`` leaves ``editor_held_open`` untouched.
+    """Every legacy ``gui_toggle_cadence`` leaves ``run_with_editor_held_open`` untouched.
 
     :param monkeypatch: Pins ``_current_platform`` to ``"linux"`` so the
         ``"render"`` cadence is accepted on Darwin runners (the schema's #714
         gate rejects it there), and patches the writer's render dependencies.
     :param legacy_cadence: Parametrized over each non-``always_on`` cadence so
-        all three nullcontext paths are pinned, not just ``never``.
+        all three inline paths are pinned, not just ``never``.
     """
     monkeypatch.setattr("synth_setter.pipeline.schemas.spec._current_platform", lambda: "linux")
     render_cfg = _smoke_render_cfg(
@@ -505,12 +538,11 @@ def test_render_in_batches_non_always_on_does_not_open_held_open_scope(
     _stub_render_dependencies(monkeypatch, load_plugin_calls=[], load_preset_calls=[])
     held_open_calls: list[object] = []
 
-    @contextlib.contextmanager
-    def fake_held_open(plugin: object) -> Iterator[None]:
+    def fake_run(plugin: object, body: Callable[[], object]) -> object:
         held_open_calls.append(plugin)
-        yield
+        return body()
 
-    monkeypatch.setattr(writers, "editor_held_open", fake_held_open)
+    monkeypatch.setattr(writers, "run_with_editor_held_open", fake_run)
 
     _render_in_batches(
         render_cfg=render_cfg,

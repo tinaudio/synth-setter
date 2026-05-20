@@ -1,10 +1,9 @@
-import contextlib
 import json
 import plistlib
-import sys
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable
 from pathlib import Path
+from typing import TypeVar
 
 import mido
 import numpy as np
@@ -14,10 +13,25 @@ from pedalboard.io import AudioFile
 
 # How long the editor stays open before we signal it to close.
 _EDITOR_INIT_DELAY_SECONDS = 0.5
-# Upper bound on how long ``editor_held_open`` waits for the editor thread to
-# drain after the close event is set; a generous safety net for the held-open
-# path (#1187), not a normal-case timing parameter.
+# Hard ceiling on how long ``run_with_editor_held_open`` waits for the render
+# worker to drain after ``show_editor`` returns; exceeding it raises
+# ``RenderWorkerLeaked`` (#1204) so the helper never returns with a live
+# worker thread.
 _EDITOR_JOIN_TIMEOUT_SECONDS = 2.0
+
+_BodyResult = TypeVar("_BodyResult")
+
+
+class RenderWorkerLeaked(RuntimeError):
+    """Render worker outlived the join window — body never reached a terminal state.
+
+    Raised by ``run_with_editor_held_open`` when ``show_editor`` returns but the
+    worker thread is still alive past ``_EDITOR_JOIN_TIMEOUT_SECONDS``, or when
+    the worker exited without capturing a result or exception. Either branch
+    means the helper cannot honour its "returns whatever body() returned"
+    contract; surfacing it as an exception keeps the caller from treating an
+    in-flight or empty render as success (#1204).
+    """
 
 
 def extract_renderer_version(plugin_path: Path) -> str:
@@ -91,61 +105,67 @@ def warmup_plugin(plugin: VST3Plugin) -> None:
         close_editor.set()  # defensive: ensure show_editor unblocks even if Timer fails
 
 
-@contextlib.contextmanager
-def editor_held_open(plugin: VST3Plugin) -> Iterator[None]:
-    """Hold ``plugin.show_editor`` open on a background thread for the ``with`` body.
+def run_with_editor_held_open(plugin: VST3Plugin, body: Callable[[], _BodyResult]) -> _BodyResult:
+    """Invoke ``body()`` on a worker thread while the caller blocks in ``plugin.show_editor``.
 
-    The editor runs on a daemon thread blocking inside ``show_editor(close_event)``.
-    ``__exit__`` sets the event, joins the thread (bounded by
-    ``_EDITOR_JOIN_TIMEOUT_SECONDS``), and re-raises any exception the editor
-    thread raised — already logged at the moment of failure via
-    ``logger.exception``. **Body exceptions always win:** if the ``with`` body
-    raises, that exception propagates and a captured editor-thread exception
-    is logged but not re-raised (it would otherwise mask the original error in
-    the ``finally``-clause raise). If the join times out the daemon thread is
-    left to be reaped at process exit; a warning records the leak.
+    Pedalboard 0.9.x requires ``show_editor`` to run on the process main
+    thread; a daemon worker handles renders so the editor stays realised for
+    the duration of ``body()`` (#1187). Worker exceptions propagate to the
+    caller after ``show_editor`` returns and take precedence over the leak
+    signal so a body that raised while finishing slowly still surfaces its
+    own exception. The helper never returns with a live worker thread:
+    ``BodyResult`` is delivered only when the worker reached a terminal state
+    inside the join window; any other outcome raises ``RenderWorkerLeaked``.
 
-    :param plugin: A loaded VST3 plugin whose editor is realised for the block.
-    :raises Exception: Propagated from the editor thread at ``__exit__`` only
-        when the ``with`` body itself raised nothing — typically a
-        ``RuntimeError`` from the VST3 host.
+    :param plugin: A loaded VST3 plugin whose editor is realised for the call.
+    :param body: Callable executed on the worker thread; its return value is
+        returned to the caller.
+    :returns: Whatever ``body()`` returned.
+    :raises BaseException: Re-raised from the worker thread if ``body()``
+        raised — typically a ``RuntimeError`` from the VST3 host or a render
+        failure.
+    :raises RenderWorkerLeaked: Worker outlived ``_EDITOR_JOIN_TIMEOUT_SECONDS``
+        after the close event was set, or exited without producing a result
+        or exception (no body return value can be surfaced safely).
     """
     close_editor = threading.Event()
-    captured: list[Exception] = []
+    result: list[_BodyResult] = []
+    captured: list[BaseException] = []
 
-    def _run_editor() -> None:
+    def _worker() -> None:
         try:
-            plugin.show_editor(close_editor)
-        except Exception as exc:  # noqa: BLE001 — fan-in for any host-side failure
-            logger.exception("vst-editor-window crashed: {}", exc)
+            result.append(body())
+        except BaseException as exc:  # noqa: BLE001 — propagate to caller after show_editor returns
             captured.append(exc)
+        finally:
+            close_editor.set()
 
-    editor_thread = threading.Thread(target=_run_editor, daemon=True, name="vst-editor-window")
-    editor_thread.start()
+    worker = threading.Thread(target=_worker, name="render-worker", daemon=True)
+    worker.start()
     try:
-        yield
+        plugin.show_editor(close_editor)
     finally:
         close_editor.set()
-        editor_thread.join(timeout=_EDITOR_JOIN_TIMEOUT_SECONDS)
-        if editor_thread.is_alive():
-            logger.warning(
-                "vst-editor-window did not drain within {}s; daemon thread "
-                "leaks (reaped at process exit)",
-                _EDITOR_JOIN_TIMEOUT_SECONDS,
-            )
-        # sys.exc_info() returns the body's exception if `with` body raised,
-        # else (None, None, None). Only surface the captured editor-thread
-        # exception when the body succeeded — re-raising during an active
-        # body exception would mask the original error (raise-in-finally wins).
-        body_exc_active = sys.exc_info()[0] is not None
-        if captured and not body_exc_active:
-            exc: Exception = captured[0]
-            raise exc
-        if captured and body_exc_active:
-            logger.error(
-                "vst-editor-window also crashed during body exception: {}",
-                captured[0],
-            )
+        worker.join(timeout=_EDITOR_JOIN_TIMEOUT_SECONDS)
+    if captured:
+        exc: BaseException = captured[0]
+        raise exc
+    if worker.is_alive():
+        logger.warning(
+            "render-worker did not drain within {}s — raising RenderWorkerLeaked"
+            " (the body must complete or raise before show_editor returns)",
+            _EDITOR_JOIN_TIMEOUT_SECONDS,
+        )
+        raise RenderWorkerLeaked(
+            f"render-worker still alive after {_EDITOR_JOIN_TIMEOUT_SECONDS}s join window;"
+            " body did not complete or raise before show_editor returned"
+        )
+    if not result:
+        raise RenderWorkerLeaked(
+            "render-worker exited without producing a result or exception;"
+            " body() must either return or raise"
+        )
+    return result[0]
 
 
 def load_preset(plugin: VST3Plugin, preset_path: str) -> None:
