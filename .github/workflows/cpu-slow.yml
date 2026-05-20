@@ -14,6 +14,13 @@ on:
     paths-ignore:
       - "docs/**"
       - "**/*.md"
+  # Self-trigger so PRs that touch the workflow (or its invariant test)
+  # exercise it pre-merge instead of waiting for the post-merge push run
+  # to surface regressions — see #1206.
+  pull_request:
+    paths:
+      - ".github/workflows/cpu-slow.yml"
+      - "tests/infra/test_cpu_slow_workflow_r2_creds.py"
 
 concurrency:
   group: cpu-slow-${{ github.ref }}

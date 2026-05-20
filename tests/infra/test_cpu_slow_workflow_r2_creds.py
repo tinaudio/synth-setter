@@ -28,6 +28,20 @@ REQUIRED_R2_ENV_KEYS: frozenset[str] = frozenset(_SECRET_R2_ENV_KEYS) | frozense
 PYTEST_STEP_NAME = "Run slow (non-GPU, non-MPS, non-VST) tests"
 RCLONE_INSTALL_STEP_NAME = "Install rclone"
 
+WORKFLOW_SELF_PATH = ".github/workflows/cpu-slow.yml"
+INVARIANT_TEST_SELF_PATH = "tests/infra/test_cpu_slow_workflow_r2_creds.py"
+
+
+def _load_workflow(project_root: Path) -> dict[str, object]:
+    """Return the parsed ``cpu-slow.yml`` workflow document.
+
+    :param project_root: repo root; the workflow is read from
+        ``<project_root>/.github/workflows/cpu-slow.yml``.
+    :returns: the parsed YAML mapping.
+    """
+    workflow_path = project_root / ".github" / "workflows" / "cpu-slow.yml"
+    return cast(dict[str, object], yaml.safe_load(workflow_path.read_text()))
+
 
 def _load_workflow_steps(project_root: Path) -> list[dict[str, object]]:
     """Return the ordered ``steps`` list of the ``run_slow_tests`` job.
@@ -36,9 +50,10 @@ def _load_workflow_steps(project_root: Path) -> list[dict[str, object]]:
         ``<project_root>/.github/workflows/cpu-slow.yml``.
     :returns: the job's ``steps`` list.
     """
-    workflow_path = project_root / ".github" / "workflows" / "cpu-slow.yml"
-    workflow = yaml.safe_load(workflow_path.read_text())
-    return cast(list[dict[str, object]], workflow["jobs"]["run_slow_tests"]["steps"])
+    workflow = _load_workflow(project_root)
+    jobs = cast(dict[str, object], workflow["jobs"])
+    run_slow_tests = cast(dict[str, object], jobs["run_slow_tests"])
+    return cast(list[dict[str, object]], run_slow_tests["steps"])
 
 
 def _load_pytest_step_env(project_root: Path) -> dict[str, str]:
@@ -53,6 +68,36 @@ def _load_pytest_step_env(project_root: Path) -> dict[str, str]:
         if step.get("name") == PYTEST_STEP_NAME:
             return cast(dict[str, str], step.get("env") or {})
     pytest.fail(f"Could not find step {PYTEST_STEP_NAME!r} in {workflow_path}")
+
+
+def _load_pull_request_paths(project_root: Path) -> list[str]:
+    """Return the ``on.pull_request.paths`` filter list from ``cpu-slow.yml``.
+
+    PyYAML parses the bare ``on`` key as the boolean ``True``, so callers
+    cannot index the document with the string ``"on"``; we resolve whichever
+    key the loader actually produced before reading the trigger block.
+
+    :param project_root: repo root; the workflow is read from
+        ``<project_root>/.github/workflows/cpu-slow.yml``.
+    :returns: the configured ``paths`` list; fails the test if the
+        ``pull_request`` trigger or its ``paths`` filter is missing.
+    """
+    workflow = _load_workflow(project_root)
+    on_key: object = "on" if "on" in workflow else True
+    triggers = cast(dict[str, object], workflow[on_key])  # type: ignore[index]
+    pull_request = triggers.get("pull_request")
+    if not isinstance(pull_request, dict):
+        pytest.fail(
+            "cpu-slow.yml missing `on.pull_request` trigger — PRs that touch the "
+            "workflow must exercise it pre-merge (see #1206)"
+        )
+    paths = pull_request.get("paths")
+    if not isinstance(paths, list):
+        pytest.fail(
+            "cpu-slow.yml `on.pull_request` missing `paths` filter — without it "
+            "every PR would trigger the slow suite (see #1206)"
+        )
+    return cast(list[str], paths)
 
 
 @pytest.mark.infra
@@ -132,4 +177,28 @@ def test_cpu_slow_installs_rclone_before_pytest(project_root: Path) -> None:
     )
     assert names.index(RCLONE_INSTALL_STEP_NAME) < names.index(PYTEST_STEP_NAME), (
         f"{RCLONE_INSTALL_STEP_NAME!r} must precede {PYTEST_STEP_NAME!r} in cpu-slow.yml"
+    )
+
+
+@pytest.mark.infra
+@pytest.mark.parametrize("expected_path", [WORKFLOW_SELF_PATH, INVARIANT_TEST_SELF_PATH])
+def test_cpu_slow_pull_request_self_trigger_present(
+    project_root: Path, expected_path: str
+) -> None:
+    """``on.pull_request.paths`` covers the workflow and its invariant test.
+
+    A PR that edits ``cpu-slow.yml`` (or this test, whose contract pins the
+    env-block shape the workflow promises) must exercise the slow suite
+    pre-merge instead of waiting for the post-merge push run — see #1206.
+
+    :param project_root: session fixture from ``tests/infra/conftest.py``.
+    :param expected_path: a repo-relative path that must appear verbatim in
+        the ``paths`` filter; parametrized so a missing entry names the
+        offending path in the failure output.
+    """
+    paths = _load_pull_request_paths(project_root)
+    assert expected_path in paths, (
+        f"cpu-slow.yml `on.pull_request.paths` missing {expected_path!r}; "
+        f"got {paths!r} — PRs touching that file must trigger the workflow "
+        f"pre-merge (see #1206)"
     )
