@@ -14,13 +14,14 @@ import click
 import h5py
 import numpy as np
 
+from synth_setter.pipeline.ci.validate_shard import (
+    check_shard_contracts,
+    check_shard_ids_match_spec_order,
+    check_shards_present,
+)
 from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from synth_setter.pipeline.spec_io import load_spec_from_uri
-
-# Re-checked at the trust boundary so a drifted shard surfaces a clean
-# ClickException instead of a bare KeyError mid-VirtualSource wiring.
-_REQUIRED_DATASETS: tuple[str, ...] = ("audio", "mel_spec", "param_array")
 
 # Output filenames, in the order ``main`` writes them.
 _SPLITS: tuple[str, ...] = ("train", "val", "test")
@@ -58,9 +59,9 @@ def main(dataset_root: Path, spec_uri: str | None) -> None:  # noqa: DOC502
     """
     spec = _load_spec(spec_uri, dataset_root)
     shard_paths = [dataset_root / s.filename for s in spec.shards]
-    _check_shards_present(shard_paths)
-    _check_shard_ids_match_spec_order(spec)
-    tails = _check_shard_contracts(shard_paths, spec.render.samples_per_shard)
+    check_shards_present(shard_paths)
+    check_shard_ids_match_spec_order(spec)
+    tails = check_shard_contracts(shard_paths, spec.render.samples_per_shard)
     shard_size = spec.render.samples_per_shard
 
     splits = _build_splits(shard_paths, spec.train_val_test_sizes, shard_size)
@@ -92,86 +93,6 @@ def _load_spec(spec_uri: str | None, dataset_root: Path) -> DatasetSpec:
             f"declares output_format={spec.output_format!r}."
         )
     return spec
-
-
-def _check_shards_present(shard_paths: list[Path]) -> None:
-    """Fail loud before any output handle opens if a spec-named shard is missing.
-
-    :param shard_paths: All shards reshard will source from, in spec order.
-    :raises click.ClickException: Listing each missing path.
-    """
-    missing = [p for p in shard_paths if not p.is_file()]
-    if missing:
-        formatted = "\n  ".join(str(p) for p in missing)
-        raise click.ClickException(
-            f"{len(missing)} shard(s) named by ``spec.shards`` are missing under "
-            f"dataset_root:\n  {formatted}"
-        )
-
-
-def _check_shard_ids_match_spec_order(spec: DatasetSpec) -> None:
-    """Catch a tampered spec whose ``shards[i].shard_id`` no longer equals ``i``.
-
-    :param spec: Loaded ``DatasetSpec``.
-    :raises click.ClickException: If any shard's ``shard_id`` disagrees with its index.
-    """
-    for index, shard in enumerate(spec.shards):
-        if shard.shard_id != index:
-            raise click.ClickException(
-                f"spec.shards[{index}].shard_id={shard.shard_id} disagrees with its "
-                f"position; spec.shards must be in shard_id order."
-            )
-
-
-def _check_shard_contracts(
-    shard_paths: list[Path],
-    samples_per_shard: int,
-) -> dict[str, tuple[int, ...]]:
-    """Validate every shard's structure and return the per-dataset trailing shape.
-
-    Catches a drifted or partial worker upload before reshard wires the file
-    into a ``VirtualSource`` (which would otherwise either silently return
-    fill values or surface as a low-signal h5py error mid-run). The returned
-    tails are reused by :func:`_write_split` so the first shard isn't reopened.
-
-    :param shard_paths: Spec-ordered list of shard files.
-    :param samples_per_shard: Required leading-axis length for every dataset.
-    :returns: Trailing shape for each required dataset key.
-    :raises click.ClickException: With the offending shard, key, and observed
-        value (shape, dtype, or row count).
-    """
-    expected_tails: dict[str, tuple[int, ...]] = {}
-    for shard in shard_paths:
-        with h5py.File(shard, "r") as f:
-            for key in _REQUIRED_DATASETS:
-                if key not in f:
-                    raise click.ClickException(
-                        f"shard {shard} is missing required dataset {key!r}; "
-                        f"present: {sorted(f.keys())}."
-                    )
-                node = f[key]
-                if not isinstance(node, h5py.Dataset):
-                    raise click.ClickException(
-                        f"shard {shard}: key {key!r} is a {type(node).__name__}, not a Dataset."
-                    )
-                if node.dtype != _FLOAT32:
-                    raise click.ClickException(
-                        f"shard {shard}: dataset {key!r} has dtype {node.dtype}, "
-                        f"expected np.float32."
-                    )
-                if node.shape[0] != samples_per_shard:
-                    raise click.ClickException(
-                        f"shard {shard}: dataset {key!r} has {node.shape[0]} rows, "
-                        f"expected samples_per_shard={samples_per_shard}."
-                    )
-                tail = tuple(node.shape[1:])
-                expected_tail = expected_tails.setdefault(key, tail)
-                if tail != expected_tail:
-                    raise click.ClickException(
-                        f"shard {shard}: dataset {key!r} trailing shape {tail} disagrees "
-                        f"with first shard's {expected_tail}."
-                    )
-    return expected_tails
 
 
 def _build_splits(
@@ -213,7 +134,7 @@ def _stage_and_commit_splits(  # noqa: DOC501,DOC503
     :param dataset_root: Directory that holds both the input shards and the outputs.
     :param splits: Per-split shard lists from :func:`_build_splits`.
     :param shard_size: ``samples_per_shard`` for every shard.
-    :param tails: Per-dataset trailing shape from :func:`_check_shard_contracts`.
+    :param tails: Per-dataset trailing shape from :func:`check_shard_contracts`.
     """
     nonempty = [(name, paths) for name, paths in splits.items() if paths]
     staging_paths = [dataset_root / f"{_STAGING_PREFIX}{name}.h5" for name, _ in nonempty]
@@ -246,8 +167,8 @@ def _write_split(
         it into place after every split's stage succeeds.
     :param split_paths: Shard files concatenated in order into the virtual layout.
     :param shard_size: Per-shard row count; identical for every shard by the
-        :func:`_check_shard_contracts` invariant.
-    :param tails: Per-dataset trailing shape from :func:`_check_shard_contracts`.
+        :func:`check_shard_contracts` invariant.
+    :param tails: Per-dataset trailing shape from :func:`check_shard_contracts`.
     """
     split_len = len(split_paths) * shard_size
     layouts = {

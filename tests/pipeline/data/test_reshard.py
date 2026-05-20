@@ -21,9 +21,9 @@ import numpy as np
 import pytest
 from click.testing import CliRunner
 
+from synth_setter.data.vst.shapes import DATASET_FIELD_NAMES
 from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME
 from synth_setter.pipeline.data import reshard as _reshard_module
-from synth_setter.pipeline.data.reshard import _REQUIRED_DATASETS
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 
 # Pinned timestamp for ``patch_runtime_io``'s ``_utc_now`` monkeypatch.
@@ -93,7 +93,7 @@ def _write_shard(path: Path, shard_size: int) -> None:
     """Write a minimal HDF5 shard with the three datasets reshard expects.
 
     Shapes and dtypes match the contract that
-    :func:`reshard._check_shard_contracts` enforces.
+    :func:`synth_setter.pipeline.ci.validate_shard.check_shard_contracts` enforces.
 
     :param path: Destination filesystem path for the shard.
     :param shard_size: Required leading-axis length for every dataset.
@@ -471,7 +471,7 @@ class TestReshardShardIdOrdering:
 class TestReshardShardContractValidation:
     """Per-shard structural validation catches drift before any output write."""
 
-    @pytest.mark.parametrize("missing_key", _REQUIRED_DATASETS)
+    @pytest.mark.parametrize("missing_key", DATASET_FIELD_NAMES)
     def test_missing_required_dataset_fails_loud(
         self,
         tmp_path: Path,

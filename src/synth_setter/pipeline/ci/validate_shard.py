@@ -31,6 +31,7 @@ import tarfile
 from pathlib import Path
 from typing import cast
 
+import click
 import h5py
 import numpy as np
 from pydantic import ValidationError
@@ -51,6 +52,89 @@ from synth_setter.pipeline.spec_io import read_spec_text
 
 _TAR_METADATA_MEMBER = "metadata.json"
 _TAR_NPY_NAME_RE = re.compile(r"^(?P<batch_key>\d{8})\.(?P<field>[^./]+)\.npy$")
+
+_FLOAT32 = np.dtype("float32")
+
+
+def check_shards_present(shard_paths: list[Path]) -> None:
+    """Fail loud before any output handle opens if a spec-named shard is missing.
+
+    :param shard_paths: All shards a downstream tool will source from, in spec order.
+    :raises click.ClickException: Listing each missing path.
+    """
+    missing = [p for p in shard_paths if not p.is_file()]
+    if missing:
+        formatted = "\n  ".join(str(p) for p in missing)
+        raise click.ClickException(
+            f"{len(missing)} shard(s) named by ``spec.shards`` are missing under "
+            f"dataset_root:\n  {formatted}"
+        )
+
+
+def check_shard_ids_match_spec_order(spec: DatasetSpec) -> None:
+    """Catch a tampered spec whose ``shards[i].shard_id`` no longer equals ``i``.
+
+    :param spec: Loaded ``DatasetSpec``.
+    :raises click.ClickException: If any shard's ``shard_id`` disagrees with its index.
+    """
+    for index, shard in enumerate(spec.shards):
+        if shard.shard_id != index:
+            raise click.ClickException(
+                f"spec.shards[{index}].shard_id={shard.shard_id} disagrees with its "
+                f"position; spec.shards must be in shard_id order."
+            )
+
+
+def check_shard_contracts(
+    shard_paths: list[Path],
+    samples_per_shard: int,
+) -> dict[str, tuple[int, ...]]:
+    """Validate every shard's structure and return the per-dataset trailing shape.
+
+    Catches a drifted or partial worker upload at the trust boundary, before a
+    downstream tool wires the file into a ``VirtualSource`` (which would
+    otherwise either silently return fill values or surface as a low-signal
+    h5py error mid-run). The returned tails let callers skip reopening the
+    first shard to discover the per-dataset trailing shape.
+
+    :param shard_paths: Spec-ordered list of shard files.
+    :param samples_per_shard: Required leading-axis length for every dataset.
+    :returns: Trailing shape for each required dataset key.
+    :raises click.ClickException: With the offending shard, key, and observed
+        value (shape, dtype, or row count).
+    """
+    expected_tails: dict[str, tuple[int, ...]] = {}
+    for shard in shard_paths:
+        with h5py.File(shard, "r") as f:
+            for key in DATASET_FIELD_NAMES:
+                if key not in f:
+                    raise click.ClickException(
+                        f"shard {shard} is missing required dataset {key!r}; "
+                        f"present: {sorted(f.keys())}."
+                    )
+                node = f[key]
+                if not isinstance(node, h5py.Dataset):
+                    raise click.ClickException(
+                        f"shard {shard}: key {key!r} is a {type(node).__name__}, not a Dataset."
+                    )
+                if node.dtype != _FLOAT32:
+                    raise click.ClickException(
+                        f"shard {shard}: dataset {key!r} has dtype {node.dtype}, "
+                        f"expected np.float32."
+                    )
+                if node.shape[0] != samples_per_shard:
+                    raise click.ClickException(
+                        f"shard {shard}: dataset {key!r} has {node.shape[0]} rows, "
+                        f"expected samples_per_shard={samples_per_shard}."
+                    )
+                tail = tuple(node.shape[1:])
+                expected_tail = expected_tails.setdefault(key, tail)
+                if tail != expected_tail:
+                    raise click.ClickException(
+                        f"shard {shard}: dataset {key!r} trailing shape {tail} disagrees "
+                        f"with first shard's {expected_tail}."
+                    )
+    return expected_tails
 
 
 def _expected_dataset_shapes(spec: DatasetSpec) -> dict[str, tuple[int, ...]]:
