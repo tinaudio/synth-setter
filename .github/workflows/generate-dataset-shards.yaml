@@ -5,6 +5,11 @@ name: Generate Dataset Shards
 # per-provider values via inputs. All providers drive `synth-setter-generate-dataset`
 # with a `skypilot_launch.compute_template=...` Hydra override.
 #
+# Optional `hydra_overrides` input — whitespace-separated tokens appended
+# verbatim to the launcher invocation. Used by the render-config matrix to
+# fan over `render.gui_toggle_cadence` and `output_format` without pre-baking
+# one Hydra experiment per cell.
+#
 # Provider-specific behavior:
 #   * `skypilot-local` — provisions a kind cluster on the runner via
 #     `sky local up`, loads the dev-snapshot image into kind, writes the
@@ -68,6 +73,11 @@ on:
         required: false
         type: string
         default: "run-metadata"
+      hydra_overrides:
+        description: "Extra whitespace-separated Hydra overrides appended to the launcher invocation (e.g. `render.gui_toggle_cadence=always_on output_format=wds`). Each token is forwarded verbatim — callers are responsible for escaping any spaces inside a single override."
+        required: false
+        type: string
+        default: ""
     outputs:
       spec_uri:
         description: "Canonical r2:// URI of the materialized spec (under-prefix `input_spec.json`). Consumed by validate-dataset-shards.yaml."
@@ -118,6 +128,11 @@ on:
         required: false
         type: string
         default: "run-metadata"
+      hydra_overrides:
+        description: "Extra whitespace-separated Hydra overrides appended verbatim to the launcher invocation (e.g. `render.gui_toggle_cadence=always_on output_format=wds`)."
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -328,6 +343,7 @@ jobs:
           INPUT_LOCAL: ${{ inputs.local }}
           INPUT_TAIL: ${{ inputs.tail }}
           INPUT_NUM_WORKERS: ${{ inputs.num_workers }}
+          INPUT_HYDRA_OVERRIDES: ${{ inputs.hydra_overrides }}
           SYNTH_SETTER_CI_MODE: "1"
         run: |
           set -euo pipefail
@@ -345,6 +361,10 @@ jobs:
           fi
           if [[ "$INPUT_TAIL" == "true" ]]; then
             OVERRIDES+=("skypilot_launch.tail=true")
+          fi
+          if [[ -n "$INPUT_HYDRA_OVERRIDES" ]]; then
+            read -ra HYDRA_EXTRA <<< "$INPUT_HYDRA_OVERRIDES"
+            OVERRIDES+=("${HYDRA_EXTRA[@]}")
           fi
           synth-setter-generate-dataset "${OVERRIDES[@]}" \
             2>&1 | tee "${RUN_METADATA_DIR}/generate.log"
@@ -448,6 +468,7 @@ jobs:
           NUM_WORKERS_OVERRIDE: ${{ inputs.num_workers != '' && format('skypilot_launch.num_workers={0}', inputs.num_workers) || '' }}
           TAIL_OVERRIDE: ${{ inputs.tail && 'skypilot_launch.tail=true' || '' }}
           LOCAL_OVERRIDE: ${{ inputs.local && 'skypilot_launch.local=true' || '' }}
+          HYDRA_OVERRIDES_EXTRA: ${{ inputs.hydra_overrides }}
         run: |
           set -euo pipefail
           docker run --rm \
@@ -474,6 +495,7 @@ jobs:
             -e NUM_WORKERS_OVERRIDE \
             -e TAIL_OVERRIDE \
             -e LOCAL_OVERRIDE \
+            -e HYDRA_OVERRIDES_EXTRA \
             "${IMAGE}" \
             bash -c '
               set -euo pipefail
@@ -485,7 +507,7 @@ jobs:
                 "skypilot_launch.compute_template=$TEMPLATE" \
                 "skypilot_launch.job_name=$CLUSTER_NAME" \
                 "skypilot_launch.worker_image_tag=$IMAGE_TAG" \
-                $LOCAL_OVERRIDE $NUM_WORKERS_OVERRIDE $TAIL_OVERRIDE
+                $LOCAL_OVERRIDE $NUM_WORKERS_OVERRIDE $TAIL_OVERRIDE $HYDRA_OVERRIDES_EXTRA
             ' \
             2>&1 | tee "${RUN_METADATA_DIR}/generate.log"
           shopt -s nullglob

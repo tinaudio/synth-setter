@@ -1,30 +1,27 @@
 name: Test Dataset Generation (Render-Config Matrix)
 
-# Per-PR matrix exercise of ``test-dataset-generation`` across the existing
-# render configs, so a regression in the ``editor_held_open`` handshake
-# (#1198, #1204), the ``always_on`` gui-toggle cadence (#1187), or
-# ``RenderConfig.parallel`` (#1189) surfaces on the PR that introduces it
-# instead of the next nightly cron. Each row dispatches the
-# ``generate-dataset-shards.yaml`` reusable against ``skypilot-local`` only —
-# the kind cluster on the runner is the cheapest path that still drives the
-# real launcher / R2 round-trip, and paid-provider coverage stays on the
-# existing weekly cron in ``test-dataset-generation.yml``.
+# Per-PR matrix exercise of ``test-dataset-generation`` across the render-side
+# code paths a PR can regress. The base config is ``smoke-shard`` (the only
+# experiment whose 12-sample volume fits comfortably under the reusable's
+# 20-min step cap); cells fan out across ``render.gui_toggle_cadence`` and
+# ``output_format`` so a regression in the ``editor_held_open`` handshake
+# (#1198, #1204), the ``always_on`` gui-toggle cadence (#1187), or the
+# wds writer surfaces on the PR that introduces it instead of the next
+# nightly cron.
 #
-# Matrix axes:
-#   * dataset_config — every PR-sized experiment under
-#     ``configs/experiment/generate_dataset/`` that exercises a distinct
-#     render-side code path. ``nightly-parallel-smoke`` covers
-#     ``RenderConfig.parallel=true``. The ``ci-materialize-test`` configs
-#     are excluded — they exist for spec-materialization round-trip, not
-#     for render-code coverage (the wds writer is exercised by
-#     ``smoke-shard-wds`` already, and the 96-sample hdf5 cadence does not
-#     add render-side signal beyond what the smoke configs already cover).
-#     The 480k-sample ``surge-simple`` and ``10-1k-shards`` configs are
-#     also excluded — they belong on the paid weekly schedule, not the
-#     PR matrix.
-#   * output_format — pinned per config (the spec-format cross-check would
-#     deterministically fail a mismatched cell, so the matrix is shaped
-#     per-config rather than fanned 2x).
+# Matrix axes (8 cells = 4 x 2, all fan-out in parallel):
+#   * cadence — every value of the ``_GuiToggleCadence`` Literal in
+#     ``src/synth_setter/pipeline/schemas/spec.py``. ``always_on`` is the
+#     cell #1204 specifically guards against the held-open handshake
+#     regression; ``never`` / ``once`` / ``render`` keep the other warm-up
+#     paths under PR-time coverage.
+#   * output_format — ``hdf5`` and ``wds``. Injected via the reusable's
+#     ``hydra_overrides`` input rather than a sibling experiment file so
+#     the matrix stays a single ``smoke-shard`` base.
+#
+# ``RenderConfig.parallel`` (#1189) coverage stays on the existing weekly
+# cron in ``test-dataset-generation.yml`` (the nightly-parallel-smoke config
+# would not fit under the 20-min step cap once multiplied by 8 cells).
 #
 # Validation of the produced shards is intentionally out of scope here:
 # ``needs.<job>.outputs.spec_uri`` from a matrix-strategy reusable workflow
@@ -36,7 +33,7 @@ name: Test Dataset Generation (Render-Config Matrix)
 #
 # Required secrets (forwarded via ``secrets: inherit``):
 #   RCLONE_CONFIG_R2_ACCESS_KEY_ID, RCLONE_CONFIG_R2_SECRET_ACCESS_KEY,
-#   RCLONE_CONFIG_R2_ENDPOINT, R2_ACCOUNT_ID — every row (R2 upload).
+#   RCLONE_CONFIG_R2_ENDPOINT, R2_ACCOUNT_ID — every cell (R2 upload).
 
 on:
   workflow_dispatch:
@@ -67,27 +64,23 @@ concurrency:
 
 jobs:
   generate:
-    name: Generate (${{ matrix.dataset_config }} / ${{ matrix.output_format }})
+    name: Generate (smoke-shard / cadence=${{ matrix.cadence }} / ${{ matrix.output_format }})
     strategy:
-      # One broken config must not mask others — every cell still emits its
+      # One broken cell must not mask others — every cell still emits its
       # own pass/fail signal even if a sibling cell aborts.
       fail-fast: false
       matrix:
-        include:
-          - dataset_config: generate_dataset/smoke-shard
-            output_format: hdf5
-          - dataset_config: generate_dataset/smoke-shard-wds
-            output_format: wds
-          - dataset_config: generate_dataset/nightly-parallel-smoke
-            output_format: hdf5
+        cadence: [never, once, render, always_on]
+        output_format: [hdf5, wds]
     uses: ./.github/workflows/generate-dataset-shards.yaml
     with:
       provider: skypilot-local
-      dataset_config: ${{ matrix.dataset_config }}
+      dataset_config: generate_dataset/smoke-shard
       image_tag: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
       cluster_name: synth-setter-render-matrix-${{ strategy.job-index }}-${{ github.run_id }}-${{ github.run_attempt }}
       num_workers: "1"
       tail: true
       local: true
-      artifact_name: render-matrix-run-metadata-${{ matrix.output_format }}-${{ strategy.job-index }}
+      artifact_name: render-matrix-run-metadata-${{ matrix.cadence }}-${{ matrix.output_format }}-${{ strategy.job-index }}
+      hydra_overrides: render.gui_toggle_cadence=${{ matrix.cadence }} output_format=${{ matrix.output_format }}
     secrets: inherit
