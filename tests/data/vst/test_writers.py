@@ -8,7 +8,10 @@ the new wds e2e tests in ``test_writers_wds_e2e.py``.
 
 from __future__ import annotations
 
+import contextlib
 import sys
+import threading
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -424,10 +427,66 @@ def test_render_in_batches_warmup_never_skips_all_renders(
     assert all(c["warmup"] is False for c in captured)
 
 
-def test_render_in_batches_always_on_raises_not_implemented(
+def test_render_in_batches_always_on_holds_editor_open_across_all_renders(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``gui_toggle_cadence="always_on"`` raises until the held-open editor wiring lands (#1187).
+    """``gui_toggle_cadence="always_on"`` wraps the loop in ``editor_held_open(cached_plugin)``.
+
+    Asserts the context manager is entered once with the cached plugin, the loop
+    runs for all samples, ``warmup_plugin`` never fires per render, and the
+    held-open scope closes after the loop.
+
+    :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
+    """
+    n = 3
+    render_cfg = _smoke_render_cfg(
+        samples_per_shard=n,
+        samples_per_render_batch=n,
+        plugin_reload_cadence="once",
+        gui_toggle_cadence="always_on",
+    )
+    cached_plugin_holder: list[object] = []
+    captured = _stub_render_dependencies(
+        monkeypatch,
+        load_plugin_calls=[],
+        load_preset_calls=[],
+        cached_plugin_holder=cached_plugin_holder,
+    )
+    held_open_calls: list[object] = []
+    close_events: list[threading.Event] = []
+
+    @contextlib.contextmanager
+    def fake_held_open(plugin: object) -> Iterator[None]:
+        held_open_calls.append(plugin)
+        event = threading.Event()
+        close_events.append(event)
+        try:
+            yield
+        finally:
+            event.set()
+
+    monkeypatch.setattr(writers, "editor_held_open", fake_held_open)
+
+    _render_in_batches(
+        render_cfg=render_cfg,
+        param_spec=MagicMock(name="param_spec"),
+        start_idx=0,
+        fixed_synth_params_list=None,
+        fixed_note_params_list=None,
+        flush_batch=lambda _batch, _start: None,
+    )
+
+    assert len(held_open_calls) == 1
+    assert held_open_calls[0] is cached_plugin_holder[0]
+    assert close_events[0].is_set()
+    assert len(captured) == n
+    assert all(c["warmup"] is False for c in captured)
+
+
+def test_render_in_batches_non_always_on_does_not_open_held_open_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The three legacy cadences leave ``editor_held_open`` untouched (nullcontext path).
 
     :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
     """
@@ -435,19 +494,28 @@ def test_render_in_batches_always_on_raises_not_implemented(
         samples_per_shard=1,
         samples_per_render_batch=1,
         plugin_reload_cadence="once",
-        gui_toggle_cadence="always_on",
+        gui_toggle_cadence="never",
     )
     _stub_render_dependencies(monkeypatch, load_plugin_calls=[], load_preset_calls=[])
+    held_open_calls: list[object] = []
 
-    with pytest.raises(NotImplementedError, match=r"always_on.*not yet wired"):
-        _render_in_batches(
-            render_cfg=render_cfg,
-            param_spec=MagicMock(name="param_spec"),
-            start_idx=0,
-            fixed_synth_params_list=None,
-            fixed_note_params_list=None,
-            flush_batch=lambda _batch, _start: None,
-        )
+    @contextlib.contextmanager
+    def fake_held_open(plugin: object) -> Iterator[None]:
+        held_open_calls.append(plugin)
+        yield
+
+    monkeypatch.setattr(writers, "editor_held_open", fake_held_open)
+
+    _render_in_batches(
+        render_cfg=render_cfg,
+        param_spec=MagicMock(name="param_spec"),
+        start_idx=0,
+        fixed_synth_params_list=None,
+        fixed_note_params_list=None,
+        flush_batch=lambda _batch, _start: None,
+    )
+
+    assert held_open_calls == []
 
 
 def test_render_in_batches_once_once_warms_once_and_caches_plugin(

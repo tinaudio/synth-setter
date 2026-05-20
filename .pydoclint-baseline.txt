@@ -81,7 +81,7 @@ src/synth_setter/data/vst/core.py
     DOC201: Function `load_plugin` does not have a return section in docstring
     DOC203: Function `load_plugin` return type(s) in docstring not consistent with the return annotation. Return annotation has 1 type(s); docstring return section has 0 type(s).
     DOC101: Function `render_params`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `render_params`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [channels: int, midi_note: int, note_start_and_end: Tuple[float, float], params: dict[str, float], plugin: Optional[VST3Plugin], plugin_path: str, preset_path: Optional[str], sample_rate: float, signal_duration_seconds: float, velocity: int, warmup: bool].
+    DOC103: Function `render_params`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [channels: int, midi_note: int, note_start_and_end: tuple[float, float], params: dict[str, float], plugin: VST3Plugin | None, plugin_path: str, preset_path: str | None, sample_rate: float, signal_duration_seconds: float, velocity: int, warmup: bool].
     DOC201: Function `render_params` does not have a return section in docstring
     DOC203: Function `render_params` return type(s) in docstring not consistent with the return annotation. Return annotation has 1 type(s); docstring return section has 0 type(s).
 --------------------

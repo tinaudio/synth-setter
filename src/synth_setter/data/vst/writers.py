@@ -8,6 +8,7 @@ writer using ``webdataset.TarWriter``.
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Callable
 from pathlib import Path
 from types import TracebackType
@@ -21,7 +22,7 @@ from pedalboard import VST3Plugin
 from tqdm import trange
 
 from synth_setter.data.vst import param_specs
-from synth_setter.data.vst.core import load_plugin, load_preset
+from synth_setter.data.vst.core import editor_held_open, load_plugin, load_preset
 from synth_setter.data.vst.generate_vst_dataset import (
     VSTDataSample,
     create_datasets_and_get_start_idx,
@@ -252,60 +253,59 @@ def _render_in_batches(
     :param fixed_synth_params_list: Optional pre-set synth params, indexed in write order.
     :param fixed_note_params_list: Optional pre-set note params, indexed in write order.
     :param flush_batch: Called with ``(batch, batch_start_idx)`` to persist each batch.
-    :raises NotImplementedError: ``gui_toggle_cadence="always_on"`` — schema-only
-        until the held-open editor wiring lands (#1187).
     """
     num_samples = render_cfg.samples_per_shard
     sample_batch: list[VSTDataSample] = []
     sample_batch_start = start_idx
-    if render_cfg.gui_toggle_cadence == "always_on":
-        # Wave 1 ships the schema literal; the held-open editor wiring lands in
-        # the follow-up PR. Raise here so a spec composed in the gap can't be
-        # silently downgraded to "never" and persisted to R2 (#1187).
-        raise NotImplementedError(
-            'gui_toggle_cadence="always_on" is not yet wired into the renderer; '
-            "pick another gui_toggle_cadence value (see RenderConfig schema for "
-            "the platform-specific allowed set) until the follow-up PR lands."
-        )
     # plugin_reload_cadence="once": load + preset once per shard, reuse instance (#705).
     # "render" (default): cached_plugin stays None; each render reloads (#489 historical).
     cached_plugin: VST3Plugin | None = None
     if render_cfg.plugin_reload_cadence == "once":
         cached_plugin = load_plugin(render_cfg.plugin_path)
         load_preset(cached_plugin, render_cfg.preset_path)
+    # always_on: hold the plugin editor open on a background thread for the
+    # whole shard loop. The validator on RenderConfig pairs this with
+    # plugin_reload_cadence="once", so cached_plugin is guaranteed non-None.
+    hold_open = render_cfg.gui_toggle_cadence == "always_on"
+    gui_scope: contextlib.AbstractContextManager[None] = (
+        editor_held_open(cached_plugin)
+        if hold_open and cached_plugin is not None
+        else contextlib.nullcontext()
+    )
     warmup_done = False
-    for i in trange(start_idx, num_samples):
-        logger.info(f"Making sample {i}")
-        warmup_this_render = render_cfg.gui_toggle_cadence == "render" or (
-            render_cfg.gui_toggle_cadence == "once" and not warmup_done
-        )
-        sample_batch.append(
-            _generate_sample_for_index(
-                i,
-                start_idx,
-                plugin_path=render_cfg.plugin_path,
-                preset_path=render_cfg.preset_path,
-                velocity=render_cfg.velocity,
-                signal_duration_seconds=render_cfg.signal_duration_seconds,
-                sample_rate=render_cfg.sample_rate,
-                channels=render_cfg.channels,
-                min_loudness=render_cfg.min_loudness,
-                param_spec=param_spec,
-                fixed_synth_params_list=fixed_synth_params_list,
-                fixed_note_params_list=fixed_note_params_list,
-                plugin=cached_plugin,
-                warmup=warmup_this_render,
+    with gui_scope:
+        for i in trange(start_idx, num_samples):
+            logger.info(f"Making sample {i}")
+            warmup_this_render = render_cfg.gui_toggle_cadence == "render" or (
+                render_cfg.gui_toggle_cadence == "once" and not warmup_done
             )
-        )
-        if warmup_this_render and render_cfg.gui_toggle_cadence == "once":
-            warmup_done = True
-        if len(sample_batch) == render_cfg.samples_per_render_batch:
-            flush_batch(sample_batch, sample_batch_start)
-            sample_batch = []
-            sample_batch_start += render_cfg.samples_per_render_batch
+            sample_batch.append(
+                _generate_sample_for_index(
+                    i,
+                    start_idx,
+                    plugin_path=render_cfg.plugin_path,
+                    preset_path=render_cfg.preset_path,
+                    velocity=render_cfg.velocity,
+                    signal_duration_seconds=render_cfg.signal_duration_seconds,
+                    sample_rate=render_cfg.sample_rate,
+                    channels=render_cfg.channels,
+                    min_loudness=render_cfg.min_loudness,
+                    param_spec=param_spec,
+                    fixed_synth_params_list=fixed_synth_params_list,
+                    fixed_note_params_list=fixed_note_params_list,
+                    plugin=cached_plugin,
+                    warmup=warmup_this_render,
+                )
+            )
+            if warmup_this_render and render_cfg.gui_toggle_cadence == "once":
+                warmup_done = True
+            if len(sample_batch) == render_cfg.samples_per_render_batch:
+                flush_batch(sample_batch, sample_batch_start)
+                sample_batch = []
+                sample_batch_start += render_cfg.samples_per_render_batch
 
-    if sample_batch:
-        flush_batch(sample_batch, sample_batch_start)
+        if sample_batch:
+            flush_batch(sample_batch, sample_batch_start)
 
 
 def _shard_metadata_from_render(render_cfg: RenderConfig) -> ShardMetadata:
