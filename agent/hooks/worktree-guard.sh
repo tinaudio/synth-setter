@@ -61,7 +61,9 @@ main() {
     slug="detached-${short_sha:-scratch}"
   fi
 
-  command -v log >/dev/null 2>&1 && log "primary-checkout edit detected (mode=${mode}, branch=${branch_label})"
+  # `declare -F`, not `command -v`: `/usr/bin/log` exists on macOS, so `command -v log`
+  # would succeed and invoke that external command under set -e instead of the shell function.
+  declare -F log >/dev/null 2>&1 && log "primary-checkout edit detected (mode=${mode}, branch=${branch_label})"
 
   local prefix override_hint
   if [[ "$mode" == "block" ]]; then
@@ -82,8 +84,8 @@ AGENTS.md "Always" rule: the primary checkout is read-only; switch to an
 isolated worktree before editing.
 
 Recommended (current HEAD: ${branch_label}):
-  git worktree add --detach .claude/worktrees/${slug}
-  cd .claude/worktrees/${slug}
+  git worktree add --detach ${primary_root}/.claude/worktrees/${slug}
+  cd ${primary_root}/.claude/worktrees/${slug}
 
 ${override_hint}
 EOF

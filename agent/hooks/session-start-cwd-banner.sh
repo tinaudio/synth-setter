@@ -47,8 +47,9 @@ main() {
     # `--detach` always works regardless of where the branch is checked out,
     # matching the primary-edit guard's remediation and `_lib.sh` convention.
     printf 'Spawn a worktree before editing:\n'
-    printf '  git worktree add --detach .claude/worktrees/%s && cd .claude/worktrees/%s\n' \
-      "$slug" "$slug"
+    # Anchor to $primary_root so the command works even when the session started in a subdir.
+    printf '  git worktree add --detach %s/.claude/worktrees/%s && cd %s/.claude/worktrees/%s\n' \
+      "$primary_root" "$slug" "$primary_root" "$slug"
   else
     printf '  status   : isolated worktree (OK)\n'
     printf '  primary  : %s\n' "$primary_root"

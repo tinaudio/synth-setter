@@ -1163,6 +1163,30 @@ T_worktree_guard_detached_head_in_primary() {
 }
 it "worktree-guard: detached HEAD in primary → 'detached HEAD' in message, '--detach' remediation, no 'HEAD' branch arg" T_worktree_guard_detached_head_in_primary
 
+T_worktree_guard_remediation_path_is_absolute_from_subdir() {
+  # Regression: original remediation used relative `.claude/worktrees/<slug>`, so
+  # running from `<primary>/src/foo/` produced `git worktree add --detach
+  # .claude/worktrees/<slug>` — which `cd`'d the agent into a path that didn't
+  # exist (subdir-relative). Remediation must anchor at $primary_root.
+  local out stderr_file subdir
+  stderr_file="$TEST_DIR/wg_stderr.txt"
+  subdir="$SANDBOX/src/nested"
+  mkdir -p "$subdir"
+  out=$(cd "$subdir" && echo '' | bash "$SANDBOX/agent/hooks/worktree-guard.sh" 2>"$stderr_file"; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0, got: $out"; return 1; }
+  grep -q "WARNING" "$stderr_file" || { echo "subdir cwd should still WARN; got: $(cat "$stderr_file")"; return 1; }
+  grep -qE "git worktree add --detach ${SANDBOX}/\\.claude/worktrees/" "$stderr_file" || {
+    echo "remediation must anchor at \$primary_root (${SANDBOX}); got: $(cat "$stderr_file")"
+    return 1
+  }
+  grep -qE "git worktree add --detach \\.claude/worktrees/" "$stderr_file" && {
+    echo "remediation must NOT use a bare relative path; got: $(cat "$stderr_file")"
+    return 1
+  }
+  return 0
+}
+it "worktree-guard: remediation path anchored to primary_root (works from any subdir)" T_worktree_guard_remediation_path_is_absolute_from_subdir
+
 # ===========================================================================
 # session-start-cwd-banner.sh — banner content per cwd
 # ===========================================================================
@@ -1224,6 +1248,25 @@ T_session_start_banner_detached_head_in_primary() {
   }
 }
 it "session-start-banner: detached HEAD in primary → 'detached HEAD' label, '--detach' remediation, no 'branch: HEAD'" T_session_start_banner_detached_head_in_primary
+
+T_session_start_banner_remediation_path_is_absolute_from_subdir() {
+  # Same regression as worktree-guard's subdir-anchored-path test:
+  # the SessionStart hook's PWD is whatever the operator launched `claude`
+  # from. If it's a subdir of primary, a bare relative `.claude/worktrees/...`
+  # in the remediation `cd`'s into a path that doesn't exist.
+  local out subdir
+  subdir="$SANDBOX/src/nested-banner"
+  mkdir -p "$subdir"
+  out=$(cd "$subdir" && bash "$SANDBOX/agent/hooks/session-start-cwd-banner.sh" </dev/null 2>&1; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0, got: $out"; return 1; }
+  [[ "$out" == *"PRIMARY CHECKOUT"* ]] || { echo "subdir cwd should still flag PRIMARY; got: $out"; return 1; }
+  echo "$out" | grep -qE "git worktree add --detach ${SANDBOX}/\\.claude/worktrees/" || {
+    echo "remediation must anchor at \$primary_root (${SANDBOX}); got: $out"
+    return 1
+  }
+  return 0
+}
+it "session-start-banner: remediation path anchored to primary_root (works from any subdir)" T_session_start_banner_remediation_path_is_absolute_from_subdir
 
 # ===========================================================================
 # Run
