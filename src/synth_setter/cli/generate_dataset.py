@@ -36,7 +36,6 @@ from synth_setter.pipeline.partitioning import (  # noqa: E402
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig  # noqa: E402
 from synth_setter.pipeline.schemas.spec import DatasetSpec, ShardSpec  # noqa: E402
 from synth_setter.pipeline.spec_io import (  # noqa: E402
-    read_spec_text,
     upload_spec,
     write_spec_locally,
 )
@@ -60,22 +59,6 @@ _CONFIG_DIR = _REPO_ROOT / "configs"
 # Worker-side checkout path — baked WORKDIR of the dev-snapshot image, not the
 # launcher's _REPO_ROOT (which may not exist on the worker filesystem).
 _WORKER_REPO_ROOT = "/home/build/synth-setter"
-
-
-def load_spec_from_uri(spec_uri: str) -> DatasetSpec:
-    """Load a DatasetSpec from a local path, ``file://`` URI, or ``r2://`` URI.
-
-    Dispatch is centralized in :func:`spec_io.read_spec_text`: bare paths and
-    ``file://`` URIs are read directly off the local filesystem; R2 URIs are
-    downloaded via rclone (which requires the standard ``RCLONE_CONFIG_R2_*``
-    env vars to be set in the caller's environment) into a tmpdir.
-
-    The R2-URI path exists because SkyPilot's RunPod backend rejects
-    programmatic ``task.update_file_mounts(...)`` with a public-key-overflow
-    error (see #749), so the launcher ships the spec via R2 instead of
-    file_mounts.
-    """
-    return DatasetSpec.model_validate_json(read_spec_text(spec_uri))
 
 
 # Bootstraps Xvfb + xsettingsd + dbus for VST3 plugin init; resolved relative

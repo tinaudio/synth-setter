@@ -34,6 +34,7 @@ from synth_setter.pipeline.schemas.spec import DatasetSpec
 
 __all__ = [
     "find_input_specs",
+    "load_spec_from_uri",
     "local_spec_path",
     "read_spec_text",
     "upload_spec",
@@ -80,6 +81,22 @@ def read_spec_text(spec_uri: str) -> str:  # noqa: DOC502
         f"unsupported spec_uri scheme {scheme!r}: {spec_uri!r}. "
         f"Supported: bare local paths, ``file://``, ``r2://``."
     )
+
+
+def load_spec_from_uri(spec_uri: str) -> DatasetSpec:  # noqa: DOC502
+    """Load a ``DatasetSpec`` from a local path, ``file://`` URI, or ``r2://`` URI.
+
+    Thin wrapper that composes :func:`read_spec_text` with
+    :meth:`DatasetSpec.model_validate_json` so callers don't have to pull in
+    the cli runner (and its Hydra/rootutils bootstrap) just to parse a spec.
+
+    :param spec_uri: Local filesystem path, ``file://`` URI, or ``r2://`` URI.
+    :returns: The parsed spec.
+    :raises ValueError: ``spec_uri`` carries an unsupported scheme (propagated
+        from :func:`read_spec_text`); also the base class of
+        ``pydantic.ValidationError`` for malformed/stale spec JSON.
+    """
+    return DatasetSpec.model_validate_json(read_spec_text(spec_uri))
 
 
 def local_spec_path(spec: DatasetSpec, output_dir: Path) -> Path:

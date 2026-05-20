@@ -172,7 +172,7 @@ class TestLoadSpecFromUri:
         :param spec: Fixture-provided ``DatasetSpec``.
         :param tmp_path: Pytest tmp dir for the local spec JSON.
         """
-        from synth_setter.cli.generate_dataset import load_spec_from_uri
+        from synth_setter.pipeline.spec_io import load_spec_from_uri
 
         spec_path = tmp_path / "spec.json"
         spec_path.write_text(spec.model_dump_json())
@@ -187,7 +187,7 @@ class TestLoadSpecFromUri:
         :param spec: Fixture-provided ``DatasetSpec``.
         :param tmp_path: Pytest tmp dir for the local spec JSON.
         """
-        from synth_setter.cli.generate_dataset import load_spec_from_uri
+        from synth_setter.pipeline.spec_io import load_spec_from_uri
 
         spec_path = tmp_path / "spec.json"
         spec_path.write_text(spec.model_dump_json())
