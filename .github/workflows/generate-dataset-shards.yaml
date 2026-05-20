@@ -166,12 +166,23 @@ jobs:
       # `render.gui_toggle_cadence=always_on; rm -rf /` would be interpreted as
       # shell syntax on the worker. Validating at the entry point fails both
       # provider branches before the unquoted expansion can run.
+      #
+      # Bash `[[ ... =~ ... ]]` is whole-input by default (no `m` modifier), so a
+      # payload like `key=v$'\n'; rm -rf /` can't bypass via a passing first line
+      # the way a line-oriented `grep -Eq` would. The explicit newline/CR guard
+      # rejects multi-line input before regex matching so the error message points
+      # at the right failure mode.
       - name: Validate hydra_overrides
         env:
           INPUT_HYDRA_OVERRIDES: ${{ inputs.hydra_overrides }}
         run: |
           set -euo pipefail
-          if ! printf '%s\n' "$INPUT_HYDRA_OVERRIDES" | grep -Eq '^[A-Za-z0-9._=,/-]*( [A-Za-z0-9._=,/-]+)*$'; then
+          REGEX='^[A-Za-z0-9._=,/-]*( [A-Za-z0-9._=,/-]+)*$'
+          if [[ "$INPUT_HYDRA_OVERRIDES" == *$'\n'* || "$INPUT_HYDRA_OVERRIDES" == *$'\r'* ]]; then
+            echo "::error::hydra_overrides contains newline/carriage-return; only single-line input is accepted."
+            exit 1
+          fi
+          if ! [[ "$INPUT_HYDRA_OVERRIDES" =~ $REGEX ]]; then
             echo "::error::hydra_overrides contains disallowed characters; only [A-Za-z0-9._=,/-] tokens separated by single spaces are allowed. See workflow header for the validation regex."
             exit 1
           fi
