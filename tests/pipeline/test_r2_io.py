@@ -185,13 +185,15 @@ class TestIsR2Reachable:
     def test_returns_true_when_rclone_lsd_exits_zero(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Happy path: rclone is on PATH and the ``lsd`` probe exits 0.
+        """Happy path: rclone on PATH, env keys present, probe exits 0.
 
-        :param monkeypatch: Pytest fixture used to stub ``shutil.which`` + ``subprocess.run``.
+        :param monkeypatch: Pytest fixture used to stub PATH + env + ``subprocess.run``.
         """
         monkeypatch.setattr(
             "synth_setter.pipeline.r2_io.shutil.which", lambda name: f"/usr/bin/{name}"
         )
+        for key in r2_io._SECRET_R2_ENV_KEYS:  # noqa: SLF001 — test asserts contract
+            monkeypatch.setenv(key, "stub")
 
         class _OK:
             returncode = 0
@@ -204,13 +206,15 @@ class TestIsR2Reachable:
     def test_returns_false_when_rclone_lsd_exits_non_zero(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Auth failure: rclone is on PATH but the probe exits non-zero.
+        """Auth failure: rclone + env keys present but the probe exits non-zero.
 
-        :param monkeypatch: Pytest fixture used to stub ``shutil.which`` + ``subprocess.run``.
+        :param monkeypatch: Pytest fixture used to stub PATH + env + ``subprocess.run``.
         """
         monkeypatch.setattr(
             "synth_setter.pipeline.r2_io.shutil.which", lambda name: f"/usr/bin/{name}"
         )
+        for key in r2_io._SECRET_R2_ENV_KEYS:  # noqa: SLF001 — test asserts contract
+            monkeypatch.setenv(key, "stub")
 
         def fake_run(*args: object, **kwargs: object) -> object:
             del args, kwargs
@@ -226,6 +230,29 @@ class TestIsR2Reachable:
         """
         monkeypatch.setattr("synth_setter.pipeline.r2_io.shutil.which", lambda _name: None)
         # subprocess.run must never be called — short-circuit on PATH miss.
+        monkeypatch.setattr(
+            "synth_setter.pipeline.r2_io.subprocess.run",
+            lambda *a, **kw: pytest.fail("subprocess.run should not be reached"),
+        )
+        assert r2_io.is_r2_reachable() is False
+
+    def test_returns_false_when_secret_env_keys_missing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Rclone-on-PATH + working local config but no env keys → skip, not hard-fail later.
+
+        Mirrors the contract of ``ensure_r2_env_loaded`` so a test that
+        gates on ``is_r2_reachable`` doesn't pass the gate and then crash
+        on ``RuntimeError`` from the env-key check downstream.
+
+        :param monkeypatch: Pytest fixture used to clear env + stub the probe.
+        """
+        monkeypatch.setattr(
+            "synth_setter.pipeline.r2_io.shutil.which", lambda name: f"/usr/bin/{name}"
+        )
+        for key in r2_io._SECRET_R2_ENV_KEYS:  # noqa: SLF001 — test asserts contract
+            monkeypatch.delenv(key, raising=False)
+        # subprocess.run must never be called — short-circuit on missing env.
         monkeypatch.setattr(
             "synth_setter.pipeline.r2_io.subprocess.run",
             lambda *a, **kw: pytest.fail("subprocess.run should not be reached"),

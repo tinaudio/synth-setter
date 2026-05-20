@@ -64,14 +64,26 @@ def finalize_wds(spec: DatasetSpec, work_dir: Path) -> None:
     """Stream stats over the train shards and upload ``stats.npz``.
 
     Per-shard tar files stay in their original R2 location; only the
-    derived ``stats.npz`` is materialized. Brace patterns for each split
-    are available via
-    ``spec.r2.split_wds_brace_uri(spec.split_shard_ranges[split])``.
+    derived ``stats.npz`` is materialized. Brace patterns for non-empty
+    splits are available via
+    ``spec.r2.split_wds_brace_uri(spec.split_shard_ranges[split])``;
+    callers must check ``lo < hi`` first because empty splits raise
+    ``ValueError`` at that helper.
 
     :param spec: Validated dataset spec (``output_format == "wds"``).
     :param work_dir: Scratch directory; one shard at a time + the final
         ``stats.npz`` live here transiently.
+    :raises ValueError: The train split is empty
+        (``spec.split_shard_ranges["train"]`` has ``lo >= hi``); stats
+        cannot be computed without at least one train shard.
     """
+    train_lo, train_hi = spec.split_shard_ranges["train"]
+    if train_lo >= train_hi:
+        raise ValueError(
+            f"train split is empty (split_shard_ranges['train']="
+            f"{spec.split_shard_ranges['train']!r}); cannot compute stats "
+            f"without at least one train shard."
+        )
     mean, std = stream_stats_wds(_download_train_shards_one_at_a_time(spec, work_dir))
     stats_npz = work_dir / STATS_NPZ_FILENAME
     np.savez(stats_npz, mean=mean, std=std)

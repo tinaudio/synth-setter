@@ -117,21 +117,22 @@ def ensure_r2_env_loaded(env_file: Path | None = None) -> None:
 
 
 def is_r2_reachable() -> bool:
-    """Return ``True`` iff ``rclone`` is on PATH and ``rclone lsd r2:`` exits 0.
+    """Return ``True`` iff every :func:`ensure_r2_env_loaded` precondition holds.
 
-    Tests gate ``@pytest.mark.integration_r2`` cases on this helper so a
-    contributor's bare clone (no creds), a fork PR (no secrets), or a
-    network-out failure auto-skips rather than failing on the first real
-    rclone call. Mirrors the ``rclone lsd r2:`` auth-ping in
-    :func:`ensure_r2_env_loaded` but swallows the failure into a boolean
-    instead of raising.
+    Tests gate ``@pytest.mark.integration_r2`` cases on this helper. The
+    predicate has to match :func:`ensure_r2_env_loaded`'s contract — if it
+    returns ``True`` only because a user's local rclone config makes
+    ``rclone lsd r2:`` succeed while the secret env keys are unset, the
+    test then calls :func:`ensure_r2_env_loaded` and hits a hard
+    ``RuntimeError`` instead of the intended auto-skip.
 
-    :returns: ``True`` when rclone binary resolves AND a credentialled
-        ``lsd`` of ``r2:`` exits 0; ``False`` otherwise (binary missing,
-        bad/missing creds, network down, etc.).
+    :returns: ``True`` when rclone is on PATH AND all three
+        ``_SECRET_R2_ENV_KEYS`` are present in ``os.environ`` AND a
+        credentialled ``rclone lsd r2:`` exits 0; ``False`` otherwise.
     """
-
     if shutil.which("rclone") is None:
+        return False
+    if not all(key in os.environ for key in _SECRET_R2_ENV_KEYS):
         return False
     try:
         subprocess.run(  # noqa: S603 — args are literal strings

@@ -198,6 +198,29 @@ def test_finalize_wds_downloads_every_train_shard_uri(
     assert uploaded[0][1] == spec.r2.stats_uri()
 
 
+def test_finalize_wds_raises_on_empty_train_split(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An empty train split surfaces as a clear ValueError, not a misleading FileNotFoundError.
+
+    :param monkeypatch: Pytest fixture used to install download/upload stubs.
+    :param tmp_path: Pytest tmp dir used as the in-process scratch work_dir.
+    """
+    # download/upload must never be called — the empty-train guard short-circuits.
+    monkeypatch.setattr(
+        "synth_setter.pipeline.r2_io.download_to_path",
+        lambda *a, **kw: pytest.fail("download_to_path should not be reached"),
+    )
+    monkeypatch.setattr(
+        "synth_setter.pipeline.r2_io.upload",
+        lambda *a, **kw: pytest.fail("upload should not be reached"),
+    )
+
+    spec = _build_wds_smoke_spec(task_name="empty-train", train_val_test_sizes=(0, 4, 0))
+    with pytest.raises(ValueError, match="train split is empty"):
+        finalize_dataset.finalize_wds(spec, tmp_path)
+
+
 def test_finalize_wds_unlinks_each_shard_after_folding(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
