@@ -9,6 +9,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType
 
+import h5py
 import numpy as np
 import pytest
 
@@ -837,3 +838,118 @@ def test_cli_help_advertises_mask_degenerate_bins_flag(
     assert exc_info.value.code == 0
     captured = capsys.readouterr()
     assert "--mask-degenerate-bins" in captured.out
+
+
+def _write_tiny_mel_h5(path: Path, rows: int = 4, seed: int = 0) -> None:
+    """Write a small HDF5 file with a ``mel_spec`` dataset.
+
+    :param path: Filesystem path where the ``.h5`` file is written.
+    :param rows: Leading-axis length; must be >=2 so Welford variance is
+        non-degenerate.
+    :param seed: PRNG seed so the same call writes the same payload across
+        repeated invocations in one process.
+    """
+    rng = np.random.default_rng(seed)
+    payload = rng.normal(size=(rows, 2, 4, 5)).astype(np.float32)
+    with h5py.File(path, "w") as f:
+        f.create_dataset("mel_spec", data=payload)
+
+
+def test_get_stats_hdf5_closes_dask_client_and_h5_file(
+    stats_script: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``get_stats_hdf5`` releases its Dask client and h5py file handle on return.
+
+    The PR's stated motivation is leak prevention in the in-process CLI:
+    the new ``with`` blocks around ``Client(...)`` and ``h5py.File(...)``
+    must teardown both resources before control returns. A regression
+    that re-introduces a bare ``Client(...)`` (no ``with``) would leave
+    ``status == "running"`` and a worker scheduler bound to a TCP port,
+    eventually preventing a second call.
+
+    :param stats_script: Imported stats module (fixture).
+    :param tmp_path: Pytest tmp dir; hosts the seeded ``train.h5``.
+    :param monkeypatch: Pytest fixture used to swap the module-level
+        ``Client`` symbol for a spy subclass that records the instance.
+    """
+    from typing import Any
+
+    from dask.distributed import Client as _Client
+
+    instances: list[_Client] = []
+
+    class _SpyClient(_Client):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            instances.append(self)
+
+    monkeypatch.setattr(stats_script, "Client", _SpyClient)
+    train_h5 = tmp_path / "train.h5"
+    _write_tiny_mel_h5(train_h5)
+
+    stats_script.get_stats_hdf5(str(train_h5))
+
+    assert len(instances) == 1
+    assert instances[0].status == "closed"
+    # Reopening the h5 must succeed — proves the file handle owned by
+    # ``get_stats_hdf5`` released its lock before returning.
+    with h5py.File(train_h5, "r") as reopened:
+        assert reopened.id.valid
+
+
+def test_get_stats_hdf5_writes_sibling_stats_npz_with_mean_std_keys(
+    stats_script: ModuleType, tmp_path: Path
+) -> None:
+    """``get_stats_hdf5(path)`` writes ``stats.npz`` sibling to ``path``.
+
+    ``finalize_hdf5`` asserts ``stats_npz.is_file()`` after the call, but
+    every test of finalize stubs ``get_stats_hdf5``. Pin the real
+    output-path derivation (``SurgeXTDataset.get_stats_file_path``) and
+    the on-disk schema (``mean`` + ``std`` keyed arrays in the input
+    dtype) directly against the real function.
+
+    :param stats_script: Imported stats module (fixture).
+    :param tmp_path: Pytest tmp dir; hosts the seeded ``train.h5``.
+    """
+    train_h5 = tmp_path / "train.h5"
+    _write_tiny_mel_h5(train_h5)
+
+    stats_script.get_stats_hdf5(str(train_h5))
+
+    stats_npz = tmp_path / "stats.npz"
+    assert stats_npz.is_file()
+    with np.load(stats_npz) as loaded:
+        assert set(loaded.files) == {"mean", "std"}
+        # Input dtype is float32; stats must preserve it (a float64 std
+        # would silently double on-disk size and downstream cast cost).
+        assert loaded["mean"].dtype == np.float32
+        assert loaded["std"].dtype == np.float32
+        # Trailing shape matches the per-sample inner of the mel dataset.
+        assert loaded["mean"].shape == (2, 4, 5)
+        assert loaded["std"].shape == (2, 4, 5)
+
+
+def test_get_stats_hdf5_callable_twice_in_same_process(
+    stats_script: ModuleType, tmp_path: Path
+) -> None:
+    """Two back-to-back calls succeed; no leaked Client port, no stale h5py handle.
+
+    ``finalize_dataset.main()`` invokes ``get_stats_hdf5`` once per run,
+    but multiple runs in the same process (CI matrix shards, an operator
+    REPL) must not regress. Without the ``with`` blocks the second call
+    would hit a port-in-use ``OSError`` from the scheduler or open the
+    h5 file on top of an unreleased handle.
+
+    :param stats_script: Imported stats module (fixture).
+    :param tmp_path: Pytest tmp dir; hosts two seeded train shards.
+    """
+    # Same path for both calls: a stale h5py handle would prevent the
+    # second open; a leaked dask client would collide on its scheduler
+    # port. Either failure mode surfaces as an exception below.
+    train_h5 = tmp_path / "train.h5"
+    _write_tiny_mel_h5(train_h5, seed=1)
+
+    stats_script.get_stats_hdf5(str(train_h5))
+    stats_script.get_stats_hdf5(str(train_h5))
+
+    assert (tmp_path / "stats.npz").is_file()

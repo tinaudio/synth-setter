@@ -378,6 +378,256 @@ def test_finalize_hdf5_real_shards_end_to_end(
         assert set(st.files) == {"mean", "std"}
 
 
+def _stub_get_stats_hdf5(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub ``finalize_dataset.get_stats_hdf5`` to write a sentinel ``stats.npz``.
+
+    Real Dask startup dominates runtime; tests that drive ``finalize_hdf5``
+    end-to-end use this stub so the subsequent ``r2_io.upload`` step still
+    runs against a real on-disk file produced sibling to ``train.h5``.
+
+    :param monkeypatch: Pytest fixture used to install the stub.
+    """
+    monkeypatch.setattr(
+        "synth_setter.cli.finalize_dataset.get_stats_hdf5",
+        lambda train_h5_path: np.savez(
+            Path(train_h5_path).parent / "stats.npz",
+            mean=np.zeros((2, 8, 8), dtype=np.float32),
+            std=np.ones((2, 8, 8), dtype=np.float32),
+        ),
+    )
+
+
+def test_finalize_hdf5_only_uploads_splits_that_reshard_wrote(
+    fake_r2_remote: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Spec with empty val+test splits: only ``train.h5`` + ``stats.npz`` land in R2.
+
+    Reshard prunes ``val.h5``/``test.h5`` when their shard ranges are
+    empty (``[lo, lo)``). Finalize's ``if split_h5.exists()`` guard must
+    keep the val/test uploads from firing; a regression that removed the
+    guard would either crash with FileNotFoundError on the missing local
+    file or silently upload a stale artifact from a previous run.
+
+    :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+    :param tmp_path: Pytest tmp dir; hosts the finalize scratch work_dir.
+    :param monkeypatch: Pytest fixture used to stub the slow Dask stats compute.
+    """
+    spec = _build_hdf5_smoke_spec(task_name="train-only-splits", train_val_test_sizes=(8, 0, 0))
+    shard_remote_dir = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
+    _seed_shard_files(shard_remote_dir, spec)
+    _stub_get_stats_hdf5(monkeypatch)
+
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    finalize_dataset.finalize_hdf5(spec, work_dir)
+
+    landed_root = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
+    assert (landed_root / "train.h5").is_file()
+    assert (landed_root / "stats.npz").is_file()
+    # No val/test artifacts were ever uploaded — reshard never wrote them
+    # and finalize's existence guard skipped the upload call.
+    assert not (landed_root / "val.h5").exists()
+    assert not (landed_root / "test.h5").exists()
+
+
+def test_finalize_hdf5_propagates_split_upload_failure_before_stats_upload(
+    fake_r2_remote: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Mid-loop split-upload failure: neither ``stats.npz`` nor ``dataset.complete`` lands.
+
+    The "never leave a marker without artifacts" invariant from
+    ``pipeline/CLAUDE.md`` must hold for every failure stage, not just
+    the stats stage. Wraps ``r2_io.upload`` to raise on the first
+    ``.h5`` split upload so reshard ran (its train.h5 exists locally)
+    but transport failed mid-flight.
+
+    :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+    :param tmp_path: Pytest tmp dir; hosts the finalize scratch work_dir.
+    :param monkeypatch: Pytest fixture used to wrap ``r2_io.upload`` with
+        a failing wrapper. Interaction-based by necessity — failure
+        injection at the transport layer has no state-based alternative.
+    """
+    spec = _build_hdf5_smoke_spec(task_name="split-upload-fails")
+    shard_remote_dir = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
+    _seed_shard_files(shard_remote_dir, spec)
+    _stub_get_stats_hdf5(monkeypatch)
+
+    def fail_on_split_upload(source: str | Path, destination_uri: str) -> None:
+        del source
+        if destination_uri.endswith(".h5"):
+            raise RuntimeError(f"simulated split upload failure for {destination_uri}")
+        pytest.fail(f"upload to {destination_uri} should not be reached after split failure")
+
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.upload", fail_on_split_upload)
+
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    with pytest.raises(RuntimeError, match="simulated split upload failure"):
+        finalize_dataset.finalize_hdf5(spec, work_dir)
+
+    landed_root = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
+    assert not (landed_root / "stats.npz").exists()
+    assert not (landed_root / "dataset.complete").exists()
+
+
+def test_finalize_hdf5_writes_input_spec_json_sibling_to_shards(
+    fake_r2_remote: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``input_spec.json`` lands in ``work_dir`` before ``reshard_dataset`` is invoked.
+
+    Reshard's default spec-discovery looks for ``<dataset_root>/input_spec.json``
+    when no ``--spec`` override is passed; finalize relies on this default
+    path. Pinning the write order here gives a finalize-side test instead
+    of a low-signal ``FileNotFoundError`` surfacing from reshard.
+
+    :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+    :param tmp_path: Pytest tmp dir; hosts the finalize scratch work_dir.
+    :param monkeypatch: Pytest fixture used to wrap ``reshard_dataset`` and
+        capture the work_dir contents at invocation time.
+    """
+    spec = _build_hdf5_smoke_spec(task_name="input-spec-sibling")
+    shard_remote_dir = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
+    _seed_shard_files(shard_remote_dir, spec)
+    _stub_get_stats_hdf5(monkeypatch)
+
+    captured_files: list[str] = []
+    real_reshard = finalize_dataset.reshard_dataset
+
+    def capturing_reshard(dataset_root: Path, *args: object, **kwargs: object) -> None:
+        captured_files.extend(sorted(p.name for p in Path(dataset_root).iterdir()))
+        real_reshard(dataset_root, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("synth_setter.cli.finalize_dataset.reshard_dataset", capturing_reshard)
+
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    finalize_dataset.finalize_hdf5(spec, work_dir)
+
+    # ``input_spec.json`` was sibling to every downloaded shard before
+    # reshard ran — reshard's default spec lookup will succeed without
+    # any ``--spec`` flag.
+    assert "input_spec.json" in captured_files
+    for shard in spec.shards:
+        assert shard.filename in captured_files
+
+
+def test_finalize_hdf5_rejects_structurally_invalid_shard(
+    fake_r2_remote: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A malformed downloaded shard surfaces an ``OSError`` from reshard, no upload runs.
+
+    Pins ``pipeline/CLAUDE.md``'s delegation contract: finalize hands
+    structural validation to reshard, which opens every shard via
+    ``h5py.File`` while staging splits. A garbage-payload shard makes
+    that open raise ``OSError("file signature not found")`` — finalize
+    propagates the raise instead of writing partial artifacts to R2.
+    The h5py error itself does not embed the offending shard's name;
+    enriching that message lives in a follow-up.
+
+    :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+    :param tmp_path: Pytest tmp dir; hosts the finalize scratch work_dir.
+    :param monkeypatch: Pytest fixture used to stub the slow Dask stats compute
+        (defensively, in case reshard is ever changed to fail later).
+    """
+    spec = _build_hdf5_smoke_spec(task_name="invalid-shard-reject")
+    shard_remote_dir = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
+    _seed_shard_files(shard_remote_dir, spec)
+    # Garbage bytes at the first shard URI — reshard's h5py.File open refuses to read it.
+    corrupted = spec.shards[0].filename
+    (shard_remote_dir / corrupted).write_bytes(b"not an HDF5 file\n")
+    _stub_get_stats_hdf5(monkeypatch)
+
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    with pytest.raises(OSError, match="file signature not found"):
+        finalize_dataset.finalize_hdf5(spec, work_dir)
+
+    # No split or stats artifact landed at the remote — the per-shard
+    # open ran before any upload, so the failure is total.
+    landed_root = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
+    assert not (landed_root / "train.h5").exists()
+    assert not (landed_root / "stats.npz").exists()
+
+
+def test_finalize_hdf5_temp_work_dir_is_torn_down_on_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``main()``'s ``TemporaryDirectory`` is removed even when ``finalize_hdf5`` raises.
+
+    A multi-GB download leak on every retry of a failing prefix is the
+    bug this pins. ``tempfile.TemporaryDirectory`` removes its dir on
+    context exit regardless of exception path; pin that the wrapping
+    in ``main()`` preserves this guarantee.
+
+    :param tmp_path: Pytest tmp dir; hosts a fake R2 stand-in for downloads.
+    :param monkeypatch: Pytest fixture used to patch the transport surface
+        and force ``finalize_hdf5`` to raise inside the tempdir scope.
+    """
+    captured_work_dir: dict[str, Path] = {}
+    r2_stand_in = tmp_path / "r2"
+
+    def boom_finalize_hdf5(spec: object, work_dir: Path) -> None:
+        del spec
+        # Capture the live tempdir path before the raise so the post-call
+        # assertion can prove ``TemporaryDirectory`` cleanup ran.
+        captured_work_dir["path"] = Path(work_dir)
+        raise RuntimeError("simulated finalize failure")
+
+    monkeypatch.setattr("synth_setter.cli.finalize_dataset.finalize_hdf5", boom_finalize_hdf5)
+    monkeypatch.setattr(
+        "synth_setter.pipeline.r2_io.download_to_path",
+        lambda r2_uri, dst: shutil.copy(r2_stand_in / Path(r2_uri).name, Path(dst)),
+    )
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.upload", lambda src, dst: None)
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.ensure_r2_env_loaded", lambda *a, **k: None)
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda uri: None)
+    monkeypatch.setattr("synth_setter.pipeline.schemas.spec._get_git_sha", lambda: "a" * 40)
+    monkeypatch.setattr("synth_setter.pipeline.schemas.spec._is_repo_dirty", lambda: False)
+    monkeypatch.setattr("synth_setter.pipeline.schemas.spec._utc_now", lambda: _FIXED_NOW)
+    monkeypatch.setattr(sys, "argv", ["finalize", "experiment=generate_dataset/smoke-shard"])
+
+    with pytest.raises(RuntimeError, match="simulated finalize failure"):
+        finalize_dataset.main()
+
+    assert "path" in captured_work_dir
+    assert not captured_work_dir["path"].exists()
+
+
+def test_finalize_hdf5_marker_idempotency_short_circuits_before_download(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Hdf5 dispatch: ``main()`` returns without one download when the marker exists.
+
+    ``test_main_is_idempotent_when_marker_already_exists`` covers the wds
+    branch; this test pins the hdf5-branch path so a regression that
+    moved the marker check *inside* the format branch (instead of
+    before ``tempfile.TemporaryDirectory()``) would be caught.
+
+    :param tmp_path: Pytest tmp dir; not used for material state but
+        required for fixture symmetry with the other hdf5 tests.
+    :param monkeypatch: Pytest fixture used to force ``object_size`` to
+        return a present marker and to fail-fast on any download.
+    """
+    del tmp_path
+    monkeypatch.setattr(
+        "synth_setter.pipeline.r2_io.download_to_path",
+        lambda *a, **kw: pytest.fail("download_to_path should not be reached"),
+    )
+    monkeypatch.setattr(
+        "synth_setter.pipeline.r2_io.upload",
+        lambda *a, **kw: pytest.fail("upload should not be reached"),
+    )
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.ensure_r2_env_loaded", lambda *a, **k: None)
+    # Non-None ``object_size`` means the marker already exists at the run prefix.
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda uri: 0)
+    monkeypatch.setattr("synth_setter.pipeline.schemas.spec._get_git_sha", lambda: "a" * 40)
+    monkeypatch.setattr("synth_setter.pipeline.schemas.spec._is_repo_dirty", lambda: False)
+    monkeypatch.setattr("synth_setter.pipeline.schemas.spec._utc_now", lambda: _FIXED_NOW)
+    monkeypatch.setattr(sys, "argv", ["finalize", "experiment=generate_dataset/smoke-shard"])
+
+    finalize_dataset.main()
+
+
 def test_main_hdf5_branch_uploads_marker_last(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
