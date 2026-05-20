@@ -62,11 +62,11 @@ jobs:
         with:
           python-version: "3.10"
 
-      # The install below is inline (`pip install --no-deps -e .` + two pinned
+      # The install below is inline (`pip install --no-deps -e .` + two extra
       # packages), so setup-python's `cache: 'pip'` (requirements-file driven)
       # doesn't apply. Cache the pip download dir keyed on this workflow's hash
       # so a touch-free re-run hits the cache for the pydantic / python-dotenv
-      # wheels (~2-4s win). PR #1164 (C3).
+      # wheels (~2-4s win).
       - name: Cache pip downloads
         uses: actions/cache@v4
         with:

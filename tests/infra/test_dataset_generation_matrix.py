@@ -91,13 +91,14 @@ def test_setup_emits_output_formats_with_both_rows(workflow: dict) -> None:
     )
 
 
-def test_setup_compose_step_branches_on_event_name(workflow: dict) -> None:
+def test_setup_matrix_step_branches_on_event_name(workflow: dict) -> None:
     """Assert `setup.matrix` sets `output_formats` in all three event-name branches.
 
     The bash logic in `setup.matrix` has three branches that each must assign
     `output_formats`:
 
-    1. ``providers == '[]'`` (unsupported event) → ``output_formats='[]'``.
+    1. ``providers == '[]'`` (unsupported event or unknown ``SCHEDULE_CRON``)
+       → ``output_formats='[]'``.
     2. ``schedule`` (hourly or weekly cron) → both rows:
        ``output_formats='["hdf5","wds"]'``.
     3. ``workflow_dispatch`` → collapse to the single format the dispatched
@@ -122,7 +123,7 @@ def test_setup_compose_step_branches_on_event_name(workflow: dict) -> None:
         "setup.matrix is missing the schedule branch that emits both hdf5 and wds "
         "rows — without it, scheduled CI would never exercise the wds matrix cell."
     )
-    assert "DATASET_CONFIG" in run_script and "compose" in run_script, (
+    assert "DISPATCH_DATASET_CONFIG" in run_script and "compose" in run_script, (
         "setup.matrix is missing the workflow_dispatch fallback that composes the "
         "dispatched experiment with Hydra to resolve a single output_format — "
         "without it, dispatch runs would fall through to an unset output_formats."

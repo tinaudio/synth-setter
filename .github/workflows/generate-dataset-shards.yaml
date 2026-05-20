@@ -294,7 +294,6 @@ jobs:
       # `_ensure_ci_sky_config()` (in src/synth_setter/pipeline/skypilot_launch.py),
       # which writes the managed-jobs controller-resource shrink to
       # ~/.sky/config.yaml so the controller pod fits on a GHA-kind cluster.
-      # The workflow-side shrink step moved into the package per PR #1164.
       #
       # `skypilot_launch.local=true` flips the launcher's local-vs-remote dispatch
       # (#841); the skypilot-local caller sets it to clear any inherited

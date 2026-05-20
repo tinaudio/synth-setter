@@ -266,12 +266,7 @@ class TestResolveWorkerEnvR2RemoteConstants:
 
 
 class TestEnsureCiSkyConfig:
-    """``_ensure_ci_sky_config`` writes the managed-jobs shrink only when CI mode is on.
-
-    Replaces the per-run YAML write previously done by
-    ``generate-dataset-shards.yaml``'s "Shrink managed-jobs controller resources
-    for kind" step (PR #1164).
-    """
+    """``_ensure_ci_sky_config`` writes the managed-jobs shrink only when CI mode is on."""
 
     def test_no_op_when_env_var_unset(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

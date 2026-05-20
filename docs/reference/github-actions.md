@@ -141,7 +141,7 @@ Or use the Actions tab UI.
 
 ### Concurrency
 
-`release` and `cpu-slow` use `cancel-in-progress: false`, so runs queue rather than cancel — back-to-back pushes to main produce sequential releases and slow-test runs. `test-dataset-generation` uses `cancel-in-progress: true` on a group keyed by `<workflow>-<ref>-<event.schedule or event_name>`, so hourly and weekly schedule ticks live in separate groups (an hourly tick won't cancel an in-flight weekly all-providers run) and each `workflow_dispatch` event gets its own group too. Other workflows that use `concurrency:` (`docs`, `r2-auth-probe`, `test-act`, `test-oci-image-bake`, `test-skypilot-local`, `test-vst-slow`) follow simpler `<ref>`-keyed patterns — check each file for specifics.
+`release` and `cpu-slow` use `cancel-in-progress: false`, so runs queue rather than cancel — back-to-back pushes to main produce sequential releases and slow-test runs. `test-dataset-generation` uses `cancel-in-progress: true` on a group keyed by `<workflow>-<ref>-<event.schedule or event_name>`, so hourly and weekly schedule ticks live in separate groups (an hourly tick won't cancel an in-flight weekly all-providers run) while all `workflow_dispatch` runs for a ref share one group (a re-dispatch cancels the in-flight prior one). Other workflows that use `concurrency:` (`docs`, `r2-auth-probe`, `test-act`, `test-oci-image-bake`, `test-skypilot-local`, `test-vst-slow`) follow simpler `<ref>`-keyed patterns — check each file for specifics.
 
 ### GPU runner torch pin
 
