@@ -337,9 +337,10 @@ def test_pre_pr_gate_allows_when_sentinel_at_head(
         check=True,
     ).stdout.strip()
     review = tmp_path / filename
+    padding = "padding\n" * 30
     review.write_text(
         f"# repo-review-full-no-comments — HEAD {head_sha}\n\n"
-        "## Summary\n\n0 BLOCK, 0 WARN.\nReviewed at: " + head_sha + "\n" + "padding\n" * 30
+        f"## Summary\n\n0 BLOCK, 0 WARN.\nReviewed at: {head_sha}\n{padding}"
     )
 
     result = _run_hook_command(

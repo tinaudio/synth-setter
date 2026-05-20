@@ -156,22 +156,41 @@ using this layout:
 For `<target>` in the header, use `PR #<N>` in PR mode or
 `branch <head_ref>` in local-branch mode.
 
-For `<next-step tip>` in the Summary section, use:
+For `<next-step tip>` in the Summary section, use (substitute
+`<REVIEW_PATH>` with the actual path computed above before printing — do
+not emit the literal placeholder):
 
 - PR mode: `Run /repo-review-full <N> to post these as inline review comments.`
-- Local-branch mode: `Open a PR with REVIEW_FULL=$REVIEW_PATH in the command. Then run /repo-review-full to post these as inline review comments if desired.`
+- Local-branch mode: `Open a PR with REVIEW_FULL=<REVIEW_PATH> in the command. Then run /repo-review-full to post these as inline review comments if desired.`
 
 Rules for the rendering:
 
 - Group inline findings by `path`, then list each finding as `**L<line>** — <body>`.
   Use the same `body` text you put into the JSON (`**[<short-tag>:<severity>]** <description>`).
+
 - Preserve the PR-health bullets from `review_body` verbatim — they are
   important for human reviewers and easy to lose if you re-summarize.
+
 - **PASS short form.** If the JSON has no findings AND no PR-health flags,
-  still write the sentinel file with at minimum the `# repo-review-full-no-comments — <target>`
-  header, a `PASS — no findings` line, and the `Reviewed at: <sha>` line —
-  ≥200 bytes so the gate's size guard does not false-trigger. Print the
-  same content to chat.
+  still write the sentinel file. The gate's size guard rejects files under
+  200 bytes, and the header + `PASS` line + `Reviewed at:` line are
+  ~130 bytes — pad with a one-line context summary so the total is ≥200
+  bytes. Use this exact template (substitute `<target>` and `<sha>`):
+
+  ```markdown
+  # repo-review-full-no-comments — <target>
+
+  PASS — no findings across all skills (code-health, comment-hygiene,
+  python-style, shell-style, synth-setter, tdd-impl, ml-test).
+
+  ## Summary
+
+  - 0 BLOCK, 0 WARN
+  - Reviewed at: <sha>
+  ```
+
+  Print the same content to chat.
+
 - The sentinel file is the gate's contract; the chat output is the human
   deliverable. Always produce both.
 

@@ -10,9 +10,8 @@ Both ``/repo-review-full-no-comments`` (when writing the rendered report) and
 ``REVIEW_FULL=<path>`` on ``gh pr create``) call into this module so the file
 name format has exactly one source of truth.
 
-The module is intentionally dependency-free (stdlib only) and exposes a small
-CLI so the bash gate can call ``python3 agent/_shared/review_sentinel.py
-parse <path>`` without needing the skill's Python environment available.
+Stdlib-only so the bash gate can ``python3 review_sentinel.py parse <path>``
+without project deps on PATH.
 """
 
 from __future__ import annotations
@@ -20,11 +19,14 @@ from __future__ import annotations
 import os
 import re
 import sys
+from collections.abc import Sequence
 
 REVIEW_DIR = ".agent-reviews"
 SKILL_PREFIX = "repo-review-full-no-comments"
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _FILENAME_RE = re.compile(rf"^{re.escape(SKILL_PREFIX)}\.([0-9a-f]{{40}})\.md$")
+_SUBCOMMANDS = frozenset({"make", "parse", "path"})
+_USAGE = f"usage: review_sentinel.py {{{' | '.join(sorted(_SUBCOMMANDS))} <arg>}}"
 
 
 def make_review_filename(sha: str) -> str:
@@ -42,9 +44,9 @@ def make_review_filename(sha: str) -> str:
 def parse_review_filename(filename: str) -> str | None:
     """Extract the SHA from a sentinel filename, or ``None`` if it doesn't match.
 
-    Accepts either a bare basename or a full path; non-basename components are
-    stripped before matching so callers don't have to remember which form to
-    pass.
+    Never raises; malformed input returns ``None``. Accepts either a bare
+    basename or a full path — non-basename components are stripped before
+    matching so callers don't have to remember which form to pass.
 
     :param filename: Basename or full path of a review file.
     :returns: The encoded 40-char SHA, or ``None`` if the basename does not
@@ -55,31 +57,31 @@ def parse_review_filename(filename: str) -> str | None:
     return match.group(1) if match else None
 
 
-def make_review_path(sha: str, base_dir: str = REVIEW_DIR) -> str:
+def make_review_path(sha: str, base_dir: str = REVIEW_DIR) -> str:  # noqa: DOC502
     """Return the canonical relative path for a sentinel review file.
 
     :param sha: Full 40-char lowercase-hex commit SHA.
     :param base_dir: Directory under which review files live; defaults to
         :data:`REVIEW_DIR`.
     :returns: Path of the form ``<base_dir>/repo-review-full-no-comments.<sha>.md``.
-
-    SHA validation is delegated to :func:`make_review_filename`, which raises
-    ``ValueError`` on an invalid SHA.
+    :raises ValueError: If ``sha`` is not a 40-char lowercase hex string
+        (delegated to :func:`make_review_filename`).
     """
-    return f"{base_dir}/{make_review_filename(sha)}"
+    return os.path.join(base_dir, make_review_filename(sha))
 
 
-def _main(argv: list[str]) -> int:
+def _main(argv: Sequence[str]) -> int:
     """Tiny CLI so the bash gate can parse/format filenames without Python imports.
 
     Subcommands: ``make <sha>`` prints the filename; ``parse <path>`` prints
-    the encoded SHA (or exits non-zero if the path is not a sentinel).
+    the encoded SHA (or exits 1 if the path is not a sentinel); ``path <sha>``
+    prints ``<REVIEW_DIR>/<filename>``.
 
     :param argv: Argument list, normally ``sys.argv``.
-    :returns: Process exit code.
+    :returns: Process exit code (0 success; 1 parse no-match; 2 usage/ValueError).
     """
-    if len(argv) < 3 or argv[1] not in {"make", "parse", "path"}:
-        sys.stderr.write("usage: review_sentinel.py {make <sha> | parse <path> | path <sha>}\n")
+    if len(argv) < 3 or argv[1] not in _SUBCOMMANDS:
+        sys.stderr.write(f"{_USAGE}\n")
         return 2
     command, arg = argv[1], argv[2]
     try:

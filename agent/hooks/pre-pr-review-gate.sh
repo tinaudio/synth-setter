@@ -17,6 +17,11 @@
 # shells out to it for parsing so the format has exactly one source of truth
 # (shared with the `/repo-review-full-no-comments` skill).
 #
+# Honor-system gate: an agent could fabricate a sentinel named after a real
+# recent SHA, but it must already know a valid recent SHA on this branch.
+# Filename-SHA + ancestry + first-parent lag are the floor; the gate does not
+# inspect file contents or mtime.
+#
 # CONTRACT — what the command line must carry
 #   REVIEW_FULL=<path>
 #     - <path> resolves to an existing file (relative to cwd) that is at least
@@ -26,14 +31,6 @@
 #       first-parent commits behind HEAD (default 2; override via env). The
 #       `--first-parent` mode means merging `main` into the branch counts as
 #       one commit, not the hundreds it brings in.
-#
-# The gate stays honor-system — a determined agent can still write a file
-# named after a real recent SHA — but the filename-encoded-SHA approach
-# raises the floor materially: an agent must know a valid recent SHA to
-# fabricate one, the freshness check is no longer mtime-based (so cross-
-# worktree / cross-clone timestamp games don't help), and we no longer
-# inspect file contents at all (Copilot's PR-#1175 finding about line-
-# anchored vs file-anchored grep is moot — there is no grep).
 #
 # INPUT (stdin)
 #   JSON with .tool_input.command — the Bash command the agent is about to run.
@@ -54,8 +51,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091  # _lib.sh resolved at runtime; not staged together
 source "${SCRIPT_DIR}/_lib.sh"
 
-SENTINEL_PY="${SCRIPT_DIR}/../_shared/review_sentinel.py"
-MIN_REVIEW_BYTES=200
+readonly SENTINEL_PY="${SCRIPT_DIR}/../_shared/review_sentinel.py"
+readonly MIN_REVIEW_BYTES=200
 REVIEW_MAX_LAG="${REVIEW_MAX_LAG:-2}"
 
 INPUT=$(cat)
@@ -68,16 +65,18 @@ if ! grep -qE '(^[[:space:]]*|[;|&`(][[:space:]]*)gh[[:space:]]+pr[[:space:]]+cr
 fi
 
 # shellcheck disable=SC2016  # intentional: no expansion wanted in the help block
-BLOCK_HELP='Run /repo-review-full-no-comments — it writes the rendered report to
+readonly BLOCK_HELP='Run /repo-review-full-no-comments — it writes the rendered report to
 .agent-reviews/repo-review-full-no-comments.<HEAD-sha>.md (filename owned by
 agent/_shared/review_sentinel.py). Then re-run with the path in the command
 — recommended as a trailing comment so other hooks still fire:
 
   gh pr create --title "..." --body "..."  # REVIEW_FULL=.agent-reviews/repo-review-full-no-comments.<sha>.md
 
-The encoded SHA must be an ancestor of HEAD and within REVIEW_MAX_LAG
+REVIEW_FULL=<value> runs to the next whitespace or shell metachar; do NOT
+quote the path inline (`REVIEW_FULL="..."` is parsed with the quote in the
+value). The encoded SHA must be an ancestor of HEAD and within REVIEW_MAX_LAG
 first-parent commits behind it (default 2; override via the REVIEW_MAX_LAG
-env var if you have a justified larger gap).'
+env var, must be a non-negative integer).'
 
 block() {
   local reason="$1"
@@ -86,8 +85,27 @@ block() {
   exit 2
 }
 
-# `grep` returns 1 on no match; under `pipefail` that would abort the script
-# before the empty-path branch runs, so trap the no-match case explicitly.
+if [[ ! "$REVIEW_MAX_LAG" =~ ^[0-9]+$ ]]; then
+  block "REVIEW_MAX_LAG must be a non-negative integer, got: ${REVIEW_MAX_LAG}"
+fi
+
+if [[ ! -f "$SENTINEL_PY" ]]; then
+  block "missing companion helper at ${SENTINEL_PY} (gate cannot parse sentinel filenames without it)"
+fi
+
+# Allow only one REVIEW_FULL= occurrence — multiple would silently pick the
+# first and an agent juggling two reviews could pass against the wrong one.
+# `|| true` traps grep's no-match exit-1; pipefail would otherwise abort the
+# script before the empty-path branch below can emit its own BLOCKED message.
+review_full_matches=$(grep -oE 'REVIEW_FULL=[^[:space:]#;|&`()<>"'"'"']+' <<<"$COMMAND" || true)
+review_full_count=$(printf '%s' "$review_full_matches" | grep -c . || true)
+if [[ "$review_full_count" -gt 1 ]]; then
+  block "multiple REVIEW_FULL= tokens in command (${review_full_count}); pick exactly one"
+fi
+
+# `grep` returns 1 on no match (under pipefail that aborts the script) and
+# `head -1`'s SIGPIPE on closing the pipe early would also surface — `|| true`
+# traps both so the empty-path branch below can emit a clean BLOCKED message.
 REVIEW_PATH=$(grep -oE 'REVIEW_FULL=[^[:space:]#;|&`()<>"'"'"']+' <<<"$COMMAND" | head -1 | cut -d= -f2- || true)
 
 if [[ -z "$REVIEW_PATH" ]]; then
@@ -97,14 +115,31 @@ if [[ ! -f "$REVIEW_PATH" ]]; then
   block "REVIEW_FULL path does not point at a file: $REVIEW_PATH"
 fi
 
-review_size=$(wc -c <"$REVIEW_PATH")
+# `stat -c %s` reads only inode metadata; cheap regardless of file size.
+review_size=$(stat -c %s "$REVIEW_PATH")
 if [[ "$review_size" -lt "$MIN_REVIEW_BYTES" ]]; then
   block "REVIEW_FULL file is suspiciously small (${review_size} < ${MIN_REVIEW_BYTES} bytes — likely a touch-bypass): $REVIEW_PATH"
 fi
 
-# Filename -> SHA via the shared Python helper (single source of truth).
-if ! review_sha=$(python3 "$SENTINEL_PY" parse "$REVIEW_PATH" 2>/dev/null); then
-  block "REVIEW_FULL filename does not match the sentinel pattern 'repo-review-full-no-comments.<40-char-sha>.md': $REVIEW_PATH"
+# Filename -> SHA via the shared Python helper (single source of truth). The
+# helper exits 1 when the basename doesn't match the sentinel pattern, exit 2
+# on usage error or ValueError — surface those separately so a missing
+# python3 / broken helper isn't misreported as "bad filename".
+helper_stderr=$(mktemp)
+trap 'rm -f "$helper_stderr"' EXIT
+if review_sha=$(python3 "$SENTINEL_PY" parse "$REVIEW_PATH" 2>"$helper_stderr"); then
+  :
+else
+  helper_rc=$?
+  helper_msg=$(cat "$helper_stderr")
+  case "$helper_rc" in
+    1)
+      block "REVIEW_FULL filename does not match the sentinel pattern 'repo-review-full-no-comments.<40-char-sha>.md': $REVIEW_PATH"
+      ;;
+    *)
+      block "internal helper error (exit ${helper_rc}) parsing ${REVIEW_PATH}: ${helper_msg:-no stderr captured}"
+      ;;
+  esac
 fi
 
 # Ancestry: a SHA on a sibling branch (or one rewritten by rebase/amend) is
@@ -113,8 +148,8 @@ if ! git merge-base --is-ancestor "$review_sha" HEAD 2>/dev/null; then
   block "review SHA ${review_sha} is not an ancestor of HEAD (rebase/amend rewrote history? run /repo-review-full-no-comments again)"
 fi
 
-# Lag in first-parent space: merging origin/main into the branch counts as
-# one commit, not the dozens it brings in. That's the behavior we want.
+# First-parent lag — merging origin/main counts as one commit, not the
+# dozens it brings in.
 lag=$(git rev-list "${review_sha}..HEAD" --first-parent --count 2>/dev/null || echo "")
 if [[ -z "$lag" ]]; then
   block "could not compute first-parent lag between review SHA ${review_sha} and HEAD"

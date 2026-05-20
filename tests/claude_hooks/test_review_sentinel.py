@@ -24,9 +24,11 @@ def _load_helper() -> ModuleType:
     """Import ``review_sentinel`` directly by path so the test doesn't need agent/ on sys.path.
 
     :returns: The imported module.
+    :raises RuntimeError: If the helper file can't be located by ``importlib``.
     """
     spec = importlib.util.spec_from_file_location("review_sentinel", _HELPER_PATH)
-    assert spec is not None and spec.loader is not None
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"could not locate {_HELPER_PATH} via importlib")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -34,9 +36,9 @@ def _load_helper() -> ModuleType:
 
 @pytest.fixture(scope="module")
 def helper() -> ModuleType:
-    """Load the helper module once per test module.
+    """Load ``review_sentinel`` once per module via path-based import.
 
-    :returns: The imported ``review_sentinel`` module.
+    :returns: The imported helper module.
     """
     return _load_helper()
 
@@ -78,7 +80,7 @@ def test_make_review_filename_rejects_invalid_sha(helper: ModuleType, bad_sha: s
     :param helper: The loaded helper module.
     :param bad_sha: Invalid SHA value (wrong length, uppercase, non-hex chars, etc.).
     """
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="expected 40-char lowercase hex SHA"):
         helper.make_review_filename(bad_sha)
 
 
@@ -108,6 +110,11 @@ def test_parse_review_filename_accepts_full_path(helper: ModuleType) -> None:
         "repo-review-full-no-comments.short.md",
         "repo-review-full-no-comments.txt",
         f"repo-review-full-no-comments.{'Z' * 40}.md",
+        f"repo-review-full-no-comments.{'A' * 40}.md",
+        # Mid-string uppercase hex char — pins per-char hex-only matching
+        # against an all-uppercase fixture that would survive a `re.IGNORECASE`
+        # regression by themselves.
+        f"repo-review-full-no-comments.{'a' * 20}A{'a' * 19}.md",
         f"repo-review-full.{'a' * 40}.md",
         f"repo-review-full-no-comments.{'a' * 40}",
         f"prefix-repo-review-full-no-comments.{'a' * 40}.md",
@@ -177,3 +184,57 @@ def test_cli_parse_exits_nonzero_on_bad_filename() -> None:
         check=False,
     )
     assert result.returncode != 0
+
+
+def test_cli_path_subcommand_emits_review_dir_filename() -> None:
+    """``path <sha>`` prints ``<REVIEW_DIR>/<filename>`` — the form SKILL.md uses."""
+    sha = "b" * 40
+    result = subprocess.run(  # noqa: S603
+        ["python3", str(_HELPER_PATH), "path", sha],  # noqa: S607
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout.strip() == f".agent-reviews/repo-review-full-no-comments.{sha}.md"
+
+
+@pytest.mark.parametrize(
+    "argv_tail",
+    [
+        [],
+        ["make"],
+        ["bogus", "x"],
+    ],
+)
+def test_cli_argv_validation_exits_2_with_usage(argv_tail: list[str]) -> None:
+    """Missing-arg / unknown-subcommand cases exit 2 and print ``usage:`` on stderr.
+
+    Pins behavior so a regression flipping ``< 3`` to ``<= 3`` or widening
+    the subcommand set silently can't survive.
+
+    :param argv_tail: Argv after the script path.
+    """
+    result = subprocess.run(  # noqa: S603
+        ["python3", str(_HELPER_PATH), *argv_tail],  # noqa: S607
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 2, (result.returncode, result.stdout, result.stderr)
+    assert "usage:" in result.stderr
+
+
+@pytest.mark.parametrize("subcommand", ["make", "path"])
+def test_cli_make_and_path_exit_2_on_bad_sha(subcommand: str) -> None:
+    """``make``/``path`` translate ValueError into exit 2 with the SHA message on stderr.
+
+    :param subcommand: Which CLI verb to exercise (both wrap ValueError the same way).
+    """
+    result = subprocess.run(  # noqa: S603
+        ["python3", str(_HELPER_PATH), subcommand, ""],  # noqa: S607
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 2, (result.returncode, result.stdout, result.stderr)
+    assert "expected 40-char lowercase hex SHA" in result.stderr

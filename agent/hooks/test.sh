@@ -39,8 +39,8 @@ git commit -q --allow-empty -m init
 # `INIT_SHA` lets reset_sandbox roll HEAD back between gate tests that create
 # commits to set up lag/ancestry scenarios. Exported so the subshell each test
 # runs in inherits it.
-export INIT_SHA
 INIT_SHA=$(git rev-parse HEAD)
+export INIT_SHA
 
 STUBS="$TEST_DIR/stubs"
 mkdir -p "$STUBS"
@@ -86,10 +86,13 @@ reset_sandbox() {
   # branches the previous test may have created (for first-parent tests).
   if [[ -n "${INIT_SHA:-}" ]]; then
     git reset --hard "$INIT_SHA" >/dev/null 2>&1 || true
-    # Drop any non-master/main branches that earlier tests created.
-    git for-each-ref --format='%(refname:short)' refs/heads \
-      | grep -vE '^(main|master)$' \
-      | xargs -r -I{} git branch -D {} >/dev/null 2>&1 || true
+    # Drop any non-master/main branches that earlier tests created. Avoid
+    # `xargs -r` (GNU extension; absent on macOS/BSD) — read line by line.
+    while IFS= read -r branch; do
+      [[ -n "$branch" ]] || continue
+      git branch -D "$branch" >/dev/null 2>&1 || true
+    done < <(git for-each-ref --format='%(refname:short)' refs/heads \
+      | grep -vE '^(main|master)$' || true)
   fi
 }
 
@@ -396,6 +399,37 @@ T_gate_small_file_blocks() {
 }
 it "pre-pr-review-gate: REVIEW_FULL=<sentinel-named but <200B> → exit 2 (touch-bypass guard)" T_gate_small_file_blocks
 
+T_gate_size_boundary_199_blocks() {
+  # Exactly one byte below the 200-byte guard — must block.
+  local out stderr_file path head_sha actual_size
+  stderr_file="$TEST_DIR/gate_stderr.txt"
+  head_sha=$(git rev-parse HEAD)
+  path=$(gate_sentinel_path "$head_sha")
+  mkdir -p "$(dirname "$path")"
+  printf 'x%.0s' {1..199} > "$path"
+  actual_size=$(stat -c %s "$path")
+  [[ "$actual_size" == "199" ]] || { echo "fixture size wrong: $actual_size"; return 1; }
+  out=$(echo "{\"tool_input\":{\"command\":\"gh pr create --title x --body y  # REVIEW_FULL=$path\"}}" | bash agent/hooks/pre-pr-review-gate.sh 2>"$stderr_file"; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:2" ]] || { echo "expected EXIT:2 at 199B, got: $out"; return 1; }
+  grep -q "suspiciously small" "$stderr_file" || { echo "stderr should mention size guard: $(cat "$stderr_file")"; return 1; }
+}
+it "pre-pr-review-gate: REVIEW_FULL file at exactly 199 bytes → exit 2 (lower bound)" T_gate_size_boundary_199_blocks
+
+T_gate_size_boundary_200_passes() {
+  # Exactly at the 200-byte floor — must pass the size guard (lag=0 since
+  # the sentinel encodes HEAD).
+  local out path head_sha actual_size
+  head_sha=$(git rev-parse HEAD)
+  path=$(gate_sentinel_path "$head_sha")
+  mkdir -p "$(dirname "$path")"
+  printf 'x%.0s' {1..200} > "$path"
+  actual_size=$(stat -c %s "$path")
+  [[ "$actual_size" == "200" ]] || { echo "fixture size wrong: $actual_size"; return 1; }
+  out=$(echo "{\"tool_input\":{\"command\":\"gh pr create --title x --body y  # REVIEW_FULL=$path\"}}" | bash agent/hooks/pre-pr-review-gate.sh 2>&1; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0 at 200B, got: $out"; return 1; }
+}
+it "pre-pr-review-gate: REVIEW_FULL file at exactly 200 bytes → exit 0 (lower bound inclusive)" T_gate_size_boundary_200_passes
+
 T_gate_bad_filename_blocks() {
   local out stderr_file path
   stderr_file="$TEST_DIR/gate_stderr.txt"
@@ -472,10 +506,10 @@ T_gate_max_lag_override_passes() {
 it "pre-pr-review-gate: REVIEW_MAX_LAG=5 widens the lag window → exit 0" T_gate_max_lag_override_passes
 
 T_gate_first_parent_merge_counts_as_one() {
-  # Build a side branch with 5 commits, merge it into main with --no-ff, then
-  # review against the pre-merge SHA. First-parent lag of the merge commit
-  # is 1, not 6 — that's what the new gate cares about.
-  local out path review_sha side_branch
+  # Side branch with 5 commits merged with --no-ff: first-parent lag = 1, not 6.
+  # Exercises the lag-counting contract: merges from main count as 1 commit.
+  local out path review_sha side_branch main_branch
+  main_branch=$(git rev-parse --abbrev-ref HEAD)
   review_sha=$(git rev-parse HEAD)
   path=$(gate_make_sentinel_review "$review_sha")
   side_branch="side-$$"
@@ -483,10 +517,18 @@ T_gate_first_parent_merge_counts_as_one() {
   for n in 1 2 3 4 5; do
     git commit -q --allow-empty -m "side $n"
   done
-  git checkout -q -
+  git checkout -q "$main_branch"
   git merge -q --no-ff --no-edit "$side_branch" >/dev/null
   out=$(echo "{\"tool_input\":{\"command\":\"gh pr create --title x --body y  # REVIEW_FULL=$path\"}}" | bash agent/hooks/pre-pr-review-gate.sh 2>&1; echo "EXIT:$?")
   [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "first-parent merge of 5 commits should be lag=1, got: $out"; return 1; }
+  # Pin the actual lag against .agent-reviews/.hook.log (where the gate's
+  # `log` helper writes). Guards against --first-parent → plain rev-list
+  # regressions (which would report lag=6).
+  grep -q "lag=1/" .agent-reviews/.hook.log || {
+    echo "expected 'lag=1/' in .agent-reviews/.hook.log to confirm --first-parent semantics"
+    cat .agent-reviews/.hook.log 2>/dev/null || echo "(log missing)"
+    return 1
+  }
 }
 it "pre-pr-review-gate: --first-parent — merging a 5-commit side branch counts as lag=1" T_gate_first_parent_merge_counts_as_one
 
