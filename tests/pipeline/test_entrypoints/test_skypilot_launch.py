@@ -1418,6 +1418,49 @@ class TestDispatchViaSkypilot:
         mock_sky.jobs.launch.assert_not_called()
         assert _SPEC_URI_STDOUT_SENTINEL not in capsys.readouterr().out
 
+    def test_sentinel_does_not_emit_when_cred_bootstrap_raises(
+        self,
+        tmp_path: Path,
+        fake_plugin: Path,
+        env_file: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        mock_sky: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """A ``_run_cred_bootstrap`` raise must skip the sentinel + ``sky.jobs.launch``.
+
+        Pins the Phase-2 ordering invariant ``_emit_spec_uri`` runs *after*
+        ``_run_cred_bootstrap`` so a CI workflow that greps the sentinel out of
+        the launcher log can treat it as proof the cred bootstrap succeeded —
+        not just that Phase-1 cleared.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param fake_plugin: Fixture-provided fake VST3 plugin path.
+        :param env_file: Fixture-provided worker env file path.
+        :param monkeypatch: Pytest fixture for env/attribute mocking.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        :param capsys: Pytest fixture capturing stdout/stderr.
+        """
+        monkeypatch.setattr(
+            "synth_setter.pipeline.skypilot_launch._run_cred_bootstrap",
+            MagicMock(side_effect=RuntimeError("simulated bootstrap failure")),
+        )
+
+        template = _write_runpod_yaml(tmp_path)
+        spec = _build_spec(fake_plugin)
+        sky_cfg = SkypilotLaunchConfig(
+            compute_template=str(template),
+            cmd="echo",
+            env_file=str(env_file),
+            job_name="bootstrap-raise",
+        )
+
+        with pytest.raises(RuntimeError, match="simulated bootstrap failure"):
+            dispatch_via_skypilot(spec, sky_cfg, spec_uri=_DISPATCH_SPEC_URI)
+
+        assert _SPEC_URI_STDOUT_SENTINEL not in capsys.readouterr().out
+        mock_sky.jobs.launch.assert_not_called()
+
     def test_end_to_end_dispatch_uses_cmd_as_run_block(
         self,
         tmp_path: Path,
