@@ -67,9 +67,8 @@ jobs:
           pytest -vv -s -m "slow and not gpu and not mps and not requires_vst" \
             --cov=src --cov-branch --cov-report=xml --cov-report=term
 
-      # Slow CPU tests exercise PyTorch forward passes and pipeline code paths
-      # that the fast suite skips. Uploading under a dedicated `slow-cpu` flag
-      # keeps that signal separable from `unit-cpu` in Codecov.
+      # Dedicated `slow-cpu` flag keeps this signal separable from `unit-cpu`
+      # in Codecov — the fast suite skips these PyTorch forward passes.
       - name: Upload coverage to Codecov
         if: always() && hashFiles('coverage.xml') != ''
         uses: codecov/codecov-action@v5
