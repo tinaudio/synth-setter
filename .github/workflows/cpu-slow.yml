@@ -14,6 +14,13 @@ on:
     paths-ignore:
       - "docs/**"
       - "**/*.md"
+  # Self-trigger so PRs that touch the workflow (or its invariant test)
+  # exercise it pre-merge instead of waiting for the post-merge push run
+  # to surface regressions — see #1206.
+  pull_request:
+    paths:
+      - ".github/workflows/cpu-slow.yml"
+      - "tests/infra/test_cpu_slow_workflow_r2_creds.py"
 
 concurrency:
   group: cpu-slow-${{ github.ref }}
@@ -24,6 +31,12 @@ permissions:
 
 jobs:
   run_slow_tests:
+    # Skip fork-PR runs: forks can't see `secrets.RCLONE_CONFIG_R2_*` and the
+    # 90-min suite would burn a 4-core runner with `integration_r2` skipping
+    # silently. Workflow_dispatch / push / schedule runs are unaffected — only
+    # the `pull_request` trigger checks head-repo identity (see #1206).
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+
     # Larger runner: the slow CPU suite runs PyTorch forward passes on the FFN
     # smoke fixtures, and the standard 2-core/7 GB `ubuntu-latest` OOMs during
     # those passes. `ubuntu-latest-4core` (4 vCPU / 16 GB) is the smallest
@@ -60,9 +73,23 @@ jobs:
       - name: List dependencies
         run: uv pip list --system
 
+      # `is_r2_reachable()` shells out to `rclone`; without the binary the
+      # `integration_r2` gate short-circuits and the tests skip silently.
+      # Mirrors the install in `test-local-launcher-roundtrip.yml` and
+      # `generate-dataset-shards.yaml`.
+      - name: Install rclone
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq rclone
+
+      # `RCLONE_CONFIG_R2_*` lets `integration_r2`-marked tests reach real
+      # R2 instead of skipping via `r2_io.is_r2_reachable()` — see #1185.
       - name: Run slow (non-GPU, non-MPS, non-VST) tests
         env:
           HYDRA_FULL_ERROR: "1"
+          RCLONE_CONFIG_R2_TYPE: s3
+          RCLONE_CONFIG_R2_PROVIDER: Cloudflare
+          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
         run: |
           pytest -vv -s -m "slow and not gpu and not mps and not requires_vst" \
             --cov=src --cov-branch --cov-report=xml --cov-report=term
