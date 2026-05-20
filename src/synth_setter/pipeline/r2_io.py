@@ -25,10 +25,12 @@ __all__ = [
     "download_to_path",
     "downloaded_to_tempfile",
     "ensure_r2_env_loaded",
+    "is_r2_reachable",
     "is_r2_uri",
     "object_size",
     "shard_uri",
     "to_rclone_path",
+    "upload",
     "upload_to_uri",
 ]
 
@@ -113,6 +115,36 @@ def ensure_r2_env_loaded(env_file: Path | None = None) -> None:
         )
 
 
+def is_r2_reachable() -> bool:
+    """Return ``True`` iff ``rclone`` is on PATH and ``rclone lsd r2:`` exits 0.
+
+    Tests gate ``@pytest.mark.integration_r2`` cases on this helper so a
+    contributor's bare clone (no creds), a fork PR (no secrets), or a
+    network-out failure auto-skips rather than failing on the first real
+    rclone call. Mirrors the ``rclone lsd r2:`` auth-ping in
+    :func:`ensure_r2_env_loaded` but swallows the failure into a boolean
+    instead of raising.
+
+    :returns: ``True`` when rclone binary resolves AND a credentialled
+        ``lsd`` of ``r2:`` exits 0; ``False`` otherwise (binary missing,
+        bad/missing creds, network down, etc.).
+    """
+    import shutil
+
+    if shutil.which("rclone") is None:
+        return False
+    try:
+        subprocess.run(  # noqa: S603 — args are literal strings
+            ["rclone", "lsd", "r2:", "--contimeout=10s", "--timeout=30s"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+    return True
+
+
 def is_r2_uri(uri: str) -> bool:
     """Return True if `uri` is an `r2://bucket/key` URI."""
     return uri.startswith(R2_URI_SCHEME)
@@ -173,6 +205,35 @@ def upload_to_uri(local_path: Path, r2_uri: str) -> None:
         _to_rclone_path(r2_uri),
     ]
     subprocess.check_call(args)  # noqa: S603 — args from validated URI
+
+
+def upload(source: str | Path, destination_uri: str) -> None:
+    """Copy ``source`` to ``destination_uri``; ``source`` may be a local path or ``r2://`` URI.
+
+    Local sources delegate to :func:`upload_to_uri` so the reliability-flag set
+    stays a single-source-of-truth. R2 sources trigger ``rclone copyto`` between
+    two ``r2:`` paths with the same flag set, supporting R2-to-R2 promotion
+    (e.g. ``metadata/workers/<id>/shard-N.h5`` → ``shard-N.h5``) without
+    round-tripping through local disk.
+
+    :param source: Local filesystem path (``str`` or ``Path``) or ``r2://`` URI.
+    :param destination_uri: Destination ``r2://`` URI.
+    """
+    if isinstance(source, str) and is_r2_uri(source):
+        args = [  # noqa: S607 — rclone resolved by image's PATH
+            "rclone",
+            "copyto",
+            "-vv",
+            "--checksum",
+            "--contimeout=30s",
+            "--timeout=300s",
+            "--retries=3",
+            _to_rclone_path(source),
+            _to_rclone_path(destination_uri),
+        ]
+        subprocess.check_call(args)  # noqa: S603 — args from validated URIs
+        return
+    upload_to_uri(Path(source), destination_uri)
 
 
 def shard_uri(bucket: str, prefix: str, shard_filename: str) -> str:

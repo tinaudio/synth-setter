@@ -179,6 +179,71 @@ class TestUploadToUri:
         assert "--retries=3" in args
 
 
+class TestUpload:
+    """Tests for ``upload`` — source-type-tolerant wrapper over ``rclone copyto``."""
+
+    def test_local_path_source_lands_at_destination(
+        self, fake_r2_remote: Path, tmp_path: Path
+    ) -> None:
+        """A local ``Path`` source uploads via the same path ``upload_to_uri`` exercises.
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        :param tmp_path: Pytest tmp dir used for the upload source file.
+        """
+        src = tmp_path / "in.json"
+        src.write_text('{"payload": 7}')
+
+        r2_io.upload(src, "r2://bucket/key.json")
+
+        assert (fake_r2_remote / "bucket" / "key.json").read_text() == '{"payload": 7}'
+
+    def test_local_str_path_source_lands_at_destination(
+        self, fake_r2_remote: Path, tmp_path: Path
+    ) -> None:
+        """A local path passed as ``str`` is coerced to ``Path`` and uploaded.
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        :param tmp_path: Pytest tmp dir used for the upload source file.
+        """
+        src = tmp_path / "in.json"
+        src.write_text("{}")
+
+        r2_io.upload(str(src), "r2://bucket/key.json")
+
+        assert (fake_r2_remote / "bucket" / "key.json").is_file()
+
+    def test_r2_uri_source_copies_remote_to_remote(
+        self, fake_r2_remote: Path, tmp_path: Path
+    ) -> None:
+        """An ``r2://`` source triggers an rclone R2→R2 copy (not a local upload).
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        :param tmp_path: Pytest tmp dir (unused but threaded for fixture symmetry).
+        """
+        seed = fake_r2_remote / "bucket" / "src" / "key.json"
+        seed.parent.mkdir(parents=True)
+        seed.write_text('{"seed": true}')
+
+        r2_io.upload("r2://bucket/src/key.json", "r2://bucket/dst/key.json")
+
+        assert (fake_r2_remote / "bucket" / "dst" / "key.json").read_text() == '{"seed": true}'
+
+    def test_r2_uri_source_uses_rclone_copyto_with_reliability_flags(self, tmp_path: Path) -> None:
+        """R2→R2 path carries the same reliability flag set as the local-upload path.
+
+        :param tmp_path: Pytest tmp dir (unused; threaded so fixture isolation is consistent).
+        """
+        with patch.object(r2_io.subprocess, "check_call") as mock_call:
+            r2_io.upload("r2://bucket/src/key.json", "r2://bucket/dst/key.json")
+        args = mock_call.call_args[0][0]
+        assert args[:2] == ["rclone", "copyto"]
+        assert "--checksum" in args
+        assert "--contimeout=30s" in args
+        assert "--timeout=300s" in args
+        assert "--retries=3" in args
+        assert args[-2:] == ["r2:bucket/src/key.json", "r2:bucket/dst/key.json"]
+
+
 class TestDownloadedToTempfile:
     """Tests for the downloaded_to_tempfile context manager."""
 

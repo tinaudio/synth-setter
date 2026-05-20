@@ -498,6 +498,42 @@ class TestDatasetSpecComputedFields:
         with pytest.raises(KeyError):
             _ = spec.num_params
 
+    def test_split_shard_ranges_partition_shards_in_index_order(
+        self, patch_runtime_io: None
+    ) -> None:
+        """Each half-open range covers ``size // samples_per_shard`` contiguous shards.
+
+        :param patch_runtime_io: Pytest fixture stubbing git/timestamp factories.
+        """
+        spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[400, 100, 100]))
+        assert spec.split_shard_ranges == {
+            "train": (0, 4),
+            "val": (4, 5),
+            "test": (5, 6),
+        }
+
+    def test_split_shard_ranges_handles_zero_sized_splits(self, patch_runtime_io: None) -> None:
+        """A zero-sized split collapses to an empty range; the next split picks up its index.
+
+        :param patch_runtime_io: Pytest fixture stubbing git/timestamp factories.
+        """
+        spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[300, 0, 0]))
+        assert spec.split_shard_ranges == {
+            "train": (0, 3),
+            "val": (3, 3),
+            "test": (3, 3),
+        }
+
+    def test_split_shard_ranges_total_matches_num_shards(self, patch_runtime_io: None) -> None:
+        """The union of the three ranges spans exactly ``[0, num_shards)``.
+
+        :param patch_runtime_io: Pytest fixture stubbing git/timestamp factories.
+        """
+        spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[400, 100, 100]))
+        ranges = spec.split_shard_ranges
+        assert ranges["train"][0] == 0
+        assert ranges["test"][1] == spec.num_shards
+
 
 # ---------------------------------------------------------------------------
 # DatasetSpec — JSON round-trip

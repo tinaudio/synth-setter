@@ -6,7 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from synth_setter.pipeline.schemas.r2_location import R2Location
-from synth_setter.pipeline.schemas.spec import ShardSpec
+from synth_setter.pipeline.schemas.spec import ShardSpec, Split
 
 
 def _shard(filename: str = "shard-000042.h5") -> ShardSpec:
@@ -172,13 +172,25 @@ class TestR2LocationLayoutHelpers:
         )
 
     @pytest.mark.parametrize("split", ["train", "val", "test"])
-    def test_split_uri(self, split: str) -> None:
-        """``split_uri(<split>)`` returns ``<prefix><split>.h5`` for each split.
+    def test_split_h5_uri(self, split: Split) -> None:
+        """``split_h5_uri(<split>)`` returns ``<prefix><split>.h5`` for each split.
 
         :param split: Parametrized split name (``train``/``val``/``test``).
         """
         loc = R2Location(bucket="intermediate-data", prefix="data/run/")
-        assert loc.split_uri(split) == f"r2://intermediate-data/data/run/{split}.h5"
+        assert loc.split_h5_uri(split) == f"r2://intermediate-data/data/run/{split}.h5"
+
+    def test_split_wds_brace_uri_zero_pads_six_digits_and_inclusive_hi(self) -> None:
+        """``split_wds_brace_uri`` returns the wds brace pattern for the half-open range."""
+        loc = R2Location(bucket="intermediate-data", prefix="data/run/")
+        assert loc.split_wds_brace_uri((0, 3)) == (
+            "r2://intermediate-data/data/run/shard-{000000..000002}.tar"
+        )
+
+    def test_split_wds_brace_uri_single_shard_range(self) -> None:
+        """A single-shard range collapses to a degenerate ``{NNNNNN..NNNNNN}`` brace."""
+        loc = R2Location(bucket="b", prefix="p/")
+        assert loc.split_wds_brace_uri((4, 5)) == "r2://b/p/shard-{000004..000004}.tar"
 
     def test_stats_uri(self) -> None:
         """``stats_uri()`` returns ``<prefix>stats.npz``."""
@@ -222,7 +234,8 @@ class TestR2LocationLayoutHelpers:
         assert loc.config_yaml_uri().startswith(expected_root)
         assert loc.dataset_card_uri().startswith(expected_root)
         assert loc.dataset_complete_marker_uri().startswith(expected_root)
-        assert loc.split_uri("train").startswith(expected_root)
+        assert loc.split_h5_uri("train").startswith(expected_root)
+        assert loc.split_wds_brace_uri((0, 1)).startswith(expected_root)
         assert loc.stats_uri().startswith(expected_root)
         assert loc.worker_staged_shard_uri(
             shard_id=0, worker_id="w", attempt_uuid="u", ext=".h5"

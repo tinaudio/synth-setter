@@ -32,7 +32,7 @@ from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME, R2_URI_SCHEME, 
 from synth_setter.pipeline.schemas.prefix import DEFAULT_R2_PREFIX_ROOT
 
 if TYPE_CHECKING:
-    from synth_setter.pipeline.schemas.spec import ShardSpec
+    from synth_setter.pipeline.schemas.spec import ShardSpec, Split
 
 __all__ = ["R2Location"]
 
@@ -206,16 +206,34 @@ class R2Location(BaseModel):
         """
         return self._under_prefix("dataset.complete")
 
-    def split_uri(self, split: str) -> str:
+    def split_h5_uri(self, split: Split) -> str:
         """R2 URI of a split virtual-dataset file (``train.h5`` / ``val.h5`` / ``test.h5``).
 
         Reshard produces these locally today; the URI is where they land once
-        finalize uploads them (#408).
+        finalize uploads them (#408). Paired with :meth:`split_wds_brace_uri`
+        for the wds variant; callers branch on ``DatasetSpec.output_format``.
 
-        :param split: One of ``"train"``, ``"val"``, ``"test"``.
+        :param split: Split name; ``Literal["train","val","test"]`` (see
+            ``synth_setter.pipeline.schemas.spec.Split``).
         :returns: ``r2://<bucket>/<prefix><split>.h5`` URI string.
         """
         return self._under_prefix(f"{split}.h5")
+
+    def split_wds_brace_uri(self, shard_range: tuple[int, int]) -> str:
+        """R2 URI carrying the webdataset brace pattern for ``[lo, hi)`` shards.
+
+        WebDataset readers expand the ``{LO..HI}`` form natively; ``HI`` here is
+        inclusive (``shard_range[1] - 1``) because that is the contract
+        ``webdataset.WebDataset`` reads.
+
+        :param shard_range: Half-open shard-index range as produced by
+            ``DatasetSpec.split_shard_ranges[split]``; ``lo == hi`` is not
+            supported (no shards => no brace pattern).
+        :returns: ``r2://<bucket>/<prefix>shard-{LO..HI}.tar`` with zero-padded
+            six-digit indices matching ``ShardSpec.filename``'s format.
+        """
+        lo, hi = shard_range
+        return self._under_prefix(f"shard-{{{lo:06d}..{hi - 1:06d}}}.tar")
 
     def stats_uri(self) -> str:
         """R2 URI of ``stats.npz`` (normalization statistics).

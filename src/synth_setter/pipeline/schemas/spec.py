@@ -41,6 +41,7 @@ __all__ = [
     "R2Location",
     "RenderConfig",
     "ShardSpec",
+    "Split",
 ]
 
 # Flat-form keys promoted into the nested ``r2`` dict by the back-compat shim.
@@ -269,6 +270,11 @@ class RenderConfig(BaseModel):
 
 # Names paired with ``train_val_test_sizes`` indices in error messages.
 _SPLIT_LABELS: tuple[str, str, str] = ("train", "val", "test")
+
+# Typed alias for split names — narrows the ``str`` parameter on layout helpers
+# (``R2Location.split_h5_uri``, ``DatasetSpec.split_shard_ranges`` keys) so a
+# typo lands as a type error rather than a silent miss at runtime.
+Split = Literal["train", "val", "test"]
 
 
 def _default_run_id(data: dict[str, Any]) -> str:
@@ -709,6 +715,24 @@ class DatasetSpec(BaseModel):
     def num_shards(self) -> int:
         """Total number of shards across all splits."""
         return len(self.shards)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @cached_property
+    def split_shard_ranges(self) -> dict[Split, tuple[int, int]]:
+        """Half-open ``[lo, hi)`` shard-index ranges per split.
+
+        :returns: Mapping from split name to ``(lo, hi)``; ``hi`` is exclusive
+            and ``hi - lo`` equals ``size // render.samples_per_shard``. The
+            ranges concatenate in train→val→test order so their union covers
+            ``[0, num_shards)`` with no gaps.
+        """
+        sps = self.render.samples_per_shard
+        train_n, val_n, test_n = (sz // sps for sz in self.train_val_test_sizes)
+        return {
+            "train": (0, train_n),
+            "val": (train_n, train_n + val_n),
+            "test": (train_n + val_n, train_n + val_n + test_n),
+        }
 
     @computed_field  # type: ignore[prop-decorator]
     @cached_property

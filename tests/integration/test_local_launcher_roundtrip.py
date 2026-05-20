@@ -25,7 +25,6 @@ from __future__ import annotations
 import io
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tarfile
@@ -48,6 +47,7 @@ from synth_setter.data.vst.shapes import (
     mel_dataset_shape,
     param_array_dataset_shape,
 )
+from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.ci.validate_shard import validate_all_shards_from_r2
 from synth_setter.pipeline.ci.validate_spec import validate_structure
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
@@ -74,35 +74,6 @@ TEST_PLUGIN_VERSION = "1.0.0-test"
 # real subprocess.check_call without recursing through any patch that targets
 # the same symbol the production code uses.
 _REAL_CHECK_CALL = subprocess.check_call
-
-
-def _r2_reachable() -> bool:
-    """Return True if rclone is on PATH and ``rclone lsd r2:`` exits cleanly.
-
-    Mirrors the gating pattern in ``tests/pipeline/data/test_r2_report.py`` so
-    a contributor running locally without R2 creds auto-skips this test
-    rather than failing on the first rclone subprocess. The ``r2:`` remote
-    is configured via ``RCLONE_CONFIG_R2_*`` env vars (set by the workflow
-    from repo secrets, or by the contributor's local rclone config); the
-    listing is authenticated and the exit code is what indicates whether
-    those creds are present and valid.
-
-    :returns: ``True`` when rclone resolves and the configured ``r2:`` remote
-        accepts a credentialled ``lsd``; ``False`` if rclone is absent or
-        the listing exits non-zero (no/invalid creds, network down, etc.).
-    """
-    if shutil.which("rclone") is None:
-        return False
-    try:
-        subprocess.run(  # noqa: S603 — args are literal strings
-            ["rclone", "lsd", "r2:", "--contimeout=10s", "--timeout=30s"],  # noqa: S607
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return False
-    return True
 
 
 def _write_dummy_h5_shard(output_path: Path, spec: DatasetSpec) -> None:
@@ -251,7 +222,7 @@ def ci_r2_prefix() -> Iterator[str]:
 
     :yields str: Trailing-slash-terminated unique R2 prefix string.
     """
-    if not _r2_reachable():
+    if not r2_io.is_r2_reachable():
         pytest.skip("R2 not reachable (rclone not on PATH or rclone lsd r2: failed)")
     prefix = _unique_r2_prefix()
     try:
