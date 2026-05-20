@@ -204,6 +204,36 @@ class TestReshardSpecDriven:
         assert not (tmp_path / "val.h5").exists()
         assert _audio_rows(tmp_path / "test.h5") == 10
 
+    def test_zero_sized_split_unlinks_stale_outputs(
+        self,
+        tmp_path: Path,
+        patch_runtime_io: None,
+        runner: CliRunner,
+    ) -> None:
+        """A previously-populated split that is now zero-sized has stale outputs removed.
+
+        Re-running reshard after shrinking a split to zero in the spec must
+        not leave the old ``{split}.h5`` (or a stale ``.tmp-{split}.h5`` from
+        a prior failed run) behind — the dataset_root must always reflect
+        the spec's current split sizes.
+
+        :param tmp_path: Per-test dataset root.
+        :param patch_runtime_io: Deterministic spec runtime stubs.
+        :param runner: Click test runner.
+        """
+        spec = DatasetSpec(**_spec_kwargs(20, 0, 10, samples_per_shard=10))
+        _materialize_dataset(tmp_path, spec)
+        stale_val = tmp_path / "val.h5"
+        stale_staging = tmp_path / ".tmp-val.h5"
+        stale_val.write_bytes(b"stale")
+        stale_staging.write_bytes(b"stale")
+
+        result = runner.invoke(_reshard_module.main, [str(tmp_path)], catch_exceptions=False)
+
+        assert result.exit_code == 0, result.output
+        assert not stale_val.exists()
+        assert not stale_staging.exists()
+
 
 class TestReshardSpecShardsAreAuthoritative:
     """Reshard reads exactly the filenames in ``spec.shards``, no glob."""

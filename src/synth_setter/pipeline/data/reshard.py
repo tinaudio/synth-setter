@@ -131,11 +131,21 @@ def _stage_and_commit_splits(  # noqa: DOC501,DOC503
     :meth:`pathlib.Path.replace` (during rename) propagate raw — only the
     cleanup is added on top.
 
+    Empty splits are pruned to match the spec: any stale ``{name}.h5`` or
+    ``.tmp-{name}.h5`` left from a previous run with a non-zero size is
+    unlinked up front, so the dataset_root after this call always reflects
+    the spec's current split sizes (non-empty splits' outputs are
+    overwritten by the rename phase, so they don't need pre-cleanup).
+
     :param dataset_root: Directory that holds both the input shards and the outputs.
     :param splits: Per-split shard lists from :func:`_build_splits`.
     :param shard_size: ``samples_per_shard`` for every shard.
     :param tails: Per-dataset trailing shape from :func:`check_shard_contracts`.
     """
+    for name, paths in splits.items():
+        if not paths:
+            (dataset_root / f"{name}.h5").unlink(missing_ok=True)
+            (dataset_root / f"{_STAGING_PREFIX}{name}.h5").unlink(missing_ok=True)
     nonempty = [(name, paths) for name, paths in splits.items() if paths]
     staging_paths = [dataset_root / f"{_STAGING_PREFIX}{name}.h5" for name, _ in nonempty]
     final_paths = [dataset_root / f"{name}.h5" for name, _ in nonempty]
