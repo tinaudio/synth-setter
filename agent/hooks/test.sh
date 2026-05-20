@@ -22,7 +22,7 @@ cleanup() { rm -rf "$TEST_DIR"; }
 trap cleanup EXIT
 
 SANDBOX="$TEST_DIR/repo"
-mkdir -p "$SANDBOX/agent/hooks"
+mkdir -p "$SANDBOX/agent/hooks" "$SANDBOX/agent/_shared"
 cp agent/hooks/_lib.sh \
    agent/hooks/doc-drift.sh \
    agent/hooks/pr-review-resolver.sh \
@@ -30,11 +30,17 @@ cp agent/hooks/_lib.sh \
    agent/hooks/edit-write.sh \
    agent/hooks/verify-gh-taxonomy.sh \
    "$SANDBOX/agent/hooks/"
+cp agent/_shared/review_sentinel.py "$SANDBOX/agent/_shared/"
 cd "$SANDBOX"
 git init -q
 git config user.email test@test
 git config user.name test
 git commit -q --allow-empty -m init
+# `INIT_SHA` lets reset_sandbox roll HEAD back between gate tests that create
+# commits to set up lag/ancestry scenarios. Exported so the subshell each test
+# runs in inherits it.
+export INIT_SHA
+INIT_SHA=$(git rev-parse HEAD)
 
 STUBS="$TEST_DIR/stubs"
 mkdir -p "$STUBS"
@@ -75,6 +81,16 @@ it() {
 
 reset_sandbox() {
   rm -rf .agent-reviews
+  # Reset HEAD and refs to the init commit so gate tests that build up
+  # commit history don't leak state between runs. Also clean up any side
+  # branches the previous test may have created (for first-parent tests).
+  if [[ -n "${INIT_SHA:-}" ]]; then
+    git reset --hard "$INIT_SHA" >/dev/null 2>&1 || true
+    # Drop any non-master/main branches that earlier tests created.
+    git for-each-ref --format='%(refname:short)' refs/heads \
+      | grep -vE '^(main|master)$' \
+      | xargs -r -I{} git branch -D {} >/dev/null 2>&1 || true
+  fi
 }
 
 run_tests() {
@@ -321,18 +337,30 @@ T_gate_quoted_substring() {
 }
 it "pre-pr-review-gate: quoted 'gh pr create' substring inside echo does NOT trigger the gate" T_gate_quoted_substring
 
-# --- helpers for gate file-validation tests ---
-# `gate_make_review` writes a review file whose mtime is forced past HEAD's
-# commit time, so freshness checks pass deterministically even when wall-clock
-# resolution matches the init commit's timestamp.
-gate_make_review() {
-  # Usage: gate_make_review <path> <body>
-  local path="$1" body="$2" head_ct future
+# --- helpers for gate sentinel-validation tests ---
+# `gate_sentinel_path` echoes the canonical sentinel path for a SHA via the
+# shared Python helper, so the test contract drifts with the helper rather
+# than hardcoding the format string in bash. Caller is expected to have the
+# helper at agent/_shared/review_sentinel.py (sandbox copies it in).
+gate_sentinel_path() {
+  # Usage: gate_sentinel_path <sha>
+  python3 agent/_shared/review_sentinel.py path "$1"
+}
+
+# `gate_make_sentinel_review` creates a review file at the canonical sentinel
+# path for a SHA, padded past the 200-byte minimum so the size guard doesn't
+# false-trigger.
+gate_make_sentinel_review() {
+  # Usage: gate_make_sentinel_review <sha>
+  local sha="$1" path
+  path=$(gate_sentinel_path "$sha")
   mkdir -p "$(dirname "$path")"
-  printf '%s' "$body" > "$path"
-  head_ct=$(git log -1 --format=%ct HEAD)
-  future=$((head_ct + 60))
-  touch -d "@$future" "$path"
+  {
+    printf '# repo-review-full-no-comments — review @ %s\n\n' "$sha"
+    printf '## Summary\n\n0 BLOCK, 0 WARN across N skills.\n\n'
+    printf 'finding line %d\n' {1..20}
+  } > "$path"
+  printf '%s\n' "$path"
 }
 
 T_gate_no_path_blocks() {
@@ -354,79 +382,113 @@ T_gate_missing_file_blocks() {
 }
 it "pre-pr-review-gate: REVIEW_FULL=<nonexistent> → exit 2 with file-not-found reason" T_gate_missing_file_blocks
 
-T_gate_empty_file_blocks() {
+T_gate_small_file_blocks() {
+  local out stderr_file path head_sha
+  stderr_file="$TEST_DIR/gate_stderr.txt"
+  head_sha=$(git rev-parse HEAD)
+  path=$(gate_sentinel_path "$head_sha")
+  mkdir -p "$(dirname "$path")"
+  # Sentinel-named, but content is a trivial touch-bypass (well under 200B).
+  printf 'x\n' > "$path"
+  out=$(echo "{\"tool_input\":{\"command\":\"gh pr create --title x --body y  # REVIEW_FULL=$path\"}}" | bash agent/hooks/pre-pr-review-gate.sh 2>"$stderr_file"; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:2" ]] || { echo "expected EXIT:2, got: $out"; return 1; }
+  grep -q "suspiciously small" "$stderr_file" || { echo "stderr should mention size guard: $(cat "$stderr_file")"; return 1; }
+}
+it "pre-pr-review-gate: REVIEW_FULL=<sentinel-named but <200B> → exit 2 (touch-bypass guard)" T_gate_small_file_blocks
+
+T_gate_bad_filename_blocks() {
   local out stderr_file path
   stderr_file="$TEST_DIR/gate_stderr.txt"
-  path=".agent-reviews/empty.md"
+  path=".agent-reviews/not-a-sentinel.md"
   mkdir -p .agent-reviews
-  : > "$path"
+  # Plenty of bytes, just wrong filename shape.
+  printf 'review body, %s bytes of padding %s' "$(printf 'x%.0s' {1..200})" "tail" > "$path"
   out=$(echo "{\"tool_input\":{\"command\":\"gh pr create --title x --body y  # REVIEW_FULL=$path\"}}" | bash agent/hooks/pre-pr-review-gate.sh 2>"$stderr_file"; echo "EXIT:$?")
   [[ "$(last_exit_line "$out")" == "EXIT:2" ]] || { echo "expected EXIT:2, got: $out"; return 1; }
-  grep -q "is empty" "$stderr_file" || { echo "stderr should mention empty-file reason"; return 1; }
+  grep -q "does not match the sentinel pattern" "$stderr_file" || { echo "stderr should mention sentinel-mismatch reason: $(cat "$stderr_file")"; return 1; }
 }
-it "pre-pr-review-gate: REVIEW_FULL=<empty file> → exit 2 with empty-file reason" T_gate_empty_file_blocks
+it "pre-pr-review-gate: REVIEW_FULL=<non-sentinel filename> → exit 2 with sentinel-mismatch reason" T_gate_bad_filename_blocks
 
-T_gate_stale_file_blocks() {
-  local out stderr_file path head_ct
+T_gate_non_ancestor_blocks() {
+  local out stderr_file fake_sha path
   stderr_file="$TEST_DIR/gate_stderr.txt"
-  path=".agent-reviews/stale.md"
-  mkdir -p .agent-reviews
-  printf '# repo-review-full-no-comments — branch foo\n%s' \
-    "$(printf 'x%.0s' {1..400})" > "$path"
-  head_ct=$(git log -1 --format=%ct HEAD)
-  # Force mtime well before HEAD's commit time.
-  touch -d "@$((head_ct - 600))" "$path"
+  # Well-shaped 40-char hex SHA that the repo has never seen.
+  fake_sha="deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+  path=$(gate_make_sentinel_review "$fake_sha")
   out=$(echo "{\"tool_input\":{\"command\":\"gh pr create --title x --body y  # REVIEW_FULL=$path\"}}" | bash agent/hooks/pre-pr-review-gate.sh 2>"$stderr_file"; echo "EXIT:$?")
   [[ "$(last_exit_line "$out")" == "EXIT:2" ]] || { echo "expected EXIT:2, got: $out"; return 1; }
-  grep -q "older than HEAD" "$stderr_file" || { echo "stderr should mention staleness vs HEAD"; return 1; }
+  grep -q "is not an ancestor of HEAD" "$stderr_file" || { echo "stderr should mention non-ancestor reason: $(cat "$stderr_file")"; return 1; }
 }
-it "pre-pr-review-gate: REVIEW_FULL=<file older than HEAD> → exit 2 with staleness reason" T_gate_stale_file_blocks
+it "pre-pr-review-gate: REVIEW_FULL=<SHA not on this branch> → exit 2 with non-ancestor reason" T_gate_non_ancestor_blocks
 
-T_gate_no_header_blocks() {
-  local out stderr_file path
-  stderr_file="$TEST_DIR/gate_stderr.txt"
-  path=".agent-reviews/no-header.md"
-  gate_make_review "$path" "$(printf 'just some prose without the expected report header.\n%s' \
-    "$(printf 'y%.0s' {1..400})")"
-  out=$(echo "{\"tool_input\":{\"command\":\"gh pr create --title x --body y  # REVIEW_FULL=$path\"}}" | bash agent/hooks/pre-pr-review-gate.sh 2>"$stderr_file"; echo "EXIT:$?")
-  [[ "$(last_exit_line "$out")" == "EXIT:2" ]] || { echo "expected EXIT:2, got: $out"; return 1; }
-  grep -q "does not look like" "$stderr_file" || { echo "stderr should mention bad-shape reason"; return 1; }
-}
-it "pre-pr-review-gate: REVIEW_FULL=<file missing header/PASS> → exit 2 with shape reason" T_gate_no_header_blocks
-
-T_gate_short_header_blocks() {
-  local out stderr_file path
-  stderr_file="$TEST_DIR/gate_stderr.txt"
-  path=".agent-reviews/short.md"
-  # Header present but body is trivial (<200 bytes total).
-  gate_make_review "$path" $'# repo-review-full-no-comments — stub\nstub\n'
-  out=$(echo "{\"tool_input\":{\"command\":\"gh pr create --title x --body y  # REVIEW_FULL=$path\"}}" | bash agent/hooks/pre-pr-review-gate.sh 2>"$stderr_file"; echo "EXIT:$?")
-  [[ "$(last_exit_line "$out")" == "EXIT:2" ]] || { echo "expected EXIT:2, got: $out"; return 1; }
-  grep -q "suspiciously short" "$stderr_file" || { echo "stderr should mention short-stub reason"; return 1; }
-}
-it "pre-pr-review-gate: REVIEW_FULL=<header but <200 bytes> → exit 2 with short-stub reason" T_gate_short_header_blocks
-
-T_gate_valid_header_passes() {
-  local out path
-  path=".agent-reviews/valid.md"
-  gate_make_review "$path" "$(printf '# repo-review-full-no-comments — branch foo\n\n## Summary\n\n%s' \
-    "$(printf 'finding line %d\n' {1..40})")"
+T_gate_head_sha_passes() {
+  local out path head_sha
+  head_sha=$(git rev-parse HEAD)
+  path=$(gate_make_sentinel_review "$head_sha")
   out=$(echo "{\"tool_input\":{\"command\":\"gh pr create --title x --body y  # REVIEW_FULL=$path\"}}" | bash agent/hooks/pre-pr-review-gate.sh 2>&1; echo "EXIT:$?")
   [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0, got: $out"; return 1; }
-  [[ "$out" != *"BLOCKED"* ]] || { echo "should not have BLOCKED valid header report"; return 1; }
+  [[ "$out" != *"BLOCKED"* ]] || { echo "HEAD-SHA review should not BLOCK"; return 1; }
 }
-it "pre-pr-review-gate: REVIEW_FULL=<fresh header report ≥200B> → exit 0" T_gate_valid_header_passes
+it "pre-pr-review-gate: REVIEW_FULL=<HEAD-SHA sentinel> → exit 0 (lag=0)" T_gate_head_sha_passes
 
-T_gate_pass_marker_passes() {
-  local out path
-  path=".agent-reviews/pass.md"
-  # Skill's empty-findings short form: a single PASS line is enough.
-  gate_make_review "$path" $'PASS — no findings\n'
+T_gate_lag_within_default_passes() {
+  # Build two more commits on top of the reviewed SHA. lag = 2 = default max.
+  local out path review_sha
+  review_sha=$(git rev-parse HEAD)
+  path=$(gate_make_sentinel_review "$review_sha")
+  git commit -q --allow-empty -m "follow-up 1"
+  git commit -q --allow-empty -m "follow-up 2"
   out=$(echo "{\"tool_input\":{\"command\":\"gh pr create --title x --body y  # REVIEW_FULL=$path\"}}" | bash agent/hooks/pre-pr-review-gate.sh 2>&1; echo "EXIT:$?")
-  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0, got: $out"; return 1; }
-  [[ "$out" != *"BLOCKED"* ]] || { echo "should not have BLOCKED PASS marker"; return 1; }
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0 at lag=2, got: $out"; return 1; }
 }
-it "pre-pr-review-gate: REVIEW_FULL=<fresh PASS report> → exit 0" T_gate_pass_marker_passes
+it "pre-pr-review-gate: review-SHA + 2 first-parent commits → exit 0 (lag=max default)" T_gate_lag_within_default_passes
+
+T_gate_lag_over_default_blocks() {
+  # Three commits past the reviewed SHA: lag=3, default max=2.
+  local out stderr_file path review_sha
+  stderr_file="$TEST_DIR/gate_stderr.txt"
+  review_sha=$(git rev-parse HEAD)
+  path=$(gate_make_sentinel_review "$review_sha")
+  git commit -q --allow-empty -m "follow-up 1"
+  git commit -q --allow-empty -m "follow-up 2"
+  git commit -q --allow-empty -m "follow-up 3"
+  out=$(echo "{\"tool_input\":{\"command\":\"gh pr create --title x --body y  # REVIEW_FULL=$path\"}}" | bash agent/hooks/pre-pr-review-gate.sh 2>"$stderr_file"; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:2" ]] || { echo "expected EXIT:2 at lag=3, got: $out"; return 1; }
+  grep -q "first-parent commits behind HEAD" "$stderr_file" || { echo "stderr should mention lag overflow: $(cat "$stderr_file")"; return 1; }
+}
+it "pre-pr-review-gate: review-SHA + 3 first-parent commits → exit 2 (lag>default)" T_gate_lag_over_default_blocks
+
+T_gate_max_lag_override_passes() {
+  # Same lag=3 scenario, but with REVIEW_MAX_LAG=5 to widen the window.
+  local out path review_sha
+  review_sha=$(git rev-parse HEAD)
+  path=$(gate_make_sentinel_review "$review_sha")
+  git commit -q --allow-empty -m "follow-up 1"
+  git commit -q --allow-empty -m "follow-up 2"
+  git commit -q --allow-empty -m "follow-up 3"
+  out=$(REVIEW_MAX_LAG=5 bash -c "echo '{\"tool_input\":{\"command\":\"gh pr create --title x --body y  # REVIEW_FULL=$path\"}}' | bash agent/hooks/pre-pr-review-gate.sh" 2>&1; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0 with REVIEW_MAX_LAG=5, got: $out"; return 1; }
+}
+it "pre-pr-review-gate: REVIEW_MAX_LAG=5 widens the lag window → exit 0" T_gate_max_lag_override_passes
+
+T_gate_first_parent_merge_counts_as_one() {
+  # Build a side branch with 5 commits, merge it into main with --no-ff, then
+  # review against the pre-merge SHA. First-parent lag of the merge commit
+  # is 1, not 6 — that's what the new gate cares about.
+  local out path review_sha side_branch
+  review_sha=$(git rev-parse HEAD)
+  path=$(gate_make_sentinel_review "$review_sha")
+  side_branch="side-$$"
+  git checkout -q -b "$side_branch"
+  for n in 1 2 3 4 5; do
+    git commit -q --allow-empty -m "side $n"
+  done
+  git checkout -q -
+  git merge -q --no-ff --no-edit "$side_branch" >/dev/null
+  out=$(echo "{\"tool_input\":{\"command\":\"gh pr create --title x --body y  # REVIEW_FULL=$path\"}}" | bash agent/hooks/pre-pr-review-gate.sh 2>&1; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "first-parent merge of 5 commits should be lag=1, got: $out"; return 1; }
+}
+it "pre-pr-review-gate: --first-parent — merging a 5-commit side branch counts as lag=1" T_gate_first_parent_merge_counts_as_one
 
 T_gate_leading_whitespace_still_blocks() {
   local out stderr_file

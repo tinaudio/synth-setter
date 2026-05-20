@@ -6,10 +6,8 @@ Schema reference: https://code.claude.com/docs/en/hooks.md.
 from __future__ import annotations
 
 import json
-import os
 import re
 import subprocess
-import time
 from pathlib import Path
 from typing import Any
 
@@ -285,36 +283,70 @@ def test_pre_pr_gate_blocks_when_review_file_missing(pre_pr_gate_command: str) -
     assert "does not point at a file" in result.stderr
 
 
-def test_pre_pr_gate_allows_when_review_file_valid(
+def test_pre_pr_gate_blocks_when_filename_not_sentinel(
     pre_pr_gate_command: str, tmp_path: Path
 ) -> None:
-    """Gate exits 0 when ``REVIEW_FULL=<path>`` is a fresh, well-formed report.
+    """Gate exits 2 when the REVIEW_FULL file's basename doesn't match the sentinel.
+
+    Even with a ≥200-byte body, a filename like ``foo.md`` should be rejected
+    because it doesn't encode a SHA via the shared helper.
 
     :param pre_pr_gate_command: Hook command body fixture.
     :param tmp_path: pytest tmp dir for the synthetic review file.
     """
+    review = tmp_path / "not-a-sentinel.md"
+    review.write_text("review body " * 30)
+    result = _run_hook_command(
+        pre_pr_gate_command,
+        {
+            "tool_input": {
+                "command": f"gh pr create --title foo --body bar  # REVIEW_FULL={review}",
+            },
+        },
+    )
+    assert result.returncode == 2, (result.returncode, result.stderr)
+    assert "does not match the sentinel pattern" in result.stderr
 
-    review = tmp_path / "fresh-review.md"
+
+def test_pre_pr_gate_allows_when_sentinel_at_head(
+    pre_pr_gate_command: str, tmp_path: Path
+) -> None:
+    """Gate exits 0 when REVIEW_FULL points at a sentinel for current HEAD SHA.
+
+    Builds the sentinel filename through the shared helper so the test drifts with the helper's
+    contract, not a hardcoded format string.
+
+    :param pre_pr_gate_command: Hook command body fixture.
+    :param tmp_path: pytest tmp dir for the synthetic review file.
+    """
+    head_sha = subprocess.run(  # noqa: S603
+        ["git", "-C", str(_REPO_ROOT), "rev-parse", "HEAD"],  # noqa: S607
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    filename = subprocess.run(  # noqa: S603
+        [  # noqa: S607
+            "python3",
+            str(_REPO_ROOT / "agent" / "_shared" / "review_sentinel.py"),
+            "make",
+            head_sha,
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    review = tmp_path / filename
     review.write_text(
-        "# repo-review-full-no-comments — branch foo\n\n## Summary\n\n" + "finding line\n" * 40
+        f"# repo-review-full-no-comments — HEAD {head_sha}\n\n"
+        "## Summary\n\n0 BLOCK, 0 WARN.\nReviewed at: " + head_sha + "\n" + "padding\n" * 30
     )
-    # Force mtime past HEAD's commit time so the freshness check passes.
-    head_ct = int(
-        subprocess.run(  # noqa: S603
-            ["git", "-C", str(_REPO_ROOT), "log", "-1", "--format=%ct", "HEAD"],  # noqa: S607
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
-    )
-    future = max(head_ct + 60, int(time.time()) + 1)
-    os.utime(review, (future, future))
 
     result = _run_hook_command(
         pre_pr_gate_command,
         {
             "tool_input": {
-                "command": (f"gh pr create --title foo --body bar  # REVIEW_FULL={review}"),
+                "command": f"gh pr create --title foo --body bar  # REVIEW_FULL={review}",
             },
         },
     )

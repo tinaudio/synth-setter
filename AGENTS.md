@@ -105,15 +105,19 @@ unintended shell expansion. A `PreToolUse` hook
   reviewers and `git log` readers don't open the issue. `/github-taxonomy`
   has the canonical title rule and examples.
 - **Pre-PR review gate.** Before `gh pr create`, run
-  `/repo-review-full-no-comments`, address every BLOCK/WARN (fix code or
-  document why it's intentional), and save the rendered report to a file
-  under `.agent-reviews/` AFTER your latest commit. A `PreToolUse` hook
-  (`agent/hooks/pre-pr-review-gate.sh`) blocks `gh pr create` until the
-  command carries `REVIEW_FULL=<path>` pointing at that file — recommended
-  as a trailing comment so other gh-pr-create hooks still fire:
-  `gh pr create … # REVIEW_FULL=.agent-reviews/pre-pr-<slug>.md`. The file
-  must start with `# repo-review-full-no-comments` (≥200 bytes) or `PASS`,
-  and its mtime must be ≥ HEAD's commit time.
+  `/repo-review-full-no-comments` and address every BLOCK/WARN (fix code or
+  document why it's intentional). The skill writes the rendered report to
+  `.agent-reviews/repo-review-full-no-comments.<HEAD-sha>.md` — filename
+  format owned by `agent/_shared/review_sentinel.py`, shared with the gate
+  hook. A `PreToolUse` hook (`agent/hooks/pre-pr-review-gate.sh`) blocks
+  `gh pr create` until the command carries `REVIEW_FULL=<path>` pointing at
+  that file — recommended as a trailing comment so other gh-pr-create hooks
+  still fire:
+  `gh pr create … # REVIEW_FULL=.agent-reviews/repo-review-full-no-comments.<sha>.md`.
+  The encoded SHA must be an ancestor of HEAD and within `REVIEW_MAX_LAG`
+  (default 2) first-parent commits of it — merges from main count as one
+  commit, not the dozens they bring in. Set `REVIEW_MAX_LAG=N` for a
+  justified larger gap.
 - **Readiness gates:** CI green ∧ `mergeable=MERGEABLE` ∧ every review
   comment has an inline reply ∧ no fresh Copilot findings — see
   `/pr-preflight`.
