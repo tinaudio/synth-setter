@@ -78,14 +78,17 @@ def test_aggregated_csv_columns(cli_metrics_dir: Path) -> None:
 def test_aggregated_scalar_values_within_tolerance(cli_metrics_dir: Path) -> None:
     """Mean/std scalars match the committed snapshot within per-metric tolerance bands.
 
-    The tolerance is intentionally lenient — librosa / pedalboard / pesto have minor cross-version
-    float drift on identical inputs. The point of the pin is to catch *shape* regressions (e.g. a
-    missing metric, an off-by-one mean) rather than to assert bit-for-bit numerical identity.
+    Distance metrics (``mss`` / ``wmfcc`` / ``sot``) use ``rel=1e-2, abs=1e-6`` —
+    enough slack for cross-version librosa / pedalboard / pesto float drift, tight
+    enough to catch a missing metric or off-by-one mean.
 
-    ``rms`` uses ``rel=1e-1`` (pure relative): its snapshot std (~1.7e-6) sits at the same
-    order of magnitude as a generic ``abs=1e-6`` floor, so a shared ``abs`` would let real
-    regressions slip through silently; and Python 3.10 → 3.11 librosa float drift on the
-    cosine-similarity-of-RMS-envelope outputs is observed at ~5% on this fixture (#1205).
+    ``rms`` is asymmetric: the *mean* is anchored at 1.0 (cosine similarity of
+    identical / near-identical RMS envelopes), so it gets the same ``rel=1e-2``
+    band as the distance metrics — a real regression dropping mean → 0.9 would
+    surface immediately. The *std* sits at the float-noise floor (~1.7e-6) and
+    drifts ~5% across Python 3.10 → 3.11 librosa builds, so the std band uses
+    ``abs=1e-5`` (purely absolute) which absorbs the noise without letting the
+    mean assertion go slack.
 
     :param cli_metrics_dir: Output directory from the module-scoped CLI invocation.
     """
@@ -94,17 +97,14 @@ def test_aggregated_scalar_values_within_tolerance(cli_metrics_dir: Path) -> Non
 
     assert set(agg.index) == set(snapshot.index)
     for metric in snapshot.index:
+        assert agg.loc[metric, "mean"] == pytest.approx(
+            snapshot.loc[metric, "mean"], rel=1e-2, abs=1e-6
+        ), f"{metric} mean drifted"
         if metric == "rms":
-            assert agg.loc[metric, "mean"] == pytest.approx(
-                snapshot.loc[metric, "mean"], rel=1e-1
-            ), f"{metric} mean drifted"
             assert agg.loc[metric, "std"] == pytest.approx(
-                snapshot.loc[metric, "std"], rel=1e-1
+                snapshot.loc[metric, "std"], abs=1e-5
             ), f"{metric} std drifted"
         else:
-            assert agg.loc[metric, "mean"] == pytest.approx(
-                snapshot.loc[metric, "mean"], rel=1e-2, abs=1e-6
-            ), f"{metric} mean drifted"
             assert agg.loc[metric, "std"] == pytest.approx(
                 snapshot.loc[metric, "std"], rel=1e-2, abs=1e-6
             ), f"{metric} std drifted"
@@ -115,9 +115,10 @@ def test_metrics_csv_per_sample_values(cli_metrics_dir: Path) -> None:
 
     Phase 1 extraction may legitimately reshape this CSV; if so, the refactor PR
     updates this test alongside the production change so the diff makes the
-    behavior change explicit. Distance metrics use ``rel=1e-2``; ``rms`` uses
-    ``rel=1e-1`` (pure-rel) — matches the aggregated-scalar test's band so
-    Python-version float drift on librosa's RMS envelopes does not flake CI.
+    behavior change explicit. Every metric uses ``rel=1e-2, abs=1e-6`` — the
+    per-sample rms is anchored at 1.0 (~0.9999997 on both sample_0 and sample_1)
+    and shows no cross-runner drift, so it does NOT need the aggregated-scalar
+    test's slack std band.
 
     Row ordering is filesystem-dependent (``Path.glob`` traversal order varies
     across Linux ext4 vs. conda-runner btrfs vs. macOS), so the pin asserts the
@@ -138,11 +139,6 @@ def test_metrics_csv_per_sample_values(cli_metrics_dir: Path) -> None:
         for metric in _EXPECTED_METRIC_COLUMNS:
             expected = snapshot.loc[sample_idx, metric]
             got = actual.loc[sample_idx, metric]
-            if metric == "rms":
-                assert got == pytest.approx(expected, rel=1e-1), (
-                    f"sample {sample_idx} {metric} drifted: {got} vs {expected}"
-                )
-            else:
-                assert got == pytest.approx(expected, rel=1e-2, abs=1e-6), (
-                    f"sample {sample_idx} {metric} drifted: {got} vs {expected}"
-                )
+            assert got == pytest.approx(expected, rel=1e-2, abs=1e-6), (
+                f"sample {sample_idx} {metric} drifted: {got} vs {expected}"
+            )
