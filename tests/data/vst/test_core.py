@@ -164,6 +164,110 @@ class TestEditorHeldOpen:
             for call in fake_logger.error.call_args_list
         )
 
+    def test_waits_for_editor_thread_start_before_yield(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``editor_started`` is set before the ``with`` body runs — see #1198.
+
+        Without the handshake the body can begin before the editor thread
+        enters ``show_editor``. We delay the thread's start so a body that
+        ran immediately would observe ``inside_show_editor`` unset; the
+        handshake forces the wait, so the assertion sees it set.
+
+        :param monkeypatch: Wraps ``threading.Thread`` to delay ``start`` and
+            expose the race the handshake closes.
+        """
+        fake_plugin = MagicMock()
+        inside_show_editor = threading.Event()
+
+        def block_inside_show_editor(event: threading.Event) -> None:
+            inside_show_editor.set()
+            event.wait(timeout=5.0)
+
+        fake_plugin.show_editor.side_effect = block_inside_show_editor
+
+        real_thread_cls = threading.Thread
+
+        def make_delayed_thread(*args: object, **kwargs: object) -> threading.Thread:
+            t = real_thread_cls(*args, **kwargs)  # type: ignore[arg-type]
+            original_start = t.start
+
+            def delayed_start() -> None:
+                def deferred() -> None:
+                    time.sleep(0.05)
+                    original_start()
+
+                real_thread_cls(target=deferred, daemon=True).start()
+
+            t.start = delayed_start  # type: ignore[method-assign]
+            return t
+
+        monkeypatch.setattr(threading, "Thread", make_delayed_thread)
+
+        with core.editor_held_open(fake_plugin):
+            assert inside_show_editor.is_set()
+
+    def test_slow_start_warns_and_proceeds(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Editor thread that misses the start handshake logs a warning and the body still runs.
+
+        Simulates a thread that delays starting past
+        ``_EDITOR_START_TIMEOUT_SECONDS``. The context manager must not raise;
+        it warns and proceeds so the render still happens — best-effort
+        handshake (see #1198).
+
+        :param monkeypatch: Tightens ``_EDITOR_START_TIMEOUT_SECONDS`` and stubs
+            ``core.logger`` so the slow-start warning assertion is observable.
+        """
+        monkeypatch.setattr(core, "_EDITOR_START_TIMEOUT_SECONDS", 0.05)
+        fake_logger = MagicMock()
+        monkeypatch.setattr(core, "logger", fake_logger)
+
+        fake_plugin = MagicMock()
+        show_editor_entered = threading.Event()
+
+        def show_editor_blocks(event: threading.Event) -> None:
+            show_editor_entered.set()
+            event.wait(timeout=5.0)
+
+        fake_plugin.show_editor.side_effect = show_editor_blocks
+
+        real_thread_cls = threading.Thread
+        release_real_start = threading.Event()
+
+        def make_slow_thread(*args: object, **kwargs: object) -> threading.Thread:
+            t = real_thread_cls(*args, **kwargs)  # type: ignore[arg-type]
+            original_start = t.start
+
+            def slow_start() -> None:
+                # Defer real start until the handshake timeout has been
+                # observed; an order of magnitude under any join timeout.
+                def deferred() -> None:
+                    release_real_start.wait(timeout=1.0)
+                    original_start()
+
+                real_thread_cls(target=deferred, daemon=True).start()
+
+            t.start = slow_start  # type: ignore[method-assign]
+            return t
+
+        monkeypatch.setattr(threading, "Thread", make_slow_thread)
+
+        body_ran = False
+        with core.editor_held_open(fake_plugin):
+            body_ran = True
+            # Let the deferred real start fire and the editor thread reach
+            # ``show_editor`` so the finally-clause join sees a started
+            # thread; production threads start synchronously — the delay is
+            # a test-only artifact of the slow-start stub.
+            release_real_start.set()
+            assert show_editor_entered.wait(timeout=1.0)
+
+        assert body_ran
+        assert any(
+            "did not signal start" in str(call.args[0])
+            for call in fake_logger.warning.call_args_list
+        )
+
     def test_join_timeout_does_not_deadlock(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """If ``show_editor`` ignores the close event, ``__exit__`` returns within the timeout.
 

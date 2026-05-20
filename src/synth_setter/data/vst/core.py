@@ -18,6 +18,10 @@ _EDITOR_INIT_DELAY_SECONDS = 0.5
 # drain after the close event is set; a generous safety net for the held-open
 # path (#1187), not a normal-case timing parameter.
 _EDITOR_JOIN_TIMEOUT_SECONDS = 2.0
+# Upper bound on how long ``editor_held_open`` waits for the editor thread to
+# signal it has been scheduled past the entry point before yielding to the
+# body (#1198); a slow-start miss warns and proceeds rather than raises.
+_EDITOR_START_TIMEOUT_SECONDS = 5.0
 
 
 def extract_renderer_version(plugin_path: Path) -> str:
@@ -105,15 +109,23 @@ def editor_held_open(plugin: VST3Plugin) -> Iterator[None]:
     the ``finally``-clause raise). If the join times out the daemon thread is
     left to be reaped at process exit; a warning records the leak.
 
+    Before yielding, blocks on a start handshake bounded by
+    ``_EDITOR_START_TIMEOUT_SECONDS`` (#1198). The event only proves the
+    editor thread was scheduled past the entry point, not that
+    ``show_editor`` has realised the window — pedalboard exposes no
+    editor-ready signal.
+
     :param plugin: A loaded VST3 plugin whose editor is realised for the block.
     :raises Exception: Propagated from the editor thread at ``__exit__`` only
         when the ``with`` body itself raised nothing — typically a
         ``RuntimeError`` from the VST3 host.
     """
     close_editor = threading.Event()
+    editor_started = threading.Event()
     captured: list[Exception] = []
 
     def _run_editor() -> None:
+        editor_started.set()
         try:
             plugin.show_editor(close_editor)
         except Exception as exc:  # noqa: BLE001 — fan-in for any host-side failure
@@ -122,6 +134,12 @@ def editor_held_open(plugin: VST3Plugin) -> Iterator[None]:
 
     editor_thread = threading.Thread(target=_run_editor, daemon=True, name="vst-editor-window")
     editor_thread.start()
+    if not editor_started.wait(timeout=_EDITOR_START_TIMEOUT_SECONDS):
+        logger.warning(
+            "vst-editor-window did not signal start within {}s; "
+            "proceeding without start handshake",
+            _EDITOR_START_TIMEOUT_SECONDS,
+        )
     try:
         yield
     finally:
