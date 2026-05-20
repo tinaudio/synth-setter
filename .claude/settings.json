@@ -62,7 +62,7 @@
       },
       {
         "matcher": "Bash",
-        "description": "Pre-PR review gate: on gh pr create, blocks the command unless it contains the literal token REVIEW_FULL_DONE=1 (recommended as a trailing comment so other gh-pr-create hooks still fire). Forces the agent to invoke /repo-review-full-no-comments and iterate on findings before opening a PR. The `if` guard scopes the hook to gh pr create at the handler level; pre-pr-review-gate.sh re-validates the command itself so non-matching commands fall through. The acknowledgment token is honor-system — the gate is a circuit-breaker that forces a pause, not unbypassable security.",
+        "description": "Pre-PR review gate: blocks gh pr create unless REVIEW_FULL=<path> points at a sentinel review file whose filename-encoded SHA is an ancestor of HEAD within REVIEW_MAX_LAG first-parent commits. Honor-system gate; raises the floor to 'produce a file named after a recent SHA on this branch'. Full contract lives in agent/hooks/pre-pr-review-gate.sh; filename format in agent/_shared/review_sentinel.py.",
         "hooks": [
           {
             "type": "command",

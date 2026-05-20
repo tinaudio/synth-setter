@@ -104,13 +104,32 @@ When the shared file says "the calling skill," that's this skill:
 
 Return here once Step 6 has produced the JSON payload on disk.
 
-## Step 7: Render the findings to the user
+## Step 7: Render the findings — write the sentinel file **and** print to chat
 
 Do NOT invoke `post_review.py`. Do NOT call any `gh api .../reviews` or
 `gh pr review` command. This skill has zero GitHub side effects.
 
-Instead, transform the JSON payload at `/tmp/repo-review-full-no-comments-findings.json`
-into a Markdown report and print it as your reply to the user. Use this layout:
+Transform the JSON payload at `/tmp/repo-review-full-no-comments-findings.json`
+into a Markdown report. The report is **both** printed to chat (human
+delivery surface) **and** written to a sentinel file. The
+`pre-pr-review-gate.sh` PreToolUse hook validates the path supplied via
+`REVIEW_FULL=<path>` on `gh pr create` by parsing this filename.
+
+**Compute the sentinel path** — the format is owned by
+`agent/_shared/review_sentinel.py` (single source of truth shared with the
+gate hook):
+
+```bash
+REVIEW_PATH=$(python3 agent/_shared/review_sentinel.py path "$(git rev-parse HEAD)")
+mkdir -p "$(dirname "$REVIEW_PATH")"
+```
+
+The result is of the form
+`.agent-reviews/repo-review-full-no-comments.<40-char-sha>.md`. **Do not
+hand-write the filename** — always go through the helper.
+
+**Write the report to `$REVIEW_PATH` and print the same content to chat**,
+using this layout:
 
 ```markdown
 # repo-review-full-no-comments — <target>
@@ -130,27 +149,50 @@ into a Markdown report and print it as your reply to the user. Use this layout:
 
 - B BLOCK, W WARN across K skills
 - PR-health flags: <M merge-conflict / F failing-check>  (omit if zero or in local-branch mode)
+- Reviewed at: <full-sha-from-git-rev-parse-HEAD>
 - <next-step tip>
 ```
 
 For `<target>` in the header, use `PR #<N>` in PR mode or
 `branch <head_ref>` in local-branch mode.
 
-For `<next-step tip>` in the Summary section, use:
+For `<next-step tip>` in the Summary section, use (substitute
+`<REVIEW_PATH>` with the actual path computed above before printing — do
+not emit the literal placeholder):
 
 - PR mode: `Run /repo-review-full <N> to post these as inline review comments.`
-- Local-branch mode: `Open a PR, then run /repo-review-full to post these as inline review comments.`
+- Local-branch mode: `Open a PR with REVIEW_FULL=<REVIEW_PATH> in the command. Then run /repo-review-full to post these as inline review comments if desired.`
 
 Rules for the rendering:
 
 - Group inline findings by `path`, then list each finding as `**L<line>** — <body>`.
   Use the same `body` text you put into the JSON (`**[<short-tag>:<severity>]** <description>`).
+
 - Preserve the PR-health bullets from `review_body` verbatim — they are
   important for human reviewers and easy to lose if you re-summarize.
-- If the JSON has no findings AND no PR-health flags, print `PASS — no findings`
-  and stop.
-- Do not write the rendered report to a file unless the user asks. The chat
-  response is the delivery surface.
+
+- **PASS short form.** If the JSON has no findings AND no PR-health flags,
+  still write the sentinel file. The gate's size guard rejects files under
+  200 bytes, and the header + `PASS` line + `Reviewed at:` line are
+  ~130 bytes — pad with a one-line context summary so the total is ≥200
+  bytes. Use this exact template (substitute `<target>` and `<sha>`):
+
+  ```markdown
+  # repo-review-full-no-comments — <target>
+
+  PASS — no findings across all skills (code-health, comment-hygiene,
+  python-style, shell-style, synth-setter, tdd-impl, ml-test).
+
+  ## Summary
+
+  - 0 BLOCK, 0 WARN
+  - Reviewed at: <sha>
+  ```
+
+  Print the same content to chat.
+
+- The sentinel file is the gate's contract; the chat output is the human
+  deliverable. Always produce both.
 
 ## Notes
 
