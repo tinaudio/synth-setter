@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779317787738,
+  "lastUpdate": 1779317790053,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -7185,6 +7185,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 11.34302904010001,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "39281d4b116711b7190b91241d34eca341475af2",
+          "message": "ci(testing): cleanup coverage config + add slow-cpu Codecov flag (#1211)\n\n* ci(testing): cleanup coverage config + add slow-cpu Codecov flag\n\n- Delete `.github/codecov.yml` (root `codecov.yml` is canonical; the\n  10-line stub was silently ignored by Codecov's precedence).\n- Fix `[tool.coverage.report].exclude_lines` to use the canonical\n  `pragma: no cover` token (with space). The old `pragma: nocover`\n  spelling was non-standard and never matched anything.\n- Collect coverage in `cpu-slow.yml` and upload under a dedicated\n  `slow-cpu` Codecov flag. The slow CPU suite exercises PyTorch forward\n  passes and pipeline paths that the fast `unit-cpu` suite skips, so\n  those lines were reading as 0% covered.\n- Register the new `slow-cpu` flag in `codecov.yml`'s `flag_management`\n  so carryforward and path scoping match `unit-cpu`.\n\nRefs #14\n\n* chore(lint): tighten cpu-slow Codecov upload comment to 2 lines\n\nCLAUDE.md caps inline comments at two lines; collapse the 3-line preamble\nto lead with the load-bearing rationale (flag separability) and drop the\nrestated context about what the slow CPU suite covers — the file header\nat lines 3-8 already says it.\n\nRefs #14",
+          "timestamp": "2026-05-20T18:32:13-04:00",
+          "tree_id": "ea7af2f16e26f2e7d3d02458e826fd54d70dd7f4",
+          "url": "https://github.com/tinaudio/synth-setter/commit/39281d4b116711b7190b91241d34eca341475af2"
+        },
+        "date": 1779317789709,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 2.2835423946380615,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 3.370179068483412,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.018074436113238335,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.008218109607696533,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 2.0823981761932373,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 16.508436109100025,
             "unit": "seconds"
           }
         ]
