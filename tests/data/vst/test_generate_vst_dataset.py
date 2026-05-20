@@ -12,16 +12,22 @@ from unittest.mock import MagicMock, patch
 
 import h5py
 import hdf5plugin  # noqa: F401  side-effect: registers Blosc2 filter for h5py reads
+
 _ = hdf5plugin  # keep type checkers from flagging the side-effect import
 import numpy as np
 import pytest
 
-from synth_setter.pipeline.schemas.spec import RenderConfig
-from synth_setter.evaluation.compute_audio_metrics import compute_mss, compute_rms, compute_sot, compute_wmfcc
 from synth_setter.data.vst import param_specs
 from synth_setter.data.vst.core import load_plugin, load_preset, render_params
 from synth_setter.data.vst.param_spec import ParamSpec
 from synth_setter.data.vst.writers import make_hdf5_dataset
+from synth_setter.evaluation.compute_audio_metrics import (
+    compute_mss,
+    compute_rms,
+    compute_sot,
+    compute_wmfcc,
+)
+from synth_setter.pipeline.schemas.spec import RenderConfig
 
 log = logging.getLogger(__name__)
 
@@ -61,21 +67,24 @@ def _render_cfg(
         velocity=_VELOCITY,
         signal_duration_seconds=_DURATION,
         min_loudness=min_loudness,
-        samples_per_render_batch=samples_per_render_batch if samples_per_render_batch is not None else num_samples,
+        samples_per_render_batch=samples_per_render_batch
+        if samples_per_render_batch is not None
+        else num_samples,
         samples_per_shard=num_samples,
         # Darwin-portable: never run the editor warm-up (#714).
         gui_toggle_cadence="never",
     )
+
 
 # Phase-robust audio similarity thresholds for replayed-params vs. candidates.
 # Two independent renders of identical params differ at the sample level on main
 # (issue #489 — Surge XT's oscillator phase init is nondeterministic across renders),
 # but should remain perceptually close. Tune downward if the metrics consistently come
 # in tighter than these caps.
-_MSS_MAX = 10.0           # multi-scale log-mel L1 distance (dB)
-_WMFCC_MAX = 18.0         # DTW-aligned MFCC L1 distance
-_SOT_MAX = 0.15          # spectral optimal transport (Wasserstein on STFT mags)
-_RMS_MIN_COSINE = 0.8   # RMS envelope cosine similarity (1.0 = identical)
+_MSS_MAX = 10.0  # multi-scale log-mel L1 distance (dB)
+_WMFCC_MAX = 18.0  # DTW-aligned MFCC L1 distance
+_SOT_MAX = 0.15  # spectral optimal transport (Wasserstein on STFT mags)
+_RMS_MIN_COSINE = 0.8  # RMS envelope cosine similarity (1.0 = identical)
 _MEL_MEAN_ABS_MAX = 5.0  # mean abs diff on stored mel_spec (log-power dB)
 
 # Peak amplitude floor below which a clip is treated as silent.
@@ -323,9 +332,7 @@ def _assert_h5_structure_is_valid(
         assert np.isfinite(params_arr).all()
 
         peak = np.abs(audio_arr).reshape(num_samples, -1).max(axis=1)
-        assert (peak > _AUDIO_PEAK_SILENCE_FLOOR).all(), (
-            f"silent clips: peaks={peak.tolist()}"
-        )
+        assert (peak > _AUDIO_PEAK_SILENCE_FLOOR).all(), f"silent clips: peaks={peak.tolist()}"
 
         return audio_arr, mel_arr, params_arr
 
@@ -359,9 +366,7 @@ def _patched_sample(
     )
 
 
-def _audio_metrics(
-    target: np.ndarray, pred: np.ndarray
-) -> tuple[float, float, float, float]:
+def _audio_metrics(target: np.ndarray, pred: np.ndarray) -> tuple[float, float, float, float]:
     """Compute (mss, wmfcc, sot, rms_cos) for one (target, pred) audio pair."""
     return (
         compute_mss(target, pred),
@@ -540,9 +545,7 @@ def _emit_audio_similarity_benchmark_metrics(
     _emit_benchmark_metrics(entries=entries, bench_filename=f"{prefix}.json")
 
 
-def _emit_benchmark_metrics(
-    entries: list[dict[str, float | str]], bench_filename: str
-) -> None:
+def _emit_benchmark_metrics(entries: list[dict[str, float | str]], bench_filename: str) -> None:
     """Append metrics to ``$BENCHMARK_OUTPUT_DIR/<bench_filename>`` for the trend chart.
 
     No-op when the env var is unset (e.g. local pytest runs). One file per
@@ -613,16 +616,14 @@ def _assert_all_pairs_audio_metrics_within_thresholds(
         *worst_rms_cos,
     )
     assert worst_mss[0] < _MSS_MAX, (
-        f"{label_prefix}: worst mss={worst_mss[0]:.4f} at pair {worst_mss[1:]} "
-        f"exceeds {_MSS_MAX}"
+        f"{label_prefix}: worst mss={worst_mss[0]:.4f} at pair {worst_mss[1:]} exceeds {_MSS_MAX}"
     )
     assert worst_wmfcc[0] < _WMFCC_MAX, (
         f"{label_prefix}: worst wmfcc={worst_wmfcc[0]:.4f} at pair {worst_wmfcc[1:]} "
         f"exceeds {_WMFCC_MAX}"
     )
     assert worst_sot[0] < _SOT_MAX, (
-        f"{label_prefix}: worst sot={worst_sot[0]:.4f} at pair {worst_sot[1:]} "
-        f"exceeds {_SOT_MAX}"
+        f"{label_prefix}: worst sot={worst_sot[0]:.4f} at pair {worst_sot[1:]} exceeds {_SOT_MAX}"
     )
     assert worst_rms_cos[0] > _RMS_MIN_COSINE, (
         f"{label_prefix}: worst rms cosine={worst_rms_cos[0]:.4f} at pair "
@@ -1173,10 +1174,12 @@ def test_generate_sample_retries_when_only_fixed_note_params(
         lambda *a, **kw: next(render_outputs),
     )
 
-    sample_returns = iter([
-        (_HARDCODED_SYNTH_PARAMS, _HARDCODED_NOTE_PARAMS),
-        (_HARDCODED_SYNTH_PARAMS, _HARDCODED_NOTE_PARAMS),
-    ])
+    sample_returns = iter(
+        [
+            (_HARDCODED_SYNTH_PARAMS, _HARDCODED_NOTE_PARAMS),
+            (_HARDCODED_SYNTH_PARAMS, _HARDCODED_NOTE_PARAMS),
+        ]
+    )
     monkeypatch.setattr(spec, "sample", lambda: next(sample_returns))
 
     sample = generate_vst_dataset.generate_sample(
@@ -1230,9 +1233,7 @@ def _install_fake_render_params(
 
     monkeypatch.setattr(generate_vst_dataset, "render_params", _fake_render_params)
 
-    sample_returns = iter(
-        [(_HARDCODED_SYNTH_PARAMS, _HARDCODED_NOTE_PARAMS)] * (num_retries + 1)
-    )
+    sample_returns = iter([(_HARDCODED_SYNTH_PARAMS, _HARDCODED_NOTE_PARAMS)] * (num_retries + 1))
     monkeypatch.setattr(spec, "sample", lambda: next(sample_returns))
     return warmup_mock
 
@@ -1383,8 +1384,12 @@ def test_emit_benchmark_skips_when_env_unset(
     _emit_audio_similarity_benchmark_metrics(
         prefix="x",
         round_trip=RoundTripMetrics(
-            mss_max=1.0, wmfcc_max=1.0, sot_max=0.001,
-            rms_cos_min=0.99, mel_mean_abs=0.5, num_samples=4,
+            mss_max=1.0,
+            wmfcc_max=1.0,
+            sot_max=0.001,
+            rms_cos_min=0.99,
+            mel_mean_abs=0.5,
+            num_samples=4,
         ),
     )
     assert list(tmp_path.iterdir()) == []  # nothing written
@@ -1403,8 +1408,12 @@ def test_emit_benchmark_round_trip_only_writes_expected_schema(
     _emit_audio_similarity_benchmark_metrics(
         prefix="bucket-a",
         round_trip=RoundTripMetrics(
-            mss_max=2.5, wmfcc_max=3.5, sot_max=0.02,
-            rms_cos_min=0.97, mel_mean_abs=1.5, num_samples=4,
+            mss_max=2.5,
+            wmfcc_max=3.5,
+            sot_max=0.02,
+            rms_cos_min=0.97,
+            mel_mean_abs=1.5,
+            num_samples=4,
         ),
         total_render_seconds=8.0,  # 8 / (2 × 4) = 1.0 s/render
     )
@@ -1415,9 +1424,8 @@ def test_emit_benchmark_round_trip_only_writes_expected_schema(
     assert by_name["bucket-a/multi-scale-spectral-loss-max"]["value"] == 2.5
     assert by_name["bucket-a/dtw-aligned-mfcc-distance-max"]["value"] == 3.5
     assert by_name["bucket-a/spectral-optimal-transport-max"]["value"] == 0.02
-    assert (
-        by_name["bucket-a/rms-envelope-cosine-distance-max"]["value"]
-        == pytest.approx(1.0 - 0.97)
+    assert by_name["bucket-a/rms-envelope-cosine-distance-max"]["value"] == pytest.approx(
+        1.0 - 0.97
     )
     assert by_name["bucket-a/mel-spectrogram-mean-absolute-error"]["value"] == 1.5
     assert by_name["bucket-a/num-samples"]["value"] == 4
@@ -1436,17 +1444,19 @@ def test_emit_benchmark_all_pairs_only_skips_round_trip_series(
     _emit_audio_similarity_benchmark_metrics(
         prefix="bucket-b",
         all_pairs=AllPairsMetrics(
-            mss_max=4.0, wmfcc_max=6.0, sot_max=0.03,
-            rms_cos_min=0.95, pair_count=66,
+            mss_max=4.0,
+            wmfcc_max=6.0,
+            sot_max=0.03,
+            rms_cos_min=0.95,
+            pair_count=66,
         ),
     )
     entries = json.loads((tmp_path / "bucket-b.json").read_text())
     by_name = {e["name"]: e for e in entries}
     assert by_name["bucket-b/all-pairs-multi-scale-spectral-loss-max"]["value"] == 4.0
-    assert (
-        by_name["bucket-b/all-pairs-rms-envelope-cosine-distance-max"]["value"]
-        == pytest.approx(1.0 - 0.95)
-    )
+    assert by_name["bucket-b/all-pairs-rms-envelope-cosine-distance-max"][
+        "value"
+    ] == pytest.approx(1.0 - 0.95)
     assert by_name["bucket-b/all-pairs-pair-count"]["value"] == 66
     # No round-trip entries when only all_pairs is supplied.
     assert "bucket-b/multi-scale-spectral-loss-max" not in by_name
@@ -1461,12 +1471,19 @@ def test_emit_benchmark_both_structs_writes_both_namespaces(
     _emit_audio_similarity_benchmark_metrics(
         prefix="bucket-c",
         round_trip=RoundTripMetrics(
-            mss_max=1.0, wmfcc_max=1.0, sot_max=0.001,
-            rms_cos_min=0.99, mel_mean_abs=0.5, num_samples=6,
+            mss_max=1.0,
+            wmfcc_max=1.0,
+            sot_max=0.001,
+            rms_cos_min=0.99,
+            mel_mean_abs=0.5,
+            num_samples=6,
         ),
         all_pairs=AllPairsMetrics(
-            mss_max=4.0, wmfcc_max=6.0, sot_max=0.03,
-            rms_cos_min=0.95, pair_count=66,
+            mss_max=4.0,
+            wmfcc_max=6.0,
+            sot_max=0.03,
+            rms_cos_min=0.95,
+            pair_count=66,
         ),
     )
     entries = json.loads((tmp_path / "bucket-c.json").read_text())
@@ -1491,8 +1508,12 @@ def test_emit_benchmark_appends_to_existing_file(
     """Subsequent emissions for the same prefix accumulate in the same file."""
     monkeypatch.setenv("BENCHMARK_OUTPUT_DIR", str(tmp_path))
     rt = RoundTripMetrics(
-        mss_max=1.0, wmfcc_max=1.0, sot_max=0.001,
-        rms_cos_min=0.99, mel_mean_abs=0.5, num_samples=2,
+        mss_max=1.0,
+        wmfcc_max=1.0,
+        sot_max=0.001,
+        rms_cos_min=0.99,
+        mel_mean_abs=0.5,
+        num_samples=2,
     )
     _emit_audio_similarity_benchmark_metrics(prefix="bucket-e", round_trip=rt)
     _emit_audio_similarity_benchmark_metrics(prefix="bucket-e", round_trip=rt)
