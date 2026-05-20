@@ -1,8 +1,20 @@
 """Tests for ``synth_setter.cli.finalize_dataset`` — finalize entrypoint.
 
-End-to-end test invokes ``main()`` against the real ``smoke-shard-wds``
-experiment so the Hydra compose + ``DatasetSpec`` construction stay
-exercised; rclone (download / upload / auth ping) is stubbed.
+Wds-side ``main()`` tests seed train shards on the ``fake_r2_remote``
+fixture (a local-typed rclone remote rooted at ``tmp_path`` — see
+``tests/pipeline/conftest.py``) and let ``finalize_dataset`` run the
+real ``rclone copyto`` for download + upload against that remote. Tests
+assert on materialized files under ``fake_r2_remote``.
+
+Two helpers stay stubbed because the local rclone backend can't simulate
+them cleanly:
+
+- ``ensure_r2_env_loaded`` — would require real ``RCLONE_CONFIG_R2_*``
+  secrets and a working ``rclone lsd r2:`` against real R2.
+- ``object_size`` — ``rclone lsf`` against an absent key on the local
+  backend exits 3 ("directory not found") instead of the empty-stdout
+  semantics S3-compatible backends return; the marker probe in ``main()``
+  needs the "absent → None" branch, so the stub stays.
 """
 
 from __future__ import annotations
@@ -11,6 +23,7 @@ import io
 import shutil
 import sys
 import tarfile
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
@@ -36,7 +49,7 @@ _FIXED_NOW = datetime(2026, 5, 20, 12, 0, 0, tzinfo=timezone.utc)
 def _write_minimal_wds_shard(dest: Path) -> None:
     """Write a tar at ``dest`` with one ``00000000.mel_spec.npy`` member.
 
-    :param dest: Filesystem path where the tar is written.
+    :param dest: Filesystem path where the tar is written. Parent dirs are created as needed.
     """
     dest.parent.mkdir(parents=True, exist_ok=True)
     # 4 rows so Welford variance is non-degenerate.
@@ -85,82 +98,120 @@ def _build_wds_smoke_spec(
     return DatasetSpec(**kwargs)  # type: ignore[arg-type]
 
 
+def _uri_to_local_path(fake_r2_remote: Path, r2_uri: str) -> Path:
+    """Map an ``r2://bucket/key`` URI to its materialized path under the local-typed remote.
+
+    The ``fake_r2_remote`` fixture sets ``RCLONE_CONFIG_R2_TYPE=local`` and
+    chdirs into ``tmp_path``, so ``r2:bucket/key`` resolves to
+    ``<tmp_path>/bucket/key`` — i.e. ``<fake_r2_remote>/bucket/key``.
+
+    :param fake_r2_remote: Root of the local-typed remote (from the fixture).
+    :param r2_uri: Canonical ``r2://bucket/key`` URI.
+    :returns: The local filesystem path the URI materializes at.
+    :raises ValueError: ``r2_uri`` does not start with the ``r2://`` scheme.
+    """
+    prefix = "r2://"
+    if not r2_uri.startswith(prefix):
+        raise ValueError(f"expected r2:// URI, got {r2_uri!r}")
+    return fake_r2_remote / r2_uri[len(prefix) :]
+
+
+def _seed_train_shards(fake_r2_remote: Path, spec: DatasetSpec) -> list[Path]:
+    """Materialize each train shard under ``<fake_r2_remote>/<bucket>/<prefix>/<filename>``.
+
+    Mirrors what ``generate_dataset.run`` would have uploaded earlier in the
+    pipeline so finalize's ``r2_io.download_to_path`` finds a real tar under
+    the local-typed remote.
+
+    :param fake_r2_remote: Root of the local-typed remote.
+    :param spec: Dataset spec whose ``shards`` and ``r2`` provide the layout.
+    :returns: The seeded local shard paths, in train-range order.
+    """
+    train_lo, train_hi = spec.split_shard_ranges["train"]
+    seeded: list[Path] = []
+    for shard in spec.shards[train_lo:train_hi]:
+        path = _uri_to_local_path(fake_r2_remote, spec.r2.shard_uri(shard))
+        _write_minimal_wds_shard(path)
+        seeded.append(path)
+    return seeded
+
+
 @pytest.fixture()
-def patch_finalize_io(monkeypatch: pytest.MonkeyPatch) -> tuple[list[str], list[tuple[Path, str]]]:
-    """Patch ``r2_io`` download/upload/auth so finalize never touches real R2.
+def stub_main_setup(monkeypatch: pytest.MonkeyPatch) -> Callable[[int | None], None]:
+    """Pin spec runtime hooks + auth + marker-probe so ``main()`` composes deterministically.
+
+    Leaves ``r2_io.download_to_path`` and ``r2_io.upload`` unstubbed — paired
+    with ``fake_r2_remote`` they run real ``rclone copyto`` against the
+    local-typed remote so tests can assert on materialized objects.
 
     :param monkeypatch: Pytest fixture used to install the stubs.
-    :returns:``(downloaded_uris, uploaded)`` — the two recording lists. Tests read these to assert
-        behaviour.
+    :returns: A setter that overrides the marker-probe's "size in R2"
+        response — ``None`` (default) makes ``main()`` proceed with finalize;
+        an ``int`` triggers the idempotency short-circuit.
     """
-    downloaded_uris: list[str] = []
-    uploaded: list[tuple[Path, str]] = []
-
-    def fake_download(r2_uri: str, dest_path: Path) -> None:
-        downloaded_uris.append(r2_uri)
-        _write_minimal_wds_shard(dest_path)
-
-    def record_upload(source: str | Path, destination_uri: str) -> None:
-        uploaded.append((Path(source), destination_uri))
-
-    monkeypatch.setattr("synth_setter.pipeline.r2_io.download_to_path", fake_download)
-    monkeypatch.setattr("synth_setter.pipeline.r2_io.upload", record_upload)
     monkeypatch.setattr(
         "synth_setter.pipeline.r2_io.ensure_r2_env_loaded",
         lambda *args, **kwargs: None,
     )
-    # main() probes the marker URI for the idempotency gate; default is "absent".
-    monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda uri: None)
-    # Pin runtime fields so DatasetSpec.run_id is reproducible across the
-    # main()-side compose and the assertion-side compose.
     monkeypatch.setattr("synth_setter.pipeline.schemas.spec._get_git_sha", lambda: "a" * 40)
     monkeypatch.setattr("synth_setter.pipeline.schemas.spec._is_repo_dirty", lambda: False)
     monkeypatch.setattr("synth_setter.pipeline.schemas.spec._utc_now", lambda: _FIXED_NOW)
-    return downloaded_uris, uploaded
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda _uri: None)
+
+    def _set_marker_size(size: int | None) -> None:
+        monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda _uri: size)
+
+    return _set_marker_size
 
 
 def test_main_uploads_stats_then_marker_at_canonical_uris(
     monkeypatch: pytest.MonkeyPatch,
-    patch_finalize_io: tuple[list[str], list[tuple[Path, str]]],
+    fake_r2_remote: Path,
+    stub_main_setup: Callable[[int | None], None],  # noqa: ARG001 — autouse-style stubs
 ) -> None:
-    """``main()`` against smoke-shard-wds uploads exactly ``stats.npz`` then ``dataset.complete``.
+    """``main()`` against smoke-shard-wds lands ``stats.npz`` then ``dataset.complete``.
+
+    Marker mtime is no earlier than stats mtime — the resumability contract
+    pins marker-last.
 
     :param monkeypatch: Pytest fixture used to patch ``sys.argv``.
-    :param patch_finalize_io: Recording stubs for download / upload / auth.
+    :param fake_r2_remote: Local-typed rclone remote; both artifacts land here.
+    :param stub_main_setup: Fixture-activation only — installs the
+        ``ensure_r2_env_loaded`` / ``object_size`` / schema-hook stubs.
     """
-    _downloaded, uploaded = patch_finalize_io
+    spec = _compose_smoke_wds_spec()
+    _seed_train_shards(fake_r2_remote, spec)
     monkeypatch.setattr(sys, "argv", ["finalize", "experiment=generate_dataset/smoke-shard-wds"])
 
     finalize_dataset.main()
 
-    # Reconstruct the spec the same way main() does so we can assert exact URIs.
-    spec = _compose_smoke_wds_spec()
-    upload_destinations = [dst for _, dst in uploaded]
-    assert upload_destinations == [
-        spec.r2.stats_uri(),
-        spec.r2.dataset_complete_marker_uri(),
-    ]
-    assert upload_destinations[-1] == spec.r2.dataset_complete_marker_uri()
+    stats_path = _uri_to_local_path(fake_r2_remote, spec.r2.stats_uri())
+    marker_path = _uri_to_local_path(fake_r2_remote, spec.r2.dataset_complete_marker_uri())
+    assert stats_path.is_file()
+    assert marker_path.is_file()
+    assert stats_path.stat().st_mtime <= marker_path.stat().st_mtime
 
 
 def test_main_is_idempotent_when_marker_already_exists(
     monkeypatch: pytest.MonkeyPatch,
-    patch_finalize_io: tuple[list[str], list[tuple[Path, str]]],
+    fake_r2_remote: Path,
+    stub_main_setup: Callable[[int | None], None],
 ) -> None:
-    """If ``dataset.complete`` already exists at the run prefix, ``main()`` does no work.
+    """Marker present at run prefix → ``main()`` short-circuits, no stats are written.
 
-    :param monkeypatch: Pytest fixture used to patch ``sys.argv`` and ``object_size``.
-    :param patch_finalize_io: Recording stubs; we override ``object_size`` after
-        the fixture installs the default-absent stub.
+    :param monkeypatch: Pytest fixture used to patch ``sys.argv``.
+    :param fake_r2_remote: Local-typed rclone remote — asserted to still be
+        free of any ``stats.npz`` after the no-op run.
+    :param stub_main_setup: Used to flip the marker probe to "present".
     """
-    downloaded, uploaded = patch_finalize_io
-    monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda uri: 0)
+    stub_main_setup(0)
+    spec = _compose_smoke_wds_spec()
     monkeypatch.setattr(sys, "argv", ["finalize", "experiment=generate_dataset/smoke-shard-wds"])
 
     finalize_dataset.main()
 
-    assert downloaded == []
-    assert uploaded == []
+    stats_path = _uri_to_local_path(fake_r2_remote, spec.r2.stats_uri())
+    assert not stats_path.exists()
 
 
 def _build_hdf5_smoke_spec(
@@ -776,76 +827,88 @@ def _compose_smoke_hdf5_spec() -> DatasetSpec:
 
 
 def test_finalize_wds_downloads_every_train_shard_uri(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    fake_r2_remote: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Multi-shard train split: every ``spec.shards[train_lo:train_hi]`` URI is downloaded.
+    """Multi-shard train split: every train shard's canonical URI is downloaded, in order.
 
-    :param monkeypatch: Pytest fixture used to install download/upload stubs.
-    :param tmp_path: Pytest tmp dir used as the in-process scratch work_dir.
+    :param fake_r2_remote: Local-typed rclone remote where each train shard
+        is seeded before finalize runs.
+    :param tmp_path: Pytest tmp dir; ``work_dir`` is a subdir so the spy can
+        distinguish finalize's transient downloads from the seeded sources.
+    :param monkeypatch: Used to install the URI-recording spy that delegates
+        to the real ``download_to_path``.
     """
-    downloaded_uris: list[str] = []
-    uploaded: list[tuple[Path, str]] = []
-    monkeypatch.setattr(
-        "synth_setter.pipeline.r2_io.download_to_path",
-        lambda uri, dest: (downloaded_uris.append(uri), _write_minimal_wds_shard(dest)),
-    )
-    monkeypatch.setattr(
-        "synth_setter.pipeline.r2_io.upload",
-        lambda source, destination_uri: uploaded.append((Path(source), destination_uri)),
-    )
+    from synth_setter.pipeline import r2_io
 
     spec = _build_wds_smoke_spec(task_name="multi-shard-train", train_val_test_sizes=(8, 0, 0))
-    finalize_dataset.finalize_wds(spec, tmp_path)
+    _seed_train_shards(fake_r2_remote, spec)
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    real_download = r2_io.download_to_path
+    downloaded_uris: list[str] = []
 
-    expected_uris = [spec.r2.shard_uri(shard) for shard in spec.shards]
+    def spy_download(r2_uri: str, dest_path: Path) -> None:
+        downloaded_uris.append(r2_uri)
+        real_download(r2_uri, dest_path)
+
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.download_to_path", spy_download)
+
+    finalize_dataset.finalize_wds(spec, work_dir)
+
+    train_lo, train_hi = spec.split_shard_ranges["train"]
+    expected_uris = [spec.r2.shard_uri(shard) for shard in spec.shards[train_lo:train_hi]]
     assert downloaded_uris == expected_uris
-    assert len(uploaded) == 1
-    assert uploaded[0][1] == spec.r2.stats_uri()
+    assert _uri_to_local_path(fake_r2_remote, spec.r2.stats_uri()).is_file()
 
 
-def test_finalize_wds_raises_on_empty_train_split(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_finalize_wds_raises_on_empty_train_split(fake_r2_remote: Path, tmp_path: Path) -> None:
     """An empty train split surfaces as a clear ValueError, not a misleading FileNotFoundError.
 
-    :param monkeypatch: Pytest fixture used to install download/upload stubs.
-    :param tmp_path: Pytest tmp dir used as the in-process scratch work_dir.
+    :param fake_r2_remote: Local-typed rclone remote — asserted untouched because the empty-train
+        guard short-circuits before any I/O.
+    :param tmp_path: Pytest tmp dir used as finalize's local work_dir.
     """
-    # download/upload must never be called — the empty-train guard short-circuits.
-    monkeypatch.setattr(
-        "synth_setter.pipeline.r2_io.download_to_path",
-        lambda *a, **kw: pytest.fail("download_to_path should not be reached"),
-    )
-    monkeypatch.setattr(
-        "synth_setter.pipeline.r2_io.upload",
-        lambda *a, **kw: pytest.fail("upload should not be reached"),
-    )
-
     spec = _build_wds_smoke_spec(task_name="empty-train", train_val_test_sizes=(0, 4, 0))
+
     with pytest.raises(ValueError, match="train split is empty"):
         finalize_dataset.finalize_wds(spec, tmp_path)
 
+    assert [p for p in fake_r2_remote.rglob("*") if p.is_file()] == []
+
 
 def test_finalize_wds_unlinks_each_shard_after_folding(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    fake_r2_remote: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Peak-disk invariant: at any moment at most one shard sits in ``work_dir``.
 
-    :param monkeypatch: Pytest fixture used to install the download stub.
-    :param tmp_path: Pytest tmp dir used as the in-process scratch work_dir.
+    Wraps ``r2_io.download_to_path`` with a spy that counts concurrent shard
+    files in ``work_dir`` right after each download lands. The wrapper
+    delegates to the real helper so the rclone download still executes
+    against ``fake_r2_remote``.
+
+    :param fake_r2_remote: Local-typed rclone remote, seeded with two shards.
+    :param tmp_path: Pytest tmp dir; ``work_dir`` is a subdir so the spy can
+        count only finalize's transient shards.
+    :param monkeypatch: Used to install the recording wrapper.
     """
-    concurrent_shards_seen: list[int] = []
-
-    def fake_download(r2_uri: str, dest_path: Path) -> None:
-        del r2_uri
-        _write_minimal_wds_shard(dest_path)
-        concurrent_shards_seen.append(len(list(tmp_path.glob("shard-*.tar"))))
-
-    monkeypatch.setattr("synth_setter.pipeline.r2_io.download_to_path", fake_download)
-    monkeypatch.setattr("synth_setter.pipeline.r2_io.upload", lambda src, dst: None)
+    from synth_setter.pipeline import r2_io
 
     spec = _build_wds_smoke_spec(task_name="peak-disk", train_val_test_sizes=(8, 0, 0))
-    finalize_dataset.finalize_wds(spec, tmp_path)
+    _seed_train_shards(fake_r2_remote, spec)
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    real_download = r2_io.download_to_path
+    concurrent_shards_seen: list[int] = []
+
+    def spy_download(r2_uri: str, dest_path: Path) -> None:
+        real_download(r2_uri, dest_path)
+        concurrent_shards_seen.append(len(list(work_dir.glob("shard-*.tar"))))
+
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.download_to_path", spy_download)
+
+    finalize_dataset.finalize_wds(spec, work_dir)
 
     assert concurrent_shards_seen == [1, 1]
 
