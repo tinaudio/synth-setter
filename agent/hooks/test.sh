@@ -29,6 +29,8 @@ cp agent/hooks/_lib.sh \
    agent/hooks/pre-pr-review-gate.sh \
    agent/hooks/edit-write.sh \
    agent/hooks/verify-gh-taxonomy.sh \
+   agent/hooks/worktree-guard.sh \
+   agent/hooks/session-start-cwd-banner.sh \
    "$SANDBOX/agent/hooks/"
 cp agent/_shared/review_sentinel.py "$SANDBOX/agent/_shared/"
 cd "$SANDBOX"
@@ -1039,6 +1041,113 @@ T_taxonomy_check_ci_minimum_joins_with_comma_space() {
   [[ "$result" == "domain-label" ]] || { echo "expected 'domain-label', got: '$result'"; return 1; }
 }
 it "verify-gh-taxonomy: check_ci_minimum joins missing fields with ', ' (comma+space)" T_taxonomy_check_ci_minimum_joins_with_comma_space
+
+# ===========================================================================
+# worktree-guard.sh — primary-checkout detection + mode dispatch
+# ===========================================================================
+#
+# Sandbox is its own primary checkout at $SANDBOX; tests that need a linked
+# worktree do `git worktree add` inside the sandbox (reset_sandbox tears them
+# down between cases). Empty stdin is intentional — the guard ignores
+# tool_input.file_path, so the test harness need not synthesize realistic JSON.
+
+T_worktree_guard_warns_in_primary() {
+  local out stderr_file
+  stderr_file="$TEST_DIR/wg_stderr.txt"
+  out=$(echo '' | bash agent/hooks/worktree-guard.sh 2>"$stderr_file"; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0, got: $out"; return 1; }
+  grep -q "WARNING" "$stderr_file" || { echo "stderr should contain WARNING; got: $(cat "$stderr_file")"; return 1; }
+  grep -q "git worktree add" "$stderr_file" || { echo "stderr should suggest 'git worktree add'"; return 1; }
+}
+it "worktree-guard: edit in primary (warn mode default) → exit 0 with WARNING + remediation on stderr" T_worktree_guard_warns_in_primary
+
+T_worktree_guard_blocks_in_primary_when_mode_block() {
+  local out stderr_file
+  stderr_file="$TEST_DIR/wg_stderr.txt"
+  out=$(WORKTREE_GUARD_MODE=block bash -c 'echo "" | bash agent/hooks/worktree-guard.sh' 2>"$stderr_file"; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:2" ]] || { echo "expected EXIT:2, got: $out"; return 1; }
+  grep -q "BLOCKED" "$stderr_file" || { echo "stderr should contain BLOCKED; got: $(cat "$stderr_file")"; return 1; }
+}
+it "worktree-guard: WORKTREE_GUARD_MODE=block in primary → exit 2 with BLOCKED on stderr" T_worktree_guard_blocks_in_primary_when_mode_block
+
+T_worktree_guard_off_mode_silent_in_primary() {
+  local out stderr_file
+  stderr_file="$TEST_DIR/wg_stderr.txt"
+  out=$(WORKTREE_GUARD_MODE=off bash -c 'echo "" | bash agent/hooks/worktree-guard.sh' 2>"$stderr_file"; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0, got: $out"; return 1; }
+  [[ -z "$(cat "$stderr_file")" ]] || { echo "stderr should be empty in off mode; got: $(cat "$stderr_file")"; return 1; }
+}
+it "worktree-guard: WORKTREE_GUARD_MODE=off → exit 0 with no output (escape hatch)" T_worktree_guard_off_mode_silent_in_primary
+
+T_worktree_guard_silent_in_linked_worktree() {
+  local out stderr_file wt
+  stderr_file="$TEST_DIR/wg_stderr.txt"
+  wt="$TEST_DIR/linked-wt"
+  git worktree add -q -b wg-test-branch "$wt" >/dev/null 2>&1
+  out=$(cd "$wt" && echo '' | bash "$SANDBOX/agent/hooks/worktree-guard.sh" 2>"$stderr_file"; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0, got: $out"; return 1; }
+  [[ -z "$(cat "$stderr_file")" ]] || { echo "stderr should be empty in linked worktree; got: $(cat "$stderr_file")"; return 1; }
+}
+it "worktree-guard: edit inside a linked worktree → exit 0, no warning" T_worktree_guard_silent_in_linked_worktree
+
+T_worktree_guard_silent_outside_repo() {
+  local out stderr_file scratch
+  stderr_file="$TEST_DIR/wg_stderr.txt"
+  scratch=$(mktemp -d "$TEST_DIR/no-git-XXXX")
+  out=$(cd "$scratch" && echo '' | bash "$SANDBOX/agent/hooks/worktree-guard.sh" 2>"$stderr_file"; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0, got: $out"; return 1; }
+  [[ -z "$(cat "$stderr_file")" ]] || { echo "stderr should be empty outside any git repo; got: $(cat "$stderr_file")"; return 1; }
+}
+it "worktree-guard: edit outside any git repo → exit 0, no warning" T_worktree_guard_silent_outside_repo
+
+T_worktree_guard_unknown_mode_falls_back_to_warn() {
+  local out stderr_file
+  stderr_file="$TEST_DIR/wg_stderr.txt"
+  out=$(WORKTREE_GUARD_MODE=bogus bash -c 'echo "" | bash agent/hooks/worktree-guard.sh' 2>"$stderr_file"; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0 even on unknown mode, got: $out"; return 1; }
+  grep -q "ignoring unknown WORKTREE_GUARD_MODE=bogus" "$stderr_file" || {
+    echo "stderr should log the unknown-mode fallback; got: $(cat "$stderr_file")"
+    return 1
+  }
+}
+it "worktree-guard: unknown WORKTREE_GUARD_MODE value logs + exits 0 (never blocks via typo)" T_worktree_guard_unknown_mode_falls_back_to_warn
+
+# ===========================================================================
+# session-start-cwd-banner.sh — banner content per cwd
+# ===========================================================================
+
+T_session_start_banner_in_primary() {
+  local out
+  out=$(bash agent/hooks/session-start-cwd-banner.sh </dev/null 2>&1; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0, got: $out"; return 1; }
+  [[ "$out" == *"PRIMARY CHECKOUT"* ]] || { echo "banner should flag PRIMARY CHECKOUT; got: $out"; return 1; }
+  [[ "$out" == *"git worktree add"* ]] || { echo "banner should suggest 'git worktree add'; got: $out"; return 1; }
+}
+it "session-start-banner: in primary → stdout flags PRIMARY CHECKOUT and shows remediation" T_session_start_banner_in_primary
+
+T_session_start_banner_in_linked_worktree() {
+  local out wt
+  wt="$TEST_DIR/banner-wt"
+  git worktree add -q -b banner-test-branch "$wt" >/dev/null 2>&1
+  out=$(cd "$wt" && bash "$SANDBOX/agent/hooks/session-start-cwd-banner.sh" </dev/null 2>&1; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0, got: $out"; return 1; }
+  [[ "$out" == *"isolated worktree"* ]] || { echo "banner should say 'isolated worktree'; got: $out"; return 1; }
+  [[ "$out" != *"PRIMARY CHECKOUT"* ]] || { echo "banner should NOT flag PRIMARY in a linked worktree; got: $out"; return 1; }
+}
+it "session-start-banner: in linked worktree → stdout reports 'isolated worktree (OK)'" T_session_start_banner_in_linked_worktree
+
+T_session_start_banner_silent_outside_repo() {
+  local out scratch
+  scratch=$(mktemp -d "$TEST_DIR/banner-no-git-XXXX")
+  out=$(cd "$scratch" && bash "$SANDBOX/agent/hooks/session-start-cwd-banner.sh" </dev/null 2>&1; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0, got: $out"; return 1; }
+  local without_exit="${out%EXIT:*}"
+  [[ -z "${without_exit//[[:space:]]/}" ]] || {
+    echo "banner should be silent outside any git repo; got: $without_exit"
+    return 1
+  }
+}
+it "session-start-banner: outside any git repo → silent, exit 0" T_session_start_banner_silent_outside_repo
 
 # ===========================================================================
 # Run
