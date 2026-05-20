@@ -366,9 +366,7 @@ def test_render_in_batches_warmup_render_runs_every_render(
     """
     # The Darwin validator rejects gui_toggle_cadence="render" (SIGTRAP, #714);
     # force the non-Darwin path so the schema constructs on macOS CI hosts too.
-    monkeypatch.setattr(
-        "synth_setter.pipeline.schemas.spec._current_platform", lambda: "linux"
-    )
+    monkeypatch.setattr("synth_setter.pipeline.schemas.spec._current_platform", lambda: "linux")
     n = 3
     render_cfg = _smoke_render_cfg(
         samples_per_shard=n,
@@ -426,6 +424,32 @@ def test_render_in_batches_warmup_never_skips_all_renders(
     assert all(c["warmup"] is False for c in captured)
 
 
+def test_render_in_batches_always_on_raises_not_implemented(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``gui_toggle_cadence="always_on"`` raises until the held-open editor wiring lands (#1187).
+
+    :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
+    """
+    render_cfg = _smoke_render_cfg(
+        samples_per_shard=1,
+        samples_per_render_batch=1,
+        plugin_reload_cadence="once",
+        gui_toggle_cadence="always_on",
+    )
+    _stub_render_dependencies(monkeypatch, load_plugin_calls=[], load_preset_calls=[])
+
+    with pytest.raises(NotImplementedError, match=r"always_on.*not yet wired"):
+        _render_in_batches(
+            render_cfg=render_cfg,
+            param_spec=MagicMock(name="param_spec"),
+            start_idx=0,
+            fixed_synth_params_list=None,
+            fixed_note_params_list=None,
+            flush_batch=lambda _batch, _start: None,
+        )
+
+
 def test_render_in_batches_once_once_warms_once_and_caches_plugin(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -474,9 +498,7 @@ def test_render_in_batches_once_render_warms_every_render_with_cached_plugin(
 
     :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
     """
-    monkeypatch.setattr(
-        "synth_setter.pipeline.schemas.spec._current_platform", lambda: "linux"
-    )
+    monkeypatch.setattr("synth_setter.pipeline.schemas.spec._current_platform", lambda: "linux")
     n = 3
     render_cfg = _smoke_render_cfg(
         samples_per_shard=n,
@@ -655,9 +677,7 @@ def test_render_in_batches_render_cadence_warms_once_per_generate_sample_call(
 
     :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
     """
-    monkeypatch.setattr(
-        "synth_setter.pipeline.schemas.spec._current_platform", lambda: "linux"
-    )
+    monkeypatch.setattr("synth_setter.pipeline.schemas.spec._current_platform", lambda: "linux")
     n = 3
     retries = 2
     render_cfg = _smoke_render_cfg(

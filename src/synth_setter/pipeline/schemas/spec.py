@@ -285,7 +285,7 @@ class RenderConfig(BaseModel):
             raise ValueError(
                 'gui_toggle_cadence="always_on" requires plugin_reload_cadence="once" '
                 "so the editor stays bound to a single live plugin instance for the "
-                "whole shard."
+                'whole shard. Set plugin_reload_cadence="once" to opt in.'
             )
         return self
 
