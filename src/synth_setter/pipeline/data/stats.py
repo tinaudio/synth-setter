@@ -150,41 +150,49 @@ def _fix_degenerate_bins(std: np.ndarray) -> np.ndarray:
     return out
 
 
-def get_stats_hdf5(filename, mask_degenerate: bool = False):
-    dataset_name = "mel_spec"
+def get_stats_hdf5(filename: str, mask_degenerate: bool = False) -> None:
+    """Compute Dask-backed mean/std over a Surge XT HDF5 ``mel_spec`` dataset.
 
+    The Dask client and HDF5 file handle are scoped to the ``with`` blocks so
+    every call releases its worker processes/threads and closes the file before
+    returning — required now that the in-process ``finalize-dataset`` CLI calls
+    this in its main loop and would otherwise leak handles across runs.
+
+    :param filename: Path to a ``.h5`` file with a ``mel_spec`` dataset.
+    :param mask_degenerate: See :func:`get_stats_wds`.
+    """
+    dataset_name = "mel_spec"
     num_workers = 4
 
     print("Starting client...")
-    client = Client(n_workers=num_workers, threads_per_worker=8)
-    # Create a dask array that references the HDF5 dataset
-    # "chunks=" controls the chunk size in memory
-    print("Creating dask array...")
-    darray = da.from_array(
-        h5py.File(filename, "r")[dataset_name],
-        chunks="auto",  # You can tune this chunk size
-    )
+    with Client(n_workers=num_workers, threads_per_worker=8) as client:
+        # ``da.from_array`` reads lazily; the h5py.File must stay open through
+        # the final ``.compute()`` so workers can pull chunks on demand.
+        with h5py.File(filename, "r") as h5_file:
+            print("Creating dask array...")
+            darray = da.from_array(h5_file[dataset_name], chunks="auto")
 
-    print("Computing mean and std...")
-    mean_task = darray.mean(axis=0)
-    std_task = darray.std(axis=0)
+            print("Computing mean and std...")
+            mean_task = darray.mean(axis=0)
+            std_task = darray.std(axis=0)
 
-    print("Persisting tasks...")
-    futures = [mean_task.persist(), std_task.persist()]
+            print("Persisting tasks...")
+            futures = [mean_task.persist(), std_task.persist()]
 
-    print("Displaying progress...")
-    progress(futures)
+            print("Displaying progress...")
+            progress(futures)
 
-    print("Gathering results...")
-    mean_val, std_val = client.gather(futures)
+            print("Gathering results...")
+            mean_val, std_val = client.gather(futures)
 
-    print("Mean:", mean_val)
-    print("std:", std_val)
+            print("Mean:", mean_val)
+            print("std:", std_val)
+
+            mean = mean_val.compute()
+            std = std_val.compute()
 
     print("Saving to file...")
     out_file = SurgeXTDataset.get_stats_file_path(filename)
-    mean = mean_val.compute()
-    std = std_val.compute()
     if mask_degenerate:
         std = _fix_degenerate_bins(std)
     else:

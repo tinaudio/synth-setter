@@ -25,7 +25,7 @@ rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
 import numpy as np  # noqa: E402
 
-from synth_setter.cli.generate_dataset import _rclone_copy, spec_from_cfg  # noqa: E402
+from synth_setter.cli.generate_dataset import spec_from_cfg  # noqa: E402
 from synth_setter.pipeline import r2_io  # noqa: E402
 from synth_setter.pipeline.constants import (  # noqa: E402
     DATASET_COMPLETE_FILENAME,
@@ -104,12 +104,20 @@ def finalize_hdf5(spec: DatasetSpec, work_dir: Path) -> None:
     :param spec: Validated dataset spec (``output_format == "hdf5"``).
     :param work_dir: Scratch directory; shards, splits, stats and the spec
         copy live here transiently for the duration of the call.
+    :raises ValueError: The train split is empty
+        (``spec.split_shard_ranges["train"]`` has ``lo >= hi``); reshard
+        would prune ``train.h5`` and stats compute would fail with a
+        low-signal HDF5 error.
     """
-    # ``_rclone_copy`` runs ``rclone copy`` (dest is a directory; the source
-    # basename is written inside it) — pass ``work_dir`` itself so the local
-    # name matches ``shard.filename`` per ShardSpec.
+    train_lo, train_hi = spec.split_shard_ranges["train"]
+    if train_lo >= train_hi:
+        raise ValueError(
+            f"train split is empty (split_shard_ranges['train']="
+            f"{spec.split_shard_ranges['train']!r}); cannot compute stats "
+            f"without at least one train shard."
+        )
     for shard in spec.shards:
-        _rclone_copy(spec.r2.shard_uri(shard), str(work_dir))
+        r2_io.download_to_path(spec.r2.shard_uri(shard), work_dir / shard.filename)
     (work_dir / INPUT_SPEC_FILENAME).write_text(spec.model_dump_json(indent=2), encoding="utf-8")
     reshard.main.callback(dataset_root=work_dir, spec_uri=None)  # type: ignore[misc]
     get_stats_hdf5(str(work_dir / "train.h5"))

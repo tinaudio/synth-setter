@@ -244,11 +244,11 @@ def test_hdf5_finalize_produces_train_consumable_layout(
     _seed_shard_files(r2_stand_in, spec)
 
     uploads: dict[str, Path] = {}
-    # ``_rclone_copy`` runs ``rclone copy`` (dest is a directory); mirror that
-    # contract so the stub can't drift into a ``copyto``-style misuse.
+    # ``download_to_path`` is file→file (``rclone copyto``): ``dst`` is the
+    # exact local path, not a directory. ``r2_uri`` carries the basename.
     monkeypatch.setattr(
-        "synth_setter.cli.finalize_dataset._rclone_copy",
-        lambda src, dst: shutil.copy(r2_stand_in / Path(src).name, Path(dst)),
+        "synth_setter.pipeline.r2_io.download_to_path",
+        lambda r2_uri, dst: shutil.copy(r2_stand_in / Path(r2_uri).name, Path(dst)),
     )
     monkeypatch.setattr(
         "synth_setter.pipeline.r2_io.upload",
@@ -290,8 +290,8 @@ def test_main_hdf5_branch_uploads_marker_last(
     r2_stand_in = tmp_path / "r2"
     upload_order: list[str] = []
     monkeypatch.setattr(
-        "synth_setter.cli.finalize_dataset._rclone_copy",
-        lambda src, dst: shutil.copy(r2_stand_in / Path(src).name, Path(dst)),
+        "synth_setter.pipeline.r2_io.download_to_path",
+        lambda r2_uri, dst: shutil.copy(r2_stand_in / Path(r2_uri).name, Path(dst)),
     )
 
     def record_upload(src: str | Path, dst: str) -> None:
@@ -325,6 +325,32 @@ def test_main_hdf5_branch_uploads_marker_last(
     assert upload_order[-1] == main_spec.r2.dataset_complete_marker_uri()
     assert main_spec.r2.stats_uri() in upload_order
     assert main_spec.r2.split_h5_uri("train") in upload_order
+
+
+def test_finalize_hdf5_raises_on_empty_train_split(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An empty train split surfaces as a clear ValueError before any download work.
+
+    Reshard prunes ``train.h5`` when the train range is empty, after which
+    ``get_stats_hdf5`` would crash with a low-signal HDF5 error; the guard
+    converts that into a contract violation the operator can fix.
+
+    :param monkeypatch: Pytest fixture used to install transport stubs.
+    :param tmp_path: Pytest tmp dir used as the in-process scratch work_dir.
+    """
+    monkeypatch.setattr(
+        "synth_setter.pipeline.r2_io.download_to_path",
+        lambda *a, **kw: pytest.fail("download_to_path should not be reached"),
+    )
+    monkeypatch.setattr(
+        "synth_setter.pipeline.r2_io.upload",
+        lambda *a, **kw: pytest.fail("upload should not be reached"),
+    )
+
+    spec = _build_hdf5_smoke_spec(task_name="empty-train-hdf5", train_val_test_sizes=(0, 4, 4))
+    with pytest.raises(ValueError, match="train split is empty"):
+        finalize_dataset.finalize_hdf5(spec, tmp_path)
 
 
 def _compose_smoke_hdf5_spec() -> DatasetSpec:
