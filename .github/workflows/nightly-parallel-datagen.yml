@@ -1,0 +1,329 @@
+name: Nightly Parallel Datagen
+
+# Nightly end-to-end exercise of ``RenderConfig.parallel=true`` (#1189) against
+# the real Surge XT VST3 (baked into the ``dev-snapshot`` image) and real
+# Cloudflare R2. Complements:
+#   * ``tests/integration/test_parallel_shard_render_linux.py`` — gated by
+#     ``slow + requires_vst + skipif(linux)`` so it never runs in default CI.
+#   * ``tests/integration/test_parallel_shard_dispatch.py`` (#1195) — drives
+#     the real ``subprocess.check_call`` boundary with a fake renderer script,
+#     no real VST and no real R2.
+#
+# This workflow is the missing surface: real Xvfb wrapper, real plugin, real
+# R2 writes under ``ThreadPoolExecutor`` dispatch — so a regression in the
+# concurrency model surfaces overnight rather than in a manual investigation.
+#
+# Sized for nightly cost: 32 samples / 4 shards / 8 samples per shard. Pool
+# size on an ``ubuntu-latest-4core`` runner = ``min(max(1, 4//2), 4)`` = 2,
+# enough to bootstrap the headless Xvfb wrapper concurrently.
+#
+# Required secrets:
+#   RCLONE_CONFIG_R2_ACCESS_KEY_ID, RCLONE_CONFIG_R2_SECRET_ACCESS_KEY,
+#   RCLONE_CONFIG_R2_ENDPOINT — used both by the launcher's spec upload and
+#   by the in-container ``rclone copy`` per shard.
+
+on:
+  # 05:00 UTC daily — picked to avoid colliding with nightly.yml (06:00),
+  # check-auth (06:00 Mon), test-dataset-generation hourly (top of hour), or
+  # unsnooze (08:00). The cron string is paired with the schedule branch in
+  # the auto-issue dedupe filter below.
+  schedule:
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Docker image tag (e.g. dev-snapshot, dev-snapshot-<sha>)"
+        required: false
+        default: "dev-snapshot"
+
+concurrency:
+  group: nightly-parallel-datagen-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  nightly-parallel-datagen:
+    name: Generate + validate parallel smoke dataset
+    runs-on: ubuntu-latest-4core
+    timeout-minutes: 30
+
+    # ``issues: write`` is needed by the auto-issue step below. Workflow
+    # default is ``contents: read``; widening here keeps the elevated scope
+    # job-local rather than workflow-wide.
+    permissions:
+      contents: read
+      issues: write
+
+    env:
+      IMAGE: tinaudio/synth-setter:${{ inputs.image_tag || 'dev-snapshot' }}
+      # ``r2.prefix`` (and therefore the spec's ``input_spec_uri``) is scoped
+      # to a unique nightly leaf so concurrent runs / re-runs cannot collide on
+      # the canonical R2 object. The leaf is computed in the ``Compute R2
+      # prefix`` step and re-exported into ``GITHUB_ENV`` so the cleanup step
+      # can purge the same scope even when the generate step fails.
+      R2_BUCKET: intermediate-data
+      RCLONE_CONFIG_R2_TYPE: s3
+      RCLONE_CONFIG_R2_PROVIDER: Cloudflare
+      RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+      RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+      RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Pull image
+        run: docker pull "$IMAGE"
+
+      # Per-run unique R2 prefix. ``run_attempt`` is part of the path so a
+      # re-run of the same workflow doesn't collide on the canonical
+      # ``input_spec.json`` object the launcher writes. The leaf nonce keeps
+      # local manual dispatches isolated even when ``run_id``/``run_attempt``
+      # repeat. Persisted into ``GITHUB_ENV`` so the cleanup step (which runs
+      # ``if: always()``) can purge the same scope on failure.
+      - name: Compute R2 prefix
+        id: prefix
+        run: |
+          set -euo pipefail
+          nonce=$(uuidgen | tr -d '-' | cut -c1-8)
+          prefix="nightly-parallel/${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}/${nonce}/"
+          echo "R2_PREFIX=${prefix}" >> "${GITHUB_ENV}"
+          echo "r2_prefix=${prefix}" >> "${GITHUB_OUTPUT}"
+          echo "r2 prefix: ${prefix}"
+
+      # Mirrors the headless plugin-load smoke check in ``test-vst-slow.yml``
+      # — fails fast if the plugin / image / mount layout is broken before
+      # the longer generate-dataset run.
+      - name: Smoke-test Surge XT plugin load
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/home/build/synth-setter" \
+            "$IMAGE" \
+            bash -c '
+              set -euo pipefail
+              cd /home/build/synth-setter
+              git config --global --add safe.directory /home/build/synth-setter
+              docker/ubuntu22_04/run-linux-vst-headless.sh \
+                python -X faulthandler -c "from synth_setter.data.vst.core import load_plugin; load_plugin(\"/usr/lib/vst3/Surge XT.vst3\")"
+            '
+
+      # Run the operator CLI end-to-end inside the dev-snapshot image:
+      #   * ``compute_template`` stays unset (configs/skypilot_launch/default.yaml
+      #     keeps it null), so ``main()`` runs ``run(spec)`` inline rather than
+      #     dispatching via SkyPilot — exercises ``_dispatch_shards_parallel``
+      #     directly on this runner.
+      #   * ``SYNTH_SETTER_WORKER_RANK=0`` / ``SYNTH_SETTER_NUM_WORKERS=1`` so
+      #     the single in-process worker owns every shard.
+      #   * ``+render.parallel=true`` overrides the default ``parallel=false``
+      #     even though the experiment YAML already sets it — the explicit
+      #     override keeps the production-path coverage signal in the workflow
+      #     itself (a future config tweak can't silently disable it).
+      #   * ``+r2.prefix=${R2_PREFIX}`` redirects shards + canonical spec away
+      #     from production prefixes into the ephemeral nightly scope.
+      #   * ``rclone copy`` runs inside the container; secrets are forwarded
+      #     via ``-e``.
+      #   * tee'd to ``${RUN_METADATA_DIR}/generate.log`` so the spec_uri
+      #     marker is extracted in the next step.
+      - name: Run synth-setter-generate-dataset (parallel=true)
+        id: generate
+        env:
+          RUN_METADATA_DIR: ${{ runner.temp }}/nightly-parallel-run-metadata
+          EXPERIMENT: generate_dataset/nightly-parallel-smoke
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUN_METADATA_DIR}"
+          docker run --rm \
+            -v "${{ github.workspace }}:/home/build/synth-setter" \
+            -v "${RUN_METADATA_DIR}:/run-metadata" \
+            -e RCLONE_CONFIG_R2_TYPE \
+            -e RCLONE_CONFIG_R2_PROVIDER \
+            -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
+            -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
+            -e RCLONE_CONFIG_R2_ENDPOINT \
+            -e EXPERIMENT \
+            -e R2_PREFIX \
+            -e HYDRA_FULL_ERROR=1 \
+            -e SYNTH_SETTER_WORKER_RANK=0 \
+            -e SYNTH_SETTER_NUM_WORKERS=1 \
+            "$IMAGE" \
+            bash -c '
+              set -euo pipefail
+              cd /home/build/synth-setter
+              git config --global --add safe.directory /home/build/synth-setter
+              bash docker/ubuntu22_04/ensure_plugin_symlinks.sh
+              synth-setter-generate-dataset \
+                "experiment=${EXPERIMENT}" \
+                "+render.parallel=true" \
+                "+r2.prefix=${R2_PREFIX}"
+            ' \
+            2>&1 | tee "${RUN_METADATA_DIR}/generate.log"
+          echo "run_metadata_dir=${RUN_METADATA_DIR}" >> "${GITHUB_OUTPUT}"
+
+      # ``upload_spec`` emits the canonical spec URI on a stdout sentinel line;
+      # ``grep || true`` keeps a missing marker from short-circuiting the step
+      # under ``set -euo pipefail`` so the explicit empty-check below surfaces
+      # a friendly error instead of a confusing pipe-failure.
+      - name: Extract spec_uri from launcher log
+        id: spec_uri
+        env:
+          GENERATE_LOG: ${{ steps.generate.outputs.run_metadata_dir }}/generate.log
+        run: |
+          set -euo pipefail
+          SPEC_URI=$(grep -m1 -oE '::synth-setter-spec-uri::r2://[^[:space:]]+' \
+            "${GENERATE_LOG}" \
+            | sed 's|^::synth-setter-spec-uri::||' || true)
+          if [[ -z "${SPEC_URI}" ]]; then
+            echo "::error::launcher did not emit a ::synth-setter-spec-uri:: marker; see generate.log"
+            exit 1
+          fi
+          echo "spec_uri=${SPEC_URI}" >> "${GITHUB_OUTPUT}"
+          echo "spec_uri: ${SPEC_URI}"
+
+      # Validate the spec + every shard against R2 using the same CI helpers
+      # invoked by ``validate-dataset-shards.yaml``. Runs inside the same
+      # ``dev-snapshot`` image so ``h5py`` is available without a host install.
+      - name: Validate spec + every shard via R2
+        env:
+          SPEC_URI: ${{ steps.spec_uri.outputs.spec_uri }}
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "${{ github.workspace }}:/home/build/synth-setter:ro" \
+            -e RCLONE_CONFIG_R2_TYPE \
+            -e RCLONE_CONFIG_R2_PROVIDER \
+            -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
+            -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
+            -e RCLONE_CONFIG_R2_ENDPOINT \
+            -e SPEC_URI \
+            "$IMAGE" \
+            bash -c '
+              set -euo pipefail
+              cd /home/build/synth-setter
+              git config --global --add safe.directory /home/build/synth-setter
+              python3 -m synth_setter.pipeline.ci.validate_spec "$SPEC_URI"
+              python3 -m synth_setter.pipeline.ci.validate_shard "$SPEC_URI"
+            '
+
+      - name: Upload run metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-parallel-run-metadata
+          path: ${{ runner.temp }}/nightly-parallel-run-metadata/
+          retention-days: 7
+          if-no-files-found: warn
+
+      # Always purge the ephemeral R2 prefix so failed runs do not leak
+      # objects. ``rclone purge`` exits non-zero on a missing remote prefix
+      # (which is fine — nothing to clean); a non-zero exit here must not
+      # mask a real test failure, hence the ``|| true``.
+      - name: Cleanup ephemeral R2 prefix
+        if: always()
+        run: |
+          set -euo pipefail
+          if [[ -z "${R2_PREFIX:-}" ]]; then
+            echo "no R2_PREFIX set; nothing to purge"
+            exit 0
+          fi
+          target="r2:${R2_BUCKET}/${R2_PREFIX}"
+          docker run --rm \
+            -e RCLONE_CONFIG_R2_TYPE \
+            -e RCLONE_CONFIG_R2_PROVIDER \
+            -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
+            -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
+            -e RCLONE_CONFIG_R2_ENDPOINT \
+            "$IMAGE" \
+            rclone purge "$target" --contimeout=10s --timeout=60s || true
+          echo "purged ${target}"
+
+      # Auto-file a Bug ticket on scheduled-run failure so nightly regressions
+      # don't go silently stale. Mirrors ``cpu-slow.yml``'s pattern: dedupe on
+      # a title fragment, comment on the existing issue on a repeat, otherwise
+      # open a fresh issue with type=Bug + parent=Phase 6 (#73). Best-effort
+      # GraphQL mutations — if either call fails the issue still has label +
+      # milestone, enough for triage.
+      - name: Auto-file failure ticket
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          dedupe_search='nightly-parallel-datagen scheduled failure'
+          existing=$(gh issue list \
+            --repo "${GITHUB_REPOSITORY}" \
+            --label ci-automation \
+            --state open \
+            --search "${dedupe_search} in:title" \
+            --json number,title \
+            --jq '.[0].number // empty')
+
+          comment_body=$(printf '%s\n\n%s\n' \
+            "Another nightly-parallel-datagen scheduled failure." \
+            "Failed run: ${RUN_URL}")
+
+          if [ -n "${existing}" ]; then
+            echo "Dedup hit: commenting on existing issue #${existing}"
+            gh issue comment "${existing}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --body "${comment_body}"
+            exit 0
+          fi
+
+          title="bug(ci-automation): nightly-parallel-datagen scheduled failure"
+          body=$(printf '%s\n\n%s\n%s\n' \
+            "The nightly-parallel-datagen workflow failed on its scheduled cron. Auto-opened by .github/workflows/nightly-parallel-datagen.yml so the regression in the parallel-dispatch path (or its Xvfb / R2 dependencies) does not go silently stale." \
+            "- Failed run: ${RUN_URL}" \
+            "- Refs #1189 (parallel feature), #1197 (this workflow)")
+
+          new_issue_url=$(gh issue create \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "${title}" \
+            --body "${body}" \
+            --label ci-automation \
+            --label data-pipeline \
+            --milestone "ci-automation v1.0.0")
+          echo "Filed: ${new_issue_url}"
+
+          new_issue_number="${new_issue_url##*/}"
+
+          new_node_id=$(gh api graphql \
+            -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){issue(number:$number){id}}}' \
+            -f owner="${GITHUB_REPOSITORY%/*}" \
+            -f repo="${GITHUB_REPOSITORY#*/}" \
+            -F number="${new_issue_number}" \
+            --jq '.data.repository.issue.id')
+
+          bug_type_id=$(gh api graphql \
+            -f query='query($owner:String!,$repo:String!){repository(owner:$owner,name:$repo){issueTypes(first:20){nodes{id name}}}}' \
+            -f owner="${GITHUB_REPOSITORY%/*}" \
+            -f repo="${GITHUB_REPOSITORY#*/}" \
+            --jq '.data.repository.issueTypes.nodes[]|select(.name=="Bug")|.id')
+
+          if [ -n "${bug_type_id}" ] && [ -n "${new_node_id}" ]; then
+            gh api graphql \
+              -f query='mutation($issueId:ID!,$issueTypeId:ID!){updateIssueIssueType(input:{issueId:$issueId,issueTypeId:$issueTypeId}){issue{number}}}' \
+              -f issueId="${new_node_id}" \
+              -f issueTypeId="${bug_type_id}" \
+              || echo "WARN: failed to set issue type=Bug; triage manually"
+          else
+            echo "WARN: missing node_id or bug_type_id; skipping issue-type set"
+          fi
+
+          phase_node_id=$(gh api graphql \
+            -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){issue(number:$number){id}}}' \
+            -f owner="${GITHUB_REPOSITORY%/*}" \
+            -f repo="${GITHUB_REPOSITORY#*/}" \
+            -F number=73 \
+            --jq '.data.repository.issue.id')
+
+          if [ -n "${phase_node_id}" ] && [ -n "${new_node_id}" ]; then
+            gh api graphql \
+              -f query='mutation($parentId:ID!,$childId:ID!){addSubIssue(input:{issueId:$parentId,subIssueId:$childId}){subIssue{number}}}' \
+              -f parentId="${phase_node_id}" \
+              -f childId="${new_node_id}" \
+              || echo "WARN: failed to parent under Phase 6 (#73); reparent manually"
+          fi

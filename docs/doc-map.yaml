@@ -62,6 +62,8 @@ docs:
         covers: "Reusable launcher fan-out across providers (skypilot-local kind, runpod, oci); per-provider artifact upload; emits a `spec_uri` workflow output (the materialized spec's canonical under-prefix `input_spec.json` URI, computed by the `synth-setter-spec-uri` console script — see `src/synth_setter/pipeline/ci/spec_uri.py`) consumed by validate-dataset-shards"
       - pattern: ".github/workflows/validate-dataset-shards.yaml"
         covers: "Reusable spec + shard validation downstream of generate-dataset-shards; takes the `spec_uri` (r2://) emitted by generate-dataset-shards as its `spec_uri` input"
+      - pattern: ".github/workflows/nightly-parallel-datagen.yml"
+        covers: "Nightly schedule (05:00 UTC) + workflow_dispatch that runs `synth-setter-generate-dataset` inline in the dev-snapshot image with `+render.parallel=true` against real Surge XT VST3 + real R2; validates the produced spec + every shard via `pipeline.ci.validate_spec` / `validate_shard`. The missing CI surface for `RenderConfig.parallel` (#1189): the Linux Xvfb stress test (`tests/integration/test_parallel_shard_render_linux.py`) is gated by `slow + requires_vst` and never runs in default CI; this workflow exercises the parallel-dispatch path end-to-end overnight. Ephemeral R2 prefix scoped to `nightly-parallel/<run_id>/<run_attempt>/<nonce>/` with always-on rclone purge."
       - pattern: "src/synth_setter/pipeline/ci/**"
         covers: "CI validation scripts, spec materialization, shard validation, and spec-URI extraction (`spec_uri.py` / `synth-setter-spec-uri`)"
       - pattern: "src/synth_setter/pipeline/r2_io.py"
