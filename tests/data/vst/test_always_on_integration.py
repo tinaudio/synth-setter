@@ -1,28 +1,35 @@
-"""End-to-end integration test for ``gui_toggle_cadence="always_on"`` (#1187).
+"""End-to-end Linux integration test for ``gui_toggle_cadence="always_on"`` (#1187).
 
-Runs on both the Linux Xvfb path (``docker/ubuntu22_04/run-linux-vst-headless.sh``)
-and the macOS Cocoa path via the existing CI matrix. Verifies that
-``editor_held_open`` survives off the main thread on each platform, the shard
-loop completes for all samples with the editor realised throughout, and no
-editor-thread crash is logged.
+Runs through ``docker/ubuntu22_04/run-linux-vst-headless.sh`` (Xvfb + xsettingsd
++ openbox + dbus) inside the existing ``test-vst-slow.yml`` workflow. Verifies
+that ``editor_held_open`` survives off the main thread on X11, the shard loop
+completes for all samples with the editor realised throughout, the produced
+HDF5 carries the expected datasets/shapes/dtypes/finiteness, and the editor
+thread emits no crash log via ``core.logger.exception``.
+
+The matching macOS Cocoa coverage is tracked separately — Apple runners with
+Surge XT installed are not part of any current workflow; see the follow-up
+issue noted in the Wave 3 PR body.
 """
 
 from __future__ import annotations
 
-import logging
 import os
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import h5py
 import hdf5plugin  # noqa: F401  side-effect: registers Blosc2 filter for h5py reads
+import numpy as np
 import pytest
 
+from synth_setter.data.vst import core
 from synth_setter.data.vst.writers import make_hdf5_dataset
 from synth_setter.pipeline.schemas.spec import RenderConfig
 
 _ = hdf5plugin  # keep type checkers from flagging the side-effect import
 
-from tests.data.vst.test_generate_vst_dataset import (  # noqa: E402
+from tests.data.vst.test_generate_vst_dataset import (  # noqa: E402  pinned canonical patch
     _HARDCODED_NOTE_PARAMS,
     _HARDCODED_SYNTH_PARAMS,
 )
@@ -43,13 +50,15 @@ skip_no_vst = pytest.mark.skipif(
 )
 
 
-def _render_cfg(num_samples: int) -> RenderConfig:
+def _render_cfg(num_samples: int, samples_per_render_batch: int) -> RenderConfig:
     """Build a held-open ``RenderConfig`` with the integration-test defaults.
 
-    :param num_samples: Samples in the shard; also used as the per-batch size so
-        the flush callback fires at the end of the shard (one batch).
-    :return: A ``RenderConfig`` with ``always_on`` + ``once`` pairing required
-        by the schema validator.
+    :param num_samples: Total samples in the shard.
+    :param samples_per_render_batch: Per-batch size; setting this smaller than
+        ``num_samples`` forces multiple flush callbacks inside the held-open
+        scope (the cross-flush invariant the test is here to defend).
+    :return: A ``RenderConfig`` pinned to the ``always_on`` + ``once`` pairing
+        required by the schema validator.
     """
     return RenderConfig(
         plugin_path=_PLUGIN_PATH,
@@ -61,7 +70,7 @@ def _render_cfg(num_samples: int) -> RenderConfig:
         velocity=_VELOCITY,
         signal_duration_seconds=_DURATION,
         min_loudness=_MIN_LOUDNESS,
-        samples_per_render_batch=num_samples,
+        samples_per_render_batch=samples_per_render_batch,
         samples_per_shard=num_samples,
         plugin_reload_cadence="once",
         gui_toggle_cadence="always_on",
@@ -72,35 +81,50 @@ def _render_cfg(num_samples: int) -> RenderConfig:
 @pytest.mark.requires_vst
 @skip_no_vst
 def test_always_on_renders_small_shard_end_to_end(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``always_on`` holds the editor open for the whole shard render on real Surge XT.
+    """``always_on`` holds the editor open across a 4-sample shard with mid-shard flush.
 
-    Runs on whichever platform the CI matrix picks up (Linux + macOS). Asserts
-    the shard completes with all rows written, the HDF5 file is well-formed, and
-    no ``vst-editor-window crashed`` warning landed in the captured logs.
+    Renders 4 samples in 2 batches so the per-batch flush callback fires inside
+    the held-open scope twice. Asserts the HDF5 shard carries all three datasets
+    at the expected shape/dtype, that audio is finite and within ``[-1, 1]``,
+    and that ``core.logger.exception`` was never called from the editor thread
+    (the structural crash gate — caplog cannot observe loguru output, so the
+    logger is stubbed to make the check observable).
 
-    :param tmp_path: Pytest fixture providing a fresh test directory.
-    :param caplog: Captures stdlib-logging records (loguru bridging may not
-        fire; the assertion is best-effort signal, not a contract gate).
+    :param tmp_path: Destination directory for the shard HDF5 file under test.
+    :param monkeypatch: Stubs ``core.logger`` so the editor-thread crash gate
+        is observable (loguru does not propagate to ``caplog``).
     """
     num_samples = 4
-    render_cfg = _render_cfg(num_samples=num_samples)
+    render_cfg = _render_cfg(num_samples=num_samples, samples_per_render_batch=2)
     out = tmp_path / "shard-000000.h5"
     fixed_synth = [_HARDCODED_SYNTH_PARAMS] * num_samples
     fixed_note = [_HARDCODED_NOTE_PARAMS] * num_samples
+    fake_logger = MagicMock(wraps=core.logger)
+    monkeypatch.setattr(core, "logger", fake_logger)
 
-    with caplog.at_level(logging.ERROR):
-        make_hdf5_dataset(
-            hdf5_file=out,
-            render_cfg=render_cfg,
-            fixed_synth_params_list=fixed_synth,
-            fixed_note_params_list=fixed_note,
-        )
+    make_hdf5_dataset(
+        hdf5_file=out,
+        render_cfg=render_cfg,
+        fixed_synth_params_list=fixed_synth,
+        fixed_note_params_list=fixed_note,
+    )
 
     assert out.exists()
     with h5py.File(out, "r") as f:
+        for key in ("audio", "mel_spec", "param_array"):
+            assert key in f, f"missing expected dataset: {key}"
         audio_ds = f["audio"]
         assert isinstance(audio_ds, h5py.Dataset)
         assert audio_ds.shape[0] == num_samples
-    assert not any("vst-editor-window crashed" in r.message for r in caplog.records)
+        audio = audio_ds[...]
+    assert np.isfinite(audio).all(), "rendered audio contains NaN/Inf"
+    assert (np.abs(audio) <= 1.0).all(), "rendered audio exceeds [-1, 1] bounds"
+
+    crash_log_calls = [
+        call
+        for call in fake_logger.exception.call_args_list
+        if "vst-editor-window crashed" in str(call.args[0])
+    ]
+    assert not crash_log_calls, f"editor-thread crash logged: {crash_log_calls}"
