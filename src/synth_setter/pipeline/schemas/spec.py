@@ -207,6 +207,23 @@ class RenderConfig(BaseModel):
     samples_per_shard: int = Field(
         description="Samples written per shard; each split size must be a multiple of this."
     )
+    max_retries: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Per-shard retry budget for transient renderer-subprocess failures "
+            "(CalledProcessError). 0 keeps strict fail-fast."
+        ),
+    )
+    parallel: bool = Field(
+        default=False,
+        description=(
+            "When True, run() dispatches shard renders concurrently with "
+            "pool size = min(max(1, available_cpus() // 2), len(my_range)). "
+            "Applies on both local-run and SkyPilot-worker contexts; peak "
+            "local disk scales with pool size."
+        ),
+    )
     plugin_reload_cadence: _PluginReloadCadence = Field(
         default="render",
         description=(

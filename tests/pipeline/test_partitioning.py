@@ -9,13 +9,50 @@ via ``monkeypatch.setenv`` / ``monkeypatch.delenv``.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from synth_setter.pipeline.partitioning import (
+    available_cpus,
     get_my_shards,
     read_rank_world_from_env,
     validate_rank_world,
 )
+
+
+class TestAvailableCpus:
+    """``available_cpus`` returns Linux-affinity-aware CPU count with a portable fallback."""
+
+    def test_uses_sched_getaffinity_when_available(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """On Linux, returns ``len(os.sched_getaffinity(0))`` — respects ``taskset``/cgroup.
+
+        :param monkeypatch: Pytest fixture used to stub ``os.sched_getaffinity``.
+        """
+        monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: {0, 1, 2, 3})
+        assert available_cpus() == 4
+
+    def test_falls_back_to_cpu_count_when_sched_getaffinity_absent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No ``sched_getaffinity`` (macOS/Windows) → ``os.cpu_count()``.
+
+        :param monkeypatch: Pytest fixture used to drop ``sched_getaffinity`` and stub ``os.cpu_count``.
+        """
+        monkeypatch.delattr(os, "sched_getaffinity", raising=False)
+        monkeypatch.setattr(os, "cpu_count", lambda: 7)
+        assert available_cpus() == 7
+
+    def test_returns_one_when_cpu_count_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``os.cpu_count() is None`` (uncommon edge) → ``1``, never 0.
+
+        :param monkeypatch: Pytest fixture used to drop ``sched_getaffinity`` and force ``os.cpu_count`` to return ``None``.
+        """
+        monkeypatch.delattr(os, "sched_getaffinity", raising=False)
+        monkeypatch.setattr(os, "cpu_count", lambda: None)
+        assert available_cpus() == 1
 
 
 class TestSingleWorker:

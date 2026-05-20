@@ -19,6 +19,19 @@ WORKER_RANK_ENV_VAR = "SYNTH_SETTER_WORKER_RANK"
 NUM_WORKERS_ENV_VAR = "SYNTH_SETTER_NUM_WORKERS"
 
 
+def available_cpus() -> int:
+    """Return the count of CPUs usable by the current process.
+
+    Linux respects ``taskset`` and cgroup pinning via ``os.sched_getaffinity``;
+    other platforms fall back to ``os.cpu_count() or 1``.
+
+    :returns: Number of CPUs usable by this process; always ``>= 1``.
+    """
+    if hasattr(os, "sched_getaffinity"):
+        return len(os.sched_getaffinity(0))
+    return os.cpu_count() or 1
+
+
 def validate_rank_world(rank: int, world: int) -> None:
     """Raise ``ValueError`` unless ``world >= 1`` and ``0 <= rank < world``."""
     if world < 1 or rank < 0 or rank >= world:

@@ -43,6 +43,8 @@ def _make_valid_spec(*, output_format: str = "hdf5", **overrides: object) -> dic
             "min_loudness": -55.0,
             "samples_per_render_batch": 32,
             "samples_per_shard": 32,
+            "max_retries": 0,
+            "parallel": False,
             "plugin_reload_cadence": "render",
             "gui_toggle_cadence": "never",
         },
