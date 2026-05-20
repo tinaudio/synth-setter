@@ -64,7 +64,20 @@ jobs:
         env:
           HYDRA_FULL_ERROR: "1"
         run: |
-          pytest -vv -s -m "slow and not gpu and not mps and not requires_vst"
+          pytest -vv -s -m "slow and not gpu and not mps and not requires_vst" \
+            --cov=src --cov-branch --cov-report=xml --cov-report=term
+
+      # Slow CPU tests exercise PyTorch forward passes and pipeline code paths
+      # that the fast suite skips. Uploading under a dedicated `slow-cpu` flag
+      # keeps that signal separable from `unit-cpu` in Codecov.
+      - name: Upload coverage to Codecov
+        if: always() && hashFiles('coverage.xml') != ''
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage.xml
+          flags: slow-cpu
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
 
       # Auto-file a bug ticket on post-merge failure so CPU regressions in
       # main don't go silently stale. Runs only when the run failed AND the

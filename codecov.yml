@@ -23,6 +23,10 @@ flag_management:
       paths:
         - src/synth_setter/
         - scripts/ci/
+    - name: slow-cpu
+      paths:
+        - src/synth_setter/
+        - scripts/ci/
 
 component_management:
   default_rules:

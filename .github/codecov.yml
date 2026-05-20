@@ -1,9 +1,0 @@
-coverage:
-  status:
-    project:
-      default:
-        threshold: 1% # fail if coverage drops by more than 1%
-
-    patch:
-      default:
-        threshold: 1% # fail if new code has >1% less coverage than target
