@@ -3,8 +3,9 @@ name: Nightly Parallel Datagen
 # Nightly end-to-end exercise of ``RenderConfig.parallel=true`` (#1189) against
 # the real Surge XT VST3 (baked into the ``dev-snapshot`` image) and real
 # Cloudflare R2. Complements:
-#   * ``tests/integration/test_parallel_shard_render_linux.py`` — gated by
-#     ``slow + requires_vst + skipif(linux)`` so it never runs in default CI.
+#   * ``tests/integration/test_parallel_shard_render_linux.py`` — Linux-only
+#     stress test (``slow + requires_vst`` + ``skipif(sys.platform != "linux")``);
+#     never runs in default CI.
 #   * ``tests/integration/test_parallel_shard_dispatch.py`` (#1195) — drives
 #     the real ``subprocess.check_call`` boundary with a fake renderer script,
 #     no real VST and no real R2.
