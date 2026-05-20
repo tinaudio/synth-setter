@@ -18,3 +18,7 @@ render:
   min_loudness: -50.0
   samples_per_render_batch: 4
   samples_per_shard: 4
+  # Materialized so the render-matrix workflow can resolve
+  # `render.gui_toggle_cadence=<cell>` overrides against this experiment
+  # without flipping the platform-aware default in `configs/render/surge_xt.yaml`.
+  gui_toggle_cadence: never

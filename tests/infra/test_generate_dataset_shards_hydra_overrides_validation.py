@@ -7,7 +7,7 @@ both provider branches on a regex-based validation step that runs immediately af
 ``Checkout``; this test pins that the step exists, sits before the docker invocation,
 and uses the documented allowed-character class.
 
-A doctable at the bottom of the module records the inputs that must pass / fail the
+The parametrized cases below record the inputs that must pass / fail the
 validation. The regex check happens at workflow runtime; here we cross-check it
 against Python's ``re`` so the same canonical samples cover both the docstring
 contract and the test.
