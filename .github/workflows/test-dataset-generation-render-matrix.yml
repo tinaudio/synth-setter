@@ -12,12 +12,16 @@ name: Test Dataset Generation (Render-Config Matrix)
 #
 # Matrix axes:
 #   * dataset_config — every PR-sized experiment under
-#     ``configs/experiment/generate_dataset/``. ``ci-materialize-test`` and
-#     ``ci-materialize-test-wds`` (96 samples) are intentionally included to
-#     cover the larger-volume cadence path; ``nightly-parallel-smoke`` covers
-#     ``RenderConfig.parallel=true``. The 480k-sample ``surge-simple`` and
-#     ``10-1k-shards`` configs are excluded — they belong on the paid
-#     weekly schedule, not the PR matrix.
+#     ``configs/experiment/generate_dataset/`` that exercises a distinct
+#     render-side code path. ``nightly-parallel-smoke`` covers
+#     ``RenderConfig.parallel=true``. The ``ci-materialize-test`` configs
+#     are excluded — they exist for spec-materialization round-trip, not
+#     for render-code coverage (the wds writer is exercised by
+#     ``smoke-shard-wds`` already, and the 96-sample hdf5 cadence does not
+#     add render-side signal beyond what the smoke configs already cover).
+#     The 480k-sample ``surge-simple`` and ``10-1k-shards`` configs are
+#     also excluded — they belong on the paid weekly schedule, not the
+#     PR matrix.
 #   * output_format — pinned per config (the spec-format cross-check would
 #     deterministically fail a mismatched cell, so the matrix is shaped
 #     per-config rather than fanned 2x).
@@ -73,10 +77,6 @@ jobs:
           - dataset_config: generate_dataset/smoke-shard
             output_format: hdf5
           - dataset_config: generate_dataset/smoke-shard-wds
-            output_format: wds
-          - dataset_config: generate_dataset/ci-materialize-test
-            output_format: hdf5
-          - dataset_config: generate_dataset/ci-materialize-test-wds
             output_format: wds
           - dataset_config: generate_dataset/nightly-parallel-smoke
             output_format: hdf5
