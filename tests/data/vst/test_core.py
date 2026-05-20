@@ -136,9 +136,12 @@ class TestEditorHeldOpen:
     def test_join_timeout_does_not_deadlock(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """If ``show_editor`` ignores the close event, ``__exit__`` returns within the timeout.
 
-        :param monkeypatch: Tightens ``_EDITOR_JOIN_TIMEOUT_SECONDS`` so the test runs quickly.
+        :param monkeypatch: Tightens ``_EDITOR_JOIN_TIMEOUT_SECONDS`` and stubs
+            ``core.logger`` so the leak-warning assertion is observable.
         """
         monkeypatch.setattr(core, "_EDITOR_JOIN_TIMEOUT_SECONDS", 0.1)
+        fake_logger = MagicMock()
+        monkeypatch.setattr(core, "logger", fake_logger)
         fake_plugin = MagicMock()
         fake_plugin.show_editor.side_effect = lambda _event: time.sleep(2.0)
 
@@ -147,7 +150,12 @@ class TestEditorHeldOpen:
             pass
         elapsed = time.monotonic() - start
 
+        # 1s slack over the 0.1s timeout to absorb CI scheduler jitter; still
+        # an order of magnitude under the 2.0s `show_editor` sleep so a
+        # regression to "wait for the thread" would fail this assertion.
         assert elapsed < 1.0
+        assert fake_logger.warning.call_count == 1
+        assert "did not drain" in fake_logger.warning.call_args.args[0]
 
 
 class TestRenderParamsPreloadedPlugin:

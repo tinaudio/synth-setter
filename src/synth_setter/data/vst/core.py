@@ -98,19 +98,22 @@ def editor_held_open(plugin: VST3Plugin) -> Iterator[None]:
     ``__exit__`` sets the event, joins the thread (bounded by
     ``_EDITOR_JOIN_TIMEOUT_SECONDS``), and re-raises any exception the editor
     thread raised — already logged at the moment of failure via
-    ``log.exception`` so operators see it in real time, not only at shard end.
+    ``logger.exception`` so operators see it in real time. If the join times
+    out (editor refused to drain), ``__exit__`` logs a warning and returns
+    without raising; the daemon thread is reaped at process exit.
 
     :param plugin: A loaded VST3 plugin whose editor is realised for the block.
-    :raises BaseException: Re-raised from the editor thread at ``__exit__`` if
-        ``plugin.show_editor`` raised.
+    :raises Exception: Propagated from the editor thread at ``__exit__``
+        (whatever ``plugin.show_editor`` raised — typically a ``RuntimeError``
+        from the VST3 host).
     """
     close_editor = threading.Event()
-    captured: list[BaseException] = []
+    captured: list[Exception] = []
 
     def _run_editor() -> None:
         try:
             plugin.show_editor(close_editor)
-        except BaseException as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — fan-in for any host-side failure
             logger.exception("vst-editor-window crashed: {}", exc)
             captured.append(exc)
 
@@ -121,8 +124,14 @@ def editor_held_open(plugin: VST3Plugin) -> Iterator[None]:
     finally:
         close_editor.set()
         editor_thread.join(timeout=_EDITOR_JOIN_TIMEOUT_SECONDS)
+        if editor_thread.is_alive():
+            logger.warning(
+                "vst-editor-window did not drain within {}s; daemon thread "
+                "leaks (reaped at process exit)",
+                _EDITOR_JOIN_TIMEOUT_SECONDS,
+            )
         if captured:
-            exc: BaseException = captured[0]
+            exc: Exception = captured[0]
             raise exc
 
 

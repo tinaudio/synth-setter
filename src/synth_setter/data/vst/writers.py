@@ -253,6 +253,8 @@ def _render_in_batches(
     :param fixed_synth_params_list: Optional pre-set synth params, indexed in write order.
     :param fixed_note_params_list: Optional pre-set note params, indexed in write order.
     :param flush_batch: Called with ``(batch, batch_start_idx)`` to persist each batch.
+    :raises RuntimeError: ``gui_toggle_cadence="always_on"`` reaches the
+        renderer without ``plugin_reload_cadence="once"`` (validator regression).
     """
     num_samples = render_cfg.samples_per_shard
     sample_batch: list[VSTDataSample] = []
@@ -263,15 +265,20 @@ def _render_in_batches(
     if render_cfg.plugin_reload_cadence == "once":
         cached_plugin = load_plugin(render_cfg.plugin_path)
         load_preset(cached_plugin, render_cfg.preset_path)
-    # always_on: hold the plugin editor open on a background thread for the
-    # whole shard loop. The validator on RenderConfig pairs this with
-    # plugin_reload_cadence="once", so cached_plugin is guaranteed non-None.
-    hold_open = render_cfg.gui_toggle_cadence == "always_on"
-    gui_scope: contextlib.AbstractContextManager[None] = (
-        editor_held_open(cached_plugin)
-        if hold_open and cached_plugin is not None
-        else contextlib.nullcontext()
-    )
+    # always_on holds the editor open on a background thread for the whole
+    # shard; RenderConfig validator pairs it with plugin_reload_cadence="once"
+    # so cached_plugin is non-None here (#1187).
+    gui_scope: contextlib.AbstractContextManager[None]
+    if render_cfg.gui_toggle_cadence == "always_on":
+        if cached_plugin is None:
+            raise RuntimeError(
+                "always_on reached the renderer without a cached plugin; "
+                "RenderConfig._always_on_requires_plugin_reload_once validator "
+                "should have rejected this combination."
+            )
+        gui_scope = editor_held_open(cached_plugin)
+    else:
+        gui_scope = contextlib.nullcontext()
     warmup_done = False
     with gui_scope:
         for i in trange(start_idx, num_samples):
