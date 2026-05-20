@@ -9,6 +9,7 @@ restructure can't drop the keys unnoticed (see #1185).
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import cast
 
@@ -43,6 +44,18 @@ def _load_workflow(project_root: Path) -> dict[str, object]:
     return cast(dict[str, object], yaml.safe_load(workflow_path.read_text()))
 
 
+def _load_run_slow_tests_job(project_root: Path) -> dict[str, object]:
+    """Return the ``run_slow_tests`` job mapping from ``cpu-slow.yml``.
+
+    :param project_root: repo root; the workflow is read from
+        ``<project_root>/.github/workflows/cpu-slow.yml``.
+    :returns: the job mapping, including ``if``, ``steps``, ``runs-on``, etc.
+    """
+    workflow = _load_workflow(project_root)
+    jobs = cast(dict[str, object], workflow["jobs"])
+    return cast(dict[str, object], jobs["run_slow_tests"])
+
+
 def _load_workflow_steps(project_root: Path) -> list[dict[str, object]]:
     """Return the ordered ``steps`` list of the ``run_slow_tests`` job.
 
@@ -50,10 +63,8 @@ def _load_workflow_steps(project_root: Path) -> list[dict[str, object]]:
         ``<project_root>/.github/workflows/cpu-slow.yml``.
     :returns: the job's ``steps`` list.
     """
-    workflow = _load_workflow(project_root)
-    jobs = cast(dict[str, object], workflow["jobs"])
-    run_slow_tests = cast(dict[str, object], jobs["run_slow_tests"])
-    return cast(list[dict[str, object]], run_slow_tests["steps"])
+    job = _load_run_slow_tests_job(project_root)
+    return cast(list[dict[str, object]], job["steps"])
 
 
 def _load_pytest_step_env(project_root: Path) -> dict[str, str]:
@@ -128,10 +139,11 @@ def test_cpu_slow_r2_secret_env_values_reference_matching_secrets(
     """
     env = _load_pytest_step_env(project_root)
     actual = env.get(key)
-    expected = f"${{{{ secrets.{key} }}}}"
-    assert actual == expected, (
-        f"cpu-slow.yml env[{key!r}] = {actual!r}; expected {expected!r} to match the "
-        f"secret-name convention used by generate-dataset-shards.yaml + "
+    pattern = rf"\$\{{\{{\s*secrets\.{re.escape(key)}\s*\}}\}}"
+    assert isinstance(actual, str) and re.fullmatch(pattern, actual), (
+        f"cpu-slow.yml env[{key!r}] = {actual!r}; expected a "
+        f"`${{{{ secrets.{key} }}}}` expression (any whitespace inside the "
+        f"braces) — secret-name convention used by generate-dataset-shards.yaml + "
         f"test-local-launcher-roundtrip.yml"
     )
 
@@ -201,4 +213,35 @@ def test_cpu_slow_pull_request_self_trigger_present(
         f"cpu-slow.yml `on.pull_request.paths` missing {expected_path!r}; "
         f"got {paths!r} — PRs touching that file must trigger the workflow "
         f"pre-merge (see #1206)"
+    )
+
+
+@pytest.mark.infra
+def test_cpu_slow_job_gated_against_fork_prs(project_root: Path) -> None:
+    """``run_slow_tests.if`` blocks fork-PR runs of the 90-min suite.
+
+    Fork PRs can't see ``secrets.RCLONE_CONFIG_R2_*``, so the
+    ``integration_r2`` surface skips anyway — but the rest of the slow
+    suite still burns a 4-core runner for up to 90 minutes. The job-level
+    ``if`` guard short-circuits ``pull_request`` events whose head repo
+    differs from the workflow repo; ``workflow_dispatch`` / ``push`` /
+    ``schedule`` runs are unaffected.
+
+    :param project_root: session fixture from ``tests/infra/conftest.py``.
+    """
+    job = _load_run_slow_tests_job(project_root)
+    guard = job.get("if")
+    assert isinstance(guard, str), (
+        "cpu-slow.yml `run_slow_tests` missing job-level `if:` guard — "
+        "fork-PR runs of the 90-min slow suite are unrestricted (see #1206)"
+    )
+    fork_guard_pattern = re.compile(
+        r"github\.event\.pull_request\.head\.repo\.full_name"
+        r"\s*==\s*"
+        r"github\.repository"
+    )
+    assert fork_guard_pattern.search(guard), (
+        f"cpu-slow.yml `run_slow_tests.if` = {guard!r}; expected a "
+        "`github.event.pull_request.head.repo.full_name == github.repository` "
+        "clause so fork PRs skip the 90-min slow suite (see #1206)"
     )
