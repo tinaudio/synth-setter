@@ -15,7 +15,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Any
 
@@ -214,11 +214,18 @@ def _dispatch_shards_parallel(
     Pool size is ``min(max(1, available_cpus() // 2), len(my_range))``. The
     heuristic halves the CPU count to leave headroom for each renderer
     subprocess's own intra-process threading (pedalboard / librosa / BLAS).
-    ``as_completed`` re-raises the first worker's exception; on exit the
-    pool's ``shutdown(cancel_futures=True)`` aborts any not-yet-started
-    shards. In-flight shards run to completion (Python has no thread
-    interruption) — matches the no-interruption-mid-render reality of the
-    serial path.
+
+    Producer/consumer dispatch: at most ``workers`` shards are submitted at
+    any time, and a new shard is submitted only after every completion in
+    the current batch has been observed without error. The first worker
+    exception is re-raised by ``fut.result()`` and the loop exits without
+    submitting more work; ``shutdown(cancel_futures=True)`` then aborts
+    any not-yet-started shards while in-flight peers run to completion
+    (Python has no thread interruption) — matches the
+    no-interruption-mid-render reality of the serial path. Submitting in
+    waves rather than all shards up-front guarantees no shard beyond the
+    in-flight set can start once a failure surfaces, even if a worker
+    thread is freed before the main thread observes the exception.
 
     :param spec: Validated dataset spec.
     :param my_range: Non-empty contiguous range of shard IDs owned by this rank.
@@ -231,16 +238,30 @@ def _dispatch_shards_parallel(
     logger.info(f"parallel dispatch: workers={workers} shards={len(my_range)}")
     rendered = 0
     skipped = 0
+    pending = iter(my_range)
+    in_flight: set[Future[tuple[bool, bool]]] = set()
     pool = ThreadPoolExecutor(max_workers=workers)
     try:
-        futures = {
-            pool.submit(_render_one_owned_shard, spec, sid, work_dir, r2_dest_prefix): sid
-            for sid in my_range
-        }
-        for fut in as_completed(futures):
-            r, s = fut.result()
-            rendered += int(r)
-            skipped += int(s)
+        for _ in range(workers):
+            sid = next(pending, None)
+            if sid is None:
+                break
+            in_flight.add(
+                pool.submit(_render_one_owned_shard, spec, sid, work_dir, r2_dest_prefix)
+            )
+        while in_flight:
+            done, in_flight = wait(in_flight, return_when=FIRST_COMPLETED)
+            for fut in done:
+                r, s = fut.result()
+                rendered += int(r)
+                skipped += int(s)
+            for _ in range(len(done)):
+                sid = next(pending, None)
+                if sid is None:
+                    break
+                in_flight.add(
+                    pool.submit(_render_one_owned_shard, spec, sid, work_dir, r2_dest_prefix)
+                )
     finally:
         pool.shutdown(wait=True, cancel_futures=True)
     return rendered, skipped
@@ -283,10 +304,12 @@ def _render_and_upload_shard(
 ) -> None:
     """Render a single shard, upload it to R2, then unlink the local file.
 
-    Unlinking after upload bounds local disk to one shard at a time — necessary on disk-constrained
-    workers running multi-shard partitions. The renderer subprocess is wrapped in a retry loop
-    bounded by ``spec.render.max_retries`` (default 0 = strict fail-fast); rclone is outside the
-    loop because it already retries via ``--retries=3``.
+    Unlinking after upload bounds local disk to one in-flight shard per caller — necessary on
+    disk-constrained workers running multi-shard partitions. Under ``render.parallel=True`` this
+    bound applies per worker thread, so peak local disk scales with the dispatcher's pool size
+    (see ``_dispatch_shards_parallel`` and ``RenderConfig.parallel``). The renderer subprocess is
+    wrapped in a retry loop bounded by ``spec.render.max_retries`` (default 0 = strict
+    fail-fast); rclone is outside the loop because it already retries via ``--retries=3``.
 
     :raises subprocess.CalledProcessError: Renderer (or rclone) subprocess exited non-zero after
         exhausting the retry budget.
