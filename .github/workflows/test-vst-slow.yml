@@ -117,7 +117,9 @@ jobs:
               docker/ubuntu22_04/run-linux-vst-headless.sh \
                 pytest -vv -s \
                   tests/data/vst/test_generate_vst_dataset.py \
-                  tests/data/vst/test_always_on_integration.py
+                  tests/data/vst/test_always_on_integration.py \
+                  tests/data/vst/test_run_with_editor_held_open_real_plugin.py \
+                  tests/data/vst/test_pedalboard_threading_contract.py
             '
 
       - name: Surface per-bucket bench JSON files on the runner
