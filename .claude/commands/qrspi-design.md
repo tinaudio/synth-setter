@@ -1,0 +1,8 @@
+---
+description: QRSPI D — produce a ~200-line design doc; this is where opinions are invited
+argument-hint: <R-doc-path> <ticket-path>
+---
+
+Invoke the `tinaudio-synth-setter-skills:qrspi-design` skill via the Skill
+tool, passing `$ARGUMENTS` through unchanged. That skill carries the canonical
+QRSPI D implementation; this file is a short-name alias.

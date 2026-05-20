@@ -1,0 +1,8 @@
+---
+description: QRSPI P — write the tactical implementation plan; do not re-open design decisions
+argument-hint: <path-to-S-doc>
+---
+
+Invoke the `tinaudio-synth-setter-skills:qrspi-plan` skill via the Skill
+tool, passing `$ARGUMENTS` through unchanged. That skill carries the canonical
+QRSPI P implementation; this file is a short-name alias.
