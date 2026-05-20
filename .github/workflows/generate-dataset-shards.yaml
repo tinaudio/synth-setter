@@ -1,9 +1,18 @@
 name: Generate Dataset Shards
 
-# Reusable workflow that owns one provider's generate_dataset invocation.
-# Callers fan out across providers (see test-dataset-generation.yml) and pass
-# per-provider values via inputs. All providers drive `synth-setter-generate-dataset`
-# with a `skypilot_launch.compute_template=...` Hydra override.
+# Reusable workflow that owns one provider's generate_dataset invocation and
+# unconditionally validates the resulting shards against
+# `synth_setter.pipeline.ci.validate_shard` before returning. Callers fan out
+# across providers (see test-dataset-generation.yml) and pass per-provider
+# values via inputs. All providers drive `synth-setter-generate-dataset` with
+# a `skypilot_launch.compute_template=...` Hydra override.
+#
+# Validation is always-on (no opt-in flag): every caller of this workflow
+# gets shard-contract enforcement. This closes the contract-drift gap that
+# #1214 hit on the float16/float32 dtype mismatch — generate-only success
+# is no longer sufficient; shards must also pass the
+# `check_shard_contracts` contract. Workflow rename to reflect the new
+# behaviour is tracked at #1224.
 #
 # Optional `hydra_overrides` input — whitespace-separated Hydra `key=value`
 # tokens appended to the launcher invocation. Tokens must not contain embedded
@@ -593,6 +602,34 @@ jobs:
           fi
           echo "spec_uri=${SPEC_URI}" >> "${GITHUB_OUTPUT}"
           echo "spec_uri: ${SPEC_URI}"
+
+      # Always validate the freshly-uploaded shards against the
+      # `check_shard_contracts` contract before this workflow returns.
+      # `validate_all_shards_from_r2(spec)` (in
+      # src/synth_setter/pipeline/ci/validate_shard.py) iterates `spec.shards`
+      # and pulls each HDF5 from R2 for the structural + shape + value +
+      # row-count checks. Runs inside the dev-snapshot image (already pulled
+      # above for runpod/oci, locally loaded into kind for skypilot-local) so
+      # h5py / numpy are available without a host-side install. Re-pulling
+      # the image when only kind has it is a no-op against the docker cache.
+      - name: Validate all shards from R2
+        env:
+          SPEC_URI: ${{ steps.spec_uri.outputs.spec_uri }}
+          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "${{ github.workspace }}:/home/build/synth-setter:ro" \
+            -e RCLONE_CONFIG_R2_TYPE=s3 \
+            -e RCLONE_CONFIG_R2_PROVIDER=Cloudflare \
+            -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
+            -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
+            -e RCLONE_CONFIG_R2_ENDPOINT \
+            -e SPEC_URI \
+            "${IMAGE}" \
+            python3 -m synth_setter.pipeline.ci.validate_shard "$SPEC_URI"
 
       # Pull the canonical spec into the debug artifact alongside generate.log
       # / sky_logs so operators don't have to chase R2 to inspect the run.
