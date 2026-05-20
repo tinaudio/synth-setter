@@ -31,19 +31,40 @@ from synth_setter.evaluation.predict_vst_audio import main as predict_vst_audio_
 
 _PARAM_SPEC_NAME = "surge_simple"
 _CHANNELS = 2
-_SAMPLES = 1024
 _SAMPLE_RATE = 8000
+_SIGNAL_DURATION_SECONDS = 0.1
 
 
-def _fake_render(*_args: object, **_kwargs: object) -> np.ndarray:
-    """Deterministic ``(_CHANNELS, _SAMPLES)`` float32 noise — stand-in for the VST render.
+def _fake_render(
+    _plugin_path: object,
+    _synth_params: object,
+    _pitch: object,
+    _velocity: object,
+    _note_start_and_end: object,
+    signal_duration_seconds: float,
+    sample_rate: int,
+    channels: int,
+    **_kwargs: object,
+) -> np.ndarray:
+    """Deterministic ``(channels, sample_rate * signal_duration_seconds)`` float32 noise.
 
-    :param \\*_args: Ignored positional arguments forwarded by callers.
-    :param \\*\\*_kwargs: Ignored keyword arguments forwarded by callers.
-    :return: ``(_CHANNELS, _SAMPLES)`` float32 audio array.
+    Honors the CLI's ``--sample_rate`` / ``--signal_duration_seconds`` / ``--channels``
+    flags so the stub output shape tracks the real ``render_params`` contract.
+
+    :param _plugin_path: Ignored; mirrors the real ``render_params`` plugin-path arg.
+    :param _synth_params: Ignored; mirrors the synth-param dict.
+    :param _pitch: Ignored; mirrors the MIDI pitch arg.
+    :param _velocity: Ignored; mirrors the MIDI velocity arg.
+    :param _note_start_and_end: Ignored; mirrors the ``(start, end)`` tuple.
+    :param signal_duration_seconds: Render length in seconds.
+    :param sample_rate: Render sample rate in Hz.
+    :param channels: Number of audio channels.
+    :param \\*\\*_kwargs: Ignored; absorbs ``preset_path`` and any future kwargs.
+    :return: ``(channels, int(sample_rate * signal_duration_seconds))`` float32 audio.
     """
+    num_samples = int(sample_rate * signal_duration_seconds)
     rng = np.random.default_rng(42)
-    return rng.standard_normal((_CHANNELS, _SAMPLES)).astype(np.float32)
+    return rng.standard_normal((channels, num_samples)).astype(np.float32)
 
 
 def _invoke_predict_cli(pred_dir: Path, out_dir: Path, *extra: str) -> None:
@@ -62,7 +83,7 @@ def _invoke_predict_cli(pred_dir: Path, out_dir: Path, *extra: str) -> None:
             f"--param_spec={_PARAM_SPEC_NAME}",
             f"--sample_rate={_SAMPLE_RATE}",
             f"--channels={_CHANNELS}",
-            "--signal_duration_seconds=0.1",
+            f"--signal_duration_seconds={_SIGNAL_DURATION_SECONDS}",
             *extra,
         ],
         catch_exceptions=False,

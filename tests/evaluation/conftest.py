@@ -74,8 +74,9 @@ def _write_wav(path: Path, audio: np.ndarray) -> None:
 def fixture_audio_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """Two ``sample_*/{pred.wav,target.wav}`` pairs — the canonical pin-test input.
 
-    ``sample_0`` is an identical 440 Hz sine pair (zero-error baseline for the
-    distance metrics, ``rms`` cosine of ``1``).
+    ``sample_0`` is an identical 440 Hz sine pair — zero-error baseline for the
+    distance metrics (``mss == wmfcc == sot == 0``) and ``rms ≈ 1`` (since
+    ``compute_rms`` is the cosine similarity of the RMS envelopes).
     ``sample_1`` is a 440 Hz sine target vs a 440 Hz sine + small Gaussian noise
     pred (positive-error case so aggregate ``std`` is non-zero).
 

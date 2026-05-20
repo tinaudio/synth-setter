@@ -8,7 +8,8 @@ proven not to regress:
   land at the expected paths
 * schema: the four-metric column set is exactly ``{mss, wmfcc, sot, rms}``
 * scalar values: the committed snapshot in ``snapshots/`` matches within a
-  lenient tolerance band (per-metric ``rel=1e-2``).
+  lenient tolerance band (``rel=1e-2`` for distance metrics, ``rel=1e-1`` for
+  ``rms`` since its ~1e-6 std drifts ~5% across Python 3.10/3.11 runners).
 
 The snapshot file is committed — it is **not** regenerated each run.
 """
@@ -27,7 +28,7 @@ _SNAPSHOT_PATH = Path(__file__).parent / "snapshots" / "compute_audio_metrics_ag
 _PER_SAMPLE_SNAPSHOT_PATH = (
     Path(__file__).parent / "snapshots" / "compute_audio_metrics_per_sample.csv"
 )
-_EXPECTED_METRIC_COLUMNS = {"mss", "wmfcc", "sot", "rms"}
+_EXPECTED_METRIC_COLUMNS = ("mss", "wmfcc", "sot", "rms")
 
 
 @pytest.fixture(scope="module")
@@ -71,19 +72,20 @@ def test_aggregated_csv_columns(cli_metrics_dir: Path) -> None:
     """
     agg = pd.read_csv(cli_metrics_dir / "aggregated_metrics.csv", index_col=0)
     assert list(agg.columns) == ["mean", "std"]
-    assert set(agg.index) == _EXPECTED_METRIC_COLUMNS
+    assert set(agg.index) == set(_EXPECTED_METRIC_COLUMNS)
 
 
 def test_aggregated_scalar_values_within_tolerance(cli_metrics_dir: Path) -> None:
-    """Mean/std scalars match the committed snapshot within ``rel=1e-2`` per metric.
+    """Mean/std scalars match the committed snapshot within per-metric tolerance bands.
 
     The tolerance is intentionally lenient — librosa / pedalboard / pesto have minor cross-version
     float drift on identical inputs. The point of the pin is to catch *shape* regressions (e.g. a
     missing metric, an off-by-one mean) rather than to assert bit-for-bit numerical identity.
 
-    ``rms`` is asserted on a pure relative band: its snapshot std (~1.7e-6) sits at the same
+    ``rms`` uses ``rel=1e-1`` (pure relative): its snapshot std (~1.7e-6) sits at the same
     order of magnitude as a generic ``abs=1e-6`` floor, so a shared ``abs`` would let real
-    regressions slip through silently.
+    regressions slip through silently; and Python 3.10 → 3.11 librosa float drift on the
+    cosine-similarity-of-RMS-envelope outputs is observed at ~5% on this fixture (#1205).
 
     :param cli_metrics_dir: Output directory from the module-scoped CLI invocation.
     """
@@ -94,10 +96,10 @@ def test_aggregated_scalar_values_within_tolerance(cli_metrics_dir: Path) -> Non
     for metric in snapshot.index:
         if metric == "rms":
             assert agg.loc[metric, "mean"] == pytest.approx(
-                snapshot.loc[metric, "mean"], rel=1e-2
+                snapshot.loc[metric, "mean"], rel=1e-1
             ), f"{metric} mean drifted"
             assert agg.loc[metric, "std"] == pytest.approx(
-                snapshot.loc[metric, "std"], rel=1e-2
+                snapshot.loc[metric, "std"], rel=1e-1
             ), f"{metric} std drifted"
         else:
             assert agg.loc[metric, "mean"] == pytest.approx(
@@ -113,8 +115,9 @@ def test_metrics_csv_per_sample_values(cli_metrics_dir: Path) -> None:
 
     Phase 1 extraction may legitimately reshape this CSV; if so, the refactor PR
     updates this test alongside the production change so the diff makes the
-    behavior change explicit. Same ``rel=1e-2`` band as the aggregated snapshot
-    (``rms`` is pure-rel because its magnitude sits near a generic ``abs=1e-6`` floor).
+    behavior change explicit. Distance metrics use ``rel=1e-2``; ``rms`` uses
+    ``rel=1e-1`` (pure-rel) — matches the aggregated-scalar test's band so
+    Python-version float drift on librosa's RMS envelopes does not flake CI.
 
     Row ordering is filesystem-dependent (``Path.glob`` traversal order varies
     across Linux ext4 vs. conda-runner btrfs vs. macOS), so the pin asserts the
@@ -129,14 +132,14 @@ def test_metrics_csv_per_sample_values(cli_metrics_dir: Path) -> None:
     assert list(actual.index) == list(snapshot.index), (
         f"sample-index set drifted: {list(actual.index)} vs {list(snapshot.index)}"
     )
-    assert set(actual.columns) == _EXPECTED_METRIC_COLUMNS
+    assert set(actual.columns) == set(_EXPECTED_METRIC_COLUMNS)
 
     for sample_idx in snapshot.index:
         for metric in _EXPECTED_METRIC_COLUMNS:
             expected = snapshot.loc[sample_idx, metric]
             got = actual.loc[sample_idx, metric]
             if metric == "rms":
-                assert got == pytest.approx(expected, rel=1e-2), (
+                assert got == pytest.approx(expected, rel=1e-1), (
                     f"sample {sample_idx} {metric} drifted: {got} vs {expected}"
                 )
             else:
