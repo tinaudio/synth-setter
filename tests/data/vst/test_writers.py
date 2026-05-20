@@ -489,10 +489,13 @@ def test_render_in_batches_non_always_on_does_not_open_held_open_scope(
 ) -> None:
     """Every legacy ``gui_toggle_cadence`` leaves ``editor_held_open`` untouched.
 
-    :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
+    :param monkeypatch: Pins ``_current_platform`` to ``"linux"`` so the
+        ``"render"`` cadence is accepted on Darwin runners (the schema's #714
+        gate rejects it there), and patches the writer's render dependencies.
     :param legacy_cadence: Parametrized over each non-``always_on`` cadence so
         all three nullcontext paths are pinned, not just ``never``.
     """
+    monkeypatch.setattr("synth_setter.pipeline.schemas.spec._current_platform", lambda: "linux")
     render_cfg = _smoke_render_cfg(
         samples_per_shard=1,
         samples_per_render_batch=1,
