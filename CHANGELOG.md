@@ -1,6 +1,46 @@
 # CHANGELOG
 
 
+## v8.1.0 (2026-05-20)
+
+### Features
+
+- **data-pipeline**: Add gui_toggle_cadence="always_on" schema value
+  ([#1190](https://github.com/tinaudio/synth-setter/pull/1190),
+  [`1c985eb`](https://github.com/tinaudio/synth-setter/commit/1c985eb9e9dbe2c997951e5d8f34d5a157c20145))
+
+* feat(data-pipeline): add gui_toggle_cadence="always_on" schema value
+
+Extend ``_GuiToggleCadence`` with ``"always_on"`` and add the validator that pairs it with
+  ``plugin_reload_cadence="once"`` (holding the editor open binds it to a single live plugin
+  instance for the shard).
+
+Schema-only; the render-loop wiring lands in a follow-up PR. ``"always_on"`` is permitted on Darwin
+  — the #714 SIGTRAP gate targets cumulative opens, not a single sustained one.
+
+Refs #1187
+
+* feat(data-pipeline): guard "always_on" in renderer until Wave 2 wiring lands
+
+Raise ``NotImplementedError`` from ``_render_in_batches`` when ``gui_toggle_cadence == "always_on"``
+  so a spec composed in the gap between Wave 1 (schema) and Wave 2 (renderer wiring) cannot be
+  silently downgraded to ``"never"`` semantics and persisted to R2.
+
+Also address review WARNs: - Add ``"always_on"`` (paired with ``plugin_reload_cadence="once"``) to
+  the off-Darwin parametrize so the literal stays coupled to the matrix. - Pin ``_current_platform``
+  to ``"linux"`` in the two non-Darwin always-on tests; assert ``plugin_reload_cadence`` in the
+  Darwin test. - Append a remediation hint to the new validator's error message matching the sibling
+  ``_gui_toggle_cadence_forbids_render_on_darwin`` convention.
+
+* docs(data-pipeline): clarify always_on transient gap per Copilot review
+
+- Field description now explicitly notes Wave 1 ships the schema only and the renderer raises
+  ``NotImplementedError`` for ``"always_on"`` until the held-open wiring lands in the follow-up PR.
+  - ``NotImplementedError`` message no longer hard-codes ``{'never', 'once', 'render'}`` (which
+  mis-suggests ``"render"`` on Darwin where it's validator-rejected per #714). Defers to the
+  RenderConfig schema for the platform-specific allowed set.
+
+
 ## v8.0.0 (2026-05-20)
 
 ### Chores
