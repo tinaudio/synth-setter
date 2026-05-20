@@ -1,0 +1,93 @@
+name: Test Dataset Generation (Render-Config Matrix)
+
+# Per-PR matrix exercise of ``test-dataset-generation`` across the existing
+# render configs, so a regression in the ``editor_held_open`` handshake
+# (#1198, #1204), the ``always_on`` gui-toggle cadence (#1187), or
+# ``RenderConfig.parallel`` (#1189) surfaces on the PR that introduces it
+# instead of the next nightly cron. Each row dispatches the
+# ``generate-dataset-shards.yaml`` reusable against ``skypilot-local`` only —
+# the kind cluster on the runner is the cheapest path that still drives the
+# real launcher / R2 round-trip, and paid-provider coverage stays on the
+# existing weekly cron in ``test-dataset-generation.yml``.
+#
+# Matrix axes:
+#   * dataset_config — every PR-sized experiment under
+#     ``configs/experiment/generate_dataset/``. ``ci-materialize-test`` and
+#     ``ci-materialize-test-wds`` (96 samples) are intentionally included to
+#     cover the larger-volume cadence path; ``nightly-parallel-smoke`` covers
+#     ``RenderConfig.parallel=true``. The 480k-sample ``surge-simple`` and
+#     ``10-1k-shards`` configs are excluded — they belong on the paid
+#     weekly schedule, not the PR matrix.
+#   * output_format — pinned per config (the spec-format cross-check would
+#     deterministically fail a mismatched cell, so the matrix is shaped
+#     per-config rather than fanned 2x).
+#
+# Validation of the produced shards is intentionally out of scope here:
+# ``needs.<job>.outputs.spec_uri`` from a matrix-strategy reusable workflow
+# call collapses to one cell's value, so a fan-out validate would silently
+# point every cell at the same spec. Generate-side success across the
+# matrix is the load-bearing signal for the regressions this workflow
+# guards; shard validation stays on ``test-dataset-generation.yml`` (which
+# runs ``smoke-shard`` only and so does not hit the collapse).
+#
+# Required secrets (forwarded via ``secrets: inherit``):
+#   RCLONE_CONFIG_R2_ACCESS_KEY_ID, RCLONE_CONFIG_R2_SECRET_ACCESS_KEY,
+#   RCLONE_CONFIG_R2_ENDPOINT, R2_ACCOUNT_ID — every row (R2 upload).
+
+on:
+  workflow_dispatch:
+    inputs:
+      docker_image_tag:
+        description: "Docker image tag (e.g. dev-snapshot, dev-snapshot-<sha>)"
+        required: false
+        default: "dev-snapshot"
+  pull_request:
+    paths:
+      - "src/synth_setter/data/vst/**"
+      - "src/synth_setter/data/render_config.py"
+      - "src/synth_setter/pipeline/schemas/spec.py"
+      - "src/synth_setter/cli/generate_dataset.py"
+      - "configs/experiment/generate_dataset/**"
+      - "configs/render/**"
+      - ".github/workflows/test-dataset-generation-render-matrix.yml"
+      - ".github/workflows/generate-dataset-shards.yaml"
+
+permissions:
+  contents: read
+
+# Stacked PR pushes coalesce on the same ref; manual dispatches stay distinct
+# by mixing ``run_id`` so a re-run against the same SHA does not self-cancel.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'auto' }}
+  cancel-in-progress: true
+
+jobs:
+  generate:
+    name: Generate (${{ matrix.dataset_config }} / ${{ matrix.output_format }})
+    strategy:
+      # One broken config must not mask others — every cell still emits its
+      # own pass/fail signal even if a sibling cell aborts.
+      fail-fast: false
+      matrix:
+        include:
+          - dataset_config: generate_dataset/smoke-shard
+            output_format: hdf5
+          - dataset_config: generate_dataset/smoke-shard-wds
+            output_format: wds
+          - dataset_config: generate_dataset/ci-materialize-test
+            output_format: hdf5
+          - dataset_config: generate_dataset/ci-materialize-test-wds
+            output_format: wds
+          - dataset_config: generate_dataset/nightly-parallel-smoke
+            output_format: hdf5
+    uses: ./.github/workflows/generate-dataset-shards.yaml
+    with:
+      provider: skypilot-local
+      dataset_config: ${{ matrix.dataset_config }}
+      image_tag: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
+      cluster_name: synth-setter-render-matrix-${{ strategy.job-index }}-${{ github.run_id }}-${{ github.run_attempt }}
+      num_workers: "1"
+      tail: true
+      local: true
+      artifact_name: render-matrix-run-metadata-${{ matrix.output_format }}-${{ strategy.job-index }}
+    secrets: inherit

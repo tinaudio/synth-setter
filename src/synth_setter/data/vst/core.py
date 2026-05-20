@@ -18,8 +18,18 @@ _EDITOR_INIT_DELAY_SECONDS = 0.5
 # drain after the close event is set; a generous safety net for the held-open
 # path (#1187), not a normal-case timing parameter.
 _EDITOR_JOIN_TIMEOUT_SECONDS = 2.0
-# Upper bound on the editor-thread start handshake; slow-start warns and proceeds (#1198).
+# Upper bound on the editor-thread start handshake; a miss raises
+# ``EditorStartTimeout`` rather than proceeding silently (#1198, #1204).
 _EDITOR_START_TIMEOUT_SECONDS = 5.0
+
+
+class EditorStartTimeout(RuntimeError):
+    """Raised when the ``editor_held_open`` start handshake misses its deadline.
+
+    Surfaces a slow editor-thread bring-up as a loud failure so the render aborts and the trace is
+    attributable, rather than degrading to a warning that would be lost in normal log noise
+    (#1204).
+    """
 
 
 def extract_renderer_version(plugin_path: Path) -> str:
@@ -108,12 +118,16 @@ def editor_held_open(plugin: VST3Plugin) -> Iterator[None]:
     left to be reaped at process exit; a warning records the leak.
 
     Before yielding, blocks on a start handshake bounded by
-    ``_EDITOR_START_TIMEOUT_SECONDS`` (#1198). The event proves the editor
-    thread reached the line just before ``show_editor`` without the host
-    raising, not that ``show_editor`` has realised the window — pedalboard
-    exposes no editor-ready signal.
+    ``_EDITOR_START_TIMEOUT_SECONDS`` (#1198). A miss raises
+    ``EditorStartTimeout`` — the body never runs, so a stuck editor bring-up
+    fails loud and traceable rather than masquerading as a slow render
+    (#1204). The event proves the editor thread reached the line just before
+    ``show_editor`` without the host raising, not that ``show_editor`` has
+    realised the window — pedalboard exposes no editor-ready signal.
 
     :param plugin: A loaded VST3 plugin whose editor is realised for the block.
+    :raises EditorStartTimeout: ``editor_started`` did not fire within
+        ``_EDITOR_START_TIMEOUT_SECONDS``; the ``with`` body is skipped.
     :raises Exception: Propagated from the editor thread at ``__exit__`` only
         when the ``with`` body itself raised nothing — typically a
         ``RuntimeError`` from the VST3 host.
@@ -133,10 +147,9 @@ def editor_held_open(plugin: VST3Plugin) -> Iterator[None]:
     editor_thread = threading.Thread(target=_run_editor, daemon=True, name="vst-editor-window")
     editor_thread.start()
     if not editor_started.wait(timeout=_EDITOR_START_TIMEOUT_SECONDS):
-        logger.warning(
-            "vst-editor-window did not signal start within {}s; "
-            "proceeding without start handshake",
-            _EDITOR_START_TIMEOUT_SECONDS,
+        close_editor.set()  # release any later show_editor call so the daemon can drain
+        raise EditorStartTimeout(
+            f"vst-editor-window did not signal start within {_EDITOR_START_TIMEOUT_SECONDS}s"
         )
     try:
         yield

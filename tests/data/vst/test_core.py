@@ -221,15 +221,16 @@ class TestEditorHeldOpen:
     ) -> None:
         """Inverse of the positive test: with the handshake disabled, the body wins the race.
 
-        Pins the negative side of #1198. Setting the timeout to 0 short-circuits
-        ``editor_started.wait`` so the body must enter before the gated editor
-        thread fires — proves the positive test would fail if the handshake
-        were removed, not just pass on a fast runner.
+        Pins the negative side of #1198. Stubs the handshake wait so it
+        returns ``True`` without firing the raise-on-miss path (#1204) — the
+        body must then enter before the gated editor thread fires, proving
+        the positive test would fail if the handshake were removed.
 
-        :param monkeypatch: Zeros ``_EDITOR_START_TIMEOUT_SECONDS`` and wraps
-            ``threading.Thread`` so the editor thread blocks on a gate.
+        :param monkeypatch: Wraps ``threading.Event.__init__`` so the second
+            event created (the handshake event in ``editor_held_open``) has
+            its ``wait`` short-circuited; wraps ``threading.Thread`` so the
+            editor thread blocks on a gate.
         """
-        monkeypatch.setattr(core, "_EDITOR_START_TIMEOUT_SECONDS", 0.0)
         fake_plugin = MagicMock()
         fake_plugin.show_editor.side_effect = lambda event: event.wait(timeout=5.0)
 
@@ -248,35 +249,43 @@ class TestEditorHeldOpen:
 
         monkeypatch.setattr(threading, "Thread", make_gated_thread)
 
+        # Short-circuit the handshake by patching ``wait`` on the second
+        # Event created in ``editor_held_open`` (``close_editor`` is first,
+        # ``editor_started`` is second). Targeting the instance keeps the
+        # close_editor / release_start waits running real code.
+        events_created: list[threading.Event] = []
+        original_init = threading.Event.__init__
+
+        def tracking_init(self: threading.Event, *args: object, **kwargs: object) -> None:
+            original_init(self, *args, **kwargs)  # type: ignore[arg-type]
+            events_created.append(self)
+            if len(events_created) == 2:
+                self.wait = lambda timeout=None: True  # type: ignore[method-assign,assignment]
+
+        monkeypatch.setattr(threading.Event, "__init__", tracking_init)
+
         with core.editor_held_open(fake_plugin):
             # Body entered with the editor thread still gated — the handshake
             # (not scheduler luck) is what makes the positive test pass.
             assert not release_start.is_set()
             release_start.set()
 
-    def test_slow_start_warns_and_proceeds(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Editor thread that misses the start handshake logs a warning and the body still runs.
+    def test_slow_start_raises_editor_start_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Editor thread that misses the start handshake raises ``EditorStartTimeout``.
 
         Simulates a thread that delays starting past
-        ``_EDITOR_START_TIMEOUT_SECONDS``. The context manager must not raise;
-        it warns and proceeds so the render still happens — best-effort
-        handshake (see #1198).
+        ``_EDITOR_START_TIMEOUT_SECONDS``. The context manager must raise
+        before yielding so the body never runs — a slow editor bring-up is a
+        loud, traceable failure rather than a warning lost in noise (#1204).
 
-        :param monkeypatch: Tightens ``_EDITOR_START_TIMEOUT_SECONDS`` and stubs
-            ``core.logger`` so the slow-start warning assertion is observable.
+        :param monkeypatch: Tightens ``_EDITOR_START_TIMEOUT_SECONDS`` and
+            wraps ``threading.Thread`` so the editor thread's real start is
+            deferred past the handshake deadline.
         """
         monkeypatch.setattr(core, "_EDITOR_START_TIMEOUT_SECONDS", 0.05)
-        fake_logger = MagicMock()
-        monkeypatch.setattr(core, "logger", fake_logger)
 
         fake_plugin = MagicMock()
-        show_editor_entered = threading.Event()
-
-        def show_editor_blocks(event: threading.Event) -> None:
-            show_editor_entered.set()
-            event.wait(timeout=5.0)
-
-        fake_plugin.show_editor.side_effect = show_editor_blocks
+        fake_plugin.show_editor.side_effect = lambda event: event.wait(timeout=5.0)
 
         real_thread_cls = threading.Thread
         release_real_start = threading.Event()
@@ -286,8 +295,6 @@ class TestEditorHeldOpen:
             original_start = t.start
 
             def slow_start() -> None:
-                # Defer real start until the handshake timeout has been
-                # observed; an order of magnitude under any join timeout.
                 def deferred() -> None:
                     release_real_start.wait(timeout=1.0)
                     original_start()
@@ -300,18 +307,12 @@ class TestEditorHeldOpen:
         monkeypatch.setattr(threading, "Thread", make_slow_thread)
 
         body_ran = False
-        with core.editor_held_open(fake_plugin):
-            body_ran = True
-            # Let the deferred real start fire so the finally-clause join sees a
-            # started thread; production starts synchronously (test-only artifact).
-            release_real_start.set()
-            assert show_editor_entered.wait(timeout=1.0)
+        with pytest.raises(core.EditorStartTimeout, match="did not signal start"):
+            with core.editor_held_open(fake_plugin):
+                body_ran = True
 
-        assert body_ran
-        assert any(
-            "did not signal start" in str(call.args[0])
-            for call in fake_logger.warning.call_args_list
-        )
+        assert not body_ran, "body must not run when start handshake misses"
+        release_real_start.set()  # let the deferred real start drain
 
     def test_join_timeout_does_not_deadlock(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """If ``show_editor`` ignores the close event, ``__exit__`` returns within the timeout.
