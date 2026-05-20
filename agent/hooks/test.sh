@@ -466,7 +466,7 @@ T_resolver_sweeps_stale_worktrees_on_start() {
   export RESOLVER_SLEEP_SECS=1 RESOLVER_DRY_RUN=1 GH_STUB_PR=99
   resolver_setup_feature_branch "feature-sweep"
   mkdir -p "$stale"
-  touch -d "@$(($(date +%s) - 3600))" "$stale"
+  perl -e '$t = time - 3600; utime $t, $t, @ARGV or die "utime failed: $!"' "$stale"
   echo '{"tool_input":{"command":"git push"}}' | bash agent/hooks/pr-review-resolver.sh >/dev/null 2>&1 || true
   [[ ! -d "$stale" ]] || {
     echo "stale worktree directory survived the sweep: $stale"
