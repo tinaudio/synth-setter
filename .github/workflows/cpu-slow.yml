@@ -60,9 +60,14 @@ jobs:
       - name: List dependencies
         run: uv pip list --system
 
+      # `RCLONE_CONFIG_R2_*` lets `integration_r2`-marked tests reach real
+      # R2 instead of skipping via `r2_io.is_r2_reachable()` — see #1185.
       - name: Run slow (non-GPU, non-MPS, non-VST) tests
         env:
           HYDRA_FULL_ERROR: "1"
+          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
         run: |
           pytest -vv -s -m "slow and not gpu and not mps and not requires_vst"
 
