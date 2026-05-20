@@ -1112,6 +1112,57 @@ T_worktree_guard_unknown_mode_falls_back_to_warn() {
 }
 it "worktree-guard: unknown WORKTREE_GUARD_MODE value logs + exits 0 (never blocks via typo)" T_worktree_guard_unknown_mode_falls_back_to_warn
 
+T_worktree_guard_off_and_unknown_drain_large_stdin() {
+  # Regression: before draining-before-dispatch, `off` and unknown-mode
+  # exited without reading stdin, leaving a >64KB-pipe-buffer write blocked
+  # in the harness writer; the read-end close then surfaced as SIGPIPE
+  # (exit 141 with pipefail). Both early-exit paths must drain.
+  #
+  # `head -c N /dev/zero` is a *finite* source: it emits exactly N bytes
+  # then exits 0, so the pipeline only flags SIGPIPE if the *hook* (not an
+  # infinite generator like `yes`) failed to read.
+  local exit_code
+  set +e
+  head -c 131072 /dev/zero | WORKTREE_GUARD_MODE=off bash agent/hooks/worktree-guard.sh >/dev/null 2>&1
+  exit_code=$?
+  set -e
+  [[ "$exit_code" == "0" ]] || { echo "off-mode pipeline exit was $exit_code (likely SIGPIPE in writer)"; return 1; }
+  set +e
+  head -c 131072 /dev/zero | WORKTREE_GUARD_MODE=bogus bash agent/hooks/worktree-guard.sh >/dev/null 2>&1
+  exit_code=$?
+  set -e
+  [[ "$exit_code" == "0" ]] || { echo "unknown-mode pipeline exit was $exit_code (likely SIGPIPE in writer)"; return 1; }
+}
+it "worktree-guard: off + unknown modes drain stdin before exiting (no SIGPIPE risk)" T_worktree_guard_off_and_unknown_drain_large_stdin
+
+T_worktree_guard_detached_head_in_primary() {
+  # Regression: --abbrev-ref HEAD returns the literal "HEAD" when detached,
+  # so the warning + remediation must not show 'HEAD' as a branch name, and
+  # `git worktree add --detach` must not be passed a positional commit-ish
+  # of "HEAD" derived from the bad detection.
+  local out stderr_file
+  stderr_file="$TEST_DIR/wg_stderr.txt"
+  git checkout -q --detach HEAD
+  out=$(echo '' | bash agent/hooks/worktree-guard.sh 2>"$stderr_file"; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0, got: $out"; return 1; }
+  grep -q "WARNING" "$stderr_file" || { echo "stderr should still WARN in detached primary; got: $(cat "$stderr_file")"; return 1; }
+  grep -q "detached HEAD" "$stderr_file" || {
+    echo "stderr should report detached HEAD, not literal branch name; got: $(cat "$stderr_file")"
+    return 1
+  }
+  # Remediation must use --detach (always works); no branch arg leaked from the bad probe.
+  grep -q "git worktree add --detach" "$stderr_file" || {
+    echo "stderr should recommend 'git worktree add --detach'; got: $(cat "$stderr_file")"
+    return 1
+  }
+  grep -qE "git worktree add .* HEAD$" "$stderr_file" && {
+    echo "stderr should NOT pass 'HEAD' as a branch arg; got: $(cat "$stderr_file")"
+    return 1
+  }
+  return 0
+}
+it "worktree-guard: detached HEAD in primary → 'detached HEAD' in message, '--detach' remediation, no 'HEAD' branch arg" T_worktree_guard_detached_head_in_primary
+
 # ===========================================================================
 # session-start-cwd-banner.sh — banner content per cwd
 # ===========================================================================
@@ -1148,6 +1199,31 @@ T_session_start_banner_silent_outside_repo() {
   }
 }
 it "session-start-banner: outside any git repo → silent, exit 0" T_session_start_banner_silent_outside_repo
+
+T_session_start_banner_detached_head_in_primary() {
+  # Regression: --abbrev-ref HEAD returns literal "HEAD" when detached, so the
+  # banner used to render `branch: HEAD` (misleading) and bake `HEAD` into the
+  # remediation. Switch to --show-current + a labeled fallback.
+  local out
+  git checkout -q --detach HEAD
+  out=$(bash agent/hooks/session-start-cwd-banner.sh </dev/null 2>&1; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0, got: $out"; return 1; }
+  [[ "$out" == *"PRIMARY CHECKOUT"* ]] || { echo "detached primary should still flag PRIMARY CHECKOUT; got: $out"; return 1; }
+  [[ "$out" == *"detached HEAD"* ]] || {
+    echo "banner should label detached HEAD instead of printing 'branch: HEAD'; got: $out"
+    return 1
+  }
+  [[ "$out" != *"branch   : HEAD"* ]] || {
+    echo "banner should NOT show 'branch: HEAD' for detached HEAD; got: $out"
+    return 1
+  }
+  # Remediation must use --detach and must not pass HEAD as a branch arg.
+  [[ "$out" == *"git worktree add --detach"* ]] || {
+    echo "banner should recommend 'git worktree add --detach'; got: $out"
+    return 1
+  }
+}
+it "session-start-banner: detached HEAD in primary → 'detached HEAD' label, '--detach' remediation, no 'branch: HEAD'" T_session_start_banner_detached_head_in_primary
 
 # ===========================================================================
 # Run

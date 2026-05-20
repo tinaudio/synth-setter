@@ -21,6 +21,10 @@ readonly SCRIPT_DIR
 }
 
 main() {
+  # Drain stdin so the calling tool harness doesn't see SIGPIPE if it pipes
+  # JSON. Done before mode dispatch so off/unknown-mode early exits drain too.
+  cat >/dev/null 2>&1 || true
+
   local mode="${WORKTREE_GUARD_MODE:-warn}"
   case "$mode" in
     off) exit 0 ;;
@@ -30,9 +34,6 @@ main() {
       exit 0
       ;;
   esac
-
-  # Drain stdin so the calling tool harness doesn't see SIGPIPE if it pipes JSON.
-  cat >/dev/null 2>&1 || true
 
   local git_dir common_dir
   git_dir=$(git rev-parse --git-dir 2>/dev/null) || exit 0
@@ -45,13 +46,22 @@ main() {
 
   [[ "$abs_git_dir" == "$abs_common_dir" ]] || exit 0
 
-  local primary_root branch slug
+  # `git branch --show-current` returns empty for detached HEAD (Git 2.22+);
+  # --abbrev-ref returns the literal string "HEAD", which made the original
+  # `|| echo "<detached>"` fallback unreachable and leaked "HEAD" into both
+  # the message and the remediation command.
+  local primary_root branch_label slug short_sha
   primary_root=$(dirname "$abs_common_dir")
-  branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "<detached>")
-  slug=${branch//\//-}
-  [[ -z "$slug" || "$slug" == "<detached>" ]] && slug="scratch"
+  branch_label=$(git branch --show-current 2>/dev/null || true)
+  if [[ -n "$branch_label" ]]; then
+    slug=${branch_label//\//-}
+  else
+    short_sha=$(git rev-parse --short HEAD 2>/dev/null || true)
+    branch_label="(detached HEAD${short_sha:+ ${short_sha}})"
+    slug="detached-${short_sha:-scratch}"
+  fi
 
-  command -v log >/dev/null 2>&1 && log "primary-checkout edit detected (mode=${mode}, branch=${branch})"
+  command -v log >/dev/null 2>&1 && log "primary-checkout edit detected (mode=${mode}, branch=${branch_label})"
 
   local prefix override_hint
   if [[ "$mode" == "block" ]]; then
@@ -62,13 +72,17 @@ main() {
     override_hint="Override: WORKTREE_GUARD_MODE=off (one-off edits) or =block (fail-fast)."
   fi
 
+  # `--detach` keeps the branch checkout intact here and creates a worktree
+  # pinned to the current HEAD commit; agent commits there and later pushes
+  # via `git push origin HEAD:<branch>`. Plain `git worktree add path branch`
+  # would fail since the branch is already checked out in this primary.
   cat >&2 <<EOF
 ${prefix}: editing inside the primary checkout (${primary_root}).
 AGENTS.md "Always" rule: the primary checkout is read-only; switch to an
 isolated worktree before editing.
 
-Recommended for branch '${branch}':
-  git worktree add .claude/worktrees/${slug} ${branch}
+Recommended (current HEAD: ${branch_label}):
+  git worktree add --detach .claude/worktrees/${slug}
   cd .claude/worktrees/${slug}
 
 ${override_hint}
