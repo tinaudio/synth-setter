@@ -143,8 +143,9 @@ can be substituted into the host-side `sudo docker run … bash -c "${WORKER_CMD
 scaffolding.)
   → ad-hoc launcher: python -m synth_setter.pipeline.skypilot_launch
                        --template <yaml> -- <arbitrary operator command>
-    runs the command via subprocess.check_call so it materializes
-    data/<task>/<run>/metadata/input_spec.json and uploads it to R2
+    runs the operator command via subprocess.check_call; that command is
+    responsible for materializing data/<task>/<run>/metadata/input_spec.json
+    and uploading it to R2 (the launcher itself does not upload)
     → discovers the unique materialized spec via find_input_specs(<repo_root>/data)
     → resolves its canonical R2 URI via the `synth-setter-spec-uri` console script
     → hands off to dispatch_via_skypilot, which forwards the URI as WORKER_SPEC_URI

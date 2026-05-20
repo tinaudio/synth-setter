@@ -88,7 +88,7 @@ For GitHub Actions concepts, see [GitHub's docs](https://docs.github.com/en/acti
 
 **Artifact chains (`upload-artifact` → `download-artifact`):**
 
-- `test-dataset-generation` writes a per-provider `test-run-metadata-<provider>` artifact for failure debugging only; the `validate-dataset-shards` jobs read the spec directly from R2 at the canonical under-prefix URI `r2://<bucket>/<prefix>input_spec.json` (computed by `synth-setter-spec-uri`) — passed through as `generate-dataset-shards`'s `spec_uri` output and consumed by `test-dataset-generation`'s `validate` job via `needs.generate-launcher.outputs.spec_uri`. **Known limitation:** `generate-launcher` and `validate` are both matrix jobs, but GitHub Actions exposes only a single scalar value through `needs.<job>.outputs.<x>` (effectively the last-finishing cell), so all `validate` cells currently see the same `spec_uri`. Per-cell pairing (fan-in aggregation keyed by `provider × output_format`) is tracked in [#1154](https://github.com/tinaudio/synth-setter/issues/1154).
+- `test-dataset-generation` writes a per-provider `test-run-metadata-<provider>` artifact for failure debugging only; the `validate-dataset-shards` jobs read the spec directly from R2 at the canonical under-prefix URI `r2://<bucket>/<prefix>input_spec.json` (emitted by the launcher's `_emit_spec_uri` as a `::synth-setter-spec-uri::<uri>` stdout sentinel and grepped out of the tee'd generate.log) — passed through as `generate-dataset-shards`'s `spec_uri` output and consumed by `test-dataset-generation`'s `validate` job via `needs.generate-launcher.outputs.spec_uri`. **Known limitation:** `generate-launcher` and `validate` are both matrix jobs, but GitHub Actions exposes only a single scalar value through `needs.<job>.outputs.<x>` (effectively the last-finishing cell), so all `validate` cells currently see the same `spec_uri`. Per-cell pairing (fan-in aggregation keyed by `provider × output_format`) is tracked in [#1154](https://github.com/tinaudio/synth-setter/issues/1154).
 - `spec-materialization` uploads spec → `test-spec-materialization` downloads and validates
 
 ## Secrets & variables
@@ -141,7 +141,7 @@ Or use the Actions tab UI.
 
 ### Concurrency
 
-`release` and `cpu-slow` use concurrency groups (both `cancel-in-progress: false`). Runs **queue** rather than cancel — back-to-back pushes to main produce sequential releases and sequential slow-test runs, not coalesced ones. No other workflow uses concurrency, so multiple pushes can run multiple CI matrices simultaneously.
+`release` and `cpu-slow` use `cancel-in-progress: false`, so runs queue rather than cancel — back-to-back pushes to main produce sequential releases and slow-test runs. `test-dataset-generation` uses `cancel-in-progress: true` on a group keyed by `<workflow>-<ref>-<event.schedule or event_name>`, so hourly and weekly schedule ticks live in separate groups (an hourly tick won't cancel an in-flight weekly all-providers run) while all `workflow_dispatch` runs for a ref share one group (a re-dispatch cancels the in-flight prior one). Other workflows that use `concurrency:` (`docs`, `r2-auth-probe`, `test-act`, `test-oci-image-bake`, `test-skypilot-local`, `test-vst-slow`) follow simpler `<ref>`-keyed patterns — check each file for specifics.
 
 ### GPU runner torch pin
 

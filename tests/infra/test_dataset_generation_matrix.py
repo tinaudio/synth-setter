@@ -97,8 +97,10 @@ def test_setup_matrix_step_branches_on_event_name(workflow: dict) -> None:
     The bash logic in `setup.matrix` has three branches that each must assign
     `output_formats`:
 
-    1. ``providers == '[]'`` (fork PR / unsupported event) → ``output_formats='[]'``.
-    2. ``pull_request`` (same-repo) → both rows: ``output_formats='["hdf5","wds"]'``.
+    1. ``providers == '[]'`` (unsupported event or unknown ``SCHEDULE_CRON``)
+       → ``output_formats='[]'``.
+    2. ``schedule`` (hourly or weekly cron) → both rows:
+       ``output_formats='["hdf5","wds"]'``.
     3. ``workflow_dispatch`` → collapse to the single format the dispatched
        experiment resolves to, via Hydra compose of ``DISPATCH_DATASET_CONFIG``.
 
@@ -115,11 +117,11 @@ def test_setup_matrix_step_branches_on_event_name(workflow: dict) -> None:
 
     assert "output_formats='[]'" in run_script, (
         "setup.matrix is missing the providers-empty branch that emits an empty "
-        "output_formats list — without it, fork-PR runs would leave the output unset."
+        "output_formats list — without it, unsupported-event runs would leave the output unset."
     )
     assert 'output_formats=\'["hdf5","wds"]\'' in run_script, (
-        "setup.matrix is missing the pull_request branch that emits both hdf5 and wds "
-        "rows — without it, PR-time CI would never exercise the new wds matrix cell."
+        "setup.matrix is missing the schedule branch that emits both hdf5 and wds "
+        "rows — without it, scheduled CI would never exercise the wds matrix cell."
     )
     assert "DISPATCH_DATASET_CONFIG" in run_script and "compose" in run_script, (
         "setup.matrix is missing the workflow_dispatch fallback that composes the "

@@ -155,6 +155,50 @@ _LOCAL_DATA_DIR = REPO_ROOT / "data"
 
 _SPEC_URI_CLI = "synth-setter-spec-uri"
 
+# Single-line stdout marker the CI workflow greps out of the tee'd launcher
+# log to populate its `spec_uri` output without re-running spec-uri derivation.
+_SPEC_URI_STDOUT_SENTINEL = "::synth-setter-spec-uri::"
+
+# CI-mode gate. Truthy → write the managed-jobs controller shrink so the
+# controller pod fits on GHA-kind. Operator local-dev leaves this unset.
+_CI_MODE_ENV = "SYNTH_SETTER_CI_MODE"
+_CI_MODE_TRUTHY_VALUES = frozenset({"1", "true", "yes", "on"})
+
+# SkyPilot's default (cpus: 4+, memory: 4x) doesn't fit in GHA-kind's
+# ~1950m allocatable CPU after kube-system. See PR #876.
+_CI_SKY_CONFIG_YAML = """jobs:
+  controller:
+    resources:
+      cpus: 1+
+      memory: 1+
+"""
+
+
+def _ensure_ci_sky_config() -> None:
+    """Write ``~/.sky/config.yaml`` with the controller shrink when CI mode is truthy.
+
+    Truthy = ``SYNTH_SETTER_CI_MODE`` ∈ {1, true, yes, on} (case-insensitive).
+    Any other value (including ``0``, ``false``, unset) is a no-op, so an
+    operator who exports ``SYNTH_SETTER_CI_MODE=0`` doesn't clobber a local
+    config.
+    """
+    if os.environ.get(_CI_MODE_ENV, "").strip().lower() not in _CI_MODE_TRUTHY_VALUES:
+        return
+    sky_dir = Path.home() / ".sky"
+    sky_dir.mkdir(parents=True, exist_ok=True)
+    config_path = sky_dir / "config.yaml"
+    config_path.write_text(_CI_SKY_CONFIG_YAML, encoding="utf-8")
+    config_path.chmod(0o600)
+
+
+def _emit_spec_uri(spec_uri: str) -> None:
+    """Print ``::synth-setter-spec-uri::<uri>`` for the CI workflow to grep.
+
+    :param spec_uri: Canonical ``r2://`` URI of the materialized spec.
+    """
+    click.echo(f"{_SPEC_URI_STDOUT_SENTINEL}{spec_uri}")
+
+
 # ``synth-setter-*`` console scripts that already own SkyPilot dispatch via
 # ``cfg.skypilot_launch.compute_template``. Routing one of these through the
 # ad-hoc launcher would either re-materialize a fresh spec on each worker
@@ -836,6 +880,12 @@ def dispatch_via_skypilot(
         raise ValueError("dispatch_via_skypilot requires sky_cfg.compute_template to be set")
     if not sky_cfg.cmd:
         raise ValueError("dispatch_via_skypilot requires sky_cfg.cmd to be set")
+
+    # Single dispatch chokepoint hit by both entrypoints (click `main` and
+    # `cli/generate_dataset.py:main`). Shrink lands before any sky.* call;
+    # marker emits before dispatch so a failure still leaves it in the log.
+    _ensure_ci_sky_config()
+    _emit_spec_uri(spec_uri)
 
     template_path = Path(sky_cfg.compute_template).expanduser().resolve()
     task_doc = _load_compute_template_with_cmd(template_path, sky_cfg.cmd)

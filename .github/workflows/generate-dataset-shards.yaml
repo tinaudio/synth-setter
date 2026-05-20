@@ -290,25 +290,11 @@ jobs:
         if: ${{ inputs.provider == 'skypilot-local' }}
         run: kind load docker-image "${IMAGE}" --name skypilot
 
-      # Shrink the managed-jobs controller pod's resource floor to fit on the
-      # GHA-kind cluster. SkyPilot's default (cpus: 4+, memory: 4x) doesn't
-      # fit in the ~1950m allocatable CPU after kube-system + sky-jobs-controller.
-      # This is a CI-only workaround; dev machines running `sky local up` against
-      # a real-sized kind don't need it. See PR #876.
-      - name: Shrink managed-jobs controller resources for kind (skypilot-local row)
-        if: ${{ inputs.provider == 'skypilot-local' }}
-        run: |
-          set -euo pipefail
-          mkdir -p "${HOME}/.sky"
-          cat > "${HOME}/.sky/config.yaml" <<'YAML'
-          jobs:
-            controller:
-              resources:
-                cpus: 1+
-                memory: 1+
-          YAML
-          chmod 600 "${HOME}/.sky/config.yaml"
-
+      # SYNTH_SETTER_CI_MODE=1 activates the launcher's
+      # `_ensure_ci_sky_config()` (in src/synth_setter/pipeline/skypilot_launch.py),
+      # which writes the managed-jobs controller-resource shrink to
+      # ~/.sky/config.yaml so the controller pod fits on a GHA-kind cluster.
+      #
       # `skypilot_launch.local=true` flips the launcher's local-vs-remote dispatch
       # (#841); the skypilot-local caller sets it to clear any inherited
       # SKYPILOT_API_SERVER_ENDPOINT. `skypilot_launch.num_workers=1` overrides
@@ -342,6 +328,7 @@ jobs:
           INPUT_LOCAL: ${{ inputs.local }}
           INPUT_TAIL: ${{ inputs.tail }}
           INPUT_NUM_WORKERS: ${{ inputs.num_workers }}
+          SYNTH_SETTER_CI_MODE: "1"
         run: |
           set -euo pipefail
           OVERRIDES=(
@@ -526,26 +513,28 @@ jobs:
           echo "=== Materialized Spec (${PROVIDER}) ==="
           head -20 "${SPEC_PATH}"
 
-      # `synth-setter-spec-uri` emits the spec's canonical under-prefix R2 URI
-      # so validate-dataset-shards.yaml can pull it directly from R2 instead
-      # of via the run-metadata artifact.
-      #
-      # The console script lives in the project package. The skypilot-local row
-      # has it via "Install launcher deps" above; runpod/oci runs do not, since
-      # their workers run remotely. The fallback `pip install` covers that case
-      # — invoking via `docker run "${IMAGE}"` is not safe here because the
-      # pulled `dev-snapshot` tag can race the per-PR image build (the workflow
-      # pulls before docker-image-build.yml has pushed the PR's tag).
-      - name: Compute spec_uri output
+      # The launcher (`src/synth_setter/pipeline/skypilot_launch.py`) emits the
+      # canonical spec URI on a stdout sentinel line after resolving it; the
+      # tee'd generate.log captures it for both skypilot-local and runpod/oci
+      # rows. We grep the marker rather than re-shelling out to the spec-uri
+      # console script (which would require a host-side `pip install -e .` for
+      # the runpod/oci rows whose workers live inside the container). Marker
+      # constant is `_SPEC_URI_STDOUT_SENTINEL` in skypilot_launch.py.
+      # `grep || true` keeps a missing marker from exiting the step (grep
+      # returns 1 on no-match; with `set -euo pipefail` an unmasked grep
+      # failure would skip the explicit empty-check below and surface a
+      # confusing pipe-failure instead of the friendly `::error::` message).
+      - name: Extract spec_uri from launcher log
         id: spec_uri
-        env:
-          SPEC_PATH: ${{ steps.gen_local.outputs.spec_path || steps.gen_docker.outputs.spec_path }}
         run: |
           set -euo pipefail
-          if ! command -v synth-setter-spec-uri >/dev/null 2>&1; then
-            python3 -m pip install --quiet -e .
+          SPEC_URI=$(grep -m1 -oE '::synth-setter-spec-uri::r2://[^[:space:]]+' \
+            "${RUN_METADATA_DIR}/generate.log" \
+            | sed 's|^::synth-setter-spec-uri::||' || true)
+          if [[ -z "${SPEC_URI}" ]]; then
+            echo "::error::launcher did not emit a ::synth-setter-spec-uri:: marker; see generate.log"
+            exit 1
           fi
-          SPEC_URI=$(synth-setter-spec-uri "${SPEC_PATH}")
           echo "spec_uri=${SPEC_URI}" >> "${GITHUB_OUTPUT}"
           echo "spec_uri: ${SPEC_URI}"
 
