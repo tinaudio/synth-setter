@@ -152,7 +152,7 @@ jobs:
               bash docker/ubuntu22_04/ensure_plugin_symlinks.sh
               synth-setter-generate-dataset \
                 "experiment=${EXPERIMENT}" \
-                "+render.parallel=true" \
+                "++render.parallel=true" \
                 "task_name=${NIGHTLY_TASK_NAME}"
             ' \
             2>&1 | tee "${RUN_METADATA_DIR}/generate.log"

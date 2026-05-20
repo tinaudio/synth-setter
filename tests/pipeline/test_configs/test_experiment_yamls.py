@@ -32,6 +32,7 @@ DATASET_EXPERIMENTS: tuple[str, ...] = (
     "generate_dataset/10-1k-shards",
     "generate_dataset/ci-materialize-test",
     "generate_dataset/ci-materialize-test-wds",
+    "generate_dataset/nightly-parallel-smoke",
     "generate_dataset/smoke-shard",
     "generate_dataset/smoke-shard-wds",
     "generate_dataset/surge-simple-480k-10k",
