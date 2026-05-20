@@ -81,6 +81,10 @@ def test_aggregated_scalar_values_within_tolerance(cli_metrics_dir: Path) -> Non
     float drift on identical inputs. The point of the pin is to catch *shape* regressions (e.g. a
     missing metric, an off-by-one mean) rather than to assert bit-for-bit numerical identity.
 
+    ``rms`` is asserted on a pure relative band: its snapshot std (~1.7e-6) sits at the same
+    order of magnitude as a generic ``abs=1e-6`` floor, so a shared ``abs`` would let real
+    regressions slip through silently.
+
     :param cli_metrics_dir: Output directory from the module-scoped CLI invocation.
     """
     agg = pd.read_csv(cli_metrics_dir / "aggregated_metrics.csv", index_col=0)
@@ -88,9 +92,17 @@ def test_aggregated_scalar_values_within_tolerance(cli_metrics_dir: Path) -> Non
 
     assert set(agg.index) == set(snapshot.index)
     for metric in snapshot.index:
-        assert agg.loc[metric, "mean"] == pytest.approx(
-            snapshot.loc[metric, "mean"], rel=1e-2, abs=1e-6
-        ), f"{metric} mean drifted"
-        assert agg.loc[metric, "std"] == pytest.approx(
-            snapshot.loc[metric, "std"], rel=1e-2, abs=1e-6
-        ), f"{metric} std drifted"
+        if metric == "rms":
+            assert agg.loc[metric, "mean"] == pytest.approx(
+                snapshot.loc[metric, "mean"], rel=1e-2
+            ), f"{metric} mean drifted"
+            assert agg.loc[metric, "std"] == pytest.approx(
+                snapshot.loc[metric, "std"], rel=1e-2
+            ), f"{metric} std drifted"
+        else:
+            assert agg.loc[metric, "mean"] == pytest.approx(
+                snapshot.loc[metric, "mean"], rel=1e-2, abs=1e-6
+            ), f"{metric} mean drifted"
+            assert agg.loc[metric, "std"] == pytest.approx(
+                snapshot.loc[metric, "std"], rel=1e-2, abs=1e-6
+            ), f"{metric} std drifted"

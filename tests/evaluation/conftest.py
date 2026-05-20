@@ -104,6 +104,8 @@ def fixture_pred_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
     Tensors are deterministic (seeded) so subsequent refactors of the loader path
     surface as test failures, not flakes. Encoded params live on ``[-1, 1]`` to
     match the CLI's ``(x + 1) / 2`` rescale + ``np.clip(..., 0, 1)`` path.
+    Pred and target params are drawn from distinct RNG seeds so the resulting
+    ``params.csv`` ``pred``/``target`` columns are guaranteed to differ row-wise.
 
     :param tmp_path_factory: Pytest fixture providing session-scoped tmp paths.
     :return: Path to the populated pred-tensor directory.
@@ -119,6 +121,9 @@ def fixture_pred_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
     ).astype(np.float32)
     torch.save(torch.from_numpy(target_audio), pred_dir / "target-audio-0.pt")
 
-    torch.save(torch.from_numpy(encoded.copy()), pred_dir / "target-params-0.pt")
+    target_encoded = (
+        np.random.default_rng(1).random((_PRED_BATCH_SIZE, len(_PARAM_SPEC))) * 2 - 1
+    ).astype(np.float32)
+    torch.save(torch.from_numpy(target_encoded), pred_dir / "target-params-0.pt")
 
     return pred_dir
