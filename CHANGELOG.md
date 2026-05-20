@@ -1,6 +1,39 @@
 # CHANGELOG
 
 
+## v8.4.1 (2026-05-20)
+
+### Bug Fixes
+
+- **data-pipeline**: Trace ThreadPoolExecutor + cross-platform parallel test
+  ([#1195](https://github.com/tinaudio/synth-setter/pull/1195),
+  [`cb7d9b9`](https://github.com/tinaudio/synth-setter/commit/cb7d9b91e73048905d4fa454c5dedd35ff00d5e3))
+
+* fix(data-pipeline): trace ThreadPoolExecutor + cross-platform parallel test
+
+Adds ``concurrency = ["thread", "multiprocessing"]`` to ``[tool.coverage.run]`` so coverage.py
+  credits lines run inside ``_dispatch_shards_parallel``'s pool workers (previously coverage was
+  7.14% on CI vs. 94% locally because the default tracer only follows the main thread). The
+  ``multiprocessing`` entry is defensive for other code paths that use ``multiprocessing.Process``.
+
+Adds ``tests/integration/test_parallel_shard_dispatch.py``: exercises ``run(spec)`` with
+  ``render.parallel=True`` through the real ``subprocess`` boundary via a fake renderer script in
+  ``tmp_path``. Pins ``available_cpus`` so pool size is deterministic, stubs
+  ``extract_renderer_version`` and the R2 skip-probe so no real VST3 / R2 credentials are needed,
+  and uses ``fake_r2_remote`` (re-exported via a new ``tests/integration/conftest.py``) for the
+  rclone destination. The Linux Xvfb wrapper prefix is skipped via ``sys.platform`` monkeypatch —
+  the wrapper is stress-tested separately by ``test_parallel_shard_render_linux.py`` (Linux+VST
+  gated, untouched here).
+
+Closes #1194. Refs #1189.
+
+* docs(testing): reflect tests/integration/ additions from #1195
+
+Update the testing primer and doc-map to acknowledge the new tests/integration/conftest.py
+  (re-exports fake_r2_remote) and the unmarked cross-platform test_parallel_shard_dispatch.py that
+  runs in the default fast lane alongside the existing integration_r2-gated launcher round-trip.
+
+
 ## v8.4.0 (2026-05-20)
 
 ### Features
