@@ -2,8 +2,9 @@
 
 Locks the per-sample output layout the Phase 2 ``render_predictions`` library
 extraction must preserve: every ``sample_<i>/`` directory must contain
-``pred.wav``, ``target.wav``, ``params.csv`` (unless ``--no-params``), and
-``spec.png`` (unless ``--skip-spectrogram``).
+``pred.wav``, ``target.wav``, ``params.csv`` (``target`` column is NaN when
+``--no-params`` is set; the file is still written), and ``spec.png``
+(unless ``--skip-spectrogram``).
 
 ``render_params`` is patched to a deterministic in-process stub so the suite
 stays CPU-only and runs without a Surge XT plugin binary present — matching
