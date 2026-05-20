@@ -27,7 +27,7 @@ Browse [`tests/`](../../tests) for the current layout. The tree has several **di
 | Cross-platform shard dispatch                     | [`tests/integration/test_parallel_shard_dispatch.py`](../../tests/integration/test_parallel_shard_dispatch.py)                                 | Verifies the ThreadPoolExecutor dispatch path on every OS; renderer fully stubbed                                        | (none — runs in the default fast suite)                       |
 | Test helpers                                      | [`tests/helpers/`](../../tests/helpers) — `RunIf`, `run_sh_command`, `package_available`                                                       | Not tests themselves — import from `tests.helpers.<name>`                                                                | —                                                             |
 
-Multiple conftests live under `tests/`; pytest resolves parent conftests, but each subtree carries its own fixtures: [`tests/conftest.py`](../../tests/conftest.py) (Hydra `cfg_train` / `cfg_eval`), [`tests/pipeline/conftest.py`](../../tests/pipeline/conftest.py) (pipeline-specific), [`tests/infra/conftest.py`](../../tests/infra/conftest.py) (intentionally minimal — only stdlib imports), and [`tests/integration/conftest.py`](../../tests/integration/conftest.py) (thin re-export of `fake_r2_remote` from `tests/pipeline/conftest.py`). The infra suite's own conftest pulls in no heavy deps, but pytest still walks up to the top-level `tests/conftest.py` (torch/h5py/Hydra) during normal collection. To skip the parent and keep the infra suite stdlib-only, run [`make test-infra`](../../Makefile), which invokes `pytest tests/infra/ --confcutdir=tests/infra`.
+Multiple conftests live under `tests/`; pytest resolves parent conftests, but each subtree carries its own fixtures: [`tests/conftest.py`](../../tests/conftest.py) (Hydra `cfg_train` / `cfg_eval` / `cfg_dataset` / `cfg_surge_xt`, plus a `fake_r2_remote` re-export from [`tests/pipeline/conftest.py`](../../tests/pipeline/conftest.py)), [`tests/pipeline/conftest.py`](../../tests/pipeline/conftest.py) (pipeline-specific), [`tests/infra/conftest.py`](../../tests/infra/conftest.py) (intentionally minimal — only stdlib imports), and [`tests/integration/conftest.py`](../../tests/integration/conftest.py) (thin re-export of `fake_r2_remote` from `tests/pipeline/conftest.py`). The infra suite's own conftest pulls in no heavy deps, but pytest still walks up to the top-level `tests/conftest.py` (torch/h5py/Hydra) during normal collection. To skip the parent and keep the infra suite stdlib-only, run [`make test-infra`](../../Makefile), which invokes `pytest tests/infra/ --confcutdir=tests/infra`.
 
 ______________________________________________________________________
 
@@ -80,9 +80,9 @@ Most categories don't need the `cfg_train` / `cfg_eval` / `cfg_dataset` / `cfg_s
 
 ______________________________________________________________________
 
-## 4. `cfg_train` / `cfg_eval` fixtures (`tests/conftest.py`)
+## 4. Hydra cfg fixtures (`tests/conftest.py`)
 
-Only needed for tests that exercise Hydra-composed configs (test_configs, test_train, test_eval, test_benchmarks, etc.).
+Only needed for tests that exercise Hydra-composed configs (test_configs, test_train, test_eval, test_benchmarks, test_generate_dataset_shards, etc.).
 
 Both defined in [`tests/conftest.py`](../../tests/conftest.py) as package-scoped `*_global` fixtures wrapped by function-scoped fixtures that inject `tmp_path`. Each `*_global` fixture composes the corresponding entry-point YAML with explicit `data=` / `model=` / `trainer=` overrides at compose time, then applies test-friendly tweaks via an `open_dict(cfg):` block. Read both blocks for today's presets — they change as the fixtures evolve.
 
