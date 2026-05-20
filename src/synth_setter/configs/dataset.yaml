@@ -24,6 +24,14 @@ run_name: ${task_name}
 output_format: hdf5
 base_seed: 42
 
+# Materialized as ``null`` so finalize-dataset.yaml can pin the generate stage's
+# ``run_id`` via the ``run_id=<value>`` Hydra override form (strict mode requires
+# the key to exist). Leaving this ``null`` on the generate path is handled by
+# ``DatasetSpec._normalize_r2_input``'s mode='before' shim, which calls
+# ``_fill_default_r2_prefix`` to materialize ``run_id`` from
+# ``task_name`` + ``created_at`` when missing/None before field validation.
+run_id: null
+
 train_val_test_sizes: ???
 # ``r2:`` lands here from the ``r2: default`` group composition above. Its
 # shape (``bucket`` + ``prefix_root``) matches the nested ``R2Location`` model
