@@ -264,7 +264,8 @@ def _render_in_batches(
         # silently downgraded to "never" and persisted to R2 (#1187).
         raise NotImplementedError(
             'gui_toggle_cadence="always_on" is not yet wired into the renderer; '
-            "use one of {'never', 'once', 'render'} until the follow-up PR lands."
+            "pick another gui_toggle_cadence value (see RenderConfig schema for "
+            "the platform-specific allowed set) until the follow-up PR lands."
         )
     # plugin_reload_cadence="once": load + preset once per shard, reuse instance (#705).
     # "render" (default): cached_plugin stays None; each render reloads (#489 historical).

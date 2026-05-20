@@ -223,10 +223,13 @@ class RenderConfig(BaseModel):
             "before every render (default on non-Darwin, matching historical "
             'per-render warm-up), ``"always_on"`` holds the editor open for the '
             "whole shard render on a background thread (requires "
-            '``plugin_reload_cadence="once"``). Darwin rejects ``"render"`` (SIGTRAP '
-            'after ~3-4 calls, #714); ``"always_on"`` is permitted on Darwin because '
-            "it opens the editor once per shard, not cumulatively. The default "
-            'factory yields ``"never"`` on Darwin.'
+            '``plugin_reload_cadence="once"``; this Wave 1 PR ships the schema '
+            "only — the renderer raises ``NotImplementedError`` for "
+            '``"always_on"`` until the held-open wiring lands in the follow-up '
+            'PR). Darwin rejects ``"render"`` (SIGTRAP after ~3-4 calls, #714); '
+            '``"always_on"`` is permitted on Darwin because it opens the editor '
+            "once per shard, not cumulatively. The default factory yields "
+            '``"never"`` on Darwin.'
         ),
     )
 
