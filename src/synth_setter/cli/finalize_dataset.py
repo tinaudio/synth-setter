@@ -32,9 +32,10 @@ from synth_setter.pipeline.constants import (  # noqa: E402
     INPUT_SPEC_FILENAME,
     STATS_NPZ_FILENAME,
 )
-from synth_setter.pipeline.data import reshard  # noqa: E402
+from synth_setter.pipeline.data.reshard import reshard_dataset  # noqa: E402
 from synth_setter.pipeline.data.stats import get_stats_hdf5, stream_stats_wds  # noqa: E402
 from synth_setter.pipeline.schemas.spec import DatasetSpec  # noqa: E402
+from synth_setter.pipeline.spec_io import write_spec_to_path  # noqa: E402
 
 # Resolve repo root from this file so the entrypoint is cwd-independent.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -97,15 +98,22 @@ def finalize_wds(spec: DatasetSpec, work_dir: Path) -> None:
 def finalize_hdf5(spec: DatasetSpec, work_dir: Path) -> None:
     """Download every shard, reshard into split files, compute stats, upload all artifacts.
 
-    Materializes ``input_spec.json`` sibling to the shards so reshard's
-    default spec-path resolution works without a ``--spec`` override.
-    ``get_stats_hdf5`` writes ``work_dir / "stats.npz"`` (path derived via
-    ``SurgeXTDataset.get_stats_file_path(train.h5)``); the post-call
+    Writes ``work_dir/input_spec.json`` flat (via
+    :func:`~synth_setter.pipeline.spec_io.write_spec_to_path`) so
+    :func:`~synth_setter.pipeline.data.reshard.reshard_dataset`'s default
+    spec discovery picks it up without a ``--spec`` override. The flat
+    placement diverges from :func:`~synth_setter.pipeline.spec_io.write_spec_locally`'s
+    nested ``<output_dir>/data/<task>/<run>/metadata/`` layout because
+    ``work_dir`` is a per-finalize scratch tempdir whose only consumer is
+    reshard — re-creating the operator-side ``data/`` hierarchy under it
+    would force the reshard adapter to learn that layout for no benefit.
+    ``get_stats_hdf5`` then writes ``work_dir / "stats.npz"`` (path derived
+    via ``SurgeXTDataset.get_stats_file_path(train.h5)``); the post-call
     ``assert`` pins that contract so a future drift in the derivation
     surfaces here rather than as a missing upload source. Structural
     validation (per ``pipeline/CLAUDE.md``) is delegated to the h5py opens
-    performed inside ``reshard._write_split`` — finalize never re-runs the
-    workers' full four-check pass.
+    that ``reshard_dataset`` performs while staging each split — finalize
+    never re-runs the workers' full four-check pass.
 
     :param spec: Validated dataset spec (``output_format == "hdf5"``).
     :param work_dir: Scratch directory; shards, splits, stats and the spec
@@ -124,11 +132,8 @@ def finalize_hdf5(spec: DatasetSpec, work_dir: Path) -> None:
         )
     for shard in spec.shards:
         r2_io.download_to_path(spec.r2.shard_uri(shard), work_dir / shard.filename)
-    (work_dir / INPUT_SPEC_FILENAME).write_text(spec.model_dump_json(indent=2), encoding="utf-8")
-    # Click's stub types ``.callback`` as ``Optional[Callable]``; assert
-    # before invocation so the call is statically typed without ``type: ignore``.
-    assert reshard.main.callback is not None  # noqa: S101 — narrows Click's Optional callback type
-    reshard.main.callback(dataset_root=work_dir, spec_uri=None)
+    write_spec_to_path(spec, work_dir / INPUT_SPEC_FILENAME)
+    reshard_dataset(work_dir)
     get_stats_hdf5(str(work_dir / "train.h5"))
     stats_npz = work_dir / STATS_NPZ_FILENAME
     assert stats_npz.is_file(), (  # noqa: S101 — pin get_stats_hdf5's implicit output-path contract

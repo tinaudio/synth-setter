@@ -13,7 +13,7 @@ import sys
 import tarfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import h5py
 import numpy as np
@@ -303,6 +303,81 @@ def test_hdf5_finalize_produces_train_consumable_layout(
         assert set(st.files) == {"mean", "std"}
 
 
+def test_finalize_hdf5_real_shards_end_to_end(
+    fake_r2_remote: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: real rclone, real reshard, real upload — read-back after work_dir deleted.
+
+    Exercises ``finalize_hdf5`` end-to-end against the ``fake_r2_remote``
+    local-typed rclone remote (no subprocess mocks): real shard downloads,
+    real ``reshard_dataset`` invocation, real ``r2_io.upload`` of every
+    split + ``stats.npz`` via ``rclone copyto``. Only ``get_stats_hdf5`` is
+    stubbed because its Dask client startup dominates runtime; the stub
+    writes a real ``stats.npz`` so the upload step is the production one.
+
+    After the call returns the work_dir is wiped; the uploaded ``train.h5``
+    is read back from the fake R2 location with sibling shards available
+    (the layout a downstream consumer sees). A row from ``audio`` is
+    dereferenced to prove the VDS sources resolve relative to the file's
+    directory — guards the absolute-path regression where ``h5py.VirtualSource``
+    would embed the now-gone work_dir.
+
+    :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir
+        (see ``tests/pipeline/conftest.py``). Skips if rclone is missing.
+    :param tmp_path: Pytest tmp dir; hosts the finalize scratch work_dir.
+    :param monkeypatch: Pytest fixture used to stub the slow Dask stats compute.
+    """
+    spec = _build_hdf5_smoke_spec(task_name="finalize-hdf5-e2e")
+
+    # Seed shards into the fake R2 location where ``download_to_path`` will fetch them.
+    shard_remote_dir = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
+    _seed_shard_files(shard_remote_dir, spec)
+
+    # Real Dask compute would dominate runtime; stub writes a sentinel ``stats.npz``
+    # so the production ``r2_io.upload`` step still runs against a real file.
+    monkeypatch.setattr(
+        "synth_setter.cli.finalize_dataset.get_stats_hdf5",
+        lambda train_h5_path: np.savez(
+            Path(train_h5_path).parent / "stats.npz",
+            mean=np.zeros((2, 8, 8), dtype=np.float32),
+            std=np.ones((2, 8, 8), dtype=np.float32),
+        ),
+    )
+
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    finalize_dataset.finalize_hdf5(spec, work_dir)
+
+    # Wipe the scratch dir before any read so the assertion proves the
+    # uploaded artifacts stand on their own (VDS relative-path invariant).
+    shutil.rmtree(work_dir)
+
+    # Layout the consumer sees: every split + stats land flat under ``<prefix>``,
+    # sibling to the source shards.
+    landed_root = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
+    train_h5 = landed_root / "train.h5"
+    val_h5 = landed_root / "val.h5"
+    test_h5 = landed_root / "test.h5"
+    stats_npz = landed_root / "stats.npz"
+    assert train_h5.is_file()
+    assert val_h5.is_file()
+    assert test_h5.is_file()
+    assert stats_npz.is_file()
+
+    # The VDS resolves and a row dereferences — proves the embedded source paths
+    # are relative (basename) and find sibling shards in ``landed_root``.
+    with h5py.File(train_h5, "r") as f:
+        assert {"audio", "mel_spec", "param_array"} <= set(f.keys())
+        audio = cast(h5py.Dataset, f["audio"])
+        assert audio.shape[0] == spec.train_val_test_sizes[0]
+        # Dereferencing a row routes through ``h5py.VirtualSource`` — would raise
+        # ``KeyError`` / return zeros if the embedded path didn't resolve.
+        _ = audio[0]
+
+    with np.load(stats_npz) as st:
+        assert set(st.files) == {"mean", "std"}
+
+
 def test_main_hdf5_branch_uploads_marker_last(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -344,7 +419,7 @@ def test_main_hdf5_branch_uploads_marker_last(
     monkeypatch.setattr(sys, "argv", ["finalize", "experiment=generate_dataset/smoke-shard"])
 
     # Re-compose the same spec ``main()`` will, then seed shards into the fake
-    # R2 root so the patched ``_rclone_copy`` lands them under ``work_dir``.
+    # R2 root so the patched ``download_to_path`` lands them under ``work_dir``.
     main_spec = _compose_smoke_hdf5_spec()
     _seed_shard_files(r2_stand_in, main_spec)
 

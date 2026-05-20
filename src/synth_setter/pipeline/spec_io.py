@@ -39,6 +39,7 @@ __all__ = [
     "read_spec_text",
     "upload_spec",
     "write_spec_locally",
+    "write_spec_to_path",
 ]
 
 # Top-level local directory that mirrors the R2 ``prefix_root``. Hard-coded
@@ -121,18 +122,50 @@ def local_spec_path(spec: DatasetSpec, output_dir: Path) -> Path:
     )
 
 
+def write_spec_to_path(spec: DatasetSpec, target: Path) -> Path:
+    """Serialize ``spec`` to an explicit filesystem path; create parent dirs.
+
+    Used by callers that need a spec written at a specific location (e.g.
+    ``cli.finalize_dataset.finalize_hdf5`` writes ``input_spec.json`` flat
+    inside its scratch work_dir so reshard's default discovery — see
+    ``data.reshard._load_spec`` — resolves it without a ``--spec`` override).
+    :func:`write_spec_locally` is the operator-side counterpart that places
+    the same bytes under the canonical ``<output_dir>/data/<task>/<run>/metadata/``
+    layout.
+
+    :param spec: The frozen DatasetSpec to serialize.
+    :param target: Destination file path; must end in
+        :data:`~synth_setter.pipeline.constants.INPUT_SPEC_FILENAME` so the
+        write is discoverable by other tools that glob the standard name.
+    :returns: The path written (same as ``target``).
+    :raises ValueError: ``target.name`` is not
+        :data:`~synth_setter.pipeline.constants.INPUT_SPEC_FILENAME`.
+    """
+    if target.name != INPUT_SPEC_FILENAME:
+        raise ValueError(
+            f"write_spec_to_path requires target.name == {INPUT_SPEC_FILENAME!r}; "
+            f"got {target.name!r}."
+        )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(spec.model_dump_json(indent=2), encoding="utf-8")
+    return target
+
+
 def write_spec_locally(spec: DatasetSpec, output_dir: Path) -> Path:
-    """Serialize ``spec`` to its local path; create parent dirs.
+    """Serialize ``spec`` to its canonical operator-side path; create parent dirs.
+
+    Thin wrapper that resolves the nested ``<output_dir>/data/<task>/<run>/metadata/``
+    layout via :func:`local_spec_path` and delegates to
+    :func:`write_spec_to_path` for the actual write. Callers that need to
+    bypass the nested layout (e.g. write flat inside a tempdir) use
+    :func:`write_spec_to_path` directly.
 
     :param spec: The frozen DatasetSpec to serialize.
     :param output_dir: Operator-side artifact root; see
         :func:`local_spec_path` for the runner's anchor convention.
     :returns: The path written.
     """
-    target = local_spec_path(spec, output_dir)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(spec.model_dump_json(indent=2), encoding="utf-8")
-    return target
+    return write_spec_to_path(spec, local_spec_path(spec, output_dir))
 
 
 def find_input_specs(data_dir: Path) -> list[Path]:

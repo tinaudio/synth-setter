@@ -33,21 +33,13 @@ _STAGING_PREFIX = ".tmp-"
 _FLOAT32 = np.dtype("float32")
 
 
-@click.command()
-@click.argument("dataset_root", type=click.Path(file_okay=False, path_type=Path))
-@click.option(
-    "--spec",
-    "spec_uri",
-    type=str,
-    default=None,
-    help=(
-        "Local path or ``r2://bucket/key`` URI of the materialized DatasetSpec JSON "
-        "(``r2://`` is downloaded via rclone — ``RCLONE_CONFIG_R2_*`` env vars must be set). "
-        f"Defaults to ``<dataset_root>/{INPUT_SPEC_FILENAME}``."
-    ),
-)
-def main(dataset_root: Path, spec_uri: str | None) -> None:  # noqa: DOC502
+def reshard_dataset(dataset_root: Path, spec_uri: str | None = None) -> None:  # noqa: DOC502
     """Split shards under ``dataset_root`` into ``{train,val,test}.h5`` virtual datasets.
+
+    Pure-function form of the reshard operation; importable from other
+    pipeline stages (notably ``cli.finalize_dataset.finalize_hdf5``) without
+    invoking the Click wrapper's ``.callback`` indirection. The :func:`main`
+    command below is a thin Click adapter that delegates to this function.
 
     :param dataset_root: Directory containing the shard files named by ``spec.shards``.
     :param spec_uri: Optional local path or ``r2://`` URI for the DatasetSpec;
@@ -66,6 +58,30 @@ def main(dataset_root: Path, spec_uri: str | None) -> None:  # noqa: DOC502
 
     splits = _build_splits(shard_paths, spec.train_val_test_sizes, shard_size)
     _stage_and_commit_splits(dataset_root, splits, shard_size, tails)
+
+
+@click.command()
+@click.argument("dataset_root", type=click.Path(file_okay=False, path_type=Path))
+@click.option(
+    "--spec",
+    "spec_uri",
+    type=str,
+    default=None,
+    help=(
+        "Local path or ``r2://bucket/key`` URI of the materialized DatasetSpec JSON "
+        "(``r2://`` is downloaded via rclone — ``RCLONE_CONFIG_R2_*`` env vars must be set). "
+        f"Defaults to ``<dataset_root>/{INPUT_SPEC_FILENAME}``."
+    ),
+)
+def main(dataset_root: Path, spec_uri: str | None) -> None:  # noqa: DOC502
+    """Click adapter that delegates to :func:`reshard_dataset`.
+
+    :param dataset_root: Directory containing the shard files named by ``spec.shards``.
+    :param spec_uri: Optional local path or ``r2://`` URI for the DatasetSpec;
+        defaults to ``<dataset_root>/input_spec.json``.
+    :raises click.ClickException: Propagated from :func:`reshard_dataset`.
+    """
+    reshard_dataset(dataset_root, spec_uri)
 
 
 def _load_spec(spec_uri: str | None, dataset_root: Path) -> DatasetSpec:
@@ -173,6 +189,12 @@ def _write_split(
 ) -> None:
     """Materialize one split's virtual dataset into ``staging_path``.
 
+    VDS source references are written as relative filenames (the shard
+    basename, not the absolute path) so the resulting ``{split}.h5`` resolves
+    against any directory that holds sibling shards — required because the
+    file is uploaded to R2 from a temp dir and later read from a different
+    local cache by training.
+
     :param staging_path: ``.tmp-<split>.h5`` destination; the caller renames
         it into place after every split's stage succeeds.
     :param split_paths: Shard files concatenated in order into the virtual layout.
@@ -189,7 +211,9 @@ def _write_split(
         range_start = i * shard_size
         range_end = range_start + shard_size
         for key, tail in tails.items():
-            source = h5py.VirtualSource(shard_path, key, dtype=_FLOAT32, shape=(shard_size, *tail))
+            source = h5py.VirtualSource(
+                shard_path.name, key, dtype=_FLOAT32, shape=(shard_size, *tail)
+            )
             layouts[key][range_start:range_end] = source
 
     with h5py.File(staging_path, "w") as f:
