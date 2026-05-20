@@ -7,9 +7,11 @@ proven not to regress:
 * file layout: ``metrics-{pid}.csv``, ``metrics.csv``, ``aggregated_metrics.csv``
   land at the expected paths
 * schema: the four-metric column set is exactly ``{mss, wmfcc, sot, rms}``
-* scalar values: the committed snapshot in ``snapshots/`` matches within a
-  lenient tolerance band (``rel=1e-2`` for distance metrics, ``rel=1e-1`` for
-  ``rms`` since its ~1e-6 std drifts ~5% across Python 3.10/3.11 runners).
+* scalar values: the committed snapshot in ``snapshots/`` matches within
+  per-metric tolerance bands — ``rel=1e-2, abs=1e-6`` on every mean, and on
+  every std EXCEPT the aggregated ``rms`` std, which uses ``abs=1e-5``
+  (purely absolute) because its snapshot value sits at the float-noise floor
+  ~1.7e-6 and drifts ~5% across Python 3.10/3.11 librosa builds.
 
 The snapshot file is committed — it is **not** regenerated each run.
 """
