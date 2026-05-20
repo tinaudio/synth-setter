@@ -28,7 +28,13 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME, R2_URI_SCHEME, RCLONE_REMOTE
+from synth_setter.pipeline.constants import (
+    DATASET_COMPLETE_FILENAME,
+    INPUT_SPEC_FILENAME,
+    R2_URI_SCHEME,
+    RCLONE_REMOTE,
+    STATS_NPZ_FILENAME,
+)
 from synth_setter.pipeline.schemas.prefix import DEFAULT_R2_PREFIX_ROOT
 
 if TYPE_CHECKING:
@@ -204,7 +210,7 @@ class R2Location(BaseModel):
 
         :returns: ``r2://<bucket>/<prefix>dataset.complete`` URI string.
         """
-        return self._under_prefix("dataset.complete")
+        return self._under_prefix(DATASET_COMPLETE_FILENAME)
 
     def split_h5_uri(self, split: Split) -> str:
         """R2 URI of a split virtual-dataset file (``train.h5`` / ``val.h5`` / ``test.h5``).
@@ -222,17 +228,24 @@ class R2Location(BaseModel):
     def split_wds_brace_uri(self, shard_range: tuple[int, int]) -> str:
         """R2 URI carrying the webdataset brace pattern for ``[lo, hi)`` shards.
 
-        WebDataset readers expand the ``{LO..HI}`` form natively; ``HI`` here is
-        inclusive (``shard_range[1] - 1``) because that is the contract
-        ``webdataset.WebDataset`` reads.
+        WebDataset readers expand the ``{LO..HI}`` form natively; ``HI`` here
+        is inclusive (``shard_range[1] - 1``) per the
+        ``webdataset.WebDataset`` contract.
 
-        :param shard_range: Half-open shard-index range as produced by
-            ``DatasetSpec.split_shard_ranges[split]``; ``lo == hi`` is not
-            supported (no shards => no brace pattern).
+        :param shard_range: Half-open shard-index range, typically from
+            ``DatasetSpec.split_shard_ranges[split]``.
         :returns: ``r2://<bucket>/<prefix>shard-{LO..HI}.tar`` with zero-padded
             six-digit indices matching ``ShardSpec.filename``'s format.
+        :raises ValueError: ``shard_range`` is empty (``lo >= hi``) — would
+            emit a malformed brace like ``{000003..000002}`` that wds reads
+            as an empty set instead of raising.
         """
         lo, hi = shard_range
+        if lo >= hi:
+            raise ValueError(
+                f"split_wds_brace_uri requires lo < hi (got {shard_range!r}); "
+                f"an empty shard range has no brace pattern."
+            )
         return self._under_prefix(f"shard-{{{lo:06d}..{hi - 1:06d}}}.tar")
 
     def stats_uri(self) -> str:
@@ -243,7 +256,7 @@ class R2Location(BaseModel):
 
         :returns: ``r2://<bucket>/<prefix>stats.npz`` URI string.
         """
-        return self._under_prefix("stats.npz")
+        return self._under_prefix(STATS_NPZ_FILENAME)
 
     def worker_staged_shard_uri(
         self,

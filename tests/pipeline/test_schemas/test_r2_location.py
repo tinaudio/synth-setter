@@ -192,6 +192,12 @@ class TestR2LocationLayoutHelpers:
         loc = R2Location(bucket="b", prefix="p/")
         assert loc.split_wds_brace_uri((4, 5)) == "r2://b/p/shard-{000004..000004}.tar"
 
+    def test_split_wds_brace_uri_rejects_empty_range(self) -> None:
+        """An empty range (lo == hi) raises rather than silently emitting a malformed brace."""
+        loc = R2Location(bucket="b", prefix="p/")
+        with pytest.raises(ValueError, match=r"requires lo < hi"):
+            loc.split_wds_brace_uri((3, 3))
+
     def test_stats_uri(self) -> None:
         """``stats_uri()`` returns ``<prefix>stats.npz``."""
         loc = R2Location(bucket="intermediate-data", prefix="data/run/")

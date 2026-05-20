@@ -7,6 +7,13 @@ Canonical names from docs/design/data-pipeline.md §7.1 (storage layout).
 # JSON serialization, never modified after launch.
 INPUT_SPEC_FILENAME = "input_spec.json"
 
+# Normalization statistics (mel-spec mean / std) written by finalize.
+STATS_NPZ_FILENAME = "stats.npz"
+
+# Zero-byte trust-anchor marker; presence under ``r2.prefix`` is the canonical
+# "this run is ready to consume" signal. Written strictly last by finalize.
+DATASET_COMPLETE_FILENAME = "dataset.complete"
+
 # Env-var name reserved for the worker to locate the materialized DatasetSpec.
 # Today's consumers: the launcher (``dispatch_via_skypilot``) injects the value
 # into each rank's ``task.update_envs``; the CI helper (``pipeline.ci.spec_uri``)

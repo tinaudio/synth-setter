@@ -10,6 +10,7 @@ when any of these functions runs; ``ensure_r2_env_loaded`` is the load + validat
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import tempfile
 from collections.abc import Iterator
@@ -129,7 +130,6 @@ def is_r2_reachable() -> bool:
         ``lsd`` of ``r2:`` exits 0; ``False`` otherwise (binary missing,
         bad/missing creds, network down, etc.).
     """
-    import shutil
 
     if shutil.which("rclone") is None:
         return False
@@ -208,17 +208,26 @@ def upload_to_uri(local_path: Path, r2_uri: str) -> None:
 
 
 def upload(source: str | Path, destination_uri: str) -> None:
-    """Copy ``source`` to ``destination_uri``; ``source`` may be a local path or ``r2://`` URI.
+    """Copy ``source`` to ``destination_uri``; ``source`` is a local path or ``r2://`` URI.
 
-    Local sources delegate to :func:`upload_to_uri` so the reliability-flag set
-    stays a single-source-of-truth. R2 sources trigger ``rclone copyto`` between
-    two ``r2:`` paths with the same flag set, supporting R2-to-R2 promotion
-    (e.g. ``metadata/workers/<id>/shard-N.h5`` → ``shard-N.h5``) without
-    round-tripping through local disk.
+    R2-source dispatches to ``rclone copyto`` (R2→R2 promotion); local-source
+    delegates to :func:`upload_to_uri` so the reliability-flag set lives in
+    one place.
 
-    :param source: Local filesystem path (``str`` or ``Path``) or ``r2://`` URI.
+    :param source: Local filesystem path (``str`` or ``Path``) or ``r2://`` URI
+        as a ``str`` — a ``Path`` whose text starts with ``r2://`` is rejected
+        because the type signature carries no URI semantics.
     :param destination_uri: Destination ``r2://`` URI.
+    :raises TypeError: ``source`` is a ``Path`` whose textual form begins with
+        ``r2://``; pass the URI as ``str`` so dispatch is unambiguous.
     """
+    if isinstance(source, Path) and str(source).startswith(("r2://", "r2:/")):
+        # ``Path("r2://bucket/key")`` collapses the double slash to ``"r2:/bucket/key"``,
+        # so both forms have to be guarded; either way the caller meant a URI.
+        raise TypeError(
+            f"upload() received Path({str(source)!r}); pass r2:// URIs as str "
+            f"so the source-type dispatch is unambiguous."
+        )
     if isinstance(source, str) and is_r2_uri(source):
         args = [  # noqa: S607 — rclone resolved by image's PATH
             "rclone",

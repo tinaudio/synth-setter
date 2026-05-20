@@ -3,9 +3,9 @@ import io
 import logging
 import re
 import tarfile
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import dask.array as da
 import h5py
@@ -281,6 +281,60 @@ def _iter_mel_batches(shard_path: Path) -> Iterator[np.ndarray]:
             yield np.load(io.BytesIO(extracted.read()))
 
 
+def _fold_shard_into_welford(
+    existing: tuple[int, Any, Any], shard_path: Path
+) -> tuple[int, Any, Any]:
+    """Fold every mel row from one shard into the Welford accumulator.
+
+    :param existing: Welford state ``(count, mean, M2)`` before this shard.
+    :param shard_path: Filesystem path to one ``shard-*.tar``.
+    :returns: Updated Welford state after every readable mel row was folded.
+    :raises ValueError: ``shard_path`` carried no readable ``*.mel_spec.npy``
+        members; raised eagerly so partial stats are never written silently
+        for a truncated/malformed shard.
+    """
+    shard_rows = 0
+    for mel_batch in _iter_mel_batches(shard_path):
+        for row in mel_batch:
+            existing = update(existing, row)
+            shard_rows += 1
+    if shard_rows == 0:
+        raise ValueError(
+            f"shard {shard_path.name} contained no readable "
+            f"'*.{MEL_SPEC_FIELD}.npy' members; aborting so partial stats "
+            f"are never written silently for a truncated/malformed shard"
+        )
+    return existing
+
+
+def stream_stats_wds(
+    shard_paths: Iterable[Path], mask_degenerate: bool = False
+) -> tuple[np.ndarray, np.ndarray]:
+    """Stream Welford mean/std across an iterable of ``shard-*.tar`` paths.
+
+    Lets finalize download a shard, fold it, and ``unlink`` it before pulling
+    the next one — peak disk stays at one shard regardless of split size.
+    The iterable is consumed lazily; a generator that downloads+yields+deletes
+    pairs naturally.
+
+    :param shard_paths: Iterable yielding shard tar paths in the order the
+        caller wants them folded; sorting is the caller's responsibility.
+    :param mask_degenerate: See :func:`get_stats_wds`.
+    :returns: ``(mean, std)`` arrays as produced by :func:`finalize`.
+    :raises FileNotFoundError: ``shard_paths`` yielded zero paths; partial
+        stats are never written silently for an empty input set.
+    """
+    existing: tuple[int, Any, Any] = (0, 0, 0)
+    folded_any = False
+    for shard_path in shard_paths:
+        logger.info(f"Processing {shard_path.name}...")
+        existing = _fold_shard_into_welford(existing, shard_path)
+        folded_any = True
+    if not folded_any:
+        raise FileNotFoundError("stream_stats_wds received no shard paths")
+    return finalize(existing, mask_degenerate=mask_degenerate)
+
+
 def get_stats_wds(directory: str | Path, mask_degenerate: bool = False) -> None:
     """Compute mel-spec mean/std across all ``shard-*.tar`` in ``directory`` and write sibling
     ``stats.npz``.
@@ -294,9 +348,6 @@ def get_stats_wds(directory: str | Path, mask_degenerate: bool = False) -> None:
         on :func:`get_stats_hdf5` / :func:`get_stats_directory` for the
         downstream rationale.
     :raises FileNotFoundError: When ``directory`` contains no shards.
-    :raises ValueError: When a matched shard has zero readable
-        ``mel_spec.npy`` members — raised eagerly so partial stats are
-        never written silently for a truncated/malformed shard.
     :returns: ``None``. Writes ``stats.npz`` to ``directory / "stats.npz"``.
     :rtype: None
     """
@@ -304,25 +355,11 @@ def get_stats_wds(directory: str | Path, mask_degenerate: bool = False) -> None:
     shard_paths = sorted(directory.glob(_SHARD_GLOB))
     if not shard_paths:
         raise FileNotFoundError(f"no {_SHARD_GLOB} files in {directory}")
+    # ``ValueError`` on a malformed shard propagates from
+    # ``stream_stats_wds → _fold_shard_into_welford``; pydoclint's
+    # :raises: section only mirrors local raises.
+    mean, std = stream_stats_wds(shard_paths, mask_degenerate=mask_degenerate)
     out_file = directory / "stats.npz"
-
-    existing = (0, 0, 0)
-    for shard_path in shard_paths:
-        logger.info(f"Processing {shard_path.name}...")
-        shard_rows = 0
-        for mel_batch in _iter_mel_batches(shard_path):
-            for row in mel_batch:
-                existing = update(existing, row)
-                shard_rows += 1
-        if shard_rows == 0:
-            raise ValueError(
-                f"shard {shard_path.name} contained no readable "
-                f"'*.{MEL_SPEC_FIELD}.npy' members; aborting so partial stats "
-                f"are never written silently for a truncated/malformed shard"
-            )
-
-    mean, std = finalize(existing, mask_degenerate=mask_degenerate)
-
     logger.info(f"Saving to {out_file}")
     np.savez(out_file, mean=mean, std=std)
 

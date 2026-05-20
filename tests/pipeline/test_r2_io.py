@@ -179,6 +179,60 @@ class TestUploadToUri:
         assert "--retries=3" in args
 
 
+class TestIsR2Reachable:
+    """Tests for ``is_r2_reachable`` — boolean auth-probe used as a test-skip gate."""
+
+    def test_returns_true_when_rclone_lsd_exits_zero(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Happy path: rclone is on PATH and the ``lsd`` probe exits 0.
+
+        :param monkeypatch: Pytest fixture used to stub ``shutil.which`` + ``subprocess.run``.
+        """
+        monkeypatch.setattr(
+            "synth_setter.pipeline.r2_io.shutil.which", lambda name: f"/usr/bin/{name}"
+        )
+
+        class _OK:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        monkeypatch.setattr("synth_setter.pipeline.r2_io.subprocess.run", lambda *a, **kw: _OK())
+        assert r2_io.is_r2_reachable() is True
+
+    def test_returns_false_when_rclone_lsd_exits_non_zero(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Auth failure: rclone is on PATH but the probe exits non-zero.
+
+        :param monkeypatch: Pytest fixture used to stub ``shutil.which`` + ``subprocess.run``.
+        """
+        monkeypatch.setattr(
+            "synth_setter.pipeline.r2_io.shutil.which", lambda name: f"/usr/bin/{name}"
+        )
+
+        def fake_run(*args: object, **kwargs: object) -> object:
+            del args, kwargs
+            raise subprocess.CalledProcessError(returncode=1, cmd=["rclone", "lsd", "r2:"])
+
+        monkeypatch.setattr("synth_setter.pipeline.r2_io.subprocess.run", fake_run)
+        assert r2_io.is_r2_reachable() is False
+
+    def test_returns_false_when_rclone_not_on_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Bare clone / missing binary: rclone is absent from PATH.
+
+        :param monkeypatch: Pytest fixture used to stub ``shutil.which``.
+        """
+        monkeypatch.setattr("synth_setter.pipeline.r2_io.shutil.which", lambda _name: None)
+        # subprocess.run must never be called — short-circuit on PATH miss.
+        monkeypatch.setattr(
+            "synth_setter.pipeline.r2_io.subprocess.run",
+            lambda *a, **kw: pytest.fail("subprocess.run should not be reached"),
+        )
+        assert r2_io.is_r2_reachable() is False
+
+
 class TestUpload:
     """Tests for ``upload`` — source-type-tolerant wrapper over ``rclone copyto``."""
 
@@ -242,6 +296,11 @@ class TestUpload:
         assert "--timeout=300s" in args
         assert "--retries=3" in args
         assert args[-2:] == ["r2:bucket/src/key.json", "r2:bucket/dst/key.json"]
+
+    def test_rejects_path_whose_text_looks_like_r2_uri(self) -> None:
+        """A ``Path("r2://...")`` is rejected so dispatch is unambiguous between local and R2."""
+        with pytest.raises(TypeError, match=r"upload\(\) received Path.*r2://"):
+            r2_io.upload(Path("r2://bucket/src/key.json"), "r2://bucket/dst/key.json")
 
 
 class TestDownloadedToTempfile:

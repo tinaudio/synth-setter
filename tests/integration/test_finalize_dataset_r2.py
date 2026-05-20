@@ -140,6 +140,21 @@ def test_finalize_wds_uploads_stats_and_marker_to_real_r2(
     assert r2_io.object_size(spec.r2.stats_uri()) is not None, (
         f"expected stats.npz at {spec.r2.stats_uri()} after finalize"
     )
-    assert r2_io.object_size(spec.r2.dataset_complete_marker_uri()) is not None, (
-        f"expected dataset.complete marker at {spec.r2.dataset_complete_marker_uri()}"
+    # Marker is a trust anchor, not a payload — 0-byte is the canonical shape.
+    marker_size = r2_io.object_size(spec.r2.dataset_complete_marker_uri())
+    assert marker_size == 0, (
+        f"expected zero-byte marker at {spec.r2.dataset_complete_marker_uri()}; "
+        f"got size={marker_size}"
     )
+    # stats.npz must carry the keys the SurgeXTDataset reader pulls
+    # (surge_datamodule.py:62-64) — pull it back and validate the schema.
+    with tempfile.TemporaryDirectory() as raw_verify_dir:
+        verify_dir = Path(raw_verify_dir)
+        local_stats = verify_dir / "stats.npz"
+        r2_io.download_to_path(spec.r2.stats_uri(), local_stats)
+        with np.load(local_stats) as stats:
+            assert set(stats.files) == {"mean", "std"}, (
+                f"stats.npz keys are {set(stats.files)}, expected {{'mean', 'std'}}"
+            )
+            assert stats["mean"].dtype.kind == "f"
+            assert stats["std"].dtype.kind == "f"
