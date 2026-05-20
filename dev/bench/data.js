@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779257553500,
+  "lastUpdate": 1779257555910,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -6613,6 +6613,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 12.484208950799996,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1c985eb9e9dbe2c997951e5d8f34d5a157c20145",
+          "message": "feat(data-pipeline): add gui_toggle_cadence=\"always_on\" schema value (#1190)\n\n* feat(data-pipeline): add gui_toggle_cadence=\"always_on\" schema value\n\nExtend ``_GuiToggleCadence`` with ``\"always_on\"`` and add the validator\nthat pairs it with ``plugin_reload_cadence=\"once\"`` (holding the editor\nopen binds it to a single live plugin instance for the shard).\n\nSchema-only; the render-loop wiring lands in a follow-up PR. ``\"always_on\"``\nis permitted on Darwin — the #714 SIGTRAP gate targets cumulative opens,\nnot a single sustained one.\n\nRefs #1187\n\n* feat(data-pipeline): guard \"always_on\" in renderer until Wave 2 wiring lands\n\nRaise ``NotImplementedError`` from ``_render_in_batches`` when\n``gui_toggle_cadence == \"always_on\"`` so a spec composed in the gap\nbetween Wave 1 (schema) and Wave 2 (renderer wiring) cannot be silently\ndowngraded to ``\"never\"`` semantics and persisted to R2.\n\nAlso address review WARNs:\n- Add ``\"always_on\"`` (paired with ``plugin_reload_cadence=\"once\"``) to\n  the off-Darwin parametrize so the literal stays coupled to the matrix.\n- Pin ``_current_platform`` to ``\"linux\"`` in the two non-Darwin\n  always-on tests; assert ``plugin_reload_cadence`` in the Darwin test.\n- Append a remediation hint to the new validator's error message\n  matching the sibling ``_gui_toggle_cadence_forbids_render_on_darwin``\n  convention.\n\nRefs #1187\n\n* docs(data-pipeline): clarify always_on transient gap per Copilot review\n\n- Field description now explicitly notes Wave 1 ships the schema only and\n  the renderer raises ``NotImplementedError`` for ``\"always_on\"`` until the\n  held-open wiring lands in the follow-up PR.\n- ``NotImplementedError`` message no longer hard-codes ``{'never', 'once',\n  'render'}`` (which mis-suggests ``\"render\"`` on Darwin where it's\n  validator-rejected per #714). Defers to the RenderConfig schema for the\n  platform-specific allowed set.\n\nRefs #1187",
+          "timestamp": "2026-05-20T01:57:55-04:00",
+          "tree_id": "7e087fa1f2cbfc370e8c100b88bfa064c7d255de",
+          "url": "https://github.com/tinaudio/synth-setter/commit/1c985eb9e9dbe2c997951e5d8f34d5a157c20145"
+        },
+        "date": 1779257555337,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 1.6612650156021118,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 3.567563036456704,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.005370124708861113,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.009748220443725586,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 1.5359387397766113,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 13.227178603000004,
             "unit": "seconds"
           }
         ]
