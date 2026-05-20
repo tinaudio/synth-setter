@@ -130,7 +130,7 @@ def _current_platform() -> str:
     return sys.platform
 
 
-_GuiToggleCadence = Literal["never", "once", "render"]
+_GuiToggleCadence = Literal["never", "once", "render", "always_on"]
 _PluginReloadCadence = Literal["once", "render"]
 
 
@@ -218,11 +218,15 @@ class RenderConfig(BaseModel):
     gui_toggle_cadence: _GuiToggleCadence = Field(
         default_factory=_default_gui_toggle_cadence,
         description=(
-            'How often to run the ``show_editor`` warm-up on the plugin: ``"never"`` '
-            'skips it entirely, ``"once"`` runs it once per shard, ``"render"`` runs '
-            "it before every render (default on non-Darwin, matching historical "
-            'per-render warm-up). Darwin rejects ``"render"`` (SIGTRAP after ~3-4 '
-            'calls, #714); the default factory yields ``"never"`` on Darwin.'
+            'How often to realise the plugin editor during the shard: ``"never"`` '
+            'skips it entirely, ``"once"`` warms once per shard, ``"render"`` warms '
+            "before every render (default on non-Darwin, matching historical "
+            'per-render warm-up), ``"always_on"`` holds the editor open for the '
+            "whole shard render on a background thread (requires "
+            '``plugin_reload_cadence="once"``). Darwin rejects ``"render"`` (SIGTRAP '
+            'after ~3-4 calls, #714); ``"always_on"`` is permitted on Darwin because '
+            "it opens the editor once per shard, not cumulatively. The default "
+            'factory yields ``"never"`` on Darwin.'
         ),
     )
 
@@ -263,6 +267,25 @@ class RenderConfig(BaseModel):
                 "show_editor accumulates AppKit/CGS commit-handler state per "
                 "call in unbundled python and triggers SIGTRAP after ~3-4 "
                 'plugin reloads (#714). Use "once" or "never" on Darwin.'
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _always_on_requires_plugin_reload_once(self) -> RenderConfig:
+        """Reject ``gui_toggle_cadence="always_on"`` unless the plugin is loaded once per shard.
+
+        Holding the editor open binds it to a single live ``VST3Plugin`` instance;
+        reloading per render would invalidate the editor handle mid-shard.
+
+        :return: ``self`` unchanged when the combination is permitted.
+        :raises ValueError: ``gui_toggle_cadence="always_on"`` combined with
+            ``plugin_reload_cadence != "once"``.
+        """
+        if self.gui_toggle_cadence == "always_on" and self.plugin_reload_cadence != "once":
+            raise ValueError(
+                'gui_toggle_cadence="always_on" requires plugin_reload_cadence="once" '
+                "so the editor stays bound to a single live plugin instance for the "
+                "whole shard."
             )
         return self
 

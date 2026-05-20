@@ -178,7 +178,7 @@ class TestRenderConfig:
     def test_gui_toggle_never_and_once_accepted_on_darwin(
         self, monkeypatch: pytest.MonkeyPatch, cadence: str
     ) -> None:
-        """``"never"`` and ``"once"`` are the only valid gui_toggle settings on Darwin.
+        """``"never"`` and ``"once"`` are accepted on Darwin (the historical safe pair).
 
         :param monkeypatch: Pytest fixture used to stub ``_current_platform``.
         :param cadence: Parametrized ``gui_toggle_cadence`` value under test.
@@ -224,6 +224,49 @@ class TestRenderConfig:
             }
         )
         assert cfg.plugin_reload_cadence == cadence
+
+    def test_always_on_accepted_with_reload_once(self) -> None:
+        """``gui_toggle_cadence="always_on"`` with ``plugin_reload_cadence="once"`` constructs."""
+        cfg = RenderConfig(
+            **{
+                **_valid_render_kwargs(),
+                "gui_toggle_cadence": "always_on",
+                "plugin_reload_cadence": "once",
+            }
+        )
+        assert cfg.gui_toggle_cadence == "always_on"
+        assert cfg.plugin_reload_cadence == "once"
+
+    def test_always_on_rejected_with_reload_render(self) -> None:
+        """``"always_on"`` rejects ``plugin_reload_cadence="render"`` at validation."""
+        with pytest.raises(
+            ValidationError,
+            match=r'gui_toggle_cadence="always_on" requires plugin_reload_cadence="once"',
+        ):
+            RenderConfig(
+                **{
+                    **_valid_render_kwargs(),
+                    "gui_toggle_cadence": "always_on",
+                    "plugin_reload_cadence": "render",
+                }
+            )
+
+    def test_always_on_accepted_on_darwin(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``"always_on"`` is permitted on Darwin (single open, below #714 threshold).
+
+        :param monkeypatch: Pytest fixture used to stub ``_current_platform``.
+        """
+        monkeypatch.setattr(
+            "synth_setter.pipeline.schemas.spec._current_platform", lambda: "darwin"
+        )
+        cfg = RenderConfig(
+            **{
+                **_valid_render_kwargs(),
+                "gui_toggle_cadence": "always_on",
+                "plugin_reload_cadence": "once",
+            }
+        )
+        assert cfg.gui_toggle_cadence == "always_on"
 
 
 # ---------------------------------------------------------------------------
