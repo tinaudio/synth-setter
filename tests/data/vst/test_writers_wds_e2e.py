@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import io
 import json
-import os
 import tarfile
 from pathlib import Path
 
@@ -26,24 +25,24 @@ from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 
 _ = hdf5plugin  # keep type checkers from flagging the side-effect import
 
-_PLUGIN_PATH = os.environ.get("SYNTH_SETTER_PLUGIN_PATH") or "plugins/Surge XT.vst3"
+# Hardcoded loudness-passing patch, h5↔h5 phase-robust comparison helpers, and
+# the canonical ``_PLUGIN_PATH`` are reused verbatim from
+# ``test_generate_vst_dataset.py`` so this module's h5↔wds parity check uses
+# the same thresholds the h5↔h5 round-trip tests already pin, and the
+# ``skip_no_vst`` mark below tracks the same plugin path that ``_render_cfg``
+# embeds in the produced ``RenderConfig``.
+from tests.data.vst.test_generate_vst_dataset import (  # noqa: E402  pinned canonical patch
+    _HARDCODED_NOTE_PARAMS,
+    _HARDCODED_SYNTH_PARAMS,
+    _MEL_MEAN_ABS_MAX,
+    _PLUGIN_PATH,
+    _assert_audio_metrics_within_thresholds,
+    _render_cfg,
+)
 
 skip_no_vst = pytest.mark.skipif(
     not Path(_PLUGIN_PATH).exists(),
     reason=f"VST plugin not found at {_PLUGIN_PATH}",
-)
-
-# Hardcoded loudness-passing patch and h5↔h5 phase-robust comparison helpers
-# are reused verbatim from ``test_generate_vst_dataset.py`` so this module's
-# h5↔wds parity check uses the same thresholds the h5↔h5 round-trip tests
-# already pin. Imported (not copied) on purpose: a future spec change updates
-# the canonical patch in one place, and both test modules track it.
-from tests.data.vst.test_generate_vst_dataset import (
-    _HARDCODED_NOTE_PARAMS,
-    _HARDCODED_SYNTH_PARAMS,
-    _MEL_MEAN_ABS_MAX,
-    _assert_audio_metrics_within_thresholds,
-    _render_cfg,
 )
 
 
