@@ -138,7 +138,7 @@ def runner() -> CliRunner:
     return CliRunner()
 
 
-class TestResharSpecDriven:
+class TestReshardSpecDriven:
     """Reshard splits the local shard list using spec-derived counts."""
 
     def test_uses_spec_train_val_test_sizes(
@@ -186,7 +186,7 @@ class TestResharSpecDriven:
         assert (tmp_path / "test.h5").exists()
 
 
-class TestResharSpecShardsAreAuthoritative:
+class TestReshardSpecShardsAreAuthoritative:
     """Reshard reads exactly the filenames in ``spec.shards``, no glob."""
 
     def test_missing_canonical_shard_fails_loud(
@@ -211,7 +211,7 @@ class TestResharSpecShardsAreAuthoritative:
         assert result.exit_code != 0
 
 
-class TestResharSpecPath:
+class TestReshardSpecPath:
     """Reshard reads the spec from ``<dataset_root>/input_spec.json`` by default."""
 
     def test_explicit_spec_path_overrides_default(
@@ -260,7 +260,7 @@ class TestResharSpecPath:
         assert result.exit_code != 0
 
 
-class TestResharRemovedFlagsRejected:
+class TestReshardRemovedFlagsRejected:
     """Flags that used to exist on reshard (``--train-samples`` / ``--val-samples`` / ``--test-
     samples`` from the original CLI; ``--shard-size`` from the interim parent #1092) must be
     rejected — the spec is now the single source of truth."""
@@ -292,7 +292,7 @@ class TestResharRemovedFlagsRejected:
         assert "no such option" in result.output.lower()
 
 
-class TestResharSplitDivisibility:
+class TestReshardSplitDivisibility:
     """``train_val_test_sizes`` must be perfectly divisible by ``samples_per_shard``."""
 
     def test_non_divisible_split_size_raises_at_runtime(
@@ -324,7 +324,7 @@ class TestResharSplitDivisibility:
         assert "divisible" in result.output.lower() or "samples_per_shard" in result.output
 
 
-class TestResharR2SpecUri:
+class TestReshardR2SpecUri:
     """``--spec r2://...`` is loaded via ``load_spec_from_uri`` (no real R2 I/O)."""
 
     def test_r2_spec_uri_is_loaded_via_load_spec_from_uri(
@@ -359,7 +359,7 @@ class TestResharR2SpecUri:
         assert (tmp_path / "train.h5").exists()
 
 
-class TestResharVirtualDatasetIdentity:
+class TestReshardVirtualDatasetIdentity:
     """Virtual-dataset rows actually surface the right source-shard bytes, in spec order."""
 
     def test_split_files_concatenate_source_shards_in_spec_order(
