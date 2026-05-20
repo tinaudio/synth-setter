@@ -109,7 +109,7 @@ def finalize_hdf5(spec: DatasetSpec, work_dir: Path) -> None:
     would force the reshard adapter to learn that layout for no benefit.
     ``get_stats_hdf5`` then writes ``work_dir / "stats.npz"`` (path derived
     via ``SurgeXTDataset.get_stats_file_path(train.h5)``); the post-call
-    ``assert`` pins that contract so a future drift in the derivation
+    existence guard pins that contract so a future drift in the derivation
     surfaces here rather than as a missing upload source. Structural
     validation (per ``pipeline/CLAUDE.md``) is delegated to the h5py opens
     that ``reshard_dataset`` performs while staging each split — finalize
@@ -122,6 +122,8 @@ def finalize_hdf5(spec: DatasetSpec, work_dir: Path) -> None:
         (``spec.split_shard_ranges["train"]`` has ``lo >= hi``); reshard
         would prune ``train.h5`` and stats compute would fail with a
         low-signal HDF5 error.
+    :raises FileNotFoundError: ``get_stats_hdf5`` returned without writing
+        ``work_dir / "stats.npz"``, breaking the upload-source contract.
     """
     train_lo, train_hi = spec.split_shard_ranges["train"]
     if train_lo >= train_hi:
@@ -136,10 +138,11 @@ def finalize_hdf5(spec: DatasetSpec, work_dir: Path) -> None:
     reshard_dataset(work_dir)
     get_stats_hdf5(str(work_dir / "train.h5"))
     stats_npz = work_dir / STATS_NPZ_FILENAME
-    assert stats_npz.is_file(), (  # noqa: S101 — pin get_stats_hdf5's implicit output-path contract
-        f"get_stats_hdf5 did not write {stats_npz}; check "
-        f"SurgeXTDataset.get_stats_file_path derivation."
-    )
+    if not stats_npz.is_file():
+        raise FileNotFoundError(
+            f"get_stats_hdf5 did not write {stats_npz}; check "
+            f"SurgeXTDataset.get_stats_file_path derivation."
+        )
     # Reshard prunes empty splits — only upload the ones it actually wrote.
     # Iterate ``split_shard_ranges`` (Split-typed keys) so split_h5_uri's
     # Literal narrowing holds without a cast.
