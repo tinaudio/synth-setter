@@ -949,31 +949,38 @@ class TestRun:
         self,
         fake_r2_remote: Path,
         tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """``render.parallel=True`` + 4 shards → renders dispatched on >1 thread; all 4 land.
+        """``render.parallel=True`` + 4 shards → ≥2 worker threads; every shard uploads.
 
-        Behavioral check: the orchestration thread that called each renderer
-        is observed via ``threading.get_ident()``. A serial run would record
-        exactly one thread ID. A pool-backed run with multiple workers
-        records at least two. State-based completion proof: every shard's
-        rclone destination file exists in the fake R2 remote.
+        Pins ``available_cpus`` to 8 so the dispatch heuristic
+        ``min(max(1, available_cpus() // 2), len(my_range))`` resolves to 4
+        workers regardless of CI runner CPU count. The dispatcher stub blocks
+        each render until the second thread enters, forcing the pool to
+        actually parallelize.
 
         :param fake_r2_remote: Local-typed R2 remote — asserted to contain
             every shard after the parallel dispatch.
-        :param tmp_path: Pytest tmp dir used by ``_multi_shard_spec``.
+        :param tmp_path: Pytest tmp dir used by ``_base_spec_kwargs``.
+        :param monkeypatch: Pins ``available_cpus`` so pool size is deterministic.
         """
+        monkeypatch.setattr("synth_setter.cli.generate_dataset.available_cpus", lambda: 8)
         kwargs = _base_spec_kwargs(tmp_path, train_val_test_sizes=[40000, 0, 0])
         kwargs["render"] = {**kwargs["render"], "parallel": True}  # type: ignore[dict-item]
         spec = DatasetSpec(**kwargs)  # type: ignore[arg-type]
         assert len(spec.shards) == 4
         thread_ids: set[int] = set()
         lock = threading.Lock()
+        two_threads_seen = threading.Event()
 
         def _thread_recording_dispatcher(args: list[str]) -> int:
             if args and args[0] == "rclone":
                 return _REAL_CHECK_CALL(args)
             with lock:
                 thread_ids.add(threading.get_ident())
+                if len(thread_ids) >= 2:
+                    two_threads_seen.set()
+            two_threads_seen.wait(timeout=5.0)
             return _materialize_shard(args)
 
         with patch(
@@ -982,11 +989,7 @@ class TestRun:
         ):
             run(spec)
 
-        # Pool size on this host = min(max(1, available_cpus() // 2), 4); even on a
-        # single-CPU runner the floor (max(1, ...)) returns 1 and the test reduces
-        # to a serial run — assert >= 1 to cover both cases, then rely on the
-        # state-based completion check.
-        assert len(thread_ids) >= 1
+        assert len(thread_ids) >= 2
         bucket_prefix = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
         for shard in spec.shards:
             assert (bucket_prefix / shard.filename).is_file()
@@ -995,18 +998,22 @@ class TestRun:
         self,
         fake_r2_remote: Path,
         tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """One failing render in a parallel pool → CalledProcessError surfaces.
+        """One failing render in a parallel pool → CalledProcessError surfaces fail-fast.
 
-        Fail-fast under ``parallel=True``: the failing future's exception
-        re-raises out of ``as_completed`` / ``fut.result()``; the pool's
-        ``shutdown(cancel_futures=True)`` aborts not-yet-started shards.
-        At least one shard fails to land, proving the abort path works.
+        Pins ``available_cpus`` to 4 so pool size resolves to 2 workers. The
+        first thread to enter fails; the in-flight peer can complete, but
+        the remaining two futures get ``cancel_futures=True``-aborted before
+        they start. Net effect: renderer fires at most twice (1 fail + ≤1
+        in-flight peer), and at most one shard lands in R2.
 
         :param fake_r2_remote: Local-typed R2 remote — used for state-based
-            check that not every shard reached upload.
+            cancellation check.
         :param tmp_path: Pytest tmp dir used by ``_base_spec_kwargs``.
+        :param monkeypatch: Pins ``available_cpus`` so pool size is deterministic.
         """
+        monkeypatch.setattr("synth_setter.cli.generate_dataset.available_cpus", lambda: 4)
         kwargs = _base_spec_kwargs(tmp_path, train_val_test_sizes=[40000, 0, 0])
         kwargs["render"] = {**kwargs["render"], "parallel": True}  # type: ignore[dict-item]
         spec = DatasetSpec(**kwargs)  # type: ignore[arg-type]
@@ -1031,12 +1038,10 @@ class TestRun:
             with pytest.raises(subprocess.CalledProcessError):
                 run(spec)
 
-        # At least one shard did not land: the first-to-run shard failed
-        # before its rclone, and (depending on scheduling) some later shards
-        # may have been cancelled before starting.
         bucket_prefix = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
         landed = sum(1 for shard in spec.shards if (bucket_prefix / shard.filename).is_file())
-        assert landed < len(spec.shards)
+        assert landed <= 1
+        assert renderer_call_count <= 2
 
     def test_render_raises_after_exhausting_max_retries(
         self,
