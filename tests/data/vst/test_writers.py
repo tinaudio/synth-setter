@@ -18,6 +18,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from synth_setter.data.vst import writers
+from synth_setter.data.vst.core import EditorStartTimeout
 from synth_setter.data.vst.generate_vst_dataset import VSTDataSample
 from synth_setter.data.vst.writers import _render_in_batches, _shard_metadata_from_render
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
@@ -481,6 +482,55 @@ def test_render_in_batches_always_on_holds_editor_open_across_all_renders(
     assert close_events[0].is_set()
     assert len(captured) == n
     assert all(c["warmup"] is False for c in captured)
+
+
+def test_render_in_batches_always_on_propagates_editor_start_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``EditorStartTimeout`` from ``editor_held_open`` escapes ``_render_in_batches``.
+
+    The slow-start contract (#1204) says a handshake miss raises
+    ``EditorStartTimeout`` rather than warning. That signal is only useful if
+    the upstream loop lets it propagate — any ``try/except RuntimeError``
+    wrapping the held-open scope would swallow the timeout and silently fall
+    back to rendering with the editor closed, defeating the always_on contract.
+
+    Pins that ``_render_in_batches`` re-raises ``EditorStartTimeout`` unchanged
+    when the inner context manager raises, and that no render calls fire.
+
+    :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
+    """
+    n = 3
+    render_cfg = _smoke_render_cfg(
+        samples_per_shard=n,
+        samples_per_render_batch=n,
+        plugin_reload_cadence="once",
+        gui_toggle_cadence="always_on",
+    )
+    captured = _stub_render_dependencies(
+        monkeypatch,
+        load_plugin_calls=[],
+        load_preset_calls=[],
+    )
+
+    @contextlib.contextmanager
+    def raising_held_open(_plugin: object) -> Iterator[None]:
+        raise EditorStartTimeout("vst-editor-window did not signal start within 0.0s")
+        yield  # unreachable; required so @contextmanager sees a generator function
+
+    monkeypatch.setattr(writers, "editor_held_open", raising_held_open)
+
+    with pytest.raises(EditorStartTimeout, match="did not signal start"):
+        _render_in_batches(
+            render_cfg=render_cfg,
+            param_spec=MagicMock(name="param_spec"),
+            start_idx=0,
+            fixed_synth_params_list=None,
+            fixed_note_params_list=None,
+            flush_batch=lambda _batch, _start: None,
+        )
+
+    assert captured == []
 
 
 @pytest.mark.parametrize("legacy_cadence", ["never", "once", "render"])
