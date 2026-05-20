@@ -72,9 +72,12 @@ agent/_shared/review_sentinel.py). Then re-run with the path in the command
 
   gh pr create --title "..." --body "..."  # REVIEW_FULL=.agent-reviews/repo-review-full-no-comments.<sha>.md
 
-REVIEW_FULL=<value> runs to the next whitespace or shell metachar; do NOT
-quote the path inline (`REVIEW_FULL="..."` is parsed with the quote in the
-value). The encoded SHA must be an ancestor of HEAD and within REVIEW_MAX_LAG
+REVIEW_FULL=<value> runs to the next whitespace or shell metachar. Quoted
+paths are NOT recognized — the value-character class excludes both single
+and double quotes entirely, so REVIEW_FULL="..." reads as missing-REVIEW_FULL.
+Pass the path bare.
+
+The encoded SHA must be an ancestor of HEAD and within REVIEW_MAX_LAG
 first-parent commits behind it (default 2; override via the REVIEW_MAX_LAG
 env var, must be a non-negative integer).'
 

@@ -26,7 +26,7 @@ SKILL_PREFIX = "repo-review-full-no-comments"
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _FILENAME_RE = re.compile(rf"^{re.escape(SKILL_PREFIX)}\.([0-9a-f]{{40}})\.md$")
 _SUBCOMMANDS = frozenset({"make", "parse", "path"})
-_USAGE = f"usage: review_sentinel.py {{{' | '.join(sorted(_SUBCOMMANDS))} <arg>}}"
+_USAGE = f"usage: review_sentinel.py {{{'|'.join(sorted(_SUBCOMMANDS))}}} <arg>"
 
 
 def make_review_filename(sha: str) -> str:
