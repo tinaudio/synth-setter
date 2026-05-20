@@ -216,6 +216,44 @@ class TestEditorHeldOpen:
             "with-body entered before the start handshake fired"
         )
 
+    def test_without_handshake_body_enters_before_editor_thread_starts(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Inverse of the positive test: with the handshake disabled, the body wins the race.
+
+        Pins the negative side of #1198. Setting the timeout to 0 short-circuits
+        ``editor_started.wait`` so the body must enter before the gated editor
+        thread fires — proves the positive test would fail if the handshake
+        were removed, not just pass on a fast runner.
+
+        :param monkeypatch: Zeros ``_EDITOR_START_TIMEOUT_SECONDS`` and wraps
+            ``threading.Thread`` so the editor thread blocks on a gate.
+        """
+        monkeypatch.setattr(core, "_EDITOR_START_TIMEOUT_SECONDS", 0.0)
+        fake_plugin = MagicMock()
+        fake_plugin.show_editor.side_effect = lambda event: event.wait(timeout=5.0)
+
+        release_start = threading.Event()
+        real_thread_cls = threading.Thread
+
+        def make_gated_thread(*args: object, **kwargs: object) -> threading.Thread:
+            user_target = kwargs.pop("target", None)
+
+            def gated_target() -> None:
+                release_start.wait(timeout=5.0)
+                if callable(user_target):
+                    user_target()
+
+            return real_thread_cls(*args, target=gated_target, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(threading, "Thread", make_gated_thread)
+
+        with core.editor_held_open(fake_plugin):
+            # Body entered with the editor thread still gated — the handshake
+            # (not scheduler luck) is what makes the positive test pass.
+            assert not release_start.is_set()
+            release_start.set()
+
     def test_slow_start_warns_and_proceeds(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Editor thread that misses the start handshake logs a warning and the body still runs.
 
@@ -264,10 +302,8 @@ class TestEditorHeldOpen:
         body_ran = False
         with core.editor_held_open(fake_plugin):
             body_ran = True
-            # Let the deferred real start fire and the editor thread reach
-            # ``show_editor`` so the finally-clause join sees a started
-            # thread; production threads start synchronously — the delay is
-            # a test-only artifact of the slow-start stub.
+            # Let the deferred real start fire so the finally-clause join sees a
+            # started thread; production starts synchronously (test-only artifact).
             release_real_start.set()
             assert show_editor_entered.wait(timeout=1.0)
 
