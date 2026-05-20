@@ -29,7 +29,10 @@ class TestAvailableCpus:
 
         :param monkeypatch: Pytest fixture used to stub ``os.sched_getaffinity``.
         """
-        monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: {0, 1, 2, 3})
+        # raising=False — sched_getaffinity is Linux-only; on macOS/Windows the
+        # attribute does not exist and the test still needs to exercise the
+        # "present and returns N" branch of available_cpus().
+        monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: {0, 1, 2, 3}, raising=False)
         assert available_cpus() == 4
 
     def test_falls_back_to_cpu_count_when_sched_getaffinity_absent(
