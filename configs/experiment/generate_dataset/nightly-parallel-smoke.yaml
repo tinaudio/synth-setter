@@ -1,13 +1,9 @@
 # @package _global_
 
-# Nightly smoke for ``RenderConfig.parallel=true`` against the real Surge XT
-# VST3 + real R2. 32 total samples → 4 shards at samples_per_shard=8, sized so
-# the headless Xvfb wrapper bootstraps at least twice concurrently
-# (pool size = ``min(max(1, cpus // 2), len(my_range))``) while staying inside
-# the workflow's step budget. ``max_retries=1`` keeps a transient Xvfb hiccup
-# from failing the nightly outright — the integration test in
-# ``tests/integration/test_parallel_shard_render_linux.py`` retains strict
-# fail-fast for the local stress signal.
+# Nightly smoke for RenderConfig.parallel=true: 32 samples → 4 shards at
+# samples_per_shard=8, sized so Xvfb bootstraps ≥2 wrappers concurrently.
+# max_retries stays at 0 (default fail-fast) — the nightly's purpose is to
+# catch parallel-dispatch regressions, which a retry budget would mask.
 
 defaults:
   - override /data: surge_simple
@@ -24,4 +20,3 @@ render:
   samples_per_render_batch: 8
   samples_per_shard: 8
   parallel: true
-  max_retries: 1

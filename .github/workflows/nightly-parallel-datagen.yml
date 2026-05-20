@@ -58,11 +58,9 @@ jobs:
 
     env:
       IMAGE: tinaudio/synth-setter:${{ inputs.image_tag || 'dev-snapshot' }}
-      # ``r2.prefix`` (and therefore the spec's ``input_spec_uri``) is scoped
-      # to a unique nightly leaf so concurrent runs / re-runs cannot collide on
-      # the canonical R2 object. The leaf is computed in the ``Compute R2
-      # prefix`` step and re-exported into ``GITHUB_ENV`` so the cleanup step
-      # can purge the same scope even when the generate step fails.
+      # ``NIGHTLY_TASK_NAME`` is computed below and exported to ``GITHUB_ENV``
+      # so the cleanup step can purge ``data/<task_name>/`` even when an
+      # earlier step fails before the spec_uri step resolves the full prefix.
       R2_BUCKET: intermediate-data
       RCLONE_CONFIG_R2_TYPE: s3
       RCLONE_CONFIG_R2_PROVIDER: Cloudflare
@@ -77,21 +75,20 @@ jobs:
       - name: Pull image
         run: docker pull "$IMAGE"
 
-      # Per-run unique R2 prefix. ``run_attempt`` is part of the path so a
-      # re-run of the same workflow doesn't collide on the canonical
-      # ``input_spec.json`` object the launcher writes. The leaf nonce keeps
-      # local manual dispatches isolated even when ``run_id``/``run_attempt``
-      # repeat. Persisted into ``GITHUB_ENV`` so the cleanup step (which runs
-      # ``if: always()``) can purge the same scope on failure.
-      - name: Compute R2 prefix
-        id: prefix
+      # Per-run unique ``task_name`` so the launcher's auto-filled
+      # ``r2.prefix = <prefix_root>/<task_name>/<run_id>/`` keeps the
+      # canonical ``data/`` prefix invariant while still scoping each
+      # nightly run to its own R2 leaf. The cleanup step purges the
+      # whole ``data/<task_name>/`` slice on ``if: always()``.
+      - name: Compute nightly task_name
+        id: task
         run: |
           set -euo pipefail
           nonce=$(uuidgen | tr -d '-' | cut -c1-8)
-          prefix="nightly-parallel/${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}/${nonce}/"
-          echo "R2_PREFIX=${prefix}" >> "${GITHUB_ENV}"
-          echo "r2_prefix=${prefix}" >> "${GITHUB_OUTPUT}"
-          echo "r2 prefix: ${prefix}"
+          task="nightly-parallel-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${nonce}"
+          echo "NIGHTLY_TASK_NAME=${task}" >> "${GITHUB_ENV}"
+          echo "task_name=${task}" >> "${GITHUB_OUTPUT}"
+          echo "nightly task_name: ${task}"
 
       # Mirrors the headless plugin-load smoke check in ``test-vst-slow.yml``
       # — fails fast if the plugin / image / mount layout is broken before
@@ -143,7 +140,7 @@ jobs:
             -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
             -e RCLONE_CONFIG_R2_ENDPOINT \
             -e EXPERIMENT \
-            -e R2_PREFIX \
+            -e NIGHTLY_TASK_NAME \
             -e HYDRA_FULL_ERROR=1 \
             -e SYNTH_SETTER_WORKER_RANK=0 \
             -e SYNTH_SETTER_NUM_WORKERS=1 \
@@ -156,30 +153,46 @@ jobs:
               synth-setter-generate-dataset \
                 "experiment=${EXPERIMENT}" \
                 "+render.parallel=true" \
-                "+r2.prefix=${R2_PREFIX}"
+                "task_name=${NIGHTLY_TASK_NAME}"
             ' \
             2>&1 | tee "${RUN_METADATA_DIR}/generate.log"
           echo "run_metadata_dir=${RUN_METADATA_DIR}" >> "${GITHUB_OUTPUT}"
 
-      # ``upload_spec`` emits the canonical spec URI on a stdout sentinel line;
-      # ``grep || true`` keeps a missing marker from short-circuiting the step
-      # under ``set -euo pipefail`` so the explicit empty-check below surfaces
-      # a friendly error instead of a confusing pipe-failure.
-      - name: Extract spec_uri from launcher log
+      # The inline ``run(spec)`` path does NOT emit the
+      # ``::synth-setter-spec-uri::`` marker (that's only the SkyPilot
+      # dispatch branch in ``skypilot_launch.py``). Instead, use the local
+      # spec the launcher wrote via ``write_spec_locally`` — it lives under
+      # ``<workspace>/data/<task_name>/<run_id>/metadata/input_spec.json``
+      # and carries ``r2.bucket`` + ``r2.prefix`` so we can synthesise the
+      # canonical R2 URI without a second R2 round-trip.
+      - name: Resolve spec_uri from local materialized spec
         id: spec_uri
         env:
-          GENERATE_LOG: ${{ steps.generate.outputs.run_metadata_dir }}/generate.log
+          NIGHTLY_TASK_NAME: ${{ steps.task.outputs.task_name }}
         run: |
           set -euo pipefail
-          SPEC_URI=$(grep -m1 -oE '::synth-setter-spec-uri::r2://[^[:space:]]+' \
-            "${GENERATE_LOG}" \
-            | sed 's|^::synth-setter-spec-uri::||' || true)
-          if [[ -z "${SPEC_URI}" ]]; then
-            echo "::error::launcher did not emit a ::synth-setter-spec-uri:: marker; see generate.log"
+          shopt -s nullglob
+          specs=("${GITHUB_WORKSPACE}/data/${NIGHTLY_TASK_NAME}"/*/metadata/input_spec.json)
+          if [[ "${#specs[@]}" -ne 1 ]]; then
+            echo "::error::expected exactly one materialized spec under data/${NIGHTLY_TASK_NAME}/*/metadata/, found ${#specs[@]}"
+            printf '%s\n' "${specs[@]}"
             exit 1
           fi
+          SPEC_PATH="${specs[0]}"
+          SPEC_URI=$(python3 -c '
+          import json, sys
+          spec = json.load(open(sys.argv[1]))
+          r2 = spec["r2"]
+          print(f"r2://{r2[\"bucket\"]}/{r2[\"prefix\"]}input_spec.json")
+          ' "${SPEC_PATH}")
+          R2_PREFIX=$(python3 -c '
+          import json, sys
+          print(json.load(open(sys.argv[1]))["r2"]["prefix"])
+          ' "${SPEC_PATH}")
           echo "spec_uri=${SPEC_URI}" >> "${GITHUB_OUTPUT}"
+          echo "R2_PREFIX=${R2_PREFIX}" >> "${GITHUB_ENV}"
           echo "spec_uri: ${SPEC_URI}"
+          echo "r2 prefix (for cleanup): ${R2_PREFIX}"
 
       # Validate the spec + every shard against R2 using the same CI helpers
       # invoked by ``validate-dataset-shards.yaml``. Runs inside the same
@@ -216,18 +229,24 @@ jobs:
           if-no-files-found: warn
 
       # Always purge the ephemeral R2 prefix so failed runs do not leak
-      # objects. ``rclone purge`` exits non-zero on a missing remote prefix
-      # (which is fine — nothing to clean); a non-zero exit here must not
-      # mask a real test failure, hence the ``|| true``.
+      # objects. Prefer the spec-derived R2_PREFIX; fall back to the
+      # task-scoped ``data/<task>/`` when generate failed before the spec_uri
+      # step ran. ``rclone purge`` exits non-zero on a missing remote prefix
+      # (fine — nothing to clean); ``|| true`` keeps cleanup from masking a
+      # real test failure.
       - name: Cleanup ephemeral R2 prefix
         if: always()
         run: |
           set -euo pipefail
-          if [[ -z "${R2_PREFIX:-}" ]]; then
-            echo "no R2_PREFIX set; nothing to purge"
+          target_prefix="${R2_PREFIX:-}"
+          if [[ -z "${target_prefix}" && -n "${NIGHTLY_TASK_NAME:-}" ]]; then
+            target_prefix="data/${NIGHTLY_TASK_NAME}/"
+          fi
+          if [[ -z "${target_prefix}" ]]; then
+            echo "no R2_PREFIX or NIGHTLY_TASK_NAME set; nothing to purge"
             exit 0
           fi
-          target="r2:${R2_BUCKET}/${R2_PREFIX}"
+          target="r2:${R2_BUCKET}/${target_prefix}"
           docker run --rm \
             -e RCLONE_CONFIG_R2_TYPE \
             -e RCLONE_CONFIG_R2_PROVIDER \
@@ -241,9 +260,9 @@ jobs:
       # Auto-file a Bug ticket on scheduled-run failure so nightly regressions
       # don't go silently stale. Mirrors ``cpu-slow.yml``'s pattern: dedupe on
       # a title fragment, comment on the existing issue on a repeat, otherwise
-      # open a fresh issue with type=Bug + parent=Phase 6 (#73). Best-effort
+      # open a fresh issue with type=Bug + parent=Phase 1 (#150). Best-effort
       # GraphQL mutations — if either call fails the issue still has label +
-      # milestone, enough for triage.
+      # milestone + assignee, enough for triage.
       - name: Auto-file failure ticket
         if: failure() && github.event_name == 'schedule'
         env:
@@ -285,6 +304,7 @@ jobs:
             --body "${body}" \
             --label ci-automation \
             --label data-pipeline \
+            --assignee ktinubu \
             --milestone "ci-automation v1.0.0")
           echo "Filed: ${new_issue_url}"
 
@@ -317,7 +337,7 @@ jobs:
             -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){issue(number:$number){id}}}' \
             -f owner="${GITHUB_REPOSITORY%/*}" \
             -f repo="${GITHUB_REPOSITORY#*/}" \
-            -F number=73 \
+            -F number=150 \
             --jq '.data.repository.issue.id')
 
           if [ -n "${phase_node_id}" ] && [ -n "${new_node_id}" ]; then
@@ -325,5 +345,5 @@ jobs:
               -f query='mutation($parentId:ID!,$childId:ID!){addSubIssue(input:{issueId:$parentId,subIssueId:$childId}){subIssue{number}}}' \
               -f parentId="${phase_node_id}" \
               -f childId="${new_node_id}" \
-              || echo "WARN: failed to parent under Phase 6 (#73); reparent manually"
+              || echo "WARN: failed to parent under Phase 1 (#150); reparent manually"
           fi
