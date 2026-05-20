@@ -109,21 +109,25 @@ def test_aggregated_scalar_values_within_tolerance(cli_metrics_dir: Path) -> Non
 
 
 def test_metrics_csv_per_sample_values(cli_metrics_dir: Path) -> None:
-    """``metrics.csv`` row count, sample-index order, and per-cell values match the snapshot.
+    """``metrics.csv`` row count, sample-index set, and per-cell values match the snapshot.
 
     Phase 1 extraction may legitimately reshape this CSV; if so, the refactor PR
     updates this test alongside the production change so the diff makes the
     behavior change explicit. Same ``rel=1e-2`` band as the aggregated snapshot
     (``rms`` is pure-rel because its magnitude sits near a generic ``abs=1e-6`` floor).
 
+    Row ordering is filesystem-dependent (``Path.glob`` traversal order varies
+    across Linux ext4 vs. conda-runner btrfs vs. macOS), so the pin asserts the
+    *sorted* index and looks up cells by sample id rather than positional row.
+
     :param cli_metrics_dir: Output directory from the module-scoped CLI invocation.
     """
-    actual = pd.read_csv(cli_metrics_dir / "metrics.csv", index_col=0)
-    snapshot = pd.read_csv(_PER_SAMPLE_SNAPSHOT_PATH, index_col=0)
+    actual = pd.read_csv(cli_metrics_dir / "metrics.csv", index_col=0).sort_index()
+    snapshot = pd.read_csv(_PER_SAMPLE_SNAPSHOT_PATH, index_col=0).sort_index()
 
     assert len(actual) == 2, f"expected 2 rows, got {len(actual)}"
     assert list(actual.index) == list(snapshot.index), (
-        f"sample-index ordering drifted: {list(actual.index)} vs {list(snapshot.index)}"
+        f"sample-index set drifted: {list(actual.index)} vs {list(snapshot.index)}"
     )
     assert set(actual.columns) == _EXPECTED_METRIC_COLUMNS
 
