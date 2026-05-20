@@ -56,7 +56,7 @@ def test_show_editor_rejects_non_main_thread() -> None:
         except BaseException as exc:  # noqa: BLE001 — pin whatever pedalboard raises
             captured.append(exc)
 
-    worker = threading.Thread(target=run)
+    worker = threading.Thread(target=run, daemon=True)
     worker.start()
     worker.join(timeout=3.0)
     assert not worker.is_alive(), "show_editor worker did not return within 3s"
