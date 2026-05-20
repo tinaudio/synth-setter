@@ -114,16 +114,20 @@ jobs:
       #     directly on this runner.
       #   * ``SYNTH_SETTER_WORKER_RANK=0`` / ``SYNTH_SETTER_NUM_WORKERS=1`` so
       #     the single in-process worker owns every shard.
-      #   * ``+render.parallel=true`` overrides the default ``parallel=false``
+      #   * ``++render.parallel=true`` overrides the default ``parallel=false``
       #     even though the experiment YAML already sets it — the explicit
       #     override keeps the production-path coverage signal in the workflow
       #     itself (a future config tweak can't silently disable it).
-      #   * ``+r2.prefix=${R2_PREFIX}`` redirects shards + canonical spec away
-      #     from production prefixes into the ephemeral nightly scope.
+      #   * ``task_name=${NIGHTLY_TASK_NAME}`` scopes the launcher-derived
+      #     ``r2.prefix`` to ``data/<task_name>/<run_id>/``, keeping ephemeral
+      #     nightly artifacts off production prefixes without an explicit
+      #     ``r2.prefix`` override.
       #   * ``rclone copy`` runs inside the container; secrets are forwarded
       #     via ``-e``.
-      #   * tee'd to ``${RUN_METADATA_DIR}/generate.log`` so the spec_uri
-      #     marker is extracted in the next step.
+      #   * tee'd to ``${RUN_METADATA_DIR}/generate.log`` for the
+      #     upload-artifact step (post-failure triage); ``spec_uri`` is
+      #     resolved from the local materialized spec in the next step, not
+      #     grepped out of this log.
       - name: Run synth-setter-generate-dataset (parallel=true)
         id: generate
         env:
