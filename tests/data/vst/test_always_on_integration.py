@@ -2,10 +2,11 @@
 
 Runs through ``docker/ubuntu22_04/run-linux-vst-headless.sh`` (Xvfb + xsettingsd
 + openbox + dbus) inside the existing ``test-vst-slow.yml`` workflow. Verifies
-that ``editor_held_open`` survives off the main thread on X11, the shard loop
-completes for all samples with the editor realised throughout, the produced
-HDF5 carries the expected datasets/shapes/dtypes/finiteness, and the editor
-thread emits no crash log via ``core.logger.exception``.
+that ``run_with_editor_held_open`` keeps the editor realised on the main
+thread while renders run on a worker, the shard loop completes for all
+samples, the produced HDF5 carries the expected datasets/shapes/dtypes/
+finiteness, and no render-worker crash log is emitted via
+``core.logger.exception``.
 
 The matching macOS Cocoa coverage is tracked separately — Apple runners with
 Surge XT installed are not part of any current workflow; see the follow-up
@@ -88,13 +89,13 @@ def test_always_on_renders_small_shard_end_to_end(
     Renders 4 samples in 2 batches so the per-batch flush callback fires inside
     the held-open scope twice. Asserts the HDF5 shard carries all three datasets
     at the expected shape/dtype, that audio is finite and within ``[-1, 1]``,
-    and that ``core.logger.exception`` was never called from the editor thread
-    (the structural crash gate — caplog cannot observe loguru output, so the
-    logger is stubbed to make the check observable).
+    and that ``core.logger.exception`` was never called (the structural crash
+    gate — caplog cannot observe loguru output, so the logger is stubbed to
+    make the check observable).
 
     :param tmp_path: Destination directory for the shard HDF5 file under test.
-    :param monkeypatch: Stubs ``core.logger`` so the editor-thread crash gate
-        is observable (loguru does not propagate to ``caplog``).
+    :param monkeypatch: Stubs ``core.logger`` so the crash gate is observable
+        (loguru does not propagate to ``caplog``).
     """
     num_samples = 4
     render_cfg = _render_cfg(num_samples=num_samples, samples_per_render_batch=2)
@@ -122,9 +123,6 @@ def test_always_on_renders_small_shard_end_to_end(
     assert np.isfinite(audio).all(), "rendered audio contains NaN/Inf"
     assert (np.abs(audio) <= 1.0).all(), "rendered audio exceeds [-1, 1] bounds"
 
-    crash_log_calls = [
-        call
-        for call in fake_logger.exception.call_args_list
-        if "vst-editor-window crashed" in str(call.args[0])
-    ]
-    assert not crash_log_calls, f"editor-thread crash logged: {crash_log_calls}"
+    assert fake_logger.exception.call_count == 0, (
+        f"unexpected logger.exception calls: {fake_logger.exception.call_args_list}"
+    )

@@ -1,10 +1,9 @@
-import contextlib
 import json
 import plistlib
-import sys
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable
 from pathlib import Path
+from typing import TypeVar
 
 import mido
 import numpy as np
@@ -14,22 +13,12 @@ from pedalboard.io import AudioFile
 
 # How long the editor stays open before we signal it to close.
 _EDITOR_INIT_DELAY_SECONDS = 0.5
-# Upper bound on how long ``editor_held_open`` waits for the editor thread to
-# drain after the close event is set; a generous safety net for the held-open
-# path (#1187), not a normal-case timing parameter.
+# Upper bound on how long ``run_with_editor_held_open`` waits for the render
+# worker to drain after ``show_editor`` returns; a generous safety net for the
+# held-open path (#1187), not a normal-case timing parameter.
 _EDITOR_JOIN_TIMEOUT_SECONDS = 2.0
-# Upper bound on the editor-thread start handshake; a miss raises
-# ``EditorStartTimeout`` rather than proceeding silently (#1198, #1204).
-_EDITOR_START_TIMEOUT_SECONDS = 5.0
 
-
-class EditorStartTimeout(RuntimeError):
-    """Raised when the ``editor_held_open`` start handshake misses its deadline.
-
-    Surfaces a slow editor-thread bring-up as a loud failure so the render aborts and the trace is
-    attributable, rather than degrading to a warning that would be lost in normal log noise
-    (#1204).
-    """
+_BodyResult = TypeVar("_BodyResult")
 
 
 def extract_renderer_version(plugin_path: Path) -> str:
@@ -103,80 +92,56 @@ def warmup_plugin(plugin: VST3Plugin) -> None:
         close_editor.set()  # defensive: ensure show_editor unblocks even if Timer fails
 
 
-@contextlib.contextmanager
-def editor_held_open(plugin: VST3Plugin) -> Iterator[None]:
-    """Hold ``plugin.show_editor`` open on a background thread for the ``with`` body.
+def run_with_editor_held_open(plugin: VST3Plugin, body: Callable[[], _BodyResult]) -> _BodyResult:
+    """Invoke ``body()`` on a worker thread while the caller blocks in ``plugin.show_editor``.
 
-    The editor runs on a daemon thread blocking inside ``show_editor(close_event)``.
-    ``__exit__`` sets the event, joins the thread (bounded by
-    ``_EDITOR_JOIN_TIMEOUT_SECONDS``), and re-raises any exception the editor
-    thread raised — already logged at the moment of failure via
-    ``logger.exception``. **Body exceptions always win:** if the ``with`` body
-    raises, that exception propagates and a captured editor-thread exception
-    is logged but not re-raised (it would otherwise mask the original error in
-    the ``finally``-clause raise). If the join times out the daemon thread is
-    left to be reaped at process exit; a warning records the leak.
+    Pedalboard 0.9.x requires ``show_editor`` to run on the process main
+    thread; the worker handles renders so the editor stays realised for the
+    duration of ``body()`` (#1187). Worker exceptions propagate to the caller
+    after ``show_editor`` returns. If the worker outlives the
+    ``_EDITOR_JOIN_TIMEOUT_SECONDS`` join window after the close event is set,
+    a warning records the leak.
 
-    Before yielding, blocks on a start handshake bounded by
-    ``_EDITOR_START_TIMEOUT_SECONDS`` (#1198). A miss raises
-    ``EditorStartTimeout`` — the body never runs, so a stuck editor bring-up
-    fails loud and traceable rather than masquerading as a slow render
-    (#1204). The event proves the editor thread reached the line just before
-    ``show_editor`` without the host raising, not that ``show_editor`` has
-    realised the window — pedalboard exposes no editor-ready signal.
-
-    :param plugin: A loaded VST3 plugin whose editor is realised for the block.
-    :raises EditorStartTimeout: ``editor_started`` did not fire within
-        ``_EDITOR_START_TIMEOUT_SECONDS``; the ``with`` body is skipped and
-        the editor thread is joined under the same bounded teardown as the
-        success path so a late-starting daemon cannot leak past the failed
-        context-entry.
-    :raises Exception: Propagated from the editor thread at ``__exit__`` only
-        when the ``with`` body itself raised nothing — typically a
-        ``RuntimeError`` from the VST3 host.
+    :param plugin: A loaded VST3 plugin whose editor is realised for the call.
+    :param body: Callable executed on the worker thread; its return value is
+        returned to the caller.
+    :returns: Whatever ``body()`` returned.
+    :raises BaseException: Re-raised from the worker thread if ``body()``
+        raised — typically a ``RuntimeError`` from the VST3 host or a render
+        failure.
     """
     close_editor = threading.Event()
-    editor_started = threading.Event()
-    captured: list[Exception] = []
+    result: list[_BodyResult] = []
+    captured: list[BaseException] = []
 
-    def _run_editor() -> None:
+    def _worker() -> None:
         try:
-            editor_started.set()
-            plugin.show_editor(close_editor)
-        except Exception as exc:  # noqa: BLE001 — fan-in for any host-side failure
-            logger.exception("vst-editor-window crashed: {}", exc)
+            result.append(body())
+        except BaseException as exc:  # noqa: BLE001 — propagate to caller after show_editor returns
             captured.append(exc)
+        finally:
+            close_editor.set()
 
-    editor_thread = threading.Thread(target=_run_editor, daemon=True, name="vst-editor-window")
-    editor_thread.start()
+    worker = threading.Thread(target=_worker, name="render-worker")
+    worker.start()
     try:
-        if not editor_started.wait(timeout=_EDITOR_START_TIMEOUT_SECONDS):
-            raise EditorStartTimeout(
-                f"vst-editor-window did not signal start within {_EDITOR_START_TIMEOUT_SECONDS}s"
-            )
-        yield
+        plugin.show_editor(close_editor)
     finally:
         close_editor.set()
-        editor_thread.join(timeout=_EDITOR_JOIN_TIMEOUT_SECONDS)
-        if editor_thread.is_alive():
+        worker.join(timeout=_EDITOR_JOIN_TIMEOUT_SECONDS)
+        if worker.is_alive():
             logger.warning(
-                "vst-editor-window did not drain within {}s; daemon thread "
-                "leaks (reaped at process exit)",
+                "render-worker did not drain within {}s; thread leaks (reaped at process exit)",
                 _EDITOR_JOIN_TIMEOUT_SECONDS,
             )
-        # sys.exc_info() returns the body's exception if `with` body raised,
-        # else (None, None, None). Only surface the captured editor-thread
-        # exception when the body succeeded — re-raising during an active
-        # body exception would mask the original error (raise-in-finally wins).
-        body_exc_active = sys.exc_info()[0] is not None
-        if captured and not body_exc_active:
-            exc: Exception = captured[0]
-            raise exc
-        if captured and body_exc_active:
-            logger.error(
-                "vst-editor-window also crashed during body exception: {}",
-                captured[0],
-            )
+    if captured:
+        exc: BaseException = captured[0]
+        raise exc
+    if not result:
+        # Worker outlived the join window without completing — the leak warning above
+        # records this; there's no body return value to surface.
+        return None  # type: ignore[return-value]
+    return result[0]
 
 
 def load_preset(plugin: VST3Plugin, preset_path: str) -> None:

@@ -8,7 +8,6 @@ writer using ``webdataset.TarWriter``.
 
 from __future__ import annotations
 
-import contextlib
 from collections.abc import Callable
 from pathlib import Path
 from types import TracebackType
@@ -22,7 +21,7 @@ from pedalboard import VST3Plugin
 from tqdm import trange
 
 from synth_setter.data.vst import param_specs
-from synth_setter.data.vst.core import editor_held_open, load_plugin, load_preset
+from synth_setter.data.vst.core import load_plugin, load_preset, run_with_editor_held_open
 from synth_setter.data.vst.generate_vst_dataset import (
     VSTDataSample,
     create_datasets_and_get_start_idx,
@@ -257,30 +256,17 @@ def _render_in_batches(
         renderer without ``plugin_reload_cadence="once"`` (validator regression).
     """
     num_samples = render_cfg.samples_per_shard
-    sample_batch: list[VSTDataSample] = []
-    sample_batch_start = start_idx
     # plugin_reload_cadence="once": load + preset once per shard, reuse instance (#705).
     # "render" (default): cached_plugin stays None; each render reloads (#489 historical).
     cached_plugin: VST3Plugin | None = None
     if render_cfg.plugin_reload_cadence == "once":
         cached_plugin = load_plugin(render_cfg.plugin_path)
         load_preset(cached_plugin, render_cfg.preset_path)
-    # always_on holds the editor open on a background thread for the whole
-    # shard; RenderConfig validator pairs it with plugin_reload_cadence="once"
-    # so cached_plugin is non-None here (#1187).
-    gui_scope: contextlib.AbstractContextManager[None]
-    if render_cfg.gui_toggle_cadence == "always_on":
-        if cached_plugin is None:
-            raise RuntimeError(
-                "always_on reached the renderer without a cached plugin; "
-                "RenderConfig._always_on_requires_plugin_reload_once validator "
-                "should have rejected this combination."
-            )
-        gui_scope = editor_held_open(cached_plugin)
-    else:
-        gui_scope = contextlib.nullcontext()
-    warmup_done = False
-    with gui_scope:
+
+    def _render_loop() -> None:
+        sample_batch: list[VSTDataSample] = []
+        sample_batch_start = start_idx
+        warmup_done = False
         for i in trange(start_idx, num_samples):
             logger.info(f"Making sample {i}")
             warmup_this_render = render_cfg.gui_toggle_cadence == "render" or (
@@ -313,6 +299,21 @@ def _render_in_batches(
 
         if sample_batch:
             flush_batch(sample_batch, sample_batch_start)
+
+    # always_on: main thread blocks in ``show_editor`` while ``_render_loop`` runs
+    # on a worker (pedalboard requires show_editor on the main thread, #1204).
+    # RenderConfig validator pairs always_on with plugin_reload_cadence="once"
+    # so cached_plugin is non-None on this branch (#1187).
+    if render_cfg.gui_toggle_cadence == "always_on":
+        if cached_plugin is None:
+            raise RuntimeError(
+                "always_on reached the renderer without a cached plugin; "
+                "RenderConfig._always_on_requires_plugin_reload_once validator "
+                "should have rejected this combination."
+            )
+        run_with_editor_held_open(cached_plugin, _render_loop)
+    else:
+        _render_loop()
 
 
 def _shard_metadata_from_render(render_cfg: RenderConfig) -> ShardMetadata:
