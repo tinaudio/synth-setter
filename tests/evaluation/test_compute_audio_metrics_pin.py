@@ -24,6 +24,9 @@ from click.testing import CliRunner
 from synth_setter.evaluation.compute_audio_metrics import main as compute_audio_metrics_main
 
 _SNAPSHOT_PATH = Path(__file__).parent / "snapshots" / "compute_audio_metrics_aggregated.csv"
+_PER_SAMPLE_SNAPSHOT_PATH = (
+    Path(__file__).parent / "snapshots" / "compute_audio_metrics_per_sample.csv"
+)
 _EXPECTED_METRIC_COLUMNS = {"mss", "wmfcc", "sot", "rms"}
 
 
@@ -70,9 +73,6 @@ def test_aggregated_csv_columns(cli_metrics_dir: Path) -> None:
     assert list(agg.columns) == ["mean", "std"]
     assert set(agg.index) == _EXPECTED_METRIC_COLUMNS
 
-    joined = pd.read_csv(cli_metrics_dir / "metrics.csv")
-    assert _EXPECTED_METRIC_COLUMNS.issubset(joined.columns)
-
 
 def test_aggregated_scalar_values_within_tolerance(cli_metrics_dir: Path) -> None:
     """Mean/std scalars match the committed snapshot within ``rel=1e-2`` per metric.
@@ -106,3 +106,36 @@ def test_aggregated_scalar_values_within_tolerance(cli_metrics_dir: Path) -> Non
             assert agg.loc[metric, "std"] == pytest.approx(
                 snapshot.loc[metric, "std"], rel=1e-2, abs=1e-6
             ), f"{metric} std drifted"
+
+
+def test_metrics_csv_per_sample_values(cli_metrics_dir: Path) -> None:
+    """``metrics.csv`` row count, sample-index order, and per-cell values match the snapshot.
+
+    Phase 1 extraction may legitimately reshape this CSV; if so, the refactor PR
+    updates this test alongside the production change so the diff makes the
+    behavior change explicit. Same ``rel=1e-2`` band as the aggregated snapshot
+    (``rms`` is pure-rel because its magnitude sits near a generic ``abs=1e-6`` floor).
+
+    :param cli_metrics_dir: Output directory from the module-scoped CLI invocation.
+    """
+    actual = pd.read_csv(cli_metrics_dir / "metrics.csv", index_col=0)
+    snapshot = pd.read_csv(_PER_SAMPLE_SNAPSHOT_PATH, index_col=0)
+
+    assert len(actual) == 2, f"expected 2 rows, got {len(actual)}"
+    assert list(actual.index) == list(snapshot.index), (
+        f"sample-index ordering drifted: {list(actual.index)} vs {list(snapshot.index)}"
+    )
+    assert set(actual.columns) == _EXPECTED_METRIC_COLUMNS
+
+    for sample_idx in snapshot.index:
+        for metric in _EXPECTED_METRIC_COLUMNS:
+            expected = snapshot.loc[sample_idx, metric]
+            got = actual.loc[sample_idx, metric]
+            if metric == "rms":
+                assert got == pytest.approx(expected, rel=1e-2), (
+                    f"sample {sample_idx} {metric} drifted: {got} vs {expected}"
+                )
+            else:
+                assert got == pytest.approx(expected, rel=1e-2, abs=1e-6), (
+                    f"sample {sample_idx} {metric} drifted: {got} vs {expected}"
+                )
