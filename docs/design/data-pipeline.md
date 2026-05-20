@@ -54,9 +54,12 @@ At research scale (500k–15M samples), the single-machine approach breaks down.
 > implemented today (`src/synth_setter/cli/generate_dataset.py` loops over
 > `spec.shards`, skipping shards already present in R2 — worker-side
 > resumability MVP per #750; the launcher-side reconciliation engine described
-> in §7.4 / §7.7 is not yet built). The distributed/parallel pipeline described
-> below — CLI, backends, reconciliation, and finalize stages — is the design
-> target and not yet built.
+> in §7.4 / §7.7 is not yet built). When `render.parallel=True`, owned shards
+> dispatch concurrently via a thread pool sized to half the worker's
+> affinity-aware CPU count; transient renderer subprocess failures are retried
+> up to `render.max_retries` times (default 0 = strict fail-fast). The
+> distributed/parallel pipeline described below — CLI, backends, reconciliation,
+> and finalize stages — is the design target and not yet built.
 
 The distributed data pipeline solves this by splitting generation across N cloud workers on **[RunPod](https://www.runpod.io/)** (a GPU/CPU cloud marketplace offering cheap on-demand compute), each independently producing shards in parallel. Workers write shards to **[Cloudflare R2](https://developers.cloudflare.com/r2/)** (an S3-compatible object storage service with free egress), which serves as both the data store and the coordination layer. A separate finalize step downloads all shards, reshards them into train/val/test splits, computes normalization statistics, registers the dataset as a **[Weights & Biases](https://wandb.ai/)** (W&B) artifact, and uploads the final dataset.
 
@@ -83,7 +86,8 @@ RunPod is used because it's the platform where GPUs are already available and co
 cat configs/experiment/generate_dataset/surge-simple-480k-10k.yaml
 # → task_name: surge-simple-480k-10k, defaults: [/data: surge_simple, /render: surge_simple, ...], ...
 
-# 2. Run sequential multi-shard generation on a single worker.
+# 2. Run multi-shard generation on a single worker (default sequential loop;
+#    `render.parallel=true` opts into thread-pool parallel dispatch).
 python -m synth_setter.cli.generate_dataset experiment=generate_dataset/surge-simple-480k-10k
 # → Loops over spec.shards, skipping shards already present in R2 (worker-side resumability MVP, #750).
 # **Planned CLI** — the distributed pipeline CLI (`python -m synth_setter.pipeline generate/status/finalize`)
@@ -1208,6 +1212,8 @@ class RenderConfig(BaseModel):
     min_loudness: float
     samples_per_render_batch: int
     samples_per_shard: int
+    max_retries: int = 0        # per-shard retry budget for transient renderer failures
+    parallel: bool = False      # dispatch shard renders concurrently (ThreadPoolExecutor)
     plugin_reload_cadence: Literal["once", "render"] = "render"
     # Platform-aware default via Field(default_factory=...): "never" on Darwin
     # (show_editor SIGTRAPs after ~3-4 calls, #714), "render" elsewhere

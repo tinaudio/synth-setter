@@ -57,7 +57,7 @@ docs:
       - pattern: "configs/experiment/**"
         covers: "Dataset generation configs, shard counts, sample counts, synth params"
       - pattern: "src/synth_setter/cli/generate_dataset.py"
-        covers: "Dataset generation entrypoint, sequential multi-shard MVP with R2 skip-existing probe (worker-side resumability MVP, #750), and the @hydra.main CLI (`python -m synth_setter.cli.generate_dataset experiment=<id>`) composed from configs/dataset.yaml"
+        covers: "Dataset generation entrypoint: sequential or (when `render.parallel=True`) thread-pool-parallel multi-shard dispatch with R2 skip-existing probe (worker-side resumability MVP, #750) and per-shard `render.max_retries` retry loop around the renderer subprocess; @hydra.main CLI (`python -m synth_setter.cli.generate_dataset experiment=<id>`) composed from configs/dataset.yaml"
       - pattern: ".github/workflows/generate-dataset-shards.yaml"
         covers: "Reusable launcher fan-out across providers (skypilot-local kind, runpod, oci); per-provider artifact upload; emits a `spec_uri` workflow output (the materialized spec's canonical under-prefix `input_spec.json` URI, computed by the `synth-setter-spec-uri` console script — see `src/synth_setter/pipeline/ci/spec_uri.py`) consumed by validate-dataset-shards"
       - pattern: ".github/workflows/validate-dataset-shards.yaml"
