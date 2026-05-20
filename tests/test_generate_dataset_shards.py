@@ -1,9 +1,4 @@
-"""Repo-root entrypoint tests for ``synth_setter.cli.generate_dataset``.
-
-Mirrors the shape of ``tests/test_train.py`` and ``tests/test_eval.py``: package-
-scoped Hydra fixture + function-scoped wrapper + direct call into the
-``@hydra.main``-decorated entry.
-"""
+"""Tests for the ``synth-setter-generate-dataset`` CLI entrypoint."""
 
 from __future__ import annotations
 
