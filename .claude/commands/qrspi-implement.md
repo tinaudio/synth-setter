@@ -1,6 +1,6 @@
 ---
-description: QRSPI I — implement phases of a P doc autonomously; delegates to implement_plan + tdd-implementation + code-health
-argument-hint: <P-doc-path> <phase-id> [--flag]
+description: QRSPI I — autonomously implement P-doc phases via implement_plan + tdd + code-health
+argument-hint: <P-doc-path> <phase-id> [--pause]
 ---
 
 Invoke the `tinaudio-synth-setter-skills:qrspi-implement` skill via the Skill
