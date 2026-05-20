@@ -8,12 +8,14 @@ exercised; rclone (download / upload / auth ping) is stubbed.
 from __future__ import annotations
 
 import io
+import shutil
 import sys
 import tarfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import h5py
 import numpy as np
 import pytest
 
@@ -153,21 +155,198 @@ def test_main_is_idempotent_when_marker_already_exists(
     assert uploaded == []
 
 
-def test_main_hdf5_branch_raises_not_implemented_without_uploading_anything(
-    monkeypatch: pytest.MonkeyPatch,
-    patch_finalize_io: tuple[list[str], list[tuple[Path, str]]],
-) -> None:
-    """The hdf5 stub raises before any upload — never strands a spurious marker.
+def _build_hdf5_smoke_spec(
+    task_name: str = "finalize-hdf5-unit",
+    train_val_test_sizes: tuple[int, int, int] = (8, 4, 4),
+    samples_per_shard: int = 4,
+) -> DatasetSpec:
+    """Construct a small hdf5 ``DatasetSpec`` directly (no Hydra compose).
 
-    :param monkeypatch: Pytest fixture used to patch ``sys.argv``.
-    :param patch_finalize_io: Recording stubs; asserted to be empty after the raise.
+    :param task_name: Unique task name so each test gets a distinct r2.prefix.
+    :param train_val_test_sizes: Three-tuple of sample counts; every entry must
+        be a multiple of ``samples_per_shard``.
+    :param samples_per_shard: Per-shard row count driving shard count derivation.
+    :returns: A frozen hdf5 ``DatasetSpec`` whose shards are deterministic.
     """
-    _downloaded, uploaded = patch_finalize_io
+    kwargs: dict[str, Any] = {
+        "task_name": task_name,
+        "output_format": "hdf5",
+        "train_val_test_sizes": list(train_val_test_sizes),
+        "base_seed": 42,
+        "r2": {"bucket": "intermediate-data"},
+        "render": {
+            "plugin_path": "/fake/Plugin.vst3",
+            "preset_path": "presets/surge-base.vstpreset",
+            "param_spec_name": "surge_simple",
+            "renderer_version": "1.0.0-test",
+            "sample_rate": 16000,
+            "channels": 2,
+            "velocity": 100,
+            "signal_duration_seconds": 4.0,
+            "min_loudness": -55.0,
+            "samples_per_render_batch": samples_per_shard,
+            "samples_per_shard": samples_per_shard,
+            "gui_toggle_cadence": "never",
+        },
+    }
+    return DatasetSpec(**kwargs)  # type: ignore[arg-type]
+
+
+def _seed_shard_files(remote_root: Path, spec: DatasetSpec) -> None:
+    """Write every ``spec.shards[i].filename`` as a structurally valid HDF5 shard.
+
+    Shapes/dtypes match
+    :func:`synth_setter.pipeline.ci.validate_shard.check_shard_contracts`.
+
+    :param remote_root: Directory acting as the R2-side staging area.
+    :param spec: Spec whose ``shards`` define the filenames to seed.
+    """
+    remote_root.mkdir(parents=True, exist_ok=True)
+    shard_size = spec.render.samples_per_shard
+    for shard in spec.shards:
+        with h5py.File(remote_root / shard.filename, "w") as f:
+            f.create_dataset("audio", shape=(shard_size, 2, 64), dtype=np.float32)
+            f.create_dataset("mel_spec", shape=(shard_size, 2, 8, 8), dtype=np.float32)
+            f.create_dataset("param_array", shape=(shard_size, 12), dtype=np.float32)
+
+
+def _stage_for(uploads: dict[str, Path], destination_uri: str, tmp_path: Path) -> Path:
+    """Allocate a unique local staging path under ``tmp_path`` for a fake upload.
+
+    :param uploads: Mutable mapping that records ``destination_uri → local copy``.
+    :param destination_uri: The would-be R2 URI of the upload.
+    :param tmp_path: Test-scoped tmp dir to host the staged copy.
+    :returns: A fresh path that ``shutil.copy`` can write to.
+    """
+    staged_root = tmp_path / "uploads"
+    staged_root.mkdir(exist_ok=True)
+    staged = staged_root / f"{len(uploads):03d}_{destination_uri.rsplit('/', 1)[-1]}"
+    uploads[destination_uri] = staged
+    return staged
+
+
+def test_hdf5_finalize_produces_train_consumable_layout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``finalize_hdf5`` downloads shards, reshards, computes stats, uploads every artifact.
+
+    Pins the train-consumable layout: each ``{train,val,test}.h5`` carries
+    ``audio`` / ``mel_spec`` / ``param_array``; ``stats.npz`` carries
+    ``mean`` / ``std``. Reshard runs for real against the seeded shards —
+    only R2 transport (``_rclone_copy`` / ``r2_io.upload``) and the heavy
+    Dask-driven ``get_stats_hdf5`` are stubbed.
+
+    :param tmp_path: Pytest tmp dir; hosts the fake R2 root + staged uploads.
+    :param monkeypatch: Pytest fixture used to install download/upload/stats stubs.
+    """
+    spec = _build_hdf5_smoke_spec()
+    r2_stand_in = tmp_path / "r2"
+    _seed_shard_files(r2_stand_in, spec)
+
+    uploads: dict[str, Path] = {}
+    # ``_rclone_copy`` runs ``rclone copy`` (dest is a directory); mirror that
+    # contract so the stub can't drift into a ``copyto``-style misuse.
+    monkeypatch.setattr(
+        "synth_setter.cli.finalize_dataset._rclone_copy",
+        lambda src, dst: shutil.copy(r2_stand_in / Path(src).name, Path(dst)),
+    )
+    monkeypatch.setattr(
+        "synth_setter.pipeline.r2_io.upload",
+        lambda src, dst: shutil.copy(src, _stage_for(uploads, dst, tmp_path)),
+    )
+    # Skip the Dask-driven mean/std compute — orchestration is what this test pins.
+    monkeypatch.setattr(
+        "synth_setter.cli.finalize_dataset.get_stats_hdf5",
+        lambda train_h5_path: np.savez(
+            Path(train_h5_path).parent / "stats.npz",
+            mean=np.zeros((2, 8, 8), dtype=np.float32),
+            std=np.ones((2, 8, 8), dtype=np.float32),
+        ),
+    )
+
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    finalize_dataset.finalize_hdf5(spec, work_dir)
+
+    for split in ("train", "val", "test"):
+        with h5py.File(uploads[spec.r2.split_h5_uri(split)], "r") as f:
+            assert {"audio", "mel_spec", "param_array"} <= set(f.keys())
+    with np.load(uploads[spec.r2.stats_uri()]) as st:
+        assert set(st.files) == {"mean", "std"}
+
+
+def test_main_hdf5_branch_uploads_marker_last(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The hdf5 ``main()`` path writes ``dataset.complete`` strictly after every artifact.
+
+    Pins the ``pipeline/CLAUDE.md`` ordering invariant for hdf5: an
+    interrupted run must never leave a marker without the artifacts it
+    advertises.
+
+    :param tmp_path: Pytest tmp dir; hosts the fake R2 root + staged uploads.
+    :param monkeypatch: Pytest fixture used to patch the full transport surface.
+    """
+    r2_stand_in = tmp_path / "r2"
+    upload_order: list[str] = []
+    monkeypatch.setattr(
+        "synth_setter.cli.finalize_dataset._rclone_copy",
+        lambda src, dst: shutil.copy(r2_stand_in / Path(src).name, Path(dst)),
+    )
+
+    def record_upload(src: str | Path, dst: str) -> None:
+        upload_order.append(dst)
+
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.upload", record_upload)
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.ensure_r2_env_loaded", lambda *a, **k: None)
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda uri: None)
+    monkeypatch.setattr("synth_setter.pipeline.schemas.spec._get_git_sha", lambda: "a" * 40)
+    monkeypatch.setattr("synth_setter.pipeline.schemas.spec._is_repo_dirty", lambda: False)
+    monkeypatch.setattr("synth_setter.pipeline.schemas.spec._utc_now", lambda: _FIXED_NOW)
+    # Skip the Dask-driven mean/std compute — orchestration is what this test pins.
+    monkeypatch.setattr(
+        "synth_setter.cli.finalize_dataset.get_stats_hdf5",
+        lambda train_h5_path: np.savez(
+            Path(train_h5_path).parent / "stats.npz",
+            mean=np.zeros((2, 8, 8), dtype=np.float32),
+            std=np.ones((2, 8, 8), dtype=np.float32),
+        ),
+    )
+    # Compose the smoke-shard hdf5 experiment so the entrypoint exercises real Hydra.
     monkeypatch.setattr(sys, "argv", ["finalize", "experiment=generate_dataset/smoke-shard"])
 
-    with pytest.raises(NotImplementedError, match="hdf5 finalize is not implemented"):
-        finalize_dataset.main()
-    assert uploaded == []
+    # Re-compose the same spec ``main()`` will, then seed shards into the fake
+    # R2 root so the patched ``_rclone_copy`` lands them under ``work_dir``.
+    main_spec = _compose_smoke_hdf5_spec()
+    _seed_shard_files(r2_stand_in, main_spec)
+
+    finalize_dataset.main()
+
+    assert upload_order[-1] == main_spec.r2.dataset_complete_marker_uri()
+    assert main_spec.r2.stats_uri() in upload_order
+    assert main_spec.r2.split_h5_uri("train") in upload_order
+
+
+def _compose_smoke_hdf5_spec() -> DatasetSpec:
+    """Re-compose the hdf5 smoke spec the same way ``main()`` does, for URI assertions.
+
+    :returns: A ``DatasetSpec`` whose ``r2.prefix`` matches what ``main()``
+        constructs from the ``smoke-shard`` experiment in the same process.
+    """
+    from hydra import compose, initialize_config_dir
+
+    with initialize_config_dir(
+        version_base="1.3",
+        config_dir=str(finalize_dataset._CONFIG_DIR),  # noqa: SLF001 — test mirrors main()
+    ):
+        cfg = compose(
+            config_name="dataset",
+            overrides=["experiment=generate_dataset/smoke-shard"],
+        )
+    cfg.paths.root_dir = str(finalize_dataset._REPO_ROOT)  # noqa: SLF001
+    cfg.paths.output_dir = str(finalize_dataset._REPO_ROOT)  # noqa: SLF001
+    cfg.paths.work_dir = str(finalize_dataset._REPO_ROOT)  # noqa: SLF001
+    return finalize_dataset.spec_from_cfg(cfg)
 
 
 def test_finalize_wds_downloads_every_train_shard_uri(

@@ -2,9 +2,11 @@
 
 Mirrors ``generate-dataset``'s operator-side shape — programmatic Hydra
 compose, single ``DatasetSpec`` input, dispatch on ``spec.output_format``.
-The wds branch streams the train shards through Welford row-by-row,
-uploads ``stats.npz``, then writes the ``dataset.complete`` marker last
-per ``pipeline/CLAUDE.md``. hdf5 is not implemented (#1183).
+Both branches upload their derived artifact(s) and then write the
+``dataset.complete`` marker last per ``pipeline/CLAUDE.md``. The wds
+branch streams train shards through Welford row-by-row; the hdf5 branch
+downloads every shard, reshards into ``{train,val,test}.h5``, and
+computes ``stats.npz`` over the train split.
 """
 
 from __future__ import annotations
@@ -13,7 +15,6 @@ import sys
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
-from typing import NoReturn
 
 import rootutils
 from hydra import compose, initialize_config_dir
@@ -24,13 +25,15 @@ rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
 import numpy as np  # noqa: E402
 
-from synth_setter.cli.generate_dataset import spec_from_cfg  # noqa: E402
+from synth_setter.cli.generate_dataset import _rclone_copy, spec_from_cfg  # noqa: E402
 from synth_setter.pipeline import r2_io  # noqa: E402
 from synth_setter.pipeline.constants import (  # noqa: E402
     DATASET_COMPLETE_FILENAME,
+    INPUT_SPEC_FILENAME,
     STATS_NPZ_FILENAME,
 )
-from synth_setter.pipeline.data.stats import stream_stats_wds  # noqa: E402
+from synth_setter.pipeline.data import reshard  # noqa: E402
+from synth_setter.pipeline.data.stats import get_stats_hdf5, stream_stats_wds  # noqa: E402
 from synth_setter.pipeline.schemas.spec import DatasetSpec  # noqa: E402
 
 # Resolve repo root from this file so the entrypoint is cwd-independent.
@@ -91,15 +94,34 @@ def finalize_wds(spec: DatasetSpec, work_dir: Path) -> None:
     logger.info("uploaded stats to {}", spec.r2.stats_uri())
 
 
-def finalize_hdf5(spec: DatasetSpec, work_dir: Path) -> NoReturn:
-    """Reject hdf5 finalize until the writer side is implemented — see #1183.
+def finalize_hdf5(spec: DatasetSpec, work_dir: Path) -> None:
+    """Download every shard, reshard into split files, compute stats, upload all artifacts.
 
-    :param spec: Validated dataset spec; unused.
-    :param work_dir: Scratch directory; unused.
-    :raises NotImplementedError: Always — hdf5 finalize is not implemented yet.
+    Materializes ``input_spec.json`` sibling to the shards so reshard's
+    default spec-path resolution works without a ``--spec`` override. Stats
+    land at ``work_dir / "stats.npz"`` per ``SurgeXTDataset.get_stats_file_path``.
+
+    :param spec: Validated dataset spec (``output_format == "hdf5"``).
+    :param work_dir: Scratch directory; shards, splits, stats and the spec
+        copy live here transiently for the duration of the call.
     """
-    del spec, work_dir
-    raise NotImplementedError("hdf5 finalize is not implemented yet")
+    # ``_rclone_copy`` runs ``rclone copy`` (dest is a directory; the source
+    # basename is written inside it) — pass ``work_dir`` itself so the local
+    # name matches ``shard.filename`` per ShardSpec.
+    for shard in spec.shards:
+        _rclone_copy(spec.r2.shard_uri(shard), str(work_dir))
+    (work_dir / INPUT_SPEC_FILENAME).write_text(spec.model_dump_json(indent=2), encoding="utf-8")
+    reshard.main.callback(dataset_root=work_dir, spec_uri=None)  # type: ignore[misc]
+    get_stats_hdf5(str(work_dir / "train.h5"))
+    # Reshard prunes empty splits — only upload the ones it actually wrote.
+    # Iterate ``split_shard_ranges`` (Split-typed keys) so split_h5_uri's
+    # Literal narrowing holds without a cast.
+    for split in spec.split_shard_ranges:
+        split_h5 = work_dir / f"{split}.h5"
+        if split_h5.exists():
+            r2_io.upload(split_h5, spec.r2.split_h5_uri(split))
+    r2_io.upload(work_dir / STATS_NPZ_FILENAME, spec.r2.stats_uri())
+    logger.info("uploaded h5 splits + stats to {}", spec.r2.rclone_prefix())
 
 
 def main() -> None:
