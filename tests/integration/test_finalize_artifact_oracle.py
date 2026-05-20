@@ -48,7 +48,6 @@ from synth_setter.pipeline import r2_io
 pytestmark = [pytest.mark.integration_r2, pytest.mark.r2, pytest.mark.slow]
 
 _FINALIZE_PREFIX_ENV = "FINALIZE_RUN_PREFIX"
-_DEFAULT_BUCKET = "intermediate-data"
 
 
 def _finalize_prefix_from_env() -> str | None:

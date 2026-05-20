@@ -91,7 +91,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.env_ref }}
+          ref: ${{ inputs.env_ref != '' && inputs.env_ref || github.sha }}
 
       - name: Set up Python
         uses: actions/setup-python@v6

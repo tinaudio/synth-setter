@@ -35,6 +35,7 @@ import pytest
 from synth_setter.cli import finalize_dataset
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
+    DATASET_FIELD_DTYPES,
     MEL_SPEC_FIELD,
     PARAM_ARRAY_FIELD,
     audio_dataset_shape,
@@ -277,9 +278,15 @@ def _seed_shard_files(remote_root: Path, spec: DatasetSpec) -> None:
     param_shape = param_array_dataset_shape(render.samples_per_shard, spec.num_params)
     for shard in spec.shards:
         with h5py.File(remote_root / shard.filename, "w") as f:
-            f.create_dataset(AUDIO_FIELD, shape=audio_shape, dtype=np.float32)
-            f.create_dataset(MEL_SPEC_FIELD, shape=mel_shape, dtype=np.float32)
-            f.create_dataset(PARAM_ARRAY_FIELD, shape=param_shape, dtype=np.float32)
+            f.create_dataset(
+                AUDIO_FIELD, shape=audio_shape, dtype=DATASET_FIELD_DTYPES[AUDIO_FIELD]
+            )
+            f.create_dataset(
+                MEL_SPEC_FIELD, shape=mel_shape, dtype=DATASET_FIELD_DTYPES[MEL_SPEC_FIELD]
+            )
+            f.create_dataset(
+                PARAM_ARRAY_FIELD, shape=param_shape, dtype=DATASET_FIELD_DTYPES[PARAM_ARRAY_FIELD]
+            )
 
 
 def _stage_for(uploads: dict[str, Path], destination_uri: str, tmp_path: Path) -> Path:

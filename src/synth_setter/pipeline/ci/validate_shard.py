@@ -38,6 +38,7 @@ from pydantic import ValidationError
 
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
+    DATASET_FIELD_DTYPES,
     DATASET_FIELD_NAMES,
     MEL_SPEC_FIELD,
     PARAM_ARRAY_FIELD,
@@ -53,7 +54,21 @@ from synth_setter.pipeline.spec_io import read_spec_text
 _TAR_METADATA_MEMBER = "metadata.json"
 _TAR_NPY_NAME_RE = re.compile(r"^(?P<batch_key>\d{8})\.(?P<field>[^./]+)\.npy$")
 
-_FLOAT32 = np.dtype("float32")
+
+def _check_dataset_dtype(shard: Path, key: str, observed: np.dtype) -> None:
+    """Reject a dataset whose on-disk dtype disagrees with the writer's contract.
+
+    :param shard: Shard path used to attribute the error to a specific file.
+    :param key: Dataset name being checked; lookup key for the per-field dtype map.
+    :param observed: dtype read from the open ``h5py.Dataset`` node.
+    :raises click.ClickException: If ``observed`` differs from
+        ``DATASET_FIELD_DTYPES[key]``.
+    """
+    expected = DATASET_FIELD_DTYPES[key]
+    if observed != expected:
+        raise click.ClickException(
+            f"shard {shard}: dataset {key!r} has dtype {observed}, expected {expected}."
+        )
 
 
 def check_shards_present(shard_paths: list[Path]) -> None:
@@ -117,11 +132,7 @@ def check_shard_contracts(
                     raise click.ClickException(
                         f"shard {shard}: key {key!r} is a {type(node).__name__}, not a Dataset."
                     )
-                if node.dtype != _FLOAT32:
-                    raise click.ClickException(
-                        f"shard {shard}: dataset {key!r} has dtype {node.dtype}, "
-                        f"expected np.float32."
-                    )
+                _check_dataset_dtype(shard, key, node.dtype)
                 if node.shape[0] != samples_per_shard:
                     raise click.ClickException(
                         f"shard {shard}: dataset {key!r} has {node.shape[0]} rows, "

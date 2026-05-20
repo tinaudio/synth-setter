@@ -646,6 +646,26 @@ class DatasetSpec(BaseModel):
                 data.pop(computed_key, None)
         return data
 
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_null_run_id(cls, data: Any) -> Any:
+        """Drop ``run_id`` when ``None`` so its ``default_factory`` fires.
+
+        ``configs/dataset.yaml`` materializes ``run_id: null`` so the finalize
+        workflow's ``run_id=<value>`` Hydra override resolves against an
+        existing key. When that override is not pinned, the composed cfg
+        arrives with ``run_id=None`` — letting it reach the field validator
+        would fail strict ``str`` validation instead of falling back to the
+        ``task_name``+``created_at`` default factory.
+
+        :param data: Raw input to the validator (typically a dict; pass-through otherwise).
+        :returns: ``data`` unchanged, or a copy with the ``None`` ``run_id`` popped.
+        """
+        if isinstance(data, dict) and data.get("run_id", "sentinel") is None:
+            data = dict(data)
+            data.pop("run_id")
+        return data
+
     @field_validator("train_val_test_sizes", mode="before")
     @classmethod
     def _splits_list_to_tuple(cls, value: Any) -> Any:

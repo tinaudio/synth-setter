@@ -21,7 +21,7 @@ import numpy as np
 import pytest
 from click.testing import CliRunner
 
-from synth_setter.data.vst.shapes import DATASET_FIELD_NAMES
+from synth_setter.data.vst.shapes import DATASET_FIELD_DTYPES, DATASET_FIELD_NAMES
 from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME
 from synth_setter.pipeline.data import reshard as _reshard_module
 from synth_setter.pipeline.schemas.spec import DatasetSpec
@@ -93,15 +93,22 @@ def _write_shard(path: Path, shard_size: int) -> None:
     """Write a minimal HDF5 shard with the three datasets reshard expects.
 
     Shapes and dtypes match the contract that
-    :func:`synth_setter.pipeline.ci.validate_shard.check_shard_contracts` enforces.
+    :func:`synth_setter.pipeline.ci.validate_shard.check_shard_contracts` enforces:
+    audio is ``float16`` (Blosc2-compressed storage at the writer); mel and
+    params are ``float32``. Drift from ``DATASET_FIELD_DTYPES`` lights the
+    dtype check first.
 
     :param path: Destination filesystem path for the shard.
     :param shard_size: Required leading-axis length for every dataset.
     """
     with h5py.File(path, "w") as f:
-        f.create_dataset("audio", shape=(shard_size, 2, 64), dtype=np.float32)
-        f.create_dataset("mel_spec", shape=(shard_size, 2, 8, 8), dtype=np.float32)
-        f.create_dataset("param_array", shape=(shard_size, 12), dtype=np.float32)
+        f.create_dataset("audio", shape=(shard_size, 2, 64), dtype=DATASET_FIELD_DTYPES["audio"])
+        f.create_dataset(
+            "mel_spec", shape=(shard_size, 2, 8, 8), dtype=DATASET_FIELD_DTYPES["mel_spec"]
+        )
+        f.create_dataset(
+            "param_array", shape=(shard_size, 12), dtype=DATASET_FIELD_DTYPES["param_array"]
+        )
 
 
 def _materialize_dataset(dataset_root: Path, spec: DatasetSpec) -> None:
@@ -159,7 +166,8 @@ class TestReshardSpecDriven:
         """Three splits are sized by ``train_val_test_sizes // samples_per_shard``.
 
         Also pins that every split file exposes the three expected datasets
-        with ``np.float32`` dtype.
+        with the per-field dtype from ``DATASET_FIELD_DTYPES`` (audio is
+        ``float16``; mel and params are ``float32``).
 
         :param tmp_path: Per-test dataset root.
         :param patch_runtime_io: Deterministic spec runtime stubs.
@@ -176,7 +184,9 @@ class TestReshardSpecDriven:
                 assert {"audio", "mel_spec", "param_array"} <= set(f.keys())
                 for key in ("audio", "mel_spec", "param_array"):
                     dataset = cast(h5py.Dataset, f[key])
-                    assert dataset.dtype == np.float32, f"{split}/{key}: {dataset.dtype}"
+                    assert dataset.dtype == DATASET_FIELD_DTYPES[key], (
+                        f"{split}/{key}: {dataset.dtype}"
+                    )
                     assert dataset.shape[0] == expected_rows
         # Happy path leaves no staging artifacts behind.
         for split in ("train", "val", "test"):
@@ -527,7 +537,7 @@ class TestReshardShardContractValidation:
         with h5py.File(corrupted_path, "w") as f:
             for key, shape in shape_map.items():
                 if key != missing_key:
-                    f.create_dataset(key, shape=shape, dtype=np.float32)
+                    f.create_dataset(key, shape=shape, dtype=DATASET_FIELD_DTYPES[key])
 
         result = runner.invoke(_reshard_module.main, [str(tmp_path)], catch_exceptions=False)
 
@@ -553,8 +563,12 @@ class TestReshardShardContractValidation:
         corrupted_path = tmp_path / spec.shards[0].filename
         with h5py.File(corrupted_path, "w") as f:
             f.create_group("audio")  # wrong h5py type at the required key
-            f.create_dataset("mel_spec", shape=(10, 2, 8, 8), dtype=np.float32)
-            f.create_dataset("param_array", shape=(10, 12), dtype=np.float32)
+            f.create_dataset(
+                "mel_spec", shape=(10, 2, 8, 8), dtype=DATASET_FIELD_DTYPES["mel_spec"]
+            )
+            f.create_dataset(
+                "param_array", shape=(10, 12), dtype=DATASET_FIELD_DTYPES["param_array"]
+            )
 
         result = runner.invoke(_reshard_module.main, [str(tmp_path)], catch_exceptions=False)
 
@@ -569,7 +583,10 @@ class TestReshardShardContractValidation:
         patch_runtime_io: None,
         runner: CliRunner,
     ) -> None:
-        """A shard whose dataset is not ``np.float32`` is rejected with observed dtype.
+        """A shard whose ``audio`` dtype drifts from the writer's contract is rejected.
+
+        Audio is stored as ``float16`` (see ``DATASET_FIELD_DTYPES``); writing it
+        as ``float64`` is the canonical drift the contract is meant to catch.
 
         :param tmp_path: Per-test dataset root.
         :param patch_runtime_io: Deterministic spec runtime stubs.
@@ -580,15 +597,88 @@ class TestReshardShardContractValidation:
         corrupted_path = tmp_path / spec.shards[0].filename
         with h5py.File(corrupted_path, "w") as f:
             f.create_dataset("audio", shape=(10, 2, 64), dtype=np.float64)
-            f.create_dataset("mel_spec", shape=(10, 2, 8, 8), dtype=np.float32)
-            f.create_dataset("param_array", shape=(10, 12), dtype=np.float32)
+            f.create_dataset(
+                "mel_spec", shape=(10, 2, 8, 8), dtype=DATASET_FIELD_DTYPES["mel_spec"]
+            )
+            f.create_dataset(
+                "param_array", shape=(10, 12), dtype=DATASET_FIELD_DTYPES["param_array"]
+            )
 
         result = runner.invoke(_reshard_module.main, [str(tmp_path)], catch_exceptions=False)
 
         assert result.exit_code != 0
         assert "audio" in result.output
         assert "float64" in result.output  # observed
-        assert "float32" in result.output  # expected
+        assert "float16" in result.output  # expected — audio is the float16 field
+        _assert_no_outputs(tmp_path)
+
+    def test_audio_as_float32_fails_loud_under_contract(
+        self,
+        tmp_path: Path,
+        patch_runtime_io: None,
+        runner: CliRunner,
+    ) -> None:
+        """Audio stored as ``float32`` is rejected — the writer emits ``float16``.
+
+        Regression for the smoke-shard finalize failure where audio was written
+        as ``float16`` but the validator hard-coded ``np.float32`` for every
+        field, so the legitimate writer output tripped the contract.
+
+        :param tmp_path: Per-test dataset root.
+        :param patch_runtime_io: Deterministic spec runtime stubs.
+        :param runner: Click test runner.
+        """
+        spec = DatasetSpec(**_spec_kwargs(20, 10, 10, samples_per_shard=10))
+        _materialize_dataset(tmp_path, spec)
+        corrupted_path = tmp_path / spec.shards[0].filename
+        with h5py.File(corrupted_path, "w") as f:
+            f.create_dataset("audio", shape=(10, 2, 64), dtype=np.float32)
+            f.create_dataset(
+                "mel_spec", shape=(10, 2, 8, 8), dtype=DATASET_FIELD_DTYPES["mel_spec"]
+            )
+            f.create_dataset(
+                "param_array", shape=(10, 12), dtype=DATASET_FIELD_DTYPES["param_array"]
+            )
+
+        result = runner.invoke(_reshard_module.main, [str(tmp_path)], catch_exceptions=False)
+
+        assert result.exit_code != 0
+        assert "audio" in result.output
+        assert "float32" in result.output
+        assert "float16" in result.output
+        _assert_no_outputs(tmp_path)
+
+    def test_mel_spec_as_float16_fails_loud_under_contract(
+        self,
+        tmp_path: Path,
+        patch_runtime_io: None,
+        runner: CliRunner,
+    ) -> None:
+        """``mel_spec`` written as ``float16`` is rejected — the writer emits ``float32``.
+
+        Pins that each field has its own declared dtype and the contract does not collapse to
+        "audio's dtype" or "any float".
+
+        :param tmp_path: Per-test dataset root.
+        :param patch_runtime_io: Deterministic spec runtime stubs.
+        :param runner: Click test runner.
+        """
+        spec = DatasetSpec(**_spec_kwargs(20, 10, 10, samples_per_shard=10))
+        _materialize_dataset(tmp_path, spec)
+        corrupted_path = tmp_path / spec.shards[0].filename
+        with h5py.File(corrupted_path, "w") as f:
+            f.create_dataset("audio", shape=(10, 2, 64), dtype=DATASET_FIELD_DTYPES["audio"])
+            f.create_dataset("mel_spec", shape=(10, 2, 8, 8), dtype=np.float16)
+            f.create_dataset(
+                "param_array", shape=(10, 12), dtype=DATASET_FIELD_DTYPES["param_array"]
+            )
+
+        result = runner.invoke(_reshard_module.main, [str(tmp_path)], catch_exceptions=False)
+
+        assert result.exit_code != 0
+        assert "mel_spec" in result.output
+        assert "float16" in result.output
+        assert "float32" in result.output
         _assert_no_outputs(tmp_path)
 
     def test_wrong_row_count_fails_loud(
@@ -608,9 +698,13 @@ class TestReshardShardContractValidation:
         corrupted_path = tmp_path / spec.shards[0].filename
         with h5py.File(corrupted_path, "w") as f:
             # 7 rows instead of 10.
-            f.create_dataset("audio", shape=(7, 2, 64), dtype=np.float32)
-            f.create_dataset("mel_spec", shape=(7, 2, 8, 8), dtype=np.float32)
-            f.create_dataset("param_array", shape=(7, 12), dtype=np.float32)
+            f.create_dataset("audio", shape=(7, 2, 64), dtype=DATASET_FIELD_DTYPES["audio"])
+            f.create_dataset(
+                "mel_spec", shape=(7, 2, 8, 8), dtype=DATASET_FIELD_DTYPES["mel_spec"]
+            )
+            f.create_dataset(
+                "param_array", shape=(7, 12), dtype=DATASET_FIELD_DTYPES["param_array"]
+            )
 
         result = runner.invoke(_reshard_module.main, [str(tmp_path)], catch_exceptions=False)
 
@@ -635,9 +729,13 @@ class TestReshardShardContractValidation:
         _materialize_dataset(tmp_path, spec)
         corrupted_path = tmp_path / spec.shards[1].filename
         with h5py.File(corrupted_path, "w") as f:
-            f.create_dataset("audio", shape=(10, 2, 32), dtype=np.float32)
-            f.create_dataset("mel_spec", shape=(10, 2, 8, 8), dtype=np.float32)
-            f.create_dataset("param_array", shape=(10, 12), dtype=np.float32)
+            f.create_dataset("audio", shape=(10, 2, 32), dtype=DATASET_FIELD_DTYPES["audio"])
+            f.create_dataset(
+                "mel_spec", shape=(10, 2, 8, 8), dtype=DATASET_FIELD_DTYPES["mel_spec"]
+            )
+            f.create_dataset(
+                "param_array", shape=(10, 12), dtype=DATASET_FIELD_DTYPES["param_array"]
+            )
 
         result = runner.invoke(_reshard_module.main, [str(tmp_path)], catch_exceptions=False)
 
@@ -708,9 +806,13 @@ class TestReshardAtomicWrite:
         spec = DatasetSpec(**_spec_kwargs(20, 10, 10, samples_per_shard=10))
         _materialize_dataset(tmp_path, spec)
         with h5py.File(tmp_path / spec.shards[2].filename, "w") as f:
-            f.create_dataset("audio", shape=(7, 2, 64), dtype=np.float32)
-            f.create_dataset("mel_spec", shape=(7, 2, 8, 8), dtype=np.float32)
-            f.create_dataset("param_array", shape=(7, 12), dtype=np.float32)
+            f.create_dataset("audio", shape=(7, 2, 64), dtype=DATASET_FIELD_DTYPES["audio"])
+            f.create_dataset(
+                "mel_spec", shape=(7, 2, 8, 8), dtype=DATASET_FIELD_DTYPES["mel_spec"]
+            )
+            f.create_dataset(
+                "param_array", shape=(7, 12), dtype=DATASET_FIELD_DTYPES["param_array"]
+            )
 
         result = runner.invoke(_reshard_module.main, [str(tmp_path)], catch_exceptions=False)
 
@@ -780,12 +882,15 @@ class TestReshardVirtualDatasetIdentity:
         tmp_path.mkdir(exist_ok=True)
         (tmp_path / INPUT_SPEC_FILENAME).write_text(spec.model_dump_json())
         # Each shard filled with float(i+1) so virtual-dataset slices stay traceable.
+        audio_dtype = DATASET_FIELD_DTYPES["audio"]
+        mel_dtype = DATASET_FIELD_DTYPES["mel_spec"]
+        param_dtype = DATASET_FIELD_DTYPES["param_array"]
         for i, shard in enumerate(spec.shards):
             fill = float(i + 1)
             with h5py.File(tmp_path / shard.filename, "w") as f:
-                f.create_dataset("audio", data=np.full((sps, 2, 64), fill, dtype=np.float32))
-                f.create_dataset("mel_spec", data=np.full((sps, 2, 8, 8), fill, dtype=np.float32))
-                f.create_dataset("param_array", data=np.full((sps, 12), fill, dtype=np.float32))
+                f.create_dataset("audio", data=np.full((sps, 2, 64), fill, dtype=audio_dtype))
+                f.create_dataset("mel_spec", data=np.full((sps, 2, 8, 8), fill, dtype=mel_dtype))
+                f.create_dataset("param_array", data=np.full((sps, 12), fill, dtype=param_dtype))
 
         result = runner.invoke(_reshard_module.main, [str(tmp_path)], catch_exceptions=False)
         assert result.exit_code == 0, result.output
@@ -798,31 +903,27 @@ class TestReshardVirtualDatasetIdentity:
             assert mel.is_virtual
             assert param.is_virtual
             np.testing.assert_array_equal(
-                audio[:sps], np.full((sps, 2, 64), 1.0, dtype=np.float32)
+                audio[:sps], np.full((sps, 2, 64), 1.0, dtype=audio_dtype)
             )
             np.testing.assert_array_equal(
-                audio[sps:], np.full((sps, 2, 64), 2.0, dtype=np.float32)
+                audio[sps:], np.full((sps, 2, 64), 2.0, dtype=audio_dtype)
             )
-            np.testing.assert_array_equal(
-                mel[:sps], np.full((sps, 2, 8, 8), 1.0, dtype=np.float32)
-            )
-            np.testing.assert_array_equal(
-                mel[sps:], np.full((sps, 2, 8, 8), 2.0, dtype=np.float32)
-            )
-            np.testing.assert_array_equal(param[:sps], np.full((sps, 12), 1.0, dtype=np.float32))
-            np.testing.assert_array_equal(param[sps:], np.full((sps, 12), 2.0, dtype=np.float32))
+            np.testing.assert_array_equal(mel[:sps], np.full((sps, 2, 8, 8), 1.0, dtype=mel_dtype))
+            np.testing.assert_array_equal(mel[sps:], np.full((sps, 2, 8, 8), 2.0, dtype=mel_dtype))
+            np.testing.assert_array_equal(param[:sps], np.full((sps, 12), 1.0, dtype=param_dtype))
+            np.testing.assert_array_equal(param[sps:], np.full((sps, 12), 2.0, dtype=param_dtype))
 
         with h5py.File(tmp_path / "val.h5", "r") as f:
             np.testing.assert_array_equal(
                 cast(h5py.Dataset, f["audio"])[:],
-                np.full((sps, 2, 64), 3.0, dtype=np.float32),
+                np.full((sps, 2, 64), 3.0, dtype=audio_dtype),
             )
             np.testing.assert_array_equal(
                 cast(h5py.Dataset, f["mel_spec"])[:],
-                np.full((sps, 2, 8, 8), 3.0, dtype=np.float32),
+                np.full((sps, 2, 8, 8), 3.0, dtype=mel_dtype),
             )
         with h5py.File(tmp_path / "test.h5", "r") as f:
             np.testing.assert_array_equal(
                 cast(h5py.Dataset, f["audio"])[:],
-                np.full((sps, 2, 64), 4.0, dtype=np.float32),
+                np.full((sps, 2, 64), 4.0, dtype=audio_dtype),
             )

@@ -343,6 +343,41 @@ class TestDatasetSpecConstruction:
         spec = DatasetSpec(**_valid_spec_kwargs(run_id="custom-run-id-001"))
         assert spec.run_id == "custom-run-id-001"
 
+    def test_run_id_none_falls_back_to_default_factory(self, patch_runtime_io: None) -> None:
+        """``run_id=None`` (Hydra's materialized null) re-fires the default factory.
+
+        ``configs/dataset.yaml`` declares ``run_id: null`` so the finalize
+        workflow's ``run_id=<value>`` Hydra override targets an existing key
+        (Hydra strict mode otherwise rejects unknown overrides). The composed
+        cfg therefore arrives with ``run_id=None`` whenever the override is
+        not pinned; the spec must resolve that to the deterministic
+        ``task_name``+``created_at`` form rather than failing validation.
+
+        :param patch_runtime_io: Deterministic spec runtime stubs.
+        """
+        spec = DatasetSpec(**_valid_spec_kwargs(run_id=None))
+        assert spec.run_id == "ci-smoke-test-20260328T120000000Z"
+
+    def test_run_id_none_with_explicit_r2_prefix_still_resolves(
+        self, patch_runtime_io: None
+    ) -> None:
+        """``run_id=None`` + explicit ``r2.prefix`` still resolves run_id via the factory.
+
+        Regression for the smoke-shard launcher roundtrip path: when both
+        ``run_id`` is null and ``r2.prefix`` is operator-supplied, the r2
+        normalization shim's prefix-fill bypass must not leave run_id as
+        ``None`` for the field validator.
+
+        :param patch_runtime_io: Deterministic spec runtime stubs.
+        """
+        spec = DatasetSpec(
+            **_valid_spec_kwargs(
+                run_id=None,
+                r2={"bucket": "intermediate-data", "prefix": "ci-test-prefix/"},
+            )
+        )
+        assert spec.run_id == "ci-smoke-test-20260328T120000000Z"
+
     def test_r2_prefix_uses_explicit_value_when_present(self, patch_runtime_io: None) -> None:
         """An explicit r2.prefix in the input dict passes through instead of being recomputed."""
         spec = DatasetSpec(

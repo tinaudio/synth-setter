@@ -1,19 +1,33 @@
 """Shape and mel-front-end primitives shared by writer and validator.
 
-Hosts the per-row array names (``DATASET_FIELD_NAMES``), the mel-spectrogram
-constants the writer's ``make_spectrogram`` uses, and the audio / mel-spec /
-param-array dataset-shape calculators. Kept as a thin sibling module so that
-the (planned) shard validator and the (planned) wds writer can import these
-primitives without pulling in the rest of ``generate_vst_dataset.py``'s
-import surface (h5py, pedalboard, the VST renderer).
+Hosts the per-row array names (``DATASET_FIELD_NAMES``), the per-field
+on-disk dtypes (``DATASET_FIELD_DTYPES``), the mel-spectrogram constants the
+writer's ``make_spectrogram`` uses, and the audio / mel-spec / param-array
+dataset-shape calculators. Kept as a thin sibling module so that the shard
+validator and the wds writer can import these primitives without pulling in
+the rest of ``generate_vst_dataset.py``'s import surface (h5py, pedalboard,
+the VST renderer).
 """
 
 from __future__ import annotations
+
+import numpy as np
 
 AUDIO_FIELD: str = "audio"
 MEL_SPEC_FIELD: str = "mel_spec"
 PARAM_ARRAY_FIELD: str = "param_array"
 DATASET_FIELD_NAMES: tuple[str, ...] = (AUDIO_FIELD, MEL_SPEC_FIELD, PARAM_ARRAY_FIELD)
+
+# Per-field on-disk dtype, matching what the HDF5 / wds writers emit. Audio is
+# stored as ``float16`` for compressed storage efficiency; mel and params stay
+# ``float32``. Consumers upcast as needed; this map is the single source of
+# truth the validator enforces and the resharder honors when constructing
+# VirtualLayouts.
+DATASET_FIELD_DTYPES: dict[str, np.dtype] = {
+    AUDIO_FIELD: np.dtype("float16"),
+    MEL_SPEC_FIELD: np.dtype("float32"),
+    PARAM_ARRAY_FIELD: np.dtype("float32"),
+}
 
 MEL_FRAMES_PER_SECOND = 100
 MEL_N_MELS = 128

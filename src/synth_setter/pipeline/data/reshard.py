@@ -12,8 +12,8 @@ from pathlib import Path
 
 import click
 import h5py
-import numpy as np
 
+from synth_setter.data.vst.shapes import DATASET_FIELD_DTYPES
 from synth_setter.pipeline.ci.validate_shard import (
     check_shard_contracts,
     check_shard_ids_match_spec_order,
@@ -29,8 +29,6 @@ _SPLITS: tuple[str, ...] = ("train", "val", "test")
 # Prefix for staging files under ``dataset_root``. Cleanup paths and the
 # ``TestReshardAtomicWrite`` assertions both depend on this exact string.
 _STAGING_PREFIX = ".tmp-"
-
-_FLOAT32 = np.dtype("float32")
 
 
 def reshard_dataset(dataset_root: Path, spec_uri: str | None = None) -> None:  # noqa: DOC502
@@ -204,7 +202,7 @@ def _write_split(
     """
     split_len = len(split_paths) * shard_size
     layouts = {
-        key: h5py.VirtualLayout(shape=(split_len, *tail), dtype=_FLOAT32)
+        key: h5py.VirtualLayout(shape=(split_len, *tail), dtype=DATASET_FIELD_DTYPES[key])
         for key, tail in tails.items()
     }
     for i, shard_path in enumerate(split_paths):
@@ -212,7 +210,10 @@ def _write_split(
         range_end = range_start + shard_size
         for key, tail in tails.items():
             source = h5py.VirtualSource(
-                shard_path.name, key, dtype=_FLOAT32, shape=(shard_size, *tail)
+                shard_path.name,
+                key,
+                dtype=DATASET_FIELD_DTYPES[key],
+                shape=(shard_size, *tail),
             )
             layouts[key][range_start:range_end] = source
 
