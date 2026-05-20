@@ -71,10 +71,8 @@ jobs:
       # dev-snapshot image's torch is built with cu128 wheels (see
       # `src/synth_setter/configs/image/dev-snapshot.yaml`), matching the gpu-x64 runner's
       # NVIDIA driver.
-      # Workspace is bind-mounted at /home/build/synth-setter, so coverage.xml
-      # written by pytest inside the container lands at
-      # ${{ github.workspace }}/coverage.xml on the host runner — picked up by
-      # the upload step below.
+      # coverage.xml written inside the container lands at
+      # ${{ github.workspace }}/coverage.xml via the workspace bind-mount.
       - name: Run GPU tests in Docker
         run: |
           docker run --rm --gpus all \

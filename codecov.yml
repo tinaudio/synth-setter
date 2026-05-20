@@ -19,10 +19,8 @@ flag_management:
   default_rules:
     carryforward: true
   individual_flags:
-    # `unit-cpu` is the aggregate of both per-OS sub-flags; ubuntu and macos
-    # jobs in test.yml upload under `unit-cpu,unit-cpu-<os>` so the parent
-    # flag preserves history while the per-OS flags catch platform-specific
-    # regressions that would otherwise be hidden by carryforward.
+    # `unit-cpu` aggregates both per-OS sub-flags; the sub-flags exist so
+    # carryforward can't mask a platform-specific regression.
     - name: unit-cpu
       paths:
         - src/synth_setter/
@@ -39,6 +37,8 @@ flag_management:
       paths:
         - src/synth_setter/
         - scripts/ci/
+    # GPU/MPS/VST suites don't exercise `scripts/ci/`, so it's omitted from
+    # their path scope (CPU flags above still include it).
     - name: unit-gpu
       paths:
         - src/synth_setter/
