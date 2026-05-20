@@ -1,0 +1,84 @@
+name: Test Generate Dataset Shards (Real R2 + VST)
+
+# Runs the `integration_r2`-gated end-to-end test in
+# `tests/test_generate_dataset_shards.py` against real Cloudflare R2 inside
+# the `tinaudio/synth-setter:dev-snapshot` Docker image so the real Surge XT
+# render path (Xvfb + xsettingsd + dbus) runs against the live R2 bucket.
+# Mirrors `test-local-launcher-roundtrip.yml`'s R2 secrets + fork-PR gate
+# and `test-vst-slow.yml`'s Docker + headless-X11 wrapper.
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Docker image tag (e.g. dev-snapshot, dev-snapshot-<sha>)"
+        required: false
+        default: "dev-snapshot"
+  pull_request:
+    paths:
+      - "tests/test_generate_dataset_shards.py"
+      - "tests/conftest.py"
+      - "configs/dataset.yaml"
+      - "configs/experiment/generate_dataset/**"
+      - "configs/render/**"
+      - "configs/r2/**"
+      - "src/synth_setter/cli/generate_dataset.py"
+      - ".github/workflows/test-generate-dataset-shards.yml"
+
+permissions:
+  contents: read
+
+# Coalesce stacked PR pushes; run_id is included so manual workflow_dispatch
+# re-runs against the same ref do not self-cancel.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'auto' }}
+  cancel-in-progress: true
+
+jobs:
+  generate-dataset-shards:
+    name: Generate dataset shards -> real R2 (Docker + VST)
+    runs-on: ubuntu-latest-4core
+    timeout-minutes: 30
+    # Fork PRs can't see repo secrets; the rclone auth ping would fail and
+    # burn runner minutes. Same gating pattern as test-local-launcher-roundtrip.yml.
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository }}
+    env:
+      IMAGE: tinaudio/synth-setter:${{ inputs.image_tag || 'dev-snapshot' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Pull image
+        run: docker pull "$IMAGE"
+
+      - name: Run generate-dataset-shards e2e in Docker
+        # `run-linux-vst-headless.sh` wraps pytest because pedalboard imports
+        # load the VST host which needs a live X display, so the headless
+        # wrapper has to apply at the pytest level (not the entire container).
+        # R2 credentials are passed via `-e` so the in-container rclone picks
+        # them up; `RCLONE_CONFIG_R2_TYPE/PROVIDER` are pinned as literals to
+        # match `test-local-launcher-roundtrip.yml`'s rclone config shape.
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/home/build/synth-setter \
+            -e HYDRA_FULL_ERROR=1 \
+            -e "SYNTH_SETTER_PLUGIN_PATH=/usr/lib/vst3/Surge XT.vst3" \
+            -e RCLONE_CONFIG_R2_TYPE=s3 \
+            -e RCLONE_CONFIG_R2_PROVIDER=Cloudflare \
+            -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
+            -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
+            -e RCLONE_CONFIG_R2_ENDPOINT \
+            "$IMAGE" \
+            bash -c '
+              set -euo pipefail
+              cd /home/build/synth-setter
+              git config --global --add safe.directory /home/build/synth-setter
+              docker/ubuntu22_04/run-linux-vst-headless.sh \
+                pytest tests/test_generate_dataset_shards.py \
+                  -m "integration_r2" \
+                  -vv -s
+            '
+        env:
+          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
