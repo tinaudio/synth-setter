@@ -151,12 +151,13 @@ emit_rewake_stamp() {
   # Prints the metadata-stamped advisory pointer on stderr so a session that
   # receives a cross-session leak can compare the origin HEAD to its own and
   # discard. AGENTS.md documents the receiving-side contract.
-  local slug="$1" pr="$2" branch="$3" head_sha="$4" review_file="$5" tail="${6:-}"
+  local slug="$1" pr="$2" branch="$3" head_sha="$4" review_file="$5" tail="${6:-}" short_head_sha
+  short_head_sha=$(git rev-parse --short=7 "$head_sha" 2>/dev/null || printf '%s' "${head_sha:0:7}")
   printf '%s report for PR #%s (branch %s, origin HEAD %s) at %s.%s\n' \
-    "$slug" "$pr" "$branch" "${head_sha:0:7}" "$review_file" \
+    "$slug" "$pr" "$branch" "$short_head_sha" "$review_file" \
     "${tail:+ $tail}" >&2
   printf 'If your current HEAD is not %s, this advisory crossed sessions — verify before acting.\n' \
-    "${head_sha:0:7}" >&2
+    "$short_head_sha" >&2
 }
 
 make_isolated_worktree() {
