@@ -127,8 +127,7 @@ unintended shell expansion. A `PreToolUse` hook
 - **Advisory rewakes carry an origin-HEAD stamp.** The `pr-review-resolver`
   and `doc-drift` PostToolUse hooks run their headless agents in detached
   worktrees and re-enter the session via `asyncRewake` with a line like
-  `pr-review-resolver report for PR #N (branch X, origin HEAD <sha7>) at
-  <path>`. Before acting on one, compare `<sha7>` to the first 7
+  `pr-review-resolver report for PR #N (branch X, origin HEAD <sha7>) at <path>`. Before acting on one, compare `<sha7>` to the first 7
   characters of `git rev-parse HEAD` (the advisory is the 7-char prefix).
   If they differ the advisory crossed sessions (it was queued by a prior
   agent's push/PR-create that finished after that session ended) — read
