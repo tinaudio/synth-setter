@@ -71,6 +71,10 @@ jobs:
       # dev-snapshot image's torch is built with cu128 wheels (see
       # `src/synth_setter/configs/image/dev-snapshot.yaml`), matching the gpu-x64 runner's
       # NVIDIA driver.
+      # Workspace is bind-mounted at /home/build/synth-setter, so coverage.xml
+      # written by pytest inside the container lands at
+      # ${{ github.workspace }}/coverage.xml on the host runner — picked up by
+      # the upload step below.
       - name: Run GPU tests in Docker
         run: |
           docker run --rm --gpus all \
@@ -83,5 +87,15 @@ jobs:
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
               src/synth_setter/scripts/run-linux-vst-headless.sh \
-                pytest -vv -s -m gpu
+                pytest -vv -s -m gpu \
+                  --cov=src --cov-branch --cov-report=xml --cov-report=term
             '
+
+      - name: Upload coverage to Codecov
+        if: always() && hashFiles('coverage.xml') != ''
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage.xml
+          flags: unit-gpu
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false

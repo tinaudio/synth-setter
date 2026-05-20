@@ -80,4 +80,15 @@ jobs:
       - name: Run MPS tests
         env:
           HYDRA_FULL_ERROR: "1"
-        run: pytest -vv -s -m mps
+        run: |
+          pytest -vv -s -m mps \
+            --cov=src --cov-branch --cov-report=xml --cov-report=term
+
+      - name: Upload coverage to Codecov
+        if: always() && hashFiles('coverage.xml') != ''
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage.xml
+          flags: unit-mps
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false

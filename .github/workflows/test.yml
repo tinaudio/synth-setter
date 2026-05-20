@@ -67,7 +67,7 @@ jobs:
         uses: codecov/codecov-action@v5
         with:
           files: coverage.xml
-          flags: unit-cpu
+          flags: unit-cpu,unit-cpu-linux
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
 
@@ -114,6 +114,6 @@ jobs:
         uses: codecov/codecov-action@v5
         with:
           files: coverage.xml
-          flags: unit-cpu
+          flags: unit-cpu,unit-cpu-macos
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false

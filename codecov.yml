@@ -19,7 +19,19 @@ flag_management:
   default_rules:
     carryforward: true
   individual_flags:
+    # `unit-cpu` is the aggregate of both per-OS sub-flags; ubuntu and macos
+    # jobs in test.yml upload under `unit-cpu,unit-cpu-<os>` so the parent
+    # flag preserves history while the per-OS flags catch platform-specific
+    # regressions that would otherwise be hidden by carryforward.
     - name: unit-cpu
+      paths:
+        - src/synth_setter/
+        - scripts/ci/
+    - name: unit-cpu-linux
+      paths:
+        - src/synth_setter/
+        - scripts/ci/
+    - name: unit-cpu-macos
       paths:
         - src/synth_setter/
         - scripts/ci/
@@ -27,6 +39,16 @@ flag_management:
       paths:
         - src/synth_setter/
         - scripts/ci/
+    - name: unit-gpu
+      paths:
+        - src/synth_setter/
+    - name: unit-mps
+      paths:
+        - src/synth_setter/
+    - name: vst
+      paths:
+        - src/synth_setter/data/vst/
+        - src/synth_setter/evaluation/compute_audio_metrics.py
 
 component_management:
   default_rules:
@@ -64,10 +86,6 @@ component_management:
       name: tools
       paths:
         - src/synth_setter/tools/**
-      statuses:
-        - type: project
-          target: 50%
-          informational: true
     - component_id: cli
       name: cli
       paths:
