@@ -49,6 +49,13 @@ def _make_valid_spec(*, output_format: str = "hdf5", **overrides: object) -> dic
         "shards": [
             {"shard_id": i, "filename": f"shard-{i:06d}{ext}", "seed": 42 + i} for i in range(3)
         ],
+        # Computed field; mirrors DatasetSpec.split_shard_ranges output for
+        # train_val_test_sizes=[32, 32, 32] and samples_per_shard=32.
+        "split_shard_ranges": {
+            "train": [0, 1],
+            "val": [1, 2],
+            "test": [2, 3],
+        },
     }
     if "render" in overrides:
         # Merge nested render overrides instead of replacing the whole sub-dict.
