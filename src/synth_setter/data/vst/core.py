@@ -1,6 +1,7 @@
 import contextlib
 import json
 import plistlib
+import sys
 import threading
 from collections.abc import Iterator
 from pathlib import Path
@@ -98,14 +99,16 @@ def editor_held_open(plugin: VST3Plugin) -> Iterator[None]:
     ``__exit__`` sets the event, joins the thread (bounded by
     ``_EDITOR_JOIN_TIMEOUT_SECONDS``), and re-raises any exception the editor
     thread raised — already logged at the moment of failure via
-    ``logger.exception`` so operators see it in real time. If the join times
-    out (editor refused to drain), ``__exit__`` logs a warning and returns
-    without raising; the daemon thread is reaped at process exit.
+    ``logger.exception``. **Body exceptions always win:** if the ``with`` body
+    raises, that exception propagates and a captured editor-thread exception
+    is logged but not re-raised (it would otherwise mask the original error in
+    the ``finally``-clause raise). If the join times out the daemon thread is
+    left to be reaped at process exit; a warning records the leak.
 
     :param plugin: A loaded VST3 plugin whose editor is realised for the block.
-    :raises Exception: Propagated from the editor thread at ``__exit__``
-        (whatever ``plugin.show_editor`` raised — typically a ``RuntimeError``
-        from the VST3 host).
+    :raises Exception: Propagated from the editor thread at ``__exit__`` only
+        when the ``with`` body itself raised nothing — typically a
+        ``RuntimeError`` from the VST3 host.
     """
     close_editor = threading.Event()
     captured: list[Exception] = []
@@ -130,9 +133,19 @@ def editor_held_open(plugin: VST3Plugin) -> Iterator[None]:
                 "leaks (reaped at process exit)",
                 _EDITOR_JOIN_TIMEOUT_SECONDS,
             )
-        if captured:
+        # sys.exc_info() returns the body's exception if `with` body raised,
+        # else (None, None, None). Only surface the captured editor-thread
+        # exception when the body succeeded — re-raising during an active
+        # body exception would mask the original error (raise-in-finally wins).
+        body_exc_active = sys.exc_info()[0] is not None
+        if captured and not body_exc_active:
             exc: Exception = captured[0]
             raise exc
+        if captured and body_exc_active:
+            logger.error(
+                "vst-editor-window also crashed during body exception: {}",
+                captured[0],
+            )
 
 
 def load_preset(plugin: VST3Plugin, preset_path: str) -> None:

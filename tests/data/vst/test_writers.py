@@ -483,18 +483,21 @@ def test_render_in_batches_always_on_holds_editor_open_across_all_renders(
     assert all(c["warmup"] is False for c in captured)
 
 
+@pytest.mark.parametrize("legacy_cadence", ["never", "once", "render"])
 def test_render_in_batches_non_always_on_does_not_open_held_open_scope(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, legacy_cadence: str
 ) -> None:
-    """The three legacy cadences leave ``editor_held_open`` untouched (nullcontext path).
+    """Every legacy ``gui_toggle_cadence`` leaves ``editor_held_open`` untouched.
 
     :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
+    :param legacy_cadence: Parametrized over each non-``always_on`` cadence so
+        all three nullcontext paths are pinned, not just ``never``.
     """
     render_cfg = _smoke_render_cfg(
         samples_per_shard=1,
         samples_per_render_batch=1,
         plugin_reload_cadence="once",
-        gui_toggle_cadence="never",
+        gui_toggle_cadence=legacy_cadence,
     )
     _stub_render_dependencies(monkeypatch, load_plugin_calls=[], load_preset_calls=[])
     held_open_calls: list[object] = []

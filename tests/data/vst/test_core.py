@@ -133,6 +133,37 @@ class TestEditorHeldOpen:
         assert fake_logger.exception.call_count == 1
         assert "vst-editor-window crashed" in fake_logger.exception.call_args.args[0]
 
+    def test_body_exception_wins_over_editor_exception(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If both the ``with`` body and the editor thread raise, the body's exception propagates.
+
+        Re-raising the captured editor exception inside the ``finally`` clause
+        would otherwise mask the body exception (raise-in-finally wins). The
+        editor crash still gets a structured error log so it is not lost.
+
+        :param monkeypatch: Stubs ``core.logger`` so the editor crash log can
+            be observed.
+        :raises ValueError: Intentionally raised inside the ``with`` body to
+            exercise the body-wins precedence path under test.
+        """
+        fake_plugin = MagicMock()
+        fake_plugin.show_editor.side_effect = RuntimeError("editor crashed")
+        fake_logger = MagicMock()
+        monkeypatch.setattr(core, "logger", fake_logger)
+
+        with pytest.raises(ValueError, match="body crashed"):
+            with core.editor_held_open(fake_plugin):
+                time.sleep(0.05)  # let the editor thread run + raise
+                raise ValueError("body crashed")
+
+        # editor crash still surfaces via the structured error log so it is
+        # not lost when the body exception takes precedence.
+        assert any(
+            "also crashed during body exception" in str(call.args[0])
+            for call in fake_logger.error.call_args_list
+        )
+
     def test_join_timeout_does_not_deadlock(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """If ``show_editor`` ignores the close event, ``__exit__`` returns within the timeout.
 
