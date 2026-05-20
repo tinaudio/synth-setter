@@ -287,24 +287,28 @@ class TestEditorHeldOpen:
         fake_plugin = MagicMock()
         fake_plugin.show_editor.side_effect = lambda event: event.wait(timeout=5.0)
 
-        real_thread_cls = threading.Thread
-        release_real_start = threading.Event()
+        # Defer ``editor_started.set()`` by 0.2s — the second ``Event`` created
+        # by ``editor_held_open`` (``close_editor`` is first) — so the handshake
+        # misses its 0.05s deadline while the real thread still starts and
+        # ``show_editor`` honours ``close_editor``, letting the finally-clause
+        # teardown join a real started daemon under ``_EDITOR_JOIN_TIMEOUT_SECONDS``
+        # (#1204).
+        events_created: list[threading.Event] = []
+        original_event_init = threading.Event.__init__
 
-        def make_slow_thread(*args: object, **kwargs: object) -> threading.Thread:
-            t = real_thread_cls(*args, **kwargs)  # type: ignore[arg-type]
-            original_start = t.start
+        def init_capture(self: threading.Event) -> None:
+            original_event_init(self)
+            events_created.append(self)
+            if len(events_created) == 2:
+                original_set = self.set
 
-            def slow_start() -> None:
-                def deferred() -> None:
-                    release_real_start.wait(timeout=1.0)
-                    original_start()
+                def deferred_set() -> None:
+                    time.sleep(0.2)
+                    original_set()
 
-                real_thread_cls(target=deferred, daemon=True).start()
+                self.set = deferred_set  # type: ignore[method-assign]
 
-            t.start = slow_start  # type: ignore[method-assign]
-            return t
-
-        monkeypatch.setattr(threading, "Thread", make_slow_thread)
+        monkeypatch.setattr(threading.Event, "__init__", init_capture)
 
         body_ran = False
         with pytest.raises(core.EditorStartTimeout, match="did not signal start"):
@@ -312,7 +316,66 @@ class TestEditorHeldOpen:
                 body_ran = True
 
         assert not body_ran, "body must not run when start handshake misses"
-        release_real_start.set()  # let the deferred real start drain
+
+    def test_slow_start_joins_editor_thread_before_raising(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Timeout path runs the same teardown (close + join + leak warn) as the success path.
+
+        Without the shared finalization the editor thread can start late and
+        call ``show_editor`` after the context manager has already raised,
+        leaking work past the failed context-entry. Captures the real
+        ``threading.Thread`` instance handed to ``editor_held_open`` and
+        asserts ``is_alive()`` is ``False`` once ``EditorStartTimeout``
+        propagates — proving the timeout path joined the daemon under the
+        same bounded teardown as the success path (#1204).
+
+        :param monkeypatch: Tightens ``_EDITOR_START_TIMEOUT_SECONDS``, defers
+            the ``editor_started.set()`` call past the handshake deadline,
+            and captures the real thread instance so ``is_alive()`` is
+            observable post-raise.
+        """
+        monkeypatch.setattr(core, "_EDITOR_START_TIMEOUT_SECONDS", 0.05)
+
+        fake_plugin = MagicMock()
+        fake_plugin.show_editor.side_effect = lambda event: event.wait(timeout=5.0)
+
+        events_created: list[threading.Event] = []
+        original_event_init = threading.Event.__init__
+
+        def init_capture(self: threading.Event) -> None:
+            original_event_init(self)
+            events_created.append(self)
+            if len(events_created) == 2:
+                original_set = self.set
+
+                def deferred_set() -> None:
+                    time.sleep(0.2)
+                    original_set()
+
+                self.set = deferred_set  # type: ignore[method-assign]
+
+        monkeypatch.setattr(threading.Event, "__init__", init_capture)
+
+        real_thread_cls = threading.Thread
+        captured_threads: list[threading.Thread] = []
+
+        def capture_thread(*args: object, **kwargs: object) -> threading.Thread:
+            t = real_thread_cls(*args, **kwargs)  # type: ignore[arg-type]
+            captured_threads.append(t)
+            return t
+
+        monkeypatch.setattr(threading, "Thread", capture_thread)
+
+        with pytest.raises(core.EditorStartTimeout):
+            with core.editor_held_open(fake_plugin):
+                pass
+
+        assert captured_threads, "editor thread was not captured"
+        editor_thread = captured_threads[0]
+        assert not editor_thread.is_alive(), (
+            "editor thread leaked past EditorStartTimeout — join missing on timeout path"
+        )
 
     def test_join_timeout_does_not_deadlock(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """If ``show_editor`` ignores the close event, ``__exit__`` returns within the timeout.

@@ -5,10 +5,13 @@ name: Generate Dataset Shards
 # per-provider values via inputs. All providers drive `synth-setter-generate-dataset`
 # with a `skypilot_launch.compute_template=...` Hydra override.
 #
-# Optional `hydra_overrides` input — whitespace-separated tokens appended
-# verbatim to the launcher invocation. Used by the render-config matrix to
-# fan over `render.gui_toggle_cadence` and `output_format` without pre-baking
-# one Hydra experiment per cell.
+# Optional `hydra_overrides` input — whitespace-separated Hydra `key=value`
+# tokens appended to the launcher invocation. Tokens must not contain embedded
+# spaces; the docker (runpod/oci) row expands `$HYDRA_OVERRIDES_EXTRA` unquoted
+# inside the worker container, so any whitespace inside a token splits it into
+# separate arguments. Used by the render-config matrix to fan over
+# `render.gui_toggle_cadence` and `output_format` without pre-baking one
+# Hydra experiment per cell.
 #
 # Provider-specific behavior:
 #   * `skypilot-local` — provisions a kind cluster on the runner via
@@ -74,7 +77,7 @@ on:
         type: string
         default: "run-metadata"
       hydra_overrides:
-        description: "Extra whitespace-separated Hydra overrides appended to the launcher invocation (e.g. `render.gui_toggle_cadence=always_on output_format=wds`). Each token is forwarded verbatim — callers are responsible for escaping any spaces inside a single override."
+        description: "Extra whitespace-separated Hydra `key=value` overrides appended to the launcher invocation (e.g. `render.gui_toggle_cadence=always_on output_format=wds`). Tokens must not contain embedded spaces — the docker (runpod/oci) row expands this variable unquoted into the worker container, so any whitespace inside a token splits it into separate arguments."
         required: false
         type: string
         default: ""
@@ -129,7 +132,7 @@ on:
         type: string
         default: "run-metadata"
       hydra_overrides:
-        description: "Extra whitespace-separated Hydra overrides appended verbatim to the launcher invocation (e.g. `render.gui_toggle_cadence=always_on output_format=wds`)."
+        description: "Extra whitespace-separated Hydra `key=value` overrides appended to the launcher invocation (e.g. `render.gui_toggle_cadence=always_on output_format=wds`). Tokens must not contain embedded spaces — the docker (runpod/oci) row expands this variable unquoted into the worker container."
         required: false
         type: string
         default: ""

@@ -127,7 +127,10 @@ def editor_held_open(plugin: VST3Plugin) -> Iterator[None]:
 
     :param plugin: A loaded VST3 plugin whose editor is realised for the block.
     :raises EditorStartTimeout: ``editor_started`` did not fire within
-        ``_EDITOR_START_TIMEOUT_SECONDS``; the ``with`` body is skipped.
+        ``_EDITOR_START_TIMEOUT_SECONDS``; the ``with`` body is skipped and
+        the editor thread is joined under the same bounded teardown as the
+        success path so a late-starting daemon cannot leak past the failed
+        context-entry.
     :raises Exception: Propagated from the editor thread at ``__exit__`` only
         when the ``with`` body itself raised nothing — typically a
         ``RuntimeError`` from the VST3 host.
@@ -146,12 +149,11 @@ def editor_held_open(plugin: VST3Plugin) -> Iterator[None]:
 
     editor_thread = threading.Thread(target=_run_editor, daemon=True, name="vst-editor-window")
     editor_thread.start()
-    if not editor_started.wait(timeout=_EDITOR_START_TIMEOUT_SECONDS):
-        close_editor.set()  # release any later show_editor call so the daemon can drain
-        raise EditorStartTimeout(
-            f"vst-editor-window did not signal start within {_EDITOR_START_TIMEOUT_SECONDS}s"
-        )
     try:
+        if not editor_started.wait(timeout=_EDITOR_START_TIMEOUT_SECONDS):
+            raise EditorStartTimeout(
+                f"vst-editor-window did not signal start within {_EDITOR_START_TIMEOUT_SECONDS}s"
+            )
         yield
     finally:
         close_editor.set()
