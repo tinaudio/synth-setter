@@ -8,6 +8,7 @@ rclone remote.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,8 @@ from omegaconf import DictConfig
 from synth_setter.cli.generate_dataset import from_hydra, spec_from_cfg
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from tests.conftest import _validate_surge_dataset
+
+_PLUGIN_PATH = Path(os.environ.get("SYNTH_SETTER_PLUGIN_PATH", "plugins/Surge XT.vst3"))
 
 
 def test_cfg_dataset_composes_and_validates_as_dataset_spec(
@@ -34,6 +37,10 @@ def test_cfg_dataset_composes_and_validates_as_dataset_spec(
 
 @pytest.mark.slow
 @pytest.mark.requires_vst
+@pytest.mark.skipif(
+    not _PLUGIN_PATH.exists(),
+    reason=f"VST plugin not found at {_PLUGIN_PATH}",
+)
 def test_generate_dataset_renders_shards_to_fake_r2(
     cfg_dataset: DictConfig,
     fake_r2_remote: Path,
