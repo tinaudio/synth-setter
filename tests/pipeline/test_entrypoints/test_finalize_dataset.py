@@ -885,18 +885,18 @@ def test_finalize_wds_raises_on_empty_train_split(fake_r2_remote: Path, tmp_path
     assert [p for p in fake_r2_remote.rglob("*") if p.is_file()] == []
 
 
+@pytest.mark.parametrize("flag", [True, False])
 def test_finalize_wds_forwards_mask_degenerate_bins_to_stream_stats(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, flag: bool
 ) -> None:
-    """``finalize_wds(..., mask_degenerate_bins=True)`` calls ``stream_stats_wds`` with the flag.
+    """``finalize_wds`` forwards ``mask_degenerate_bins`` to ``stream_stats_wds`` verbatim.
 
-    Pins the wire so smoke configs that set ``mask_degenerate_bins: true`` at
-    the dataset cfg level survive into the stats step — a regression that
-    dropped the kwarg from this call site would resurrect the CI failure
-    even though both endpoints still accept the flag in isolation.
+    Pins the wire on both polarities so a regression that hard-wires the kwarg (True or False)
+    fails the test rather than silently re-breaking smoke finalize.
 
     :param monkeypatch: Pytest fixture used to capture the forwarded kwarg.
-    :param tmp_path: Pytest tmp dir; the download stub never fires.
+    :param tmp_path: Pytest tmp dir; the download stub writes one minimal shard.
+    :param flag: Parametrized polarity threaded through the wire.
     """
     monkeypatch.setattr(
         "synth_setter.pipeline.r2_io.download_to_path",
@@ -907,18 +907,55 @@ def test_finalize_wds_forwards_mask_degenerate_bins_to_stream_stats(
     captured: dict[str, bool] = {}
 
     def fake_stream_stats(shard_paths: object, mask_degenerate: bool = False) -> tuple[Any, Any]:
-        # Drain the generator so its download-and-unlink contract runs even
-        # though the real Welford fold is short-circuited.
+        # Drain the generator — keeps download_to_path + unlink firing the same
+        # way the production Welford fold would.
         list(shard_paths)  # type: ignore[arg-type]
         captured["mask_degenerate"] = mask_degenerate
         return np.zeros((2, 2), dtype=np.float32), np.ones((2, 2), dtype=np.float32)
 
     monkeypatch.setattr("synth_setter.cli.finalize_dataset.stream_stats_wds", fake_stream_stats)
 
-    spec = _build_wds_smoke_spec(task_name="mask-forwards", train_val_test_sizes=(4, 0, 0))
-    finalize_dataset.finalize_wds(spec, tmp_path, mask_degenerate_bins=True)
+    spec = _build_wds_smoke_spec(task_name=f"mask-forwards-{flag}", train_val_test_sizes=(4, 0, 0))
+    finalize_dataset.finalize_wds(spec, tmp_path, mask_degenerate_bins=flag)
 
-    assert captured == {"mask_degenerate": True}
+    assert captured == {"mask_degenerate": flag}
+
+
+@pytest.mark.parametrize("flag", [True, False])
+def test_finalize_hdf5_forwards_mask_degenerate_bins_to_get_stats(
+    fake_r2_remote: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, flag: bool
+) -> None:
+    """``finalize_hdf5`` forwards ``mask_degenerate_bins`` to ``get_stats_hdf5`` verbatim.
+
+    Mirrors the wds wire test so a regression on the hdf5 branch surfaces the same way; the smoke-
+    shard config opts in for the same reason and needs the same protection.
+
+    :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+    :param tmp_path: Pytest tmp dir; hosts the finalize scratch work_dir.
+    :param monkeypatch: Pytest fixture used to capture the forwarded kwarg.
+    :param flag: Parametrized polarity threaded through the wire.
+    """
+    captured: dict[str, bool] = {}
+
+    def fake_get_stats(train_h5_path: str, mask_degenerate: bool = False) -> None:
+        captured["mask_degenerate"] = mask_degenerate
+        np.savez(
+            Path(train_h5_path).parent / "stats.npz",
+            mean=np.zeros((2, 8, 8), dtype=np.float32),
+            std=np.ones((2, 8, 8), dtype=np.float32),
+        )
+
+    monkeypatch.setattr("synth_setter.cli.finalize_dataset.get_stats_hdf5", fake_get_stats)
+
+    spec = _build_hdf5_smoke_spec(task_name=f"mask-forwards-hdf5-{flag}")
+    shard_remote_dir = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
+    _seed_shard_files(shard_remote_dir, spec)
+
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    finalize_dataset.finalize_hdf5(spec, work_dir, mask_degenerate_bins=flag)
+
+    assert captured == {"mask_degenerate": flag}
 
 
 def test_finalize_wds_unlinks_each_shard_after_folding(

@@ -79,9 +79,7 @@ def finalize_wds(spec: DatasetSpec, work_dir: Path, mask_degenerate_bins: bool =
     :param work_dir: Scratch directory; one shard at a time + the final
         ``stats.npz`` live here transiently.
     :param mask_degenerate_bins: Forwarded to ``stream_stats_wds``; ``True``
-        substitutes ``std=1.0`` at any zero-variance mel position instead of
-        raising. Small CI smoke datasets (12 samples) have deterministically
-        constant positions and need this flag to finalize.
+        substitutes ``std=1.0`` at zero-variance mel bins instead of raising.
     :raises ValueError: The train split is empty
         (``spec.split_shard_ranges["train"]`` has ``lo >= hi``); stats
         cannot be computed without at least one train shard.
@@ -127,10 +125,7 @@ def finalize_hdf5(spec: DatasetSpec, work_dir: Path, mask_degenerate_bins: bool 
     :param work_dir: Scratch directory; shards, splits, stats and the spec
         copy live here transiently for the duration of the call.
     :param mask_degenerate_bins: Forwarded to ``get_stats_hdf5``; ``True``
-        substitutes ``std=1.0`` at any zero-variance mel position instead of
-        raising. Wds is the typical canary because Welford reports exact zero
-        variance, but the hdf5 dask path can flip to zero too once FP noise
-        no longer hides constant bins.
+        substitutes ``std=1.0`` at zero-variance mel bins instead of raising.
     :raises ValueError: The train split is empty
         (``spec.split_shard_ranges["train"]`` has ``lo >= hi``); reshard
         would prune ``train.h5`` and stats compute would fail with a
@@ -189,9 +184,7 @@ def main() -> None:
     cfg.paths.output_dir = str(_REPO_ROOT)
     cfg.paths.work_dir = str(_REPO_ROOT)
 
-    # Pop the finalize-only knob before ``spec_from_cfg`` — it is listed in
-    # ``_NON_SPEC_KEYS`` so DatasetSpec construction would ignore it, but the
-    # explicit read keeps the wiring discoverable from this function.
+    # Read before spec_from_cfg; ``_NON_SPEC_KEYS`` drops it from spec construction.
     mask_degenerate_bins = bool(cfg.get("mask_degenerate_bins", False))
 
     spec = spec_from_cfg(cfg)

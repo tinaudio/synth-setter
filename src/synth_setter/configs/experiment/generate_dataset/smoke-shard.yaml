@@ -11,10 +11,8 @@ defaults:
 
 task_name: smoke-shard
 
-# 12-sample renders have deterministically constant mel positions Welford
-# reports as zero variance; the hdf5 path masks the same bins so its dask
-# compute does not regress the CI cell if FP noise stops hiding them.
-# Production datasets keep the strict default in ``configs/dataset.yaml``.
+# 12-sample renders have constant mel bins; mask so finalize stays green
+# if dask's FP noise stops hiding them on the hdf5 path.
 mask_degenerate_bins: true
 
 train_val_test_sizes: [12, 0, 0]
