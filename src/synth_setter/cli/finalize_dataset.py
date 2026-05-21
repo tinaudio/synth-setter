@@ -65,7 +65,7 @@ def _download_train_shards_one_at_a_time(spec: DatasetSpec, work_dir: Path) -> I
             local.unlink(missing_ok=True)
 
 
-def finalize_wds(spec: DatasetSpec, work_dir: Path) -> None:
+def finalize_wds(spec: DatasetSpec, work_dir: Path, mask_degenerate_bins: bool = False) -> None:
     """Stream stats over the train shards and upload ``stats.npz``.
 
     Per-shard tar files stay in their original R2 location; only the
@@ -78,6 +78,10 @@ def finalize_wds(spec: DatasetSpec, work_dir: Path) -> None:
     :param spec: Validated dataset spec (``output_format == "wds"``).
     :param work_dir: Scratch directory; one shard at a time + the final
         ``stats.npz`` live here transiently.
+    :param mask_degenerate_bins: Forwarded to ``stream_stats_wds``; ``True``
+        substitutes ``std=1.0`` at any zero-variance mel position instead of
+        raising. Small CI smoke datasets (12 samples) have deterministically
+        constant positions and need this flag to finalize.
     :raises ValueError: The train split is empty
         (``spec.split_shard_ranges["train"]`` has ``lo >= hi``); stats
         cannot be computed without at least one train shard.
@@ -89,14 +93,17 @@ def finalize_wds(spec: DatasetSpec, work_dir: Path) -> None:
             f"{spec.split_shard_ranges['train']!r}); cannot compute stats "
             f"without at least one train shard."
         )
-    mean, std = stream_stats_wds(_download_train_shards_one_at_a_time(spec, work_dir))
+    mean, std = stream_stats_wds(
+        _download_train_shards_one_at_a_time(spec, work_dir),
+        mask_degenerate=mask_degenerate_bins,
+    )
     stats_npz = work_dir / STATS_NPZ_FILENAME
     np.savez(stats_npz, mean=mean, std=std)
     r2_io.upload(stats_npz, spec.r2.stats_uri())
     logger.info("uploaded stats to {}", spec.r2.stats_uri())
 
 
-def finalize_hdf5(spec: DatasetSpec, work_dir: Path) -> None:
+def finalize_hdf5(spec: DatasetSpec, work_dir: Path, mask_degenerate_bins: bool = False) -> None:
     """Download every shard, reshard into split files, compute stats, upload all artifacts.
 
     Writes ``work_dir/input_spec.json`` flat (via
@@ -119,6 +126,11 @@ def finalize_hdf5(spec: DatasetSpec, work_dir: Path) -> None:
     :param spec: Validated dataset spec (``output_format == "hdf5"``).
     :param work_dir: Scratch directory; shards, splits, stats and the spec
         copy live here transiently for the duration of the call.
+    :param mask_degenerate_bins: Forwarded to ``get_stats_hdf5``; ``True``
+        substitutes ``std=1.0`` at any zero-variance mel position instead of
+        raising. Wds is the typical canary because Welford reports exact zero
+        variance, but the hdf5 dask path can flip to zero too once FP noise
+        no longer hides constant bins.
     :raises ValueError: The train split is empty
         (``spec.split_shard_ranges["train"]`` has ``lo >= hi``); reshard
         would prune ``train.h5`` and stats compute would fail with a
@@ -137,7 +149,7 @@ def finalize_hdf5(spec: DatasetSpec, work_dir: Path) -> None:
         r2_io.download_to_path(spec.r2.shard_uri(shard), work_dir / shard.filename)
     write_spec_to_path(spec, work_dir / INPUT_SPEC_FILENAME)
     reshard_dataset(work_dir)
-    get_stats_hdf5(str(work_dir / "train.h5"))
+    get_stats_hdf5(str(work_dir / "train.h5"), mask_degenerate=mask_degenerate_bins)
     stats_npz = work_dir / STATS_NPZ_FILENAME
     if not stats_npz.is_file():
         raise FileNotFoundError(
@@ -177,6 +189,11 @@ def main() -> None:
     cfg.paths.output_dir = str(_REPO_ROOT)
     cfg.paths.work_dir = str(_REPO_ROOT)
 
+    # Pop the finalize-only knob before ``spec_from_cfg`` — it is listed in
+    # ``_NON_SPEC_KEYS`` so DatasetSpec construction would ignore it, but the
+    # explicit read keeps the wiring discoverable from this function.
+    mask_degenerate_bins = bool(cfg.get("mask_degenerate_bins", False))
+
     spec = spec_from_cfg(cfg)
     r2_io.ensure_r2_env_loaded()
 
@@ -188,9 +205,9 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as raw_work_dir:
         work_dir = Path(raw_work_dir)
         if spec.output_format == "wds":
-            finalize_wds(spec, work_dir)
+            finalize_wds(spec, work_dir, mask_degenerate_bins=mask_degenerate_bins)
         elif spec.output_format == "hdf5":
-            finalize_hdf5(spec, work_dir)
+            finalize_hdf5(spec, work_dir, mask_degenerate_bins=mask_degenerate_bins)
         else:
             raise ValueError(f"unsupported output_format: {spec.output_format!r}")
         marker_local = work_dir / DATASET_COMPLETE_FILENAME

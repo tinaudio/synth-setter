@@ -24,6 +24,17 @@ run_name: ${task_name}
 output_format: hdf5
 base_seed: 42
 
+# Forwarded by ``synth-setter-finalize-dataset`` to the wds / hdf5 stats path
+# (``stream_stats_wds`` / ``get_stats_hdf5``). Strict (``false``) is the
+# production default — degenerate mel bins surface as a hard failure with the
+# operator-actionable ``ValueError`` from
+# ``synth_setter.pipeline.data.stats._check_degenerate_bins``. Smoke configs
+# (``smoke-shard``, ``smoke-shard-wds``) flip it to ``true`` because at 12
+# samples some mel positions (early-frame silence, channels below the source's
+# active bandwidth) are deterministically constant and Welford's exact
+# variance reports them.
+mask_degenerate_bins: false
+
 # Materialized as ``null`` so finalize-dataset.yaml can pin the generate stage's
 # ``run_id`` via the ``run_id=<value>`` Hydra override form (strict mode requires
 # the key to exist). Leaving this ``null`` on the generate path is handled by

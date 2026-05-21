@@ -54,6 +54,9 @@ _NON_SPEC_KEYS: tuple[str, ...] = (
     "hydra",
     "run_name",
     "skypilot_launch",
+    # Finalize-only knob (forwarded to ``stream_stats_wds`` / ``get_stats_hdf5``);
+    # not a DatasetSpec field.
+    "mask_degenerate_bins",
 )
 
 # Operator-side artifact anchor — local checkout where the spec is written

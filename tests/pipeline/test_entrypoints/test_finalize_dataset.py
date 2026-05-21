@@ -339,7 +339,7 @@ def test_hdf5_finalize_produces_train_consumable_layout(
     # Skip the Dask-driven mean/std compute — orchestration is what this test pins.
     monkeypatch.setattr(
         "synth_setter.cli.finalize_dataset.get_stats_hdf5",
-        lambda train_h5_path: np.savez(
+        lambda train_h5_path, mask_degenerate=False: np.savez(
             Path(train_h5_path).parent / "stats.npz",
             mean=np.zeros((2, 8, 8), dtype=np.float32),
             std=np.ones((2, 8, 8), dtype=np.float32),
@@ -395,7 +395,7 @@ def test_finalize_hdf5_real_shards_end_to_end(
     # so the production ``r2_io.upload`` step still runs against a real file.
     monkeypatch.setattr(
         "synth_setter.cli.finalize_dataset.get_stats_hdf5",
-        lambda train_h5_path: np.savez(
+        lambda train_h5_path, mask_degenerate=False: np.savez(
             Path(train_h5_path).parent / "stats.npz",
             mean=np.zeros((2, 8, 8), dtype=np.float32),
             std=np.ones((2, 8, 8), dtype=np.float32),
@@ -447,7 +447,7 @@ def _stub_get_stats_hdf5(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     monkeypatch.setattr(
         "synth_setter.cli.finalize_dataset.get_stats_hdf5",
-        lambda train_h5_path: np.savez(
+        lambda train_h5_path, mask_degenerate=False: np.savez(
             Path(train_h5_path).parent / "stats.npz",
             mean=np.zeros((2, 8, 8), dtype=np.float32),
             std=np.ones((2, 8, 8), dtype=np.float32),
@@ -624,8 +624,10 @@ def test_finalize_hdf5_temp_work_dir_is_torn_down_on_failure(
     captured_work_dir: dict[str, Path] = {}
     r2_stand_in = tmp_path / "r2"
 
-    def boom_finalize_hdf5(spec: object, work_dir: Path) -> None:
-        del spec
+    def boom_finalize_hdf5(
+        spec: object, work_dir: Path, mask_degenerate_bins: bool = False
+    ) -> None:
+        del spec, mask_degenerate_bins
         # Capture the live tempdir path before the raise so the post-call
         # assertion can prove ``TemporaryDirectory`` cleanup ran.
         captured_work_dir["path"] = Path(work_dir)
@@ -717,7 +719,7 @@ def test_main_hdf5_branch_uploads_marker_last(
     # Skip the Dask-driven mean/std compute — orchestration is what this test pins.
     monkeypatch.setattr(
         "synth_setter.cli.finalize_dataset.get_stats_hdf5",
-        lambda train_h5_path: np.savez(
+        lambda train_h5_path, mask_degenerate=False: np.savez(
             Path(train_h5_path).parent / "stats.npz",
             mean=np.zeros((2, 8, 8), dtype=np.float32),
             std=np.ones((2, 8, 8), dtype=np.float32),
@@ -797,8 +799,8 @@ def test_finalize_hdf5_propagates_stats_failure_before_marker_upload(
         lambda src, dst: uploaded.append(dst),
     )
 
-    def boom(train_h5_path: str) -> None:
-        del train_h5_path
+    def boom(train_h5_path: str, mask_degenerate: bool = False) -> None:
+        del train_h5_path, mask_degenerate
         raise RuntimeError("degenerate bins")
 
     monkeypatch.setattr("synth_setter.cli.finalize_dataset.get_stats_hdf5", boom)
@@ -881,6 +883,42 @@ def test_finalize_wds_raises_on_empty_train_split(fake_r2_remote: Path, tmp_path
         finalize_dataset.finalize_wds(spec, tmp_path)
 
     assert [p for p in fake_r2_remote.rglob("*") if p.is_file()] == []
+
+
+def test_finalize_wds_forwards_mask_degenerate_bins_to_stream_stats(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``finalize_wds(..., mask_degenerate_bins=True)`` calls ``stream_stats_wds`` with the flag.
+
+    Pins the wire so smoke configs that set ``mask_degenerate_bins: true`` at
+    the dataset cfg level survive into the stats step — a regression that
+    dropped the kwarg from this call site would resurrect the CI failure
+    even though both endpoints still accept the flag in isolation.
+
+    :param monkeypatch: Pytest fixture used to capture the forwarded kwarg.
+    :param tmp_path: Pytest tmp dir; the download stub never fires.
+    """
+    monkeypatch.setattr(
+        "synth_setter.pipeline.r2_io.download_to_path",
+        lambda r2_uri, dest_path: _write_minimal_wds_shard(dest_path),
+    )
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.upload", lambda *a, **kw: None)
+
+    captured: dict[str, bool] = {}
+
+    def fake_stream_stats(shard_paths: object, mask_degenerate: bool = False) -> tuple[Any, Any]:
+        # Drain the generator so its download-and-unlink contract runs even
+        # though the real Welford fold is short-circuited.
+        list(shard_paths)  # type: ignore[arg-type]
+        captured["mask_degenerate"] = mask_degenerate
+        return np.zeros((2, 2), dtype=np.float32), np.ones((2, 2), dtype=np.float32)
+
+    monkeypatch.setattr("synth_setter.cli.finalize_dataset.stream_stats_wds", fake_stream_stats)
+
+    spec = _build_wds_smoke_spec(task_name="mask-forwards", train_val_test_sizes=(4, 0, 0))
+    finalize_dataset.finalize_wds(spec, tmp_path, mask_degenerate_bins=True)
+
+    assert captured == {"mask_degenerate": True}
 
 
 def test_finalize_wds_unlinks_each_shard_after_folding(
