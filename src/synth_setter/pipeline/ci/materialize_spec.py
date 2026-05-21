@@ -18,14 +18,13 @@ import sys
 from pathlib import Path
 
 import rootutils
-from hydra import compose, initialize_config_dir
+from hydra import compose, initialize_config_module
 from hydra.errors import HydraException
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
 from synth_setter.cli.generate_dataset import spec_from_cfg  # noqa: E402
 from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME  # noqa: E402
-from synth_setter.resources import configs_dir  # noqa: E402
 
 # Operator-side artifact anchor — distinct from :func:`configs_dir` (which
 # now ships inside the package). Resolves the local checkout so the
@@ -44,7 +43,7 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        with initialize_config_dir(version_base="1.3", config_dir=str(configs_dir())):
+        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
             cfg = compose(config_name="dataset", overrides=[f"experiment={experiment}"])
     except HydraException as exc:
         sys.stderr.write(f"error: Hydra compose failed for experiment {experiment!r}: {exc}\n")

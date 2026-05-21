@@ -162,7 +162,7 @@ with `strict=True` and `extra="forbid"`. The config loader rejects unknown
 keys, invalid types, and malformed values at load time.
 
 ```yaml
-# configs/image/dev-snapshot.yaml
+# src/synth_setter/configs/image/dev-snapshot.yaml
 dockerfile: docker/ubuntu22_04/Dockerfile
 image: tinaudio/synth-setter
 base_image: "ubuntu@sha256:3ba65aa..."

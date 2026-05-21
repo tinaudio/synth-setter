@@ -13,12 +13,12 @@ import numpy as np
 import pytest
 import rootutils
 import torch
-from hydra import compose, initialize_config_dir
+from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 from omegaconf import DictConfig, open_dict
 
 from synth_setter.data.vst import param_specs, preset_paths
-from synth_setter.resources import configs_dir, vst_headless_wrapper
+from synth_setter.resources import vst_headless_wrapper
 from synth_setter.utils.utils import register_resolvers
 from tests._baseline_worktree import worktree_for_ref  # noqa: F401 — pytest fixture re-export
 
@@ -123,7 +123,7 @@ def cfg_train_global() -> DictConfig:
 
     :return: A DictConfig object containing a default Hydra configuration for training.
     """
-    with initialize_config_dir(version_base="1.3", config_dir=str(configs_dir())):
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="train.yaml",
             return_hydra_config=True,
@@ -165,7 +165,7 @@ def cfg_eval_global() -> DictConfig:
 
     :return: A DictConfig containing a default Hydra configuration for evaluation.
     """
-    with initialize_config_dir(version_base="1.3", config_dir=str(configs_dir())):
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="eval.yaml",
             return_hydra_config=True,
@@ -255,7 +255,7 @@ def cfg_dataset_global() -> DictConfig:
         ``experiment=generate_dataset/smoke-shard`` so every required (``???``)
         field is populated.
     """
-    with initialize_config_dir(version_base="1.3", config_dir=str(configs_dir())):
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="dataset",
             overrides=["experiment=generate_dataset/smoke-shard"],
@@ -376,7 +376,7 @@ def _build_surge_xt_smoke_cfg(
 
     :return: Resolved DictConfig with the smoke-test bake-ins applied.
     """
-    with initialize_config_dir(version_base="1.3", config_dir=str(configs_dir())):
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="train.yaml",
             return_hydra_config=True,

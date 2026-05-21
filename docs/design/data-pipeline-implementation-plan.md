@@ -111,7 +111,7 @@ Matches design doc §14.5. Config filenames encode runtime parameters — the fi
 stem is the `dataset_config_id` (see [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids)):
 
 ```yaml
-# configs/experiment/generate_dataset/surge-simple-480k-10k.yaml
+# src/synth_setter/configs/experiment/generate_dataset/surge-simple-480k-10k.yaml
 # → dataset_config_id = surge-simple-480k-10k
 param_spec: surge_simple
 plugin_path: plugins/Surge XT.vst3    # renderer_version pinned via SURGE_XT_RENDERER_VERSION constant; worker verifies

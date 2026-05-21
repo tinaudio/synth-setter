@@ -77,7 +77,7 @@ ______________________________________________________________________
 ### Local development (target state)
 
 ```yaml
-# configs/experiment/surge/flow_simple.yaml (proposed)
+# src/synth_setter/configs/experiment/surge/flow_simple.yaml (proposed)
 defaults:
   - override /data: surge_simple
   - override /model: surge_flow
@@ -304,7 +304,7 @@ Behavior:
 Lightning's `WandbLogger` with `log_model: "all"` uploads every checkpoint as a W&B artifact immediately after each save. No custom callback needed. Every 5000-step checkpoint, best, and last are all uploaded immediately — pod death loses at most one checkpoint interval.
 
 ```yaml
-# configs/logger/wandb.yaml
+# src/synth_setter/configs/logger/wandb.yaml
 wandb:
   _target_: lightning.pytorch.loggers.WandbLogger
   project: synth-setter

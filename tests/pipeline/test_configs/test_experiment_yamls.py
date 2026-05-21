@@ -2,7 +2,7 @@
 
 Each entry in :data:`DATASET_EXPERIMENTS` names a datagen experiment under
 ``configs/experiment/generate_dataset/`` that composes ``dataset.yaml`` via Hydra's
-``initialize_config_dir`` + ``compose``. The composed dict — minus the non-``DatasetSpec``
+``initialize_config_module`` + ``compose``. The composed dict — minus the non-``DatasetSpec``
 group sub-trees (``data:``, ``r2:``, ``paths:``, and ``hydra:``) that are either lifted
 to top-level via interpolation or only exist for Hydra runtime — must validate as
 ``DatasetSpec`` and JSON round-trip without drift.
@@ -19,13 +19,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from hydra import compose, initialize_config_dir
+from hydra import compose, initialize_config_module
 
 from synth_setter.cli.generate_dataset import spec_from_cfg
 from synth_setter.pipeline.schemas.spec import DatasetSpec
-from synth_setter.resources import configs_dir
 
-CONFIG_DIR = Path(str(configs_dir()))
 # Local checkout root — the test pins ``cfg.paths.*`` to this anchor so the
 # composed ``${oc.env:PROJECT_ROOT}`` / ``${hydra:runtime.output_dir}``
 # interpolations resolve to a real on-disk path during unit tests.
@@ -46,7 +44,7 @@ DATASET_EXPERIMENTS: tuple[str, ...] = (
 
 def _compose_dataset_spec(experiment: str) -> DatasetSpec:
     """Compose ``configs/dataset.yaml`` with the named experiment override."""
-    with initialize_config_dir(version_base="1.3", config_dir=str(CONFIG_DIR)):
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(config_name="dataset", overrides=[f"experiment={experiment}"])
     # ``configs/paths/default.yaml`` interpolates ``${oc.env:PROJECT_ROOT}`` and
     # ``${hydra:runtime.output_dir}``; the latter is only set under @hydra.main,

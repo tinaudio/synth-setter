@@ -76,7 +76,7 @@ Separately, the data pipeline (#74) already uses R2 as the source of truth for g
 The experiment config pins everything needed to reproduce an eval — model, data, and checkpoint:
 
 ```yaml
-# configs/experiment/surge/flow_simple.yaml (proposed)
+# src/synth_setter/configs/experiment/surge/flow_simple.yaml (proposed)
 defaults:
   - override /data: surge_simple
   - override /model: surge_flow
@@ -289,7 +289,7 @@ Four metrics are computed for each (predicted, target) audio pair:
 When `data.r2_path` is explicitly provided (via CLI override or experiment config), `SurgeDataModule.prepare_data()` syncs the dataset to `data.dataset_root` before the data loaders are created.
 
 ```yaml
-# configs/data/surge_simple.yaml — no r2_path, no env vars for paths
+# src/synth_setter/configs/data/surge_simple.yaml — no r2_path, no env vars for paths
 _target_: synth_setter.data.surge_datamodule.SurgeDataModule
 dataset_root: ${paths.data_dir}/surge_simple/surge_simple-20260312T143022500Z  # {dataset_config_id}/{dataset_wandb_run_id}
 # r2_path: deliberately absent — must be specified explicitly when needed
@@ -304,7 +304,7 @@ To use R2, pass it explicitly:
 python -m synth_setter.cli.eval data.r2_path=r2:intermediate-data/data/surge_simple/surge_simple-20260312T143022500Z/ ...
 
 # Or in an experiment config that opts in
-# configs/experiment/surge/flow_simple.yaml
+# src/synth_setter/configs/experiment/surge/flow_simple.yaml
 data:
   r2_path: r2:intermediate-data/data/surge_simple/surge_simple-20260312T143022500Z/
 ```
@@ -327,7 +327,7 @@ checkpoint saved by `ModelCheckpoint` as a W&B artifact immediately. Zero new co
 experiment config pins a W&B artifact reference using resolver syntax:
 
 ```yaml
-# configs/experiment/surge/flow_simple.yaml
+# src/synth_setter/configs/experiment/surge/flow_simple.yaml
 ckpt_path: ${wandb:tinaudio/synth-setter/model-flow_simple:latest}
 ```
 

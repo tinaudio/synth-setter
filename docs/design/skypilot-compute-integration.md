@@ -60,7 +60,7 @@ The SkyPilot YAML content is resolved (read from disk) before the dict reaches `
 Training uses pure Hydra DictConfig, not Pydantic. Add `compute_config` as a top-level key:
 
 ```yaml
-# configs/train.yaml
+# src/synth_setter/configs/train.yaml
 defaults:
   - _self_
   - data: ???
@@ -78,7 +78,7 @@ The training entrypoint (`src/synth_setter/cli/train.py`) reads `cfg.get("comput
 Same pattern as training:
 
 ```yaml
-# configs/eval.yaml
+# src/synth_setter/configs/eval.yaml
 compute_config: null
 ```
 
@@ -89,7 +89,7 @@ compute_config: null
 The smoke pipeline ships three real templates:
 
 ```
-configs/compute/
+src/synth_setter/configs/compute/
 ├── runpod-template.yaml      # RunPod GPU (primary smoke target)
 ├── oci-cpu-template.yaml     # OCI x86 CPU Flex (second smoke target)
 └── local-template.yaml       # kind/kubernetes (sky local up; CI smoke only — see the YAML header for the CI-only resource shrink, PR #876)
@@ -142,7 +142,7 @@ $EDITOR .env  # fill in RCLONE_CONFIG_R2_* + WANDB_API_KEY
 # skypilot_launch.compute_template set in the config) dispatches via SkyPilot.
 synth-setter-generate-dataset \
     experiment=generate_dataset/smoke-shard \
-    skypilot_launch.compute_template=configs/compute/runpod-template.yaml
+    skypilot_launch.compute_template=src/synth_setter/configs/compute/runpod-template.yaml
 ```
 
 This is the **standard** local dispatch path: each `synth-setter-*` CLI
@@ -167,7 +167,7 @@ their own, use the launcher CLI directly:
 
 ```bash
 python -m synth_setter.pipeline.skypilot_launch \
-    --template configs/compute/runpod-template.yaml \
+    --template src/synth_setter/configs/compute/runpod-template.yaml \
     -- <arbitrary-command-that-materializes-an-input_spec.json>
 ```
 
@@ -390,7 +390,7 @@ Should `skypilot` be a required or optional dependency?
 ### Integration tests
 
 - `pipeline generate` with `compute_config: null` runs workers locally (LocalBackend path).
-- `pipeline generate` with `compute_config: configs/compute/vast-spot.yaml` calls SkyPilot SDK (mock SkyPilot in tests).
+- `pipeline generate` with `compute_config: src/synth_setter/configs/compute/vast-spot.yaml` calls SkyPilot SDK (mock SkyPilot in tests).
 - Worker idempotency: start worker with some shards already `.valid` in R2 → skips them.
 
 ### E2E validation

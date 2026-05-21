@@ -16,12 +16,13 @@ import subprocess
 import sys
 import tempfile
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
 import hydra
 import rootutils
-from hydra import compose, initialize_config_dir
+from hydra import compose, initialize_config_module
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 
@@ -41,7 +42,7 @@ from synth_setter.pipeline.spec_io import (  # noqa: E402
     upload_spec,
     write_spec_locally,
 )
-from synth_setter.resources import configs_dir, vst_headless_wrapper  # noqa: E402
+from synth_setter.resources import as_file, vst_headless_wrapper  # noqa: E402
 
 # Composed-config keys that aren't DatasetSpec fields (interpolation sources, Hydra
 # runtime, dispatch-mode sub-trees). See dataset.yaml in the shipped configs/
@@ -310,21 +311,29 @@ def _render_and_upload_shard(
         exhausting the retry budget.
     :raises RuntimeError: Renderer exited 0 without writing the expected shard file.
     """
-    args = [str(vst_headless_wrapper())] if sys.platform == "linux" else []
-    args += build_generate_args(spec, shard, work_dir)
-    logger.info(f"rendering shard {shard.shard_id} -> {shard.filename}")
-    max_attempts = spec.render.max_retries + 1
-    for attempt in range(max_attempts):
-        try:
-            subprocess.check_call(args)  # noqa: S603 — args built from validated spec
-            break
-        except subprocess.CalledProcessError:
-            if attempt + 1 == max_attempts:
-                raise
-            logger.warning(
-                f"shard {shard.shard_id} render failed on attempt "
-                f"{attempt + 1}/{max_attempts}; retrying"
-            )
+    # Zipped wheels extract the wrapper to a temp file that only lives while
+    # ``as_file()`` is open; ``ExitStack`` keeps it on disk across the retry
+    # loop, and skips materialization on non-Linux.
+    with ExitStack() as stack:
+        if sys.platform == "linux":
+            wrapper_path = stack.enter_context(as_file(vst_headless_wrapper()))
+            args = [str(wrapper_path)]
+        else:
+            args = []
+        args += build_generate_args(spec, shard, work_dir)
+        logger.info(f"rendering shard {shard.shard_id} -> {shard.filename}")
+        max_attempts = spec.render.max_retries + 1
+        for attempt in range(max_attempts):
+            try:
+                subprocess.check_call(args)  # noqa: S603 — args built from validated spec
+                break
+            except subprocess.CalledProcessError:
+                if attempt + 1 == max_attempts:
+                    raise
+                logger.warning(
+                    f"shard {shard.shard_id} render failed on attempt "
+                    f"{attempt + 1}/{max_attempts}; retrying"
+                )
     shard_path = work_dir / shard.filename
     # Surface a generator that exited 0 without writing output here, not as a
     # downstream rclone "source not found".
@@ -409,7 +418,7 @@ def _build_worker_cmd(overrides: list[str], spec: DatasetSpec) -> str:
     return " && ".join(parts)
 
 
-@hydra.main(version_base="1.3", config_path="../configs", config_name="dataset")
+@hydra.main(version_base="1.3", config_path="pkg://synth_setter.configs", config_name="dataset")
 def from_hydra(cfg: DictConfig) -> None:
     """Worker-side @hydra.main entry: build the spec and render it in-process.
 
@@ -429,7 +438,7 @@ def main() -> None:
     """
     overrides = list(sys.argv[1:])
 
-    with initialize_config_dir(version_base="1.3", config_dir=str(configs_dir())):
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(config_name="dataset", overrides=overrides)
 
     # Programmatic compose leaves ${hydra:runtime.output_dir} unset; pin paths.*

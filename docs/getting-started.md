@@ -417,9 +417,10 @@ config is composed from multiple YAML files that layer on top of each other.
 ### 5a. Config structure
 
 ```
-configs/
+src/synth_setter/configs/   # located via synth_setter.resources.configs_dir()
   train.yaml          # Top-level training defaults
   eval.yaml           # Top-level evaluation defaults
+  dataset.yaml        # Pipeline dataset defaults
   data/               # Data module configs (kosc, ksin, surge, ...)
   model/              # Model configs (ffn, flow, flowmlp, ...)
   trainer/            # Trainer configs (gpu, cpu, mps, ddp, ...)
@@ -428,7 +429,7 @@ configs/
   experiment/         # Experiment configs (compose data + model + overrides)
     kosc/             # k-osc experiments
     surge/            # Surge XT experiments
-  dataset/            # Pipeline dataset configs
+    generate_dataset/ # Pipeline dataset experiments
 ```
 
 `src/synth_setter/configs/train.yaml` and `src/synth_setter/configs/eval.yaml` require `data=` and `model=` to be

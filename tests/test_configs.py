@@ -4,7 +4,7 @@ from typing import Any
 
 import hydra
 import pytest
-from hydra import compose, initialize_config_dir
+from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
@@ -155,7 +155,7 @@ def test_test_mps_yaml_matches_cfg_surge_xt_global(experiment: str, test_mps_yam
     fixture_param_spec = fixture_cfg.callbacks.log_per_param_mse.param_spec
     GlobalHydra.instance().clear()
 
-    with initialize_config_dir(version_base="1.3", config_dir=str(configs_dir())):
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         experiment_cfg = compose(
             config_name="train.yaml",
             return_hydra_config=False,

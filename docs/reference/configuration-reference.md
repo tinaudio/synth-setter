@@ -30,7 +30,7 @@ ______________________________________________________________________
 ### 2.1 Data Generation
 
 ```
-configs/experiment/generate_dataset/{id}.yaml → Hydra compose against configs/dataset.yaml
+src/synth_setter/configs/experiment/generate_dataset/{id}.yaml → Hydra compose against src/synth_setter/configs/dataset.yaml
   → spec_from_cfg(cfg) → DatasetSpec (frozen, Pydantic, the spec ON R2)
     → spec_io.write_spec_locally(spec, _REPO_ROOT)
         → <repo>/data/<task_name>/<run_id>/metadata/input_spec.json (operator-side artifact)
@@ -108,7 +108,7 @@ be confused:
 #### Standard path: entrypoint-owned dispatch
 
 ```
-synth-setter-generate-dataset experiment=… skypilot_launch.compute_template=configs/compute/runpod-template.yaml
+synth-setter-generate-dataset experiment=… skypilot_launch.compute_template=src/synth_setter/configs/compute/runpod-template.yaml
   → @hydra.main composes DictConfig → spec_from_cfg → DatasetSpec
     → write_spec_locally(spec, _REPO_ROOT)
     → upload_spec(spec) → R2 at {r2.prefix}input_spec.json
@@ -135,7 +135,7 @@ synth-setter-generate-dataset experiment=… skypilot_launch.compute_template=co
 #### Ad-hoc path: `python -m synth_setter.pipeline.skypilot_launch`
 
 ```
-configs/compute/{provider}-template.yaml (SkyPilot Task YAML — either no `run:`
+src/synth_setter/configs/compute/{provider}-template.yaml (SkyPilot Task YAML — either no `run:`
 block, or a `run:` containing the `${WORKER_CMD}` sentinel where the worker
 cmd should land; see `_load_compute_template_with_cmd`. RunPod uses the
 former; OCI (`oci-cpu-template.yaml`) uses the latter so the launcher's cmd
