@@ -4,11 +4,12 @@ from typing import Any
 
 import hydra
 import pytest
-from hydra import compose, initialize
+from hydra import compose, initialize_config_dir
 from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 
+from synth_setter.resources import configs_dir
 from tests.conftest import _build_surge_xt_smoke_cfg
 
 
@@ -72,25 +73,25 @@ class TestWandbConfigResolvesFromEnv:
     def test_wandb_entity_resolves_from_env(self, monkeypatch):
         """OmegaConf resolves WANDB_ENTITY from environment."""
         monkeypatch.setenv("WANDB_ENTITY", "test-entity")
-        cfg = OmegaConf.load("configs/logger/wandb.yaml")
+        cfg = OmegaConf.load(str(configs_dir() / "logger" / "wandb.yaml"))
         assert OmegaConf.select(cfg, "wandb.entity") == "test-entity"
 
     def test_wandb_project_resolves_from_env(self, monkeypatch):
         """OmegaConf resolves WANDB_PROJECT from environment."""
         monkeypatch.setenv("WANDB_PROJECT", "test-project")
-        cfg = OmegaConf.load("configs/logger/wandb.yaml")
+        cfg = OmegaConf.load(str(configs_dir() / "logger" / "wandb.yaml"))
         assert OmegaConf.select(cfg, "wandb.project") == "test-project"
 
     def test_wandb_entity_defaults_to_none_when_env_unset(self, monkeypatch):
         """Entity falls back to None (user's default W&B entity) when env var unset."""
         monkeypatch.delenv("WANDB_ENTITY", raising=False)
-        cfg = OmegaConf.load("configs/logger/wandb.yaml")
+        cfg = OmegaConf.load(str(configs_dir() / "logger" / "wandb.yaml"))
         assert OmegaConf.select(cfg, "wandb.entity") is None
 
     def test_wandb_project_defaults_to_synth_setter_when_env_unset(self, monkeypatch):
         """Project falls back to synth-setter when env var unset."""
         monkeypatch.delenv("WANDB_PROJECT", raising=False)
-        cfg = OmegaConf.load("configs/logger/wandb.yaml")
+        cfg = OmegaConf.load(str(configs_dir() / "logger" / "wandb.yaml"))
         assert OmegaConf.select(cfg, "wandb.project") == "synth-setter"
 
 
@@ -154,7 +155,7 @@ def test_test_mps_yaml_matches_cfg_surge_xt_global(experiment: str, test_mps_yam
     fixture_param_spec = fixture_cfg.callbacks.log_per_param_mse.param_spec
     GlobalHydra.instance().clear()
 
-    with initialize(version_base="1.3", config_path="../configs"):
+    with initialize_config_dir(version_base="1.3", config_dir=str(configs_dir())):
         experiment_cfg = compose(
             config_name="train.yaml",
             return_hydra_config=False,

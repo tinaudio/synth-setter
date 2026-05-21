@@ -1,6 +1,6 @@
 """End-to-end Linux integration test for ``gui_toggle_cadence="always_on"`` (#1187).
 
-Runs through ``docker/ubuntu22_04/run-linux-vst-headless.sh`` (Xvfb + xsettingsd
+Runs through ``src/synth_setter/scripts/run-linux-vst-headless.sh`` (Xvfb + xsettingsd
 + openbox + dbus) inside the existing ``test-vst-slow.yml`` workflow. Verifies
 that ``run_with_editor_held_open`` keeps the editor realised on the main
 thread while renders run on a worker, the shard loop completes for all

@@ -28,12 +28,16 @@ The `synth-setter-train`, `synth-setter-eval`, and `synth-setter-generate-datase
 
 ## Shell helpers
 
-Container-runtime shell helpers (X11 / VST3 bootstrap) live next to the `Dockerfile` that `COPY`s them:
+Container-runtime shell helpers (X11 / VST3 bootstrap):
 
-| Helper                      | Location                                       |
-| --------------------------- | ---------------------------------------------- |
-| `run-linux-vst-headless.sh` | `docker/ubuntu22_04/run-linux-vst-headless.sh` |
-| `ensure_plugin_symlinks.sh` | `docker/ubuntu22_04/ensure_plugin_symlinks.sh` |
+| Helper                      | Location                                             |
+| --------------------------- | ---------------------------------------------------- |
+| `run-linux-vst-headless.sh` | `src/synth_setter/scripts/run-linux-vst-headless.sh` |
+| `ensure_plugin_symlinks.sh` | `docker/ubuntu22_04/ensure_plugin_symlinks.sh`       |
+
+`run-linux-vst-headless.sh` ships inside the `synth_setter` package and is
+discovered via `synth_setter.resources.vst_headless_wrapper()` — see
+[`src/synth_setter/resources.py`](../src/synth_setter/resources.py).
 
 ## See also
 

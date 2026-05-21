@@ -27,8 +27,8 @@ in_scope() {
   case "$1" in
     .github/workflows/*.yaml|.github/workflows/*.yml) return 0 ;;
     */.github/workflows/*.yaml|*/.github/workflows/*.yml) return 0 ;;
-    configs/compute/*.yaml|configs/compute/*.yml) return 0 ;;
-    */configs/compute/*.yaml|*/configs/compute/*.yml) return 0 ;;
+    src/synth_setter/configs/compute/*.yaml|src/synth_setter/configs/compute/*.yml) return 0 ;;
+    */src/synth_setter/configs/compute/*.yaml|*/src/synth_setter/configs/compute/*.yml) return 0 ;;
   esac
   return 1
 }
@@ -47,7 +47,7 @@ emit_block_message() {
     echo "  # Pin the template's image_id from its default to the dispatched tag."
     echo "  - name: Pin image tag"
     echo "    run: |"
-    echo "      sed -i \"s|...|...|\" configs/compute/runpod-template.yaml"
+    echo "      sed -i \"s|...|...|\" src/synth_setter/configs/compute/runpod-template.yaml"
     echo
     echo "Offenders (tab-delimited: line<TAB>block<TAB>header_line<TAB>text):"
     printf '  %s\n' "${violations//$'\n'/$'\n  '}"

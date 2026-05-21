@@ -55,7 +55,7 @@ class DatasetSpec(BaseModel):
 
 The SkyPilot YAML content is resolved (read from disk) before the dict reaches `DatasetSpec(**kwargs)` so the frozen spec carries a self-contained snapshot rather than a path; SkyPilot YAMLs are small (~20 lines), so embedding preserves full provenance without bloating the spec.
 
-### 3.2 Training config (Hydra — `configs/train.yaml`)
+### 3.2 Training config (Hydra — `src/synth_setter/configs/train.yaml`)
 
 Training uses pure Hydra DictConfig, not Pydantic. Add `compute_config` as a top-level key:
 
@@ -73,7 +73,7 @@ compute_config: null  # Path to SkyPilot YAML. null = local execution
 
 The training entrypoint (`src/synth_setter/cli/train.py`) reads `cfg.get("compute_config")` and either trains locally or launches via SkyPilot SDK.
 
-### 3.3 Eval config (Hydra — `configs/eval.yaml`)
+### 3.3 Eval config (Hydra — `src/synth_setter/configs/eval.yaml`)
 
 Same pattern as training:
 
@@ -84,7 +84,7 @@ compute_config: null
 
 ## 4. New Files & Artifacts
 
-### 4.1 SkyPilot YAML configs (`configs/compute/`)
+### 4.1 SkyPilot YAML configs (`src/synth_setter/configs/compute/`)
 
 The smoke pipeline ships three real templates:
 
@@ -116,7 +116,7 @@ The SkyPilot launcher (`synth_setter.pipeline.skypilot_launch`) needs to forward
 
 #### The forwarded set
 
-Defined as `_WORKER_ENV_KEYS` in `src/synth_setter/pipeline/skypilot_launch.py`. The tuple is the source of truth for what the launcher forwards to the worker pod via `task.update_envs(...)`; the matching `envs:` block in `configs/compute/runpod-template.yaml` declares the same names with empty defaults so the SkyPilot Task validates as fully-specified before the launcher fills them.
+Defined as `_WORKER_ENV_KEYS` in `src/synth_setter/pipeline/skypilot_launch.py`. The tuple is the source of truth for what the launcher forwards to the worker pod via `task.update_envs(...)`; the matching `envs:` block in `src/synth_setter/configs/compute/runpod-template.yaml` declares the same names with empty defaults so the SkyPilot Task validates as fully-specified before the launcher fills them.
 
 Anything outside the tuple is *not* forwarded to the worker, even if it's set in the launcher's environment. Adding a key requires adding it both to `_WORKER_ENV_KEYS` and to the `envs:` block.
 
@@ -306,10 +306,10 @@ Replace RunPod references with SkyPilot/provider-agnostic language.
 **Files to modify:**
 
 - `src/synth_setter/pipeline/schemas/spec.py` — add a `compute_config` field (optional, defaults to `None`) to `DatasetSpec`
-- `configs/experiment/generate_dataset/surge-simple-480k-10k.yaml` — add an optional `compute_config` key, or leave it out for local execution
+- `src/synth_setter/configs/experiment/generate_dataset/surge-simple-480k-10k.yaml` — add an optional `compute_config` key, or leave it out for local execution
 - Tests: `tests/pipeline/test_schemas/` — add test cases for the new field, backward compat
 
-Note: `DatasetSpec` is the single spec type. It's composed via Hydra — `spec_from_cfg(cfg)` over `configs/dataset.yaml` plus an experiment override — with no separate `DatasetConfig` / `DatasetPipelineSpec` / `materialize_spec()` layer in front of it.
+Note: `DatasetSpec` is the single spec type. It's composed via Hydra — `spec_from_cfg(cfg)` over `src/synth_setter/configs/dataset.yaml` plus an experiment override — with no separate `DatasetConfig` / `DatasetPipelineSpec` / `materialize_spec()` layer in front of it.
 
 **Background.** `DatasetConfig`, `DatasetPipelineSpec`, and `materialize_spec()` were unified into `DatasetSpec` in [#887](https://github.com/tinaudio/synth-setter/pull/887); the `load_dataset_spec_yaml` bridge was removed in [#917](https://github.com/tinaudio/synth-setter/pull/917).
 
@@ -317,8 +317,8 @@ Note: `DatasetSpec` is the single spec type. It's composed via Hydra — `spec_f
 
 **Files to create:**
 
-- `configs/compute/vast-spot.yaml`
-- `configs/compute/vast-ondemand.yaml`
+- `src/synth_setter/configs/compute/vast-spot.yaml`
+- `src/synth_setter/configs/compute/vast-ondemand.yaml`
 
 **Files to modify:**
 
@@ -356,8 +356,8 @@ else:
 
 **Files to modify:**
 
-- `configs/train.yaml` — add `compute_config: null`
-- `configs/eval.yaml` — add `compute_config: null`
+- `src/synth_setter/configs/train.yaml` — add `compute_config: null`
+- `src/synth_setter/configs/eval.yaml` — add `compute_config: null`
 - `src/synth_setter/cli/train.py` — check `cfg.get("compute_config")`, launch via SkyPilot if set
 - `src/synth_setter/cli/eval.py` — same
 

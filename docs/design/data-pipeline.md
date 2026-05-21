@@ -1358,7 +1358,7 @@ Pydantic is for trust boundaries — where data enters the system from an extern
 
 ### 14.5 Config Materialization
 
-A run starts from a Hydra experiment YAML composed against `configs/dataset.yaml`:
+A run starts from a Hydra experiment YAML composed against `src/synth_setter/configs/dataset.yaml`:
 
 ```yaml
 # configs/experiment/generate_dataset/surge-simple-480k-10k.yaml (filename stem = dataset_config_id)
@@ -1378,11 +1378,11 @@ render:
   min_loudness: -50.0
 ```
 
-`configs/dataset.yaml` is the `@hydra.main` entry. Its `defaults` list pulls in `data:` (param spec / channels / velocity / loudness floor), `render:` (renderer + plugin / preset / sample rate / batch sizes), `r2:` (bucket + prefix root), `paths:`, `hydra:`, and the named `experiment:`. Required slots are marked `???` and filled by the chosen experiment.
+`src/synth_setter/configs/dataset.yaml` is the `@hydra.main` entry. Its `defaults` list pulls in `data:` (param spec / channels / velocity / loudness floor), `render:` (renderer + plugin / preset / sample rate / batch sizes), `r2:` (bucket + prefix root), `paths:`, `hydra:`, and the named `experiment:`. Required slots are marked `???` and filled by the chosen experiment.
 
 On first `generate` (`python -m synth_setter.cli.generate_dataset experiment=<id>`):
 
-1. Hydra composes the experiment against `configs/dataset.yaml`, yielding an `OmegaConf` `DictConfig`.
+1. Hydra composes the experiment against `src/synth_setter/configs/dataset.yaml`, yielding an `OmegaConf` `DictConfig`.
 2. `spec_from_cfg(cfg)` flattens the composed groups and constructs a Pydantic `DatasetSpec` (`strict=True`, `frozen=True`) in one shot — the same model used for the on-R2 artifact.
 3. Runtime fields (`run_id`, `r2`, `created_at`, `git_sha`, `is_repo_dirty`) auto-fill via `default_factory` when absent. `run_id` is `{task_name}-{YYYYMMDDTHHMMSSsssZ}` (millisecond precision); `r2.prefix` is `data/{task_name}/{run_id}/`. `renderer_version` is set by the configured renderer's pin; the worker re-derives via `extract_renderer_version` and refuses to render on mismatch.
 4. Computed fields (`shards`, `num_shards`, `num_params`) derive deterministically from layout + render fields.
@@ -1403,7 +1403,7 @@ On first `generate` (`python -m synth_setter.cli.generate_dataset experiment=<id
 | Config ID + ISO timestamp | `dataset_wandb_run_id`                             | `surge-simple-480k-10k-20260312T143022500Z`                             |
 | R2 root path              | `data/{dataset_config_id}/{dataset_wandb_run_id}/` | `data/surge-simple-480k-10k/surge-simple-480k-10k-20260312T143022500Z/` |
 
-Config filenames live in `configs/experiment/generate_dataset/`. Production training configs follow the pattern `{name}-{total_train_samples}-{shard_size}.yaml` (e.g. `surge-simple-480k-10k.yaml`); CI smoke and partitioner-exercise configs use shorter, role-descriptive names (e.g. `smoke-shard.yaml`, `10-1k-shards.yaml`). The filename without extension is the `dataset_config_id` — choose names that read clearly in R2 paths and W&B run IDs.
+Config filenames live in `src/synth_setter/configs/experiment/generate_dataset/`. Production training configs follow the pattern `{name}-{total_train_samples}-{shard_size}.yaml` (e.g. `surge-simple-480k-10k.yaml`); CI smoke and partitioner-exercise configs use shorter, role-descriptive names (e.g. `smoke-shard.yaml`, `10-1k-shards.yaml`). The filename without extension is the `dataset_config_id` — choose names that read clearly in R2 paths and W&B run IDs.
 
 ### 14.7 CLI & Directory Structure
 
@@ -1451,7 +1451,7 @@ src/
   # logging_config.py   # structlog configuration
 ```
 
-Pipeline configs live under `configs/` as Hydra groups composed by `configs/dataset.yaml` (filename stem of `configs/experiment/generate_dataset/<id>.yaml` = `dataset_config_id`):
+Pipeline configs live under `src/synth_setter/configs/` as Hydra groups composed by `src/synth_setter/configs/dataset.yaml` (filename stem of `src/synth_setter/configs/experiment/generate_dataset/<id>.yaml` = `dataset_config_id`):
 
 ```
 configs/

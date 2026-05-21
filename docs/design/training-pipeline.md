@@ -533,13 +533,13 @@ ______________________________________________________________________
 
 ## Appendix B: Current File Inventory
 
-| File                            | Current role                                                                                   | Gap                               |
-| ------------------------------- | ---------------------------------------------------------------------------------------------- | --------------------------------- |
-| `src/synth_setter/cli/train.py` | Main training entry point                                                                      | —                                 |
-| `configs/logger/wandb.yaml`     | W&B config (`log_model: "all"` — uploads every checkpoint immediately, env-var entity/project) | —                                 |
-| `configs/data/*.yaml`           | Dataset paths                                                                                  | Shared portability cleanup needed |
-| `docker/*`                      | Existing container setup                                                                       | Training-specific image needed    |
-| `scripts/runpod_*.py`           | Data-pipeline-focused launchers                                                                | No training launcher              |
+| File                                         | Current role                                                                                   | Gap                               |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------------- | --------------------------------- |
+| `src/synth_setter/cli/train.py`              | Main training entry point                                                                      | —                                 |
+| `src/synth_setter/configs/logger/wandb.yaml` | W&B config (`log_model: "all"` — uploads every checkpoint immediately, env-var entity/project) | —                                 |
+| `src/synth_setter/configs/data/*.yaml`       | Dataset paths                                                                                  | Shared portability cleanup needed |
+| `docker/*`                                   | Existing container setup                                                                       | Training-specific image needed    |
+| `scripts/runpod_*.py`                        | Data-pipeline-focused launchers                                                                | No training launcher              |
 
 ## Appendix C: Checkpoint Policy
 

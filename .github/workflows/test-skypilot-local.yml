@@ -31,7 +31,7 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
-      - "configs/compute/local-debug-rclone-template.yaml"
+      - "src/synth_setter/configs/compute/local-debug-rclone-template.yaml"
       - ".github/workflows/test-skypilot-local.yml"
 
 permissions:
@@ -51,7 +51,7 @@ jobs:
     timeout-minutes: 30
     env:
       CLUSTER_NAME: synth-setter-local-${{ github.run_id }}-${{ github.run_attempt }}
-      TEMPLATE: configs/compute/local-debug-rclone-template.yaml
+      TEMPLATE: src/synth_setter/configs/compute/local-debug-rclone-template.yaml
       LOG_PATH: /tmp/skypilot-local-debug.log
       R2_BUCKET: intermediate-data
     steps:

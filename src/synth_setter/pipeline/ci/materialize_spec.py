@@ -25,9 +25,12 @@ rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
 from synth_setter.cli.generate_dataset import spec_from_cfg  # noqa: E402
 from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME  # noqa: E402
+from synth_setter.resources import configs_dir  # noqa: E402
 
-CONFIG_DIR = Path(__file__).resolve().parents[4] / "configs"
-REPO_ROOT = CONFIG_DIR.parent
+# Operator-side artifact anchor — distinct from :func:`configs_dir` (which
+# now ships inside the package). Resolves the local checkout so the
+# ``paths.*`` Hydra interpolations have a real on-disk root.
+REPO_ROOT = Path(__file__).resolve().parents[4]
 
 
 def main() -> None:
@@ -41,7 +44,7 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        with initialize_config_dir(version_base="1.3", config_dir=str(CONFIG_DIR)):
+        with initialize_config_dir(version_base="1.3", config_dir=str(configs_dir())):
             cfg = compose(config_name="dataset", overrides=[f"experiment={experiment}"])
     except HydraException as exc:
         sys.stderr.write(f"error: Hydra compose failed for experiment {experiment!r}: {exc}\n")

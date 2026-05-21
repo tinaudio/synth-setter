@@ -262,7 +262,7 @@ Sub-issues: [#18](https://github.com/tinaudio/synth-setter/issues/18) (config-dr
 - `pipeline/schemas/` — Pydantic models split across submodules: ~~`config.py`~~ ✅ (`DatasetConfig`, `SplitsConfig`, load/ID helpers), ~~`spec.py`~~ ✅ (`DatasetPipelineSpec`, `ShardSpec`, `materialize_spec`), `report.py` (`WorkerReport`, `ShardResult`), `card.py` (`DatasetCard`, `ValidationSummary`), `sample.py` (`Sample` dataclass).
   **Note:** ~~`prefix.py`~~ ✅ and ~~`image_config.py`~~ ✅ also exist.
   `report.py`, `card.py`, and `sample.py` are not yet created.
-- ~~`configs/experiment/generate_dataset/surge-simple-480k-10k.yaml`~~ ✅ — sample config (filename stem = `dataset_config_id`)
+- ~~`src/synth_setter/configs/experiment/generate_dataset/surge-simple-480k-10k.yaml`~~ ✅ — sample config (filename stem = `dataset_config_id`)
 - ~~`tests/pipeline/__init__.py`~~ ✅
 - ~~`tests/pipeline/test_schemas/`~~ ✅
 
@@ -470,7 +470,7 @@ Sub-issue: [#7](https://github.com/tinaudio/synth-setter/issues/7) (buildx TARGE
 **Files to port from `experiment`:**
 
 - `docker/ubuntu22_04/Dockerfile` — multi-stage build with BuildKit secrets
-- `docker/ubuntu22_04/run-linux-vst-headless.sh` — Xvfb wrapper for headless VST
+- `src/synth_setter/scripts/run-linux-vst-headless.sh` — Xvfb wrapper for headless VST
 - `Makefile` additions — `docker-build-dev-snapshot`
 
 **Verification:**

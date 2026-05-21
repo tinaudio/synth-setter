@@ -133,6 +133,16 @@ where = ["src"]
 [tool.setuptools.package-dir]
 "" = "src"
 
+# Ship Hydra config YAMLs and the Linux Xvfb wrapper inside the wheel so
+# ``importlib.resources.files("synth_setter")`` can locate them under any
+# install layout — see ``src/synth_setter/resources.py``.
+[tool.setuptools.package-data]
+"synth_setter" = [
+  "configs/**/*.yaml",
+  "configs/**/*.yml",
+  "scripts/*.sh",
+]
+
 
 [tool.pytest.ini_options]
 addopts = [

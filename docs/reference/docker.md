@@ -156,7 +156,7 @@ YAML (see Image config below). CLI takes precedence.
 ### Image config (CI)
 
 For CI builds, image parameters are defined in YAML config files under
-`configs/image/` and validated by
+`src/synth_setter/configs/image/` and validated by
 [image_config.py](../../src/synth_setter/pipeline/schemas/image_config.py) — a Pydantic `BaseModel`
 with `strict=True` and `extra="forbid"`. The config loader rejects unknown
 keys, invalid types, and malformed values at load time.
@@ -221,7 +221,7 @@ docker run --rm synth-setter:dev-snapshot \
 
 Generates one or more VST dataset shards (looping over `spec.shards`) via
 `generate_vst_dataset.py` under headless X11 (Xvfb). The headless bootstrap
-(`docker/ubuntu22_04/run-linux-vst-headless.sh`) is applied inside
+(`src/synth_setter/scripts/run-linux-vst-headless.sh`) is applied inside
 `synth_setter.cli.generate_dataset.run()` at the audio-rendering boundary,
 wrapping only the generator subprocess.
 
@@ -286,7 +286,7 @@ X11 is bootstrapped automatically around the generator subprocess inside
 
 ```bash
 docker run --rm synth-setter:dev-snapshot \
-  docker/ubuntu22_04/run-linux-vst-headless.sh \
+  src/synth_setter/scripts/run-linux-vst-headless.sh \
     python -c "
       from pedalboard import VST3Plugin
       p = VST3Plugin('/usr/lib/vst3/Surge XT.vst3')
@@ -303,7 +303,7 @@ dev-snapshot image, pushes to Docker Hub, and runs smoke tests.
 
 ### What it does
 
-1. Validates the image config (`configs/image/dev-snapshot.yaml` via Pydantic)
+1. Validates the image config (`src/synth_setter/configs/image/dev-snapshot.yaml` via Pydantic)
 2. Builds the image using Docker Buildx
 3. Pushes tagged images to Docker Hub (dispatch/push-to-main only)
 4. Runs smoke tests against the SHA-pinned tag (dispatch/push-to-main only)
@@ -399,7 +399,7 @@ docker run --rm -it synth-setter:dev-snapshot bash
 
 Headless X11 issues — check in order:
 
-1. **Xvfb running?** `docker/ubuntu22_04/run-linux-vst-headless.sh` starts it automatically
+1. **Xvfb running?** `src/synth_setter/scripts/run-linux-vst-headless.sh` starts it automatically
 2. **Missing libraries?** `ldd /usr/lib/vst3/Surge\ XT.vst3/Contents/*/libSurge\ XT.so`
 3. **Software rendering?** Verify `LIBGL_ALWAYS_SOFTWARE=1` is set (no GPU in CI)
 

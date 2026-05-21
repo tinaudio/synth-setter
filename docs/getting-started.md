@@ -176,7 +176,7 @@ with decreasing loss values.
 
 **What happens:**
 
-- Hydra composes the config from `configs/train.yaml` + the experiment override
+- Hydra composes the config from `src/synth_setter/configs/train.yaml` + the experiment override
 - Lightning sets up the data module, model, callbacks, and trainer
 - Checkpoints are saved under `logs/{task_name}/{experiment_name}/{run_name}-{timestamp}/checkpoints/` (for this command: `logs/train/kosc/ffn_mse-<timestamp>/checkpoints/`)
 - Metrics are logged to W&B + CSV + TensorBoard by default. W&B requires
@@ -185,7 +185,7 @@ with decreasing loss values.
 
 ### 3b. Available k-osc experiments
 
-The `configs/experiment/kosc/` directory contains several variants:
+The `src/synth_setter/configs/experiment/kosc/` directory contains several variants:
 
 | Config             | Description                          |
 | ------------------ | ------------------------------------ |
@@ -298,7 +298,7 @@ You should see top-level directories like `data/`, `train/`, and `eval/`.
 
 **W&B is enabled by default.** [Weights & Biases](https://wandb.ai/) provides
 experiment tracking, metric logging, and model checkpoint storage. The default
-training logger (`configs/logger/many_loggers.yaml`) composes W&B + CSV +
+training logger (`src/synth_setter/configs/logger/many_loggers.yaml`) composes W&B + CSV +
 TensorBoard, so fresh runs log to all three. The integration is handled
 through Lightning's `WandbLogger` -- there are no direct `wandb.init()` calls
 in the codebase.
@@ -326,7 +326,7 @@ in the codebase.
    ```
 
 **Disabled — drop W&B from the default compose:** comment out `- wandb` in
-`configs/logger/many_loggers.yaml`, or override per run with `logger=csv`
+`src/synth_setter/configs/logger/many_loggers.yaml`, or override per run with `logger=csv`
 or `logger=tensorboard`:
 
 ```bash
@@ -369,7 +369,7 @@ RUNPOD_API_KEY=<your-api-key>
 
 [Oracle Cloud Infrastructure](https://www.oracle.com/cloud/) is wired up as a
 second SkyPilot target alongside RunPod for the `generate_dataset` smoke
-pipeline (CPU-only Flex shapes via `configs/compute/oci-cpu-template.yaml`).
+pipeline (CPU-only Flex shapes via `src/synth_setter/configs/compute/oci-cpu-template.yaml`).
 **You do not need OCI for local development or training.**
 
 If you are exercising the OCI target:
@@ -431,12 +431,12 @@ configs/
   dataset/            # Pipeline dataset configs
 ```
 
-`configs/train.yaml` and `configs/eval.yaml` require `data=` and `model=` to be
+`src/synth_setter/configs/train.yaml` and `src/synth_setter/configs/eval.yaml` require `data=` and `model=` to be
 specified — they have no default. The defaults for each model family
 (including required-for-training values like `trainer.max_steps` for surge's
-LR scheduler) live in `configs/experiment/`. Look there to see how a given
-model is meant to be trained — `configs/experiment/kosc/base.yaml` and
-`configs/experiment/surge/base.yaml` are the canonical starting points.
+LR scheduler) live in `src/synth_setter/configs/experiment/`. Look there to see how a given
+model is meant to be trained — `src/synth_setter/configs/experiment/kosc/base.yaml` and
+`src/synth_setter/configs/experiment/surge/base.yaml` are the canonical starting points.
 
 ### 5b. Common overrides
 
@@ -571,10 +571,10 @@ ______________________________________________________________________
 
 ## 9. What to Try Next
 
-- **Experiment configs:** Browse `configs/experiment/` for pre-configured
+- **Experiment configs:** Browse `src/synth_setter/configs/experiment/` for pre-configured
   experiments across different models and datasets.
 - **Data generation:** See `src/synth_setter/cli/generate_dataset.py` for the dataset
-  generation entry point (Hydra; `configs/dataset.yaml` is the root config). The
+  generation entry point (Hydra; `src/synth_setter/configs/dataset.yaml` is the root config). The
   `synth-setter-generate-dataset` console script is the canonical surface.
 - **Design docs:** Read `docs/design/data-pipeline.md` for the data pipeline
   architecture and `docs/design/training-pipeline.md` for the training pipeline.

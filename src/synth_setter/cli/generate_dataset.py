@@ -41,11 +41,12 @@ from synth_setter.pipeline.spec_io import (  # noqa: E402
     upload_spec,
     write_spec_locally,
 )
+from synth_setter.resources import configs_dir, vst_headless_wrapper  # noqa: E402
 
 # Composed-config keys that aren't DatasetSpec fields (interpolation sources, Hydra
-# runtime, dispatch-mode sub-trees). See configs/dataset.yaml for the live set.
-# ``r2`` is *not* listed: it composes from ``configs/r2/default.yaml`` directly
-# into the spec's nested ``R2Location`` field after the migration.
+# runtime, dispatch-mode sub-trees). See dataset.yaml in the shipped configs/
+# tree for the live set. ``r2`` is *not* listed: it composes from
+# ``r2/default.yaml`` directly into the spec's nested ``R2Location`` field.
 _NON_SPEC_KEYS: tuple[str, ...] = (
     "data",
     "paths",
@@ -54,21 +55,15 @@ _NON_SPEC_KEYS: tuple[str, ...] = (
     "skypilot_launch",
 )
 
-# Resolve repo root from this file so the entry-point is cwd-independent.
+# Operator-side artifact anchor — local checkout where the spec is written
+# and where ``cfg.paths.*`` interpolations resolve. Distinct from
+# :func:`configs_dir` (now inside the package); kept on disk so re-runs land
+# in the same checkout the operator launched from.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-_CONFIG_DIR = _REPO_ROOT / "configs"
 
 # Worker-side checkout path — baked WORKDIR of the dev-snapshot image, not the
 # launcher's _REPO_ROOT (which may not exist on the worker filesystem).
 _WORKER_REPO_ROOT = "/home/build/synth-setter"
-
-
-# Bootstraps Xvfb + xsettingsd + dbus for VST3 plugin init; resolved relative
-# to the container WORKDIR (``/home/build/synth-setter``) baked in the image.
-# X11 wrapping lives at the audio-rendering boundary (this subprocess call),
-# not at the container entrypoint — the click CLI stays X11-agnostic so idle
-# and passthrough don't pay the Xvfb startup cost.
-VST_HEADLESS_WRAPPER = "docker/ubuntu22_04/run-linux-vst-headless.sh"
 
 
 def _rclone_copy(src: str, dest: str) -> None:
@@ -315,7 +310,7 @@ def _render_and_upload_shard(
         exhausting the retry budget.
     :raises RuntimeError: Renderer exited 0 without writing the expected shard file.
     """
-    args = [VST_HEADLESS_WRAPPER] if sys.platform == "linux" else []
+    args = [str(vst_headless_wrapper())] if sys.platform == "linux" else []
     args += build_generate_args(spec, shard, work_dir)
     logger.info(f"rendering shard {shard.shard_id} -> {shard.filename}")
     max_attempts = spec.render.max_retries + 1
@@ -414,7 +409,7 @@ def _build_worker_cmd(overrides: list[str], spec: DatasetSpec) -> str:
     return " && ".join(parts)
 
 
-@hydra.main(version_base="1.3", config_path="../../../configs", config_name="dataset")
+@hydra.main(version_base="1.3", config_path="../configs", config_name="dataset")
 def from_hydra(cfg: DictConfig) -> None:
     """Worker-side @hydra.main entry: build the spec and render it in-process.
 
@@ -434,7 +429,7 @@ def main() -> None:
     """
     overrides = list(sys.argv[1:])
 
-    with initialize_config_dir(version_base="1.3", config_dir=str(_CONFIG_DIR)):
+    with initialize_config_dir(version_base="1.3", config_dir=str(configs_dir())):
         cfg = compose(config_name="dataset", overrides=overrides)
 
     # Programmatic compose leaves ${hydra:runtime.output_dir} unset; pin paths.*

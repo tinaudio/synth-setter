@@ -23,8 +23,13 @@ from hydra import compose, initialize_config_dir
 
 from synth_setter.cli.generate_dataset import spec_from_cfg
 from synth_setter.pipeline.schemas.spec import DatasetSpec
+from synth_setter.resources import configs_dir
 
-CONFIG_DIR = Path(__file__).resolve().parent.parent.parent.parent / "configs"
+CONFIG_DIR = Path(str(configs_dir()))
+# Local checkout root — the test pins ``cfg.paths.*`` to this anchor so the
+# composed ``${oc.env:PROJECT_ROOT}`` / ``${hydra:runtime.output_dir}``
+# interpolations resolve to a real on-disk path during unit tests.
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 # Curated list of datagen experiments (those that compose dataset.yaml). See the
 # module docstring for why this is an allowlist rather than a directory scan.
@@ -47,9 +52,9 @@ def _compose_dataset_spec(experiment: str) -> DatasetSpec:
     # ``${hydra:runtime.output_dir}``; the latter is only set under @hydra.main,
     # not bare ``compose()``. Pin both so ``resolve=True`` doesn't trip in unit
     # tests (mirrors the train/eval conftest pattern in ``tests/conftest.py``).
-    cfg.paths.root_dir = str(CONFIG_DIR.parent)
-    cfg.paths.output_dir = str(CONFIG_DIR.parent)
-    cfg.paths.work_dir = str(CONFIG_DIR.parent)
+    cfg.paths.root_dir = str(REPO_ROOT)
+    cfg.paths.output_dir = str(REPO_ROOT)
+    cfg.paths.work_dir = str(REPO_ROOT)
     return spec_from_cfg(cfg)
 
 

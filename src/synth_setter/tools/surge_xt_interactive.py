@@ -43,6 +43,7 @@ from synth_setter.data.vst.core import (  # noqa: E402
 from synth_setter.data.vst.param_spec import ParamSpec  # noqa: E402
 from synth_setter.data.vst.writers import make_hdf5_dataset  # noqa: E402
 from synth_setter.pipeline.schemas.spec import RenderConfig  # noqa: E402
+from synth_setter.resources import vst_headless_wrapper  # noqa: E402
 
 MIDI_LISTEN_MESSAGE_TYPES = ("note_on", "note_off", "control_change", "pitchwheel", "aftertouch")
 
@@ -125,7 +126,12 @@ _MIDI_POLL_INTERVAL_SECONDS = 0.01
 _VST_SUBPROCESS_TIMEOUT_SECONDS = 300
 _EVAL_SUBPROCESS_TIMEOUT_SECONDS = 600
 _METRICS_SUBPROCESS_TIMEOUT_SECONDS = 300
-_VST_HEADLESS_WRAPPER = _REPO_ROOT / "docker" / "ubuntu22_04" / "run-linux-vst-headless.sh"
+# Eagerly materialize the package-shipped wrapper as a Path so tests and
+# callers can introspect it (``.is_file()`` etc.) without re-entering
+# :func:`vst_headless_wrapper`. Safe because modern pip layouts unpack
+# wheels to the filesystem — see :func:`synth_setter.resources.as_file`
+# for the zipped-wheel fallback.
+_VST_HEADLESS_WRAPPER: Path = Path(str(vst_headless_wrapper()))
 _EVAL_SCRIPT = _REPO_ROOT / "src" / "eval.py"
 _PREDICT_VST_AUDIO_MODULE = "synth_setter.evaluation.predict_vst_audio"
 _COMPUTE_AUDIO_METRICS_MODULE = "synth_setter.evaluation.compute_audio_metrics"

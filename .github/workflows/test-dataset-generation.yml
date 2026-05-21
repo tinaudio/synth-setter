@@ -6,7 +6,7 @@ name: Test Dataset Generation
 #   * `skypilot-local` — invokes `generate-dataset-shards.yaml` with
 #     `local: true, num_workers: '1'` to provision a kind cluster on the
 #     runner, load dev-snapshot into kind, and launch against
-#     `configs/compute/local-template.yaml`. Hourly schedule default —
+#     `src/synth_setter/configs/compute/local-template.yaml`. Hourly schedule default —
 #     exercises the same launcher / cred-bootstrap path as the cloud providers,
 #     closing the #806 unification gap. No billable capacity.
 #   * `runpod` / `oci` — invoke `generate-dataset-shards.yaml` against the
@@ -76,7 +76,7 @@ on:
   workflow_dispatch:
     inputs:
       dataset_config:
-        description: "Hydra experiment name under configs/experiment/ (e.g. `generate_dataset/smoke-shard`)"
+        description: "Hydra experiment name under src/synth_setter/configs/experiment/ (e.g. `generate_dataset/smoke-shard`)"
         required: true
         default: "generate_dataset/smoke-shard"
       docker_image_tag:
@@ -127,7 +127,7 @@ jobs:
   #                             `output_format`, and the spec-format cross-check
   #                             would otherwise fail the non-matching cell.
   #   * `r2_bucket`           — Cloudflare R2 bucket name (from
-  #                             configs/image/dev-snapshot.yaml). Used to
+  #                             src/synth_setter/configs/image/dev-snapshot.yaml). Used to
   #                             construct the spec_uri the validate job pulls.
   #
   # Policy:
@@ -153,7 +153,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      # configs/hydra/default.yaml's `defaults` block overrides job_logging /
+      # src/synth_setter/configs/hydra/default.yaml's `defaults` block overrides job_logging /
       # hydra_logging to `colorlog`, which is provided by the hydra-colorlog
       # plugin. Without it, Hydra compose fails with:
       #   MissingConfigException: Could not find 'hydra/job_logging/colorlog'
@@ -246,7 +246,7 @@ jobs:
       # Bucket comes from the composed dataset config (the source of truth the
       # launcher uses for `spec.r2_bucket` and therefore for its R2 upload
       # destination). Post-Hydra migration, the experiment id is composed
-      # against `configs/dataset.yaml` rather than read from a YAML path —
+      # against `src/synth_setter/configs/dataset.yaml` rather than read from a YAML path —
       # `r2_bucket` resolves through `${r2.bucket}` from the `r2` config group.
       - id: bucket
         env:

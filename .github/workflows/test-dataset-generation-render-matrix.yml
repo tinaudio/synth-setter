@@ -59,8 +59,8 @@ on:
       - "src/synth_setter/data/render_config.py"
       - "src/synth_setter/pipeline/schemas/spec.py"
       - "src/synth_setter/cli/generate_dataset.py"
-      - "configs/experiment/generate_dataset/**"
-      - "configs/render/**"
+      - "src/synth_setter/configs/experiment/generate_dataset/**"
+      - "src/synth_setter/configs/render/**"
       - ".github/workflows/test-dataset-generation-render-matrix.yml"
       - ".github/workflows/generate-dataset-shards.yaml"
 

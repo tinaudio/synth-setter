@@ -42,6 +42,7 @@ from synth_setter.data.vst.shapes import (
     param_array_dataset_shape,
 )
 from synth_setter.pipeline.schemas.spec import DatasetSpec
+from synth_setter.resources import configs_dir
 
 _FIXED_NOW = datetime(2026, 5, 20, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -814,7 +815,7 @@ def _compose_smoke_hdf5_spec() -> DatasetSpec:
 
     with initialize_config_dir(
         version_base="1.3",
-        config_dir=str(finalize_dataset._CONFIG_DIR),  # noqa: SLF001 — test mirrors main()
+        config_dir=str(configs_dir()),
     ):
         cfg = compose(
             config_name="dataset",
@@ -923,7 +924,7 @@ def _compose_smoke_wds_spec() -> DatasetSpec:
 
     with initialize_config_dir(
         version_base="1.3",
-        config_dir=str(finalize_dataset._CONFIG_DIR),  # noqa: SLF001 — test mirrors main()
+        config_dir=str(configs_dir()),
     ):
         cfg = compose(
             config_name="dataset",
