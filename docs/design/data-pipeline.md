@@ -1429,7 +1429,7 @@ src/
 
     constants.py        # Well-known filenames (INPUT_SPEC_FILENAME)
     r2_io.py            # rclone-backed R2 helpers (URI handling, download, upload, size probe)
-    skypilot_launch.py  # Click CLI thin passthrough: shells out to an inner generator command, discovers + parses `input_spec.json` via `find_input_specs`, reads its R2 URI off `spec.r2.input_spec_uri()`, then hands off to `dispatch_via_skypilot`, which validates cfg + creds in a Phase 1 pass before printing `::synth-setter-spec-uri::<uri>` on stdout (Phase 2) for the CI workflow to harvest.
+    skypilot_launch.py  # Click CLI thin passthrough: shells out to an inner generator command, discovers the materialized `input_spec.json` via `find_input_specs`, resolves its R2 URI via `_resolve_spec_uri` (subprocess to `synth-setter-spec-uri`), then hands off to `dispatch_via_skypilot`, which prints `::synth-setter-spec-uri::<uri>` on stdout for the CI workflow to harvest.
 
   # --- Planned (not yet implemented) ---
   # cli.py              # Click entry point: generate, status, finalize

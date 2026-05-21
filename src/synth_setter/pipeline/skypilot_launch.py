@@ -15,10 +15,8 @@ Concretely, this CLI:
    operator passes after `--`. That command is expected to materialize a
    canonical `data/<task>/<run>/metadata/input_spec.json` and upload it to
    R2 — anything else is fine, but discovery in step 2 will fail without it.
-2. Discovers the unique materialized `input_spec.json` under `<repo_root>/data`,
-   parses it once as a ``DatasetSpec``, and reads its canonical R2 URI off
-   ``spec.r2.input_spec_uri()`` (same derivation the ``synth-setter-spec-uri``
-   console script exposes for shell callers).
+2. Discovers the unique materialized `input_spec.json` under `<repo_root>/data`
+   and asks the `synth-setter-spec-uri` console script for its canonical R2 URI.
 3. Hands the spec + URI off to ``dispatch_via_skypilot``, which provisions
    workers via `sky.jobs.launch`, forwards the URI as `WORKER_SPEC_URI`, and
    re-executes the same inner command verbatim on each worker.
@@ -154,6 +152,8 @@ DEFAULT_ENV_FILE = REPO_ROOT / ".env"
 # launcher's discovery aligned with the generator's write site regardless of
 # where the operator invoked it from.
 _LOCAL_DATA_DIR = REPO_ROOT / "data"
+
+_SPEC_URI_CLI = "synth-setter-spec-uri"
 
 # Single-line stdout marker the CI workflow greps out of the tee'd launcher
 # log to populate its `spec_uri` output without re-running spec-uri derivation.
@@ -417,10 +417,11 @@ def main(
 
     Shells out to ``command`` so it materializes the canonical
     ``data/<task>/<run>/metadata/input_spec.json`` and uploads it to R2; the
-    launcher parses that spec once and forwards ``spec.r2.input_spec_uri()``
-    to ``dispatch_via_skypilot``, which re-executes ``command`` verbatim on
-    each worker. See the module docstring for when an entrypoint-owned
-    ``skypilot_launch.compute_template`` is the right tool instead.
+    launcher then resolves the spec's R2 URI via ``synth-setter-spec-uri`` and
+    hands off to ``dispatch_via_skypilot``, which re-executes ``command``
+    verbatim on each worker. See the module docstring for when an
+    entrypoint-owned ``skypilot_launch.compute_template`` is the right tool
+    instead.
 
     Pass the inner command after the launcher's own options::
 
@@ -455,8 +456,8 @@ def main(
     subprocess.check_call(list(command), cwd=str(REPO_ROOT))  # noqa: S603 — operator-supplied command, intentional passthrough
 
     spec_path = _find_unique_spec_path(command_for_error=command[0])
+    spec_uri = _resolve_spec_uri(spec_path)
     spec = DatasetSpec.model_validate_json(spec_path.read_text(encoding="utf-8"))
-    spec_uri = spec.r2.input_spec_uri()
 
     sky_cfg = SkypilotLaunchConfig(
         compute_template=str(template_path),
@@ -509,6 +510,23 @@ def _find_unique_spec_path(command_for_error: str) -> Path:
             "run with a fresh working tree."
         )
     return specs[0]
+
+
+def _resolve_spec_uri(spec_path: Path) -> str:
+    """Shell out to ``synth-setter-spec-uri`` to compute the canonical R2 URI.
+
+    Keeping the URI derivation in a console script (rather than re-deriving it
+    here from ``DatasetSpec.r2.input_spec_uri()``) means the launcher and the
+    rest of the pipeline share one validator path — any spec-schema drift
+    fails loud in the same place.
+
+    :param spec_path: Local path to the materialized ``input_spec.json``.
+    :returns: The trimmed ``spec.r2.input_spec_uri()`` stdout line.
+    """
+    raw = subprocess.check_output(  # noqa: S603 — in-repo console script, arg is a validated Path
+        [_SPEC_URI_CLI, str(spec_path)]  # noqa: S607 — entry-point on PATH after `pip install -e .`
+    )
+    return raw.decode().strip()
 
 
 def _reject_dispatch_owning_inner_command(command: tuple[str, ...]) -> None:
@@ -858,19 +876,30 @@ def dispatch_via_skypilot(
         or unresolved worker env vars.
     :raises RuntimeError: one or more ranks did not reach the SUCCEEDED terminal status.
     """
-    # Phase 1: pure validation — pinned by test_phase1_failures_skip_phase2_side_effects.
     if not sky_cfg.compute_template:
         raise ValueError("dispatch_via_skypilot requires sky_cfg.compute_template to be set")
     if not sky_cfg.cmd:
         raise ValueError("dispatch_via_skypilot requires sky_cfg.cmd to be set")
 
+    # Single dispatch chokepoint hit by both entrypoints (click `main` and
+    # `cli/generate_dataset.py:main`). Shrink lands before any sky.* call;
+    # marker emits before dispatch so a failure still leaves it in the log.
+    _ensure_ci_sky_config()
+    _emit_spec_uri(spec_uri)
+
+    template_path = Path(sky_cfg.compute_template).expanduser().resolve()
+    task_doc = _load_compute_template_with_cmd(template_path, sky_cfg.cmd)
+
+    env_file_path = Path(sky_cfg.env_file).expanduser() if sky_cfg.env_file else None
+
     # api_server and local express opposite dispatch modes — accepting both
     # would leave the resolved SKYPILOT_API_SERVER_ENDPOINT non-deterministic.
     if sky_cfg.api_server is not None and sky_cfg.local:
         raise ValueError("api_server and local are mutually exclusive")
-
-    template_path = Path(sky_cfg.compute_template).expanduser().resolve()
-    task_doc = _load_compute_template_with_cmd(template_path, sky_cfg.cmd)
+    if sky_cfg.api_server is not None:
+        os.environ[_SKYPILOT_API_SERVER_ENV] = sky_cfg.api_server
+    elif sky_cfg.local:
+        os.environ.pop(_SKYPILOT_API_SERVER_ENV, None)
 
     if sky_cfg.job_name is not None and not _JOB_NAME_RE.fullmatch(sky_cfg.job_name):
         raise ValueError(
@@ -884,7 +913,6 @@ def dispatch_via_skypilot(
             f"got {sky_cfg.worker_image_tag!r}"
         )
 
-    env_file_path = Path(sky_cfg.env_file).expanduser() if sky_cfg.env_file else None
     worker_env = resolve_worker_env(env_file_path)
     if not any(k in worker_env for k in _SECRET_WORKER_ENV_KEYS):
         raise ValueError(
@@ -893,6 +921,13 @@ def dispatch_via_skypilot(
             f"{env_file_path if env_file_path is not None else '<env_file not set>'}. "
             f"Expected at least one of: {', '.join(_SECRET_WORKER_ENV_KEYS)}."
         )
+
+    # Defensive: mirror RCLONE_CONFIG_R2_* into os.environ so any downstream subprocess
+    # (e.g. SkyPilot's storage backend) inherits credentials when .env populated worker_env
+    # without exporting them.
+    for key, value in worker_env.items():
+        if key.startswith("RCLONE_CONFIG_R2_"):
+            os.environ[key] = value
 
     base_job_name = sky_cfg.job_name or f"synth-setter-smoke-{spec.task_name[:8]}"
     if not _JOB_NAME_RE.fullmatch(base_job_name):
@@ -903,26 +938,8 @@ def dispatch_via_skypilot(
         )
 
     provider = _detect_provider_from_doc(task_doc, source=template_path)
-
-    # Phase 2: commit — side effects in dependency order; sentinel emits after cred bootstrap.
-    _ensure_ci_sky_config()
-
-    if sky_cfg.api_server is not None:
-        os.environ[_SKYPILOT_API_SERVER_ENV] = sky_cfg.api_server
-    elif sky_cfg.local:
-        os.environ.pop(_SKYPILOT_API_SERVER_ENV, None)
-
-    # Defensive: mirror RCLONE_CONFIG_R2_* into os.environ so any downstream subprocess
-    # (e.g. SkyPilot's storage backend) inherits credentials when .env populated worker_env
-    # without exporting them.
-    for key, value in worker_env.items():
-        if key.startswith("RCLONE_CONFIG_R2_"):
-            os.environ[key] = value
-
     if provider != "local":
         _run_cred_bootstrap(provider=provider, env_file_path=env_file_path)
-
-    _emit_spec_uri(spec_uri)
 
     worker_env[WORKER_SPEC_URI_ENV] = spec_uri
 
