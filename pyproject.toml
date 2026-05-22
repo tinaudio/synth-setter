@@ -4,7 +4,8 @@ version = "8.5.2"
 description = "Studying the effect of permutation symmetry on audio synthesiser parameter inference."
 authors = [{name = "Khaled Tinubu"}, {name = "tinaudio"}]
 readme = "README.md"
-requires-python = ">=3.10"
+# Upper bound stops the resolver chasing future Pythons with no torch wheels.
+requires-python = ">=3.10,<3.14"
 dependencies = [
   # --------- hydra --------- #
   "hydra-colorlog==1.2.0",
@@ -48,19 +49,50 @@ dependencies = [
   "rich",
   "rootutils",
   "runpod==1.8.1",
-  "scipy==1.14.1",
+  # Range pin (was ==1.14.1): a hard patch-pin risks backtracking against
+  # torch / librosa / kymatio during lock resolution.
+  "scipy>=1.14,<1.15",
   "sh",
   "threadpoolctl",
   # --------- eval metrics --------- #
   "pesto-pitch==2.0.1",
   "dtw-python==1.7.4",
   "kymatio==0.3.0",
+  # --------- torch stack (routed per-platform in [tool.uv.sources]) --------- #
+  # lightning / torchmetrics are pure-python — they MUST NOT appear in
+  # [tool.uv.sources], or uv will try to resolve them from a torch index that
+  # doesn't host them.
+  "torch>=2.0.0",
+  "torchvision>=0.15.0",
+  "torchaudio>=2.0.0",
+  "lightning>=2.6.0",
+  "torchmetrics>=0.11.4",
 ]
 
 [project.optional-dependencies]
+# Backend selector for `uv sync` / `uv lock` on Linux/Win — mutually exclusive
+# (see [tool.uv].conflicts). On macOS both markers exclude these extras, so a
+# bare `uv sync` falls through to the PyPI MPS-capable wheel.
+#   Linux GPU box  -> `uv sync --extra cu128`
+#   Linux CPU CI   -> `uv sync --extra cpu --no-default-groups --group dev`
+#   macOS          -> `uv sync`           (no backend flag — markers exclude both)
+#
+# uv requires a `conflicts` group of >=2 entries, so a single-extra design
+# (bare `uv sync` resolves to CUDA on Linux) is rejected by the resolver.
+# Removal of the `torch`/`dev`/`all` shims below is tracked in #1245.
+cpu = [
+  "torch>=2.0.0",
+  "torchvision>=0.15.0",
+  "torchaudio>=2.0.0",
+]
+cu128 = [
+  "torch>=2.0.0",
+  "torchvision>=0.15.0",
+  "torchaudio>=2.0.0",
+]
+# Backward-compat shims while Phase 2 (#1245) flips CI to `uv sync --frozen`.
+# Once nothing references `.[torch,dev]` or `.[all]`, delete these three.
 torch = [
-  # Install with an explicit index (via uv's --torch-backend) when targeting
-  # CUDA wheels in Docker.
   "torch>=2.0.0",
   "torchvision>=0.15.0",
   "torchaudio>=2.0.0",
@@ -86,6 +118,79 @@ docs = [
 ]
 all = [
   "synth-setter[torch,dev]",
+]
+
+# PEP 735 groups: private dev concerns, not published package features. A bare
+# `uv sync` installs the `dev` group (which transitively includes `docs`).
+# Use `uv sync --only-group dev` for lint/type-check jobs that don't import
+# torch.
+[dependency-groups]
+docs = [
+  "mkdocs",
+  "mkdocs-material",
+  "mkdocstrings[python]",
+  "griffe-pydantic",
+]
+dev = [
+  "hypothesis",
+  "mutmut==3.5.*",
+  "pre-commit",
+  "pyright==1.1.408",
+  "pytest",
+  "pytest-benchmark",
+  "pytest-cov",
+  "pytest-xdist",
+  "ruff",
+  { include-group = "docs" },
+]
+
+[tool.uv]
+# Tell the resolver `cpu` and `cu128` produce different torch wheels, so it
+# locks each branch independently into the universal lockfile. Required when
+# two extras route the same package to different indexes.
+conflicts = [
+  [
+    { extra = "cpu" },
+    { extra = "cu128" },
+  ],
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+# explicit = uv only consults this index for packages routed here by
+# [tool.uv.sources]; it won't search it for unrelated packages.
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+# CUDA toolkit must be compatible with every GPU box's driver. cu128 wheels
+# are forward-compatible with newer drivers; the only failure mode is a box
+# whose driver is older than cu128. Update this URL + the index name if the
+# fleet target shifts (e.g. cu126, cu130).
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+# Resolution per platform:
+#   macOS                  -> no marker matches -> PyPI (MPS-capable wheel)
+#   Linux/Win, --extra cu128 -> pytorch-cu128                       (GPU box)
+#   Linux/Win, --extra cpu   -> pytorch-cpu                       (GPU-less CI)
+# Bare `uv sync` on Linux/Win without a backend extra falls through to PyPI's
+# universal torch wheel; pin an explicit `--extra cu128` or `--extra cpu` in
+# production paths. All three torch packages must be listed — omitting one
+# silently resolves it from PyPI and pins a wheel that mismatches the others.
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cpu",    extra = "cpu",   marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+  { index = "pytorch-cu128",  extra = "cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+torchvision = [
+  { index = "pytorch-cpu",    extra = "cpu",   marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+  { index = "pytorch-cu128",  extra = "cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+torchaudio = [
+  { index = "pytorch-cpu",    extra = "cpu",   marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+  { index = "pytorch-cu128",  extra = "cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 
 
