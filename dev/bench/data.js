@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779317790053,
+  "lastUpdate": 1779478302762,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -4110,6 +4110,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.057923197746276855,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "205d176a86949b9515f7ec9379d8e8e0216da9e8",
+          "message": "fix(deps): pin kubernetes==35.0.0 — unblock SkyPilot pod_config validation (#1242)\n\n* fix(deps): pin kubernetes==35.0.0 to unblock SkyPilot pod_config\n\nkubernetes 36.0.0 (uploaded 2026-05-20) broke SkyPilot 0.12.0\npod_config validation with `No module named\n'kubernetes.client.models.dict[str, str]'`, failing the hourly\n`Test Dataset Generation` cron since 2026-05-20T23:30Z. Diagnostic\nPR #1241 confirmed pinning kubernetes==35.0.0 restores the workflow.\n\nPins kubernetes==35.0.0 in three places so neither the launcher venv,\nthe skypilot-local smoke runner, nor any future install of the\npackage can pull in 36.x:\n- pyproject.toml [project].dependencies (pipeline group)\n- .github/workflows/generate-dataset-shards.yaml launcher install\n  + cache key bump (k8s35-) so warm caches cannot mask the pin\n- .github/workflows/test-skypilot-local.yml install line\n\nCloses #1239\n\n* docs(pyproject): note co-pin obligation for kubernetes==35.0.0\n\nMirror the sync-note pattern used for skypilot==0.12.0 so future\nmaintainers see all three pin sites at a glance.\n\nRefs #1239",
+          "timestamp": "2026-05-22T19:15:13Z",
+          "tree_id": "941fc3c2d4e5baccb8c945c68bd64ea78d72256b",
+          "url": "https://github.com/tinaudio/synth-setter/commit/205d176a86949b9515f7ec9379d8e8e0216da9e8"
+        },
+        "date": 1779478302186,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.9339497089385986,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 5.809773522068281,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.0258246548473835,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.032835960388183594,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.312735080718994,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 12.217214883666664,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.361564636230469,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.149714158661664,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.029430458322167397,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.037029266357421875,
             "unit": "1-cos"
           },
           {
