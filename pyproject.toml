@@ -49,8 +49,8 @@ dependencies = [
   "rich",
   "rootutils",
   "runpod==1.8.1",
-  # Range pin (was ==1.14.1): a hard patch-pin risks backtracking against
-  # torch / librosa / kymatio during lock resolution.
+  # Pin: scipy>=1.14,<1.15 — a hard ==1.14.1 patch-pin risks backtracking
+  # against torch / librosa / kymatio during lock resolution. See #1247.
   "scipy>=1.14,<1.15",
   "sh",
   "threadpoolctl",
@@ -80,6 +80,9 @@ dependencies = [
 # uv requires a `conflicts` group of >=2 entries, so a single-extra design
 # (bare `uv sync` resolves to CUDA on Linux) is rejected by the resolver.
 # Removal of the `torch`/`dev`/`all` shims below is tracked in #1245.
+# cpu and cu128 package lists must stay byte-identical — only the index in
+# [tool.uv.sources] differs. Bumping a version in one without the other
+# produces a split lockfile with mismatched torch versions per backend.
 cpu = [
   "torch>=2.0.0",
   "torchvision>=0.15.0",
@@ -91,7 +94,11 @@ cu128 = [
   "torchaudio>=2.0.0",
 ]
 # Backward-compat shims while Phase 2 (#1245) flips CI to `uv sync --frozen`.
-# Once nothing references `.[torch,dev]` or `.[all]`, delete these three.
+# `torch` is now a no-op (the torch stack is mandatory in [dependencies]) but
+# the syntax `.[torch,dev]` must keep parsing; `dev`/`docs` mirror the
+# [dependency-groups] entries below, minus the group-include relationship.
+# Delete all four once nothing references `.[torch,dev]`, `.[dev]`, or
+# `.[all]` — tracked in #1245.
 torch = [
   "torch>=2.0.0",
   "torchvision>=0.15.0",
@@ -121,9 +128,11 @@ all = [
 ]
 
 # PEP 735 groups: private dev concerns, not published package features. A bare
-# `uv sync` installs the `dev` group (which transitively includes `docs`).
-# Use `uv sync --only-group dev` for lint/type-check jobs that don't import
-# torch.
+# `uv sync` installs the `dev` group (which transitively includes `docs`). Use
+# `uv sync --only-group dev` for lint/type-check jobs that don't import torch.
+# Note the dev group includes docs via `include-group`; the matching
+# [project.optional-dependencies].dev shim does NOT — `uv pip install .[dev]`
+# keeps its pre-#1247 behavior of installing dev tools only.
 [dependency-groups]
 docs = [
   "mkdocs",
