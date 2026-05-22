@@ -85,9 +85,10 @@ repos:
     hooks:
       - id: check-github-workflows
 
-  # validate-pyproject: validates pyproject.toml against PEP 517/518
+  # validate-pyproject: validates pyproject.toml against PEP 517/518/621.
+  # v0.21+ adds PEP 735 ([dependency-groups]) support — required by #1247.
   - repo: https://github.com/abravalheri/validate-pyproject
-    rev: v0.18
+    rev: v0.25
     hooks:
       - id: validate-pyproject
 
