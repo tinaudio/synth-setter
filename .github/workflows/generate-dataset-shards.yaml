@@ -295,9 +295,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/.venv-launcher
-          key: launcher-uv-${{ runner.os }}-py310-skypilot0.12.0-${{ hashFiles('uv.lock', 'pyproject.toml') }}
+          key: launcher-uv-${{ runner.os }}-py310-skypilot0.12.0-k8s35-${{ hashFiles('uv.lock', 'pyproject.toml') }}
           restore-keys: |
-            launcher-uv-${{ runner.os }}-py310-skypilot0.12.0-
+            launcher-uv-${{ runner.os }}-py310-skypilot0.12.0-k8s35-
 
       # Idempotent: `uv venv` creates the venv if missing; `uv pip install` is
       # a no-op on a cache hit (resolver sees the requested versions already
@@ -311,7 +311,7 @@ jobs:
           if [[ ! -x "${VENV}/bin/python" ]]; then
             uv venv "${VENV}" --python 3.10
           fi
-          uv pip install --python "${VENV}/bin/python" -e . "skypilot[kubernetes]==0.12.0"
+          uv pip install --python "${VENV}/bin/python" -e . "skypilot[kubernetes]==0.12.0" "kubernetes==35.0.0"
           echo "${VENV}/bin" >> "${GITHUB_PATH}"
           sudo apt-get install -y -qq rclone
 

@@ -15,6 +15,8 @@ dependencies = [
   "wandb",
   # --------- pipeline --------- #
   "click<8.2",
+  # Pin: kubernetes>=36 breaks SkyPilot pod_config validation — see #1239.
+  "kubernetes==35.0.0",
   "numpy",
   "oci",
   "pydantic>=2",

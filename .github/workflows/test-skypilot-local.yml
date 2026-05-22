@@ -86,7 +86,7 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq socat
 
       - name: Install SkyPilot (kubernetes extra)
-        run: pip install "skypilot[kubernetes]==0.12.0"
+        run: pip install "skypilot[kubernetes]==0.12.0" "kubernetes==35.0.0"
 
       # Provision the local kind cluster. `--no-gpus` keeps the cluster CPU-
       # only so the runner image's missing nvidia-container-toolkit doesn't
