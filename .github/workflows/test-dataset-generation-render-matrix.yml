@@ -128,12 +128,22 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "pyproject.toml"
 
-      # ``-e .`` pulls Hydra + Pydantic — enough to import
-      # ``synth_setter.cli.generate_dataset:main`` and exercise
-      # ``spec_from_cfg``. Skip ``[torch,dev]`` so the contract job stays
-      # well under a minute.
+      # The validator fires inside ``spec_from_cfg`` before any
+      # torch-importing module loads, so install ``-e .`` with
+      # ``--no-deps`` and add back only the module-load surface of
+      # ``synth_setter.cli.generate_dataset`` (hydra → omegaconf,
+      # rootutils, loguru, dotenv, pydantic, plus vst/core's pedalboard
+      # + mido + numpy). Bypassing ``[project].dependencies`` keeps the
+      # contract job well under a minute — the torch stack landed in
+      # mandatory deps in #1247 for universal-lock resolution; #1245
+      # folds this callsite back onto the canonical install path.
       - name: Install package (validator only)
-        run: uv pip install --system -e .
+        run: |
+          uv pip install --system --no-deps -e .
+          uv pip install --system \
+            hydra-core hydra-colorlog rootutils \
+            loguru python-dotenv pydantic \
+            pedalboard mido numpy
 
       # ``continue-on-error`` keeps the cell green so the next step can
       # assert the failure. ``PIPESTATUS[0]`` captures the launcher exit

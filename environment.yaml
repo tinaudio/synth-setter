@@ -18,16 +18,20 @@ channels:
 # Split of responsibilities between conda and pip:
 # - conda owns the torch stack (python, pytorch, torchvision, lightning, torchmetrics)
 #   because that's the whole reason to use the conda path — precompiled binaries.
-# - pip owns everything else, installed in a single shot via `.[dev]` (the project
-#   itself plus its `dev` optional-dependency group from pyproject.toml). This gives
-#   us a non-overlapping dependency set by construction, so the conda and pip
-#   installers cannot fight over the same package.
+# - pip handles the project install via `.[dev]` (the project itself plus its
+#   `dev` optional-dependency group from pyproject.toml). Since #1247 the torch
+#   stack lives in `[project.dependencies]`, so the pip spec now formally
+#   overlaps with the conda-installed packages above. pip's
+#   already-satisfied-skip behavior keeps conda's binaries authoritative as
+#   long as their versions satisfy the project's lower bounds; that is
+#   exactly what the matched specs below guarantee.
 #
 # The torch-stack version specs here are kept in lock-step with
-# pyproject.toml's [project.optional-dependencies].torch: if that group raises
-# a lower bound, bump the matching spec here too. Otherwise conda could
-# legally resolve to an older version than the pip spec allows, and the two
-# installers would disagree silently.
+# pyproject.toml's [project.dependencies] torch entries: if those raise a
+# lower bound, bump the matching spec here too. Otherwise conda could legally
+# resolve to an older version than the pip spec allows, and pip would
+# reinstall from PyPI on top of conda's binary — defeating the whole reason
+# to use the conda path.
 
 dependencies:
   - python=3.10
