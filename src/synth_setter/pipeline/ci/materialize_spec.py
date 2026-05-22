@@ -21,15 +21,13 @@ import rootutils
 from hydra import compose, initialize_config_module
 from hydra.errors import HydraException
 
-rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
-
-from synth_setter.cli.generate_dataset import spec_from_cfg  # noqa: E402
-from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME  # noqa: E402
-
 # Operator-side artifact anchor — distinct from :func:`configs_dir` (which
 # now ships inside the package). Resolves the local checkout so the
 # ``paths.*`` Hydra interpolations have a real on-disk root.
-REPO_ROOT = Path(__file__).resolve().parents[4]
+REPO_ROOT = rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
+
+from synth_setter.cli.generate_dataset import spec_from_cfg  # noqa: E402
+from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME  # noqa: E402
 
 
 def main() -> None:
