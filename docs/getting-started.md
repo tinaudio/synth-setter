@@ -592,8 +592,8 @@ managed Python 3.10 interpreter, the venv, dependencies, and pre-commit.
 This appendix is for users who want to manage Python and the environment
 themselves (pip, conda, pyenv, system Python, etc.).
 
-**Requirement:** Python 3.10 or newer (the project declares
-`requires-python = ">=3.10"` in `pyproject.toml`; `pip` enforces this).
+**Requirement:** see the `requires-python` field in `pyproject.toml`
+(currently `>=3.10,<3.14`; `pip` enforces this).
 
 ### A.1. Plain pip + venv
 
