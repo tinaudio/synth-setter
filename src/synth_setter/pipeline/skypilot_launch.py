@@ -171,41 +171,21 @@ _CI_MODE_TRUTHY_VALUES = frozenset({"1", "true", "yes", "on"})
 
 # SkyPilot's default (cpus: 4+, memory: 4x) doesn't fit in GHA-kind's
 # ~1950m allocatable CPU after kube-system. See PR #876.
-#
-# `kubernetes.pod_config` forces every CI-kind pod (jobs controller + worker)
-# to use the locally-loaded image and never resolve the manifest from Docker
-# Hub. Without this, kind/containerd still contacts registry-1.docker.io and
-# trips its anonymous-pull 429, even though `kind load docker-image` already
-# placed the image on the node. Container `name`-less entry merges into the
-# pod's first container (SkyPilot patch-merge legacy). See #1255.
 _CI_SKY_CONFIG_YAML = """jobs:
   controller:
     resources:
       cpus: 1+
       memory: 1+
-kubernetes:
-  pod_config:
-    spec:
-      containers:
-        - imagePullPolicy: Never
 """
 
 
 def _ensure_ci_sky_config() -> None:
-    """Write ``~/.sky/config.yaml`` with CI-only SkyPilot overrides when CI mode is truthy.
-
-    Currently emits two overrides: a managed-jobs controller resource shrink so
-    the controller pod fits a GHA-kind cluster (#876), and a
-    ``kubernetes.pod_config.spec.containers[0].imagePullPolicy: Never`` so
-    every CI-kind pod uses the locally-loaded dev-snapshot image instead of
-    racing Docker Hub's anonymous 429 limit (#1255).
+    """Write ``~/.sky/config.yaml`` with the controller shrink when CI mode is truthy.
 
     Truthy = ``SYNTH_SETTER_CI_MODE`` ∈ {1, true, yes, on} (case-insensitive).
     Any other value (including ``0``, ``false``, unset) is a no-op, so an
     operator who exports ``SYNTH_SETTER_CI_MODE=0`` doesn't clobber a local
-    config, and production runs against real clouds never apply
-    ``imagePullPolicy: Never`` (which would prevent the worker from pulling
-    the image at all).
+    config.
     """
     if os.environ.get(_CI_MODE_ENV, "").strip().lower() not in _CI_MODE_TRUTHY_VALUES:
         return

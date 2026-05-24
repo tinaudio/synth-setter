@@ -299,16 +299,16 @@ class TestEnsureCiSkyConfig:
         assert "memory: 1+" in body
         assert "controller:" in body
 
-    def test_writes_image_pull_policy_never_under_kubernetes_pod_config(
+    def test_global_config_does_not_carry_pod_config(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """SYNTH_SETTER_CI_MODE=1 → pod_config forces ``imagePullPolicy: Never``.
+        """``~/.sky/config.yaml`` must not set ``kubernetes.pod_config`` globally.
 
-        Pinning the exact nested location is what makes the override actually
-        reach kubelet — SkyPilot's ``combine_pod_config_fields`` merges this
-        into every kind pod (jobs controller + worker), letting the
-        pre-loaded dev-snapshot image satisfy starts without re-resolving the
-        manifest from Docker Hub (#1255).
+        A global ``imagePullPolicy: Never`` blocks the SkyPilot jobs
+        controller — whose image lives on GAR and is not ``kind load``-ed —
+        from starting (#1255 → run 26374103900). The pod-config override
+        belongs in the per-task ``local-template.yaml`` instead, where it
+        scopes to the user worker pod only.
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
         :param monkeypatch: Pytest fixture for env/attribute mocking.
@@ -319,8 +319,7 @@ class TestEnsureCiSkyConfig:
         monkeypatch.setenv("HOME", str(tmp_path))
         _ensure_ci_sky_config()
         doc = _yaml.safe_load((tmp_path / ".sky" / "config.yaml").read_text(encoding="utf-8"))
-        containers = doc["kubernetes"]["pod_config"]["spec"]["containers"]
-        assert containers == [{"imagePullPolicy": "Never"}]
+        assert "kubernetes" not in doc
 
     def test_idempotent_overwrite(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Re-invoking the helper is safe; the file is rewritten, not appended.
@@ -371,6 +370,38 @@ class TestEnsureCiSkyConfig:
         monkeypatch.setenv("HOME", str(tmp_path))
         _ensure_ci_sky_config()
         assert (tmp_path / ".sky" / "config.yaml").is_file()
+
+
+class TestLocalTemplatePodConfig:
+    """``configs/compute/local-template.yaml`` carries the task-scoped pod_config override.
+
+    ``imagePullPolicy: Never`` must be scoped to the user worker task — a
+    global override blocks the SkyPilot jobs controller from pulling its
+    own (non-``kind load``-ed) image (#1255 → run 26374103900).
+    """
+
+    def test_image_pull_policy_never_is_scoped_to_task(self) -> None:
+        """Top-level ``config.kubernetes.pod_config`` lands on ``Resources._cluster_config_overrides``.
+
+        SkyPilot reads the top-level ``config:`` field as the task's
+        override config, so the merge applies only when provisioning this
+        task — the controller's resources are unaffected.
+        """
+        from pathlib import Path as _Path
+
+        import yaml as _yaml
+
+        template_path = (
+            _Path(__file__).resolve().parents[3]
+            / "src"
+            / "synth_setter"
+            / "configs"
+            / "compute"
+            / "local-template.yaml"
+        )
+        doc = _yaml.safe_load(template_path.read_text(encoding="utf-8"))
+        containers = doc["config"]["kubernetes"]["pod_config"]["spec"]["containers"]
+        assert containers == [{"imagePullPolicy": "Never"}]
 
 
 class TestEmitSpecUri:
