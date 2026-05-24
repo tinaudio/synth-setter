@@ -299,17 +299,16 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/.venv-launcher
-          key: launcher-uv-${{ runner.os }}-py310-skypilot0.12.0-k8s35-${{ hashFiles('uv.lock', 'pyproject.toml') }}
+          # hashFiles('uv.lock', 'pyproject.toml') is the cache invalidator —
+          # any pin change there busts the key. Literal version tokens removed
+          # so the key cannot drift from the actual pin set.
+          key: launcher-uv-${{ runner.os }}-py310-${{ hashFiles('uv.lock', 'pyproject.toml') }}
           restore-keys: |
-            launcher-uv-${{ runner.os }}-py310-skypilot0.12.0-k8s35-
+            launcher-uv-${{ runner.os }}-py310-
 
-      # Idempotent: `uv sync --frozen` is a no-op on a cache hit (lockfile +
-      # the target venv match). On a cache miss / partial restore, sync
-      # reconciles the venv to the locked pin set without re-resolving. The
-      # `kubernetes` extra of skypilot now lives in [project.dependencies], so
-      # `--extra cpu` + the default dev group gives a byte-identical install
-      # to the pre-#1245 hand-picked `skypilot[kubernetes]` + `kubernetes`
-      # closure. UV_PROJECT_ENVIRONMENT points uv at the cached venv path.
+      # Idempotent on cache hit; the `kubernetes` extra of skypilot lives in
+      # [project.dependencies], so `--extra cpu` + the default dev group covers
+      # skypilot-local. UV_PROJECT_ENVIRONMENT pins uv to the cached venv.
       - name: Install launcher deps (skypilot-local row)
         if: ${{ inputs.provider == 'skypilot-local' }}
         env:

@@ -85,10 +85,8 @@ jobs:
       - name: Install rclone
         run: sudo apt-get update -qq && sudo apt-get install -y -qq rclone
 
-      # Linux CPU-CI: torch is required for `tests/conftest.py` collection,
-      # not for the launcher itself. --extra cpu pulls the small CPU wheel;
-      # `--frozen` errors on lockfile drift. Runner is ephemeral per-run so
-      # the resync flip cannot bite.
+      # torch is required for `tests/conftest.py` collection, not for the
+      # launcher itself; --extra cpu pulls the small CPU wheel.
       - name: Install project deps (uv sync --frozen, CPU torch)
         run: uv sync --frozen --extra cpu --no-default-groups --group dev
 

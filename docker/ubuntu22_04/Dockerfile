@@ -275,19 +275,15 @@ RUN python --version && \
 # ==========================================
 FROM python-base AS builder-install-synth-setter-deps
 # Install Python dependencies via `uv sync --frozen` against the committed
-# lockfile. uv's built-in cache (mounted below) persists across builds —
-# torch wheels (~2.5 GB) are downloaded once and survive pyproject.toml edits.
+# lockfile. uv's cache (mounted below) persists torch wheels (~2.5 GB)
+# across builds. Cache scope: only pyproject.toml + uv.lock + README.md
+# (referenced by [project].readme) enter this layer, so unrelated source
+# edits do not bust the torch-wheels cache. The .github/workflows/
+# uv-lock-check.yml matrix guards the upstream invariant.
 #
-# Cache scope: pyproject.toml + uv.lock + README.md (referenced by
-# [project].readme) are the only files copied in here, so unrelated source
-# edits do not bust the ~2.5 GB torch-wheels layer. `--frozen` errors on
-# stale lock instead of silently re-resolving; the lock-check matrix in
-# .github/workflows/uv-lock-check.yml guards the upstream invariant.
-#
-# TORCH_BACKEND -> uv extra: cu128 routes torch through pytorch-cu128 per
-# [tool.uv.sources]; cpu routes through pytorch-cpu. Set via build-arg from
-# .github/workflows/docker-build-validation.yml. UV_PROJECT_ENVIRONMENT
-# points uv at the pre-created /venv/main venv (set in python-base above).
+# TORCH_BACKEND selects the `cpu`/`cu128` extra → pytorch-* index per
+# [tool.uv.sources]; build-arg from docker-build-validation.yml.
+# UV_PROJECT_ENVIRONMENT points uv at /venv/main (created in python-base).
 COPY --from=synth-setter-src /home/build/synth-setter/pyproject.toml /artifacts/
 COPY --from=synth-setter-src /home/build/synth-setter/uv.lock /artifacts/
 COPY --from=synth-setter-src /home/build/synth-setter/README.md /artifacts/
@@ -402,7 +398,8 @@ RUN git init && \
     git branch --set-upstream-to=origin/main main
 
 # Install the project package so `import src` works from any working directory.
-# --no-deps: all runtime deps already installed via uv pip install above.
+# --no-deps pairs with the `--no-install-project` on the earlier `uv sync` above —
+# deps are already in the venv; this step installs the package editable.
 RUN uv pip install --no-deps -e .
 
 # Run not-slow unit tests (mocked subprocess + LocalFakeUploader — no VST or R2 needed)

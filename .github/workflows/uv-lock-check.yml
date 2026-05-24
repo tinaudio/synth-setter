@@ -1,14 +1,10 @@
 name: uv lock check
 
-# Verifies `uv.lock` stays in sync with `pyproject.toml` on every platform we
-# claim to support. The committed lock is a universal lockfile that encodes
-# resolutions for macOS, Linux, and Windows simultaneously; a contributor who
-# edits `[project.dependencies]` without re-running `uv lock` would otherwise
-# only see the breakage in a downstream `uv sync --frozen` job.
-#
-# Why a matrix: a lock generated only on macOS can encode a Linux-only
-# resolution that was never actually validated. Running `uv lock --check` on
-# each OS exercises that platform's branch of the universal resolution.
+# Verifies `uv.lock` stays in sync with `pyproject.toml`. The committed lock
+# is universal (macOS + Linux + Windows in one file), and a lock generated
+# only on one OS can encode a resolution that was never actually validated
+# on the others — so we run `uv lock --check` on a matrix to exercise each
+# platform's branch of the universal resolution.
 
 on:
   workflow_dispatch:
@@ -53,9 +49,6 @@ jobs:
         with:
           enable-cache: true
 
-      # `uv lock --check` re-runs the resolver against pyproject.toml and
-      # exits non-zero if the result would differ from the committed lock.
-      # `--locked` would have been an alternative but is sync-side, not
-      # lock-side; this is the canonical "lock is up-to-date" probe.
+      # `uv lock --check` re-resolves against pyproject.toml; non-zero if drifted.
       - name: Verify lockfile is in sync with pyproject.toml
         run: uv lock --check

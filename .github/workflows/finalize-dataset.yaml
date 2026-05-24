@@ -107,9 +107,8 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq rclone
 
       # finalize imports `cli.generate_dataset.spec_from_cfg` which transitively
-      # touches the torch-gated `data/` package, so the CPU torch wheel is the
-      # smallest install that resolves all imports. `--frozen` errors on lock
-      # drift; runner is ephemeral so the resync flip cannot bite.
+      # touches the torch-gated `data/` package — CPU torch is the minimum that
+      # resolves all imports.
       - name: Install project deps (uv sync --frozen, CPU torch)
         run: uv sync --frozen --extra cpu --no-default-groups --group dev
 

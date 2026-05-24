@@ -89,9 +89,8 @@ jobs:
       - name: Install socat (kubectl port-forward dependency)
         run: sudo apt-get update -qq && sudo apt-get install -y -qq socat
 
-      # skypilot[runpod,oci,kubernetes] + kubernetes==35.0.0 are pinned in
-      # [project.dependencies], so a frozen sync gives a byte-identical install
-      # to the pre-#1245 ad-hoc `pip install "skypilot[kubernetes]==0.12.0"`.
+      # skypilot[runpod,oci,kubernetes]==0.12.0 + kubernetes==35.0.0 are pinned
+      # in [project.dependencies]; --frozen installs the validated closure.
       - name: Install SkyPilot via uv sync --frozen
         run: uv sync --frozen --extra cpu --no-default-groups --group dev
 

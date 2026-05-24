@@ -67,12 +67,12 @@ jobs:
         with:
           enable-cache: true
 
-      # Linux CPU-CI; runner is ephemeral so the resync flip cannot bite.
+      # Frozen sync, CPU torch via [tool.uv.sources] — see test.yml for rationale.
       - name: Install dependencies (uv sync --frozen, CPU torch)
         run: uv sync --frozen --extra cpu --no-default-groups --group dev
 
       - name: List dependencies
-        run: uv pip list
+        run: uv pip list --python .venv/bin/python
 
       # `is_r2_reachable()` shells out to `rclone`; without the binary the
       # `integration_r2` gate short-circuits and the tests skip silently.

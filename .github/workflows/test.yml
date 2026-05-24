@@ -49,15 +49,13 @@ jobs:
         with:
           enable-cache: true
 
-      # Linux CPU-CI: --extra cpu routes torch via the pytorch-cpu index per
-      # [tool.uv.sources]; --frozen errors on lockfile drift instead of silently
-      # re-resolving. GH-actions runners are ephemeral per-run, so the resync
-      # flip described in #1243 cannot affect later steps.
+      # --extra cpu routes torch through pytorch-cpu per [tool.uv.sources];
+      # --frozen errors on lockfile drift. Ephemeral runner — see #1243.
       - name: Install dependencies (uv sync --frozen, CPU torch)
         run: uv sync --frozen --extra cpu --no-default-groups --group dev
 
       - name: List dependencies
-        run: uv pip list
+        run: uv pip list --python .venv/bin/python
 
       # `--cov=scripts/ci` is needed alongside `--cov=src`: pytest-cov's
       # `--cov` overrides `[tool.coverage.run].source` in `pyproject.toml`.
@@ -108,7 +106,7 @@ jobs:
         run: uv sync --frozen
 
       - name: List dependencies
-        run: uv pip list
+        run: uv pip list --python .venv/bin/python
 
       # See the ubuntu job above for why `--cov=scripts/ci` is required.
       - name: Run pytest with coverage

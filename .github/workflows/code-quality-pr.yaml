@@ -32,11 +32,13 @@ jobs:
         with:
           enable-cache: true
 
-      # Lint/format/type-check only: --only-group dev pulls the [dev] PEP 735
-      # group (ruff, pyright, pre-commit, pytest, ...) without dragging the
-      # torch stack onto the runner. --frozen errors on lockfile drift.
+      # `--only-group dev` installs lint/type-check tools without the torch stack.
       - name: Install dev tools (uv sync --frozen, no torch)
         run: uv sync --frozen --only-group dev
+
+      # Put the uv venv on PATH so pre-commit finds the synced ruff/pyright/pydoclint.
+      - name: Activate uv venv on PATH
+        run: echo "${GITHUB_WORKSPACE}/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Find changed files
         id: changed_files
@@ -46,12 +48,6 @@ jobs:
 
       - name: List changed files
         run: echo '${{ steps.changed_files.outputs.all_changed_files }}'
-
-      # pre-commit looks at PATH; activating the uv-managed venv lets the
-      # tj-actions/changed-files-driven `pre-commit run --files ...` reach the
-      # synced ruff/pyright/pydoclint instead of system tools.
-      - name: Activate uv venv on PATH
-        run: echo "${GITHUB_WORKSPACE}/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Run pre-commits
         uses: pre-commit/action@v3.0.1

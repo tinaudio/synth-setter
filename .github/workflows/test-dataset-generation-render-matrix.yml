@@ -128,12 +128,9 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "pyproject.toml"
 
-      # The validator fires inside ``spec_from_cfg`` before any torch import,
-      # but pinning the project's runtime closure here as a hand-picked list
-      # silently drifted away from ``[project].dependencies``. Re-fold onto
-      # the canonical lockfile path: ``uv sync --frozen`` resolves the same
-      # closure the rest of CI installs, with the resync-flip guard of
-      # ``--extra cpu`` (this is a Linux CI runner). Runner is ephemeral.
+      # Validator runs inside ``spec_from_cfg`` before any torch import, but
+      # the canonical install path is cheap (~1 min cached) and the closure
+      # cannot drift from [project.dependencies] — see #1245. Ephemeral runner.
       - name: Install package (uv sync --frozen, CPU torch)
         run: uv sync --frozen --extra cpu --no-default-groups --group dev
 

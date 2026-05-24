@@ -233,12 +233,11 @@ jobs:
         with:
           enable-cache: true
 
-      # Bare-runner skypilot install — was `pip install "skypilot[runpod,oci]==0.12.0"`
-      # before #1245 flipped CI onto the universal lock. The same pin (plus the
-      # kubernetes extra) now lives in [project.dependencies], so `uv sync
-      # --frozen` produces a byte-identical skypilot install, validated against
-      # the lock by the matrix in uv-lock-check.yml.
-      - name: Install skypilot via uv sync --frozen
+      # inline-sky drives `sky.launch` directly from the runner Python;
+      # launcher-runner uses its own install step below; launcher-docker runs
+      # everything inside the dev-snapshot image and needs no host install.
+      - name: Install skypilot via uv sync --frozen (inline-sky row)
+        if: matrix.mode == 'inline-sky'
         run: uv sync --frozen --extra cpu --no-default-groups --group dev
 
       - name: Pin image tag in debug template
@@ -352,15 +351,10 @@ jobs:
               )
           PY
 
-      # Full [project.dependencies] install (skypilot + python-dotenv + loguru +
-      # pedalboard + mido + numpy + pydantic + click + ...). The launcher's
-      # import chain (skypilot_launch -> spec.py -> synth_setter.data.vst ->
-      # core.py) pulls in the whole runtime, so a targeted install is
-      # whack-a-mole — the project's default deps keep launcher-runner mode
-      # honestly mirroring what a developer would have on their laptop. The
-      # inline-sky step above already populated `.venv` via `uv sync`; this
-      # step is the launcher-runner path equivalent, so re-running the same
-      # sync is idempotent.
+      # Full [project.dependencies] install. The launcher's import chain
+      # (skypilot_launch -> spec.py -> synth_setter.data.vst -> core.py) pulls
+      # in the whole runtime — keep launcher-runner mode mirroring what a
+      # developer has on their laptop, not a targeted closure.
       - name: Install launcher deps (launcher-runner mode)
         if: matrix.mode == 'launcher-runner'
         run: uv sync --frozen --extra cpu --no-default-groups --group dev

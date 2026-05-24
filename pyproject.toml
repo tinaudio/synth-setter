@@ -23,9 +23,8 @@ dependencies = [
   "pydantic-settings>=2",
   "pyyaml",
   "tomli; python_version < '3.11'",
-  # `kubernetes` extra is needed by skypilot-local CI dispatches (kind cluster);
-  # locking it here lets `uv sync --frozen` cover every backend without ad-hoc
-  # post-install `pip install skypilot[kubernetes]`.
+  # `kubernetes` extra serves skypilot-local kind-cluster CI; locking it here
+  # keeps `uv sync --frozen` self-sufficient.
   "skypilot[runpod,oci,kubernetes]==0.12.0",
   "structlog",
   "tenacity",
@@ -94,12 +93,9 @@ cu128 = [
   "torchvision>=0.15.0",
   "torchaudio>=2.0.0",
 ]
-# Legacy `pip install`-compatible aggregations. `uv sync --frozen` is the
-# canonical install path post-#1245; these shims keep `pip install
-# -e ".[torch,dev]"` working for the Makefile + Conda environment.yaml +
-# scripts/sync_worker_checkout.sh callsites (which do not honor
-# [tool.uv.sources] and so cannot use the universal lock). Removal of the
-# shims tracks alongside migration of those callsites — out of scope here.
+# Aggregations consumed by the Makefile, environment.yaml, and
+# scripts/sync_worker_checkout.sh — callsites that use plain `pip install`
+# and cannot honor [tool.uv.sources]. Retained until those migrate.
 torch = [
   "torch>=2.0.0",
   "torchvision>=0.15.0",
@@ -141,36 +137,6 @@ synth-setter-generate-dataset = "synth_setter.cli.generate_dataset:main"
 synth-setter-generate-dataset-from-hydra = "synth_setter.cli.generate_dataset:from_hydra"
 synth-setter-finalize-dataset = "synth_setter.cli.finalize_dataset:main"
 synth-setter-spec-uri = "synth_setter.pipeline.ci.spec_uri:main"
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 [dependency-groups]
