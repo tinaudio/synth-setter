@@ -42,7 +42,7 @@ from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.resources import as_file, vst_headless_wrapper
 from synth_setter.workspace import operator_workspace
 
-_OPERATOR_WORKSPACE = operator_workspace()
+operator_workspace()
 
 MIDI_LISTEN_MESSAGE_TYPES = ("note_on", "note_off", "control_change", "pitchwheel", "aftertouch")
 
@@ -125,7 +125,7 @@ _MIDI_POLL_INTERVAL_SECONDS = 0.01
 _VST_SUBPROCESS_TIMEOUT_SECONDS = 300
 _EVAL_SUBPROCESS_TIMEOUT_SECONDS = 600
 _METRICS_SUBPROCESS_TIMEOUT_SECONDS = 300
-_EVAL_SCRIPT = _OPERATOR_WORKSPACE / "src" / "eval.py"
+_EVAL_MODULE = "synth_setter.cli.eval"
 _PREDICT_VST_AUDIO_MODULE = "synth_setter.evaluation.predict_vst_audio"
 _COMPUTE_AUDIO_METRICS_MODULE = "synth_setter.evaluation.compute_audio_metrics"
 
@@ -691,7 +691,8 @@ def _run_predict(
     runner(  # noqa: S603
         [
             sys.executable,
-            str(_EVAL_SCRIPT),
+            "-m",
+            _EVAL_MODULE,
             "experiment=surge/test",
             "ckpt_path=" + str(checkpoint_path.resolve()),
             "data.predict_file=" + str(predict_file.resolve()),
