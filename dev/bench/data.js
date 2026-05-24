@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779663034463,
+  "lastUpdate": 1779663036802,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -8186,6 +8186,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 23.193738662600005,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8a16d0e4ca9859c6fc25592d1ed2e67b90708556",
+          "message": "refactor(testing): hoist install_fake_plugin fixture to tests/conftest.py (#1265)\n\nMove ``fake_vst3_plugin`` and ``install_fake_plugin`` from\n``tests/data/vst/conftest.py`` to ``tests/conftest.py`` so they are\ndiscoverable from sibling test trees (``tests/tools/``, ``tests/evaluation/``,\n``tests/integration/``). ``tests/data/vst/_fake_plugin.py`` stays put — only\nthe fixtures' discovery scope widens. The old VST-scoped conftest had no\nother content, so the file is removed.\n\nWave 1 of the rollout in #1258. Unblocks the cross-tree fake-plugin twins\nand the consolidation of ad-hoc plugin doubles tracked under that issue.\n\nRefs #1258",
+          "timestamp": "2026-05-24T22:31:37Z",
+          "tree_id": "9701af86b22e5c596bdfbf0754fe008cb9a13e7f",
+          "url": "https://github.com/tinaudio/synth-setter/commit/8a16d0e4ca9859c6fc25592d1ed2e67b90708556"
+        },
+        "date": 1779663036143,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 3.5050601959228516,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 3.942954782322049,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.03307697921991348,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.06212151050567627,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 2.5674540996551514,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 20.3440722692,
             "unit": "seconds"
           }
         ]
