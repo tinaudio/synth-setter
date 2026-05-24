@@ -17,10 +17,11 @@ from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 from omegaconf import DictConfig, open_dict
 
-from synth_setter.data.vst import param_specs, preset_paths
+from synth_setter.data.vst import core, param_specs, preset_paths
 from synth_setter.resources import vst_headless_wrapper
 from synth_setter.utils.utils import register_resolvers
 from tests._baseline_worktree import worktree_for_ref  # noqa: F401 — pytest fixture re-export
+from tests.data.vst._fake_plugin import FakeVST3Plugin
 
 # Per-clip dimensions for the smoke fixture's HDF5 output. ``RenderConfig`` in
 # ``synth_setter.pipeline.schemas.spec`` declares no field defaults — the fixture passes
@@ -625,6 +626,38 @@ def cfg_surge_xt_eval(
     yield cfg
 
     GlobalHydra.instance().clear()
+
+
+@pytest.fixture
+def fake_vst3_plugin() -> FakeVST3Plugin:
+    """Return a fresh ``FakeVST3Plugin`` instance per test (no shared state).
+
+    :returns: Stand-in plugin whose ``plugin_path`` field is set but never
+        read from disk; downstream production code receives this via
+        ``install_fake_plugin``.
+    """
+    return FakeVST3Plugin("plugins/fake.vst3")
+
+
+@pytest.fixture
+def install_fake_plugin(
+    monkeypatch: pytest.MonkeyPatch, fake_vst3_plugin: FakeVST3Plugin
+) -> FakeVST3Plugin:
+    """Patch ``core.load_plugin`` and ``core.VST3Plugin`` to yield the fake.
+
+    Both seams are covered: ``load_plugin`` is the normal pipeline entry
+    point; ``VST3Plugin`` is constructed directly by
+    ``extract_renderer_version``'s fallback path.
+
+    :param monkeypatch: Pytest fixture used to swap the two ``core``
+        callables for the test's duration; teardown restores both.
+    :param fake_vst3_plugin: The instance the patched callables return.
+    :returns: The same ``fake_vst3_plugin`` instance, so tests asserting
+        on it can compare by identity.
+    """
+    monkeypatch.setattr(core, "load_plugin", lambda _path, **_kw: fake_vst3_plugin)
+    monkeypatch.setattr(core, "VST3Plugin", lambda _path: fake_vst3_plugin)
+    return fake_vst3_plugin
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
