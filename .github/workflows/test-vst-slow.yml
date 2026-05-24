@@ -116,9 +116,21 @@ jobs:
               git config --global --add safe.directory /home/build/synth-setter
               src/synth_setter/scripts/run-linux-vst-headless.sh \
                 pytest -vv -s \
+                  --cov=src --cov-branch --cov-report=xml --cov-report=term \
                   tests/data/vst/test_generate_vst_dataset.py \
                   tests/data/vst/test_always_on_integration.py
             '
+
+      # coverage.xml is written inside the container at the workspace mount,
+      # so it lands at ${{ github.workspace }}/coverage.xml on the host.
+      - name: Upload coverage to Codecov
+        if: always() && hashFiles('coverage.xml') != ''
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage.xml
+          flags: vst
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
 
       - name: Surface per-bucket bench JSON files on the runner
         # ``benchmark-action/github-action-benchmark`` reads its input from

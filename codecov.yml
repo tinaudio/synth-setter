@@ -19,7 +19,17 @@ flag_management:
   default_rules:
     carryforward: true
   individual_flags:
+    # `unit-cpu` aggregates both per-OS sub-flags; the sub-flags exist so
+    # carryforward can't mask a platform-specific regression.
     - name: unit-cpu
+      paths:
+        - src/synth_setter/
+        - scripts/ci/
+    - name: unit-cpu-linux
+      paths:
+        - src/synth_setter/
+        - scripts/ci/
+    - name: unit-cpu-macos
       paths:
         - src/synth_setter/
         - scripts/ci/
@@ -27,6 +37,18 @@ flag_management:
       paths:
         - src/synth_setter/
         - scripts/ci/
+    # GPU/MPS/VST suites don't exercise `scripts/ci/`, so it's omitted from
+    # their path scope (CPU flags above still include it).
+    - name: unit-gpu
+      paths:
+        - src/synth_setter/
+    - name: unit-mps
+      paths:
+        - src/synth_setter/
+    - name: vst
+      paths:
+        - src/synth_setter/data/vst/
+        - src/synth_setter/evaluation/compute_audio_metrics.py
 
 component_management:
   default_rules:
@@ -64,10 +86,6 @@ component_management:
       name: tools
       paths:
         - src/synth_setter/tools/**
-      statuses:
-        - type: project
-          target: 50%
-          informational: true
     - component_id: cli
       name: cli
       paths:

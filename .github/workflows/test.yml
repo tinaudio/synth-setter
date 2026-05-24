@@ -56,18 +56,20 @@ jobs:
       - name: List dependencies
         run: uv pip list --system
 
+      # `--cov=scripts/ci` is needed alongside `--cov=src`: pytest-cov's
+      # `--cov` overrides `[tool.coverage.run].source` in `pyproject.toml`.
       - name: Run pytest with coverage
         env:
           HYDRA_FULL_ERROR: "1"
         run: |
           pytest -n auto -m "not slow and not gpu and not mps" -vv -s \
-            --cov=src --cov-branch --cov-report=xml --cov-report=term
+            --cov=src --cov=scripts/ci --cov-branch --cov-report=xml --cov-report=term
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
           files: coverage.xml
-          flags: unit-cpu
+          flags: unit-cpu,unit-cpu-linux
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
 
@@ -103,17 +105,18 @@ jobs:
       - name: List dependencies
         run: uv pip list --system
 
+      # See the ubuntu job above for why `--cov=scripts/ci` is required.
       - name: Run pytest with coverage
         env:
           HYDRA_FULL_ERROR: "1"
         run: |
           pytest -n auto -m "not slow and not gpu and not mps" -vv -s \
-            --cov=src --cov-branch --cov-report=xml --cov-report=term
+            --cov=src --cov=scripts/ci --cov-branch --cov-report=xml --cov-report=term
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
           files: coverage.xml
-          flags: unit-cpu
+          flags: unit-cpu,unit-cpu-macos
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
