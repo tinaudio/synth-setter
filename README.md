@@ -106,19 +106,13 @@ the install command for your hardware:
 | Linux CPU-only (CI / laptop) | `uv sync --frozen --extra cpu --no-default-groups --group dev` |
 | Lint / type-check only       | `uv sync --frozen --only-group dev`                            |
 
-**Mac users: never pass `--extra cpu` or `--extra cu128`.** The marker in
-`[tool.uv.sources]` excludes both on Apple Silicon, so the flag is a silent
-no-op that confuses readers. A bare `uv sync --frozen` resolves torch from
-PyPI's MPS-capable wheel.
+Two table caveats:
 
-**CUDA is the source of truth for reported numbers.** MPS results need not
-match CPU/CUDA bit-for-bit (and some ops fall back to CPU under MPS). When a
-Mac collaborator sees a small numerical divergence from a Linux-CUDA run,
-that is expected — not a reproducibility bug.
+- Mac must use bare `uv sync --frozen` — backend extras are a silent no-op there.
+- CUDA is the source of truth for reported numbers; MPS may diverge slightly.
 
-Dependency-management details (relock cadence, the resync flip on Linux,
-lockfile-diff review) live in
-[docs/reference/dependency-management.md](docs/reference/dependency-management.md).
+Full rationale plus the relock cadence and the Linux-only resync flip live
+in [docs/reference/dependency-management.md](docs/reference/dependency-management.md).
 
 ## Quick Start
 

@@ -14,12 +14,11 @@ command differs by hardware, and how to keep the committed `uv.lock` honest.
 | Verify the lock is in sync           | `uv lock --check`                                              |
 | Regenerate the lock after a dep edit | `uv lock` (then commit the diff)                               |
 
-`--frozen` errors instead of silently re-resolving if the lock and
-`pyproject.toml` disagree. CI uses it everywhere; you should too.
+`--frozen` errors instead of silently re-resolving when the lock and
+`pyproject.toml` disagree. CI uses it everywhere.
 
-A separate matrix runs `uv lock --check` on macOS + Linux on every PR — see
-`.github/workflows/uv-lock-check.yml`. A stale lock there is the failure mode
-the matrix exists to catch.
+A separate per-PR matrix runs `uv lock --check` on macOS + Linux
+(`.github/workflows/uv-lock-check.yml`); a stale lock is what it catches.
 
 ## Mac: no backend flag
 
@@ -29,8 +28,7 @@ Mac** — the marker in `[tool.uv.sources]` excludes both on macOS, so the
 flag is a silent no-op that confuses readers. The `cpu`/`cu128` extras
 are Linux/Windows backend selectors.
 
-Intel Macs silently get a CPU-only torch from the same PyPI wheel
-(no MPS). Expected, not a bug.
+Intel Macs resolve to a CPU-only torch from the same wheel (no MPS hardware).
 
 ## CUDA is the source of truth for reported numbers
 
@@ -45,16 +43,17 @@ marker so CI can route it to the macOS runner.
 
 ## The resync flip (Linux footgun)
 
-`uv sync` does **exact** syncing by default — it removes/replaces anything
-not matching the current command's resolution. Backend selection is **not
-sticky** — `--extra cpu` applies only to the command it's passed to; the
-next `uv` invocation has no memory of it.
+Two `uv sync` behaviours combine into a Linux footgun:
 
-On Linux that combines into a trap: **any `uv` command without `--extra cpu`
-re-resolves torch to CUDA and exact-syncs the CPU wheel out**, pulling
-multi-GB CUDA wheels onto a GPU-less box. The CUDA torch often still imports
-on a CPU-only box (it just finds no GPU), so the wrong, bloated environment
-can pass tests silently.
+1. **Exact sync**: every invocation removes/replaces packages not matching
+   the current resolution.
+2. **Non-sticky extras**: `--extra cpu` applies only to the command it's
+   passed to; the next `uv` invocation has no memory of it.
+
+So any later `uv` command without `--extra cpu` re-resolves torch to CUDA
+and exact-syncs the CPU wheel out, pulling multi-GB CUDA wheels onto a
+GPU-less box. The wrong env often still imports (no GPU is not an import
+error), so tests can pass silently on the bloated install.
 
 The trap is **Linux-only**. macOS is immune (markers exclude both extras).
 
@@ -112,9 +111,8 @@ package's metadata.
 If the closure is publicly-installable (e.g. `synth-setter[cloud]` for a
 hypothetical cloud-only optional dep set), use `[project.optional-dependencies]`.
 
-After either edit: run `uv lock`, review the diff, commit `pyproject.toml`
-
-- `uv.lock` in the same commit.
+After either edit: run `uv lock`, review the diff, and commit `pyproject.toml`
+and `uv.lock` in the same commit.
 
 ## Open questions
 

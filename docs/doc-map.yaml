@@ -114,7 +114,7 @@ docs:
       - pattern: "scripts/skypilot/capture-state.sh"
         covers: "Best-effort kube-apiserver + controller on-pod sky_logs snapshot called from generate-dataset-shards.yaml (skypilot-local row) before `sky local down` reaps the kind cluster. Captures pod describes, events, controller logs, and the controller's provision.log so scheduling-side hangs are diagnosable post-mortem (#876). Bash-3.2 portable so the same script runs on macOS CI."
       - pattern: "pyproject.toml"
-        covers: "skypilot[runpod,oci]==0.12.0 listed under [project.dependencies] — required, not optional (decision: see §8.2)"
+        covers: "skypilot[runpod,oci,kubernetes]==0.12.0 listed under [project.dependencies] — required, not optional"
         scope: "skypilot"
 
   # ── Storage provenance spec ─────────────────────────────────────

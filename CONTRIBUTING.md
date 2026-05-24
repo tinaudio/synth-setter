@@ -31,12 +31,10 @@ Install the project in editable mode with development dependencies:
 make install        # runs: pip install uv && uv pip install -e ".[torch,dev]"
 ```
 
-`make install` uses `uv pip install -e ".[torch,dev]"` under the hood,
-which is convenient but does **not** consume the committed lockfile. For
-reproducible installs (the same wheel pins CI uses), prefer `uv sync` —
-see [docs/reference/dependency-management.md](docs/reference/dependency-management.md)
-for the full command surface, including the Linux CPU/CUDA split and the
-"resync flip" footgun to avoid on Linux.
+`make install` does not consume the committed lockfile. For the same wheel
+pins CI uses, run `uv sync --frozen` — see
+[docs/reference/dependency-management.md](docs/reference/dependency-management.md)
+for per-platform commands.
 
 Install pre-commit hooks:
 

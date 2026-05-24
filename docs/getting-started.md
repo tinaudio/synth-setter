@@ -568,6 +568,22 @@ This is expected. VST tests require Surge XT to be installed (see
 [section 4a](#4a-surge-xt-vst-plugin)). They are excluded from `make test-fast`
 by default.
 
+### CI fails with `uv lock --check`
+
+If you added or changed a dependency in `pyproject.toml`, the committed
+`uv.lock` is now stale and the `uv-lock-check` workflow rejects the PR.
+Re-lock and commit the diff:
+
+```bash
+uv lock
+git add uv.lock
+git commit -m "chore(deps): relock for <reason>"
+```
+
+Run `uv lock` on a Mac or GPU box, **never** under a `--extra cpu`
+environment (see the resync-flip note in
+[docs/reference/dependency-management.md](reference/dependency-management.md)).
+
 ______________________________________________________________________
 
 ## 9. What to Try Next
