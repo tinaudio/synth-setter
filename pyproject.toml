@@ -71,11 +71,15 @@ dependencies = [
 
 [project.optional-dependencies]
 # Backend selector for `uv sync` / `uv lock` on Linux/Win — mutually exclusive
-# (see [tool.uv].conflicts). On macOS both markers exclude these extras, so a
-# bare `uv sync` falls through to the PyPI MPS-capable wheel.
+# (see [tool.uv].conflicts). The cpu/cu128 extras themselves are NOT platform-
+# gated; the `sys_platform == 'linux' or 'win32'` markers live on the source
+# routing in [tool.uv.sources]. On macOS, bare `uv sync` activates neither
+# extra and falls through to the PyPI MPS-capable wheel via
+# [project.dependencies]. Passing `--extra cpu` on macOS is harmless — the
+# routing markers don't match, so torch still resolves from PyPI.
 #   Linux GPU box  -> `uv sync --extra cu128`
 #   Linux CPU CI   -> `uv sync --extra cpu --no-default-groups --group dev`
-#   macOS          -> `uv sync`           (no backend flag — markers exclude both)
+#   macOS          -> `uv sync`           (no backend flag needed)
 #
 # uv requires a `conflicts` group of >=2 entries, so a single-extra design
 # (bare `uv sync` resolves to CUDA on Linux) is rejected by the resolver.
