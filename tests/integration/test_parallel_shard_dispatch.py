@@ -132,7 +132,12 @@ def _wire_run_into_fake_renderer(
 
     fake_renderer = _write_fake_renderer(tmp_path)
 
-    def _fake_build_args(_spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -> list[str]:
+    def _fake_build_args(
+        _spec: DatasetSpec,
+        shard: ShardSpec,
+        output_dir: Path,
+        _script_path: Path,
+    ) -> list[str]:
         return [sys.executable, str(fake_renderer), str(output_dir / shard.filename)]
 
     monkeypatch.setattr("synth_setter.cli.generate_dataset.build_generate_args", _fake_build_args)

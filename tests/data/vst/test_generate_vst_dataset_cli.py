@@ -76,7 +76,9 @@ def test_build_generate_args_roundtrips_through_cli_parser() -> None:
     break this round-trip even when the field-set parity tests still pass.
     """
     spec = _smoke_spec()
-    args = build_generate_args(spec, spec.shards[0], Path("/tmp"))
+    args = build_generate_args(
+        spec, spec.shards[0], Path("/tmp"), Path("/fake/generate_vst_dataset.py")
+    )
 
     parsed = CliApp.run(_GenerateCliArgs, cli_args=args[2:])
     reconstructed = RenderConfig(**parsed.model_dump(exclude={"data_file"}))

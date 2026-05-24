@@ -42,7 +42,11 @@ from synth_setter.pipeline.spec_io import (  # noqa: E402
     upload_spec,
     write_spec_locally,
 )
-from synth_setter.resources import as_file, vst_headless_wrapper  # noqa: E402
+from synth_setter.resources import (  # noqa: E402
+    as_file,
+    generate_vst_dataset_script,
+    vst_headless_wrapper,
+)
 
 # Composed-config keys that aren't DatasetSpec fields (interpolation sources, Hydra
 # runtime, dispatch-mode sub-trees). See dataset.yaml in the shipped configs/
@@ -98,7 +102,12 @@ def _rclone_copy(src: str, dest: str) -> None:
     logger.info(f"rclone returned cleanly: {src} -> {dest}")
 
 
-def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -> list[str]:
+def build_generate_args(
+    spec: DatasetSpec,
+    shard: ShardSpec,
+    output_dir: Path,
+    script_path: Path,
+) -> list[str]:
     """Build CLI args for ``generate_vst_dataset.py`` from a spec and shard.
 
     The flag set is derived from ``RenderConfig.model_fields`` so every renderer
@@ -106,11 +115,16 @@ def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -
     field on the model auto-extends the CLI invocation. The writer is dispatched
     on ``shard.filename``'s suffix inside the subprocess via
     ``EXTENSION_TO_OUTPUT_FORMAT``.
+
+    :param script_path: Filesystem path to ``generate_vst_dataset.py``. The
+        caller is responsible for keeping this path valid for the subprocess
+        lifetime — under zipped wheels that means an :func:`as_file` /
+        :class:`contextlib.ExitStack` envelope around the subprocess call.
     """
     output_path = output_dir / shard.filename
     args = [
         sys.executable,
-        "src/synth_setter/data/vst/generate_vst_dataset.py",
+        str(script_path),
         str(output_path),
     ]
     for key, value in spec.render.model_dump().items():
@@ -311,16 +325,17 @@ def _render_and_upload_shard(
         exhausting the retry budget.
     :raises RuntimeError: Renderer exited 0 without writing the expected shard file.
     """
-    # Zipped wheels extract the wrapper to a temp file that only lives while
-    # ``as_file()`` is open; ``ExitStack`` keeps it on disk across the retry
-    # loop, and skips materialization on non-Linux.
+    # Zipped wheels extract the script + Linux wrapper to temp files that only
+    # live while ``as_file()`` is open; ``ExitStack`` keeps them on disk across
+    # the retry loop, and skips the wrapper on non-Linux.
     with ExitStack() as stack:
+        script_path = Path(stack.enter_context(as_file(generate_vst_dataset_script())))
         if sys.platform == "linux":
             wrapper_path = stack.enter_context(as_file(vst_headless_wrapper()))
             args = [str(wrapper_path)]
         else:
             args = []
-        args += build_generate_args(spec, shard, work_dir)
+        args += build_generate_args(spec, shard, work_dir, script_path)
         logger.info(f"rendering shard {shard.shard_id} -> {shard.filename}")
         max_attempts = spec.render.max_retries + 1
         for attempt in range(max_attempts):

@@ -42,10 +42,10 @@ from synth_setter.cli.generate_dataset import (
     run,
 )
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
-from synth_setter.resources import vst_headless_wrapper
 from tests.helpers.subprocess_args import find_script_index
 
-VST_HEADLESS_WRAPPER = str(vst_headless_wrapper())
+_WRAPPER_NAME = "run-linux-vst-headless.sh"
+_SCRIPT_NAME = "generate_vst_dataset.py"
 
 # Reusable VST3 bundle with a real Contents/moduleinfo.json so
 # extract_renderer_version (called by run) returns a deterministic version
@@ -272,7 +272,7 @@ class TestRun:
         renderer_calls = _renderer_argv_lists(patched_subprocess)
         assert len(renderer_calls) == 1
         args = renderer_calls[0]
-        # args = [VST_HEADLESS_WRAPPER (linux only), python, generate_vst_dataset.py, ...]
+        # args = [wrapper-path (linux only), python, generate_vst_dataset.py, ...]
         assert any("generate_vst_dataset.py" in a for a in args)
         assert str(spec.render.samples_per_shard) in args
 
@@ -297,11 +297,11 @@ class TestRun:
         assert len(renderer_calls) == 1
         args = renderer_calls[0]
         if sys.platform == "linux":
-            assert args[0] == VST_HEADLESS_WRAPPER
-            assert args[2] == "src/synth_setter/data/vst/generate_vst_dataset.py"
+            assert args[0].endswith(_WRAPPER_NAME), args[0]
+            assert args[2].endswith(_SCRIPT_NAME), args[2]
         else:
-            assert VST_HEADLESS_WRAPPER not in args
-            assert args[1] == "src/synth_setter/data/vst/generate_vst_dataset.py"
+            assert not any(a.endswith(_WRAPPER_NAME) for a in args)
+            assert args[1].endswith(_SCRIPT_NAME), args[1]
 
     def test_uploads_shard_to_r2_after_generation(
         self,
@@ -1121,6 +1121,9 @@ class TestRun:
 # ---------------------------------------------------------------------------
 
 
+_FAKE_SCRIPT = Path("/fake/generate_vst_dataset.py")
+
+
 class TestBuildGenerateArgs:
     """build_generate_args() produces correct CLI arg lists from spec + shard."""
 
@@ -1128,7 +1131,7 @@ class TestBuildGenerateArgs:
         """Output file path is {output_dir}/{shard.filename}."""
         shard = spec.shards[0]
 
-        args = build_generate_args(spec, shard, tmp_path)
+        args = build_generate_args(spec, shard, tmp_path, _FAKE_SCRIPT)
 
         assert args[2] == str(tmp_path / "shard-000000.h5")
 
@@ -1140,7 +1143,7 @@ class TestBuildGenerateArgs:
         """
         shard = spec.shards[0]
 
-        args = build_generate_args(spec, shard, Path("out"))
+        args = build_generate_args(spec, shard, Path("out"), _FAKE_SCRIPT)
 
         flag_idx = args.index("--samples_per_shard")
         assert args[flag_idx + 1] == str(spec.render.samples_per_shard)
@@ -1149,19 +1152,19 @@ class TestBuildGenerateArgs:
         """The flag set equals ``RenderConfig.model_fields`` — auto-derived parity guard."""
         shard = spec.shards[0]
 
-        args = build_generate_args(spec, shard, Path("out"))
+        args = build_generate_args(spec, shard, Path("out"), _FAKE_SCRIPT)
 
         option_keys: set[str] = {arg.lstrip("-") for arg in args if arg.startswith("--")}
 
         assert option_keys == set(RenderConfig.model_fields.keys())
 
     def test_args_start_with_python_and_script(self, spec: DatasetSpec) -> None:
-        """First arg is the Python executable, second is the generation script."""
+        """First arg is the Python executable, second is the materialized script path."""
         shard = spec.shards[0]
 
-        args = build_generate_args(spec, shard, Path("out"))
+        args = build_generate_args(spec, shard, Path("out"), _FAKE_SCRIPT)
 
-        assert args[1] == "src/synth_setter/data/vst/generate_vst_dataset.py"
+        assert args[1] == str(_FAKE_SCRIPT)
 
 
 # ---------------------------------------------------------------------------
