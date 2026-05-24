@@ -371,8 +371,8 @@ class TestEnsureCiSkyConfig:
 class TestLocalTemplatePodConfig:
     """``configs/compute/local-template.yaml`` carries the task-scoped pod_config override.
 
-    The override must live on the user worker task — a global write would
-    block the SkyPilot jobs controller from pulling its own image (#1255).
+    The override must live on the user worker task — a global write would block the SkyPilot jobs
+    controller from pulling its own image (#1255).
     """
 
     def test_image_pull_policy_never_is_scoped_to_task(self) -> None:
