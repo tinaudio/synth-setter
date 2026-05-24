@@ -18,10 +18,10 @@ on:
     paths:
       - "tests/test_generate_dataset_shards.py"
       - "tests/conftest.py"
-      - "configs/dataset.yaml"
-      - "configs/experiment/generate_dataset/**"
-      - "configs/render/**"
-      - "configs/r2/**"
+      - "src/synth_setter/configs/dataset.yaml"
+      - "src/synth_setter/configs/experiment/generate_dataset/**"
+      - "src/synth_setter/configs/render/**"
+      - "src/synth_setter/configs/r2/**"
       - "src/synth_setter/cli/generate_dataset.py"
       - ".github/workflows/test-generate-dataset-shards.yml"
 
@@ -57,7 +57,8 @@ jobs:
       # `ensure_plugin_symlinks.sh` recreates the in-image
       # `plugins/Surge XT.vst3` symlink that the workspace bind-mount shadows;
       # without it the worker resolves `plugin_path: plugins/Surge XT.vst3`
-      # (from `configs/render/surge_xt.yaml`) to a missing host file.
+      # (from `src/synth_setter/configs/render/surge_xt.yaml`) to a missing
+      # host file.
       # R2 credentials are passed via `-e` so the in-container rclone picks
       # them up; `RCLONE_CONFIG_R2_TYPE/PROVIDER` are pinned as literals to
       # match `test-local-launcher-roundtrip.yml`'s rclone config shape.
@@ -78,7 +79,7 @@ jobs:
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
               bash docker/ubuntu22_04/ensure_plugin_symlinks.sh
-              docker/ubuntu22_04/run-linux-vst-headless.sh \
+              src/synth_setter/scripts/run-linux-vst-headless.sh \
                 pytest tests/test_generate_dataset_shards.py \
                   -m "integration_r2" \
                   -vv -s
