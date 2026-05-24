@@ -33,6 +33,7 @@ on:
       - "src/synth_setter/pipeline/schemas/shard_metadata.py"
       - "src/synth_setter/pipeline/partitioning.py"
       - "src/synth_setter/pipeline/r2_io.py"
+      - "src/synth_setter/pipeline/skypilot_launch.py"
       - "src/synth_setter/pipeline/spec_io.py"
       - "src/synth_setter/pipeline/ci/**"
       - "src/synth_setter/cli/generate_dataset.py"
