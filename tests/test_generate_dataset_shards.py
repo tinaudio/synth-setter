@@ -8,7 +8,6 @@ URI in real Cloudflare R2 (auto-skips when ``rclone`` / R2 creds are absent).
 
 from __future__ import annotations
 
-import subprocess
 import uuid
 
 import pytest
@@ -69,8 +68,4 @@ def test_generate_dataset_renders_shards_to_r2(
             size = r2_io.object_size(spec.r2.shard_uri(shard))
             assert size is not None and size > 0, f"shard missing in R2: {shard.filename}"
     finally:
-        subprocess.run(  # noqa: S603 — args built from validated spec
-            ["rclone", "purge", f"r2:{spec.r2.bucket}/{spec.r2.prefix}"],  # noqa: S607
-            check=False,
-            capture_output=True,
-        )
+        r2_io.purge_prefix(spec.r2.bucket, spec.r2.prefix)

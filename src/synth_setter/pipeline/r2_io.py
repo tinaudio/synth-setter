@@ -29,6 +29,7 @@ __all__ = [
     "is_r2_reachable",
     "is_r2_uri",
     "object_size",
+    "purge_prefix",
     "shard_uri",
     "to_rclone_path",
     "upload",
@@ -278,6 +279,26 @@ def object_size(r2_uri: str) -> int | None:
     )
     out = result.stdout.strip()
     return int(out) if out else None
+
+
+def purge_prefix(bucket: str, prefix: str) -> None:
+    """Recursively delete every object under ``r2://{bucket}/{prefix}`` (best-effort).
+
+    Intended for integration-test teardown that runs in a ``finally`` block:
+    rclone's exit status is intentionally ignored so a transient purge failure
+    does not mask the test's real result (e.g. an assertion that fired before
+    cleanup). Pair with a unique per-run ``prefix`` so a partial purge cannot
+    leak shards across concurrent runs.
+
+    :param bucket: R2 bucket name (no scheme, no trailing slash).
+    :param prefix: Key prefix to wipe — should end in ``/`` so rclone treats it
+        as a directory rather than a single-object delete target.
+    """
+    subprocess.run(  # noqa: S603 — args from validated bucket + prefix
+        ["rclone", "purge", f"{RCLONE_REMOTE}:{bucket}/{prefix}"],  # noqa: S607
+        check=False,
+        capture_output=True,
+    )
 
 
 @contextmanager

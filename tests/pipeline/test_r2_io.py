@@ -467,6 +467,63 @@ class TestObjectSize:
             r2_io.object_size("local/key.h5")
 
 
+class TestPurgePrefix:
+    """Tests for purge_prefix — best-effort recursive delete via `rclone purge`."""
+
+    def test_removes_all_objects_under_prefix(self, fake_r2_remote: Path) -> None:
+        """Every key under the prefix is gone after the call.
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        """
+        prefix_root = fake_r2_remote / "bucket" / "runs" / "abc"
+        prefix_root.mkdir(parents=True)
+        (prefix_root / "shard-000000.h5").write_bytes(b"x")
+        (prefix_root / "shard-000001.h5").write_bytes(b"y")
+
+        r2_io.purge_prefix("bucket", "runs/abc/")
+
+        assert not prefix_root.exists()
+
+    def test_leaves_sibling_prefixes_untouched(self, fake_r2_remote: Path) -> None:
+        """A purge bounded by ``prefix`` does not touch keys outside it.
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        """
+        target = fake_r2_remote / "bucket" / "runs" / "abc"
+        sibling = fake_r2_remote / "bucket" / "runs" / "xyz"
+        target.mkdir(parents=True)
+        sibling.mkdir(parents=True)
+        (target / "shard.h5").write_bytes(b"x")
+        keeper = sibling / "shard.h5"
+        keeper.write_bytes(b"y")
+
+        r2_io.purge_prefix("bucket", "runs/abc/")
+
+        assert keeper.exists()
+
+    def test_missing_prefix_does_not_raise(self, fake_r2_remote: Path) -> None:
+        """A non-existent prefix is a no-op — `check=False` swallows rclone's exit code.
+
+        Critical for use in ``finally`` blocks, where a missing prefix means the
+        test failed before any upload occurred and purge should not mask that.
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        """
+        r2_io.purge_prefix("bucket", "never-created/")
+
+    def test_invokes_rclone_purge_with_translated_path(self) -> None:
+        """Argv shape: ``rclone purge r2:{bucket}/{prefix}`` with check=False."""
+        completed = MagicMock(spec=subprocess.CompletedProcess)
+        completed.returncode = 0
+        with patch.object(r2_io.subprocess, "run", return_value=completed) as mock_run:
+            r2_io.purge_prefix("bucket", "runs/abc/")
+        args = mock_run.call_args[0][0]
+        assert args == ["rclone", "purge", "r2:bucket/runs/abc/"]
+        kwargs = mock_run.call_args[1]
+        assert kwargs.get("check") is False
+        assert kwargs.get("capture_output") is True
+
+
 def _set_all_r2_secrets(monkeypatch: pytest.MonkeyPatch, suffix: str = "from-env") -> None:
     """Populate `RCLONE_CONFIG_R2_*` secrets so `ensure_r2_env_loaded` finds them.
 
