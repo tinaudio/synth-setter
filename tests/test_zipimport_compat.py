@@ -7,9 +7,14 @@ to ``__fspath__`` / ``.glob()`` / ``str(traversable)``-as-real-path. Both
 shapes pass when the install layout happens to be a ``PosixPath``.
 
 The fixture zips the ``synth_setter`` source tree once per session and spawns
-a fresh Python with ``PYTHONPATH=<zip>`` and a wiped ``sys.path`` so the
-subprocess can only find the package via ``zipimport``. Each test injects a
-small Python program over ``-c`` and asserts on its stdout — failure modes
+a fresh Python with ``PYTHONPATH=<zip>`` prepended to ``sys.path``, ``-s``
+plus ``PYTHONNOUSERSITE=1`` to skip the user site, and a minimal ``env`` that
+omits ``VIRTUAL_ENV``. The parent venv's ``site-packages`` is still imported
+by ``site`` (deliberately: transitive deps like ``rootutils`` and
+``omegaconf`` must remain importable for the ``generate_vst_dataset.py
+--help`` smoke), but ``synth_setter`` itself resolves out of the zip because
+``PYTHONPATH`` precedes ``site-packages`` on ``sys.path``. Each test injects
+a small Python program over ``-c`` and asserts on its stdout — failure modes
 (missing ``__fspath__``, broken ``open``, ``glob`` returning ``[]``) surface
 as a non-zero exit with a readable traceback.
 """
