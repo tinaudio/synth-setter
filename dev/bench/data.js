@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779637106544,
+  "lastUpdate": 1779637108321,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -7471,6 +7471,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 18.137182759499996,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2a80910b775bf268c60edec8d40404aef1808a91",
+          "message": "refactor(code-health): ship configs/ and the headless VST wrapper inside the package (#1236)\n\n* refactor(code-health): ship configs/ and the headless wrapper inside the package\n\nMove `configs/` to `src/synth_setter/configs/` and\n`docker/ubuntu22_04/run-linux-vst-headless.sh` to\n`src/synth_setter/scripts/run-linux-vst-headless.sh`. Locate both via\n`importlib.resources.files(\"synth_setter\")` instead of\n`Path(__file__).resolve().parents[N]` walks or bare relative paths so\nthey keep working under any install layout (editable, wheel, zip).\n\nAdds `src/synth_setter/resources.py` exposing `configs_dir()` and\n`vst_headless_wrapper()` helpers (Traversable-returning, with\n`as_file` re-exported for subprocess callers on zipped wheels). Wires\n`[tool.setuptools.package-data]` so the YAMLs and `.sh` ship in the\nwheel.\n\nAll callsites updated: Python (CLIs, materialize_spec, surge_xt_interactive,\ntests), Hydra `@hydra.main(config_path=...)` decorators, programmatic\n`initialize_config_dir` sites, GHA workflows, SkyPilot compute templates,\nDockerfile COPY, Makefile, and docs.\n\nRefs #1235\nRefs #1122\nPart of #223\n\n* refactor(code-health): resolve packaged configs via pkg:// + as_file()\n\nCompletes the configs/headless-wrapper packaging refactor by closing the\nzipped-wheel hole the previous commit left open. Flips every Hydra\nentrypoint and programmatic compose site from filesystem-relative paths\nto ``pkg://synth_setter.configs`` / ``initialize_config_module``, wraps\nevery subprocess argv build in ``as_file()`` so the wrapper survives a\nzip-import install, and ships a Hydra SearchPathPlugin so downstream\napps auto-discover the configs after ``pip install``.\n\nWhat changed (vs. the previous commit on this branch):\n\n- ``cli/{train,eval,generate_dataset}.py``: ``@hydra.main(config_path=\n  \"pkg://synth_setter.configs\", ...)``. The relative\n  ``config_path=\"../configs\"`` previously broke under zipimport.\n- ``cli/{finalize_dataset,generate_dataset}.py``, ``pipeline/ci/\n  materialize_spec.py``, and 8 test files: ``initialize_config_dir(\n  config_dir=str(configs_dir()))`` -> ``initialize_config_module(\n  config_module=\"synth_setter.configs\")``.\n- ``cli/generate_dataset.py`` / ``tools/surge_xt_interactive.py``:\n  ``as_file()`` + ``ExitStack`` wrap the subprocess invocation so the\n  wrapper path stays valid across retries and zipped-wheel installs.\n  Drops the module-level ``_VST_HEADLESS_WRAPPER`` constant from\n  ``surge_xt_interactive``; the argv builder now requires the caller to\n  pass a real, materialized ``wrapper_path`` on Linux.\n- ``src/hydra_plugins/synth_setter_searchpath/__init__.py``: new Hydra\n  SearchPathPlugin that appends ``pkg://synth_setter.configs`` to every\n  search path. Auto-discovered via the top-level ``hydra_plugins``\n  namespace package shipped in the wheel.\n- ``pyproject.toml``: ``namespaces = true`` so setuptools picks up the\n  ``hydra_plugins`` namespace package alongside the regular\n  ``synth_setter`` package.\n- ``resources.py``: docstring re-oriented so ``as_file()`` is the\n  install-layout-safe default and ``str(traversable)`` is documented as\n  the unpacked-wheel shortcut.\n- ``tests/data/vst/test_preset_params.py``: tighten the skip-message\n  spacing.\n- Docs: every ``configs/`` path reference under ``docs/`` updated to\n  ``src/synth_setter/configs/``.\n\nVerification (all run in this commit):\n\n- ``ruff check`` / ``ruff format --check`` / ``pydoclint`` clean.\n- Fast suite: 1391 passed, 232 deselected.\n- Targeted 425-test bundle (tests/test_configs, tests/schemas,\n  tests/pipeline/test_configs, tests/pipeline/test_entrypoints,\n  tests/pipeline/test_ci, tests/claude_hooks/test_settings_hooks):\n  425 passed.\n- ``initialize_config_module(config_module=\"synth_setter.configs\")``\n  composes ``experiment=generate_dataset/smoke-shard`` from /tmp.\n- ``Plugins.instance().discover(SearchPathPlugin)`` contains\n  ``SynthSetterSearchPathPlugin`` (auto-discovered).\n- ``python -m build`` ships ``hydra_plugins/`` + 152 entries under\n  ``synth_setter/configs/`` and ``synth_setter/scripts/`` in the wheel.\n- Fresh ``uv venv`` + wheel install + ``cd /tmp`` + compose: composes\n  the same spec; ``as_file(vst_headless_wrapper())`` resolves under the\n  site-packages install.\n\nRefs #1235\nRefs #1122\nPart of #223\n\n* refactor(pipeline): anchor REPO_ROOT on rootutils.setup_root return\n\nReuse the project-root Path returned by ``rootutils.setup_root`` instead\nof a duplicate ``Path(__file__).resolve().parents[4]`` walk. Same\nbehavior, but the anchor no longer breaks if this module moves.\n\nMirrors the pattern already in\n``src/synth_setter/tools/surge_xt_interactive.py``.\n\nAddresses PR #1236 review comment 3291278211.",
+          "timestamp": "2026-05-24T11:22:43-04:00",
+          "tree_id": "f27b018313b510620cdd8809489782442338b44a",
+          "url": "https://github.com/tinaudio/synth-setter/commit/2a80910b775bf268c60edec8d40404aef1808a91"
+        },
+        "date": 1779637107942,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 2.4566609859466553,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 3.3513635055720807,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.009845423512160778,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.01109766960144043,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 1.3795373439788818,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 15.694585689600007,
             "unit": "seconds"
           }
         ]
