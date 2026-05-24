@@ -46,8 +46,10 @@ jobs:
         with:
           python-version: "3.10"
 
+      # Pin so an upstream tool release can't flip this gate red without a
+      # repo-side change. Bump deliberately as needed.
       - name: Install build tools
-        run: pip install --upgrade build twine
+        run: pip install 'build==1.2.*' 'twine==5.*'
 
       # `python -m build` runs PEP 517 in an isolated env; missing/broken
       # [build-system] fails here instead of falling back to legacy setuptools.
@@ -59,7 +61,7 @@ jobs:
 
       # Cheap diff signal when package-data changes.
       - name: List wheel contents
-        run: python -m zipfile -l dist/*.whl
+        run: python -m zipfile -l dist/synth_setter-*.whl
 
       # `--no-deps` keeps this a packaging check, not a dep-resolution check;
       # the heavy runtime stack (skypilot, torch, h5py) is exercised in Tests.
