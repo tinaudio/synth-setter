@@ -8,6 +8,7 @@ touches ``.github/workflows/deflake-mps.yml``. Gated by
 """
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -17,12 +18,12 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_always_fails(tmp_path):
-    """Write a sentinel marker into ``tmp_path``, then fail.
+def test_always_fails(tmp_path: Path) -> None:
+    """Fail unconditionally, leaving a sentinel file in ``tmp_path``.
 
-    The marker filename is asserted by the workflow's
-    ``Verify artifact contents`` step to prove
-    ``tmp_path_retention_policy=failed`` actually retained the dir.
+    :param tmp_path: Per-iteration pytest tmpdir; retained by
+        ``tmp_path_retention_policy=failed`` so the workflow's
+        ``Verify artifact contents`` step can grep for the marker.
     """
     (tmp_path / "deflake-self-test-marker").write_text("sentinel")
     pytest.fail("intentional sentinel failure for the deflake self-test")
