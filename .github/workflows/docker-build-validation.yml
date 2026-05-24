@@ -44,6 +44,11 @@ jobs:
     name: Build and push Docker image
     runs-on: ubuntu-latest-4core
     timeout-minutes: 60
+    # packages: write mirrors the build to ghcr.io as a rate-limit-free
+    # fallback for Docker Hub pulls on Azure runners — see #1254.
+    permissions:
+      contents: read
+      packages: write
 
     steps:
       - uses: actions/checkout@v6
@@ -188,6 +193,16 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # Same push-only gate as the Docker Hub login above; GHCR auths
+      # via the job's GITHUB_TOKEN, no extra secret needed.
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -212,7 +227,11 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ steps.config.outputs.image }}
+          # Fan out every tag to both registries; ghcr.io is the
+          # rate-limit-free pull mirror — see #1254.
+          images: |
+            ${{ steps.config.outputs.image }}
+            ghcr.io/tinaudio/synth-setter
           # Floating tags `dev-snapshot` and `latest` are gated to push-to-main
           # runs or dispatches that explicitly target main. Dispatching with
           # git_ref pointed at a non-main ref must NOT overwrite either tag —
@@ -261,6 +280,8 @@ jobs:
           tags: |
             ${{ steps.config.outputs.image }}:devcontainer-tools
             ${{ steps.config.outputs.image }}:devcontainer-tools-${{ steps.source.outputs.sha }}
+            ghcr.io/tinaudio/synth-setter:devcontainer-tools
+            ghcr.io/tinaudio/synth-setter:devcontainer-tools-${{ steps.source.outputs.sha }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             BUILD_MODE=${{ steps.config.outputs.build_mode }}
