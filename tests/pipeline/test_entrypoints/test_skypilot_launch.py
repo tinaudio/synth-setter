@@ -299,6 +299,29 @@ class TestEnsureCiSkyConfig:
         assert "memory: 1+" in body
         assert "controller:" in body
 
+    def test_writes_image_pull_policy_never_under_kubernetes_pod_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """SYNTH_SETTER_CI_MODE=1 → pod_config forces ``imagePullPolicy: Never``.
+
+        Pinning the exact nested location is what makes the override actually
+        reach kubelet — SkyPilot's ``combine_pod_config_fields`` merges this
+        into every kind pod (jobs controller + worker), letting the
+        pre-loaded dev-snapshot image satisfy starts without re-resolving the
+        manifest from Docker Hub (#1255).
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param monkeypatch: Pytest fixture for env/attribute mocking.
+        """
+        import yaml as _yaml
+
+        monkeypatch.setenv("SYNTH_SETTER_CI_MODE", "1")
+        monkeypatch.setenv("HOME", str(tmp_path))
+        _ensure_ci_sky_config()
+        doc = _yaml.safe_load((tmp_path / ".sky" / "config.yaml").read_text(encoding="utf-8"))
+        containers = doc["kubernetes"]["pod_config"]["spec"]["containers"]
+        assert containers == [{"imagePullPolicy": "Never"}]
+
     def test_idempotent_overwrite(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Re-invoking the helper is safe; the file is rewritten, not appended.
 
