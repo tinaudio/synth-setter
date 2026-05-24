@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779637108321,
+  "lastUpdate": 1779654860478,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -4278,6 +4278,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.04041224718093872,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "65148c24c19163185c909b28f3d174e47528d3bf",
+          "message": "ci(testing): broaden Codecov coverage signal across suites and platforms (#1219)\n\n* ci(testing): broaden Codecov coverage signal across suites and platforms\n\nBuilds on the Codecov cleanup from #1211. Five focused changes:\n\n- **Add coverage upload to test-mps.yml, test-gpu.yml, test-vst-slow.yml.**\n  These suites exercise code paths the fast/slow CPU suites can't reach\n  (MPS backend, CUDA kernels, VST plugin host). Without an upload they\n  read as 0% in Codecov and create perverse incentives to skip hard-path\n  tests. Each uploads under its own flag (`unit-mps`, `unit-gpu`, `vst`)\n  guarded by `if: always() && hashFiles('coverage.xml') != ''` so a mid-\n  suite crash still uploads partial coverage without failing the job.\n- **Split unit-cpu into per-OS sub-flags.** Both ubuntu and macos jobs in\n  `test.yml` now upload under `unit-cpu,unit-cpu-<os>`. The parent\n  `unit-cpu` flag preserves historical carryforward while the per-OS\n  flags surface platform-specific regressions that carryforward would\n  otherwise hide.\n- **Register the new flags in codecov.yml** with appropriate path scope\n  (vst is narrowed to the VST module + audio-metrics evaluator;\n  GPU/MPS scope `src/synth_setter/` only).\n- **Drop the `tools` component's `target: 50%` status override.** The\n  fixed 50% target was perpetually red and overrode the more useful\n  `default_rules` auto/no-regression baseline — losing the regression\n  signal in exchange for a static, non-actionable badge. Letting `tools`\n  inherit `default_rules` restores regression detection.\n- **Add missing `[tool.coverage.report].exclude_lines` patterns**:\n  `if TYPE_CHECKING:`, `@overload`, `@(abc\\\\.)?abstractmethod`, and\n  ellipsis function bodies (`\\\\.\\\\.\\\\.\\\\s*$`, anchored to end-of-line so\n  inline ellipsis like `arr[..., :]` and `\"wait...\"` are not excluded).\n  These structurally-untestable lines inflate the uncovered count today.\n\nNo enforcement changes — `informational: true` stays for both `project`\nand `patch` per the existing roadmap on #14.\n\nRefs #14\n\n* chore(lint): apply review polish to coverage signal rollout\n\n- Collapse `if TYPE_CHECKING:` / `if typing.TYPE_CHECKING:` into a single\n  `if (typing\\\\.)?TYPE_CHECKING:` regex and drop the bare `@overload` line\n  (the `@(typing\\\\.)?overload` regex below already covers both forms).\n  Matches the style of `@(abc\\\\.)?abstractmethod` and removes the dual-\n  pattern asymmetry the code-health review flagged.\n- Tighten the codecov.yml `unit-cpu` aggregate comment from 4 lines to 2\n  per CLAUDE.md cap-at-two; load-bearing why (carryforward masking) leads.\n- Tighten the test-gpu.yml bind-mount comment from 4 lines to 2 with the\n  same edit pattern.\n- Add a one-line note on `unit-gpu` / `unit-mps` / `vst` flag paths\n  explaining why `scripts/ci/` is intentionally omitted (those suites\n  don't exercise scripts/ci).\n\nRefs #14\n\n* ci(testing): collect scripts/ci coverage in CPU pytest invocations\n\n`--cov=src` alone overrides `[tool.coverage.run].source` from\n`pyproject.toml`, so `scripts/ci/` was silently absent from the coverage\nupload even though the unit-cpu/slow-cpu flag paths in `codecov.yml`\ninclude it. Add `--cov=scripts/ci` to all three CPU pytest invocations\n(test.yml ubuntu + macos, cpu-slow.yml) so the flag paths are no longer\nmisleading and the `scripts-ci` component receives real coverage data.\n\nAddresses Copilot review on PR #1219:\nhttps://github.com/tinaudio/synth-setter/pull/1219#discussion_r3295210237\n\nRefs #14",
+          "timestamp": "2026-05-24T20:14:50Z",
+          "tree_id": "5604657305aa97c6ebfed93fdbc6a96d3507e7bd",
+          "url": "https://github.com/tinaudio/synth-setter/commit/65148c24c19163185c909b28f3d174e47528d3bf"
+        },
+        "date": 1779654859820,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.9870007038116455,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.392653503343463,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.025155287235975266,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.021288514137268066,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.0127670764923096,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 17.223842407916667,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.3212361335754395,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.652144688429543,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.03202533349394798,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.03698527812957764,
             "unit": "1-cos"
           },
           {
