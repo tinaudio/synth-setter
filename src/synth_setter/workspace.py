@@ -25,7 +25,11 @@ _WORKSPACE_ENV = "SYNTH_SETTER_WORKSPACE"
 
 
 def _checkout_root() -> Path | None:
-    """Return the first ancestor of this file containing ``.project-root``."""
+    """Return the first ancestor of this file containing ``.project-root``.
+
+    :returns: Absolute path of the checkout root, or ``None`` if no
+        ``.project-root`` marker is reachable up the parents chain.
+    """
     for candidate in Path(__file__).resolve().parents:
         if (candidate / _CHECKOUT_MARKER).is_file():
             return candidate

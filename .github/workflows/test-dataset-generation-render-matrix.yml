@@ -132,19 +132,19 @@ jobs:
       # torch-importing module loads, so install ``-e .`` with
       # ``--no-deps`` and add back only the module-load surface of
       # ``synth_setter.cli.generate_dataset`` (hydra → omegaconf,
-      # rootutils, loguru, dotenv, pydantic, plus vst/core's pedalboard
-      # + mido + numpy). Bypassing ``[project].dependencies`` keeps the
-      # contract job well under a minute — the torch stack landed in
-      # mandatory deps in #1247 for universal-lock resolution; #1245
-      # folds this callsite back onto the canonical install path.
-      # Exact pins for hydra-core / hydra-colorlog / loguru mirror
+      # loguru, dotenv, pydantic, plus vst/core's pedalboard + mido +
+      # numpy). Bypassing ``[project].dependencies`` keeps the contract
+      # job well under a minute — the torch stack landed in mandatory
+      # deps in #1247 for universal-lock resolution; #1245 folds this
+      # callsite back onto the canonical install path. Exact pins for
+      # hydra-core / hydra-colorlog / loguru mirror
       # ``[project].dependencies`` so this hand-picked closure cannot
       # drift past the project's locked versions while it lives here.
       - name: Install package (validator only)
         run: |
           uv pip install --system --no-deps -e .
           uv pip install --system \
-            hydra-core==1.3.2 hydra-colorlog==1.2.0 rootutils \
+            hydra-core==1.3.2 hydra-colorlog==1.2.0 \
             loguru==0.7.3 python-dotenv 'pydantic>=2' \
             pedalboard mido numpy
 

@@ -32,7 +32,7 @@ ______________________________________________________________________
 ```
 src/synth_setter/configs/experiment/generate_dataset/{id}.yaml → Hydra compose against src/synth_setter/configs/dataset.yaml
   → spec_from_cfg(cfg) → DatasetSpec (frozen, Pydantic, the spec ON R2)
-    → spec_io.write_spec_locally(spec, _REPO_ROOT)
+    → spec_io.write_spec_locally(spec, _OPERATOR_WORKSPACE)
         → <repo>/data/<task_name>/<run_id>/metadata/input_spec.json (operator-side artifact)
     → r2_io.ensure_r2_env_loaded(sky_cfg.env_file)   (dotenv + auth ping)
     → spec_io.upload_spec(spec) → R2 at {r2.prefix}input_spec.json (one canonical write per main())
@@ -110,7 +110,7 @@ be confused:
 ```
 synth-setter-generate-dataset experiment=… skypilot_launch.compute_template=src/synth_setter/configs/compute/runpod-template.yaml
   → @hydra.main composes DictConfig → spec_from_cfg → DatasetSpec
-    → write_spec_locally(spec, _REPO_ROOT)
+    → write_spec_locally(spec, _OPERATOR_WORKSPACE)
     → upload_spec(spec) → R2 at {r2.prefix}input_spec.json
     → dispatch_via_skypilot(spec, sky_cfg, spec_uri=spec.r2.input_spec_uri())
       → SkyPilot provisions pod (RunPod, OCI, kubernetes via `sky local up`)

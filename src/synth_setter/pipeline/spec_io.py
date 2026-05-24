@@ -2,9 +2,10 @@
 
 The frozen ``DatasetSpec`` is written to two well-known locations every run:
 
-  - local: ``<repo_root>/data/<task_name>/<run_id>/metadata/input_spec.json``
-    (the runner anchors at ``_REPO_ROOT``; see :func:`local_spec_path`'s
-    ``output_dir`` parameter for why ``cfg.paths.output_dir`` is not used)
+  - local: ``<workspace>/data/<task_name>/<run_id>/metadata/input_spec.json``
+    (the runner anchors at ``_OPERATOR_WORKSPACE``; see
+    :func:`local_spec_path`'s ``output_dir`` parameter for why
+    ``cfg.paths.output_dir`` is not used)
   - R2:    ``spec.r2.input_spec_uri()`` (see ``R2Location.input_spec_uri``)
 
 The local path anticipates the ``docs/design/storage-provenance-spec.md`` §3a
@@ -106,12 +107,12 @@ def local_spec_path(spec: DatasetSpec, output_dir: Path) -> Path:
 
     :param spec: The frozen DatasetSpec.
     :param output_dir: Operator-side artifact root. The runner
-        (``cli/generate_dataset.py::main()``) passes ``_REPO_ROOT`` —
+        (``cli/generate_dataset.py::main()``) passes ``_OPERATOR_WORKSPACE`` —
         ``cfg.paths.output_dir`` is pinned to the same value as a shim
         for ``${hydra:runtime.output_dir}`` resolution, but is not the
         anchor read back here.
     :returns: ``<output_dir>/data/<task_name>/<run_id>/metadata/input_spec.json``
-        — i.e. ``<repo_root>/data/...`` when invoked from the runner.
+        — i.e. ``<workspace>/data/...`` when invoked from the runner.
     """
     return (
         output_dir

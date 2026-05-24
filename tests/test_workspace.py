@@ -20,13 +20,22 @@ from synth_setter import workspace
 
 @pytest.fixture(autouse=True)
 def _reset_workspace_cache(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Drop the ``@cache`` and any leaked ``$PROJECT_ROOT`` between cases."""
+    """Drop the ``@cache`` and any leaked ``$PROJECT_ROOT`` between cases.
+
+    :param monkeypatch: Pytest fixture for env-var isolation.
+    """
     workspace.operator_workspace.cache_clear()
     monkeypatch.delenv("PROJECT_ROOT", raising=False)
 
 
 def _stage_synthetic_package(tmp_path: Path) -> Path:
-    """Copy ``src/synth_setter`` into ``tmp_path/site-packages`` for subprocess use."""
+    """Copy ``src/synth_setter`` into ``tmp_path/site-packages`` for subprocess use.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :returns: Path to the synthetic ``site-packages`` directory; passed
+        as ``PYTHONPATH`` to launcher subprocesses that need to import
+        ``synth_setter`` without a ``.project-root`` reachable.
+    """
     src_pkg = Path(__file__).resolve().parents[1] / "src" / "synth_setter"
     dest = tmp_path / "site-packages"
     dest.mkdir()
@@ -39,7 +48,11 @@ def _stage_synthetic_package(tmp_path: Path) -> Path:
 
 
 def test_env_override_wins(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """``$SYNTH_SETTER_WORKSPACE`` takes precedence over the checkout."""
+    """``$SYNTH_SETTER_WORKSPACE`` takes precedence over the checkout.
+
+    :param monkeypatch: Pytest fixture for env-var setup.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
     monkeypatch.setenv("SYNTH_SETTER_WORKSPACE", str(tmp_path))
     resolved = workspace.operator_workspace()
     assert resolved == tmp_path.resolve()
@@ -47,7 +60,10 @@ def test_env_override_wins(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
 
 
 def test_checkout_root_detected_from_marker(monkeypatch: pytest.MonkeyPatch) -> None:
-    """With no env override, the parents-walk lands on the test file's checkout root."""
+    """With no env override, the parents-walk lands on the test file's checkout root.
+
+    :param monkeypatch: Pytest fixture for env-var isolation.
+    """
     monkeypatch.delenv("SYNTH_SETTER_WORKSPACE", raising=False)
     expected = Path(workspace.__file__).resolve().parents[2]
     resolved = workspace.operator_workspace()
@@ -58,14 +74,22 @@ def test_checkout_root_detected_from_marker(monkeypatch: pytest.MonkeyPatch) -> 
 def test_project_root_env_set_as_side_effect(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """The helper publishes the resolved path as ``$PROJECT_ROOT`` for Hydra interpolation."""
+    """The helper publishes the resolved path as ``$PROJECT_ROOT`` for Hydra interpolation.
+
+    :param monkeypatch: Pytest fixture for env-var setup.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
     monkeypatch.setenv("SYNTH_SETTER_WORKSPACE", str(tmp_path))
     workspace.operator_workspace()
     assert os.environ["PROJECT_ROOT"] == str(tmp_path.resolve())
 
 
 def test_project_root_env_not_overwritten(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """A pre-set ``$PROJECT_ROOT`` is preserved — operator wins."""
+    """A pre-set ``$PROJECT_ROOT`` is preserved — operator wins.
+
+    :param monkeypatch: Pytest fixture for env-var setup.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
     monkeypatch.setenv("PROJECT_ROOT", "/already/set")
     monkeypatch.setenv("SYNTH_SETTER_WORKSPACE", str(tmp_path))
     workspace.operator_workspace()
@@ -78,6 +102,8 @@ def test_cwd_fallback_when_no_checkout_reachable(tmp_path: Path) -> None:
     Mirrors the wheel-install crash repro in #1261: copy ``synth_setter``
     into a clean tree, point ``PYTHONPATH`` at it, leave both
     workspace-resolution envs unset so the cwd branch fires.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
     """
     dest = _stage_synthetic_package(tmp_path)
 
@@ -122,6 +148,9 @@ def test_launcher_imports_without_project_root(tmp_path: Path, module: str) -> N
     failure mode the issue described. The post-import ``$PROJECT_ROOT``
     assertion confirms the side effect ``configs/paths/default.yaml``'s
     ``${oc.env:PROJECT_ROOT}`` interpolation depends on actually fires.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param module: Parametrized console-script module path under test.
     """
     dest = _stage_synthetic_package(tmp_path)
 
