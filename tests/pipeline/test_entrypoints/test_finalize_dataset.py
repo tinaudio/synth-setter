@@ -67,12 +67,15 @@ def _write_minimal_wds_shard(dest: Path) -> None:
 def _build_wds_smoke_spec(
     task_name: str = "finalize-wds-unit",
     train_val_test_sizes: tuple[int, int, int] = (4, 0, 0),
+    mask_degenerate_bins: bool = False,
 ) -> DatasetSpec:
     """Construct a wds ``DatasetSpec`` directly (no Hydra compose).
 
     :param task_name: Unique task name so each test gets a distinct r2.prefix.
     :param train_val_test_sizes: Three-tuple of sample counts; default is one
         4-sample shard.
+    :param mask_degenerate_bins: Threaded onto the spec so wire tests can pin
+        both polarities of the finalize stats-fold knob.
     :returns: A frozen wds ``DatasetSpec`` whose shards are deterministic.
     """
     kwargs: dict[str, Any] = {
@@ -80,6 +83,7 @@ def _build_wds_smoke_spec(
         "output_format": "wds",
         "train_val_test_sizes": list(train_val_test_sizes),
         "base_seed": 42,
+        "mask_degenerate_bins": mask_degenerate_bins,
         "r2": {"bucket": "intermediate-data"},
         "render": {
             "plugin_path": "/fake/Plugin.vst3",
@@ -219,6 +223,7 @@ def _build_hdf5_smoke_spec(
     task_name: str = "finalize-hdf5-unit",
     train_val_test_sizes: tuple[int, int, int] = (8, 4, 4),
     samples_per_shard: int = 4,
+    mask_degenerate_bins: bool = False,
 ) -> DatasetSpec:
     """Construct a small hdf5 ``DatasetSpec`` directly (no Hydra compose).
 
@@ -226,6 +231,8 @@ def _build_hdf5_smoke_spec(
     :param train_val_test_sizes: Three-tuple of sample counts; every entry must
         be a multiple of ``samples_per_shard``.
     :param samples_per_shard: Per-shard row count driving shard count derivation.
+    :param mask_degenerate_bins: Threaded onto the spec so wire tests can pin
+        both polarities of the finalize stats-fold knob.
     :returns: A frozen hdf5 ``DatasetSpec`` whose shards are deterministic.
     """
     kwargs: dict[str, Any] = {
@@ -233,6 +240,7 @@ def _build_hdf5_smoke_spec(
         "output_format": "hdf5",
         "train_val_test_sizes": list(train_val_test_sizes),
         "base_seed": 42,
+        "mask_degenerate_bins": mask_degenerate_bins,
         "r2": {"bucket": "intermediate-data"},
         "render": {
             "plugin_path": "/fake/Plugin.vst3",
@@ -624,10 +632,8 @@ def test_finalize_hdf5_temp_work_dir_is_torn_down_on_failure(
     captured_work_dir: dict[str, Path] = {}
     r2_stand_in = tmp_path / "r2"
 
-    def boom_finalize_hdf5(
-        spec: object, work_dir: Path, mask_degenerate_bins: bool = False
-    ) -> None:
-        del spec, mask_degenerate_bins
+    def boom_finalize_hdf5(spec: object, work_dir: Path) -> None:
+        del spec
         # Capture the live tempdir path before the raise so the post-call
         # assertion can prove ``TemporaryDirectory`` cleanup ran.
         captured_work_dir["path"] = Path(work_dir)
@@ -889,14 +895,14 @@ def test_finalize_wds_raises_on_empty_train_split(fake_r2_remote: Path, tmp_path
 def test_finalize_wds_forwards_mask_degenerate_bins_to_stream_stats(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, flag: bool
 ) -> None:
-    """``finalize_wds`` forwards ``mask_degenerate_bins`` to ``stream_stats_wds`` verbatim.
+    """``finalize_wds`` forwards ``spec.mask_degenerate_bins`` to ``stream_stats_wds`` verbatim.
 
     Pins the wire on both polarities so a regression that hard-wires the kwarg (True or False)
     fails the test rather than silently re-breaking smoke finalize.
 
     :param monkeypatch: Pytest fixture used to capture the forwarded kwarg.
     :param tmp_path: Pytest tmp dir; the download stub writes one minimal shard.
-    :param flag: Parametrized polarity threaded through the wire.
+    :param flag: Parametrized polarity threaded through the wire via the spec field.
     """
     monkeypatch.setattr(
         "synth_setter.pipeline.r2_io.download_to_path",
@@ -915,8 +921,12 @@ def test_finalize_wds_forwards_mask_degenerate_bins_to_stream_stats(
 
     monkeypatch.setattr("synth_setter.cli.finalize_dataset.stream_stats_wds", fake_stream_stats)
 
-    spec = _build_wds_smoke_spec(task_name=f"mask-forwards-{flag}", train_val_test_sizes=(4, 0, 0))
-    finalize_dataset.finalize_wds(spec, tmp_path, mask_degenerate_bins=flag)
+    spec = _build_wds_smoke_spec(
+        task_name=f"mask-forwards-{flag}",
+        train_val_test_sizes=(4, 0, 0),
+        mask_degenerate_bins=flag,
+    )
+    finalize_dataset.finalize_wds(spec, tmp_path)
 
     assert captured == {"mask_degenerate": flag}
 
@@ -925,7 +935,7 @@ def test_finalize_wds_forwards_mask_degenerate_bins_to_stream_stats(
 def test_finalize_hdf5_forwards_mask_degenerate_bins_to_get_stats(
     fake_r2_remote: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, flag: bool
 ) -> None:
-    """``finalize_hdf5`` forwards ``mask_degenerate_bins`` to ``get_stats_hdf5`` verbatim.
+    """``finalize_hdf5`` forwards ``spec.mask_degenerate_bins`` to ``get_stats_hdf5`` verbatim.
 
     Mirrors the wds wire test so a regression on the hdf5 branch surfaces the same way; the smoke-
     shard config opts in for the same reason and needs the same protection.
@@ -933,7 +943,7 @@ def test_finalize_hdf5_forwards_mask_degenerate_bins_to_get_stats(
     :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
     :param tmp_path: Pytest tmp dir; hosts the finalize scratch work_dir.
     :param monkeypatch: Pytest fixture used to capture the forwarded kwarg.
-    :param flag: Parametrized polarity threaded through the wire.
+    :param flag: Parametrized polarity threaded through the wire via the spec field.
     """
     captured: dict[str, bool] = {}
 
@@ -947,13 +957,16 @@ def test_finalize_hdf5_forwards_mask_degenerate_bins_to_get_stats(
 
     monkeypatch.setattr("synth_setter.cli.finalize_dataset.get_stats_hdf5", fake_get_stats)
 
-    spec = _build_hdf5_smoke_spec(task_name=f"mask-forwards-hdf5-{flag}")
+    spec = _build_hdf5_smoke_spec(
+        task_name=f"mask-forwards-hdf5-{flag}",
+        mask_degenerate_bins=flag,
+    )
     shard_remote_dir = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
     _seed_shard_files(shard_remote_dir, spec)
 
     work_dir = tmp_path / "work"
     work_dir.mkdir()
-    finalize_dataset.finalize_hdf5(spec, work_dir, mask_degenerate_bins=flag)
+    finalize_dataset.finalize_hdf5(spec, work_dir)
 
     assert captured == {"mask_degenerate": flag}
 
