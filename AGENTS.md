@@ -89,7 +89,7 @@ exempt.
 ## YAML `run:` block scalars are bash
 
 In GitHub Actions workflows (`.github/workflows/*.{yml,yaml}`) and SkyPilot
-task configs (`configs/compute/*.yaml`'s `run:` / `setup:` blocks), comments
+task configs (`src/synth_setter/configs/compute/*.yaml`'s `run:` / `setup:` blocks), comments
 go **above** the step, never inside the block scalar. The block-scalar body
 is bash and stray `'`, `` ` ``, `$`, or `\` inside a comment has caused
 unintended shell expansion. A `PreToolUse` hook

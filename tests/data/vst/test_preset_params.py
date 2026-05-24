@@ -10,8 +10,8 @@ Regression for: https://github.com/tinaudio/synth-setter/issues/225
 """
 
 import os
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -30,8 +30,9 @@ skip_no_vst = pytest.mark.skipif(
 
 skip_linux = pytest.mark.skipif(
     sys.platform == "linux",
-    reason=" test needs refactor to use  docker/ubuntu22_04/run-linux-vst-headless.sh",
+    reason="test needs refactor to use src/synth_setter/scripts/run-linux-vst-headless.sh",
 )
+
 
 @requires_vst
 @skip_no_vst

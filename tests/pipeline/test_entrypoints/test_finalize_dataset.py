@@ -810,11 +810,11 @@ def _compose_smoke_hdf5_spec() -> DatasetSpec:
     :returns: A ``DatasetSpec`` whose ``r2.prefix`` matches what ``main()``
         constructs from the ``smoke-shard`` experiment in the same process.
     """
-    from hydra import compose, initialize_config_dir
+    from hydra import compose, initialize_config_module
 
-    with initialize_config_dir(
+    with initialize_config_module(
         version_base="1.3",
-        config_dir=str(finalize_dataset._CONFIG_DIR),  # noqa: SLF001 — test mirrors main()
+        config_module="synth_setter.configs",
     ):
         cfg = compose(
             config_name="dataset",
@@ -919,11 +919,11 @@ def _compose_smoke_wds_spec() -> DatasetSpec:
     :returns: A ``DatasetSpec`` whose ``r2.prefix`` matches what ``main()``
         constructs from the ``smoke-shard-wds`` experiment in the same process.
     """
-    from hydra import compose, initialize_config_dir
+    from hydra import compose, initialize_config_module
 
-    with initialize_config_dir(
+    with initialize_config_module(
         version_base="1.3",
-        config_dir=str(finalize_dataset._CONFIG_DIR),  # noqa: SLF001 — test mirrors main()
+        config_module="synth_setter.configs",
     ):
         cfg = compose(
             config_name="dataset",

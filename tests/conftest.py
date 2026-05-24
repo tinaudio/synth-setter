@@ -13,11 +13,12 @@ import numpy as np
 import pytest
 import rootutils
 import torch
-from hydra import compose, initialize
+from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 from omegaconf import DictConfig, open_dict
 
 from synth_setter.data.vst import param_specs, preset_paths
+from synth_setter.resources import vst_headless_wrapper
 from synth_setter.utils.utils import register_resolvers
 from tests._baseline_worktree import worktree_for_ref  # noqa: F401 — pytest fixture re-export
 
@@ -50,12 +51,12 @@ _VST_SUBPROCESS_TIMEOUT_SECONDS = 600
 NUM_FIXTURE_SAMPLES = 5
 
 
-# Bootstraps Xvfb + xsettingsd + dbus for VST3 plugin init; resolved relative
-# to the container WORKDIR (``/home/build/synth-setter``) baked in the image.
-# X11 wrapping lives at the audio-rendering boundary (the subprocess call),
-# not at the container entrypoint — the click CLI stays X11-agnostic so idle
-# and passthrough don't pay the Xvfb startup cost.
-VST_HEADLESS_WRAPPER = "docker/ubuntu22_04/run-linux-vst-headless.sh"
+# Bootstraps Xvfb + xsettingsd + dbus for VST3 plugin init; ships inside
+# the ``synth_setter`` package via :mod:`synth_setter.resources`. X11
+# wrapping lives at the audio-rendering boundary (the subprocess call),
+# not at the container entrypoint — the click CLI stays X11-agnostic so
+# idle and passthrough don't pay the Xvfb startup cost.
+VST_HEADLESS_WRAPPER = str(vst_headless_wrapper())
 
 
 def _validate_surge_dataset(path: Path, num_samples: int) -> None:
@@ -122,7 +123,7 @@ def cfg_train_global() -> DictConfig:
 
     :return: A DictConfig object containing a default Hydra configuration for training.
     """
-    with initialize(version_base="1.3", config_path="../configs"):
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="train.yaml",
             return_hydra_config=True,
@@ -164,7 +165,7 @@ def cfg_eval_global() -> DictConfig:
 
     :return: A DictConfig containing a default Hydra configuration for evaluation.
     """
-    with initialize(version_base="1.3", config_path="../configs"):
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="eval.yaml",
             return_hydra_config=True,
@@ -254,7 +255,7 @@ def cfg_dataset_global() -> DictConfig:
         ``experiment=generate_dataset/smoke-shard`` so every required (``???``)
         field is populated.
     """
-    with initialize(version_base="1.3", config_path="../configs"):
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="dataset",
             overrides=["experiment=generate_dataset/smoke-shard"],
@@ -375,7 +376,7 @@ def _build_surge_xt_smoke_cfg(
 
     :return: Resolved DictConfig with the smoke-test bake-ins applied.
     """
-    with initialize(version_base="1.3", config_path="../configs"):
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="train.yaml",
             return_hydra_config=True,

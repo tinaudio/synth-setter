@@ -122,13 +122,14 @@ output — no version drift.
 
 ### Project layout
 
-| Directory           | Purpose                                                                 |
-| ------------------- | ----------------------------------------------------------------------- |
-| `src/synth_setter/` | ML code, distributed data pipeline (`pipeline/`), CLIs (PEP src-layout) |
-| `scripts/`          | Standalone utility scripts                                              |
-| `configs/`          | Hydra YAML configs and pipeline configs                                 |
-| `tests/`            | Test suite (mirrors `src/synth_setter/`)                                |
-| `docs/design/`      | Design documents                                                        |
+| Directory                   | Purpose                                                                           |
+| --------------------------- | --------------------------------------------------------------------------------- |
+| `src/synth_setter/`         | ML code, distributed data pipeline (`pipeline/`), CLIs (PEP src-layout)           |
+| `src/synth_setter/configs/` | Hydra YAML configs; located via `synth_setter.resources.configs_dir()`            |
+| `src/synth_setter/scripts/` | Shipped shell helpers (e.g. `run-linux-vst-headless.sh`); located via `resources` |
+| `scripts/`                  | Standalone utility scripts                                                        |
+| `tests/`                    | Test suite (mirrors `src/synth_setter/`)                                          |
+| `docs/design/`              | Design documents                                                                  |
 
 ## Testing
 

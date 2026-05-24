@@ -231,11 +231,9 @@ def ci_r2_prefix() -> Iterator[str]:
         # Read bucket from the same config the test composed against. R2 v3
         # purges return non-zero on an empty prefix on some endpoints; swallow
         # any rclone exit so a cleanup hiccup doesn't mask a real test failure.
-        from hydra import compose, initialize_config_dir
+        from hydra import compose, initialize_config_module
 
-        repo_root = Path(__file__).resolve().parents[2]
-        cfg_dir = str(repo_root / "configs")
-        with initialize_config_dir(version_base="1.3", config_dir=cfg_dir):
+        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
             cfg = compose(
                 config_name="dataset",
                 overrides=["experiment=generate_dataset/smoke-shard"],
@@ -311,11 +309,10 @@ def test_launcher_roundtrip_with_stubbed_renderer(
 
     # Compose once so we have the spec the launcher will materialize; this
     # is also what the downstream validate helpers expect to be on R2.
-    from hydra import compose, initialize_config_dir
+    from hydra import compose, initialize_config_module
 
     repo_root = Path(__file__).resolve().parents[2]
-    cfg_dir = str(repo_root / "configs")
-    with initialize_config_dir(version_base="1.3", config_dir=cfg_dir):
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(config_name="dataset", overrides=argv[1:])
     # Mirror main()'s pre-spec-construction shim for the unresolved
     # ${hydra:runtime.output_dir} interpolation.

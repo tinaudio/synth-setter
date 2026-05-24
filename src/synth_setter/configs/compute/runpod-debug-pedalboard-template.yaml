@@ -45,7 +45,7 @@ setup: |
 run: |
   set -euo pipefail
   bash docker/ubuntu22_04/ensure_plugin_symlinks.sh
-  bash docker/ubuntu22_04/run-linux-vst-headless.sh python -c '
+  bash src/synth_setter/scripts/run-linux-vst-headless.sh python -c '
   from pedalboard import VST3Plugin
   plugin = VST3Plugin("plugins/Surge XT.vst3")
   print(f"plugin loaded: name={plugin.name!r} version={plugin.version!r}")

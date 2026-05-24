@@ -126,12 +126,25 @@ synth-setter-spec-uri = "synth_setter.pipeline.ci.spec_uri:main"
 
 
 [tool.setuptools.packages.find]
-# PEP src-layout: the only Python package this project ships is `synth_setter`,
-# living at src/synth_setter/. Setuptools discovers subpackages automatically.
+# PEP src-layout: ``synth_setter`` (regular package) plus the ``hydra_plugins``
+# namespace package both live under ``src/``. ``namespaces = true`` is what
+# lets Hydra auto-discover ``hydra_plugins.synth_setter_searchpath`` after a
+# wheel install — see ``src/hydra_plugins/synth_setter_searchpath/__init__.py``.
 where = ["src"]
+namespaces = true
 
 [tool.setuptools.package-dir]
 "" = "src"
+
+# Ship Hydra config YAMLs and the Linux Xvfb wrapper inside the wheel so
+# ``importlib.resources.files("synth_setter")`` can locate them under any
+# install layout — see ``src/synth_setter/resources.py``.
+[tool.setuptools.package-data]
+"synth_setter" = [
+  "configs/**/*.yaml",
+  "configs/**/*.yml",
+  "scripts/*.sh",
+]
 
 
 [tool.pytest.ini_options]

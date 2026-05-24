@@ -30,11 +30,11 @@ name: Generate Dataset Shards
 #     `sky local up`, loads the dev-snapshot image into kind, writes the
 #     managed-jobs controller-resource shrink into ~/.sky/config.yaml so the
 #     controller pod fits on kind, then invokes against
-#     `configs/compute/local-template.yaml`. The launcher detects
+#     `src/synth_setter/configs/compute/local-template.yaml`. The launcher detects
 #     `cloud: kubernetes` and skips its cred bootstrap. Always tears down
 #     kind in `if: always()`.
 #   * `runpod` / `oci` — in-container invocation against the matching
-#     `configs/compute/*-template.yaml`. The launcher's `_run_cred_bootstrap`
+#     `src/synth_setter/configs/compute/*-template.yaml`. The launcher's `_run_cred_bootstrap`
 #     writes provider creds inside the container; if SKYPILOT_API_SERVER_ENDPOINT
 #     is set, the bootstrap is skipped (the remote API server holds creds).
 #
@@ -56,7 +56,7 @@ on:
         required: true
         type: string
       dataset_config:
-        description: "Hydra experiment name under configs/experiment/ (e.g. `generate_dataset/smoke-shard`)"
+        description: "Hydra experiment name under src/synth_setter/configs/experiment/ (e.g. `generate_dataset/smoke-shard`)"
         required: true
         type: string
       image_tag:
@@ -109,7 +109,7 @@ on:
           - runpod
           - oci
       dataset_config:
-        description: "Hydra experiment name under configs/experiment/ (e.g. `generate_dataset/smoke-shard`)"
+        description: "Hydra experiment name under src/synth_setter/configs/experiment/ (e.g. `generate_dataset/smoke-shard`)"
         required: true
         type: string
         default: "generate_dataset/smoke-shard"
@@ -392,7 +392,7 @@ jobs:
           set -euo pipefail
           OVERRIDES=(
             "experiment=$CONFIG_PATH"
-            "skypilot_launch.compute_template=configs/compute/local-template.yaml"
+            "skypilot_launch.compute_template=src/synth_setter/configs/compute/local-template.yaml"
             "skypilot_launch.job_name=$CLUSTER_NAME"
             "skypilot_launch.worker_image_tag=$IMAGE_TAG"
           )
@@ -494,7 +494,7 @@ jobs:
         if: ${{ inputs.provider == 'runpod' || inputs.provider == 'oci' }}
         env:
           SKYPILOT_API_SERVER_ENDPOINT: ${{ secrets.SKYPILOT_API_SERVER_ENDPOINT }}
-          TEMPLATE: configs/compute/${{ inputs.provider == 'oci' && 'oci-cpu' || inputs.provider }}-template.yaml
+          TEMPLATE: src/synth_setter/configs/compute/${{ inputs.provider == 'oci' && 'oci-cpu' || inputs.provider }}-template.yaml
           CLUSTER_NAME: ${{ steps.cluster.outputs.name }}
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
           OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}

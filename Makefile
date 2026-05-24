@@ -30,7 +30,7 @@ sync: ## Merge changes from main branch to your current branch
 # so HEADLESS_WRAPPER is empty there. Wrapper exits cleanly even if no VST
 # tests run (VST3-not-installed → tests skip via existing skipif decorators).
 UNAME_S := $(shell uname -s)
-HEADLESS_WRAPPER := $(if $(filter Linux,$(UNAME_S)),docker/ubuntu22_04/run-linux-vst-headless.sh,)
+HEADLESS_WRAPPER := $(if $(filter Linux,$(UNAME_S)),src/synth_setter/scripts/run-linux-vst-headless.sh,)
 
 test-fast: ## Inner-loop tests: CPU-only, no slow, no VST. Excludes gpu/mps so the suite is host-portable.
 	pytest -n auto -m "not slow and not gpu and not mps and not requires_vst"

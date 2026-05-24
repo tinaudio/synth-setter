@@ -148,73 +148,73 @@ jobs:
         include:
           - variant: noop
             mode: inline-sky
-            template: configs/compute/runpod-debug-template.yaml
+            template: src/synth_setter/configs/compute/runpod-debug-template.yaml
             cluster_prefix: synth-setter-debug
             cluster_suffix: noop
             config: ""
           - variant: image-pull
             mode: inline-sky
-            template: configs/compute/runpod-debug-image-pull-template.yaml
+            template: src/synth_setter/configs/compute/runpod-debug-image-pull-template.yaml
             cluster_prefix: synth-setter-debug
             cluster_suffix: image-pull
             config: ""
           - variant: spec-mount
             mode: inline-sky
-            template: configs/compute/runpod-debug-spec-mount-template.yaml
+            template: src/synth_setter/configs/compute/runpod-debug-spec-mount-template.yaml
             cluster_prefix: synth-setter-debug
             cluster_suffix: spec-mount
             config: ""
           - variant: headless
             mode: inline-sky
-            template: configs/compute/runpod-debug-headless-template.yaml
+            template: src/synth_setter/configs/compute/runpod-debug-headless-template.yaml
             cluster_prefix: synth-setter-debug
             cluster_suffix: headless
             config: ""
           - variant: rclone
             mode: inline-sky
-            template: configs/compute/runpod-debug-rclone-template.yaml
+            template: src/synth_setter/configs/compute/runpod-debug-rclone-template.yaml
             cluster_prefix: synth-setter-debug
             cluster_suffix: rclone
             config: ""
           - variant: headless-rclone
             mode: inline-sky
-            template: configs/compute/runpod-debug-headless-rclone-template.yaml
+            template: src/synth_setter/configs/compute/runpod-debug-headless-rclone-template.yaml
             cluster_prefix: synth-setter-debug
             cluster_suffix: headless-rclone
             config: ""
           - variant: pedalboard-load
             mode: inline-sky
-            template: configs/compute/runpod-debug-pedalboard-template.yaml
+            template: src/synth_setter/configs/compute/runpod-debug-pedalboard-template.yaml
             cluster_prefix: synth-setter-debug
             cluster_suffix: pedalboard
             config: ""
           - variant: stickiness-probe
             mode: inline-sky
-            template: configs/compute/runpod-debug-template.yaml
+            template: src/synth_setter/configs/compute/runpod-debug-template.yaml
             cluster_prefix: synth-setter-smoke
             cluster_suffix: stickiness
             config: ""
           - variant: launcher
             mode: launcher-runner
-            template: configs/compute/runpod-debug-launcher-minimal-template.yaml
+            template: src/synth_setter/configs/compute/runpod-debug-launcher-minimal-template.yaml
             cluster_prefix: synth-setter-debug
             cluster_suffix: launcher
             config: generate_dataset/smoke-shard
           - variant: launcher-in-docker
             mode: launcher-docker
-            template: configs/compute/runpod-debug-launcher-minimal-template.yaml
+            template: src/synth_setter/configs/compute/runpod-debug-launcher-minimal-template.yaml
             cluster_prefix: synth-setter-debug
             cluster_suffix: launcher-docker
             config: generate_dataset/smoke-shard
           - variant: generate-tiny
             mode: launcher-runner
-            template: configs/compute/runpod-template.yaml
+            template: src/synth_setter/configs/compute/runpod-template.yaml
             cluster_prefix: synth-setter-debug
             cluster_suffix: generate-tiny
             config: generate_dataset/smoke-shard
           - variant: generate-tiny-in-docker
             mode: launcher-docker
-            template: configs/compute/runpod-template.yaml
+            template: src/synth_setter/configs/compute/runpod-template.yaml
             cluster_prefix: synth-setter-debug
             cluster_suffix: generate-tiny-docker
             config: generate_dataset/smoke-shard

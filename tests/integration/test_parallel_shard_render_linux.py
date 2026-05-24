@@ -1,8 +1,8 @@
 """Stress integration test for parallel shard renders under the Linux Xvfb wrapper.
 
 When ``render.parallel=True`` and we run on Linux, ``_render_and_upload_shard``
-forks N concurrent invocations of ``docker/ubuntu22_04/run-linux-vst-headless.sh``
-(``generate_dataset.py:VST_HEADLESS_WRAPPER``). The wrapper bootstraps Xvfb +
+forks N concurrent invocations of ``src/synth_setter/scripts/run-linux-vst-headless.sh``
+(resolved via :func:`synth_setter.resources.vst_headless_wrapper`). The wrapper bootstraps Xvfb +
 xsettingsd + dbus for the pedalboard ``VST3Plugin`` to construct against an
 X11 display. If the wrapper does not isolate Xvfb per invocation, concurrent
 calls race the X server and the renderer raises ``CalledProcessError``.

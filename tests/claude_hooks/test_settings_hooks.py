@@ -443,7 +443,7 @@ def yaml_run_hook_command() -> str:
 
 
 def test_yaml_run_hook_passes_unrelated_file(yaml_run_hook_command: str) -> None:
-    """Edits to files outside workflows/ and configs/compute/ fast-path through.
+    """Edits to files outside workflows/ and src/synth_setter/configs/compute/ fast-path through.
 
     :param yaml_run_hook_command: Hook command body fixture.
     """
@@ -1064,7 +1064,7 @@ def test_baseline_hook_allows_equal_count_edit(baseline_hook_command: str, tmp_p
 
 
 def test_yaml_run_hook_blocks_compute_config_path(yaml_run_hook_command: str) -> None:
-    """A `#`-comment inside a ``run: |`` block in ``configs/compute/*.yaml`` is blocked.
+    """Block a `#`-comment in a ``run: |`` body under ``src/synth_setter/configs/compute/*.yaml``.
 
     :param yaml_run_hook_command: Hook command body fixture.
     """
@@ -1078,7 +1078,10 @@ def test_yaml_run_hook_blocks_compute_config_path(yaml_run_hook_command: str) ->
         yaml_run_hook_command,
         {
             "tool_name": "Write",
-            "tool_input": {"file_path": "configs/compute/foo.yaml", "content": content},
+            "tool_input": {
+                "file_path": "src/synth_setter/configs/compute/foo.yaml",
+                "content": content,
+            },
         },
     )
     assert result.returncode == 2, (result.returncode, result.stderr)
@@ -1568,7 +1571,7 @@ def test_yaml_run_hook_description_documents_both_extensions() -> None:
     """The matcher description must mention both ``.yml`` and ``.yaml`` extensions.
 
     The hook's ``in_scope`` accepts ``.github/workflows/*.{yml,yaml}`` and
-    ``configs/compute/*.{yml,yaml}``. A description naming only one extension
+    ``src/synth_setter/configs/compute/*.{yml,yaml}``. A description naming only one extension
     per directory misleads users into surprise when the other fires.
     """
     # _find_handler enforces "exactly one matcher entry" — call it first so a

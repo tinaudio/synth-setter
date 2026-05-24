@@ -42,6 +42,7 @@ from synth_setter.pipeline.skypilot_launch import (
 from synth_setter.pipeline.skypilot_launch import (
     _run_cred_bootstrap as _real_run_cred_bootstrap,
 )
+from synth_setter.resources import configs_dir
 
 
 @pytest.fixture()
@@ -74,12 +75,7 @@ def env_file(tmp_path: Path) -> Path:
 @pytest.fixture()
 def template_yaml() -> Path:
     """Resolve the in-repo SkyPilot RunPod template path."""
-    return (
-        Path(__file__).resolve().parent.parent.parent.parent
-        / "configs"
-        / "compute"
-        / "runpod-template.yaml"
-    )
+    return Path(str(configs_dir() / "compute" / "runpod-template.yaml"))
 
 
 @pytest.fixture(autouse=True)
