@@ -58,6 +58,8 @@ CI and `make` selectors are **not identical** — CI may use different marker co
 
 **Markers** are registered in [`pyproject.toml`](../../pyproject.toml) under `[tool.pytest.ini_options].markers`. The file lists each marker's purpose. Strict markers are on — unknown marker names fail collection, so new markers must be added to `pyproject.toml` first.
 
+**Test order and seeding are randomized.** `pytest-randomly` is on by default; each run shuffles test order and reseeds `random` / `numpy.random` / `torch`. To reproduce a flake, copy the `Using --randomly-seed=NNN` line printed at session start and pass it back via `-p randomly --randomly-seed=NNN`; disable shuffling with `-p no:randomly`. The on-demand deflake harness ([`deflake-mps.yml`](../../.github/workflows/deflake-mps.yml) / `make deflake TEST=<node-id> [COUNT=50]`) reruns a single node N times and uploads failed iterations' `tmp_path` as artifacts — see [#1260](https://github.com/tinaudio/synth-setter/issues/1260).
+
 ______________________________________________________________________
 
 ## 3. Which shape fits your test?
