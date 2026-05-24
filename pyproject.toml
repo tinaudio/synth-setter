@@ -118,6 +118,8 @@ dev = [
   "pytest",
   "pytest-benchmark",
   "pytest-cov",
+  "pytest-randomly",
+  "pytest-repeat",
   "pytest-xdist",
   "ruff",
 ]
@@ -152,6 +154,8 @@ dev = [
   "pytest",
   "pytest-benchmark",
   "pytest-cov",
+  "pytest-randomly",
+  "pytest-repeat",
   "pytest-xdist",
   "ruff",
   { include-group = "docs" },

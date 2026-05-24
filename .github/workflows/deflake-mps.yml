@@ -1,0 +1,129 @@
+name: Deflake (MPS)
+
+# Rerun a single pytest node N times on macOS Apple Silicon and upload every
+# failed iteration's tmp_path as an artifact — diagnostic harness for the
+# MPS-non-determinism flakes tracked in #1260.
+on:
+  workflow_dispatch:
+    inputs:
+      test_node_id:
+        description: "Pytest node id (e.g. tests/test_train.py::test_train_eval_surge_xt[mps-surge_4-loss_l2_mel])"
+        required: true
+        type: string
+      count:
+        description: "Number of iterations"
+        required: true
+        type: number
+        default: 50
+
+permissions:
+  contents: read
+
+jobs:
+  deflake:
+    runs-on: macos-latest
+
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv pip install --system -e ".[torch,dev]"
+
+      # Mirror `test-mps.yml`'s Surge XT provisioning — same cask + symlink path
+      # the configs and `--plugin_path` defaults expect.
+      - name: Install Surge XT VST3
+        run: |
+          brew install --cask surge-xt
+          mkdir -p plugins
+          ln -sfn '/Library/Audio/Plug-Ins/VST3/Surge XT.vst3' 'plugins/Surge XT.vst3'
+
+      - name: Smoke-test Surge XT plugin load
+        run: |
+          python -X faulthandler -c "from synth_setter.data.vst.core import load_plugin; load_plugin('plugins/Surge XT.vst3')"
+
+      - name: Probe MPS availability
+        run: |
+          python -c "import torch; assert torch.backends.mps.is_available(), 'MPS not available on this runner'"
+
+      - name: List dependencies
+        run: uv pip list --system
+
+      # COUNT validated as a positive int — `type: number` admits floats; pytest-repeat needs int.
+      # NODE_ID + COUNT routed through env (never inlined into `run: |`) so an adversarial
+      # dispatch input can't break out of the bash/Python context.
+      - name: Run deflake loop
+        continue-on-error: true
+        env:
+          HYDRA_FULL_ERROR: "1"
+          NODE_ID: ${{ inputs.test_node_id }}
+          COUNT: ${{ inputs.count }}
+        run: |
+          set -euo pipefail
+          [[ "$COUNT" =~ ^[0-9]+$ ]] || { echo "ERROR: count must be a positive integer, got: $COUNT" >&2; exit 2; }
+          mkdir -p deflake-artifacts
+          pytest \
+            --count="$COUNT" \
+            -vv -s \
+            -o tmp_path_retention_policy=failed \
+            --basetemp "$PWD/deflake-artifacts/pytest" \
+            --junitxml deflake-artifacts/junit.xml \
+            -- "$NODE_ID" \
+            2>&1 | tee deflake-artifacts/pytest.log
+
+      - name: Summarize results
+        if: always()
+        env:
+          NODE_ID: ${{ inputs.test_node_id }}
+          COUNT: ${{ inputs.count }}
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import os
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          node_id = os.environ["NODE_ID"]
+          count = os.environ["COUNT"]
+          junit = Path("deflake-artifacts/junit.xml")
+          print("## Deflake results\n")
+          print(f"- node id: `{node_id}`")
+          print(f"- iterations requested: **{count}**")
+          if not junit.exists():
+              print("\n_junit.xml missing — pytest collection likely failed; see logs._")
+              raise SystemExit(0)
+          root = ET.parse(junit).getroot()
+          ts = root if root.tag == "testsuite" else root.find("testsuite")
+          if ts is None:
+              print("\n_junit.xml had no testsuite element — see logs._")
+              raise SystemExit(0)
+          total = int(ts.get("tests", 0))
+          fails = int(ts.get("failures", 0)) + int(ts.get("errors", 0))
+          rate = (fails / total * 100) if total else 0.0
+          print(f"- iterations run: **{total}**")
+          print(f"- failures: **{fails}**")
+          print(f"- fail rate: **{rate:.1f}%**")
+          PY
+
+      # `run_attempt` in the artifact name so a re-run of the same dispatch
+      # doesn't collide. `warn` (not `error`) so zero-failure runs still
+      # upload the junit + log bundle.
+      - name: Upload deflake artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deflake-mps-${{ github.run_id }}-${{ github.run_attempt }}
+          path: deflake-artifacts/
+          retention-days: 14
+          if-no-files-found: warn
