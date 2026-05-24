@@ -2,7 +2,7 @@
 
 import threading
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -66,7 +66,7 @@ class FakeVST3Plugin:
 
     def process(
         self,
-        midi_events: Iterable[tuple[bytes, float]],
+        midi_events: Iterable[tuple[Sequence[int], float]],
         duration_seconds: float,
         sample_rate: float,
         channels: int,
@@ -75,24 +75,27 @@ class FakeVST3Plugin:
     ) -> np.ndarray:
         """Render deterministic audio matching the real plugin's output contract.
 
-        Empty ``midi_events`` (the production flush calls) yield silence; any
-        ``note_on`` yields a sine at the note's frequency, scaled by velocity.
+        Empty ``midi_events`` (the production flush calls) yield a zero-length
+        buffer because ``core.render_params`` discards the flush return value;
+        any ``note_on`` yields a sine at the note's frequency, scaled by velocity.
 
-        :param midi_events: Iterable of ``(payload_bytes, time_seconds)``; only
-            the first ``note_on`` is honoured.
+        :param midi_events: Iterable of ``(payload, time_seconds)`` where ``payload``
+            matches ``mido.Message.bytes()`` (a ``Sequence[int]``); only the first
+            ``note_on`` is honoured.
         :param duration_seconds: Output length; ``num_samples = duration * sample_rate``.
         :param sample_rate: Output sample rate in Hz.
         :param channels: Channel count of the returned ndarray (axis 0).
         :param block_size: Accepted to match the real plugin's signature; unused.
         :param tail: Accepted to match the real plugin's signature; unused.
-        :returns: ``np.ndarray`` of shape ``(channels, num_samples)``, float32,
-            with peak in ``[0, 1]`` and identical contents across repeated calls
-            for the same inputs.
+        :returns: ``np.ndarray`` of shape ``(channels, num_samples)`` for note-on
+            renders or ``(channels, 0)`` for flush calls, float32, with peak in
+            ``[0, 1]`` and identical contents across repeated calls for the same
+            inputs.
         """
-        num_samples = int(duration_seconds * sample_rate)
         note = _first_note_on(midi_events)
         if note is None:
-            return np.zeros((channels, num_samples), dtype=np.float32)
+            return np.zeros((channels, 0), dtype=np.float32)
+        num_samples = int(duration_seconds * sample_rate)
 
         pitch, velocity = note
         freq = _A4_FREQUENCY_HZ * 2.0 ** ((pitch - _A4_MIDI_NOTE) / _SEMITONES_PER_OCTAVE)
@@ -102,14 +105,16 @@ class FakeVST3Plugin:
         return np.broadcast_to(wave, (channels, num_samples)).copy()
 
 
-def _first_note_on(midi_events: Iterable[tuple[bytes, float]]) -> tuple[int, int] | None:
+def _first_note_on(
+    midi_events: Iterable[tuple[Sequence[int], float]],
+) -> tuple[int, int] | None:
     """Return ``(pitch, velocity)`` of the first ``note_on`` event, or ``None``.
 
     A ``note_on`` with velocity 0 is the MIDI idiom for ``note_off``; it does
     not count as a sounding event here.
 
-    :param midi_events: Iterable of ``(payload_bytes, time_seconds)`` per the
-        ``make_midi_events`` shape used by the production pipeline.
+    :param midi_events: Iterable of ``(payload, time_seconds)`` matching the
+        ``mido.Message.bytes()`` shape used by the production pipeline.
     :returns: ``(pitch, velocity)`` of the first true note-on event, or
         ``None`` if no sounding event is present.
     """

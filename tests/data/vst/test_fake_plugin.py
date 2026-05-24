@@ -1,7 +1,6 @@
 """Contract tests for ``FakeVST3Plugin`` — the duck-typed E2E test double."""
 
 import threading
-import time
 
 import numpy as np
 
@@ -40,13 +39,16 @@ def test_reset_is_a_noop() -> None:
     plugin.reset()
 
 
-def test_process_with_empty_midi_returns_float32_silence() -> None:
-    """Flush calls (``midi_events=[]``) return correctly shaped float32 zeros."""
+def test_process_with_empty_midi_returns_zero_length_float32_buffer() -> None:
+    """Flush calls (``midi_events=[]``) return a zero-length float32 buffer.
+
+    The production pipeline discards the flush return value, so allocating a full-duration zero
+    array would waste ~11MB per call at 44.1 kHz / 32 s.
+    """
     plugin = FakeVST3Plugin("plugins/anything.vst3")
-    out = plugin.process([], 0.5, 44100.0, 2, 2048, True)
-    assert out.shape == (2, 22050)
+    out = plugin.process([], 32.0, 44100.0, 2, 2048, True)
+    assert out.shape == (2, 0)
     assert out.dtype == np.float32
-    assert not out.any()
 
 
 def test_process_with_note_returns_audio_above_loudness_gate() -> None:
@@ -81,7 +83,18 @@ def test_show_editor_blocks_until_close_event_is_set() -> None:
     """``show_editor`` returns only after the host signals ``close_event.set()``."""
     plugin = FakeVST3Plugin("plugins/anything.vst3")
     close_event = threading.Event()
+    entered_wait = threading.Event()
     returned = threading.Event()
+
+    # Wrap ``close_event.wait`` so the test observes the exact moment the
+    # worker enters the blocking call — avoids any timing-based race.
+    original_wait = close_event.wait
+
+    def _instrumented_wait(timeout: float | None = None) -> bool:
+        entered_wait.set()
+        return original_wait(timeout)
+
+    close_event.wait = _instrumented_wait  # type: ignore[method-assign]
 
     def _run() -> None:
         plugin.show_editor(close_event)
@@ -89,7 +102,7 @@ def test_show_editor_blocks_until_close_event_is_set() -> None:
 
     thread = threading.Thread(target=_run, daemon=True)
     thread.start()
-    time.sleep(0.1)  # CI-safe margin for thread-startup + entering close_event.wait()
+    assert entered_wait.wait(timeout=1.0), "worker thread never entered show_editor"
     assert not returned.is_set(), "show_editor returned before close_event was set"
     close_event.set()
     assert returned.wait(timeout=1.0), "show_editor did not return after close_event"
