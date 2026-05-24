@@ -15,6 +15,12 @@ on:
         required: true
         type: number
         default: 50
+  # PR-self-test: runs the harness against a fast non-MPS test (count=3) so
+  # a change to this file is exercised end-to-end before merge — at-rest
+  # workflow_dispatch can't fire until the file is on the default branch.
+  pull_request:
+    paths:
+      - ".github/workflows/deflake-mps.yml"
 
 permissions:
   contents: read
@@ -68,8 +74,8 @@ jobs:
         continue-on-error: true
         env:
           HYDRA_FULL_ERROR: "1"
-          NODE_ID: ${{ inputs.test_node_id }}
-          COUNT: ${{ inputs.count }}
+          NODE_ID: ${{ inputs.test_node_id || 'tests/pipeline/test_file_uri.py::TestFileUriScheme::test_scheme_constant_is_canonical_file_prefix' }}
+          COUNT: ${{ inputs.count || 3 }}
         run: |
           set -euo pipefail
           [[ "$COUNT" =~ ^[0-9]+$ ]] || { echo "ERROR: count must be a positive integer, got: $COUNT" >&2; exit 2; }
@@ -86,8 +92,8 @@ jobs:
       - name: Summarize results
         if: always()
         env:
-          NODE_ID: ${{ inputs.test_node_id }}
-          COUNT: ${{ inputs.count }}
+          NODE_ID: ${{ inputs.test_node_id || 'tests/pipeline/test_file_uri.py::TestFileUriScheme::test_scheme_constant_is_canonical_file_prefix' }}
+          COUNT: ${{ inputs.count || 3 }}
         run: |
           python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
           import os
