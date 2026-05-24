@@ -1,0 +1,92 @@
+name: Package smoke
+
+# Catches packaging regressions (missing package-data, broken build-backend,
+# src-layout / namespace-package) before a publish attempt surfaces them — see #1235, #542.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "pyproject.toml"
+      - "src/**"
+      - "README.md"
+      - "LICENSE"
+      - ".github/workflows/package-smoke.yml"
+  pull_request:
+    branches: [main, "release/*", "dev"]
+    paths:
+      - "pyproject.toml"
+      - "src/**"
+      - "README.md"
+      - "LICENSE"
+      - ".github/workflows/package-smoke.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-smoke-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build-and-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      # Pin to requires-python floor so older-interpreter metadata bugs surface here.
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Install build tools
+        run: pip install --upgrade build twine
+
+      # `python -m build` runs PEP 517 in an isolated env; missing/broken
+      # [build-system] fails here instead of falling back to legacy setuptools.
+      - name: Build sdist and wheel
+        run: python -m build --outdir dist
+
+      - name: Validate distribution metadata
+        run: twine check --strict dist/*
+
+      # Cheap diff signal when package-data changes.
+      - name: List wheel contents
+        run: python -m zipfile -l dist/*.whl
+
+      # `--no-deps` keeps this a packaging check, not a dep-resolution check;
+      # the heavy runtime stack (skypilot, torch, h5py) is exercised in Tests.
+      - name: Install wheel into clean venv
+        run: |
+          python -m venv "$RUNNER_TEMP/clean"
+          "$RUNNER_TEMP/clean/bin/pip" install --no-deps dist/synth_setter-*.whl
+
+      # cwd outside the repo so Python imports from the wheel, not src/;
+      # find_spec is used for hydra_plugins because its module body needs hydra.
+      - name: Smoke-test installed package
+        working-directory: ${{ runner.temp }}
+        run: |
+          "$RUNNER_TEMP/clean/bin/python" - <<'PY'
+          import importlib.util
+          from importlib.resources import files
+
+          import synth_setter
+
+          spec = importlib.util.find_spec("hydra_plugins.synth_setter_searchpath")
+          assert spec is not None, "hydra_plugins.synth_setter_searchpath not in installed wheel"
+
+          configs = files("synth_setter").joinpath("configs")
+          assert configs.is_dir(), f"configs/ missing from wheel: {configs}"
+          assert configs.joinpath("train.yaml").is_file(), "configs/train.yaml not bundled"
+
+          print("synth_setter:", synth_setter.__file__)
+          print("hydra_plugins.synth_setter_searchpath:", spec.origin)
+          print("configs path:", configs)
+          PY
