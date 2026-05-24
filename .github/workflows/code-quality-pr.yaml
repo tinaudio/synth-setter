@@ -36,10 +36,6 @@ jobs:
       - name: Install dev tools (uv sync --frozen, no torch)
         run: uv sync --frozen --only-group dev
 
-      # Put the uv venv on PATH so pre-commit finds the synced ruff/pyright/pydoclint.
-      - name: Activate uv venv on PATH
-        run: echo "${GITHUB_WORKSPACE}/.venv/bin" >> "$GITHUB_PATH"
-
       - name: Find changed files
         id: changed_files
         uses: tj-actions/changed-files@v45
@@ -49,10 +45,13 @@ jobs:
       - name: List changed files
         run: echo '${{ steps.changed_files.outputs.all_changed_files }}'
 
+      # `pre-commit/action@v3` shells out to `python -m pip install pre-commit`
+      # against whichever python is first on PATH; with `uv sync` putting
+      # `.venv/bin/python` on PATH that python has no pip and the action dies
+      # with "No module named pip". The dev group already installs pre-commit
+      # into `.venv/bin`, so call it directly through `uv run`.
       - name: Run pre-commits
-        uses: pre-commit/action@v3.0.1
-        with:
-          extra_args: --files ${{ steps.changed_files.outputs.all_changed_files }}
+        run: uv run pre-commit run --files ${{ steps.changed_files.outputs.all_changed_files }}
 
       # Closes pydoclint's P6 blind spot: a new function/class added to a file
       # listed in [tool.pydoclint].exclude would otherwise enter main without

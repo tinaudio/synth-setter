@@ -29,12 +29,14 @@ jobs:
       - name: Install dev tools (uv sync --frozen, no torch)
         run: uv sync --frozen --only-group dev
 
-      - name: Activate uv venv on PATH
-        run: echo "${GITHUB_WORKSPACE}/.venv/bin" >> "$GITHUB_PATH"
-
+      # `pre-commit/action@v3` shells out to `python -m pip install pre-commit`
+      # against whichever python is first on PATH; with `uv sync` putting
+      # `.venv/bin/python` on PATH that python has no pip and the action dies
+      # with "No module named pip". Run pre-commit straight from the venv
+      # through `uv run` instead — pre-commit is in the dev group.
       - name: Run pre-commits
-        uses: pre-commit/action@v3.0.1
         env:
           # no-commit-to-branch hook rejects commits on main, but this CI job
           # runs after merge to main, so the hook must be skipped. See 628fa8e.
           SKIP: no-commit-to-branch
+        run: uv run pre-commit run --all-files
