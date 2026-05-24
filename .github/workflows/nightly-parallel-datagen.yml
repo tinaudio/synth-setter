@@ -112,8 +112,13 @@ jobs:
       #     keeps it null), so ``main()`` runs ``run(spec)`` inline rather than
       #     dispatching via SkyPilot — exercises ``_dispatch_shards_parallel``
       #     directly on this runner.
-      #   * ``SYNTH_SETTER_WORKER_RANK=0`` / ``SYNTH_SETTER_NUM_WORKERS=1`` so
-      #     the single in-process worker owns every shard.
+      #   * Partition env intentionally unset — exercises the
+      #     ``read_rank_world_from_env`` local default ``(rank=0, world=1)``
+      #     end-to-end. A regression that loses the default fails this
+      #     workflow before a launcher-less developer hits it. The #763
+      #     invariant (partial partition env still raises; only the
+      #     both-absent path defaults) is pinned by the partitioning unit
+      #     tests.
       #   * ``++render.parallel=true`` overrides the default ``parallel=false``
       #     even though the experiment YAML already sets it — the explicit
       #     override keeps the production-path coverage signal in the workflow
@@ -146,8 +151,6 @@ jobs:
             -e EXPERIMENT \
             -e NIGHTLY_TASK_NAME \
             -e HYDRA_FULL_ERROR=1 \
-            -e SYNTH_SETTER_WORKER_RANK=0 \
-            -e SYNTH_SETTER_NUM_WORKERS=1 \
             "$IMAGE" \
             bash -c '
               set -euo pipefail
