@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779658940652,
+  "lastUpdate": 1779660088948,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -4530,6 +4530,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.04281240701675415,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4d2c5c88ae90b06f3b497250c0f9163895452c06",
+          "message": "chore(deps): introduce uv.lock + hybrid PyTorch routing (#1248)\n\n* chore(deps): introduce uv.lock + hybrid PyTorch routing\n\nLay the foundation for reproducible dependency installs by committing a\nuniversal `uv.lock` and routing PyTorch wheels per platform from\n`pyproject.toml`. Phase 2 (#1245) flips CI from `uv pip install` to\n`uv sync --frozen` and removes the backward-compat shim extras left in\nplace here.\n\nChanges\n- `requires-python = \">=3.10,<3.14\"` — upper bound prevents the resolver\n  from chasing future Python versions with no torch wheels.\n- Move `torch`, `torchvision`, `torchaudio`, `lightning`, `torchmetrics`\n  from the `[torch]` extra into regular `dependencies`. Routing now lives\n  in `[tool.uv.sources]`, not the extra.\n- Add `[project.optional-dependencies].cpu` and `.cu128` backend extras.\n  Two extras are required: uv's `conflicts` declaration needs >=2 entries,\n  so the single-extra \"default = CUDA on Linux\" pattern in #1243's design\n  is not accepted by the resolver.\n- Add `[dependency-groups]` with `dev` (transitively including `docs`).\n- Add `[tool.uv]` `conflicts` declaring `cpu` and `cu128` mutually\n  exclusive — needed so uv locks each branch independently into the\n  universal lock instead of trying to satisfy both at once.\n- Add `[[tool.uv.index]]` entries for pytorch-cpu and pytorch-cu128\n  (both `explicit = true`).\n- Add `[tool.uv.sources]` routing torch/torchvision/torchaudio per\n  extra + platform marker. lightning and torchmetrics deliberately\n  excluded — they are pure-Python and the pytorch indexes do not host\n  them.\n- Relax `scipy==1.14.1` -> `scipy>=1.14,<1.15`. A hard patch-pin risks\n  backtracking against torch / librosa / kymatio during lock resolution.\n- Bump pre-commit validate-pyproject `v0.18` -> `v0.25` to support\n  PEP 735 `[dependency-groups]`.\n- Generate and commit `uv.lock` (328 packages).\n\nCommand surface introduced (CI cutover lands in #1245)\n\n- `uv sync --extra cu128`                       — GPU box (CUDA 12.8)\n- `uv sync --extra cpu --no-default-groups --group dev` — GPU-less CI\n- `uv sync --only-group dev`                    — lint/type-check (no torch)\n- `uv sync`                                     — macOS (MPS via PyPI)\n- `uv lock --check`                             — verify lock matches `pyproject.toml`\n\nVerification\n- `uv lock --check` passes.\n- `uv sync --frozen --extra cpu --no-default-groups --group dev` resolves\n  `torch==2.12.0+cpu` from pytorch-cpu.\n- `uv sync --frozen --extra cu128 --no-default-groups --group dev` resolves\n  `torch==2.11.0+cu128` from pytorch-cu128.\n- `uv sync --frozen --only-group dev` installs pyright/ruff/pytest without\n  torch.\n\nBackward compatibility\n- `torch`, `dev`, `docs`, `all` extras retained as shims so existing\n  `uv pip install -e \".[torch,dev]\"` calls in CI keep working. `uv pip`\n  does not honor `[tool.uv.sources]`, so those callsites continue to\n  resolve from PyPI as they did before this PR. Removal of the shims\n  lands in #1245 alongside the `uv sync --frozen` cutover.\n- The Dockerfile's `uv pip install --torch-backend ${TORCH_BACKEND}\n  --extra torch --extra dev` continues to work — the `[torch]` shim\n  still lists the packages, and `--torch-backend` configures the\n  index at `uv pip` time.\n\nRefs #1247\nRefs #1244\nRefs #1243\n\nCo-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>\n\n* chore(deps): clarify shim ownership + pin comment style\n\nAddress review feedback from repo-review-full-no-comments:\n\n- Note that the `cpu` and `cu128` extras must stay byte-identical\n  (routing lives in `[tool.uv.sources]`, not the extra contents) so a\n  future torch bump doesn't produce a split lockfile.\n- Expand the shim block comment to cover all four extras explicitly\n  (`torch` is now a no-op; `dev`/`docs` mirror the new groups minus\n  the `include-group` relationship).\n- Document that the `[dependency-groups].dev` group includes `docs`\n  while the `[project.optional-dependencies].dev` extra does not —\n  preserves pre-#1247 `uv pip install .[dev]` behavior.\n- Normalize the scipy pin comment to the same `# Pin: ...` style used\n  by the kubernetes co-pin block.\n\nNo functional changes; `uv lock --check` still resolves 328 packages.\n\nRefs #1247\n\n* docs: refresh stale pyproject references for #1247\n\nTwo factual contradictions introduced by the uv.lock foundation PR:\n\n- `docs/getting-started.md`: `requires-python = \">=3.10\"` was inlined as\n  a literal that now mismatches `pyproject.toml`'s `>=3.10,<3.14`.\n  Rewrite drift-resistant: point at the field, give the current bound\n  parenthetically.\n- `docs/reference/github-actions.md`: the GPU-runner section referred\n  to \"the `torch` extra in `pyproject.toml`\" as the version source-of-\n  truth. After #1247 the `torch` extra is a backward-compat no-op shim;\n  the version floor lives in `[project.dependencies]`. Re-point the\n  sentence at the right field.\n\nSubstantive Appendix A.4 + README \"GPU vs CPU\" rewrites (new\n`uv sync --extra cu128|cpu` command surface, `[dependency-groups]`,\n`uv.lock` workflow) deferred to Phase 3 (#1246) per the epic's split.\n\nRefs #1247\nRefs #1246\n\n* fix(ci): preserve no-torch install paths for #1247 callsites\n\nPre-#1247 both callsites relied on torch being optional. Now the torch\nstack is mandatory in `[project.dependencies]` for universal-lock\nresolution, so a bare `-e .` or `.[dev]` formally pulls torch.\n\n`test-dataset-generation-render-matrix.yml` contract job: switch to\n`uv pip install --no-deps -e .` plus an explicit module-load surface\n(hydra-core + colorlog, rootutils, loguru, python-dotenv, pydantic,\npedalboard, mido, numpy). Validator still fires inside `spec_from_cfg`\nbefore any torch-importing module loads, and the job stays well under a\nminute as the inline comment promises.\n\n`environment.yaml`: pip's `.[dev]` now formally overlaps with the\nconda-installed torch packages; rewrite the comment to describe the\nreal contract — pip's already-satisfied skip keeps conda's binaries\nauthoritative as long as the matched specs in this file stay >= the\nproject's lower bounds. No install-line change needed.\n\n#1245 folds both callsites back onto the canonical `uv sync --frozen`\ninstall path.\n\nRefs #1247\n\n* chore(deps): clarify [tool.uv.sources] marker scope + pin validator install closure\n\nAddress Copilot review feedback on #1248:\n\n* `pyproject.toml`: reword the `[project.optional-dependencies]` header so it\n  no longer claims the cpu/cu128 extras themselves are marker-gated. The\n  `sys_platform == 'linux' or 'win32'` markers live on the source routing in\n  `[tool.uv.sources]`; macOS just falls through to PyPI because bare\n  `uv sync` activates neither extra. (review comment 3291389406)\n\n* `.github/workflows/test-dataset-generation-render-matrix.yml`: mirror\n  `[project].dependencies` exact pins (`hydra-core==1.3.2`,\n  `hydra-colorlog==1.2.0`, `loguru==0.7.3`) on the hand-picked validator-only\n  install closure so the contract job cannot drift past the project's locked\n  versions while #1245 has not yet folded this callsite back onto\n  `uv sync --only-group dev`. (review comment 3291389441)\n\nRefs #1247\n\n* chore(deps): fix invalid marker example in pyproject.toml comment\n\nThe [project.optional-dependencies] header used `sys_platform == 'linux'\nor 'win32'` as an inline example — that is not a valid PEP 508 marker.\nThe correct form repeats the LHS: `sys_platform == 'linux' or\nsys_platform == 'win32'`. Aligns the comment with the actual markers in\n[tool.uv.sources] (which were already correct).\n\nRefs #1247\n\n---------\n\nCo-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-05-24T17:26:42-04:00",
+          "tree_id": "3ee61fcf2817c7eb8a6f3394f888234fa39fa759",
+          "url": "https://github.com/tinaudio/synth-setter/commit/4d2c5c88ae90b06f3b497250c0f9163895452c06"
+        },
+        "date": 1779660088008,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.9242799282073975,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.589667530544102,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.030334267765283585,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.023749113082885742,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.569467782974243,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 16.308410934333335,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.327663898468018,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.650169921778143,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.03569395840167999,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.04067671298980713,
             "unit": "1-cos"
           },
           {
