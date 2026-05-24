@@ -291,13 +291,29 @@ def purge_prefix(bucket: str, prefix: str) -> None:
     leak shards across concurrent runs.
 
     :param bucket: R2 bucket name (no scheme, no trailing slash).
-    :param prefix: Key prefix to wipe — should end in ``/`` so rclone treats it
-        as a directory rather than a single-object delete target.
+    :param prefix: Key prefix to wipe; must be non-empty and end in ``/`` so the
+        rclone target is unambiguously a directory and an absent or accidental
+        bare ``"/"`` cannot purge the whole bucket.
+    :raises ValueError: ``prefix`` is empty, is ``"/"``, or lacks a trailing
+        ``/`` — guards against ``rclone purge r2:{bucket}/`` wiping the bucket.
     """
+    stripped = prefix.strip()
+    if not stripped or stripped == "/" or not prefix.endswith("/"):
+        raise ValueError(
+            f"purge_prefix refuses bucket-wide or single-object target: prefix={prefix!r} "
+            "must be non-empty, not '/', and end with '/'"
+        )
     subprocess.run(  # noqa: S603 — args from validated bucket + prefix
-        ["rclone", "purge", f"{RCLONE_REMOTE}:{bucket}/{prefix}"],  # noqa: S607
+        [  # noqa: S607
+            "rclone",
+            "purge",
+            f"{RCLONE_REMOTE}:{bucket}/{prefix}",
+            "--contimeout=10s",
+            "--timeout=60s",
+        ],
         check=False,
         capture_output=True,
+        timeout=120,
     )
 
 

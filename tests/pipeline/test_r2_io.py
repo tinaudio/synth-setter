@@ -512,16 +512,39 @@ class TestPurgePrefix:
         r2_io.purge_prefix("bucket", "never-created/")
 
     def test_invokes_rclone_purge_with_translated_path(self) -> None:
-        """Argv shape: ``rclone purge r2:{bucket}/{prefix}`` with check=False."""
+        """Argv shape: ``rclone purge r2:{bucket}/{prefix}`` with rclone + subprocess timeouts."""
         completed = MagicMock(spec=subprocess.CompletedProcess)
         completed.returncode = 0
         with patch.object(r2_io.subprocess, "run", return_value=completed) as mock_run:
             r2_io.purge_prefix("bucket", "runs/abc/")
         args = mock_run.call_args[0][0]
-        assert args == ["rclone", "purge", "r2:bucket/runs/abc/"]
+        assert args == [
+            "rclone",
+            "purge",
+            "r2:bucket/runs/abc/",
+            "--contimeout=10s",
+            "--timeout=60s",
+        ]
         kwargs = mock_run.call_args[1]
         assert kwargs.get("check") is False
         assert kwargs.get("capture_output") is True
+        assert kwargs.get("timeout") == 120
+
+    @pytest.mark.parametrize("bad_prefix", ["", "/", " ", "runs/abc"])
+    def test_rejects_unsafe_prefix(self, bad_prefix: str) -> None:
+        """Empty, ``/``, or non-trailing-slash prefixes raise before shelling out.
+
+        Guards against ``rclone purge r2:{bucket}/`` wiping an entire bucket on a
+        formatting mistake in caller code.
+
+        :param bad_prefix: Indirect-parametrized prefix value the guard must reject.
+        """
+        with (
+            patch.object(r2_io.subprocess, "run") as mock_run,
+            pytest.raises(ValueError, match="purge_prefix refuses"),
+        ):
+            r2_io.purge_prefix("bucket", bad_prefix)
+        mock_run.assert_not_called()
 
 
 def _set_all_r2_secrets(monkeypatch: pytest.MonkeyPatch, suffix: str = "from-env") -> None:

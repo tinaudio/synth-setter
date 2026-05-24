@@ -34,6 +34,7 @@ def test_cfg_dataset_composes_and_validates_as_dataset_spec(
 
 @pytest.mark.integration_r2
 @pytest.mark.r2
+@pytest.mark.requires_vst
 @pytest.mark.slow
 def test_generate_dataset_renders_shards_to_r2(
     cfg_dataset: DictConfig,
