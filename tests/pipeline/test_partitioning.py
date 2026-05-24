@@ -175,12 +175,13 @@ class TestValidation:
 
 
 class TestReadRankWorldFromEnv:
-    """Read SYNTH_SETTER_WORKER_RANK / SYNTH_SETTER_NUM_WORKERS with no defaults.
+    """Read SYNTH_SETTER_WORKER_RANK / SYNTH_SETTER_NUM_WORKERS with a local-only default.
 
-    The silent-default behavior is intentionally refused: a worker invoked
-    with a multi-shard spec but no partition env would otherwise duplicate
-    every shard across every node. Any missing/malformed/out-of-bounds env
-    must raise — generate_dataset.run propagates the ValueError to the worker exit path.
+    Both env vars absent → ``(0, 1)`` so a one-off ``generate_dataset`` run
+    doesn't require exporting partition env. Partial config (only one set) and
+    any malformed / out-of-bounds value still raise — partial almost always
+    means a launcher dropped half its env injection, and silently coercing it
+    to single-worker would duplicate every shard across every node (#763).
     """
 
     @pytest.fixture(autouse=True)
@@ -197,25 +198,37 @@ class TestReadRankWorldFromEnv:
         monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "4")
         assert read_rank_world_from_env() == (2, 4)
 
-    def test_both_missing_raises_with_both_names_in_message(self) -> None:
-        """Both vars missing → ValueError naming both."""
+    def test_both_missing_defaults_to_local_single_worker(self) -> None:
+        """Both vars absent → ``(0, 1)`` so local runs need no env setup."""
+        assert read_rank_world_from_env() == (0, 1)
+
+    def test_only_rank_missing_raises_naming_both_vars(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Only world set → ValueError naming both vars; partial config never silently defaults.
+
+        :param monkeypatch: Used to set world without rank.
+        """
+        monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "2")
         with pytest.raises(ValueError) as excinfo:
             read_rank_world_from_env()
         message = str(excinfo.value)
         assert "SYNTH_SETTER_WORKER_RANK" in message
         assert "SYNTH_SETTER_NUM_WORKERS" in message
 
-    def test_only_rank_missing_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Only rank var missing → ValueError naming rank."""
-        monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
-        with pytest.raises(ValueError, match="SYNTH_SETTER_WORKER_RANK"):
-            read_rank_world_from_env()
+    def test_only_world_missing_raises_naming_both_vars(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Only rank set → ValueError naming both vars; partial config never silently defaults.
 
-    def test_only_world_missing_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Only world var missing → ValueError naming world."""
+        :param monkeypatch: Used to set rank without world.
+        """
         monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
-        with pytest.raises(ValueError, match="SYNTH_SETTER_NUM_WORKERS"):
+        with pytest.raises(ValueError) as excinfo:
             read_rank_world_from_env()
+        message = str(excinfo.value)
+        assert "SYNTH_SETTER_WORKER_RANK" in message
+        assert "SYNTH_SETTER_NUM_WORKERS" in message
 
     def test_non_integer_rank_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Non-integer rank ('abc') → ValueError naming SYNTH_SETTER_WORKER_RANK."""
