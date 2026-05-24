@@ -58,8 +58,6 @@ def test_generate_dataset_renders_shards_to_r2(
     )
     with open_dict(cfg_dataset):
         cfg_dataset.r2.prefix = unique_prefix
-    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
-    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
 
     spec = spec_from_cfg(cfg_dataset)
     try:
