@@ -135,6 +135,9 @@ jobs:
       # Resolves `spec.r2.bucket` from the same composed config the chained
       # generate + finalize used, so the `rclone ls` prefix lines up with what
       # finalize actually wrote (rather than hardcoding `intermediate-data`).
+      # configs ship inside `src/synth_setter/configs/` (see #1236); point
+      # `initialize_config_dir` at the in-package path on disk so we avoid the
+      # heavier `pip install -e .` just to read one Hydra value.
       - name: Resolve R2 bucket from dataset config
         id: bucket
         run: |
@@ -144,7 +147,7 @@ jobs:
           import os
           from pathlib import Path
           from hydra import compose, initialize_config_dir
-          cfg_dir = str(Path.cwd() / "configs")
+          cfg_dir = str(Path.cwd() / "src" / "synth_setter" / "configs")
           experiment = os.environ["CONFIG_PATH"]
           with initialize_config_dir(version_base="1.3", config_dir=cfg_dir):
               cfg = compose(config_name="dataset", overrides=[f"experiment={experiment}"])
