@@ -74,6 +74,10 @@ jobs:
       # COUNT validated as a positive int — `type: number` admits floats; pytest-repeat needs int.
       # PYTEST_NODE_ID + COUNT routed through env (never inlined into `run: |`) so an adversarial
       # dispatch input can't break out of the bash/Python context.
+      # Defaults are event-scoped rather than `inputs.* || <fallback>`: GHA expressions treat `0`
+      # as falsy, so `inputs.count || 3` would silently rewrite a dispatched `count=0` to 3 and
+      # bypass the positive-integer validator. The event check preserves the raw input so the
+      # validator can reject it.
       # DEFLAKE_SELF_TEST opts the sentinel in only on PR self-test; dispatched runs leave it
       # unset so a broad selector like `tests/` can't accidentally pull the failing sentinel in.
       # `continue-on-error` is also PR-scoped: the sentinel is *supposed* to fail (that's how the
@@ -83,8 +87,8 @@ jobs:
         continue-on-error: ${{ github.event_name == 'pull_request' }}
         env:
           HYDRA_FULL_ERROR: "1"
-          PYTEST_NODE_ID: ${{ inputs.pytest_node_id || 'tests/_meta/test_deflake_self_test.py::test_always_fails' }}
-          COUNT: ${{ inputs.count || 3 }}
+          PYTEST_NODE_ID: ${{ github.event_name == 'pull_request' && 'tests/_meta/test_deflake_self_test.py::test_always_fails' || inputs.pytest_node_id }}
+          COUNT: ${{ github.event_name == 'pull_request' && '3' || inputs.count }}
           DEFLAKE_SELF_TEST: ${{ github.event_name == 'pull_request' && '1' || '' }}
         run: |
           set -euo pipefail
@@ -126,8 +130,8 @@ jobs:
       - name: Summarize results
         if: always()
         env:
-          PYTEST_NODE_ID: ${{ inputs.pytest_node_id || 'tests/_meta/test_deflake_self_test.py::test_always_fails' }}
-          COUNT: ${{ inputs.count || 3 }}
+          PYTEST_NODE_ID: ${{ github.event_name == 'pull_request' && 'tests/_meta/test_deflake_self_test.py::test_always_fails' || inputs.pytest_node_id }}
+          COUNT: ${{ github.event_name == 'pull_request' && '3' || inputs.count }}
         run: |
           python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
           import os
