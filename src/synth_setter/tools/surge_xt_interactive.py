@@ -40,9 +40,6 @@ from synth_setter.data.vst.param_spec import ParamSpec
 from synth_setter.data.vst.writers import make_hdf5_dataset
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.resources import as_file, vst_headless_wrapper
-from synth_setter.workspace import operator_workspace
-
-operator_workspace()
 
 MIDI_LISTEN_MESSAGE_TYPES = ("note_on", "note_off", "control_change", "pitchwheel", "aftertouch")
 
