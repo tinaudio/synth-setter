@@ -196,3 +196,36 @@ def test_as_file_materializes_generate_script_under_zipimport(
     result = _run_in_zipped_python(synth_setter_zip, code)
     assert result.returncode == 0, f"as_file(generate_vst_dataset_script) failed: {result.stderr}"
     assert "OK" in result.stdout
+
+
+def test_generate_script_actually_executes_under_zipimport(synth_setter_zip: Path) -> None:
+    """Spawn the materialized renderer as ``python <script> --help`` and assert exit 0.
+
+    Stronger than the materialization check above: the script's own module-top
+    imports (``rootutils.setup_root``, then ``from synth_setter…``) have to
+    survive being invoked from a tempfile location. Catches the failure mode
+    where ``rootutils`` can't walk up from a temp path to find ``.project-root``
+    and crashes the renderer before the launcher's argv even reaches the CLI.
+
+    :param synth_setter_zip: Session-scoped fixture path to the in-tree zip.
+    """
+    code = textwrap.dedent("""
+        import subprocess, sys
+        from synth_setter.resources import as_file, generate_vst_dataset_script
+
+        with as_file(generate_vst_dataset_script()) as script_path:
+            result = subprocess.run(
+                [sys.executable, str(script_path), "--help"],
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+        assert result.returncode == 0, (
+            f"renderer --help exited {result.returncode}: {result.stderr[:600]}"
+        )
+        assert "--plugin_path" in result.stdout, "expected CLI flag missing from --help"
+        print("OK")
+    """)
+    result = _run_in_zipped_python(synth_setter_zip, code)
+    assert result.returncode == 0, f"renderer execution under zip failed: {result.stderr}"
+    assert "OK" in result.stdout

@@ -12,7 +12,17 @@ from pedalboard import VST3Plugin
 from pyloudnorm import Meter
 from pydantic_settings import BaseSettings, CliApp, CliPositionalArg, SettingsConfigDict
 
-rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
+try:
+    # Operator-checkout path: bootstraps PROJECT_ROOT + adds the source tree to
+    # sys.path so the script can `import synth_setter` even when run directly.
+    rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
+except FileNotFoundError:
+    # Packaged-resource path: ``as_file()`` extracts this script to a tempfile
+    # under zipped wheels, so the ``.project-root`` indicator isn't reachable
+    # from ``__file__``. The launcher already has ``synth_setter`` importable
+    # via site-packages / zipimport — fall through to the imports below.
+    pass
+
 from synth_setter.pipeline.schemas.spec import (  # noqa: E402
     EXTENSION_TO_OUTPUT_FORMAT,
     RenderConfig,
