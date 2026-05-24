@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779664149322,
+  "lastUpdate": 1779664151243,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -8329,6 +8329,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 20.3440722692,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "01263764c5f2daa00027478264f187f58abaaf8a",
+          "message": "test(data-pipeline): pin run_with_editor_held_open + pedalboard threading contracts against real plugin (#1216)\n\n* test(data-pipeline): pin run_with_editor_held_open + pedalboard threading contracts against real plugin\n\n* test(data-pipeline): daemonize show_editor worker thread in threading contract test\n\nA non-daemon worker that outlives the join window can keep pytest from\nexiting cleanly when show_editor hangs. Daemon=True matches the\nconvention in tests/data/vst/test_preset_coverage.py:62.\n\n* test(data-pipeline): drop stale editor-crash-log assertion + rewrite docstring against current contract\n\n`run_with_editor_held_open` no longer routes editor failures through\n`_run_editor` + `logger.exception(\"vst-editor-window crashed: ...\")` —\nthat codepath was removed when the threading model was inverted to run\n`show_editor` on the caller's main thread. The dead `crash_log_calls`\nassertion always passed vacuously, and the docstring still named the\nremoved symbols.\n\nReplace with the actual contract:\n\n- pedalboard/JUCE invariant violations surface as `RuntimeError` from\n  `show_editor` itself (the \"Plugin UI windows can only be shown from\n  the main thread\" guard).\n- body exceptions are re-raised after the worker drains.\n- a worker that outlives the post-`show_editor` join window raises\n  `core.RenderWorkerLeaked`.\n\nTest assertion stays the contract pin (`result is None` with an empty\nbody) so a failure cannot be confused with a render/writer regression.\nRemoves the now-unused `MagicMock` import and `monkeypatch` parameter.\n\nAddresses Copilot review comment on PR #1216.\n\nRefs #1215.\n\nCo-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-05-24T18:33:03-04:00",
+          "tree_id": "7c34a8c3a87a030de44f3a43590e9becc47028cd",
+          "url": "https://github.com/tinaudio/synth-setter/commit/01263764c5f2daa00027478264f187f58abaaf8a"
+        },
+        "date": 1779664150866,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 2.365417718887329,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 2.6785685051605106,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.007486281450837851,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.0032845735549926758,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 1.3357189893722534,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 19.655999773200005,
             "unit": "seconds"
           }
         ]
