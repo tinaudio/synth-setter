@@ -7,8 +7,6 @@ schema (``instantiate_callbacks`` short-circuits on falsy).
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from pydantic import ValidationError
 
@@ -16,7 +14,7 @@ from synth_setter.resources import configs_dir
 from synth_setter.schemas.callbacks_config import CallbackInstance, CallbacksConfig
 from tests.schemas.conftest import compose_train_cfg
 
-_CALLBACKS_CONFIG_DIR = Path(str(configs_dir() / "callbacks"))
+_CALLBACKS_CONFIG_DIR = configs_dir() / "callbacks"
 
 
 def _all_callback_config_names() -> list[str]:
@@ -24,7 +22,11 @@ def _all_callback_config_names() -> list[str]:
 
     :return: Sorted list of YAML stems found in ``configs/callbacks/``.
     """
-    names = sorted(p.stem for p in _CALLBACKS_CONFIG_DIR.glob("*.yaml"))
+    names = sorted(
+        p.name.removesuffix(".yaml")
+        for p in _CALLBACKS_CONFIG_DIR.iterdir()
+        if p.is_file() and p.name.endswith(".yaml")
+    )
     assert names, (
         f"no callback YAMLs found under {_CALLBACKS_CONFIG_DIR} — "
         "has the callbacks composition layout changed?"

@@ -7,7 +7,6 @@ and accepts them, deferring the failure to ``hydra.utils.instantiate``.
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -21,7 +20,7 @@ from synth_setter.schemas.data_config import DataConfig
 from synth_setter.schemas.paths_config import PathsConfig
 from tests.schemas.conftest import compose_subtree
 
-_DATA_CONFIG_DIR = Path(str(configs_dir() / "data"))
+_DATA_CONFIG_DIR = configs_dir() / "data"
 
 
 def _all_data_config_names() -> list[str]:
@@ -29,7 +28,11 @@ def _all_data_config_names() -> list[str]:
 
     :return: Sorted list of YAML stems found in ``configs/data/``.
     """
-    names = sorted(p.stem for p in _DATA_CONFIG_DIR.glob("*.yaml"))
+    names = sorted(
+        p.name.removesuffix(".yaml")
+        for p in _DATA_CONFIG_DIR.iterdir()
+        if p.is_file() and p.name.endswith(".yaml")
+    )
     assert names, f"no data YAMLs found under {_DATA_CONFIG_DIR} — has the layout changed?"
     return names
 

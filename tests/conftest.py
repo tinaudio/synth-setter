@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Iterator
+from contextlib import ExitStack
 from pathlib import Path
 
 import h5py
@@ -18,7 +19,7 @@ from hydra.core.global_hydra import GlobalHydra
 from omegaconf import DictConfig, open_dict
 
 from synth_setter.data.vst import param_specs, preset_paths
-from synth_setter.resources import vst_headless_wrapper
+from synth_setter.resources import as_file, generate_vst_dataset_script, vst_headless_wrapper
 from synth_setter.utils.utils import register_resolvers
 from tests._baseline_worktree import worktree_for_ref  # noqa: F401 — pytest fixture re-export
 
@@ -56,7 +57,12 @@ NUM_FIXTURE_SAMPLES = 5
 # wrapping lives at the audio-rendering boundary (the subprocess call),
 # not at the container entrypoint — the click CLI stays X11-agnostic so
 # idle and passthrough don't pay the Xvfb startup cost.
-VST_HEADLESS_WRAPPER = str(vst_headless_wrapper())
+#
+# Eager ``str(vst_headless_wrapper())`` doesn't survive zipped-wheel
+# installs — the underlying Traversable has no on-disk path until
+# :func:`as_file` extracts it. Callers materialize on demand inside an
+# :class:`contextlib.ExitStack` envelope around the subprocess call (see
+# :func:`surge_xt_smoke_datasets` below and ``tests/test_train.py``).
 
 
 def _validate_surge_dataset(path: Path, num_samples: int) -> None:
@@ -482,54 +488,60 @@ def surge_xt_smoke_datasets(tmp_path: Path, param_spec_name: str) -> Path:
 
     Path(smoke_dataset_dir).mkdir(parents=True, exist_ok=True)
 
-    generate_dataset_args = []
-    if sys.platform == "linux":
-        generate_dataset_args.append(VST_HEADLESS_WRAPPER)
+    # Materialize packaged resources via ``as_file`` so the fixture survives a
+    # zipped-wheel install — the extracted tempfiles must outlive the
+    # subprocess, hence the surrounding ``ExitStack``.
+    with ExitStack() as stack:
+        script_path = stack.enter_context(as_file(generate_vst_dataset_script()))
+        generate_dataset_args: list[str] = []
+        if sys.platform == "linux":
+            wrapper_path = stack.enter_context(as_file(vst_headless_wrapper()))
+            generate_dataset_args.append(str(wrapper_path))
 
-    generate_dataset_args += [
-        sys.executable,
-        "src/synth_setter/data/vst/generate_vst_dataset.py",
-        str(smoke_dataset_dir / "train.h5"),
-        f"--plugin_path={_SURGE_FIXTURE_PLUGIN_PATH}",
-        f"--preset_path={preset_paths[param_spec_name]}",
-        f"--param_spec_name={param_spec_name}",
-        f"--renderer_version={_SURGE_FIXTURE_RENDERER_VERSION}",
-        f"--sample_rate={_SURGE_FIXTURE_SAMPLE_RATE}",
-        f"--channels={_SURGE_FIXTURE_CHANNELS}",
-        f"--velocity={_SURGE_FIXTURE_VELOCITY}",
-        f"--signal_duration_seconds={_SURGE_FIXTURE_DURATION_SECONDS}",
-        f"--min_loudness={_SURGE_FIXTURE_MIN_LOUDNESS}",
-        f"--samples_per_render_batch={NUM_FIXTURE_SAMPLES}",
-        f"--samples_per_shard={NUM_FIXTURE_SAMPLES}",
-    ]
+        generate_dataset_args += [
+            sys.executable,
+            str(script_path),
+            str(smoke_dataset_dir / "train.h5"),
+            f"--plugin_path={_SURGE_FIXTURE_PLUGIN_PATH}",
+            f"--preset_path={preset_paths[param_spec_name]}",
+            f"--param_spec_name={param_spec_name}",
+            f"--renderer_version={_SURGE_FIXTURE_RENDERER_VERSION}",
+            f"--sample_rate={_SURGE_FIXTURE_SAMPLE_RATE}",
+            f"--channels={_SURGE_FIXTURE_CHANNELS}",
+            f"--velocity={_SURGE_FIXTURE_VELOCITY}",
+            f"--signal_duration_seconds={_SURGE_FIXTURE_DURATION_SECONDS}",
+            f"--min_loudness={_SURGE_FIXTURE_MIN_LOUDNESS}",
+            f"--samples_per_render_batch={NUM_FIXTURE_SAMPLES}",
+            f"--samples_per_shard={NUM_FIXTURE_SAMPLES}",
+        ]
 
-    # capture_output=False (default): child inherits parent's stdout/stderr, no pipe is
-    # created. Avoids the `capture_output=True` deadlock where fork-inherited fds in
-    # pytest/DataLoader workers keep the pipe's read end open and block `communicate()`
-    # forever. Output flows to pytest's normal capture (visible with `-s` or on failure);
-    # we lose `result.stdout/stderr` on the failure branch but keep the exit code, which
-    # is what the failure branch needs to fail loud. See #695.
-    try:
-        result = subprocess.run(  # noqa: S603
-            generate_dataset_args,
-            text=True,
-            check=False,
-            timeout=_VST_SUBPROCESS_TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired:
-        pytest.fail(
-            f"generate_vst_dataset timed out after {_VST_SUBPROCESS_TIMEOUT_SECONDS}s\n"
-            f"command: {generate_dataset_args}\n"
-            f"(child stdout/stderr printed above; rerun with `pytest -s` if captured)",
-            pytrace=False,
-        )
-    if result.returncode != 0:
-        pytest.fail(
-            f"generate_vst_dataset failed (exit {result.returncode})\n"
-            f"command: {generate_dataset_args}\n"
-            f"(child stdout/stderr printed above; rerun with `pytest -s` if captured)",
-            pytrace=False,
-        )
+        # capture_output=False (default): child inherits parent's stdout/stderr, no pipe is
+        # created. Avoids the `capture_output=True` deadlock where fork-inherited fds in
+        # pytest/DataLoader workers keep the pipe's read end open and block `communicate()`
+        # forever. Output flows to pytest's normal capture (visible with `-s` or on failure);
+        # we lose `result.stdout/stderr` on the failure branch but keep the exit code, which
+        # is what the failure branch needs to fail loud. See #695.
+        try:
+            result = subprocess.run(  # noqa: S603
+                generate_dataset_args,
+                text=True,
+                check=False,
+                timeout=_VST_SUBPROCESS_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            pytest.fail(
+                f"generate_vst_dataset timed out after {_VST_SUBPROCESS_TIMEOUT_SECONDS}s\n"
+                f"command: {generate_dataset_args}\n"
+                f"(child stdout/stderr printed above; rerun with `pytest -s` if captured)",
+                pytrace=False,
+            )
+        if result.returncode != 0:
+            pytest.fail(
+                f"generate_vst_dataset failed (exit {result.returncode})\n"
+                f"command: {generate_dataset_args}\n"
+                f"(child stdout/stderr printed above; rerun with `pytest -s` if captured)",
+                pytrace=False,
+            )
     assert (smoke_dataset_dir / "train.h5").exists(), (
         "Dataset generation failed to produce train.h5 fixture"
     )

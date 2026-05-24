@@ -6,8 +6,6 @@ Every YAML under ``configs/model/`` must validate; variant kwargs ride
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from pydantic import ValidationError
 
@@ -15,7 +13,7 @@ from synth_setter.resources import configs_dir
 from synth_setter.schemas.model_config import ModelConfig, OptimizerConfig
 from tests.schemas.conftest import compose_subtree
 
-_MODEL_CONFIG_DIR = Path(str(configs_dir() / "model"))
+_MODEL_CONFIG_DIR = configs_dir() / "model"
 
 _VALID_TARGET = "synth_setter.models.X"
 
@@ -31,7 +29,11 @@ def _all_model_config_names() -> list[str]:
 
     :return: Sorted list of YAML stems found in ``configs/model/``.
     """
-    names = sorted(p.stem for p in _MODEL_CONFIG_DIR.glob("*.yaml"))
+    names = sorted(
+        p.name.removesuffix(".yaml")
+        for p in _MODEL_CONFIG_DIR.iterdir()
+        if p.is_file() and p.name.endswith(".yaml")
+    )
     assert names, f"no model YAMLs found under {_MODEL_CONFIG_DIR} — has the layout changed?"
     return names
 

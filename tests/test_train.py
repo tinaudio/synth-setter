@@ -3,6 +3,7 @@
 import os
 import subprocess
 import sys
+from contextlib import ExitStack
 from pathlib import Path
 
 import numpy as np
@@ -15,10 +16,10 @@ from omegaconf import DictConfig, open_dict
 from synth_setter.cli.eval import evaluate
 from synth_setter.cli.train import train
 from synth_setter.data.vst import param_specs, preset_paths
+from synth_setter.resources import as_file, vst_headless_wrapper
 from tests.conftest import (
     _VST_SUBPROCESS_TIMEOUT_SECONDS,
     NUM_FIXTURE_SAMPLES,
-    VST_HEADLESS_WRAPPER,
     _build_surge_xt_smoke_cfg,
 )
 from tests.helpers.run_if import RunIf
@@ -47,7 +48,7 @@ def test_train_fast_dev_run_tiny_model_tiny_data(cfg_train: DictConfig) -> None:
 
 
 @pytest.mark.gpu
-@RunIf(min_gpus=1)
+@RunIf(min_gpus=1)  # pyright: ignore[reportCallIssue]  # RunIf.__new__ returns MarkDecorator
 def test_train_fast_dev_run_gpu(cfg_train: DictConfig) -> None:
     """Run for 1 train, val and test step on GPU.
 
@@ -61,7 +62,7 @@ def test_train_fast_dev_run_gpu(cfg_train: DictConfig) -> None:
 
 
 @pytest.mark.gpu
-@RunIf(min_gpus=1)
+@RunIf(min_gpus=1)  # pyright: ignore[reportCallIssue]  # RunIf.__new__ returns MarkDecorator
 @pytest.mark.slow
 def test_train_fast_dev_run_gpu_compile(cfg_train: DictConfig) -> None:
     """Run for 1 train, val and test step on GPU with torch.compile enabled.
@@ -77,7 +78,7 @@ def test_train_fast_dev_run_gpu_compile(cfg_train: DictConfig) -> None:
 
 
 @pytest.mark.gpu
-@RunIf(min_gpus=1)
+@RunIf(min_gpus=1)  # pyright: ignore[reportCallIssue]  # RunIf.__new__ returns MarkDecorator
 @pytest.mark.slow
 def test_train_epoch_gpu_amp(cfg_train: DictConfig) -> None:
     """Train 1 epoch on GPU with mixed-precision.
@@ -93,7 +94,7 @@ def test_train_epoch_gpu_amp(cfg_train: DictConfig) -> None:
 
 
 @pytest.mark.gpu
-@RunIf(min_gpus=1)
+@RunIf(min_gpus=1)  # pyright: ignore[reportCallIssue]  # RunIf.__new__ returns MarkDecorator
 @pytest.mark.slow
 def test_train_epoch_double_val_loop(cfg_train: DictConfig) -> None:
     """Train 1 epoch with validation loop twice per epoch.
@@ -135,7 +136,7 @@ def test_train_ddp_sim(cfg_train: DictConfig) -> None:
 
 
 @pytest.mark.gpu
-@RunIf(min_gpus=1)
+@RunIf(min_gpus=1)  # pyright: ignore[reportCallIssue]  # RunIf.__new__ returns MarkDecorator
 @pytest.mark.slow
 def test_train_resume(tmp_path: Path, cfg_train: DictConfig) -> None:
     """Run 1 epoch, finish, and resume for another epoch.
@@ -319,41 +320,45 @@ def test_train_eval_surge_xt(
     audio_dir = tmp_path / "audio"
     runner = CliRunner()
 
-    args = []
-    if sys.platform == "linux":
-        args.append(VST_HEADLESS_WRAPPER)
+    # Materialize the Xvfb wrapper inside an ``ExitStack`` so the extracted
+    # tempfile outlives the subprocess on zipped-wheel installs.
+    with ExitStack() as stack:
+        args: list[str] = []
+        if sys.platform == "linux":
+            wrapper_path = stack.enter_context(as_file(vst_headless_wrapper()))
+            args.append(str(wrapper_path))
 
-    args += [
-        sys.executable,
-        "-m",
-        "synth_setter.evaluation.predict_vst_audio",
-        str(predictions_dir),
-        str(audio_dir),
-        f"--param_spec={param_spec_name}",
-        f"--preset_path={preset_paths[param_spec_name]}",
-        "-t",
-    ]
-    try:
-        result = subprocess.run(  # noqa: S603, S607
-            args,
-            text=True,
-            check=False,
-            timeout=_VST_SUBPROCESS_TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired:
-        pytest.fail(
-            f"predict_vst_audio timed out after {_VST_SUBPROCESS_TIMEOUT_SECONDS}s\n"
-            f"command: {args}\n"
-            f"(child stdout/stderr printed above; rerun with `pytest -s` if captured)",
-            pytrace=False,
-        )
-    if result.returncode != 0:
-        pytest.fail(
-            f"predict_vst_audio failed (exit {result.returncode})\n"
-            f"command: {args}\n"
-            f"(child stdout/stderr printed above; rerun with `pytest -s` if captured)",
-            pytrace=False,
-        )
+        args += [
+            sys.executable,
+            "-m",
+            "synth_setter.evaluation.predict_vst_audio",
+            str(predictions_dir),
+            str(audio_dir),
+            f"--param_spec={param_spec_name}",
+            f"--preset_path={preset_paths[param_spec_name]}",
+            "-t",
+        ]
+        try:
+            result = subprocess.run(  # noqa: S603, S607
+                args,
+                text=True,
+                check=False,
+                timeout=_VST_SUBPROCESS_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            pytest.fail(
+                f"predict_vst_audio timed out after {_VST_SUBPROCESS_TIMEOUT_SECONDS}s\n"
+                f"command: {args}\n"
+                f"(child stdout/stderr printed above; rerun with `pytest -s` if captured)",
+                pytrace=False,
+            )
+        if result.returncode != 0:
+            pytest.fail(
+                f"predict_vst_audio failed (exit {result.returncode})\n"
+                f"command: {args}\n"
+                f"(child stdout/stderr printed above; rerun with `pytest -s` if captured)",
+                pytrace=False,
+            )
 
     sample_dirs = sorted(d for d in audio_dir.iterdir() if d.is_dir())
     assert [d.name for d in sample_dirs] == [f"sample_{i}" for i in range(NUM_FIXTURE_SAMPLES)]

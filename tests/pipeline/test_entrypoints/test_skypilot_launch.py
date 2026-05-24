@@ -14,6 +14,7 @@ supplied inner command (typically ``synth-setter-generate-dataset``) that writes
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -42,7 +43,7 @@ from synth_setter.pipeline.skypilot_launch import (
 from synth_setter.pipeline.skypilot_launch import (
     _run_cred_bootstrap as _real_run_cred_bootstrap,
 )
-from synth_setter.resources import configs_dir
+from synth_setter.resources import as_file, configs_dir
 
 
 @pytest.fixture()
@@ -73,9 +74,16 @@ def env_file(tmp_path: Path) -> Path:
 
 
 @pytest.fixture()
-def template_yaml() -> Path:
-    """Resolve the in-repo SkyPilot RunPod template path."""
-    return Path(str(configs_dir() / "compute" / "runpod-template.yaml"))
+def template_yaml() -> Iterator[Path]:
+    """Materialize the shipped RunPod template as a real on-disk Path.
+
+    :func:`as_file` keeps the extracted tempfile (under a zipped wheel) alive
+    for the SkyPilot click invocation in the test body.
+
+    :yields Path: Filesystem path to the materialized template YAML.
+    """
+    with as_file(configs_dir() / "compute" / "runpod-template.yaml") as path:
+        yield path
 
 
 @pytest.fixture(autouse=True)

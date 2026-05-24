@@ -6,8 +6,6 @@ Every ``configs/logger/`` YAML must validate; logger kwargs ride
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from pydantic import ValidationError
 
@@ -15,7 +13,7 @@ from synth_setter.resources import configs_dir
 from synth_setter.schemas.logger_config import LoggerConfig, LoggerInstance
 from tests.schemas.conftest import compose_subtree
 
-_LOGGER_CONFIG_DIR = Path(str(configs_dir() / "logger"))
+_LOGGER_CONFIG_DIR = configs_dir() / "logger"
 
 
 def _all_logger_config_names() -> list[str]:
@@ -23,7 +21,11 @@ def _all_logger_config_names() -> list[str]:
 
     :return: Sorted list of YAML stems found in ``configs/logger/``.
     """
-    names = sorted(p.stem for p in _LOGGER_CONFIG_DIR.glob("*.yaml"))
+    names = sorted(
+        p.name.removesuffix(".yaml")
+        for p in _LOGGER_CONFIG_DIR.iterdir()
+        if p.is_file() and p.name.endswith(".yaml")
+    )
     assert names, f"no logger YAMLs found under {_LOGGER_CONFIG_DIR} — has the layout changed?"
     return names
 

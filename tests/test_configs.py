@@ -73,25 +73,25 @@ class TestWandbConfigResolvesFromEnv:
     def test_wandb_entity_resolves_from_env(self, monkeypatch):
         """OmegaConf resolves WANDB_ENTITY from environment."""
         monkeypatch.setenv("WANDB_ENTITY", "test-entity")
-        cfg = OmegaConf.load(str(configs_dir() / "logger" / "wandb.yaml"))
+        cfg = OmegaConf.create((configs_dir() / "logger" / "wandb.yaml").read_text())
         assert OmegaConf.select(cfg, "wandb.entity") == "test-entity"
 
     def test_wandb_project_resolves_from_env(self, monkeypatch):
         """OmegaConf resolves WANDB_PROJECT from environment."""
         monkeypatch.setenv("WANDB_PROJECT", "test-project")
-        cfg = OmegaConf.load(str(configs_dir() / "logger" / "wandb.yaml"))
+        cfg = OmegaConf.create((configs_dir() / "logger" / "wandb.yaml").read_text())
         assert OmegaConf.select(cfg, "wandb.project") == "test-project"
 
     def test_wandb_entity_defaults_to_none_when_env_unset(self, monkeypatch):
         """Entity falls back to None (user's default W&B entity) when env var unset."""
         monkeypatch.delenv("WANDB_ENTITY", raising=False)
-        cfg = OmegaConf.load(str(configs_dir() / "logger" / "wandb.yaml"))
+        cfg = OmegaConf.create((configs_dir() / "logger" / "wandb.yaml").read_text())
         assert OmegaConf.select(cfg, "wandb.entity") is None
 
     def test_wandb_project_defaults_to_synth_setter_when_env_unset(self, monkeypatch):
         """Project falls back to synth-setter when env var unset."""
         monkeypatch.delenv("WANDB_PROJECT", raising=False)
-        cfg = OmegaConf.load(str(configs_dir() / "logger" / "wandb.yaml"))
+        cfg = OmegaConf.create((configs_dir() / "logger" / "wandb.yaml").read_text())
         assert OmegaConf.select(cfg, "wandb.project") == "synth-setter"
 
 
