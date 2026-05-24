@@ -299,13 +299,15 @@ ______________________________________________________________________
 ## 4. CI Workflow
 
 The GHA workflow `.github/workflows/docker-build-validation.yml` builds a
-dev-snapshot image, pushes to Docker Hub, and runs smoke tests.
+dev-snapshot image, pushes to Docker Hub (and mirrors to
+`ghcr.io/tinaudio/synth-setter` as a rate-limit-free pull fallback — see
+#1254), and runs smoke tests.
 
 ### What it does
 
 1. Validates the image config (`src/synth_setter/configs/image/dev-snapshot.yaml` via Pydantic)
 2. Builds the image using Docker Buildx
-3. Pushes tagged images to Docker Hub (dispatch/push-to-main only)
+3. Pushes tagged images to Docker Hub and ghcr.io (dispatch/push-to-main only)
 4. Runs smoke tests against the SHA-pinned tag (dispatch/push-to-main only)
 
 On **pull requests** (Docker-related paths only), the workflow runs steps 1–2
@@ -323,6 +325,9 @@ If the YAML violates the schema, the workflow fails before any build starts.
 | `tinaudio/synth-setter:dev-snapshot-<sha>`       | No       | Immutable, used for smoke tests                                                  |
 | `tinaudio/synth-setter:devcontainer-tools`       | Yes      | Latest devcontainer-tools (consumed by `.devcontainer/`)                         |
 | `tinaudio/synth-setter:devcontainer-tools-<sha>` | No       | Immutable, pinnable from `.devcontainer/Dockerfile`                              |
+
+Every tag above is also published to `ghcr.io/tinaudio/synth-setter:<same-tag>`
+as a Docker Hub pull mirror.
 
 Both `latest` and `dev-snapshot` are gated to runs that represent the main
 branch — push-to-main runs, dispatches with `git_ref` in `{main, refs/heads/main, refs/remotes/origin/main}`, and dispatches with a 40-char SHA that resolves
@@ -371,6 +376,9 @@ gh workflow run docker-build-validation.yml --ref main
 | `RCLONE_CONFIG_R2_SECRET_ACCESS_KEY` | R2 credentials                                       |
 | `RCLONE_CONFIG_R2_ENDPOINT`          | R2 endpoint (runtime)                                |
 | `WANDB_API_KEY`                      | W&B auth (runtime)                                   |
+
+The GHCR mirror push auths via the built-in `GITHUB_TOKEN` and needs the job's
+`permissions: packages: write` block — no extra secret to provision.
 
 ______________________________________________________________________
 

@@ -65,6 +65,21 @@ test-infra: ## Devcontainer + GHA invariant tests — stdlib-only, no torch/Hydr
 test-bats: ## Run BATS shell tests
 	bats --recursive tests/
 
+# Local mirror of .github/workflows/deflake-mps.yml — see that workflow for the rationale on each flag.
+# `pipefail` (target-scoped via bash) ensures pytest's non-zero exit propagates through `tee`.
+deflake: SHELL := /bin/bash
+deflake: ## Rerun TEST COUNT times; retain failed tmp_paths under deflake-artifacts/
+	@test -n "$(TEST)" || (echo "usage: make deflake TEST=<node-id> [COUNT=50]" >&2; exit 1)
+	@set -o pipefail; \
+	mkdir -p deflake-artifacts && \
+	pytest \
+	  --count="$(or $(COUNT),50)" \
+	  -vv -s \
+	  -o tmp_path_retention_policy=failed \
+	  --basetemp "$(CURDIR)/deflake-artifacts/pytest" \
+	  --junitxml deflake-artifacts/junit.xml \
+	  -- "$(TEST)" 2>&1 | tee deflake-artifacts/pytest.log
+
 install: ## End-to-end: install uv, create .venv (Python 3.10), install deps, set up pre-commit
 	@command -v uv >/dev/null 2>&1 || [ -x "$$HOME/.local/bin/uv" ] || \
 		{ echo "Installing uv..."; curl -LsSf https://astral.sh/uv/install.sh | sh; }

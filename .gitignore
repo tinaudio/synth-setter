@@ -52,6 +52,7 @@ coverage.xml
 .pytest_cache/
 mutants/
 .mutmut-cache/
+deflake-artifacts/
 
 # Translations
 *.mo

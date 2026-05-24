@@ -1,11 +1,14 @@
 name: Docker Image Build and Push
 
-# Builds a dev-snapshot Docker image, pushes to Docker Hub, and runs smoke
-# tests against the pushed image.
+# Builds a dev-snapshot Docker image, pushes to Docker Hub + GHCR, and runs
+# smoke tests against the pushed image.
 #
 # Triggers:
 # - Manual dispatch or push to main: full build + push + smoke tests
+#   (docker-push job, packages: write).
 # - Pull request (Docker-related paths): build-only validation (no push)
+#   (docker-validate job, contents: read only — PR shell steps cannot use
+#   the GITHUB_TOKEN to push to GHCR; see #1266 review).
 #
 # git_ref resolution:
 # The git_ref input accepts any ref form (branch, tag, or full SHA). After
@@ -40,19 +43,116 @@ on:
       - "tests/docker/**"
 
 jobs:
-  docker-build:
-    name: Build and push Docker image
+  # PR-only validation: build the image with `push: false` to prove the
+  # Dockerfile + build args still compose. Held to `contents: read` so a
+  # malicious PR shell step cannot use the job's GITHUB_TOKEN to push to
+  # GHCR — the elevated `packages: write` lives on docker-push instead.
+  docker-validate:
+    name: Validate Docker image build
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest-4core
     timeout-minutes: 60
+    permissions:
+      contents: read
 
     steps:
       - uses: actions/checkout@v6
         with:
-          # pull_request: use PR head; dispatch: use input; push: triggering SHA.
-          # `github.sha` pins push runs to the commit that fired the workflow so
-          # back-to-back merges don't cause one run to build a later main commit
-          # (and skip the immutable dev-snapshot-<sha> tag for the triggering one).
-          ref: ${{ github.event.pull_request.head.sha || github.event.inputs.git_ref || github.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Resolve checked-out commit SHA
+        id: source
+        run: |
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      # load_image_config only needs pyyaml + pydantic (pydantic-core
+      # resolves transitively). Keep the runner-side env minimal: install
+      # the project with --no-deps so the full [project.dependencies]
+      # doesn't drag in torch/skypilot/librosa, then add pyyaml and
+      # pydantic in a second command with their own deps.
+      - name: Install synth_setter (editable; provides the load_image_config CLI plus its pyyaml + pydantic deps)
+        run: |
+          uv pip install --system --no-deps -e .
+          uv pip install --system pyyaml pydantic
+
+      - name: Load image config
+        id: config
+        run: |
+          python -m synth_setter.pipeline.ci.load_image_config \
+            --config src/synth_setter/configs/image/dev-snapshot.yaml \
+            --github-sha '${{ steps.source.outputs.sha }}' \
+            --issue-number '${{ github.event.pull_request.number }}'
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image (validation only — no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ steps.config.outputs.dockerfile }}
+          target: dev-snapshot
+          platforms: ${{ steps.config.outputs.target_platform }}
+          push: false
+          load: false
+          build-args: |
+            BUILD_MODE=${{ steps.config.outputs.build_mode }}
+            BASE_IMAGE=${{ steps.config.outputs.base_image }}
+            TORCH_BACKEND=${{ steps.config.outputs.torch_backend }}
+            SYNTH_PERMUTATIONS_GIT_REF=${{ steps.source.outputs.sha }}
+          # No BuildKit secrets: the repo is public (no GIT_PAT needed) and
+          # R2/W&B credentials flow in at runtime, not build time.
+          secrets: ""
+          # cache-from is unauthenticated; cache-to is omitted because PR
+          # validation has no Docker Hub login.
+          cache-from: type=registry,ref=tinaudio/synth-setter:buildcache
+
+      - name: Build devcontainer-tools image (validation only — no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ steps.config.outputs.dockerfile }}
+          target: devcontainer-tools
+          platforms: ${{ steps.config.outputs.target_platform }}
+          push: false
+          build-args: |
+            BUILD_MODE=${{ steps.config.outputs.build_mode }}
+            BASE_IMAGE=${{ steps.config.outputs.base_image }}
+            TORCH_BACKEND=${{ steps.config.outputs.torch_backend }}
+            SYNTH_PERMUTATIONS_GIT_REF=${{ steps.source.outputs.sha }}
+          secrets: ""
+          cache-from: type=registry,ref=tinaudio/synth-setter:buildcache
+
+  # Push + smoke tests for push-to-main and workflow_dispatch. Holds the
+  # `packages: write` permission so the GHCR mirror push (see #1254) works;
+  # gated by `if:` so PR runs never enter this job and never see the token.
+  docker-push:
+    name: Build and push Docker image
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest-4core
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # dispatch: use input; push: triggering SHA. `github.sha` pins push
+          # runs to the commit that fired the workflow so back-to-back merges
+          # don't cause one run to build a later main commit (and skip the
+          # immutable dev-snapshot-<sha> tag for the triggering one).
+          ref: ${{ github.event.inputs.git_ref || github.sha }}
 
       # Emits three outputs:
       #   sha         — 40-char commit SHA, baked into the image
@@ -91,7 +191,6 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           DISPATCH_REF: ${{ github.event.inputs.git_ref }}
-          PR_HEAD_REF: ${{ github.head_ref }}
         run: |
           resolved_sha=$(git rev-parse HEAD)
           echo "sha=${resolved_sha}" >> "$GITHUB_OUTPUT"
@@ -104,8 +203,7 @@ jobs:
                 ;;
             esac
           fi
-          if [ "$is_main" = "false" ] \
-              && { [ "$EVENT_NAME" = "push" ] || [ "$EVENT_NAME" = "workflow_dispatch" ]; }; then
+          if [ "$is_main" = "false" ]; then
             main_sha=$(git ls-remote origin refs/heads/main | awk '{print $1}')
             if [ -n "$main_sha" ] && [ "$resolved_sha" = "$main_sha" ]; then
               is_main="true"
@@ -133,8 +231,6 @@ jobs:
                 raw_branch="$candidate"
               fi
             fi
-          elif [ "$EVENT_NAME" = "pull_request" ]; then
-            raw_branch="$PR_HEAD_REF"
           fi
           slug=""
           if [ -n "$raw_branch" ]; then
@@ -152,11 +248,6 @@ jobs:
         with:
           enable-cache: true
 
-      # load_image_config only needs pyyaml + pydantic (pydantic-core
-      # resolves transitively). Keep the runner-side env minimal: install
-      # the project with --no-deps so the full [project.dependencies]
-      # doesn't drag in torch/skypilot/librosa, then add pyyaml and
-      # pydantic in a second command with their own deps.
       - name: Install synth_setter (editable; provides the load_image_config CLI plus its pyyaml + pydantic deps)
         run: |
           uv pip install --system --no-deps -e .
@@ -168,31 +259,27 @@ jobs:
           python -m synth_setter.pipeline.ci.load_image_config \
             --config src/synth_setter/configs/image/dev-snapshot.yaml \
             --github-sha '${{ steps.source.outputs.sha }}' \
-            --issue-number '${{ github.event.pull_request.number || github.event.inputs.issue_number || 311 }}'
+            --issue-number '${{ github.event.inputs.issue_number || 311 }}'
 
       - name: Log in to Docker Hub
-        # Only needed for push; PR runs are build-only validation. Gating
-        # this step prevents same-repo PRs from failing if DOCKERHUB_*
-        # secrets are temporarily unavailable, and matches the existing
-        # gate on the Verify Docker Hub push access step below.
-        #
-        # Note: fork PRs still can't build this Dockerfile even with the
-        # gate in place, because the in-image `git fetch origin` resolves
-        # SYNTH_PERMUTATIONS_GIT_REF against upstream tinaudio/synth-setter,
-        # not the fork. A proper fork-PR build would need to fetch from
-        # github.event.pull_request.head.repo.html_url; that's not
-        # implemented here.
-        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # GHCR auths via the job's GITHUB_TOKEN; the `packages: write`
+      # permission scoped to this push-only job is what authorises the push.
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Verify Docker Hub push access
-        if: github.event_name != 'pull_request'
         env:
           DH_USER: ${{ secrets.DOCKERHUB_USERNAME }}
           DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -212,7 +299,11 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ steps.config.outputs.image }}
+          # Fan out every tag to both registries; ghcr.io is the
+          # rate-limit-free pull mirror — see #1254.
+          images: |
+            ${{ steps.config.outputs.image }}
+            ghcr.io/tinaudio/synth-setter
           # Floating tags `dev-snapshot` and `latest` are gated to push-to-main
           # runs or dispatches that explicitly target main. Dispatching with
           # git_ref pointed at a non-main ref must NOT overwrite either tag —
@@ -235,8 +326,8 @@ jobs:
           file: ${{ steps.config.outputs.dockerfile }}
           target: dev-snapshot
           platforms: ${{ steps.config.outputs.target_platform }}
-          push: ${{ github.event_name != 'pull_request' }}
-          load: ${{ github.event_name != 'pull_request' }}
+          push: true
+          load: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
@@ -248,7 +339,7 @@ jobs:
           # R2/W&B credentials flow in at runtime, not build time.
           secrets: ""
           cache-from: type=registry,ref=tinaudio/synth-setter:buildcache
-          cache-to: ${{ github.event_name != 'pull_request' && 'type=registry,ref=tinaudio/synth-setter:buildcache,mode=max' || '' }}
+          cache-to: type=registry,ref=tinaudio/synth-setter:buildcache,mode=max
 
       - name: Build and push devcontainer-tools image
         uses: docker/build-push-action@v6
@@ -257,10 +348,12 @@ jobs:
           file: ${{ steps.config.outputs.dockerfile }}
           target: devcontainer-tools
           platforms: ${{ steps.config.outputs.target_platform }}
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
           tags: |
             ${{ steps.config.outputs.image }}:devcontainer-tools
             ${{ steps.config.outputs.image }}:devcontainer-tools-${{ steps.source.outputs.sha }}
+            ghcr.io/tinaudio/synth-setter:devcontainer-tools
+            ghcr.io/tinaudio/synth-setter:devcontainer-tools-${{ steps.source.outputs.sha }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             BUILD_MODE=${{ steps.config.outputs.build_mode }}
@@ -277,7 +370,6 @@ jobs:
       # So we invoke pytest directly instead of going through the click CLI's
       # `passthrough` subcommand.
       - name: Smoke test — container starts and Python imports work
-        if: github.event_name != 'pull_request'
         env:
           SMOKE_IMAGE: ${{ steps.config.outputs.image }}:dev-snapshot-${{ steps.source.outputs.sha }}
         run: |
@@ -286,7 +378,6 @@ jobs:
             pytest tests/docker/test_smoke.py::test_pedalboard_importable -v
 
       - name: Smoke test — VST loads under headless X11
-        if: github.event_name != 'pull_request'
         env:
           SMOKE_IMAGE: ${{ steps.config.outputs.image }}:dev-snapshot-${{ steps.source.outputs.sha }}
         run: |
