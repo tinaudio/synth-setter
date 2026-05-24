@@ -1,6 +1,545 @@
 # CHANGELOG
 
 
+## v8.7.1 (2026-05-24)
+
+### Bug Fixes
+
+- **ci**: Scope imagePullPolicy=Never to the worker task, not ~/.sky/config.yaml
+  ([#1270](https://github.com/tinaudio/synth-setter/pull/1270),
+  [`3676b00`](https://github.com/tinaudio/synth-setter/commit/3676b005517970d240583450db49b75a647b6291))
+
+* fix(ci): scope imagePullPolicy=Never to the worker task, not ~/.sky/config.yaml
+
+Move the `kubernetes.pod_config.spec.containers[0].imagePullPolicy: Never` override from
+  `_ensure_ci_sky_config`'s global write into the top-level `config:` block of
+  `configs/compute/local-template.yaml`. SkyPilot reads that field as the task's
+  `Resources._cluster_config_overrides`, so the merge applies only when provisioning the user worker
+  — never the jobs controller.
+
+Before this change the override was global. SkyPilot's `combine_pod_config_fields` merged it into
+  every kind pod, including the managed-jobs controller pod whose image
+  (`us-docker.pkg.dev/sky-dev-465/skypilotk8s/skypilot:<tag>`) lives on Google Artifact Registry and
+  is NOT loaded into kind via `kind load docker-image`. Kubelet then refused to start the controller
+  with `Container image ... is not present with pull policy of Never`, timing out the 40-min
+  launcher step on the smoke matrix on main (test-dataset-finalization run 26374103900). The
+  original symptom #1255 fixes — anonymous Docker Hub 429 on the worker's
+  `tinaudio/synth-setter:dev-snapshot` pull — still gets `Never` because the per-task scope reaches
+  the worker pod (where `kind load` already placed the image), so kubelet uses the loaded copy
+  without re-resolving the manifest from Docker Hub.
+
+Test updates: - Replace `test_writes_image_pull_policy_never_under_kubernetes_pod_config` with
+  `test_global_config_does_not_carry_pod_config`, asserting the inverse — `~/.sky/config.yaml` must
+  NOT carry `kubernetes` so the controller can pull. - Add
+  `TestLocalTemplatePodConfig::test_image_pull_policy_never_is_scoped_to_task` pinning the override
+  at the per-task YAML location.
+
+Fixes #1255.
+
+* review nits: tighten YAML/docstring prose; module-level yaml + configs_dir helper
+
+Applied from repo-review-full-no-comments pass on cd54675:
+
+- local-template.yaml: collapse the 6-line pod_config rationale to a 4-line block + #1255 pointer;
+  restore the dropped "name-less container merges into the pod's first container via SkyPilot's
+  patch-merge legacy" note (comment-hygiene BLOCK on the essay-length comment). - tests: drop two
+  baked-in `run 26374103900` references from docstrings (comment-hygiene BLOCK — issue link is the
+  durable anchor; CI run IDs rot). Trim the `TestLocalTemplatePodConfig` docstring to one line. -
+  tests: lift `yaml` to module-level imports; reuse the existing `configs_dir()` helper for the
+  template path instead of hand-stitching `parents[3] / "src" / ...` (consistent with
+  `template_yaml` fixture on line 78); drop the in-function `import yaml as _yaml` / `Path as _Path`
+  aliases (code-health, python-style WARNs). - tests: narrow the global-config assertion from
+  `"kubernetes" not in doc` to `"pod_config" not in doc.get("kubernetes", {})` so an unrelated
+  future `kubernetes.<key>` global setting won't break the test (tdd-impl WARN on over-broad
+  assertion).
+
+* style(testing): reflow TestLocalTemplatePodConfig docstring for docformatter
+
+CI failure on #1270: docformatter wanted the two-line summary joined onto the 100-col second line.
+  No behavioral change.
+
+### Continuous Integration
+
+- Force imagePullPolicy=Never in CI to avoid Docker Hub 429
+  ([#1257](https://github.com/tinaudio/synth-setter/pull/1257),
+  [`8e4d4bc`](https://github.com/tinaudio/synth-setter/commit/8e4d4bce6a6d6709580daf96181b1233e6535109))
+
+The wds row of the kind smoke matrix timed out (#1255) when the worker pod's image pull hit Docker
+  Hub's anonymous 429 even though the image was already loaded into the node via `kind load
+  docker-image`. Kubelet falls back to resolving the manifest on pod start, which is what the rate
+  limit catches.
+
+Extend `_ensure_ci_sky_config()` to write a
+  `kubernetes.pod_config.spec.containers[0].imagePullPolicy: Never` override alongside the existing
+  controller-resource shrink. SkyPilot merges this into every kind pod it provisions (jobs
+  controller + worker), so both pods now use the pre-loaded image and never contact Docker Hub.
+  Gating on `SYNTH_SETTER_CI_MODE` keeps production runs — which actually do need to pull from a
+  registry — untouched.
+
+Refs #1255.
+
+- **ci-automation**: Mirror dev-snapshot image to GHCR from the build workflow
+  ([#1266](https://github.com/tinaudio/synth-setter/pull/1266),
+  [`fa6e434`](https://github.com/tinaudio/synth-setter/commit/fa6e43488dabd902a94308ec3fa77e8838d2327f))
+
+* ci(ci-automation): mirror dev-snapshot image to GHCR from the build workflow
+
+Wires GHCR as a second push target into docker-build-validation.yml so every tag the build produces
+  (`dev-snapshot`, `dev-snapshot-<sha>`, `dev-snapshot-<branch>`, `latest`, and the
+  `devcontainer-tools[-<sha>]` pair) lands in both `tinaudio/synth-setter` on Docker Hub and
+  `ghcr.io/tinaudio/synth-setter`. Auth uses the built-in `GITHUB_TOKEN` with job-level `packages:
+  write` — no new secret setup required. The PR-validation path stays push-free; the gate on the
+  GHCR login mirrors the existing Docker Hub gate.
+
+GitHub Actions runners on Azure share a single Docker Hub egress pool; PR #1214's wds smoke job
+  timed out on HTTP 429 "unauthenticated pull rate limit" pulling
+  `tinaudio/synth-setter:dev-snapshot`. Mirroring inside the build workflow avoids both the
+  rate-limited Docker Hub pull and the separate `workflow_dispatch` mirror job from
+  ci/mirror-image-to-ghcr — the same buildx output gets pushed once to each registry instead of
+  round-tripping Docker Hub → runner → GHCR.
+
+Also updates the reference docs that previously claimed Docker Hub was the only push target: -
+  docs/reference/docker.md: workflow summary, tags section, secrets table footnote about packages:
+  write - docs/reference/github-actions.md: workflow table row, "Public image, runtime secrets"
+  section, "Mount-as-volume pattern" section - docs/doc-map.yaml: append GHCR mirror tags +
+  permission to the docker-build-validation.yml covers field so future doc-drift scans treat the
+  GHCR surface as in scope
+
+After the first successful main build, the GHCR package needs a one-time visibility flip to public
+  via the GHCR package settings so unauthenticated CI pulls succeed.
+
+Refs #1254
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* ci(ci-automation): split PR validation off the GHCR push job
+
+Same-repo PRs were running in the same job that declared `permissions: { packages: write }`, so the
+  PR's GITHUB_TOKEN could push to GHCR even though the actual push steps were gated by event_name.
+  Split into two jobs so the permission only lives on push/dispatch runs:
+
+- docker-validate: pull_request only, contents: read. Builds the image with push: false to validate
+  Dockerfile + build args. - docker-push: push/workflow_dispatch only, contents: read + packages:
+  write. Logs in to Docker Hub and GHCR, pushes both registries, runs smoke tests.
+
+Refs #1266 (review thread r3295434550).
+
+* docs(github-actions): clarify docker-build-validation push gating in catalog
+
+The workflow catalog row read like every run pushes and smoke-tests; on PR events the workflow now
+  runs the docker-validate job only (no push, no smoke tests). Spell out that pushes + smoke tests
+  are gated on push-to-main or workflow_dispatch and PRs are build-only.
+
+Addresses Copilot review feedback on #1266.
+
+Refs #1254.
+
+---------
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+- **package**: Add wheel build + import smoke workflow
+  ([#1253](https://github.com/tinaudio/synth-setter/pull/1253),
+  [`f2f3400`](https://github.com/tinaudio/synth-setter/commit/f2f3400756f592201aec91472157e5c9e6fe867e))
+
+* ci(package): add wheel build + import smoke workflow
+
+Exercises the publish path on every PR that touches packaging surface: runs `python -m build` (PEP
+  517 isolated), `twine check --strict`, then installs the wheel `--no-deps` into a fresh venv
+  outside the repo and asserts that `synth_setter` imports, the
+  `hydra_plugins.synth_setter_searchpath` namespace package is discoverable (via `find_spec` — its
+  module body needs `hydra` which `--no-deps` deliberately omits), and that bundled `configs/` is
+  locatable via `importlib.resources`.
+
+Catches before a real publish attempt: missing `[build-system]` table, broken package-data globs,
+  src-layout regressions, and the false-pass where the smoke test imports the source tree instead of
+  the installed wheel. Kept --no-deps so this stays a packaging check, not a dep-resolution check
+  (the heavy runtime stack is exercised in Tests).
+
+Refs #1235
+
+* ci(package): pin build/twine and align wheel glob
+
+Addresses two Copilot review comments on PR #1253: - L50: pin `build==1.2.*` and `twine==5.*` so an
+  upstream tool release can't flip this gate red without a repo-side change. - L62: use
+  `dist/synth_setter-*.whl` for `zipfile -l` so it matches the explicit name used by the install
+  step at L69 — removes the list/install glob inconsistency Copilot flagged.
+
+* ci(package): add canonical Hydra compose against installed wheel
+
+Closes the wheel-vs-editable coverage gap on PR #1253: every other workflow installs with `pip
+  install -e .`, so a broken `[tool.setuptools.package-data]` glob still passes pytest (the YAMLs
+  exist in src/) but breaks for real users on `pip install synth-setter`.
+
+Two new steps after the existing --no-deps smoke:
+
+- `Install wheel with full deps` — fresh venv, `pip install dist/synth_setter-*.whl[torch]`. Proves
+  the wheel resolves the full runtime stack without an editable shim. - `Canonical Hydra compose
+  against installed wheel` — runs the canonical pattern (`register_resolvers()` +
+  `initialize_config_module(...)` + `compose('train.yaml',
+  overrides=['data=ksin','model=ffn','trainer=cpu'])`) with `cwd` outside the repo. Forces every
+  YAML in train's defaults chain (data/ksin, model/ffn, trainer/cpu, callbacks/default,
+  logger/many_loggers, paths/default, extras/default, hydra/default) to load from the wheel, and
+  exercises the namespace plugin's auto-registration of `pkg://synth_setter.configs` plus the custom
+  `mul` resolver.
+
+Stops short of `hydra.utils.instantiate(...)` — that's covered by `tests/test_configs.py` against
+  the editable tree and would just be slower duplication here.
+
+Job timeout bumped 10 → 15 min to absorb the full-deps install (~3–5 min on ubuntu-latest).
+
+* ci(package): bump twine pin to 6.* (5.x rejects Metadata-Version 2.4)
+
+The 'twine==5.*' pin in 95fe45f red-ed the gate on the next push: modern setuptools (which `python
+  -m build` invokes via PEP 517) now emits Metadata-Version 2.4 in the wheel's METADATA file, and
+  twine 5 only knows 1.0–2.3, so `twine check --strict` blows up with
+
+InvalidDistribution: Metadata is missing required fields: Name, Version.
+
+... is using a supported Metadata-Version: 1.0, 1.1, 1.2, 2.0, 2.1, 2.2, 2.3.
+
+That's why the original `pip install --upgrade build twine` quietly worked — it pulled twine 6.2.0.
+  Pin to 'twine==6.*' so the floor is explicit and the lesson is preserved in the comment.
+
+* ci(package): use --find-links not glob+extras for the wheel install
+
+`pip install dist/synth_setter-*.whl[torch]` failed in 91d8d4c:
+
+ERROR: Invalid wheel filename (wrong number of parts): 'synth_setter-*'
+
+Cause: bash parses `[torch]` as a character class, so `dist/synth_setter-*.whl[torch]` matches files
+  ending in `.wh` + one of t/o/r/c/h. None match, so bash leaves the pattern literal, and pip
+  receives a glob string instead of a wheel path.
+
+`pip install --find-links dist 'synth-setter[torch]'` is the canonical way: pip parses `[torch]` as
+  the extras spec, and resolves the project name against the local dist plus PyPI for deps.
+
+* ci(package): fix compose smoke assertion path (model.net.out_dim)
+
+`${mul:${data.k},2}` is defined at `model.net.out_dim` in `model/ffn.yaml`, not at `model.out_dim`.
+  The 2a9e3f2 smoke step crashed with
+
+omegaconf.errors.ConfigAttributeError: Key 'out_dim' is not in struct full_key: model.out_dim
+
+confirming the compose itself succeeded (data/model/trainer/net all populated, structured-mode
+  catching the typo); only the assertion was addressing the wrong leaf. The original intent — assert
+  that the custom `mul` resolver fires under canonical compose against the installed wheel — is
+  intact.
+
+* ci(package): install explicit wheel path, not name-resolved from index
+
+Copilot review on PR #1253 noted that `pip install --find-links dist 'synth-setter[torch]'` lets the
+  resolver consider PyPI candidates alongside the local dist/ tree, so a higher version on the index
+  would be preferred over the just-built wheel — defeating the whole point of this smoke step.
+
+Switch to:
+
+WHL=$(ls dist/synth_setter-*.whl) pip install "${WHL}[torch]"
+
+The explicit local path forces the locally-built wheel; the quoted `[torch]` suppresses bash's
+  character-class interpretation while pip still parses `<path>[<extras>]` correctly.
+
+- **testing**: Add deflake-mps workflow + pytest-repeat/randomly plugins
+  ([#1262](https://github.com/tinaudio/synth-setter/pull/1262),
+  [`2954b63`](https://github.com/tinaudio/synth-setter/commit/2954b6327ef97ed17de47076a126929c32cc0a00))
+
+* ci(testing): add deflake-mps workflow + pytest-repeat/randomly plugins
+
+Adds an on-demand harness for investigating MPS test flakes (e.g. the
+  test_train_eval_surge_xt[mps-...] silent-render variant from #898):
+
+- pytest-repeat + pytest-randomly added to dev extras (and the matching dependency-group) so a
+  developer can `pytest --count=N` a single node id locally and every run logs its random seed for
+  reproducibility. - .github/workflows/deflake-mps.yml: workflow_dispatch with test_node_id + count
+  inputs. Setup mirrors test-mps.yml (Surge XT cask, MPS probe); pytest runs with --count,
+  tmp_path_retention_policy=failed, and a workspace-rooted --basetemp so the upload step can grab
+  only the failed iterations' tmp dirs. Step summary parses the junit.xml for a fail-rate readout;
+  deflake-artifacts/ uploaded with 14-day retention. - Makefile `deflake` target mirrors the CI
+  invocation for local repro. - .gitignore: deflake-artifacts/ so local runs don't pollute git
+  status.
+
+Refs #898
+
+* docs(testing): note pytest-randomly default + register deflake-mps in doc-map
+
+Follows up on the deflake-mps harness in this PR per doc-drift advisory:
+
+- docs/doc-map.yaml: add deflake-mps.yml under the testing primer's workflow list. Every sibling
+  workflow already has an entry; without this one, future doc-drift wouldn't flag changes to the new
+  file. - docs/reference/testing.md: surface that pytest-randomly is on by default (auto-shuffles +
+  reseeds every run) and point at how to reproduce a flake via --randomly-seed=NNN. Also points at
+  the new deflake harness for the on-demand case. The plugin is auto-activated on import so a tester
+  reading the primer otherwise has no signal that order/seed varies between local runs.
+
+Refs #1260
+
+* ci(testing): self-test deflake-mps on PRs that touch the workflow file
+
+Adds a `pull_request` trigger to `deflake-mps.yml` gated on `paths:
+  [".github/workflows/deflake-mps.yml"]` so a change to the harness gets exercised end-to-end before
+  merge. At-rest `workflow_dispatch` can't fire until the file is on the default branch, which means
+  any deflake-mps.yml change today is unverifiable pre-merge — this closes that gap without burning
+  macOS runner-minutes on every PR.
+
+The PR run uses a fast non-MPS test (`tests/pipeline/test_file_uri.py::
+  TestFileUriScheme::test_scheme_constant_is_canonical_file_prefix`, ~ms-fast) with count=3 as
+  defaults — the macOS runner setup, Surge XT cask install, MPS probe, pytest-repeat invocation,
+  summary, and artifact upload all still exercise. The smoke proves the harness works; it does not
+  try to also exercise the actual MPS flake.
+
+Inputs use `${{ inputs.X || 'default' }}` so workflow_dispatch keeps honoring user inputs while
+  pull_request reaches the defaults.
+
+* address copilot review feedback on PR #1262
+
+Bug fixes (both flagged by copilot-pull-request-reviewer[bot]):
+
+- deflake-mps.yml:81 — COUNT validator tightened from ^[0-9]+$ to ^[1-9][0-9]*$ so it matches its
+  stated "positive integer" contract. count=0 previously slipped through and dispatched a no-op
+  pytest run; now rejects with "count must be a positive integer (>= 1)". (comment #3295365143)
+
+- Makefile:78 — `pytest … | tee …` was masking pytest's non-zero exit; `make deflake` reported
+  success on failing tests, breaking scriptability. Added target-scoped `SHELL := /bin/bash` and
+  `set -o pipefail` so pytest's exit propagates through the pipe. Verified: a failing test now
+  produces a non-zero make exit. (comment #3295365149)
+
+* ci(testing): quote --count and --basetemp in `make deflake`
+
+Defensive quoting on the Make-expanded values so a `COUNT` or `CURDIR` containing spaces is passed
+  to pytest as a single token rather than being re-split by the shell into stray arguments. (Strict
+  workflow validates COUNT to digits-only; the Makefile target has no such guard since it's
+  developer-local, so quote here.)
+
+Raised by copilot-pull-request-reviewer[bot] (comment #3295390214, second half — the pipefail half
+  of that comment is already addressed by d2f7757e).
+
+* ci(testing): rename dispatch input + verify deflake artifacts via failing sentinel
+
+- Rename workflow_dispatch input `test_node_id` → `pytest_node_id` (and the paired `NODE_ID` env var
+  / python local) so the name reflects pytest's canonical "node id" term and disambiguates from
+  CI/k8s "node". - Add `tests/_meta/test_deflake_self_test.py`, a sentinel test that always fails
+  when `DEFLAKE_SELF_TEST=1` and skips otherwise. Point the PR self-test fallback at it (count=3) so
+  the failure branches of `tmp_path_retention_policy=failed`, junit failure aggregation, and the
+  summarizer's fail-rate arithmetic are exercised on every PR that touches the workflow or the
+  sentinel. - Add `Verify artifact contents (PR self-test)` step that asserts `failures="3"` in
+  junit.xml and exactly 3 retained tmp_paths carrying the sentinel marker file. Gated on
+  `github.event_name == 'pull_request'` since dispatched runs target user-chosen tests with unknown
+  outputs.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* ci(testing): satisfy ruff ANN001 + pydoclint DOC101 on sentinel test
+
+`tmp_path: Path` annotation and a `:param tmp_path:` line carrying the retention-policy rationale —
+  same shape as the other tmp_path-consuming tests in `tests/test_eval.py`.
+
+* ci(testing): scope sentinel + continue-on-error to PR self-test event
+
+Address Copilot review feedback on PR #1262:
+
+- `DEFLAKE_SELF_TEST` was set to "1" unconditionally, which would let a manually-dispatched run with
+  a broad selector (e.g. `tests/`) accidentally include the intentionally-failing sentinel and
+  poison the fail-rate signal the operator is looking for. Gate the env var on `github.event_name ==
+  'pull_request'` so dispatched runs leave the sentinel skipped even when their node id pattern
+  would otherwise catch it. - `continue-on-error: true` was masking pytest's real exit code for
+  dispatched runs too — the operator investigating a flake wants the job conclusion to reflect
+  whether the test failed, not just "harness ran". Same conditional: keep `true` for the PR
+  self-test (where the sentinel is *expected* to fail and the green check lets the PR merge),
+  `false` for dispatch.
+
+* ci(testing): event-scope COUNT/PYTEST_NODE_ID to preserve dispatched 0
+
+`${{ inputs.count || 3 }}` treats `0` as falsy under GHA expression semantics, so dispatching with
+  `count=0` silently fell back to 3 and bypassed the `^[1-9][0-9]*$` validator. Switch both step env
+  blocks to `${{ github.event_name == 'pull_request' && '3' || inputs.count }}` so PR self-tests
+  still get the sentinel defaults while dispatched 0 reaches the validator and is rejected. Same
+  pattern applied to PYTEST_NODE_ID for symmetry.
+
+---------
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+### Refactoring
+
+- **testing**: Hoist install_fake_plugin fixture to tests/conftest.py
+  ([#1265](https://github.com/tinaudio/synth-setter/pull/1265),
+  [`8a16d0e`](https://github.com/tinaudio/synth-setter/commit/8a16d0e4ca9859c6fc25592d1ed2e67b90708556))
+
+Move ``fake_vst3_plugin`` and ``install_fake_plugin`` from ``tests/data/vst/conftest.py`` to
+  ``tests/conftest.py`` so they are discoverable from sibling test trees (``tests/tools/``,
+  ``tests/evaluation/``, ``tests/integration/``). ``tests/data/vst/_fake_plugin.py`` stays put —
+  only the fixtures' discovery scope widens. The old VST-scoped conftest had no other content, so
+  the file is removed.
+
+Wave 1 of the rollout in #1258. Unblocks the cross-tree fake-plugin twins and the consolidation of
+  ad-hoc plugin doubles tracked under that issue.
+
+Refs #1258
+
+### Testing
+
+- **data-pipeline**: Add VST-gated e2e generate_dataset shard render
+  ([#1232](https://github.com/tinaudio/synth-setter/pull/1232),
+  [`d28aebf`](https://github.com/tinaudio/synth-setter/commit/d28aebf6d772811e6701bdcce994130879da7e91))
+
+* test(data-pipeline): add VST-gated e2e generate_dataset shard render
+
+Adds tests/test_generate_dataset_shards.py::test_generate_dataset_renders_shards_to_fake_r2 —
+  invokes from_hydra(cfg) with the cfg_dataset fixture, runs real Surge XT rendering through
+  generate_vst_dataset.py subprocess, and asserts each shard lands at the spec-derived R2 URI in the
+  fake-local remote with a valid HDF5 shape via _validate_surge_dataset.
+
+Re-exports fake_r2_remote from tests/pipeline/conftest.py at the root level so repo-root tests can
+  consume it. Updates docs/doc-map.yaml and docs/reference/testing.md to document the new
+  cfg_dataset fixture pair and the e2e test shape (doc-drift findings from Phase 1).
+
+Phase 2 of the QRSPI plan at
+  thoughts/shared/plans/2026-05-20-test-generate-dataset-conftest-parity.md.
+
+* test(data-pipeline): skip e2e shard render when Surge XT plugin is absent
+
+The @pytest.mark.requires_vst marker is a filter marker only — it does not auto-skip. Add an
+  explicit skipif decorator so contributor laptops and test-fast CI runs skip rather than error out
+  on the missing plugin.
+
+Refs #1231
+
+* docs(testing): broaden Hydra-cfg references to include cfg_dataset
+
+Resolve three doc-drift items from PR #1232's review: the conftest-inventory line (Section 2), the
+  Section 4 heading, and the Section 4 test-list parenthetical all stopped at the train/eval pair.
+  Update them to reflect the four-fixture surface (cfg_train, cfg_eval, cfg_surge_xt, cfg_dataset)
+  and the fake_r2_remote re-export.
+
+* fix(tests): harden generate_dataset e2e test for Surge XT and CWD invariants
+
+Address four reviewer findings on PR #1232:
+
+- Inline a cfg-driven shape validator; _validate_surge_dataset is coupled to 44.1kHz surge_xt
+  fixture constants and would crash on smoke-shard's 16kHz output. - Re-chdir to
+  cfg_dataset.paths.root_dir before from_hydra(); fake_r2_remote's monkeypatch.chdir(tmp_path) broke
+  generate_dataset's relative VST_HEADLESS_WRAPPER lookup. - Treat SYNTH_SETTER_PLUGIN_PATH="" as
+  unset via `or` fallback.
+
+* test(data-pipeline): switch generate_dataset e2e to real R2 + add CI workflow
+
+Replace the fake_r2_remote-based e2e test with an integration_r2-marked real-R2 round-trip per
+  #1206's pattern. The test now: - Composes cfg_dataset via the existing
+  generate_dataset/smoke-shard experiment (no further override needed; R2 bucket/prefix already
+  wired through the experiment). - Overrides cfg.r2.prefix with a uuid-suffixed path so concurrent
+  runs do not clobber each other. - Auto-skips when r2_io.is_r2_reachable() returns False (no rclone
+  or no creds). - Asserts each shard lands in real R2 via r2_io.object_size, then rclone-purges the
+  unique prefix in a try/finally cleanup. - Drops fake_r2_remote, the conftest re-export, the
+  monkeypatch.chdir(...) workaround, the _PLUGIN_PATH skipif, and the requires_vst marker. The
+  integration_r2 marker + GHA-injected R2 creds + Docker image's Surge XT install replace all of
+  them.
+
+Adds .github/workflows/test-generate-dataset-shards.yml that runs the test on PRs touching
+  tests/test_generate_dataset_shards.py (and the related dataset cfg / cli surface) inside the
+  synth-setter:dev-snapshot Docker image with R2 secrets injected.
+
+* refactor(pipeline): extract rclone purge to r2_io.purge_prefix + fix VST plugin path in CI
+
+- Add `r2_io.purge_prefix(bucket, prefix)` for best-effort recursive deletion of every key under an
+  R2 prefix via `rclone purge`. Test teardown in `tests/test_generate_dataset_shards.py` now calls
+  this util instead of building the rclone argv inline (review feedback on PR #1232).
+
+- Fix CI failure in `test-generate-dataset-shards.yml`: the workspace bind-mount shadows the image's
+  `plugins/Surge XT.vst3` symlink, so the worker resolved `plugin_path: plugins/Surge XT.vst3` (from
+  `configs/render/surge_xt.yaml`) to a missing host file and raised `FileNotFoundError`. Run
+  `docker/ubuntu22_04/ensure_plugin_symlinks.sh` before pytest to recreate the symlink, matching the
+  pattern in `nightly-parallel-datagen.yml`, `spec-materialization.yml`, and
+  `test-skypilot-debug.yml`.
+
+- Add TestPurgePrefix to `tests/pipeline/test_r2_io.py`: state-based coverage of the happy path +
+  sibling-isolation against `fake_r2_remote`, missing-prefix no-op against the real local rclone
+  backend, and an argv-shape probe pinning `rclone purge r2:{bucket}/{prefix}` with `check=False`.
+
+* fix(ci): point e2e workflow at post-#1236 script and configs paths
+
+After merging main, `docker/ubuntu22_04/run-linux-vst-headless.sh` is gone (moved to
+  `src/synth_setter/scripts/run-linux-vst-headless.sh` in #1236) and `configs/` is now under
+  `src/synth_setter/configs/`. The bind-mounted workspace in CI exposed the new layout, so the bash
+  invocation 127'd on the old path:
+
+bash: line 7: docker/ubuntu22_04/run-linux-vst-headless.sh: No such file or directory
+
+Update the wrapper path and the pull_request paths filter to track the relocated configs tree.
+
+* Update test_generate_dataset_shards.py
+
+* fix(pipeline): harden purge_prefix + add requires_vst marker to e2e (PR #1232 review round)
+
+- src/synth_setter/pipeline/r2_io.py: purge_prefix now rejects empty, "/", and no-trailing-slash
+  prefixes (so a caller mistake can't wipe a whole bucket via `rclone purge r2:{bucket}/`), and
+  threads `--contimeout=10s --timeout=60s` plus a 120s subprocess.run timeout so a transient rclone
+  hang in `finally` cannot stall CI. Matches the sibling timeouts in
+  tests/integration/test_local_launcher_roundtrip.py and the rclone-lsd call sites already in r2_io.
+
+- tests/pipeline/test_r2_io.py::TestPurgePrefix: updates argv expectation for the new timeout flags;
+  adds a parametrized test_rejects_unsafe_prefix covering "", "/", " ", and a no-trailing- slash
+  value, asserting the guard raises before any subprocess call.
+
+- tests/test_generate_dataset_shards.py: adds @pytest.mark.requires_vst on the e2e test so `pytest
+  -m "integration_r2 and not requires_vst"` selection cleanly excludes it; CI selector is `-m
+  "integration_r2"` so the new marker doesn't change which lane runs the test.
+
+- docs/reference/testing.md: marker column for the e2e row now lists `integration_r2`, `r2`,
+  `requires_vst`, `slow`; the Section 4 cfg_dataset paragraph documents the full gating semantics
+  (marker filter + runtime R2-reachable skip + dev-snapshot Docker plugin path).
+
+Addresses Copilot review comments #3295226313, #3295226321, #3295226334.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+- **data-pipeline**: Pin run_with_editor_held_open + pedalboard threading contracts against real
+  plugin ([#1216](https://github.com/tinaudio/synth-setter/pull/1216),
+  [`0126376`](https://github.com/tinaudio/synth-setter/commit/01263764c5f2daa00027478264f187f58abaaf8a))
+
+* test(data-pipeline): pin run_with_editor_held_open + pedalboard threading contracts against real
+  plugin
+
+* test(data-pipeline): daemonize show_editor worker thread in threading contract test
+
+A non-daemon worker that outlives the join window can keep pytest from exiting cleanly when
+  show_editor hangs. Daemon=True matches the convention in
+  tests/data/vst/test_preset_coverage.py:62.
+
+* test(data-pipeline): drop stale editor-crash-log assertion + rewrite docstring against current
+  contract
+
+`run_with_editor_held_open` no longer routes editor failures through `_run_editor` +
+  `logger.exception("vst-editor-window crashed: ...")` — that codepath was removed when the
+  threading model was inverted to run `show_editor` on the caller's main thread. The dead
+  `crash_log_calls` assertion always passed vacuously, and the docstring still named the removed
+  symbols.
+
+Replace with the actual contract:
+
+- pedalboard/JUCE invariant violations surface as `RuntimeError` from `show_editor` itself (the
+  "Plugin UI windows can only be shown from the main thread" guard). - body exceptions are re-raised
+  after the worker drains. - a worker that outlives the post-`show_editor` join window raises
+  `core.RenderWorkerLeaked`.
+
+Test assertion stays the contract pin (`result is None` with an empty body) so a failure cannot be
+  confused with a render/writer regression. Removes the now-unused `MagicMock` import and
+  `monkeypatch` parameter.
+
+Addresses Copilot review comment on PR #1216.
+
+Refs #1215.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+
 ## v8.7.0 (2026-05-24)
 
 ### Chores
