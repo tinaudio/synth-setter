@@ -86,7 +86,7 @@ set -a && source .env && set +a
 > **Already have Surge XT installed system-wide?** Skip `make install-surge-xt`
 > and symlink it manually:
 > `ln -s "/path/to/Surge XT.vst3" "plugins/Surge XT.vst3"`.
-> See [docs/getting-started.md &sect;2d](docs/getting-started.md#2d-install-the-surge-xt-vst3).
+> See [docs/getting-started.md §2d](docs/getting-started.md#2d-install-the-surge-xt-vst3).
 
 > **Prefer pip or conda?** If you'd rather manage the Python interpreter and
 > venv yourself, see
@@ -96,11 +96,29 @@ set -a && source .env && set +a
 
 ### GPU vs CPU
 
-This project depends on PyTorch (`torch>=2.0.0`), but the install does not fix
-whether you use a CPU-only build or a CUDA-enabled build. Choose and install the
-appropriate PyTorch package for your system (CPU-only or a specific CUDA version)
-using the [PyTorch install matrix](https://pytorch.org/get-started/locally/), then
-install the remaining dependencies as described above.
+The PyTorch backend is routed per platform from the committed `uv.lock`. Pick
+the install command for your hardware:
+
+| Target                       | Command                                                        |
+| ---------------------------- | -------------------------------------------------------------- |
+| macOS (Apple Silicon, MPS)   | `uv sync --frozen`                                             |
+| Linux GPU box (CUDA 12.8)    | `uv sync --frozen --extra cu128`                               |
+| Linux CPU-only (CI / laptop) | `uv sync --frozen --extra cpu --no-default-groups --group dev` |
+| Lint / type-check only       | `uv sync --frozen --only-group dev`                            |
+
+**Mac users: never pass `--extra cpu` or `--extra cu128`.** The marker in
+`[tool.uv.sources]` excludes both on Apple Silicon, so the flag is a silent
+no-op that confuses readers. A bare `uv sync --frozen` resolves torch from
+PyPI's MPS-capable wheel.
+
+**CUDA is the source of truth for reported numbers.** MPS results need not
+match CPU/CUDA bit-for-bit (and some ops fall back to CPU under MPS). When a
+Mac collaborator sees a small numerical divergence from a Linux-CUDA run,
+that is expected — not a reproducibility bug.
+
+Dependency-management details (relock cadence, the resync flip on Linux,
+lockfile-diff review) live in
+[docs/reference/dependency-management.md](docs/reference/dependency-management.md).
 
 ## Quick Start
 
