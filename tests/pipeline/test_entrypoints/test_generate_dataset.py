@@ -213,13 +213,14 @@ class TestRun:
 
     @pytest.fixture(autouse=True)
     def _set_default_skypilot_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Default to a single-worker rank/world for tests that don't care about partitioning.
+        """Pin rank=0/world=1 explicitly so partition-agnostic tests are insulated from host env.
 
-        ``run()`` now requires ``SYNTH_SETTER_WORKER_RANK`` / ``SYNTH_SETTER_NUM_WORKERS`` to be set
-        (silent default removed — see ``read_rank_world_from_env``). Most tests in this class
-        exercise behaviors orthogonal to partitioning, so set rank=0/world=1 by default; tests
-        that probe multi-worker partitioning override via ``monkeypatch.setenv`` and tests for
-        the missing-env contract override via ``monkeypatch.delenv``.
+        ``read_rank_world_from_env`` defaults to ``(0, 1)`` when both vars are
+        absent, but this fixture also overwrites any value the developer's shell
+        may have exported (e.g. an in-flight multi-worker debugging session) so
+        the partition-agnostic tests in this class stay deterministic. Tests
+        that probe multi-worker partitioning override via ``monkeypatch.setenv``;
+        the default-fallback test overrides via ``monkeypatch.delenv``.
         """
         monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
         monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
@@ -596,25 +597,58 @@ class TestRun:
         patched_subprocess.assert_not_called()
         assert not (fake_r2_remote / spec.r2.bucket / spec.r2.prefix).exists()
 
-    def test_run_raises_when_skypilot_env_missing(
+    def test_run_defaults_to_single_worker_when_skypilot_env_absent(
         self,
         patched_subprocess: MagicMock,
         fake_r2_remote: Path,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Missing partition env → ValueError before any rclone or subprocess work.
+        """No partition env → rank=0/world=1, the lone worker renders every shard.
 
-        Removes the silent-default smell where a worker invoked without partition env would
-        otherwise duplicate every shard across every node.
+        Underwrites the dev-experience contract that ``synth-setter-generate-dataset`` works
+        out of the box without exporting ``SYNTH_SETTER_WORKER_RANK`` / ``SYNTH_SETTER_NUM_WORKERS``.
 
-        :param patched_subprocess: Subprocess dispatcher; asserted never invoked.
-        :param fake_r2_remote: Local-typed R2 remote — asserted empty.
+        :param patched_subprocess: Subprocess dispatcher used to introspect renderer argv per shard.
+        :param fake_r2_remote: Local-typed R2 remote — asserted to contain every shard.
         :param tmp_path: Pytest tmp dir used by ``_multi_shard_spec``.
         :param monkeypatch: Used to unset the rank/world env vars.
         """
         monkeypatch.delenv("SYNTH_SETTER_WORKER_RANK", raising=False)
         monkeypatch.delenv("SYNTH_SETTER_NUM_WORKERS", raising=False)
+        spec = _multi_shard_spec(tmp_path, n=3)
+
+        run(spec)
+
+        rendered_filenames = {
+            Path(args[find_script_index(args) + 1]).name
+            for args in _renderer_argv_lists(patched_subprocess)
+        }
+        assert rendered_filenames == {shard.filename for shard in spec.shards}
+        bucket_prefix = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
+        for shard in spec.shards:
+            assert (bucket_prefix / shard.filename).is_file()
+
+    def test_run_raises_on_partial_partition_env(
+        self,
+        patched_subprocess: MagicMock,
+        fake_r2_remote: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Only world set (rank dropped) → ValueError before any rclone or subprocess work.
+
+        Partial partition env almost always means a launcher dropped half its env injection;
+        silently coercing it to single-worker would duplicate every shard across every node
+        (#763). The default-to-(0, 1) fallback is gated on BOTH vars being absent.
+
+        :param patched_subprocess: Subprocess dispatcher; asserted never invoked.
+        :param fake_r2_remote: Local-typed R2 remote — asserted empty.
+        :param tmp_path: Pytest tmp dir used by ``_multi_shard_spec``.
+        :param monkeypatch: Used to set world but unset rank.
+        """
+        monkeypatch.delenv("SYNTH_SETTER_WORKER_RANK", raising=False)
+        monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "2")
         spec = _multi_shard_spec(tmp_path, n=3)
 
         with pytest.raises(ValueError) as excinfo:
