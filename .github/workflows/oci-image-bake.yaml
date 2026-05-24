@@ -45,7 +45,7 @@ on:
       source_template:
         description: "SkyPilot task template to provision and bake. Defaults to the production OCI CPU worker template."
         required: false
-        default: "configs/compute/oci-cpu-template.yaml"
+        default: "src/synth_setter/configs/compute/oci-cpu-template.yaml"
       worker_image_tag:
         description: "Docker tag injected as WORKER_IMAGE into the template's setup. Whatever the template pre-pulls will be baked into the resulting OCI image."
         required: false
@@ -71,7 +71,7 @@ on:
       source_template:
         type: string
         required: false
-        default: "configs/compute/oci-cpu-template.yaml"
+        default: "src/synth_setter/configs/compute/oci-cpu-template.yaml"
       worker_image_tag:
         type: string
         required: false

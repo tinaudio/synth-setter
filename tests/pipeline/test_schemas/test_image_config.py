@@ -13,6 +13,7 @@ import pytest
 from pydantic import ValidationError
 
 from synth_setter.pipeline.schemas.image_config import load_image_config
+from synth_setter.resources import configs_dir
 
 VALID_SHA = "a" * 40
 VALID_ISSUE = 266
@@ -243,7 +244,7 @@ class TestStaticFieldsAndYamlMerge:
 
     def test_static_field_values_match_dev_snapshot_yaml(self) -> None:
         """Real dev-snapshot.yaml fields match expected defaults (catches drift)."""
-        config_path = Path("configs/image/dev-snapshot.yaml")
+        config_path = Path(str(configs_dir() / "image" / "dev-snapshot.yaml"))
 
         result = load_image_config(config_path, github_sha=VALID_SHA, issue_number=VALID_ISSUE)
 

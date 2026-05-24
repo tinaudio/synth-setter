@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       experiment:
-        description: "Datagen experiment id (e.g. generate_dataset/ci-materialize-test) — composed via Hydra against configs/dataset.yaml"
+        description: "Datagen experiment id (e.g. generate_dataset/ci-materialize-test) — composed via Hydra against src/synth_setter/configs/dataset.yaml"
         required: true
         type: string
       artifact_name:
@@ -78,7 +78,7 @@ jobs:
               git config --global --add safe.directory /home/build/synth-setter
               bash docker/ubuntu22_04/ensure_plugin_symlinks.sh
               # Headless X11 needed because importing pedalboard (via param_specs) requires it
-              docker/ubuntu22_04/run-linux-vst-headless.sh \
+              src/synth_setter/scripts/run-linux-vst-headless.sh \
                 python -m synth_setter.pipeline.ci.materialize_spec "$EXPERIMENT" /spec-output
             '
 

@@ -29,6 +29,8 @@ cp agent/hooks/_lib.sh \
    agent/hooks/pre-pr-review-gate.sh \
    agent/hooks/edit-write.sh \
    agent/hooks/verify-gh-taxonomy.sh \
+   agent/hooks/worktree-guard.sh \
+   agent/hooks/session-start-cwd-banner.sh \
    "$SANDBOX/agent/hooks/"
 cp agent/_shared/review_sentinel.py "$SANDBOX/agent/_shared/"
 cd "$SANDBOX"
@@ -1039,6 +1041,232 @@ T_taxonomy_check_ci_minimum_joins_with_comma_space() {
   [[ "$result" == "domain-label" ]] || { echo "expected 'domain-label', got: '$result'"; return 1; }
 }
 it "verify-gh-taxonomy: check_ci_minimum joins missing fields with ', ' (comma+space)" T_taxonomy_check_ci_minimum_joins_with_comma_space
+
+# ===========================================================================
+# worktree-guard.sh — primary-checkout detection + mode dispatch
+# ===========================================================================
+#
+# Sandbox is its own primary checkout at $SANDBOX; tests that need a linked
+# worktree do `git worktree add` inside the sandbox (reset_sandbox tears them
+# down between cases). Empty stdin is intentional — the guard ignores
+# tool_input.file_path, so the test harness need not synthesize realistic JSON.
+
+T_worktree_guard_warns_in_primary() {
+  local out stderr_file
+  stderr_file="$TEST_DIR/wg_stderr.txt"
+  out=$(echo '' | bash agent/hooks/worktree-guard.sh 2>"$stderr_file"; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0, got: $out"; return 1; }
+  grep -q "WARNING" "$stderr_file" || { echo "stderr should contain WARNING; got: $(cat "$stderr_file")"; return 1; }
+  grep -q "git worktree add" "$stderr_file" || { echo "stderr should suggest 'git worktree add'"; return 1; }
+}
+it "worktree-guard: edit in primary (warn mode default) → exit 0 with WARNING + remediation on stderr" T_worktree_guard_warns_in_primary
+
+T_worktree_guard_blocks_in_primary_when_mode_block() {
+  local out stderr_file
+  stderr_file="$TEST_DIR/wg_stderr.txt"
+  out=$(WORKTREE_GUARD_MODE=block bash -c 'echo "" | bash agent/hooks/worktree-guard.sh' 2>"$stderr_file"; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:2" ]] || { echo "expected EXIT:2, got: $out"; return 1; }
+  grep -q "BLOCKED" "$stderr_file" || { echo "stderr should contain BLOCKED; got: $(cat "$stderr_file")"; return 1; }
+}
+it "worktree-guard: WORKTREE_GUARD_MODE=block in primary → exit 2 with BLOCKED on stderr" T_worktree_guard_blocks_in_primary_when_mode_block
+
+T_worktree_guard_off_mode_silent_in_primary() {
+  local out stderr_file
+  stderr_file="$TEST_DIR/wg_stderr.txt"
+  out=$(WORKTREE_GUARD_MODE=off bash -c 'echo "" | bash agent/hooks/worktree-guard.sh' 2>"$stderr_file"; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0, got: $out"; return 1; }
+  [[ -z "$(cat "$stderr_file")" ]] || { echo "stderr should be empty in off mode; got: $(cat "$stderr_file")"; return 1; }
+}
+it "worktree-guard: WORKTREE_GUARD_MODE=off → exit 0 with no output (escape hatch)" T_worktree_guard_off_mode_silent_in_primary
+
+T_worktree_guard_silent_in_linked_worktree() {
+  local out stderr_file wt
+  stderr_file="$TEST_DIR/wg_stderr.txt"
+  wt="$TEST_DIR/linked-wt"
+  git worktree add -q -b wg-test-branch "$wt" >/dev/null 2>&1
+  out=$(cd "$wt" && echo '' | bash "$SANDBOX/agent/hooks/worktree-guard.sh" 2>"$stderr_file"; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0, got: $out"; return 1; }
+  [[ -z "$(cat "$stderr_file")" ]] || { echo "stderr should be empty in linked worktree; got: $(cat "$stderr_file")"; return 1; }
+}
+it "worktree-guard: edit inside a linked worktree → exit 0, no warning" T_worktree_guard_silent_in_linked_worktree
+
+T_worktree_guard_silent_outside_repo() {
+  local out stderr_file scratch
+  stderr_file="$TEST_DIR/wg_stderr.txt"
+  scratch=$(mktemp -d "$TEST_DIR/no-git-XXXX")
+  out=$(cd "$scratch" && echo '' | bash "$SANDBOX/agent/hooks/worktree-guard.sh" 2>"$stderr_file"; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0, got: $out"; return 1; }
+  [[ -z "$(cat "$stderr_file")" ]] || { echo "stderr should be empty outside any git repo; got: $(cat "$stderr_file")"; return 1; }
+}
+it "worktree-guard: edit outside any git repo → exit 0, no warning" T_worktree_guard_silent_outside_repo
+
+T_worktree_guard_unknown_mode_falls_back_to_warn() {
+  local out stderr_file
+  stderr_file="$TEST_DIR/wg_stderr.txt"
+  out=$(WORKTREE_GUARD_MODE=bogus bash -c 'echo "" | bash agent/hooks/worktree-guard.sh' 2>"$stderr_file"; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0 even on unknown mode, got: $out"; return 1; }
+  grep -q "ignoring unknown WORKTREE_GUARD_MODE=bogus" "$stderr_file" || {
+    echo "stderr should log the unknown-mode fallback; got: $(cat "$stderr_file")"
+    return 1
+  }
+}
+it "worktree-guard: unknown WORKTREE_GUARD_MODE value logs + exits 0 (never blocks via typo)" T_worktree_guard_unknown_mode_falls_back_to_warn
+
+T_worktree_guard_off_and_unknown_drain_large_stdin() {
+  # Regression: before draining-before-dispatch, `off` and unknown-mode
+  # exited without reading stdin, leaving a >64KB-pipe-buffer write blocked
+  # in the harness writer; the read-end close then surfaced as SIGPIPE
+  # (exit 141 with pipefail). Both early-exit paths must drain.
+  #
+  # `head -c N /dev/zero` is a *finite* source: it emits exactly N bytes
+  # then exits 0, so the pipeline only flags SIGPIPE if the *hook* (not an
+  # infinite generator like `yes`) failed to read.
+  local exit_code
+  set +e
+  head -c 131072 /dev/zero | WORKTREE_GUARD_MODE=off bash agent/hooks/worktree-guard.sh >/dev/null 2>&1
+  exit_code=$?
+  set -e
+  [[ "$exit_code" == "0" ]] || { echo "off-mode pipeline exit was $exit_code (likely SIGPIPE in writer)"; return 1; }
+  set +e
+  head -c 131072 /dev/zero | WORKTREE_GUARD_MODE=bogus bash agent/hooks/worktree-guard.sh >/dev/null 2>&1
+  exit_code=$?
+  set -e
+  [[ "$exit_code" == "0" ]] || { echo "unknown-mode pipeline exit was $exit_code (likely SIGPIPE in writer)"; return 1; }
+}
+it "worktree-guard: off + unknown modes drain stdin before exiting (no SIGPIPE risk)" T_worktree_guard_off_and_unknown_drain_large_stdin
+
+T_worktree_guard_detached_head_in_primary() {
+  # Regression: --abbrev-ref HEAD returns the literal "HEAD" when detached,
+  # so the warning + remediation must not show 'HEAD' as a branch name, and
+  # `git worktree add --detach` must not be passed a positional commit-ish
+  # of "HEAD" derived from the bad detection.
+  local out stderr_file
+  stderr_file="$TEST_DIR/wg_stderr.txt"
+  git checkout -q --detach HEAD
+  out=$(echo '' | bash agent/hooks/worktree-guard.sh 2>"$stderr_file"; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0, got: $out"; return 1; }
+  grep -q "WARNING" "$stderr_file" || { echo "stderr should still WARN in detached primary; got: $(cat "$stderr_file")"; return 1; }
+  grep -q "detached HEAD" "$stderr_file" || {
+    echo "stderr should report detached HEAD, not literal branch name; got: $(cat "$stderr_file")"
+    return 1
+  }
+  # Remediation must use --detach (always works); no branch arg leaked from the bad probe.
+  grep -q "git worktree add --detach" "$stderr_file" || {
+    echo "stderr should recommend 'git worktree add --detach'; got: $(cat "$stderr_file")"
+    return 1
+  }
+  grep -qE "git worktree add .* HEAD$" "$stderr_file" && {
+    echo "stderr should NOT pass 'HEAD' as a branch arg; got: $(cat "$stderr_file")"
+    return 1
+  }
+  return 0
+}
+it "worktree-guard: detached HEAD in primary → 'detached HEAD' in message, '--detach' remediation, no 'HEAD' branch arg" T_worktree_guard_detached_head_in_primary
+
+T_worktree_guard_remediation_path_is_absolute_from_subdir() {
+  # Regression: original remediation used relative `.claude/worktrees/<slug>`, so
+  # running from `<primary>/src/foo/` produced `git worktree add --detach
+  # .claude/worktrees/<slug>` — which `cd`'d the agent into a path that didn't
+  # exist (subdir-relative). Remediation must anchor at $primary_root.
+  local out stderr_file subdir
+  stderr_file="$TEST_DIR/wg_stderr.txt"
+  subdir="$SANDBOX/src/nested"
+  mkdir -p "$subdir"
+  out=$(cd "$subdir" && echo '' | bash "$SANDBOX/agent/hooks/worktree-guard.sh" 2>"$stderr_file"; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0, got: $out"; return 1; }
+  grep -q "WARNING" "$stderr_file" || { echo "subdir cwd should still WARN; got: $(cat "$stderr_file")"; return 1; }
+  grep -qE "git worktree add --detach ${SANDBOX}/\\.claude/worktrees/" "$stderr_file" || {
+    echo "remediation must anchor at \$primary_root (${SANDBOX}); got: $(cat "$stderr_file")"
+    return 1
+  }
+  grep -qE "git worktree add --detach \\.claude/worktrees/" "$stderr_file" && {
+    echo "remediation must NOT use a bare relative path; got: $(cat "$stderr_file")"
+    return 1
+  }
+  return 0
+}
+it "worktree-guard: remediation path anchored to primary_root (works from any subdir)" T_worktree_guard_remediation_path_is_absolute_from_subdir
+
+# ===========================================================================
+# session-start-cwd-banner.sh — banner content per cwd
+# ===========================================================================
+
+T_session_start_banner_in_primary() {
+  local out
+  out=$(bash agent/hooks/session-start-cwd-banner.sh </dev/null 2>&1; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0, got: $out"; return 1; }
+  [[ "$out" == *"PRIMARY CHECKOUT"* ]] || { echo "banner should flag PRIMARY CHECKOUT; got: $out"; return 1; }
+  [[ "$out" == *"git worktree add"* ]] || { echo "banner should suggest 'git worktree add'; got: $out"; return 1; }
+}
+it "session-start-banner: in primary → stdout flags PRIMARY CHECKOUT and shows remediation" T_session_start_banner_in_primary
+
+T_session_start_banner_in_linked_worktree() {
+  local out wt
+  wt="$TEST_DIR/banner-wt"
+  git worktree add -q -b banner-test-branch "$wt" >/dev/null 2>&1
+  out=$(cd "$wt" && bash "$SANDBOX/agent/hooks/session-start-cwd-banner.sh" </dev/null 2>&1; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0, got: $out"; return 1; }
+  [[ "$out" == *"isolated worktree"* ]] || { echo "banner should say 'isolated worktree'; got: $out"; return 1; }
+  [[ "$out" != *"PRIMARY CHECKOUT"* ]] || { echo "banner should NOT flag PRIMARY in a linked worktree; got: $out"; return 1; }
+}
+it "session-start-banner: in linked worktree → stdout reports 'isolated worktree (OK)'" T_session_start_banner_in_linked_worktree
+
+T_session_start_banner_silent_outside_repo() {
+  local out scratch
+  scratch=$(mktemp -d "$TEST_DIR/banner-no-git-XXXX")
+  out=$(cd "$scratch" && bash "$SANDBOX/agent/hooks/session-start-cwd-banner.sh" </dev/null 2>&1; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0, got: $out"; return 1; }
+  local without_exit="${out%EXIT:*}"
+  [[ -z "${without_exit//[[:space:]]/}" ]] || {
+    echo "banner should be silent outside any git repo; got: $without_exit"
+    return 1
+  }
+}
+it "session-start-banner: outside any git repo → silent, exit 0" T_session_start_banner_silent_outside_repo
+
+T_session_start_banner_detached_head_in_primary() {
+  # Regression: --abbrev-ref HEAD returns literal "HEAD" when detached, so the
+  # banner used to render `branch: HEAD` (misleading) and bake `HEAD` into the
+  # remediation. Switch to --show-current + a labeled fallback.
+  local out
+  git checkout -q --detach HEAD
+  out=$(bash agent/hooks/session-start-cwd-banner.sh </dev/null 2>&1; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0, got: $out"; return 1; }
+  [[ "$out" == *"PRIMARY CHECKOUT"* ]] || { echo "detached primary should still flag PRIMARY CHECKOUT; got: $out"; return 1; }
+  [[ "$out" == *"detached HEAD"* ]] || {
+    echo "banner should label detached HEAD instead of printing 'branch: HEAD'; got: $out"
+    return 1
+  }
+  [[ "$out" != *"branch   : HEAD"* ]] || {
+    echo "banner should NOT show 'branch: HEAD' for detached HEAD; got: $out"
+    return 1
+  }
+  # Remediation must use --detach and must not pass HEAD as a branch arg.
+  [[ "$out" == *"git worktree add --detach"* ]] || {
+    echo "banner should recommend 'git worktree add --detach'; got: $out"
+    return 1
+  }
+}
+it "session-start-banner: detached HEAD in primary → 'detached HEAD' label, '--detach' remediation, no 'branch: HEAD'" T_session_start_banner_detached_head_in_primary
+
+T_session_start_banner_remediation_path_is_absolute_from_subdir() {
+  # Same regression as worktree-guard's subdir-anchored-path test:
+  # the SessionStart hook's PWD is whatever the operator launched `claude`
+  # from. If it's a subdir of primary, a bare relative `.claude/worktrees/...`
+  # in the remediation `cd`'s into a path that doesn't exist.
+  local out subdir
+  subdir="$SANDBOX/src/nested-banner"
+  mkdir -p "$subdir"
+  out=$(cd "$subdir" && bash "$SANDBOX/agent/hooks/session-start-cwd-banner.sh" </dev/null 2>&1; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0, got: $out"; return 1; }
+  [[ "$out" == *"PRIMARY CHECKOUT"* ]] || { echo "subdir cwd should still flag PRIMARY; got: $out"; return 1; }
+  echo "$out" | grep -qE "git worktree add --detach ${SANDBOX}/\\.claude/worktrees/" || {
+    echo "remediation must anchor at \$primary_root (${SANDBOX}); got: $out"
+    return 1
+  }
+  return 0
+}
+it "session-start-banner: remediation path anchored to primary_root (works from any subdir)" T_session_start_banner_remediation_path_is_absolute_from_subdir
 
 # ===========================================================================
 # Run

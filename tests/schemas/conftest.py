@@ -11,7 +11,7 @@ from collections.abc import Iterator
 from typing import Any, cast
 
 import pytest
-from hydra import compose, initialize
+from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 from omegaconf import OmegaConf
 
@@ -62,7 +62,7 @@ def compose_train_cfg(
     selected_overrides = list(_DEFAULT_OVERRIDES)
     if overrides is not None:
         selected_overrides.extend(overrides)
-    with initialize(version_base="1.3", config_path="../../configs"):
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="train.yaml",
             return_hydra_config=return_hydra_config,

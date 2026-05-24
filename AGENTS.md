@@ -14,8 +14,12 @@ Architecture: [docs/architecture.md](docs/architecture.md).
 - **Always work in an isolated git worktree.** Branch switching and stash
   conflicts have caused lost work and accidental commits to wrong branches.
   Use `git worktree add` (or `isolation: "worktree"` when spawning subagents).
-  The main checkout is read-only — `git log`, exploration, `rclone ls`. Never
-  edit files there.
+  The primary checkout is read-only — `git log`, exploration, `rclone ls`.
+  Never edit files there. A `SessionStart` hook
+  (`agent/hooks/session-start-cwd-banner.sh`) prints a primary-vs-worktree
+  banner on startup/resume/clear/compact; a `PreToolUse` hook
+  (`agent/hooks/worktree-guard.sh`) warns on Edit/Write inside the primary
+  checkout (`WORKTREE_GUARD_MODE`: `warn` default / `block` / `off`).
 - **Always verify the branch before push.** Run `git branch --show-current`
   and confirm it matches the target PR branch. A hook prints the branch on
   every `git commit`; don't ignore it.
@@ -89,7 +93,7 @@ exempt.
 ## YAML `run:` block scalars are bash
 
 In GitHub Actions workflows (`.github/workflows/*.{yml,yaml}`) and SkyPilot
-task configs (`configs/compute/*.yaml`'s `run:` / `setup:` blocks), comments
+task configs (`src/synth_setter/configs/compute/*.yaml`'s `run:` / `setup:` blocks), comments
 go **above** the step, never inside the block scalar. The block-scalar body
 is bash and stray `'`, `` ` ``, `$`, or `\` inside a comment has caused
 unintended shell expansion. A `PreToolUse` hook

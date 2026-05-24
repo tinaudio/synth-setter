@@ -1,7 +1,7 @@
 # SkyPilot task template for RunPod — DEBUG variant: headless wrapper canary.
 #
 # Layer 3 in the progressive triage matrix: builds on `noop` by invoking the
-# headless wrapper (`docker/ubuntu22_04/run-linux-vst-headless.sh`) around a no-op `echo`.
+# headless wrapper (`src/synth_setter/scripts/run-linux-vst-headless.sh`) around a no-op `echo`.
 # Tests the wrapper's full lifecycle on RunPod: Xvfb + xsettingsd + openbox +
 # dbus startup, the cleanup trap firing on `echo`'s exit, all child processes
 # reaped, the SSH command's pipes released, and SkyPilot's job-status reporter
@@ -40,4 +40,4 @@ setup: |
   echo "synth-setter debug-headless worker ready (host: $(hostname))"
 
 run: |
-  bash docker/ubuntu22_04/run-linux-vst-headless.sh echo "skypilot-debug headless job done (host: $(hostname))"
+  bash src/synth_setter/scripts/run-linux-vst-headless.sh echo "skypilot-debug headless job done (host: $(hostname))"

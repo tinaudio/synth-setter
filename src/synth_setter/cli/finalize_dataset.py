@@ -17,7 +17,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import rootutils
-from hydra import compose, initialize_config_dir
+from hydra import compose, initialize_config_module
 from loguru import logger
 
 # Bootstrap PROJECT_ROOT + sys.path before sibling synth_setter imports.
@@ -37,9 +37,10 @@ from synth_setter.pipeline.data.stats import get_stats_hdf5, stream_stats_wds  #
 from synth_setter.pipeline.schemas.spec import DatasetSpec  # noqa: E402
 from synth_setter.pipeline.spec_io import write_spec_to_path  # noqa: E402
 
-# Resolve repo root from this file so the entrypoint is cwd-independent.
+# Operator-side artifact anchor — local checkout where the spec is written
+# and where ``cfg.paths.*`` interpolations resolve. Distinct from
+# :func:`configs_dir` (now inside the package).
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-_CONFIG_DIR = _REPO_ROOT / "configs"
 
 
 def _download_train_shards_one_at_a_time(spec: DatasetSpec, work_dir: Path) -> Iterator[Path]:
@@ -167,7 +168,7 @@ def main() -> None:
     :raises ValueError: ``spec.output_format`` is neither ``"hdf5"`` nor ``"wds"``.
     """
     overrides = list(sys.argv[1:])
-    with initialize_config_dir(version_base="1.3", config_dir=str(_CONFIG_DIR)):
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(config_name="dataset", overrides=overrides)
 
     # Pin paths.* so spec_from_cfg's resolve step does not trip on

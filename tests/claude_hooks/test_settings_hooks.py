@@ -26,7 +26,11 @@ def _load_settings() -> dict[str, Any]:
 
 
 def _matcher_entries() -> list[dict[str, Any]]:
-    """Return every PreToolUse/PostToolUse matcher-entry in source order.
+    """Return every matcher-entry across all hook events in source order.
+
+    Iterates every value of the top-level ``hooks`` map — currently
+    ``SessionStart``, ``PreToolUse``, and ``PostToolUse`` — so any new hook
+    event added under ``hooks`` is picked up automatically.
 
     :returns: Flat list of matcher-entry objects.
     """
@@ -164,6 +168,8 @@ _EXPECTED_SHARED_HOOK_COMMANDS: tuple[tuple[str, str], ...] = (
     ("No-yaml-run-comments", "bash agent/hooks/no-yaml-run-comments.sh"),
     ("PR review resolver", "bash agent/hooks/pr-review-resolver.sh"),
     ("Taxonomy verification", "bash agent/hooks/verify-gh-taxonomy.sh"),
+    ("Worktree guard", "bash agent/hooks/worktree-guard.sh"),
+    ("Worktree-status banner", "bash agent/hooks/session-start-cwd-banner.sh"),
 )
 
 
@@ -443,7 +449,7 @@ def yaml_run_hook_command() -> str:
 
 
 def test_yaml_run_hook_passes_unrelated_file(yaml_run_hook_command: str) -> None:
-    """Edits to files outside workflows/ and configs/compute/ fast-path through.
+    """Edits to files outside workflows/ and src/synth_setter/configs/compute/ fast-path through.
 
     :param yaml_run_hook_command: Hook command body fixture.
     """
@@ -1064,7 +1070,7 @@ def test_baseline_hook_allows_equal_count_edit(baseline_hook_command: str, tmp_p
 
 
 def test_yaml_run_hook_blocks_compute_config_path(yaml_run_hook_command: str) -> None:
-    """A `#`-comment inside a ``run: |`` block in ``configs/compute/*.yaml`` is blocked.
+    """Block a `#`-comment in a ``run: |`` body under ``src/synth_setter/configs/compute/*.yaml``.
 
     :param yaml_run_hook_command: Hook command body fixture.
     """
@@ -1078,7 +1084,10 @@ def test_yaml_run_hook_blocks_compute_config_path(yaml_run_hook_command: str) ->
         yaml_run_hook_command,
         {
             "tool_name": "Write",
-            "tool_input": {"file_path": "configs/compute/foo.yaml", "content": content},
+            "tool_input": {
+                "file_path": "src/synth_setter/configs/compute/foo.yaml",
+                "content": content,
+            },
         },
     )
     assert result.returncode == 2, (result.returncode, result.stderr)
@@ -1568,7 +1577,7 @@ def test_yaml_run_hook_description_documents_both_extensions() -> None:
     """The matcher description must mention both ``.yml`` and ``.yaml`` extensions.
 
     The hook's ``in_scope`` accepts ``.github/workflows/*.{yml,yaml}`` and
-    ``configs/compute/*.{yml,yaml}``. A description naming only one extension
+    ``src/synth_setter/configs/compute/*.{yml,yaml}``. A description naming only one extension
     per directory misleads users into surprise when the other fires.
     """
     # _find_handler enforces "exactly one matcher entry" — call it first so a

@@ -21,15 +21,15 @@ ______________________________________________________________________
 
 ## 1. Initialization
 
-| Concern           | How it works                                                                                             | File                                      |
-| ----------------- | -------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
-| W&B run creation  | `WandbLogger` instantiated by Hydra — included in the default `many_loggers` compose (W&B + CSV + TB)    | `configs/logger/wandb.yaml`               |
-| Entity / project  | Env-var driven: `entity: ${oc.env:WANDB_ENTITY,null}`, `project: "${oc.env:WANDB_PROJECT,synth-setter}"` | `configs/logger/wandb.yaml:10,13`         |
-| Default compose   | `many_loggers` composes `csv + tensorboard + wandb` (W&B enabled by default)                             | `configs/logger/many_loggers.yaml`        |
-| Run ID            | `null` (W&B auto-generates)                                                                              | `configs/logger/wandb.yaml:8`             |
-| Checkpoint upload | `log_model: "all"`                                                                                       | `configs/logger/wandb.yaml:11`            |
-| Code saving       | `wandb.Settings(code_dir=".")`                                                                           | `configs/logger/wandb.yaml:17-19`         |
-| Run teardown      | `wandb.finish()` in `task_wrapper` finally block                                                         | `src/synth_setter/utils/utils.py:101-106` |
+| Concern           | How it works                                                                                             | File                                                |
+| ----------------- | -------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| W&B run creation  | `WandbLogger` instantiated by Hydra — included in the default `many_loggers` compose (W&B + CSV + TB)    | `src/synth_setter/configs/logger/wandb.yaml`        |
+| Entity / project  | Env-var driven: `entity: ${oc.env:WANDB_ENTITY,null}`, `project: "${oc.env:WANDB_PROJECT,synth-setter}"` | `src/synth_setter/configs/logger/wandb.yaml:10,13`  |
+| Default compose   | `many_loggers` composes `csv + tensorboard + wandb` (W&B enabled by default)                             | `src/synth_setter/configs/logger/many_loggers.yaml` |
+| Run ID            | `null` (W&B auto-generates)                                                                              | `src/synth_setter/configs/logger/wandb.yaml:8`      |
+| Checkpoint upload | `log_model: "all"`                                                                                       | `src/synth_setter/configs/logger/wandb.yaml:11`     |
+| Code saving       | `wandb.Settings(code_dir=".")`                                                                           | `src/synth_setter/configs/logger/wandb.yaml:17-19`  |
+| Run teardown      | `wandb.finish()` in `task_wrapper` finally block                                                         | `src/synth_setter/utils/utils.py:101-106`           |
 
 **No direct `wandb.init()` calls exist in runtime code.** One `wandb.config.update()` call exists: `log_wandb_provenance()` in `src/synth_setter/utils/logging_utils.py:91` writes provenance metadata (see [2g](#2g-provenance-metadata-logged-once-at-run-start)).
 
@@ -105,13 +105,13 @@ only; with `logger=wandb` they go to W&B only.
 
 ### 2d. Callbacks — Non-W&B
 
-| Callback              | What it does                                           | Config                                                  |
-| --------------------- | ------------------------------------------------------ | ------------------------------------------------------- |
-| `ModelCheckpoint`     | Saves `.ckpt` locally (uploaded by `log_model: "all"`) | `configs/callbacks/model_checkpoint.yaml`               |
-| `LearningRateMonitor` | Logs LR to Lightning logger                            | `configs/callbacks/lr_monitor.yaml`                     |
-| `RichProgressBar`     | Terminal display only                                  | `configs/callbacks/rich_progress_bar.yaml`              |
-| `ModelSummary`        | Prints param summary to console                        | `configs/callbacks/model_summary.yaml`                  |
-| `PredictionWriter`    | Saves predictions to `.pt` files locally               | `src/synth_setter/utils/callbacks.py::PredictionWriter` |
+| Callback              | What it does                                           | Config                                                      |
+| --------------------- | ------------------------------------------------------ | ----------------------------------------------------------- |
+| `ModelCheckpoint`     | Saves `.ckpt` locally (uploaded by `log_model: "all"`) | `src/synth_setter/configs/callbacks/model_checkpoint.yaml`  |
+| `LearningRateMonitor` | Logs LR to Lightning logger                            | `src/synth_setter/configs/callbacks/lr_monitor.yaml`        |
+| `RichProgressBar`     | Terminal display only                                  | `src/synth_setter/configs/callbacks/rich_progress_bar.yaml` |
+| `ModelSummary`        | Prints param summary to console                        | `src/synth_setter/configs/callbacks/model_summary.yaml`     |
+| `PredictionWriter`    | Saves predictions to `.pt` files locally               | `src/synth_setter/utils/callbacks.py::PredictionWriter`     |
 
 ### 2e. Gradient Watching
 

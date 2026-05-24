@@ -11,10 +11,11 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from synth_setter.resources import configs_dir
 from synth_setter.schemas.logger_config import LoggerConfig, LoggerInstance
 from tests.schemas.conftest import compose_subtree
 
-_LOGGER_CONFIG_DIR = Path(__file__).resolve().parents[2] / "configs" / "logger"
+_LOGGER_CONFIG_DIR = Path(str(configs_dir())) / "logger"
 
 
 def _all_logger_config_names() -> list[str]:

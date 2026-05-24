@@ -38,12 +38,14 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from synth_setter.cli.generate_dataset import (
-    VST_HEADLESS_WRAPPER,
     build_generate_args,
     run,
 )
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
+from synth_setter.resources import vst_headless_wrapper
 from tests.helpers.subprocess_args import find_script_index
+
+VST_HEADLESS_WRAPPER = str(vst_headless_wrapper())
 
 # Reusable VST3 bundle with a real Contents/moduleinfo.json so
 # extract_renderer_version (called by run) returns a deterministic version

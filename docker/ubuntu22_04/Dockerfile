@@ -352,7 +352,7 @@ RUN case "${TARGETARCH:-}" in \
     pueued --version
 
 WORKDIR /artifacts
-COPY --from=synth-setter-src /home/build/synth-setter/docker/ubuntu22_04/run-linux-vst-headless.sh /artifacts/
+COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/scripts/run-linux-vst-headless.sh /artifacts/
 COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/data/vst/core.py /artifacts/
 RUN chmod +x ./run-linux-vst-headless.sh
 # Validate that Surge XT loads correctly under headless X11

@@ -6,6 +6,18 @@
     }
   },
   "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "description": "Worktree-status banner: prints cwd, current branch, and whether the agent is sitting in the primary checkout (which AGENTS.md marks read-only). Fires on every session start, resume, /clear, and /compact so post-compaction agents see the same context. Goal: surface the primary-vs-worktree distinction at the moment the agent picks up work, before the first Edit/Write — the AGENTS.md rule lives outside CLAUDE.md so the agent doesn't otherwise see it in the system reminder.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash agent/hooks/session-start-cwd-banner.sh"
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Edit|Write",
@@ -14,6 +26,16 @@
           {
             "type": "command",
             "command": "bash agent/hooks/edit-write.sh credential-protect"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "description": "Worktree guard: on Edit/Write inside the primary checkout, prints a WARNING with the exact `git worktree add` command. Default WORKTREE_GUARD_MODE=warn (exit 0, never blocks); =block upgrades to exit 2, =off disables. Edits outside the repo or inside linked worktrees fall through silently. Companion to the SessionStart banner; full rationale lives there.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash agent/hooks/worktree-guard.sh"
           }
         ]
       },

@@ -11,10 +11,11 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from synth_setter.resources import configs_dir
 from synth_setter.schemas.trainer_config import TrainerConfig
 from tests.schemas.conftest import compose_subtree
 
-_TRAINER_CONFIG_DIR = Path(__file__).resolve().parents[2] / "configs" / "trainer"
+_TRAINER_CONFIG_DIR = Path(str(configs_dir())) / "trainer"
 
 
 def _all_trainer_config_names() -> list[str]:

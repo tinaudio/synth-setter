@@ -29,7 +29,7 @@ on:
     paths:
       - .github/workflows/oci-image-bake.yaml
       - .github/workflows/test-oci-image-bake.yml
-      - configs/compute/oci-cpu-template.yaml
+      - src/synth_setter/configs/compute/oci-cpu-template.yaml
 
 concurrency:
   group: test-oci-image-bake-${{ github.event.pull_request.number }}

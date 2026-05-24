@@ -11,7 +11,7 @@ import threading
 import time
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -43,6 +43,7 @@ from synth_setter.data.vst.core import (  # noqa: E402
 from synth_setter.data.vst.param_spec import ParamSpec  # noqa: E402
 from synth_setter.data.vst.writers import make_hdf5_dataset  # noqa: E402
 from synth_setter.pipeline.schemas.spec import RenderConfig  # noqa: E402
+from synth_setter.resources import as_file, vst_headless_wrapper  # noqa: E402
 
 MIDI_LISTEN_MESSAGE_TYPES = ("note_on", "note_off", "control_change", "pitchwheel", "aftertouch")
 
@@ -125,7 +126,6 @@ _MIDI_POLL_INTERVAL_SECONDS = 0.01
 _VST_SUBPROCESS_TIMEOUT_SECONDS = 300
 _EVAL_SUBPROCESS_TIMEOUT_SECONDS = 600
 _METRICS_SUBPROCESS_TIMEOUT_SECONDS = 300
-_VST_HEADLESS_WRAPPER = _REPO_ROOT / "docker" / "ubuntu22_04" / "run-linux-vst-headless.sh"
 _EVAL_SCRIPT = _REPO_ROOT / "src" / "eval.py"
 _PREDICT_VST_AUDIO_MODULE = "synth_setter.evaluation.predict_vst_audio"
 _COMPUTE_AUDIO_METRICS_MODULE = "synth_setter.evaluation.compute_audio_metrics"
@@ -749,21 +749,26 @@ def _build_predict_vst_audio_argv(
     running on Linux.
 
     :param platform: Override for ``sys.platform``; ``None`` reads ``sys.platform`` at call time.
-    :param wrapper_path: Override for ``_VST_HEADLESS_WRAPPER``; ``None`` reads the module-level
-        constant at call time.
+    :param wrapper_path: Real, on-disk path to the Xvfb wrapper; required on Linux
+        (the caller materializes :func:`vst_headless_wrapper` via ``as_file``).
 
     :raises FileNotFoundError: on Linux when the wrapper path is absent.
+    :raises ValueError: on Linux when ``wrapper_path`` is ``None``.
     """
     resolved_platform = platform if platform is not None else sys.platform
-    resolved_wrapper = wrapper_path if wrapper_path is not None else _VST_HEADLESS_WRAPPER
     args: list[str] = []
     if resolved_platform == "linux":
-        if not resolved_wrapper.is_file():
+        if wrapper_path is None:
+            raise ValueError(
+                "wrapper_path is required on Linux — caller must materialize "
+                "vst_headless_wrapper() via as_file() before invoking this builder."
+            )
+        if not wrapper_path.is_file():
             raise FileNotFoundError(
-                f"VST headless wrapper not found at {resolved_wrapper}; "
+                f"VST headless wrapper not found at {wrapper_path}; "
                 f"this script needs it on Linux to run predict_vst_audio.py headlessly."
             )
-        args.append(str(resolved_wrapper))
+        args.append(str(wrapper_path))
     args += [
         sys.executable,
         "-m",
@@ -837,23 +842,33 @@ def _render_predicted_audio(
         absent.
     :raises ValueError: if a rendered WAV's peak amplitude is below ``SILENCE_PEAK_THRESHOLD``.
     """
-    args = _build_predict_vst_audio_argv(
-        predictions_output_dir, audio_dir, param_spec_name, preset_path
-    )
-    runner = subprocess_runner if subprocess_runner is not None else subprocess.run
-    try:
-        runner(  # noqa: S603
-            args,
-            check=True,
-            timeout=_VST_SUBPROCESS_TIMEOUT_SECONDS,
+    # Zipped wheels extract the wrapper to a temp file that only lives while
+    # ``as_file()`` is open; keep the context open across the subprocess call.
+    with ExitStack() as stack:
+        wrapper_path: Path | None = None
+        if sys.platform == "linux":
+            wrapper_path = Path(stack.enter_context(as_file(vst_headless_wrapper())))
+        args = _build_predict_vst_audio_argv(
+            predictions_output_dir,
+            audio_dir,
+            param_spec_name,
+            preset_path,
+            wrapper_path=wrapper_path,
         )
-    except subprocess.TimeoutExpired:
-        logger.error(
-            "predict_vst_audio timed out after %ss; command: %s",
-            _VST_SUBPROCESS_TIMEOUT_SECONDS,
-            args,
-        )
-        raise
+        runner = subprocess_runner if subprocess_runner is not None else subprocess.run
+        try:
+            runner(  # noqa: S603
+                args,
+                check=True,
+                timeout=_VST_SUBPROCESS_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            logger.error(
+                "predict_vst_audio timed out after %ss; command: %s",
+                _VST_SUBPROCESS_TIMEOUT_SECONDS,
+                args,
+            )
+            raise
     _validate_rendered_audio_dir(audio_dir, num_samples)
 
 

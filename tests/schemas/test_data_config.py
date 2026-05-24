@@ -11,16 +11,17 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from hydra import compose, initialize
+from hydra import compose, initialize_config_module
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import OmegaConf
 from pydantic import ValidationError
 
+from synth_setter.resources import configs_dir
 from synth_setter.schemas.data_config import DataConfig
 from synth_setter.schemas.paths_config import PathsConfig
 from tests.schemas.conftest import compose_subtree
 
-_DATA_CONFIG_DIR = Path(__file__).resolve().parents[2] / "configs" / "data"
+_DATA_CONFIG_DIR = Path(str(configs_dir())) / "data"
 
 
 def _all_data_config_names() -> list[str]:
@@ -67,7 +68,7 @@ class TestPathsConfigResolvedInterpolation:
         monkeypatch.setenv("PROJECT_ROOT", "/tmp/x")  # noqa: S108
         # output_dir / work_dir overridden because ``${hydra:runtime.*}`` is
         # only populated at fit time, not at compose time.
-        with initialize(version_base="1.3", config_path="../../configs"):
+        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
             cfg = compose(
                 config_name="train.yaml",
                 return_hydra_config=True,
