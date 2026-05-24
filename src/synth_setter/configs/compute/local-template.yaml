@@ -16,12 +16,10 @@
 # cluster via `kind load docker-image` ahead of launch. `image_id` is set
 # per-launch by the launcher from skypilot_launch.worker_image_tag.
 
-# Task-scoped pod_config override: `imagePullPolicy: Never` makes kubelet
-# use the kind-loaded synth-setter image and never resolve its manifest
-# from Docker Hub, avoiding the anonymous-pull 429 that timed out #1255.
-# Scoped to this task (not ~/.sky/config.yaml) so the SkyPilot jobs
-# controller — whose image lives on GAR and is not `kind load`-ed — still
-# pulls normally; a global override blocks the controller from starting.
+# Task-scoped (not ~/.sky/config.yaml): a global override blocks the
+# SkyPilot jobs controller, whose image lives on GAR and is not `kind
+# load`-ed. Name-less container merges into the pod's first container
+# via SkyPilot's patch-merge legacy. See #1255.
 config:
   kubernetes:
     pod_config:
