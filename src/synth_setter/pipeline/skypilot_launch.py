@@ -107,7 +107,7 @@ _WORKER_GIT_REF_RE = re.compile(r"^[0-9a-f]{7,40}$")
 _JOB_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$")
 
 # Forwarded via task.update_envs; each resolved from .env then process env.
-# Keep in sync with the envs: block in configs/compute/runpod-template.yaml.
+# Keep in sync with the envs: block in src/synth_setter/configs/compute/runpod-template.yaml.
 # WORKER_GIT_REF: pod fetches+checks out this ref before generate_dataset, to
 # bypass dev-snapshot image-bake lag in PR CI.
 _WORKER_ENV_KEYS: tuple[str, ...] = (
