@@ -125,11 +125,15 @@ jobs:
             "run_id=${RUN_ID}" \
             2>&1 | tee finalize.log
 
+      # `run_id` discriminator — matrix callers invoke this reusable multiple
+      # times in one run (e.g., one row per output_format), and upload-artifact
+      # v4 fails on name collisions. `output_format` may be unset because
+      # `generate-dataset-shards.yaml` forwards it via Hydra overrides only.
       - name: Upload finalize log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: finalize-log-${{ inputs.provider }}-${{ inputs.output_format }}
+          name: finalize-log-${{ inputs.provider }}-${{ inputs.output_format || 'na' }}-${{ inputs.run_id }}
           path: finalize.log
           if-no-files-found: warn
           retention-days: 7
