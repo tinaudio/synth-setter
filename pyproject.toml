@@ -1,3 +1,11 @@
+[build-system]
+# Declaring a build-system is what flips `uv sync` from `source = { virtual }`
+# (skips installing the project itself) to `source = { editable }` — without
+# it the `synth_setter` package and `project.scripts` entry points never land
+# in the venv. See #1245.
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "synth-setter"
 version = "8.7.1"
