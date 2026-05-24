@@ -74,15 +74,18 @@ jobs:
       # COUNT validated as a positive int — `type: number` admits floats; pytest-repeat needs int.
       # PYTEST_NODE_ID + COUNT routed through env (never inlined into `run: |`) so an adversarial
       # dispatch input can't break out of the bash/Python context.
-      # DEFLAKE_SELF_TEST opts the sentinel in (see its module-level `pytestmark.skipif`);
-      # harmless for dispatched runs targeting other tests, which don't read the env var.
+      # DEFLAKE_SELF_TEST opts the sentinel in only on PR self-test; dispatched runs leave it
+      # unset so a broad selector like `tests/` can't accidentally pull the failing sentinel in.
+      # `continue-on-error` is also PR-scoped: the sentinel is *supposed* to fail (that's how the
+      # Verify step gets a junit with failures to assert on), so a green PR check is correct;
+      # for dispatched runs the operator wants the job conclusion to reflect pytest's real exit.
       - name: Run deflake loop
-        continue-on-error: true
+        continue-on-error: ${{ github.event_name == 'pull_request' }}
         env:
           HYDRA_FULL_ERROR: "1"
           PYTEST_NODE_ID: ${{ inputs.pytest_node_id || 'tests/_meta/test_deflake_self_test.py::test_always_fails' }}
           COUNT: ${{ inputs.count || 3 }}
-          DEFLAKE_SELF_TEST: "1"
+          DEFLAKE_SELF_TEST: ${{ github.event_name == 'pull_request' && '1' || '' }}
         run: |
           set -euo pipefail
           [[ "$COUNT" =~ ^[1-9][0-9]*$ ]] || { echo "ERROR: count must be a positive integer (>= 1), got: $COUNT" >&2; exit 2; }
