@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779660091119,
+  "lastUpdate": 1779663034463,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -4614,6 +4614,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.04067671298980713,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8a16d0e4ca9859c6fc25592d1ed2e67b90708556",
+          "message": "refactor(testing): hoist install_fake_plugin fixture to tests/conftest.py (#1265)\n\nMove ``fake_vst3_plugin`` and ``install_fake_plugin`` from\n``tests/data/vst/conftest.py`` to ``tests/conftest.py`` so they are\ndiscoverable from sibling test trees (``tests/tools/``, ``tests/evaluation/``,\n``tests/integration/``). ``tests/data/vst/_fake_plugin.py`` stays put — only\nthe fixtures' discovery scope widens. The old VST-scoped conftest had no\nother content, so the file is removed.\n\nWave 1 of the rollout in #1258. Unblocks the cross-tree fake-plugin twins\nand the consolidation of ad-hoc plugin doubles tracked under that issue.\n\nRefs #1258",
+          "timestamp": "2026-05-24T22:31:37Z",
+          "tree_id": "9701af86b22e5c596bdfbf0754fe008cb9a13e7f",
+          "url": "https://github.com/tinaudio/synth-setter/commit/8a16d0e4ca9859c6fc25592d1ed2e67b90708556"
+        },
+        "date": 1779663033320,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.5995032787323,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 5.924725574306212,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.024824991822242737,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.020110249519348145,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.125445604324341,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 16.10374706525,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 3.9257640838623047,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.642089878870174,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.0283473152667284,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.03352320194244385,
             "unit": "1-cos"
           },
           {
