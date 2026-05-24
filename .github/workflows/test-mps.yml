@@ -47,8 +47,11 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Install dependencies
-        run: uv pip install --system -e ".[torch,dev]"
+      # macOS: bare `uv sync --frozen` resolves torch from PyPI's MPS-capable
+      # wheel — no backend extra on Apple Silicon (the sys_platform marker in
+      # [tool.uv.sources] would not match anyway). --frozen errors on lock drift.
+      - name: Install dependencies (uv sync --frozen, MPS wheel from PyPI)
+        run: uv sync --frozen
 
       # Install the Surge XT VST3 cask and symlink it into the repo-relative
       # `plugins/Surge XT.vst3` path that configs, CLI `--plugin_path` defaults,
@@ -64,7 +67,7 @@ jobs:
       # the cask install or symlink is broken before the full pytest run.
       - name: Smoke-test Surge XT plugin load
         run: |
-          python -X faulthandler -c "from synth_setter.data.vst.core import load_plugin; load_plugin('plugins/Surge XT.vst3')"
+          uv run python -X faulthandler -c "from synth_setter.data.vst.core import load_plugin; load_plugin('plugins/Surge XT.vst3')"
 
       # Confirm MPS is actually visible to PyTorch — without this, the parametrized
       # `accelerator` fixture in tests/conftest.py would hardfail every collected
@@ -72,16 +75,16 @@ jobs:
       # without the test suite being able to tell us why.
       - name: Probe MPS availability
         run: |
-          python -c "import torch; assert torch.backends.mps.is_available(), 'MPS not available on this runner'"
+          uv run python -c "import torch; assert torch.backends.mps.is_available(), 'MPS not available on this runner'"
 
       - name: List dependencies
-        run: uv pip list --system
+        run: uv pip list
 
       - name: Run MPS tests
         env:
           HYDRA_FULL_ERROR: "1"
         run: |
-          pytest -vv -s -m mps \
+          uv run pytest -vv -s -m mps \
             --cov=src --cov-branch --cov-report=xml --cov-report=term
 
       - name: Upload coverage to Codecov

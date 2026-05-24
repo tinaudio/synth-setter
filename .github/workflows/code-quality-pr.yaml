@@ -32,8 +32,11 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Install dependencies
-        run: uv pip install --system -e ".[torch,dev]"
+      # Lint/format/type-check only: --only-group dev pulls the [dev] PEP 735
+      # group (ruff, pyright, pre-commit, pytest, ...) without dragging the
+      # torch stack onto the runner. --frozen errors on lockfile drift.
+      - name: Install dev tools (uv sync --frozen, no torch)
+        run: uv sync --frozen --only-group dev
 
       - name: Find changed files
         id: changed_files
@@ -43,6 +46,12 @@ jobs:
 
       - name: List changed files
         run: echo '${{ steps.changed_files.outputs.all_changed_files }}'
+
+      # pre-commit looks at PATH; activating the uv-managed venv lets the
+      # tj-actions/changed-files-driven `pre-commit run --files ...` reach the
+      # synced ruff/pyright/pydoclint instead of system tools.
+      - name: Activate uv venv on PATH
+        run: echo "${GITHUB_WORKSPACE}/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Run pre-commits
         uses: pre-commit/action@v3.0.1
@@ -55,4 +64,4 @@ jobs:
       # author to either clean the file (preferred) or revert the addition.
       # See #938.
       - name: Guard against new defs in pydoclint-excluded files
-        run: python scripts/check_no_new_funcs_in_pydoclint_excluded.py --base ${{ github.event.pull_request.base.sha }}
+        run: uv run python scripts/check_no_new_funcs_in_pydoclint_excluded.py --base ${{ github.event.pull_request.base.sha }}

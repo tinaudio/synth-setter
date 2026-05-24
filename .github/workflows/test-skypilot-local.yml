@@ -62,7 +62,11 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.10"
-          cache: pip
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
 
       # `sky local up` shells out to kind + kubectl. The runner image has
       # docker preinstalled but neither kind nor kubectl, so install both.
@@ -85,8 +89,11 @@ jobs:
       - name: Install socat (kubectl port-forward dependency)
         run: sudo apt-get update -qq && sudo apt-get install -y -qq socat
 
-      - name: Install SkyPilot (kubernetes extra)
-        run: pip install "skypilot[kubernetes]==0.12.0" "kubernetes==35.0.0"
+      # skypilot[runpod,oci,kubernetes] + kubernetes==35.0.0 are pinned in
+      # [project.dependencies], so a frozen sync gives a byte-identical install
+      # to the pre-#1245 ad-hoc `pip install "skypilot[kubernetes]==0.12.0"`.
+      - name: Install SkyPilot via uv sync --frozen
+        run: uv sync --frozen --extra cpu --no-default-groups --group dev
 
       # Provision the local kind cluster. `--no-gpus` keeps the cluster CPU-
       # only so the runner image's missing nvidia-container-toolkit doesn't
@@ -97,7 +104,7 @@ jobs:
       # below (`CLUSTER_NAME`, run-scoped) is independent — kind names the
       # backing cluster, SkyPilot names the logical job cluster.
       - name: sky local up
-        run: sky local up --no-gpus
+        run: uv run sky local up --no-gpus
 
       # Launch the local-debug rclone task. R2 env vars are forwarded into
       # the worker pod via task.update_envs — same wiring the production
@@ -119,7 +126,7 @@ jobs:
           RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
         run: |
           set -o pipefail
-          python - <<'PY' 2>&1 | tee "$LOG_PATH"
+          uv run python - <<'PY' 2>&1 | tee "$LOG_PATH"
           import os
           import sys
 
@@ -164,7 +171,7 @@ jobs:
       # exits clean.
       - name: sky local down
         if: always()
-        run: sky local down || true
+        run: uv run sky local down || true
 
       - name: Upload run metadata
         if: always()

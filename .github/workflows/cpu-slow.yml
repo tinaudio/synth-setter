@@ -67,11 +67,12 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Install dependencies
-        run: uv pip install --system -e ".[torch,dev]"
+      # Linux CPU-CI; runner is ephemeral so the resync flip cannot bite.
+      - name: Install dependencies (uv sync --frozen, CPU torch)
+        run: uv sync --frozen --extra cpu --no-default-groups --group dev
 
       - name: List dependencies
-        run: uv pip list --system
+        run: uv pip list
 
       # `is_r2_reachable()` shells out to `rclone`; without the binary the
       # `integration_r2` gate short-circuits and the tests skip silently.
@@ -93,7 +94,7 @@ jobs:
           RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
           RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
         run: |
-          pytest -vv -s -m "slow and not gpu and not mps and not requires_vst" \
+          uv run pytest -vv -s -m "slow and not gpu and not mps and not requires_vst" \
             --cov=src --cov=scripts/ci --cov-branch --cov-report=xml --cov-report=term
 
       # Dedicated `slow-cpu` flag keeps this signal separable from `unit-cpu`

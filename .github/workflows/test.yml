@@ -49,12 +49,15 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Install dependencies
-        run: |
-          uv pip install --system -e ".[torch,dev]"
+      # Linux CPU-CI: --extra cpu routes torch via the pytorch-cpu index per
+      # [tool.uv.sources]; --frozen errors on lockfile drift instead of silently
+      # re-resolving. GH-actions runners are ephemeral per-run, so the resync
+      # flip described in #1243 cannot affect later steps.
+      - name: Install dependencies (uv sync --frozen, CPU torch)
+        run: uv sync --frozen --extra cpu --no-default-groups --group dev
 
       - name: List dependencies
-        run: uv pip list --system
+        run: uv pip list
 
       # `--cov=scripts/ci` is needed alongside `--cov=src`: pytest-cov's
       # `--cov` overrides `[tool.coverage.run].source` in `pyproject.toml`.
@@ -62,7 +65,7 @@ jobs:
         env:
           HYDRA_FULL_ERROR: "1"
         run: |
-          pytest -n auto -m "not slow and not gpu and not mps" -vv -s \
+          uv run pytest -n auto -m "not slow and not gpu and not mps" -vv -s \
             --cov=src --cov=scripts/ci --cov-branch --cov-report=xml --cov-report=term
 
       - name: Upload coverage to Codecov
@@ -98,19 +101,21 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Install dependencies
-        run: |
-          uv pip install --system -e ".[torch,dev]"
+      # macOS: bare `uv sync --frozen` lets torch resolve from PyPI's
+      # MPS-capable wheel — no `--extra cpu` on Apple Silicon (the
+      # sys_platform marker in [tool.uv.sources] would not match anyway).
+      - name: Install dependencies (uv sync --frozen, MPS wheel from PyPI)
+        run: uv sync --frozen
 
       - name: List dependencies
-        run: uv pip list --system
+        run: uv pip list
 
       # See the ubuntu job above for why `--cov=scripts/ci` is required.
       - name: Run pytest with coverage
         env:
           HYDRA_FULL_ERROR: "1"
         run: |
-          pytest -n auto -m "not slow and not gpu and not mps" -vv -s \
+          uv run pytest -n auto -m "not slow and not gpu and not mps" -vv -s \
             --cov=src --cov=scripts/ci --cov-branch --cov-report=xml --cov-report=term
 
       - name: Upload coverage to Codecov

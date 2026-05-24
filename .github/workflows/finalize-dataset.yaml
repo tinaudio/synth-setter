@@ -106,13 +106,12 @@ jobs:
       - name: Install rclone
         run: sudo apt-get update -qq && sudo apt-get install -y -qq rclone
 
-      # `[torch,dev]` is the smallest install that imports finalize cleanly:
-      # `pipeline.data.reshard` pulls h5py / numpy via the base deps, and the
-      # entrypoint imports `cli.generate_dataset.spec_from_cfg` which transitively
-      # touches the torch-gated `data/` package. `--system` installs into the
-      # runner Python so `synth-setter-finalize-dataset` resolves on PATH.
-      - name: Install project deps
-        run: uv pip install --system -e ".[torch,dev]"
+      # finalize imports `cli.generate_dataset.spec_from_cfg` which transitively
+      # touches the torch-gated `data/` package, so the CPU torch wheel is the
+      # smallest install that resolves all imports. `--frozen` errors on lock
+      # drift; runner is ephemeral so the resync flip cannot bite.
+      - name: Install project deps (uv sync --frozen, CPU torch)
+        run: uv sync --frozen --extra cpu --no-default-groups --group dev
 
       - name: Run synth-setter-finalize-dataset
         env:
@@ -120,7 +119,7 @@ jobs:
           RUN_ID: ${{ inputs.run_id }}
         run: |
           set -euo pipefail
-          synth-setter-finalize-dataset \
+          uv run synth-setter-finalize-dataset \
             "experiment=${CONFIG_PATH}" \
             "run_id=${RUN_ID}" \
             2>&1 | tee finalize.log
