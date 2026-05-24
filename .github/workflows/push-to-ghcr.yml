@@ -1,0 +1,44 @@
+name: Push To GHCR
+
+# Mirrors the dev-snapshot Docker image from Docker Hub to GHCR so jobs
+# pulling from GitHub Actions runners avoid Docker Hub's shared egress
+# rate limit (HTTP 429 "unauthenticated pull rate limit" — see failed
+# run https://github.com/tinaudio/synth-setter/actions/runs/26371827439/job/77625225624
+# from PR #1214). Pulls tinaudio/synth-setter:dev-snapshot, retags for
+# GHCR, pushes.
+#
+# Auth: the built-in GITHUB_TOKEN with packages: write is enough — no
+# secret setup required.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  push-to-ghcr:
+    name: Mirror dev-snapshot to GHCR
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull dev-snapshot from Docker Hub, retag, push to GHCR
+        env:
+          SOURCE_IMAGE: tinaudio/synth-setter:dev-snapshot
+          REPO_OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          docker pull "$SOURCE_IMAGE"
+          owner_lc="$(echo "$REPO_OWNER" | tr '[:upper:]' '[:lower:]')"
+          target="ghcr.io/${owner_lc}/synth-setter:dev-snapshot"
+          docker tag "$SOURCE_IMAGE" "$target"
+          docker push "$target"
+          echo "Pushed $target"
