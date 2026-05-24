@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779656164127,
+  "lastUpdate": 1779656166361,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -7757,6 +7757,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 19.549581854199992,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b0ae4e0654da21f89c419d24b9af9360928d1324",
+          "message": "test(testing): add duck-typed FakeVST3Plugin for VST-free e2e shard renders (#1234)\n\n* test(testing): add duck-typed FakeVST3Plugin for VST-free e2e shard renders\n\nToday every E2E test that exercises the dataset pipeline\n(make_hdf5_dataset, render_params) needs a real Surge XT .vst3 bundle\nand an X11 display, so PR-time runners skip them and only the nightly\njob exercises the batch loop, HDF5 writer, mel-spec, RenderConfig\nwiring, and gui_toggle_cadence end-to-end.\n\nThis change adds a duck-typed FakeVST3Plugin satisfying the six\nattributes / methods core.py touches (version, parameters[k].raw_value,\nshow_editor, load_preset, reset, process). process emits a\ndeterministic sine derived from the first note_on event — loud enough\nto clear _MIN_LOUDNESS=-55 dB so the pipeline writes a complete shard —\nor silence on flush calls. show_editor blocks on the close_event\nmirroring the real plugin's editor_held_open contract.\n\nTwo new pytest fixtures (fake_vst3_plugin, install_fake_plugin) live in\ntests/data/vst/conftest.py and monkeypatch core.load_plugin /\ncore.VST3Plugin. A new fake_vst marker selects the fast suite.\ntests/data/vst/test_fake_plugin_e2e.py mirrors\ntest_always_on_integration.py's HDF5 assertions but runs with no real\nplugin and no X11 — proving the always_on held-editor path round-trips\nunder the fake in 1.1 s.\n\nExisting requires_vst tests are unaffected: install_fake_plugin only\napplies when a test explicitly depends on it, and the nightly real-VST\njob continues to exercise the Steinberg loader and JUCE state handling\nthe fake does not cover.\n\nFollow-up: wire a fake-vst-e2e CI job that runs the fake_vst marker on\nevery PR. Tracked separately.\n\nCloses #1233\n\n* test(testing): address Copilot review feedback on PR #1234\n\nBug fixes\n- _fake_plugin.py: widen midi_events payload from `bytes` to `Sequence[int]` so\n  the fake matches what `mido.Message.bytes()` actually produces (comment\n  #3277676197)\n- test_fake_plugin.py: replace `time.sleep(0.1)` in show_editor blocking test\n  with an instrumented `close_event.wait` wrapper that signals an `entered_wait`\n  Event — assertion now observes the worker entering the blocking call instead\n  of relying on a timing margin (comment #3277676144)\n- test_fake_plugin_e2e.py: tighten editor-crash assertion to\n  `fake_logger.exception.call_count == 0`, mirroring the canonical pattern in\n  test_always_on_integration.py (comment #3277676213)\n\nPerformance\n- _fake_plugin.py: flush calls (`midi_events=[]`) now return a zero-length\n  `(channels, 0)` buffer instead of allocating a full ~11MB silence array;\n  `core.render_params` discards the flush return value, so the allocation was\n  pure waste (comment #3277676176). Contract test renamed accordingly.\n\nDRY / dedup\n- test_fake_plugin_e2e.py: drop the local `_render_cfg` helper and reuse the\n  canonical one from `test_generate_vst_dataset.py` via `RenderConfig.model_copy\n  (update=...)` for the three fake-specific fields (comment #3277676229).\n\nRefs #1233",
+          "timestamp": "2026-05-24T16:38:57-04:00",
+          "tree_id": "3758bbe9d8b9b3c2a85ff8ddc9e37cb136a6312e",
+          "url": "https://github.com/tinaudio/synth-setter/commit/b0ae4e0654da21f89c419d24b9af9360928d1324"
+        },
+        "date": 1779656165995,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 2.58129620552063,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 2.6145004510879515,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.007853273302316666,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.002372443675994873,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 2.3807456493377686,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 19.285571002899996,
             "unit": "seconds"
           }
         ]
