@@ -99,11 +99,13 @@ jobs:
       # so a broken [tool.setuptools.package-data] glob still passes pytest
       # but breaks for real users. This step installs the built wheel with
       # full deps and runs the canonical Hydra compose path through it.
+      # `--find-links dist` instead of a glob so `[torch]` is parsed by pip
+      # as an extras spec, not by bash as a character class.
       - name: Install wheel with full deps
         run: |
           python -m venv "$RUNNER_TEMP/full"
           "$RUNNER_TEMP/full/bin/pip" install --upgrade pip
-          "$RUNNER_TEMP/full/bin/pip" install dist/synth_setter-*.whl[torch]
+          "$RUNNER_TEMP/full/bin/pip" install --find-links dist 'synth-setter[torch]'
 
       # Compose train.yaml through the canonical entry pattern — exercises
       # the namespace plugin's auto-registration of `pkg://synth_setter.configs`,
