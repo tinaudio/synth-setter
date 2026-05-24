@@ -91,19 +91,18 @@ synth-setter/
 │   │   ├── skypilot_launch.py  # SkyPilot launcher CLI
 │   │   └── constants.py    #     Shared constants (`INPUT_SPEC_FILENAME`)
 │   ├── evaluation/         #   predict_vst_audio, compute_audio_metrics (library code called by cli/eval.py)
-│   └── tools/              #   `python -m` utilities (surge_xt_interactive, plot_param2tok, ...)
-│
-├── configs/                # Hydra YAML configs (and SkyPilot Task templates under compute/)
-│   ├── dataset.yaml        #   Root dataset-generation config (entrypoint mirrors train.yaml / eval.yaml)
-│   ├── render/             #   Renderer configs (RenderConfig sub-model)
-│   ├── experiment/         #   Experiment configs — training (compose data + model + trainer) and datagen (composes dataset.yaml)
-│   ├── compute/            #   SkyPilot Task YAMLs for the data pipeline launcher (RunPod landed; Vast.ai planned)
-│   ├── data/               #   DataModule configs (paths, splits, batch size)
-│   ├── model/              #   Model architecture configs
-│   ├── trainer/            #   Lightning Trainer configs
-│   ├── callbacks/          #   Callback configs (checkpointing, early stopping)
-│   ├── logger/             #   Logger configs (W&B, CSV, TensorBoard)
-│   └── train.yaml          #   Root training config
+│   ├── tools/              #   `python -m` utilities (surge_xt_interactive, plot_param2tok, ...)
+│   └── configs/            #   Hydra YAML configs (and SkyPilot Task templates under compute/) — #1236
+│       ├── train.yaml      #     Root training config
+│       ├── dataset.yaml    #     Root dataset-generation config (entrypoint mirrors train.yaml / eval.yaml)
+│       ├── experiment/     #     Experiment configs — training (compose data + model + trainer) and datagen (composes dataset.yaml)
+│       ├── compute/        #     SkyPilot Task YAMLs for the data pipeline launcher (RunPod landed; Vast.ai planned)
+│       ├── render/         #     Renderer configs (RenderConfig sub-model)
+│       ├── data/           #     DataModule configs (paths, splits, batch size)
+│       ├── model/          #     Model architecture configs
+│       ├── trainer/        #     Lightning Trainer configs
+│       ├── callbacks/      #     Callback configs (checkpointing, early stopping)
+│       └── logger/         #     Logger configs (W&B, CSV, TensorBoard)
 │
 ├── scripts/                # SkyPilot/CI shell tooling (skypilot/, ci/) — bare root is empty by design
 ├── tests/                  # Test suite (mirrors src/synth_setter/ structure)

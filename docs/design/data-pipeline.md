@@ -1454,7 +1454,7 @@ src/
 Pipeline configs live under `src/synth_setter/configs/` as Hydra groups composed by `src/synth_setter/configs/dataset.yaml` (filename stem of `src/synth_setter/configs/experiment/generate_dataset/<id>.yaml` = `dataset_config_id`):
 
 ```
-configs/
+src/synth_setter/configs/
   dataset.yaml         # @hydra.main entry point; defaults list (data/render/r2/paths/hydra/experiment)
   experiment/
     generate_dataset/  # Dataset generation recipes; filename stem = dataset_config_id

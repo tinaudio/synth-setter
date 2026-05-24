@@ -160,7 +160,7 @@ portable `make` targets instead. No new code references SGE.
 | Local eval from cold start | Fresh clone → metrics CSV in < 15 min (small fixture)        | Time from `git clone` to `metrics.csv` on dev laptop |
 | Environment coverage       | Works on macOS, Linux, Docker, CI                            | CI matrix                                            |
 | Data fetch reliability     | `r2:` paths resolve and download without manual intervention | E2E test with R2 fixture                             |
-| Zero hardcoded paths       | No `/data/scratch/` in committed configs                     | `grep -r '/data/scratch' configs/`                   |
+| Zero hardcoded paths       | No `/data/scratch/` in committed configs                     | `grep -r '/data/scratch' src/synth_setter/configs/`  |
 
 ### Non-Goals
 

@@ -61,8 +61,8 @@ ______________________________________________________________________
 ### Files to modify
 
 ```
-configs/data/*.yaml
-configs/logger/wandb.yaml
+src/synth_setter/configs/data/*.yaml
+src/synth_setter/configs/logger/wandb.yaml
 Makefile
 src/synth_setter/cli/train.py
 ```
@@ -95,7 +95,7 @@ ______________________________________________________________________
 ### Files to modify
 
 ```
-configs/logger/wandb.yaml
+src/synth_setter/configs/logger/wandb.yaml
 src/synth_setter/cli/train.py
 Makefile
 ```
