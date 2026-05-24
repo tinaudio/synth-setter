@@ -69,7 +69,7 @@ docs:
       - pattern: "src/synth_setter/pipeline/r2_io.py"
         covers: "rclone-backed R2 helpers — URI handling, download, upload, size probe; single rclone call site shared by CI validators and the worker entrypoint's skip-existing probe"
       - pattern: "src/synth_setter/pipeline/spec_io.py"
-        covers: "`input_spec.json` read/write/upload/discover helpers (`load_spec_from_uri`, `local_spec_path`, `write_spec_locally`, `upload_spec`, `find_input_specs`) — sole call site for writing the operator-side local mirror at `<repo_root>/data/<task_name>/<run_id>/metadata/input_spec.json` (runner anchors at `_REPO_ROOT`, not Hydra's runtime output dir) and the R2 copy at `spec.r2.input_spec_uri()`; called from `cli/generate_dataset.py`'s `main()`. `load_spec_from_uri` is the thin wrapper around `read_spec_text` + `DatasetSpec.model_validate_json` used by `pipeline/data/reshard.py` so the reshard CLI parses specs without dragging Hydra/rootutils into its import graph. `find_input_specs` glob-discovers already-materialized specs under a local `data/` root and is added for future use by `cli/generate_dataset.py`; not yet wired."
+        covers: "`input_spec.json` read/write/upload/discover helpers (`load_spec_from_uri`, `local_spec_path`, `write_spec_locally`, `upload_spec`, `find_input_specs`) — sole call site for writing the operator-side local mirror at `<workspace>/data/<task_name>/<run_id>/metadata/input_spec.json` (runner anchors at `_OPERATOR_WORKSPACE` via :func:`synth_setter.workspace.operator_workspace`, not Hydra's runtime output dir) and the R2 copy at `spec.r2.input_spec_uri()`; called from `cli/generate_dataset.py`'s `main()`. `load_spec_from_uri` is the thin wrapper around `read_spec_text` + `DatasetSpec.model_validate_json` used by `pipeline/data/reshard.py` so the reshard CLI parses specs without dragging Hydra into its import graph. `find_input_specs` glob-discovers already-materialized specs under a local `data/` root and is added for future use by `cli/generate_dataset.py`; not yet wired."
       - pattern: "src/synth_setter/pipeline/constants.py"
         covers: "Input spec filename, rclone remote name, and canonical `r2://` URI scheme constants"
       - pattern: "src/synth_setter/pipeline/schemas/r2_location.py"
@@ -131,7 +131,7 @@ docs:
         covers: "rclone upload of spec and shard files, R2 path construction"
         scope: "rclone"
       - pattern: "src/synth_setter/pipeline/spec_io.py"
-        covers: "`input_spec.json` writers — `write_spec_locally` materializes the operator-side local mirror at `<repo_root>/data/<task_name>/<run_id>/metadata/input_spec.json` (runner anchors at `_REPO_ROOT`, anticipating §3a's `metadata/` target layout); `upload_spec` writes the R2 copy at `spec.r2.input_spec_uri()` (flat MVP path per #385)."
+        covers: "`input_spec.json` writers — `write_spec_locally` materializes the operator-side local mirror at `<workspace>/data/<task_name>/<run_id>/metadata/input_spec.json` (runner anchors at `_OPERATOR_WORKSPACE` via :func:`synth_setter.workspace.operator_workspace`, anticipating §3a's `metadata/` target layout); `upload_spec` writes the R2 copy at `spec.r2.input_spec_uri()` (flat MVP path per #385)."
       - pattern: "src/synth_setter/pipeline/constants.py"
         covers: "INPUT_SPEC_FILENAME constant"
 
@@ -140,7 +140,7 @@ docs:
     description: Training pipeline design — Hydra configs, Lightning training, RunPod portability
     sources:
       - pattern: "src/synth_setter/cli/train.py"
-        covers: "Training entry point, Hydra config composition, rootutils setup"
+        covers: "Training entry point, Hydra config composition, operator-workspace bootstrap (sets ``$PROJECT_ROOT`` so ``configs/paths/default.yaml`` interpolates under any install layout)"
       - pattern: "src/synth_setter/models/**"
         covers: "Lightning module definitions, forward pass, loss computation, optimizer config"
       - pattern: "src/synth_setter/data/**"

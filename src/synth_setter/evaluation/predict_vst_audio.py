@@ -8,12 +8,10 @@ import librosa
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import rootutils
 import torch
 from pedalboard.io import AudioFile
 from tqdm import tqdm, trange
 
-rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 from synth_setter.data.vst import param_specs
 from synth_setter.data.vst.core import render_params
 from synth_setter.data.vst.param_spec import ParamSpec

@@ -21,28 +21,25 @@ from pathlib import Path
 from typing import Any
 
 import hydra
-import rootutils
 from hydra import compose, initialize_config_module
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 
-# Bootstrap PROJECT_ROOT + sys.path — see https://github.com/ashleve/rootutils.
-rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
-
-from synth_setter.data.vst.core import extract_renderer_version  # noqa: E402
-from synth_setter.pipeline import r2_io  # noqa: E402
-from synth_setter.pipeline.partitioning import (  # noqa: E402
+from synth_setter.data.vst.core import extract_renderer_version
+from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.partitioning import (
     available_cpus,
     get_my_shards,
     read_rank_world_from_env,
 )
-from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig  # noqa: E402
-from synth_setter.pipeline.schemas.spec import DatasetSpec, ShardSpec  # noqa: E402
-from synth_setter.pipeline.spec_io import (  # noqa: E402
+from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
+from synth_setter.pipeline.schemas.spec import DatasetSpec, ShardSpec
+from synth_setter.pipeline.spec_io import (
     upload_spec,
     write_spec_locally,
 )
-from synth_setter.resources import as_file, vst_headless_wrapper  # noqa: E402
+from synth_setter.resources import as_file, vst_headless_wrapper
+from synth_setter.workspace import operator_workspace
 
 # Composed-config keys that aren't DatasetSpec fields (interpolation sources, Hydra
 # runtime, dispatch-mode sub-trees). See dataset.yaml in the shipped configs/
@@ -56,14 +53,14 @@ _NON_SPEC_KEYS: tuple[str, ...] = (
     "skypilot_launch",
 )
 
-# Operator-side artifact anchor — local checkout where the spec is written
-# and where ``cfg.paths.*`` interpolations resolve. Distinct from
-# :func:`configs_dir` (now inside the package); kept on disk so re-runs land
-# in the same checkout the operator launched from.
-_REPO_ROOT = Path(__file__).resolve().parents[3]
+# Operator-side artifact anchor — where the spec is written and where
+# ``cfg.paths.*`` interpolations resolve. Under a checkout this is the repo
+# root; under a wheel install ``operator_workspace()`` falls back to
+# ``$SYNTH_SETTER_WORKSPACE`` or ``Path.cwd()``.
+_OPERATOR_WORKSPACE = operator_workspace()
 
 # Worker-side checkout path — baked WORKDIR of the dev-snapshot image, not the
-# launcher's _REPO_ROOT (which may not exist on the worker filesystem).
+# launcher's workspace (which may not exist on the worker filesystem).
 _WORKER_REPO_ROOT = "/home/build/synth-setter"
 
 
@@ -443,17 +440,18 @@ def main() -> None:
 
     # Programmatic compose leaves ${hydra:runtime.output_dir} unset; pin paths.*
     # so spec_from_cfg's resolve step doesn't trip on the unresolved interpolation.
-    cfg.paths.root_dir = str(_REPO_ROOT)
-    cfg.paths.output_dir = str(_REPO_ROOT)
-    cfg.paths.work_dir = str(_REPO_ROOT)
+    cfg.paths.root_dir = str(_OPERATOR_WORKSPACE)
+    cfg.paths.output_dir = str(_OPERATOR_WORKSPACE)
+    cfg.paths.work_dir = str(_OPERATOR_WORKSPACE)
 
     spec = spec_from_cfg(cfg)
     sky_cfg = _sky_cfg_from_dataset_cfg(cfg)
 
-    # _REPO_ROOT (not cfg.paths.output_dir) is the anchor: the paths.* pins
-    # above are defensive shims for ${hydra:runtime.output_dir} resolution,
-    # not the operator-side artifact root.
-    spec_path = write_spec_locally(spec, _REPO_ROOT)
+    # ``_OPERATOR_WORKSPACE`` (not cfg.paths.output_dir) is the anchor: the
+    # paths.* pins above are defensive shims for
+    # ${hydra:runtime.output_dir} resolution, not the operator-side
+    # artifact root.
+    spec_path = write_spec_locally(spec, _OPERATOR_WORKSPACE)
     logger.info(f"wrote local spec to {spec_path}")
 
     # Load + validate R2 creds once for the whole run, then upload the

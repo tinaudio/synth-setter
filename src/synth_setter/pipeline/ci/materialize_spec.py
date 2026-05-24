@@ -17,17 +17,18 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-import rootutils
 from hydra import compose, initialize_config_module
 from hydra.errors import HydraException
 
-# Operator-side artifact anchor — distinct from :func:`configs_dir` (which
-# now ships inside the package). Resolves the local checkout so the
-# ``paths.*`` Hydra interpolations have a real on-disk root.
-REPO_ROOT = rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
+from synth_setter.cli.generate_dataset import spec_from_cfg
+from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME
+from synth_setter.workspace import operator_workspace
 
-from synth_setter.cli.generate_dataset import spec_from_cfg  # noqa: E402
-from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME  # noqa: E402
+# Operator-side anchor for ``paths.*`` Hydra interpolations. Under CI
+# (the only caller today) the checkout is on disk and resolves to its
+# root; under a wheel install ``operator_workspace()`` falls back to
+# ``$SYNTH_SETTER_WORKSPACE`` or ``Path.cwd()``.
+_OPERATOR_WORKSPACE = operator_workspace()
 
 
 def main() -> None:
@@ -46,9 +47,9 @@ def main() -> None:
     except HydraException as exc:
         sys.stderr.write(f"error: Hydra compose failed for experiment {experiment!r}: {exc}\n")
         sys.exit(2)
-    cfg.paths.root_dir = str(REPO_ROOT)
-    cfg.paths.output_dir = str(REPO_ROOT)
-    cfg.paths.work_dir = str(REPO_ROOT)
+    cfg.paths.root_dir = str(_OPERATOR_WORKSPACE)
+    cfg.paths.output_dir = str(_OPERATOR_WORKSPACE)
+    cfg.paths.work_dir = str(_OPERATOR_WORKSPACE)
     spec = spec_from_cfg(cfg)
 
     spec_json = spec.model_dump_json(indent=2)

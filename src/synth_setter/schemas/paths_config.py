@@ -40,9 +40,10 @@ class PathsConfig(StrictAllowExtraModel):
 
     root_dir: NonBlankStr = Field(
         description=(
-            "Project root. Default ``${oc.env:PROJECT_ROOT}`` so the active "
-            "checkout is the root; ``rootutils`` sets ``PROJECT_ROOT`` in the "
-            "training entrypoint."
+            "Operator workspace root. Default ``${oc.env:PROJECT_ROOT}`` "
+            "(set by :func:`synth_setter.workspace.operator_workspace` at "
+            "launcher import — resolves to ``$SYNTH_SETTER_WORKSPACE``, "
+            "the active checkout, or CWD)."
         ),
     )
     data_dir: NonBlankStr = Field(

@@ -8,12 +8,9 @@ import click
 import hydra
 import matplotlib.pyplot as plt
 import numpy as np
-import rootutils
 import torch
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
-
-rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
 from synth_setter.data.vst import param_specs
 from synth_setter.models.components.transformer import LearntProjection

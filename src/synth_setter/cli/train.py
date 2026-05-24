@@ -4,14 +4,10 @@ from typing import Any
 
 import hydra
 import lightning as L
-import rootutils
 import torch
 from lightning import Callback, LightningDataModule, LightningModule, Trainer
 from lightning.pytorch.loggers import Logger
 from omegaconf import DictConfig
-
-# Bootstrap PROJECT_ROOT + sys.path — see https://github.com/ashleve/rootutils.
-rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
 from synth_setter.utils import (
     RankedLogger,
@@ -25,6 +21,11 @@ from synth_setter.utils import (
     task_wrapper,
     watch_gradients,
 )
+from synth_setter.workspace import operator_workspace
+
+# Resolve workspace at import so ``${oc.env:PROJECT_ROOT}`` in
+# ``configs/paths/default.yaml`` interpolates under any install layout.
+operator_workspace()
 
 register_resolvers()
 

@@ -293,8 +293,8 @@ def _run_under_shim(
 # Dotted-path keys stripped before the equality comparison so the assertion
 # catches schema/value drift, not noise. Two named groups for self-documentation:
 
-# Derived from rootutils + invocation cwd; always differ between the baseline
-# worktree and the live REPO_ROOT.
+# Derived from operator_workspace() + invocation cwd; always differ between the
+# baseline worktree and the live workspace.
 INVOCATION_PATH_KEYS: tuple[str, ...] = (
     "paths.root_dir",
     "paths.data_dir",

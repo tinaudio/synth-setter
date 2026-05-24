@@ -88,8 +88,9 @@ def load_spec_from_uri(spec_uri: str) -> DatasetSpec:  # noqa: DOC502
     """Load a ``DatasetSpec`` from a local path, ``file://`` URI, or ``r2://`` URI.
 
     Thin wrapper that composes :func:`read_spec_text` with
-    :meth:`DatasetSpec.model_validate_json` so callers don't have to pull in
-    the cli runner (and its Hydra/rootutils bootstrap) just to parse a spec.
+    :meth:`DatasetSpec.model_validate_json` so callers don't have to pull
+    in the cli runner (and its Hydra/workspace bootstrap) just to parse a
+    spec.
 
     :param spec_uri: Local filesystem path, ``file://`` URI, or ``r2://`` URI.
     :returns: The parsed spec.

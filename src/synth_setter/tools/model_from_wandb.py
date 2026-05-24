@@ -5,13 +5,10 @@ from typing import Literal
 
 import click
 import hydra
-import rootutils
 import torch
 from IPython import embed
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
-
-rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
 from synth_setter.utils import register_resolvers
 

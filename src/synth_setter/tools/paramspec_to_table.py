@@ -1,9 +1,5 @@
 """Render a ParamSpec into a LaTeX longtable for inclusion in papers."""
 
-import rootutils
-
-rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
-
 from synth_setter.data.vst import param_specs
 
 TABLE_PREAMBLE = """

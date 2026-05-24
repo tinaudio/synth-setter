@@ -16,31 +16,28 @@ import tempfile
 from collections.abc import Iterator
 from pathlib import Path
 
-import rootutils
+import numpy as np
 from hydra import compose, initialize_config_module
 from loguru import logger
 
-# Bootstrap PROJECT_ROOT + sys.path before sibling synth_setter imports.
-rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
-
-import numpy as np  # noqa: E402
-
-from synth_setter.cli.generate_dataset import spec_from_cfg  # noqa: E402
-from synth_setter.pipeline import r2_io  # noqa: E402
-from synth_setter.pipeline.constants import (  # noqa: E402
+from synth_setter.cli.generate_dataset import spec_from_cfg
+from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.constants import (
     DATASET_COMPLETE_FILENAME,
     INPUT_SPEC_FILENAME,
     STATS_NPZ_FILENAME,
 )
-from synth_setter.pipeline.data.reshard import reshard_dataset  # noqa: E402
-from synth_setter.pipeline.data.stats import get_stats_hdf5, stream_stats_wds  # noqa: E402
-from synth_setter.pipeline.schemas.spec import DatasetSpec  # noqa: E402
-from synth_setter.pipeline.spec_io import write_spec_to_path  # noqa: E402
+from synth_setter.pipeline.data.reshard import reshard_dataset
+from synth_setter.pipeline.data.stats import get_stats_hdf5, stream_stats_wds
+from synth_setter.pipeline.schemas.spec import DatasetSpec
+from synth_setter.pipeline.spec_io import write_spec_to_path
+from synth_setter.workspace import operator_workspace
 
-# Operator-side artifact anchor — local checkout where the spec is written
-# and where ``cfg.paths.*`` interpolations resolve. Distinct from
-# :func:`configs_dir` (now inside the package).
-_REPO_ROOT = Path(__file__).resolve().parents[3]
+# Operator-side artifact anchor — where ``cfg.paths.*`` interpolations
+# resolve. Under a checkout this is the repo root; under a wheel install
+# ``operator_workspace()`` falls back to ``$SYNTH_SETTER_WORKSPACE`` or
+# ``Path.cwd()``.
+_OPERATOR_WORKSPACE = operator_workspace()
 
 
 def _download_train_shards_one_at_a_time(spec: DatasetSpec, work_dir: Path) -> Iterator[Path]:
@@ -178,9 +175,9 @@ def main() -> None:
 
     # Pin paths.* so spec_from_cfg's resolve step does not trip on
     # ${hydra:runtime.output_dir} — programmatic compose leaves it unset.
-    cfg.paths.root_dir = str(_REPO_ROOT)
-    cfg.paths.output_dir = str(_REPO_ROOT)
-    cfg.paths.work_dir = str(_REPO_ROOT)
+    cfg.paths.root_dir = str(_OPERATOR_WORKSPACE)
+    cfg.paths.output_dir = str(_OPERATOR_WORKSPACE)
+    cfg.paths.work_dir = str(_OPERATOR_WORKSPACE)
 
     spec = spec_from_cfg(cfg)
     r2_io.ensure_r2_env_loaded()
