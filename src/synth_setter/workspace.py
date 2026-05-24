@@ -1,17 +1,10 @@
 """Operator-side workspace anchor for launcher modules.
 
-The console-script entries (``synth-setter-generate-dataset``,
-``synth-setter-finalize-dataset``, ``synth-setter-train``,
-``synth-setter-eval``) need *somewhere* to write the launcher-side spec
-mirror and to resolve ``configs/paths/default.yaml``'s
-``${oc.env:PROJECT_ROOT}`` interpolation. Under a checkout this was the
-repo root; under a wheel install no such root exists, so we resolve
-explicitly and document the fallback.
-
-Distinct from :mod:`synth_setter.resources` — that module locates
-*package-shipped* assets (configs, scripts) via ``importlib.resources``.
-This module locates the *operator's* workspace (where artifacts get
-written, where ``.env`` lives, where local spec mirrors land).
+Resolves where launchers write the spec mirror and what
+``${oc.env:PROJECT_ROOT}`` points at in ``configs/paths/default.yaml``;
+the precedence is documented on :func:`operator_workspace`. Distinct
+from :mod:`synth_setter.resources`, which locates package-shipped assets
+via :mod:`importlib.resources`.
 """
 
 from __future__ import annotations
@@ -24,23 +17,15 @@ from loguru import logger
 
 __all__ = ["operator_workspace"]
 
-# Marker file used by ``rootutils`` to identify a checkout root. Kept
-# tracked at the repo root so the checkout-detection branch below stays
-# truthy under ``pip install -e .``.
+# .project-root marker, tracked at the checkout root so editable installs
+# resolve via the parents[]-walk below.
 _CHECKOUT_MARKER = ".project-root"
 
-# Override env var. Operators on a wheel install (or anyone who wants the
-# workspace to live somewhere other than CWD / the checkout) sets this.
 _WORKSPACE_ENV = "SYNTH_SETTER_WORKSPACE"
 
 
 def _checkout_root() -> Path | None:
-    """Return the synth-setter checkout root if reachable from this file.
-
-    ``parents[2]`` from ``src/synth_setter/workspace.py`` is the checkout;
-    we walk up regardless and stop at the first ``.project-root`` so
-    namespace-package layouts and rare reorganizations still resolve.
-    """
+    """Return the first ancestor of this file containing ``.project-root``."""
     for candidate in Path(__file__).resolve().parents:
         if (candidate / _CHECKOUT_MARKER).is_file():
             return candidate
@@ -49,20 +34,17 @@ def _checkout_root() -> Path | None:
 
 @cache
 def operator_workspace() -> Path:
-    """Resolve the operator's workspace directory.
+    """Resolve the operator workspace; publish ``$PROJECT_ROOT`` if unset.
 
-    Resolution order:
+    Order: ``$SYNTH_SETTER_WORKSPACE`` → checkout reachable from
+    ``__file__`` (editable / in-repo) → ``Path.cwd()`` (packaged install,
+    logs a warning since the path is likely unintended). A pre-set
+    ``$PROJECT_ROOT`` is preserved — operators who set both keep theirs.
 
-    1. ``$SYNTH_SETTER_WORKSPACE`` if set (explicit operator override).
-    2. The synth-setter checkout root if reachable from ``__file__``
-       (editable install or in-repo invocation).
-    3. ``Path.cwd()`` as the last resort (packaged install with no
-       override).
-
-    Sets ``os.environ["PROJECT_ROOT"]`` to the resolved path as a side
-    effect so ``configs/paths/default.yaml``'s ``${oc.env:PROJECT_ROOT}``
-    interpolation resolves under any install layout. Existing
-    ``PROJECT_ROOT`` values are preserved — operators who set both win.
+    The ``$PROJECT_ROOT`` publication happens once per process via
+    ``@cache``; subsequent callers who ``del os.environ["PROJECT_ROOT"]``
+    will not see it re-published. Launchers therefore call this once at
+    module import, before any Hydra compose.
 
     :returns: Absolute, resolved workspace path.
     """
@@ -75,7 +57,7 @@ def operator_workspace() -> Path:
             workspace = checkout
         else:
             workspace = Path.cwd().resolve()
-            logger.info(
+            logger.warning(
                 "no checkout marker reachable; using cwd as workspace: {}. Set ${} to override.",
                 workspace,
                 _WORKSPACE_ENV,

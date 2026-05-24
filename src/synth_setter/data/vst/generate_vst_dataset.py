@@ -11,9 +11,8 @@ from pedalboard import VST3Plugin
 from pydantic_settings import BaseSettings, CliApp, CliPositionalArg, SettingsConfigDict
 from pyloudnorm import Meter
 
-from synth_setter.data.vst import param_specs  # noqa
-from synth_setter.data.vst.core import render_params  # noqa
-from synth_setter.data.vst.param_spec import ParamSpec  # noqa
+from synth_setter.data.vst.core import render_params
+from synth_setter.data.vst.param_spec import ParamSpec
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
     MEL_N_MELS,

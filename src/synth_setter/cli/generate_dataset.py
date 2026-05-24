@@ -53,10 +53,8 @@ _NON_SPEC_KEYS: tuple[str, ...] = (
     "skypilot_launch",
 )
 
-# Operator-side artifact anchor — where the spec is written and where
-# ``cfg.paths.*`` interpolations resolve. Under a checkout this is the repo
-# root; under a wheel install ``operator_workspace()`` falls back to
-# ``$SYNTH_SETTER_WORKSPACE`` or ``Path.cwd()``.
+# Anchor for ``cfg.paths.*`` interpolations and the local spec mirror.
+# See :func:`synth_setter.workspace.operator_workspace` for resolution.
 _OPERATOR_WORKSPACE = operator_workspace()
 
 # Worker-side checkout path — baked WORKDIR of the dev-snapshot image, not the

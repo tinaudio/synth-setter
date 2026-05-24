@@ -24,10 +24,8 @@ from synth_setter.cli.generate_dataset import spec_from_cfg
 from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME
 from synth_setter.workspace import operator_workspace
 
-# Operator-side anchor for ``paths.*`` Hydra interpolations. Under CI
-# (the only caller today) the checkout is on disk and resolves to its
-# root; under a wheel install ``operator_workspace()`` falls back to
-# ``$SYNTH_SETTER_WORKSPACE`` or ``Path.cwd()``.
+# Anchor for ``cfg.paths.*`` interpolations. See
+# :func:`synth_setter.workspace.operator_workspace` for resolution.
 _OPERATOR_WORKSPACE = operator_workspace()
 
 

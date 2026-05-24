@@ -14,7 +14,7 @@ from nflows.transforms.coupling import (
 )
 from nflows.transforms.normalization import BatchNorm
 
-from synth_setter.data.vst import param_specs  # noqa
+from synth_setter.data.vst import param_specs
 from synth_setter.data.vst.param_spec import (
     CategoricalParameter,
     DiscreteLiteralParameter,

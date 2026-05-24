@@ -33,10 +33,8 @@ from synth_setter.pipeline.schemas.spec import DatasetSpec
 from synth_setter.pipeline.spec_io import write_spec_to_path
 from synth_setter.workspace import operator_workspace
 
-# Operator-side artifact anchor — where ``cfg.paths.*`` interpolations
-# resolve. Under a checkout this is the repo root; under a wheel install
-# ``operator_workspace()`` falls back to ``$SYNTH_SETTER_WORKSPACE`` or
-# ``Path.cwd()``.
+# Anchor for ``cfg.paths.*`` interpolations. See
+# :func:`synth_setter.workspace.operator_workspace` for resolution.
 _OPERATOR_WORKSPACE = operator_workspace()
 
 
