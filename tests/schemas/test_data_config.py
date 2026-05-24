@@ -21,7 +21,7 @@ from synth_setter.schemas.data_config import DataConfig
 from synth_setter.schemas.paths_config import PathsConfig
 from tests.schemas.conftest import compose_subtree
 
-_DATA_CONFIG_DIR = Path(str(configs_dir())) / "data"
+_DATA_CONFIG_DIR = Path(str(configs_dir() / "data"))
 
 
 def _all_data_config_names() -> list[str]:

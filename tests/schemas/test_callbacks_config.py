@@ -16,7 +16,7 @@ from synth_setter.resources import configs_dir
 from synth_setter.schemas.callbacks_config import CallbackInstance, CallbacksConfig
 from tests.schemas.conftest import compose_train_cfg
 
-_CALLBACKS_CONFIG_DIR = Path(str(configs_dir())) / "callbacks"
+_CALLBACKS_CONFIG_DIR = Path(str(configs_dir() / "callbacks"))
 
 
 def _all_callback_config_names() -> list[str]:

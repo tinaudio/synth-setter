@@ -15,7 +15,7 @@ from synth_setter.resources import configs_dir
 from synth_setter.schemas.model_config import ModelConfig, OptimizerConfig
 from tests.schemas.conftest import compose_subtree
 
-_MODEL_CONFIG_DIR = Path(str(configs_dir())) / "model"
+_MODEL_CONFIG_DIR = Path(str(configs_dir() / "model"))
 
 _VALID_TARGET = "synth_setter.models.X"
 
