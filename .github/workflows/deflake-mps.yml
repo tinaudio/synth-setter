@@ -78,7 +78,7 @@ jobs:
           COUNT: ${{ inputs.count || 3 }}
         run: |
           set -euo pipefail
-          [[ "$COUNT" =~ ^[0-9]+$ ]] || { echo "ERROR: count must be a positive integer, got: $COUNT" >&2; exit 2; }
+          [[ "$COUNT" =~ ^[1-9][0-9]*$ ]] || { echo "ERROR: count must be a positive integer (>= 1), got: $COUNT" >&2; exit 2; }
           mkdir -p deflake-artifacts
           pytest \
             --count="$COUNT" \
