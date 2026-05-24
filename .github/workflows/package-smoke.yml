@@ -132,12 +132,12 @@ jobs:
           assert cfg.data, "data group not composed"
           assert cfg.model, "model group not composed"
           assert cfg.trainer, "trainer group not composed"
-          assert isinstance(cfg.model.out_dim, int), (
-              f"mul resolver did not produce int for cfg.model.out_dim: {cfg.model.out_dim!r}"
+          assert isinstance(cfg.model.net.out_dim, int), (
+              f"mul resolver did not produce int for cfg.model.net.out_dim: {cfg.model.net.out_dim!r}"
           )
 
           print("data._target_:", cfg.data._target_)
           print("model._target_:", cfg.model._target_)
           print("trainer._target_:", cfg.trainer._target_)
-          print("model.out_dim (mul-resolved):", cfg.model.out_dim)
+          print("model.net.out_dim (mul-resolved):", cfg.model.net.out_dim)
           PY
