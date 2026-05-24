@@ -3,7 +3,8 @@
 Each worker owns a contiguous, deterministic slice of shard IDs computed from
 ``(total_shards, rank, world)``. Pure helpers (``get_my_shards``,
 ``validate_rank_world``) and an env-reading shell (``read_rank_world_from_env``)
-that fails loudly on missing partition env — see #763.
+that defaults to single-worker local mode when both partition env vars are
+absent, and rejects any partial / malformed config — see #763.
 
 Env vars are ``SYNTH_SETTER_``-prefixed to dodge SkyPilot's reserved
 ``SKYPILOT_NODE_RANK`` (clobbered to 0 per single-node cluster) and to avoid
@@ -27,8 +28,9 @@ def available_cpus() -> int:
 
     :returns: Number of CPUs usable by this process; always ``>= 1``.
     """
-    if hasattr(os, "sched_getaffinity"):
-        return len(os.sched_getaffinity(0))
+    sched_getaffinity = getattr(os, "sched_getaffinity", None)
+    if sched_getaffinity is not None:
+        return len(sched_getaffinity(0))
     return os.cpu_count() or 1
 
 
@@ -42,20 +44,30 @@ def validate_rank_world(rank: int, world: int) -> None:
 
 
 def read_rank_world_from_env() -> tuple[int, int]:
-    """Read SYNTH_SETTER_WORKER_RANK / SYNTH_SETTER_NUM_WORKERS as ints, no defaults.
+    """Read SYNTH_SETTER_WORKER_RANK / SYNTH_SETTER_NUM_WORKERS as ints.
 
-    Silent defaults are refused so a misconfigured worker can't duplicate every
-    shard across every node — see #763.
+    With both env vars absent, returns ``(0, 1)`` — the local single-worker
+    default that makes ``generate_dataset`` usable without manually exporting
+    partition env. A partial config (only one set) still raises: that pattern
+    almost always means a launcher dropped half its env injection, and silently
+    treating it as single-worker would duplicate every shard across every
+    node — see #763.
 
     :return: ``(rank, world)`` as integers, validated against ``validate_rank_world``.
-    :raises ValueError: If either env var is missing, can't parse as int, or fails the
-        rank/world bounds check.
+    :raises ValueError: If exactly one env var is set, either can't parse as int,
+        or the resulting rank/world fails the bounds check.
     """
-    missing = [
-        name for name in (WORKER_RANK_ENV_VAR, NUM_WORKERS_ENV_VAR) if name not in os.environ
-    ]
-    if missing:
-        raise ValueError(f"missing partition env vars: {', '.join(missing)}")
+    rank_present = WORKER_RANK_ENV_VAR in os.environ
+    world_present = NUM_WORKERS_ENV_VAR in os.environ
+    if not rank_present and not world_present:
+        return 0, 1
+    if rank_present != world_present:
+        missing = WORKER_RANK_ENV_VAR if not rank_present else NUM_WORKERS_ENV_VAR
+        present = NUM_WORKERS_ENV_VAR if not rank_present else WORKER_RANK_ENV_VAR
+        raise ValueError(
+            f"partial partition env: {present} set but {missing} missing "
+            "(set both or neither — neither defaults to single-worker local mode)"
+        )
     rank_raw = os.environ[WORKER_RANK_ENV_VAR]
     world_raw = os.environ[NUM_WORKERS_ENV_VAR]
     try:

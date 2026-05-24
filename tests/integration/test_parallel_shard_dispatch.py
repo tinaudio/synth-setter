@@ -16,6 +16,7 @@ plugin installed, so the dispatcher path is never coverage-blind.
 
 from __future__ import annotations
 
+import shutil
 import sys
 import textwrap
 from datetime import datetime, timezone
@@ -99,20 +100,50 @@ def _build_spec() -> DatasetSpec:
     return DatasetSpec(**kwargs)  # type: ignore[arg-type]
 
 
+def _wire_run_into_fake_renderer(
+    spec: DatasetSpec,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Wire ``run(spec)`` to cross the real subprocess boundary into a fake renderer.
+
+    Stubs the renderer-version probe (no real VST3 on disk), the R2 skip-probe
+    (every shard is "absent"), pins ``available_cpus`` to 8 so pool size is
+    deterministic across CI hosts, swaps the renderer args for a
+    ``sys.executable <fake_renderer.py> <output_path>`` invocation, and skips
+    the Linux Xvfb wrapper (fake renderer needs no X11; the wrapper is
+    stress-tested by ``test_parallel_shard_render_linux.py``).
+
+    Partition env (``SYNTH_SETTER_WORKER_RANK`` / ``SYNTH_SETTER_NUM_WORKERS``)
+    is the caller's responsibility — leave both unset for default-mode tests
+    or call ``monkeypatch.setenv`` for explicit-rank tests.
+
+    :param spec: Spec whose ``render.renderer_version`` is mirrored by the stub probe.
+    :param tmp_path: Per-test tmp dir; the fake renderer is dropped here.
+    :param monkeypatch: Pytest fixture used for all the stubs.
+    """
+    monkeypatch.setattr("synth_setter.cli.generate_dataset.available_cpus", lambda: 8)
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset.extract_renderer_version",
+        lambda _path: spec.render.renderer_version,
+    )
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda *_a, **_k: None)
+    monkeypatch.setattr("synth_setter.cli.generate_dataset.sys.platform", "darwin")
+
+    fake_renderer = _write_fake_renderer(tmp_path)
+
+    def _fake_build_args(_spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -> list[str]:
+        return [sys.executable, str(fake_renderer), str(output_dir / shard.filename)]
+
+    monkeypatch.setattr("synth_setter.cli.generate_dataset.build_generate_args", _fake_build_args)
+
+
 def test_parallel_dispatch_crosses_real_subprocess_boundary(
     fake_r2_remote: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``parallel=True`` + 4 shards uploads every shard via real subprocess + real rclone.
-
-    Stubs the renderer-version probe (no real VST3 on disk) and the R2
-    skip-probe (every shard is "absent"), pins ``available_cpus`` to 8 so
-    pool size is deterministic across CI hosts, and swaps the renderer args
-    for a ``sys.executable <fake_renderer.py> <output_path>`` invocation.
-    The dispatch path then runs end-to-end: ``ThreadPoolExecutor`` →
-    ``subprocess.check_call`` → fresh Python → empty file written → real
-    ``rclone copy`` → ``fake_r2_remote``.
 
     State-based assertion: every shard's filename exists under the fake R2
     remote when ``run(spec)`` returns.
@@ -126,24 +157,7 @@ def test_parallel_dispatch_crosses_real_subprocess_boundary(
 
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
-    monkeypatch.setattr("synth_setter.cli.generate_dataset.available_cpus", lambda: 8)
-    monkeypatch.setattr(
-        "synth_setter.cli.generate_dataset.extract_renderer_version",
-        lambda _path: spec.render.renderer_version,
-    )
-    monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda *_a, **_k: None)
-    # Skip the Linux Xvfb-wrapper prefix in ``_render_and_upload_shard`` — the
-    # fake renderer needs no X11, and the wrapper isn't on PATH from the test
-    # CWD (``fake_r2_remote`` chdirs into tmp_path). The wrapper itself is
-    # stress-tested by ``test_parallel_shard_render_linux.py``.
-    monkeypatch.setattr("synth_setter.cli.generate_dataset.sys.platform", "darwin")
-
-    fake_renderer = _write_fake_renderer(tmp_path)
-
-    def _fake_build_args(_spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -> list[str]:
-        return [sys.executable, str(fake_renderer), str(output_dir / shard.filename)]
-
-    monkeypatch.setattr("synth_setter.cli.generate_dataset.build_generate_args", _fake_build_args)
+    _wire_run_into_fake_renderer(spec, tmp_path, monkeypatch)
 
     run(spec)
 
@@ -152,3 +166,59 @@ def test_parallel_dispatch_crosses_real_subprocess_boundary(
         assert (bucket_prefix / shard.filename).is_file(), (
             f"shard {shard.shard_id} did not land in fake R2: {shard.filename}"
         )
+
+
+def test_two_ranks_render_disjoint_complete_shard_partition(
+    fake_r2_remote: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two ranks (0/2 + 1/2) over the same spec produce a disjoint, complete shard set.
+
+    Cross-checks the launcher/worker env-var contract end-to-end: rank-0 and
+    rank-1 each render their slice through the real subprocess boundary; the
+    union must cover every shard and the intersection must be empty. Catches
+    drift between ``WORKER_RANK_ENV_VAR`` / ``NUM_WORKERS_ENV_VAR`` (the
+    launcher-side injection) and the names ``read_rank_world_from_env`` reads.
+    If anyone renames one side without the other, both ranks fall back to the
+    single-worker default and render every shard, breaking the disjointness
+    assertion.
+
+    :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+    :param tmp_path: Per-test tmp dir for the fake renderer script.
+    :param monkeypatch: Used by the shared setup helper plus per-rank env injection.
+    """
+    spec = _build_spec()
+    assert len(spec.shards) == _NUM_SHARDS
+
+    _wire_run_into_fake_renderer(spec, tmp_path, monkeypatch)
+    bucket_prefix = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
+
+    def _landed_filenames() -> set[str]:
+        return {
+            shard.filename for shard in spec.shards if (bucket_prefix / shard.filename).is_file()
+        }
+
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "2")
+    run(spec)
+    rank_0_landed = _landed_filenames()
+
+    # Wipe the bucket between ranks so rank-1's landed set is observed
+    # independently — otherwise the intersection check would be vacuously
+    # empty by set-difference construction and couldn't catch a regression
+    # where rank-1 silently re-renders rank-0's shards.
+    if bucket_prefix.exists():
+        shutil.rmtree(bucket_prefix)
+
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "1")
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "2")
+    run(spec)
+    rank_1_landed = _landed_filenames()
+
+    every_shard = {shard.filename for shard in spec.shards}
+    assert rank_0_landed | rank_1_landed == every_shard, "ranks left a shard unrendered"
+    assert not (rank_0_landed & rank_1_landed), (
+        f"ranks rendered overlapping shards: {rank_0_landed & rank_1_landed}"
+    )
+    assert rank_0_landed and rank_1_landed, "one rank rendered nothing — env-var injection broke"
