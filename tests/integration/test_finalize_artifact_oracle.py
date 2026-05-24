@@ -112,15 +112,18 @@ def _load_param_array_from_hdf5(local_h5: Path) -> np.ndarray:
 
 
 def _load_param_array_from_wds_tar(local_tar: Path) -> np.ndarray:
-    """Stack every ``param_array.npy`` member of a wds shard into a single array.
+    """Concatenate every ``param_array.npy`` member of a wds shard into a single array.
 
-    WebDataset shards (`*.tar`) carry one file per sample, named
-    ``<sample_id>.<key>.npy``; ``param_array`` is one such key per
-    ``configs/data/surge_simple.yaml``. Members are sorted by name so the
-    returned array's row order is deterministic.
+    ``synth_setter.data.vst.writers.save_wds_samples`` keys each tar record by
+    ``f"{start_idx:08d}"`` and stores the batch's ``param_array`` as a single
+    ``(B, P)`` payload (one record per render batch, not one record per row).
+    Members are concatenated along axis 0 in sorted name order so the returned
+    array's row order matches ``start_idx`` ascending.
 
     :param local_tar: Local path to a downloaded shard tarball.
-    :returns: ``param_array`` rows stacked into a ``(N, P)`` float32 array.
+    :returns: ``param_array`` rows concatenated into a ``(N, P)`` float32 array,
+        where ``N`` is the sum of per-record batch sizes; ``(0, 0)`` when the
+        shard carries no ``param_array.npy`` member.
     """
     rows: list[np.ndarray] = []
     with tarfile.open(local_tar, mode="r") as tar:
@@ -133,7 +136,7 @@ def _load_param_array_from_wds_tar(local_tar: Path) -> np.ndarray:
             if fh is None:
                 continue
             rows.append(np.load(io.BytesIO(fh.read())).astype(np.float32))
-    return np.stack(rows, axis=0) if rows else np.zeros((0, 0), dtype=np.float32)
+    return np.concatenate(rows, axis=0) if rows else np.zeros((0, 0), dtype=np.float32)
 
 
 def _build_oracle_module(num_params: int) -> SurgeFakeOracleModule:
