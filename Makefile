@@ -73,10 +73,10 @@ deflake: ## Rerun TEST COUNT times; retain failed tmp_paths under deflake-artifa
 	@set -o pipefail; \
 	mkdir -p deflake-artifacts && \
 	pytest \
-	  --count=$(or $(COUNT),50) \
+	  --count="$(or $(COUNT),50)" \
 	  -vv -s \
 	  -o tmp_path_retention_policy=failed \
-	  --basetemp $(CURDIR)/deflake-artifacts/pytest \
+	  --basetemp "$(CURDIR)/deflake-artifacts/pytest" \
 	  --junitxml deflake-artifacts/junit.xml \
 	  -- "$(TEST)" 2>&1 | tee deflake-artifacts/pytest.log
 
