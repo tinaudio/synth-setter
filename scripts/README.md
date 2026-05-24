@@ -36,7 +36,11 @@ Container-runtime shell helpers (X11 / VST3 bootstrap):
 | `ensure_plugin_symlinks.sh` | `docker/ubuntu22_04/ensure_plugin_symlinks.sh`       |
 
 `run-linux-vst-headless.sh` ships inside the `synth_setter` package and is
-discovered via `synth_setter.resources.vst_headless_wrapper()` — see
+discovered via `synth_setter.resources.vst_headless_wrapper()`; the Python
+worker script `generate_vst_dataset.py` is similarly packaged and located via
+`synth_setter.resources.generate_vst_dataset_script()`. Both return a
+`Traversable` — wrap in `as_file()` when a real on-disk path is required
+(e.g. for `subprocess.run`). See
 [`src/synth_setter/resources.py`](../src/synth_setter/resources.py).
 
 ## See also

@@ -250,7 +250,11 @@ docs:
     description: Test layout, fixtures, markers, and the cpu/mps/gpu CI lane split
     sources:
       - pattern: "tests/conftest.py"
-        covers: "Hydra cfg_train/cfg_eval/cfg_surge_xt fixtures, accelerator parametrize, param_spec_name parametrize, experiment_name parametrize, _build_surge_xt_smoke_cfg, surge_xt_smoke_datasets, _validate_surge_dataset, shared constants (NUM_FIXTURE_SAMPLES, VST_HEADLESS_WRAPPER, _VST_SUBPROCESS_TIMEOUT_SECONDS)"
+        covers: "Hydra cfg_train/cfg_eval/cfg_surge_xt fixtures, accelerator parametrize, param_spec_name parametrize, experiment_name parametrize, _build_surge_xt_smoke_cfg, surge_xt_smoke_datasets (materializes wrapper+script via as_file + ExitStack for zip-wheel compat), _validate_surge_dataset, shared constants (NUM_FIXTURE_SAMPLES, _VST_SUBPROCESS_TIMEOUT_SECONDS)"
+      - pattern: "src/synth_setter/resources.py"
+        covers: "Traversable-based package resource discovery (configs_dir, vst_headless_wrapper, generate_vst_dataset_script); as_file re-export for materializing tempfile paths across zipped/unpacked installs"
+      - pattern: "tests/test_zipimport_compat.py"
+        covers: "End-to-end smoke lane that zips src/synth_setter and verifies every resources helper works under zipimport (import, iterdir, read_text, as_file materialization, actual subprocess execution of the renderer)"
       - pattern: "tests/test_train.py"
         covers: "E2E Hydra train / resume / Surge XT smoke + train→eval round-trip"
       - pattern: "tests/test_eval.py"
