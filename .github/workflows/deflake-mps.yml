@@ -6,7 +6,7 @@ name: Deflake (MPS)
 on:
   workflow_dispatch:
     inputs:
-      test_node_id:
+      pytest_node_id:
         description: "Pytest node id (e.g. tests/test_train.py::test_train_eval_surge_xt[mps-surge_4-loss_l2_mel])"
         required: true
         type: string
@@ -15,12 +15,16 @@ on:
         required: true
         type: number
         default: 50
-  # PR-self-test: runs the harness against a fast non-MPS test (count=3) so
-  # a change to this file is exercised end-to-end before merge — at-rest
-  # workflow_dispatch can't fire until the file is on the default branch.
+  # PR-self-test: runs the harness against `tests/_meta/test_deflake_self_test.py`
+  # (count=3, intentionally failing) so the failure paths — tmp_path retention,
+  # junit failure parsing, summarizer arithmetic — are exercised end-to-end
+  # before merge. At-rest `workflow_dispatch` can't fire until the file is on
+  # the default branch, so changes to either the workflow or the sentinel test
+  # must trigger this self-test.
   pull_request:
     paths:
       - ".github/workflows/deflake-mps.yml"
+      - "tests/_meta/test_deflake_self_test.py"
 
 permissions:
   contents: read
@@ -68,14 +72,17 @@ jobs:
         run: uv pip list --system
 
       # COUNT validated as a positive int — `type: number` admits floats; pytest-repeat needs int.
-      # NODE_ID + COUNT routed through env (never inlined into `run: |`) so an adversarial
+      # PYTEST_NODE_ID + COUNT routed through env (never inlined into `run: |`) so an adversarial
       # dispatch input can't break out of the bash/Python context.
+      # DEFLAKE_SELF_TEST opts the sentinel in (see its module-level `pytestmark.skipif`);
+      # harmless for dispatched runs targeting other tests, which don't read the env var.
       - name: Run deflake loop
         continue-on-error: true
         env:
           HYDRA_FULL_ERROR: "1"
-          NODE_ID: ${{ inputs.test_node_id || 'tests/pipeline/test_file_uri.py::TestFileUriScheme::test_scheme_constant_is_canonical_file_prefix' }}
+          PYTEST_NODE_ID: ${{ inputs.pytest_node_id || 'tests/_meta/test_deflake_self_test.py::test_always_fails' }}
           COUNT: ${{ inputs.count || 3 }}
+          DEFLAKE_SELF_TEST: "1"
         run: |
           set -euo pipefail
           [[ "$COUNT" =~ ^[1-9][0-9]*$ ]] || { echo "ERROR: count must be a positive integer (>= 1), got: $COUNT" >&2; exit 2; }
@@ -86,13 +93,37 @@ jobs:
             -o tmp_path_retention_policy=failed \
             --basetemp "$PWD/deflake-artifacts/pytest" \
             --junitxml deflake-artifacts/junit.xml \
-            -- "$NODE_ID" \
+            -- "$PYTEST_NODE_ID" \
             2>&1 | tee deflake-artifacts/pytest.log
+
+      # PR-self-test only: assert the deflake-artifacts bundle contains what
+      # the sentinel run is supposed to produce, so a regression in tmp_path
+      # retention, junit failure aggregation, or the upload glob fails CI
+      # before merge. Dispatched runs target user-chosen tests, so we can't
+      # assert anything about their outputs — skip there.
+      - name: Verify artifact contents (PR self-test)
+        if: always() && github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          test -s deflake-artifacts/pytest.log || { echo "::error::pytest.log missing or empty"; exit 1; }
+          test -s deflake-artifacts/junit.xml || { echo "::error::junit.xml missing or empty"; exit 1; }
+          grep -q 'failures="3"' deflake-artifacts/junit.xml || {
+            echo "::error::expected failures=\"3\" in junit.xml — summarizer fail-rate path won't be exercised"
+            cat deflake-artifacts/junit.xml
+            exit 1
+          }
+          markers=$(find deflake-artifacts/pytest -name 'deflake-self-test-marker' | wc -l | tr -d ' ')
+          [[ "$markers" -eq 3 ]] || {
+            echo "::error::expected 3 retained tmp_paths with sentinel marker, found $markers"
+            find deflake-artifacts/pytest -type f
+            exit 1
+          }
+          echo "✅ artifacts verified: junit failures=3, 3 tmp_paths retained with sentinel marker"
 
       - name: Summarize results
         if: always()
         env:
-          NODE_ID: ${{ inputs.test_node_id || 'tests/pipeline/test_file_uri.py::TestFileUriScheme::test_scheme_constant_is_canonical_file_prefix' }}
+          PYTEST_NODE_ID: ${{ inputs.pytest_node_id || 'tests/_meta/test_deflake_self_test.py::test_always_fails' }}
           COUNT: ${{ inputs.count || 3 }}
         run: |
           python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
@@ -100,11 +131,11 @@ jobs:
           import xml.etree.ElementTree as ET
           from pathlib import Path
 
-          node_id = os.environ["NODE_ID"]
+          pytest_node_id = os.environ["PYTEST_NODE_ID"]
           count = os.environ["COUNT"]
           junit = Path("deflake-artifacts/junit.xml")
           print("## Deflake results\n")
-          print(f"- node id: `{node_id}`")
+          print(f"- node id: `{pytest_node_id}`")
           print(f"- iterations requested: **{count}**")
           if not junit.exists():
               print("\n_junit.xml missing — pytest collection likely failed; see logs._")
