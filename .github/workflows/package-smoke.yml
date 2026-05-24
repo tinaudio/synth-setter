@@ -32,7 +32,7 @@ concurrency:
 jobs:
   build-and-smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       contents: read
 
@@ -91,4 +91,50 @@ jobs:
           print("synth_setter:", synth_setter.__file__)
           print("hydra_plugins.synth_setter_searchpath:", spec.origin)
           print("configs path:", configs)
+          PY
+
+      # Closes the gap that editable installs mask: tests in test.yml run
+      # against `pip install -e .` where src/.../configs/ is the source dir,
+      # so a broken [tool.setuptools.package-data] glob still passes pytest
+      # but breaks for real users. This step installs the built wheel with
+      # full deps and runs the canonical Hydra compose path through it.
+      - name: Install wheel with full deps
+        run: |
+          python -m venv "$RUNNER_TEMP/full"
+          "$RUNNER_TEMP/full/bin/pip" install --upgrade pip
+          "$RUNNER_TEMP/full/bin/pip" install dist/synth_setter-*.whl[torch]
+
+      # Compose train.yaml through the canonical entry pattern — exercises
+      # the namespace plugin's auto-registration of `pkg://synth_setter.configs`,
+      # the custom `${mul:…}` resolver in model/ffn.yaml, and every YAML in
+      # train's defaults chain (data/ksin, model/ffn, trainer/cpu, callbacks,
+      # logger, paths, extras, hydra). Stops short of `hydra.utils.instantiate`
+      # — that's what tests/test_configs.py covers against the editable tree.
+      - name: Canonical Hydra compose against installed wheel
+        working-directory: ${{ runner.temp }}
+        run: |
+          "$RUNNER_TEMP/full/bin/python" - <<'PY'
+          from hydra import compose, initialize_config_module
+
+          from synth_setter.utils import register_resolvers
+
+          register_resolvers()
+
+          with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+              cfg = compose(
+                  config_name="train.yaml",
+                  overrides=["data=ksin", "model=ffn", "trainer=cpu"],
+              )
+
+          assert cfg.data, "data group not composed"
+          assert cfg.model, "model group not composed"
+          assert cfg.trainer, "trainer group not composed"
+          assert isinstance(cfg.model.out_dim, int), (
+              f"mul resolver did not produce int for cfg.model.out_dim: {cfg.model.out_dim!r}"
+          )
+
+          print("data._target_:", cfg.data._target_)
+          print("model._target_:", cfg.model._target_)
+          print("trainer._target_:", cfg.trainer._target_)
+          print("model.out_dim (mul-resolved):", cfg.model.out_dim)
           PY
