@@ -31,7 +31,7 @@ resources:
   image_id: docker:tinaudio/synth-setter:dev-snapshot
 
 file_mounts:
-  /home/build/synth-setter/data/spec-mount-probe.txt: configs/compute/runpod-debug-spec-mount-template.yaml
+  /home/build/synth-setter/data/spec-mount-probe.txt: src/synth_setter/configs/compute/runpod-debug-spec-mount-template.yaml
 
 setup: |
   echo "synth-setter debug-spec-mount worker ready (host: $(hostname))"

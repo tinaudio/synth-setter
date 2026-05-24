@@ -3,11 +3,12 @@
 **This is not the standard dispatch path for the project's CLI entrypoints.**
 The `synth-setter-*` console scripts (currently `synth-setter-generate-dataset`,
 with more to follow) already carry their own `skypilot_launch.compute_template`
-configuration — point that field at a `configs/compute/*.yaml` and the
-entrypoint dispatches via SkyPilot on its own (see
+configuration — point that field at a `src/synth_setter/configs/compute/*.yaml`
+and the entrypoint dispatches via SkyPilot on its own (see
 `synth_setter.cli.generate_dataset.main` and
-`configs/skypilot_launch/default.yaml`). Use this module only when no such
-entrypoint exists for the command you want to run on a SkyPilot worker.
+`src/synth_setter/configs/skypilot_launch/default.yaml`). Use this module only
+when no such entrypoint exists for the command you want to run on a SkyPilot
+worker.
 
 Concretely, this CLI:
 
@@ -31,8 +32,10 @@ their own ``cfg.skypilot_launch.compute_template`` config and would
 self-recursively dispatch.
 
 Provider-neutral: the same binary launches against
-`configs/compute/runpod-template.yaml`, `configs/compute/oci-cpu-template.yaml`,
-or `configs/compute/local-template.yaml` (kubernetes-via-`sky local up`).
+`src/synth_setter/configs/compute/runpod-template.yaml`,
+`src/synth_setter/configs/compute/oci-cpu-template.yaml`, or
+`src/synth_setter/configs/compute/local-template.yaml`
+(kubernetes-via-`sky local up`).
 Worker env is forwarded via `task.update_envs` (#749 explains why
 `task.update_file_mounts` is avoided), and each rank's task is submitted to
 the SkyPilot managed-jobs controller — see
@@ -143,7 +146,9 @@ _CRED_BOOTSTRAP_SCRIPT = (
 _TAIL_LOGS_RC_SUCCESS = 0
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_TEMPLATE = REPO_ROOT / "configs" / "compute" / "runpod-template.yaml"
+DEFAULT_TEMPLATE = (
+    REPO_ROOT / "src" / "synth_setter" / "configs" / "compute" / "runpod-template.yaml"
+)
 DEFAULT_ENV_FILE = REPO_ROOT / ".env"
 
 # Local mirror anchor: the inner generator command writes
@@ -958,4 +963,4 @@ def dispatch_via_skypilot(
 
 
 if __name__ == "__main__":
-    main()
+    main()  # pyright: ignore[reportCallIssue]  # click decorator chain
