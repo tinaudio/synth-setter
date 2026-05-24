@@ -24,6 +24,11 @@ run_name: ${task_name}
 output_format: hdf5
 base_seed: 42
 
+# Forwarded by ``synth-setter-finalize-dataset`` to ``stream_stats_wds`` /
+# ``get_stats_hdf5``; ``true`` substitutes ``std=1.0`` at zero-variance mel
+# bins instead of raising. Smoke configs override to ``true``.
+mask_degenerate_bins: false
+
 # Materialized as ``null`` so finalize-dataset.yaml can pin the generate stage's
 # ``run_id`` via the ``run_id=<value>`` Hydra override form (strict mode requires
 # the key to exist). Leaving this ``null`` on the generate path is handled by

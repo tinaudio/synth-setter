@@ -16,6 +16,10 @@ task_name: smoke-shard-wds
 
 output_format: wds
 
+# 12-sample renders have constant mel bins (early-frame silence, channels
+# below the source's active bandwidth); mask so finalize completes.
+mask_degenerate_bins: true
+
 train_val_test_sizes: [12, 0, 0]
 
 render:

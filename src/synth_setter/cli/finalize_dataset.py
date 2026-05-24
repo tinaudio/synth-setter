@@ -73,7 +73,8 @@ def finalize_wds(spec: DatasetSpec, work_dir: Path) -> None:
     splits are available via
     ``spec.r2.split_wds_brace_uri(spec.split_shard_ranges[split])``;
     callers must check ``lo < hi`` first because empty splits raise
-    ``ValueError`` at that helper.
+    ``ValueError`` at that helper. ``spec.mask_degenerate_bins`` is
+    forwarded to ``stream_stats_wds``.
 
     :param spec: Validated dataset spec (``output_format == "wds"``).
     :param work_dir: Scratch directory; one shard at a time + the final
@@ -89,7 +90,10 @@ def finalize_wds(spec: DatasetSpec, work_dir: Path) -> None:
             f"{spec.split_shard_ranges['train']!r}); cannot compute stats "
             f"without at least one train shard."
         )
-    mean, std = stream_stats_wds(_download_train_shards_one_at_a_time(spec, work_dir))
+    mean, std = stream_stats_wds(
+        _download_train_shards_one_at_a_time(spec, work_dir),
+        mask_degenerate=spec.mask_degenerate_bins,
+    )
     stats_npz = work_dir / STATS_NPZ_FILENAME
     np.savez(stats_npz, mean=mean, std=std)
     r2_io.upload(stats_npz, spec.r2.stats_uri())
@@ -115,6 +119,7 @@ def finalize_hdf5(spec: DatasetSpec, work_dir: Path) -> None:
     validation (per ``pipeline/CLAUDE.md``) is delegated to the h5py opens
     that ``reshard_dataset`` performs while staging each split — finalize
     never re-runs the workers' full four-check pass.
+    ``spec.mask_degenerate_bins`` is forwarded to ``get_stats_hdf5``.
 
     :param spec: Validated dataset spec (``output_format == "hdf5"``).
     :param work_dir: Scratch directory; shards, splits, stats and the spec
@@ -137,7 +142,7 @@ def finalize_hdf5(spec: DatasetSpec, work_dir: Path) -> None:
         r2_io.download_to_path(spec.r2.shard_uri(shard), work_dir / shard.filename)
     write_spec_to_path(spec, work_dir / INPUT_SPEC_FILENAME)
     reshard_dataset(work_dir)
-    get_stats_hdf5(str(work_dir / "train.h5"))
+    get_stats_hdf5(str(work_dir / "train.h5"), mask_degenerate=spec.mask_degenerate_bins)
     stats_npz = work_dir / STATS_NPZ_FILENAME
     if not stats_npz.is_file():
         raise FileNotFoundError(

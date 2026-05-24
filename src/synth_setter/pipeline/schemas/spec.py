@@ -478,6 +478,11 @@ class DatasetSpec(BaseModel):
 
         Nested ``RenderConfig`` carrying every per-shard renderer input.
 
+    .. attribute :: mask_degenerate_bins
+
+        Whether finalize substitutes ``std=1.0`` at zero-variance mel bins
+        instead of raising; ``False`` is the strict production default.
+
     .. attribute :: git_sha
 
         Commit SHA of the launcher's working tree at construction.
@@ -533,6 +538,16 @@ class DatasetSpec(BaseModel):
 
     render: RenderConfig = Field(
         description="Nested ``RenderConfig`` carrying every per-shard renderer input."
+    )
+
+    mask_degenerate_bins: bool = Field(
+        default=False,
+        description=(
+            "Whether the finalize stats fold substitutes ``std=1.0`` at zero-variance "
+            "mel bins instead of raising; ``False`` is the strict production default. "
+            "Smoke configs override to ``True`` because tiny renders have constant "
+            "attack-time frames and channels below the source's active bandwidth."
+        ),
     )
 
     # Auto-filled runtime fields: factories fire only when the value is missing on
