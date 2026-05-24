@@ -12,6 +12,18 @@ version: 1
 
 docs:
   # ── Docker reference ────────────────────────────────────────────
+  - doc: docs/reference/dependency-management.md
+    description: uv sync command surface, relock cadence, Linux resync flip
+    sources:
+      - pattern: "pyproject.toml"
+        covers: "[project.dependencies], [project.optional-dependencies] backend extras (cpu, cu128) and legacy shims (torch, dev, docs, all), [dependency-groups] dev+docs, [tool.uv].conflicts, [[tool.uv.index]], [tool.uv.sources]"
+      - pattern: "uv.lock"
+        covers: "Committed universal lockfile (macOS + Linux + Windows resolution); regenerate with `uv lock` after pyproject edits and review the diff in PRs"
+      - pattern: ".github/workflows/uv-lock-check.yml"
+        covers: "macOS + Linux matrix running `uv lock --check` on every PR that touches pyproject.toml or uv.lock; catches stale-lock drift"
+      - pattern: "docker/ubuntu22_04/Dockerfile"
+        covers: "Container install via `uv sync --frozen --extra ${TORCH_BACKEND} --no-install-project` against the committed lock; dev-base stage installs the package editable on top"
+
   - doc: docs/reference/docker.md
     description: Docker build, run, debug reference
     sources:

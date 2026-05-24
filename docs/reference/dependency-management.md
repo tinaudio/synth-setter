@@ -15,10 +15,12 @@ command differs by hardware, and how to keep the committed `uv.lock` honest.
 | Regenerate the lock after a dep edit | `uv lock` (then commit the diff)                               |
 
 `--frozen` errors instead of silently re-resolving when the lock and
-`pyproject.toml` disagree. CI uses it everywhere.
+`pyproject.toml` disagree. CI uses it for the main project install everywhere
+it can.
 
-A separate per-PR matrix runs `uv lock --check` on macOS + Linux
-(`.github/workflows/uv-lock-check.yml`); a stale lock is what it catches.
+`.github/workflows/uv-lock-check.yml` runs `uv lock --check` on macOS + Linux
+for every PR that touches `pyproject.toml` or `uv.lock`; a stale lock is
+what it catches.
 
 ## Mac: no backend flag
 
@@ -90,12 +92,13 @@ are the ones you wanted.
 
 `pyproject.toml` retains `[project.optional-dependencies]` entries for
 `torch`, `dev`, `docs`, and `all`. These exist so `pip install -e ".[torch,dev]"`
-keeps working for callsites that cannot honor `[tool.uv.sources]`:
+keeps working for callsites that cannot honor `[tool.uv.sources]`, including:
 
 - `Makefile`'s `make install` target.
 - `environment.yaml` (Conda envs).
 - `scripts/sync_worker_checkout.sh` (SkyPilot worker setup).
 - `.github/workflows/docs.yml` (mkdocs build).
+- `.github/workflows/test-dataset-finalization.yml` (`pip install -e ".[torch,dev]"` smoke).
 
 The shims do not produce a lockfile-validated install; they re-resolve every
 time. Prefer `uv sync --frozen` for any new install path. Removal of the
