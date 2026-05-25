@@ -16,6 +16,7 @@ from synth_setter.cli.eval import evaluate
 from synth_setter.cli.train import train
 from synth_setter.data.vst import param_specs, preset_paths
 from tests.conftest import (
+    _SURGE_FIXTURE_PLUGIN_PATH,
     _VST_SUBPROCESS_TIMEOUT_SECONDS,
     NUM_FIXTURE_SAMPLES,
     VST_HEADLESS_WRAPPER,
@@ -329,6 +330,7 @@ def test_train_eval_surge_xt(
         "synth_setter.evaluation.predict_vst_audio",
         str(predictions_dir),
         str(audio_dir),
+        f"--plugin_path={_SURGE_FIXTURE_PLUGIN_PATH}",
         f"--param_spec={param_spec_name}",
         f"--preset_path={preset_paths[param_spec_name]}",
         "-t",

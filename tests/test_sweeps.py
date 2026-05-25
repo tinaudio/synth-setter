@@ -8,10 +8,19 @@ from tests.helpers.run_if import RunIf
 from tests.helpers.run_sh_command import run_sh_command
 
 startfile = "src/synth_setter/cli/train.py"
-# logger=[] disables wandb/tensorboard for these throwaway sweep subprocess runs.
-# ~callbacks.lr_monitor works around #517 — LearningRateMonitor hard-requires a
-# logger and crashes at on_train_start when logger is empty.
-overrides = ["logger=[]", "~callbacks.lr_monitor"]
+# `model=`/`data=` are mandatory in `configs/train.yaml` (`???` defaults);
+# `+run_name=` is consumed by the `hydra.run.dir` interpolation in
+# `configs/hydra/default.yaml`. `logger=[]` disables wandb/tensorboard for
+# these throwaway subprocess runs. `~callbacks.lr_monitor` works around #517 —
+# LearningRateMonitor hard-requires a logger and crashes at on_train_start
+# when logger is empty.
+overrides = [
+    "model=ffn",
+    "data=ksin",
+    "+run_name=sweep",
+    "logger=[]",
+    "~callbacks.lr_monitor",
+]
 
 
 @pytest.mark.gpu
@@ -50,6 +59,12 @@ def test_hydra_sweep_ddp_sim(tmp_path: Path) -> None:
         "+trainer.limit_train_batches=1",
         "+trainer.limit_val_batches=1",
         "+trainer.limit_test_batches=1",
+        # ksin's default `train_val_test_sizes` (409M train rows) blows out
+        # torch.multiprocessing's shmem when DDP forks the dataloader. Shrink
+        # the split and disable worker MP so this exercises sweep + DDP
+        # plumbing, not dataset throughput.
+        "data.train_val_test_sizes=[100,100,100]",
+        "data.num_workers=0",
         "model.optimizer.lr=0.005,0.01,0.02",
     ] + overrides
     run_sh_command(command)
