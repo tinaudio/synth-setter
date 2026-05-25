@@ -21,6 +21,7 @@ For GitHub Actions concepts, see [GitHub's docs](https://docs.github.com/en/acti
 | `pr-metadata-gate`        | Enforces that every PR links a taxonomy-compliant issue (type, label, milestone, Epic lineage).                                                                                 | Walks issue parent chain up to 4 levels; falls back to Epic check if GraphQL parent field unavailable.                                                                                                                                                                        |
 | `bats-tests`              | Runs BATS tests against shell scripts under `scripts/` and `tests/`.                                                                                                            |                                                                                                                                                                                                                                                                               |
 | `docker-build-validation` | Builds the dev-snapshot Docker image; pushes to Docker Hub + GHCR and runs smoke tests on push-to-main/workflow_dispatch; PRs are build-only.                                   | Image is public and ships no credentials; R2/W&B creds flow in at runtime. See [Public image, runtime secrets](#public-image-runtime-secrets).                                                                                                                                |
+| `uv-lock-check`           | Verifies `uv.lock` stays in sync with `pyproject.toml` via `uv lock --check` on `ubuntu-latest` + `macos-latest`. Gates every PR that touches either file.                      | Matrix runs both OSes because `uv.lock` is universal — a lock generated on one platform can encode an unvalidated branch for the other. See [Universal lockfile validation](#universal-lockfile-validation).                                                                  |
 
 ### Pipeline
 
@@ -166,6 +167,10 @@ Or use the Actions tab UI.
 ### PR metadata gate epic traversal
 
 `pr-metadata-gate` walks the issue parent chain (sub-issue hierarchy) up to 4 levels looking for an Epic. If GitHub's GraphQL `parent` field is unavailable for the auth token, it falls back to checking whether the issue itself is an Epic. Orphan issues — those not under any Epic — fail the gate.
+
+### Universal lockfile validation
+
+`uv.lock` is a single file that encodes the resolution for every platform we support (macOS, Linux, Windows). A lock generated on one OS can encode a branch for another OS that was never actually validated — fine for static-metadata wheels, risky for varies-by-platform native deps. `uv-lock-check` runs `uv lock --check` on both `ubuntu-latest` and `macos-latest` so each platform's branch of the universal resolution is exercised on every PR that touches `pyproject.toml` or `uv.lock`. A failure means the lock is stale relative to `pyproject.toml`; the fix is `uv lock` + commit the diff. See [docs/reference/dependency-management.md](dependency-management.md) for the relock cadence and the Linux-only resync flip.
 
 ## Keeping this doc in sync
 
