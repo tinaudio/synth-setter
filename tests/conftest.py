@@ -11,7 +11,6 @@ import h5py
 import hdf5plugin  # noqa: F401   side-effect import: registers HDF5_PLUGIN_PATH so h5py can load Blosc2 filters in fixtures
 import numpy as np
 import pytest
-import rootutils
 import torch
 from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
@@ -20,6 +19,7 @@ from omegaconf import DictConfig, open_dict
 from synth_setter.data.vst import core, param_specs, preset_paths
 from synth_setter.resources import vst_headless_wrapper
 from synth_setter.utils.utils import register_resolvers
+from synth_setter.workspace import operator_workspace
 from tests._baseline_worktree import worktree_for_ref  # noqa: F401 — pytest fixture re-export
 from tests.data.vst._fake_plugin import FakeVST3Plugin
 
@@ -150,7 +150,7 @@ def cfg_train_global() -> DictConfig:
             # Other defaults
             cfg.model.compile = False
             cfg.logger = None
-            cfg.paths.root_dir = str(rootutils.find_root(indicator=".project-root"))
+            cfg.paths.root_dir = str(operator_workspace())
             cfg.callbacks.model_checkpoint.save_top_k = -1
             cfg.callbacks.model_checkpoint.save_last = True
             callbacks = cfg.get("callbacks")
@@ -197,7 +197,7 @@ def cfg_eval_global() -> DictConfig:
             # Other defaults
             cfg.model.compile = False
             cfg.logger = None
-            cfg.paths.root_dir = str(rootutils.find_root(indicator=".project-root"))
+            cfg.paths.root_dir = str(operator_workspace())
     return cfg
 
 
@@ -262,7 +262,7 @@ def cfg_dataset_global() -> DictConfig:
             overrides=["experiment=generate_dataset/smoke-shard"],
         )
         with open_dict(cfg):
-            cfg.paths.root_dir = str(rootutils.find_root(indicator=".project-root"))
+            cfg.paths.root_dir = str(operator_workspace())
     return cfg
 
 
@@ -388,7 +388,7 @@ def _build_surge_xt_smoke_cfg(
         )
         TRAINING_STEPS = 1
         with open_dict(cfg):
-            cfg.paths.root_dir = str(rootutils.find_root(indicator=".project-root"))
+            cfg.paths.root_dir = str(operator_workspace())
 
             cfg.trainer.accelerator = accelerator
             # MPS doesn't support float64 ops Lightning uses by default; pin to float32.

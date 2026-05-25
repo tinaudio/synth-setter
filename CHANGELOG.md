@@ -1,6 +1,29 @@
 # CHANGELOG
 
 
+## v8.7.2 (2026-05-25)
+
+### Bug Fixes
+
+- **launchers**: Strip rootutils, route paths through operator_workspace() (Closes #1261)
+  ([#1268](https://github.com/tinaudio/synth-setter/pull/1268),
+  [`4227418`](https://github.com/tinaudio/synth-setter/commit/422741874f5f6ca1c924b94f6cff3224e5f005c8))
+
+### Continuous Integration
+
+- Trigger PR-smoke on skypilot_launch.py changes
+  ([#1264](https://github.com/tinaudio/synth-setter/pull/1264),
+  [`4db3749`](https://github.com/tinaudio/synth-setter/commit/4db3749d996807053da590439e6d7436032ea9ad))
+
+The PR-presubmit smoke workflows that exercise the SkyPilot launcher's CI code path (`Generate +
+  finalize` matrix and `Launcher -> real-R2 roundtrip`) are paths-gated and did not include
+  `src/synth_setter/pipeline/skypilot_launch.py`. PR #1257 had to be validated by manual
+  `workflow_dispatch` because the smoke jobs would not auto-fire on launcher edits. Add the launcher
+  file to both allow-lists so future changes get presubmit coverage.
+
+Refs #1263
+
+
 ## v8.7.1 (2026-05-24)
 
 ### Bug Fixes

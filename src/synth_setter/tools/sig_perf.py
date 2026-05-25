@@ -5,10 +5,8 @@ import time
 from collections.abc import Callable
 
 import psutil
-import rootutils
 import torch
 
-rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 from synth_setter.data.kosc_datamodule import make_sig
 from synth_setter.data.ksin_datamodule import make_sin
 

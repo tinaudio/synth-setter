@@ -1,25 +1,18 @@
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Tuple
+from typing import Any
 
 import h5py
 import hdf5plugin
 import librosa
 import numpy as np
-import rootutils
 from loguru import logger
 from pedalboard import VST3Plugin
-from pyloudnorm import Meter
 from pydantic_settings import BaseSettings, CliApp, CliPositionalArg, SettingsConfigDict
+from pyloudnorm import Meter
 
-rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
-from synth_setter.pipeline.schemas.spec import (  # noqa: E402
-    EXTENSION_TO_OUTPUT_FORMAT,
-    RenderConfig,
-)
-from synth_setter.data.vst import param_specs  # noqa
-from synth_setter.data.vst.core import render_params  # noqa
-from synth_setter.data.vst.param_spec import ParamSpec  # noqa
+from synth_setter.data.vst.core import render_params
+from synth_setter.data.vst.param_spec import ParamSpec
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
     MEL_N_MELS,
@@ -31,6 +24,10 @@ from synth_setter.data.vst.shapes import (
     mel_hop_length,
     mel_n_fft,
     param_array_dataset_shape,
+)
+from synth_setter.pipeline.schemas.spec import (
+    EXTENSION_TO_OUTPUT_FORMAT,
+    RenderConfig,
 )
 
 
@@ -105,9 +102,7 @@ def generate_sample(
         if fixed_synth_params is None or fixed_note_params is None:
             logger.debug("sampling params")
             sampled_synth, sampled_note = param_spec.sample()
-            synth_params = (
-                fixed_synth_params if fixed_synth_params is not None else sampled_synth
-            )
+            synth_params = fixed_synth_params if fixed_synth_params is not None else sampled_synth
             note_params = fixed_note_params if fixed_note_params is not None else sampled_note
         else:
             synth_params = fixed_synth_params
@@ -189,19 +184,17 @@ def get_first_unwritten_idx(dataset: h5py.Dataset) -> int:
 def create_dataset_and_get_first_unwritten_idx(
     h5py_file: h5py.File,
     name: str,
-    shape: Tuple[int, ...],
+    shape: tuple[int, ...],
     dtype: np.dtype,
     compression: Any,
-) -> Tuple[h5py.Dataset, int]:
+) -> tuple[h5py.Dataset, int]:
     logger.info(f"Looking for dataset {name}...")
     if name in h5py_file:
         logger.info(f"Found dataset {name}, looking for first unwritten row.")
         dataset = h5py_file[name]
         return dataset, get_first_unwritten_idx(dataset)
 
-    dataset = h5py_file.create_dataset(
-        name, shape=shape, dtype=dtype, compression=compression
-    )
+    dataset = h5py_file.create_dataset(name, shape=shape, dtype=dtype, compression=compression)
     return dataset, 0
 
 
@@ -288,8 +281,7 @@ def main() -> None:
         make_wds_dataset(args.data_file, render_cfg)
     else:
         raise SystemExit(
-            f"data_file must end in one of {sorted(EXTENSION_TO_OUTPUT_FORMAT)}, "
-            f"got {suffix!r}"
+            f"data_file must end in one of {sorted(EXTENSION_TO_OUTPUT_FORMAT)}, got {suffix!r}"
         )
 
 

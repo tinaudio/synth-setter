@@ -426,8 +426,9 @@ Returns a valid `DatasetPipelineSpec` with sensible defaults: `renderer_version=
 `code_version="abc1234"`, `run_id` derived from params, `output_format="hdf5"`.
 Accepts `num_shards`, `shard_size`, `output_format` overrides.
 
-**`tests/pipeline/conftest.py` also adds project root to `sys.path`** if needed (same
-pattern as existing `rootutils.setup_root()`).
+**`tests/pipeline/conftest.py` also adds project root to `sys.path`** if needed
+(`synth_setter.workspace.operator_workspace()` publishes `$PROJECT_ROOT` from the
+checkout root in dev / from `$SYNTH_SETTER_WORKSPACE` in packaged installs).
 
 **Unit tests (write first):**
 

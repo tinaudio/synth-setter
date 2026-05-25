@@ -10,10 +10,8 @@ from typing import Any, NamedTuple
 import dask.array as da
 import h5py
 import numpy as np
-import rootutils
 from dask.distributed import Client, progress
 
-rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 from synth_setter.data.audio_datamodule import AudioFolderDataset
 from synth_setter.data.surge_datamodule import SurgeXTDataset
 from synth_setter.data.vst.shapes import MEL_SPEC_FIELD

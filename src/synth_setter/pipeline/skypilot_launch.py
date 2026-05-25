@@ -91,6 +91,8 @@ from synth_setter.pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from synth_setter.pipeline.spec_io import find_input_specs
+from synth_setter.resources import configs_dir
+from synth_setter.workspace import operator_workspace
 
 _WORKER_IMAGE_ENV = "WORKER_IMAGE"
 _WORKER_IMAGE_REPO = "tinaudio/synth-setter"
@@ -138,27 +140,25 @@ _SECRET_WORKER_ENV_KEYS: tuple[str, ...] = tuple(
     k for k in _WORKER_ENV_KEYS if k not in _R2_RCLONE_CONSTANTS
 )
 
-_CRED_BOOTSTRAP_SCRIPT = (
-    Path(__file__).resolve().parents[3] / "scripts" / "skypilot" / "write_provider_creds.sh"
-)
-
 # sky.jobs.tail_logs(follow=True) rc: 0 = SUCCEEDED, 100 = non-SUCCEEDED terminal.
 _TAIL_LOGS_RC_SUCCESS = 0
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_TEMPLATE = (
-    REPO_ROOT / "src" / "synth_setter" / "configs" / "compute" / "runpod-template.yaml"
-)
-DEFAULT_ENV_FILE = REPO_ROOT / ".env"
+_OPERATOR_WORKSPACE = operator_workspace()
 
-# Local mirror anchor: the inner generator command writes
-# ``<repo_root>/data/<task>/<run>/metadata/input_spec.json`` via
-# ``cli/generate_dataset.py::main()``'s ``write_spec_locally(spec, _REPO_ROOT)``.
-# The CLI globs this directory after the subprocess returns to find the spec
-# the generator just materialized; anchoring at REPO_ROOT (not CWD) keeps the
-# launcher's discovery aligned with the generator's write site regardless of
-# where the operator invoked it from.
-_LOCAL_DATA_DIR = REPO_ROOT / "data"
+# Lives outside the package — packaged installs need $SYNTH_SETTER_WORKSPACE
+# to point at a checkout with scripts/skypilot/ present. See #1261.
+_CRED_BOOTSTRAP_SCRIPT = _OPERATOR_WORKSPACE / "scripts" / "skypilot" / "write_provider_creds.sh"
+
+# Resolved via importlib.resources so wheel installs find it; str() yields
+# a real fs path under editable + unpacked-wheel installs (zipped wheels
+# unsupported by the SkyPilot launcher).
+DEFAULT_TEMPLATE = Path(str(configs_dir() / "compute" / "runpod-template.yaml"))
+DEFAULT_ENV_FILE = _OPERATOR_WORKSPACE / ".env"
+
+# Anchored at the workspace (not CWD) so this launcher's spec-discovery
+# glob lines up with generate_dataset.main()'s write_spec_locally site
+# regardless of where the operator invoked it.
+_LOCAL_DATA_DIR = _OPERATOR_WORKSPACE / "data"
 
 # Single-line stdout marker the CI workflow greps out of the tee'd launcher
 # log to populate its `spec_uri` output without re-running spec-uri derivation.
@@ -453,11 +453,10 @@ def main(
 
     _reject_dispatch_owning_inner_command(command)
 
-    # cwd=REPO_ROOT pins the inner command's relative-path lookups (e.g. the
-    # default `.env`) to the same anchor _LOCAL_DATA_DIR uses for spec discovery,
-    # so an operator invoking the launcher from outside the repo doesn't have
-    # the inner generator silently fall back to a missing CWD-relative .env.
-    subprocess.check_call(list(command), cwd=str(REPO_ROOT))  # noqa: S603 — operator-supplied command, intentional passthrough
+    # cwd pinned to the workspace so the inner command's relative-path
+    # lookups (default `.env`) and _LOCAL_DATA_DIR spec discovery share
+    # one anchor regardless of where the operator invoked the launcher.
+    subprocess.check_call(list(command), cwd=str(_OPERATOR_WORKSPACE))  # noqa: S603 — operator-supplied command, intentional passthrough
 
     spec_path = _find_unique_spec_path(command_for_error=command[0])
     spec = DatasetSpec.model_validate_json(spec_path.read_text(encoding="utf-8"))

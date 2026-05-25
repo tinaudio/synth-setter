@@ -16,34 +16,30 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+import click
+import h5py
+import hdf5plugin  # noqa: F401  side-effect: registers HDF5_PLUGIN_PATH for Blosc2 filters
+import mido
+import numpy as np
 import pandas as pd
-import rootutils
+import torch
+from pedalboard import VST3Plugin
+from pedalboard.io import AudioFile, AudioStream, StreamResampler
+from rich.console import Console
+from rich.logging import RichHandler
 
-_REPO_ROOT = rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
-
-import click  # noqa: E402
-import h5py  # noqa: E402
-import hdf5plugin  # noqa: F401, E402  side-effect: registers HDF5_PLUGIN_PATH for Blosc2 filters
-import mido  # noqa: E402
-import numpy as np  # noqa: E402
-import torch  # noqa: E402
-from pedalboard import VST3Plugin  # noqa: E402
-from pedalboard.io import AudioFile, AudioStream, StreamResampler  # noqa: E402
-from rich.console import Console  # noqa: E402
-from rich.logging import RichHandler  # noqa: E402
-
-from synth_setter.data.vst import param_specs, preset_paths  # noqa: E402
-from synth_setter.data.vst.core import (  # noqa: E402
-    extract_renderer_version,  # noqa: E402
+from synth_setter.data.vst import param_specs, preset_paths
+from synth_setter.data.vst.core import (
+    extract_renderer_version,
     load_plugin,
     load_preset,
     make_midi_events,
     set_params,
 )
-from synth_setter.data.vst.param_spec import ParamSpec  # noqa: E402
-from synth_setter.data.vst.writers import make_hdf5_dataset  # noqa: E402
-from synth_setter.pipeline.schemas.spec import RenderConfig  # noqa: E402
-from synth_setter.resources import as_file, vst_headless_wrapper  # noqa: E402
+from synth_setter.data.vst.param_spec import ParamSpec
+from synth_setter.data.vst.writers import make_hdf5_dataset
+from synth_setter.pipeline.schemas.spec import RenderConfig
+from synth_setter.resources import as_file, vst_headless_wrapper
 
 MIDI_LISTEN_MESSAGE_TYPES = ("note_on", "note_off", "control_change", "pitchwheel", "aftertouch")
 
@@ -126,7 +122,7 @@ _MIDI_POLL_INTERVAL_SECONDS = 0.01
 _VST_SUBPROCESS_TIMEOUT_SECONDS = 300
 _EVAL_SUBPROCESS_TIMEOUT_SECONDS = 600
 _METRICS_SUBPROCESS_TIMEOUT_SECONDS = 300
-_EVAL_SCRIPT = _REPO_ROOT / "src" / "eval.py"
+_EVAL_MODULE = "synth_setter.cli.eval"
 _PREDICT_VST_AUDIO_MODULE = "synth_setter.evaluation.predict_vst_audio"
 _COMPUTE_AUDIO_METRICS_MODULE = "synth_setter.evaluation.compute_audio_metrics"
 
@@ -692,7 +688,8 @@ def _run_predict(
     runner(  # noqa: S603
         [
             sys.executable,
-            str(_EVAL_SCRIPT),
+            "-m",
+            _EVAL_MODULE,
             "experiment=surge/test",
             "ckpt_path=" + str(checkpoint_path.resolve()),
             "data.predict_file=" + str(predict_file.resolve()),

@@ -1220,7 +1220,7 @@ class TestSpecFromCfg:
 
 # PROJECT_ROOT-bootstrap behavior is exercised end-to-end by tests/pipeline/test_configs/
 # test_experiment_yamls.py — those tests fail with an InterpolationResolutionError if the
-# module's import-time `rootutils.setup_root(...)` ever stops setting PROJECT_ROOT.
+# launcher's import-time `operator_workspace()` ever stops setting PROJECT_ROOT.
 
 
 # ---------------------------------------------------------------------------

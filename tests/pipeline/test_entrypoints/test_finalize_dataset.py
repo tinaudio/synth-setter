@@ -835,9 +835,9 @@ def _compose_smoke_hdf5_spec() -> DatasetSpec:
             config_name="dataset",
             overrides=["experiment=generate_dataset/smoke-shard"],
         )
-    cfg.paths.root_dir = str(finalize_dataset._REPO_ROOT)  # noqa: SLF001
-    cfg.paths.output_dir = str(finalize_dataset._REPO_ROOT)  # noqa: SLF001
-    cfg.paths.work_dir = str(finalize_dataset._REPO_ROOT)  # noqa: SLF001
+    cfg.paths.root_dir = str(finalize_dataset._OPERATOR_WORKSPACE)  # noqa: SLF001
+    cfg.paths.output_dir = str(finalize_dataset._OPERATOR_WORKSPACE)  # noqa: SLF001
+    cfg.paths.work_dir = str(finalize_dataset._OPERATOR_WORKSPACE)  # noqa: SLF001
     return finalize_dataset.spec_from_cfg(cfg)
 
 
@@ -1024,7 +1024,7 @@ def _compose_smoke_wds_spec() -> DatasetSpec:
             config_name="dataset",
             overrides=["experiment=generate_dataset/smoke-shard-wds"],
         )
-    cfg.paths.root_dir = str(finalize_dataset._REPO_ROOT)  # noqa: SLF001
-    cfg.paths.output_dir = str(finalize_dataset._REPO_ROOT)  # noqa: SLF001
-    cfg.paths.work_dir = str(finalize_dataset._REPO_ROOT)  # noqa: SLF001
+    cfg.paths.root_dir = str(finalize_dataset._OPERATOR_WORKSPACE)  # noqa: SLF001
+    cfg.paths.output_dir = str(finalize_dataset._OPERATOR_WORKSPACE)  # noqa: SLF001
+    cfg.paths.work_dir = str(finalize_dataset._OPERATOR_WORKSPACE)  # noqa: SLF001
     return finalize_dataset.spec_from_cfg(cfg)

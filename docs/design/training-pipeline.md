@@ -58,7 +58,7 @@ Training is operationally different from the data pipeline:
 | `ModelCheckpoint`                                         | Saves every 5000 steps + best + last                                                      |
 | CSV logger                                                | Local fallback                                                                            |
 | Lightning resume                                          | `ckpt_path=` already supported                                                            |
-| `rootutils` / `PROJECT_ROOT`                              | Paths already resolve cleanly                                                             |
+| `operator_workspace()` / `PROJECT_ROOT`                   | Paths already resolve cleanly via `synth_setter.workspace`                                |
 
 ### Current Gaps
 

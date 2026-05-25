@@ -96,9 +96,9 @@ class TestWandbConfigResolvesFromEnv:
 
 
 # Volatile cfg branches that legitimately differ between the fixture builder and the YAML
-# compose: ``paths`` is filesystem-anchored at ``rootutils.find_root`` time, ``hydra``
-# carries the per-invocation runtime metadata, and ``task_name`` is interpolated from the
-# entry-point script name (test runner vs. ``train.py``).
+# compose: ``paths`` is filesystem-anchored via ``operator_workspace()``, ``hydra`` carries
+# the per-invocation runtime metadata, and ``task_name`` is interpolated from the entry-point
+# script name (test runner vs. ``train.py``).
 _VOLATILE_TOP_KEYS = ("paths", "hydra", "task_name")
 
 

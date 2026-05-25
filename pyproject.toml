@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "synth-setter"
-version = "8.7.1"
+version = "8.7.2"
 description = "Studying the effect of permutation symmetry on audio synthesiser parameter inference."
 authors = [{name = "Khaled Tinubu"}, {name = "tinaudio"}]
 readme = "README.md"
@@ -52,7 +52,6 @@ dependencies = [
   "pyloudnorm",
   "python-dotenv",
   "rich",
-  "rootutils",
   "runpod==1.8.1",
   # Pin: scipy>=1.14,<1.15 — a hard ==1.14.1 patch-pin risks backtracking
   # against torch / librosa / kymatio during lock resolution. See #1247.

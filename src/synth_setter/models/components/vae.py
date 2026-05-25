@@ -3,7 +3,6 @@
 import math
 from dataclasses import dataclass
 
-import rootutils
 import torch
 import torch.nn as nn
 from nflows.flows import SimpleRealNVP
@@ -15,8 +14,7 @@ from nflows.transforms.coupling import (
 )
 from nflows.transforms.normalization import BatchNorm
 
-rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
-from synth_setter.data.vst import param_specs  # noqa
+from synth_setter.data.vst import param_specs
 from synth_setter.data.vst.param_spec import (
     CategoricalParameter,
     DiscreteLiteralParameter,
