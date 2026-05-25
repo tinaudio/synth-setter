@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779719833691,
+  "lastUpdate": 1779719836306,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -8615,6 +8615,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 17.846387923399995,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ea1d209465254f010822171605108fa1bfb03f94",
+          "message": "fix(deps): re-add rootutils as dev dep for v0.0.0 baseline scripts (#1275)\n\nThe slow-tests baseline at tag v0.0.0 still ships src/train.py and\nsrc/eval.py that `import rootutils` at module top. PR #1268 dropped\nrootutils from runtime deps (Closes #1261), but the cpu-slow workflow's\ntest_compare_baseline_configs.py forwards those baseline scripts to the\nlive Python via a shim — every parametrized case was failing with\n`ModuleNotFoundError: No module named 'rootutils'`.\n\nAdd rootutils to both the `[project.optional-dependencies].dev` shim\n(used by `uv pip install -e .[torch,dev]` in cpu-slow.yml) and the PEP\n735 `[dependency-groups].dev`, with an inline comment scoping the\ndependency to baseline reproduction. No production code path imports\nrootutils.\n\nCloses #1272",
+          "timestamp": "2026-05-25T14:18:00Z",
+          "tree_id": "66cb525ba6a46c07edd7c889fc1ccecfbb33a79f",
+          "url": "https://github.com/tinaudio/synth-setter/commit/ea1d209465254f010822171605108fa1bfb03f94"
+        },
+        "date": 1779719835896,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 2.3225419521331787,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 5.222762943804264,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.010916088707745075,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.02496802806854248,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 1.8870043754577637,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 19.7464341285,
             "unit": "seconds"
           }
         ]
