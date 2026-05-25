@@ -1,6 +1,22 @@
 # CHANGELOG
 
 
+## v8.7.4 (2026-05-25)
+
+### Bug Fixes
+
+- **ci**: Repoint test-dataset-generation Hydra compose at src/synth_setter/configs
+  ([#1274](https://github.com/tinaudio/synth-setter/pull/1274),
+  [`9b5b3e5`](https://github.com/tinaudio/synth-setter/commit/9b5b3e5812b368e63f6a2b5331dd954b8f1a2e8c))
+
+`Path.cwd() / 'configs'` was left over from before #1236 moved the configs tree into the package.
+  The setup job's `bucket` step fails on every scheduled run with `MissingConfigException: Primary
+  config directory not found.`, which skips `generate-launcher` and cascades to every `validate`
+  cell because `needs.generate-launcher.outputs.spec_uri` is empty.
+
+Match the path expression already used by test-dataset-finalization.yml.
+
+
 ## v8.7.3 (2026-05-25)
 
 ### Bug Fixes
