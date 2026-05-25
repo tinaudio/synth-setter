@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "synth-setter"
-version = "8.7.2"
+version = "8.7.4"
 description = "Studying the effect of permutation symmetry on audio synthesiser parameter inference."
 authors = [{name = "Khaled Tinubu"}, {name = "tinaudio"}]
 readme = "README.md"
@@ -121,6 +121,10 @@ dev = [
   "pytest-randomly",
   "pytest-repeat",
   "pytest-xdist",
+  # Required only by the v0.0.0 baseline `src/{train,eval}.py` that
+  # tests/test_compare_baseline_configs.py runs through the live Python.
+  # Not used by `synth_setter/` itself — see #1268.
+  "rootutils",
   "ruff",
 ]
 docs = [
@@ -164,6 +168,10 @@ dev = [
   "pytest-randomly",
   "pytest-repeat",
   "pytest-xdist",
+  # Required only by the v0.0.0 baseline `src/{train,eval}.py` that
+  # tests/test_compare_baseline_configs.py runs through the live Python.
+  # Not used by `synth_setter/` itself — see #1268.
+  "rootutils",
   "ruff",
   { include-group = "docs" },
 ]

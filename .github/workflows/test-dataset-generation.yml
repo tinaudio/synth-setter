@@ -224,7 +224,7 @@ jobs:
           import sys
           from pathlib import Path
           from hydra import compose, initialize_config_dir
-          cfg_dir = str(Path.cwd() / 'configs')
+          cfg_dir = str(Path.cwd() / 'src' / 'synth_setter' / 'configs')
           experiment = os.environ['DISPATCH_DATASET_CONFIG']
           with initialize_config_dir(version_base='1.3', config_dir=cfg_dir):
               cfg = compose(config_name='dataset', overrides=[f'experiment={experiment}'])
@@ -262,7 +262,7 @@ jobs:
           import os
           from pathlib import Path
           from hydra import compose, initialize_config_dir
-          cfg_dir = str(Path.cwd() / 'configs')
+          cfg_dir = str(Path.cwd() / 'src' / 'synth_setter' / 'configs')
           experiment = os.environ['DATASET_CONFIG']
           with initialize_config_dir(version_base='1.3', config_dir=cfg_dir):
               cfg = compose(config_name='dataset', overrides=[f'experiment={experiment}'])

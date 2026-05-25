@@ -1,6 +1,43 @@
 # CHANGELOG
 
 
+## v8.7.4 (2026-05-25)
+
+### Bug Fixes
+
+- **ci**: Repoint test-dataset-generation Hydra compose at src/synth_setter/configs
+  ([#1274](https://github.com/tinaudio/synth-setter/pull/1274),
+  [`9b5b3e5`](https://github.com/tinaudio/synth-setter/commit/9b5b3e5812b368e63f6a2b5331dd954b8f1a2e8c))
+
+`Path.cwd() / 'configs'` was left over from before #1236 moved the configs tree into the package.
+  The setup job's `bucket` step fails on every scheduled run with `MissingConfigException: Primary
+  config directory not found.`, which skips `generate-launcher` and cascades to every `validate`
+  cell because `needs.generate-launcher.outputs.spec_uri` is empty.
+
+Match the path expression already used by test-dataset-finalization.yml.
+
+
+## v8.7.3 (2026-05-25)
+
+### Bug Fixes
+
+- **deps**: Re-add rootutils as dev dep for v0.0.0 baseline scripts
+  ([#1275](https://github.com/tinaudio/synth-setter/pull/1275),
+  [`ea1d209`](https://github.com/tinaudio/synth-setter/commit/ea1d209465254f010822171605108fa1bfb03f94))
+
+The slow-tests baseline at tag v0.0.0 still ships src/train.py and src/eval.py that `import
+  rootutils` at module top. PR #1268 dropped rootutils from runtime deps (Closes #1261), but the
+  cpu-slow workflow's test_compare_baseline_configs.py forwards those baseline scripts to the live
+  Python via a shim — every parametrized case was failing with `ModuleNotFoundError: No module named
+  'rootutils'`.
+
+Add rootutils to both the `[project.optional-dependencies].dev` shim (used by `uv pip install -e
+  .[torch,dev]` in cpu-slow.yml) and the PEP 735 `[dependency-groups].dev`, with an inline comment
+  scoping the dependency to baseline reproduction. No production code path imports rootutils.
+
+Closes #1272
+
+
 ## v8.7.2 (2026-05-25)
 
 ### Bug Fixes
