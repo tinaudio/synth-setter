@@ -225,16 +225,19 @@ jobs:
           echo "cluster_name: ${CLUSTER_NAME}"
 
       # `kind load` doubles the CUDA image into the kind node's snapshotter;
-      # `/` (~25 GB) overflows, `/mnt` (~70 GB) doesn't. Must run pre-pull.
-      - name: Move docker storage to /mnt (skypilot-local row)
+      # the 25 GB default free on `/` overflows. /mnt is too small (14 GB) to
+      # rehost docker, so reclaim ~40 GB on `/` instead, before the pull.
+      - name: Free disk space for kind load (skypilot-local row)
         if: ${{ inputs.provider == 'skypilot-local' }}
-        run: |
-          set -euo pipefail
-          sudo systemctl stop docker.socket docker
-          sudo mkdir -p /mnt/docker
-          echo '{"data-root":"/mnt/docker"}' | sudo tee /etc/docker/daemon.json >/dev/null
-          sudo systemctl start docker
-          docker info --format '{{.DockerRootDir}}' | grep -qx /mnt/docker
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
 
       # A2 (#1164): pull the worker image in the background so the kind binary
       # install + Python / uv setup can run in parallel. The pull only fills
