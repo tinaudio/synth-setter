@@ -31,7 +31,6 @@ from typing import Any, cast
 import h5py
 import numpy as np
 import pytest
-from hydra import compose, initialize_config_module
 from omegaconf import DictConfig, OmegaConf
 
 from synth_setter.cli import finalize_dataset
@@ -286,40 +285,39 @@ def test_run_raises_on_unsupported_output_format(
         finalize_dataset.run(cfg)
 
 
-def test_finalize_dataset_config_yaml_composes_with_dataset_spec_uri_required(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_finalize_dataset_main_resolves_hydra_logging_under_at_hydra_main(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_run_setup: Callable[[int | None], None],
 ) -> None:
-    """The packaged ``finalize_dataset.yaml`` exposes the URI field and overrides ``run.dir``.
+    """Invoking ``main()`` under @hydra.main resolves every interpolation in the shared groups.
 
-    Catches typos in the new top-level config: missing ``dataset_spec_uri``,
-    wrong ``paths``/``hydra`` defaults groups, or a ``run.dir`` that still
-    interpolates ``${task_name}/${run_name}`` (which the URI-only config
-    does not surface). The ``${hydra:runtime.output_dir}`` interpolation
-    inside ``paths.output_dir`` is only resolvable under @hydra.main; this
-    test inspects the unresolved structure instead.
+    The shared ``hydra/default.yaml`` interpolates ``${task_name}`` into both
+    ``run.dir`` and ``job_logging.handlers.file.filename``. A missing override
+    surfaces as a Hydra startup ``InterpolationKeyError`` *before* ``run()``
+    fires — a structure-only compose check (``return_hydra_config=True``)
+    inspects unresolved templates and misses this. Drive the decorated
+    ``main()`` for real with the marker-probe stub set to "present" so the
+    body short-circuits at the idempotency check, isolating the test to
+    Hydra-side resolution.
 
-    :param tmp_path: Sandbox for ``PROJECT_ROOT`` so the ``paths`` group composes.
-    :param monkeypatch: Pytest fixture used to point ``PROJECT_ROOT`` at the sandbox.
+    :param tmp_path: Hosts ``PROJECT_ROOT``, the on-disk spec JSON, and Hydra's run dir.
+    :param monkeypatch: Pytest fixture used to point ``PROJECT_ROOT`` + ``sys.argv``.
+    :param stub_run_setup: Used to flip the marker probe to "present" so the
+        body skips the wds/hdf5 dispatch.
     """
+    stub_run_setup(0)
     monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
-    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
-        cfg = compose(
-            config_name="finalize_dataset",
-            overrides=["dataset_spec_uri=r2://bucket/data/run/input_spec.json"],
-            return_hydra_config=True,
-        )
+    spec = _build_wds_smoke_spec(task_name="hydra-startup")
+    spec_uri = _write_spec_to_file(spec, tmp_path)
+    monkeypatch.setattr("sys.argv", ["finalize_dataset", f"dataset_spec_uri={spec_uri}"])
 
-    assert cfg.dataset_spec_uri == "r2://bucket/data/run/input_spec.json"
-    # ``paths`` group is wired (output_dir interpolates the hydra runtime dir).
-    raw_paths = OmegaConf.to_container(cfg.paths, resolve=False)
-    assert isinstance(raw_paths, dict)
-    assert raw_paths["output_dir"] == "${hydra:runtime.output_dir}"
-    # ``hydra.run.dir`` is overridden to a path that does not interpolate
-    # ${task_name} / ${run_name} — those fields are not in this cfg.
-    run_dir_template = str(cfg.hydra.run.dir)
-    assert "${task_name}" not in run_dir_template
-    assert "${run_name}" not in run_dir_template
-    assert "finalize_dataset" in run_dir_template
+    finalize_dataset.main()
+
+    # Hydra's run dir for this invocation lands under PROJECT_ROOT/logs/finalize_dataset/.
+    # Existence proves @hydra.main resolved ${paths.log_dir}, ${now:…}, and
+    # the ${task_name} interpolations the shared hydra group references.
+    assert (tmp_path / "logs" / "finalize_dataset").is_dir()
 
 
 def _build_hdf5_smoke_spec(
