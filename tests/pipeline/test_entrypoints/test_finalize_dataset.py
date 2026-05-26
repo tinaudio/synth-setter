@@ -1028,3 +1028,105 @@ def _compose_smoke_wds_spec() -> DatasetSpec:
     cfg.paths.output_dir = str(finalize_dataset._OPERATOR_WORKSPACE)  # noqa: SLF001
     cfg.paths.work_dir = str(finalize_dataset._OPERATOR_WORKSPACE)  # noqa: SLF001
     return finalize_dataset.spec_from_cfg(cfg)
+
+
+class TestMainKeepLocal:
+    """``--keep-local`` redirects rclone's ``r2:`` remote to ``cfg.paths.data_dir``."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_r2_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Drop ``RCLONE_CONFIG_R2_*`` so each test observes a clean redirect state.
+
+        :param monkeypatch: Pytest fixture used to remove env vars.
+        """
+        import os
+
+        for key in list(os.environ):
+            if key.startswith("RCLONE_CONFIG_R2_"):
+                monkeypatch.delenv(key, raising=False)
+
+    @pytest.fixture(autouse=True)
+    def _stub_main_internals(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Short-circuit ``main()`` past the keep-local wiring without doing rclone I/O.
+
+        Pins the marker probe to ``0`` (object exists) so ``main()`` returns
+        immediately after the redirect runs, without entering ``finalize_wds``
+        / ``finalize_hdf5``. ``ensure_r2_env_loaded`` is also a no-op because
+        we want to assert what the redirect set, not what loader resolution
+        layered on top.
+
+        :param monkeypatch: Pytest fixture used to install stubs.
+        """
+        monkeypatch.setattr(
+            "synth_setter.pipeline.r2_io.ensure_r2_env_loaded",
+            lambda *args, **kwargs: None,
+        )
+        monkeypatch.setattr("synth_setter.pipeline.schemas.spec._get_git_sha", lambda: "a" * 40)
+        monkeypatch.setattr("synth_setter.pipeline.schemas.spec._is_repo_dirty", lambda: False)
+        monkeypatch.setattr("synth_setter.pipeline.schemas.spec._utc_now", lambda: _FIXED_NOW)
+        monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda _uri: 0)
+
+    def test_keep_local_sets_alias_env_to_resolved_paths_data_dir(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """``--keep-local`` resolves ``cfg.paths.data_dir`` into the rclone env vars.
+
+        :param monkeypatch: Pytest fixture used to patch argv.
+        :param tmp_path: Pytest tmp dir used as the override data_dir.
+        """
+        import os
+
+        local_root = tmp_path / "finalize-local"
+        argv = [
+            "finalize",
+            "experiment=generate_dataset/smoke-shard-wds",
+            f"paths.data_dir={local_root}",
+            "--keep-local",
+        ]
+        monkeypatch.setattr(sys, "argv", argv)
+
+        finalize_dataset.main()
+
+        assert os.environ["RCLONE_CONFIG_R2_TYPE"] == "alias"
+        assert os.environ["RCLONE_CONFIG_R2_REMOTE"] == str(local_root.resolve())
+        assert local_root.is_dir()
+
+    def test_without_keep_local_does_not_touch_rclone_env(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """No ``--keep-local`` → ``main()`` leaves ``RCLONE_CONFIG_R2_*`` alone.
+
+        :param monkeypatch: Pytest fixture used to patch argv.
+        """
+        import os
+
+        argv = ["finalize", "experiment=generate_dataset/smoke-shard-wds"]
+        monkeypatch.setattr(sys, "argv", argv)
+
+        finalize_dataset.main()
+
+        assert "RCLONE_CONFIG_R2_TYPE" not in os.environ
+        assert "RCLONE_CONFIG_R2_REMOTE" not in os.environ
+
+    def test_keep_local_flag_stripped_from_hydra_overrides(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """``--keep-local`` never reaches Hydra compose (would error as an unknown override).
+
+        :param monkeypatch: Pytest fixture used to patch argv.
+        :param tmp_path: Pytest tmp dir used as the override data_dir.
+        """
+        argv = [
+            "finalize",
+            "experiment=generate_dataset/smoke-shard-wds",
+            f"paths.data_dir={tmp_path}",
+            "--keep-local",
+        ]
+        monkeypatch.setattr(sys, "argv", argv)
+
+        finalize_dataset.main()

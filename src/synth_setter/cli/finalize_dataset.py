@@ -20,6 +20,7 @@ import numpy as np
 from hydra import compose, initialize_config_module
 from loguru import logger
 
+from synth_setter.cli._keep_local import redirect_r2_to_local, split_keep_local
 from synth_setter.cli.generate_dataset import spec_from_cfg
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.constants import (
@@ -165,9 +166,14 @@ def main() -> None:
     second invocation against a finalized prefix is a no-op rather than a
     full redo.
 
+    ``--keep-local`` redirects rclone's ``r2:`` remote to
+    ``cfg.paths.data_dir`` so downloads, splits, stats, and the marker all
+    read from and write to the local mirror established by a prior keep-local
+    generate run.
+
     :raises ValueError: ``spec.output_format`` is neither ``"hdf5"`` nor ``"wds"``.
     """
-    overrides = list(sys.argv[1:])
+    keep_local, overrides = split_keep_local(sys.argv[1:])
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(config_name="dataset", overrides=overrides)
 
@@ -178,6 +184,10 @@ def main() -> None:
     cfg.paths.work_dir = str(_OPERATOR_WORKSPACE)
 
     spec = spec_from_cfg(cfg)
+
+    if keep_local:
+        redirect_r2_to_local(Path(cfg.paths.data_dir).resolve())
+
     r2_io.ensure_r2_env_loaded()
 
     marker_uri = spec.r2.dataset_complete_marker_uri()

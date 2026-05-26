@@ -78,6 +78,13 @@ def ensure_r2_env_loaded(env_file: Path | None = None) -> None:
     defaulting + presence+auth checks still run against whatever ``os.environ``
     already has.
 
+    If the caller has pre-set ``RCLONE_CONFIG_R2_TYPE`` to a non-``s3`` value
+    (e.g. ``alias`` for keep-local dev mode), the secret-key check and the
+    rclone auth ping are skipped — s3 credentials are not meaningful when
+    rclone is routing ``r2:`` to a local filesystem (or any other backend).
+    The dotenv step still runs so an operator can still pin overrides via
+    ``env_file`` if they want.
+
     :param env_file: Optional dotenv file to merge into ``os.environ`` first
         (typically ``sky_cfg.env_file``).
     :raises RuntimeError: A required secret key is unset after the load, or
@@ -87,6 +94,10 @@ def ensure_r2_env_loaded(env_file: Path | None = None) -> None:
         for key, value in dotenv_values(env_file).items():
             if key and key.startswith("RCLONE_CONFIG_R2_") and value is not None:
                 os.environ[key] = value
+
+    preset_type = os.environ.get("RCLONE_CONFIG_R2_TYPE")
+    if preset_type and preset_type != "s3":
+        return
 
     for key, default in _R2_STRUCTURAL_DEFAULTS.items():
         os.environ.setdefault(key, default)

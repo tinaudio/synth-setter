@@ -1663,3 +1663,163 @@ class TestMainSpecPersistence:
         kwargs = recorded["kwargs"]
         assert isinstance(kwargs, dict)
         assert kwargs["spec_uri"] == spec.r2.input_spec_uri()
+
+
+class TestMainKeepLocal:
+    """``--keep-local`` redirects rclone's ``r2:`` remote to ``cfg.paths.data_dir``."""
+
+    @pytest.fixture(autouse=True)
+    def _set_default_skypilot_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Single-worker rank/world so ``run()`` would succeed if it ran.
+
+        :param monkeypatch: Pytest fixture used to set env vars.
+        """
+        monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+        monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+
+    @pytest.fixture(autouse=True)
+    def _clear_r2_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Drop ``RCLONE_CONFIG_R2_*`` so each test observes a clean redirect state.
+
+        :param monkeypatch: Pytest fixture used to remove env vars.
+        """
+        import os
+
+        for key in list(os.environ):
+            if key.startswith("RCLONE_CONFIG_R2_"):
+                monkeypatch.delenv(key, raising=False)
+
+    @pytest.fixture(autouse=True)
+    def _stub_run_and_spec_io(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Stub side-effects so the test reaches the keep-local branch.
+
+        :param monkeypatch: Pytest fixture used to patch the helpers.
+        """
+        import synth_setter.cli.generate_dataset as gd
+
+        monkeypatch.setattr(gd, "run", lambda *_a, **_kw: None)
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset.write_spec_locally",
+            MagicMock(side_effect=lambda spec, out: Path(out) / "input_spec.json"),
+        )
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset.upload_spec",
+            MagicMock(return_value="r2://stub-bucket/stub-key/input_spec.json"),
+        )
+        monkeypatch.setattr(gd.r2_io, "ensure_r2_env_loaded", MagicMock(return_value=None))
+
+    def test_keep_local_rejected_with_compute_template(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """``--keep-local`` + non-null ``compute_template`` raises ValueError.
+
+        Worker pods are ephemeral, so a retained artifact there is useless;
+        rejecting at the launcher avoids dispatching a confusing run.
+
+        :param monkeypatch: Pytest fixture used to patch argv.
+        :param tmp_path: Pytest tmp dir for a stub compute template.
+        """
+        import synth_setter.cli.generate_dataset as gd
+
+        template = tmp_path / "template.yaml"
+        template.write_text("resources:\n  cloud: runpod\nenvs:\n  X: ''\n")
+
+        argv = [
+            "synth-setter-generate-dataset",
+            "experiment=generate_dataset/smoke-shard",
+            f"render.plugin_path={TEST_PLUGIN_VST3}",
+            f"skypilot_launch.compute_template={template}",
+            "--keep-local",
+        ]
+        monkeypatch.setattr("sys.argv", argv)
+
+        with pytest.raises(ValueError, match="--keep-local is incompatible with SkyPilot"):
+            gd.main()
+
+    def test_keep_local_sets_alias_env_to_resolved_paths_data_dir(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """``--keep-local`` resolves ``cfg.paths.data_dir`` into the rclone env vars.
+
+        Operators can override the destination with ``paths.data_dir=<...>``;
+        the redirect picks up that override (not a hard-coded path).
+
+        :param monkeypatch: Pytest fixture used to patch argv.
+        :param tmp_path: Pytest tmp dir used as the override data_dir.
+        """
+        import os
+
+        import synth_setter.cli.generate_dataset as gd
+
+        local_root = tmp_path / "my-data"
+        argv = [
+            "synth-setter-generate-dataset",
+            "experiment=generate_dataset/smoke-shard",
+            f"render.plugin_path={TEST_PLUGIN_VST3}",
+            f"paths.data_dir={local_root}",
+            "--keep-local",
+        ]
+        monkeypatch.setattr("sys.argv", argv)
+
+        gd.main()
+
+        assert os.environ["RCLONE_CONFIG_R2_TYPE"] == "alias"
+        assert os.environ["RCLONE_CONFIG_R2_REMOTE"] == str(local_root.resolve())
+        assert local_root.is_dir()
+
+    def test_without_keep_local_does_not_touch_rclone_env(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """No ``--keep-local`` → ``main()`` leaves ``RCLONE_CONFIG_R2_*`` alone.
+
+        The default path must not change rclone resolution; production runs continue to talk to
+        real R2.
+
+        :param monkeypatch: Pytest fixture used to patch argv.
+        """
+        import os
+
+        import synth_setter.cli.generate_dataset as gd
+
+        argv = [
+            "synth-setter-generate-dataset",
+            "experiment=generate_dataset/smoke-shard",
+            f"render.plugin_path={TEST_PLUGIN_VST3}",
+        ]
+        monkeypatch.setattr("sys.argv", argv)
+
+        gd.main()
+
+        assert "RCLONE_CONFIG_R2_TYPE" not in os.environ
+        assert "RCLONE_CONFIG_R2_REMOTE" not in os.environ
+
+    def test_keep_local_stripped_from_hydra_overrides(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """``--keep-local`` never reaches Hydra compose — it would error as an unknown override.
+
+        The split happens before ``initialize_config_module``; if it leaked
+        through, Hydra would raise on the dangling token.
+
+        :param monkeypatch: Pytest fixture used to patch argv.
+        :param tmp_path: Pytest tmp dir used as the override data_dir.
+        """
+        import synth_setter.cli.generate_dataset as gd
+
+        argv = [
+            "synth-setter-generate-dataset",
+            "experiment=generate_dataset/smoke-shard",
+            f"render.plugin_path={TEST_PLUGIN_VST3}",
+            f"paths.data_dir={tmp_path}",
+            "--keep-local",
+        ]
+        monkeypatch.setattr("sys.argv", argv)
+
+        gd.main()

@@ -25,6 +25,7 @@ from hydra import compose, initialize_config_module
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 
+from synth_setter.cli._keep_local import redirect_r2_to_local, split_keep_local
 from synth_setter.data.vst.core import extract_renderer_version
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.partitioning import (
@@ -430,8 +431,17 @@ def main() -> None:
     be picked from ``cfg.skypilot_launch.compute_template`` before Hydra would
     hand the cfg straight to the body. Overrides are replayed verbatim on the
     worker so the launcher/worker composition matches byte-for-byte.
+
+    ``--keep-local`` redirects rclone's ``r2:`` remote to
+    ``cfg.paths.data_dir`` (see :func:`redirect_r2_to_local`); the rest of the
+    pipeline is unchanged, including spec upload and shard uploads. The flag
+    is mutually exclusive with SkyPilot dispatch — worker pods are ephemeral,
+    so a retained-local artifact on the worker would never reach the operator.
+
+    :raises ValueError: ``--keep-local`` was combined with a non-null
+        ``compute_template``.
     """
-    overrides = list(sys.argv[1:])
+    keep_local, overrides = split_keep_local(sys.argv[1:])
 
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(config_name="dataset", overrides=overrides)
@@ -444,6 +454,16 @@ def main() -> None:
 
     spec = spec_from_cfg(cfg)
     sky_cfg = _sky_cfg_from_dataset_cfg(cfg)
+
+    if keep_local and sky_cfg.compute_template is not None:
+        raise ValueError(
+            "--keep-local is incompatible with SkyPilot dispatch "
+            f"(compute_template={sky_cfg.compute_template!r}); the retained "
+            "artifacts would live on the ephemeral worker pod, not on the "
+            "operator host. Drop --keep-local or unset compute_template."
+        )
+    if keep_local:
+        redirect_r2_to_local(Path(cfg.paths.data_dir).resolve())
 
     # ``_OPERATOR_WORKSPACE`` (not cfg.paths.output_dir) is the anchor: the
     # paths.* pins above are defensive shims for

@@ -708,22 +708,22 @@ class TestEnsureR2EnvLoaded:
         assert captured["RCLONE_CONFIG_R2_TYPE"] == "s3"
         assert captured["RCLONE_CONFIG_R2_PROVIDER"] == "Cloudflare"
 
-    def test_does_not_overwrite_caller_provided_type_and_provider(
+    def test_caller_provided_s3_type_with_other_provider_still_validates(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A caller's ``TYPE`` / ``PROVIDER`` win — the defaults only fill the unset case.
+        """``TYPE=s3`` with a non-default provider keeps the secret + auth-ping checks.
 
-        Preserves the rclone env-override design: callers (e.g. a future non-Cloudflare
-        S3-compatible backend) can override the structural keys without having to opt out
-        of ``ensure_r2_env_loaded``.
+        A non-Cloudflare S3-compatible backend (AWS, B2, etc.) is reached via
+        ``TYPE=s3`` + a different ``PROVIDER``; credentials are still needed,
+        so the function preserves the full validation path. Only the unset
+        defaults are filled — the caller's provider survives.
 
         :param monkeypatch: Pytest fixture used to populate env vars.
         """
         import os
 
         _set_all_r2_secrets(monkeypatch)
-        monkeypatch.setenv("RCLONE_CONFIG_R2_TYPE", "caller-type")
-        monkeypatch.setenv("RCLONE_CONFIG_R2_PROVIDER", "caller-provider")
+        monkeypatch.setenv("RCLONE_CONFIG_R2_PROVIDER", "AWS")
         captured: dict[str, str] = {}
 
         def _capture(*_a: object, **_kw: object) -> subprocess.CompletedProcess[str]:
@@ -733,5 +733,46 @@ class TestEnsureR2EnvLoaded:
         with patch.object(r2_io.subprocess, "run", side_effect=_capture):
             r2_io.ensure_r2_env_loaded(env_file=None)
 
-        assert captured["RCLONE_CONFIG_R2_TYPE"] == "caller-type"
-        assert captured["RCLONE_CONFIG_R2_PROVIDER"] == "caller-provider"
+        assert captured["RCLONE_CONFIG_R2_TYPE"] == "s3"
+        assert captured["RCLONE_CONFIG_R2_PROVIDER"] == "AWS"
+
+    def test_caller_provided_non_s3_type_bypasses_validation(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``TYPE=alias`` (or any non-s3 type) skips the cred check and the auth ping.
+
+        rclone's ``alias`` / ``local`` / etc. backends do not consume S3 credentials,
+        so requiring them is wrong. ``--keep-local`` dev mode pre-sets ``TYPE=alias``
+        before this function runs; the early-return keeps that path no-error even
+        with no R2 creds in the environment.
+
+        :param monkeypatch: Pytest fixture used to populate env vars.
+        """
+        import os
+
+        monkeypatch.setenv("RCLONE_CONFIG_R2_TYPE", "alias")
+        monkeypatch.setenv("RCLONE_CONFIG_R2_REMOTE", "/var/tmp/local-r2")  # noqa: S108
+
+        with patch.object(r2_io.subprocess, "run") as mock_run:
+            r2_io.ensure_r2_env_loaded(env_file=None)
+
+        mock_run.assert_not_called()
+        assert os.environ["RCLONE_CONFIG_R2_TYPE"] == "alias"
+        assert "RCLONE_CONFIG_R2_PROVIDER" not in os.environ
+
+    def test_caller_provided_local_type_also_bypasses_validation(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``TYPE=local`` (the test-fixture form) takes the same early-return path.
+
+        The fake-R2 fixture in ``tests/pipeline/conftest.py`` uses ``TYPE=local``;
+        production keep-local uses ``TYPE=alias``. Both must bypass cred validation.
+
+        :param monkeypatch: Pytest fixture used to set TYPE.
+        """
+        monkeypatch.setenv("RCLONE_CONFIG_R2_TYPE", "local")
+
+        with patch.object(r2_io.subprocess, "run") as mock_run:
+            r2_io.ensure_r2_env_loaded(env_file=None)
+
+        mock_run.assert_not_called()
