@@ -490,10 +490,11 @@ def main() -> None:
     sky_cfg = sky_cfg.model_copy(
         update={
             "cmd": _build_worker_cmd(overrides, spec),
+            "job_name": sky_cfg.job_name or f"synth-setter-smoke-{spec.task_name[:8]}",
             "extra_envs": {WORKER_SPEC_URI_ENV: spec_uri},
         }
     )
-    dispatch_via_skypilot(spec, sky_cfg, spec_uri=spec_uri)
+    dispatch_via_skypilot(sky_cfg)
 
 
 if __name__ == "__main__":
