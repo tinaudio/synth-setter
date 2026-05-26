@@ -1,12 +1,12 @@
 """Tests for ``synth_setter.cli.finalize_dataset`` — finalize entrypoint.
 
-``run(cfg)`` tests seed train shards on the ``fake_r2_remote`` fixture
-(a local-typed rclone remote rooted at ``tmp_path`` — see
+``finalize(cfg)`` tests seed train shards on the ``fake_r2_remote``
+fixture (a local-typed rclone remote rooted at ``tmp_path`` — see
 ``tests/pipeline/conftest.py``) and let ``finalize_dataset`` run the
 real ``rclone copyto`` for download + upload against that remote. The
-spec is written to disk as JSON and the run cfg carries a ``file://``
-URI pointing at it, mirroring how production callers will pass the R2
-URI of ``input_spec.json``.
+spec is written to disk as JSON and the cfg carries a ``file://`` URI
+pointing at it, mirroring how production callers pass the R2 URI of
+``input_spec.json``.
 
 Two helpers stay stubbed because the local rclone backend can't simulate
 them cleanly:
@@ -15,8 +15,8 @@ them cleanly:
   secrets and a working ``rclone lsd r2:`` against real R2.
 - ``object_size`` — ``rclone lsf`` against an absent key on the local
   backend exits 3 ("directory not found") instead of the empty-stdout
-  semantics S3-compatible backends return; the marker probe in ``run()``
-  needs the "absent → None" branch, so the stub stays.
+  semantics S3-compatible backends return; the marker probe in
+  ``finalize()`` needs the "absent → None" branch, so the stub stays.
 """
 
 from __future__ import annotations
@@ -144,8 +144,8 @@ def _seed_train_shards(fake_r2_remote: Path, spec: DatasetSpec) -> list[Path]:
 def _write_spec_to_file(spec: DatasetSpec, tmp_path: Path) -> str:
     """Persist ``spec`` as JSON under ``tmp_path`` and return its ``file://`` URI.
 
-    Mirrors generate-stage's ``upload_spec(spec)`` so ``run()`` re-hydrates
-    the same ``DatasetSpec`` via ``load_spec_from_uri``.
+    Mirrors generate-stage's ``upload_spec(spec)`` so ``finalize()``
+    re-hydrates the same ``DatasetSpec`` via ``load_spec_from_uri``.
 
     :param spec: Frozen ``DatasetSpec`` to serialize.
     :param tmp_path: Test-scoped tmp dir.
@@ -158,13 +158,13 @@ def _write_spec_to_file(spec: DatasetSpec, tmp_path: Path) -> str:
     return spec_file.as_uri()
 
 
-def _build_run_cfg(spec_uri: str, output_dir: Path) -> DictConfig:
-    """Synthesize a minimal ``run()`` cfg without invoking Hydra's @main decoration.
+def _build_finalize_cfg(spec_uri: str, output_dir: Path) -> DictConfig:
+    """Synthesize a minimal ``finalize()`` cfg without invoking Hydra's @main decoration.
 
     :param spec_uri: URI passed through to ``load_spec_from_uri``.
     :param output_dir: Directory finalize uses as its scratch ``work_dir``.
         Must exist (``@hydra.main`` ordinarily creates it before ``main()`` runs).
-    :returns: Mutable DictConfig with the two fields ``run()`` consumes.
+    :returns: Mutable DictConfig with the two fields ``finalize()`` consumes.
     """
     return cast(
         DictConfig,
@@ -182,8 +182,8 @@ def stub_finalize_setup(monkeypatch: pytest.MonkeyPatch) -> Callable[[int | None
 
     :param monkeypatch: Pytest fixture used to install the stubs.
     :returns: A setter that overrides the marker-probe's "size in R2"
-        response — ``None`` (default) makes ``run()`` proceed with finalize;
-        an ``int`` triggers the idempotency short-circuit.
+        response — ``None`` (default) makes ``finalize()`` proceed; an
+        ``int`` triggers the idempotency short-circuit.
     """
     monkeypatch.setattr(
         "synth_setter.pipeline.r2_io.ensure_r2_env_loaded",
@@ -219,7 +219,7 @@ def test_finalize_uploads_stats_then_marker_at_canonical_uris(
     _seed_train_shards(fake_r2_remote, spec)
     output_dir = tmp_path / "hydra_output"
     output_dir.mkdir()
-    cfg = _build_run_cfg(_write_spec_to_file(spec, tmp_path), output_dir)
+    cfg = _build_finalize_cfg(_write_spec_to_file(spec, tmp_path), output_dir)
 
     real_upload = r2_io.upload
     upload_order: list[str] = []
@@ -247,7 +247,7 @@ def test_finalize_is_idempotent_when_marker_already_exists(
     fake_r2_remote: Path,
     stub_finalize_setup: Callable[[int | None], None],
 ) -> None:
-    """Marker present at run prefix → ``run()`` short-circuits, no stats are written.
+    """Marker present at run prefix → ``finalize()`` short-circuits, no stats are written.
 
     :param tmp_path: Pytest tmp dir; hosts the on-disk spec JSON + Hydra-style output_dir.
     :param fake_r2_remote: Local-typed rclone remote — asserted to still be
@@ -255,10 +255,10 @@ def test_finalize_is_idempotent_when_marker_already_exists(
     :param stub_finalize_setup: Used to flip the marker probe to "present".
     """
     stub_finalize_setup(0)
-    spec = _build_wds_smoke_spec(task_name="run-idempotent-wds")
+    spec = _build_wds_smoke_spec(task_name="finalize-idempotent-wds")
     output_dir = tmp_path / "hydra_output"
     output_dir.mkdir()
-    cfg = _build_run_cfg(_write_spec_to_file(spec, tmp_path), output_dir)
+    cfg = _build_finalize_cfg(_write_spec_to_file(spec, tmp_path), output_dir)
 
     finalize_dataset.finalize(cfg)
 
@@ -290,7 +290,7 @@ def test_finalize_raises_on_unsupported_output_format(
     )
     output_dir = tmp_path / "hydra_output"
     output_dir.mkdir()
-    cfg = _build_run_cfg("file:///unused", output_dir)
+    cfg = _build_finalize_cfg("file:///unused", output_dir)
 
     with pytest.raises(ValueError, match="unsupported output_format"):
         finalize_dataset.finalize(cfg)
@@ -305,8 +305,8 @@ def test_finalize_dataset_main_resolves_hydra_logging_under_at_hydra_main(
 
     The shared ``hydra/default.yaml`` interpolates ``${task_name}`` into both
     ``run.dir`` and ``job_logging.handlers.file.filename``. A missing override
-    surfaces as a Hydra startup ``InterpolationKeyError`` *before* ``run()``
-    fires — a structure-only compose check (``return_hydra_config=True``)
+    surfaces as a Hydra startup ``InterpolationKeyError`` *before*
+    ``finalize()`` fires — a structure-only compose check (``return_hydra_config=True``)
     inspects unresolved templates and misses this. Drive the decorated
     ``main()`` for real with the marker-probe stub set to "present" so the
     body short-circuits at the idempotency check, isolating the test to
@@ -748,7 +748,7 @@ def test_finalize_hdf5_marker_idempotency_short_circuits_before_download(
     spec = _build_hdf5_smoke_spec(task_name="finalize-hdf5-marker-present")
     output_dir = tmp_path / "hydra_output"
     output_dir.mkdir()
-    cfg = _build_run_cfg(_write_spec_to_file(spec, tmp_path), output_dir)
+    cfg = _build_finalize_cfg(_write_spec_to_file(spec, tmp_path), output_dir)
 
     finalize_dataset.finalize(cfg)
 
@@ -758,7 +758,7 @@ def test_finalize_hdf5_marker_idempotency_short_circuits_before_download(
 def test_finalize_hdf5_branch_uploads_marker_last(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The hdf5 ``run(cfg)`` path writes ``dataset.complete`` strictly after every artifact.
+    """The hdf5 ``finalize(cfg)`` path writes ``dataset.complete`` strictly after every artifact.
 
     Pins the ``pipeline/CLAUDE.md`` ordering invariant for hdf5: an
     interrupted run must never leave a marker without the artifacts it
@@ -768,7 +768,7 @@ def test_finalize_hdf5_branch_uploads_marker_last(
     :param monkeypatch: Pytest fixture used to patch the full transport surface.
     """
     r2_stand_in = tmp_path / "r2"
-    spec = _build_hdf5_smoke_spec(task_name="run-hdf5-marker-last")
+    spec = _build_hdf5_smoke_spec(task_name="finalize-hdf5-marker-last")
     _seed_shard_files(r2_stand_in, spec)
     upload_order: list[str] = []
 
@@ -788,7 +788,7 @@ def test_finalize_hdf5_branch_uploads_marker_last(
 
     output_dir = tmp_path / "hydra_output"
     output_dir.mkdir()
-    cfg = _build_run_cfg(_write_spec_to_file(spec, tmp_path), output_dir)
+    cfg = _build_finalize_cfg(_write_spec_to_file(spec, tmp_path), output_dir)
 
     finalize_dataset.finalize(cfg)
 
