@@ -37,14 +37,16 @@ register_resolvers()
 log = RankedLogger(__name__, rank_zero_only=True)
 
 
-def _run_predict_postprocessing(cfg: DictConfig) -> None:
+def _run_predict_postprocessing(cfg: DictConfig) -> None:  # noqa: DOC502
     """Render VST audio and compute audio metrics for the just-written predictions.
 
-    Both phases are off by default and only fire when their ``cfg.evaluation``
-    flag is true. The VST render subprocess inherits an Xvfb display on Linux
-    via the headless wrapper extracted from ``synth_setter.resources``; the
+    The VST render subprocess is prefixed with the headless wrapper on Linux so
+    the VST3 plugin gets an Xvfb display before pedalboard imports it; the
     metrics subprocess is CPU-only and needs no wrapper.
 
+    :param cfg: Reads ``cfg.evaluation`` (gates + ``num_workers``), ``cfg.render``
+        (param spec, preset, optional plugin path), and ``cfg.paths.output_dir``
+        (base for ``predictions/``, ``audio/``, ``metrics/``).
     :raises subprocess.CalledProcessError: propagated from a non-zero subprocess exit.
     :raises subprocess.TimeoutExpired: propagated when a subprocess exceeds
         :data:`_SUBPROCESS_TIMEOUT_SECONDS`.

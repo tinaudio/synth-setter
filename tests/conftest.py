@@ -612,8 +612,8 @@ def cfg_surge_xt_eval(
 
     :param cfg_surge_xt_global: The Surge XT training config (parametrized over accelerator, param_spec_name, and experiment_name).
     :param tmp_path: The temporary logging path (shared with `cfg_surge_xt`).
-    :param param_spec_name: Selects ``preset_paths`` entry so ``cfg.render`` lines up with the
-        param spec the trained model was wired against.
+    :param param_spec_name: Keys ``preset_paths`` so ``cfg.render`` matches the
+        spec the model was trained against.
 
     :return: A DictConfig configured to evaluate a Surge XT checkpoint on the smoke-test
         dataset.

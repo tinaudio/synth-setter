@@ -18,8 +18,7 @@ task_name: "eval"
 tags: ["dev"]
 mode: test
 
-# Predict-mode post-processing (VST render + audio metrics). Off by default so
-# `mode: test` / `mode: validate` runs stay unchanged.
+# Predict-mode post-processing; gated off so `mode: test`/`validate` stay unchanged.
 evaluation:
   render_vst: false
   compute_metrics: false
