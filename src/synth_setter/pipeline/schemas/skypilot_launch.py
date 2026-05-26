@@ -61,10 +61,11 @@ class SkypilotLaunchConfig(BaseModel):
     .. attribute :: extra_envs
 
         Caller-supplied env vars merged into every rank's worker env after
-        ``resolve_worker_env``. Keys must match the POSIX env-var identifier
-        grammar and may not collide with the launcher's resolved-env keys
-        (use ``.env`` or process env for those); rank/world keys injected
-        later still win.
+        ``resolve_worker_env``. Keys must match ``[A-Z_][A-Z0-9_]*``
+        (uppercase-only env-var identifiers — POSIX-portable across the
+        shells SkyPilot exports to) and may not collide with the launcher's
+        resolved-env keys (use ``.env`` or process env for those); rank/world
+        keys injected later still win.
     """
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
@@ -111,7 +112,12 @@ class SkypilotLaunchConfig(BaseModel):
     @field_validator("extra_envs")
     @classmethod
     def extra_envs_keys_must_be_env_identifiers(cls, v: dict[str, str]) -> dict[str, str]:
-        """Reject keys that aren't POSIX env-var identifiers.
+        """Reject keys that aren't uppercase env-var identifiers.
+
+        The accepted grammar (``[A-Z_][A-Z0-9_]*``) is intentionally narrower
+        than full POSIX — uppercase-only matches the convention every worker
+        env this launcher exports has followed historically, and keeps caller-
+        supplied vars visually distinct from shell locals on the worker side.
 
         :param v: Candidate ``extra_envs`` mapping pre-validation.
         :return: ``v`` unchanged when every key matches ``[A-Z_][A-Z0-9_]*``.
@@ -120,6 +126,7 @@ class SkypilotLaunchConfig(BaseModel):
         bad = [k for k in v if not _ENV_IDENT_RE.match(k)]
         if bad:
             raise ValueError(
-                f"extra_envs keys must match POSIX env-var identifiers; got invalid: {bad}"
+                "extra_envs keys must match the uppercase env-var grammar "
+                f"[A-Z_][A-Z0-9_]*; got invalid: {bad}"
             )
         return v

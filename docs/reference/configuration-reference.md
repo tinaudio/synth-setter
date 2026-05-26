@@ -98,7 +98,7 @@ synth-setter-generate-dataset experiment=… skypilot_launch.compute_template=sr
   → @hydra.main composes DictConfig → spec_from_cfg → DatasetSpec
     → write_spec_locally(spec, _OPERATOR_WORKSPACE)
     → upload_spec(spec) → R2 at {r2.prefix}input_spec.json
-    → sky_cfg.extra_envs[WORKER_SPEC_URI] = spec.r2.input_spec_uri()
+    → sky_cfg.extra_envs["WORKER_SPEC_URI"] = spec.r2.input_spec_uri()
     → dispatch_via_skypilot(sky_cfg)
       → SkyPilot provisions pod (RunPod, OCI, kubernetes via `sky local up`)
         → pod runs: cd /home/build/synth-setter
@@ -163,7 +163,7 @@ The RunPod template exists today (data-pipeline smoke). Vast.ai template not yet
 **RunPod** (`src/synth_setter/configs/compute/runpod-template.yaml`) — landed. Abridged
 shape (see the file for the full template):
 
-The launcher injects `image_id` per-launch via `--worker-image-tag` (default `dev-snapshot`) for non-OCI backends, so the template omits a literal `image_id:` entry and relies on the per-launch injection:
+The launcher injects `image_id` per-launch via `sky_cfg.worker_image_tag` (default `"dev-snapshot"`) for non-OCI backends, so the template omits a literal `image_id:` entry and relies on the per-launch injection:
 
 ```yaml
 resources:

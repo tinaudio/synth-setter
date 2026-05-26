@@ -100,7 +100,7 @@ class TestExtraEnvs:
         ids=["lowercase", "mixed-case", "leading-digit", "dash", "space", "empty"],
     )
     def test_extra_envs_rejects_invalid_identifier_keys(self, bad_key: str) -> None:
-        """Keys must match the POSIX env-var identifier grammar so exports round-trip.
+        """Keys must match the uppercase env-var grammar so exports round-trip cleanly.
 
         :param bad_key: Parametrized invalid key the validator must reject.
         """
