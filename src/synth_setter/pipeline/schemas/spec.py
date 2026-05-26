@@ -483,6 +483,11 @@ class DatasetSpec(BaseModel):
         Whether finalize substitutes ``std=1.0`` at zero-variance mel bins
         instead of raising; ``False`` is the strict production default.
 
+    .. attribute :: output_dir
+
+        Optional local directory where ``run()`` stages and keeps each shard;
+        ``None`` keeps the default tempdir + post-upload unlink.
+
     .. attribute :: git_sha
 
         Commit SHA of the launcher's working tree at construction.
@@ -547,6 +552,19 @@ class DatasetSpec(BaseModel):
             "mel bins instead of raising; ``False`` is the strict production default. "
             "Smoke configs override to ``True`` because tiny renders have constant "
             "attack-time frames and channels below the source's active bandwidth."
+        ),
+    )
+
+    output_dir: str | None = Field(
+        default=None,
+        description=(
+            "Optional local directory where ``run()`` stages and keeps each rendered shard. "
+            "When ``None``, shards go to a ``TemporaryDirectory`` and are unlinked after upload, "
+            "bounding local disk to one in-flight shard per worker thread. When set, the "
+            "directory is created (``parents=True``) and the per-shard unlink is skipped so the "
+            "operator can inspect or reuse the shards; R2 upload still happens so finalize is "
+            "unaffected. The path is honoured per-rank — on a SkyPilot dispatch the value is a "
+            "path on the worker pod, not the launcher's filesystem."
         ),
     )
 

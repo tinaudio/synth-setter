@@ -16,7 +16,7 @@ import subprocess
 import sys
 import tempfile
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
-from contextlib import ExitStack
+from contextlib import AbstractContextManager, ExitStack, nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -121,8 +121,11 @@ def run(spec: DatasetSpec) -> None:
     copy once on the launcher host before either calling ``run(spec)`` inline
     (local-run) or dispatching to a SkyPilot worker pod that re-enters via
     ``from_hydra`` → ``run(spec)``. Each shard is rendered, uploaded, and
-    unlinked before moving on — bounding local disk to one shard at a time.
-    Subprocesses fail-fast: later shards are not attempted on subprocess error.
+    (when ``spec.output_dir`` is ``None``) unlinked before moving on, bounding
+    local disk to one shard at a time. With ``spec.output_dir`` set, shards
+    are staged there and kept on disk after upload; peak local disk grows
+    with the rank's owned-shard count. Subprocesses fail-fast: later shards
+    are not attempted on subprocess error.
 
     Before each render, R2 is probed for the shard's destination object: if it already exists with
     non-zero size, the shard is skipped (resumability MVP — see #750). The probe uses
@@ -159,9 +162,17 @@ def run(spec: DatasetSpec) -> None:
 
     r2_dest_prefix = spec.r2.rclone_prefix()
 
-    with tempfile.TemporaryDirectory() as work_dir_str:
-        work_dir = Path(work_dir_str)
+    work_dir_cm: AbstractContextManager[str]
+    if spec.output_dir is None:
+        work_dir_cm = tempfile.TemporaryDirectory()
+    else:
+        work_dir = Path(spec.output_dir)
+        work_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"staging shards at operator-supplied output_dir: {work_dir}")
+        work_dir_cm = nullcontext(str(work_dir))
 
+    with work_dir_cm as work_dir_str:
+        work_dir = Path(work_dir_str)
         if spec.render.parallel and len(my_range) > 0:
             rendered, skipped = _dispatch_shards_parallel(spec, my_range, work_dir, r2_dest_prefix)
         else:
@@ -293,14 +304,18 @@ def _render_and_upload_shard(
     work_dir: Path,
     r2_dest_prefix: str,
 ) -> None:
-    """Render a single shard, upload it to R2, then unlink the local file.
+    """Render a single shard, upload it to R2, then unlink (unless ``spec.output_dir`` is set).
 
-    Unlinking after upload bounds local disk to one in-flight shard per caller — necessary on
-    disk-constrained workers running multi-shard partitions. Under ``render.parallel=True`` this
-    bound applies per worker thread, so peak local disk scales with the dispatcher's pool size
-    (see ``_dispatch_shards_parallel`` and ``RenderConfig.parallel``). The renderer subprocess is
-    wrapped in a retry loop bounded by ``spec.render.max_retries`` (default 0 = strict
-    fail-fast); rclone is outside the loop because it already retries via ``--retries=3``.
+    With ``spec.output_dir is None``, unlinking after upload bounds local disk to one
+    in-flight shard per caller — necessary on disk-constrained workers running multi-shard
+    partitions. Under ``render.parallel=True`` this bound applies per worker thread, so peak
+    local disk scales with the dispatcher's pool size (see ``_dispatch_shards_parallel`` and
+    ``RenderConfig.parallel``). When ``spec.output_dir`` is set the unlink is skipped so the
+    operator can inspect/reuse the shards; the disk bound then no longer holds and peak local
+    disk scales with the rank's full assigned range (or the entire dataset for a single-worker
+    run). The renderer subprocess is wrapped in a retry loop bounded by ``spec.render.max_retries``
+    (default 0 = strict fail-fast); rclone is outside the loop because it already retries via
+    ``--retries=3``.
 
     :raises subprocess.CalledProcessError: Renderer (or rclone) subprocess exited non-zero after
         exhausting the retry budget.
@@ -339,8 +354,11 @@ def _render_and_upload_shard(
     logger.info(f"shard rendered: {shard_path} ({shard_path.stat().st_size} bytes)")
     _rclone_copy(str(shard_path), r2_dest_prefix)
     logger.info(f"shard uploaded: {shard.filename} -> {r2_dest_prefix}")
-    shard_path.unlink()
-    logger.info(f"shard removed locally: {shard_path}")
+    if spec.output_dir is None:
+        shard_path.unlink()
+        logger.info(f"shard removed locally: {shard_path}")
+    else:
+        logger.info(f"shard kept locally (output_dir set): {shard_path}")
 
 
 def spec_from_cfg(cfg: DictConfig) -> DatasetSpec:

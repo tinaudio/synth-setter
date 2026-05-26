@@ -1115,6 +1115,95 @@ class TestRun:
         assert renderer_calls == 3
         assert not (fake_r2_remote / spec.r2.bucket / spec.r2.prefix).exists()
 
+    def test_output_dir_keeps_shard_after_upload(
+        self,
+        patched_subprocess: MagicMock,  # noqa: ARG002
+        fake_r2_remote: Path,
+        tmp_path: Path,
+    ) -> None:
+        """``spec.output_dir`` set → shards stay under that dir; upload still lands in R2.
+
+        :param patched_subprocess: Fixture-activation only.
+        :param fake_r2_remote: Asserted to contain the uploaded shard.
+        :param tmp_path: Both ``output_dir`` and plugin-path resolution.
+        """
+        out_dir = tmp_path / "local-shards"
+        kwargs = _base_spec_kwargs(tmp_path, output_dir=str(out_dir))
+        spec = DatasetSpec(**kwargs)  # type: ignore[arg-type]
+
+        run(spec)
+
+        assert (out_dir / spec.shards[0].filename).is_file()
+        assert (
+            fake_r2_remote / spec.r2.bucket / spec.r2.prefix / spec.shards[0].filename
+        ).is_file()
+
+    def test_output_dir_is_created_when_missing(
+        self,
+        patched_subprocess: MagicMock,  # noqa: ARG002
+        fake_r2_remote: Path,  # noqa: ARG002
+        tmp_path: Path,
+    ) -> None:
+        """A non-existent ``output_dir`` (and its parents) is created before rendering.
+
+        :param patched_subprocess: Fixture-activation only.
+        :param fake_r2_remote: Fixture-activation only.
+        :param tmp_path: Multi-segment path that doesn't exist yet.
+        """
+        out_dir = tmp_path / "does-not-exist" / "yet"
+        assert not out_dir.exists()
+        kwargs = _base_spec_kwargs(tmp_path, output_dir=str(out_dir))
+        spec = DatasetSpec(**kwargs)  # type: ignore[arg-type]
+
+        run(spec)
+
+        assert out_dir.is_dir()
+        assert out_dir.parent.is_dir()
+        assert (out_dir / spec.shards[0].filename).is_file()
+
+    def test_output_dir_unset_still_unlinks_local_shard(
+        self,
+        fake_r2_remote: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``output_dir=None`` preserves the unlink-after-upload contract.
+
+        Regression guard against the keep-local branch leaking into the default path — pins the
+        disk-bounding invariant for tempdir-mode runs.
+
+        :param fake_r2_remote: Asserted to contain the uploaded shard.
+        :param tmp_path: Used by ``_base_spec_kwargs``.
+        :param monkeypatch: Spies on ``Path.unlink``.
+        """
+        spec = DatasetSpec(**_base_spec_kwargs(tmp_path))  # type: ignore[arg-type]
+        assert spec.output_dir is None
+        unlinked: list[Path] = []
+        real_unlink = Path.unlink
+
+        def _spy_unlink(self: Path, missing_ok: bool = False) -> None:
+            unlinked.append(self)
+            real_unlink(self, missing_ok=missing_ok)
+
+        monkeypatch.setattr(Path, "unlink", _spy_unlink)
+
+        def _dispatcher(args: list[str]) -> int:
+            if args and args[0] == "rclone":
+                return _REAL_CHECK_CALL(args)
+            return _materialize_shard(args)
+
+        with patch(
+            "synth_setter.cli.generate_dataset.subprocess.check_call",
+            side_effect=_dispatcher,
+        ):
+            run(spec)
+
+        shard_names = {p.name for p in unlinked}
+        assert spec.shards[0].filename in shard_names
+        assert (
+            fake_r2_remote / spec.r2.bucket / spec.r2.prefix / spec.shards[0].filename
+        ).is_file()
+
 
 # ---------------------------------------------------------------------------
 # build_generate_args — arg construction from spec + shard
