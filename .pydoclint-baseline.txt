@@ -4,8 +4,6 @@ src/synth_setter/cli/generate_dataset.py
     DOC101: Function `build_generate_args`: Docstring contains fewer arguments than in function signature.
     DOC103: Function `build_generate_args`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [output_dir: Path, shard: ShardSpec, spec: DatasetSpec].
     DOC201: Function `build_generate_args` does not have a return section in docstring
-    DOC101: Function `run`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `run`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [spec: DatasetSpec].
     DOC101: Function `_render_and_upload_shard`: Docstring contains fewer arguments than in function signature.
     DOC103: Function `_render_and_upload_shard`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [r2_dest_prefix: str, shard: ShardSpec, spec: DatasetSpec, work_dir: Path].
     DOC101: Function `spec_from_cfg`: Docstring contains fewer arguments than in function signature.

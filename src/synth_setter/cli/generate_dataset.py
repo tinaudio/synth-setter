@@ -140,6 +140,9 @@ def generate(spec: DatasetSpec) -> None:
     ``configs/render/<spec>.yaml``; this is where the worker — which has pedalboard
     — verifies the plugin and pinned ``renderer_version`` agree.
 
+    :param spec: Validated dataset spec; rank/world env partitions ``spec.shards``
+        across worker pods, and ``spec.render.renderer_version`` is cross-checked
+        against the loaded plugin.
     :raises RuntimeError: If the worker's plugin version disagrees with
         ``spec.render.renderer_version``.
     """

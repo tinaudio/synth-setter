@@ -202,9 +202,9 @@ class TestLoadSpecFromUri:
 
 
 class TestRun:
-    """generate(spec) orchestrates: render → upload shard, per owned shard.
+    """Render → upload, per owned shard.
 
-    No spec upload.
+    No spec upload — ``main()`` writes it once.
     """
 
     @pytest.fixture(autouse=True)
@@ -1349,7 +1349,7 @@ class TestMainDispatchBranches:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """compute_template=null routes to generate(spec) with a DatasetSpec; dispatch stays unused.
+        """compute_template=null calls generate(spec) inline; dispatch is not used.
 
         :param monkeypatch: Pytest fixture used to patch argv and module functions.
         """
