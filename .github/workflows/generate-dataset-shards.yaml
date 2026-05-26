@@ -224,10 +224,8 @@ jobs:
           echo "name=${CLUSTER_NAME}" >> "${GITHUB_OUTPUT}"
           echo "cluster_name: ${CLUSTER_NAME}"
 
-      # `kind load` rehydrates the image into a second containerd snapshotter
-      # inside the kind node; `/` (~25 GB) is too small for the CUDA stack,
-      # `/mnt` (~70 GB ephemeral) is not. Must precede `Pull image (background)`
-      # so there is no docker cache to migrate.
+      # `kind load` doubles the CUDA image into the kind node's snapshotter;
+      # `/` (~25 GB) overflows, `/mnt` (~70 GB) doesn't. Must run pre-pull.
       - name: Move docker storage to /mnt (skypilot-local row)
         if: ${{ inputs.provider == 'skypilot-local' }}
         run: |
@@ -236,7 +234,7 @@ jobs:
           sudo mkdir -p /mnt/docker
           echo '{"data-root":"/mnt/docker"}' | sudo tee /etc/docker/daemon.json >/dev/null
           sudo systemctl start docker
-          docker info --format 'data-root: {{.DockerRootDir}}'
+          docker info --format '{{.DockerRootDir}}' | grep -qx /mnt/docker
 
       # A2 (#1164): pull the worker image in the background so the kind binary
       # install + Python / uv setup can run in parallel. The pull only fills
