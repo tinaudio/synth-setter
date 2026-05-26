@@ -162,16 +162,18 @@ def run(cfg: DictConfig) -> None:
     run prefix — R2 is the source of truth (per ``pipeline/CLAUDE.md``), so
     a second invocation against a finalized prefix is a no-op rather than a
     full redo. ``cfg.paths.output_dir`` is the per-run scratch directory
-    (``@hydra.main`` allocates it before this runs); finalize writes shards,
-    splits, ``stats.npz`` and the marker there transiently.
+    (``@hydra.main`` allocates it before this runs, and ``run`` creates it
+    when missing for direct callers); finalize writes shards, splits,
+    ``stats.npz`` and the marker there, and the directory is retained for
+    post-mortem unless cleaned externally.
 
     :param cfg: Composed cfg with ``dataset_spec_uri`` (URI accepted by
         :func:`~synth_setter.pipeline.spec_io.load_spec_from_uri`) and
-        ``paths.output_dir`` (existing directory).
+        ``paths.output_dir`` (created if missing).
     :raises ValueError: ``spec.output_format`` is neither ``"hdf5"`` nor ``"wds"``.
     """
-    spec = load_spec_from_uri(cfg.dataset_spec_uri)
     r2_io.ensure_r2_env_loaded()
+    spec = load_spec_from_uri(cfg.dataset_spec_uri)
 
     marker_uri = spec.r2.dataset_complete_marker_uri()
     if r2_io.object_size(marker_uri) is not None:
@@ -179,6 +181,7 @@ def run(cfg: DictConfig) -> None:
         return
 
     work_dir = Path(cfg.paths.output_dir)
+    work_dir.mkdir(parents=True, exist_ok=True)
     if spec.output_format == "wds":
         finalize_wds(spec, work_dir)
     elif spec.output_format == "hdf5":
