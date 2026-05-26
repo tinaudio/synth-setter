@@ -1,8 +1,6 @@
 """Tests for the ``synth-setter-train`` CLI entrypoint."""
 
 import os
-import subprocess
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -14,12 +12,9 @@ from omegaconf import DictConfig, open_dict
 
 from synth_setter.cli.eval import evaluate
 from synth_setter.cli.train import train
-from synth_setter.data.vst import param_specs, preset_paths
+from synth_setter.data.vst import param_specs
 from tests.conftest import (
-    _SURGE_FIXTURE_PLUGIN_PATH,
-    _VST_SUBPROCESS_TIMEOUT_SECONDS,
     NUM_FIXTURE_SAMPLES,
-    VST_HEADLESS_WRAPPER,
     _build_surge_xt_smoke_cfg,
 )
 from tests.helpers.run_if import RunIf
@@ -261,10 +256,7 @@ def test_train_eval_surge_xt(
     :param experiment_name: Hydra experiment override the cfg was built from — drives
         the oracle-specific tight audio-metric bounds at the end of the test.
     """
-    from click.testing import CliRunner
     from pedalboard.io import AudioFile
-
-    from synth_setter.evaluation.compute_audio_metrics import main as compute_audio_metrics_main
 
     NUM_AUDIO_METRICS = 4  # mss, wmfcc, sot, rms
     METRICS_FILE_EXPECTATIONS = {
@@ -314,49 +306,7 @@ def test_train_eval_surge_xt(
             )
             assert torch.equal(pred, target_params), f"oracle pred-{i}.pt != target-params-{i}.pt"
 
-    # Render predicted params through the Surge XT VST to per-sample audio directories.
-    # `-t` (`--rerender_target`) re-synthesizes target.wav from the stored target_params instead
-    # of the saved target audio.
     audio_dir = tmp_path / "audio"
-    runner = CliRunner()
-
-    args = []
-    if sys.platform == "linux":
-        args.append(VST_HEADLESS_WRAPPER)
-
-    args += [
-        sys.executable,
-        "-m",
-        "synth_setter.evaluation.predict_vst_audio",
-        str(predictions_dir),
-        str(audio_dir),
-        f"--plugin_path={_SURGE_FIXTURE_PLUGIN_PATH}",
-        f"--param_spec={param_spec_name}",
-        f"--preset_path={preset_paths[param_spec_name]}",
-        "-t",
-    ]
-    try:
-        result = subprocess.run(  # noqa: S603, S607
-            args,
-            text=True,
-            check=False,
-            timeout=_VST_SUBPROCESS_TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired:
-        pytest.fail(
-            f"predict_vst_audio timed out after {_VST_SUBPROCESS_TIMEOUT_SECONDS}s\n"
-            f"command: {args}\n"
-            f"(child stdout/stderr printed above; rerun with `pytest -s` if captured)",
-            pytrace=False,
-        )
-    if result.returncode != 0:
-        pytest.fail(
-            f"predict_vst_audio failed (exit {result.returncode})\n"
-            f"command: {args}\n"
-            f"(child stdout/stderr printed above; rerun with `pytest -s` if captured)",
-            pytrace=False,
-        )
-
     sample_dirs = sorted(d for d in audio_dir.iterdir() if d.is_dir())
     assert [d.name for d in sample_dirs] == [f"sample_{i}" for i in range(NUM_FIXTURE_SAMPLES)]
     # ``target.wav`` is rendered from fixture-truth params and must be audible —
@@ -378,15 +328,7 @@ def test_train_eval_surge_xt(
             f"{sample_dir.name}/target.wav is silent (peak={target_peak:.2e})"
         )
 
-    # Compute audio distance metrics (MSS, wMFCC, SOT, RMS) on the rendered pairs.
     metrics_dir = tmp_path / "metrics"
-    result = runner.invoke(
-        compute_audio_metrics_main,
-        [str(audio_dir), str(metrics_dir), "-w", "1"],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 0, result.output
-
     for metrics_file, expected in METRICS_FILE_EXPECTATIONS.items():
         assert (metrics_dir / metrics_file).is_file(), f"{metrics_file} not found in {metrics_dir}"
         metrics_df = pd.read_csv(metrics_dir / metrics_file)
