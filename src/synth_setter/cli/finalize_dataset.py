@@ -1,26 +1,24 @@
 """``synth-setter-finalize-dataset`` entrypoint: post-generate finalize stage.
 
-Mirrors ``generate-dataset``'s operator-side shape — programmatic Hydra
-compose, single ``DatasetSpec`` input, dispatch on ``spec.output_format``.
-Both branches upload their derived artifact(s) and then write the
-``dataset.complete`` marker last per ``pipeline/CLAUDE.md``. The wds
-branch streams train shards through Welford row-by-row; the hdf5 branch
-downloads every shard, reshards into ``{train,val,test}.h5``, and
-computes ``stats.npz`` over the train split.
+Loads the frozen ``DatasetSpec`` from ``cfg.dataset_spec_uri`` (an R2 URI
+produced by the upstream generate stage's ``upload_spec``) and dispatches
+on ``spec.output_format``. Both branches upload their derived artifact(s)
+and then write the ``dataset.complete`` marker last per
+``pipeline/CLAUDE.md``. The wds branch streams train shards through
+Welford row-by-row; the hdf5 branch downloads every shard, reshards into
+``{train,val,test}.h5``, and computes ``stats.npz`` over the train split.
 """
 
 from __future__ import annotations
 
-import sys
-import tempfile
 from collections.abc import Iterator
 from pathlib import Path
 
+import hydra
 import numpy as np
-from hydra import compose, initialize_config_module
 from loguru import logger
+from omegaconf import DictConfig
 
-from synth_setter.cli.generate_dataset import spec_from_cfg
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.constants import (
     DATASET_COMPLETE_FILENAME,
@@ -30,12 +28,7 @@ from synth_setter.pipeline.constants import (
 from synth_setter.pipeline.data.reshard import reshard_dataset
 from synth_setter.pipeline.data.stats import get_stats_hdf5, stream_stats_wds
 from synth_setter.pipeline.schemas.spec import DatasetSpec
-from synth_setter.pipeline.spec_io import write_spec_to_path
-from synth_setter.workspace import operator_workspace
-
-# Anchor for ``cfg.paths.*`` interpolations. See
-# :func:`synth_setter.workspace.operator_workspace` for resolution.
-_OPERATOR_WORKSPACE = operator_workspace()
+from synth_setter.pipeline.spec_io import load_spec_from_uri, write_spec_to_path
 
 
 def _download_train_shards_one_at_a_time(spec: DatasetSpec, work_dir: Path) -> Iterator[Path]:
@@ -157,27 +150,22 @@ def finalize_hdf5(spec: DatasetSpec, work_dir: Path) -> None:
     logger.info("uploaded stats to {}", spec.r2.stats_uri())
 
 
-def main() -> None:
-    """Operator CLI: compose dataset cfg, dispatch on ``output_format``, write marker last.
+def run(cfg: DictConfig) -> None:
+    """Load DatasetSpec from ``cfg.dataset_spec_uri``, dispatch on ``output_format``, marker last.
 
     Skips the body entirely when ``dataset.complete`` already exists at the
-    run prefix — R2 is the source of truth (per ``pipeline/CLAUDE.md``), so a
-    second invocation against a finalized prefix is a no-op rather than a
-    full redo.
+    run prefix — R2 is the source of truth (per ``pipeline/CLAUDE.md``), so
+    a second invocation against a finalized prefix is a no-op rather than a
+    full redo. ``cfg.paths.output_dir`` is the per-run scratch directory
+    (``@hydra.main`` allocates it before this runs); finalize writes shards,
+    splits, ``stats.npz`` and the marker there transiently.
 
+    :param cfg: Composed cfg with ``dataset_spec_uri`` (URI accepted by
+        :func:`~synth_setter.pipeline.spec_io.load_spec_from_uri`) and
+        ``paths.output_dir`` (existing directory).
     :raises ValueError: ``spec.output_format`` is neither ``"hdf5"`` nor ``"wds"``.
     """
-    overrides = list(sys.argv[1:])
-    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
-        cfg = compose(config_name="dataset", overrides=overrides)
-
-    # Pin paths.* so spec_from_cfg's resolve step does not trip on
-    # ${hydra:runtime.output_dir} — programmatic compose leaves it unset.
-    cfg.paths.root_dir = str(_OPERATOR_WORKSPACE)
-    cfg.paths.output_dir = str(_OPERATOR_WORKSPACE)
-    cfg.paths.work_dir = str(_OPERATOR_WORKSPACE)
-
-    spec = spec_from_cfg(cfg)
+    spec = load_spec_from_uri(cfg.dataset_spec_uri)
     r2_io.ensure_r2_env_loaded()
 
     marker_uri = spec.r2.dataset_complete_marker_uri()
@@ -185,18 +173,31 @@ def main() -> None:
         logger.info("skip: {} already exists, run is finalized", marker_uri)
         return
 
-    with tempfile.TemporaryDirectory() as raw_work_dir:
-        work_dir = Path(raw_work_dir)
-        if spec.output_format == "wds":
-            finalize_wds(spec, work_dir)
-        elif spec.output_format == "hdf5":
-            finalize_hdf5(spec, work_dir)
-        else:
-            raise ValueError(f"unsupported output_format: {spec.output_format!r}")
-        marker_local = work_dir / DATASET_COMPLETE_FILENAME
-        marker_local.touch()
-        r2_io.upload(marker_local, marker_uri)
+    work_dir = Path(cfg.paths.output_dir)
+    if spec.output_format == "wds":
+        finalize_wds(spec, work_dir)
+    elif spec.output_format == "hdf5":
+        finalize_hdf5(spec, work_dir)
+    else:
+        raise ValueError(f"unsupported output_format: {spec.output_format!r}")
+
+    marker_local = work_dir / DATASET_COMPLETE_FILENAME
+    marker_local.touch()
+    r2_io.upload(marker_local, marker_uri)
     logger.info("wrote dataset.complete to {}", marker_uri)
+
+
+@hydra.main(
+    version_base="1.3",
+    config_path="pkg://synth_setter.configs",
+    config_name="finalize_dataset",
+)
+def main(cfg: DictConfig) -> None:
+    """Operator CLI: thin @hydra.main wrapper around :func:`run`.
+
+    :param cfg: Hydra-composed cfg; see :func:`run` for the field contract.
+    """
+    run(cfg)
 
 
 if __name__ == "__main__":

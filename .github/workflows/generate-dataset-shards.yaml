@@ -98,7 +98,7 @@ on:
         description: "Canonical r2:// URI of the materialized spec (under-prefix `input_spec.json`). Consumed by validate-dataset-shards.yaml."
         value: ${{ jobs.generate.outputs.spec_uri }}
       run_id:
-        description: "Generate stage's run_id, parsed from the spec_uri's `data/<task>/<run_id>/` segment. Consumed by finalize-dataset.yaml so finalize composes against the same R2 prefix."
+        description: "Generate stage's run_id, parsed from the spec_uri's `data/<task>/<run_id>/` segment. Forwarded to finalize-dataset.yaml for log/artifact naming; finalize loads the run identity from the spec_uri itself."
         value: ${{ jobs.generate.outputs.run_id }}
   workflow_dispatch:
     inputs:
@@ -688,7 +688,7 @@ jobs:
     uses: ./.github/workflows/finalize-dataset.yaml
     with:
       provider: ${{ inputs.provider }}
-      config_path: ${{ inputs.dataset_config }}
+      dataset_spec_uri: ${{ needs.generate.outputs.spec_uri }}
       run_id: ${{ needs.generate.outputs.run_id }}
       env_ref: ${{ github.event.pull_request.head.sha || github.sha }}
     secrets: inherit

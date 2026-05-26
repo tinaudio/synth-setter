@@ -1,0 +1,15 @@
+# @package _global_
+defaults:
+  - paths: default
+  - hydra: default
+  - _self_
+
+dataset_spec_uri: ???
+
+# ``hydra/default.yaml``'s ``run.dir`` interpolates ${task_name}/${run_name},
+# which this config does not surface; override to a path that only needs
+# ``paths.log_dir`` + timestamp. ``_self_`` is last in ``defaults`` so this
+# block overrides the group's value.
+hydra:
+  run:
+    dir: ${paths.log_dir}/finalize_dataset/${now:%Y-%m-%d_%H-%M-%S}
