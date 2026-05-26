@@ -54,6 +54,29 @@ class TestSplitKeepLocal:
         """``[]`` is a no-op."""
         assert split_keep_local([]) == (False, [])
 
+    def test_prefix_match_passes_through(self) -> None:
+        """``--keep-localx`` (prefix without ``=``) is not the flag; survives in remaining.
+
+        Pins the boundary of the ``startswith("--keep-local=")`` gate so a
+        rename or loosening to ``startswith("--keep-local")`` would surface here.
+        """
+        argv = ["--keep-localx", "experiment=foo"]
+        keep_local, remaining = split_keep_local(argv)
+        assert keep_local is False
+        assert remaining == argv
+
+    def test_space_separated_value_falls_through_to_hydra(self) -> None:
+        """``--keep-local true`` strips the flag but leaves ``true`` in remaining.
+
+        Documented contract — Hydra then rejects the dangling token. Pins the
+        behavior so a future "peek-ahead" implementation announces itself by
+        breaking this test.
+        """
+        argv = [KEEP_LOCAL_FLAG, "true", "experiment=foo"]
+        keep_local, remaining = split_keep_local(argv)
+        assert keep_local is True
+        assert remaining == ["true", "experiment=foo"]
+
 
 class TestRedirectR2ToLocal:
     """``redirect_r2_to_local`` sets the two env vars rclone reads for ``r2:``."""

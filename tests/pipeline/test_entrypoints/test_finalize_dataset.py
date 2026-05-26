@@ -1118,9 +1118,16 @@ class TestMainKeepLocal:
     ) -> None:
         """``--keep-local`` never reaches Hydra compose (would error as an unknown override).
 
+        Asserts the redirect ran (env vars set), proving the flag was both
+        stripped from the overrides Hydra saw AND recognized by the CLI
+        plumbing — a silent passthrough would either error in Hydra or leave
+        the env vars untouched.
+
         :param monkeypatch: Pytest fixture used to patch argv.
         :param tmp_path: Pytest tmp dir used as the override data_dir.
         """
+        import os
+
         argv = [
             "finalize",
             "experiment=generate_dataset/smoke-shard-wds",
@@ -1130,3 +1137,5 @@ class TestMainKeepLocal:
         monkeypatch.setattr(sys, "argv", argv)
 
         finalize_dataset.main()
+
+        assert os.environ.get("RCLONE_CONFIG_R2_TYPE") == "alias"

@@ -1805,12 +1805,16 @@ class TestMainKeepLocal:
     ) -> None:
         """``--keep-local`` never reaches Hydra compose — it would error as an unknown override.
 
-        The split happens before ``initialize_config_module``; if it leaked
-        through, Hydra would raise on the dangling token.
+        Asserts ``main()`` completes AND the redirect ran (env vars set), proving
+        the flag was both stripped from the overrides Hydra saw AND recognized
+        by the CLI plumbing. A silent passthrough would either error in Hydra
+        or leave the env vars untouched.
 
         :param monkeypatch: Pytest fixture used to patch argv.
         :param tmp_path: Pytest tmp dir used as the override data_dir.
         """
+        import os
+
         import synth_setter.cli.generate_dataset as gd
 
         argv = [
@@ -1823,3 +1827,5 @@ class TestMainKeepLocal:
         monkeypatch.setattr("sys.argv", argv)
 
         gd.main()
+
+        assert os.environ.get("RCLONE_CONFIG_R2_TYPE") == "alias"

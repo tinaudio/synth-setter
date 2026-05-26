@@ -23,9 +23,12 @@ KEEP_LOCAL_FLAG = "--keep-local"
 def split_keep_local(argv: list[str]) -> tuple[bool, list[str]]:
     """Pop ``--keep-local`` out of ``argv``; return ``(keep_local, remaining)``.
 
-    Boolean-only flag — ``--keep-local=true`` / ``--keep-local true`` and any
-    other suffix-bearing form is rejected so operators can't accidentally
-    pass a value rclone would never see.
+    Boolean-only flag — ``--keep-local=value`` is rejected here so an operator
+    typo doesn't silently pass a value rclone would never see. The
+    space-separated form ``--keep-local true`` is not detected; the trailing
+    token survives in the remaining-overrides list and Hydra rejects it as an
+    unknown override (``Could not override 'true'``), which is the desired
+    failure mode.
 
     :param argv: CLI overrides (``sys.argv[1:]``-shaped).
     :returns: ``(True, [...])`` if ``--keep-local`` was present exactly once;
