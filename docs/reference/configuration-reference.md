@@ -83,44 +83,35 @@ Reference: `eval-pipeline.md` §4–5
 
 ### 2.4 Cloud Infrastructure
 
-There are two ways a SkyPilot dispatch enters this codebase, and they should not
-be confused:
+`dispatch_via_skypilot` is the single entry point a `synth-setter-*` CLI takes
+to dispatch onto SkyPilot. Each console script that supports compute carries
+a `skypilot_launch` sub-config (today: `synth-setter-generate-dataset`; more
+entrypoints are expected to follow). Setting
+`skypilot_launch.compute_template=<path>` flips the command from "run
+in-process" to "materialize the spec, then dispatch via SkyPilot" — no
+separate launcher invocation is involved.
 
-1. **Standard path — a `synth-setter-*` CLI entrypoint dispatches itself.** Each
-   project console script that has compute support carries a `skypilot_launch`
-   sub-config (today: `synth-setter-generate-dataset`; more entrypoints are
-   expected to follow). Setting `skypilot_launch.compute_template=<path>` on the
-   entrypoint's Hydra invocation flips that single command from "run in-process"
-   to "materialize the spec, then dispatch via SkyPilot". This is the standard,
-   recommended way to run dataset generation (and any other supported command)
-   on SkyPilot — no separate launcher invocation involved.
-
-2. **Ad-hoc path — `synth_setter.pipeline.skypilot_launch`.** A thin wrapper
-   for running an *arbitrary* operator-supplied command on a SkyPilot worker
-   when no entrypoint in (1) covers the use case. The launcher shells out to
-   the command verbatim, discovers the materialized spec, resolves its URI,
-   and re-executes the same command on every worker rank. Reach for it when
-   you have an ad-hoc command you want to fan out via SkyPilot; do not use it
-   to invoke a `synth-setter-*` entrypoint that already has compute support —
-   that would be either redundant or self-defeating (the inner entrypoint
-   would either run locally a second time or attempt to dispatch on its own).
-
-#### Standard path: entrypoint-owned dispatch
+#### Dispatch flow
 
 ```
 synth-setter-generate-dataset experiment=… skypilot_launch.compute_template=src/synth_setter/configs/compute/runpod-template.yaml
   → @hydra.main composes DictConfig → spec_from_cfg → DatasetSpec
     → write_spec_locally(spec, _OPERATOR_WORKSPACE)
     → upload_spec(spec) → R2 at {r2.prefix}input_spec.json
-    → dispatch_via_skypilot(spec, sky_cfg, spec_uri=spec.r2.input_spec_uri())
+    → sky_cfg.extra_envs[WORKER_SPEC_URI] = spec.r2.input_spec_uri()
+    → dispatch_via_skypilot(sky_cfg)
       → SkyPilot provisions pod (RunPod, OCI, kubernetes via `sky local up`)
         → pod runs: cd /home/build/synth-setter
                     && bash scripts/sync_worker_checkout.sh
                     && exec synth-setter-generate-dataset-from-hydra <pinned hydra overrides>
 ```
 
-- Hydra composition lives in the entrypoint itself; the launcher module is not
-  on this path beyond `dispatch_via_skypilot`.
+- `dispatch_via_skypilot` takes a single `SkypilotLaunchConfig` argument and
+  knows nothing about `DatasetSpec`. Dataset-specific worker envs (today
+  `WORKER_SPEC_URI`) flow through `sky_cfg.extra_envs`, merged into per-rank
+  envs after `resolve_worker_env`.
+- Hydra composition lives in the entrypoint itself; the launcher module is
+  not on this path beyond `dispatch_via_skypilot`.
 - `_build_worker_cmd` (in `synth_setter.cli.generate_dataset`) pins the same
   Hydra overrides the operator composed with, and the `from_hydra` entrypoint
   on the worker rebuilds the spec from those — so worker re-execution is
@@ -132,49 +123,13 @@ synth-setter-generate-dataset experiment=… skypilot_launch.compute_template=sr
   SkyPilot's RunPod backend rejects programmatic file_mounts with a
   pubkey-overflow error (see [#749](https://github.com/tinaudio/synth-setter/issues/749)).
 
-#### Ad-hoc path: `python -m synth_setter.pipeline.skypilot_launch`
+#### Job-name conventions
 
-```
-src/synth_setter/configs/compute/{provider}-template.yaml (SkyPilot Task YAML — either no `run:`
-block, or a `run:` containing the `${WORKER_CMD}` sentinel where the worker
-cmd should land; see `_load_compute_template_with_cmd`. RunPod uses the
-former; OCI (`oci-cpu-template.yaml`) uses the latter so the launcher's cmd
-can be substituted into the host-side `sudo docker run … bash -c "${WORKER_CMD}"`
-scaffolding.)
-  → ad-hoc launcher: python -m synth_setter.pipeline.skypilot_launch
-                       --template <yaml> -- <arbitrary operator command>
-    runs the operator command via subprocess.check_call; that command is
-    responsible for materializing data/<task>/<run>/metadata/input_spec.json
-    and uploading it to R2 (the launcher itself does not upload)
-    → discovers the unique materialized spec via find_input_specs(<repo_root>/data)
-    → parses the discovered spec once and reads its R2 URI off spec.r2.input_spec_uri()
-    → hands off to dispatch_via_skypilot, which forwards the URI as WORKER_SPEC_URI
-      and re-executes the same operator command verbatim on each worker rank
-```
-
-- Invoked via: `python -m synth_setter.pipeline.skypilot_launch --template <yaml> -- <arbitrary command>`. The launcher's options precede `--`; everything after is the operator-supplied inner command, passed through verbatim to `subprocess.check_call` and to each worker's `run:` block.
-- **Inner-command contract** (the operator-supplied command must satisfy all
-  three): (a) materialize exactly one canonical
-  `data/<task>/<run>/metadata/input_spec.json`; (b) upload that spec to its
-  canonical R2 URI (the launcher itself does not upload — it parses the
-  discovered spec once, reads `spec.r2.input_spec_uri()`, and forwards it as
-  `WORKER_SPEC_URI`);
-  (c) re-enter deterministically on each worker (the same command string is
-  threaded into the SkyPilot task's `run:` block via `shlex.join`, so it must
-  be safe to run identically on the launcher host and every worker rank).
-- **Do not pass a `synth-setter-*` CLI entrypoint here** — those entrypoints
-  already own their dispatch via the standard path above, and invoking one
-  through the ad-hoc launcher would either re-materialize a fresh spec on
-  each worker or attempt to dispatch a second time.
-- The launcher enforces this with a runtime guardrail:
-  `synth_setter.pipeline.skypilot_launch._DISPATCH_OWNING_ENTRYPOINTS` lists
-  the `synth-setter-*` console scripts that own their own dispatch (today:
-  `synth-setter-generate-dataset`; extended as new dispatching entrypoints
-  land), and passing one of them as the inner command (bare, absolute-path,
-  or `python -m <module>`) raises a `click.ClickException` with a pointer to
-  the standard-path invocation. The guardrail covers the common misuse only —
-  shell aliases or wrapper scripts that resolve to a dispatching entrypoint
-  by a different name will not be caught.
+`sky_cfg.job_name` is optional. When unset, the launcher falls back to
+`synth-setter-<8-hex-uuid>` — a domain-neutral default. Callers that want a
+domain-shaped stem set `job_name` explicitly before calling the launcher;
+`synth-setter-generate-dataset` pins
+`synth-setter-smoke-<spec.task_name[:8]>` from `main()`.
 
 Reference: `training-pipeline.md` Appendix D
 

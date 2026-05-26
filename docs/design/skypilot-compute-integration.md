@@ -145,53 +145,34 @@ synth-setter-generate-dataset \
     skypilot_launch.compute_template=src/synth_setter/configs/compute/runpod-template.yaml
 ```
 
-This is the **standard** local dispatch path: each `synth-setter-*` CLI
-entrypoint that supports SkyPilot carries its own `skypilot_launch` sub-config
-(today `synth-setter-generate-dataset`; more entrypoints are expected to
-follow), and setting `skypilot_launch.compute_template` flips the same command
-from "run in-process" to "materialize the spec, then dispatch via SkyPilot".
-The env-resolution logic described above lives inside
-`dispatch_via_skypilot` and runs the same way regardless of whether the call
-originated from this standard path or from the ad-hoc launcher CLI
-(`python -m synth_setter.pipeline.skypilot_launch`, contrasted against the
-standard path in
-[configuration-reference.md §2.4](../reference/configuration-reference.md#24-cloud-infrastructure))
-— both share one resolver, one `.env` lookup, and one set of failure modes.
+This is the dispatch path each `synth-setter-*` CLI entrypoint takes: the
+entrypoint carries its own `skypilot_launch` sub-config (today
+`synth-setter-generate-dataset`; more entrypoints are expected to follow),
+and setting `skypilot_launch.compute_template` flips the same command from
+"run in-process" to "materialize the spec, then dispatch via SkyPilot". The
+env-resolution logic described above lives inside `dispatch_via_skypilot`
+and runs the same way for every caller — one resolver, one `.env` lookup,
+one set of failure modes.
 
 The resolver finds `<repo_root>/.env`, parses it via `python-dotenv`, and
 resolves all keys from there. Process env is a non-event because `.env` wins
 per key — useful when you have stale shell exports.
 
-For arbitrary ad-hoc commands that have no `synth-setter-*` entrypoint of
-their own, use the launcher CLI directly:
+#### Caller-supplied worker envs
 
-```bash
-python -m synth_setter.pipeline.skypilot_launch \
-    --template src/synth_setter/configs/compute/runpod-template.yaml \
-    -- <arbitrary-command-that-materializes-an-input_spec.json>
-```
+`dispatch_via_skypilot(sky_cfg)` is domain-neutral: it knows nothing about
+`DatasetSpec` and exposes no spec-aware kwargs. Callers thread their own
+worker envs through `sky_cfg.extra_envs: dict[str, str]`. The launcher
+merges that dict into the per-rank env dict after `resolve_worker_env`, so
+caller values override resolver values; rank/world keys
+(`SYNTH_SETTER_WORKER_RANK`, `SYNTH_SETTER_NUM_WORKERS`) are injected last
+and remain launcher-owned.
 
-The launcher's `--` argument is passed verbatim to `subprocess.check_call` and
-re-used as each worker's `run:` command, so the inner command must be safe to
-re-execute identically on the launcher host and on every worker rank. Do
-**not** pass a `synth-setter-*` CLI entrypoint as the inner command — those
-already own their dispatch via the standard path above, and routing them
-through this launcher would either materialize a fresh spec on each worker
-(losing alignment with the canonical `input_spec.json` the launcher just
-discovered) or attempt to dispatch a second time.
-
-To close the misuse loop, the launcher carries a runtime guardrail —
-`_DISPATCH_OWNING_ENTRYPOINTS` (`src/synth_setter/pipeline/skypilot_launch.py`)
-lists the `synth-setter-*` console scripts that own their own dispatch, and
-passing any of them as the inner command (whether as the bare console-script
-name, an absolute-path invocation, or the `python -m <module>` equivalent)
-raises a `click.ClickException` before the inner subprocess is even spawned.
-The check is intentionally narrow: it catches the direct-invocation misuse
-but does not chase shell aliases or wrapper scripts that resolve to a
-dispatching entrypoint by a different name, so the rule still rides on
-operator discipline at the margins.
-
-> **Note on `python -m synth_setter.pipeline.skypilot_launch -- …`.** The launcher CLI accepts an arbitrary inner command via the trailing `--` separator, but the inner command must (a) materialize exactly one canonical `data/<task>/<run>/metadata/input_spec.json`, (b) upload that spec to its canonical R2 URI (the launcher itself does not upload — it parses the discovered spec once, reads `spec.r2.input_spec_uri()`, and forwards it as `WORKER_SPEC_URI`), and (c) re-enter deterministically on the worker (the same string is threaded into the SkyPilot task's `run:` block via `shlex.join`). The default `synth-setter-generate-dataset` console script does **not** yet satisfy (c) — it re-composes Hydra fresh and would either run the pipeline locally on the worker or recursively dispatch — so it is not currently a valid inner command for this entrypoint. Use the canonical `synth-setter-generate-dataset` path shown above until a materialize-only mode lands (follow-up tracked in #1160).
+The dataset pipeline uses this seam to forward the canonical spec URI:
+`generate_dataset.main` writes
+`sky_cfg.extra_envs[WORKER_SPEC_URI] = spec.r2.input_spec_uri()` immediately
+before the dispatch call. Future callers fill the same dict with whatever
+envs their worker entrypoint needs.
 
 #### CI story
 
@@ -218,7 +199,7 @@ The SkyPilot launch step in `.github/workflows/test-dataset-generation.yml` (onl
       -e RCLONE_CONFIG_R2_ENDPOINT \
       -e R2_ACCOUNT_ID \
       -e WANDB_API_KEY \
-      "$IMAGE" bash -c '... python -m synth_setter.pipeline.skypilot_launch ...'
+      "$IMAGE" bash -c '... synth-setter-generate-dataset ... skypilot_launch.compute_template=... ...'
 ```
 
 Notes:
