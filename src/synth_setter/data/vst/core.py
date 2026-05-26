@@ -44,7 +44,7 @@ def extract_renderer_version(plugin_path: Path) -> str:
     launcher) must avoid it — they pin `renderer_version` in the dataset
     config that produces the spec and let the worker compare against this
     function's output before rendering (see
-    `synth_setter.cli.generate_dataset.run`).
+    `synth_setter.cli.generate_dataset.generate`).
 
     :raises FileNotFoundError: plugin_path does not exist.
     :raises RuntimeError: version cannot be extracted by any method.

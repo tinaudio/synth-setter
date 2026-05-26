@@ -222,7 +222,7 @@ docker run --rm synth-setter:dev-snapshot \
 Generates one or more VST dataset shards (looping over `spec.shards`) via
 `generate_vst_dataset.py` under headless X11 (Xvfb). The headless bootstrap
 (`src/synth_setter/scripts/run-linux-vst-headless.sh`) is applied inside
-`synth_setter.cli.generate_dataset.run()` at the audio-rendering boundary,
+`synth_setter.cli.generate_dataset.generate()` at the audio-rendering boundary,
 wrapping only the generator subprocess.
 
 **Required env vars:** See § Runtime environment variables above. For
