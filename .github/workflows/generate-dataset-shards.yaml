@@ -582,13 +582,13 @@ jobs:
           echo "=== Materialized Spec (${PROVIDER}) ==="
           head -20 "${SPEC_PATH}"
 
-      # The launcher (`src/synth_setter/pipeline/skypilot_launch.py`) emits the
-      # canonical spec URI on a stdout sentinel line after resolving it; the
-      # tee'd generate.log captures it for both skypilot-local and runpod/oci
-      # rows. We grep the marker rather than re-shelling out to the spec-uri
-      # console script (which would require a host-side `pip install -e .` for
-      # the runpod/oci rows whose workers live inside the container). Marker
-      # constant is `_SPEC_URI_STDOUT_SENTINEL` in skypilot_launch.py.
+      # `synth-setter-generate-dataset` (`src/synth_setter/cli/generate_dataset.py`)
+      # emits the canonical spec URI on a stdout sentinel line after resolving
+      # it; the tee'd generate.log captures it for both skypilot-local and
+      # runpod/oci rows. We grep the marker rather than re-shelling out to the
+      # spec-uri console script (which would require a host-side `pip install
+      # -e .` for the runpod/oci rows whose workers live inside the container).
+      # Marker constant is `_SPEC_URI_STDOUT_SENTINEL` in generate_dataset.py.
       # `grep || true` keeps a missing marker from exiting the step (grep
       # returns 1 on no-match; with `set -euo pipefail` an unmasked grep
       # failure would skip the explicit empty-check below and surface a

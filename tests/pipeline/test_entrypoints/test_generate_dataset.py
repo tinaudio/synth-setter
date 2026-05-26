@@ -1663,3 +1663,31 @@ class TestMainSpecPersistence:
         kwargs = recorded["kwargs"]
         assert isinstance(kwargs, dict)
         assert kwargs["spec_uri"] == spec.r2.input_spec_uri()
+
+    def test_main_emits_spec_uri_sentinel(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """``main()`` prints ``::synth-setter-spec-uri::<uri>`` before dispatching.
+
+        The CI workflow greps the tee'd ``generate.log`` for this marker; the
+        sentinel must emit on the launcher host (not the worker) so it shows
+        up before any rank boots.
+
+        :param monkeypatch: Pytest fixture used to patch ``sys.argv`` + dispatch.
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param capsys: Pytest fixture capturing stdout/stderr.
+        """
+        import synth_setter.cli.generate_dataset as gd
+        import synth_setter.pipeline.skypilot_launch as sl
+
+        template = self._write_minimal_template(tmp_path)
+        monkeypatch.setattr("sys.argv", self._dispatch_argv(template))
+        monkeypatch.setattr(sl, "dispatch_via_skypilot", lambda *_a, **_k: None)
+
+        gd.main()
+
+        out = capsys.readouterr().out
+        assert "::synth-setter-spec-uri::r2://" in out

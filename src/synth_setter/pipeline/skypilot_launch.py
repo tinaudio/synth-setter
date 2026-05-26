@@ -20,9 +20,10 @@ Concretely, this CLI:
    parses it once as a ``DatasetSpec``, and reads its canonical R2 URI off
    ``spec.r2.input_spec_uri()`` (same derivation the ``synth-setter-spec-uri``
    console script exposes for shell callers).
-3. Hands the spec + URI off to ``dispatch_via_skypilot``, which provisions
-   workers via `sky.jobs.launch`, forwards the URI as `WORKER_SPEC_URI`, and
-   re-executes the same inner command verbatim on each worker.
+3. Hands the spec off to ``dispatch_via_skypilot``, which provisions workers
+   via `sky.jobs.launch` and re-executes the same inner command verbatim on
+   each worker. Callers thread dataset-specific envs through
+   ``sky_cfg.extra_envs``.
 
 Because step 3 re-uses the operator's argv verbatim, the inner command must
 be safe to run identically on the launcher host and on every worker rank.
@@ -86,7 +87,6 @@ import sky.jobs  # managed-jobs SDK: sky.jobs.launch / tail_logs / cancel
 import yaml
 from dotenv import dotenv_values
 
-from synth_setter.pipeline.constants import WORKER_SPEC_URI_ENV
 from synth_setter.pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
 from synth_setter.pipeline.schemas.spec import DatasetSpec
@@ -160,10 +160,6 @@ DEFAULT_ENV_FILE = _OPERATOR_WORKSPACE / ".env"
 # regardless of where the operator invoked it.
 _LOCAL_DATA_DIR = _OPERATOR_WORKSPACE / "data"
 
-# Single-line stdout marker the CI workflow greps out of the tee'd launcher
-# log to populate its `spec_uri` output without re-running spec-uri derivation.
-_SPEC_URI_STDOUT_SENTINEL = "::synth-setter-spec-uri::"
-
 # CI-mode gate. Truthy → write the managed-jobs controller shrink so the
 # controller pod fits on GHA-kind. Operator local-dev leaves this unset.
 _CI_MODE_ENV = "SYNTH_SETTER_CI_MODE"
@@ -194,14 +190,6 @@ def _ensure_ci_sky_config() -> None:
     config_path = sky_dir / "config.yaml"
     config_path.write_text(_CI_SKY_CONFIG_YAML, encoding="utf-8")
     config_path.chmod(0o600)
-
-
-def _emit_spec_uri(spec_uri: str) -> None:
-    """Print ``::synth-setter-spec-uri::<uri>`` for the CI workflow to grep.
-
-    :param spec_uri: Canonical ``r2://`` URI of the materialized spec.
-    """
-    click.echo(f"{_SPEC_URI_STDOUT_SENTINEL}{spec_uri}")
 
 
 # ``synth-setter-*`` console scripts that already own SkyPilot dispatch via
@@ -852,12 +840,11 @@ def dispatch_via_skypilot(
 
     :param spec: Validated dataset spec to render on the worker(s).
     :param sky_cfg: Validated launcher configuration (compute_template + cmd required).
-    :param spec_uri: Canonical R2 URI of the materialized spec — injected into each
-        worker's env as ``WORKER_SPEC_URI``. The dispatched cmd rebuilds the spec
-        from Hydra overrides and does not consume this env var; downstream
-        validate-time consumers read it via the workflow output. Pass
-        ``spec.r2.input_spec_uri()`` (not ``spec.r2.uri(INPUT_SPEC_FILENAME)`` —
-        that omits the run prefix).
+        ``sky_cfg.extra_envs`` is merged into per-rank envs after
+        ``resolve_worker_env``, so callers forward dataset-specific envs
+        (e.g. the canonical spec URI) through that channel.
+    :param spec_uri: Unused — retained for one phase while callers migrate to
+        a single-arg signature.
     :raises ValueError: degenerate ``sky_cfg``, conflicting ``cmd``/``run:`` pair,
         or unresolved worker env vars.
     :raises RuntimeError: one or more ranks did not reach the SUCCEEDED terminal status.
@@ -909,7 +896,7 @@ def dispatch_via_skypilot(
 
     provider = _detect_provider_from_doc(task_doc, source=template_path)
 
-    # Phase 2: commit — side effects in dependency order; sentinel emits after cred bootstrap.
+    # Phase 2: commit — side effects in dependency order.
     _ensure_ci_sky_config()
 
     if sky_cfg.api_server is not None:
@@ -926,10 +913,6 @@ def dispatch_via_skypilot(
 
     if provider != "local":
         _run_cred_bootstrap(provider=provider, env_file_path=env_file_path)
-
-    _emit_spec_uri(spec_uri)
-
-    worker_env[WORKER_SPEC_URI_ENV] = spec_uri
 
     if provider == "local":
         import sky.check

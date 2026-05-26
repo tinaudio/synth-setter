@@ -30,9 +30,7 @@ from synth_setter.pipeline.schemas.spec import DatasetSpec
 from synth_setter.pipeline.skypilot_launch import (
     _SECRET_WORKER_ENV_KEYS,
     _SKYPILOT_API_SERVER_ENV,
-    _SPEC_URI_STDOUT_SENTINEL,
     _WORKER_ENV_KEYS,
-    _emit_spec_uri,
     _ensure_ci_sky_config,
     _override_image_id,
     dispatch_via_skypilot,
@@ -44,6 +42,10 @@ from synth_setter.pipeline.skypilot_launch import (
     _run_cred_bootstrap as _real_run_cred_bootstrap,
 )
 from synth_setter.resources import configs_dir
+
+# Stable-format marker emitted by ``generate_dataset.main`` for the CI workflow
+# grep; the launcher must not print it (a duplicate would confuse the workflow).
+_SPEC_URI_STDOUT_SENTINEL = "::synth-setter-spec-uri::"
 
 
 @pytest.fixture()
@@ -383,27 +385,6 @@ class TestLocalTemplatePodConfig:
         assert containers == [{"imagePullPolicy": "Never"}]
 
 
-class TestEmitSpecUri:
-    """``_emit_spec_uri`` prints the canonical URI on a stdout sentinel line.
-
-    The test-dataset-generation workflow greps the tee'd launcher log for this
-    sentinel (replacing the previous host-side ``synth-setter-spec-uri`` re-
-    invocation in bash, PR #1164).
-    """
-
-    def test_marker_format_is_stable(self, capsys: pytest.CaptureFixture[str]) -> None:
-        """One-line ``::synth-setter-spec-uri::<uri>`` marker so the workflow grep is unambiguous.
-
-        :param capsys: Pytest fixture capturing stdout/stderr.
-        """
-        _emit_spec_uri("r2://intermediate-data/run/input_spec.json")
-        captured = capsys.readouterr()
-        assert (
-            captured.out.strip()
-            == f"{_SPEC_URI_STDOUT_SENTINEL}r2://intermediate-data/run/input_spec.json"
-        )
-
-
 # ---------------------------------------------------------------------------
 # main — new click CLI (subprocess passthrough + spec discovery + dispatch)
 # ---------------------------------------------------------------------------
@@ -651,47 +632,6 @@ class TestCli:
         )
         assert result.exit_code == 0, result.output
         assert check_call_calls == [["materialize-input-spec", "experiment=foo"]]
-
-    def test_spec_uri_is_threaded_into_worker_env(
-        self,
-        cwd_with_spec: tuple[Path, Path, DatasetSpec],
-        env_file: Path,
-        template_yaml: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        mock_sky: MagicMock,
-    ) -> None:
-        """``spec.r2.input_spec_uri()`` of the discovered spec lands in the worker's env.
-
-        :param cwd_with_spec: Fixture providing a CWD pre-populated with a canonical input_spec.json.
-        :param env_file: Fixture-provided worker env file path.
-        :param template_yaml: Fixture-provided compute template path.
-        :param monkeypatch: Pytest fixture for env/attribute mocking.
-        :param mock_sky: Mocked ``sky`` module from fixture.
-        """
-        _, _, spec = cwd_with_spec
-        monkeypatch.setattr(
-            "synth_setter.pipeline.skypilot_launch.subprocess.check_call",
-            lambda _args, **_kwargs: 0,
-        )
-        expected_uri = spec.r2.input_spec_uri()
-
-        runner = CliRunner()
-        result = runner.invoke(
-            main,
-            [
-                "--template",
-                str(template_yaml),
-                "--env-file",
-                str(env_file),
-                "--",
-                "materialize-input-spec",
-            ],
-        )
-        assert result.exit_code == 0, result.output
-        update_envs = mock_sky.Task.from_yaml_config.return_value.update_envs.call_args_list
-        assert update_envs, "dispatch_via_skypilot should have updated worker env"
-        forwarded = update_envs[0].args[0]
-        assert forwarded[WORKER_SPEC_URI_ENV] == expected_uri
 
     def test_no_spec_under_data_dir_fails_clearly(
         self,
@@ -1403,12 +1343,11 @@ class TestDispatchViaSkypilot:
     ) -> None:
         """Phase-1 raises leave every Phase-2 side effect untouched.
 
-        Probes all four Phase-2 mutations: ``~/.sky/config.yaml`` write,
-        ``_SKYPILOT_API_SERVER_ENV`` set in process env, ``sky.jobs.launch``
-        called, and the ``::synth-setter-spec-uri::`` stdout sentinel. A
-        regression that promotes any one of them above the cred check or
-        any other Phase-1 validator trips this test on every parametrized
-        failure mode.
+        Probes the three Phase-2 mutations: ``~/.sky/config.yaml`` write,
+        ``_SKYPILOT_API_SERVER_ENV`` set in process env, and ``sky.jobs.launch``
+        called. The ``::synth-setter-spec-uri::`` stdout sentinel is owned by
+        ``generate_dataset.main`` — its absence here is a regression guard
+        against re-introducing emission in the launcher.
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
         :param fake_plugin: Fixture-provided fake VST3 plugin path.
@@ -1447,7 +1386,7 @@ class TestDispatchViaSkypilot:
         mock_sky.jobs.launch.assert_not_called()
         assert _SPEC_URI_STDOUT_SENTINEL not in capsys.readouterr().out
 
-    def test_sentinel_does_not_emit_when_cred_bootstrap_raises(
+    def test_cred_bootstrap_raise_skips_launch_and_stays_silent(
         self,
         tmp_path: Path,
         fake_plugin: Path,
@@ -1456,12 +1395,10 @@ class TestDispatchViaSkypilot:
         mock_sky: MagicMock,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """A ``_run_cred_bootstrap`` raise must skip the sentinel + ``sky.jobs.launch``.
+        """A ``_run_cred_bootstrap`` raise propagates without reaching ``sky.jobs.launch``.
 
-        Pins the Phase-2 ordering invariant ``_emit_spec_uri`` runs *after*
-        ``_run_cred_bootstrap`` so a CI workflow that greps the sentinel out of
-        the launcher log can treat it as proof the cred bootstrap succeeded —
-        not just that Phase-1 cleared.
+        The launcher is also silent on the spec-uri sentinel regardless of
+        outcome (the sentinel is owned by ``generate_dataset.main``).
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
         :param fake_plugin: Fixture-provided fake VST3 plugin path.
@@ -1622,6 +1559,74 @@ class TestDispatchViaSkypilot:
             assert injected[NUM_WORKERS_ENV_VAR] == "2"
             assert injected[WORKER_RANK_ENV_VAR] in {"0", "1"}
 
+    def test_launcher_does_not_emit_worker_spec_uri_without_extra_envs(
+        self,
+        tmp_path: Path,
+        fake_plugin: Path,
+        env_file: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """Empty ``extra_envs`` → no rank receives ``WORKER_SPEC_URI`` from the launcher.
+
+        Spec-URI emission moved to the caller (``generate_dataset.main``);
+        the launcher is now spec-agnostic.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param fake_plugin: Fixture-provided fake VST3 plugin path.
+        :param env_file: Fixture-provided worker env file path.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        """
+        template = _write_runpod_yaml(tmp_path)
+        spec = _build_spec(fake_plugin)
+        sky_cfg = SkypilotLaunchConfig(
+            compute_template=str(template),
+            cmd="echo",
+            env_file=str(env_file),
+            job_name="no-spec-uri",
+            num_workers=2,
+            extra_envs={},
+        )
+
+        dispatch_via_skypilot(spec, sky_cfg, spec_uri=_DISPATCH_SPEC_URI)
+
+        update_envs_calls = mock_sky.Task.from_yaml_config.return_value.update_envs.call_args_list
+        assert len(update_envs_calls) == 2
+        for call in update_envs_calls:
+            assert WORKER_SPEC_URI_ENV not in call.args[0]
+
+    def test_launcher_does_not_print_spec_uri_sentinel(
+        self,
+        tmp_path: Path,
+        fake_plugin: Path,
+        env_file: Path,
+        mock_sky: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """``dispatch_via_skypilot`` no longer prints the ``::synth-setter-spec-uri::`` marker.
+
+        The CI workflow grep contract now consumes the sentinel from
+        ``generate_dataset.main``'s stdout; the launcher must stay silent so
+        the marker has a single owner.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param fake_plugin: Fixture-provided fake VST3 plugin path.
+        :param env_file: Fixture-provided worker env file path.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        :param capsys: Pytest fixture capturing stdout/stderr.
+        """
+        template = _write_runpod_yaml(tmp_path)
+        spec = _build_spec(fake_plugin)
+        sky_cfg = SkypilotLaunchConfig(
+            compute_template=str(template),
+            cmd="echo",
+            env_file=str(env_file),
+            job_name="no-sentinel",
+        )
+
+        dispatch_via_skypilot(spec, sky_cfg, spec_uri=_DISPATCH_SPEC_URI)
+
+        assert "::synth-setter-spec-uri::" not in capsys.readouterr().out
+
     def test_single_worker_dispatch_still_injects_rank_world_env(
         self,
         tmp_path: Path,
@@ -1757,33 +1762,3 @@ class TestDispatchViaSkypilot:
         with pytest.raises(ValueError, match="mutually exclusive"):
             dispatch_via_skypilot(spec, sky_cfg, spec_uri=_DISPATCH_SPEC_URI)
         mock_sky.jobs.launch.assert_not_called()
-
-    def test_spec_uri_kwarg_injected_verbatim_into_worker_env(
-        self,
-        tmp_path: Path,
-        fake_plugin: Path,
-        env_file: Path,
-        mock_sky: MagicMock,
-    ) -> None:
-        """The kwarg-supplied ``spec_uri`` lands in worker env verbatim.
-
-        :param tmp_path: Pytest fixture providing a fresh test directory.
-        :param fake_plugin: Fixture-provided fake VST3 plugin path.
-        :param env_file: Fixture-provided worker env file path.
-        :param mock_sky: Mocked ``sky`` module from fixture.
-        """
-        template = _write_runpod_yaml(tmp_path)
-        spec = _build_spec(fake_plugin)
-        sky_cfg = SkypilotLaunchConfig(
-            compute_template=str(template),
-            cmd="echo",
-            env_file=str(env_file),
-            job_name="kwarg-spec-uri",
-        )
-
-        dispatch_via_skypilot(spec, sky_cfg, spec_uri=_DISPATCH_SPEC_URI)
-
-        update_envs_calls = mock_sky.Task.from_yaml_config.return_value.update_envs.call_args_list
-        assert len(update_envs_calls) == 1
-        forwarded = update_envs_calls[0].args[0]
-        assert forwarded[WORKER_SPEC_URI_ENV] == _DISPATCH_SPEC_URI
