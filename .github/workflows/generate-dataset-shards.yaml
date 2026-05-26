@@ -225,13 +225,14 @@ jobs:
           echo "cluster_name: ${CLUSTER_NAME}"
 
       # `kind load` doubles the CUDA image into the kind node's snapshotter;
-      # the 25 GB default free on `/` overflows. /mnt is too small (14 GB) to
-      # rehost docker, so reclaim ~40 GB on `/` instead, before the pull.
+      # peak host footprint is ~30 GB. Reclaim ~30 GB on `/` pre-pull.
+      # `tool-cache: true` deletes /opt/hostedtoolcache — setup-python below
+      # re-fetches Python (~20 s).
       - name: Free disk space for kind load (skypilot-local row)
         if: ${{ inputs.provider == 'skypilot-local' }}
         uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
         with:
-          tool-cache: false
+          tool-cache: true
           android: true
           dotnet: true
           haskell: true
