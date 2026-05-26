@@ -347,6 +347,21 @@ jobs:
           fi
           echo "docker pull completed for ${IMAGE}"
 
+      # `kind load` shells `docker save` into /var/lib/docker/tmp/; the
+      # ~10 GB tar exhausts ubuntu-latest's root partition without cleanup.
+      - name: Free disk space for kind load (skypilot-local row)
+        if: ${{ inputs.provider == 'skypilot-local' }}
+        run: |
+          set -euo pipefail
+          df -h / | tail -1 | awk '{print "before: " $4 " free on /"}'
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /usr/local/lib/android \
+            /opt/ghc \
+            /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL
+          df -h / | tail -1 | awk '{print "after:  " $4 " free on /"}'
+
       - name: Load dev-snapshot image into kind (skypilot-local row)
         if: ${{ inputs.provider == 'skypilot-local' }}
         run: kind load docker-image "${IMAGE}" --name skypilot
