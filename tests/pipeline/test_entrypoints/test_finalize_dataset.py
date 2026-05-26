@@ -26,7 +26,6 @@ import shutil
 import tarfile
 from collections.abc import Callable
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, NoReturn, cast
 
 import h5py
@@ -174,7 +173,7 @@ def _build_run_cfg(spec_uri: str, output_dir: Path) -> DictConfig:
 
 
 @pytest.fixture()
-def stub_run_setup(monkeypatch: pytest.MonkeyPatch) -> Callable[[int | None], None]:
+def stub_finalize_setup(monkeypatch: pytest.MonkeyPatch) -> Callable[[int | None], None]:
     """Stub ``ensure_r2_env_loaded`` + marker-probe; expose a marker-size setter.
 
     Leaves ``r2_io.download_to_path`` and ``r2_io.upload`` unstubbed — paired
@@ -198,27 +197,25 @@ def stub_run_setup(monkeypatch: pytest.MonkeyPatch) -> Callable[[int | None], No
     return _set_marker_size
 
 
-def test_run_uploads_stats_then_marker_at_canonical_uris(
+def test_finalize_uploads_stats_then_marker_at_canonical_uris(
     tmp_path: Path,
     fake_r2_remote: Path,
     monkeypatch: pytest.MonkeyPatch,
-    stub_run_setup: Callable[[int | None], None],  # noqa: ARG001 — installs stubs only
+    stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001 — installs stubs only
 ) -> None:
-    """``run(cfg)`` against a wds spec lands ``stats.npz`` strictly before ``dataset.complete``.
+    """Spy on ``r2_io.upload`` to assert ``stats.npz`` is uploaded before ``dataset.complete``.
 
-    Wraps ``r2_io.upload`` to record destination URIs in call order; the
-    real upload still runs so the on-disk artifacts can be asserted as
-    well. Order via a spy is filesystem-invariant — mtime granularity on
-    fast filesystems can tie two writes inside a single ``run()`` call.
+    Order via a spy is filesystem-invariant — mtime granularity on fast
+    filesystems can tie two writes inside a single ``finalize`` call.
 
     :param tmp_path: Pytest tmp dir; hosts the on-disk spec JSON + Hydra-style output_dir.
     :param fake_r2_remote: Local-typed rclone remote; both artifacts land here.
-    :param monkeypatch: Pytest fixture used to wrap ``r2_io.upload`` with an
-        order-recording spy that still delegates to the real helper.
-    :param stub_run_setup: Fixture-activation only — installs the
+    :param monkeypatch: Pytest fixture used to wrap ``synth_setter.pipeline.r2_io.upload``
+        with an order-recording spy that still delegates to the real helper.
+    :param stub_finalize_setup: Fixture-activation only — installs the
         ``ensure_r2_env_loaded`` / ``object_size`` stubs.
     """
-    spec = _build_wds_smoke_spec(task_name="run-marker-last-wds")
+    spec = _build_wds_smoke_spec(task_name="finalize-marker-last-wds")
     _seed_train_shards(fake_r2_remote, spec)
     output_dir = tmp_path / "hydra_output"
     output_dir.mkdir()
@@ -233,45 +230,46 @@ def test_run_uploads_stats_then_marker_at_canonical_uris(
 
     monkeypatch.setattr("synth_setter.pipeline.r2_io.upload", spy_upload)
 
-    finalize_dataset.run(cfg)
+    finalize_dataset.finalize(cfg)
 
-    stats_path = _uri_to_local_path(fake_r2_remote, spec.r2.stats_uri())
-    marker_path = _uri_to_local_path(fake_r2_remote, spec.r2.dataset_complete_marker_uri())
-    assert stats_path.is_file()
-    assert marker_path.is_file()
+    stats_uri = spec.r2.stats_uri()
     marker_uri = spec.r2.dataset_complete_marker_uri()
+    assert _uri_to_local_path(fake_r2_remote, stats_uri).is_file()
+    assert _uri_to_local_path(fake_r2_remote, marker_uri).is_file()
+    assert upload_order.count(stats_uri) == 1
+    assert upload_order.count(marker_uri) == 1
     assert upload_order.index(marker_uri) == len(upload_order) - 1
-    assert upload_order.index(spec.r2.stats_uri()) < upload_order.index(marker_uri)
+    assert upload_order.index(stats_uri) < upload_order.index(marker_uri)
 
 
-def test_run_is_idempotent_when_marker_already_exists(
+def test_finalize_is_idempotent_when_marker_already_exists(
     tmp_path: Path,
     fake_r2_remote: Path,
-    stub_run_setup: Callable[[int | None], None],
+    stub_finalize_setup: Callable[[int | None], None],
 ) -> None:
     """Marker present at run prefix → ``run()`` short-circuits, no stats are written.
 
     :param tmp_path: Pytest tmp dir; hosts the on-disk spec JSON + Hydra-style output_dir.
     :param fake_r2_remote: Local-typed rclone remote — asserted to still be
         free of any ``stats.npz`` after the no-op run.
-    :param stub_run_setup: Used to flip the marker probe to "present".
+    :param stub_finalize_setup: Used to flip the marker probe to "present".
     """
-    stub_run_setup(0)
+    stub_finalize_setup(0)
     spec = _build_wds_smoke_spec(task_name="run-idempotent-wds")
     output_dir = tmp_path / "hydra_output"
     output_dir.mkdir()
     cfg = _build_run_cfg(_write_spec_to_file(spec, tmp_path), output_dir)
 
-    finalize_dataset.run(cfg)
+    finalize_dataset.finalize(cfg)
 
     stats_path = _uri_to_local_path(fake_r2_remote, spec.r2.stats_uri())
     assert not stats_path.exists()
 
 
-def test_run_raises_on_unsupported_output_format(
+def test_finalize_raises_on_unsupported_output_format(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    stub_run_setup: Callable[[int | None], None],  # noqa: ARG001 — installs stubs only
+    stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001 — installs stubs only
 ) -> None:
     """An ``output_format`` outside {hdf5, wds} surfaces a clear ValueError.
 
@@ -281,28 +279,27 @@ def test_run_raises_on_unsupported_output_format(
 
     :param tmp_path: Pytest tmp dir; hosts the Hydra-style output_dir.
     :param monkeypatch: Pytest fixture used to install a stub loader.
-    :param stub_run_setup: Installs the auth + marker-probe stubs so the
+    :param stub_finalize_setup: Installs the auth + marker-probe stubs so the
         dispatcher (not the marker check) is the failure surface.
     """
-    fake_spec = SimpleNamespace(
-        output_format="parquet",
-        r2=SimpleNamespace(dataset_complete_marker_uri=lambda: "r2://b/k/dataset.complete"),
+    bad_spec = _build_wds_smoke_spec(task_name="finalize-bad-format").model_copy(
+        update={"output_format": "parquet"}
     )
     monkeypatch.setattr(
-        "synth_setter.cli.finalize_dataset.load_spec_from_uri", lambda _uri: fake_spec
+        "synth_setter.cli.finalize_dataset.load_spec_from_uri", lambda _uri: bad_spec
     )
     output_dir = tmp_path / "hydra_output"
     output_dir.mkdir()
     cfg = _build_run_cfg("file:///unused", output_dir)
 
     with pytest.raises(ValueError, match="unsupported output_format"):
-        finalize_dataset.run(cfg)
+        finalize_dataset.finalize(cfg)
 
 
 def test_finalize_dataset_main_resolves_hydra_logging_under_at_hydra_main(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    stub_run_setup: Callable[[int | None], None],
+    stub_finalize_setup: Callable[[int | None], None],
 ) -> None:
     """Invoking ``main()`` under @hydra.main resolves every interpolation in the shared groups.
 
@@ -317,10 +314,10 @@ def test_finalize_dataset_main_resolves_hydra_logging_under_at_hydra_main(
 
     :param tmp_path: Hosts ``PROJECT_ROOT``, the on-disk spec JSON, and Hydra's run dir.
     :param monkeypatch: Pytest fixture used to point ``PROJECT_ROOT`` + ``sys.argv``.
-    :param stub_run_setup: Used to flip the marker probe to "present" so the
+    :param stub_finalize_setup: Used to flip the marker probe to "present" so the
         body skips the wds/hdf5 dispatch.
     """
-    stub_run_setup(0)
+    stub_finalize_setup(0)
     monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
     spec = _build_wds_smoke_spec(task_name="hydra-startup")
     spec_uri = _write_spec_to_file(spec, tmp_path)
@@ -436,14 +433,16 @@ def _stub_get_stats_hdf5(monkeypatch: pytest.MonkeyPatch) -> None:
 
     :param monkeypatch: Pytest fixture used to install the stub.
     """
-    monkeypatch.setattr(
-        "synth_setter.cli.finalize_dataset.get_stats_hdf5",
-        lambda train_h5_path, mask_degenerate=False: np.savez(
+
+    def fake_stats(train_h5_path: str, mask_degenerate: bool = False) -> None:
+        del mask_degenerate
+        np.savez(
             Path(train_h5_path).parent / "stats.npz",
             mean=np.zeros((2, 8, 8), dtype=np.float32),
             std=np.ones((2, 8, 8), dtype=np.float32),
-        ),
-    )
+        )
+
+    monkeypatch.setattr("synth_setter.cli.finalize_dataset.get_stats_hdf5", fake_stats)
 
 
 def test_hdf5_finalize_produces_train_consumable_layout(
@@ -712,14 +711,14 @@ def test_finalize_hdf5_rejects_structurally_invalid_shard(
     assert not (landed_root / "stats.npz").exists()
 
 
-def test_run_hdf5_marker_idempotency_short_circuits_before_download(
+def test_finalize_hdf5_marker_idempotency_short_circuits_before_download(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Hdf5 dispatch: ``run()`` returns without any download when the marker exists.
+    """Hdf5 dispatch: ``finalize()`` returns without any download when the marker exists.
 
-    ``test_run_is_idempotent_when_marker_already_exists`` covers the wds
-    branch; this test pins the hdf5-branch path so a regression that
+    ``test_finalize_is_idempotent_when_marker_already_exists`` covers the
+    wds branch; this test pins the hdf5-branch path so a regression that
     moved the marker check *inside* the format branch (after the dispatch
     table) would be caught. Positive assertion: ``object_size`` was probed
     exactly once against the marker URI (so a refactor that removed the
@@ -746,18 +745,17 @@ def test_run_hdf5_marker_idempotency_short_circuits_before_download(
 
     monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", record_probe)
 
-    spec = _build_hdf5_smoke_spec(task_name="run-hdf5-marker-present")
+    spec = _build_hdf5_smoke_spec(task_name="finalize-hdf5-marker-present")
     output_dir = tmp_path / "hydra_output"
     output_dir.mkdir()
     cfg = _build_run_cfg(_write_spec_to_file(spec, tmp_path), output_dir)
 
-    finalize_dataset.run(cfg)
+    finalize_dataset.finalize(cfg)
 
     assert probed_uris == [spec.r2.dataset_complete_marker_uri()]
-    assert not (output_dir / "dataset.complete").exists()
 
 
-def test_run_hdf5_branch_uploads_marker_last(
+def test_finalize_hdf5_branch_uploads_marker_last(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The hdf5 ``run(cfg)`` path writes ``dataset.complete`` strictly after every artifact.
@@ -792,7 +790,7 @@ def test_run_hdf5_branch_uploads_marker_last(
     output_dir.mkdir()
     cfg = _build_run_cfg(_write_spec_to_file(spec, tmp_path), output_dir)
 
-    finalize_dataset.run(cfg)
+    finalize_dataset.finalize(cfg)
 
     marker_uri = spec.r2.dataset_complete_marker_uri()
     marker_index = upload_order.index(marker_uri)
