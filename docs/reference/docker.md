@@ -282,7 +282,7 @@ jq -r .r2.prefix input_spec.json
 
 VST3 plugins (Surge XT) require an X11 display. For dataset generation,
 X11 is bootstrapped automatically around the generator subprocess inside
-`run()`. For ad-hoc VST work, prepend the headless wrapper to your command:
+`generate()`. For ad-hoc VST work, prepend the headless wrapper to your command:
 
 ```bash
 docker run --rm synth-setter:dev-snapshot \
