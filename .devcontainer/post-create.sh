@@ -59,7 +59,17 @@ fi
 # --local, pre-commit install → .git/hooks/*) don't land root-owned in the
 # bind-mounted workspace. Both opt-in DEVCONTAINER_USER=root sessions and
 # Codespaces (which runs postCreateCommand as root) hit this path.
+#
+# Before dropping, scrub core.hooksPath from the scopes only root can reach:
+# /etc/gitconfig (--system) and /root/.gitconfig (--global). --global is
+# per-user, so a stray entry there shadows .git/hooks/pre-commit for any
+# later root shell or root-running agent and makes `pre-commit install`
+# refuse with "Cowardly refusing…". These writes land outside the workspace,
+# so they don't violate the no-root-owned-files invariant above.
 if [ "$(id -u)" -eq 0 ]; then
+  for scope in --system --global; do
+    git config "$scope" --unset-all core.hooksPath 2>/dev/null || true
+  done
   exec runuser -u dev -- bash "$(readlink -f "${BASH_SOURCE[0]}")"
 fi
 
@@ -101,10 +111,17 @@ else
   echo "RESTRICTED_AGENT_GIT_PAT not set, skipping git credential config"
 fi
 
-# Pre-commit hooks (pre-commit itself is in the image's deps). Strip any
-# absolute host-path core.hooksPath that may leak from the host .git/config
-# (harmless in Codespaces; bites local devcontainer users).
-git config --local --unset-all core.hooksPath 2>/dev/null || true
+# Pre-commit hooks (pre-commit itself is in the image's deps). Strip
+# core.hooksPath from every scope dev can write — --local catches the
+# host-bind-mounted .git/config leak, --global catches a stray entry in
+# /home/dev/.gitconfig, --worktree catches per-worktree overrides. Without
+# this, `pre-commit install` aborts with "Cowardly refusing…" and any
+# value set here would silently shadow .git/hooks/pre-commit at commit
+# time. --system is handled in the root pre-exec above; dev cannot write
+# /etc/gitconfig.
+for scope in --global --local --worktree; do
+  git config "$scope" --unset-all core.hooksPath 2>/dev/null || true
+done
 pre-commit install
 
 echo "Dev container ready. Run 'make test-fast' to verify."
