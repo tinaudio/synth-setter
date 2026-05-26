@@ -21,16 +21,12 @@ Usage::
 
     synth-setter-spec-uri <input_spec.json>
     synth-setter-spec-uri --from-experiment EXP --run-id-override RUNID
-
-Prints the resulting URI to stdout; exits non-zero on wrong arity, missing
-or unreadable spec, or invalid spec content.
 """
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Any
 
 from hydra import compose, initialize_config_module
 from omegaconf import OmegaConf
@@ -104,7 +100,7 @@ def compute_spec_uri_from_hydra(experiment: str, run_id_override: str) -> str:
     cfg.paths.root_dir = "."
     cfg.paths.output_dir = "."
     cfg.paths.work_dir = "."
-    raw: Any = OmegaConf.to_container(cfg, resolve=True)
+    raw: object = OmegaConf.to_container(cfg, resolve=True)
     if not isinstance(raw, dict):
         raise TypeError(f"composed config is not a mapping: {type(raw).__name__}")
     spec_kwargs = {
@@ -126,30 +122,33 @@ def _parse_hydra_argv(argv: list[str]) -> tuple[str, str] | None:
         ``("__usage__", "")`` on a malformed invocation;
         ``None`` when neither flag is present.
     """
-    flag_prefixes = ("--from-experiment", "--run-id-override")
-    if not any(a.startswith(flag_prefixes) for a in argv):
+    # Exact-name match (plus the ``=value`` form) so future flags like
+    # ``--from-experiment-source`` can't accidentally route through this parser.
+    hydra_flags = {"--from-experiment", "--run-id-override"}
+    eq_prefixes = ("--from-experiment=", "--run-id-override=")
+    if not any(a in hydra_flags or a.startswith(eq_prefixes) for a in argv):
         return None
 
     experiment: str | None = None
     run_id_override: str | None = None
     i = 0
     while i < len(argv):
-        a = argv[i]
-        if a == "--from-experiment" and i + 1 < len(argv):
+        arg = argv[i]
+        if arg == "--from-experiment" and i + 1 < len(argv):
             experiment = argv[i + 1]
             i += 2
-        elif a.startswith("--from-experiment="):
-            experiment = a.split("=", 1)[1]
+        elif arg.startswith("--from-experiment="):
+            experiment = arg.split("=", 1)[1]
             i += 1
-        elif a == "--run-id-override" and i + 1 < len(argv):
+        elif arg == "--run-id-override" and i + 1 < len(argv):
             run_id_override = argv[i + 1]
             i += 2
-        elif a.startswith("--run-id-override="):
-            run_id_override = a.split("=", 1)[1]
+        elif arg.startswith("--run-id-override="):
+            run_id_override = arg.split("=", 1)[1]
             i += 1
         else:
             return ("__usage__", "")
-    if experiment is None or run_id_override is None:
+    if not experiment or not run_id_override:
         return ("__usage__", "")
     return (experiment, run_id_override)
 
