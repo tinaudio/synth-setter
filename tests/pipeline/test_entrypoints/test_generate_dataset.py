@@ -201,13 +201,8 @@ class TestLoadSpecFromUri:
         assert loaded.task_name == spec.task_name
 
 
-# ---------------------------------------------------------------------------
-# generate — full flow orchestration
-# ---------------------------------------------------------------------------
-
-
 class TestRun:
-    """Run() orchestrates: generate → upload shard, per owned shard.
+    """generate(spec) orchestrates: render → upload shard, per owned shard.
 
     No spec upload.
     """
