@@ -435,3 +435,58 @@ class TestCliFromExperimentMode:
         assert exc.value.code == 3
         err = capsys.readouterr().err
         assert "Traceback" not in err
+
+    def test_experiment_named_usage_does_not_trip_sentinel(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """``--from-experiment __usage__`` reaches Hydra, not the sentinel branch.
+
+        Defends the upgrade from the prior ``"__usage__"`` magic string to a
+        class-based sentinel: a user passing ``--from-experiment __usage__``
+        now hits Hydra compose (which fails because no such experiment file
+        exists, exit 3) rather than being misrouted into the usage-error
+        branch (exit 1).
+
+        :param monkeypatch: Pytest fixture used to set ``sys.argv``.
+        :param capsys: Pytest fixture capturing stdout/stderr.
+        """
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "synth-setter-spec-uri",
+                "--from-experiment",
+                "__usage__",
+                "--run-id-override",
+                "x",
+            ],
+        )
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 3, "should reach compose, not the usage branch"
+        err = capsys.readouterr().err
+        assert "Traceback" not in err
+        assert "__usage__" in err
+
+    def test_usage_text_uses_live_argv_program_name(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Usage banner uses ``Path(sys.argv[0]).name`` rather than hard-coding the script name.
+
+        A ``python -m synth_setter.pipeline.ci.spec_uri`` invocation (or any
+        non-default entrypoint) should display the actual command the operator
+        just ran.
+
+        :param monkeypatch: Pytest fixture used to set ``sys.argv``.
+        :param capsys: Pytest fixture capturing stdout/stderr.
+        """
+        monkeypatch.setattr("sys.argv", ["/usr/local/bin/aliased-spec-uri"])
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 1
+        err = capsys.readouterr().err
+        assert "aliased-spec-uri" in err
+        assert "synth-setter-spec-uri" not in err

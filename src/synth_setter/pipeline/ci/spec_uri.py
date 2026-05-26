@@ -41,10 +41,35 @@ _EXIT_USAGE = 1
 _EXIT_MISSING_FILE = 2
 _EXIT_INVALID_SPEC = 3
 
-_USAGE = (
-    "Usage: synth-setter-spec-uri <input_spec.json>\n"
-    "   or: synth-setter-spec-uri --from-experiment EXP --run-id-override RUNID\n"
-)
+
+def _usage_text() -> str:
+    """Return the dual-mode usage banner with the live program name interpolated.
+
+    Reads ``sys.argv[0]`` so a ``python -m synth_setter.pipeline.ci.spec_uri``
+    invocation (or any non-default entrypoint) displays the actual command
+    the operator just ran rather than a stale ``synth-setter-spec-uri`` literal.
+
+    :returns: Two-line usage string ending in a trailing newline.
+    """
+    prog = Path(sys.argv[0]).name if sys.argv and sys.argv[0] else "synth-setter-spec-uri"
+    return (
+        f"Usage: {prog} <input_spec.json>\n"
+        f"   or: {prog} --from-experiment EXP --run-id-override RUNID\n"
+    )
+
+
+class _UsageErrorMarker:
+    """Singleton sentinel returned by ``_parse_hydra_argv`` to signal a usage error.
+
+    A class-based sentinel cannot collide with any user-supplied string (unlike
+    the prior ``"__usage__"`` magic value), so a real experiment named
+    ``__usage__`` is no longer special-cased into a usage error.
+    """
+
+    __slots__ = ()
+
+
+_USAGE_ERROR: _UsageErrorMarker = _UsageErrorMarker()
 
 # Composed-config keys that aren't ``DatasetSpec`` fields. Mirrors
 # ``cli.generate_dataset._NON_SPEC_KEYS`` — keep in sync if either side adds
@@ -109,17 +134,17 @@ def compute_spec_uri_from_hydra(experiment: str, run_id_override: str) -> str:
     return DatasetSpec(**spec_kwargs).r2.input_spec_uri()
 
 
-def _parse_hydra_argv(argv: list[str]) -> tuple[str, str] | None:
+def _parse_hydra_argv(argv: list[str]) -> tuple[str, str] | _UsageErrorMarker | None:
     """Extract ``(experiment, run_id_override)`` from argv when both flags are set.
 
     Accepts both ``--flag VALUE`` and ``--flag=VALUE`` forms. Returns ``None``
     when *neither* flag is present (caller falls through to file mode).
-    Returns ``("__usage__", "")`` sentinel when *some* flag is present but the
-    pair is incomplete or has stray args, signalling a usage error.
+    Returns ``_USAGE_ERROR`` (a sentinel object) when *some* flag is present
+    but the pair is incomplete or has stray args, signalling a usage error.
 
     :param argv: ``sys.argv[1:]`` slice.
     :returns: ``(experiment, run_id_override)`` on a complete pair;
-        ``("__usage__", "")`` on a malformed invocation;
+        ``_USAGE_ERROR`` on a malformed invocation;
         ``None`` when neither flag is present.
     """
     # Exact-name match (plus the ``=value`` form) so future flags like
@@ -147,9 +172,9 @@ def _parse_hydra_argv(argv: list[str]) -> tuple[str, str] | None:
             run_id_override = arg.split("=", 1)[1]
             i += 1
         else:
-            return ("__usage__", "")
+            return _USAGE_ERROR
     if not experiment or not run_id_override:
-        return ("__usage__", "")
+        return _USAGE_ERROR
     return (experiment, run_id_override)
 
 
@@ -159,24 +184,28 @@ def main() -> None:
 
     hydra_args = _parse_hydra_argv(argv)
     if hydra_args is not None:
-        experiment, run_id_override = hydra_args
-        if experiment == "__usage__":
-            sys.stderr.write(_USAGE)
+        if isinstance(hydra_args, _UsageErrorMarker):
+            sys.stderr.write(_usage_text())
             sys.exit(_EXIT_USAGE)
+        experiment, run_id_override = hydra_args
         try:
             uri = compute_spec_uri_from_hydra(experiment, run_id_override)
-        # Hydra's compose can raise a wide set of types (MissingConfigException,
-        # OmegaConfBaseException, OverridesParser errors, etc.). Catch broadly
-        # and collapse to one stderr line — distinguishing them in the CLI buys
-        # nothing the exit code doesn't already encode.
+        # Hydra's compose plus the downstream ``DatasetSpec(**spec_kwargs)``
+        # construction can both raise (MissingConfigException, OmegaConfBaseException,
+        # OverridesParser errors, ValidationError, TypeError); collapse them all to
+        # one stderr line — distinguishing them in the CLI buys nothing the exit
+        # code doesn't already encode.
         except Exception as exc:  # noqa: BLE001
-            sys.stderr.write(f"error: compose failed for experiment {experiment!r}: {exc}\n")
+            sys.stderr.write(
+                f"error: failed to derive spec URI for experiment {experiment!r} "
+                f"({type(exc).__name__}): {exc}\n"
+            )
             sys.exit(_EXIT_INVALID_SPEC)
         sys.stdout.write(uri + "\n")
         return
 
     if len(argv) != 1:
-        sys.stderr.write(_USAGE)
+        sys.stderr.write(_usage_text())
         sys.exit(_EXIT_USAGE)
     spec_path = Path(argv[0])
     if not spec_path.is_file():
