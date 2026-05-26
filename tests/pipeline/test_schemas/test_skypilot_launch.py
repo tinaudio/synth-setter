@@ -85,3 +85,24 @@ class TestModelCopy:
         assert with_cmd.compute_template == "x.yaml"
         # Original is untouched (frozen invariant).
         assert original.cmd is None
+
+
+class TestExtraEnvs:
+    """``extra_envs`` carries caller-supplied per-rank worker env additions."""
+
+    def test_extra_envs_defaults_to_empty_dict(self) -> None:
+        """No callers means no merge — the default must not surprise rank env composition."""
+        assert SkypilotLaunchConfig().extra_envs == {}
+
+    @pytest.mark.parametrize(
+        "bad_key",
+        ["lower", "Mixed", "1LEADING_DIGIT", "HAS-DASH", "HAS SPACE", ""],
+        ids=["lowercase", "mixed-case", "leading-digit", "dash", "space", "empty"],
+    )
+    def test_extra_envs_rejects_lowercase_keys(self, bad_key: str) -> None:
+        """Keys must match the POSIX env-var identifier grammar so exports round-trip.
+
+        :param bad_key: Parametrized invalid key the validator must reject.
+        """
+        with pytest.raises(ValidationError, match="extra_envs keys"):
+            SkypilotLaunchConfig(extra_envs={bad_key: "x"})

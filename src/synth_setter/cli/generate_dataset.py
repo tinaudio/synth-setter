@@ -27,6 +27,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from synth_setter.data.vst.core import extract_renderer_version
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.constants import WORKER_SPEC_URI_ENV
 from synth_setter.pipeline.partitioning import (
     available_cpus,
     get_my_shards,
@@ -380,6 +381,11 @@ def _sky_cfg_from_dataset_cfg(cfg: DictConfig) -> SkypilotLaunchConfig:
             "skypilot_launch.cmd is launcher-internal and cannot be set from Hydra; "
             "the worker-side bash one-liner is built from argv by main()."
         )
+    if sky_kwargs.get("extra_envs"):
+        raise ValueError(
+            "skypilot_launch.extra_envs is launcher-internal and cannot be set from Hydra; "
+            "main() injects dataset-specific worker envs (e.g. WORKER_SPEC_URI)."
+        )
     return SkypilotLaunchConfig(**sky_kwargs)
 
 
@@ -469,10 +475,15 @@ def main() -> None:
     # Deferred import — SkyPilot pulls heavy provider SDKs on import.
     from synth_setter.pipeline.skypilot_launch import dispatch_via_skypilot
 
-    sky_cfg = sky_cfg.model_copy(update={"cmd": _build_worker_cmd(overrides, spec)})
     # ``input_spec_uri()`` (not ``uri(INPUT_SPEC_FILENAME)``) — the former
     # includes the run's prefix so the worker reads the same canonical object
     # ``main()`` just uploaded.
+    sky_cfg = sky_cfg.model_copy(
+        update={
+            "cmd": _build_worker_cmd(overrides, spec),
+            "extra_envs": {WORKER_SPEC_URI_ENV: spec.r2.input_spec_uri()},
+        }
+    )
     dispatch_via_skypilot(spec, sky_cfg, spec_uri=spec.r2.input_spec_uri())
 
 

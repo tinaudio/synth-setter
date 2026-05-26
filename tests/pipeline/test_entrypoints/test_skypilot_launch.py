@@ -1587,6 +1587,41 @@ class TestDispatchViaSkypilot:
         for call in mock_sky.Task.from_yaml_config.return_value.update_envs.call_args_list:
             assert call.args[0][NUM_WORKERS_ENV_VAR] == "3"
 
+    def test_extra_envs_forwarded_to_each_rank(
+        self,
+        tmp_path: Path,
+        fake_plugin: Path,
+        env_file: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """Caller-supplied ``sky_cfg.extra_envs`` lands in every rank's worker env.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param fake_plugin: Fixture-provided fake VST3 plugin path.
+        :param env_file: Fixture-provided worker env file path.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        """
+        template = _write_runpod_yaml(tmp_path)
+        spec = _build_spec(fake_plugin)
+        sky_cfg = SkypilotLaunchConfig(
+            compute_template=str(template),
+            cmd="echo",
+            env_file=str(env_file),
+            job_name="extra-envs",
+            num_workers=2,
+            extra_envs={"FOO": "bar"},
+        )
+
+        dispatch_via_skypilot(spec, sky_cfg, spec_uri=_DISPATCH_SPEC_URI)
+
+        update_envs_calls = mock_sky.Task.from_yaml_config.return_value.update_envs.call_args_list
+        assert len(update_envs_calls) == 2
+        for call in update_envs_calls:
+            injected = call.args[0]
+            assert injected["FOO"] == "bar"
+            assert injected[NUM_WORKERS_ENV_VAR] == "2"
+            assert injected[WORKER_RANK_ENV_VAR] in {"0", "1"}
+
     def test_single_worker_dispatch_still_injects_rank_world_env(
         self,
         tmp_path: Path,

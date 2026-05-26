@@ -8,7 +8,11 @@ resolved separately via ``resolve_worker_env``.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, field_validator
+import re
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+_ENV_IDENT_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 
 
 class SkypilotLaunchConfig(BaseModel):
@@ -53,6 +57,12 @@ class SkypilotLaunchConfig(BaseModel):
     .. attribute :: local
 
         Run the job on the local SkyPilot context instead of remote.
+
+    .. attribute :: extra_envs
+
+        Caller-supplied env vars merged into every rank's worker env after
+        ``resolve_worker_env``. Keys must match the POSIX env-var identifier
+        grammar; rank/world keys injected later still win.
     """
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
@@ -66,6 +76,7 @@ class SkypilotLaunchConfig(BaseModel):
     tail: bool = False
     api_server: str | None = None
     local: bool = False
+    extra_envs: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("num_workers")
     @classmethod
@@ -94,3 +105,19 @@ class SkypilotLaunchConfig(BaseModel):
         if not v.strip():
             raise ValueError("api_server must be a non-empty URL when set")
         return v.strip()
+
+    @field_validator("extra_envs")
+    @classmethod
+    def extra_envs_keys_must_be_env_identifiers(cls, v: dict[str, str]) -> dict[str, str]:
+        """Reject keys that aren't POSIX env-var identifiers.
+
+        :param v: Candidate ``extra_envs`` mapping pre-validation.
+        :return: ``v`` unchanged when every key matches ``[A-Z_][A-Z0-9_]*``.
+        :raises ValueError: one or more keys violate the env-identifier grammar.
+        """
+        bad = [k for k in v if not _ENV_IDENT_RE.match(k)]
+        if bad:
+            raise ValueError(
+                f"extra_envs keys must match POSIX env-var identifiers; got invalid: {bad}"
+            )
+        return v

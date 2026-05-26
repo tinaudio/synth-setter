@@ -890,6 +890,7 @@ def dispatch_via_skypilot(
 
     env_file_path = Path(sky_cfg.env_file).expanduser() if sky_cfg.env_file else None
     worker_env = resolve_worker_env(env_file_path)
+    worker_env.update(sky_cfg.extra_envs)
     if not any(k in worker_env for k in _SECRET_WORKER_ENV_KEYS):
         raise ValueError(
             "No worker env vars resolved. Set the rclone-R2 keys in process env "
