@@ -37,7 +37,7 @@ register_resolvers()
 log = RankedLogger(__name__, rank_zero_only=True)
 
 
-def _run_predict_postprocessing(cfg: DictConfig) -> None:  # noqa: DOC502
+def _run_predict_postprocessing(cfg: DictConfig) -> None:  # noqa: DOC502,DOC503
     """Render VST audio and compute audio metrics for the just-written predictions.
 
     The VST render subprocess is prefixed with the headless wrapper on Linux so

@@ -106,7 +106,17 @@ def _build_postprocess_cfg(
     num_workers: int = 1,
     render: dict[str, Any] | None = None,
 ) -> DictConfig:
-    """Build a minimal cfg accepted by ``_run_predict_postprocessing``."""
+    """Build a minimal cfg accepted by ``_run_predict_postprocessing``.
+
+    :param output_dir: Resolves to ``cfg.paths.output_dir``; the helper derives
+        ``predictions/`` / ``audio/`` / ``metrics/`` under it.
+    :param render_vst: Drives ``cfg.evaluation.render_vst``.
+    :param compute_metrics: Drives ``cfg.evaluation.compute_metrics``.
+    :param rerender_target: Drives ``cfg.evaluation.rerender_target``.
+    :param num_workers: Drives ``cfg.evaluation.num_workers``.
+    :param render: Drives ``cfg.render``; pass ``None`` to test the unset-render branch.
+    :returns: Minimal :class:`DictConfig` shaped the way the helper reads it.
+    """
     return OmegaConf.create(  # type: ignore[no-any-return]
         {
             "paths": {"output_dir": str(output_dir)},
@@ -123,7 +133,13 @@ def _build_postprocess_cfg(
 
 @pytest.fixture
 def captured_argv(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
-    """Capture every ``subprocess.run`` argv from the eval module without launching it."""
+    """Capture every ``subprocess.run`` argv from the eval module without launching it.
+
+    :param monkeypatch: Used to stub ``subprocess.run``, ``as_file``, and
+        ``vst_headless_wrapper`` so the helper builds argv without touching
+        the real VST subprocess or package-data extraction.
+    :returns: List that grows by one entry per intercepted ``subprocess.run`` call.
+    """
     captured: list[list[str]] = []
 
     def _fake_run(args: list[str], **_kwargs: Any) -> None:
@@ -144,7 +160,12 @@ def captured_argv(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
 
 @pytest.fixture
 def predictions_tree(tmp_path: Path) -> Path:
-    """Create a ``predictions/`` and ``audio/`` subtree so existence guards pass."""
+    """Create a ``predictions/`` and ``audio/`` subtree so existence guards pass.
+
+    :param tmp_path: Pytest-provided per-test temporary directory; receives the
+        ``predictions/`` and ``audio/`` children the helper checks for.
+    :returns: ``tmp_path`` itself — used as ``cfg.paths.output_dir`` by callers.
+    """
     (tmp_path / "predictions").mkdir()
     (tmp_path / "audio").mkdir()
     return tmp_path
@@ -155,7 +176,12 @@ def test_postprocessing_linux_argv_has_wrapper_prefix(
     predictions_tree: Path,
     captured_argv: list[list[str]],
 ) -> None:
-    """On Linux the render argv starts with the Xvfb wrapper path."""
+    """On Linux the render argv starts with the Xvfb wrapper path.
+
+    :param monkeypatch: Pins ``sys.platform`` to ``linux`` so the wrapper branch fires.
+    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created.
+    :param captured_argv: Captured argv list populated by the fixture.
+    """
     monkeypatch.setattr(eval_mod.sys, "platform", "linux")
     cfg = _build_postprocess_cfg(
         predictions_tree,
@@ -178,7 +204,12 @@ def test_postprocessing_non_linux_argv_omits_wrapper(
     predictions_tree: Path,
     captured_argv: list[list[str]],
 ) -> None:
-    """Off-Linux platforms must invoke the python entrypoint directly."""
+    """Off-Linux platforms must invoke the python entrypoint directly.
+
+    :param monkeypatch: Pins ``sys.platform`` to ``darwin`` so the wrapper branch is skipped.
+    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created.
+    :param captured_argv: Captured argv list populated by the fixture.
+    """
     monkeypatch.setattr(eval_mod.sys, "platform", "darwin")
     cfg = _build_postprocess_cfg(
         predictions_tree,
@@ -200,8 +231,17 @@ def test_postprocessing_plugin_path_gate(
     predictions_tree: Path,
     captured_argv: list[list[str]],
 ) -> None:
-    """``cfg.render.plugin_path`` adds ``--plugin_path <value>`` to the render argv only when set."""
+    """``cfg.render.plugin_path`` adds ``--plugin_path <value>`` to the render argv only when set.
+
+    :param monkeypatch: Pins ``sys.platform`` to ``darwin`` so the headless wrapper
+        prefix doesn't shift argv indices the test asserts on.
+    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created
+        so the helper's existence guards pass.
+    :param captured_argv: List of every ``subprocess.run`` argv the helper would have
+        spawned; populated by the fixture's monkeypatch.
+    """
     monkeypatch.setattr(eval_mod.sys, "platform", "darwin")
+    plugin_path = str(predictions_tree / "Surge XT.vst3")
     cfg = _build_postprocess_cfg(
         predictions_tree,
         compute_metrics=False,
@@ -209,7 +249,7 @@ def test_postprocessing_plugin_path_gate(
         render={
             "param_spec_name": "surge/fake_oracle",
             "preset_path": "preset.fxp",
-            "plugin_path": "/tmp/Surge XT.vst3",
+            "plugin_path": plugin_path,
         },
     )
 
@@ -218,7 +258,7 @@ def test_postprocessing_plugin_path_gate(
     render_argv = captured_argv[0]
     assert "--plugin_path" in render_argv
     plugin_idx = render_argv.index("--plugin_path")
-    assert render_argv[plugin_idx + 1] == "/tmp/Surge XT.vst3"
+    assert render_argv[plugin_idx + 1] == plugin_path
 
 
 def test_postprocessing_rerender_target_gate(
@@ -226,7 +266,12 @@ def test_postprocessing_rerender_target_gate(
     predictions_tree: Path,
     captured_argv: list[list[str]],
 ) -> None:
-    """``evaluation.rerender_target`` appends ``-t`` only when truthy."""
+    """``evaluation.rerender_target`` appends ``-t`` only when truthy.
+
+    :param monkeypatch: Pins ``sys.platform`` to ``darwin`` so the wrapper branch is skipped.
+    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created.
+    :param captured_argv: Captured argv list populated by the fixture.
+    """
     monkeypatch.setattr(eval_mod.sys, "platform", "darwin")
     render = {"param_spec_name": "surge/fake_oracle", "preset_path": "preset.fxp"}
 
@@ -250,7 +295,13 @@ def test_postprocessing_metrics_argv_includes_num_workers(
     predictions_tree: Path,
     captured_argv: list[list[str]],
 ) -> None:
-    """The metrics subprocess receives ``-w <num_workers>`` from ``cfg.evaluation``."""
+    """The metrics subprocess receives ``-w <num_workers>`` from ``cfg.evaluation``.
+
+    :param monkeypatch: Pins ``sys.platform`` to ``darwin`` so render-branch monkeypatches
+        (still installed by the fixture) don't influence the metrics-only argv.
+    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created.
+    :param captured_argv: Captured argv list populated by the fixture.
+    """
     monkeypatch.setattr(eval_mod.sys, "platform", "darwin")
     cfg = _build_postprocess_cfg(
         predictions_tree,
@@ -275,7 +326,11 @@ def test_postprocessing_no_op_when_both_gates_off(
     predictions_tree: Path,
     captured_argv: list[list[str]],
 ) -> None:
-    """No subprocess fires when ``render_vst`` and ``compute_metrics`` are both off."""
+    """No subprocess fires when ``render_vst`` and ``compute_metrics`` are both off.
+
+    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created.
+    :param captured_argv: Captured argv list — asserted empty.
+    """
     cfg = _build_postprocess_cfg(
         predictions_tree, render_vst=False, compute_metrics=False, render=None
     )
@@ -289,7 +344,11 @@ def test_postprocessing_render_requires_render_cfg(
     predictions_tree: Path,
     captured_argv: list[list[str]],
 ) -> None:
-    """``render_vst=True`` with ``cfg.render is None`` raises a directed ``ValueError``."""
+    """``render_vst=True`` with ``cfg.render is None`` raises a directed ``ValueError``.
+
+    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created.
+    :param captured_argv: Captured argv list — asserted empty (helper fails before dispatch).
+    """
     cfg = _build_postprocess_cfg(predictions_tree, compute_metrics=False, render=None)
 
     with pytest.raises(ValueError, match="render config group"):
@@ -301,7 +360,11 @@ def test_postprocessing_render_requires_predictions_dir(
     tmp_path: Path,
     captured_argv: list[list[str]],
 ) -> None:
-    """Missing ``predictions/`` dir surfaces a callback-pointing ``ValueError``."""
+    """Missing ``predictions/`` dir surfaces a callback-pointing ``ValueError``.
+
+    :param tmp_path: Pytest temp dir used as ``output_dir`` without pre-creating subtrees.
+    :param captured_argv: Captured argv list — asserted empty (helper fails before dispatch).
+    """
     cfg = _build_postprocess_cfg(
         tmp_path,
         compute_metrics=False,
@@ -317,7 +380,11 @@ def test_postprocessing_metrics_requires_audio_dir(
     tmp_path: Path,
     captured_argv: list[list[str]],
 ) -> None:
-    """Missing ``audio/`` dir surfaces a render-pointing ``ValueError`` for metrics-only runs."""
+    """Missing ``audio/`` dir surfaces a render-pointing ``ValueError`` for metrics-only runs.
+
+    :param tmp_path: Pytest temp dir used as ``output_dir`` without pre-creating subtrees.
+    :param captured_argv: Captured argv list — asserted empty (helper fails before dispatch).
+    """
     cfg = _build_postprocess_cfg(tmp_path, render_vst=False, compute_metrics=True)
 
     with pytest.raises(ValueError, match="render_vst"):
