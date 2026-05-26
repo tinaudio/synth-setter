@@ -31,6 +31,11 @@ Install the project in editable mode with development dependencies:
 make install        # runs: pip install uv && uv pip install -e ".[torch,dev]"
 ```
 
+`make install` does not consume the committed lockfile. For the same wheel
+pins CI uses, run `uv sync --frozen` — see
+[docs/reference/dependency-management.md](docs/reference/dependency-management.md)
+for per-platform commands.
+
 Install pre-commit hooks:
 
 ```bash
@@ -150,16 +155,17 @@ make benchmark      # performance benchmarks
 
 Tests use `pytest` with strict markers. The registered markers are:
 
-| Marker                      | Meaning                             |
-| --------------------------- | ----------------------------------- |
-| `@pytest.mark.slow`         | Long-running tests                  |
-| `@pytest.mark.gpu`          | Requires a GPU                      |
-| `@pytest.mark.requires_vst` | Requires Surge XT VST plugin binary |
-| `@pytest.mark.r2`           | Requires R2/rclone access           |
-| `@pytest.mark.hypothesis`   | Property-based tests (Hypothesis)   |
-| `@pytest.mark.pipeline`     | Pipeline integration tests          |
-| `@pytest.mark.benchmark`    | Performance benchmarks              |
-| `@pytest.mark.docker_smoke` | Smoke tests inside Docker image     |
+| Marker                      | Meaning                                                                            |
+| --------------------------- | ---------------------------------------------------------------------------------- |
+| `@pytest.mark.slow`         | Long-running tests                                                                 |
+| `@pytest.mark.gpu`          | Requires a GPU                                                                     |
+| `@pytest.mark.mps`          | Requires Apple MPS (Metal); use for any test that exercises an MPS-incompatible op |
+| `@pytest.mark.requires_vst` | Requires Surge XT VST plugin binary                                                |
+| `@pytest.mark.r2`           | Requires R2/rclone access                                                          |
+| `@pytest.mark.hypothesis`   | Property-based tests (Hypothesis)                                                  |
+| `@pytest.mark.pipeline`     | Pipeline integration tests                                                         |
+| `@pytest.mark.benchmark`    | Performance benchmarks                                                             |
+| `@pytest.mark.docker_smoke` | Smoke tests inside Docker image                                                    |
 
 Tests with missing dependencies (GPU, VST plugin, R2 credentials) are skipped
 automatically. This is expected and reported by pytest.

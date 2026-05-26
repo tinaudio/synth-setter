@@ -1,0 +1,54 @@
+name: uv lock check
+
+# Verifies `uv.lock` stays in sync with `pyproject.toml`. The committed lock
+# is universal (macOS + Linux + Windows in one file), and a lock generated
+# only on one OS can encode a resolution that was never actually validated
+# on the others — so we run `uv lock --check` on a matrix to exercise each
+# platform's branch of the universal resolution.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/uv-lock-check.yml"
+  pull_request:
+    branches: [main, "release/*", "dev"]
+    paths:
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/uv-lock-check.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  lock-check:
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ["ubuntu-latest", "macos-latest"]
+
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      # `uv lock --check` re-resolves against pyproject.toml; non-zero if drifted.
+      - name: Verify lockfile is in sync with pyproject.toml
+        run: uv lock --check

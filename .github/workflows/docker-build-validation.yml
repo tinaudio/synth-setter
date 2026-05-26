@@ -248,15 +248,15 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Install synth_setter (editable; provides the load_image_config CLI plus its pyyaml + pydantic deps)
-        run: |
-          uv pip install --system --no-deps -e .
-          uv pip install --system pyyaml pydantic
+      # load_image_config needs the project's pyyaml + pydantic; canonical
+      # frozen-sync path. Runner is ephemeral.
+      - name: Install synth_setter (uv sync --frozen, CPU torch)
+        run: uv sync --frozen --extra cpu --no-default-groups --group dev
 
       - name: Load image config
         id: config
         run: |
-          python -m synth_setter.pipeline.ci.load_image_config \
+          uv run python -m synth_setter.pipeline.ci.load_image_config \
             --config src/synth_setter/configs/image/dev-snapshot.yaml \
             --github-sha '${{ steps.source.outputs.sha }}' \
             --issue-number '${{ github.event.inputs.issue_number || 311 }}'

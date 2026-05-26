@@ -37,17 +37,18 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Install dependencies
-        run: uv pip install --system -e ".[torch,dev]"
+      # Frozen sync, CPU torch via [tool.uv.sources] — see test.yml for rationale.
+      - name: Install dependencies (uv sync --frozen, CPU torch)
+        run: uv sync --frozen --extra cpu --no-default-groups --group dev
 
       - name: Run mutmut
         env:
           HYDRA_FULL_ERROR: "1"
-        run: mutmut run
+        run: uv run mutmut run
 
       - name: Print results
         if: always()
-        run: mutmut results
+        run: uv run mutmut results
 
       - name: Upload mutants/ artifact
         if: always()

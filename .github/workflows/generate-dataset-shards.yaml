@@ -299,24 +299,24 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/.venv-launcher
-          key: launcher-uv-${{ runner.os }}-py310-skypilot0.12.0-k8s35-${{ hashFiles('uv.lock', 'pyproject.toml') }}
+          # hashFiles('uv.lock', 'pyproject.toml') is the cache invalidator —
+          # any pin change there busts the key. Literal version tokens removed
+          # so the key cannot drift from the actual pin set.
+          key: launcher-uv-${{ runner.os }}-py310-${{ hashFiles('uv.lock', 'pyproject.toml') }}
           restore-keys: |
-            launcher-uv-${{ runner.os }}-py310-skypilot0.12.0-k8s35-
+            launcher-uv-${{ runner.os }}-py310-
 
-      # Idempotent: `uv venv` creates the venv if missing; `uv pip install` is
-      # a no-op on a cache hit (resolver sees the requested versions already
-      # installed). On a cache miss / partial restore, the install reconciles
-      # the venv to the requested pin set.
+      # Idempotent on cache hit; the `kubernetes` extra of skypilot lives in
+      # [project.dependencies], so `--extra cpu` + the default dev group covers
+      # skypilot-local. UV_PROJECT_ENVIRONMENT pins uv to the cached venv.
       - name: Install launcher deps (skypilot-local row)
         if: ${{ inputs.provider == 'skypilot-local' }}
+        env:
+          UV_PROJECT_ENVIRONMENT: ${{ github.workspace }}/.venv-launcher
         run: |
           set -euo pipefail
-          VENV="${GITHUB_WORKSPACE}/.venv-launcher"
-          if [[ ! -x "${VENV}/bin/python" ]]; then
-            uv venv "${VENV}" --python 3.10
-          fi
-          uv pip install --python "${VENV}/bin/python" -e . "skypilot[kubernetes]==0.12.0" "kubernetes==35.0.0"
-          echo "${VENV}/bin" >> "${GITHUB_PATH}"
+          uv sync --frozen --extra cpu --no-default-groups --group dev
+          echo "${UV_PROJECT_ENVIRONMENT}/bin" >> "${GITHUB_PATH}"
           sudo apt-get install -y -qq rclone
 
       - name: sky local up (skypilot-local row)

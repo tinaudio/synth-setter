@@ -1,6 +1,14 @@
+[build-system]
+# Declaring a build-system is what flips `uv sync` from `source = { virtual }`
+# (skips installing the project itself) to `source = { editable }` — without
+# it the `synth_setter` package and `project.scripts` entry points never land
+# in the venv. See #1245.
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "synth-setter"
-version = "8.7.2"
+version = "8.7.4"
 description = "Studying the effect of permutation symmetry on audio synthesiser parameter inference."
 authors = [{name = "Khaled Tinubu"}, {name = "tinaudio"}]
 readme = "README.md"
@@ -16,8 +24,6 @@ dependencies = [
   # --------- pipeline --------- #
   "click<8.2",
   # Pin: kubernetes>=36 breaks SkyPilot pod_config validation — see #1239.
-  # Co-pin echoed in .github/workflows/test-skypilot-local.yml and
-  # .github/workflows/generate-dataset-shards.yaml.
   "kubernetes==35.0.0",
   "numpy",
   "oci",
@@ -25,9 +31,9 @@ dependencies = [
   "pydantic-settings>=2",
   "pyyaml",
   "tomli; python_version < '3.11'",
-  # Pin must stay in sync with the bare-runner install in
-  # .github/workflows/test-skypilot-debug.yml.
-  "skypilot[runpod,oci]==0.12.0",
+  # `kubernetes` extra serves skypilot-local kind-cluster CI; locking it here
+  # keeps `uv sync --frozen` self-sufficient.
+  "skypilot[runpod,oci,kubernetes]==0.12.0",
   "structlog",
   "tenacity",
   "webdataset",
@@ -81,7 +87,6 @@ dependencies = [
 #
 # uv requires a `conflicts` group of >=2 entries, so a single-extra design
 # (bare `uv sync` resolves to CUDA on Linux) is rejected by the resolver.
-# Removal of the `torch`/`dev`/`all` shims below is tracked in #1245.
 # cpu and cu128 package lists must stay byte-identical — only the index in
 # [tool.uv.sources] differs. Bumping a version in one without the other
 # produces a split lockfile with mismatched torch versions per backend.
@@ -95,12 +100,9 @@ cu128 = [
   "torchvision>=0.15.0",
   "torchaudio>=2.0.0",
 ]
-# Backward-compat shims while Phase 2 (#1245) flips CI to `uv sync --frozen`.
-# `torch` is now a no-op (the torch stack is mandatory in [dependencies]) but
-# the syntax `.[torch,dev]` must keep parsing; `dev`/`docs` mirror the
-# [dependency-groups] entries below, minus the group-include relationship.
-# Delete all four once nothing references `.[torch,dev]`, `.[dev]`, or
-# `.[all]` — tracked in #1245.
+# Aggregations consumed by the Makefile, environment.yaml, and
+# scripts/sync_worker_checkout.sh — callsites that use plain `pip install`
+# and cannot honor [tool.uv.sources]. Retained until those migrate.
 torch = [
   "torch>=2.0.0",
   "torchvision>=0.15.0",
@@ -119,6 +121,10 @@ dev = [
   "pytest-randomly",
   "pytest-repeat",
   "pytest-xdist",
+  # Required only by the v0.0.0 baseline `src/{train,eval}.py` that
+  # tests/test_compare_baseline_configs.py runs through the live Python.
+  # Not used by `synth_setter/` itself — see #1268.
+  "rootutils",
   "ruff",
 ]
 docs = [
@@ -134,9 +140,6 @@ all = [
 # PEP 735 groups: private dev concerns, not published package features. A bare
 # `uv sync` installs the `dev` group (which transitively includes `docs`). Use
 # `uv sync --only-group dev` for lint/type-check jobs that don't import torch.
-# Note the dev group includes docs via `include-group`; the matching
-# [project.optional-dependencies].dev shim does NOT — `uv pip install .[dev]`
-# keeps its pre-#1247 behavior of installing dev tools only.
 
 [project.scripts]
 synth-setter-train = "synth_setter.cli.train:main"
@@ -145,37 +148,6 @@ synth-setter-generate-dataset = "synth_setter.cli.generate_dataset:main"
 synth-setter-generate-dataset-from-hydra = "synth_setter.cli.generate_dataset:from_hydra"
 synth-setter-finalize-dataset = "synth_setter.cli.finalize_dataset:main"
 synth-setter-spec-uri = "synth_setter.pipeline.ci.spec_uri:main"
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 [dependency-groups]
@@ -196,6 +168,10 @@ dev = [
   "pytest-randomly",
   "pytest-repeat",
   "pytest-xdist",
+  # Required only by the v0.0.0 baseline `src/{train,eval}.py` that
+  # tests/test_compare_baseline_configs.py runs through the live Python.
+  # Not used by `synth_setter/` itself — see #1268.
+  "rootutils",
   "ruff",
   { include-group = "docs" },
 ]

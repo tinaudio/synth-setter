@@ -86,20 +86,13 @@ jobs:
       - name: Install rclone
         run: sudo apt-get update -qq && sudo apt-get install -y -qq rclone
 
-      # Install with [torch,dev]. Slimmer install paths (e.g. the
-      # `--no-deps` pattern in validate-dataset-shards.yaml) don't work
-      # here because tests/conftest.py imports torch at module top, so
-      # pytest collection requires torch to be importable even though
-      # the launcher itself doesn't pull torch in. [dev] supplies pytest;
-      # [torch] satisfies conftest. pedalboard is a base dep (pulled in
-      # by synth_setter.data.vst.core, which the launcher imports for
-      # extract_renderer_version); the stub avoids the headless Surge
-      # render path but not the import.
-      - name: Install project deps
-        run: uv pip install --system -e ".[torch,dev]"
+      # torch is required for `tests/conftest.py` collection, not for the
+      # launcher itself; --extra cpu pulls the small CPU wheel.
+      - name: Install project deps (uv sync --frozen, CPU torch)
+        run: uv sync --frozen --extra cpu --no-default-groups --group dev
 
       - name: Run launcher roundtrip integration test
         run: |
-          pytest tests/integration/test_local_launcher_roundtrip.py \
+          uv run pytest tests/integration/test_local_launcher_roundtrip.py \
             -m "integration_r2" \
             -vv -s

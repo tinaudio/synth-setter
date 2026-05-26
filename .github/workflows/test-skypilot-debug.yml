@@ -227,10 +227,18 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.10"
-          cache: pip
 
-      - name: Install skypilot
-        run: pip install "skypilot[runpod,oci]==0.12.0"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      # inline-sky drives `sky.launch` directly from the runner Python;
+      # launcher-runner uses its own install step below; launcher-docker runs
+      # everything inside the dev-snapshot image and needs no host install.
+      - name: Install skypilot via uv sync --frozen (inline-sky row)
+        if: matrix.mode == 'inline-sky'
+        run: uv sync --frozen --extra cpu --no-default-groups --group dev
 
       - name: Pin image tag in debug template
         env:
@@ -275,7 +283,7 @@ jobs:
             echo "SKYPILOT_API_SERVER_ENDPOINT is set; remote API server holds provider creds, skipping local cred bootstrap"
           fi
 
-          python - <<'PY' 2>&1 | tee "$LOG_PATH"
+          uv run python - <<'PY' 2>&1 | tee "$LOG_PATH"
           import os, time
           import sky
 
@@ -343,15 +351,13 @@ jobs:
               )
           PY
 
-      # Full [project.dependencies] install (skypilot + python-dotenv + loguru +
-      # pedalboard + mido + numpy + pydantic + click + ...). The launcher's
-      # import chain (skypilot_launch -> spec.py -> synth_setter.data.vst ->
-      # core.py) pulls in the whole runtime, so a targeted install is
-      # whack-a-mole — the project's default deps keep launcher-runner mode
-      # honestly mirroring what a developer would have on their laptop.
+      # Full [project.dependencies] install. The launcher's import chain
+      # (skypilot_launch -> spec.py -> synth_setter.data.vst -> core.py) pulls
+      # in the whole runtime — keep launcher-runner mode mirroring what a
+      # developer has on their laptop, not a targeted closure.
       - name: Install launcher deps (launcher-runner mode)
         if: matrix.mode == 'launcher-runner'
-        run: pip install -e .
+        run: uv sync --frozen --extra cpu --no-default-groups --group dev
 
       # `spec_io.upload_spec` shells out to `rclone copyto` to ship the
       # materialized spec to R2. The dev-snapshot image has rclone baked in,
@@ -388,7 +394,7 @@ jobs:
           LOG_PATH: /tmp/debug-pure-sky-${{ matrix.cluster_suffix }}.log
         run: |
           set -euo pipefail
-          synth-setter-generate-dataset \
+          uv run synth-setter-generate-dataset \
             "experiment=$CONFIG_PATH" \
             "skypilot_launch.compute_template=$TEMPLATE" \
             "skypilot_launch.job_name=$CLUSTER_NAME" \

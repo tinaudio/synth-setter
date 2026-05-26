@@ -274,30 +274,25 @@ RUN python --version && \
 # Both dev and final-stage inherit from this stage.
 # ==========================================
 FROM python-base AS builder-install-synth-setter-deps
-# Install all Python dependencies via uv in a single resolution pass.
-# uv's built-in cache (mounted below) persists across builds — torch wheels
-# (~2.5 GB) are only downloaded once and survive pyproject.toml changes.
+# Install Python dependencies via `uv sync --frozen` against the committed
+# lockfile. uv's cache (mounted below) persists torch wheels (~2.5 GB)
+# across builds. Cache scope: only pyproject.toml + uv.lock + README.md
+# (referenced by [project].readme) enter this layer, so unrelated source
+# edits do not bust the torch-wheels cache. The .github/workflows/
+# uv-lock-check.yml matrix guards the upstream invariant.
 #
-# Cache scope: only pyproject.toml + README.md are copied in (README.md is
-# referenced by [project].readme), so unrelated source edits do not bust the
-# ~2.5 GB torch-wheels layer. uv reads dependencies directly from
-# pyproject.toml via `-r`, with `--extra torch --extra dev` pulling the
-# matching optional groups. The project itself is reinstalled --no-deps
-# from real source in the dev-base stage below.
-#
-# --torch-backend: tells uv which PyTorch variant to install (e.g. cu128, cpu).
-# This replaces --extra-index-url + --index-strategy unsafe-best-match,
-# which was needed because the PyTorch CUDA index carried stale copies of
-# common packages.
+# TORCH_BACKEND selects the `cpu`/`cu128` extra → pytorch-* index per
+# [tool.uv.sources]; build-arg from docker-build-validation.yml.
+# UV_PROJECT_ENVIRONMENT points uv at /venv/main (created in python-base).
 COPY --from=synth-setter-src /home/build/synth-setter/pyproject.toml /artifacts/
+COPY --from=synth-setter-src /home/build/synth-setter/uv.lock /artifacts/
 COPY --from=synth-setter-src /home/build/synth-setter/README.md /artifacts/
 ARG TORCH_BACKEND=cu128
 RUN --mount=type=cache,target=/root/.cache/uv \
     cd /artifacts && \
-    uv pip install \
-        --torch-backend ${TORCH_BACKEND} \
-        -r pyproject.toml --extra torch --extra dev && \
-    rm -rf /artifacts/pyproject.toml /artifacts/README.md
+    UV_PROJECT_ENVIRONMENT=$VIRTUAL_ENV \
+    uv sync --frozen --extra ${TORCH_BACKEND} --no-default-groups --group dev --no-install-project && \
+    rm -rf /artifacts/pyproject.toml /artifacts/uv.lock /artifacts/README.md
 
 # Runtime apt packages: headless VST loading, rclone for R2 uploads, and the
 # toolchain SkyPilot's RunPod backend needs to provision and stage file_mounts
@@ -403,7 +398,8 @@ RUN git init && \
     git branch --set-upstream-to=origin/main main
 
 # Install the project package so `import src` works from any working directory.
-# --no-deps: all runtime deps already installed via uv pip install above.
+# --no-deps pairs with the `--no-install-project` on the earlier `uv sync` above —
+# deps are already in the venv; this step installs the package editable.
 RUN uv pip install --no-deps -e .
 
 # Run not-slow unit tests (mocked subprocess + LocalFakeUploader — no VST or R2 needed)

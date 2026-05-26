@@ -86,7 +86,7 @@ set -a && source .env && set +a
 > **Already have Surge XT installed system-wide?** Skip `make install-surge-xt`
 > and symlink it manually:
 > `ln -s "/path/to/Surge XT.vst3" "plugins/Surge XT.vst3"`.
-> See [docs/getting-started.md &sect;2d](docs/getting-started.md#2d-install-the-surge-xt-vst3).
+> See [docs/getting-started.md §2d](docs/getting-started.md#2d-install-the-surge-xt-vst3).
 
 > **Prefer pip or conda?** If you'd rather manage the Python interpreter and
 > venv yourself, see
@@ -96,11 +96,23 @@ set -a && source .env && set +a
 
 ### GPU vs CPU
 
-This project depends on PyTorch (`torch>=2.0.0`), but the install does not fix
-whether you use a CPU-only build or a CUDA-enabled build. Choose and install the
-appropriate PyTorch package for your system (CPU-only or a specific CUDA version)
-using the [PyTorch install matrix](https://pytorch.org/get-started/locally/), then
-install the remaining dependencies as described above.
+The PyTorch backend is routed per platform from the committed `uv.lock`. Pick
+the install command for your hardware:
+
+| Target                       | Command                                                        |
+| ---------------------------- | -------------------------------------------------------------- |
+| macOS (Apple Silicon, MPS)   | `uv sync --frozen`                                             |
+| Linux GPU box (CUDA 12.8)    | `uv sync --frozen --extra cu128`                               |
+| Linux CPU-only (CI / laptop) | `uv sync --frozen --extra cpu --no-default-groups --group dev` |
+| Lint / type-check only       | `uv sync --frozen --only-group dev`                            |
+
+Two table caveats:
+
+- Mac must use bare `uv sync --frozen` — backend extras are a silent no-op there.
+- CUDA is the source of truth for reported numbers; MPS may diverge slightly.
+
+Full rationale plus the relock cadence and the Linux-only resync flip live
+in [docs/reference/dependency-management.md](docs/reference/dependency-management.md).
 
 ## Quick Start
 
