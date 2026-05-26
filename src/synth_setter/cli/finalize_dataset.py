@@ -29,6 +29,11 @@ from synth_setter.pipeline.data.reshard import reshard_dataset
 from synth_setter.pipeline.data.stats import get_stats_hdf5, stream_stats_wds
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from synth_setter.pipeline.spec_io import load_spec_from_uri, write_spec_to_path
+from synth_setter.workspace import operator_workspace
+
+# Resolve workspace at import so ``${oc.env:PROJECT_ROOT}`` in
+# ``configs/paths/default.yaml`` interpolates under any install layout.
+operator_workspace()
 
 
 def _download_train_shards_one_at_a_time(spec: DatasetSpec, work_dir: Path) -> Iterator[Path]:

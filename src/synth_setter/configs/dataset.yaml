@@ -29,12 +29,9 @@ base_seed: 42
 # bins instead of raising. Smoke configs override to ``true``.
 mask_degenerate_bins: false
 
-# Materialized as ``null`` so finalize-dataset.yaml can pin the generate stage's
-# ``run_id`` via the ``run_id=<value>`` Hydra override form (strict mode requires
-# the key to exist). Leaving this ``null`` on the generate path is handled by
-# ``DatasetSpec._normalize_r2_input``'s mode='before' shim, which calls
+# Null default: ``DatasetSpec._normalize_r2_input``'s mode='before' shim calls
 # ``_fill_default_r2_prefix`` to materialize ``run_id`` from
-# ``task_name`` + ``created_at`` when missing/None before field validation.
+# ``task_name`` + ``created_at`` when missing before field validation.
 run_id: null
 
 train_val_test_sizes: ???

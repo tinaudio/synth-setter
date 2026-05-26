@@ -934,7 +934,7 @@ def test_get_stats_hdf5_callable_twice_in_same_process(
 ) -> None:
     """Two back-to-back calls succeed; no leaked Client port, no stale h5py handle.
 
-    ``finalize_dataset.main()`` invokes ``get_stats_hdf5`` once per run,
+    ``finalize_dataset.finalize_hdf5`` invokes ``get_stats_hdf5`` once per run,
     but multiple runs in the same process (CI matrix shards, an operator
     REPL) must not regress. Without the ``with`` blocks the second call
     would hit a port-in-use ``OSError`` from the scheduler or open the

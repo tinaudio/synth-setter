@@ -52,7 +52,27 @@ src/synth_setter/configs/experiment/generate_dataset/{id}.yaml → Hydra compose
 
 Reference: `data-pipeline.md` §14.5
 
-### 2.2 Training
+### 2.2 Data Finalization
+
+```
+synth-setter-finalize-dataset dataset_spec_uri=r2://…/input_spec.json
+  → @hydra.main composes DictConfig from src/synth_setter/configs/finalize_dataset.yaml
+    → load_spec_from_uri(cfg.dataset_spec_uri) → DatasetSpec (the frozen spec generate uploaded)
+      → r2_io.object_size(spec.r2.dataset_complete_marker_uri()) probe (idempotency short-circuit)
+      → branch on spec.output_format:
+          ├─ wds:  finalize_wds  — Welford-stream stats over train shards → upload stats.npz
+          └─ hdf5: finalize_hdf5 — download every shard → reshard into {train,val,test}.h5 → stats.npz
+      → upload dataset.complete marker LAST (R2 source-of-truth resumability invariant)
+```
+
+- Single required input: `dataset_spec_uri`. URI scheme dispatched by `load_spec_from_uri` (`file://`, `r2://`, or bare path)
+- `cfg.paths.output_dir` (Hydra's per-run dir under `${paths.log_dir}/finalize_dataset/<timestamp>`) is the scratch work_dir for both branches
+- Idempotency: a re-run against a prefix that already has `dataset.complete` exits cleanly without downloads or uploads. R2 is the source of truth (see `pipeline/CLAUDE.md`)
+- Marker-last invariant: `dataset.complete` is uploaded strictly after every artifact a downstream consumer expects, so an interrupted run never leaves a marker without its splits / stats
+
+Reference: `data-pipeline.md` §14.5 (finalize stage)
+
+### 2.3 Training
 
 ```
 train.yaml + defaults (experiment, data, model, trainer, callbacks, logger)
@@ -68,7 +88,7 @@ train.yaml + defaults (experiment, data, model, trainer, callbacks, logger)
 
 Reference: `training-pipeline.md` §4–5
 
-### 2.3 Evaluation
+### 2.4 Evaluation
 
 ```
 eval.yaml + experiment config (pins model + data + checkpoint)
@@ -81,7 +101,7 @@ eval.yaml + experiment config (pins model + data + checkpoint)
 
 Reference: `eval-pipeline.md` §4–5
 
-### 2.4 Cloud Infrastructure
+### 2.5 Cloud Infrastructure
 
 There are two ways a SkyPilot dispatch enters this codebase, and they should not
 be confused:
