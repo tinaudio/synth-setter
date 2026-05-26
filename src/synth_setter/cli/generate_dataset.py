@@ -16,7 +16,7 @@ import subprocess
 import sys
 import tempfile
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
-from contextlib import ExitStack
+from contextlib import AbstractContextManager, ExitStack, nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -159,9 +159,17 @@ def run(spec: DatasetSpec) -> None:
 
     r2_dest_prefix = spec.r2.rclone_prefix()
 
-    with tempfile.TemporaryDirectory() as work_dir_str:
-        work_dir = Path(work_dir_str)
+    work_dir_cm: AbstractContextManager[str]
+    if spec.output_dir is None:
+        work_dir_cm = tempfile.TemporaryDirectory()
+    else:
+        work_dir = Path(spec.output_dir)
+        work_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"staging shards at operator-supplied output_dir: {work_dir}")
+        work_dir_cm = nullcontext(str(work_dir))
 
+    with work_dir_cm as work_dir_str:
+        work_dir = Path(work_dir_str)
         if spec.render.parallel and len(my_range) > 0:
             rendered, skipped = _dispatch_shards_parallel(spec, my_range, work_dir, r2_dest_prefix)
         else:
@@ -339,8 +347,11 @@ def _render_and_upload_shard(
     logger.info(f"shard rendered: {shard_path} ({shard_path.stat().st_size} bytes)")
     _rclone_copy(str(shard_path), r2_dest_prefix)
     logger.info(f"shard uploaded: {shard.filename} -> {r2_dest_prefix}")
-    shard_path.unlink()
-    logger.info(f"shard removed locally: {shard_path}")
+    if spec.output_dir is None:
+        shard_path.unlink()
+        logger.info(f"shard removed locally: {shard_path}")
+    else:
+        logger.info(f"shard kept locally (output_dir set): {shard_path}")
 
 
 def spec_from_cfg(cfg: DictConfig) -> DatasetSpec:

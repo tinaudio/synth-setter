@@ -29,6 +29,12 @@ base_seed: 42
 # bins instead of raising. Smoke configs override to ``true``.
 mask_degenerate_bins: false
 
+# Optional local directory for staged shards; when set, ``run()`` writes shards
+# here instead of a ``TemporaryDirectory`` and skips the post-upload unlink so
+# the operator can inspect or reuse them locally. ``null`` keeps the default
+# ephemeral-tempdir + unlink behaviour.
+output_dir: null
+
 # Materialized as ``null`` so finalize-dataset.yaml can pin the generate stage's
 # ``run_id`` via the ``run_id=<value>`` Hydra override form (strict mode requires
 # the key to exist). Leaving this ``null`` on the generate path is handled by
