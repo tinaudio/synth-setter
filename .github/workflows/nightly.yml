@@ -32,12 +32,8 @@ jobs:
       - name: List dependencies
         run: uv pip list --python .venv/bin/python
 
-      # Bare ubuntu runner has no CUDA/MPS device and no Surge XT VST3 binary;
-      # exclude the corresponding markers so accelerator/plugin-gated tests are
-      # deselected at collection rather than hardfailing in their fixtures. The
-      # accelerator-bound surge_xt smoke tests run via `test-gpu.yml` /
-      # `test-mps.yml` / `test-vst-slow.yml` against the dev-snapshot image
-      # (which ships `/usr/lib/vst3/Surge XT.vst3`).
+      # ubuntu-latest has no CUDA/MPS device and no Surge XT VST3; gpu/mps/
+      # requires_vst suites run on dev-snapshot via sibling workflows — see #1279.
       - name: Run full test suite
         env:
           HYDRA_FULL_ERROR: "1"
