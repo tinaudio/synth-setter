@@ -47,6 +47,8 @@ def _run_predict_postprocessing(cfg: DictConfig) -> None:  # noqa: DOC502
     :param cfg: Reads ``cfg.evaluation`` (gates + ``num_workers``), ``cfg.render``
         (param spec, preset, optional plugin path), and ``cfg.paths.output_dir``
         (base for ``predictions/``, ``audio/``, ``metrics/``).
+    :raises ValueError: if ``evaluation.render_vst`` is enabled but ``cfg.render`` is
+        unset, or the expected input directory for a stage is missing.
     :raises subprocess.CalledProcessError: propagated from a non-zero subprocess exit.
     :raises subprocess.TimeoutExpired: propagated when a subprocess exceeds
         :data:`_SUBPROCESS_TIMEOUT_SECONDS`.
@@ -57,6 +59,17 @@ def _run_predict_postprocessing(cfg: DictConfig) -> None:  # noqa: DOC502
     metrics_dir = output_dir / "metrics"
 
     if cfg.evaluation.render_vst:
+        if cfg.get("render") is None:
+            raise ValueError(
+                "evaluation.render_vst=true requires a render config group "
+                "(e.g. `+render=surge_xt`); cfg.render is unset."
+            )
+        if not predictions_dir.is_dir():
+            raise ValueError(
+                f"evaluation.render_vst=true expects predictions at {predictions_dir} "
+                "— configure a PredictionWriter callback (e.g. `callbacks=prediction_writer`) "
+                "so trainer.predict writes one params CSV per sample before rendering."
+            )
         with ExitStack() as stack:
             args: list[str] = []
             if sys.platform == "linux":
@@ -85,6 +98,12 @@ def _run_predict_postprocessing(cfg: DictConfig) -> None:  # noqa: DOC502
             )
 
     if cfg.evaluation.compute_metrics:
+        if not audio_dir.is_dir():
+            raise ValueError(
+                f"evaluation.compute_metrics=true expects rendered audio at {audio_dir} "
+                "— enable evaluation.render_vst or point cfg.paths.output_dir at a "
+                "directory containing an `audio/` subdirectory."
+            )
         args = [
             sys.executable,
             "-m",
@@ -170,7 +189,10 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
             return_predictions=False,
             weights_only=False,
         )
-        _run_predict_postprocessing(cfg)
+        # Rank-zero gate: trainer.predict runs on every rank in DDP/multi-device
+        # setups, but the postprocessing subprocesses share one output_dir.
+        if trainer.is_global_zero:
+            _run_predict_postprocessing(cfg)
 
     metric_dict = trainer.callback_metrics
 
