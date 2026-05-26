@@ -156,16 +156,12 @@ def finalize_hdf5(spec: DatasetSpec, work_dir: Path) -> None:
 
 
 def run(cfg: DictConfig) -> None:
-    """Load DatasetSpec from ``cfg.dataset_spec_uri``, dispatch on ``output_format``, marker last.
+    """Idempotent finalize: spec from URI → branch on ``output_format`` → marker last.
 
-    Skips the body entirely when ``dataset.complete`` already exists at the
-    run prefix — R2 is the source of truth (per ``pipeline/CLAUDE.md``), so
-    a second invocation against a finalized prefix is a no-op rather than a
-    full redo. ``cfg.paths.output_dir`` is the per-run scratch directory
-    (``@hydra.main`` allocates it before this runs, and ``run`` creates it
-    when missing for direct callers); finalize writes shards, splits,
-    ``stats.npz`` and the marker there, and the directory is retained for
-    post-mortem unless cleaned externally.
+    Returns without work when ``dataset.complete`` already exists at the run
+    prefix — R2 is the source of truth (per ``pipeline/CLAUDE.md``).
+    ``cfg.paths.output_dir`` is retained after the call for post-mortem
+    unless cleaned externally (potentially multi-GB on the hdf5 branch).
 
     :param cfg: Composed cfg with ``dataset_spec_uri`` (URI accepted by
         :func:`~synth_setter.pipeline.spec_io.load_spec_from_uri`) and
@@ -201,7 +197,7 @@ def run(cfg: DictConfig) -> None:
     config_name="finalize_dataset",
 )
 def main(cfg: DictConfig) -> None:
-    """Operator CLI: thin @hydra.main wrapper around :func:`run`.
+    """@hydra.main entrypoint; delegates to :func:`run` for the contract.
 
     :param cfg: Hydra-composed cfg; see :func:`run` for the field contract.
     """

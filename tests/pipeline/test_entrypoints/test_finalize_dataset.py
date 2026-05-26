@@ -26,7 +26,8 @@ import shutil
 import tarfile
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, cast
+from types import SimpleNamespace
+from typing import Any, NoReturn, cast
 
 import h5py
 import numpy as np
@@ -43,6 +44,7 @@ from synth_setter.data.vst.shapes import (
     mel_dataset_shape,
     param_array_dataset_shape,
 )
+from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 
 
@@ -143,11 +145,11 @@ def _seed_train_shards(fake_r2_remote: Path, spec: DatasetSpec) -> list[Path]:
 def _write_spec_to_file(spec: DatasetSpec, tmp_path: Path) -> str:
     """Persist ``spec`` as JSON under ``tmp_path`` and return its ``file://`` URI.
 
-    Mirrors what generate-stage's ``upload_spec(spec)`` lands at the R2 input-spec URI
-    so ``run()`` can re-hydrate the exact same ``DatasetSpec`` from local disk.
+    Mirrors generate-stage's ``upload_spec(spec)`` so ``run()`` re-hydrates
+    the same ``DatasetSpec`` via ``load_spec_from_uri``.
 
-    :param spec: The frozen ``DatasetSpec`` to serialize.
-    :param tmp_path: Test-scoped tmp dir; the JSON lands at ``<tmp_path>/spec/input_spec.json``.
+    :param spec: Frozen ``DatasetSpec`` to serialize.
+    :param tmp_path: Test-scoped tmp dir.
     :returns: ``file://`` URI consumable by ``load_spec_from_uri``.
     """
     spec_dir = tmp_path / "spec"
@@ -159,10 +161,6 @@ def _write_spec_to_file(spec: DatasetSpec, tmp_path: Path) -> str:
 
 def _build_run_cfg(spec_uri: str, output_dir: Path) -> DictConfig:
     """Synthesize a minimal ``run()`` cfg without invoking Hydra's @main decoration.
-
-    ``run()`` only reads ``cfg.dataset_spec_uri`` and ``cfg.paths.output_dir``;
-    a hand-built DictConfig is the lowest-friction equivalent of what
-    @hydra.main would compose at the @main entry.
 
     :param spec_uri: URI passed through to ``load_spec_from_uri``.
     :param output_dir: Directory finalize uses as its scratch ``work_dir``.
@@ -203,15 +201,20 @@ def stub_run_setup(monkeypatch: pytest.MonkeyPatch) -> Callable[[int | None], No
 def test_run_uploads_stats_then_marker_at_canonical_uris(
     tmp_path: Path,
     fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
     stub_run_setup: Callable[[int | None], None],  # noqa: ARG001 — installs stubs only
 ) -> None:
-    """``run(cfg)`` against a wds spec lands ``stats.npz`` then ``dataset.complete``.
+    """``run(cfg)`` against a wds spec lands ``stats.npz`` strictly before ``dataset.complete``.
 
-    Marker mtime is no earlier than stats mtime — the resumability contract
-    pins marker-last.
+    Wraps ``r2_io.upload`` to record destination URIs in call order; the
+    real upload still runs so the on-disk artifacts can be asserted as
+    well. Order via a spy is filesystem-invariant — mtime granularity on
+    fast filesystems can tie two writes inside a single ``run()`` call.
 
     :param tmp_path: Pytest tmp dir; hosts the on-disk spec JSON + Hydra-style output_dir.
     :param fake_r2_remote: Local-typed rclone remote; both artifacts land here.
+    :param monkeypatch: Pytest fixture used to wrap ``r2_io.upload`` with an
+        order-recording spy that still delegates to the real helper.
     :param stub_run_setup: Fixture-activation only — installs the
         ``ensure_r2_env_loaded`` / ``object_size`` stubs.
     """
@@ -221,13 +224,24 @@ def test_run_uploads_stats_then_marker_at_canonical_uris(
     output_dir.mkdir()
     cfg = _build_run_cfg(_write_spec_to_file(spec, tmp_path), output_dir)
 
+    real_upload = r2_io.upload
+    upload_order: list[str] = []
+
+    def spy_upload(src: str | Path, dst: str) -> None:
+        upload_order.append(dst)
+        real_upload(src, dst)
+
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.upload", spy_upload)
+
     finalize_dataset.run(cfg)
 
     stats_path = _uri_to_local_path(fake_r2_remote, spec.r2.stats_uri())
     marker_path = _uri_to_local_path(fake_r2_remote, spec.r2.dataset_complete_marker_uri())
     assert stats_path.is_file()
     assert marker_path.is_file()
-    assert stats_path.stat().st_mtime <= marker_path.stat().st_mtime
+    marker_uri = spec.r2.dataset_complete_marker_uri()
+    assert upload_order.index(marker_uri) == len(upload_order) - 1
+    assert upload_order.index(spec.r2.stats_uri()) < upload_order.index(marker_uri)
 
 
 def test_run_is_idempotent_when_marker_already_exists(
@@ -265,18 +279,18 @@ def test_run_raises_on_unsupported_output_format(
     without wiring its branch must trip this test rather than silently
     skip the artifact upload and write a misleading ``dataset.complete``.
 
-    :param tmp_path: Pytest tmp dir; hosts the on-disk spec JSON.
-    :param monkeypatch: Pytest fixture used to mutate the loaded spec's format.
+    :param tmp_path: Pytest tmp dir; hosts the Hydra-style output_dir.
+    :param monkeypatch: Pytest fixture used to install a stub loader.
     :param stub_run_setup: Installs the auth + marker-probe stubs so the
         dispatcher (not the marker check) is the failure surface.
     """
-
-    def loader(_uri: str) -> DatasetSpec:
-        spec = _build_wds_smoke_spec(task_name="run-bad-format")
-        object.__setattr__(spec, "output_format", "parquet")
-        return spec
-
-    monkeypatch.setattr("synth_setter.cli.finalize_dataset.load_spec_from_uri", loader)
+    fake_spec = SimpleNamespace(
+        output_format="parquet",
+        r2=SimpleNamespace(dataset_complete_marker_uri=lambda: "r2://b/k/dataset.complete"),
+    )
+    monkeypatch.setattr(
+        "synth_setter.cli.finalize_dataset.load_spec_from_uri", lambda _uri: fake_spec
+    )
     output_dir = tmp_path / "hydra_output"
     output_dir.mkdir()
     cfg = _build_run_cfg("file:///unused", output_dir)
@@ -413,6 +427,25 @@ def _stage_for(uploads: dict[str, Path], destination_uri: str, tmp_path: Path) -
     return staged
 
 
+def _stub_get_stats_hdf5(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub ``finalize_dataset.get_stats_hdf5`` to write a sentinel ``stats.npz``.
+
+    Real Dask startup dominates runtime; tests that drive ``finalize_hdf5``
+    end-to-end use this stub so the subsequent ``r2_io.upload`` step still
+    runs against a real on-disk file produced sibling to ``train.h5``.
+
+    :param monkeypatch: Pytest fixture used to install the stub.
+    """
+    monkeypatch.setattr(
+        "synth_setter.cli.finalize_dataset.get_stats_hdf5",
+        lambda train_h5_path, mask_degenerate=False: np.savez(
+            Path(train_h5_path).parent / "stats.npz",
+            mean=np.zeros((2, 8, 8), dtype=np.float32),
+            std=np.ones((2, 8, 8), dtype=np.float32),
+        ),
+    )
+
+
 def test_hdf5_finalize_produces_train_consumable_layout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -445,15 +478,7 @@ def test_hdf5_finalize_produces_train_consumable_layout(
         "synth_setter.pipeline.r2_io.upload",
         lambda src, dst: shutil.copy(src, _stage_for(uploads, dst, tmp_path)),
     )
-    # Skip the Dask-driven mean/std compute — orchestration is what this test pins.
-    monkeypatch.setattr(
-        "synth_setter.cli.finalize_dataset.get_stats_hdf5",
-        lambda train_h5_path, mask_degenerate=False: np.savez(
-            Path(train_h5_path).parent / "stats.npz",
-            mean=np.zeros((2, 8, 8), dtype=np.float32),
-            std=np.ones((2, 8, 8), dtype=np.float32),
-        ),
-    )
+    _stub_get_stats_hdf5(monkeypatch)
 
     work_dir = tmp_path / "work"
     work_dir.mkdir()
@@ -499,17 +524,7 @@ def test_finalize_hdf5_real_shards_end_to_end(
     # Seed shards into the fake R2 location where ``download_to_path`` will fetch them.
     shard_remote_dir = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
     _seed_shard_files(shard_remote_dir, spec)
-
-    # Real Dask compute would dominate runtime; stub writes a sentinel ``stats.npz``
-    # so the production ``r2_io.upload`` step still runs against a real file.
-    monkeypatch.setattr(
-        "synth_setter.cli.finalize_dataset.get_stats_hdf5",
-        lambda train_h5_path, mask_degenerate=False: np.savez(
-            Path(train_h5_path).parent / "stats.npz",
-            mean=np.zeros((2, 8, 8), dtype=np.float32),
-            std=np.ones((2, 8, 8), dtype=np.float32),
-        ),
-    )
+    _stub_get_stats_hdf5(monkeypatch)
 
     work_dir = tmp_path / "work"
     work_dir.mkdir()
@@ -543,25 +558,6 @@ def test_finalize_hdf5_real_shards_end_to_end(
 
     with np.load(stats_npz) as st:
         assert set(st.files) == {"mean", "std"}
-
-
-def _stub_get_stats_hdf5(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub ``finalize_dataset.get_stats_hdf5`` to write a sentinel ``stats.npz``.
-
-    Real Dask startup dominates runtime; tests that drive ``finalize_hdf5``
-    end-to-end use this stub so the subsequent ``r2_io.upload`` step still
-    runs against a real on-disk file produced sibling to ``train.h5``.
-
-    :param monkeypatch: Pytest fixture used to install the stub.
-    """
-    monkeypatch.setattr(
-        "synth_setter.cli.finalize_dataset.get_stats_hdf5",
-        lambda train_h5_path, mask_degenerate=False: np.savez(
-            Path(train_h5_path).parent / "stats.npz",
-            mean=np.zeros((2, 8, 8), dtype=np.float32),
-            std=np.ones((2, 8, 8), dtype=np.float32),
-        ),
-    )
 
 
 def test_finalize_hdf5_only_uploads_splits_that_reshard_wrote(
@@ -725,7 +721,9 @@ def test_run_hdf5_marker_idempotency_short_circuits_before_download(
     ``test_run_is_idempotent_when_marker_already_exists`` covers the wds
     branch; this test pins the hdf5-branch path so a regression that
     moved the marker check *inside* the format branch (after the dispatch
-    table) would be caught.
+    table) would be caught. Positive assertion: ``object_size`` was probed
+    exactly once against the marker URI (so a refactor that removed the
+    probe and the dispatch entirely would fail rather than silently pass).
 
     :param tmp_path: Pytest tmp dir; hosts the on-disk spec JSON + output_dir.
     :param monkeypatch: Pytest fixture used to force ``object_size`` to
@@ -740,7 +738,13 @@ def test_run_hdf5_marker_idempotency_short_circuits_before_download(
         lambda *a, **kw: pytest.fail("upload should not be reached"),
     )
     monkeypatch.setattr("synth_setter.pipeline.r2_io.ensure_r2_env_loaded", lambda *a, **k: None)
-    monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda _uri: 0)
+    probed_uris: list[str] = []
+
+    def record_probe(uri: str) -> int:
+        probed_uris.append(uri)
+        return 0
+
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", record_probe)
 
     spec = _build_hdf5_smoke_spec(task_name="run-hdf5-marker-present")
     output_dir = tmp_path / "hydra_output"
@@ -748,6 +752,9 @@ def test_run_hdf5_marker_idempotency_short_circuits_before_download(
     cfg = _build_run_cfg(_write_spec_to_file(spec, tmp_path), output_dir)
 
     finalize_dataset.run(cfg)
+
+    assert probed_uris == [spec.r2.dataset_complete_marker_uri()]
+    assert not (output_dir / "dataset.complete").exists()
 
 
 def test_run_hdf5_branch_uploads_marker_last(
@@ -779,15 +786,7 @@ def test_run_hdf5_branch_uploads_marker_last(
     monkeypatch.setattr("synth_setter.pipeline.r2_io.upload", record_upload)
     monkeypatch.setattr("synth_setter.pipeline.r2_io.ensure_r2_env_loaded", lambda *a, **k: None)
     monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda _uri: None)
-    # Skip the Dask-driven mean/std compute — orchestration is what this test pins.
-    monkeypatch.setattr(
-        "synth_setter.cli.finalize_dataset.get_stats_hdf5",
-        lambda train_h5_path, mask_degenerate=False: np.savez(
-            Path(train_h5_path).parent / "stats.npz",
-            mean=np.zeros((2, 8, 8), dtype=np.float32),
-            std=np.ones((2, 8, 8), dtype=np.float32),
-        ),
-    )
+    _stub_get_stats_hdf5(monkeypatch)
 
     output_dir = tmp_path / "hydra_output"
     output_dir.mkdir()
@@ -859,7 +858,7 @@ def test_finalize_hdf5_propagates_stats_failure_before_marker_upload(
         lambda src, dst: uploaded.append(dst),
     )
 
-    def boom(train_h5_path: str, mask_degenerate: bool = False) -> None:
+    def boom(train_h5_path: str, mask_degenerate: bool = False) -> NoReturn:
         del train_h5_path, mask_degenerate
         raise RuntimeError("degenerate bins")
 
@@ -885,8 +884,6 @@ def test_finalize_wds_downloads_every_train_shard_uri(
     :param monkeypatch: Used to install the URI-recording spy that delegates
         to the real ``download_to_path``.
     """
-    from synth_setter.pipeline import r2_io
-
     spec = _build_wds_smoke_spec(task_name="multi-shard-train", train_val_test_sizes=(8, 0, 0))
     _seed_train_shards(fake_r2_remote, spec)
     work_dir = tmp_path / "work"
@@ -1020,8 +1017,6 @@ def test_finalize_wds_unlinks_each_shard_after_folding(
         count only finalize's transient shards.
     :param monkeypatch: Used to install the recording wrapper.
     """
-    from synth_setter.pipeline import r2_io
-
     spec = _build_wds_smoke_spec(task_name="peak-disk", train_val_test_sizes=(8, 0, 0))
     _seed_train_shards(fake_r2_remote, spec)
     work_dir = tmp_path / "work"

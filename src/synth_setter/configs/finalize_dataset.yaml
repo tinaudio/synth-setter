@@ -6,11 +6,9 @@ defaults:
 
 dataset_spec_uri: ???
 
-# ``hydra/default.yaml`` interpolates ${task_name} into ``run.dir`` and
-# ``job_logging.handlers.file.filename``; surface a literal task_name so
-# both resolve. ``run.dir`` is also overridden because the group default
-# additionally references ${run_name}, which this config does not surface.
-# ``_self_`` is last in ``defaults`` so this block overrides the group.
+# Surfaces ${task_name} so hydra/default.yaml's run.dir + job_logging
+# interpolations resolve; run.dir is also overridden below because the
+# group default references ${run_name}, which this cfg does not surface.
 task_name: finalize_dataset
 
 hydra:
