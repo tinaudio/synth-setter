@@ -231,8 +231,11 @@ def _dispatch_shards_parallel(
 
     :param spec: Validated dataset spec.
     :param my_range: Non-empty contiguous range of shard IDs owned by this rank.
-    :param work_dir: Per-run tempdir owned by ``run()``; peak local disk
-        scales with the pool size (one in-flight shard per worker thread).
+    :param work_dir: Per-run staging dir owned by ``run()`` (tempdir, or
+        ``spec.output_dir`` when set); with a tempdir peak local disk scales
+        with the pool size (one in-flight shard per worker thread), with
+        ``spec.output_dir`` the unlink is skipped so peak disk scales with
+        ``my_range``.
     :param r2_dest_prefix: ``spec.r2.rclone_prefix()``.
     :returns: ``(rendered, skipped)`` summary counts over ``my_range``.
     """
