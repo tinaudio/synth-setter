@@ -33,6 +33,7 @@ import threading
 from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1720,4 +1721,17 @@ class TestMainSpecPersistence:
 
         sky_cfg = recorded["sky_cfg"]
         spec_call = gd.write_spec_locally.call_args[0][0]  # type: ignore[attr-defined]
-        assert sky_cfg.job_name == f"synth-setter-smoke-{spec_call.task_name[:8]}"  # type: ignore[attr-defined]
+        assert sky_cfg.job_name == gd._smoke_job_name(spec_call)  # type: ignore[attr-defined]
+
+
+def test_smoke_job_name_rejects_unsafe_task_name() -> None:
+    """``_smoke_job_name`` raises with a task-name-aware diagnostic on malformed task_name.
+
+    Pins the dataset-aware error message that the launcher's
+    ``_JOB_NAME_RE`` validator would otherwise surface without spec context.
+    """
+    from synth_setter.cli.generate_dataset import _smoke_job_name
+
+    bad_spec = SimpleNamespace(task_name="bad.task.name")
+    with pytest.raises(ValueError, match=r"fix spec.task_name or pin"):
+        _smoke_job_name(bad_spec)  # type: ignore[arg-type]

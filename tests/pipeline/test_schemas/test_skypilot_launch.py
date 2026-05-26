@@ -99,10 +99,22 @@ class TestExtraEnvs:
         ["lower", "Mixed", "1LEADING_DIGIT", "HAS-DASH", "HAS SPACE", ""],
         ids=["lowercase", "mixed-case", "leading-digit", "dash", "space", "empty"],
     )
-    def test_extra_envs_rejects_lowercase_keys(self, bad_key: str) -> None:
+    def test_extra_envs_rejects_invalid_identifier_keys(self, bad_key: str) -> None:
         """Keys must match the POSIX env-var identifier grammar so exports round-trip.
 
         :param bad_key: Parametrized invalid key the validator must reject.
         """
         with pytest.raises(ValidationError, match="extra_envs keys"):
             SkypilotLaunchConfig(extra_envs={bad_key: "x"})
+
+    @pytest.mark.parametrize(
+        "good_key",
+        ["FOO", "FOO_BAR", "_LEAD", "A0", "_"],
+        ids=["plain", "with-underscore", "leading-underscore", "with-digit", "bare-underscore"],
+    )
+    def test_extra_envs_accepts_valid_identifier_keys(self, good_key: str) -> None:
+        """Anchor the positive grammar so a future regex tightening can't silently drop legal keys.
+
+        :param good_key: Parametrized valid key the validator must accept.
+        """
+        assert SkypilotLaunchConfig(extra_envs={good_key: "x"}).extra_envs == {good_key: "x"}

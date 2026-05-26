@@ -62,7 +62,9 @@ class SkypilotLaunchConfig(BaseModel):
 
         Caller-supplied env vars merged into every rank's worker env after
         ``resolve_worker_env``. Keys must match the POSIX env-var identifier
-        grammar; rank/world keys injected later still win.
+        grammar and may not collide with the launcher's resolved-env keys
+        (use ``.env`` or process env for those); rank/world keys injected
+        later still win.
     """
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")

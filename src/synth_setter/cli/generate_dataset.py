@@ -395,6 +395,33 @@ def _sky_cfg_from_dataset_cfg(cfg: DictConfig) -> SkypilotLaunchConfig:
     return SkypilotLaunchConfig(**sky_kwargs)
 
 
+def _smoke_job_name(spec: DatasetSpec) -> str:
+    """Build the dataset-flavored SkyPilot job-name stem from ``spec.task_name``.
+
+    The first 8 chars of ``task_name`` are interpolated into the
+    ``synth-setter-smoke-<…>`` stem. Validated against the launcher's
+    k8s-label-subset grammar so a malformed ``task_name`` raises here with a
+    domain-specific message, not later from inside ``dispatch_via_skypilot``
+    where the spec is no longer in scope.
+
+    :param spec: Validated dataset spec.
+    :return: Job-name stem matching the launcher's ``_JOB_NAME_RE`` grammar.
+    :raises ValueError: ``spec.task_name[:8]`` would produce a stem outside the
+        launcher grammar; fix ``spec.task_name`` or pin
+        ``skypilot_launch.job_name``.
+    """
+    from synth_setter.pipeline.skypilot_launch import _JOB_NAME_RE
+
+    stem = f"synth-setter-smoke-{spec.task_name[:8]}"
+    if not _JOB_NAME_RE.fullmatch(stem):
+        raise ValueError(
+            f"derived job-name stem {stem!r} contains characters outside "
+            f"{_JOB_NAME_RE.pattern}; fix spec.task_name or pin "
+            "skypilot_launch.job_name explicitly."
+        )
+    return stem
+
+
 def _build_worker_cmd(overrides: list[str], spec: DatasetSpec) -> str:
     """Reconstruct the worker-side bash command that re-enters Hydra via from_hydra.
 
@@ -490,7 +517,7 @@ def main() -> None:
     sky_cfg = sky_cfg.model_copy(
         update={
             "cmd": _build_worker_cmd(overrides, spec),
-            "job_name": sky_cfg.job_name or f"synth-setter-smoke-{spec.task_name[:8]}",
+            "job_name": sky_cfg.job_name or _smoke_job_name(spec),
             "extra_envs": {WORKER_SPEC_URI_ENV: spec_uri},
         }
     )

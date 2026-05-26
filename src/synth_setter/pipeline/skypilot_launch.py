@@ -529,16 +529,13 @@ def _run_workers_from_doc(
 def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
     """Dispatch ``sky_cfg.cmd`` to the SkyPilot template named in ``sky_cfg``.
 
-    ``sky_cfg.compute_template`` and ``sky_cfg.cmd`` must both be set;
-    ``None`` is the caller's "don't dispatch" sentinel.
+    ``sky_cfg.compute_template`` and ``sky_cfg.cmd`` must both be non-None.
 
-    :param sky_cfg: Validated launcher config. ``extra_envs`` is merged into
-        per-rank envs after ``resolve_worker_env`` so callers forward
-        domain-specific envs (e.g. ``WORKER_SPEC_URI``) through that channel.
-        ``job_name`` pins the worker job-name stem; unset falls back to
-        ``synth-setter-<uuid8>``.
+    :param sky_cfg: Validated launcher config; see ``SkypilotLaunchConfig`` for
+        per-field semantics.
     :raises ValueError: degenerate ``sky_cfg``, conflicting ``cmd``/``run:`` pair,
-        or unresolved worker env vars.
+        unresolved worker env vars, or ``extra_envs`` keys colliding with
+        ``_WORKER_ENV_KEYS``.
     :raises RuntimeError: one or more ranks did not reach the SUCCEEDED terminal status.
     """
     # Phase 1: pure validation — pinned by test_phase1_failures_skip_phase2_side_effects.
@@ -567,9 +564,18 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
             f"got {sky_cfg.worker_image_tag!r}"
         )
 
+    # Reject extra_envs ↔ resolved-worker-env collisions before merge so a caller
+    # can't bypass the .env/process-env resolution path for secrets.
+    cred_overlap = sorted(set(sky_cfg.extra_envs) & set(_WORKER_ENV_KEYS))
+    if cred_overlap:
+        raise ValueError(
+            f"extra_envs keys collide with worker-resolved env: {cred_overlap}. "
+            "Set these via .env or process env (resolved by resolve_worker_env), "
+            "not sky_cfg.extra_envs."
+        )
+
     env_file_path = Path(sky_cfg.env_file).expanduser() if sky_cfg.env_file else None
     worker_env = resolve_worker_env(env_file_path)
-    worker_env.update(sky_cfg.extra_envs)
     if not any(k in worker_env for k in _SECRET_WORKER_ENV_KEYS):
         raise ValueError(
             "No worker env vars resolved. Set the rclone-R2 keys in process env "
@@ -577,6 +583,7 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
             f"{env_file_path if env_file_path is not None else '<env_file not set>'}. "
             f"Expected at least one of: {', '.join(_SECRET_WORKER_ENV_KEYS)}."
         )
+    worker_env.update(sky_cfg.extra_envs)
 
     base_job_name = sky_cfg.job_name or f"synth-setter-{uuid.uuid4().hex[:8]}"
 

@@ -11,6 +11,7 @@ funnel, the per-rank fan-out, and the uuid-stem job-name fallback.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -1044,11 +1045,70 @@ class TestDispatchViaSkypilot:
 
         update_envs_calls = mock_sky.Task.from_yaml_config.return_value.update_envs.call_args_list
         assert len(update_envs_calls) == 2
+        ranks_seen = sorted(call.args[0][WORKER_RANK_ENV_VAR] for call in update_envs_calls)
+        assert ranks_seen == ["0", "1"]
         for call in update_envs_calls:
             injected = call.args[0]
             assert injected["FOO"] == "bar"
             assert injected[NUM_WORKERS_ENV_VAR] == "2"
-            assert injected[WORKER_RANK_ENV_VAR] in {"0", "1"}
+
+    def test_rank_world_envs_override_caller_extra_envs(
+        self,
+        tmp_path: Path,
+        env_file: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """Launcher-owned rank/world keys win over collisions in ``sky_cfg.extra_envs``.
+
+        Pins the schema's documented precedence rule: a caller smuggling a
+        bogus ``SYNTH_SETTER_WORKER_RANK`` cannot corrupt partitioning.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param env_file: Fixture-provided worker env file path.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        """
+        template = _write_runpod_yaml(tmp_path)
+        sky_cfg = SkypilotLaunchConfig(
+            compute_template=str(template),
+            cmd="echo",
+            env_file=str(env_file),
+            job_name="rank-precedence",
+            num_workers=2,
+            extra_envs={WORKER_RANK_ENV_VAR: "999", NUM_WORKERS_ENV_VAR: "999"},
+        )
+
+        dispatch_via_skypilot(sky_cfg)
+
+        update_envs_calls = mock_sky.Task.from_yaml_config.return_value.update_envs.call_args_list
+        ranks_seen = sorted(call.args[0][WORKER_RANK_ENV_VAR] for call in update_envs_calls)
+        assert ranks_seen == ["0", "1"]
+        for call in update_envs_calls:
+            assert call.args[0][NUM_WORKERS_ENV_VAR] == "2"
+
+    def test_extra_envs_collision_with_resolved_env_keys_raises(
+        self,
+        tmp_path: Path,
+        env_file: Path,
+    ) -> None:
+        """Reject ``extra_envs`` keys that overlap ``_WORKER_ENV_KEYS``.
+
+        Prevents a caller from silently bypassing ``resolve_worker_env``'s
+        ``.env``-then-process-env resolution for secrets.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param env_file: Fixture-provided worker env file path.
+        """
+        template = _write_runpod_yaml(tmp_path)
+        sky_cfg = SkypilotLaunchConfig(
+            compute_template=str(template),
+            cmd="echo",
+            env_file=str(env_file),
+            job_name="cred-overlap",
+            extra_envs={"RCLONE_CONFIG_R2_ACCESS_KEY_ID": "bypass"},
+        )
+
+        with pytest.raises(ValueError, match="extra_envs keys collide"):
+            dispatch_via_skypilot(sky_cfg)
 
     def test_launcher_does_not_emit_worker_spec_uri_without_extra_envs(
         self,
@@ -1210,23 +1270,21 @@ class TestDispatchViaSkypilot:
             dispatch_via_skypilot(sky_cfg)
         mock_sky.jobs.launch.assert_not_called()
 
-    def test_dispatch_via_skypilot_accepts_only_sky_cfg(
+    def test_job_name_falls_back_to_uuid8_stem_when_unset(
         self,
         tmp_path: Path,
         env_file: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """Single-arg call with ``job_name=None`` falls back to ``synth-setter-<uuid8>``.
+        """``job_name=None`` falls back to ``synth-setter-<uuid8>``.
 
-        Pins the new domain-neutral signature: no ``spec``, no ``spec_uri``,
-        and the uuid-stem fallback covers callers that don't pin a name.
+        Pins the domain-neutral fallback: a caller that doesn't pin a stem gets
+        an 8-hex-char uuid suffix, not a dataset-flavored name.
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
         :param env_file: Fixture-provided worker env file path.
         :param mock_sky: Mocked ``sky`` module from fixture.
         """
-        import re
-
         template = _write_runpod_yaml(tmp_path)
         sky_cfg = SkypilotLaunchConfig(
             compute_template=str(template),
