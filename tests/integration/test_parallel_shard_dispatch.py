@@ -159,7 +159,7 @@ def test_parallel_dispatch_crosses_real_subprocess_boundary(
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
     _wire_generate_into_fake_renderer(spec, tmp_path, monkeypatch)
 
-    generate(spec)
+    generate(spec, tmp_path)
 
     bucket_prefix = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
     for shard in spec.shards:
@@ -201,7 +201,7 @@ def test_two_ranks_render_disjoint_complete_shard_partition(
 
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "2")
-    generate(spec)
+    generate(spec, tmp_path)
     rank_0_landed = _landed_filenames()
 
     # Wipe the bucket between ranks so rank-1's landed set is observed
@@ -213,7 +213,7 @@ def test_two_ranks_render_disjoint_complete_shard_partition(
 
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "1")
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "2")
-    generate(spec)
+    generate(spec, tmp_path)
     rank_1_landed = _landed_filenames()
 
     every_shard = {shard.filename for shard in spec.shards}

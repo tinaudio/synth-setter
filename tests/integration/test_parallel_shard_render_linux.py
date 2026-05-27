@@ -74,7 +74,7 @@ def test_parallel_renders_under_xvfb_wrapper(
     monkeypatch.setattr("synth_setter.cli.generate_dataset._rclone_copy", _fake_rclone)
     monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda *_a, **_k: None)
 
-    generate(spec)
+    generate(spec, tmp_path)
 
     assert len(rclone_srcs) == _NUM_SHARDS
     for path in rclone_srcs:

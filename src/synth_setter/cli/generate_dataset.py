@@ -14,7 +14,6 @@ from __future__ import annotations
 import shlex
 import subprocess
 import sys
-import tempfile
 import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextlib import ExitStack
@@ -116,15 +115,18 @@ def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -
     return args
 
 
-def generate(spec: DatasetSpec) -> None:
-    """Render+upload each owned shard in turn.
+def generate(spec: DatasetSpec, work_dir: Path) -> None:
+    """Render+upload each owned shard; writes shards under ``work_dir``.
 
+    ``work_dir`` is the Hydra per-run output dir supplied by the caller.
     Spec upload no longer happens here — ``main()`` writes the canonical R2
-    copy once on the launcher host before either calling ``generate(spec)`` inline
-    (local-run) or dispatching to a SkyPilot worker pod that re-enters via
-    ``from_hydra`` → ``generate(spec)``. Each shard is rendered, uploaded, and
-    unlinked before moving on — bounding local disk to one shard at a time.
-    Subprocesses fail-fast: later shards are not attempted on subprocess error.
+    copy once on the launcher host before either calling
+    ``generate(spec, work_dir)`` inline (local-run) or dispatching to a
+    SkyPilot worker pod that re-enters via
+    ``from_hydra`` → ``generate(spec, work_dir)``. Each shard is rendered,
+    uploaded, and unlinked before moving on — bounding local disk to one
+    shard at a time. Subprocesses fail-fast: later shards are not attempted
+    on subprocess error.
 
     Before each render, R2 is probed for the shard's destination object: if it already exists with
     non-zero size, the shard is skipped (resumability MVP — see #750). The probe uses
@@ -138,6 +140,8 @@ def generate(spec: DatasetSpec) -> None:
     :param spec: Validated dataset spec; rank/world env partitions ``spec.shards``
         across worker pods, and ``spec.render.renderer_version`` is cross-checked
         against the loaded plugin.
+    :param work_dir: Caller-supplied output dir (the Hydra per-run output dir);
+        created if missing. Shards are written here before the rclone upload.
     :raises RuntimeError: If the worker's plugin version disagrees with
         ``spec.render.renderer_version``.
     """
@@ -163,28 +167,25 @@ def generate(spec: DatasetSpec) -> None:
     )
 
     r2_dest_prefix = spec.r2.rclone_prefix()
+    work_dir.mkdir(parents=True, exist_ok=True)
 
-    with tempfile.TemporaryDirectory() as work_dir_str:
-        work_dir = Path(work_dir_str)
-
-        # ``start`` brackets only the dispatch call so the rate excludes tempdir
-        # setup and any post-dispatch cleanup; it still includes the in-loop R2
-        # skip probes (those are observable cost of the resumability MVP, #750).
-        start = time.perf_counter()
-        if spec.render.parallel and len(my_range) > 0:
-            rendered, skipped = _dispatch_shards_parallel(spec, my_range, work_dir, r2_dest_prefix)
-        else:
-            rendered, skipped = _dispatch_shards_serial(spec, my_range, work_dir, r2_dest_prefix)
-        elapsed_s = time.perf_counter() - start
-        samples = rendered * spec.render.samples_per_shard
-        rate = samples / elapsed_s if elapsed_s > 0 else 0.0
-        logger.info(
-            f"shard summary: rendered={rendered} skipped={skipped} of {len(my_range)} assigned"
-        )
-        logger.info(
-            f"generation speed: {samples} samples in {elapsed_s:.3f}s "
-            f"= {rate:.3f} samples/s (wallclock includes R2 skip probes)"
-        )
+    # ``start`` brackets only the dispatch call so the rate still includes the
+    # in-loop R2 skip probes (observable cost of the resumability MVP, #750).
+    start = time.perf_counter()
+    if spec.render.parallel and len(my_range) > 0:
+        rendered, skipped = _dispatch_shards_parallel(spec, my_range, work_dir, r2_dest_prefix)
+    else:
+        rendered, skipped = _dispatch_shards_serial(spec, my_range, work_dir, r2_dest_prefix)
+    elapsed_s = time.perf_counter() - start
+    samples = rendered * spec.render.samples_per_shard
+    rate = samples / elapsed_s if elapsed_s > 0 else 0.0
+    logger.info(
+        f"shard summary: rendered={rendered} skipped={skipped} of {len(my_range)} assigned"
+    )
+    logger.info(
+        f"generation speed: {samples} samples in {elapsed_s:.3f}s "
+        f"= {rate:.3f} samples/s (wallclock includes R2 skip probes)"
+    )
 
 
 def _dispatch_shards_serial(
@@ -468,7 +469,7 @@ def from_hydra(cfg: DictConfig) -> None:
     :param cfg: Composed Hydra dataset cfg supplied by ``@hydra.main`` from
         the worker's argv overrides.
     """
-    generate(spec_from_cfg(cfg))
+    generate(spec_from_cfg(cfg), Path(cfg.paths.output_dir))
 
 
 @hydra.main(version_base="1.3", config_path="pkg://synth_setter.configs", config_name="dataset")
@@ -507,7 +508,7 @@ def main(cfg: DictConfig) -> None:
     spec_uri = spec.r2.input_spec_uri()
 
     if sky_cfg.compute_template is None:
-        generate(spec)
+        generate(spec, Path(cfg.paths.output_dir))
         return
 
     # Deferred import — SkyPilot pulls heavy provider SDKs on import.
