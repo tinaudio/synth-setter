@@ -222,15 +222,37 @@ serial and parallel dispatchers.
 | `generation/samples`            | `rendered * spec.render.samples_per_shard`        |
 | `generation/samples_per_second` | `samples / elapsed_s` (0.0 when `elapsed_s == 0`) |
 
-Emitted by `_log_summary` after the dispatcher returns. Final `finalize(status)` records
-the run as `"success"` even on partial-success (some shards rendered, others failed);
-crash-on-raise reports `"failed"`.
+Emitted by `_log_summary` after the dispatcher returns. The dispatcher is fail-fast, so
+the summary fires only when every owned shard either rendered or was short-circuited by
+the R2-skip probe; `finalize(status)` then records `"success"`. Any exception during
+dispatch sets `status="failed"` (via `except BaseException` in `generate()`) and the
+summary is not emitted.
 
 ### 5d. Linked issues
 
 | Issue                                                         | Topic                                                                                                                   |
 | ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | [#1318](https://github.com/tinaudio/synth-setter/issues/1318) | v2: per-sample loudness telemetry relay (stdout protocol, worker → launcher) — deferred non-goal from the design doc Q5 |
+
+### 5e. Sweeps
+
+Operator-authored sweep configs under `sweeps/` drive `synth-setter-generate-dataset`
+via `wandb sweep` + `wandb agent`. Each YAML pins `program:` at
+`src/synth_setter/cli/generate_dataset.py` and uses `${args_no_hyphens}` so sweep
+parameters reach the launcher as Hydra overrides (e.g. `render.plugin_reload_cadence=once`).
+`entity:` / `project:` are pinned in the YAML — wandb's sweep CLI does not honor
+`WANDB_ENTITY` / `WANDB_PROJECT` at sweep-creation time (those only steer
+`wandb.init` inside each trial).
+
+To launch:
+
+```bash
+wandb sweep sweeps/generate_dataset_cadence.yaml   # prints sweep_id
+wandb agent <entity>/<project>/<sweep_id>          # runs trials
+```
+
+Each trial subprocess opens its own wandb run with `id = spec.run_id`; the
+`WANDB_SWEEP_ID` env (set by the agent) attaches the run to the sweep grid.
 
 ______________________________________________________________________
 
