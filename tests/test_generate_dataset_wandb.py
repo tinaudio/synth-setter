@@ -2,14 +2,16 @@
 
 Drives ``generate(spec, work_dir, loggers)`` against a real
 ``WandbLogger(offline=True)`` so spec ingestion (``log_hyperparams`` +
-artifact upload) is exercised through the live wandb client without touching
-the network. Shards are short-circuited via a stubbed ``object_size`` probe
-so the test never invokes the renderer subprocess or rclone.
+artifact upload) and per-shard / summary ``log_metrics`` are exercised
+through the live wandb client without touching the network. Shards are
+short-circuited via a stubbed ``object_size`` probe so the test never
+invokes the renderer subprocess or rclone.
 """
 
 from __future__ import annotations
 
 import glob
+import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,9 +19,43 @@ from pathlib import Path
 import pytest
 import wandb
 from lightning.pytorch.loggers.wandb import WandbLogger
+from wandb.proto import wandb_internal_pb2 as wandb_pb
+from wandb.sdk.internal import datastore as wandb_datastore
 
 from synth_setter.cli.generate_dataset import generate
 from synth_setter.pipeline.schemas.spec import DatasetSpec
+
+
+def _read_history_rows(wandb_binary: Path) -> list[dict[str, str]]:
+    """Decode the history records in a wandb offline ``.wandb`` binary.
+
+    Offline runs do not write ``files/wandb-history.jsonl`` (that file
+    only materializes on ``wandb sync``); the binary datastore is the
+    source of truth for per-step ``log_metrics`` payloads. Slash-paths
+    arrive as ``nested_key`` (``['shard', 'bytes']``), so the rejoiner
+    matches the keys callers passed to ``log_metrics``.
+
+    :param wandb_binary: Path to the offline ``run-*.wandb`` file.
+    :returns: One dict per history record; values are JSON-encoded
+        strings (as the datastore stores them).
+    """
+    ds = wandb_datastore.DataStore()
+    ds.open_for_scan(str(wandb_binary))
+    rows: list[dict[str, str]] = []
+    while True:
+        data = ds.scan_data()
+        if data is None:
+            break
+        rec = wandb_pb.Record()  # pyright: ignore[reportAttributeAccessIssue]
+        rec.ParseFromString(data)
+        if not rec.HasField("history"):
+            continue
+        row: dict[str, str] = {}
+        for item in rec.history.item:
+            key = item.key if item.key else "/".join(item.nested_key)
+            row[key] = item.value_json
+        rows.append(row)
+    return rows
 
 
 def _build_spec() -> DatasetSpec:
@@ -143,3 +179,73 @@ def test_generate_logs_spec_as_hyperparams_and_artifact_offline(
         f"artifact name {artifact_name!r} not recorded in offline run binary"
     )
     assert b"dataset-spec" in payload, "artifact type 'dataset-spec' not recorded"
+
+
+def test_generate_logs_per_shard_and_summary_metrics_offline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``generate`` emits one history row per shard plus a terminal summary row.
+
+    Per-shard rows carry ``shard/bytes`` (from the R2 skip-probe's
+    ``existing_size``) and ``shard/render_seconds`` (``0.0`` for skips).
+    The terminal row carries the ``shards/{rendered,skipped,total}``
+    counters and the e2e generation triple
+    (``generation/{elapsed_seconds,samples,samples_per_second}``).
+
+    :param tmp_path: Per-test tmp dir; the offline run lands at
+        ``tmp_path/wandb/offline-run-*-<run_id>``.
+    :param monkeypatch: Used to scrub ambient ``WANDB_*`` env and stub
+        ``object_size`` + ``extract_renderer_version``.
+    """
+    _scrub_wandb_env(monkeypatch)
+    monkeypatch.setenv("WANDB_MODE", "offline")
+
+    spec = _build_spec()
+
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset.extract_renderer_version",
+        lambda _path: spec.render.renderer_version,
+    )
+    # Every shard hits the R2-skip branch so ``shard/bytes`` is the stubbed
+    # ``existing_size`` and ``shard/render_seconds`` is 0.0.
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda *_a, **_k: 1_024)
+
+    wandb_logger = WandbLogger(
+        offline=True,
+        save_dir=str(tmp_path),
+        id=spec.run_id,
+        project="wandb-track-test-project",
+    )
+
+    generate(spec, tmp_path, [wandb_logger])
+
+    binary_files = glob.glob(
+        str(tmp_path / "wandb" / f"offline-run-*-{spec.run_id}" / "run-*.wandb")
+    )
+    assert len(binary_files) == 1, f"expected exactly one .wandb binary, found {binary_files}"
+
+    rows = _read_history_rows(Path(binary_files[0]))
+    shard_rows = [r for r in rows if "shard/bytes" in r]
+    assert len(shard_rows) == spec.num_shards, (
+        f"expected {spec.num_shards} per-shard history rows, got {len(shard_rows)}: {shard_rows}"
+    )
+    for r in shard_rows:
+        assert json.loads(r["shard/bytes"]) == 1024, r
+        assert json.loads(r["shard/render_seconds"]) == 0.0, r
+
+    summary_rows = [r for r in rows if "shards/rendered" in r]
+    assert len(summary_rows) == 1, (
+        f"expected exactly one summary history row, got {len(summary_rows)}: {summary_rows}"
+    )
+    summary = summary_rows[0]
+    assert json.loads(summary["shards/rendered"]) == 0, summary
+    assert json.loads(summary["shards/skipped"]) == spec.num_shards, summary
+    assert json.loads(summary["shards/total"]) == spec.num_shards, summary
+    for key in (
+        "generation/elapsed_seconds",
+        "generation/samples",
+        "generation/samples_per_second",
+    ):
+        assert key in summary, (key, summary)
+    assert json.loads(summary["generation/samples"]) == 0, summary
+    assert json.loads(summary["generation/samples_per_second"]) == 0.0, summary

@@ -230,9 +230,13 @@ def generate(spec: DatasetSpec, work_dir: Path, loggers: list[Logger]) -> None: 
         # in-loop R2 skip probes (observable cost of the resumability MVP, #750).
         start = time.perf_counter()
         if spec.render.parallel and len(my_range) > 0:
-            rendered, skipped = _dispatch_shards_parallel(spec, my_range, work_dir, r2_dest_prefix)
+            rendered, skipped = _dispatch_shards_parallel(
+                spec, my_range, work_dir, r2_dest_prefix, loggers
+            )
         else:
-            rendered, skipped = _dispatch_shards_serial(spec, my_range, work_dir, r2_dest_prefix)
+            rendered, skipped = _dispatch_shards_serial(
+                spec, my_range, work_dir, r2_dest_prefix, loggers
+            )
         elapsed_s = time.perf_counter() - start
         samples = rendered * spec.render.samples_per_shard
         rate = samples / elapsed_s if elapsed_s > 0 else 0.0
@@ -243,6 +247,7 @@ def generate(spec: DatasetSpec, work_dir: Path, loggers: list[Logger]) -> None: 
             f"generation speed: {samples} samples in {elapsed_s:.3f}s "
             f"= {rate:.3f} samples/s (wallclock includes R2 skip probes)"
         )
+        _log_summary(loggers, rendered, skipped, len(my_range), elapsed_s, samples, rate)
     except BaseException:
         status = "failed"
         raise
@@ -297,6 +302,64 @@ def _log_spec_artifact(loggers: list[Logger], spec: DatasetSpec) -> None:
         tmp.unlink()
 
 
+def _log_shard_metrics(
+    loggers: list[Logger], shard_id: int, byte_size: int, render_seconds: float
+) -> None:
+    """Emit per-shard byte size + render duration as a wandb history row.
+
+    :param loggers: Lightning loggers — empty list is a no-op.
+    :param shard_id: Passed as ``step`` so wandb's x-axis aligns with shard order.
+    :param byte_size: Local shard file size in bytes; stable because shards are
+        retained at ``work_dir``.
+    :param render_seconds: Wall-clock seconds from subprocess invoke through
+        upload-end; ``0.0`` on the R2-skip branch.
+    """
+    payload = {"shard/bytes": byte_size, "shard/render_seconds": render_seconds}
+    for lg in loggers:
+        try:
+            lg.log_metrics(payload, step=shard_id)
+        except Exception as exc:  # noqa: BLE001 — third-party logger failures must not abort the run
+            logger.warning(f"log_metrics(shard) failed on {type(lg).__name__}: {exc}")
+
+
+def _log_summary(
+    loggers: list[Logger],
+    rendered: int,
+    skipped: int,
+    total: int,
+    elapsed_s: float,
+    samples: int,
+    rate: float,
+) -> None:
+    """Emit the run-level shard counters + e2e generation triple.
+
+    Mirrors the loguru summary line at ``generate()`` so wandb history and
+    stdout agree on the rate that the resumability MVP (#750, #1304) reports.
+
+    :param loggers: Lightning loggers — empty list is a no-op.
+    :param rendered: Shards this rank actually rendered.
+    :param skipped: Shards short-circuited by the R2-skip probe.
+    :param total: ``len(my_range)`` — owned shard count for this rank.
+    :param elapsed_s: Wall-clock seconds bracketing the dispatcher (includes
+        the R2 skip probes by design).
+    :param samples: ``rendered * spec.render.samples_per_shard``.
+    :param rate: ``samples / elapsed_s`` (``0.0`` when ``elapsed_s == 0``).
+    """
+    payload = {
+        "shards/rendered": rendered,
+        "shards/skipped": skipped,
+        "shards/total": total,
+        "generation/elapsed_seconds": elapsed_s,
+        "generation/samples": samples,
+        "generation/samples_per_second": rate,
+    }
+    for lg in loggers:
+        try:
+            lg.log_metrics(payload)
+        except Exception as exc:  # noqa: BLE001 — third-party logger failures must not abort the run
+            logger.warning(f"log_metrics(summary) failed on {type(lg).__name__}: {exc}")
+
+
 def _close_loggers(loggers: list[Logger], status: str) -> None:
     """Finalize each logger and flush any live wandb run.
 
@@ -325,6 +388,7 @@ def _dispatch_shards_serial(
     my_range: range,
     work_dir: Path,
     r2_dest_prefix: str,
+    loggers: list[Logger],
 ) -> tuple[int, int]:
     """Render+upload owned shards in order; fail-fast on first error.
 
@@ -332,12 +396,14 @@ def _dispatch_shards_serial(
     :param my_range: Contiguous range of shard IDs owned by this rank.
     :param work_dir: Hydra per-run output dir; shards land here before upload.
     :param r2_dest_prefix: ``spec.r2.rclone_prefix()``.
+    :param loggers: Forwarded to ``_render_one_owned_shard`` so per-shard
+        byte size + render duration land in wandb history.
     :returns: ``(rendered, skipped)`` summary counts over ``my_range``.
     """
     rendered = 0
     skipped = 0
     for shard_id in my_range:
-        r, s = _render_one_owned_shard(spec, shard_id, work_dir, r2_dest_prefix)
+        r, s = _render_one_owned_shard(spec, shard_id, work_dir, r2_dest_prefix, loggers)
         rendered += int(r)
         skipped += int(s)
     return rendered, skipped
@@ -348,6 +414,7 @@ def _dispatch_shards_parallel(
     my_range: range,
     work_dir: Path,
     r2_dest_prefix: str,
+    loggers: list[Logger],
 ) -> tuple[int, int]:
     """Render+upload owned shards concurrently via a ``ThreadPoolExecutor``.
 
@@ -371,6 +438,8 @@ def _dispatch_shards_parallel(
     :param my_range: Non-empty contiguous range of shard IDs owned by this rank.
     :param work_dir: Hydra per-run output dir; every owned shard lands here.
     :param r2_dest_prefix: ``spec.r2.rclone_prefix()``.
+    :param loggers: Forwarded to ``_render_one_owned_shard`` so per-shard
+        byte size + render duration land in wandb history.
     :returns: ``(rendered, skipped)`` summary counts over ``my_range``.
     """
     workers = min(max(1, available_cpus() // 2), len(my_range))
@@ -386,7 +455,7 @@ def _dispatch_shards_parallel(
             if sid is None:
                 break
             in_flight.add(
-                pool.submit(_render_one_owned_shard, spec, sid, work_dir, r2_dest_prefix)
+                pool.submit(_render_one_owned_shard, spec, sid, work_dir, r2_dest_prefix, loggers)
             )
         while in_flight:
             done, in_flight = wait(in_flight, return_when=FIRST_COMPLETED)
@@ -399,7 +468,9 @@ def _dispatch_shards_parallel(
                 if sid is None:
                     break
                 in_flight.add(
-                    pool.submit(_render_one_owned_shard, spec, sid, work_dir, r2_dest_prefix)
+                    pool.submit(
+                        _render_one_owned_shard, spec, sid, work_dir, r2_dest_prefix, loggers
+                    )
                 )
     finally:
         pool.shutdown(wait=True, cancel_futures=True)
@@ -411,16 +482,21 @@ def _render_one_owned_shard(
     shard_id: int,
     work_dir: Path,
     r2_dest_prefix: str,
+    loggers: list[Logger],
 ) -> tuple[bool, bool]:
     """Render+upload one owned shard, or skip if R2 already has it.
 
     Encapsulates the R2 skip-probe + ``_render_and_upload_shard`` invocation
-    so the serial and parallel dispatch arms share one callable.
+    so the serial and parallel dispatch arms share one callable. Emits one
+    ``shard/bytes`` + ``shard/render_seconds`` history row per call —
+    ``render_seconds == 0.0`` on the skip branch, wall-clock from subprocess
+    invoke through upload-end on the render branch.
 
     :param spec: Validated dataset spec; ``spec.shards[shard_id]`` is fetched.
-    :param shard_id: Index into ``spec.shards``.
+    :param shard_id: Index into ``spec.shards``; also the ``step`` for the row.
     :param work_dir: Hydra per-run output dir; shards land here before upload.
     :param r2_dest_prefix: ``spec.r2.rclone_prefix()``.
+    :param loggers: Forwarded to ``_log_shard_metrics``.
     :returns: ``(rendered, skipped)`` — exactly one is ``True``.
     """
     shard = spec.shards[shard_id]
@@ -430,8 +506,13 @@ def _render_one_owned_shard(
             f"skipping shard {shard.shard_id} — already in R2 "
             f"({existing_size} bytes): {shard.filename}"
         )
+        _log_shard_metrics(loggers, shard_id, byte_size=existing_size, render_seconds=0.0)
         return False, True
-    _render_and_upload_shard(spec, shard, work_dir, r2_dest_prefix)
+    t0 = time.monotonic()
+    byte_size = _render_and_upload_shard(spec, shard, work_dir, r2_dest_prefix)
+    _log_shard_metrics(
+        loggers, shard_id, byte_size=byte_size, render_seconds=time.monotonic() - t0
+    )
     return True, False
 
 
@@ -440,7 +521,7 @@ def _render_and_upload_shard(
     shard: ShardSpec,
     work_dir: Path,
     r2_dest_prefix: str,
-) -> None:
+) -> int:
     """Render a single shard and upload it to R2; shards are retained at ``work_dir``.
 
     Rendered shards stay on disk under ``work_dir`` for post-mortem inspection
@@ -450,6 +531,8 @@ def _render_and_upload_shard(
     ``spec.render.max_retries`` (default 0 = strict fail-fast); rclone is outside
     the loop because it already retries via ``--retries=3``.
 
+    :returns: Local shard file size in bytes; stable for the caller because
+        shards are retained at ``work_dir``.
     :raises subprocess.CalledProcessError: Renderer (or rclone) subprocess exited non-zero after
         exhausting the retry budget.
     :raises RuntimeError: Renderer exited 0 without writing the expected shard file.
@@ -484,9 +567,11 @@ def _render_and_upload_shard(
         raise RuntimeError(
             f"generate_vst_dataset.py exited 0 but did not write expected shard file: {shard_path}"
         )
-    logger.info(f"shard rendered: {shard_path} ({shard_path.stat().st_size} bytes)")
+    byte_size = shard_path.stat().st_size
+    logger.info(f"shard rendered: {shard_path} ({byte_size} bytes)")
     _rclone_copy(str(shard_path), r2_dest_prefix)
     logger.info(f"shard uploaded: {shard.filename} -> {r2_dest_prefix}")
+    return byte_size
 
 
 def spec_from_cfg(cfg: DictConfig) -> DatasetSpec:
