@@ -92,10 +92,14 @@ Reference: `training-pipeline.md` §4–5
 
 ```
 eval.yaml + experiment config (pins model + data + checkpoint)
-  → Hydra composes DictConfig → predict → render → metrics
+  + evaluation: {render_vst, compute_metrics, rerender_target, num_workers}
+  + render: {param_spec_name, preset_path, plugin_path?}   # required when render_vst=true
+  → Hydra composes DictConfig → predict (→ render → metrics if mode=predict and gates on)
 ```
 
 - Experiment config pins everything: model checkpoint (W&B artifact ref), data config, eval settings
+- `evaluation:` block (in `src/synth_setter/configs/eval.yaml`) gates the in-process render and metrics phases — both default off so `mode=test`/`mode=validate` runs are unchanged
+- `render:` defaults entry composes a renderer config group (e.g. `render=surge_xt`) and supplies the VST plugin/preset/param-spec that `_run_predict_postprocessing` forwards to the render subprocess
 - No eval spec — configs are the source of truth
 - Full provenance in R2 path: `eval/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/{eval_config_id}/{eval_wandb_run_id}/`
 

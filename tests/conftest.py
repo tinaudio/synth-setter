@@ -600,7 +600,10 @@ def cfg_surge_xt(
 
 @pytest.fixture(scope="function")
 def cfg_surge_xt_eval(
-    cfg_surge_xt_global: DictConfig, tmp_path: Path, surge_xt_smoke_datasets: Path
+    cfg_surge_xt_global: DictConfig,
+    tmp_path: Path,
+    surge_xt_smoke_datasets: Path,
+    param_spec_name: str,
 ) -> DictConfig:
     """Eval config for the Surge XT train->eval smoke-test roundtrip.
 
@@ -609,6 +612,8 @@ def cfg_surge_xt_eval(
 
     :param cfg_surge_xt_global: The Surge XT training config (parametrized over accelerator, param_spec_name, and experiment_name).
     :param tmp_path: The temporary logging path (shared with `cfg_surge_xt`).
+    :param param_spec_name: Keys ``preset_paths`` so ``cfg.render`` matches the
+        spec the model was trained against.
 
     :return: A DictConfig configured to evaluate a Surge XT checkpoint on the smoke-test
         dataset.
@@ -622,6 +627,17 @@ def cfg_surge_xt_eval(
         cfg.data.predict_file = str(surge_xt_smoke_datasets / "test.h5")
         cfg.ckpt_path = str(tmp_path / "checkpoints" / "last.ckpt")
         cfg.mode = "predict"
+        cfg.evaluation = {
+            "render_vst": True,
+            "compute_metrics": True,
+            "rerender_target": True,
+            "num_workers": 1,
+        }
+        cfg.render = {
+            "param_spec_name": param_spec_name,
+            "preset_path": preset_paths[param_spec_name],
+            "plugin_path": _SURGE_FIXTURE_PLUGIN_PATH,
+        }
 
     yield cfg
 

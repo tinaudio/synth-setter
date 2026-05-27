@@ -11,11 +11,19 @@ defaults:
   - hydra: default
   - callbacks: none
   - experiment: null
+  - render: null
 
 task_name: "eval"
 
 tags: ["dev"]
 mode: test
+
+# Predict-mode post-processing; gated off so `mode: test`/`validate` stay unchanged.
+evaluation:
+  render_vst: false
+  compute_metrics: false
+  rerender_target: true
+  num_workers: 1
 
 # passing checkpoint path is necessary for evaluation
 ckpt_path: ???

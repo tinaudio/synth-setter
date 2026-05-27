@@ -215,17 +215,19 @@ The evaluation pipeline is a three-stage batch pipeline. Each stage is an indepe
 
 Interactive captured-patch evaluation: `src/synth_setter/tools/surge_xt_interactive.py --checkpoint-path …` invokes the predict → render → metrics chain end-to-end via `eval_patches` (see [`docs/guides/surge-xt-interactive.md`](../guides/surge-xt-interactive.md)).
 
+Same chain in-process from the `synth-setter-eval` CLI: with `mode=predict` and `cfg.evaluation.{render_vst,compute_metrics}` enabled, `cli/eval.py` shells out to the render and metrics modules itself, so the render and metrics stages are reachable from a single Hydra entrypoint as well as from `surge_xt_interactive.py`.
+
 ## 5. Stage Definitions
 
 ### 5.1 Predict
 
-| Property    | Value                                                                                                                                                    |
-| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Command** | `python -m synth_setter.cli.eval mode=predict experiment={exp} data={data} ckpt_path={ckpt}`                                                             |
-| **Input**   | Trained checkpoint (`.ckpt`), test dataset (HDF5 shard or virtual dataset)                                                                               |
-| **Output**  | `pred-{batch_idx}.pt`, `target-audio-{batch_idx}.pt`, `target-params-{batch_idx}.pt`                                                                     |
-| **Compute** | GPU — model forward pass                                                                                                                                 |
-| **Config**  | Hydra composition: `src/synth_setter/configs/eval.yaml` + `src/synth_setter/configs/data/{data}.yaml` + `src/synth_setter/configs/experiment/{exp}.yaml` |
+| Property    | Value                                                                                                                                                                                                                                        |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Command** | `python -m synth_setter.cli.eval mode=predict experiment={exp} data={data} ckpt_path={ckpt}`                                                                                                                                                 |
+| **Input**   | Trained checkpoint (`.ckpt`), test dataset (HDF5 shard or virtual dataset)                                                                                                                                                                   |
+| **Output**  | `pred-{batch_idx}.pt`, `target-audio-{batch_idx}.pt`, `target-params-{batch_idx}.pt`                                                                                                                                                         |
+| **Compute** | GPU — model forward pass                                                                                                                                                                                                                     |
+| **Config**  | Hydra composition: `src/synth_setter/configs/eval.yaml` + `src/synth_setter/configs/data/{data}.yaml` + `src/synth_setter/configs/experiment/{exp}.yaml` (+ `src/synth_setter/configs/render/{spec}.yaml` when `evaluation.render_vst=true`) |
 
 The predict stage loads a trained model checkpoint via PyTorch Lightning's `Trainer.predict()`, runs inference on the test split, and writes predicted parameter tensors to disk using a `PredictionWriter` callback.
 
@@ -235,6 +237,19 @@ The predict stage loads a trained model checkpoint via PyTorch Lightning's `Trai
 - If `data.r2_path` is explicitly set, `SurgeDataModule.prepare_data()` syncs from R2 before loading
 - Checkpoint path supports `${wandb:...}` resolver — auto-downloads from W&B artifacts to local cache
 - Output directory: `${paths.output_dir}/predictions` (see `src/synth_setter/configs/callbacks/prediction_writer.yaml`)
+
+#### Predict-mode post-processing (in-process)
+
+When `cfg.mode == "predict"`, `cli/eval.py` invokes `_run_predict_postprocessing()` after `trainer.predict()`. Both phases shell out to the existing CLIs (`predict_vst_audio.py`, `compute_audio_metrics.py`) and are gated by `cfg.evaluation`:
+
+| Key                          | Default | Effect when true                                                                                                                                                                                 |
+| ---------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `evaluation.render_vst`      | `false` | Subprocess-renders `${paths.output_dir}/audio/sample_*/{pred.wav, target.wav, spec.png, params.csv}`; requires `cfg.render.{param_spec_name, preset_path}` and optional `cfg.render.plugin_path` |
+| `evaluation.compute_metrics` | `false` | Subprocess-computes `${paths.output_dir}/metrics/{metrics, aggregated_metrics}.csv` against the rendered pairs                                                                                   |
+| `evaluation.rerender_target` | `true`  | Forwards `-t` to `predict_vst_audio` so `target.wav` is re-synthesized from stored target params (comparable to the rendered `pred.wav`) instead of replayed from `target-audio-*.pt`            |
+| `evaluation.num_workers`     | `1`     | Forwarded as `-w` to `compute_audio_metrics`                                                                                                                                                     |
+
+On Linux the render subprocess is prefixed with the headless wrapper materialised via `synth_setter.resources.vst_headless_wrapper()` so the VST3 plugin sees an Xvfb display before pedalboard imports it; the metrics subprocess is CPU-only and runs unwrapped. Both default-off so `mode: test` and `mode: validate` paths are unchanged.
 
 ### 5.2 Render
 
@@ -1188,13 +1203,13 @@ and **eval artifacts** (audio files, prediction tensors — no W&B UI benefit).
 
 ### Eval Scripts
 
-| File                                                   | Lines    | Purpose                                     | Cluster coupling                                                          |
-| ------------------------------------------------------ | -------- | ------------------------------------------- | ------------------------------------------------------------------------- |
-| `src/synth_setter/cli/eval.py`                         | 121      | Hydra entry point for predict/test/validate | Data configs require explicit `dataset_root`/`predict_file` (no defaults) |
-| `src/synth_setter/evaluation/predict_vst_audio.py`     | 232      | VST rendering from predicted parameters     | Plugin path defaults                                                      |
-| `renderscript.sh`                                      | 59       | Xvfb wrapper for headless rendering         | Assumes Linux, no macOS support                                           |
-| `src/synth_setter/evaluation/compute_audio_metrics.py` | 323      | Parallel metric computation                 | None (already portable)                                                   |
-| `jobs/predict/*.sh`                                    | 19 files | SGE job scripts, one per model (deprecated) | SGE directives, hardcoded paths, `module load`                            |
+| File                                                   | Lines    | Purpose                                                                                                  | Cluster coupling                                                          |
+| ------------------------------------------------------ | -------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `src/synth_setter/cli/eval.py`                         | 194      | Hydra entry point for predict/test/validate, with optional render + metrics chaining when `mode=predict` | Data configs require explicit `dataset_root`/`predict_file` (no defaults) |
+| `src/synth_setter/evaluation/predict_vst_audio.py`     | 232      | VST rendering from predicted parameters                                                                  | Plugin path defaults                                                      |
+| `renderscript.sh`                                      | 59       | Xvfb wrapper for headless rendering                                                                      | Assumes Linux, no macOS support                                           |
+| `src/synth_setter/evaluation/compute_audio_metrics.py` | 323      | Parallel metric computation                                                                              | None (already portable)                                                   |
+| `jobs/predict/*.sh`                                    | 19 files | SGE job scripts, one per model (deprecated)                                                              | SGE directives, hardcoded paths, `module load`                            |
 
 ### Data Configs
 
