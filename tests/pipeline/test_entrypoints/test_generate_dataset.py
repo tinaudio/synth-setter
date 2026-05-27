@@ -1665,6 +1665,9 @@ class TestMainDispatchBranches:
             f"render.plugin_path={TEST_PLUGIN_VST3}",
             "finalize_inline=true",
             "oracle_eval_inline=true",
+            # Override smoke-shard's [12, 0, 0] — the zero-size guard rejects
+            # train_val_test_sizes with any zero split for oracle_eval_inline.
+            "train_val_test_sizes=[12, 4, 4]",
         ]
         monkeypatch.setattr("sys.argv", argv)
         monkeypatch.setattr(gd, "generate", lambda _spec, _work_dir: None)
@@ -1809,6 +1812,43 @@ class TestMainDispatchBranches:
         monkeypatch.setattr(gd, "_run_oracle_eval_subprocess", oracle_mock)
 
         with pytest.raises(ValueError, match="only supports output_format=hdf5"):
+            gd.main()
+        generate_mock.assert_not_called()
+        finalize_mock.assert_not_called()
+        oracle_mock.assert_not_called()
+
+    def test_main_oracle_eval_inline_rejects_zero_size_split(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Fail-fast guard: ``oracle_eval_inline=true`` rejects ``[N, 0, 0]``-style sizes.
+
+        ``SurgeDataModule.setup()`` opens train/val/test ``.h5`` unconditionally
+        regardless of stage, so any zero-size split would FileNotFoundError
+        deep inside Lightning. The launcher catches the misconfig up front.
+
+        :param monkeypatch: Patches argv and the ``generate`` / ``finalize_from_spec``
+            / oracle-eval seams; the test asserts none of them is reached.
+        """
+        import synth_setter.cli.generate_dataset as gd
+
+        argv = [
+            "synth-setter-generate-dataset",
+            "experiment=generate_dataset/smoke-shard",
+            f"render.plugin_path={TEST_PLUGIN_VST3}",
+            "finalize_inline=true",
+            "oracle_eval_inline=true",
+        ]
+        monkeypatch.setattr("sys.argv", argv)
+        monkeypatch.setenv("HYDRA_FULL_ERROR", "1")
+        generate_mock = MagicMock()
+        finalize_mock = MagicMock()
+        oracle_mock = MagicMock()
+        monkeypatch.setattr(gd, "generate", generate_mock)
+        monkeypatch.setattr(gd, "finalize_from_spec", finalize_mock)
+        monkeypatch.setattr(gd, "_run_oracle_eval_subprocess", oracle_mock)
+
+        with pytest.raises(ValueError, match="train_val_test_sizes > 0"):
             gd.main()
         generate_mock.assert_not_called()
         finalize_mock.assert_not_called()

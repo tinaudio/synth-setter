@@ -517,7 +517,9 @@ def main(cfg: DictConfig) -> None:
 
     :param cfg: Hydra-composed dataset cfg.
     :raises ValueError: ``oracle_eval_inline=true`` without
-        ``finalize_inline=true``, or with ``output_format!=hdf5``.
+        ``finalize_inline=true``, with ``output_format!=hdf5``, or with
+        a zero-size train / val / test split (the eval datamodule opens
+        all three split files unconditionally).
     """
     overrides = list(HydraConfig.get().overrides.task)
     spec = spec_from_cfg(cfg)
@@ -534,6 +536,12 @@ def main(cfg: DictConfig) -> None:
             raise ValueError(
                 "oracle_eval_inline=true only supports output_format=hdf5; "
                 f"got {cfg.output_format!r}."
+            )
+        if any(size == 0 for size in spec.train_val_test_sizes):
+            raise ValueError(
+                "oracle_eval_inline=true requires all of "
+                f"train_val_test_sizes > 0; got {tuple(spec.train_val_test_sizes)}. "
+                "SurgeDataModule opens train.h5 / val.h5 / test.h5 unconditionally."
             )
 
     # ``_OPERATOR_WORKSPACE`` is the launcher-side spec-mirror anchor; the
