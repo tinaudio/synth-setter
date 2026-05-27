@@ -154,16 +154,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      # Installs both Hydra (for the `matrix` step's workflow_dispatch
-      # `output_format` resolution) and the synth-setter package itself (so
-      # the `Compute per-cell spec_uri map` step's `synth-setter-spec-uri
-      # --from-experiment ... --run-id-override ...` call resolves on the host
-      # without a docker pull). `--no-deps` keeps the heavy [project.dependencies]
-      # (torch, skypilot, librosa, ...) out of this setup-only environment;
-      # the explicit pydantic + python-dotenv pin covers the spec-uri CLI's
-      # transitive import of `synth_setter.pipeline.schemas.spec`.
-      # `hydra-colorlog` is required because src/synth_setter/configs/hydra/default.yaml's
-      # `defaults` block names `colorlog` for job_logging / hydra_logging.
+      # `--no-deps` keeps torch / skypilot / librosa out of this setup-only env;
+      # the explicit `hydra-core` + `hydra-colorlog` pair matches
+      # `configs/hydra/default.yaml`'s `colorlog` job_logging selector, and the
+      # `pydantic` / `python-dotenv` pair covers `synth-setter-spec-uri`'s
+      # transitive import of `synth_setter.pipeline.schemas.spec`. If the CLI
+      # grows a new top-level dep, add it here — see #25 for tracking drift.
       - name: Install synth-setter for Hydra compose + spec-uri CLI
         run: |
           pip install --no-deps -e .
@@ -277,13 +273,14 @@ jobs:
           echo "r2_bucket=${R2_BUCKET}" >> "${GITHUB_OUTPUT}"
           echo "r2_bucket: ${R2_BUCKET}"
 
-      # Precompute the spec_uri for every (provider, output_format) cell in
-      # the matrix, keyed as `provider-output_format`, so the downstream
-      # `validate` matrix can look up its own URI from a single non-matrix
-      # output and side-step the `needs.<matrix-job>.outputs.<x>` scalar
-      # collapse that #1154 documents. The same per-cell `run_id` formula
-      # appears in `generate-launcher`'s `run_id:` input, so the URI each
-      # validate cell consumes is the URI its paired generate cell wrote.
+      # Precompute spec_uri for every (provider, output_format) cell, keyed
+      # `<provider>-<output_format>`. Routing the URI through this non-matrix
+      # output dodges the `needs.<matrix-job>.outputs.<x>` scalar collapse —
+      # see #1154. The per-cell `run_id` formula matches the one
+      # `generate-launcher` passes (#1154 fix is bi-directional). The temp
+      # `rows` file holds one JSON object per cell so a `synth-setter-spec-uri`
+      # failure aborts via `set -e` instead of being swallowed by an enclosing
+      # pipe/command-substitution; the post-loop `jq -sc add` collapses them.
       - name: Compute per-cell spec_uri map
         id: spec_uris
         env:
@@ -294,29 +291,45 @@ jobs:
           RUN_ID_BASE: ${{ github.run_id }}
         run: |
           set -euo pipefail
-          if [[ "$PROVIDERS_JSON" == "[]" || "$FORMATS_JSON" == "[]" ]]; then
+          providers_n=$(printf '%s' "$PROVIDERS_JSON" | jq 'length')
+          formats_n=$(printf '%s' "$FORMATS_JSON" | jq 'length')
+          if [[ "$providers_n" -eq 0 || "$formats_n" -eq 0 ]]; then
             echo "spec_uris={}" >> "$GITHUB_OUTPUT"
             echo "spec_uris: {}"
             exit 0
           fi
-          json=$({
-            while read -r prov; do
-              while read -r fmt; do
-                if [[ "$EVENT_NAME" == "schedule" ]]; then
-                  if [[ "$fmt" == "wds" ]]; then
-                    exp="generate_dataset/smoke-shard-wds"
-                  else
-                    exp="generate_dataset/smoke-shard"
-                  fi
+          rows=$(mktemp)
+          trap 'rm -f "$rows"' EXIT
+          while read -r prov; do
+            while read -r fmt; do
+              if [[ "$EVENT_NAME" == "schedule" ]]; then
+                if [[ "$fmt" == "wds" ]]; then
+                  exp="generate_dataset/smoke-shard-wds"
                 else
-                  exp="$DISPATCH_DATASET_CONFIG"
+                  exp="generate_dataset/smoke-shard"
                 fi
-                rid="${RUN_ID_BASE}-${prov}-${fmt}"
-                uri=$(synth-setter-spec-uri --from-experiment "$exp" --run-id-override "$rid")
-                jq -nc --arg k "${prov}-${fmt}" --arg v "$uri" '{($k): $v}'
-              done < <(printf '%s' "$FORMATS_JSON" | jq -r '.[]')
-            done < <(printf '%s' "$PROVIDERS_JSON" | jq -r '.[]')
-          } | jq -sc 'add // {}')
+              else
+                exp="$DISPATCH_DATASET_CONFIG"
+              fi
+              rid="${RUN_ID_BASE}-${prov}-${fmt}"
+              if ! uri=$(synth-setter-spec-uri --from-experiment "$exp" --run-id-override "$rid"); then
+                echo "::error::synth-setter-spec-uri failed for experiment=${exp} run_id=${rid}"
+                exit 1
+              fi
+              if [[ -z "$uri" ]]; then
+                echo "::error::synth-setter-spec-uri returned empty URI for experiment=${exp} run_id=${rid}"
+                exit 1
+              fi
+              jq -nc --arg k "${prov}-${fmt}" --arg v "$uri" '{($k): $v}' >> "$rows"
+            done < <(printf '%s' "$FORMATS_JSON" | jq -r '.[]')
+          done < <(printf '%s' "$PROVIDERS_JSON" | jq -r '.[]')
+          json=$(jq -sc 'add // {}' < "$rows")
+          actual_n=$(printf '%s' "$json" | jq 'length')
+          expected_n=$(( providers_n * formats_n ))
+          if [[ "$actual_n" -ne "$expected_n" ]]; then
+            echo "::error::spec_uris cardinality mismatch: expected ${expected_n}, got ${actual_n}"
+            exit 1
+          fi
           echo "spec_uris=$json" >> "$GITHUB_OUTPUT"
           echo "spec_uris: $json"
 

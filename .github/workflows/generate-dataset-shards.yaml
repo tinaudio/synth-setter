@@ -94,15 +94,16 @@ on:
         type: string
         default: ""
       run_id:
-        description: "Per-cell `run_id` pin appended to the launcher invocation as `+run_id=<value>`. Matrix callers pass a deterministic per-cell identifier (e.g. `<github.run_id>-<provider>-<output_format>`) so each cell writes under its own R2 prefix and validator cells can derive the same URI via `synth-setter-spec-uri --from-experiment ... --run-id-override ...`."
-        required: true
+        description: "`+run_id=<value>` Hydra override pinned at the launcher. Matrix callers pass `<gh.run_id>-<provider>-<output_format>` so validator cells can re-derive the URI; non-matrix callers can leave empty to auto-pin `<gh.run_id>-<run_attempt>` and avoid retry collisions on R2."
+        required: false
         type: string
+        default: ""
     outputs:
       spec_uri:
-        description: "Canonical r2:// URI of the materialized spec (under-prefix `input_spec.json`). Derived via `synth-setter-spec-uri --from-experiment <dataset_config> --run-id-override <run_id>` from the same Hydra cfg the launcher composes."
+        description: "Canonical `r2://<bucket>/<prefix>input_spec.json` URI of the materialized spec."
         value: ${{ jobs.generate.outputs.spec_uri }}
       run_id:
-        description: "Generate stage's `run_id`, mirrored back to callers as a job output so chained finalize / validate consumers don't have to re-thread the input."
+        description: "Effective `run_id` (caller-passed or auto-pinned fallback)."
         value: ${{ jobs.generate.outputs.run_id }}
   workflow_dispatch:
     inputs:
@@ -156,7 +157,7 @@ on:
         type: string
         default: ""
       run_id:
-        description: "Per-dispatch `run_id` pin appended to the launcher invocation as `+run_id=<value>`. Empty (default) auto-pins `<github.run_id>-<github.run_attempt>` so retries don't collide on R2."
+        description: "`+run_id=<value>` Hydra override; empty auto-pins `<gh.run_id>-<run_attempt>` so retries don't collide on R2."
         required: false
         type: string
         default: ""
@@ -613,16 +614,11 @@ jobs:
           echo "=== Materialized Spec (${PROVIDER}) ==="
           head -20 "${SPEC_PATH}"
 
-      # `spec_uri` is derived via `synth-setter-spec-uri --from-experiment
-      # <dataset_config> --run-id-override <run_id>`, which Hydra-composes the
-      # same cfg the launcher just ran. The URI is a pure function of
-      # `(experiment, run_id)` (r2.bucket + r2.prefix derive deterministically
-      # from cfg + the pinned `+run_id` override), so per-cell matrix callers
-      # can recompute the exact same URI from the same coordinates — closing
-      # the matrix-output fan-in collapse documented at #1154. Runs inside
-      # the dev-snapshot image because that's the only environment guaranteed
-      # to have the synth-setter package + Hydra installed across both the
-      # skypilot-local and runpod/oci rows.
+      # Re-derive spec_uri from `(experiment, run_id)` via the same Hydra
+      # cfg the launcher just composed — see #1154 for the matrix-output
+      # collapse this routes around. Runs inside the dev-snapshot image so
+      # both the skypilot-local (host-installed) and runpod/oci (image-only)
+      # rows share one resolution path.
       - name: Resolve spec_uri via Hydra-compose
         id: spec_uri
         env:
@@ -630,15 +626,22 @@ jobs:
           RUN_ID_OVERRIDE: ${{ inputs.run_id || format('{0}-{1}', github.run_id, github.run_attempt) }}
         run: |
           set -euo pipefail
-          SPEC_URI=$(docker run --rm \
-            -e EXPERIMENT \
-            -e RUN_ID_OVERRIDE \
-            "${IMAGE}" \
-            synth-setter-spec-uri \
-              --from-experiment "$EXPERIMENT" \
-              --run-id-override "$RUN_ID_OVERRIDE")
+          err=$(mktemp)
+          trap 'rm -f "$err"' EXIT
+          if ! SPEC_URI=$(docker run --rm \
+              -e EXPERIMENT \
+              -e RUN_ID_OVERRIDE \
+              "${IMAGE}" \
+              synth-setter-spec-uri \
+                --from-experiment "$EXPERIMENT" \
+                --run-id-override "$RUN_ID_OVERRIDE" 2>"$err"); then
+            echo "::error::synth-setter-spec-uri failed for experiment=${EXPERIMENT} run_id=${RUN_ID_OVERRIDE}"
+            cat "$err" >&2 || true
+            exit 1
+          fi
           if [[ -z "${SPEC_URI}" ]]; then
             echo "::error::synth-setter-spec-uri returned an empty URI for experiment=${EXPERIMENT} run_id=${RUN_ID_OVERRIDE}"
+            cat "$err" >&2 || true
             exit 1
           fi
           echo "spec_uri=${SPEC_URI}" >> "${GITHUB_OUTPUT}"

@@ -1663,12 +1663,9 @@ class TestMainSpecPersistence:
         tmp_path: Path,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """``main()`` writes nothing on the legacy ``::synth-setter-spec-uri::`` channel.
+        """``main()`` must not print the ``::synth-setter-spec-uri::`` marker on stdout.
 
-        CI now derives the URI per-cell via ``synth-setter-spec-uri
-        --from-experiment ... --run-id-override ...`` from the pinned
-        ``+run_id`` override; reintroducing stdout emission would resurrect the
-        matrix-output collapse documented at #1154.
+        CI derives the URI via ``synth-setter-spec-uri`` (Hydra-compose) — see #1154.
 
         :param monkeypatch: Pytest fixture used to patch ``sys.argv`` + dispatch.
         :param tmp_path: Pytest fixture providing a fresh test directory.
