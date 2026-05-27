@@ -17,8 +17,20 @@ from pathlib import Path
 import pytest
 import wandb
 from lightning.pytorch.loggers.wandb import WandbLogger
-from wandb.proto import wandb_internal_pb2 as wandb_pb
-from wandb.sdk.internal import datastore as wandb_datastore
+
+# Verified against wandb 0.26.x. ``wandb.proto.wandb_internal_pb2.Record`` and
+# ``wandb.sdk.internal.datastore.DataStore`` are wandb internals — if a future
+# release moves them, the import fails and the whole module skips rather than
+# red-CIing. The skip message points the next maintainer at the wandb upgrade
+# as the proximate cause.
+try:
+    from wandb.proto import wandb_internal_pb2 as wandb_pb
+    from wandb.sdk.internal import datastore as wandb_datastore
+except ImportError as exc:  # pragma: no cover — guards a future wandb upgrade
+    pytest.skip(
+        f"wandb internals moved (wandb=={wandb.__version__}); update test helper: {exc}",
+        allow_module_level=True,
+    )
 
 from synth_setter.cli.generate_dataset import generate
 from synth_setter.pipeline.schemas.spec import DatasetSpec

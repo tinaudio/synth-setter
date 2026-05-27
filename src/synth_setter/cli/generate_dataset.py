@@ -192,10 +192,14 @@ def generate(spec: DatasetSpec, work_dir: Path, loggers: list[Logger]) -> None: 
     :raises RuntimeError: If the worker's plugin version disagrees with
         ``spec.render.renderer_version``.
     """
-    _log_hyperparams(loggers, spec)
-    _log_spec_artifact(loggers, spec)
     status = "success"
     try:
+        # Inside the try so a helper failure (e.g. tempfile creation in
+        # ``_log_spec_artifact``) still triggers ``finalize("failed")`` +
+        # ``wandb.finish()`` in the ``finally`` — otherwise the wandb run
+        # leaks un-closed on the helper's exception path.
+        _log_hyperparams(loggers, spec)
+        _log_spec_artifact(loggers, spec)
         render = spec.render
         actual_renderer_version = extract_renderer_version(Path(render.plugin_path))
         if actual_renderer_version != render.renderer_version:
@@ -289,7 +293,14 @@ def _log_spec_artifact(loggers: list[Logger], spec: DatasetSpec) -> None:
             except Exception as exc:  # noqa: BLE001 — wandb artifact failure must not abort the run
                 logger.warning(f"log_spec_artifact failed on {type(lg).__name__}: {exc}")
     finally:
-        tmp.unlink()
+        # Best-effort tempfile cleanup; wandb has already copied the payload
+        # into its own store by this point. A leaked tempfile under the OS
+        # temp dir is preferable to letting a deletion failure (Windows lock,
+        # antivirus scan, prior removal) abort dataset generation.
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError as exc:
+            logger.warning(f"tempfile cleanup failed for {tmp}: {exc}")
 
 
 def _log_shard_metrics(
@@ -366,7 +377,12 @@ def _close_loggers(loggers: list[Logger], status: str) -> None:
             lg.finalize(status)
         except Exception as exc:  # noqa: BLE001 — finalize errors must not mask the original raise
             logger.warning(f"logger finalize failed on {type(lg).__name__}: {exc}")
-    if wandb.run is not None:
+    # Only close the wandb run if a ``WandbLogger`` is in ``loggers`` — i.e. we
+    # opened it. Otherwise a stale ``wandb.run`` started elsewhere in the
+    # process (e.g. another library, a sibling test) would be silently
+    # finished here.
+    have_wandb_logger = any(isinstance(lg, WandbLogger) for lg in loggers)
+    if have_wandb_logger and wandb.run is not None:
         try:
             wandb.finish()
         except Exception as exc:  # noqa: BLE001 — finish errors must not mask the original raise
