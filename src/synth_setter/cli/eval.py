@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any
 
 import hydra
+import pandas as pd
+import wandb
 from lightning import Callback, LightningDataModule, LightningModule, Trainer
 from lightning.pytorch.loggers import Logger
 from omegaconf import DictConfig
@@ -27,6 +29,7 @@ from synth_setter.workspace import operator_workspace
 _PREDICT_VST_AUDIO_MODULE = "synth_setter.evaluation.predict_vst_audio"
 _COMPUTE_AUDIO_METRICS_MODULE = "synth_setter.evaluation.compute_audio_metrics"
 _SUBPROCESS_TIMEOUT_SECONDS = 600
+_AGGREGATED_METRICS_FILENAME = "aggregated_metrics.csv"
 
 # Resolve workspace at import so ``${oc.env:PROJECT_ROOT}`` in
 # ``configs/paths/default.yaml`` interpolates under any install layout.
@@ -37,16 +40,54 @@ register_resolvers()
 log = RankedLogger(__name__, rank_zero_only=True)
 
 
-def _run_predict_postprocessing(cfg: DictConfig) -> None:  # noqa: DOC502,DOC503
-    """Render VST audio and compute audio metrics for the just-written predictions.
+def _load_audio_metrics(metrics_dir: Path) -> dict[str, float]:
+    """Flatten ``aggregated_metrics.csv`` into ``{"audio/<name>_<stat>": value}``.
+
+    :param metrics_dir: Directory containing the ``aggregated_metrics.csv`` produced by
+        :mod:`synth_setter.evaluation.compute_audio_metrics`; rows are metric names,
+        columns are ``mean`` and ``std``.
+    :returns: Flat float dict suitable for ``wandb.run.log`` and ``trainer.callback_metrics``.
+    :raises FileNotFoundError: if the aggregated CSV is missing — the caller just ran the
+        producing subprocess so a missing file means that subprocess failed silently.
+    """
+    csv_path = metrics_dir / _AGGREGATED_METRICS_FILENAME
+    if not csv_path.is_file():
+        raise FileNotFoundError(
+            f"{_AGGREGATED_METRICS_FILENAME} missing at {csv_path} — the compute_audio_metrics "
+            "subprocess returned 0 but did not write the aggregated CSV."
+        )
+    df = pd.read_csv(csv_path, index_col=0)
+    return {
+        f"audio/{metric}_{stat}": float(df.at[metric, stat])
+        for metric in df.index
+        for stat in df.columns
+    }
+
+
+def _log_audio_metrics_to_wandb(audio_metrics: dict[str, float]) -> None:
+    """Forward ``audio_metrics`` to the active wandb run, if any.
+
+    :param audio_metrics: Flat metric dict from :func:`_load_audio_metrics`.
+    """
+    if wandb.run is None:
+        return
+    wandb.run.log(audio_metrics)
+
+
+def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: DOC502,DOC503
+    """Render VST audio, compute audio metrics, and return their aggregated values.
 
     The VST render subprocess is prefixed with the headless wrapper on Linux so
     the VST3 plugin gets an Xvfb display before pedalboard imports it; the
-    metrics subprocess is CPU-only and needs no wrapper.
+    metrics subprocess is CPU-only and needs no wrapper. When metrics run and a
+    wandb run is active, the aggregated values are also logged to that run so
+    they land alongside ``test/param_mse``.
 
     :param cfg: Reads ``cfg.evaluation`` (gates + ``num_workers``), ``cfg.render``
         (param spec, preset, optional plugin path), and ``cfg.paths.output_dir``
         (base for ``predictions/``, ``audio/``, ``metrics/``).
+    :returns: ``{"audio/<name>_<stat>": value}`` when ``compute_metrics`` ran;
+        empty dict otherwise. Always rank-zero — the caller gates DDP duplication.
     :raises ValueError: if ``evaluation.render_vst`` is enabled but ``cfg.render`` is
         unset, or the expected input directory for a stage is missing.
     :raises subprocess.CalledProcessError: propagated from a non-zero subprocess exit.
@@ -119,6 +160,11 @@ def _run_predict_postprocessing(cfg: DictConfig) -> None:  # noqa: DOC502,DOC503
             check=True,
             timeout=_SUBPROCESS_TIMEOUT_SECONDS,
         )
+        audio_metrics = _load_audio_metrics(metrics_dir)
+        _log_audio_metrics_to_wandb(audio_metrics)
+        return audio_metrics
+
+    return {}
 
 
 @task_wrapper
@@ -164,6 +210,7 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
 
     mode = cfg.get("mode", "test")
 
+    audio_metrics: dict[str, float] = {}
     if mode == "test":
         log.info("Starting testing!")
         trainer.test(
@@ -192,9 +239,10 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
         # Rank-zero gate: trainer.predict runs on every rank in DDP/multi-device
         # setups, but the postprocessing subprocesses share one output_dir.
         if trainer.is_global_zero:
-            _run_predict_postprocessing(cfg)
+            audio_metrics = _run_predict_postprocessing(cfg)
 
-    metric_dict = trainer.callback_metrics
+    metric_dict: dict[str, Any] = dict(trainer.callback_metrics)
+    metric_dict.update(audio_metrics)
 
     return metric_dict, object_dict
 

@@ -251,6 +251,8 @@ When `cfg.mode == "predict"`, `cli/eval.py` invokes `_run_predict_postprocessing
 
 On Linux the render subprocess is prefixed with the headless wrapper materialised via `synth_setter.resources.vst_headless_wrapper()` so the VST3 plugin sees an Xvfb display before pedalboard imports it; the metrics subprocess is CPU-only and runs unwrapped. Both default-off so `mode: test` and `mode: validate` paths are unchanged.
 
+When `evaluation.compute_metrics` runs, the aggregated values from `aggregated_metrics.csv` are also surfaced to the active wandb run (as `audio/<name>_{mean,std}`) and merged into the dict returned by `evaluate()` alongside Lightning's `trainer.callback_metrics`, so the same wandb run that holds `test/param_mse` can carry the audio metrics too.
+
 ### 5.2 Render
 
 | Property     | Value                                                                                                                    |
