@@ -103,7 +103,7 @@ on:
         description: "Canonical `r2://<bucket>/<prefix>input_spec.json` URI of the materialized spec."
         value: ${{ jobs.generate.outputs.spec_uri }}
       run_id:
-        description: "Effective `run_id` (caller-passed or auto-pinned fallback)."
+        description: "Effective `run_id` (caller-passed or auto-pinned fallback); forwarded to `finalize-dataset.yaml` for log/artifact naming."
         value: ${{ jobs.generate.outputs.run_id }}
   workflow_dispatch:
     inputs:

@@ -19,12 +19,14 @@ name: Test Dataset Generation
 # captures the script's stdout via `subprocess.run(capture_output=True)` so a
 # `tee`'d caller workflow can't leak secrets.
 #
-# Stage handoff is via R2: each generate job writes the canonical
-# under-prefix copy at `r2://<bucket>/<prefix>input_spec.json` (the spec's
-# own self-described URI, emitted by `synth-setter-spec-uri`). The validate
-# job below consumes `needs.generate-launcher.outputs.spec_uri`. The
-# run-metadata artifact upload remains for debugging, but it's no longer
-# load-bearing.
+# Stage handoff is via R2: each generate cell writes the canonical
+# under-prefix copy at `r2://<bucket>/<prefix>input_spec.json`. The validate
+# job below indexes `needs.setup.outputs.spec_uris` — a JSON map keyed by
+# `<provider>-<output_format>` that the `setup` job populates by calling
+# `synth-setter-spec-uri --from-experiment ... --run-id-override ...` once
+# per cell. Routing through the non-matrix `setup` output sidesteps the
+# `needs.<matrix-job>.outputs.<x>` scalar collapse (#1154). The run-metadata
+# artifact upload remains for debugging, but it's no longer load-bearing.
 #
 # Provider matrix policy (computed in the `setup` job):
 #   * schedule (hourly `0 * * * *`)    → skypilot-local × {hdf5, wds}.
