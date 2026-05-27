@@ -63,6 +63,25 @@ _OPERATOR_WORKSPACE = operator_workspace()
 # launcher's workspace (which may not exist on the worker filesystem).
 _WORKER_REPO_ROOT = "/home/build/synth-setter"
 
+# Shared decorator so both surfaces stay locked to the same compose triple
+# (drift between them silently picks up the wrong config).
+_dataset_hydra_main = hydra.main(
+    version_base="1.3",
+    config_path="pkg://synth_setter.configs",
+    config_name="dataset",
+)
+
+
+def _hydra_work_dir(cfg: DictConfig) -> Path:
+    """Return the per-run Hydra output dir as a ``Path``.
+
+    :param cfg: Composed dataset cfg whose ``paths.output_dir`` interpolates
+        from ``${hydra:runtime.output_dir}``.
+    :returns: ``Path(cfg.paths.output_dir)`` — the work_dir both entrypoints
+        feed into ``generate``.
+    """
+    return Path(cfg.paths.output_dir)
+
 
 def _rclone_copy(src: str, dest: str) -> None:
     """Upload a file to R2 via rclone with checksum verification.
@@ -457,17 +476,17 @@ def _build_worker_cmd(overrides: list[str], spec: DatasetSpec) -> str:
     return " && ".join(parts)
 
 
-@hydra.main(version_base="1.3", config_path="pkg://synth_setter.configs", config_name="dataset")
+@_dataset_hydra_main
 def from_hydra(cfg: DictConfig) -> None:
     """Worker-side @hydra.main entry: build the spec and render it in-process.
 
     :param cfg: Composed Hydra dataset cfg supplied by ``@hydra.main`` from
         the worker's argv overrides.
     """
-    generate(spec_from_cfg(cfg), Path(cfg.paths.output_dir))
+    generate(spec_from_cfg(cfg), _hydra_work_dir(cfg))
 
 
-@hydra.main(version_base="1.3", config_path="pkg://synth_setter.configs", config_name="dataset")
+@_dataset_hydra_main
 def main(cfg: DictConfig) -> None:
     """Persist the canonical spec to R2, then run locally or dispatch to SkyPilot.
 
@@ -477,7 +496,7 @@ def main(cfg: DictConfig) -> None:
     :param cfg: Hydra-composed dataset cfg; ``cfg.paths.output_dir`` is the
         per-run dir supplied by ``@hydra.main``.
     """
-    overrides = list(HydraConfig.get().overrides.task)
+    overrides = [str(o) for o in HydraConfig.get().overrides.task]
     spec = spec_from_cfg(cfg)
     sky_cfg = _sky_cfg_from_dataset_cfg(cfg)
 
@@ -502,7 +521,7 @@ def main(cfg: DictConfig) -> None:
     spec_uri = spec.r2.input_spec_uri()
 
     if sky_cfg.compute_template is None:
-        generate(spec, Path(cfg.paths.output_dir))
+        generate(spec, _hydra_work_dir(cfg))
         return
 
     # Deferred import — SkyPilot pulls heavy provider SDKs on import.
