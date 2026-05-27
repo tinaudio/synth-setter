@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 import hydra
-from hydra import compose, initialize_config_module
+from hydra.core.hydra_config import HydraConfig
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 
@@ -55,8 +55,8 @@ _NON_SPEC_KEYS: tuple[str, ...] = (
     "skypilot_launch",
 )
 
-# Anchor for ``cfg.paths.*`` interpolations and the local spec mirror.
-# See :func:`synth_setter.workspace.operator_workspace` for resolution.
+# Local spec-mirror anchor; ``operator_workspace()`` also publishes
+# ``PROJECT_ROOT`` so ``cfg.paths.*`` interpolations resolve under @hydra.main.
 _OPERATOR_WORKSPACE = operator_workspace()
 
 # Worker-side checkout path — baked WORKDIR of the dev-snapshot image, not the
@@ -445,7 +445,7 @@ def _build_worker_cmd(overrides: list[str], spec: DatasetSpec) -> str:
     ``_default_run_id`` / ``_fill_default_r2_prefix`` in
     ``synth_setter.pipeline.schemas.spec``).
 
-    :param overrides: Operator's Hydra overrides (launcher's ``sys.argv[1:]``).
+    :param overrides: Operator's Hydra overrides (``HydraConfig.get().overrides.task``).
     :param spec: Launcher's ``DatasetSpec``; runtime fields are pinned into
         the worker overrides for compose determinism.
     :return: Bash one-liner suitable for use as a ``sky.Task`` ``run:`` block.
@@ -471,32 +471,23 @@ def from_hydra(cfg: DictConfig) -> None:
     generate(spec_from_cfg(cfg))
 
 
-def main() -> None:
-    """Operator CLI: compose dataset cfg from argv, then run locally or dispatch to SkyPilot.
+@hydra.main(version_base="1.3", config_path="pkg://synth_setter.configs", config_name="dataset")
+def main(cfg: DictConfig) -> None:
+    """Operator CLI: run the composed dataset spec locally or dispatch to SkyPilot.
 
-    Uses programmatic compose (not ``@hydra.main``) so the dispatch branch can
-    be picked from ``cfg.skypilot_launch.compute_template`` before Hydra would
-    hand the cfg straight to the body. Overrides are replayed verbatim on the
-    worker so the launcher/worker composition matches byte-for-byte.
+    Worker-side overrides are replayed verbatim under ``_build_worker_cmd`` so
+    the launcher/worker composition matches byte-for-byte; ``HydraConfig`` is
+    the authoritative source for the operator's task overrides.
+
+    :param cfg: Hydra-composed dataset cfg.
     """
-    overrides = list(sys.argv[1:])
-
-    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
-        cfg = compose(config_name="dataset", overrides=overrides)
-
-    # Programmatic compose leaves ${hydra:runtime.output_dir} unset; pin paths.*
-    # so spec_from_cfg's resolve step doesn't trip on the unresolved interpolation.
-    cfg.paths.root_dir = str(_OPERATOR_WORKSPACE)
-    cfg.paths.output_dir = str(_OPERATOR_WORKSPACE)
-    cfg.paths.work_dir = str(_OPERATOR_WORKSPACE)
-
+    overrides = list(HydraConfig.get().overrides.task)
     spec = spec_from_cfg(cfg)
     sky_cfg = _sky_cfg_from_dataset_cfg(cfg)
 
-    # ``_OPERATOR_WORKSPACE`` (not cfg.paths.output_dir) is the anchor: the
-    # paths.* pins above are defensive shims for
-    # ${hydra:runtime.output_dir} resolution, not the operator-side
-    # artifact root.
+    # ``_OPERATOR_WORKSPACE`` is the launcher-side spec-mirror anchor; the
+    # Hydra per-run dir (``cfg.paths.output_dir``) is shard-scoped, not the
+    # operator-side artifact root.
     spec_path = write_spec_locally(spec, _OPERATOR_WORKSPACE)
     logger.info(f"wrote local spec to {spec_path}")
 

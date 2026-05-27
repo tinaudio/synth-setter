@@ -1350,13 +1350,18 @@ class TestMainDispatchBranches:
     """``main()`` composes the dataset cfg from argv, then dispatches local or via SkyPilot."""
 
     @pytest.fixture(autouse=True)
-    def _set_default_skypilot_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Set single-worker rank/world env so the local branch's generate() succeeds.
+    def _set_default_skypilot_env(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """Pin single-worker rank/world + isolate Hydra's per-run dir to ``tmp_path``.
+
+        ``@hydra.main`` resolves ``${paths.log_dir}`` from ``${oc.env:PROJECT_ROOT}``;
+        redirecting PROJECT_ROOT keeps the per-run dir under the test tree.
 
         :param monkeypatch: Pytest fixture used to set env vars.
+        :param tmp_path: Per-test tmp dir hosting PROJECT_ROOT.
         """
         monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
         monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+        monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
 
     @pytest.fixture(autouse=True)
     def _stub_spec_io_in_main(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1466,14 +1471,17 @@ class TestMainDispatchBranches:
     def test_operator_supplied_cmd_is_rejected(
         self,
         monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         """A `+skypilot_launch.cmd=…` override is rejected before any dispatch fires.
 
         Uses Hydra's `+key=value` add-syntax because the key isn't in
         configs/skypilot_launch/default.yaml (struct-mode would otherwise reject it before our
-        guard runs).
+        guard runs). Under ``@hydra.main`` the launcher-side ValueError surfaces as
+        ``SystemExit(1)``; the original ValueError message is logged by Hydra's error handler.
 
         :param monkeypatch: Pytest fixture used to set ``sys.argv``.
+        :param capsys: Pytest fixture capturing the Hydra error-handler stderr.
         """
         import synth_setter.cli.generate_dataset as gd
         import synth_setter.pipeline.skypilot_launch as sl
@@ -1495,8 +1503,9 @@ class TestMainDispatchBranches:
         monkeypatch.setattr(gd, "generate", _run_must_not_fire)
         monkeypatch.setattr(sl, "dispatch_via_skypilot", _dispatch_must_not_fire)
 
-        with pytest.raises(ValueError, match="skypilot_launch.cmd is launcher-internal"):
+        with pytest.raises(SystemExit):
             gd.main()
+        assert "skypilot_launch.cmd is launcher-internal" in capsys.readouterr().err
 
 
 class TestMainSpecPersistence:
@@ -1510,13 +1519,18 @@ class TestMainSpecPersistence:
     """
 
     @pytest.fixture(autouse=True)
-    def _set_default_skypilot_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Single-worker rank/world so the local branch's ``generate()`` shim succeeds.
+    def _set_default_skypilot_env(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """Pin single-worker rank/world + isolate Hydra's per-run dir to ``tmp_path``.
+
+        ``@hydra.main`` resolves ``${paths.log_dir}`` from ``${oc.env:PROJECT_ROOT}``;
+        redirecting PROJECT_ROOT keeps the per-run dir under the test tree.
 
         :param monkeypatch: Pytest fixture used to set env vars.
+        :param tmp_path: Per-test tmp dir hosting PROJECT_ROOT.
         """
         monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
         monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+        monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
 
     @pytest.fixture(autouse=True)
     def _stub_run_and_spec_io(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1745,6 +1759,80 @@ class TestMainSpecPersistence:
         sky_cfg = recorded["sky_cfg"]
         spec_call = gd.write_spec_locally.call_args[0][0]  # type: ignore[attr-defined]
         assert sky_cfg.job_name == gd._smoke_job_name(spec_call)  # type: ignore[attr-defined]
+
+
+class TestMainHydraOutputDir:
+    """``cfg.paths.output_dir`` resolves to Hydra's per-run dir inside ``main()``.
+
+    Pins the @hydra.main decoration contract for the launcher entrypoint.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _isolate_hydra_output_dir(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """Redirect PROJECT_ROOT to tmp so Hydra writes the per-run dir under the test tree.
+
+        :param monkeypatch: Pytest fixture used to override env vars.
+        :param tmp_path: Per-test tmp dir hosting the synthetic checkout root.
+        """
+        monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
+        monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+        monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+
+    @pytest.fixture(autouse=True)
+    def _stub_run_and_spec_io(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Stub the launcher's R2 + dispatch surface so main() runs without I/O.
+
+        :param monkeypatch: Pytest fixture used to patch module-level callables.
+        """
+        import synth_setter.cli.generate_dataset as gd
+
+        monkeypatch.setattr(gd, "generate", lambda _spec: None)
+        monkeypatch.setattr(
+            gd,
+            "write_spec_locally",
+            MagicMock(side_effect=lambda spec, out: Path(out) / "input_spec.json"),
+        )
+        monkeypatch.setattr(
+            gd,
+            "upload_spec",
+            MagicMock(return_value="r2://stub-bucket/stub-key/input_spec.json"),
+        )
+        monkeypatch.setattr(gd.r2_io, "ensure_r2_env_loaded", MagicMock(return_value=None))
+
+    def test_main_resolves_output_dir_under_hydra_main(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Inside main(), cfg.paths.output_dir equals HydraConfig.get().runtime.output_dir.
+
+        Pins the @hydra.main decoration contract: the per-run dir is supplied by
+        Hydra runtime rather than pinned by the launcher to a hand-picked anchor.
+
+        :param monkeypatch: Pytest fixture used to patch ``sys.argv`` + capture cfg.
+        """
+        from hydra.core.hydra_config import HydraConfig
+
+        import synth_setter.cli.generate_dataset as gd
+
+        argv = [
+            "synth-setter-generate-dataset",
+            "experiment=generate_dataset/smoke-shard",
+            f"render.plugin_path={TEST_PLUGIN_VST3}",
+        ]
+        monkeypatch.setattr("sys.argv", argv)
+
+        observed: dict[str, str] = {}
+        real_spec_from_cfg = gd.spec_from_cfg
+
+        def _capture_then_build(cfg: object) -> DatasetSpec:
+            observed["output_dir"] = cfg.paths.output_dir  # type: ignore[attr-defined]
+            observed["runtime_output_dir"] = HydraConfig.get().runtime.output_dir
+            return real_spec_from_cfg(cfg)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(gd, "spec_from_cfg", _capture_then_build)
+
+        gd.main()
+
+        assert observed["output_dir"] == observed["runtime_output_dir"]
 
 
 def test_smoke_job_name_rejects_unsafe_task_name() -> None:
