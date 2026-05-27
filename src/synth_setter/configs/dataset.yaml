@@ -34,10 +34,8 @@ mask_degenerate_bins: false
 # skypilot_launch.compute_template is set.
 finalize_inline: false
 
-# Run synth-setter-eval inline (subprocess) against experiment=surge/fake_oracle
-# after finalize completes. Requires finalize_inline=true and output_format=hdf5;
-# raises ValueError otherwise. Ignored with INFO when skypilot_launch.compute_template
-# is set.
+# Run surge/fake_oracle inline (subprocess) after finalize. Requires
+# finalize_inline=true + output_format=hdf5. Local-run only.
 oracle_eval_inline: false
 
 # Null default: ``DatasetSpec._drop_null_run_id`` mode='before' validator pops

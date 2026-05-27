@@ -179,19 +179,14 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
 def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     """Evaluate the given checkpoint on a datamodule testset.
 
-    This method is wrapped in optional @task_wrapper decorator, that controls the behavior during
-    failure. Useful for multiruns, saving info about the crash, etc.
+    Wrapped in ``@task_wrapper`` so crashes still flush the run dir.
 
-    :param cfg: DictConfig configuration composed by Hydra. ``cfg.ckpt_path``
-        may be ``None`` — Lightning's ``trainer.test`` / ``validate`` /
-        ``predict`` accept that and evaluate the in-memory model, which the
-        ``surge/fake_oracle`` baseline relies on for inline oracle-eval after
-        ``generate_dataset`` finalize.
-    :return: ``(metric_dict, object_dict)``. ``metric_dict`` is the
-        ``trainer.callback_metrics`` copy merged with any audio metrics from
-        :func:`_run_predict_postprocessing`; Lightning entries are ``torch.Tensor``
-        while audio entries are Python ``float``, so callers iterating values
-        must handle both.
+    :param cfg: Hydra-composed cfg; ``cfg.ckpt_path=None`` is allowed and
+        evaluates the in-memory model (Lightning's documented no-op).
+    :return: ``(metric_dict, object_dict)``. ``metric_dict`` merges
+        ``trainer.callback_metrics`` (``torch.Tensor`` values) with audio
+        metrics from :func:`_run_predict_postprocessing` (Python ``float``),
+        so callers iterating values must handle both.
     """
     log.info(f"Instantiating datamodule <{cfg.data._target_}>")
     datamodule: LightningDataModule = hydra.utils.instantiate(cfg.data)

@@ -33,18 +33,14 @@ def test_evaluate_runs_oracle_with_null_ckpt_path(
     tmp_path: Path,
     surge_xt_smoke_datasets: Path,
 ) -> None:
-    """``evaluate()`` runs the fake oracle on its untrained state when ``ckpt_path`` is ``None``.
+    """Fake oracle returns ``batch["params"]`` verbatim, so ``test/param_mse`` is exactly zero.
 
-    ``ckpt_path=null`` must survive Hydra composition into ``evaluate()`` so the
-    inline oracle-eval path (generate-dataset finalize → ``synth-setter-eval``)
-    can probe a fresh model. The fake oracle returns ``batch["params"]``
-    verbatim, so ``test/param_mse`` collapses to exactly zero independent of
-    training state — that exact-zero is the load-bearing oracle invariant.
+    The load-bearing invariant is that ``ckpt_path=null`` survives Hydra
+    composition into ``evaluate()`` and the oracle's exact-zero MSE reaches
+    the metric dict.
 
-    :param tmp_path: Per-test temp dir used as Hydra ``paths.output_dir`` /
-        ``paths.log_dir`` so the run writes nowhere durable.
-    :param surge_xt_smoke_datasets: Smoke-fixture directory holding
-        ``{train,val,test}.h5`` + ``stats.npz`` for ``data=surge``.
+    :param tmp_path: Pinned as Hydra ``paths.output_dir`` / ``paths.log_dir``.
+    :param surge_xt_smoke_datasets: Holds ``{train,val,test}.h5`` + ``stats.npz``.
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(

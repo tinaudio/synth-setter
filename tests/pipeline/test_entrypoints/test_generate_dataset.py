@@ -1679,13 +1679,9 @@ class TestMainDispatchBranches:
         oracle_mock.assert_called_once()
         dataset_root = oracle_mock.call_args[0][0]
         assert isinstance(dataset_root, Path)
-        # ``_OPERATOR_WORKSPACE/oracle_eval/<run_id>/`` is the contracted layout —
-        # the parent directory of the eval dir must be the ``oracle_eval`` folder.
         assert dataset_root.parent.name == "oracle_eval", (
             f"dataset_root should land under <workspace>/oracle_eval/<run_id>/; got {dataset_root!r}"
         )
-        # ``_download_finalized_splits`` is the seam between finalize and eval —
-        # it must run first, into the same directory the eval subprocess reads.
         download_mock.assert_called_once()
         _, downloaded_dest = download_mock.call_args[0]
         assert downloaded_dest == dataset_root
@@ -1753,15 +1749,9 @@ class TestMainDispatchBranches:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Fail-fast guard: ``oracle_eval_inline=true`` without ``finalize_inline=true``.
+        """``oracle_eval_inline=true`` without ``finalize_inline=true`` raises pre-``generate()``.
 
-        Inline oracle eval reads the finalized ``{train,val,test}.h5`` files
-        finalize uploads; running without finalize would always miss them.
-        The guard fires up front so the operator doesn't pay generate's
-        render cost before the misconfig surfaces.
-
-        :param monkeypatch: Patches argv and the ``generate`` / ``finalize_from_spec``
-            / oracle-eval seams; the test asserts none of them is reached.
+        :param monkeypatch: Patches argv + the three seams the test asserts are unreached.
         """
         import synth_setter.cli.generate_dataset as gd
 
@@ -1792,12 +1782,9 @@ class TestMainDispatchBranches:
     ) -> None:
         """``oracle_eval_inline=true`` + ``output_format=wds`` raises before ``generate()``.
 
-        The oracle eval datamodule reads HDF5 split files; WDS shards aren't
-        consumed by the same loader. The guard fires up front so neither
-        generate nor finalize run before the misconfig surfaces.
+        Eval reads HDF5 splits; WDS shards aren't consumed by the same loader.
 
-        :param monkeypatch: Patches argv and the ``generate`` / ``finalize_from_spec``
-            / oracle-eval seams; the test asserts none of them is reached.
+        :param monkeypatch: Patches argv + the three seams the test asserts are unreached.
         """
         import synth_setter.cli.generate_dataset as gd
 

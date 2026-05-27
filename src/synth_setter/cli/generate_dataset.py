@@ -65,19 +65,15 @@ _OPERATOR_WORKSPACE = operator_workspace()
 # launcher's workspace (which may not exist on the worker filesystem).
 _WORKER_REPO_ROOT = "/home/build/synth-setter"
 
-# Wall-clock bound on the inline oracle-eval subprocess (seconds). Sized for
-# the smoke-shard datasets the inline path is used with — multi-minute eval
-# runs belong on the dispatch path, not inline.
+# Smoke-shard-sized; longer eval runs belong on the dispatch path, not inline.
 _ORACLE_EVAL_TIMEOUT_SECONDS = 600
 
 
 def _download_finalized_splits(spec: DatasetSpec, dest: Path) -> None:
-    """Download the finalized ``{train,val,test}.h5`` splits from R2 into ``dest``.
+    """Download finalized ``{train,val,test}.h5`` from R2 into ``dest`` (created if missing).
 
-    :param spec: Validated dataset spec; ``spec.r2.split_h5_uri(split)`` builds
-        the canonical R2 URI for each split.
-    :param dest: Local directory to receive the three split files; created if
-        missing.
+    :param spec: Resolves the per-split R2 URI via ``spec.r2.split_h5_uri``.
+    :param dest: Local directory to receive the three split files.
     """
     dest.mkdir(parents=True, exist_ok=True)
     for split in ("train", "val", "test"):
@@ -85,14 +81,12 @@ def _download_finalized_splits(spec: DatasetSpec, dest: Path) -> None:
 
 
 def _run_oracle_eval_subprocess(dataset_root: Path) -> None:
-    """Subprocess ``synth-setter-eval`` against ``experiment=surge/fake_oracle``.
+    """Run the fake-oracle eval on ``dataset_root`` to verify the param-array round-trip.
 
-    Runs the fake-oracle on ``dataset_root``'s {train,val,test}.h5 to confirm
-    the parameter-array round-trip survived generate + finalize. ``check=True``
-    so a non-zero eval exit (or wall-clock timeout) propagates to the caller.
+    ``check=True`` so a non-zero eval exit (or wall-clock timeout) propagates
+    to the caller.
 
-    :param dataset_root: Directory holding the finalized HDF5 split files;
-        passed verbatim to the eval datamodule's ``dataset_root`` override.
+    :param dataset_root: Holds the finalized HDF5 splits the eval datamodule reads.
     """
     argv = [
         sys.executable,
