@@ -111,6 +111,7 @@ def test_wandb_grid_sweep_threads_cadence_overrides(
     """
     # Local import: wandb is optional at install time, gated by RunIf(wandb=True).
     import wandb
+
     from synth_setter.cli.generate_dataset import spec_from_cfg
 
     monkeypatch.delenv("WANDB_MODE", raising=False)
