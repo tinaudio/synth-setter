@@ -1,0 +1,9 @@
+# @package _global_
+
+# Used by the generate-and-finalize-dataset workflow; mirrors
+# smoke-shard.yaml but produces dataset.complete in one CLI process.
+defaults:
+  - /experiment/generate_dataset/smoke-shard@_global_
+  - _self_
+
+finalize_inline: true
