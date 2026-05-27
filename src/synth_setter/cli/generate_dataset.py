@@ -121,13 +121,13 @@ def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -
     return args
 
 
-def run(spec: DatasetSpec) -> None:
+def generate(spec: DatasetSpec) -> None:
     """Render+upload each owned shard in turn.
 
     Spec upload no longer happens here — ``main()`` writes the canonical R2
-    copy once on the launcher host before either calling ``run(spec)`` inline
+    copy once on the launcher host before either calling ``generate(spec)`` inline
     (local-run) or dispatching to a SkyPilot worker pod that re-enters via
-    ``from_hydra`` → ``run(spec)``. Each shard is rendered, uploaded, and
+    ``from_hydra`` → ``generate(spec)``. Each shard is rendered, uploaded, and
     unlinked before moving on — bounding local disk to one shard at a time.
     Subprocesses fail-fast: later shards are not attempted on subprocess error.
 
@@ -140,6 +140,9 @@ def run(spec: DatasetSpec) -> None:
     ``configs/render/<spec>.yaml``; this is where the worker — which has pedalboard
     — verifies the plugin and pinned ``renderer_version`` agree.
 
+    :param spec: Validated dataset spec; rank/world env partitions ``spec.shards``
+        across worker pods, and ``spec.render.renderer_version`` is cross-checked
+        against the loaded plugin.
     :raises RuntimeError: If the worker's plugin version disagrees with
         ``spec.render.renderer_version``.
     """
@@ -188,7 +191,7 @@ def _dispatch_shards_serial(
 
     :param spec: Validated dataset spec.
     :param my_range: Contiguous range of shard IDs owned by this rank.
-    :param work_dir: Per-run tempdir owned by ``run()``.
+    :param work_dir: Per-run tempdir owned by ``generate()``.
     :param r2_dest_prefix: ``spec.r2.rclone_prefix()``.
     :returns: ``(rendered, skipped)`` summary counts over ``my_range``.
     """
@@ -227,7 +230,7 @@ def _dispatch_shards_parallel(
 
     :param spec: Validated dataset spec.
     :param my_range: Non-empty contiguous range of shard IDs owned by this rank.
-    :param work_dir: Per-run tempdir owned by ``run()``; peak local disk
+    :param work_dir: Per-run tempdir owned by ``generate()``; peak local disk
         scales with the pool size (one in-flight shard per worker thread).
     :param r2_dest_prefix: ``spec.r2.rclone_prefix()``.
     :returns: ``(rendered, skipped)`` summary counts over ``my_range``.
@@ -278,7 +281,7 @@ def _render_one_owned_shard(
 
     :param spec: Validated dataset spec; ``spec.shards[shard_id]`` is fetched.
     :param shard_id: Index into ``spec.shards``.
-    :param work_dir: Per-run tempdir owned by ``run()``.
+    :param work_dir: Per-run tempdir owned by ``generate()``.
     :param r2_dest_prefix: ``spec.r2.rclone_prefix()``.
     :returns: ``(rendered, skipped)`` — exactly one is ``True``.
     """
@@ -459,7 +462,7 @@ def from_hydra(cfg: DictConfig) -> None:
     :param cfg: Composed Hydra dataset cfg supplied by ``@hydra.main`` from
         the worker's argv overrides.
     """
-    run(spec_from_cfg(cfg))
+    generate(spec_from_cfg(cfg))
 
 
 def main() -> None:
@@ -493,7 +496,7 @@ def main() -> None:
 
     # Load + validate R2 creds once for the whole run, then upload the
     # canonical spec from this single launcher-side site. Both branches benefit:
-    # local-run uses the just-loaded env for run()'s shard uploads, and the
+    # local-run uses the just-loaded env for generate()'s shard uploads, and the
     # dispatch branch lets the worker boot already pointing at an existing
     # canonical object (no per-rank re-write).
     env_file = Path(sky_cfg.env_file).expanduser() if sky_cfg.env_file else None
@@ -508,7 +511,7 @@ def main() -> None:
     click.echo(f"{_SPEC_URI_STDOUT_SENTINEL}{spec_uri}")
 
     if sky_cfg.compute_template is None:
-        run(spec)
+        generate(spec)
         return
 
     # Deferred import — SkyPilot pulls heavy provider SDKs on import.

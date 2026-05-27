@@ -300,7 +300,7 @@ docs:
       - pattern: "tests/integration/**"
         covers: "Two classes of integration tests: (1) launcher-against-real-R2 round-trips with a stubbed VST renderer subprocess (`integration_r2` marker) — fast PR-tier alternative to the kind + dev-snapshot matrix in `test-dataset-generation.yml`, run by `test-local-launcher-roundtrip.yml` on same-repo PRs; and (2) unmarked cross-platform shard-dispatch tests (`test_parallel_shard_dispatch.py`) that run in the default fast lane via `test.yml`."
       - pattern: ".github/workflows/test-local-launcher-roundtrip.yml"
-        covers: "Fast PR-tier (~8-10 min) lane for `tests/integration/`: invokes the `synth-setter-generate-dataset` CLI entrypoint (`cli.generate_dataset.main()`, which then calls `run()` internally) end-to-end against real R2 with the VST renderer subprocess stubbed; no kind, no sky.launch, no dev-snapshot image pull. Gated on same-repo PRs (forks skipped). Unique per-run R2 prefix + best-effort rclone purge teardown. PR #1170; tracks #1164."
+        covers: "Fast PR-tier (~8-10 min) lane for `tests/integration/`: invokes the `synth-setter-generate-dataset` CLI entrypoint (`cli.generate_dataset.main()`, which then calls `generate()` internally) end-to-end against real R2 with the VST renderer subprocess stubbed; no kind, no sky.launch, no dev-snapshot image pull. Gated on same-repo PRs (forks skipped). Unique per-run R2 prefix + best-effort rclone purge teardown. PR #1170; tracks #1164."
 
   # ── macOS VM provisioning (Tart) ────────────────────────────────
   - doc: docs/getting-started.md

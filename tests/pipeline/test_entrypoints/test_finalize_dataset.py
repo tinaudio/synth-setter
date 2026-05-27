@@ -124,7 +124,7 @@ def _uri_to_local_path(fake_r2_remote: Path, r2_uri: str) -> Path:
 def _seed_train_shards(fake_r2_remote: Path, spec: DatasetSpec) -> list[Path]:
     """Materialize each train shard under ``<fake_r2_remote>/<bucket>/<prefix>/<filename>``.
 
-    Mirrors what ``generate_dataset.run`` would have uploaded earlier in the
+    Mirrors what ``generate_dataset.generate`` would have uploaded earlier in the
     pipeline so finalize's ``r2_io.download_to_path`` finds a real tar under
     the local-typed remote.
 

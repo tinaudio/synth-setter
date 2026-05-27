@@ -1,6 +1,6 @@
 """Cross-platform integration test for ``RenderConfig.parallel`` dispatch.
 
-Exercises ``run(spec)`` with ``render.parallel=True`` through the real
+Exercises ``generate(spec)`` with ``render.parallel=True`` through the real
 ``subprocess.check_call`` boundary on every OS / CI host — no Linux Xvfb
 wrapper, no Surge VST3 bundle, no R2 credentials. A fake renderer script
 (written into ``tmp_path``) replaces ``generate_vst_dataset.py``: it just
@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-from synth_setter.cli.generate_dataset import run
+from synth_setter.cli.generate_dataset import generate
 from synth_setter.pipeline.schemas.spec import DatasetSpec, ShardSpec
 
 _NUM_SHARDS = 4
@@ -100,12 +100,12 @@ def _build_spec() -> DatasetSpec:
     return DatasetSpec(**kwargs)  # type: ignore[arg-type]
 
 
-def _wire_run_into_fake_renderer(
+def _wire_generate_into_fake_renderer(
     spec: DatasetSpec,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Wire ``run(spec)`` to cross the real subprocess boundary into a fake renderer.
+    """Wire ``generate(spec)`` to cross the real subprocess boundary into a fake renderer.
 
     Stubs the renderer-version probe (no real VST3 on disk), the R2 skip-probe
     (every shard is "absent"), pins ``available_cpus`` to 8 so pool size is
@@ -146,7 +146,7 @@ def test_parallel_dispatch_crosses_real_subprocess_boundary(
     """``parallel=True`` + 4 shards uploads every shard via real subprocess + real rclone.
 
     State-based assertion: every shard's filename exists under the fake R2
-    remote when ``run(spec)`` returns.
+    remote when ``generate(spec)`` returns.
 
     :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
     :param tmp_path: Per-test tmp dir for the fake renderer script.
@@ -157,9 +157,9 @@ def test_parallel_dispatch_crosses_real_subprocess_boundary(
 
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
-    _wire_run_into_fake_renderer(spec, tmp_path, monkeypatch)
+    _wire_generate_into_fake_renderer(spec, tmp_path, monkeypatch)
 
-    run(spec)
+    generate(spec)
 
     bucket_prefix = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
     for shard in spec.shards:
@@ -191,7 +191,7 @@ def test_two_ranks_render_disjoint_complete_shard_partition(
     spec = _build_spec()
     assert len(spec.shards) == _NUM_SHARDS
 
-    _wire_run_into_fake_renderer(spec, tmp_path, monkeypatch)
+    _wire_generate_into_fake_renderer(spec, tmp_path, monkeypatch)
     bucket_prefix = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
 
     def _landed_filenames() -> set[str]:
@@ -201,7 +201,7 @@ def test_two_ranks_render_disjoint_complete_shard_partition(
 
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "2")
-    run(spec)
+    generate(spec)
     rank_0_landed = _landed_filenames()
 
     # Wipe the bucket between ranks so rank-1's landed set is observed
@@ -213,7 +213,7 @@ def test_two_ranks_render_disjoint_complete_shard_partition(
 
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "1")
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "2")
-    run(spec)
+    generate(spec)
     rank_1_landed = _landed_filenames()
 
     every_shard = {shard.filename for shard in spec.shards}

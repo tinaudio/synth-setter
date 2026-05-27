@@ -24,7 +24,7 @@ from pathlib import Path
 import h5py
 import pytest
 
-from synth_setter.cli.generate_dataset import run
+from synth_setter.cli.generate_dataset import generate
 from synth_setter.data.vst.shapes import AUDIO_FIELD
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 
@@ -74,7 +74,7 @@ def test_parallel_renders_under_xvfb_wrapper(
     monkeypatch.setattr("synth_setter.cli.generate_dataset._rclone_copy", _fake_rclone)
     monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda *_a, **_k: None)
 
-    run(spec)
+    generate(spec)
 
     assert len(rclone_srcs) == _NUM_SHARDS
     for path in rclone_srcs:

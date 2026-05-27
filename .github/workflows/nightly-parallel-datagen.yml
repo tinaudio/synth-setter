@@ -109,7 +109,7 @@ jobs:
 
       # Run the operator CLI end-to-end inside the dev-snapshot image:
       #   * ``compute_template`` stays unset (src/synth_setter/configs/skypilot_launch/default.yaml
-      #     keeps it null), so ``main()`` runs ``run(spec)`` inline rather than
+      #     keeps it null), so ``main()`` runs ``generate(spec)`` inline rather than
       #     dispatching via SkyPilot — exercises ``_dispatch_shards_parallel``
       #     directly on this runner.
       #   * Partition env intentionally unset — exercises the
@@ -165,7 +165,7 @@ jobs:
             2>&1 | tee "${RUN_METADATA_DIR}/generate.log"
           echo "run_metadata_dir=${RUN_METADATA_DIR}" >> "${GITHUB_OUTPUT}"
 
-      # The inline ``run(spec)`` path does NOT emit the
+      # The inline ``generate(spec)`` path does NOT emit the
       # ``::synth-setter-spec-uri::`` marker (that's only the SkyPilot
       # dispatch branch in ``skypilot_launch.py``). Instead, use the local
       # spec the launcher wrote via ``write_spec_locally`` — it lives under

@@ -87,7 +87,7 @@ name: Test SkyPilot Debug
 #                    network namespace, etc.).
 #
 #   generate-tiny    Invokes the launcher with the production template
-#                    (real `generate_dataset.run` in the worker; full
+#                    (real `generate_dataset.generate` in the worker; full
 #                    render + rclone upload). The "tiny" qualifier is
 #                    aspirational — it's actually a mini production smoke
 #                    that exists in the matrix so triage doesn't require

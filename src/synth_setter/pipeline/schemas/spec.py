@@ -219,7 +219,7 @@ class RenderConfig(BaseModel):
     parallel: bool = Field(
         default=False,
         description=(
-            "When True, run() dispatches shard renders concurrently with "
+            "When True, generate() dispatches shard renders concurrently with "
             "pool size = min(max(1, available_cpus() // 2), len(my_range)). "
             "Applies on both local-run and SkyPilot-worker contexts; peak "
             "local disk scales with pool size."
