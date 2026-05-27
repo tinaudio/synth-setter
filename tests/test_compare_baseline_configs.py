@@ -318,6 +318,7 @@ ACCEPTED_DIFFS: tuple[str, ...] = (
     "data.dataset_root",
     "data.predict_file",
     "data.stats_file",
+    "evaluation",  # eval CLI predict-mode post-processing block; not a model knob
 )
 
 # Leaf-name keys stripped at every nesting depth. Use this list (vs. ACCEPTED_DIFFS)
