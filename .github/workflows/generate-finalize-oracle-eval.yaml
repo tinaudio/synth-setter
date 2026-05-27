@@ -86,11 +86,20 @@ jobs:
             "oracle_eval_inline=true" \
             2>&1 | tee generate-finalize-oracle-eval.log
 
+      # Lightning's `trainer.test()` prints the final metrics table to stdout;
+      # parse it for `test/param_mse` and assert exactly zero — the load-bearing
+      # oracle invariant. Fails the workflow on any non-zero / missing value.
+      - name: Assert oracle test/param_mse == 0.0
+        run: |
+          set -euo pipefail
+          uv run python -m synth_setter.evaluation.assert_oracle_invariant \
+            generate-finalize-oracle-eval.log
+
       - name: Upload log
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: generate-finalize-oracle-eval-log-${{ inputs.experiment }}
           path: generate-finalize-oracle-eval.log
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 7
