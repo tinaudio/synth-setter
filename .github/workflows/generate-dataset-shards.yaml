@@ -224,6 +224,23 @@ jobs:
           echo "name=${CLUSTER_NAME}" >> "${GITHUB_OUTPUT}"
           echo "cluster_name: ${CLUSTER_NAME}"
 
+      # `kind load` doubles the CUDA image into the kind node's snapshotter;
+      # peak host footprint is ~30 GB. Reclaim ~25 GB on `/` pre-pull.
+      # tool-cache stays off — deleting /opt/hostedtoolcache breaks the
+      # downstream `helm/kind-action` step (its tool-cache library expects
+      # the directory to exist, not just be empty).
+      - name: Free disk space for kind load (skypilot-local row)
+        if: ${{ inputs.provider == 'skypilot-local' }}
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
       # A2 (#1164): pull the worker image in the background so the kind binary
       # install + Python / uv setup can run in parallel. The pull only fills
       # the host Docker cache; nothing downstream of this step reads from it
@@ -346,21 +363,6 @@ jobs:
             exit "${ec}"
           fi
           echo "docker pull completed for ${IMAGE}"
-
-      # `kind load` shells `docker save` into /var/lib/docker/tmp/; the
-      # ~10 GB tar exhausts ubuntu-latest's root partition without cleanup.
-      - name: Free disk space for kind load (skypilot-local row)
-        if: ${{ inputs.provider == 'skypilot-local' }}
-        run: |
-          set -euo pipefail
-          df -h / | tail -1 | awk '{print "before: " $4 " free on /"}'
-          sudo rm -rf \
-            /usr/share/dotnet \
-            /usr/local/lib/android \
-            /opt/ghc \
-            /usr/local/.ghcup \
-            /opt/hostedtoolcache/CodeQL
-          df -h / | tail -1 | awk '{print "after:  " $4 " free on /"}'
 
       - name: Load dev-snapshot image into kind (skypilot-local row)
         if: ${{ inputs.provider == 'skypilot-local' }}
