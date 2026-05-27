@@ -175,7 +175,8 @@ def generate(spec: DatasetSpec, work_dir: Path, loggers: list[Logger]) -> None: 
     ``configs/render/<spec>.yaml``; the worker — which has pedalboard — verifies
     the plugin and pinned ``renderer_version`` agree.
 
-    The spec is pushed to every logger as hyperparameters and uploaded as a
+    The spec is pushed to every logger as hyperparameters and, when a
+    ``WandbLogger`` is present in ``loggers``, uploaded as a
     ``<task_name>-input-spec`` artifact before any render begins. The wandb
     run is bracketed by the function: ``finalize(status)`` and ``wandb.finish()``
     fire in ``finally`` so the run is closed (and offline binaries flushed) on
