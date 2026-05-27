@@ -170,10 +170,13 @@ def generate(spec: DatasetSpec) -> None:
 
     r2_dest_prefix = spec.r2.rclone_prefix()
 
-    start = time.perf_counter()
     with tempfile.TemporaryDirectory() as work_dir_str:
         work_dir = Path(work_dir_str)
 
+        # ``start`` brackets only the dispatch call so the rate excludes tempdir
+        # setup and any post-dispatch cleanup; it still includes the in-loop R2
+        # skip probes (those are observable cost of the resumability MVP, #750).
+        start = time.perf_counter()
         if spec.render.parallel and len(my_range) > 0:
             rendered, skipped = _dispatch_shards_parallel(spec, my_range, work_dir, r2_dest_prefix)
         else:
@@ -186,7 +189,7 @@ def generate(spec: DatasetSpec) -> None:
         )
         logger.info(
             f"generation speed: {samples} samples in {elapsed_s:.3f}s "
-            f"= {rate:.3f} samples/s (skipped shards excluded)"
+            f"= {rate:.3f} samples/s (wallclock includes R2 skip probes)"
         )
 
 
