@@ -18,54 +18,9 @@ import pytest
 import wandb
 from lightning.pytorch.loggers.wandb import WandbLogger
 
-# Verified against wandb 0.26.x. ``wandb.proto.wandb_internal_pb2.Record`` and
-# ``wandb.sdk.internal.datastore.DataStore`` are wandb internals — if a future
-# release moves them, the import fails and the whole module skips rather than
-# red-CIing. The skip message points the next maintainer at the wandb upgrade
-# as the proximate cause.
-try:
-    from wandb.proto import wandb_internal_pb2 as wandb_pb
-    from wandb.sdk.internal import datastore as wandb_datastore
-except ImportError as exc:  # pragma: no cover — guards a future wandb upgrade
-    pytest.skip(
-        f"wandb internals moved (wandb=={wandb.__version__}); update test helper: {exc}",
-        allow_module_level=True,
-    )
-
 from synth_setter.cli.generate_dataset import generate
 from synth_setter.pipeline.schemas.spec import DatasetSpec
-
-
-def _read_history_rows(wandb_binary: Path) -> list[dict[str, str]]:
-    """Decode the history records in a wandb offline ``.wandb`` binary.
-
-    Offline runs do not write ``files/wandb-history.jsonl`` (that file
-    only materializes on ``wandb sync``); the binary datastore is the
-    source of truth for per-step ``log_metrics`` payloads. Slash-paths
-    arrive as ``nested_key`` (``['shard', 'bytes']``), so the rejoiner
-    matches the keys callers passed to ``log_metrics``.
-
-    :param wandb_binary: Path to the offline ``run-*.wandb`` file.
-    :returns: One dict per history record; values are JSON-encoded
-        strings (as the datastore stores them).
-    """
-    ds = wandb_datastore.DataStore()
-    ds.open_for_scan(str(wandb_binary))
-    rows: list[dict[str, str]] = []
-    while True:
-        data = ds.scan_data()
-        if data is None:
-            break
-        rec = wandb_pb.Record()  # pyright: ignore[reportAttributeAccessIssue]
-        rec.ParseFromString(data)
-        if not rec.HasField("history"):
-            continue
-        row: dict[str, str] = {}
-        for item in rec.history.item:
-            key = item.key if item.key else "/".join(item.nested_key)
-            row[key] = item.value_json
-        rows.append(row)
-    return rows
+from tests.helpers.wandb_offline import read_history_rows
 
 
 def _build_spec() -> DatasetSpec:
@@ -220,7 +175,7 @@ def test_generate_logs_per_shard_and_summary_metrics_offline(
     )
     assert len(binary_files) == 1, f"expected exactly one .wandb binary, found {binary_files}"
 
-    rows = _read_history_rows(Path(binary_files[0]))
+    rows = read_history_rows(Path(binary_files[0]))
     shard_rows = [r for r in rows if "shard/bytes" in r]
     assert len(shard_rows) == spec.num_shards, (
         f"expected {spec.num_shards} per-shard history rows, got {len(shard_rows)}: {shard_rows}"
