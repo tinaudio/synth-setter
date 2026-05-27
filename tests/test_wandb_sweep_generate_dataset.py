@@ -1,21 +1,16 @@
 """End-to-end test for the ``generate_dataset`` W&B grid sweep over render cadences.
 
-Exercises the ``sweeps/generate_dataset_cadence.yaml`` plumbing on the live
-W&B backend: registers the sweep, then drives an in-process agent that
-threads each swept ``render.plugin_reload_cadence`` / ``render.gui_toggle_cadence``
-cell through the same Hydra compose path the CLI uses, and confirms the
-constructed ``DatasetSpec`` carries the swept values.
-
-The trial body deliberately stops at ``spec_from_cfg`` — the cadence
-validator (``RenderConfig._always_on_requires_plugin_reload_once``) fires
-inside compose, before any rendering side effect, so this test costs nothing
-on R2 / SkyPilot / VST3 while still catching regressions in the
-``${args_no_hyphens}`` → Hydra → ``RenderConfig`` round-trip.
+Stops at ``spec_from_cfg`` so the cross-field validator
+(``RenderConfig._always_on_requires_plugin_reload_once``) fires inside Hydra
+compose — no R2 / SkyPilot / VST3 cost — while still catching regressions
+in the ``${args_no_hyphens}`` → Hydra → ``RenderConfig`` round-trip.
 """
 
 from __future__ import annotations
 
+import itertools
 import os
+import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -32,17 +27,23 @@ if TYPE_CHECKING:
 
 _SWEEP_YAML = Path(__file__).resolve().parent.parent / "sweeps" / "generate_dataset_cadence.yaml"
 
-# 2x2 grid — every cell satisfies the RenderConfig cross-field validator on
-# Linux (where CI runs); the "always_on + render" rejection cell is covered
-# by the render-matrix workflow's contract job, not by this test.
-_EXPECTED_CELLS: frozenset[tuple[str, str]] = frozenset(
-    {
-        ("once", "never"),
-        ("once", "once"),
-        ("render", "never"),
-        ("render", "once"),
-    }
-)
+
+def _expected_cells_from_yaml() -> frozenset[tuple[str, str]]:
+    """Cartesian product of the cadence param values declared in the sweep YAML.
+
+    Reading the grid out of the YAML rather than hardcoding it keeps this test from drifting
+    silently when an operator edits the sweep config.
+
+    :returns: Every (plugin_reload_cadence, gui_toggle_cadence) cell the sweep advertises to W&B.
+    """
+    cfg = yaml.safe_load(_SWEEP_YAML.read_text())
+    params = cfg["parameters"]
+    plug = params["render.plugin_reload_cadence"]["values"]
+    gui = params["render.gui_toggle_cadence"]["values"]
+    return frozenset(itertools.product(plug, gui))
+
+
+_EXPECTED_CELLS = _expected_cells_from_yaml()
 
 
 def _compose_dataset_cfg(
@@ -50,13 +51,13 @@ def _compose_dataset_cfg(
 ) -> DictConfig:
     """Compose the smoke-shard dataset cfg with the swept cadence overrides.
 
-    :param plugin_reload_cadence: Value the sweep agent selected for
-        ``render.plugin_reload_cadence``.
-    :param gui_toggle_cadence: Value the sweep agent selected for
-        ``render.gui_toggle_cadence``.
-    :param paths_root: Per-test scratch dir; pinned into ``cfg.paths.*`` so
-        ``spec_from_cfg``'s ``resolve=True`` does not trip on the unresolved
-        ``${hydra:runtime.output_dir}`` interpolation.
+    :param plugin_reload_cadence: One of ``{"once", "render"}`` (matches
+        ``_PluginReloadCadence`` in ``pipeline/schemas/spec.py``).
+    :param gui_toggle_cadence: One of ``{"never", "once", "render", "always_on"}``;
+        ``"always_on"`` requires ``plugin_reload_cadence == "once"`` per the
+        ``RenderConfig`` cross-field validator.
+    :param paths_root: Pinned into ``cfg.paths.*`` so ``spec_from_cfg``'s
+        ``resolve=True`` does not trip on ``${hydra:runtime.output_dir}``.
 
     :returns: Composed DictConfig ready for ``spec_from_cfg``.
     """
@@ -82,24 +83,33 @@ def _compose_dataset_cfg(
 @RunIf(wandb=True)
 @pytest.mark.skipif(
     not os.environ.get("WANDB_API_KEY"),
-    reason="WANDB_API_KEY not set — wandb sweep requires the live backend (offline mode is unsupported for sweeps).",
+    reason="WANDB_API_KEY not set — sweeps need the live W&B backend.",
 )
-def test_wandb_grid_sweep_threads_cadence_overrides(tmp_path: Path) -> None:
+def test_wandb_grid_sweep_threads_cadence_overrides(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Live W&B grid sweep over the two render cadence params on smoke-shard.
 
     Registers a grid sweep on the configured entity/project (overridable via
     ``WANDB_ENTITY`` / ``WANDB_PROJECT``), runs the agent in-process via
     ``function=trial`` so each cell stays within this interpreter, and
-    asserts every (plugin_reload_cadence, gui_toggle_cadence) cell threads
-    cleanly through Hydra into the constructed ``DatasetSpec``.
+    asserts every (plugin_reload_cadence, gui_toggle_cadence) cell declared
+    in the sweep YAML threads cleanly through Hydra into the constructed
+    ``DatasetSpec``.
 
     :param tmp_path: Per-test scratch dir handed to ``_compose_dataset_cfg``
         so ``cfg.paths.*`` resolves without leaking into the operator
         workspace.
+    :param monkeypatch: Used to scrub ``WANDB_MODE`` from the environment so
+        a leaked ``offline`` value cannot silently neuter ``wandb.sweep`` /
+        ``wandb.agent`` (sweeps require the live backend).
     """
+    # Local import: wandb is optional at install time, gated by RunIf(wandb=True).
     import wandb
 
     from synth_setter.cli.generate_dataset import spec_from_cfg
+
+    monkeypatch.delenv("WANDB_MODE", raising=False)
 
     sweep_cfg = yaml.safe_load(_SWEEP_YAML.read_text())
     entity = os.environ.get("WANDB_ENTITY", sweep_cfg.get("entity"))
@@ -108,31 +118,36 @@ def test_wandb_grid_sweep_threads_cadence_overrides(tmp_path: Path) -> None:
     observed: set[tuple[str, str]] = set()
 
     def trial() -> None:
-        # Force online mode — sweeps require the live backend, so silently
-        # honoring a leaked WANDB_MODE=offline from another test would mask
-        # a real failure as a green run.
         with wandb.init(mode="online") as run:
-            plugin_reload_cadence = run.config["render.plugin_reload_cadence"]
-            gui_toggle_cadence = run.config["render.gui_toggle_cadence"]
-            cfg = _compose_dataset_cfg(plugin_reload_cadence, gui_toggle_cadence, tmp_path)
+            plug = run.config["render.plugin_reload_cadence"]
+            gui = run.config["render.gui_toggle_cadence"]
+            cfg = _compose_dataset_cfg(plug, gui, tmp_path)
             spec = spec_from_cfg(cfg)
-            assert spec.render.plugin_reload_cadence == plugin_reload_cadence
-            assert spec.render.gui_toggle_cadence == gui_toggle_cadence
+            cell = (spec.render.plugin_reload_cadence, spec.render.gui_toggle_cadence)
+            assert cell in _EXPECTED_CELLS, f"unexpected sweep cell {cell!r}"
             run.log(
                 {
-                    "plugin_reload_cadence_observed": spec.render.plugin_reload_cadence,
-                    "gui_toggle_cadence_observed": spec.render.gui_toggle_cadence,
-                    "render.samples_per_shard": spec.render.samples_per_shard,
+                    "plugin_reload_cadence_observed": cell[0],
+                    "gui_toggle_cadence_observed": cell[1],
                 }
             )
-            observed.add((spec.render.plugin_reload_cadence, spec.render.gui_toggle_cadence))
+            observed.add(cell)
 
     sweep_id = wandb.sweep(sweep_cfg, entity=entity, project=project)
-    wandb.agent(
-        sweep_id, function=trial, entity=entity, project=project, count=len(_EXPECTED_CELLS)
-    )
+    try:
+        wandb.agent(
+            sweep_id, function=trial, entity=entity, project=project, count=len(_EXPECTED_CELLS)
+        )
+    finally:
+        # Stop the sweep on the server so repeated CI runs do not leak
+        # half-grids into the W&B project history.
+        try:
+            wandb.Api().sweep(f"{entity}/{project}/{sweep_id}").stop()
+        except Exception as cleanup_exc:  # noqa: BLE001 — best-effort cleanup
+            warnings.warn(f"wandb sweep cleanup failed: {cleanup_exc!r}", stacklevel=1)
 
+    missing = sorted(_EXPECTED_CELLS - observed)
+    extra = sorted(observed - _EXPECTED_CELLS)
     assert observed == _EXPECTED_CELLS, (
-        f"Sweep agent did not observe the full grid: missing "
-        f"{_EXPECTED_CELLS - observed}, extra {observed - _EXPECTED_CELLS}"
+        f"Sweep agent did not observe the full grid: missing={missing}, extra={extra}"
     )
