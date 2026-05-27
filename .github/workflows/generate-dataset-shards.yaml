@@ -93,12 +93,16 @@ on:
         required: false
         type: string
         default: ""
+      run_id:
+        description: "Per-cell `run_id` pin appended to the launcher invocation as `+run_id=<value>`. Matrix callers pass a deterministic per-cell identifier (e.g. `<github.run_id>-<provider>-<output_format>`) so each cell writes under its own R2 prefix and validator cells can derive the same URI via `synth-setter-spec-uri --from-experiment ... --run-id-override ...`."
+        required: true
+        type: string
     outputs:
       spec_uri:
-        description: "Canonical r2:// URI of the materialized spec (under-prefix `input_spec.json`). Consumed by validate-dataset-shards.yaml."
+        description: "Canonical r2:// URI of the materialized spec (under-prefix `input_spec.json`). Derived via `synth-setter-spec-uri --from-experiment <dataset_config> --run-id-override <run_id>` from the same Hydra cfg the launcher composes."
         value: ${{ jobs.generate.outputs.spec_uri }}
       run_id:
-        description: "Generate stage's run_id, parsed from the spec_uri's `data/<task>/<run_id>/` segment. Forwarded to finalize-dataset.yaml for log/artifact naming; finalize loads the run identity from the spec_uri itself."
+        description: "Generate stage's `run_id`, mirrored back to callers as a job output so chained finalize / validate consumers don't have to re-thread the input."
         value: ${{ jobs.generate.outputs.run_id }}
   workflow_dispatch:
     inputs:
@@ -148,6 +152,11 @@ on:
         default: "run-metadata"
       hydra_overrides:
         description: "Extra whitespace-separated Hydra `key=value` overrides appended to the launcher invocation (e.g. `render.gui_toggle_cadence=always_on output_format=wds`). Validated against `^[A-Za-z0-9._=,/-]*( [A-Za-z0-9._=,/-]+)*$` — any shell metacharacter fails the workflow because the docker row expands the variable unquoted inside the worker container."
+        required: false
+        type: string
+        default: ""
+      run_id:
+        description: "Per-dispatch `run_id` pin appended to the launcher invocation as `+run_id=<value>`. Empty (default) auto-pins `<github.run_id>-<github.run_attempt>` so retries don't collide on R2."
         required: false
         type: string
         default: ""
@@ -408,6 +417,7 @@ jobs:
           INPUT_TAIL: ${{ inputs.tail }}
           INPUT_NUM_WORKERS: ${{ inputs.num_workers }}
           INPUT_HYDRA_OVERRIDES: ${{ inputs.hydra_overrides }}
+          INPUT_RUN_ID: ${{ inputs.run_id || format('{0}-{1}', github.run_id, github.run_attempt) }}
           SYNTH_SETTER_CI_MODE: "1"
         run: |
           set -euo pipefail
@@ -416,6 +426,7 @@ jobs:
             "skypilot_launch.compute_template=src/synth_setter/configs/compute/local-template.yaml"
             "skypilot_launch.job_name=$CLUSTER_NAME"
             "skypilot_launch.worker_image_tag=$IMAGE_TAG"
+            "+run_id=$INPUT_RUN_ID"
           )
           if [[ "$INPUT_LOCAL" == "true" ]]; then
             OVERRIDES+=("skypilot_launch.local=true")
@@ -533,6 +544,7 @@ jobs:
           TAIL_OVERRIDE: ${{ inputs.tail && 'skypilot_launch.tail=true' || '' }}
           LOCAL_OVERRIDE: ${{ inputs.local && 'skypilot_launch.local=true' || '' }}
           HYDRA_OVERRIDES_EXTRA: ${{ inputs.hydra_overrides }}
+          INPUT_RUN_ID: ${{ inputs.run_id || format('{0}-{1}', github.run_id, github.run_attempt) }}
         run: |
           set -euo pipefail
           docker run --rm \
@@ -560,6 +572,7 @@ jobs:
             -e TAIL_OVERRIDE \
             -e LOCAL_OVERRIDE \
             -e HYDRA_OVERRIDES_EXTRA \
+            -e INPUT_RUN_ID \
             "${IMAGE}" \
             bash -c '
               set -euo pipefail
@@ -571,6 +584,7 @@ jobs:
                 "skypilot_launch.compute_template=$TEMPLATE" \
                 "skypilot_launch.job_name=$CLUSTER_NAME" \
                 "skypilot_launch.worker_image_tag=$IMAGE_TAG" \
+                "+run_id=$INPUT_RUN_ID" \
                 $LOCAL_OVERRIDE $NUM_WORKERS_OVERRIDE $TAIL_OVERRIDE $HYDRA_OVERRIDES_EXTRA
             ' \
             2>&1 | tee "${RUN_METADATA_DIR}/generate.log"
@@ -599,42 +613,38 @@ jobs:
           echo "=== Materialized Spec (${PROVIDER}) ==="
           head -20 "${SPEC_PATH}"
 
-      # `synth-setter-generate-dataset` (`src/synth_setter/cli/generate_dataset.py`)
-      # emits the canonical spec URI on a stdout sentinel line after resolving
-      # it; the tee'd generate.log captures it for both skypilot-local and
-      # runpod/oci rows. We grep the marker rather than re-shelling out to the
-      # spec-uri console script (which would require a host-side `pip install
-      # -e .` for the runpod/oci rows whose workers live inside the container).
-      # Marker constant is `_SPEC_URI_STDOUT_SENTINEL` in generate_dataset.py.
-      # `grep || true` keeps a missing marker from exiting the step (grep
-      # returns 1 on no-match; with `set -euo pipefail` an unmasked grep
-      # failure would skip the explicit empty-check below and surface a
-      # confusing pipe-failure instead of the friendly `::error::` message).
-      # Also parses the penultimate path segment of the spec_uri as `run_id`
-      # (per the `data/<task>/<run_id>/input_spec.json` shape `make_r2_prefix`
-      # produces in pipeline/schemas/prefix.py); the chained finalize job
-      # consumes it as a Hydra `run_id=<value>` override so finalize composes
-      # against the same R2 prefix generate wrote.
-      - name: Extract spec_uri from launcher log
+      # `spec_uri` is derived via `synth-setter-spec-uri --from-experiment
+      # <dataset_config> --run-id-override <run_id>`, which Hydra-composes the
+      # same cfg the launcher just ran. The URI is a pure function of
+      # `(experiment, run_id)` (r2.bucket + r2.prefix derive deterministically
+      # from cfg + the pinned `+run_id` override), so per-cell matrix callers
+      # can recompute the exact same URI from the same coordinates — closing
+      # the matrix-output fan-in collapse documented at #1154. Runs inside
+      # the dev-snapshot image because that's the only environment guaranteed
+      # to have the synth-setter package + Hydra installed across both the
+      # skypilot-local and runpod/oci rows.
+      - name: Resolve spec_uri via Hydra-compose
         id: spec_uri
+        env:
+          EXPERIMENT: ${{ inputs.dataset_config }}
+          RUN_ID_OVERRIDE: ${{ inputs.run_id || format('{0}-{1}', github.run_id, github.run_attempt) }}
         run: |
           set -euo pipefail
-          SPEC_URI=$(grep -m1 -oE '::synth-setter-spec-uri::r2://[^[:space:]]+' \
-            "${RUN_METADATA_DIR}/generate.log" \
-            | sed 's|^::synth-setter-spec-uri::||' || true)
+          SPEC_URI=$(docker run --rm \
+            -e EXPERIMENT \
+            -e RUN_ID_OVERRIDE \
+            "${IMAGE}" \
+            synth-setter-spec-uri \
+              --from-experiment "$EXPERIMENT" \
+              --run-id-override "$RUN_ID_OVERRIDE")
           if [[ -z "${SPEC_URI}" ]]; then
-            echo "::error::launcher did not emit a ::synth-setter-spec-uri:: marker; see generate.log"
-            exit 1
-          fi
-          RUN_ID=$(printf '%s\n' "${SPEC_URI}" | awk -F/ '{print $(NF-1)}')
-          if [[ -z "${RUN_ID}" ]]; then
-            echo "::error::could not parse run_id from spec_uri=${SPEC_URI}"
+            echo "::error::synth-setter-spec-uri returned an empty URI for experiment=${EXPERIMENT} run_id=${RUN_ID_OVERRIDE}"
             exit 1
           fi
           echo "spec_uri=${SPEC_URI}" >> "${GITHUB_OUTPUT}"
-          echo "run_id=${RUN_ID}" >> "${GITHUB_OUTPUT}"
+          echo "run_id=${RUN_ID_OVERRIDE}" >> "${GITHUB_OUTPUT}"
           echo "spec_uri: ${SPEC_URI}"
-          echo "run_id: ${RUN_ID}"
+          echo "run_id: ${RUN_ID_OVERRIDE}"
 
       # Always validate the freshly-uploaded shards against the
       # `check_shard_contracts` contract before this workflow returns.

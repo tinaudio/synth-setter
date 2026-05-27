@@ -20,7 +20,6 @@ from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
-import click
 import hydra
 from hydra import compose, initialize_config_module
 from loguru import logger
@@ -62,11 +61,6 @@ _OPERATOR_WORKSPACE = operator_workspace()
 # Worker-side checkout path — baked WORKDIR of the dev-snapshot image, not the
 # launcher's workspace (which may not exist on the worker filesystem).
 _WORKER_REPO_ROOT = "/home/build/synth-setter"
-
-# Stdout marker the CI workflow greps out of the tee'd launcher log to populate
-# the workflow's ``spec_uri`` output. Emitted from ``main`` before any dispatch
-# so the marker is visible on the launcher host regardless of provider.
-_SPEC_URI_STDOUT_SENTINEL = "::synth-setter-spec-uri::"
 
 
 def _rclone_copy(src: str, dest: str) -> None:
@@ -508,7 +502,6 @@ def main() -> None:
     # includes the run's prefix so the worker reads the same canonical object
     # ``main()`` just uploaded.
     spec_uri = spec.r2.input_spec_uri()
-    click.echo(f"{_SPEC_URI_STDOUT_SENTINEL}{spec_uri}")
 
     if sky_cfg.compute_template is None:
         generate(spec)

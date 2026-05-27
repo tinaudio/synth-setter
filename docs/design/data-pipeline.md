@@ -1429,7 +1429,7 @@ src/
 
     constants.py        # Well-known filenames (INPUT_SPEC_FILENAME)
     r2_io.py            # rclone-backed R2 helpers (URI handling, download, upload, size probe)
-    skypilot_launch.py  # Click CLI thin passthrough: shells out to an inner generator command, discovers + parses `input_spec.json` via `find_input_specs`, reads its R2 URI off `spec.r2.input_spec_uri()`, then hands off to `dispatch_via_skypilot`, which validates cfg + creds in a Phase 1 pass before printing `::synth-setter-spec-uri::<uri>` on stdout (Phase 2) for the CI workflow to harvest.
+    skypilot_launch.py  # Click CLI thin passthrough: shells out to an inner generator command, discovers + parses `input_spec.json` via `find_input_specs`, reads its R2 URI off `spec.r2.input_spec_uri()`, then hands off to `dispatch_via_skypilot`, which validates cfg + creds in a Phase 1 pass before invoking `sky.jobs.launch` (Phase 2). CI workflows derive the canonical spec URI deterministically via `synth-setter-spec-uri --from-experiment ... --run-id-override ...` from the same Hydra cfg the launcher composes.
 
   # --- Planned (not yet implemented) ---
   # cli.py              # Click entry point: generate, status, finalize

@@ -142,26 +142,32 @@ jobs:
   #
   # Empty array → downstream matrices skip naturally; no `has_jobs` flag.
   setup:
-    name: Compute provider list + R2 bucket
+    name: Compute provider list + R2 bucket + per-cell spec_uri map
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       providers: ${{ steps.matrix.outputs.providers }}
       output_formats: ${{ steps.matrix.outputs.output_formats }}
       r2_bucket: ${{ steps.bucket.outputs.r2_bucket }}
+      spec_uris: ${{ steps.spec_uris.outputs.spec_uris }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      # src/synth_setter/configs/hydra/default.yaml's `defaults` block overrides job_logging /
-      # hydra_logging to `colorlog`, which is provided by the hydra-colorlog
-      # plugin. Without it, Hydra compose fails with:
-      #   MissingConfigException: Could not find 'hydra/job_logging/colorlog'
-      # Pin both to the same versions as [project.dependencies] in pyproject.toml.
-      # Installed before the `matrix` step because that step also composes the
-      # dispatched config to resolve `output_format` on workflow_dispatch.
-      - name: Install Hydra for dataset-config composition
-        run: pip install "hydra-core==1.3.2" "hydra-colorlog==1.2.0"
+      # Installs both Hydra (for the `matrix` step's workflow_dispatch
+      # `output_format` resolution) and the synth-setter package itself (so
+      # the `Compute per-cell spec_uri map` step's `synth-setter-spec-uri
+      # --from-experiment ... --run-id-override ...` call resolves on the host
+      # without a docker pull). `--no-deps` keeps the heavy [project.dependencies]
+      # (torch, skypilot, librosa, ...) out of this setup-only environment;
+      # the explicit pydantic + python-dotenv pin covers the spec-uri CLI's
+      # transitive import of `synth_setter.pipeline.schemas.spec`.
+      # `hydra-colorlog` is required because src/synth_setter/configs/hydra/default.yaml's
+      # `defaults` block names `colorlog` for job_logging / hydra_logging.
+      - name: Install synth-setter for Hydra compose + spec-uri CLI
+        run: |
+          pip install --no-deps -e .
+          pip install "hydra-core==1.3.2" "hydra-colorlog==1.2.0" "pydantic>=2,<3" python-dotenv
 
       # Provider axis:
       #   schedule, cron `0 * * * *` (hourly) → skypilot-local
@@ -271,6 +277,49 @@ jobs:
           echo "r2_bucket=${R2_BUCKET}" >> "${GITHUB_OUTPUT}"
           echo "r2_bucket: ${R2_BUCKET}"
 
+      # Precompute the spec_uri for every (provider, output_format) cell in
+      # the matrix, keyed as `provider-output_format`, so the downstream
+      # `validate` matrix can look up its own URI from a single non-matrix
+      # output and side-step the `needs.<matrix-job>.outputs.<x>` scalar
+      # collapse that #1154 documents. The same per-cell `run_id` formula
+      # appears in `generate-launcher`'s `run_id:` input, so the URI each
+      # validate cell consumes is the URI its paired generate cell wrote.
+      - name: Compute per-cell spec_uri map
+        id: spec_uris
+        env:
+          PROVIDERS_JSON: ${{ steps.matrix.outputs.providers }}
+          FORMATS_JSON: ${{ steps.matrix.outputs.output_formats }}
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_DATASET_CONFIG: ${{ inputs.dataset_config || 'generate_dataset/smoke-shard' }}
+          RUN_ID_BASE: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [[ "$PROVIDERS_JSON" == "[]" || "$FORMATS_JSON" == "[]" ]]; then
+            echo "spec_uris={}" >> "$GITHUB_OUTPUT"
+            echo "spec_uris: {}"
+            exit 0
+          fi
+          json=$({
+            while read -r prov; do
+              while read -r fmt; do
+                if [[ "$EVENT_NAME" == "schedule" ]]; then
+                  if [[ "$fmt" == "wds" ]]; then
+                    exp="generate_dataset/smoke-shard-wds"
+                  else
+                    exp="generate_dataset/smoke-shard"
+                  fi
+                else
+                  exp="$DISPATCH_DATASET_CONFIG"
+                fi
+                rid="${RUN_ID_BASE}-${prov}-${fmt}"
+                uri=$(synth-setter-spec-uri --from-experiment "$exp" --run-id-override "$rid")
+                jq -nc --arg k "${prov}-${fmt}" --arg v "$uri" '{($k): $v}'
+              done < <(printf '%s' "$FORMATS_JSON" | jq -r '.[]')
+            done < <(printf '%s' "$PROVIDERS_JSON" | jq -r '.[]')
+          } | jq -sc 'add // {}')
+          echo "spec_uris=$json" >> "$GITHUB_OUTPUT"
+          echo "spec_uris: $json"
+
   # `skypilot-local` / `runpod` / `oci` rows: route through the official
   # launcher reusable. Cluster name includes `github.run_attempt` so re-running
   # a failed job doesn't collide on the launcher's R2 spec key. The
@@ -302,13 +351,19 @@ jobs:
       tail: true
       local: ${{ matrix.provider == 'skypilot-local' }}
       artifact_name: test-run-metadata-${{ matrix.provider }}-${{ matrix.output_format }}
+      run_id: ${{ github.run_id }}-${{ matrix.provider }}-${{ matrix.output_format }}
     secrets: inherit
 
-  # validate-spec + validate-shard pull the spec from R2 directly via the
-  # canonical `spec_uri` output emitted by `synth-setter-spec-uri`. `if:
-  # !cancelled()` decouples each provider × output_format cell from the OTHER
-  # cells' generate outcomes — RunPod transients won't skip OCI validation,
-  # and an hdf5 failure won't skip wds.
+  # Each validate cell reads its own spec_uri from `needs.setup.outputs.spec_uris`
+  # — a non-matrix JSON map indexed by `<provider>-<output_format>`, populated
+  # by the setup job via `synth-setter-spec-uri --from-experiment ...
+  # --run-id-override ...`. Routing through `needs.setup` (a single non-matrix
+  # job) instead of `needs.generate-launcher` (matrix) sidesteps GHA's
+  # matrix-outputs scalar collapse documented at #1154; per-cell pairing is
+  # restored because each generate cell wrote under the same per-cell run_id
+  # formula. `if: !cancelled()` decouples each cell from the OTHER cells'
+  # generate outcomes — RunPod transients won't skip OCI validation, and an
+  # hdf5 failure won't skip wds.
   validate:
     name: Validate ${{ matrix.provider }} / ${{ matrix.output_format }} dataset
     needs: [setup, generate-launcher]
@@ -321,5 +376,5 @@ jobs:
     uses: ./.github/workflows/validate-dataset-shards.yaml
     with:
       image_tag: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
-      spec_uri: ${{ needs.generate-launcher.outputs.spec_uri }}
+      spec_uri: ${{ fromJSON(needs.setup.outputs.spec_uris)[format('{0}-{1}', matrix.provider, matrix.output_format)] }}
     secrets: inherit

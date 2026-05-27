@@ -38,10 +38,6 @@ from synth_setter.pipeline.skypilot_launch import (
 )
 from synth_setter.resources import configs_dir
 
-# Stable-format marker emitted by ``generate_dataset.main`` for the CI workflow
-# grep; the launcher must not print it (a duplicate would confuse the workflow).
-_SPEC_URI_STDOUT_SENTINEL = "::synth-setter-spec-uri::"
-
 
 @pytest.fixture()
 def env_file(tmp_path: Path) -> Path:
@@ -846,7 +842,6 @@ class TestDispatchViaSkypilot:
         env_file: Path,
         monkeypatch: pytest.MonkeyPatch,
         mock_sky: MagicMock,
-        capsys: pytest.CaptureFixture[str],
         kwargs_overrides: dict[str, object],
         match: str,
     ) -> None:
@@ -854,15 +849,12 @@ class TestDispatchViaSkypilot:
 
         Probes the three Phase-2 mutations: ``~/.sky/config.yaml`` write,
         ``_SKYPILOT_API_SERVER_ENV`` set in process env, and ``sky.jobs.launch``
-        called. The ``::synth-setter-spec-uri::`` stdout sentinel is owned by
-        ``generate_dataset.main`` — its absence here is a regression guard
-        against re-introducing emission in the launcher.
+        called.
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
         :param env_file: Fixture-provided worker env file path.
         :param monkeypatch: Pytest fixture for env/attribute mocking.
         :param mock_sky: Mocked ``sky`` module from fixture.
-        :param capsys: Pytest fixture capturing stdout/stderr.
         :param kwargs_overrides: ``SkypilotLaunchConfig`` overrides that trip
             exactly one Phase-1 validator.
         :param match: Regex expected in the ``ValueError`` message.
@@ -891,26 +883,20 @@ class TestDispatchViaSkypilot:
         assert not (tmp_path / ".sky").exists()
         assert _SKYPILOT_API_SERVER_ENV not in os.environ
         mock_sky.jobs.launch.assert_not_called()
-        assert _SPEC_URI_STDOUT_SENTINEL not in capsys.readouterr().out
 
-    def test_cred_bootstrap_raise_skips_launch_and_stays_silent(
+    def test_cred_bootstrap_raise_skips_launch(
         self,
         tmp_path: Path,
         env_file: Path,
         monkeypatch: pytest.MonkeyPatch,
         mock_sky: MagicMock,
-        capsys: pytest.CaptureFixture[str],
     ) -> None:
         """A ``_run_cred_bootstrap`` raise propagates without reaching ``sky.jobs.launch``.
-
-        The launcher is also silent on the spec-uri sentinel regardless of
-        outcome (the sentinel is owned by ``generate_dataset.main``).
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
         :param env_file: Fixture-provided worker env file path.
         :param monkeypatch: Pytest fixture for env/attribute mocking.
         :param mock_sky: Mocked ``sky`` module from fixture.
-        :param capsys: Pytest fixture capturing stdout/stderr.
         """
         monkeypatch.setattr(
             "synth_setter.pipeline.skypilot_launch._run_cred_bootstrap",
@@ -928,7 +914,6 @@ class TestDispatchViaSkypilot:
         with pytest.raises(RuntimeError, match="simulated bootstrap failure"):
             dispatch_via_skypilot(sky_cfg)
 
-        assert _SPEC_URI_STDOUT_SENTINEL not in capsys.readouterr().out
         mock_sky.jobs.launch.assert_not_called()
 
     def test_end_to_end_dispatch_uses_cmd_as_run_block(
@@ -1141,36 +1126,6 @@ class TestDispatchViaSkypilot:
         assert len(update_envs_calls) == 2
         for call in update_envs_calls:
             assert WORKER_SPEC_URI_ENV not in call.args[0]
-
-    def test_launcher_does_not_print_spec_uri_sentinel(
-        self,
-        tmp_path: Path,
-        env_file: Path,
-        mock_sky: MagicMock,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        """``dispatch_via_skypilot`` no longer prints the ``::synth-setter-spec-uri::`` marker.
-
-        The CI workflow grep contract now consumes the sentinel from
-        ``generate_dataset.main``'s stdout; the launcher must stay silent so
-        the marker has a single owner.
-
-        :param tmp_path: Pytest fixture providing a fresh test directory.
-        :param env_file: Fixture-provided worker env file path.
-        :param mock_sky: Mocked ``sky`` module from fixture.
-        :param capsys: Pytest fixture capturing stdout/stderr.
-        """
-        template = _write_runpod_yaml(tmp_path)
-        sky_cfg = SkypilotLaunchConfig(
-            compute_template=str(template),
-            cmd="echo",
-            env_file=str(env_file),
-            job_name="no-sentinel",
-        )
-
-        dispatch_via_skypilot(sky_cfg)
-
-        assert "::synth-setter-spec-uri::" not in capsys.readouterr().out
 
     def test_single_worker_dispatch_still_injects_rank_world_env(
         self,
