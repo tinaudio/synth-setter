@@ -7,10 +7,11 @@ The entrypoint's public surface:
   auth ping), uploads the canonical spec via ``spec_io.upload_spec``, then
   either calls ``generate(spec)`` inline (local-run) or dispatches to a SkyPilot
   worker pod.
-- ``generate(spec)``: per-rank renderer. For each owned shard in ``spec.shards``,
-  shells out to ``generate_vst_dataset.py``, uploads the shard to R2 at
-  ``r2:{bucket}/{prefix}/``, and unlinks the local file. No longer uploads
-  the spec — ``main()`` does that once on the launcher host.
+- ``generate(spec, work_dir)``: per-rank renderer. For each owned shard in
+  ``spec.shards``, shells out to ``generate_vst_dataset.py`` writing into
+  ``work_dir``, then uploads the shard to R2 at ``r2:{bucket}/{prefix}/``;
+  rendered shards are retained under ``work_dir`` for downstream consumption.
+  ``main()`` writes the canonical spec to R2 once on the launcher host.
 
 ``TestRun`` tests share a ``patched_subprocess`` fixture that pulls in
 ``fake_r2_remote`` (see ``tests/pipeline/conftest.py``) and patches
@@ -447,75 +448,32 @@ class TestRun:
             "rclone",
         ]
 
-    def test_local_shard_file_removed_after_upload(
+    def test_shards_persist_after_upload(
         self,
         fake_r2_remote: Path,
         tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Each shard's local HDF5 is unlinked between its upload and the next render.
+        """Every rendered shard remains at ``work_dir / shard.filename`` after upload.
 
-        Verifies the disk-bounding invariant via an interleaved event stream
-        (renderer / rclone / unlink). For every shard the test asserts the
-        per-shard sequence ``(renderer, rclone, unlink)`` on the same path —
-        which proves both ordering (shard N is unlinked *before* shard N+1's
-        renderer runs) and final-shard coverage (the last shard's unlink is
-        recorded, not masked by the outer ``TemporaryDirectory`` teardown).
+        Pins the post-upload retention contract: ``finalize_dataset`` and
+        post-mortem consumers expect shards to outlive the render+upload step.
 
-        :param fake_r2_remote: Local-typed R2 remote rooted at a tmp dir.
-        :param tmp_path: Pytest tmp dir used by ``_multi_shard_spec``.
-        :param monkeypatch: Used to wrap ``Path.unlink`` with a call-recording
-            spy that delegates to the real implementation.
+        :param fake_r2_remote: Local-typed R2 remote — asserted to contain every
+            shard alongside the on-disk copies.
+        :param tmp_path: Caller-supplied work_dir for ``generate()``.
         """
         spec = _multi_shard_spec(tmp_path, n=3)
-        events: list[tuple[str, Path]] = []
-
-        def _record_dispatcher(args: list[str]) -> int:
-            if args and args[0] == "rclone":
-                # rclone copy argv ends with [src, dest]; the src is the
-                # just-rendered shard's local path.
-                events.append(("rclone", Path(args[-2])))
-                return _REAL_CHECK_CALL(args)
-            out_path = Path(args[find_script_index(args) + 1])
-            events.append(("renderer", out_path))
-            return _materialize_shard(args)
-
-        real_unlink = Path.unlink
-
-        def _spy_unlink(self: Path, missing_ok: bool = False) -> None:
-            events.append(("unlink", self))
-            real_unlink(self, missing_ok=missing_ok)
-
-        monkeypatch.setattr(Path, "unlink", _spy_unlink)
 
         with patch(
             "synth_setter.cli.generate_dataset.subprocess.check_call",
-            side_effect=_record_dispatcher,
+            side_effect=_materialize_or_passthrough_rclone,
         ):
             generate(spec, tmp_path)
 
-        # Restrict unlink events to those targeting an uploaded shard source —
-        # the spy captures every Path.unlink in-process, but only shard-source
-        # unlinks are part of the disk-bounding contract under test.
-        upload_sources = [p for kind, p in events if kind == "rclone"]
-        shard_paths = set(upload_sources)
-        shard_events = [
-            (kind, p)
-            for kind, p in events
-            if kind in ("renderer", "rclone") or (kind == "unlink" and p in shard_paths)
-        ]
-        expected = [
-            entry
-            for src in upload_sources
-            for entry in (("renderer", src), ("rclone", src), ("unlink", src))
-        ]
-        assert len(upload_sources) == 3
-        assert shard_events == expected, (
-            "per-shard sequence (renderer, rclone, unlink) was not maintained: "
-            f"got {shard_events!r}, expected {expected!r}"
-        )
+        bucket_prefix = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
         for shard in spec.shards:
-            assert (fake_r2_remote / spec.r2.bucket / spec.r2.prefix / shard.filename).is_file()
+            assert (tmp_path / shard.filename).is_file()
+            assert (bucket_prefix / shard.filename).is_file()
 
     def test_subprocess_failure_in_second_shard_propagates_immediately(
         self,
@@ -1173,7 +1131,7 @@ class TestRun:
 
         Stubs ``_rclone_copy`` to snapshot the source path and its on-disk
         existence at the upload moment — proving the shard landed at
-        ``work_dir / shard.filename`` before the post-upload unlink fires.
+        ``work_dir / shard.filename`` before the upload runs.
 
         :param patched_subprocess: Fixture-activation only; renderer side of the
             dispatcher materializes the shard file into ``work_dir``.

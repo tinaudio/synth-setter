@@ -123,10 +123,8 @@ def generate(spec: DatasetSpec, work_dir: Path) -> None:
     copy once on the launcher host before either calling
     ``generate(spec, work_dir)`` inline (local-run) or dispatching to a
     SkyPilot worker pod that re-enters via
-    ``from_hydra`` → ``generate(spec, work_dir)``. Each shard is rendered,
-    uploaded, and unlinked before moving on — bounding local disk to one
-    shard at a time. Subprocesses fail-fast: later shards are not attempted
-    on subprocess error.
+    ``from_hydra`` → ``generate(spec, work_dir)``. Subprocesses fail-fast:
+    later shards are not attempted on subprocess error.
 
     Before each render, R2 is probed for the shard's destination object: if it already exists with
     non-zero size, the shard is skipped (resumability MVP — see #750). The probe uses
@@ -198,7 +196,7 @@ def _dispatch_shards_serial(
 
     :param spec: Validated dataset spec.
     :param my_range: Contiguous range of shard IDs owned by this rank.
-    :param work_dir: Per-run tempdir owned by ``generate()``.
+    :param work_dir: Hydra per-run output dir; shards land here before upload.
     :param r2_dest_prefix: ``spec.r2.rclone_prefix()``.
     :returns: ``(rendered, skipped)`` summary counts over ``my_range``.
     """
@@ -237,8 +235,7 @@ def _dispatch_shards_parallel(
 
     :param spec: Validated dataset spec.
     :param my_range: Non-empty contiguous range of shard IDs owned by this rank.
-    :param work_dir: Per-run tempdir owned by ``generate()``; peak local disk
-        scales with the pool size (one in-flight shard per worker thread).
+    :param work_dir: Hydra per-run output dir; every owned shard lands here.
     :param r2_dest_prefix: ``spec.r2.rclone_prefix()``.
     :returns: ``(rendered, skipped)`` summary counts over ``my_range``.
     """
@@ -288,7 +285,7 @@ def _render_one_owned_shard(
 
     :param spec: Validated dataset spec; ``spec.shards[shard_id]`` is fetched.
     :param shard_id: Index into ``spec.shards``.
-    :param work_dir: Per-run tempdir owned by ``generate()``.
+    :param work_dir: Hydra per-run output dir; shards land here before upload.
     :param r2_dest_prefix: ``spec.r2.rclone_prefix()``.
     :returns: ``(rendered, skipped)`` — exactly one is ``True``.
     """
@@ -310,14 +307,12 @@ def _render_and_upload_shard(
     work_dir: Path,
     r2_dest_prefix: str,
 ) -> None:
-    """Render a single shard, upload it to R2, then unlink the local file.
+    """Render a single shard and upload it to R2; shards are retained at ``work_dir``.
 
-    Unlinking after upload bounds local disk to one in-flight shard per caller — necessary on
-    disk-constrained workers running multi-shard partitions. Under ``render.parallel=True`` this
-    bound applies per worker thread, so peak local disk scales with the dispatcher's pool size
-    (see ``_dispatch_shards_parallel`` and ``RenderConfig.parallel``). The renderer subprocess is
-    wrapped in a retry loop bounded by ``spec.render.max_retries`` (default 0 = strict
-    fail-fast); rclone is outside the loop because it already retries via ``--retries=3``.
+    Rendered shards stay on disk under ``work_dir`` for post-mortem and downstream
+    ``finalize_dataset`` consumption. The renderer subprocess is wrapped in a retry
+    loop bounded by ``spec.render.max_retries`` (default 0 = strict fail-fast);
+    rclone is outside the loop because it already retries via ``--retries=3``.
 
     :raises subprocess.CalledProcessError: Renderer (or rclone) subprocess exited non-zero after
         exhausting the retry budget.
@@ -356,8 +351,6 @@ def _render_and_upload_shard(
     logger.info(f"shard rendered: {shard_path} ({shard_path.stat().st_size} bytes)")
     _rclone_copy(str(shard_path), r2_dest_prefix)
     logger.info(f"shard uploaded: {shard.filename} -> {r2_dest_prefix}")
-    shard_path.unlink()
-    logger.info(f"shard removed locally: {shard_path}")
 
 
 def spec_from_cfg(cfg: DictConfig) -> DatasetSpec:
