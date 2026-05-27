@@ -62,20 +62,25 @@ def _compose_dataset_cfg(
     :returns: Composed DictConfig ready for ``spec_from_cfg``.
     """
     GlobalHydra.instance().clear()
-    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
-        cfg = compose(
-            config_name="dataset",
-            overrides=[
-                "experiment=generate_dataset/smoke-shard",
-                f"render.plugin_reload_cadence={plugin_reload_cadence}",
-                f"render.gui_toggle_cadence={gui_toggle_cadence}",
-            ],
-        )
-    with open_dict(cfg):
-        cfg.paths.root_dir = str(paths_root)
-        cfg.paths.output_dir = str(paths_root)
-        cfg.paths.work_dir = str(paths_root)
-    return cfg
+    try:
+        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+            cfg = compose(
+                config_name="dataset",
+                overrides=[
+                    "experiment=generate_dataset/smoke-shard",
+                    f"render.plugin_reload_cadence={plugin_reload_cadence}",
+                    f"render.gui_toggle_cadence={gui_toggle_cadence}",
+                ],
+            )
+        with open_dict(cfg):
+            cfg.paths.root_dir = str(paths_root)
+            cfg.paths.output_dir = str(paths_root)
+            cfg.paths.work_dir = str(paths_root)
+        return cfg
+    finally:
+        # Leave GlobalHydra clean so later tests that call initialize_*
+        # without their own pre-clear do not hit "already initialized".
+        GlobalHydra.instance().clear()
 
 
 @pytest.mark.slow
@@ -106,14 +111,19 @@ def test_wandb_grid_sweep_threads_cadence_overrides(
     """
     # Local import: wandb is optional at install time, gated by RunIf(wandb=True).
     import wandb
-
     from synth_setter.cli.generate_dataset import spec_from_cfg
 
     monkeypatch.delenv("WANDB_MODE", raising=False)
+    # Pin W&B's per-run output dir under tmp_path so wandb.init() does not
+    # drop a `./wandb/` directory into the repo checkout for local runs.
+    monkeypatch.setenv("WANDB_DIR", str(tmp_path))
 
     sweep_cfg = yaml.safe_load(_SWEEP_YAML.read_text())
-    entity = os.environ.get("WANDB_ENTITY", sweep_cfg.get("entity"))
-    project = os.environ.get("WANDB_PROJECT", sweep_cfg.get("project", "synth-setter"))
+    # `or` (not the dict default) — CI templating sometimes exports an
+    # empty WANDB_ENTITY / WANDB_PROJECT, and "" would silently shadow the
+    # YAML's hardcoded values and crash inside wandb.sweep().
+    entity = os.environ.get("WANDB_ENTITY") or sweep_cfg.get("entity")
+    project = os.environ.get("WANDB_PROJECT") or sweep_cfg.get("project", "synth-setter")
 
     observed: set[tuple[str, str]] = set()
 
