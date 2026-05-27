@@ -13,6 +13,7 @@ defaults:
   - hydra: default
   - skypilot_launch: default
   - experiment: ???
+  - logger: wandb
 
 task_name: ???
 # ``configs/hydra/default.yaml`` interpolates ``${run_name}`` into ``hydra.run.dir``;

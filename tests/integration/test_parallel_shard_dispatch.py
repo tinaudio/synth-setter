@@ -1,6 +1,6 @@
 """Cross-platform integration test for ``RenderConfig.parallel`` dispatch.
 
-Exercises ``generate(spec, work_dir)`` with ``render.parallel=True`` through the real
+Exercises ``generate(spec, work_dir, loggers)`` with ``render.parallel=True`` through the real
 ``subprocess.check_call`` boundary on every OS / CI host — no Linux Xvfb
 wrapper, no Surge VST3 bundle, no R2 credentials. A fake renderer script
 (written into ``tmp_path``) replaces ``generate_vst_dataset.py``: it just
@@ -146,7 +146,7 @@ def test_parallel_dispatch_crosses_real_subprocess_boundary(
     """``parallel=True`` + 4 shards uploads every shard via real subprocess + real rclone.
 
     State-based assertion: every shard's filename exists under the fake R2
-    remote when ``generate(spec, work_dir)`` returns.
+    remote when ``generate(spec, work_dir, loggers)`` returns.
 
     :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
     :param tmp_path: Per-test tmp dir for the fake renderer script.
@@ -159,7 +159,7 @@ def test_parallel_dispatch_crosses_real_subprocess_boundary(
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
     _wire_generate_into_fake_renderer(spec, tmp_path, monkeypatch)
 
-    generate(spec, tmp_path)
+    generate(spec, tmp_path, [])
 
     bucket_prefix = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
     for shard in spec.shards:
@@ -201,7 +201,7 @@ def test_two_ranks_render_disjoint_complete_shard_partition(
 
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "2")
-    generate(spec, tmp_path)
+    generate(spec, tmp_path, [])
     rank_0_landed = _landed_filenames()
 
     # Wipe the bucket between ranks so rank-1's landed set is observed
@@ -213,7 +213,7 @@ def test_two_ranks_render_disjoint_complete_shard_partition(
 
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "1")
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "2")
-    generate(spec, tmp_path)
+    generate(spec, tmp_path, [])
     rank_1_landed = _landed_filenames()
 
     every_shard = {shard.filename for shard in spec.shards}

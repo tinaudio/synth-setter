@@ -82,6 +82,7 @@ _NON_SPEC_CFG_KEYS: tuple[str, ...] = (
     "skypilot_launch",
     "finalize_inline",
     "oracle_eval_inline",
+    "logger",
 )
 
 
