@@ -686,7 +686,9 @@ def _loggers_pinned_to_spec(cfg: DictConfig, spec: DatasetSpec) -> list[Logger]:
         dataset.
     :returns: Loggers list — empty when ``cfg.logger`` is omitted/null.
     """
-    if cfg.get("logger") is not None:
+    # Guard against non-wandb logger groups (e.g. ``logger=tensorboard``) where
+    # ``logger.wandb`` is absent and ``OmegaConf.update`` would raise.
+    if OmegaConf.select(cfg, "logger.wandb") is not None:
         OmegaConf.update(cfg, "logger.wandb.id", spec.run_id)
     return instantiate_loggers(cfg.get("logger"))
 

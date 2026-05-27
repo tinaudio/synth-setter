@@ -222,11 +222,12 @@ serial and parallel dispatchers.
 | `generation/samples`            | `rendered * spec.render.samples_per_shard`        |
 | `generation/samples_per_second` | `samples / elapsed_s` (0.0 when `elapsed_s == 0`) |
 
-Emitted by `_log_summary` after the dispatcher returns. The dispatcher is fail-fast, so
-the summary fires only when every owned shard either rendered or was short-circuited by
-the R2-skip probe; `finalize(status)` then records `"success"`. Any exception during
-dispatch sets `status="failed"` (via `except BaseException` in `generate()`) and the
-summary is not emitted.
+Emitted by `_log_summary` after the dispatcher returns. The dispatcher is fail-fast — there
+is no partial-success path. Either every owned shard's contract is fulfilled (rendered or
+short-circuited by the R2-skip probe) and `finalize(status)` records `"success"`, or any
+shard's exception propagates up `generate()`'s `try/except`, `status` flips to `"failed"`,
+the summary is not emitted, and `_close_loggers` calls `finalize("failed")` + `wandb.finish()`
+in the `finally`.
 
 ### 5d. Linked issues
 
