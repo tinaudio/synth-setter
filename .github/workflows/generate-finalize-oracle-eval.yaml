@@ -1,0 +1,96 @@
+name: Generate + Finalize + Oracle-Eval Dataset (inline)
+
+# Runs synth-setter-generate-dataset with finalize_inline=true and
+# oracle_eval_inline=true so the same CLI process that generated the
+# shards also writes dataset.complete and runs the surge/fake_oracle
+# eval against the finalized splits — proving the parameter-array
+# round-trip survived generate + finalize. Mirrors finalize-dataset.yaml's
+# bare-runner install (no docker, no SkyPilot path); the experiment chosen
+# at dispatch time decides which spec is generated.
+#
+# Required secrets (callers should `secrets: inherit`):
+#   RCLONE_CONFIG_R2_ACCESS_KEY_ID, RCLONE_CONFIG_R2_SECRET_ACCESS_KEY,
+#   RCLONE_CONFIG_R2_ENDPOINT — same R2 credentials the standalone
+#   generate / finalize stages use.
+
+on:
+  workflow_dispatch:
+    inputs:
+      experiment:
+        description: "Experiment YAML stem under configs/experiment/generate_dataset/"
+        required: true
+        type: string
+        default: smoke-shard-with-oracle-eval
+      env_ref:
+        description: "Git ref / SHA to check out"
+        required: false
+        type: string
+        default: ""
+  workflow_call:
+    inputs:
+      experiment:
+        required: true
+        type: string
+      env_ref:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  generate_and_finalize_and_oracle_eval:
+    name: Run generate_dataset (finalize_inline=true, oracle_eval_inline=true)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RCLONE_CONFIG_R2_TYPE: s3
+      RCLONE_CONFIG_R2_PROVIDER: Cloudflare
+      RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+      RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+      RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+      HYDRA_FULL_ERROR: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.env_ref != '' && inputs.env_ref || github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install rclone
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq rclone
+
+      # `pipeline.data.reshard` transitively touches the torch-gated `data/`
+      # package — CPU torch is the minimum that resolves all imports.
+      - name: Install project deps (uv sync --frozen, CPU torch)
+        run: uv sync --frozen --extra cpu --no-default-groups --group dev
+
+      - name: Run synth-setter-generate-dataset (oracle_eval_inline)
+        env:
+          EXPERIMENT: ${{ inputs.experiment }}
+          PROJECT_ROOT: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          uv run synth-setter-generate-dataset \
+            "experiment=generate_dataset/${EXPERIMENT}" \
+            "finalize_inline=true" \
+            "oracle_eval_inline=true" \
+            2>&1 | tee generate-finalize-oracle-eval.log
+
+      - name: Upload log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: generate-finalize-oracle-eval-log-${{ inputs.experiment }}
+          path: generate-finalize-oracle-eval.log
+          if-no-files-found: warn
+          retention-days: 7

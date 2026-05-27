@@ -1,0 +1,11 @@
+# @package _global_
+
+# Used by the generate-finalize-oracle-eval workflow; mirrors
+# smoke-shard-with-finalize.yaml but additionally runs the
+# surge/fake_oracle eval inline so the same CLI process verifies the
+# parameter-array round-trip survived generate + finalize.
+defaults:
+  - /experiment/generate_dataset/smoke-shard-with-finalize@_global_
+  - _self_
+
+oracle_eval_inline: true
