@@ -89,11 +89,34 @@ jobs:
       # Lightning's `trainer.test()` prints the final metrics table to stdout;
       # parse it for `test/param_mse` and assert exactly zero — the load-bearing
       # oracle invariant. Fails the workflow on any non-zero / missing value.
-      - name: Assert oracle test/param_mse == 0.0
+      - name: Assert oracle test/param_mse == 0.0 (log)
         run: |
           set -euo pipefail
           uv run python -m synth_setter.evaluation.assert_oracle_invariant \
             generate-finalize-oracle-eval.log
+
+      # Independent structured cross-check: `cli/eval.py` writes the metric_dict
+      # JSON under <eval-dir>/metrics/metrics.json. Globbing under the operator
+      # workspace finds the one inline-eval run's artifact regardless of the
+      # spec's run_id, then asserts the same invariant from a non-stdout source.
+      - name: Locate metrics.json
+        id: locate_metrics
+        run: |
+          set -euo pipefail
+          metrics_path=$(find "${PROJECT_ROOT}/oracle_eval" -type f -name 'metrics.json' | head -n1)
+          if [ -z "${metrics_path}" ]; then
+            echo "::error::no metrics.json under ${PROJECT_ROOT}/oracle_eval"; exit 1
+          fi
+          echo "path=${metrics_path}" >> "${GITHUB_OUTPUT}"
+          echo "Located metrics.json at ${metrics_path}"
+        env:
+          PROJECT_ROOT: ${{ github.workspace }}
+
+      - name: Assert oracle test/param_mse == 0.0 (metrics.json)
+        run: |
+          set -euo pipefail
+          uv run python -m synth_setter.evaluation.assert_oracle_invariant \
+            --metrics-json "${{ steps.locate_metrics.outputs.path }}"
 
       - name: Upload log
         if: always()
@@ -101,5 +124,14 @@ jobs:
         with:
           name: generate-finalize-oracle-eval-log-${{ inputs.experiment }}
           path: generate-finalize-oracle-eval.log
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload metrics.json
+        if: always() && steps.locate_metrics.outputs.path != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: generate-finalize-oracle-eval-metrics-${{ inputs.experiment }}
+          path: ${{ steps.locate_metrics.outputs.path }}
           if-no-files-found: error
           retention-days: 7

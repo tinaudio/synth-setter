@@ -94,6 +94,7 @@ def _run_oracle_eval_subprocess(dataset_root: Path) -> None:
         "synth_setter.cli.eval",
         "experiment=surge/fake_oracle",
         f"data.dataset_root={dataset_root}",
+        f"hydra.run.dir={dataset_root}",
         "ckpt_path=null",
         "logger=null",
         "mode=test",

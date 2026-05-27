@@ -1,5 +1,6 @@
 """Hydra entrypoint for evaluating a trained model on a datamodule's test split."""
 
+import json
 import subprocess
 import sys
 from contextlib import ExitStack
@@ -256,6 +257,34 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     return metric_dict, object_dict
 
 
+def _dump_metric_dict(metric_dict: dict[str, Any], output_dir: Path) -> Path:
+    """Serialize ``metric_dict`` to ``<output_dir>/metrics/metrics.json``; return the path.
+
+    Lightning tensors and numpy arrays are coerced to native floats / lists
+    so downstream gates (workflow asserters, CSV joiners) can parse without
+    importing torch. Callers that want the structured artifact for a
+    pass/fail gate read from the returned path.
+
+    :param metric_dict: Return value of :func:`evaluate`'s first tuple element.
+    :param output_dir: Hydra per-run output dir; the ``metrics/`` subdir is
+        created if missing.
+    :returns: Absolute path to the written ``metrics.json``.
+    """
+    metrics_dir = output_dir / "metrics"
+    metrics_dir.mkdir(parents=True, exist_ok=True)
+    serializable: dict[str, Any] = {}
+    for key, value in metric_dict.items():
+        if hasattr(value, "item") and not hasattr(value, "__len__"):
+            serializable[key] = value.item()
+        elif hasattr(value, "tolist"):
+            serializable[key] = value.tolist()
+        else:
+            serializable[key] = value
+    out_path = metrics_dir / "metrics.json"
+    out_path.write_text(json.dumps(serializable, indent=2, sort_keys=True))
+    return out_path
+
+
 @hydra.main(version_base="1.3", config_path="pkg://synth_setter.configs", config_name="eval.yaml")
 def main(cfg: DictConfig) -> None:
     """Run the evaluation entrypoint.
@@ -266,7 +295,8 @@ def main(cfg: DictConfig) -> None:
     # (e.g. ask for tags if none are provided in cfg, print cfg tree, etc.)
     extras(cfg)
 
-    evaluate(cfg)
+    metric_dict, _ = evaluate(cfg)
+    _dump_metric_dict(metric_dict, Path(cfg.paths.output_dir))
 
 
 if __name__ == "__main__":

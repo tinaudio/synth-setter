@@ -1713,6 +1713,9 @@ class TestMainDispatchBranches:
         assert "synth_setter.cli.eval" in called_argv
         assert "experiment=surge/fake_oracle" in called_argv
         assert f"data.dataset_root={tmp_path}" in called_argv
+        # Pins the Hydra per-run dir to the same path as data.dataset_root so
+        # the workflow's metrics.json glob lands at <tmp_path>/metrics/metrics.json.
+        assert f"hydra.run.dir={tmp_path}" in called_argv
         assert "ckpt_path=null" in called_argv
         assert "mode=test" in called_argv
 

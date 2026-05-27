@@ -1,13 +1,17 @@
-"""Parse a `synth-setter-eval` log for `test/param_mse` and assert it is exactly zero.
+"""Assert ``test/param_mse == 0.0`` against the eval log or the metrics.json artifact.
 
-Used by the `Generate + Finalize + Oracle-Eval Dataset (inline)` workflow to turn Lightning's
-printed metrics table into a hard pass/fail gate — the oracle's load-bearing invariant is `pred ==
-target` (and therefore `param_mse == 0.0`), so any other value means generate or finalize corrupted
-the parameter-array round-trip.
+Used by the `Generate + Finalize + Oracle-Eval Dataset (inline)` workflow as a
+two-pronged gate on the oracle's load-bearing invariant (``pred == target`` →
+``param_mse == 0.0``). The log assertion catches anything that lands in
+Lightning's stdout table; the JSON assertion reads the structured artifact
+`cli/eval.py` writes to the per-run output dir. Either failing means generate
+or finalize corrupted the parameter-array round-trip.
 """
 
 from __future__ import annotations
 
+import argparse
+import json
 import re
 import sys
 from pathlib import Path
@@ -41,31 +45,63 @@ def parse_metric_from_log(log_text: str, metric_key: str = _METRIC_KEY) -> float
     return float(floats[-1])
 
 
+def parse_metric_from_json(json_text: str, metric_key: str = _METRIC_KEY) -> float:
+    """Return the float at ``metric_key`` from the metrics.json artifact.
+
+    :param json_text: Contents of the per-run ``metrics/metrics.json`` file.
+    :param metric_key: Key to look up; defaults to ``"test/param_mse"``.
+    :returns: Coerced ``float(payload[metric_key])``.
+    :raises ValueError: Payload not a dict, key missing, or value not numeric.
+    """
+    payload = json.loads(json_text)
+    if not isinstance(payload, dict):
+        raise ValueError(f"metrics.json must be a JSON object; got {type(payload).__name__}")
+    if metric_key not in payload:
+        raise ValueError(f"{metric_key!r} not found in metrics.json (keys: {sorted(payload)})")
+    value = payload[metric_key]
+    if not isinstance(value, (int, float)):
+        raise ValueError(f"{metric_key!r} is non-numeric in metrics.json: {value!r}")
+    return float(value)
+
+
 def main(argv: list[str] | None = None) -> int:
-    """CLI: read the log path from argv, parse, and exit non-zero on failure.
+    """CLI: assert ``test/param_mse == 0.0`` against a log file or a metrics.json artifact.
+
+    Pass either the eval subprocess's captured log (default) or the JSON
+    artifact via ``--metrics-json``. Running both back-to-back from a
+    workflow asserts the invariant twice — once on the unstructured stdout
+    table, once on the structured artifact — so a regression in either
+    surface fails the gate.
 
     :param argv: Argument list excluding the program name; defaults to
         ``sys.argv[1:]``.
-    :returns: 0 when ``test/param_mse == 0.0`` exactly; 1 otherwise (also when
-        the metric is missing, non-numeric, or NaN).
+    :returns: 0 when ``test/param_mse == 0.0`` exactly; 1 otherwise.
     """
-    args = sys.argv[1:] if argv is None else argv
-    if len(args) != 1:
-        print("usage: assert_oracle_invariant <log-path>", file=sys.stderr)  # noqa: T201
-        return 1
-    log_path = Path(args[0])
+    parser = argparse.ArgumentParser(description=__doc__)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("log_path", nargs="?", type=Path, help="Path to the eval subprocess log.")
+    source.add_argument(
+        "--metrics-json",
+        type=Path,
+        help="Path to ``metrics/metrics.json`` written by ``cli/eval.py:_dump_metric_dict``.",
+    )
+    ns = parser.parse_args(argv)
+    source_path = ns.metrics_json if ns.metrics_json is not None else ns.log_path
+    source_label = "metrics.json" if ns.metrics_json is not None else "log"
+    parse = parse_metric_from_json if ns.metrics_json is not None else parse_metric_from_log
+
     try:
-        value = parse_metric_from_log(log_path.read_text())
+        value = parse(source_path.read_text())
     except (FileNotFoundError, ValueError) as exc:
-        print(f"FAIL: {exc}", file=sys.stderr)  # noqa: T201
+        print(f"FAIL ({source_label}): {exc}", file=sys.stderr)  # noqa: T201
         return 1
     if value != 0.0:
         print(  # noqa: T201
-            f"FAIL: test/param_mse={value!r}; oracle requires exact 0.0",
+            f"FAIL ({source_label}): test/param_mse={value!r}; oracle requires exact 0.0",
             file=sys.stderr,
         )
         return 1
-    print(f"PASS: test/param_mse={value}")  # noqa: T201
+    print(f"PASS ({source_label}): test/param_mse={value}")  # noqa: T201
     return 0
 
 

@@ -1,13 +1,15 @@
-"""Pin the log-parser used by the generate-finalize-oracle-eval workflow's gate."""
+"""Pin the log and metrics.json parsers used by the workflow gate."""
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
 from synth_setter.evaluation.assert_oracle_invariant import (
     main,
+    parse_metric_from_json,
     parse_metric_from_log,
 )
 
@@ -90,7 +92,64 @@ def test_main_exits_one_on_missing_log(tmp_path: Path) -> None:
     assert main([str(tmp_path / "missing.log")]) == 1
 
 
-def test_main_exits_one_on_wrong_argc() -> None:
-    """CLI returns 1 on missing or extra positional arguments rather than tracebacking."""
-    assert main([]) == 1
-    assert main(["a", "b"]) == 1
+def test_main_exits_nonzero_on_no_args() -> None:
+    """Argparse rejects the call with no source argument; CLI exits non-zero."""
+    with pytest.raises(SystemExit) as exc:
+        main([])
+    assert exc.value.code != 0
+
+
+def test_json_parser_extracts_metric() -> None:
+    """metrics.json key lookup returns the stored float without tensor / numpy coercion."""
+    payload = {"test/param_mse": 0.0, "test/per_param_mse": [0.0, 0.0, 0.0, 0.0]}
+    assert parse_metric_from_json(json.dumps(payload)) == 0.0
+
+
+def test_json_parser_raises_when_payload_is_not_dict() -> None:
+    """A JSON list at the top level isn't a metric dict and must fail the gate, not coerce."""
+    with pytest.raises(ValueError, match="must be a JSON object"):
+        parse_metric_from_json(json.dumps([1, 2, 3]))
+
+
+def test_json_parser_raises_when_key_missing() -> None:
+    """Missing ``test/param_mse`` key means eval never ran the test phase — surface the gap."""
+    with pytest.raises(ValueError, match="not found in metrics.json"):
+        parse_metric_from_json(json.dumps({"val/param_mse": 0.0}))
+
+
+def test_json_parser_raises_when_value_non_numeric() -> None:
+    """A non-numeric metric (e.g. NaN serialized as the string ``"NaN"``) is a parse failure."""
+    with pytest.raises(ValueError, match="non-numeric"):
+        parse_metric_from_json(json.dumps({"test/param_mse": "NaN"}))
+
+
+def test_main_metrics_json_mode_exits_zero_on_zero_metric(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``--metrics-json`` happy path: CLI returns 0 and reports the source label.
+
+    :param tmp_path: Holds the JSON fixture.
+    :param capsys: Captures the PASS line for source-label assertion.
+    """
+    metrics = tmp_path / "metrics.json"
+    metrics.write_text(json.dumps({"test/param_mse": 0.0}))
+    assert main(["--metrics-json", str(metrics)]) == 0
+    out = capsys.readouterr().out
+    assert "PASS" in out
+    assert "metrics.json" in out
+
+
+def test_main_metrics_json_mode_exits_one_on_nonzero_metric(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``--metrics-json`` failure path: CLI returns 1 and FAIL is tagged with the source.
+
+    :param tmp_path: Holds the JSON fixture.
+    :param capsys: Captures the FAIL line for source-label assertion.
+    """
+    metrics = tmp_path / "metrics.json"
+    metrics.write_text(json.dumps({"test/param_mse": 0.0001}))
+    assert main(["--metrics-json", str(metrics)]) == 1
+    err = capsys.readouterr().err
+    assert "FAIL" in err
+    assert "metrics.json" in err

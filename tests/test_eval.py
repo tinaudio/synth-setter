@@ -17,6 +17,7 @@ from omegaconf import DictConfig, OmegaConf, open_dict
 from synth_setter.cli import eval as eval_mod
 from synth_setter.cli.eval import (
     _COMPUTE_AUDIO_METRICS_MODULE,
+    _dump_metric_dict,
     _load_audio_metrics,
     _run_predict_postprocessing,
     evaluate,
@@ -76,6 +77,35 @@ def test_evaluate_runs_oracle_with_null_ckpt_path(
     assert param_mse.dtype.is_floating_point
     assert torch.isfinite(param_mse), f"oracle test/param_mse must be finite; got {param_mse!r}"
     assert param_mse.item() == 0.0
+
+
+def test_dump_metric_dict_writes_json_with_coerced_scalars(tmp_path: Path) -> None:
+    """Lightning tensors and numpy arrays are coerced to native floats / lists in ``metrics.json``.
+
+    Pins the artifact downstream gates (workflow asserter, CSV joiners) read from —
+    a torch / numpy dependency in those gates would force imports just to deserialize.
+
+    :param tmp_path: Hydra-style output dir; the ``metrics/`` subdir lands under it.
+    """
+    import json
+
+    import numpy as np
+
+    metric_dict = {
+        "test/param_mse": torch.tensor(0.0),
+        "test/per_param_mse": torch.tensor([0.0, 0.0, 0.0, 0.0]),
+        "audio/mss_mean": np.float32(0.5),
+        "raw/string": "v1",
+    }
+    out_path = _dump_metric_dict(metric_dict, tmp_path)
+
+    assert out_path == tmp_path / "metrics" / "metrics.json"
+    assert out_path.is_file()
+    payload = json.loads(out_path.read_text())
+    assert payload["test/param_mse"] == 0.0
+    assert payload["test/per_param_mse"] == [0.0, 0.0, 0.0, 0.0]
+    assert payload["audio/mss_mean"] == pytest.approx(0.5)
+    assert payload["raw/string"] == "v1"
 
 
 @pytest.mark.gpu
