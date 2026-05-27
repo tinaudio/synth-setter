@@ -80,6 +80,7 @@ _NON_SPEC_CFG_KEYS: tuple[str, ...] = (
     "hydra",
     "run_name",
     "skypilot_launch",
+    "finalize_inline",
 )
 
 
