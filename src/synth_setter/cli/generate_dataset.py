@@ -15,6 +15,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextlib import ExitStack
 from pathlib import Path
@@ -169,6 +170,7 @@ def generate(spec: DatasetSpec) -> None:
 
     r2_dest_prefix = spec.r2.rclone_prefix()
 
+    start = time.perf_counter()
     with tempfile.TemporaryDirectory() as work_dir_str:
         work_dir = Path(work_dir_str)
 
@@ -176,8 +178,15 @@ def generate(spec: DatasetSpec) -> None:
             rendered, skipped = _dispatch_shards_parallel(spec, my_range, work_dir, r2_dest_prefix)
         else:
             rendered, skipped = _dispatch_shards_serial(spec, my_range, work_dir, r2_dest_prefix)
+        elapsed_s = time.perf_counter() - start
+        samples = rendered * spec.render.samples_per_shard
+        rate = samples / elapsed_s if elapsed_s > 0 else 0.0
         logger.info(
             f"shard summary: rendered={rendered} skipped={skipped} of {len(my_range)} assigned"
+        )
+        logger.info(
+            f"generation speed: {samples} samples in {elapsed_s:.3f}s "
+            f"= {rate:.3f} samples/s (skipped shards excluded)"
         )
 
 
