@@ -2,10 +2,9 @@
 
 The frozen ``DatasetSpec`` is written to two well-known locations every run:
 
-  - local: ``<workspace>/data/<task_name>/<run_id>/metadata/input_spec.json``
-    (the runner anchors at ``_OPERATOR_WORKSPACE``; see
-    :func:`local_spec_path`'s ``output_dir`` parameter for why
-    ``cfg.paths.output_dir`` is not used)
+  - local: ``<output_dir>/data/<task_name>/<run_id>/metadata/input_spec.json``
+    where ``output_dir`` is ``cfg.paths.output_dir`` (the Hydra per-run dir,
+    resolved from ``${hydra:runtime.output_dir}``)
   - R2:    ``spec.r2.input_spec_uri()`` (see ``R2Location.input_spec_uri``)
 
 The local path anticipates the ``docs/design/storage-provenance-spec.md`` §3a
@@ -107,12 +106,10 @@ def local_spec_path(spec: DatasetSpec, output_dir: Path) -> Path:
 
     :param spec: The frozen DatasetSpec.
     :param output_dir: Operator-side artifact root. The runner
-        (``cli/generate_dataset.py::main()``) passes ``_OPERATOR_WORKSPACE`` —
-        ``cfg.paths.output_dir`` is pinned to the same value as a shim
-        for ``${hydra:runtime.output_dir}`` resolution, but is not the
-        anchor read back here.
+        (``cli/generate_dataset.py::main()``) passes
+        ``Path(cfg.paths.output_dir)`` — the Hydra per-run dir.
     :returns: ``<output_dir>/data/<task_name>/<run_id>/metadata/input_spec.json``
-        — i.e. ``<workspace>/data/...`` when invoked from the runner.
+        — i.e. under the Hydra per-run dir when invoked from the runner.
     """
     return (
         output_dir

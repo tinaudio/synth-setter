@@ -32,8 +32,8 @@ ______________________________________________________________________
 ```
 src/synth_setter/configs/experiment/generate_dataset/{id}.yaml → Hydra compose against src/synth_setter/configs/dataset.yaml
   → spec_from_cfg(cfg) → DatasetSpec (frozen, Pydantic, the spec ON R2)
-    → spec_io.write_spec_locally(spec, _OPERATOR_WORKSPACE)
-        → <workspace>/data/<task_name>/<run_id>/metadata/input_spec.json (operator-side artifact)
+    → spec_io.write_spec_locally(spec, Path(cfg.paths.output_dir))
+        → <hydra_output_dir>/data/<task_name>/<run_id>/metadata/input_spec.json (operator-side artifact)
     → r2_io.ensure_r2_env_loaded(sky_cfg.env_file)   (dotenv + auth ping)
     → spec_io.upload_spec(spec) → R2 at {r2.prefix}input_spec.json (one canonical write per main())
     → branch on sky_cfg.compute_template:
@@ -120,7 +120,7 @@ separate launcher invocation is involved.
 ```
 synth-setter-generate-dataset experiment=… skypilot_launch.compute_template=src/synth_setter/configs/compute/runpod-template.yaml
   → @hydra.main composes DictConfig → spec_from_cfg → DatasetSpec
-    → write_spec_locally(spec, _OPERATOR_WORKSPACE)
+    → write_spec_locally(spec, Path(cfg.paths.output_dir))
     → upload_spec(spec) → R2 at {r2.prefix}input_spec.json
     → sky_cfg.extra_envs["WORKER_SPEC_URI"] = spec.r2.input_spec_uri()
     → dispatch_via_skypilot(sky_cfg)

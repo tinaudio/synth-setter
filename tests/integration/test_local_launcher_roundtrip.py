@@ -363,3 +363,90 @@ def test_launcher_roundtrip_with_stubbed_renderer(
     assert renderer_invocations == 0, (
         f"skip-existing path failed: renderer was invoked {renderer_invocations}x on resume"
     )
+
+
+def test_subprocess_writes_spec_under_hydra_output_dir(
+    ci_r2_prefix: str,
+    tmp_path: Path,
+) -> None:
+    """Spawn the CLI as a real subprocess and pin the spec-mirror path.
+
+    Complements ``test_launcher_roundtrip_with_stubbed_renderer`` (which
+    runs ``gd.main()`` in-process) by exercising the real CLI binary
+    across a process boundary, which an in-process ``patch`` of
+    ``subprocess.check_call`` cannot reach. ``hydra.run.dir`` is pinned to
+    a known location under ``tmp_path`` so the spec-mirror file path is
+    deterministic; the negative assertion catches a silent re-introduction
+    of the operator-workspace anchor. The render subprocess crashes here
+    because the fixture ``TestPlugin.vst3`` is a moduleinfo-only bundle
+    with no loadable .so — the test pins behavior that happens before
+    render dispatch, so the returncode is intentionally not asserted.
+
+    :param ci_r2_prefix: Unique R2 prefix; finalizer purges it.
+    :param tmp_path: Pytest tmp dir; pinned as the Hydra run dir so the
+        timestamped default doesn't make filesystem assertions brittle.
+    """
+    from hydra import compose, initialize_config_module
+
+    import synth_setter.cli.generate_dataset as gd
+
+    fixed_created_at = datetime(2026, 5, 19, 0, 0, 0, tzinfo=timezone.utc).isoformat()
+    hydra_run_dir = tmp_path / "run"
+    overrides = [
+        "experiment=generate_dataset/smoke-shard",
+        f"render.plugin_path={TEST_PLUGIN_VST3}",
+        f"render.renderer_version={TEST_PLUGIN_VERSION}",
+        f"+r2.prefix={ci_r2_prefix}",
+        f"+created_at={fixed_created_at}",
+        f"hydra.run.dir={hydra_run_dir}",
+    ]
+
+    repo_root = Path(__file__).resolve().parents[2]
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(config_name="dataset", overrides=overrides)
+    cfg.paths.root_dir = str(repo_root)
+    cfg.paths.output_dir = str(hydra_run_dir)
+    cfg.paths.work_dir = str(repo_root)
+    expected_spec = gd.spec_from_cfg(cfg)
+
+    repo_data_path = repo_root / "data" / expected_spec.task_name / expected_spec.run_id
+    assert not repo_data_path.exists(), (
+        f"precondition: {repo_data_path} must not exist before the run "
+        "(otherwise the negative-pin assertion below is meaningless)"
+    )
+
+    env = {**os.environ, "SYNTH_SETTER_WORKER_RANK": "0", "SYNTH_SETTER_NUM_WORKERS": "1"}
+    result = subprocess.run(  # noqa: S603 — fixed argv; overrides are validated by Hydra.
+        [sys.executable, "-m", "synth_setter.cli.generate_dataset", *overrides],
+        cwd=repo_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=300,
+    )
+
+    spec_mirror = (
+        hydra_run_dir
+        / "data"
+        / expected_spec.task_name
+        / expected_spec.run_id
+        / "metadata"
+        / "input_spec.json"
+    )
+    # Spec mirror is written before generate() runs, so it must exist even if
+    # the subprocess later crashes during render — the fixture TestPlugin.vst3
+    # has no loadable .so. The diagnostic dump fires only when the mirror is
+    # missing, surfacing the real failure (e.g. spec write itself raised).
+    assert spec_mirror.is_file(), (
+        f"spec mirror not at expected path: {spec_mirror}\n"
+        f"subprocess returncode={result.returncode}\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    loaded = json.loads(spec_mirror.read_text())
+    assert loaded["task_name"] == expected_spec.task_name
+    assert loaded["run_id"] == expected_spec.run_id
+
+    assert not repo_data_path.exists(), (
+        f"operator-workspace anchor regression: subprocess wrote under {repo_data_path}"
+    )

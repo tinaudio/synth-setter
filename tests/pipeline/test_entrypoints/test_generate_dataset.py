@@ -1984,11 +1984,19 @@ class TestMainSpecPersistence:
         return template
 
     def test_main_writes_local_spec(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """``main()`` calls ``write_spec_locally`` with the composed spec + output_dir.
+        """``main()`` calls ``write_spec_locally`` with ``Path(cfg.paths.output_dir)``.
+
+        Pinned by cross-reference: ``main()`` passes the same value to both
+        ``write_spec_locally`` and ``generate()`` (the local-run shard
+        scratch dir), so equality with the captured ``generate`` arg
+        anchors the source without hard-coding the timestamped Hydra dir.
 
         :param monkeypatch: Pytest fixture used to patch ``sys.argv``.
         """
         import synth_setter.cli.generate_dataset as gd
+
+        generate_mock = MagicMock(return_value=None)
+        monkeypatch.setattr(gd, "generate", generate_mock)
 
         argv = [
             "synth-setter-generate-dataset",
@@ -2003,6 +2011,9 @@ class TestMainSpecPersistence:
         called_spec, called_out = gd.write_spec_locally.call_args[0]  # type: ignore[attr-defined]
         assert isinstance(called_spec, DatasetSpec)
         assert isinstance(called_out, Path)
+        generate_mock.assert_called_once()
+        _, generate_work_dir = generate_mock.call_args[0]
+        assert called_out == generate_work_dir
 
     def test_local_run_uploads_spec_from_main(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Local-run branch uploads the spec from ``main()`` exactly once.

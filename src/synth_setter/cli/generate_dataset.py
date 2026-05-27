@@ -57,9 +57,9 @@ _NON_SPEC_KEYS: tuple[str, ...] = (
     "oracle_eval_inline",
 )
 
-# Local spec-mirror anchor; ``operator_workspace()`` also publishes
-# ``PROJECT_ROOT`` so ``cfg.paths.*`` interpolations resolve under @hydra.main.
-_OPERATOR_WORKSPACE = operator_workspace()
+# Side effect only: publish ``PROJECT_ROOT`` so ``${oc.env:PROJECT_ROOT}``
+# in ``configs/paths/default.yaml`` resolves under @hydra.main compose.
+operator_workspace()
 
 # Worker-side checkout path — baked WORKDIR of the dev-snapshot image, not the
 # launcher's workspace (which may not exist on the worker filesystem).
@@ -544,10 +544,7 @@ def main(cfg: DictConfig) -> None:
                 "SurgeDataModule opens train.h5 / val.h5 / test.h5 unconditionally."
             )
 
-    # ``_OPERATOR_WORKSPACE`` is the launcher-side spec-mirror anchor; the
-    # Hydra per-run dir (``cfg.paths.output_dir``) is shard-scoped, not the
-    # operator-side artifact root.
-    spec_path = write_spec_locally(spec, _OPERATOR_WORKSPACE)
+    spec_path = write_spec_locally(spec, Path(cfg.paths.output_dir))
     logger.info(f"wrote local spec to {spec_path}")
 
     # Load + validate R2 creds once for the whole run, then upload the
@@ -568,9 +565,9 @@ def main(cfg: DictConfig) -> None:
     if sky_cfg.compute_template is None:
         generate(spec, Path(cfg.paths.output_dir))
         if cfg.finalize_inline:
-            finalize_from_spec(spec, _OPERATOR_WORKSPACE)
+            finalize_from_spec(spec, Path(cfg.paths.output_dir))
         if cfg.oracle_eval_inline:
-            eval_dir = _OPERATOR_WORKSPACE / "oracle_eval" / spec.run_id
+            eval_dir = Path(cfg.paths.output_dir) / "oracle_eval" / spec.run_id
             _download_finalized_splits(spec, eval_dir)
             _run_oracle_eval_subprocess(eval_dir)
         return
