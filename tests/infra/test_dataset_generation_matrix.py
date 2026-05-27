@@ -1,11 +1,13 @@
 """Static assertions on the test-dataset-generation workflow's matrix shape.
 
-The PR exercises both `hdf5` and `wds` shard formats through the same generate +
-validate plumbing. These tests parse `test-dataset-generation.yml` and assert
-that the `output_format` axis is wired into the `generate-launcher` strategy
-matrix, that cluster names are namespaced by `matrix.output_format` so the
-matrix cells don't collide on per-cell R2 prefixes, and that the validate
-job consumes the launcher's canonical `spec_uri` output.
+The workflow exercises both `hdf5` and `wds` shard formats through the same
+generate + validate plumbing. These tests parse `test-dataset-generation.yml`
+and assert that the `output_format` axis is wired into the `generate-launcher`
+strategy matrix, that cluster names are namespaced by `matrix.output_format` so
+the matrix cells don't collide on per-cell R2 prefixes, that the per-cell
+`run_id` formula reaches the launcher, and that the validate job reads its
+URI from the `setup.outputs.spec_uris` map keyed by `<provider>-<output_format>`
+(see #1154 for the matrix-output collapse the map routing dodges).
 
 Kept as a stand-alone YAML parse (no `act`) so the assertion runs on every CI
 worker without needing the `act` binary on PATH.
@@ -63,16 +65,63 @@ def test_generate_job_cluster_name_includes_output_format(workflow: dict, job_na
     )
 
 
-def test_validate_spec_uri_consumes_generate_launcher_output(workflow: dict) -> None:
-    """Assert the validate job's spec_uri reads from ``needs.generate-launcher.outputs.spec_uri``.
+def test_validate_spec_uri_indexes_setup_map_by_matrix_coords(workflow: dict) -> None:
+    """Validate cells must index ``setup.outputs.spec_uris`` by matrix coords.
+
+    Routing through the non-matrix ``setup`` output dodges the
+    ``needs.<matrix-job>.outputs.<x>`` scalar collapse documented at #1154;
+    per-cell pairing then holds because both the URI map and the per-cell
+    ``run_id`` formula encode the same ``<provider>-<output_format>`` coord.
 
     :param workflow: Parsed workflow YAML from the module-scoped fixture.
     """
     validate = workflow["jobs"]["validate"]
     spec_uri = validate["with"]["spec_uri"]
-    assert "needs.generate-launcher.outputs.spec_uri" in spec_uri, (
-        f"validate.with.spec_uri does not consume the launcher's canonical spec_uri output — "
-        f"got: {spec_uri!r}"
+    assert "fromJSON(needs.setup.outputs.spec_uris)" in spec_uri, (
+        "validate.with.spec_uri must read from the setup job's spec_uris map "
+        f"(non-matrix output) per #1154 — got: {spec_uri!r}"
+    )
+    assert "matrix.provider" in spec_uri and "matrix.output_format" in spec_uri, (
+        "validate.with.spec_uri must index the map by both matrix.provider and "
+        f"matrix.output_format so per-cell pairing holds — got: {spec_uri!r}"
+    )
+
+
+def test_generate_launcher_pins_run_id_per_cell(workflow: dict) -> None:
+    """Assert ``generate-launcher.with.run_id`` interpolates both matrix axes.
+
+    The per-cell ``run_id`` pin (threaded into the launcher as ``+run_id=<value>``)
+    must encode the same ``<provider>-<output_format>`` coordinate the validate
+    cell uses to index the spec_uris map, so generate and validate cells pair
+    on the same R2 prefix.
+
+    :param workflow: Parsed workflow YAML from the module-scoped fixture.
+    """
+    generate_launcher = workflow["jobs"]["generate-launcher"]
+    run_id = generate_launcher["with"]["run_id"]
+    assert "matrix.provider" in run_id and "matrix.output_format" in run_id, (
+        "generate-launcher.with.run_id must interpolate matrix.provider and "
+        f"matrix.output_format so each cell writes under its own R2 prefix — got: {run_id!r}"
+    )
+
+
+def test_setup_emits_spec_uris_map_output(workflow: dict) -> None:
+    """Assert `setup` emits a `spec_uris` output computed by `synth-setter-spec-uri`.
+
+    :param workflow: Parsed workflow YAML from the module-scoped fixture.
+    """
+    setup_job = workflow["jobs"]["setup"]
+    assert "spec_uris" in setup_job["outputs"], (
+        "setup.outputs is missing the `spec_uris` key the validate job indexes."
+    )
+    map_step = _find_step(setup_job["steps"], step_id="spec_uris")
+    run_script = map_step["run"]
+    assert "synth-setter-spec-uri" in run_script, (
+        "setup.spec_uris step must invoke synth-setter-spec-uri to derive each cell's URI."
+    )
+    assert "--from-experiment" in run_script and "--run-id-override" in run_script, (
+        "setup.spec_uris step must pass both --from-experiment and --run-id-override "
+        "to synth-setter-spec-uri so the URI derivation matches the launcher-side compose."
     )
 
 
