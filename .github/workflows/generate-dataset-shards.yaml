@@ -390,12 +390,14 @@ jobs:
       # (#843). The override array is built conditionally so optional flags
       # don't expand to empty strings.
       #
-      # `synth-setter-generate-dataset` writes the canonical spec to
-      # `<workspace>/data/<task>/<run>/metadata/input_spec.json` via
-      # `write_spec_locally` and uploads that exact file to R2 (single source of
-      # truth — both the spec_uri output and downstream validate consume the
-      # same run_id). The step output `spec_path` resolves that file so later
-      # steps don't have to repeat the glob.
+      # `synth-setter-generate-dataset` writes the canonical spec under
+      # `cfg.paths.output_dir` (the Hydra per-run dir). We pin
+      # `hydra.run.dir=/home/build/synth-setter/run` so the spec lands at a
+      # deterministic glob — `<workspace>/run/data/<task>/<run>/metadata/input_spec.json`
+      # — and uploads that exact file to R2 (single source of truth — both the
+      # spec_uri output and downstream validate consume the same run_id). The
+      # step output `spec_path` resolves that file so later steps don't have to
+      # repeat the glob.
       #
       # 40-min step cap accommodates the 8-cell render-matrix cells (#1204)
       # without leaving headroom-too-thin for a hung launcher to surface; the
@@ -442,12 +444,13 @@ jobs:
             OVERRIDES+=("${HYDRA_EXTRA[@]}")
           fi
           OVERRIDES+=("+run_id=$INPUT_RUN_ID")
+          OVERRIDES+=("hydra.run.dir=${GITHUB_WORKSPACE}/run")
           synth-setter-generate-dataset "${OVERRIDES[@]}" \
             2>&1 | tee "${RUN_METADATA_DIR}/generate.log"
           shopt -s nullglob
-          specs=("${GITHUB_WORKSPACE}"/data/*/*/metadata/input_spec.json)
+          specs=("${GITHUB_WORKSPACE}"/run/data/*/*/metadata/input_spec.json)
           if [[ "${#specs[@]}" -ne 1 ]]; then
-            echo "::error::expected exactly one materialized spec under data/*/*/metadata/, found ${#specs[@]}"
+            echo "::error::expected exactly one materialized spec under run/data/*/*/metadata/, found ${#specs[@]}"
             printf '%s\n' "${specs[@]}"
             exit 1
           fi
@@ -586,13 +589,14 @@ jobs:
                 "skypilot_launch.job_name=$CLUSTER_NAME" \
                 "skypilot_launch.worker_image_tag=$IMAGE_TAG" \
                 $LOCAL_OVERRIDE $NUM_WORKERS_OVERRIDE $TAIL_OVERRIDE $HYDRA_OVERRIDES_EXTRA \
-                "+run_id=$INPUT_RUN_ID"
+                "+run_id=$INPUT_RUN_ID" \
+                "hydra.run.dir=/home/build/synth-setter/run"
             ' \
             2>&1 | tee "${RUN_METADATA_DIR}/generate.log"
           shopt -s nullglob
-          specs=("${GITHUB_WORKSPACE}"/data/*/*/metadata/input_spec.json)
+          specs=("${GITHUB_WORKSPACE}"/run/data/*/*/metadata/input_spec.json)
           if [[ "${#specs[@]}" -ne 1 ]]; then
-            echo "::error::expected exactly one materialized spec under data/*/*/metadata/, found ${#specs[@]}"
+            echo "::error::expected exactly one materialized spec under run/data/*/*/metadata/, found ${#specs[@]}"
             printf '%s\n' "${specs[@]}"
             exit 1
           fi
@@ -691,7 +695,7 @@ jobs:
           name: ${{ inputs.artifact_name }}
           path: |
             /tmp/run-metadata-${{ inputs.provider }}/
-            ${{ github.workspace }}/data/*/*/metadata/input_spec.json
+            ${{ github.workspace }}/run/data/*/*/metadata/input_spec.json
           retention-days: 7
           if-no-files-found: warn
 
