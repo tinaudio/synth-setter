@@ -160,7 +160,8 @@ jobs:
               synth-setter-generate-dataset \
                 "experiment=${EXPERIMENT}" \
                 "++render.parallel=true" \
-                "task_name=${NIGHTLY_TASK_NAME}"
+                "task_name=${NIGHTLY_TASK_NAME}" \
+                "hydra.run.dir=/home/build/synth-setter/nightly-run"
             ' \
             2>&1 | tee "${RUN_METADATA_DIR}/generate.log"
           echo "run_metadata_dir=${RUN_METADATA_DIR}" >> "${GITHUB_OUTPUT}"
@@ -168,7 +169,9 @@ jobs:
       # Inline ``generate(spec)`` samples ``run_id`` from ``created_at``, so the
       # URI isn't reproducible from ``(experiment, run_id)`` alone. Read it from
       # the locally-written spec under
-      # ``<workspace>/data/<task_name>/<run_id>/metadata/input_spec.json``.
+      # ``<hydra.run.dir>/data/<task_name>/<run_id>/metadata/input_spec.json``
+      # — the previous step pins ``hydra.run.dir`` to ``nightly-run/`` so the
+      # glob is deterministic.
       # Hoist ``r2["bucket"]`` / ``r2["prefix"]`` to locals: Python <3.12 rejects
       # ``\"`` inside f-string parts, and the single-quoted heredoc forbids ``'``.
       - name: Resolve spec_uri from local materialized spec
@@ -178,9 +181,9 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          specs=("${GITHUB_WORKSPACE}/data/${NIGHTLY_TASK_NAME}"/*/metadata/input_spec.json)
+          specs=("${GITHUB_WORKSPACE}/nightly-run/data/${NIGHTLY_TASK_NAME}"/*/metadata/input_spec.json)
           if [[ "${#specs[@]}" -ne 1 ]]; then
-            echo "::error::expected exactly one materialized spec under data/${NIGHTLY_TASK_NAME}/*/metadata/, found ${#specs[@]}"
+            echo "::error::expected exactly one materialized spec under nightly-run/data/${NIGHTLY_TASK_NAME}/*/metadata/, found ${#specs[@]}"
             printf '%s\n' "${specs[@]}"
             exit 1
           fi

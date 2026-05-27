@@ -25,6 +25,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -409,11 +410,13 @@ def test_subprocess_writes_spec_under_hydra_output_dir(
     cfg.paths.work_dir = str(repo_root)
     expected_spec = gd.spec_from_cfg(cfg)
 
+    # Self-isolate: a prior run with the same pinned ``created_at`` (e.g. an
+    # earlier developer invocation under the old operator-workspace anchor)
+    # could have left this path on disk. Clear it so the post-run negative
+    # assertion is a meaningful pin of "no operator-workspace regression."
     repo_data_path = repo_root / "data" / expected_spec.task_name / expected_spec.run_id
-    assert not repo_data_path.exists(), (
-        f"precondition: {repo_data_path} must not exist before the run "
-        "(otherwise the negative-pin assertion below is meaningless)"
-    )
+    if repo_data_path.exists():
+        shutil.rmtree(repo_data_path)
 
     env = {**os.environ, "SYNTH_SETTER_WORKER_RANK": "0", "SYNTH_SETTER_NUM_WORKERS": "1"}
     result = subprocess.run(  # noqa: S603 — fixed argv; overrides are validated by Hydra.
