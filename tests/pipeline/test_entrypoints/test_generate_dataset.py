@@ -921,20 +921,12 @@ class TestRun:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """End-of-run summary reports samples/sec computed from ``rendered`` shards only.
+        """Speed log line counts only ``rendered`` shards, not skipped ones.
 
-        ``samples`` excludes shards that were skipped because they already
-        existed in R2 — the rate measures freshly produced work, not historical
-        output. The wallclock is read with ``time.perf_counter`` so a frozen
-        clock would surface as ``elapsed_s=0`` and a 0.0 rate fallback.
-
-        :param mock_logger: Patched ``generate_dataset.logger`` for capturing
-            the speed log line.
-        :param patched_subprocess: Fixture-activation only (renderer
-            materializes shards so rclone copies have a valid source).
-        :param tmp_path: Pytest tmp dir used by ``_multi_shard_spec``.
-        :param monkeypatch: Used to install the per-shard probe stub so one
-            shard is skipped and two are rendered.
+        :param mock_logger: Captures the speed log line's content.
+        :param patched_subprocess: Fixture-activation only.
+        :param tmp_path: Used by ``_multi_shard_spec``.
+        :param monkeypatch: Installs the probe stub that skips shard 0.
         """
         spec = _multi_shard_spec(tmp_path, n=3)
 
