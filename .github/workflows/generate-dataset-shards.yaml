@@ -225,14 +225,15 @@ jobs:
           echo "cluster_name: ${CLUSTER_NAME}"
 
       # `kind load` doubles the CUDA image into the kind node's snapshotter;
-      # peak host footprint is ~30 GB. Reclaim ~30 GB on `/` pre-pull.
-      # `tool-cache: true` deletes /opt/hostedtoolcache — setup-python below
-      # re-fetches Python (~20 s).
+      # peak host footprint is ~30 GB. Reclaim ~25 GB on `/` pre-pull.
+      # tool-cache stays off — deleting /opt/hostedtoolcache breaks the
+      # downstream `helm/kind-action` step (its tool-cache library expects
+      # the directory to exist, not just be empty).
       - name: Free disk space for kind load (skypilot-local row)
         if: ${{ inputs.provider == 'skypilot-local' }}
         uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
         with:
-          tool-cache: true
+          tool-cache: false
           android: true
           dotnet: true
           haskell: true
