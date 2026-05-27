@@ -528,6 +528,19 @@ def main(cfg: DictConfig) -> None:
     spec = spec_from_cfg(cfg)
     sky_cfg = _sky_cfg_from_dataset_cfg(cfg)
 
+    if sky_cfg.compute_template is None and cfg.oracle_eval_inline:
+        if not cfg.finalize_inline:
+            raise ValueError(
+                "oracle_eval_inline=true requires finalize_inline=true; "
+                "the inline oracle eval reads the {train,val,test}.h5 files "
+                "finalize uploads to R2."
+            )
+        if cfg.output_format != "hdf5":
+            raise ValueError(
+                "oracle_eval_inline=true only supports output_format=hdf5; "
+                f"got {cfg.output_format!r}."
+            )
+
     # ``_OPERATOR_WORKSPACE`` is the launcher-side spec-mirror anchor; the
     # Hydra per-run dir (``cfg.paths.output_dir``) is shard-scoped, not the
     # operator-side artifact root.
@@ -554,17 +567,6 @@ def main(cfg: DictConfig) -> None:
         if cfg.finalize_inline:
             finalize_from_spec(spec, _OPERATOR_WORKSPACE)
         if cfg.oracle_eval_inline:
-            if not cfg.finalize_inline:
-                raise ValueError(
-                    "oracle_eval_inline=true requires finalize_inline=true; "
-                    "the inline oracle eval reads the {train,val,test}.h5 files "
-                    "finalize uploads to R2."
-                )
-            if cfg.output_format != "hdf5":
-                raise ValueError(
-                    "oracle_eval_inline=true only supports output_format=hdf5; "
-                    f"got {cfg.output_format!r}."
-                )
             eval_dir = _OPERATOR_WORKSPACE / "oracle_eval" / spec.run_id
             _download_finalized_splits(spec, eval_dir)
             _run_oracle_eval_subprocess(eval_dir)

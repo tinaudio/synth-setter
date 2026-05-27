@@ -1761,14 +1761,15 @@ class TestMainDispatchBranches:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """``oracle_eval_inline=true`` without ``finalize_inline=true`` raises.
+        """Fail-fast guard: ``oracle_eval_inline=true`` without ``finalize_inline=true``.
 
-        Inline oracle eval consumes the finalized {train,val,test}.h5 files
-        finalize uploads to R2; running it without finalize would always
-        miss the splits. Surface that misconfiguration loudly.
+        Inline oracle eval reads the finalized ``{train,val,test}.h5`` files
+        finalize uploads; running without finalize would always miss them.
+        The guard fires up front so the operator doesn't pay generate's
+        render cost before the misconfig surfaces.
 
-        :param monkeypatch: Pytest fixture used to patch argv + the
-            ``generate`` / oracle-eval seams (asserted unreached).
+        :param monkeypatch: Patches argv and the ``generate`` / ``finalize_from_spec``
+            / oracle-eval seams; the test asserts none of them is reached.
         """
         import synth_setter.cli.generate_dataset as gd
 
@@ -1780,27 +1781,31 @@ class TestMainDispatchBranches:
         ]
         monkeypatch.setattr("sys.argv", argv)
         monkeypatch.setenv("HYDRA_FULL_ERROR", "1")
-        monkeypatch.setattr(gd, "generate", lambda _spec, _work_dir: None)
+        generate_mock = MagicMock()
+        finalize_mock = MagicMock()
         oracle_mock = MagicMock()
+        monkeypatch.setattr(gd, "generate", generate_mock)
+        monkeypatch.setattr(gd, "finalize_from_spec", finalize_mock)
         monkeypatch.setattr(gd, "_run_oracle_eval_subprocess", oracle_mock)
 
         with pytest.raises(ValueError, match="requires finalize_inline=true"):
             gd.main()
+        generate_mock.assert_not_called()
+        finalize_mock.assert_not_called()
         oracle_mock.assert_not_called()
 
     def test_main_oracle_eval_inline_rejects_wds(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """``oracle_eval_inline=true`` with ``output_format=wds`` raises.
+        """``oracle_eval_inline=true`` + ``output_format=wds`` raises before ``generate()``.
 
-        The oracle eval pipeline reads HDF5 split files; WDS shards aren't
-        consumed by the same datamodule. Reject at the launcher seam so
-        the failure surfaces before the (lengthy) eval subprocess fires.
+        The oracle eval datamodule reads HDF5 split files; WDS shards aren't
+        consumed by the same loader. The guard fires up front so neither
+        generate nor finalize run before the misconfig surfaces.
 
-        :param monkeypatch: Pytest fixture used to patch argv + the
-            ``generate`` / ``finalize_from_spec`` / oracle-eval seams
-            (asserted unreached).
+        :param monkeypatch: Patches argv and the ``generate`` / ``finalize_from_spec``
+            / oracle-eval seams; the test asserts none of them is reached.
         """
         import synth_setter.cli.generate_dataset as gd
 
@@ -1814,13 +1819,17 @@ class TestMainDispatchBranches:
         ]
         monkeypatch.setattr("sys.argv", argv)
         monkeypatch.setenv("HYDRA_FULL_ERROR", "1")
-        monkeypatch.setattr(gd, "generate", lambda _spec, _work_dir: None)
-        monkeypatch.setattr(gd, "finalize_from_spec", MagicMock())
+        generate_mock = MagicMock()
+        finalize_mock = MagicMock()
         oracle_mock = MagicMock()
+        monkeypatch.setattr(gd, "generate", generate_mock)
+        monkeypatch.setattr(gd, "finalize_from_spec", finalize_mock)
         monkeypatch.setattr(gd, "_run_oracle_eval_subprocess", oracle_mock)
 
         with pytest.raises(ValueError, match="only supports output_format=hdf5"):
             gd.main()
+        generate_mock.assert_not_called()
+        finalize_mock.assert_not_called()
         oracle_mock.assert_not_called()
 
     @patch("synth_setter.cli.generate_dataset.logger")
