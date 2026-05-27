@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from hydra import compose, initialize_config_module
+from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf, open_dict
 
@@ -19,7 +21,59 @@ from synth_setter.cli.eval import (
     evaluate,
 )
 from synth_setter.cli.train import train
+from synth_setter.data.vst import param_specs
+from synth_setter.workspace import operator_workspace
 from tests.helpers.run_if import RunIf
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+def test_evaluate_runs_oracle_with_null_ckpt_path(
+    tmp_path: Path,
+    surge_xt_smoke_datasets: Path,
+) -> None:
+    """``evaluate()`` runs the fake oracle on its untrained state when ``ckpt_path`` is ``None``.
+
+    ``ckpt_path=null`` must survive Hydra composition into ``evaluate()`` so the
+    inline oracle-eval path (generate-dataset finalize → ``synth-setter-eval``)
+    can probe a fresh model. The fake oracle returns ``batch["params"]``
+    verbatim, so ``test/param_mse`` collapses to exactly zero independent of
+    training state — that exact-zero is the load-bearing oracle invariant.
+
+    :param tmp_path: Per-test temp dir used as Hydra ``paths.output_dir`` /
+        ``paths.log_dir`` so the run writes nowhere durable.
+    :param surge_xt_smoke_datasets: Smoke-fixture directory holding
+        ``{train,val,test}.h5`` + ``stats.npz`` for ``data=surge``.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="eval.yaml",
+            return_hydra_config=True,
+            overrides=[
+                "experiment=surge/test-mps-fake-oracle",
+                "trainer=cpu",
+                f"model.net.d_out={len(param_specs['surge_4'])}",
+                "callbacks.log_per_param_mse.param_spec=surge_4",
+            ],
+        )
+
+    with open_dict(cfg):
+        cfg.paths.root_dir = str(operator_workspace())
+        cfg.paths.output_dir = str(tmp_path)
+        cfg.paths.log_dir = str(tmp_path)
+        cfg.data.dataset_root = str(surge_xt_smoke_datasets)
+        cfg.data.predict_file = str(surge_xt_smoke_datasets / "test.h5")
+        cfg.data.batch_size = 1
+        cfg.data.num_workers = 0
+        cfg.ckpt_path = None
+
+    HydraConfig().set_config(cfg)
+    try:
+        metric_dict, _ = evaluate(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert metric_dict["test/param_mse"].item() == 0.0
 
 
 @pytest.mark.gpu

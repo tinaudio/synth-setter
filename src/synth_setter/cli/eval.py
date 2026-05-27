@@ -182,15 +182,17 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     This method is wrapped in optional @task_wrapper decorator, that controls the behavior during
     failure. Useful for multiruns, saving info about the crash, etc.
 
-    :param cfg: DictConfig configuration composed by Hydra.
+    :param cfg: DictConfig configuration composed by Hydra. ``cfg.ckpt_path``
+        may be ``None`` — Lightning's ``trainer.test`` / ``validate`` /
+        ``predict`` accept that and evaluate the in-memory model, which the
+        ``surge/fake_oracle`` baseline relies on for inline oracle-eval after
+        ``generate_dataset`` finalize.
     :return: ``(metric_dict, object_dict)``. ``metric_dict`` is the
         ``trainer.callback_metrics`` copy merged with any audio metrics from
         :func:`_run_predict_postprocessing`; Lightning entries are ``torch.Tensor``
         while audio entries are Python ``float``, so callers iterating values
         must handle both.
     """
-    assert cfg.ckpt_path
-
     log.info(f"Instantiating datamodule <{cfg.data._target_}>")
     datamodule: LightningDataModule = hydra.utils.instantiate(cfg.data)
 
