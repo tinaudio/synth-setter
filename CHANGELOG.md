@@ -1,6 +1,100 @@
 # CHANGELOG
 
 
+## v8.9.0 (2026-05-27)
+
+### Features
+
+- **cli**: Log e2e sample generation speed (samples/s) in generate_dataset
+  ([#1304](https://github.com/tinaudio/synth-setter/pull/1304),
+  [`351cebb`](https://github.com/tinaudio/synth-setter/commit/351cebb6080e7b2083ea34266302d50f85bb9531))
+
+* feat(cli): log e2e generation speed (samples/s) in generate_dataset
+
+Wrap the dispatch loop in `time.perf_counter` and emit a per-rank speed line alongside the existing
+  shard summary. Samples count uses `rendered * spec.render.samples_per_shard` so
+  skipped-because-already-in-R2 shards don't inflate the rate.
+
+* chore(test): trim speed-log test docstring to one-line contract
+
+The original body restated information visible in the assertions and fixtures. Keeps the :param:
+  list pydoclint expects but cuts each line to load-bearing semantics only.
+
+* fix(cli): tighten wallclock span and rephrase speed-log suffix
+
+Address Copilot review on #1304: - Move ``start = time.perf_counter()`` inside the
+  ``TemporaryDirectory`` context so the measurement excludes tempdir setup. The R2 skip probes are
+  still inside the dispatch helpers, so the wallclock denominator still pays for them on resumed
+  runs. - Rephrase the parenthetical suffix from ``(skipped shards excluded)`` to ``(wallclock
+  includes R2 skip probes)`` so the message describes the measurement boundary instead of restating
+  the numerator.
+
+### Refactoring
+
+- **ci**: Drop spec-uri stdout sentinel, pin +run_id per cell
+  ([#1303](https://github.com/tinaudio/synth-setter/pull/1303),
+  [`96f2c64`](https://github.com/tinaudio/synth-setter/commit/96f2c64390cacd736e86c4a31043f5ab443356a8))
+
+* refactor(ci): drop spec-uri stdout sentinel, pin +run_id per cell
+
+Refs #1297; closes #1154.
+
+The CI workflow used to derive each cell's `spec_uri` by grepping a `::synth-setter-spec-uri::<uri>`
+  stdout sentinel out of the tee'd launcher log. With PR #1298's Hydra-compose mode landed, every
+  cell can re-derive the same canonical URI from `(experiment, run_id)` alone, so:
+
+* `cli/generate_dataset.py` no longer emits the sentinel (and `click` is no longer imported — that
+  was its sole consumer). * `generate-dataset-shards.yaml` accepts a new `run_id` workflow input,
+  threads it as a `+run_id=<value>` Hydra override into both the skypilot-local and runpod/oci
+  launcher invocations, and resolves the output `spec_uri` by shelling `synth-setter-spec-uri
+  --from-experiment ... --run-id-override ...` inside the dev-snapshot image. The stdout grep block
+  + sentinel-missing error branch are gone. * `test-dataset-generation.yml` precomputes a per-cell
+  URI map in `setup` keyed by `<provider>-<output_format>`, threads `run_id: ${{ github.run_id
+  }}-<provider>-<output_format>` into `generate-launcher`, and indexes the map for each `validate`
+  cell. Routing through `needs.setup` (non-matrix) sidesteps the matrix-output scalar collapse that
+  surfaced as #1154 — each validate cell now sees the URI its paired generate cell wrote.
+
+Two launcher tests that pinned the sentinel-not-emitted property and their duplicated module-level
+  constant are removed; one negation test on the `main()` side remains as a regression guard. Doc
+  references in github-actions.md, data-pipeline.md, and nightly-parallel-datagen.yml are updated to
+  describe the Hydra-compose derivation path.
+
+* refactor(ci): make run_id workflow_call optional + harden spec_uri map
+
+Pre-PR review-pass fixups:
+
+* `generate-dataset-shards.yaml` `workflow_call.inputs.run_id` is now optional with the same
+  auto-pinned fallback the `workflow_dispatch` surface uses. The two non-matrix callers
+  (`test-dataset-finalization`, `test-dataset-generation-render-matrix`) keep working without
+  per-cell threading. * `Compute per-cell spec_uri map` accumulates JSON rows into a tempfile
+  instead of a `$( { … } | jq -sc … )` substitution so `set -e` actually propagates a
+  `synth-setter-spec-uri` failure. Adds an empty-URI guard, a cardinality check against
+  `len(providers) * len(formats)`, and an `mktemp`/`trap rm` pair. * `Resolve spec_uri via
+  Hydra-compose` captures docker stderr to a tempfile and replays it on failure so a
+  `MissingConfigException` / `ValidationError` surfaces in the action log instead of collapsing to
+  the generic "returned an empty URI" line. * Inline comments and YAML input descriptions trimmed to
+  one-liners with `#1154` pointers; the negation test's docstring and the nightly workflow comment
+  lose their migration narration.
+
+* test(infra): pin validate.spec_uri reads from setup.spec_uris map
+
+* docs(ci): align test-dataset-generation header + storage-provenance with new spec_uri routing
+
+* refactor(ci): pin +run_id last, derive spec_uri from materialized file, include run_attempt
+
+Address Copilot review comments on #1303:
+
+* `+run_id=<value>` is now the last override in both launcher rows so a caller-supplied
+  `hydra_overrides` value can't shadow the per-cell pin. * `Resolve spec_uri` reads the URI from the
+  materialized `SPEC_PATH` (file mode: `synth-setter-spec-uri <path>`) instead of recomposing. The
+  output reflects whatever `(experiment, run_id, hydra_overrides)` combination the launcher actually
+  used; `run_id` is parsed from the URI's penultimate path segment. * Per-cell `run_id` formula in
+  `test-dataset-generation.yml` now incorporates `github.run_attempt` at both sites (the `setup`
+  job's spec_uri map AND `generate-launcher`'s `with.run_id`) so workflow reruns don't collide on
+  the same R2 prefix. * `docs/reference/github-actions.md` artifact name corrected to
+  `test-run-metadata-<provider>-<output_format>`.
+
+
 ## v8.8.0 (2026-05-27)
 
 ### Chores
