@@ -1,12 +1,13 @@
 """Spec-driven generate_dataset runner.
 
-Two console-script surfaces:
+Two ``@hydra.main`` console-script surfaces share the dataset config:
 
 - ``synth-setter-generate-dataset`` → :func:`main` — operator entry; runs the
   spec in-process or dispatches it to SkyPilot based on
   ``cfg.skypilot_launch.compute_template``.
 - ``synth-setter-generate-dataset-from-hydra`` → :func:`from_hydra` — worker
-  entry; pure ``@hydra.main`` re-compose so launcher/worker share argv.
+  entry; SkyPilot re-invokes it with the launcher's overrides replayed so
+  composition matches byte-for-byte.
 """
 
 from __future__ import annotations
@@ -116,30 +117,24 @@ def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -
 
 
 def generate(spec: DatasetSpec, work_dir: Path) -> None:
-    """Render+upload each owned shard; writes shards under ``work_dir``.
+    """Render+upload each owned shard; fail-fast on subprocess error.
 
-    ``work_dir`` is the Hydra per-run output dir supplied by the caller.
-    Spec upload no longer happens here — ``main()`` writes the canonical R2
-    copy once on the launcher host before either calling
-    ``generate(spec, work_dir)`` inline (local-run) or dispatching to a
-    SkyPilot worker pod that re-enters via
-    ``from_hydra`` → ``generate(spec, work_dir)``. Subprocesses fail-fast:
-    later shards are not attempted on subprocess error.
+    Before each render, R2 is probed for the shard's destination object: if it
+    already exists with non-zero size, the shard is skipped (resumability MVP
+    — see #750). The probe uses ``check=True``, so a non-zero rclone exit
+    (auth, network) propagates as a hard failure rather than degrading
+    silently into a re-render.
 
-    Before each render, R2 is probed for the shard's destination object: if it already exists with
-    non-zero size, the shard is skipped (resumability MVP — see #750). The probe uses
-    ``check=True``, so a non-zero rclone exit (auth, network) propagates as a hard failure rather
-    than degrading silently into a re-render.
+    The launcher builds the spec interpreter-only (no pedalboard / X11)
+    trusting ``configs/render/<spec>.yaml``; the worker — which has pedalboard
+    — verifies the plugin and the pinned ``renderer_version`` agree.
 
-    The launcher builds the spec interpreter-only (no pedalboard / X11) trusting
-    ``configs/render/<spec>.yaml``; this is where the worker — which has pedalboard
-    — verifies the plugin and pinned ``renderer_version`` agree.
-
-    :param spec: Validated dataset spec; rank/world env partitions ``spec.shards``
-        across worker pods, and ``spec.render.renderer_version`` is cross-checked
-        against the loaded plugin.
-    :param work_dir: Caller-supplied output dir (the Hydra per-run output dir);
-        created if missing. Shards are written here before the rclone upload.
+    :param spec: Validated dataset spec; rank/world env partitions
+        ``spec.shards`` across worker pods, and
+        ``spec.render.renderer_version`` is cross-checked against the loaded
+        plugin.
+    :param work_dir: Created if missing; peak local disk per rank scales with
+        ``len(my_range) * shard_size`` (shards persist after upload).
     :raises RuntimeError: If the worker's plugin version disagrees with
         ``spec.render.renderer_version``.
     """
@@ -167,8 +162,8 @@ def generate(spec: DatasetSpec, work_dir: Path) -> None:
     r2_dest_prefix = spec.r2.rclone_prefix()
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    # ``start`` brackets only the dispatch call so the rate still includes the
-    # in-loop R2 skip probes (observable cost of the resumability MVP, #750).
+    # ``start`` brackets only the dispatch call; the rate includes in-loop R2
+    # skip probes (observable cost of the resumability MVP, #750).
     start = time.perf_counter()
     if spec.render.parallel and len(my_range) > 0:
         rendered, skipped = _dispatch_shards_parallel(spec, my_range, work_dir, r2_dest_prefix)
@@ -235,7 +230,8 @@ def _dispatch_shards_parallel(
 
     :param spec: Validated dataset spec.
     :param my_range: Non-empty contiguous range of shard IDs owned by this rank.
-    :param work_dir: Hydra per-run output dir; every owned shard lands here.
+    :param work_dir: Hydra per-run output dir; up to ``workers`` shards are
+        actively being written here at once on top of the retained set.
     :param r2_dest_prefix: ``spec.r2.rclone_prefix()``.
     :returns: ``(rendered, skipped)`` summary counts over ``my_range``.
     """
@@ -445,6 +441,10 @@ def _build_worker_cmd(overrides: list[str], spec: DatasetSpec) -> str:
     :param spec: Launcher's ``DatasetSpec``; runtime fields are pinned into
         the worker overrides for compose determinism.
     :return: Bash one-liner suitable for use as a ``sky.Task`` ``run:`` block.
+        The worker's ``${hydra:runtime.output_dir}`` will not match the
+        launcher's — each side resolves its own timestamp via
+        ``configs/hydra/default.yaml``; that's intentional (each pod owns
+        its run dir).
     """
     pinned_overrides = [f"+created_at={spec.created_at.isoformat()}"]
     all_overrides = list(overrides) + pinned_overrides
@@ -469,21 +469,20 @@ def from_hydra(cfg: DictConfig) -> None:
 
 @hydra.main(version_base="1.3", config_path="pkg://synth_setter.configs", config_name="dataset")
 def main(cfg: DictConfig) -> None:
-    """Operator CLI: run the composed dataset spec locally or dispatch to SkyPilot.
+    """Persist the canonical spec to R2, then run locally or dispatch to SkyPilot.
 
-    Worker-side overrides are replayed verbatim under ``_build_worker_cmd`` so
-    the launcher/worker composition matches byte-for-byte; ``HydraConfig`` is
-    the authoritative source for the operator's task overrides.
+    Dispatches via SkyPilot when ``cfg.skypilot_launch.compute_template`` is
+    set; otherwise calls ``generate()`` inline.
 
-    :param cfg: Hydra-composed dataset cfg.
+    :param cfg: Hydra-composed dataset cfg; ``cfg.paths.output_dir`` is the
+        per-run dir supplied by ``@hydra.main``.
     """
     overrides = list(HydraConfig.get().overrides.task)
     spec = spec_from_cfg(cfg)
     sky_cfg = _sky_cfg_from_dataset_cfg(cfg)
 
-    # ``_OPERATOR_WORKSPACE`` is the launcher-side spec-mirror anchor; the
-    # Hydra per-run dir (``cfg.paths.output_dir``) is shard-scoped, not the
-    # operator-side artifact root.
+    # ``_OPERATOR_WORKSPACE`` (not ``cfg.paths.output_dir``) — the spec mirror
+    # is operator-side and outlives the Hydra per-run dir.
     spec_path = write_spec_locally(spec, _OPERATOR_WORKSPACE)
     logger.info(f"wrote local spec to {spec_path}")
 
