@@ -29,16 +29,22 @@ OVERRIDE_ARGS: list[str] = [
 ]
 
 
+# Bounded so a hung VST init or stalled R2 upload can't block CI indefinitely.
+_CLI_TIMEOUT_S = 600
+
+
 @pytest.mark.slow
 @pytest.mark.network
 @pytest.mark.r2
 @pytest.mark.requires_vst
-@pytest.mark.parametrize("override_args", OVERRIDE_ARGS, ids=lambda s: s or "<empty>")
+@pytest.mark.parametrize("override_args", OVERRIDE_ARGS)
 def test_generate_dataset_cli_accepts_overrides(override_args: str) -> None:
-    """Invoke the CLI with ``override_args`` and assert it exits 0.
+    """Assert the CLI exits 0 for each override string (shlex-split into argv tail).
 
-    :param override_args: Whitespace-separated override string passed straight
-        through to the CLI after ``shlex.split``.
+    :param override_args: argv tail after ``shlex.split``; may mix Hydra overrides and flags.
     """
     argv = [_ENTRYPOINT, *shlex.split(override_args)]
-    subprocess.run(argv, check=True)  # noqa: S603 — argv built from in-test literals
+    # capture_output so CalledProcessError surfaces the actual error on CI.
+    subprocess.run(  # noqa: S603 — argv built from in-test literals
+        argv, check=True, capture_output=True, text=True, timeout=_CLI_TIMEOUT_S
+    )
