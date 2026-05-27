@@ -25,6 +25,7 @@ from hydra.core.hydra_config import HydraConfig
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 
+from synth_setter.cli.finalize_dataset import finalize_from_spec
 from synth_setter.data.vst.core import extract_renderer_version
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.constants import WORKER_SPEC_URI_ENV
@@ -52,6 +53,7 @@ _NON_SPEC_KEYS: tuple[str, ...] = (
     "hydra",
     "run_name",
     "skypilot_launch",
+    "finalize_inline",
 )
 
 # Local spec-mirror anchor; ``operator_workspace()`` also publishes
@@ -504,7 +506,17 @@ def main(cfg: DictConfig) -> None:
 
     if sky_cfg.compute_template is None:
         generate(spec, Path(cfg.paths.output_dir))
+        if cfg.finalize_inline:
+            finalize_from_spec(spec, _OPERATOR_WORKSPACE)
         return
+
+    if cfg.finalize_inline:
+        logger.info(
+            "finalize_inline=true ignored: "
+            f"skypilot_launch.compute_template={sky_cfg.compute_template!r} "
+            "dispatches to a worker; finalize runs out-of-band via the "
+            "finalize-dataset workflow."
+        )
 
     # Deferred import — SkyPilot pulls heavy provider SDKs on import.
     from synth_setter.pipeline.skypilot_launch import dispatch_via_skypilot

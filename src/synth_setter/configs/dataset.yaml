@@ -29,6 +29,11 @@ base_seed: 42
 # bins instead of raising. Smoke configs override to ``true``.
 mask_degenerate_bins: false
 
+# Run synth-setter-finalize-dataset inline after generate completes.
+# Local-run path only; ignored (with an INFO log) when
+# skypilot_launch.compute_template is set.
+finalize_inline: false
+
 # Null default: ``DatasetSpec._drop_null_run_id`` mode='before' validator pops
 # a ``None`` ``run_id`` so the field's ``default_factory`` (``_default_run_id``)
 # fires from ``task_name`` + ``created_at``. Keeping the key present lets the

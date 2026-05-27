@@ -1518,6 +1518,131 @@ class TestMainDispatchBranches:
         with pytest.raises(ValueError, match="skypilot_launch.cmd is launcher-internal"):
             gd.main()
 
+    def test_main_finalize_inline_true_invokes_finalize_from_spec(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """finalize_inline=true on the local-run branch invokes finalize_from_spec.
+
+        Composes a real ``smoke-shard`` experiment with the new flag set,
+        stubs ``generate`` to a no-op, and replaces ``finalize_from_spec``
+        with a mock so the test pins the wire (call + spec identity)
+        without needing real rclone against a finalize-shaped remote. The
+        end-to-end marker upload is already covered by the Phase 1
+        ``test_finalize_from_spec_uploads_stats_then_marker_at_canonical_uris``
+        sibling test.
+
+        :param monkeypatch: Pytest fixture used to patch argv +
+            ``generate`` + ``finalize_from_spec``.
+        """
+        import synth_setter.cli.generate_dataset as gd
+
+        argv = [
+            "synth-setter-generate-dataset",
+            "experiment=generate_dataset/smoke-shard",
+            f"render.plugin_path={TEST_PLUGIN_VST3}",
+            "finalize_inline=true",
+        ]
+        monkeypatch.setattr("sys.argv", argv)
+
+        captured: dict[str, object] = {}
+
+        def _capture_spec(spec: object, _work_dir: Path) -> None:
+            captured["spec"] = spec
+
+        monkeypatch.setattr(gd, "generate", _capture_spec)
+        finalize_mock = MagicMock()
+        monkeypatch.setattr(gd, "finalize_from_spec", finalize_mock)
+
+        gd.main()
+
+        finalize_mock.assert_called_once()
+        called_spec, called_work_dir = finalize_mock.call_args[0]
+        assert isinstance(called_spec, DatasetSpec)
+        assert called_spec is captured["spec"]
+        assert isinstance(called_work_dir, Path)
+
+    def test_main_finalize_inline_default_false_skips_finalize(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Default ``finalize_inline=false`` leaves the existing local-run shape unchanged.
+
+        Pins the opt-in invariant — no finalize fires when the operator
+        omits the override.
+
+        :param monkeypatch: Pytest fixture used to patch argv +
+            ``generate`` + ``finalize_from_spec``.
+        """
+        import synth_setter.cli.generate_dataset as gd
+
+        argv = [
+            "synth-setter-generate-dataset",
+            "experiment=generate_dataset/smoke-shard",
+            f"render.plugin_path={TEST_PLUGIN_VST3}",
+        ]
+        monkeypatch.setattr("sys.argv", argv)
+        monkeypatch.setattr(gd, "generate", lambda _spec, _work_dir: None)
+        finalize_mock = MagicMock()
+        monkeypatch.setattr(gd, "finalize_from_spec", finalize_mock)
+
+        gd.main()
+
+        finalize_mock.assert_not_called()
+
+    @patch("synth_setter.cli.generate_dataset.logger")
+    def test_main_finalize_inline_ignored_in_dispatch_branch(
+        self,
+        mock_logger: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """finalize_inline=true is ignored (with INFO log) when dispatching to SkyPilot.
+
+        SkyPilot delegation hands the run to a worker pod; finalize must
+        run out-of-band via the finalize-dataset workflow rather than fire
+        from the launcher process. Pins both halves: ``finalize_from_spec``
+        is not called, and an INFO log line mentions the override was ignored.
+
+        :param mock_logger: Patched ``generate_dataset.logger`` — the
+            established loguru capture pattern in this file.
+        :param monkeypatch: Pytest fixture used to patch argv + dispatch +
+            ``finalize_from_spec`` (asserted unreached).
+        :param tmp_path: Pytest fixture providing a fresh test directory for
+            the minimal compute template.
+        """
+        import synth_setter.cli.generate_dataset as gd
+        import synth_setter.pipeline.skypilot_launch as sl
+
+        template = tmp_path / "template.yaml"
+        template.write_text("resources:\n  cloud: runpod\nenvs:\n  X: ''\n")
+        argv = [
+            "synth-setter-generate-dataset",
+            "experiment=generate_dataset/smoke-shard",
+            f"render.plugin_path={TEST_PLUGIN_VST3}",
+            f"skypilot_launch.compute_template={template}",
+            "finalize_inline=true",
+        ]
+        monkeypatch.setattr("sys.argv", argv)
+        monkeypatch.setattr(sl, "dispatch_via_skypilot", lambda *_a, **_k: None)
+        monkeypatch.setattr(
+            gd,
+            "generate",
+            lambda *_a, **_k: pytest.fail("generate must not fire on dispatch branch"),
+        )
+        finalize_mock = MagicMock()
+        monkeypatch.setattr(gd, "finalize_from_spec", finalize_mock)
+
+        gd.main()
+
+        finalize_mock.assert_not_called()
+        info_messages = [str(c.args[0]) for c in mock_logger.info.call_args_list]
+        ignored_lines = [m for m in info_messages if "finalize_inline=true ignored" in m]
+        assert len(ignored_lines) == 1, (
+            f"expected exactly one INFO log mentioning 'finalize_inline=true ignored'; "
+            f"got messages: {info_messages!r}"
+        )
+
 
 class TestMainSpecPersistence:
     """``main()`` writes the local spec, loads R2 env, uploads the canonical spec on every path.
