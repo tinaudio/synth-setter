@@ -1651,15 +1651,11 @@ class TestMainDispatchBranches:
     ) -> None:
         """oracle_eval_inline=true on the local-run branch shells out to synth-setter-eval.
 
-        Stubs ``generate`` + ``finalize_from_spec`` + ``_download_finalized_splits``
-        and patches ``_run_oracle_eval_subprocess`` to capture its
-        ``dataset_root`` argument. Asserts the eval helper fires exactly
-        once with a path under ``_OPERATOR_WORKSPACE/oracle_eval/<run_id>/``.
-        The argv shape itself is pinned by
-        ``test_run_oracle_eval_subprocess_builds_expected_argv``.
+        Asserts the eval helper fires once with ``dataset_root`` under
+        ``_OPERATOR_WORKSPACE/oracle_eval/<run_id>/`` and that
+        ``_download_finalized_splits`` populates the same path first.
 
-        :param monkeypatch: Pytest fixture used to patch argv + the four
-            module-level seams.
+        :param monkeypatch: Patches argv + the four module-level seams.
         """
         import synth_setter.cli.generate_dataset as gd
 
@@ -1701,15 +1697,12 @@ class TestMainDispatchBranches:
     ) -> None:
         """Helper subprocesses ``synth_setter.cli.eval`` with the contract argv.
 
-        Pins the exact argv shape the inline oracle eval depends on:
-        ``-m synth_setter.cli.eval``, ``experiment=surge/fake_oracle``,
-        ``ckpt_path=null``, ``mode=test``, and a ``data.dataset_root=``
-        argument carrying the caller-supplied path. Runs the helper
-        directly (no Hydra compose) so the test is insulated from
-        cfg-resolution noise.
+        Pins the load-bearing overrides (``experiment=surge/fake_oracle``,
+        ``data.dataset_root``, ``ckpt_path=null``, ``mode=test``). Runs the
+        helper directly so cfg-resolution noise can't mask an argv drift.
 
-        :param monkeypatch: Used to patch the module's ``subprocess.run``.
-        :param tmp_path: Standin for the finalize download directory.
+        :param monkeypatch: Patches the module's ``subprocess.run``.
+        :param tmp_path: Stands in for the finalize download directory.
         """
         import synth_setter.cli.generate_dataset as gd
 
@@ -1731,13 +1724,9 @@ class TestMainDispatchBranches:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Default ``oracle_eval_inline=false`` leaves the eval subprocess unfired.
+        """Opt-in invariant: default false ⇒ neither download nor eval subprocess fires.
 
-        Pins the opt-in invariant: omitting the override never triggers a
-        synth-setter-eval subprocess, even when ``finalize_inline=true``.
-
-        :param monkeypatch: Pytest fixture used to patch argv + the
-            ``generate`` / ``finalize_from_spec`` / oracle-eval seams.
+        :param monkeypatch: Patches argv + the four module-level seams.
         """
         import synth_setter.cli.generate_dataset as gd
 
@@ -1750,11 +1739,14 @@ class TestMainDispatchBranches:
         monkeypatch.setattr("sys.argv", argv)
         monkeypatch.setattr(gd, "generate", lambda _spec, _work_dir: None)
         monkeypatch.setattr(gd, "finalize_from_spec", MagicMock())
+        download_mock = MagicMock()
         oracle_mock = MagicMock()
+        monkeypatch.setattr(gd, "_download_finalized_splits", download_mock)
         monkeypatch.setattr(gd, "_run_oracle_eval_subprocess", oracle_mock)
 
         gd.main()
 
+        download_mock.assert_not_called()
         oracle_mock.assert_not_called()
 
     def test_main_oracle_eval_inline_requires_finalize_inline(
@@ -1839,19 +1831,17 @@ class TestMainDispatchBranches:
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
     ) -> None:
-        """``oracle_eval_inline=true`` is ignored (with INFO log) on the dispatch branch.
+        """Dispatch branch: ``oracle_eval_inline=true`` is logged-and-ignored, not raised.
 
-        SkyPilot delegation hands the run to a worker pod; the oracle eval
-        runs out-of-band via its own workflow rather than fire from the
-        launcher process. Pins both halves: the eval subprocess is not
-        called, and an INFO log line mentions the override was ignored.
+        SkyPilot hands the run to a worker pod; oracle eval runs out-of-band
+        via its own workflow. Asserts no eval subprocess fires and the INFO
+        log mentions the override was ignored.
 
         :param mock_logger: Patched ``generate_dataset.logger`` — the
             established loguru capture pattern in this file.
-        :param monkeypatch: Pytest fixture used to patch argv + dispatch +
-            the oracle-eval seam (asserted unreached).
-        :param tmp_path: Pytest fixture providing a fresh test directory for
-            the minimal compute template.
+        :param monkeypatch: Patches argv + dispatch + the oracle-eval seam.
+        :param tmp_path: Holds the minimal compute template the dispatch
+            branch reads from disk.
         """
         import synth_setter.cli.generate_dataset as gd
         import synth_setter.pipeline.skypilot_launch as sl
