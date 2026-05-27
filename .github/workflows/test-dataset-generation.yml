@@ -290,7 +290,7 @@ jobs:
           FORMATS_JSON: ${{ steps.matrix.outputs.output_formats }}
           EVENT_NAME: ${{ github.event_name }}
           DISPATCH_DATASET_CONFIG: ${{ inputs.dataset_config || 'generate_dataset/smoke-shard' }}
-          RUN_ID_BASE: ${{ github.run_id }}
+          RUN_ID_BASE: ${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
           providers_n=$(printf '%s' "$PROVIDERS_JSON" | jq 'length')
@@ -366,7 +366,7 @@ jobs:
       tail: true
       local: ${{ matrix.provider == 'skypilot-local' }}
       artifact_name: test-run-metadata-${{ matrix.provider }}-${{ matrix.output_format }}
-      run_id: ${{ github.run_id }}-${{ matrix.provider }}-${{ matrix.output_format }}
+      run_id: ${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.provider }}-${{ matrix.output_format }}
     secrets: inherit
 
   # Each validate cell reads its own spec_uri from `needs.setup.outputs.spec_uris`

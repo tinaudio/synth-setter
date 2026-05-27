@@ -427,7 +427,6 @@ jobs:
             "skypilot_launch.compute_template=src/synth_setter/configs/compute/local-template.yaml"
             "skypilot_launch.job_name=$CLUSTER_NAME"
             "skypilot_launch.worker_image_tag=$IMAGE_TAG"
-            "+run_id=$INPUT_RUN_ID"
           )
           if [[ "$INPUT_LOCAL" == "true" ]]; then
             OVERRIDES+=("skypilot_launch.local=true")
@@ -442,6 +441,7 @@ jobs:
             read -ra HYDRA_EXTRA <<< "$INPUT_HYDRA_OVERRIDES"
             OVERRIDES+=("${HYDRA_EXTRA[@]}")
           fi
+          OVERRIDES+=("+run_id=$INPUT_RUN_ID")
           synth-setter-generate-dataset "${OVERRIDES[@]}" \
             2>&1 | tee "${RUN_METADATA_DIR}/generate.log"
           shopt -s nullglob
@@ -585,8 +585,8 @@ jobs:
                 "skypilot_launch.compute_template=$TEMPLATE" \
                 "skypilot_launch.job_name=$CLUSTER_NAME" \
                 "skypilot_launch.worker_image_tag=$IMAGE_TAG" \
-                "+run_id=$INPUT_RUN_ID" \
-                $LOCAL_OVERRIDE $NUM_WORKERS_OVERRIDE $TAIL_OVERRIDE $HYDRA_OVERRIDES_EXTRA
+                $LOCAL_OVERRIDE $NUM_WORKERS_OVERRIDE $TAIL_OVERRIDE $HYDRA_OVERRIDES_EXTRA \
+                "+run_id=$INPUT_RUN_ID"
             ' \
             2>&1 | tee "${RUN_METADATA_DIR}/generate.log"
           shopt -s nullglob
@@ -614,40 +614,45 @@ jobs:
           echo "=== Materialized Spec (${PROVIDER}) ==="
           head -20 "${SPEC_PATH}"
 
-      # Re-derive spec_uri from `(experiment, run_id)` via the same Hydra
-      # cfg the launcher just composed — see #1154 for the matrix-output
-      # collapse this routes around. Runs inside the dev-snapshot image so
-      # both the skypilot-local (host-installed) and runpod/oci (image-only)
-      # rows share one resolution path.
-      - name: Resolve spec_uri via Hydra-compose
+      # Read spec_uri straight off the materialized `SPEC_PATH` — the same
+      # file `write_spec_locally` wrote and `upload_spec` pushed to R2 — so
+      # the output reflects whatever `(experiment, run_id, hydra_overrides)`
+      # the launcher actually composed (not just what we passed). `run_id`
+      # is the URI's penultimate path segment, per the
+      # `data/<task>/<run_id>/input_spec.json` shape `make_r2_prefix`
+      # produces. Runs inside the dev-snapshot image with the workspace
+      # mounted so the host SPEC_PATH translates cleanly to a container path.
+      - name: Resolve spec_uri from materialized spec
         id: spec_uri
         env:
-          EXPERIMENT: ${{ inputs.dataset_config }}
-          RUN_ID_OVERRIDE: ${{ inputs.run_id || format('{0}-{1}', github.run_id, github.run_attempt) }}
+          SPEC_PATH: ${{ steps.gen_local.outputs.spec_path || steps.gen_docker.outputs.spec_path }}
         run: |
           set -euo pipefail
+          rel="${SPEC_PATH#${GITHUB_WORKSPACE}/}"
           err=$(mktemp)
           trap 'rm -f "$err"' EXIT
           if ! SPEC_URI=$(docker run --rm \
-              -e EXPERIMENT \
-              -e RUN_ID_OVERRIDE \
+              -v "${GITHUB_WORKSPACE}:/home/build/synth-setter:ro" \
               "${IMAGE}" \
-              synth-setter-spec-uri \
-                --from-experiment "$EXPERIMENT" \
-                --run-id-override "$RUN_ID_OVERRIDE" 2>"$err"); then
-            echo "::error::synth-setter-spec-uri failed for experiment=${EXPERIMENT} run_id=${RUN_ID_OVERRIDE}"
+              synth-setter-spec-uri "/home/build/synth-setter/${rel}" 2>"$err"); then
+            echo "::error::synth-setter-spec-uri failed to derive URI from ${SPEC_PATH}"
             cat "$err" >&2 || true
             exit 1
           fi
           if [[ -z "${SPEC_URI}" ]]; then
-            echo "::error::synth-setter-spec-uri returned an empty URI for experiment=${EXPERIMENT} run_id=${RUN_ID_OVERRIDE}"
+            echo "::error::synth-setter-spec-uri returned an empty URI for ${SPEC_PATH}"
             cat "$err" >&2 || true
             exit 1
           fi
+          RUN_ID=$(printf '%s\n' "${SPEC_URI}" | awk -F/ '{print $(NF-1)}')
+          if [[ -z "${RUN_ID}" ]]; then
+            echo "::error::could not parse run_id from spec_uri=${SPEC_URI}"
+            exit 1
+          fi
           echo "spec_uri=${SPEC_URI}" >> "${GITHUB_OUTPUT}"
-          echo "run_id=${RUN_ID_OVERRIDE}" >> "${GITHUB_OUTPUT}"
+          echo "run_id=${RUN_ID}" >> "${GITHUB_OUTPUT}"
           echo "spec_uri: ${SPEC_URI}"
-          echo "run_id: ${RUN_ID_OVERRIDE}"
+          echo "run_id: ${RUN_ID}"
 
       # Always validate the freshly-uploaded shards against the
       # `check_shard_contracts` contract before this workflow returns.
