@@ -169,6 +169,8 @@ jobs:
       # URI isn't reproducible from ``(experiment, run_id)`` alone. Read it from
       # the locally-written spec under
       # ``<workspace>/data/<task_name>/<run_id>/metadata/input_spec.json``.
+      # Hoist ``r2["bucket"]`` / ``r2["prefix"]`` to locals: Python <3.12 rejects
+      # ``\"`` inside f-string parts, and the single-quoted heredoc forbids ``'``.
       - name: Resolve spec_uri from local materialized spec
         id: spec_uri
         env:
@@ -185,9 +187,9 @@ jobs:
           SPEC_PATH="${specs[0]}"
           SPEC_URI=$(python3 -c '
           import json, sys
-          spec = json.load(open(sys.argv[1]))
-          r2 = spec["r2"]
-          print(f"r2://{r2[\"bucket\"]}/{r2[\"prefix\"]}input_spec.json")
+          r2 = json.load(open(sys.argv[1]))["r2"]
+          bucket, prefix = r2["bucket"], r2["prefix"]
+          print(f"r2://{bucket}/{prefix}input_spec.json")
           ' "${SPEC_PATH}")
           R2_PREFIX=$(python3 -c '
           import json, sys
