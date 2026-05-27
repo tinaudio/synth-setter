@@ -155,30 +155,26 @@ def finalize_hdf5(spec: DatasetSpec, work_dir: Path) -> None:
     logger.info("uploaded stats to {}", spec.r2.stats_uri())
 
 
-def finalize(cfg: DictConfig) -> None:
-    """Finalize the R2 prefix for ``cfg.dataset_spec_uri``; idempotent on ``dataset.complete``.
+def finalize_from_spec(spec: DatasetSpec, work_dir: Path) -> None:
+    """Finalize a dataset given an in-memory spec; idempotent on ``dataset.complete``.
 
     Returns without work when the marker already exists at the run prefix —
     R2 is the source of truth (per ``pipeline/CLAUDE.md``). The branch on
     ``spec.output_format`` writes the derived artifacts; the marker is
     uploaded strictly last so an interrupted run never advertises artifacts
-    that have not landed.
+    that have not landed. Caller is responsible for ensuring R2 creds are
+    loaded.
 
-    :param cfg: Composed cfg with ``dataset_spec_uri`` (URI accepted by
-        :func:`~synth_setter.pipeline.spec_io.load_spec_from_uri`) and
-        ``paths.output_dir`` (writable scratch dir; created if missing;
-        retained after the call, multi-GB on the hdf5 branch).
+    :param spec: Validated dataset spec.
+    :param work_dir: Writable scratch dir; created if missing; retained
+        after the call (multi-GB on the hdf5 branch).
     :raises ValueError: ``spec.output_format`` is neither ``"hdf5"`` nor ``"wds"``.
     """
-    r2_io.ensure_r2_env_loaded()
-    spec = load_spec_from_uri(cfg.dataset_spec_uri)
-
     marker_uri = spec.r2.dataset_complete_marker_uri()
     if r2_io.object_size(marker_uri) is not None:
         logger.info("skip: {} already exists, run is finalized", marker_uri)
         return
 
-    work_dir = Path(cfg.paths.output_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
     if spec.output_format == "wds":
         finalize_wds(spec, work_dir)
@@ -191,6 +187,23 @@ def finalize(cfg: DictConfig) -> None:
     marker_local.touch()
     r2_io.upload(marker_local, marker_uri)
     logger.info("wrote dataset.complete to {}", marker_uri)
+
+
+def finalize(cfg: DictConfig) -> None:
+    """Finalize the R2 prefix for ``cfg.dataset_spec_uri``; idempotent on ``dataset.complete``.
+
+    Loads R2 creds and the spec from ``cfg.dataset_spec_uri``, then delegates
+    to :func:`finalize_from_spec` for the marker-probe → dispatch → marker-upload
+    body.
+
+    :param cfg: Composed cfg with ``dataset_spec_uri`` (URI accepted by
+        :func:`~synth_setter.pipeline.spec_io.load_spec_from_uri`) and
+        ``paths.output_dir`` (writable scratch dir; created if missing;
+        retained after the call, multi-GB on the hdf5 branch).
+    """
+    r2_io.ensure_r2_env_loaded()
+    spec = load_spec_from_uri(cfg.dataset_spec_uri)
+    finalize_from_spec(spec, Path(cfg.paths.output_dir))
 
 
 @hydra.main(

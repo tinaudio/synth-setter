@@ -242,6 +242,53 @@ def test_finalize_uploads_stats_then_marker_at_canonical_uris(
     assert upload_order.index(stats_uri) < upload_order.index(marker_uri)
 
 
+def test_finalize_from_spec_uploads_stats_then_marker_at_canonical_uris(
+    tmp_path: Path,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001 — installs stubs only
+) -> None:
+    """``finalize_from_spec`` honors the marker-last ordering without re-loading the spec.
+
+    Mirrors ``test_finalize_uploads_stats_then_marker_at_canonical_uris`` but
+    calls the in-memory entry point directly — no ``cfg`` synthesis, no
+    ``load_spec_from_uri`` round-trip — so the inline path
+    (``generate_dataset.main`` will reuse) is pinned independently of the
+    URI-driven entry point.
+
+    :param tmp_path: Hosts the Hydra-style work_dir.
+    :param fake_r2_remote: Local-typed rclone remote; both artifacts land here.
+    :param monkeypatch: Pytest fixture used to wrap ``synth_setter.pipeline.r2_io.upload``
+        with an order-recording spy that still delegates to the real helper.
+    :param stub_finalize_setup: Fixture-activation only — installs the
+        ``ensure_r2_env_loaded`` / ``object_size`` stubs.
+    """
+    spec = _build_wds_smoke_spec(task_name="finalize-from-spec-marker-last")
+    _seed_train_shards(fake_r2_remote, spec)
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+
+    real_upload = r2_io.upload
+    upload_order: list[str] = []
+
+    def spy_upload(src: str | Path, dst: str) -> None:
+        upload_order.append(dst)
+        real_upload(src, dst)
+
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.upload", spy_upload)
+
+    finalize_dataset.finalize_from_spec(spec, work_dir)
+
+    stats_uri = spec.r2.stats_uri()
+    marker_uri = spec.r2.dataset_complete_marker_uri()
+    assert _uri_to_local_path(fake_r2_remote, stats_uri).is_file()
+    assert _uri_to_local_path(fake_r2_remote, marker_uri).is_file()
+    assert upload_order.count(stats_uri) == 1
+    assert upload_order.count(marker_uri) == 1
+    assert upload_order.index(marker_uri) == len(upload_order) - 1
+    assert upload_order.index(stats_uri) < upload_order.index(marker_uri)
+
+
 def test_finalize_is_idempotent_when_marker_already_exists(
     tmp_path: Path,
     fake_r2_remote: Path,
