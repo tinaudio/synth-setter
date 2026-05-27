@@ -1142,39 +1142,38 @@ class TestRun:
         assert renderer_calls == 3
         assert not (fake_r2_remote / spec.r2.bucket / spec.r2.prefix).exists()
 
-    def test_shard_lands_in_work_dir_before_upload(
+    def test_each_shard_lands_in_work_dir_before_its_upload(
         self,
         patched_subprocess: MagicMock,  # noqa: ARG002
-        spec: DatasetSpec,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Caller-supplied ``work_dir`` hosts the rendered shard at the upload boundary.
+        """Every owned shard exists at ``work_dir / shard.filename`` when its upload fires.
 
-        Stubs ``_rclone_copy`` to snapshot the source path and its on-disk
-        existence at the upload moment — proving the shard landed at
-        ``work_dir / shard.filename`` before the upload runs.
+        Stubs ``_rclone_copy`` to snapshot the source path + existence at
+        each upload moment. Asserts the invariant across a 3-shard spec —
+        catches a regression where only the first shard lands before
+        upload (single-shard coverage misses that class of bug).
 
         :param patched_subprocess: Fixture-activation only; renderer side of the
-            dispatcher materializes the shard file into ``work_dir``.
-        :param spec: Fixture-provided single-shard ``DatasetSpec``.
-        :param tmp_path: Caller-supplied work_dir for this run.
+            dispatcher materializes each shard file into ``work_dir``.
+        :param tmp_path: Doubles as the ``work_dir`` passed to ``generate``.
         :param monkeypatch: Used to install the rclone-stub that captures the
-            shard path + existence at the upload moment.
+            shard path + existence at every upload moment.
         """
-        captured: dict[str, object] = {}
+        spec = _multi_shard_spec(tmp_path, n=3)
+        captured: list[tuple[Path, bool]] = []
 
         def _capture_src(src: str, _dest: str) -> None:
             src_path = Path(src)
-            captured["src"] = src_path
-            captured["existed_at_upload"] = src_path.is_file()
+            captured.append((src_path, src_path.is_file()))
 
         monkeypatch.setattr("synth_setter.cli.generate_dataset._rclone_copy", _capture_src)
 
         generate(spec, tmp_path)
 
-        assert captured["src"] == tmp_path / spec.shards[0].filename
-        assert captured["existed_at_upload"] is True
+        assert [src for src, _ in captured] == [tmp_path / s.filename for s in spec.shards]
+        assert all(existed for _, existed in captured)
 
 
 # ---------------------------------------------------------------------------
@@ -1820,18 +1819,24 @@ class TestMainHydraOutputDir:
         )
         monkeypatch.setattr(gd.r2_io, "ensure_r2_env_loaded", MagicMock(return_value=None))
 
-    def test_main_resolves_output_dir_under_hydra_main(
-        self, monkeypatch: pytest.MonkeyPatch
+    def test_main_forwards_hydra_per_run_dir_into_generate(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """Inside main(), cfg.paths.output_dir equals HydraConfig.get().runtime.output_dir.
+        """``main()`` feeds the Hydra per-run output dir into ``generate(spec, work_dir)``.
 
-        Pins the @hydra.main decoration contract: the per-run dir is supplied by
-        Hydra runtime rather than pinned by the launcher to a hand-picked anchor.
+        Behavioral assertions: the work_dir handed to ``generate`` is (a) under
+        the test's ``PROJECT_ROOT`` (so PROJECT_ROOT actually drives Hydra's
+        path resolution) and (b) a real dir on disk by the time ``generate``
+        sees it. Avoids the prior tautology of asserting
+        ``cfg.paths.output_dir == HydraConfig.get().runtime.output_dir`` —
+        that's true by construction under ``@hydra.main`` and would survive a
+        regression where the value drifted away from the per-run dir entirely.
 
-        :param monkeypatch: Pytest fixture used to patch ``sys.argv`` + capture cfg.
+        :param monkeypatch: Pytest fixture used to patch ``sys.argv`` + capture
+            ``generate``'s ``work_dir`` argument.
+        :param tmp_path: Doubles as ``PROJECT_ROOT`` (via the autouse fixture);
+            the Hydra per-run dir must land beneath it.
         """
-        from hydra.core.hydra_config import HydraConfig
-
         import synth_setter.cli.generate_dataset as gd
 
         argv = [
@@ -1841,19 +1846,20 @@ class TestMainHydraOutputDir:
         ]
         monkeypatch.setattr("sys.argv", argv)
 
-        observed: dict[str, str] = {}
-        real_spec_from_cfg = gd.spec_from_cfg
+        captured: dict[str, Path] = {}
 
-        def _capture_then_build(cfg: object) -> DatasetSpec:
-            observed["output_dir"] = cfg.paths.output_dir  # type: ignore[attr-defined]
-            observed["runtime_output_dir"] = HydraConfig.get().runtime.output_dir
-            return real_spec_from_cfg(cfg)  # type: ignore[arg-type]
+        def _capture_work_dir(_spec: object, work_dir: Path) -> None:
+            captured["work_dir"] = work_dir
 
-        monkeypatch.setattr(gd, "spec_from_cfg", _capture_then_build)
+        monkeypatch.setattr(gd, "generate", _capture_work_dir)
 
         gd.main()
 
-        assert observed["output_dir"] == observed["runtime_output_dir"]
+        work_dir = captured["work_dir"]
+        assert work_dir.is_relative_to(tmp_path), (
+            f"Hydra per-run dir {work_dir} is not under PROJECT_ROOT {tmp_path}"
+        )
+        assert work_dir.is_dir()
 
 
 def test_smoke_job_name_rejects_unsafe_task_name() -> None:
