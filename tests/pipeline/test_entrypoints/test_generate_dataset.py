@@ -114,6 +114,28 @@ def _renderer_argv_lists(mock: MagicMock) -> list[list[str]]:
     ]
 
 
+def _pin_hydra_isolation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Pin rank/world and redirect ``PROJECT_ROOT`` so ``@hydra.main`` per-run dirs land in tmp.
+
+    The three ``main()``-exercising test classes share this isolation pattern;
+    centralising it here prevents drift across the autouse fixtures.
+
+    :param monkeypatch: Pytest fixture used to set env vars.
+    :param tmp_path: Per-test tmp dir hosting ``PROJECT_ROOT``.
+    """
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
+
+
+def _noop_generate(_spec: object, _work_dir: object) -> None:
+    """No-op stand-in for ``generate(spec, work_dir)`` in launcher-only tests.
+
+    :param _spec: Ignored; underscore-prefixed to signal disuse.
+    :param _work_dir: Ignored; underscore-prefixed to signal disuse.
+    """
+
+
 def _base_spec_kwargs(tmp_path: Path, **overrides: object) -> dict[str, object]:
     """Return valid DatasetSpec kwargs for direct construction."""
     kwargs: dict[str, object] = {
@@ -264,7 +286,7 @@ class TestRun:
         :param patched_subprocess: Subprocess dispatcher used to introspect the
             single renderer call's argv.
         :param spec: Fixture-provided ``DatasetSpec``.
-        :param tmp_path: Caller-supplied work_dir for ``generate()``.
+        :param tmp_path: Doubles as the ``work_dir`` passed to ``generate``.
         """
         generate(spec, tmp_path)
 
@@ -290,7 +312,7 @@ class TestRun:
         :param patched_subprocess: Subprocess dispatcher used to introspect the
             renderer argv (looking for the headless-wrapper prefix on Linux).
         :param spec: Fixture-provided ``DatasetSpec``.
-        :param tmp_path: Caller-supplied work_dir for ``generate()``.
+        :param tmp_path: Doubles as the ``work_dir`` passed to ``generate``.
         """
         generate(spec, tmp_path)
 
@@ -324,7 +346,7 @@ class TestRun:
         :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
         :param patched_subprocess: Fixture-activation only (handles the
             ``subprocess.check_call`` patch).
-        :param tmp_path: Caller-supplied work_dir for ``generate()``.
+        :param tmp_path: Doubles as the ``work_dir`` passed to ``generate``.
         """
         generate(spec, tmp_path)
 
@@ -345,7 +367,7 @@ class TestRun:
         :param spec: Fixture-provided ``DatasetSpec``.
         :param fake_r2_remote: Local-typed rclone remote — asserted empty since
             no shard should land when the renderer fails.
-        :param tmp_path: Caller-supplied work_dir for ``generate()``.
+        :param tmp_path: Doubles as the ``work_dir`` passed to ``generate``.
         """
         patched_subprocess.side_effect = subprocess.CalledProcessError(
             1, "generate_vst_dataset.py"
@@ -377,7 +399,7 @@ class TestRun:
         :param spec: Fixture-provided ``DatasetSpec``.
         :param monkeypatch: Used to invalidate the ``r2:`` remote type so the
             real rclone subprocess exits non-zero on the copy.
-        :param tmp_path: Caller-supplied work_dir for ``generate()``.
+        :param tmp_path: Doubles as the ``work_dir`` passed to ``generate``.
         """
         monkeypatch.setenv("RCLONE_CONFIG_R2_TYPE", "this-backend-does-not-exist")
 
@@ -460,7 +482,7 @@ class TestRun:
 
         :param fake_r2_remote: Local-typed R2 remote — asserted to contain every
             shard alongside the on-disk copies.
-        :param tmp_path: Caller-supplied work_dir for ``generate()``.
+        :param tmp_path: Doubles as the ``work_dir`` passed to ``generate``.
         """
         spec = _multi_shard_spec(tmp_path, n=3)
 
@@ -527,7 +549,7 @@ class TestRun:
         :param fake_r2_remote: Local-typed R2 remote — must remain empty since
             no shard file is written and rclone is therefore never invoked.
         :param spec: Fixture-provided ``DatasetSpec``.
-        :param tmp_path: Caller-supplied work_dir for ``generate()``.
+        :param tmp_path: Doubles as the ``work_dir`` passed to ``generate``.
         """
         # Renderer-only side effect: return 0 without writing the shard file,
         # so the ``shard_path.is_file()`` guard raises before any rclone call.
@@ -733,7 +755,7 @@ class TestRun:
         :param spec: Fixture-provided ``DatasetSpec``.
         :param monkeypatch: Used to override the probe to claim the shard is
             already in R2.
-        :param tmp_path: Caller-supplied work_dir for ``generate()``.
+        :param tmp_path: Doubles as the ``work_dir`` passed to ``generate``.
         """
         monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda *_a, **_k: 12345)
 
@@ -757,7 +779,7 @@ class TestRun:
             to fire exactly once.
         :param fake_r2_remote: Local-typed R2 remote — shard should land here.
         :param spec: Fixture-provided ``DatasetSpec``.
-        :param tmp_path: Caller-supplied work_dir for ``generate()``.
+        :param tmp_path: Doubles as the ``work_dir`` passed to ``generate``.
         """
         generate(spec, tmp_path)
 
@@ -782,7 +804,7 @@ class TestRun:
         :param fake_r2_remote: Local-typed R2 remote — shard should land here.
         :param spec: Fixture-provided ``DatasetSpec``.
         :param monkeypatch: Used to override the probe to report 0 bytes.
-        :param tmp_path: Caller-supplied work_dir for ``generate()``.
+        :param tmp_path: Doubles as the ``work_dir`` passed to ``generate``.
         """
         monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda *_a, **_k: 0)
 
@@ -933,7 +955,7 @@ class TestRun:
             invoked (the probe failure raises before any render/upload).
         :param spec: Fixture-provided ``DatasetSpec``.
         :param monkeypatch: Used to install the raising probe stub.
-        :param tmp_path: Caller-supplied work_dir for ``generate()``.
+        :param tmp_path: Doubles as the ``work_dir`` passed to ``generate``.
         """
 
         def _raise(*_a: object, **_k: object) -> None:
@@ -1362,18 +1384,13 @@ class TestMainDispatchBranches:
     """``main()`` composes the dataset cfg from argv, then dispatches local or via SkyPilot."""
 
     @pytest.fixture(autouse=True)
-    def _set_default_skypilot_env(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        """Pin single-worker rank/world + isolate Hydra's per-run dir to ``tmp_path``.
+    def _isolate_hydra(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """Pin rank/world + ``PROJECT_ROOT`` so ``main()``'s Hydra dir lands under tmp.
 
-        ``@hydra.main`` resolves ``${paths.log_dir}`` from ``${oc.env:PROJECT_ROOT}``;
-        redirecting PROJECT_ROOT keeps the per-run dir under the test tree.
-
-        :param monkeypatch: Pytest fixture used to set env vars.
-        :param tmp_path: Per-test tmp dir hosting PROJECT_ROOT.
+        :param monkeypatch: Pytest fixture forwarded to ``_pin_hydra_isolation``.
+        :param tmp_path: Per-test tmp dir forwarded to ``_pin_hydra_isolation``.
         """
-        monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
-        monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
-        monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
+        _pin_hydra_isolation(monkeypatch, tmp_path)
 
     @pytest.fixture(autouse=True)
     def _stub_spec_io_in_main(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1530,18 +1547,13 @@ class TestMainSpecPersistence:
     """
 
     @pytest.fixture(autouse=True)
-    def _set_default_skypilot_env(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        """Pin single-worker rank/world + isolate Hydra's per-run dir to ``tmp_path``.
+    def _isolate_hydra(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """Pin rank/world + ``PROJECT_ROOT`` so ``main()``'s Hydra dir lands under tmp.
 
-        ``@hydra.main`` resolves ``${paths.log_dir}`` from ``${oc.env:PROJECT_ROOT}``;
-        redirecting PROJECT_ROOT keeps the per-run dir under the test tree.
-
-        :param monkeypatch: Pytest fixture used to set env vars.
-        :param tmp_path: Per-test tmp dir hosting PROJECT_ROOT.
+        :param monkeypatch: Pytest fixture forwarded to ``_pin_hydra_isolation``.
+        :param tmp_path: Per-test tmp dir forwarded to ``_pin_hydra_isolation``.
         """
-        monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
-        monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
-        monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
+        _pin_hydra_isolation(monkeypatch, tmp_path)
 
     @pytest.fixture(autouse=True)
     def _stub_run_and_spec_io(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1555,7 +1567,7 @@ class TestMainSpecPersistence:
         """
         import synth_setter.cli.generate_dataset as gd
 
-        monkeypatch.setattr(gd, "generate", lambda _spec, _work_dir: None)
+        monkeypatch.setattr(gd, "generate", _noop_generate)
         monkeypatch.setattr(
             gd,
             "write_spec_locally",
@@ -1779,15 +1791,13 @@ class TestMainHydraOutputDir:
     """
 
     @pytest.fixture(autouse=True)
-    def _isolate_hydra_output_dir(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        """Redirect PROJECT_ROOT to tmp so Hydra writes the per-run dir under the test tree.
+    def _isolate_hydra(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """Pin rank/world + ``PROJECT_ROOT`` so ``main()``'s Hydra dir lands under tmp.
 
-        :param monkeypatch: Pytest fixture used to override env vars.
-        :param tmp_path: Per-test tmp dir hosting the synthetic checkout root.
+        :param monkeypatch: Pytest fixture forwarded to ``_pin_hydra_isolation``.
+        :param tmp_path: Per-test tmp dir forwarded to ``_pin_hydra_isolation``.
         """
-        monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
-        monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
-        monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+        _pin_hydra_isolation(monkeypatch, tmp_path)
 
     @pytest.fixture(autouse=True)
     def _stub_run_and_spec_io(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1797,7 +1807,7 @@ class TestMainHydraOutputDir:
         """
         import synth_setter.cli.generate_dataset as gd
 
-        monkeypatch.setattr(gd, "generate", lambda _spec, _work_dir: None)
+        monkeypatch.setattr(gd, "generate", _noop_generate)
         monkeypatch.setattr(
             gd,
             "write_spec_locally",
