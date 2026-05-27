@@ -1,6 +1,167 @@
 # CHANGELOG
 
 
+## v8.11.0 (2026-05-27)
+
+### Features
+
+- **cli**: Oracle_eval_inline flag for synth-setter-generate-dataset
+  ([#1325](https://github.com/tinaudio/synth-setter/pull/1325),
+  [`8df67ec`](https://github.com/tinaudio/synth-setter/commit/8df67ec520c23366497921e342ebc5fea34b9161))
+
+* refactor(eval): allow ckpt_path=null in evaluate() for inline oracle-eval
+
+Drop the unconditional ``assert cfg.ckpt_path`` in ``synth_setter.cli.eval`` so the
+  ``ckpt_path=null`` CLI override survives Hydra composition; Lightning's ``trainer.test`` /
+  ``validate`` / ``predict`` already accept ``None`` and evaluate the in-memory model, which the
+  ``surge/fake_oracle`` baseline needs for the inline oracle-eval path that PR #1313's
+  ``finalize_inline`` flag extends. Locks the contract with a smoke test that composes the eval cfg
+  with ``experiment=surge/test-mps-fake-oracle``, ``ckpt_path=None``, and asserts ``test/param_mse
+  == 0.0`` against the smoke-fixture dataset.
+
+Phase 1 of the generate-dataset-inline-oracle-eval design doc; see
+  ``thoughts/shared/design/2026-05-27-generate-dataset-inline-oracle-eval.md``.
+
+* feat(cli): wire oracle_eval_inline flag through generate_dataset.main()
+
+Add the launcher-side seam for the inline oracle-eval subprocess: a new ``oracle_eval_inline`` flag
+  on the dataset cfg, two private helpers (``_download_finalized_splits``,
+  ``_run_oracle_eval_subprocess``) that pull the finalized splits from R2 and subprocess
+  ``synth-setter-eval experiment=surge/fake_oracle`` against them, and a call site after the
+  existing ``finalize_inline`` branch that raises ``ValueError`` on misconfiguration (oracle without
+  finalize, or against output_format!=hdf5) and is ignored with an INFO log on the dispatch path.
+
+Phase 2 of #1372.
+
+* feat(ci): add generate-finalize-oracle-eval workflow + experiment YAML
+
+Operator surface for Phase 3 of the inline oracle-eval plan: a new experiment config layers
+  oracle_eval_inline=true onto the existing smoke-shard-with-finalize chain, and a new workflow
+  drives it on a bare runner so the same CLI process generates shards, writes dataset.complete, and
+  runs surge/fake_oracle against the finalized splits — verifying the parameter-array round-trip
+  end-to-end.
+
+* fix(cli): validate oracle_eval_inline preconditions before generate()
+
+Hoists the `finalize_inline=true` and `output_format=hdf5` guards above `generate()` on the
+  local-run branch so a misconfigured run fails fast — before paying the render cost. Dispatch
+  branch keeps its log-and-ignore shape unchanged.
+
+Addresses ml-data-pipeline review on PR #1325 (validation-order WARN). Updates the two guard tests
+  to assert generate / finalize_from_spec / oracle-eval seams are all unreached, pinning the new
+  ordering.
+
+Refs #1319
+
+* test(eval): strengthen oracle invariant beyond trivial zero equality
+
+Adds type, scalar-shape, dtype, and finiteness assertions to
+  `test_evaluate_runs_oracle_with_null_ckpt_path` alongside the existing `item() == 0.0` check. A
+  NaN-filled `batch["params"]` (corrupted H5 round-trip, dtype mismatch through the datamodule,
+  etc.) now surfaces as a finite-tensor assertion failure rather than slipping past `0.0 == 0.0` by
+  Python equality.
+
+Addresses the ml-test BLOCK on PR #1325 — the prior assertion was tautological because the fake
+  oracle aliases preds and targets to the same tensor.
+
+* chore(test): tighten oracle_eval_inline test docstrings and seam asserts
+
+Drops fixture-role restatements in `:param:` blocks, collapses multi-paragraph bodies to one short
+  rationale, and adds the download-seam `assert_not_called()` to `default_false_skips` so a
+  regression that downloads splits unconditionally after finalize would surface here instead of
+  silently passing.
+
+Addresses comment-hygiene cluster + tdd-impl WARN on PR #1325.
+
+* feat(ci): assert oracle test/param_mse == 0.0 in the workflow gate
+
+Adds a parser module that reads Lightning's metrics table from the eval subprocess log and exits
+  non-zero if `test/param_mse` is missing, non-numeric, or anything other than exactly 0.0. The
+  workflow runs it after the generate-dataset step so a corrupted parameter-array round-trip fails
+  the workflow loudly instead of being buried in the uploaded log artifact. Tightens
+  `if-no-files-found: warn` → `error` on the log upload while we're here.
+
+Nine new unit tests pin the parser against Lightning's table layout including last-match precedence
+  (per-batch progress vs. final aggregate), missing-metric and non-numeric-metric error paths, and
+  the CLI exit-code contract.
+
+* chore(simplify): tighten oracle-eval docstrings and comments
+
+Sentinel deferred bucket — comment-hygiene + python-style cluster across the five files modified on
+  this branch. No behavior change; the 6 oracle tests + 17 non-VST eval tests still pass and
+  pydoclint is clean.
+
+- evaluate() docstring: lead with the contract, drop the migration narrative pinning
+  surge/fake_oracle into the generic API. - _ORACLE_EVAL_TIMEOUT_SECONDS: 3-line comment to one-line
+  why-only. - _download_finalized_splits / _run_oracle_eval_subprocess: collapse paraphrased :param:
+  blocks and drop the function-name restate. - dataset.yaml oracle_eval_inline: 4-line preamble to
+  2-line why. - tests/test_eval.py oracle docstring: invariant up front, drop the param-fixture-role
+  :param: prose. - tests/.../test_generate_dataset.py: drop inline comments that restate the
+  assertion immediately below; condense two oracle test docstrings.
+
+* feat(ci): cross-check oracle test/param_mse via metrics.json artifact
+
+Adds a structured JSON artifact alongside the existing log-grep gate so the workflow asserts the
+  oracle invariant from two independent surfaces:
+
+1. ``cli/eval.py:main()`` now writes the trainer's ``metric_dict`` to
+  ``<output_dir>/metrics/metrics.json`` after ``evaluate()`` returns, coercing torch tensors and
+  numpy scalars to native floats / lists so downstream readers don't need torch on the import path.
+  2. ``_run_oracle_eval_subprocess`` pins ``hydra.run.dir=<dataset_root>`` so the metrics.json lands
+  at a predictable path under the launcher's ``oracle_eval/<run_id>/`` directory. 3.
+  ``assert_oracle_invariant`` grows ``--metrics-json`` mode that reads the JSON, validates the dict
+  shape, and asserts ``test/param_mse == 0.0`` from a non-stdout source. 4. The workflow now (a)
+  locates the metrics.json via glob, (b) runs the asserter in both modes (log + JSON), and (c)
+  uploads the JSON as a separate artifact for post-mortem inspection.
+
+Drift between Lightning's stdout table and the structured artifact now fails the gate even if either
+  surface alone reports zero.
+
+* fix(cli): oracle_eval_inline rejects zero-size splits; smoke yaml has non-zero val/test
+
+Addresses two Copilot review comments on PR #1325 that pointed at the same root cause: the upstream
+  `smoke-shard.yaml` ships `train_val_test_sizes: [12, 0, 0]` and `SurgeDataModule.setup()` opens
+  `{train,val,test}.h5` unconditionally regardless of stage, so the workflow's happy path would have
+  FileNotFoundError'd on `val.h5` / `test.h5` deep inside Lightning.
+
+- `smoke-shard-with-oracle-eval.yaml` overrides `train_val_test_sizes: [12, 4, 4]` (multiples of
+  `render.samples_per_shard=4`) so finalize uploads all three split files and the eval datamodule
+  loads cleanly. - `main()` gains a third launcher-side guard: when `oracle_eval_inline=true`, any
+  zero-size split raises `ValueError` before generate runs, surfacing the misconfig at compose time
+  instead of mid-Lightning.
+
+One new test (`test_main_oracle_eval_inline_rejects_zero_size_split`) pins the guard; the happy-path
+  test (`test_main_oracle_eval_inline_true_invokes_subprocess`) now overrides
+  `train_val_test_sizes=[12, 4, 4]` to compose past the new guard.
+
+### Testing
+
+- **testing**: Parametrized subprocess smoke for synth-setter-generate-dataset CLI
+  ([#1317](https://github.com/tinaudio/synth-setter/pull/1317),
+  [`fcdf2e1`](https://github.com/tinaudio/synth-setter/commit/fcdf2e105c8df46f8b456ecf972546a38e742643))
+
+* test(testing): add parametrized subprocess smoke for synth-setter-generate-dataset CLI
+
+Each parametrize entry is a single Hydra-override string passed to the installed entrypoint; the
+  test body splits with shlex and shells out under check=True. Seed list covers the cheapest --help
+  path and a real smoke-shard render. Plugin path honors SYNTH_SETTER_PLUGIN_PATH per the existing
+  convention in tests/data/vst/test_preset_params.py.
+
+Closes #1316
+
+* test(testing): capture subprocess output, bound runtime, drop dead ids fallback
+
+Three review-driven nits on the just-added CLI smoke test:
+
+- capture_output=True + timeout=600 on the CLI subprocess so CalledProcessError surfaces
+  stdout/stderr on CI failure and a hung VST init / stalled R2 upload can't block the suite
+  indefinitely. - Drop the ``ids=lambda s: s or "<empty>"`` branch — no empty entries exist in
+  OVERRIDE_ARGS so the fallback is dead code; pytest derives sensible ids from the strings directly.
+  - Tighten the function docstring summary + :param: to the load-bearing facts.
+
+Refs #1316
+
+
 ## v8.10.0 (2026-05-27)
 
 ### Documentation
