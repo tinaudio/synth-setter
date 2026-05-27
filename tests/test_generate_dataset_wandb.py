@@ -1,11 +1,9 @@
 """Offline integration tests for ``generate_dataset`` wandb tracking.
 
-Drives ``generate(spec, work_dir, loggers)`` against a real
-``WandbLogger(offline=True)`` so spec ingestion (``log_hyperparams`` +
-artifact upload) and per-shard / summary ``log_metrics`` are exercised
-through the live wandb client without touching the network. Shards are
-short-circuited via a stubbed ``object_size`` probe so the test never
-invokes the renderer subprocess or rclone.
+Drives ``generate`` against a real ``WandbLogger(offline=True)`` so spec
+ingestion and per-shard / summary ``log_metrics`` exercise the live wandb
+client without network. ``object_size`` is stubbed so every shard hits the
+R2-skip branch — no renderer subprocess or rclone.
 """
 
 from __future__ import annotations
@@ -98,15 +96,9 @@ def _build_spec() -> DatasetSpec:
 
 
 def _scrub_wandb_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Remove every ``WANDB_*`` env var the host may have exported.
+    """Drop ambient ``WANDB_*`` env so a host dotenv can't steer the offline run.
 
-    Operator dotenvs and CI shells typically export ``WANDB_API_KEY`` /
-    ``WANDB_PROJECT`` / ``WANDB_ENTITY`` / ``WANDB_MODE``; any of these
-    would steer the offline run toward a different project or trigger
-    network calls and defeat the hermetic guarantee.
-
-    :param monkeypatch: Pytest fixture used to ``delenv`` ambient
-        ``WANDB_*`` keys for the duration of the calling test.
+    :param monkeypatch: ``delenv`` is applied per-key for the calling test.
     """
     for key in [k for k in os.environ if k.startswith("WANDB_")]:
         monkeypatch.delenv(key, raising=False)
@@ -114,15 +106,7 @@ def _scrub_wandb_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture(autouse=True)
 def _reset_wandb_session_state() -> None:
-    """Drop any wandb session cached by an earlier test.
-
-    ``wandb`` caches its session at first ``wandb.init``; without an
-    explicit ``wandb.teardown`` between runs, a subsequent ``WandbLogger``
-    reuses the cached session and silently ignores ``offline=True`` (the
-    library logs a warning that env changes are ignored). Tearing down
-    here keeps each test hermetic regardless of the runtime order
-    ``pytest-randomly`` picks.
-    """
+    """Tear down any cached wandb session so each test's ``offline=True`` takes effect."""
     wandb.teardown()
 
 

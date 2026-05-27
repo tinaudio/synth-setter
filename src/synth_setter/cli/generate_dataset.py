@@ -164,34 +164,28 @@ def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -
 def generate(spec: DatasetSpec, work_dir: Path, loggers: list[Logger]) -> None:  # noqa: DOC503
     """Render+upload each owned shard; writes shards under ``work_dir``.
 
-    ``work_dir`` is the Hydra per-run output dir supplied by the caller.
-    Spec upload no longer happens here — ``main()`` writes the canonical R2
-    copy once on the launcher host before either calling
-    ``generate(spec, work_dir, loggers)`` inline (local-run) or dispatching to a
-    SkyPilot worker pod that re-enters via
-    ``from_hydra`` → ``generate(spec, work_dir, loggers)``. Subprocesses fail-fast:
-    later shards are not attempted on subprocess error.
-
-    Before each render, R2 is probed for the shard's destination object: if it already exists with
-    non-zero size, the shard is skipped (resumability MVP — see #750). The probe uses
-    ``check=True``, so a non-zero rclone exit (auth, network) propagates as a hard failure rather
-    than degrading silently into a re-render.
+    Subprocesses fail-fast: later shards are not attempted on subprocess error.
+    Before each render, R2 is probed for the shard's destination object: if it
+    already exists with non-zero size, the shard is skipped (resumability MVP
+    — see #750). The probe uses ``check=True``, so a non-zero rclone exit
+    (auth, network) propagates as a hard failure rather than degrading silently
+    into a re-render.
 
     The launcher builds the spec interpreter-only (no pedalboard / X11) trusting
-    ``configs/render/<spec>.yaml``; this is where the worker — which has pedalboard
-    — verifies the plugin and pinned ``renderer_version`` agree.
+    ``configs/render/<spec>.yaml``; the worker — which has pedalboard — verifies
+    the plugin and pinned ``renderer_version`` agree.
 
     The spec is pushed to every logger as hyperparameters and uploaded as a
     ``<task_name>-input-spec`` artifact before any render begins. The wandb
-    run is bracketed by the function: it ``finalize(status)`` and
-    ``wandb.finish()`` fire in ``finally`` so the run is closed (and offline
-    binaries flushed) on both success and failure.
+    run is bracketed by the function: ``finalize(status)`` and ``wandb.finish()``
+    fire in ``finally`` so the run is closed (and offline binaries flushed) on
+    both success and failure.
 
     :param spec: Validated dataset spec; rank/world env partitions ``spec.shards``
         across worker pods, and ``spec.render.renderer_version`` is cross-checked
         against the loaded plugin.
-    :param work_dir: Caller-supplied output dir (the Hydra per-run output dir);
-        created if missing. Shards are written here before the rclone upload.
+    :param work_dir: Hydra per-run output dir supplied by the caller; created
+        if missing. Shards are written here before the rclone upload.
     :param loggers: Lightning loggers instantiated by ``instantiate_loggers`` —
         typically a single ``WandbLogger`` whose ``id`` was pinned to
         ``spec.run_id`` by the caller. May be empty (logger group disabled).
@@ -275,11 +269,7 @@ def _log_spec_artifact(loggers: list[Logger], spec: DatasetSpec) -> None:
     """Upload the spec as a wandb artifact when a ``WandbLogger`` is present.
 
     Writes the spec JSON to a tempfile; the wandb client copies the payload
-    into its own store before this function returns. The launcher-side
-    on-disk mirror at
-    ``<workspace>/data/<task>/<run>/metadata/input_spec.json`` (written by
-    ``main()`` via ``write_spec_locally``) serves the local-mirror-for-R2-upload
-    concern and is unrelated to wandb tracking.
+    into its own store before this function returns.
 
     :param loggers: Lightning loggers; non-``WandbLogger`` entries are skipped.
     :param spec: ``spec.task_name`` names the artifact (``<task_name>-input-spec``).
@@ -630,9 +620,7 @@ def _smoke_job_name(spec: DatasetSpec) -> str:
 
     :param spec: Validated dataset spec.
     :return: Job-name stem matching the launcher's ``_JOB_NAME_RE`` grammar.
-    :raises ValueError: ``spec.task_name[:8]`` would produce a stem outside the
-        launcher grammar; fix ``spec.task_name`` or pin
-        ``skypilot_launch.job_name``.
+    :raises ValueError: derived stem violates ``_JOB_NAME_RE``.
     """
     from synth_setter.pipeline.skypilot_launch import _JOB_NAME_RE
 
@@ -742,34 +730,22 @@ def main(cfg: DictConfig) -> None:
                 "SurgeDataModule opens train.h5 / val.h5 / test.h5 unconditionally."
             )
 
-    # ``_OPERATOR_WORKSPACE`` is the launcher-side spec-mirror anchor; the
-    # Hydra per-run dir (``cfg.paths.output_dir``) is shard-scoped, not the
-    # operator-side artifact root.
+    # Launcher-side spec mirror; ``cfg.paths.output_dir`` is shard-scoped, not the artifact root.
     spec_path = write_spec_locally(spec, _OPERATOR_WORKSPACE)
     logger.info(f"wrote local spec to {spec_path}")
 
-    # Load + validate R2 creds once for the whole run, then upload the
-    # canonical spec from this single launcher-side site. Both branches benefit:
-    # local-run uses the just-loaded env for generate()'s shard uploads, and the
-    # dispatch branch lets the worker boot already pointing at an existing
-    # canonical object (no per-rank re-write).
+    # Load creds once and upload the canonical spec here so workers boot pointing at it.
     env_file = Path(sky_cfg.env_file).expanduser() if sky_cfg.env_file else None
     r2_io.ensure_r2_env_loaded(env_file)
     r2_uri = upload_spec(spec)
     logger.info(f"spec uploaded -> {r2_uri}")
 
-    # ``input_spec_uri()`` (not ``uri(INPUT_SPEC_FILENAME)``) — the former
-    # includes the run's prefix so the worker reads the same canonical object
-    # ``main()`` just uploaded.
+    # ``input_spec_uri()`` includes the run prefix so workers read the same object just uploaded.
     spec_uri = spec.r2.input_spec_uri()
 
     if sky_cfg.compute_template is None:
         loggers = _loggers_pinned_to_spec(cfg, spec)
-        # finalize sits outside the wandb-tracked region by design: generate()
-        # brackets the wandb run with ``finalize(status)`` + ``wandb.finish()``
-        # around shard dispatch only, so a finalize failure is a separate
-        # signal from the dataset run (see #1289 for a follow-up that promotes
-        # finalize to its own wandb run).
+        # finalize runs outside the wandb-tracked region — see #1289.
         generate(spec, Path(cfg.paths.output_dir), loggers)
         if cfg.finalize_inline:
             finalize_from_spec(spec, _OPERATOR_WORKSPACE)
