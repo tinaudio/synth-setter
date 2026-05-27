@@ -1,9 +1,14 @@
 """End-to-end test for the ``generate_dataset`` W&B grid sweep over render cadences.
 
-Stops at ``spec_from_cfg`` so the cross-field validator
-(``RenderConfig._always_on_requires_plugin_reload_once``) fires inside Hydra
-compose — no R2 / SkyPilot / VST3 cost — while still catching regressions
-in the ``${args_no_hyphens}`` → Hydra → ``RenderConfig`` round-trip.
+Drives the sweep in-process via ``wandb.agent(function=trial)``; each
+trial pulls swept values off ``run.config`` and threads them through
+``compose(... overrides=[...])`` into ``spec_from_cfg``. Stops at
+``spec_from_cfg`` so the cross-field validator
+(``RenderConfig._always_on_requires_plugin_reload_once``) fires without
+any R2 / SkyPilot / VST3 cost. The sweep YAML's ``command:`` /
+``${args_no_hyphens}`` templating is **not** exercised by the in-process
+agent path; a separate static assertion pins that contract so the
+subprocess-launched (operator-facing) form stays well-formed.
 """
 
 from __future__ import annotations
@@ -162,3 +167,20 @@ def test_wandb_grid_sweep_threads_cadence_overrides(
     assert observed == _EXPECTED_CELLS, (
         f"Sweep agent did not observe the full grid: missing={missing}, extra={extra}"
     )
+
+
+def test_sweep_yaml_command_includes_args_no_hyphens() -> None:
+    """Pin the operator-facing ``command:`` shape so subprocess agents stay wired.
+
+    The in-process agent path consumes ``run.config`` directly and bypasses
+    the YAML's ``command:`` list, so the live-backend test above never
+    notices if ``${args_no_hyphens}`` (or the ``program`` / ``interpreter``
+    placeholders) drop out. A subprocess-launched ``wandb agent`` would,
+    though — and silently degrade to single-cell runs.
+    """
+    cfg = yaml.safe_load(_SWEEP_YAML.read_text())
+    command = cfg["command"]
+    assert command[0] == "${interpreter}", command
+    assert command[1] == "${program}", command
+    assert "${args_no_hyphens}" in command, command
+    assert any(tok.startswith("experiment=") for tok in command), command
