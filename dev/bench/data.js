@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779719836306,
+  "lastUpdate": 1779843491668,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -4950,6 +4950,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.031219482421875,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "36bfc0b531192a2abd6f24ea6da3bceea05d3ff7",
+          "message": "refactor(cli): rename generate_dataset.run → generate (#1295)\n\n* refactor(cli): rename generate_dataset.run → generate\n\nAligns the in-process worker name with the module verb (matches train.train,\neval.evaluate). Module path + verb name now both signal what the call does;\nmain() remains the @hydra.main wrapper / dispatch driver.\n\n* review: drop forbidden banner separator + sweep two stale prose refs\n\nResolves the two BLOCKs surfaced by the pre-PR review:\n- comment-hygiene C9: remove the # ----- section banner around TestRun\n- code-health: update the cross-module docstring pointer in\n  tests/pipeline/test_entrypoints/test_finalize_dataset.py that still named\n  generate_dataset.run\n\nAlso retitles the now-self-contradictory TestRun class docstring (the verb\n'generate' clashed with the SUT name) — no method or class identifiers\nrenamed; that sweep is intentionally out of scope.\n\n* review: sweep stale generate_dataset.run refs in docs + workflow comments\n\nDoc-drift surfaced 7 stale references outside the first commit's blast radius:\ntwo in docs/reference/{configuration-reference,docker,github-actions}.md,\none in docs/doc-map.yaml, and two comments in\n.github/workflows/nightly-parallel-datagen.yml. All now name generate().\n\n* review: sweep RenderConfig.parallel description run() → generate()\n\nUser-facing Pydantic field description on `RenderConfig.parallel` still\nreferenced the old worker name. This is the last stale prose ref flagged\nby Copilot at https://github.com/tinaudio/synth-setter/pull/1295#discussion_r3307373596;\nthe other sites (docker.md, configuration-reference.md, github-actions.md,\ndoc-map.yaml, nightly-parallel-datagen.yml) were already swept in 4f730e14.\n\n* fix(lint): docformatter + pydoclint baseline drift from rename\n\nCI surfaced three lint issues after the rename:\n- generate() needed a :param spec: docstring entry (pydoclint DOC101/DOC103;\n  the previous run() row in .pydoclint-baseline.txt was suppressing it).\n- TestRun class docstring and one TestMainDispatchBranches docstring\n  reflowed to fit docformatter's wrap and ruff's D205 one-line summary rule\n  after the verb gained 5 chars.\n- .pydoclint-baseline.txt: drop the stale generate_dataset.py 'Function run'\n  rows now that the violation is fixed at the source.",
+          "timestamp": "2026-05-26T20:40:26-04:00",
+          "tree_id": "dd429a8c35adcefd7ec77f28f89ccdcaf06762f9",
+          "url": "https://github.com/tinaudio/synth-setter/commit/36bfc0b531192a2abd6f24ea6da3bceea05d3ff7"
+        },
+        "date": 1779843490704,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 4.128269195556641,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.434392758561298,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.027054261416196823,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.014146387577056885,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.433411121368408,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 14.742769226250005,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.791627407073975,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.487481716226321,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.03461058437824249,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.04318511486053467,
             "unit": "1-cos"
           },
           {
