@@ -5,8 +5,8 @@ The entrypoint's public surface:
 - ``main()``: launcher-side orchestrator. Composes the cfg, writes the local
   ``input_spec.json`` mirror, runs ``r2_io.ensure_r2_env_loaded`` (dotenv +
   auth ping), uploads the canonical spec via ``spec_io.upload_spec``, then
-  either calls ``generate(spec)`` inline (local-run) or dispatches to a SkyPilot
-  worker pod.
+  either calls ``generate(spec, work_dir)`` inline (local-run) or dispatches
+  to a SkyPilot worker pod.
 - ``generate(spec, work_dir)``: per-rank renderer. For each owned shard in
   ``spec.shards``, shells out to ``generate_vst_dataset.py`` writing into
   ``work_dir``, then uploads the shard to R2 at ``r2:{bucket}/{prefix}/``;
@@ -1397,7 +1397,7 @@ class TestMainDispatchBranches:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """compute_template=null calls generate(spec) inline; dispatch is not used.
+        """compute_template=null calls generate(spec, work_dir) inline; dispatch is not used.
 
         :param monkeypatch: Pytest fixture used to patch argv and module functions.
         """
@@ -1483,17 +1483,16 @@ class TestMainDispatchBranches:
     def test_operator_supplied_cmd_is_rejected(
         self,
         monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
     ) -> None:
         """A `+skypilot_launch.cmd=…` override is rejected before any dispatch fires.
 
         Uses Hydra's `+key=value` add-syntax because the key isn't in
         configs/skypilot_launch/default.yaml (struct-mode would otherwise reject it before our
-        guard runs). Under ``@hydra.main`` the launcher-side ValueError surfaces as
-        ``SystemExit(1)``; the original ValueError message is logged by Hydra's error handler.
+        guard runs). ``HYDRA_FULL_ERROR=1`` makes ``@hydra.main`` re-raise the launcher-side
+        ``ValueError`` instead of converting it to ``SystemExit(1)``, so the assertion pins the
+        launcher contract directly rather than coupling to Hydra's error-handler formatting.
 
-        :param monkeypatch: Pytest fixture used to set ``sys.argv``.
-        :param capsys: Pytest fixture capturing the Hydra error-handler stderr.
+        :param monkeypatch: Pytest fixture used to set ``sys.argv`` and ``HYDRA_FULL_ERROR``.
         """
         import synth_setter.cli.generate_dataset as gd
         import synth_setter.pipeline.skypilot_launch as sl
@@ -1505,6 +1504,7 @@ class TestMainDispatchBranches:
             "+skypilot_launch.cmd=rm -rf /",
         ]
         monkeypatch.setattr("sys.argv", argv)
+        monkeypatch.setenv("HYDRA_FULL_ERROR", "1")
 
         def _run_must_not_fire(*_args: object, **_kwargs: object) -> None:
             raise AssertionError("generate must not be called when cmd is rejected")
@@ -1515,9 +1515,8 @@ class TestMainDispatchBranches:
         monkeypatch.setattr(gd, "generate", _run_must_not_fire)
         monkeypatch.setattr(sl, "dispatch_via_skypilot", _dispatch_must_not_fire)
 
-        with pytest.raises(SystemExit):
+        with pytest.raises(ValueError, match="skypilot_launch.cmd is launcher-internal"):
             gd.main()
-        assert "skypilot_launch.cmd is launcher-internal" in capsys.readouterr().err
 
 
 class TestMainSpecPersistence:
@@ -1526,8 +1525,8 @@ class TestMainSpecPersistence:
     The R2 upload is launcher-side and happens once per ``main()`` invocation:
     after the local write, before the local-run / dispatch branch is taken.
     Workers in the dispatch path no longer re-upload the spec (the worker's
-    ``generate(spec)`` writes shards only); the canonical R2 object exists before
-    any worker boots.
+    ``generate(spec, work_dir)`` writes shards only); the canonical R2 object
+    exists before any worker boots.
     """
 
     @pytest.fixture(autouse=True)

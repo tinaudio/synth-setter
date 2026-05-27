@@ -37,9 +37,9 @@ src/synth_setter/configs/experiment/generate_dataset/{id}.yaml → Hydra compose
     → r2_io.ensure_r2_env_loaded(sky_cfg.env_file)   (dotenv + auth ping)
     → spec_io.upload_spec(spec) → R2 at {r2.prefix}input_spec.json (one canonical write per main())
     → branch on sky_cfg.compute_template:
-        ├─ None: generate(spec) — renders + uploads shards
+        ├─ None: generate(spec, Path(cfg.paths.output_dir)) — renders + uploads shards
         └─ set:  dispatch_via_skypilot — injects spec.r2.input_spec_uri() as WORKER_SPEC_URI;
-                 worker pod runs generate(spec) which renders + uploads shards (no spec re-upload)
+                 worker pod runs generate(spec, work_dir) which renders + uploads shards (no spec re-upload)
 ```
 
 - Input is mutable, human-authored YAML under `src/synth_setter/configs/experiment/generate_dataset/`

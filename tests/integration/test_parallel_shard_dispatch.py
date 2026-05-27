@@ -1,6 +1,6 @@
 """Cross-platform integration test for ``RenderConfig.parallel`` dispatch.
 
-Exercises ``generate(spec)`` with ``render.parallel=True`` through the real
+Exercises ``generate(spec, work_dir)`` with ``render.parallel=True`` through the real
 ``subprocess.check_call`` boundary on every OS / CI host — no Linux Xvfb
 wrapper, no Surge VST3 bundle, no R2 credentials. A fake renderer script
 (written into ``tmp_path``) replaces ``generate_vst_dataset.py``: it just
@@ -105,7 +105,7 @@ def _wire_generate_into_fake_renderer(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Wire ``generate(spec)`` to cross the real subprocess boundary into a fake renderer.
+    """Wire ``generate`` to cross the real subprocess boundary into a fake renderer.
 
     Stubs the renderer-version probe (no real VST3 on disk), the R2 skip-probe
     (every shard is "absent"), pins ``available_cpus`` to 8 so pool size is
@@ -146,7 +146,7 @@ def test_parallel_dispatch_crosses_real_subprocess_boundary(
     """``parallel=True`` + 4 shards uploads every shard via real subprocess + real rclone.
 
     State-based assertion: every shard's filename exists under the fake R2
-    remote when ``generate(spec)`` returns.
+    remote when ``generate(spec, work_dir)`` returns.
 
     :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
     :param tmp_path: Per-test tmp dir for the fake renderer script.

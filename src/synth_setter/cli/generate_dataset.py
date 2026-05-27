@@ -309,10 +309,12 @@ def _render_and_upload_shard(
 ) -> None:
     """Render a single shard and upload it to R2; shards are retained at ``work_dir``.
 
-    Rendered shards stay on disk under ``work_dir`` for post-mortem and downstream
-    ``finalize_dataset`` consumption. The renderer subprocess is wrapped in a retry
-    loop bounded by ``spec.render.max_retries`` (default 0 = strict fail-fast);
-    rclone is outside the loop because it already retries via ``--retries=3``.
+    Rendered shards stay on disk under ``work_dir`` for post-mortem inspection
+    (``finalize_dataset`` re-downloads from R2 — launcher and worker pods do not
+    share a filesystem). Peak local disk per rank scales with the number of owned
+    shards. The renderer subprocess is wrapped in a retry loop bounded by
+    ``spec.render.max_retries`` (default 0 = strict fail-fast); rclone is outside
+    the loop because it already retries via ``--retries=3``.
 
     :raises subprocess.CalledProcessError: Renderer (or rclone) subprocess exited non-zero after
         exhausting the retry budget.
