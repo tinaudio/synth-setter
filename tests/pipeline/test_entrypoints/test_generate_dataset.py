@@ -1672,7 +1672,7 @@ class TestMainDispatchBranches:
             "train_val_test_sizes=[12, 4, 4]",
         ]
         monkeypatch.setattr("sys.argv", argv)
-        monkeypatch.setattr(gd, "generate", lambda _spec, _work_dir: None)
+        monkeypatch.setattr(gd, "generate", lambda _spec, _work_dir, _loggers: None)
         monkeypatch.setattr(gd, "finalize_from_spec", MagicMock())
         download_mock = MagicMock()
         monkeypatch.setattr(gd, "_download_finalized_splits", download_mock)
@@ -1741,7 +1741,7 @@ class TestMainDispatchBranches:
             "finalize_inline=true",
         ]
         monkeypatch.setattr("sys.argv", argv)
-        monkeypatch.setattr(gd, "generate", lambda _spec, _work_dir: None)
+        monkeypatch.setattr(gd, "generate", lambda _spec, _work_dir, _loggers: None)
         monkeypatch.setattr(gd, "finalize_from_spec", MagicMock())
         download_mock = MagicMock()
         oracle_mock = MagicMock()
