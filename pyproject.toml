@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "synth-setter"
-version = "8.9.1"
+version = "8.10.0"
 description = "Studying the effect of permutation symmetry on audio synthesiser parameter inference."
 authors = [{name = "Khaled Tinubu"}, {name = "tinaudio"}]
 readme = "README.md"
@@ -148,6 +148,7 @@ synth-setter-generate-dataset = "synth_setter.cli.generate_dataset:main"
 synth-setter-generate-dataset-from-hydra = "synth_setter.cli.generate_dataset:from_hydra"
 synth-setter-finalize-dataset = "synth_setter.cli.finalize_dataset:main"
 synth-setter-spec-uri = "synth_setter.pipeline.ci.spec_uri:main"
+
 
 
 

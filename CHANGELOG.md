@@ -1,6 +1,175 @@
 # CHANGELOG
 
 
+## v8.10.0 (2026-05-27)
+
+### Documentation
+
+- Dequote .env.example values + warn about --env-file semantics
+  ([#1284](https://github.com/tinaudio/synth-setter/pull/1284),
+  [`5fb1bc1`](https://github.com/tinaudio/synth-setter/commit/5fb1bc1eac1d078b23f46a660542fc457a19a662))
+
+* fix(docs): dequote .env.example values + warn about --env-file semantics
+
+Docker --env-file (used by devcontainers in .devcontainer/{cpu,gpu,root_gpu} and the SkyPilot
+  launcher via configs/skypilot_launch/default.yaml) passes quoted values through literally —
+  KEY="value" arrives in the container as the 7-character value `"value"`. Shell `source` and
+  python-dotenv strip quotes, so a quoted .env "works" outside the container and silently breaks
+  inside it. Users hit this with RCLONE_CONFIG_R2_TYPE="s3" → rclone rejects backend `"s3"` with
+  `didn't find backend called "\"s3\""`, masking the bug behind the .setdefault() guard in r2_io.py.
+
+- Dequote SKYPILOT_API_SERVER_ENDPOINT (was the only quoted line). - Add a header note telling users
+  to write values bare.
+
+Fixes #1282
+
+* fix(docs): correct .env.example header — only devcontainers use --env-file
+
+The SkyPilot launcher's env_file consumes .env via python-dotenv's dotenv_values()
+  (src/synth_setter/pipeline/skypilot_launch.py:87,248), which strips quotes. Only the devcontainers
+  load .env via Docker --env-file (.devcontainer/{cpu,gpu,root_gpu}/devcontainer.json:14-17).
+
+Tighten the header from 5 lines to 3 — drop the RCLONE example detail (covered in #1282), drop the
+  inaccurate "+ SkyPilot launcher" claim, keep the load-bearing rule + the precise consumer + the
+  issue pointer.
+
+Refs #1282
+
+* fix(docs): broaden .env.example warning to cover docker run --env-file
+
+The previous header named only the devcontainers as the affected consumer.
+  docs/reference/docker.md:191-235, docs/getting-started.md:262, and
+  docs/operations/credential-rotation-guide.md:18,331,350 all recommend `docker run --env-file .env`
+  as the canonical non-devcontainer workflow, which hits the same quote-passthrough parser. Header
+  now names both paths and points back to docs/reference/docker.md.
+
+### Features
+
+- **cli**: Finalize_inline flag for synth-setter-generate-dataset
+  ([#1313](https://github.com/tinaudio/synth-setter/pull/1313),
+  [`50f2891`](https://github.com/tinaudio/synth-setter/commit/50f2891a7973b6925b9e0347993c49820b8600a6))
+
+* refactor(cli): extract finalize_from_spec from finalize(cfg)
+
+Splits finalize_dataset.finalize(cfg) at the load_spec_from_uri call. The post-load body (marker
+  probe → output_format dispatch → marker upload) moves into finalize_from_spec(spec, work_dir);
+  finalize(cfg) shrinks to env load + spec load + delegate. This is the precondition for letting
+  generate_dataset.main() finalize inline without re-loading the spec it already has in memory
+  (issue #1312, phase 1 of 3).
+
+No behaviour change for the URI-driven entry point: the new test
+  test_finalize_from_spec_uploads_stats_then_marker_at_canonical_uris pins the in-memory path
+  against the same fake-r2 remote / shard seeding the existing marker-last test uses.
+
+* feat(cli): wire finalize_inline into generate_dataset.main()
+
+Adds an opt-in ``finalize_inline`` flag to the dataset cfg (default ``false``). On the local-run
+  branch, ``main()`` invokes ``finalize_from_spec(spec, _OPERATOR_WORKSPACE)`` after ``generate()``
+  returns so a single CLI process produces both the shards and ``dataset.complete``. On the SkyPilot
+  dispatch branch the flag is ignored with an INFO log — finalize there continues to run out-of-band
+  via the finalize-dataset workflow (issue #1312, phase 2 of 3).
+
+The new key is added to ``_NON_SPEC_KEYS`` so it never reaches ``DatasetSpec(**kwargs)``. Three
+  tests pin the wire:
+
+- test_main_finalize_inline_true_invokes_finalize_from_spec — local branch with the override
+  forwards the in-memory spec into finalize. -
+  test_main_finalize_inline_default_false_skips_finalize — opt-in invariant: omitting the override
+  leaves the existing shape unchanged. - test_main_finalize_inline_ignored_in_dispatch_branch —
+  dispatch branch with the override emits the INFO log and never calls finalize_from_spec.
+
+* ci(datagen): add generate-and-finalize-dataset workflow + smoke experiment
+
+New ``Generate + Finalize Dataset (inline)`` workflow runs ``synth-setter-generate-dataset`` with
+  ``finalize_inline=true`` so the shards and ``dataset.complete`` marker land in a single CLI
+  process — no separate finalize-dataset workflow invocation needed for the small-volume smoke path
+  (issue #1312, phase 3 of 3).
+
+Body shape mirrors ``finalize-dataset.yaml``: bare-runner install, ``uv sync --frozen --extra cpu
+  --no-default-groups --group dev``, R2 env from the same secret triplet, ``HYDRA_FULL_ERROR=1`` for
+  surfaced compose errors. The matching ``smoke-shard-with-finalize`` experiment composes the
+  existing ``smoke-shard`` defaults (so the 12-sample / 3-shard render volume stays in lockstep with
+  PR-presubmit) and only flips the new ``finalize_inline`` flag to ``true``.
+
+Both ``workflow_dispatch`` (UI-driven, default ``experiment=smoke-shard-with-finalize``) and
+  ``workflow_call`` (reusable by other workflows) triggers are wired; ``permissions: contents:
+  read`` is the minimum needed for checkout.
+
+* fix(spec_uri): mirror finalize_inline into _NON_SPEC_CFG_KEYS
+
+``synth_setter.pipeline.ci.spec_uri._NON_SPEC_CFG_KEYS`` mirrors
+  ``cli.generate_dataset._NON_SPEC_KEYS`` so the Hydra-compose path through
+  ``synth-setter-spec-uri`` drops the same non-spec sub-trees. Phase 2 of #1312 added
+  ``finalize_inline`` to the launcher's tuple but not to the sibling; conda CI surfaced the drift
+  via ``test_non_spec_cfg_keys_mirror_cli_canonical`` plus four ``ValidationError(extra_forbidden)``
+  failures from the spec_uri/Hydra-compose tests that build ``DatasetSpec`` with the non-dropped key
+  still present.
+
+Add the key on the spec_uri side to restore the contract.
+
+### Refactoring
+
+- **cli**: Land generate_dataset shards under Hydra per-run output dir
+  ([#1311](https://github.com/tinaudio/synth-setter/pull/1311),
+  [`13eb3b8`](https://github.com/tinaudio/synth-setter/commit/13eb3b87a2b648977dc6bfef3bec98469c550a65))
+
+* refactor(cli): migrate generate_dataset main() to @hydra.main
+
+Move the operator entrypoint off programmatic compose and onto the @hydra.main decorator so the
+  per-run output dir comes from Hydra runtime rather than a launcher-side _OPERATOR_WORKSPACE pin.
+  Worker overrides now flow through HydraConfig.get().overrides.task instead of sys.argv[1:],
+  keeping byte-equivalence with the prior capture but matching the path other CLIs (train, eval,
+  finalize_dataset) already use.
+
+Phase 1 of the generate-dataset-hydra-output-dir plan; subsequent phases thread cfg.paths.output_dir
+  into generate() and stop unlinking shards after upload.
+
+* refactor(cli): pass work_dir into generate() instead of tempdir
+
+generate() now takes the Hydra per-run output dir as an explicit argument; both call sites supply
+  ``Path(cfg.paths.output_dir)``. The tempfile.TemporaryDirectory context is gone — shards still get
+  unlinked post-upload (Phase 3 removes that), but they now land under the visible per-run dir for
+  the duration of the render+upload step.
+
+* refactor(cli): retain shards under work_dir after upload in generate_dataset
+
+Shards now persist at the Hydra per-run output dir for post-mortem inspection and downstream
+  finalize_dataset consumption rather than being unlinked after upload. Docstrings on generate /
+  _dispatch_shards_* / _render_and_upload_shard / _render_one_owned_shard drop the
+  bounded-local-disk and tempdir framing accordingly.
+
+* fix(cli): pin operator_supplied_cmd test on ValueError + refresh stale signatures
+
+CI failure: `test_operator_supplied_cmd_is_rejected` expected SystemExit under @hydra.main, but CI
+  runners set HYDRA_FULL_ERROR=1 (re-raising the original ValueError instead of converting to
+  SystemExit). Set the env inside the test and assert on the underlying ValueError directly — pins
+  the launcher contract, not Hydra's error-handler formatting.
+
+Doc-drift: stale `generate(spec)` references in docs/ and the test module/class docstrings updated
+  to `generate(spec, work_dir)` after the Phase-2 signature change. Also rewrites the misleading
+  "for downstream `finalize_dataset` consumption" line on `_render_and_upload_shard` — finalize
+  re-downloads from R2 (launcher/worker pods don't share a FS).
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+### Testing
+
+- **baseline**: Accept new top-level evaluation key in predict-config diff
+  ([#1308](https://github.com/tinaudio/synth-setter/pull/1308),
+  [`38f077f`](https://github.com/tinaudio/synth-setter/commit/38f077f969f8186250169de54bb072096ea1a617))
+
+PR #1291 added a top-level ``evaluation:`` block to ``eval.yaml`` to gate the new in-process VST
+  render + audio metrics step. The v0.0.0 baseline the nightly compares against doesn't have it, so
+  every ``test_predict_configs_are_equal[...]`` parametrization started failing. The block is
+  equivalent to the pre-#1291 ``surge_xt_interactive.py`` render+metrics step (just folded into the
+  eval CLI) — not a model knob — so it gets the same ``ACCEPTED_DIFFS`` treatment as
+  ``logger.tensorboard`` and friends.
+
+
 ## v8.9.1 (2026-05-27)
 
 ### Bug Fixes
