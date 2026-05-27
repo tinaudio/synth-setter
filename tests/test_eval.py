@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import torch
 from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
@@ -73,7 +74,12 @@ def test_evaluate_runs_oracle_with_null_ckpt_path(
     finally:
         GlobalHydra.instance().clear()
 
-    assert metric_dict["test/param_mse"].item() == 0.0
+    param_mse = metric_dict["test/param_mse"]
+    assert isinstance(param_mse, torch.Tensor)
+    assert param_mse.numel() == 1
+    assert param_mse.dtype.is_floating_point
+    assert torch.isfinite(param_mse), f"oracle test/param_mse must be finite; got {param_mse!r}"
+    assert param_mse.item() == 0.0
 
 
 @pytest.mark.gpu
