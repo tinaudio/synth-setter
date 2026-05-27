@@ -30,6 +30,7 @@ _PREDICT_VST_AUDIO_MODULE = "synth_setter.evaluation.predict_vst_audio"
 _COMPUTE_AUDIO_METRICS_MODULE = "synth_setter.evaluation.compute_audio_metrics"
 _SUBPROCESS_TIMEOUT_SECONDS = 600
 _AGGREGATED_METRICS_FILENAME = "aggregated_metrics.csv"
+_AGGREGATED_METRICS_STATS: tuple[str, ...] = ("mean", "std")
 
 # Resolve workspace at import so ``${oc.env:PROJECT_ROOT}`` in
 # ``configs/paths/default.yaml`` interpolates under any install layout.
@@ -45,10 +46,11 @@ def _load_audio_metrics(metrics_dir: Path) -> dict[str, float]:
 
     :param metrics_dir: Directory containing the ``aggregated_metrics.csv`` produced by
         :mod:`synth_setter.evaluation.compute_audio_metrics`; rows are metric names,
-        columns are ``mean`` and ``std``.
-    :returns: Flat float dict suitable for ``wandb.run.log`` and ``trainer.callback_metrics``.
-    :raises FileNotFoundError: if the aggregated CSV is missing — the caller just ran the
-        producing subprocess so a missing file means that subprocess failed silently.
+        columns are :data:`_AGGREGATED_METRICS_STATS`.
+    :returns: One entry per ``(metric, stat)`` cell of the CSV.
+    :raises FileNotFoundError: when the producing subprocess returned 0 without writing the
+        CSV; surfaced so the silent-success failure mode is loud.
+    :raises ValueError: when the CSV is missing a required stat column.
     """
     csv_path = metrics_dir / _AGGREGATED_METRICS_FILENAME
     if not csv_path.is_file():
@@ -57,21 +59,29 @@ def _load_audio_metrics(metrics_dir: Path) -> dict[str, float]:
             "subprocess returned 0 but did not write the aggregated CSV."
         )
     df = pd.read_csv(csv_path, index_col=0)
+    missing = [stat for stat in _AGGREGATED_METRICS_STATS if stat not in df.columns]
+    if missing:
+        raise ValueError(
+            f"{csv_path} missing required stat columns {missing}; got {list(df.columns)}."
+        )
     return {
         f"audio/{metric}_{stat}": float(df.at[metric, stat])
         for metric in df.index
-        for stat in df.columns
+        for stat in _AGGREGATED_METRICS_STATS
     }
 
 
 def _log_audio_metrics_to_wandb(audio_metrics: dict[str, float]) -> None:
-    """Forward ``audio_metrics`` to the active wandb run, if any.
+    """No-op when ``wandb.run`` is unset; otherwise log to it, swallowing wandb errors.
 
-    :param audio_metrics: Flat metric dict from :func:`_load_audio_metrics`.
+    :param audio_metrics: Forwarded verbatim to ``wandb.run.log``.
     """
     if wandb.run is None:
         return
-    wandb.run.log(audio_metrics)
+    try:
+        wandb.run.log(audio_metrics)
+    except Exception as exc:
+        log.warning(f"wandb.run.log raised {type(exc).__name__}: {exc}; metrics still returned.")
 
 
 def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: DOC502,DOC503
@@ -79,9 +89,7 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
 
     The VST render subprocess is prefixed with the headless wrapper on Linux so
     the VST3 plugin gets an Xvfb display before pedalboard imports it; the
-    metrics subprocess is CPU-only and needs no wrapper. When metrics run and a
-    wandb run is active, the aggregated values are also logged to that run so
-    they land alongside ``test/param_mse``.
+    metrics subprocess is CPU-only and needs no wrapper.
 
     :param cfg: Reads ``cfg.evaluation`` (gates + ``num_workers``), ``cfg.render``
         (param spec, preset, optional plugin path), and ``cfg.paths.output_dir``
@@ -175,7 +183,11 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     failure. Useful for multiruns, saving info about the crash, etc.
 
     :param cfg: DictConfig configuration composed by Hydra.
-    :return: Tuple[dict, dict] with metrics and dict with all instantiated objects.
+    :return: ``(metric_dict, object_dict)``. ``metric_dict`` is the
+        ``trainer.callback_metrics`` copy merged with any audio metrics from
+        :func:`_run_predict_postprocessing`; Lightning entries are ``torch.Tensor``
+        while audio entries are Python ``float``, so callers iterating values
+        must handle both.
     """
     assert cfg.ckpt_path
 

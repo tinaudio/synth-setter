@@ -13,6 +13,7 @@ from omegaconf import DictConfig, OmegaConf, open_dict
 
 from synth_setter.cli import eval as eval_mod
 from synth_setter.cli.eval import (
+    _COMPUTE_AUDIO_METRICS_MODULE,
     _load_audio_metrics,
     _run_predict_postprocessing,
     evaluate,
@@ -102,6 +103,17 @@ _FAKE_WRAPPER = "/fake/vst-headless-wrapper"
 
 _AGGREGATED_METRICS_CSV = ",mean,std\nmss,0.5,0.1\nwmfcc,0.3,0.05\nsot,0.2,0.02\nrms,0.9,0.01\n"
 
+_EXPECTED_AUDIO_METRICS = {
+    "audio/mss_mean": pytest.approx(0.5),
+    "audio/mss_std": pytest.approx(0.1),
+    "audio/wmfcc_mean": pytest.approx(0.3),
+    "audio/wmfcc_std": pytest.approx(0.05),
+    "audio/sot_mean": pytest.approx(0.2),
+    "audio/sot_std": pytest.approx(0.02),
+    "audio/rms_mean": pytest.approx(0.9),
+    "audio/rms_std": pytest.approx(0.01),
+}
+
 
 def _build_postprocess_cfg(
     output_dir: Path,
@@ -154,9 +166,9 @@ def captured_argv(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
 
     def _fake_run(args: list[str], **_kwargs: Any) -> None:
         captured.append(list(args))
-        if "synth_setter.evaluation.compute_audio_metrics" not in args:
+        if _COMPUTE_AUDIO_METRICS_MODULE not in args:
             return
-        metrics_dir = Path(args[args.index("synth_setter.evaluation.compute_audio_metrics") + 2])
+        metrics_dir = Path(args[args.index(_COMPUTE_AUDIO_METRICS_MODULE) + 2])
         metrics_dir.mkdir(parents=True, exist_ok=True)
         (metrics_dir / "aggregated_metrics.csv").write_text(_AGGREGATED_METRICS_CSV)
 
@@ -410,28 +422,19 @@ def test_postprocessing_metrics_requires_audio_dir(
 def test_load_audio_metrics_flattens_mean_and_std(tmp_path: Path) -> None:
     """``aggregated_metrics.csv`` becomes a flat ``audio/<name>_<stat>`` float dict.
 
-    :param tmp_path: Receives the fixture ``aggregated_metrics.csv`` before the load runs.
+    :param tmp_path: Scratch metrics dir seeded with the fixture CSV.
     """
     (tmp_path / "aggregated_metrics.csv").write_text(_AGGREGATED_METRICS_CSV)
 
     metrics = _load_audio_metrics(tmp_path)
 
-    assert metrics == {
-        "audio/mss_mean": 0.5,
-        "audio/mss_std": 0.1,
-        "audio/wmfcc_mean": 0.3,
-        "audio/wmfcc_std": 0.05,
-        "audio/sot_mean": 0.2,
-        "audio/sot_std": 0.02,
-        "audio/rms_mean": 0.9,
-        "audio/rms_std": 0.01,
-    }
+    assert metrics == _EXPECTED_AUDIO_METRICS
 
 
 def test_load_audio_metrics_returns_python_floats(tmp_path: Path) -> None:
-    """Values are plain ``float`` so downstream wandb / Lightning logs stay numpy-free.
+    """Values are plain ``float`` — protects downstream wandb / Lightning logs from numpy scalars.
 
-    :param tmp_path: Receives the fixture ``aggregated_metrics.csv`` before the load runs.
+    :param tmp_path: Scratch metrics dir seeded with the fixture CSV.
     """
     (tmp_path / "aggregated_metrics.csv").write_text(_AGGREGATED_METRICS_CSV)
 
@@ -441,11 +444,25 @@ def test_load_audio_metrics_returns_python_floats(tmp_path: Path) -> None:
 
 
 def test_load_audio_metrics_missing_csv_raises(tmp_path: Path) -> None:
-    """A missing aggregated CSV surfaces a directed ``FileNotFoundError``.
+    """Missing aggregated CSV surfaces a directed FileNotFoundError naming the subprocess.
 
-    :param tmp_path: Used as a metrics dir that intentionally does not contain the CSV.
+    :param tmp_path: Used as a metrics dir intentionally left empty to trigger the guard.
     """
-    with pytest.raises(FileNotFoundError, match="aggregated_metrics.csv"):
+    with pytest.raises(
+        FileNotFoundError,
+        match=r"aggregated_metrics\.csv.*compute_audio_metrics.*did not write",
+    ):
+        _load_audio_metrics(tmp_path)
+
+
+def test_load_audio_metrics_missing_stat_column_raises(tmp_path: Path) -> None:
+    """A CSV lacking a required stat column surfaces a directed ValueError naming the gap.
+
+    :param tmp_path: Scratch metrics dir seeded with a mean-only CSV.
+    """
+    (tmp_path / "aggregated_metrics.csv").write_text(",mean\nmss,0.5\n")
+
+    with pytest.raises(ValueError, match=r"missing required stat columns \['std'\]"):
         _load_audio_metrics(tmp_path)
 
 
@@ -458,9 +475,10 @@ def _writes_metrics_csv(audio_metrics_dir: Path, csv_body: str) -> Any:
     """
 
     def _fake_run(args: list[str], **_kwargs: Any) -> None:
-        if args[2] == "synth_setter.evaluation.compute_audio_metrics":
-            audio_metrics_dir.mkdir(parents=True, exist_ok=True)
-            (audio_metrics_dir / "aggregated_metrics.csv").write_text(csv_body)
+        if _COMPUTE_AUDIO_METRICS_MODULE not in args:
+            return
+        audio_metrics_dir.mkdir(parents=True, exist_ok=True)
+        (audio_metrics_dir / "aggregated_metrics.csv").write_text(csv_body)
 
     return _fake_run
 
@@ -508,15 +526,14 @@ def test_postprocessing_returns_loaded_audio_metrics(
 
     result = _run_predict_postprocessing(cfg)
 
-    assert result["audio/mss_mean"] == 0.5
-    assert result["audio/rms_std"] == 0.01
+    assert result == _EXPECTED_AUDIO_METRICS
 
 
 def test_postprocessing_logs_audio_metrics_to_active_wandb_run(
     monkeypatch: pytest.MonkeyPatch,
     predictions_tree: Path,
 ) -> None:
-    """When ``wandb.run`` is set, the loaded audio metrics are forwarded to ``run.log``.
+    """When ``wandb.run`` is set, the loaded audio metrics are forwarded to ``run.log`` once.
 
     :param monkeypatch: Stubs ``subprocess.run`` so the CSV materializes without launching
         the real subprocess, and stubs ``wandb.run`` so logging is observable.
@@ -529,15 +546,13 @@ def test_postprocessing_logs_audio_metrics_to_active_wandb_run(
         _writes_metrics_csv(metrics_dir, _AGGREGATED_METRICS_CSV),
     )
 
-    import wandb
-
     logged: list[dict[str, float]] = []
 
     class _FakeRun:
         def log(self, payload: dict[str, float]) -> None:
             logged.append(payload)
 
-    monkeypatch.setattr(wandb, "run", _FakeRun())
+    monkeypatch.setattr(eval_mod.wandb, "run", _FakeRun())
 
     cfg = _build_postprocess_cfg(
         predictions_tree,
@@ -547,9 +562,7 @@ def test_postprocessing_logs_audio_metrics_to_active_wandb_run(
 
     _run_predict_postprocessing(cfg)
 
-    assert len(logged) == 1
-    assert logged[0]["audio/mss_mean"] == 0.5
-    assert logged[0]["audio/wmfcc_std"] == 0.05
+    assert logged == [_EXPECTED_AUDIO_METRICS]
 
 
 def test_postprocessing_skips_wandb_when_no_run(
@@ -569,9 +582,7 @@ def test_postprocessing_skips_wandb_when_no_run(
         _writes_metrics_csv(metrics_dir, _AGGREGATED_METRICS_CSV),
     )
 
-    import wandb
-
-    monkeypatch.setattr(wandb, "run", None)
+    monkeypatch.setattr(eval_mod.wandb, "run", None)
 
     cfg = _build_postprocess_cfg(
         predictions_tree,
@@ -581,4 +592,4 @@ def test_postprocessing_skips_wandb_when_no_run(
 
     result = _run_predict_postprocessing(cfg)
 
-    assert result["audio/mss_mean"] == 0.5
+    assert result == _EXPECTED_AUDIO_METRICS
