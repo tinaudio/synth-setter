@@ -2014,7 +2014,7 @@ class TestMainSpecPersistence:
         assert isinstance(called_spec, DatasetSpec)
         assert isinstance(called_out, Path)
         generate_mock.assert_called_once()
-        _, generate_work_dir = generate_mock.call_args[0]
+        _, generate_work_dir, _ = generate_mock.call_args[0]
         assert called_out == generate_work_dir
 
     def test_local_run_uploads_spec_from_main(self, monkeypatch: pytest.MonkeyPatch) -> None:
