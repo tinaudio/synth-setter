@@ -25,7 +25,6 @@ from __future__ import annotations
 import io
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tarfile
@@ -403,6 +402,8 @@ def test_subprocess_writes_spec_under_hydra_output_dir(
     ]
 
     repo_root = Path(__file__).resolve().parents[2]
+    operator_workspace_dir = tmp_path / "workspace"
+    operator_workspace_dir.mkdir()
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(config_name="dataset", overrides=overrides)
     cfg.paths.root_dir = str(repo_root)
@@ -410,15 +411,15 @@ def test_subprocess_writes_spec_under_hydra_output_dir(
     cfg.paths.work_dir = str(repo_root)
     expected_spec = gd.spec_from_cfg(cfg)
 
-    # Self-isolate: a prior run with the same pinned ``created_at`` (e.g. an
-    # earlier developer invocation under the old operator-workspace anchor)
-    # could have left this path on disk. Clear it so the post-run negative
-    # assertion is a meaningful pin of "no operator-workspace regression."
-    repo_data_path = repo_root / "data" / expected_spec.task_name / expected_spec.run_id
-    if repo_data_path.exists():
-        shutil.rmtree(repo_data_path)
-
-    env = {**os.environ, "SYNTH_SETTER_WORKER_RANK": "0", "SYNTH_SETTER_NUM_WORKERS": "1"}
+    # Redirect ``operator_workspace()`` into ``tmp_path`` so the regression
+    # check below — "spec must not land under the operator-workspace anchor"
+    # — never touches files outside ``tmp_path`` on a developer's machine.
+    env = {
+        **os.environ,
+        "SYNTH_SETTER_WORKER_RANK": "0",
+        "SYNTH_SETTER_NUM_WORKERS": "1",
+        "SYNTH_SETTER_WORKSPACE": str(operator_workspace_dir),
+    }
     result = subprocess.run(  # noqa: S603 — fixed argv; overrides are validated by Hydra.
         [sys.executable, "-m", "synth_setter.cli.generate_dataset", *overrides],
         cwd=repo_root,
@@ -450,6 +451,9 @@ def test_subprocess_writes_spec_under_hydra_output_dir(
     assert loaded["task_name"] == expected_spec.task_name
     assert loaded["run_id"] == expected_spec.run_id
 
-    assert not repo_data_path.exists(), (
-        f"operator-workspace anchor regression: subprocess wrote under {repo_data_path}"
+    workspace_data_path = (
+        operator_workspace_dir / "data" / expected_spec.task_name / expected_spec.run_id
+    )
+    assert not workspace_data_path.exists(), (
+        f"operator-workspace anchor regression: subprocess wrote under {workspace_data_path}"
     )
