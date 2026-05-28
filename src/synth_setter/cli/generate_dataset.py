@@ -110,7 +110,9 @@ def _run_oracle_eval_subprocess(dataset_root: Path, run_id: str) -> None:
         f"hydra.run.dir={dataset_root}",
         "ckpt_path=null",
         "logger=wandb",
-        f"+logger.wandb.id={run_id}",
+        # id already exists in logger/wandb.yaml (id: null) so a plain
+        # override suffices; resume is absent there and needs +append.
+        f"logger.wandb.id={run_id}",
         "+logger.wandb.resume=must",
         # configs/data/surge*.yaml marks predict_file a mandatory `???` value;
         # mode=test never reads it, so null satisfies the resolver instead of

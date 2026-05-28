@@ -1758,7 +1758,8 @@ class TestMainDispatchBranches:
         # The eval resumes the generate run rather than opening a fresh one, so
         # its test/* metrics share the run id (logger=null crashed Hydra — see #1331).
         assert "logger=wandb" in called_argv
-        assert "+logger.wandb.id=some-run-id" in called_argv
+        # id exists in logger/wandb.yaml (plain override); resume is absent (+append).
+        assert "logger.wandb.id=some-run-id" in called_argv
         assert "+logger.wandb.resume=must" in called_argv
         # surge data config marks predict_file mandatory; mode=test never reads it.
         assert "data.predict_file=null" in called_argv
