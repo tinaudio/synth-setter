@@ -26,7 +26,7 @@ def _valid_render_kwargs(plugin_path: str = "/fake/Plugin.vst3") -> dict[str, An
         "preset_path": "presets/surge-base.vstpreset",
         "param_spec_name": "surge_simple",
         "renderer_version": "1.3.4",
-        "sample_rate": 16000,
+        "sample_rate": 44100,
         "channels": 2,
         "velocity": 100,
         "signal_duration_seconds": 4.0,
@@ -848,7 +848,7 @@ class TestSpecConstructionStaysPedalboardFree:
             "    render={\n"
             "        'plugin_path': '/tmp/x.vst3', 'preset_path': '/tmp/x.vstpreset',\n"
             "        'param_spec_name': 'surge_simple', 'renderer_version': 'v1',\n"
-            "        'sample_rate': 16000, 'channels': 1, 'velocity': 64,\n"
+            "        'sample_rate': 44100, 'channels': 1, 'velocity': 64,\n"
             "        'signal_duration_seconds': 1.0, 'min_loudness': -30.0,\n"
             "        'samples_per_render_batch': 1, 'samples_per_shard': 1,\n"
             "        'gui_toggle_cadence': 'never',\n"

@@ -134,7 +134,7 @@ def _base_spec_kwargs(tmp_path: Path, **overrides: object) -> dict[str, object]:
             "preset_path": "presets/surge-base.vstpreset",
             "param_spec_name": "surge_simple",
             "renderer_version": TEST_PLUGIN_VERSION,
-            "sample_rate": 16000,
+            "sample_rate": 44100,
             "channels": 2,
             "velocity": 100,
             "signal_duration_seconds": 4.0,
@@ -1224,7 +1224,7 @@ class TestSpecFromCfg:
         from synth_setter.cli.generate_dataset import spec_from_cfg
 
         cfg_dict: dict[str, object] = dict(valid_dataset_spec_kwargs)
-        cfg_dict["data"] = {"sample_rate": 16000}
+        cfg_dict["data"] = {"sample_rate": 44100}
         cfg_dict["paths"] = {"root_dir": "/fake-root"}
         cfg_dict["hydra"] = {"runtime": {"output_dir": "/fake-out"}}
 

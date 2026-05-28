@@ -36,7 +36,7 @@ def _smoke_render_cfg(**overrides: object) -> RenderConfig:
         "preset_path": "presets/surge-base.vstpreset",
         "param_spec_name": "surge_simple",
         "renderer_version": "1.3.4",
-        "sample_rate": 16000,
+        "sample_rate": 44100,
         "channels": 2,
         "velocity": 100,
         "signal_duration_seconds": 4.0,
@@ -123,7 +123,7 @@ def _cli_argv(data_file: str) -> list[str]:
         "--renderer_version",
         "1.3.4",
         "--sample_rate",
-        "16000",
+        "44100",
         "--channels",
         "2",
         "--velocity",
@@ -646,7 +646,7 @@ def test_render_in_batches_once_render_warms_every_render_with_cached_plugin(
 # ``warmup = False`` reset that the writer-level kwarg checks would miss.
 
 
-_RENDERER_FAKE_AUDIO_SHAPE = (2, 16000 * 4)
+_RENDERER_FAKE_AUDIO_SHAPE = (2, 44100 * 4)
 
 
 def _silent_render() -> object:
@@ -669,7 +669,7 @@ def _loud_render() -> object:
     import numpy as np
 
     n = _RENDERER_FAKE_AUDIO_SHAPE[1]
-    t = np.arange(n) / 16000.0
+    t = np.arange(n) / 44100.0
     sine = (0.5 * np.sin(2 * np.pi * 440.0 * t)).astype(np.float32)
     return np.stack([sine, sine], axis=0)
 

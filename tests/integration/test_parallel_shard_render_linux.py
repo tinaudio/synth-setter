@@ -110,7 +110,7 @@ def _build_real_surge_spec(_tmp_path: Path) -> DatasetSpec:
             "preset_path": PRESET_PATH,
             "param_spec_name": "surge_simple",
             "renderer_version": RENDERER_VERSION,
-            "sample_rate": 16000,
+            "sample_rate": 44100,
             "channels": 2,
             "velocity": 100,
             "signal_duration_seconds": 1.0,
