@@ -1,6 +1,160 @@
 # CHANGELOG
 
 
+## v8.12.1 (2026-05-28)
+
+### Bug Fixes
+
+- **data-pipeline**: Default generated-audio sample_rate to 44100
+  ([#1330](https://github.com/tinaudio/synth-setter/pull/1330),
+  [`2848b71`](https://github.com/tinaudio/synth-setter/commit/2848b718c8dd8decdd83802f59dac59b62104b79))
+
+Standardize generated-audio sample_rate on 44100 across the generate_dataset experiment configs, the
+  spec test-values validator, and the pinned test fixtures (audio time-samples 64000 -> 176400 where
+  coupled to sample_rate * 4.0s). Math-only shape-helper tests and negative-value validation cases
+  keep their literal 16000 inputs.
+
+### Build System
+
+- **devcontainer**: Auto-wire wandb MCP server from WANDB_API_KEY
+  ([#1327](https://github.com/tinaudio/synth-setter/pull/1327),
+  [`6bb630f`](https://github.com/tinaudio/synth-setter/commit/6bb630f5d910fff246b1e712a4127d80e77c1f83))
+
+Adds a project-scoped .mcp.json that points Claude Code at https://mcp.withwandb.com/mcp with
+  Authorization: Bearer ${WANDB_API_KEY}. Every devcontainer variant already forwards .env via
+  runArgs --env-file, so the existing WANDB_API_KEY entry is enough to wire the server with no
+  per-developer ~/.claude.json edits and survives rebuilds. Also notes the new consumer in
+  .env.example.
+
+Closes #1326
+
+### Chores
+
+- **devcontainer**: Restore claude/gh tmux panes on rebuild
+  ([#1329](https://github.com/tinaudio/synth-setter/pull/1329),
+  [`33a1265`](https://github.com/tinaudio/synth-setter/commit/33a1265939c582f30ce9ffacf9cc5dca8e30a5f9))
+
+* chore(devcontainer): restore claude/gh tmux panes on rebuild
+
+tmux-resurrect only restores a fixed default program list (vi/vim/nvim/
+  emacs/man/less/more/tail/top/htop/irssi/weechat/mutt); panes running an interactive claude or gh
+  come back as bare bash after a rebuild. Opt both in via @resurrect-processes with the loose-match
+  (~) prefix so they survive regardless of arguments (e.g. claude --resume <uuid>). The option
+  appends to the default list, so the built-in programs stay restored.
+
+This relaunches the program fresh; it does not restore Claude's in-app conversation state (still
+  requires /resume in the relaunched pane).
+
+Refs #1328
+
+* docs(doc-map): note resurrect claude/gh pane restore
+
+The covers: enumeration for .devcontainer/tmux.conf listed the resurrect/continuum settings but
+  omitted the new @resurrect-processes behavior added in this PR.
+
+### Refactoring
+
+- **cli**: Anchor generate_dataset spec mirror + finalize on cfg.paths.output_dir
+  ([#1324](https://github.com/tinaudio/synth-setter/pull/1324),
+  [`fdc4601`](https://github.com/tinaudio/synth-setter/commit/fdc4601b4c28edfde1f99a3b7f33dd48551eb3f7))
+
+* refactor(cli): anchor generate_dataset spec mirror + finalize on cfg.paths.output_dir
+
+Drop the module-level `_OPERATOR_WORKSPACE = operator_workspace()` binding in
+  `cli/generate_dataset.py`; switch `write_spec_locally` and `finalize_from_spec` call sites to
+  `Path(cfg.paths.output_dir)`. The bare `operator_workspace()` side-effect call stays so
+  `$PROJECT_ROOT` is still published before any `@hydra.main` compose — matches the pattern in
+  `cli/eval.py`, `cli/train.py`, `cli/finalize_dataset.py`.
+
+`main()` and `from_hydra()` now use a single anchor for the spec mirror, finalize scratch, and shard
+  scratch — the Hydra per-run dir. The separate `_OPERATOR_WORKSPACE` bindings in
+  `pipeline/skypilot_launch.py` (`.env`/cred-script paths) and `pipeline/ci/materialize_spec.py` (CI
+  shim) are unrelated and out of scope.
+
+Behavioral side effect (operator-approved): `finalize_inline=true` scratch now lands under
+  `${hydra:runtime.output_dir}` (default
+  `logs/<task>/<runs|exp>/<run_name>-<timestamp>/data/<task>/<run>/`) instead of
+  `<repo>/data/<task>/<run>/`. Override via `paths.output_dir=...` on the CLI.
+
+Test coverage: - Unit: `test_main_writes_local_spec` pins equality between `write_spec_locally`'s
+  `out` arg and `generate()`'s `_work_dir` arg. - Integration: new subprocess-based test exercises
+  the real CLI binary under a `hydra.run.dir=<tmp_path>` override; asserts both positive spec-mirror
+  path and negative `<repo>/data/<task>/<run>/` pin.
+
+Doc drift swept in `docs/design/storage-provenance-spec.md`,
+  `docs/reference/configuration-reference.md`, `docs/doc-map.yaml`, and `pipeline/spec_io.py`'s
+  docstring.
+
+`uv.lock` self-version aligned to 8.10.0 (matches `pyproject.toml` at HEAD; pre-existing drift from
+  the 8.10.0 release commit).
+
+Closes #1322
+
+* fixup(test+ci): address review feedback on PR #1324
+
+- Self-isolate the new subprocess integration test instead of asserting the data dir doesn't exist
+  as a precondition; pre-clean the deterministic ``<repo>/data/<task>/<run>/`` path so the post-run
+  negative-pin assertion still detects an operator-workspace regression on developer machines that
+  may have a leftover dir from a prior run. (Copilot inline comment; independently flagged by 2
+  pre-PR review skills.)
+
+- Pin ``hydra.run.dir=/home/build/synth-setter/nightly-run`` in ``nightly-parallel-datagen.yml``'s
+  ``synth-setter-generate-dataset`` invocation, and update the ``Resolve spec_uri from local
+  materialized spec`` step's glob, comment, and error message to match. Without this the spec-mirror
+  anchor change in this PR would silently break the nightly workflow on first run (the previous glob
+  hardcoded ``<workspace>/data/`` which no longer receives the mirror).
+
+- Update ``docs/design/storage-provenance-spec.md``'s Consumers cell to describe the
+  pinned-``hydra.run.dir`` flow the workflow now uses, and bump ``Last Updated`` to 2026-05-27.
+
+Refs #1322
+
+* fixup(ci): pin hydra.run.dir in generate-dataset-shards.yaml
+
+The 9 ``Generate (skypilot-local)`` matrix cells + the 2 ``Generate + finalize smoke`` jobs failed
+  on the prior fix-up commit (b454475b) with::
+
+::error::expected exactly one materialized spec under data/*/*/metadata/, found 0
+
+Same class of bug as the nightly workflow this PR already addressed: the reusable
+  ``generate-dataset-shards.yaml`` workflow globs the local spec mirror at
+  ``<workspace>/data/<task>/<run>/metadata/input_spec.json`` after running
+  ``synth-setter-generate-dataset``. This PR's anchor change moves that mirror under
+  ``cfg.paths.output_dir`` (the Hydra per-run dir, which defaults under ``logs/`` and embeds a
+  wall-clock timestamp), so the glob finds zero files.
+
+Fix mirrors the nightly workflow update: pin ``hydra.run.dir=/home/build/synth-setter/run`` on both
+  the skypilot-local and docker invocations of ``synth-setter-generate-dataset``, and update the
+  three globs (skypilot-local site, docker site, upload-artifact path) plus error messages to look
+  under ``run/data/`` instead. ``run/`` is the ``${GITHUB_WORKSPACE}`` mount point shared with the
+  docker container.
+
+``test-dataset-finalization.yml``'s ``Verify finalize artifacts`` job fails as a transitive
+  consequence — it reads the spec from the artifact this workflow uploads — and recovers
+  automatically once the upload path fix lands.
+
+* test(roundtrip): isolate operator-workspace regression check under tmp_path
+
+Copilot flagged that the prior shutil.rmtree() on `<repo>/data/<task>/<run_id>` could destroy a
+  developer's real artifacts. Set SYNTH_SETTER_WORKSPACE=<tmp_path>/workspace in the subprocess env
+  so a regression to the operator-workspace anchor would write under tmp_path, drop the rmtree, and
+  assert non-existence at the isolated path instead.
+
+Refs #1324
+
+* test(generate-dataset): unpack 3-arg generate() call_args in spec persistence test
+
+The merge with main brought the wandb integration's `generate(spec, work_dir, loggers)` signature,
+  but `test_main_writes_local_spec` still unpacked `generate_mock.call_args[0]` into two variables,
+  failing with `ValueError: too many values to unpack` on macOS CI.
+
+* chore(deps): refresh uv.lock for 8.12.0 version bump
+
+The merge with main brought the 8.11.0 -> 8.12.0 version bump in pyproject.toml from the release
+  commit, but uv.lock still pinned synth-setter @ 8.11.0, tripping the lock-check job's `uv lock
+  --check`.
+
+
 ## v8.12.0 (2026-05-27)
 
 ### Features
