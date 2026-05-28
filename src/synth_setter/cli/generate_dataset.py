@@ -112,8 +112,9 @@ def _run_oracle_eval_subprocess(dataset_root: Path, run_id: str) -> None:
         "logger=wandb",
         f"+logger.wandb.id={run_id}",
         "+logger.wandb.resume=must",
-        # surge data config marks predict_file mandatory (???); mode=test
-        # never reads it, so null keeps datamodule instantiation from raising.
+        # configs/data/surge*.yaml marks predict_file a mandatory `???` value;
+        # mode=test never reads it, so null satisfies the resolver instead of
+        # raising MissingMandatoryValue at datamodule instantiation — see #1331.
         "data.predict_file=null",
         # SurgeXTDataset floors len to samples // batch_size; the 128 default
         # would yield zero batches on the smoke-sized test split (4 samples),
