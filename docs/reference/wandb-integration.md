@@ -255,6 +255,17 @@ wandb agent <entity>/<project>/<sweep_id>          # runs trials
 Each trial subprocess opens its own wandb run with `id = spec.run_id`; the
 `WANDB_SWEEP_ID` env (set by the agent) attaches the run to the sweep grid.
 
+### 5f. Inline oracle eval (`oracle_eval_inline=true`)
+
+When `oracle_eval_inline=true`, the local-run path shells out to
+`synth_setter.cli.eval` after `generate(...)` has closed its run.
+`_run_oracle_eval_subprocess` (`src/synth_setter/cli/generate_dataset.py`)
+re-opens the same run via `+logger.wandb.id=<spec.run_id> +logger.wandb.resume=must`, so Lightning's `trainer.test` deposits `test/*`
+metrics (e.g. `test/param_mse` from the surge fake-oracle) onto the generate
+run — a `wandb sync` then merges both phases under one run id. The eval
+subprocess inherits `WANDB_MODE` from the launcher, so its offline/online
+posture follows the parent's.
+
 ______________________________________________________________________
 
 ## 6. Known Gaps

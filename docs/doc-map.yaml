@@ -56,7 +56,7 @@ docs:
       - pattern: "src/synth_setter/cli/eval.py"
         covers: "Checkpoint resolution from W&B, evaluation logging"
       - pattern: "src/synth_setter/cli/generate_dataset.py"
-        covers: "WandbLogger lifecycle for dataset generation: spec → hyperparams + dataset-spec artifact, per-shard + summary history rows, run id pinned to spec.run_id"
+        covers: "WandbLogger lifecycle for dataset generation: spec → hyperparams + dataset-spec artifact, per-shard + summary history rows, run id pinned to spec.run_id, inline oracle eval resuming the run to append test/* rows"
       - pattern: "src/synth_setter/configs/dataset.yaml"
         covers: "Default `logger: wandb` for dataset generation; entity/project sourced from logger/wandb.yaml"
       - pattern: "sweeps/**"
