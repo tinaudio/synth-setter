@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779944137148,
+  "lastUpdate": 1779944139954,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -8901,6 +8901,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 19.105667306999997,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2848b718c8dd8decdd83802f59dac59b62104b79",
+          "message": "fix(data-pipeline): default generated-audio sample_rate to 44100 (#1330)\n\nStandardize generated-audio sample_rate on 44100 across the\ngenerate_dataset experiment configs, the spec test-values validator,\nand the pinned test fixtures (audio time-samples 64000 -> 176400 where\ncoupled to sample_rate * 4.0s). Math-only shape-helper tests and\nnegative-value validation cases keep their literal 16000 inputs.",
+          "timestamp": "2026-05-28T00:37:31-04:00",
+          "tree_id": "d89e0e061ff8c49f47aa9487e211da5f715edd79",
+          "url": "https://github.com/tinaudio/synth-setter/commit/2848b718c8dd8decdd83802f59dac59b62104b79"
+        },
+        "date": 1779944139398,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 2.1310245990753174,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 2.3282343181222678,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.019183199852705002,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.026929080486297607,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 1.4501641988754272,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 15.986784338600012,
             "unit": "seconds"
           }
         ]
