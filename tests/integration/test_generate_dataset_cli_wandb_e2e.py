@@ -349,7 +349,12 @@ def test_phase_3_sweep_cadence_cell_runs_end_to_end(
 
 
 def _single_wandb_binary(run_dir: Path) -> Path:
-    """Return the sole ``run-*.wandb`` binary under one offline-run dir."""
+    """Return the sole ``run-*.wandb`` binary under one offline-run dir.
+
+    :param run_dir: a single ``offline-run-*`` dir; must hold exactly one
+        ``run-*.wandb`` binary.
+    :returns: the lone matching binary path.
+    """
     binaries = list(run_dir.glob("run-*.wandb"))
     assert len(binaries) == 1, (
         f"expected exactly one .wandb binary under {run_dir}; got {binaries}"

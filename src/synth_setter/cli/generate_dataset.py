@@ -76,7 +76,7 @@ _ORACLE_EVAL_TIMEOUT_SECONDS = 600
 
 
 def _download_finalized_splits(spec: DatasetSpec, dest: Path) -> None:
-    """Download finalized ``{train,val,test}.h5`` + ``stats.npz`` into ``dest`` (created if missing).
+    """Download ``{train,val,test}.h5`` + ``stats.npz`` into ``dest``.
 
     The eval datamodule loads normalization stats from ``dest/stats.npz``
     (``use_saved_mean_and_variance=true``), so it must land beside the splits.
