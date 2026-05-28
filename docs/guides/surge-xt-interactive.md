@@ -263,7 +263,7 @@ your teammates so they aren't blindsided.
   use this path for large pipeline runs.
 - **Silent captured patches fast-fail** — `generate_sample` raises
   `ValueError` when `fixed_synth_params` is set and the render falls
-  below `MAKE_DATASET_MIN_LOUDNESS = -50.0`
+  below `MAKE_DATASET_MIN_LOUDNESS = -55.0`
   ([`src/synth_setter/tools/surge_xt_interactive.py`](../../src/synth_setter/tools/surge_xt_interactive.py)).
   The synth patch dominates loudness, so re-sampling note params alone
   can't lift a silent patch above threshold; rather than loop, the

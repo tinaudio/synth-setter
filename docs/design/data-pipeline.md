@@ -1375,7 +1375,7 @@ train_val_test_sizes: [440000, 20000, 20000]
 
 render:
   sample_rate: 44100
-  min_loudness: -50.0
+  min_loudness: -55.0
 ```
 
 `src/synth_setter/configs/dataset.yaml` is the `@hydra.main` entry. Its `defaults` list pulls in `data:` (param spec / channels / velocity / loudness floor), `render:` (renderer + plugin / preset / sample rate / batch sizes), `r2:` (bucket + prefix root), `paths:`, `hydra:`, and the named `experiment:`. Required slots are marked `???` and filled by the chosen experiment.
