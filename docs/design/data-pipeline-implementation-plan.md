@@ -133,7 +133,7 @@ preset_path: presets/surge-simple.vstpreset
 channels: 2
 velocity: 100
 signal_duration_seconds: 4.0
-min_loudness: -50.0
+min_loudness: -55.0
 samples_per_render_batch: 32
 ```
 
