@@ -32,7 +32,7 @@ from omegaconf import DictConfig, OmegaConf
 from synth_setter.cli.finalize_dataset import finalize_from_spec
 from synth_setter.data.vst.core import extract_renderer_version
 from synth_setter.pipeline import r2_io
-from synth_setter.pipeline.constants import WORKER_SPEC_URI_ENV
+from synth_setter.pipeline.constants import STATS_NPZ_FILENAME, WORKER_SPEC_URI_ENV
 from synth_setter.pipeline.partitioning import (
     available_cpus,
     get_my_shards,
@@ -76,23 +76,30 @@ _ORACLE_EVAL_TIMEOUT_SECONDS = 600
 
 
 def _download_finalized_splits(spec: DatasetSpec, dest: Path) -> None:
-    """Download finalized ``{train,val,test}.h5`` from R2 into ``dest`` (created if missing).
+    """Download ``{train,val,test}.h5`` + ``stats.npz`` into ``dest``.
 
-    :param spec: Resolves the per-split R2 URI via ``spec.r2.split_h5_uri``.
-    :param dest: Local directory to receive the three split files.
+    The eval datamodule loads normalization stats from ``dest/stats.npz``
+    (``use_saved_mean_and_variance=true``), so it must land beside the splits.
+
+    :param spec: Resolves the R2 URIs via ``spec.r2.split_h5_uri`` /
+        ``spec.r2.stats_uri``.
+    :param dest: Local directory to receive the splits and stats file.
     """
     dest.mkdir(parents=True, exist_ok=True)
     for split in ("train", "val", "test"):
         r2_io.download_to_path(spec.r2.split_h5_uri(split), dest / f"{split}.h5")
+    r2_io.download_to_path(spec.r2.stats_uri(), dest / STATS_NPZ_FILENAME)
 
 
-def _run_oracle_eval_subprocess(dataset_root: Path) -> None:
+def _run_oracle_eval_subprocess(dataset_root: Path, run_id: str) -> None:
     """Run the fake-oracle eval on ``dataset_root`` to verify the param-array round-trip.
 
     ``check=True`` so a non-zero eval exit (or wall-clock timeout) propagates
     to the caller.
 
     :param dataset_root: Holds the finalized HDF5 splits the eval datamodule reads.
+    :param run_id: Canonical ``spec.run_id``; the eval resumes this wandb run
+        so its ``test/*`` metrics land on the generate phase's run.
     """
     argv = [
         sys.executable,
@@ -102,7 +109,19 @@ def _run_oracle_eval_subprocess(dataset_root: Path) -> None:
         f"data.dataset_root={dataset_root}",
         f"hydra.run.dir={dataset_root}",
         "ckpt_path=null",
-        "logger=null",
+        "logger=wandb",
+        # id already exists in logger/wandb.yaml (id: null) so a plain
+        # override suffices; resume is absent there and needs +append.
+        f"logger.wandb.id={run_id}",
+        "+logger.wandb.resume=must",
+        # configs/data/surge*.yaml marks predict_file a mandatory `???` value;
+        # mode=test never reads it, so null satisfies the resolver instead of
+        # raising MissingMandatoryValue at datamodule instantiation — see #1331.
+        "data.predict_file=null",
+        # SurgeXTDataset floors len to samples // batch_size; the 128 default
+        # would yield zero batches on the smoke-sized test split (4 samples),
+        # so test_step never runs and no test/* metric is logged — see #1331.
+        "data.batch_size=1",
         "mode=test",
     ]
     logger.info(f"oracle_eval_inline subprocess: {argv}")
@@ -768,7 +787,7 @@ def main(cfg: DictConfig) -> None:
         if cfg.oracle_eval_inline:
             eval_dir = Path(cfg.paths.output_dir) / "oracle_eval" / spec.run_id
             _download_finalized_splits(spec, eval_dir)
-            _run_oracle_eval_subprocess(eval_dir)
+            _run_oracle_eval_subprocess(eval_dir, spec.run_id)
         return
 
     if cfg.finalize_inline or cfg.oracle_eval_inline:

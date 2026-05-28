@@ -129,6 +129,8 @@ def _run_cli(
     hydra_run_dir: Path,
     r2_prefix: str,
     extra_overrides: list[str] | None = None,
+    extra_env: dict[str, str] | None = None,
+    timeout: int = 300,
 ) -> subprocess.CompletedProcess[str]:
     """Subprocess-invoke ``synth-setter-generate-dataset`` with offline wandb.
 
@@ -144,6 +146,12 @@ def _run_cli(
         purges it on teardown.
     :param extra_overrides: Additional Hydra overrides appended after the
         baseline pins (e.g. cadence overrides for Phase 3).
+    :param extra_env: Merged on top of the base env (``WANDB_MODE=offline``
+        + ``PYTHONPATH``); use to pin ``SYNTH_SETTER_WORKSPACE`` when the
+        test cares where ``operator_workspace()`` lands on disk.
+    :param timeout: Wall-clock seconds for the whole CLI; lift above the
+        300s default when the invocation also runs inline finalize / oracle
+        eval phases.
     :returns: The completed subprocess; the caller asserts on
         ``returncode`` + reads the wandb dir under ``hydra_run_dir``.
     """
@@ -163,13 +171,15 @@ def _run_cli(
     worktree_src = Path(__file__).resolve().parents[2] / "src"
     pythonpath = f"{worktree_src}:{os.environ.get('PYTHONPATH', '')}"
     env = {**os.environ, "WANDB_MODE": "offline", "PYTHONPATH": pythonpath}
+    if extra_env:
+        env.update(extra_env)
     return subprocess.run(  # noqa: S603 — args built from validated config + test-controlled paths
         [sys.executable, "-m", "synth_setter.cli.generate_dataset", *overrides],
         env=env,
         capture_output=True,
         text=True,
         check=False,
-        timeout=300,
+        timeout=timeout,
     )
 
 
@@ -336,3 +346,86 @@ def test_phase_3_sweep_cadence_cell_runs_end_to_end(
             f"cadence override {key}={value!r} not found in wandb binary at "
             f"{wandb_binaries[0]} (cell reload={reload_cadence} gui={gui_cadence})"
         )
+
+
+def _single_wandb_binary(run_dir: Path) -> Path:
+    """Return the sole ``run-*.wandb`` binary under one offline-run dir.
+
+    :param run_dir: a single ``offline-run-*`` dir; must hold exactly one
+        ``run-*.wandb`` binary.
+    :returns: the lone matching binary path.
+    """
+    binaries = list(run_dir.glob("run-*.wandb"))
+    assert len(binaries) == 1, (
+        f"expected exactly one .wandb binary under {run_dir}; got {binaries}"
+    )
+    return binaries[0]
+
+
+def test_oracle_eval_inline_resumes_generate_wandb_run(
+    cli_env: tuple[Path, str],
+) -> None:
+    """Inline oracle eval resumes the generate-phase wandb run id.
+
+    One CLI invocation with ``oracle_eval_inline=true`` +
+    ``finalize_inline=true`` under ``WANDB_MODE=offline``. After the CLI
+    exits, the launcher's hydra dir and the operator workspace's
+    ``oracle_eval/<run_id>/`` dir each hold one ``offline-run-*-<run_id>``
+    directory; the two ``<run_id>`` slugs must match (the eval child
+    resumed the same wandb run). Generate's dir must carry shard +
+    summary history rows; eval's dir must carry at least one ``test/*``
+    row from Lightning's ``trainer.test``.
+
+    :param cli_env: ``(hydra_run_dir, r2_prefix)`` from the fixture — gates
+        skip conditions and owns R2 cleanup.
+    """
+    hydra_run_dir, prefix = cli_env
+    # ``operator_workspace()`` honors ``$SYNTH_SETTER_WORKSPACE`` and
+    # decides where ``main()`` writes ``oracle_eval/<run_id>/``; pin it to
+    # the fixture's tmp_path so the eval's wandb dir is reachable from the
+    # test without depending on the checkout-root walk.
+    workspace = hydra_run_dir.parent
+    result = _run_cli(
+        hydra_run_dir=hydra_run_dir,
+        r2_prefix=prefix,
+        extra_overrides=[
+            "experiment=generate_dataset/smoke-shard-with-oracle-eval",
+            "finalize_inline=true",
+            "oracle_eval_inline=true",
+        ],
+        extra_env={"SYNTH_SETTER_WORKSPACE": str(workspace)},
+        timeout=600,
+    )
+    _assert_cli_succeeded(result, context="oracle_eval_inline shared-wandb-run")
+
+    generate_run_dir = _find_offline_run_dir(hydra_run_dir)
+    generate_run_id = generate_run_dir.name.split("-", 3)[-1]
+
+    eval_workspace_dir = workspace / "oracle_eval" / generate_run_id
+    assert eval_workspace_dir.is_dir(), (
+        f"expected eval workspace dir at {eval_workspace_dir}; "
+        f"main()'s oracle_eval_inline branch did not run with the launcher's run_id"
+    )
+    eval_run_dir = _find_offline_run_dir(eval_workspace_dir)
+    eval_run_id = eval_run_dir.name.split("-", 3)[-1]
+    assert eval_run_id == generate_run_id, (
+        f"eval wandb run id {eval_run_id!r} does not match generate's "
+        f"{generate_run_id!r} — the eval subprocess opened a fresh run "
+        f"instead of resuming"
+    )
+
+    generate_binary = _single_wandb_binary(generate_run_dir)
+    generate_rows = read_history_rows(generate_binary)
+    assert any("shard/bytes" in r for r in generate_rows), (
+        f"generate dir missing per-shard history rows in {generate_binary}"
+    )
+    assert any("shards/rendered" in r for r in generate_rows), (
+        f"generate dir missing summary history row in {generate_binary}"
+    )
+
+    eval_binary = _single_wandb_binary(eval_run_dir)
+    eval_rows = read_history_rows(eval_binary)
+    assert any(any(k.startswith("test/") for k in r) for r in eval_rows), (
+        f"eval dir has no test/* history rows in {eval_binary}; "
+        f"oracle eval did not log Lightning test_step metrics to the resumed run"
+    )
