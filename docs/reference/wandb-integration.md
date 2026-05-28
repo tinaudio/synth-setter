@@ -164,25 +164,100 @@ ______________________________________________________________________
 
 ## 3. Artifacts
 
-| Artifact          | Source                                 | When                                                                                      |
-| ----------------- | -------------------------------------- | ----------------------------------------------------------------------------------------- |
-| Model checkpoints | `ModelCheckpoint` + `log_model: "all"` | Every 5000 steps (with `default_surge` callbacks) + best + last, all uploaded immediately |
-| Source code       | `wandb.Settings(code_dir=".")`         | Run start                                                                                 |
+| Artifact                 | Source                                                             | When                                                                                                |
+| ------------------------ | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| Model checkpoints        | `ModelCheckpoint` + `log_model: "all"`                             | Every 5000 steps (with `default_surge` callbacks) + best + last, all uploaded immediately           |
+| Source code              | `wandb.Settings(code_dir=".")`                                     | Run start                                                                                           |
+| `<task_name>-input-spec` | `_log_spec_artifact` in `src/synth_setter/cli/generate_dataset.py` | Dataset-generation run start; artifact type `dataset-spec`, payload = `DatasetSpec.model_dump_json` |
 
 ______________________________________________________________________
 
 ## 4. Entry Points
 
-| Entry point                     | W&B usage                                                                                                                                                                          | File                            |
-| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
-| `src/synth_setter/cli/train.py` | Full: logger init → hparams → provenance → train metrics → test metrics → teardown                                                                                                 | `src/synth_setter/cli/train.py` |
-| `src/synth_setter/cli/eval.py`  | Full: logger init → hparams → provenance → test/val metrics (+ optional predictions) → predict-mode `audio/<metric>_{mean,std}` keys from `_log_audio_metrics_to_wandb` → teardown | `src/synth_setter/cli/eval.py`  |
+| Entry point                                | W&B usage                                                                                                                                                                            | File                                       |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------ |
+| `src/synth_setter/cli/train.py`            | Full: logger init → hparams → provenance → train metrics → test metrics → teardown                                                                                                   | `src/synth_setter/cli/train.py`            |
+| `src/synth_setter/cli/eval.py`             | Full: logger init → hparams → provenance → test/val metrics (+ optional predictions) → predict-mode `audio/<metric>_{mean,std}` keys from `_log_audio_metrics_to_wandb` → teardown   | `src/synth_setter/cli/eval.py`             |
+| `src/synth_setter/cli/generate_dataset.py` | Dataset-generation: logger init pinned to `spec.run_id` → spec hparams → `<task_name>-input-spec` artifact → per-shard metrics → run summary → `finalize(status)` + `wandb.finish()` | `src/synth_setter/cli/generate_dataset.py` |
 
-Both use `@task_wrapper` which ensures `wandb.finish()` runs even on exception.
+Both training and eval use `@task_wrapper` which ensures `wandb.finish()` runs even on exception.
+`generate_dataset` brackets `generate(...)` in its own `try/finally` that calls `_close_loggers` — see §5 for the metric / run-id contract.
 
 ______________________________________________________________________
 
-## 5. Known Gaps
+## 5. Dataset Generation Runs
+
+`src/synth_setter/cli/generate_dataset.py` instantiates a `WandbLogger` via Hydra
+(`configs/dataset.yaml` includes `- logger: wandb` in its defaults list) and pins
+`logger.wandb.id` to `spec.run_id` — derived deterministically by
+`make_dataset_wandb_run_id` (`src/synth_setter/pipeline/schemas/prefix.py`) — so
+the W&B run ID matches the R2 prefix under `data/<task_name>/<run_id>/`. This is
+the single binding point: re-running with the same `spec` resumes the same W&B run.
+
+### 5a. Hyperparameters and artifact (logged once at run start)
+
+| Key / artifact           | Source                                                                                                       |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| All `DatasetSpec` fields | `_log_hyperparams(loggers, spec)` → `spec.model_dump(mode="json")`                                           |
+| `<task_name>-input-spec` | `_log_spec_artifact(loggers, spec)` — artifact type `dataset-spec`, payload `spec.model_dump_json(indent=2)` |
+
+### 5b. Per-shard metrics (one history row per shard, `step=shard_id`)
+
+| Key                    | What                                                                           |
+| ---------------------- | ------------------------------------------------------------------------------ |
+| `shard/bytes`          | Local shard file size in bytes (stable; shards retained at `work_dir`)         |
+| `shard/render_seconds` | Wall-clock seconds from subprocess invoke through upload-end; `0.0` on R2-skip |
+
+Emitted by `_log_shard_metrics` from `_render_one_owned_shard` in both the
+serial and parallel dispatchers.
+
+### 5c. Run summary (one terminal row)
+
+| Key                             | What                                              |
+| ------------------------------- | ------------------------------------------------- |
+| `shards/rendered`               | Shards this rank actually rendered                |
+| `shards/skipped`                | Shards short-circuited by the R2-skip probe       |
+| `shards/total`                  | `len(my_range)` — owned shard count for this rank |
+| `generation/elapsed_seconds`    | Wall-clock dispatcher duration (mirrors #1304)    |
+| `generation/samples`            | `rendered * spec.render.samples_per_shard`        |
+| `generation/samples_per_second` | `samples / elapsed_s` (0.0 when `elapsed_s == 0`) |
+
+Emitted by `_log_summary` after the dispatcher returns. The dispatcher is fail-fast — there
+is no partial-success path. Either every owned shard's contract is fulfilled (rendered or
+short-circuited by the R2-skip probe) and `finalize(status)` records `"success"`, or any
+shard's exception propagates up `generate()`'s `try/except`, `status` flips to `"failed"`,
+the summary is not emitted, and `_close_loggers` calls `finalize("failed")` + `wandb.finish()`
+in the `finally`.
+
+### 5d. Linked issues
+
+| Issue                                                         | Topic                                                                                                                   |
+| ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| [#1318](https://github.com/tinaudio/synth-setter/issues/1318) | v2: per-sample loudness telemetry relay (stdout protocol, worker → launcher) — deferred non-goal from the design doc Q5 |
+
+### 5e. Sweeps
+
+Operator-authored sweep configs under `sweeps/` drive `synth-setter-generate-dataset`
+via `wandb sweep` + `wandb agent`. Each YAML pins `program:` at
+`src/synth_setter/cli/generate_dataset.py` and uses `${args_no_hyphens}` so sweep
+parameters reach the launcher as Hydra overrides (e.g. `render.plugin_reload_cadence=once`).
+`entity:` / `project:` are pinned in the YAML — wandb's sweep CLI does not honor
+`WANDB_ENTITY` / `WANDB_PROJECT` at sweep-creation time (those only steer
+`wandb.init` inside each trial).
+
+To launch:
+
+```bash
+wandb sweep sweeps/generate_dataset_cadence.yaml   # prints sweep_id
+wandb agent <entity>/<project>/<sweep_id>          # runs trials
+```
+
+Each trial subprocess opens its own wandb run with `id = spec.run_id`; the
+`WANDB_SWEEP_ID` env (set by the agent) attaches the run to the sweep grid.
+
+______________________________________________________________________
+
+## 6. Known Gaps
 
 | #   | Gap                                                                                                                                                                                                                                                                           | Impact                                                                                              | Tracking |
 | --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | -------- |

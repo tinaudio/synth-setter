@@ -1,6 +1,193 @@
 # CHANGELOG
 
 
+## v8.12.0 (2026-05-27)
+
+### Features
+
+- **monitoring**: Track generate_dataset runs in wandb
+  ([#1323](https://github.com/tinaudio/synth-setter/pull/1323),
+  [`763c60c`](https://github.com/tinaudio/synth-setter/commit/763c60cbae410544f6a4fc890b5f3f2407953b9b))
+
+* feat(generate-dataset): track wandb run with spec hyperparams + artifact
+
+Wires generate_dataset into wandb tracking so each run is observable end-to-end:
+
+- Adds `- logger: wandb` to the dataset.yaml defaults and extends `_NON_SPEC_KEYS` (in both the CLI
+  and the spec-URI helper) with `"logger"`. - Widens `generate(spec, work_dir)` → `generate(spec,
+  work_dir, loggers)` and bracket-wraps the dispatch body in a try/except/finally so: *
+  `_log_hyperparams` pushes `spec.model_dump(mode="json")` onto each logger * `_log_spec_artifact`
+  uploads the spec as a `<task_name>-input-spec` wandb artifact via a tempfile (independent of the
+  local mirror) * `_close_loggers` finalizes each logger with the run status and calls
+  `wandb.finish()` so offline `.wandb` binaries flush even on failure - Extracts
+  `_loggers_pinned_to_spec(cfg, spec)` so `main()` and `from_hydra()` share the OmegaConf override
+  that pins `logger.wandb.id` to `spec.run_id`, keeping the wandb run identity in lockstep with
+  `make_dataset_wandb_run_id`.
+
+The new `tests/test_generate_dataset_wandb.py` exercises the wiring end-to-end against a real
+  `WandbLogger(offline=True)` (no network), stubbing `object_size` + `extract_renderer_version` so
+  shards short-circuit on the R2-skip path. The offline run dir + `<task_name>-input-spec` artifact
+  entry in the `.wandb` binary are the load-bearing assertions. An autouse `wandb.teardown()`
+  fixture keeps the test order-independent under pytest-randomly.
+
+Existing `generate(...)` call sites in tests get the `[]` logger list; the spec-URI ci helper's
+  `_NON_SPEC_CFG_KEYS` stays in sync with the CLI's canonical list (validated by
+  `test_non_spec_cfg_keys_mirror_cli_canonical`).
+
+* feat(generate-dataset): log per-shard bytes + render seconds + run summary to wandb
+
+Thread the loggers list through both dispatcher arms and ``_render_one_owned_shard`` so every owned
+  shard emits one history row keyed on ``shard/bytes`` + ``shard/render_seconds`` (``0.0`` on the
+  R2-skip branch, wall-clock from subprocess invoke through upload-end on the render branch). After
+  dispatch returns, ``generate()`` forwards the existing samples/s telemetry (#1304) plus the
+  rendered/skipped/total counters to ``_log_summary`` so the run is queryable end-to-end in wandb
+  instead of only via stdout. ``_render_and_upload_shard`` now returns the local byte size so the
+  metrics call uses the stable on-disk stat (shards are retained at ``work_dir``, #1311).
+
+Offline integration test reads the run's binary datastore directly — offline runs do not materialize
+  ``files/wandb-history.jsonl`` — and asserts one per-shard row per ``spec.shards`` entry plus
+  exactly one terminal summary row with the expected counters and triple.
+
+* docs(monitoring): document generate_dataset wandb tracking + pin sweep YAML shape
+
+Document the new `generate_dataset` wandb wiring in `docs/reference/wandb-integration.md` (§3
+  artifact, §4 entry point, new §5 covering hyperparams + per-shard / summary metric keys + the
+  `spec.run_id` ↔ `wandb.run.id` binding) and extend `docs/doc-map.yaml` so doc-drift tracks
+  `cli/generate_dataset.py` and `configs/dataset.yaml` against this doc.
+
+Add the operator-facing `sweeps/generate_dataset_cadence.yaml` grid sweep over
+  `render.plugin_reload_cadence` × `render.gui_toggle_cadence`, and pin its shape with an offline
+  structural test `tests/test_sweep_yaml_structure.py` so the `command:` / `${args_no_hyphens}`
+  contract that `wandb agent` executes cannot drift silently without a live W&B run.
+
+Issue #1318 already tracks the deferred v2 per-sample loudness telemetry relay (design doc Q5);
+  cross-linked from the new doc section.
+
+Refs #1318
+
+* docs(monitoring): address doc-drift advisory on PR #1323
+
+- wandb-integration.md §5c: correct partial-success claim — dispatcher is fail-fast, so summary
+  fires only when every shard rendered or R2-skipped; any exception sets status="failed" before the
+  summary is emitted. - configuration-reference.md §2.1: update inlined generate() signature to the
+  new 3-arg form (spec, work_dir, loggers). - storage-provenance-spec.md §Materialized spec: drop
+  the stale 2-arg generate(spec, work_dir) signature in the consumers cell. - doc-map.yaml: tighten
+  the cli/generate_dataset.py and dataset.yaml covers strings; add a sweeps/** entry pointing at
+  wandb-integration.md. - wandb-integration.md §5e: new short section describing the wandb sweep
+  launch sequence and the entity/project / WANDB_SWEEP_ID semantics.
+
+Refs #1321.
+
+* fix(generate-dataset): address Copilot review on PR #1323
+
+- src/synth_setter/cli/generate_dataset.py: gate the `OmegaConf.update(cfg, "logger.wandb.id", ...)`
+  on `OmegaConf.select(cfg, "logger.wandb") is not None` so a non-wandb logger override (e.g.
+  `logger=tensorboard`) no longer raises before `instantiate_loggers` (#3312644025).
+
+- docs/reference/wandb-integration.md: tighten the §5c fail-fast wording so "rendered or
+  short-circuited by the R2-skip probe" is not misread as endorsing partial-success as "success";
+  partial-success has no path under the dispatcher's fail-fast contract (#3312644080).
+
+Refs PR #1323
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* refactor(generate-dataset): tighten comments + docstrings flagged by repo review
+
+Comment-hygiene + clarity pass over the wandb-tracking diff per the pre-PR sentinel; behavior
+  unchanged.
+
+- generate(): drop "no longer happens here" historical narration; fold the two-place
+  ``generate(spec, work_dir, loggers)`` restatement into a single contract paragraph. -
+  _log_spec_artifact(): drop the on-disk-mirror disclaimer — the local spec mirror is a main()
+  concern, not this function's. - _smoke_job_name(): collapse the :raises ValueError: paraphrase of
+  the raised message into one line. - main(): tighten three multi-line rationale comments (workspace
+  anchor, R2 creds load, finalize-outside-wandb #1289 pointer) to one line each. - spec_uri.py: drop
+  historical "unlike the prior __usage__" prose and tighten three multi-line comments
+  (paths-pinning, flag-parser scope, collapsed exception list). -
+  sweeps/generate_dataset_cadence.yaml: replace the misleading WANDB_ENTITY override claim with a
+  present-tense pin rationale (wandb sweep ignores those env vars at sweep-creation time). -
+  tests/test_generate_dataset_wandb.py: tighten module docstring and the two helper docstrings
+  without losing pydoclint-required field lists.
+
+* fix(generate-dataset): address Copilot round-2 review on PR #1323
+
+- src/synth_setter/cli/generate_dataset.py: move ``_log_hyperparams`` / ``_log_spec_artifact``
+  inside the ``try`` block so a helper-level exception still triggers ``finalize("failed")`` +
+  ``wandb.finish()`` in the ``finally`` (PRRT_kwDOPbKJR86FLg6u).
+
+- src/synth_setter/cli/generate_dataset.py: wrap the tempfile cleanup in ``_log_spec_artifact`` with
+  ``missing_ok=True`` + ``except OSError`` so a Windows-lock / antivirus / prior-removal failure no
+  longer aborts the run (PRRT_kwDOPbKJR86FLg7M).
+
+- src/synth_setter/cli/generate_dataset.py: gate ``wandb.finish()`` in ``_close_loggers`` on a
+  ``WandbLogger`` being present in ``loggers`` so ``generate(..., loggers=[])`` no longer closes a
+  stale run started elsewhere in the same process (PRRT_kwDOPbKJR86FLg7e).
+
+- tests/test_generate_dataset_wandb.py: wrap the wandb-internals import in ``try /
+  pytest.skip(allow_module_level=True)`` so a future wandb upgrade that moves the ``wandb.proto`` /
+  ``wandb.sdk.internal`` paths skips the test module with a loud, pointable reason rather than
+  red-CI-ing (PRRT_kwDOPbKJR86FLg70).
+
+* test(generate-dataset): add CLI subprocess e2e for wandb Phase 1/2/3
+
+Promotes the three manual-verification items from
+  ``thoughts/shared/plans/2026-05-27-track-generate-dataset-in-wandb.md`` to a real test under
+  ``tests/integration/``:
+
+- ``test_phase_1_and_2_cli_emits_run_id_plus_shard_and_summary_history`` subprocess-invokes
+  ``synth-setter-generate-dataset experiment=generate_dataset/smoke-shard`` with
+  ``WANDB_MODE=offline`` and asserts the offline-run dir's slug encodes ``spec.run_id`` (Phase 1),
+  plus the ``.wandb`` binary's history contains three per-shard
+  ``shard/bytes``/``shard/render_seconds`` rows and one terminal summary row with every key the PR
+  claims (Phase 2).
+
+- ``test_phase_3_sweep_cadence_cell_runs_end_to_end`` parametrizes over the four cadence cells in
+  ``sweeps/generate_dataset_cadence.yaml`` (``plugin_reload_cadence`` × ``gui_toggle_cadence``) and
+  asserts each cell's CLI invocation emits an offline run whose ``.wandb`` binary records the
+  cadence override in its hyperparams — the same per-cell contract ``wandb agent`` would exercise,
+  without needing the wandb sweep backend.
+
+Marked ``slow + r2 + integration_r2``; auto-skips on non-Linux, when Surge VST3 is absent, or when
+  R2 is unreachable. A unique ``ci-cli-wandb-e2e/<run_id>/<run_attempt>/<uuid>/`` prefix per test
+  isolates concurrent CI runs; ``rclone purge`` finalizer cleans up even when the test body raises.
+
+``PYTHONPATH=<worktree>/src`` is prepended on the subprocess env so the spawned CLI imports the same
+  ``synth_setter`` source the test was collected from, even when ``pip install -e .`` is pinned to a
+  sibling checkout.
+
+Also extracts ``read_history_rows`` from ``tests/test_generate_dataset_wandb.py`` into
+  ``tests/helpers/wandb_offline.py`` so both the in-process and the CLI-subprocess test files share
+  one wandb-internals decoder. The ``try`` / ``pytest.skip(allow_module_level=True)`` import guard
+  moves with it — a future wandb upgrade that moves ``wandb.proto.wandb_internal_pb2`` or
+  ``wandb.sdk.internal.datastore`` skips every consumer with a single, pointable reason instead of
+  red-CI-ing.
+
+* docs(generate-dataset): clarify spec-artifact upload is wandb-gated
+
+The generate() docstring previously implied the <task_name>-input-spec artifact is always uploaded
+  before rendering, but _log_spec_artifact() is a no-op unless a WandbLogger is present in loggers.
+  Mirror _log_spec_artifact's own contract wording so the docstring matches runtime behavior.
+
+Resolves Copilot review thread PRRT_kwDOPbKJR86FLsIY on PR #1323.
+
+* fix(generate-dataset): widen oracle_eval_inline test stubs to 3-arg generate
+
+PR #1325 added ``TestMainDispatchBranches::test_main_oracle_eval_inline_*`` on main while this
+  branch widened ``generate(spec, work_dir)`` to ``generate(spec, work_dir, loggers)``. After
+  rebasing onto main, the two stubs at lines 1675 / 1744 still read ``lambda _spec, _work_dir:
+  None`` and ``main()`` now passes three args, raising ``TypeError`` from inside Hydra.
+
+Widen both stubs to ``lambda _spec, _work_dir, _loggers: None``, matching the convention used
+  elsewhere in the file (lines 1587, 1949, 2191).
+
+Refs PR #1323 (rebase fixup)
+
+---------
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+
 ## v8.11.0 (2026-05-27)
 
 ### Features

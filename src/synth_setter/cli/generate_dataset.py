@@ -14,6 +14,7 @@ from __future__ import annotations
 import shlex
 import subprocess
 import sys
+import tempfile
 import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextlib import ExitStack
@@ -21,7 +22,10 @@ from pathlib import Path
 from typing import Any
 
 import hydra
+import wandb
 from hydra.core.hydra_config import HydraConfig
+from lightning.pytorch.loggers import Logger
+from lightning.pytorch.loggers.wandb import WandbLogger
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 
@@ -41,6 +45,7 @@ from synth_setter.pipeline.spec_io import (
     write_spec_locally,
 )
 from synth_setter.resources import as_file, vst_headless_wrapper
+from synth_setter.utils.instantiators import instantiate_loggers
 from synth_setter.workspace import operator_workspace
 
 # Composed-config keys that aren't DatasetSpec fields (interpolation sources, Hydra
@@ -55,6 +60,7 @@ _NON_SPEC_KEYS: tuple[str, ...] = (
     "skypilot_launch",
     "finalize_inline",
     "oracle_eval_inline",
+    "logger",
 )
 
 # Side effect only: publish ``PROJECT_ROOT`` so ``${oc.env:PROJECT_ROOT}``
@@ -155,75 +161,233 @@ def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -
     return args
 
 
-def generate(spec: DatasetSpec, work_dir: Path) -> None:
+def generate(spec: DatasetSpec, work_dir: Path, loggers: list[Logger]) -> None:  # noqa: DOC503
     """Render+upload each owned shard; writes shards under ``work_dir``.
 
-    ``work_dir`` is the Hydra per-run output dir supplied by the caller.
-    Spec upload no longer happens here — ``main()`` writes the canonical R2
-    copy once on the launcher host before either calling
-    ``generate(spec, work_dir)`` inline (local-run) or dispatching to a
-    SkyPilot worker pod that re-enters via
-    ``from_hydra`` → ``generate(spec, work_dir)``. Subprocesses fail-fast:
-    later shards are not attempted on subprocess error.
-
-    Before each render, R2 is probed for the shard's destination object: if it already exists with
-    non-zero size, the shard is skipped (resumability MVP — see #750). The probe uses
-    ``check=True``, so a non-zero rclone exit (auth, network) propagates as a hard failure rather
-    than degrading silently into a re-render.
+    Subprocesses fail-fast: later shards are not attempted on subprocess error.
+    Before each render, R2 is probed for the shard's destination object: if it
+    already exists with non-zero size, the shard is skipped (resumability MVP
+    — see #750). The probe uses ``check=True``, so a non-zero rclone exit
+    (auth, network) propagates as a hard failure rather than degrading silently
+    into a re-render.
 
     The launcher builds the spec interpreter-only (no pedalboard / X11) trusting
-    ``configs/render/<spec>.yaml``; this is where the worker — which has pedalboard
-    — verifies the plugin and pinned ``renderer_version`` agree.
+    ``configs/render/<spec>.yaml``; the worker — which has pedalboard — verifies
+    the plugin and pinned ``renderer_version`` agree.
+
+    The spec is pushed to every logger as hyperparameters and, when a
+    ``WandbLogger`` is present in ``loggers``, uploaded as a
+    ``<task_name>-input-spec`` artifact before any render begins. The wandb
+    run is bracketed by the function: ``finalize(status)`` and ``wandb.finish()``
+    fire in ``finally`` so the run is closed (and offline binaries flushed) on
+    both success and failure.
 
     :param spec: Validated dataset spec; rank/world env partitions ``spec.shards``
         across worker pods, and ``spec.render.renderer_version`` is cross-checked
         against the loaded plugin.
-    :param work_dir: Caller-supplied output dir (the Hydra per-run output dir);
-        created if missing. Shards are written here before the rclone upload.
+    :param work_dir: Hydra per-run output dir supplied by the caller; created
+        if missing. Shards are written here before the rclone upload.
+    :param loggers: Lightning loggers instantiated by ``instantiate_loggers`` —
+        typically a single ``WandbLogger`` whose ``id`` was pinned to
+        ``spec.run_id`` by the caller. May be empty (logger group disabled).
     :raises RuntimeError: If the worker's plugin version disagrees with
         ``spec.render.renderer_version``.
     """
-    render = spec.render
-    actual_renderer_version = extract_renderer_version(Path(render.plugin_path))
-    if actual_renderer_version != render.renderer_version:
-        raise RuntimeError(
-            f"Renderer version mismatch: spec pins {render.renderer_version!r} but "
-            f"plugin at {render.plugin_path} reports {actual_renderer_version!r}. "
-            "Rebuild the image against the matching SURGE_GIT_REF, or bump "
-            "renderer_version in the dataset config that produced this spec."
+    status = "success"
+    try:
+        # Inside the try so a helper failure (e.g. tempfile creation in
+        # ``_log_spec_artifact``) still triggers ``finalize("failed")`` +
+        # ``wandb.finish()`` in the ``finally`` — otherwise the wandb run
+        # leaks un-closed on the helper's exception path.
+        _log_hyperparams(loggers, spec)
+        _log_spec_artifact(loggers, spec)
+        render = spec.render
+        actual_renderer_version = extract_renderer_version(Path(render.plugin_path))
+        if actual_renderer_version != render.renderer_version:
+            raise RuntimeError(
+                f"Renderer version mismatch: spec pins {render.renderer_version!r} but "
+                f"plugin at {render.plugin_path} reports {actual_renderer_version!r}. "
+                "Rebuild the image against the matching SURGE_GIT_REF, or bump "
+                "renderer_version in the dataset config that produced this spec."
+            )
+        logger.info(
+            f"renderer_version OK: plugin at {render.plugin_path} == {render.renderer_version}"
         )
-    logger.info(
-        f"renderer_version OK: plugin at {render.plugin_path} == {render.renderer_version}"
-    )
 
-    rank, world = read_rank_world_from_env()
-    my_range = get_my_shards(spec.num_shards, rank=rank, world=world)
-    logger.info(
-        f"shard partition: rank={rank}/{world} owns shard_ids "
-        f"[{my_range.start}, {my_range.stop}) "
-        f"({len(my_range)} of {spec.num_shards} shards)"
-    )
+        rank, world = read_rank_world_from_env()
+        my_range = get_my_shards(spec.num_shards, rank=rank, world=world)
+        logger.info(
+            f"shard partition: rank={rank}/{world} owns shard_ids "
+            f"[{my_range.start}, {my_range.stop}) "
+            f"({len(my_range)} of {spec.num_shards} shards)"
+        )
 
-    r2_dest_prefix = spec.r2.rclone_prefix()
-    work_dir.mkdir(parents=True, exist_ok=True)
+        r2_dest_prefix = spec.r2.rclone_prefix()
+        work_dir.mkdir(parents=True, exist_ok=True)
 
-    # ``start`` brackets only the dispatch call so the rate still includes the
-    # in-loop R2 skip probes (observable cost of the resumability MVP, #750).
-    start = time.perf_counter()
-    if spec.render.parallel and len(my_range) > 0:
-        rendered, skipped = _dispatch_shards_parallel(spec, my_range, work_dir, r2_dest_prefix)
-    else:
-        rendered, skipped = _dispatch_shards_serial(spec, my_range, work_dir, r2_dest_prefix)
-    elapsed_s = time.perf_counter() - start
-    samples = rendered * spec.render.samples_per_shard
-    rate = samples / elapsed_s if elapsed_s > 0 else 0.0
-    logger.info(
-        f"shard summary: rendered={rendered} skipped={skipped} of {len(my_range)} assigned"
-    )
-    logger.info(
-        f"generation speed: {samples} samples in {elapsed_s:.3f}s "
-        f"= {rate:.3f} samples/s (wallclock includes R2 skip probes)"
-    )
+        # ``start`` brackets only the dispatch call so the rate still includes the
+        # in-loop R2 skip probes (observable cost of the resumability MVP, #750).
+        start = time.perf_counter()
+        if spec.render.parallel and len(my_range) > 0:
+            rendered, skipped = _dispatch_shards_parallel(
+                spec, my_range, work_dir, r2_dest_prefix, loggers
+            )
+        else:
+            rendered, skipped = _dispatch_shards_serial(
+                spec, my_range, work_dir, r2_dest_prefix, loggers
+            )
+        elapsed_s = time.perf_counter() - start
+        samples = rendered * spec.render.samples_per_shard
+        rate = samples / elapsed_s if elapsed_s > 0 else 0.0
+        logger.info(
+            f"shard summary: rendered={rendered} skipped={skipped} of {len(my_range)} assigned"
+        )
+        logger.info(
+            f"generation speed: {samples} samples in {elapsed_s:.3f}s "
+            f"= {rate:.3f} samples/s (wallclock includes R2 skip probes)"
+        )
+        _log_summary(loggers, rendered, skipped, len(my_range), elapsed_s, samples, rate)
+    except BaseException:
+        status = "failed"
+        raise
+    finally:
+        _close_loggers(loggers, status)
+
+
+def _log_hyperparams(loggers: list[Logger], spec: DatasetSpec) -> None:
+    """Push the spec onto each logger as hyperparameters.
+
+    :param loggers: Lightning loggers — empty list is a no-op.
+    :param spec: Serialized via ``model_dump(mode="json")`` so nested
+        ``R2Location`` / ``ShardSpec`` entries round-trip through wandb's
+        config flattener.
+    """
+    payload = spec.model_dump(mode="json")
+    for lg in loggers:
+        try:
+            lg.log_hyperparams(payload)
+        except Exception as exc:  # noqa: BLE001 — third-party logger failures must not abort the run
+            logger.warning(f"log_hyperparams failed on {type(lg).__name__}: {exc}")
+
+
+def _log_spec_artifact(loggers: list[Logger], spec: DatasetSpec) -> None:
+    """Upload the spec as a wandb artifact when a ``WandbLogger`` is present.
+
+    Writes the spec JSON to a tempfile; the wandb client copies the payload
+    into its own store before this function returns.
+
+    :param loggers: Lightning loggers; non-``WandbLogger`` entries are skipped.
+    :param spec: ``spec.task_name`` names the artifact (``<task_name>-input-spec``).
+    """
+    wandb_lgs = [lg for lg in loggers if isinstance(lg, WandbLogger)]
+    if not wandb_lgs:
+        return
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+        f.write(spec.model_dump_json(indent=2))
+        tmp = Path(f.name)
+    try:
+        for lg in wandb_lgs:
+            try:
+                art = wandb.Artifact(name=f"{spec.task_name}-input-spec", type="dataset-spec")
+                art.add_file(str(tmp))
+                lg.experiment.log_artifact(art)
+            except Exception as exc:  # noqa: BLE001 — wandb artifact failure must not abort the run
+                logger.warning(f"log_spec_artifact failed on {type(lg).__name__}: {exc}")
+    finally:
+        # Best-effort tempfile cleanup; wandb has already copied the payload
+        # into its own store by this point. A leaked tempfile under the OS
+        # temp dir is preferable to letting a deletion failure (Windows lock,
+        # antivirus scan, prior removal) abort dataset generation.
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError as exc:
+            logger.warning(f"tempfile cleanup failed for {tmp}: {exc}")
+
+
+def _log_shard_metrics(
+    loggers: list[Logger], shard_id: int, byte_size: int, render_seconds: float
+) -> None:
+    """Emit per-shard byte size + render duration as a wandb history row.
+
+    :param loggers: Lightning loggers — empty list is a no-op.
+    :param shard_id: Passed as ``step`` so wandb's x-axis aligns with shard order.
+    :param byte_size: Local shard file size in bytes; stable because shards are
+        retained at ``work_dir``.
+    :param render_seconds: Wall-clock seconds from subprocess invoke through
+        upload-end; ``0.0`` on the R2-skip branch.
+    """
+    payload = {"shard/bytes": byte_size, "shard/render_seconds": render_seconds}
+    for lg in loggers:
+        try:
+            lg.log_metrics(payload, step=shard_id)
+        except Exception as exc:  # noqa: BLE001 — third-party logger failures must not abort the run
+            logger.warning(f"log_metrics(shard) failed on {type(lg).__name__}: {exc}")
+
+
+def _log_summary(
+    loggers: list[Logger],
+    rendered: int,
+    skipped: int,
+    total: int,
+    elapsed_s: float,
+    samples: int,
+    rate: float,
+) -> None:
+    """Emit the run-level shard counters + e2e generation triple.
+
+    Mirrors the loguru summary line at ``generate()`` so wandb history and
+    stdout agree on the rate that the resumability MVP (#750, #1304) reports.
+
+    :param loggers: Lightning loggers — empty list is a no-op.
+    :param rendered: Shards this rank actually rendered.
+    :param skipped: Shards short-circuited by the R2-skip probe.
+    :param total: ``len(my_range)`` — owned shard count for this rank.
+    :param elapsed_s: Wall-clock seconds bracketing the dispatcher (includes
+        the R2 skip probes by design).
+    :param samples: ``rendered * spec.render.samples_per_shard``.
+    :param rate: ``samples / elapsed_s`` (``0.0`` when ``elapsed_s == 0``).
+    """
+    payload = {
+        "shards/rendered": rendered,
+        "shards/skipped": skipped,
+        "shards/total": total,
+        "generation/elapsed_seconds": elapsed_s,
+        "generation/samples": samples,
+        "generation/samples_per_second": rate,
+    }
+    for lg in loggers:
+        try:
+            lg.log_metrics(payload)
+        except Exception as exc:  # noqa: BLE001 — third-party logger failures must not abort the run
+            logger.warning(f"log_metrics(summary) failed on {type(lg).__name__}: {exc}")
+
+
+def _close_loggers(loggers: list[Logger], status: str) -> None:
+    """Finalize each logger and flush any live wandb run.
+
+    ``WandbLogger.finalize`` records status but does not close the run;
+    ``wandb.finish()`` is what flushes the offline ``.wandb`` binary
+    (matches the pattern in ``synth_setter.utils.utils``).
+
+    :param loggers: Lightning loggers — finalize is invoked on each.
+    :param status: ``"success"`` or ``"failed"``; forwarded verbatim to the
+        loggers' ``finalize`` contract.
+    """
+    for lg in loggers:
+        try:
+            lg.finalize(status)
+        except Exception as exc:  # noqa: BLE001 — finalize errors must not mask the original raise
+            logger.warning(f"logger finalize failed on {type(lg).__name__}: {exc}")
+    # Only close the wandb run if a ``WandbLogger`` is in ``loggers`` — i.e. we
+    # opened it. Otherwise a stale ``wandb.run`` started elsewhere in the
+    # process (e.g. another library, a sibling test) would be silently
+    # finished here.
+    have_wandb_logger = any(isinstance(lg, WandbLogger) for lg in loggers)
+    if have_wandb_logger and wandb.run is not None:
+        try:
+            wandb.finish()
+        except Exception as exc:  # noqa: BLE001 — finish errors must not mask the original raise
+            logger.warning(f"wandb.finish() failed: {exc}")
 
 
 def _dispatch_shards_serial(
@@ -231,6 +395,7 @@ def _dispatch_shards_serial(
     my_range: range,
     work_dir: Path,
     r2_dest_prefix: str,
+    loggers: list[Logger],
 ) -> tuple[int, int]:
     """Render+upload owned shards in order; fail-fast on first error.
 
@@ -238,12 +403,14 @@ def _dispatch_shards_serial(
     :param my_range: Contiguous range of shard IDs owned by this rank.
     :param work_dir: Hydra per-run output dir; shards land here before upload.
     :param r2_dest_prefix: ``spec.r2.rclone_prefix()``.
+    :param loggers: Forwarded to ``_render_one_owned_shard`` so per-shard
+        byte size + render duration land in wandb history.
     :returns: ``(rendered, skipped)`` summary counts over ``my_range``.
     """
     rendered = 0
     skipped = 0
     for shard_id in my_range:
-        r, s = _render_one_owned_shard(spec, shard_id, work_dir, r2_dest_prefix)
+        r, s = _render_one_owned_shard(spec, shard_id, work_dir, r2_dest_prefix, loggers)
         rendered += int(r)
         skipped += int(s)
     return rendered, skipped
@@ -254,6 +421,7 @@ def _dispatch_shards_parallel(
     my_range: range,
     work_dir: Path,
     r2_dest_prefix: str,
+    loggers: list[Logger],
 ) -> tuple[int, int]:
     """Render+upload owned shards concurrently via a ``ThreadPoolExecutor``.
 
@@ -277,6 +445,8 @@ def _dispatch_shards_parallel(
     :param my_range: Non-empty contiguous range of shard IDs owned by this rank.
     :param work_dir: Hydra per-run output dir; every owned shard lands here.
     :param r2_dest_prefix: ``spec.r2.rclone_prefix()``.
+    :param loggers: Forwarded to ``_render_one_owned_shard`` so per-shard
+        byte size + render duration land in wandb history.
     :returns: ``(rendered, skipped)`` summary counts over ``my_range``.
     """
     workers = min(max(1, available_cpus() // 2), len(my_range))
@@ -292,7 +462,7 @@ def _dispatch_shards_parallel(
             if sid is None:
                 break
             in_flight.add(
-                pool.submit(_render_one_owned_shard, spec, sid, work_dir, r2_dest_prefix)
+                pool.submit(_render_one_owned_shard, spec, sid, work_dir, r2_dest_prefix, loggers)
             )
         while in_flight:
             done, in_flight = wait(in_flight, return_when=FIRST_COMPLETED)
@@ -305,7 +475,9 @@ def _dispatch_shards_parallel(
                 if sid is None:
                     break
                 in_flight.add(
-                    pool.submit(_render_one_owned_shard, spec, sid, work_dir, r2_dest_prefix)
+                    pool.submit(
+                        _render_one_owned_shard, spec, sid, work_dir, r2_dest_prefix, loggers
+                    )
                 )
     finally:
         pool.shutdown(wait=True, cancel_futures=True)
@@ -317,16 +489,21 @@ def _render_one_owned_shard(
     shard_id: int,
     work_dir: Path,
     r2_dest_prefix: str,
+    loggers: list[Logger],
 ) -> tuple[bool, bool]:
     """Render+upload one owned shard, or skip if R2 already has it.
 
     Encapsulates the R2 skip-probe + ``_render_and_upload_shard`` invocation
-    so the serial and parallel dispatch arms share one callable.
+    so the serial and parallel dispatch arms share one callable. Emits one
+    ``shard/bytes`` + ``shard/render_seconds`` history row per call —
+    ``render_seconds == 0.0`` on the skip branch, wall-clock from subprocess
+    invoke through upload-end on the render branch.
 
     :param spec: Validated dataset spec; ``spec.shards[shard_id]`` is fetched.
-    :param shard_id: Index into ``spec.shards``.
+    :param shard_id: Index into ``spec.shards``; also the ``step`` for the row.
     :param work_dir: Hydra per-run output dir; shards land here before upload.
     :param r2_dest_prefix: ``spec.r2.rclone_prefix()``.
+    :param loggers: Forwarded to ``_log_shard_metrics``.
     :returns: ``(rendered, skipped)`` — exactly one is ``True``.
     """
     shard = spec.shards[shard_id]
@@ -336,8 +513,13 @@ def _render_one_owned_shard(
             f"skipping shard {shard.shard_id} — already in R2 "
             f"({existing_size} bytes): {shard.filename}"
         )
+        _log_shard_metrics(loggers, shard_id, byte_size=existing_size, render_seconds=0.0)
         return False, True
-    _render_and_upload_shard(spec, shard, work_dir, r2_dest_prefix)
+    t0 = time.monotonic()
+    byte_size = _render_and_upload_shard(spec, shard, work_dir, r2_dest_prefix)
+    _log_shard_metrics(
+        loggers, shard_id, byte_size=byte_size, render_seconds=time.monotonic() - t0
+    )
     return True, False
 
 
@@ -346,7 +528,7 @@ def _render_and_upload_shard(
     shard: ShardSpec,
     work_dir: Path,
     r2_dest_prefix: str,
-) -> None:
+) -> int:
     """Render a single shard and upload it to R2; shards are retained at ``work_dir``.
 
     Rendered shards stay on disk under ``work_dir`` for post-mortem inspection
@@ -356,6 +538,8 @@ def _render_and_upload_shard(
     ``spec.render.max_retries`` (default 0 = strict fail-fast); rclone is outside
     the loop because it already retries via ``--retries=3``.
 
+    :returns: Local shard file size in bytes; stable for the caller because
+        shards are retained at ``work_dir``.
     :raises subprocess.CalledProcessError: Renderer (or rclone) subprocess exited non-zero after
         exhausting the retry budget.
     :raises RuntimeError: Renderer exited 0 without writing the expected shard file.
@@ -390,9 +574,11 @@ def _render_and_upload_shard(
         raise RuntimeError(
             f"generate_vst_dataset.py exited 0 but did not write expected shard file: {shard_path}"
         )
-    logger.info(f"shard rendered: {shard_path} ({shard_path.stat().st_size} bytes)")
+    byte_size = shard_path.stat().st_size
+    logger.info(f"shard rendered: {shard_path} ({byte_size} bytes)")
     _rclone_copy(str(shard_path), r2_dest_prefix)
     logger.info(f"shard uploaded: {shard.filename} -> {r2_dest_prefix}")
+    return byte_size
 
 
 def spec_from_cfg(cfg: DictConfig) -> DatasetSpec:
@@ -451,9 +637,7 @@ def _smoke_job_name(spec: DatasetSpec) -> str:
 
     :param spec: Validated dataset spec.
     :return: Job-name stem matching the launcher's ``_JOB_NAME_RE`` grammar.
-    :raises ValueError: ``spec.task_name[:8]`` would produce a stem outside the
-        launcher grammar; fix ``spec.task_name`` or pin
-        ``skypilot_launch.job_name``.
+    :raises ValueError: derived stem violates ``_JOB_NAME_RE``.
     """
     from synth_setter.pipeline.skypilot_launch import _JOB_NAME_RE
 
@@ -497,6 +681,23 @@ def _build_worker_cmd(overrides: list[str], spec: DatasetSpec) -> str:
     return " && ".join(parts)
 
 
+def _loggers_pinned_to_spec(cfg: DictConfig, spec: DatasetSpec) -> list[Logger]:
+    """Pin the wandb run id to ``spec.run_id`` and instantiate ``cfg.logger``.
+
+    :param cfg: Composed dataset cfg; ``cfg.logger.wandb.id`` is overridden
+        in place so the wandb run identity stays in lockstep with the spec's
+        ``make_dataset_wandb_run_id`` derivation.
+    :param spec: ``spec.run_id`` is the canonical ``wandb.run.id`` for this
+        dataset.
+    :returns: Loggers list — empty when ``cfg.logger`` is omitted/null.
+    """
+    # Guard against non-wandb logger groups (e.g. ``logger=tensorboard``) where
+    # ``logger.wandb`` is absent and ``OmegaConf.update`` would raise.
+    if OmegaConf.select(cfg, "logger.wandb") is not None:
+        OmegaConf.update(cfg, "logger.wandb.id", spec.run_id)
+    return instantiate_loggers(cfg.get("logger"))
+
+
 @hydra.main(version_base="1.3", config_path="pkg://synth_setter.configs", config_name="dataset")
 def from_hydra(cfg: DictConfig) -> None:
     """Worker-side @hydra.main entry: build the spec and render it in-process.
@@ -504,7 +705,9 @@ def from_hydra(cfg: DictConfig) -> None:
     :param cfg: Composed Hydra dataset cfg supplied by ``@hydra.main`` from
         the worker's argv overrides.
     """
-    generate(spec_from_cfg(cfg), Path(cfg.paths.output_dir))
+    spec = spec_from_cfg(cfg)
+    loggers = _loggers_pinned_to_spec(cfg, spec)
+    generate(spec, Path(cfg.paths.output_dir), loggers)
 
 
 @hydra.main(version_base="1.3", config_path="pkg://synth_setter.configs", config_name="dataset")
@@ -547,23 +750,19 @@ def main(cfg: DictConfig) -> None:
     spec_path = write_spec_locally(spec, Path(cfg.paths.output_dir))
     logger.info(f"wrote local spec to {spec_path}")
 
-    # Load + validate R2 creds once for the whole run, then upload the
-    # canonical spec from this single launcher-side site. Both branches benefit:
-    # local-run uses the just-loaded env for generate()'s shard uploads, and the
-    # dispatch branch lets the worker boot already pointing at an existing
-    # canonical object (no per-rank re-write).
+    # Load creds once and upload the canonical spec here so workers boot pointing at it.
     env_file = Path(sky_cfg.env_file).expanduser() if sky_cfg.env_file else None
     r2_io.ensure_r2_env_loaded(env_file)
     r2_uri = upload_spec(spec)
     logger.info(f"spec uploaded -> {r2_uri}")
 
-    # ``input_spec_uri()`` (not ``uri(INPUT_SPEC_FILENAME)``) — the former
-    # includes the run's prefix so the worker reads the same canonical object
-    # ``main()`` just uploaded.
+    # ``input_spec_uri()`` includes the run prefix so workers read the same object just uploaded.
     spec_uri = spec.r2.input_spec_uri()
 
     if sky_cfg.compute_template is None:
-        generate(spec, Path(cfg.paths.output_dir))
+        loggers = _loggers_pinned_to_spec(cfg, spec)
+        # finalize runs outside the wandb-tracked region — see #1289.
+        generate(spec, Path(cfg.paths.output_dir), loggers)
         if cfg.finalize_inline:
             finalize_from_spec(spec, Path(cfg.paths.output_dir))
         if cfg.oracle_eval_inline:

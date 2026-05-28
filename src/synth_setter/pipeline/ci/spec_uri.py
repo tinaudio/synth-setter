@@ -61,9 +61,8 @@ def _usage_text() -> str:
 class _UsageErrorMarker:
     """Singleton sentinel returned by ``_parse_hydra_argv`` to signal a usage error.
 
-    A class-based sentinel cannot collide with any user-supplied string (unlike
-    the prior ``"__usage__"`` magic value), so a real experiment named
-    ``__usage__`` is no longer special-cased into a usage error.
+    A class-based sentinel cannot collide with any user-supplied string, so a
+    real experiment named ``__usage__`` is not special-cased into a usage error.
     """
 
     __slots__ = ()
@@ -82,6 +81,7 @@ _NON_SPEC_CFG_KEYS: tuple[str, ...] = (
     "skypilot_launch",
     "finalize_inline",
     "oracle_eval_inline",
+    "logger",
 )
 
 
@@ -120,10 +120,7 @@ def compute_spec_uri_from_hydra(experiment: str, run_id_override: str) -> str:
     overrides = [f"experiment={experiment}", f"+run_id={run_id_override}"]
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(config_name="dataset", overrides=overrides)
-    # Programmatic compose leaves ${hydra:runtime.output_dir} unset; pin
-    # paths.* with placeholders so resolve() doesn't trip — values are
-    # irrelevant to URI derivation, which depends only on task_name + run_id
-    # + r2.bucket.
+    # Placeholders so resolve() doesn't trip on the unset ${hydra:runtime.output_dir}.
     cfg.paths.root_dir = "."
     cfg.paths.output_dir = "."
     cfg.paths.work_dir = "."
@@ -149,8 +146,7 @@ def _parse_hydra_argv(argv: list[str]) -> tuple[str, str] | _UsageErrorMarker | 
         ``_USAGE_ERROR`` on a malformed invocation;
         ``None`` when neither flag is present.
     """
-    # Exact-name match (plus the ``=value`` form) so future flags like
-    # ``--from-experiment-source`` can't accidentally route through this parser.
+    # Exact-name match (plus ``=value`` form) so prefix-extended flags don't route here.
     hydra_flags = {"--from-experiment", "--run-id-override"}
     eq_prefixes = ("--from-experiment=", "--run-id-override=")
     if not any(a in hydra_flags or a.startswith(eq_prefixes) for a in argv):
@@ -192,11 +188,7 @@ def main() -> None:
         experiment, run_id_override = hydra_args
         try:
             uri = compute_spec_uri_from_hydra(experiment, run_id_override)
-        # Hydra's compose plus the downstream ``DatasetSpec(**spec_kwargs)``
-        # construction can both raise (MissingConfigException, OmegaConfBaseException,
-        # OverridesParser errors, ValidationError, TypeError); collapse them all to
-        # one stderr line — distinguishing them in the CLI buys nothing the exit
-        # code doesn't already encode.
+        # Hydra compose + DatasetSpec construction share one exit code; distinguishing types buys nothing.
         except Exception as exc:  # noqa: BLE001
             sys.stderr.write(
                 f"error: failed to derive spec URI for experiment {experiment!r} "
