@@ -1691,6 +1691,37 @@ class TestMainDispatchBranches:
         _, downloaded_dest = download_mock.call_args[0]
         assert downloaded_dest == dataset_root
 
+    def test_download_finalized_splits_fetches_stats_npz_beside_splits(
+        self,
+        spec: DatasetSpec,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """Finalize download lands ``stats.npz`` in the same dir as the splits.
+
+        The eval datamodule loads normalization stats from
+        ``<dataset_root>/stats.npz`` (``use_saved_mean_and_variance=true``);
+        without it the inline oracle eval crashes — see #1331.
+
+        :param spec: Fixture-provided ``DatasetSpec``; resolves the R2 URIs.
+        :param monkeypatch: Patches the module's ``r2_io.download_to_path``.
+        :param tmp_path: Destination dir for the downloaded artifacts.
+        """
+        import synth_setter.cli.generate_dataset as gd
+
+        downloads: dict[Path, str] = {}
+        monkeypatch.setattr(
+            gd.r2_io,
+            "download_to_path",
+            lambda uri, dest: downloads.__setitem__(Path(dest), uri),
+        )
+
+        gd._download_finalized_splits(spec, tmp_path)
+
+        assert downloads[tmp_path / "stats.npz"] == spec.r2.stats_uri()
+        for split in ("train", "val", "test"):
+            assert downloads[tmp_path / f"{split}.h5"] == spec.r2.split_h5_uri(split)
+
     def test_run_oracle_eval_subprocess_builds_expected_argv(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -1699,8 +1730,10 @@ class TestMainDispatchBranches:
         """Helper subprocesses ``synth_setter.cli.eval`` with the contract argv.
 
         Pins the load-bearing overrides (``experiment=surge/fake_oracle``,
-        ``data.dataset_root``, ``ckpt_path=null``, ``mode=test``). Runs the
-        helper directly so cfg-resolution noise can't mask an argv drift.
+        ``data.dataset_root``, ``ckpt_path=null``, ``mode=test``) plus the
+        wandb-resume trio that routes the eval's ``test/*`` metrics onto the
+        generate run. Runs the helper directly so cfg-resolution noise can't
+        mask an argv drift.
 
         :param monkeypatch: Patches the module's ``subprocess.run``.
         :param tmp_path: Stands in for the finalize download directory.
@@ -1710,7 +1743,7 @@ class TestMainDispatchBranches:
         run_mock = MagicMock()
         monkeypatch.setattr(gd.subprocess, "run", run_mock)
 
-        gd._run_oracle_eval_subprocess(tmp_path)
+        gd._run_oracle_eval_subprocess(tmp_path, "some-run-id")
 
         run_mock.assert_called_once()
         called_argv = run_mock.call_args[0][0]
@@ -1722,6 +1755,16 @@ class TestMainDispatchBranches:
         # the workflow's metrics.json glob lands at <tmp_path>/metrics/metrics.json.
         assert f"hydra.run.dir={tmp_path}" in called_argv
         assert "ckpt_path=null" in called_argv
+        # The eval resumes the generate run rather than opening a fresh one, so
+        # its test/* metrics share the run id (logger=null crashed Hydra — see #1331).
+        assert "logger=wandb" in called_argv
+        assert "+logger.wandb.id=some-run-id" in called_argv
+        assert "+logger.wandb.resume=must" in called_argv
+        # surge data config marks predict_file mandatory; mode=test never reads it.
+        assert "data.predict_file=null" in called_argv
+        # batch_size=1 keeps the smoke-sized test split (4 samples) from
+        # flooring to zero batches under the 128 default — see #1331.
+        assert "data.batch_size=1" in called_argv
         assert "mode=test" in called_argv
 
     def test_main_oracle_eval_inline_default_false_skips(
