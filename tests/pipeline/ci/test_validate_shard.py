@@ -28,7 +28,7 @@ from synth_setter.pipeline.schemas.spec import DatasetSpec
 
 
 _AUDIO_CHANNELS = 2
-_AUDIO_SAMPLES_PER_ROW = 64000
+_AUDIO_SAMPLES_PER_ROW = 176400
 _MEL_SHAPE_PER_ROW = (2, 128, 401)
 _PARAM_LENGTH = 92
 
@@ -70,7 +70,7 @@ def real_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> DatasetSpec:
             "preset_path": "presets/surge-base.vstpreset",
             "param_spec_name": "surge_simple",
             "renderer_version": "1.3.4",
-            "sample_rate": 16000,
+            "sample_rate": 44100,
             "channels": 2,
             "velocity": 100,
             "signal_duration_seconds": 4.0,
@@ -106,7 +106,7 @@ class TestValidateShard:
             shard_path,
             shard_size=real_spec.render.samples_per_shard,
             datasets={
-                "audio": (real_spec.render.samples_per_shard, 2, 64000),
+                "audio": (real_spec.render.samples_per_shard, 2, 176400),
                 "mel_spec": (real_spec.render.samples_per_shard, 2, 128, 401),
                 # param_array intentionally omitted
             },
@@ -125,7 +125,7 @@ class TestValidateShard:
             shard_path,
             shard_size=wrong_size,
             datasets={
-                "audio": (wrong_size, 2, 64000),
+                "audio": (wrong_size, 2, 176400),
                 "mel_spec": (real_spec.render.samples_per_shard, 2, 128, 401),
                 "param_array": (real_spec.render.samples_per_shard, 92),
             },
@@ -163,7 +163,7 @@ class TestValidateShard:
             shard_path,
             shard_size=shard_size,
             datasets={
-                "audio": (shard_size, 2, 64000),
+                "audio": (shard_size, 2, 176400),
                 "mel_spec": (shard_size, 2, 128, 401),
                 "param_array": (shard_size, 92),
                 "extra_dataset": (shard_size, 7),

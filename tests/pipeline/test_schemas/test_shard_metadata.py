@@ -22,7 +22,7 @@ def _valid_kwargs(**overrides: Any) -> dict[str, Any]:
     kwargs: dict[str, Any] = {
         "velocity": 100,
         "signal_duration_seconds": 4.0,
-        "sample_rate": 16000,
+        "sample_rate": 44100,
         "channels": 2,
         "min_loudness": -55.0,
     }
@@ -38,7 +38,7 @@ class TestShardMetadataConstruction:
         meta = ShardMetadata(**_valid_kwargs())
         assert meta.velocity == 100
         assert meta.signal_duration_seconds == 4.0
-        assert meta.sample_rate == 16000
+        assert meta.sample_rate == 44100
         assert meta.channels == 2
         assert meta.min_loudness == -55.0
 

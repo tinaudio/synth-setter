@@ -103,7 +103,7 @@ def validate_test_values(spec: dict[str, Any]) -> list[str]:
     }
     render_passthrough = {
         "param_spec_name": "surge_simple",
-        "sample_rate": 16000,
+        "sample_rate": 44100,
         "samples_per_shard": 32,
         "velocity": 100,
     }

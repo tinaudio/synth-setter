@@ -90,7 +90,7 @@ def staged_wds_spec() -> Iterator[DatasetSpec]:
             "preset_path": "presets/surge-base.vstpreset",
             "param_spec_name": "surge_simple",
             "renderer_version": "1.0.0-test",
-            "sample_rate": 16000,
+            "sample_rate": 44100,
             "channels": 2,
             "velocity": 100,
             "signal_duration_seconds": 4.0,

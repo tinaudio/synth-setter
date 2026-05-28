@@ -49,7 +49,7 @@ def _build_spec() -> DatasetSpec:
             "preset_path": "presets/fake.vstpreset",
             "param_spec_name": "surge_simple",
             "renderer_version": "0.0.0-fake",
-            "sample_rate": 16000,
+            "sample_rate": 44100,
             "channels": 2,
             "velocity": 100,
             "signal_duration_seconds": 1.0,

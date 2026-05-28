@@ -90,7 +90,7 @@ def test_make_spectrogram_pure_tone_peaks_near_expected_mel_bin() -> None:
     """A 1 kHz sine should peak in a mel bin close to 1 kHz — guards against a zeros-mutant."""
     import librosa
 
-    sr = 16000.0
+    sr = 44100.0
     freq = 1000.0
     specs = make_spectrogram(_sine(channels=1, samples=8192, freq=freq, sr=sr), sr)
     spec = specs[0]

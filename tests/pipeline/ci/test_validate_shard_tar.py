@@ -32,13 +32,13 @@ from synth_setter.pipeline.ci.validate_shard import validate_shard
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 
 _VALID_AUDIO_CHANNELS = 2
-_VALID_AUDIO_SAMPLES_PER_ROW = 64000
+_VALID_AUDIO_SAMPLES_PER_ROW = 176400
 _VALID_MEL_INNER_SHAPE: tuple[int, int, int] = (2, 128, 401)
 _VALID_PARAM_LENGTH = 92
 _VALID_METADATA: dict[str, object] = {
     "velocity": 100,
     "signal_duration_seconds": 4.0,
-    "sample_rate": 16000,
+    "sample_rate": 44100,
     "channels": _VALID_AUDIO_CHANNELS,
     "min_loudness": -55.0,
 }
@@ -48,8 +48,8 @@ _VALID_METADATA: dict[str, object] = {
 def real_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> DatasetSpec:
     """Build a ``DatasetSpec`` whose render config matches the module's ``_VALID_*`` constants.
 
-    The sample rate (``16000``) and duration (``4.0``) make audio time-samples
-    ``64000`` and mel ``n_frames`` ``401`` — lining up with ``_VALID_*`` so each
+    The sample rate (``44100``) and duration (``4.0``) make audio time-samples
+    ``176400`` and mel ``n_frames`` ``401`` — lining up with ``_VALID_*`` so each
     test can override exactly one dim while leaving the others correct.
 
     :param tmp_path: pytest-provided temp directory used for the fake VST3 bundle.
@@ -79,7 +79,7 @@ def real_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> DatasetSpec:
             "preset_path": "presets/surge-base.vstpreset",
             "param_spec_name": "surge_simple",
             "renderer_version": "1.3.4",
-            "sample_rate": 16000,
+            "sample_rate": 44100,
             "channels": _VALID_AUDIO_CHANNELS,
             "velocity": 100,
             "signal_duration_seconds": 4.0,
