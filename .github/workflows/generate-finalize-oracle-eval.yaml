@@ -6,13 +6,10 @@ name: Generate + Finalize + Oracle-Eval Dataset (inline)
 # eval against the finalized splits — proving the parameter-array
 # round-trip survived generate + finalize.
 #
-# Generation renders real audio with the Surge XT VST3, so the job runs
-# inside the dev-snapshot image (plugin at /usr/lib/vst3/Surge XT.vst3 plus
-# the headless X11 stack) under the Xvfb wrapper, mirroring
-# nightly-parallel-datagen.yml. WANDB_MODE=offline keeps the run hermetic and
-# lets the inline oracle eval resume the generate-phase run without an API
-# key — the same setup pinned by
-# tests/integration/test_generate_dataset_cli_wandb_e2e.py.
+# Generation renders real audio with the Surge XT VST3, so the job runs the
+# dev-snapshot image under the Xvfb wrapper (mirrors nightly-parallel-datagen.yml).
+# WANDB_MODE=offline keeps the run hermetic so the inline oracle eval can resume
+# the generate-phase run — see tests/integration/test_generate_dataset_cli_wandb_e2e.py.
 #
 # Required secrets (callers should `secrets: inherit`):
 #   RCLONE_CONFIG_R2_ACCESS_KEY_ID, RCLONE_CONFIG_R2_SECRET_ACCESS_KEY,
@@ -66,8 +63,8 @@ jobs:
       RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
       RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
       HYDRA_FULL_ERROR: "1"
-      # offline keeps the inline oracle eval's resume=must hermetic — no API
-      # key, no server-side smoke runs (see the e2e test referenced above).
+      # Keeps the inline oracle eval's resume=must hermetic — no API key, no
+      # server-side smoke runs (see the e2e test referenced in the header).
       WANDB_MODE: offline
     steps:
       - name: Checkout
@@ -93,11 +90,9 @@ jobs:
                 python -X faulthandler -c "from synth_setter.data.vst.core import load_plugin; load_plugin(\"/usr/lib/vst3/Surge XT.vst3\")"
             '
 
-      # Generation renders with the real Surge VST3, so it runs in the image
-      # under the Xvfb wrapper. ensure_plugin_symlinks.sh recreates the
-      # plugins/Surge XT.vst3 symlink the bind-mount shadows; hydra.run.dir is
-      # pinned under the mounted workspace so the host can read the eval's
-      # metrics.json and the tee'd log.
+      # ensure_plugin_symlinks.sh restores the Surge symlink the bind-mount
+      # shadows; hydra.run.dir is pinned under the mounted workspace so the host
+      # can read the eval's metrics.json and the tee'd log.
       - name: Run synth-setter-generate-dataset (oracle_eval_inline)
         env:
           EXPERIMENT: ${{ inputs.experiment }}
@@ -130,8 +125,7 @@ jobs:
 
       # Lightning's trainer.test() prints the final metrics table to stdout
       # (tee'd to the host log above); parse it for test/param_mse and assert
-      # exactly zero — the load-bearing oracle invariant. Runs in the image
-      # because assert_oracle_invariant ships in the synth_setter package.
+      # exactly zero — the load-bearing oracle invariant.
       - name: Assert oracle test/param_mse == 0.0 (log)
         run: |
           set -euo pipefail
@@ -154,7 +148,7 @@ jobs:
         run: |
           set -euo pipefail
           rel=$(cd "${{ github.workspace }}" && find oracle-eval-run -type f -path '*/oracle_eval/*/metrics/metrics.json' -print -quit)
-          if [ -z "${rel}" ]; then
+          if [[ -z "${rel}" ]]; then
             echo "::error::no metrics.json under oracle-eval-run/"; exit 1
           fi
           echo "rel=${rel}" >> "${GITHUB_OUTPUT}"
