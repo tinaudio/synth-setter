@@ -20,6 +20,7 @@ mode: test
 
 # Predict-mode post-processing; gated off so `mode: test`/`validate` stay unchanged.
 evaluation:
+  download_dataset_root_uri: null
   render_vst: false
   compute_metrics: false
   rerender_target: true
