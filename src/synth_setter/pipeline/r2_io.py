@@ -170,6 +170,18 @@ def to_rclone_path(r2_uri: str) -> str:
 _to_rclone_path = to_rclone_path
 
 
+def download_dir_no_overwrite(r2_uri: str, dest_path: Path) -> None:
+    args = [  # noqa: S607
+        "rclone",
+        "copy",
+        "--immutable",
+        "--checksum",
+        _to_rclone_path(r2_uri),
+        str(dest_path),
+    ]
+    subprocess.check_call(args)  # noqa: S603 — args from validated URI
+
+
 def download_to_path(r2_uri: str, dest_path: Path) -> None:
     """Download an R2 object to a specific local file path.
 

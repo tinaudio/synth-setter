@@ -9,11 +9,12 @@ from typing import Any
 
 import hydra
 import pandas as pd
-import wandb
 from lightning import Callback, LightningDataModule, LightningModule, Trainer
 from lightning.pytorch.loggers import Logger
 from omegaconf import DictConfig
 
+import wandb
+from synth_setter.pipeline import r2_io
 from synth_setter.resources import as_file, vst_headless_wrapper
 from synth_setter.utils import (
     RankedLogger,
@@ -294,6 +295,10 @@ def main(cfg: DictConfig) -> None:
     # apply extra utilities
     # (e.g. ask for tags if none are provided in cfg, print cfg tree, etc.)
     extras(cfg)
+    dataset_uri = cfg.evaluation.download_dataset_root_uri
+    if dataset_uri:
+        r2_io.ensure_r2_env_loaded()
+        r2_io.download_dir_no_overwrite(dataset_uri, cfg.data.dataset_root)
 
     metric_dict, _ = evaluate(cfg)
     _dump_metric_dict(metric_dict, Path(cfg.paths.output_dir))

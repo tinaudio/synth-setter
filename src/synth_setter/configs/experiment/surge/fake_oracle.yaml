@@ -4,6 +4,8 @@ defaults:
   - surge/base
   - override /model: surge_fake_oracle
   - override /data: surge
+  - override /callbacks: eval_surge
+  - override /trainer: cpu
   - _self_
 
 run_name: fake_oracle
@@ -12,6 +14,8 @@ experiment_name: surge-fake-oracle
 model:
   net:
     d_out: 300
+
+mode: predict
 
 tags:
   - surge
@@ -22,3 +26,17 @@ callbacks:
     _target_: synth_setter.utils.callbacks.LogPerParamMSE
     param_spec: surge_xt
   plot_proj_ii: null
+
+data:
+  batch_size: 1
+  predict_file: ???
+
+render: ???
+
+ckpt_path: null
+
+evaluation:
+  render_vst: true
+  compute_metrics: true
+  rerender_target: false
+  num_workers: 1
