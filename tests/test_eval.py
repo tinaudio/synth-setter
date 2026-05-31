@@ -1,8 +1,10 @@
 """Tests for the ``synth-setter-eval`` CLI entrypoint."""
 
+import json
 import math
 import os
 import shutil
+import subprocess
 import sys
 from contextlib import contextmanager
 from pathlib import Path
@@ -51,6 +53,8 @@ def test_evaluate_runs_oracle_with_null_ckpt_path(
             overrides=[
                 "experiment=surge/test-mps-fake-oracle",
                 "trainer=cpu",
+                # The experiment defaults to mode=predict; this invariant is test-mode.
+                "mode=test",
                 f"model.net.d_out={len(param_specs['surge_4'])}",
                 "callbacks.log_per_param_mse.param_spec=surge_4",
             ],
@@ -88,7 +92,6 @@ def test_dump_metric_dict_writes_json_with_coerced_scalars(tmp_path: Path) -> No
 
     :param tmp_path: Hydra-style output dir; the ``metrics/`` subdir lands under it.
     """
-    import json
 
     import numpy as np
 
@@ -178,6 +181,80 @@ def test_download_eval_dataset_noop_when_uri_null(local_r2_remote: Path, tmp_pat
     eval_mod._download_eval_dataset(cfg)
 
     assert list(dataset_root.iterdir()) == []
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+def test_eval_cli_downloads_dataset_from_r2_then_scores_oracle(
+    tmp_path: Path, surge_xt_smoke_datasets: Path
+) -> None:
+    """End-to-end through the ``synth-setter-eval`` CLI: R2 prefetch then oracle scoring.
+
+    No in-process shortcuts and no mocks — the real entrypoint runs with real
+    ``rclone`` (local-backed remote). A dataset staged under an ``r2://`` prefix is
+    downloaded into an initially-absent ``data.dataset_root``, and the fake oracle's
+    exact-zero ``test/param_mse`` reaches ``metrics.json``. Proves the new
+    ``evaluation.download_dataset_root_uri`` gate composes with eval through ``main``.
+
+    :param tmp_path: Root for the fake R2 remote, the download target, and the output dir.
+    :param surge_xt_smoke_datasets: Source ``{train,val,test}.h5`` + ``stats.npz``.
+    """
+    if shutil.which("rclone") is None:
+        pytest.skip("rclone binary not available on PATH")
+
+    remote_root = tmp_path / "r2"
+    staged = remote_root / "intermediate-data" / "dataset"
+    staged.mkdir(parents=True)
+    splits_and_stats = ("train.h5", "val.h5", "test.h5", "stats.npz")
+    for name in splits_and_stats:
+        shutil.copy(surge_xt_smoke_datasets / name, staged / name)
+
+    dataset_root = tmp_path / "downloaded"
+    output_dir = tmp_path / "out"
+
+    env = {
+        **os.environ,
+        "RCLONE_CONFIG_R2_TYPE": "local",
+        "RCLONE_CONFIG_R2_ACCESS_KEY_ID": "stub",
+        "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY": "stub",
+        "RCLONE_CONFIG_R2_ENDPOINT": "stub",
+    }
+    proc = subprocess.run(  # noqa: S603 — controlled argv
+        [
+            sys.executable,
+            "-m",
+            "synth_setter.cli.eval",
+            "experiment=surge/test-mps-fake-oracle",
+            "trainer=cpu",
+            "mode=test",
+            # mode=test never renders; null satisfies the resolver that the
+            # experiment's mandatory `render: ???` would otherwise trip.
+            "render=null",
+            "hydra.job.chdir=false",
+            f"model.net.d_out={len(param_specs['surge_4'])}",
+            "callbacks.log_per_param_mse.param_spec=surge_4",
+            "evaluation.download_dataset_root_uri=r2://intermediate-data/dataset",
+            f"data.dataset_root={dataset_root}",
+            f"data.predict_file={dataset_root}/test.h5",
+            "data.batch_size=1",
+            "data.num_workers=0",
+            "ckpt_path=null",
+            f"paths.output_dir={output_dir}",
+            f"hydra.run.dir={output_dir}",
+        ],
+        cwd=remote_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+
+    for name in splits_and_stats:
+        assert (dataset_root / name).is_file(), f"{name} was not downloaded from R2"
+
+    metrics = json.loads((output_dir / "metrics" / "metrics.json").read_text())
+    assert metrics["test/param_mse"] == 0.0
 
 
 @pytest.mark.gpu
