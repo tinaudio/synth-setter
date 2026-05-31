@@ -26,6 +26,16 @@ tags:
 logger: null
 test: false
 
+# Predict-mode eval knobs — kept in lockstep with surge/fake_oracle.yaml (see header).
+mode: predict
+render: ???
+
+evaluation:
+  render_vst: true
+  compute_metrics: true
+  rerender_target: false
+  num_workers: 1
+
 model:
   compile: false
   scheduler: null

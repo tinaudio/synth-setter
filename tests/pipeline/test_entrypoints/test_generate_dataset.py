@@ -1884,6 +1884,8 @@ class TestMainDispatchBranches:
             f"render.plugin_path={TEST_PLUGIN_VST3}",
             "finalize_inline=true",
             "oracle_eval_inline=true",
+            # smoke-shard now defaults to [4, 4, 4]; pin a zero split to exercise the guard.
+            "train_val_test_sizes=[4,0,0]",
         ]
         monkeypatch.setattr("sys.argv", argv)
         monkeypatch.setenv("HYDRA_FULL_ERROR", "1")
