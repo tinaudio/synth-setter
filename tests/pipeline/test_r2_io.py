@@ -110,6 +110,56 @@ class TestDownloadToPath:
             r2_io.download_to_path("local-spec.json", tmp_path / "out.json")
 
 
+class TestDownloadDirNoOverwrite:
+    """Tests for download_dir_no_overwrite — prefix→directory copy."""
+
+    def test_lands_remote_tree_under_dest_dir(self, fake_r2_remote: Path, tmp_path: Path) -> None:
+        """Every object under the prefix is copied into ``dest_path``.
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        :param tmp_path: Pytest tmp dir used for the download destination.
+        """
+        prefix = fake_r2_remote / "bucket" / "dataset"
+        prefix.mkdir(parents=True)
+        (prefix / "train.h5").write_text("train")
+        (prefix / "stats.npz").write_text("stats")
+        dest = tmp_path / "root"
+
+        r2_io.download_dir_no_overwrite("r2://bucket/dataset", dest)
+
+        assert (dest / "train.h5").read_text() == "train"
+        assert (dest / "stats.npz").read_text() == "stats"
+
+    def test_rejects_non_r2_uri(self, tmp_path: Path) -> None:
+        """A local-path source is rejected — caller must branch on is_r2_uri.
+
+        :param tmp_path: Pytest tmp dir used to build a local destination path.
+        """
+        with pytest.raises(ValueError, match="not an r2:// URI"):
+            r2_io.download_dir_no_overwrite("local-dir", tmp_path / "root")
+
+    def test_command_carries_immutable_and_reliability_flags(self, tmp_path: Path) -> None:
+        """Pin the rclone verb + ``--immutable`` + reliability-flag set.
+
+        ``--immutable`` is the entire point of this helper (no-clobber) and is
+        unobservable from filesystem state alone; the reliability flags must
+        match the upload helpers so a transient blip retries instead of failing
+        the eval. One mock-based argv assertion guards both invariants.
+
+        :param tmp_path: Pytest tmp dir used for the download destination.
+        """
+        with patch.object(r2_io.subprocess, "check_call") as mock_call:
+            r2_io.download_dir_no_overwrite("r2://bucket/dataset", tmp_path / "root")
+        args = mock_call.call_args[0][0]
+        assert args[:2] == ["rclone", "copy"]
+        assert "--immutable" in args
+        assert "--checksum" in args
+        assert "-vv" in args
+        assert "--contimeout=30s" in args
+        assert "--timeout=300s" in args
+        assert "--retries=3" in args
+
+
 class TestUploadToUri:
     """Tests for upload_to_uri — file→file upload with reliability flags."""
 

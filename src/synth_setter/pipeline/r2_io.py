@@ -23,6 +23,7 @@ from synth_setter.pipeline.constants import R2_URI_SCHEME, RCLONE_REMOTE
 
 __all__ = [
     "R2_URI_SCHEME",
+    "download_dir_no_overwrite",
     "download_to_path",
     "downloaded_to_tempfile",
     "ensure_r2_env_loaded",
@@ -171,11 +172,27 @@ _to_rclone_path = to_rclone_path
 
 
 def download_dir_no_overwrite(r2_uri: str, dest_path: Path) -> None:
-    args = [  # noqa: S607
+    """Copy every object under an R2 prefix into a local directory, never clobbering.
+
+    Unlike :func:`download_to_path` (single object → file), this is a directory
+    copy. ``--immutable`` hard-fails if a destination file already exists with a
+    different size/mtime/checksum (rather than silently overwriting or skipping),
+    so re-running against a populated dataset root surfaces drift instead of
+    masking it. Reliability flags mirror the upload helpers so a transient blip
+    retries instead of failing the eval outright.
+
+    :param r2_uri: ``r2://`` directory prefix; every object beneath it is copied.
+    :param dest_path: Local destination directory, created by rclone if absent.
+    """
+    args = [  # noqa: S607 — rclone resolved by image's PATH
         "rclone",
         "copy",
+        "-vv",
         "--immutable",
         "--checksum",
+        "--contimeout=30s",
+        "--timeout=300s",
+        "--retries=3",
         _to_rclone_path(r2_uri),
         str(dest_path),
     ]
