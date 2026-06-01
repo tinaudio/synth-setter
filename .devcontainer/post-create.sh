@@ -124,4 +124,21 @@ for scope in --global --local --worktree; do
 done
 pre-commit install
 
+# Per-worktree venv isolation. The image bakes VIRTUAL_ENV=/venv/main onto
+# PATH, so every shell — and every git worktree — shares one editable install;
+# whichever worktree last ran `uv sync` owns it. This snippet activates a
+# worktree-local ./.venv when present, shadowing /venv/main. The agent harness
+# re-sources ~/.bashrc each shell and preserves cwd, so the active venv tracks
+# the current worktree. grep-guarded to stay idempotent across re-runs.
+if ! grep -q 'Per-worktree venv isolation' "$HOME/.bashrc"; then
+  cat >>"$HOME/.bashrc" <<'EOF'
+
+# Per-worktree venv isolation — see .devcontainer/post-create.sh.
+if [[ -f "$PWD/.venv/bin/activate" ]]; then
+  unset VIRTUAL_ENV
+  source "$PWD/.venv/bin/activate"
+fi
+EOF
+fi
+
 echo "Dev container ready. Run 'make test-fast' to verify."
