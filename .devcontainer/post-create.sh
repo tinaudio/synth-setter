@@ -125,16 +125,17 @@ done
 pre-commit install
 
 # Per-worktree venv isolation. The image bakes VIRTUAL_ENV=/venv/main onto
-# PATH, so every shell — and every git worktree — shares one editable install;
-# whichever worktree last ran `uv sync` owns it. This snippet activates a
-# worktree-local ./.venv when present, shadowing /venv/main. The agent harness
-# re-sources ~/.bashrc each shell and preserves cwd, so the active venv tracks
-# the current worktree. grep-guarded to stay idempotent across re-runs.
-if ! grep -q 'Per-worktree venv isolation' "$HOME/.bashrc"; then
+# PATH, so every git worktree shares one editable install — whichever ran
+# `uv sync` last owns it. Activate a worktree-local ./.venv when present,
+# shadowing /venv/main. The harness re-sources ~/.bashrc per shell and keeps
+# cwd, so the active venv tracks the worktree. `-qs`: an absent ~/.bashrc is
+# the not-yet-installed case, not an error. See #1339.
+if ! grep -qs 'Per-worktree venv isolation' "$HOME/.bashrc"; then
   cat >>"$HOME/.bashrc" <<'EOF'
 
 # Per-worktree venv isolation — see .devcontainer/post-create.sh.
-if [[ -f "$PWD/.venv/bin/activate" ]]; then
+# The VIRTUAL_ENV guard skips re-activation so re-sourcing can't stack PATH.
+if [[ -f "$PWD/.venv/bin/activate" && "${VIRTUAL_ENV:-}" != "$PWD/.venv" ]]; then
   unset VIRTUAL_ENV
   source "$PWD/.venv/bin/activate"
 fi
