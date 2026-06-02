@@ -123,7 +123,7 @@ def test_eval_cli_downloads_dataset_from_r2_then_scores_oracle(
     ``rclone`` (local-backed remote). A dataset staged under an ``r2://`` prefix is
     downloaded into an initially-absent ``data.dataset_root``, and the fake oracle's
     exact-zero ``test/param_mse`` reaches ``metrics.json``. Proves the new
-    ``evaluation.download_dataset_root_uri`` gate composes with eval through ``main``.
+    ``data.download_dataset_root_uri`` gate composes with eval through ``main``.
 
     :param tmp_path: Root for the fake R2 remote, the download target, and the output dir.
     :param surge_xt_smoke_datasets: Source ``{train,val,test}.h5`` + ``stats.npz``.

@@ -98,13 +98,7 @@ def _set_up_module(**kwargs: object) -> Iterator[SurgeDataModule]:
     try:
         yield module
     finally:
-        # SurgeDataModule.teardown() blindly closes every split's dataset_file
-        # handle; in fake mode those are None and the close call would raise.
-        # Tests that exercise teardown's real-mode behavior do so directly
-        # (see test_teardown_closes_open_h5_handles) — skip it here when the
-        # caller asked for fake mode.
-        if not module.fake:
-            module.teardown()
+        module.teardown()
 
 
 def _unwrap(maybe_tensor: torch.Tensor | None) -> torch.Tensor:

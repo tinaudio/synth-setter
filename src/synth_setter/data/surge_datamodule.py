@@ -358,7 +358,12 @@ class SurgeDataModule(LightningDataModule):
         )
 
     def teardown(self, stage: str | None = None):
-        self.train_dataset.dataset_file.close()
-        self.val_dataset.dataset_file.close()
-        self.test_dataset.dataset_file.close()
-        self.predict_dataset.dataset_file.close()
+        # fake mode leaves dataset_file None (no h5 opened), so guard each close.
+        for dataset in (
+            self.train_dataset,
+            self.val_dataset,
+            self.test_dataset,
+            self.predict_dataset,
+        ):
+            if dataset.dataset_file is not None:
+                dataset.dataset_file.close()
