@@ -126,19 +126,27 @@ pre-commit install
 
 # Per-worktree venv isolation. The image bakes VIRTUAL_ENV=/venv/main onto
 # PATH, so every git worktree shares one editable install — whichever ran
-# `uv sync` last owns it. Activate a worktree-local ./.venv when present,
-# shadowing /venv/main. The harness re-sources ~/.bashrc per shell and keeps
-# cwd, so the active venv tracks the worktree. `-qs`: an absent ~/.bashrc is
-# the not-yet-installed case, not an error. See #1339.
+# `uv sync` last owns it. Walk up to the .project-root anchor and activate
+# that worktree's ./.venv when present, shadowing /venv/main. The harness
+# re-sources ~/.bashrc per shell and keeps cwd, so the active venv tracks the
+# worktree. `-qs`: an absent ~/.bashrc is the not-yet-installed case, not an
+# error. See #1339.
 if ! grep -qs 'Per-worktree venv isolation' "$HOME/.bashrc"; then
   cat >>"$HOME/.bashrc" <<'EOF'
 
 # Per-worktree venv isolation — see .devcontainer/post-create.sh.
-# The VIRTUAL_ENV guard skips re-activation so re-sourcing can't stack PATH.
-if [[ -f "$PWD/.venv/bin/activate" && "${VIRTUAL_ENV:-}" != "$PWD/.venv" ]]; then
+# Walk up to .project-root so activation works from any subdir, not just the
+# worktree root. The VIRTUAL_ENV guard skips re-activation so re-sourcing
+# can't stack PATH.
+__ss_root="$PWD"
+while [[ "$__ss_root" != "/" && ! -f "$__ss_root/.project-root" ]]; do
+  __ss_root="$(dirname "$__ss_root")"
+done
+if [[ -f "$__ss_root/.venv/bin/activate" && "${VIRTUAL_ENV:-}" != "$__ss_root/.venv" ]]; then
   unset VIRTUAL_ENV
-  source "$PWD/.venv/bin/activate"
+  source "$__ss_root/.venv/bin/activate"
 fi
+unset __ss_root
 EOF
 fi
 

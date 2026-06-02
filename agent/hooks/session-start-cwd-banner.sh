@@ -49,7 +49,8 @@ main() {
     printf 'Spawn a worktree before editing:\n'
     # Anchor to $primary_root so the command works even when the session started in a subdir.
     # `uv sync` builds the worktree's own .venv so it stops sharing the image's /venv/main.
-    printf '  git worktree add --detach %s/.claude/worktrees/%s && cd %s/.claude/worktrees/%s && uv sync\n' \
+    # Single-quote the emitted paths so the command survives a $primary_root with spaces.
+    printf "  git worktree add --detach '%s/.claude/worktrees/%s' && cd '%s/.claude/worktrees/%s' && uv sync\n" \
       "$primary_root" "$slug" "$primary_root" "$slug"
   else
     printf '  status   : isolated worktree (OK)\n'
