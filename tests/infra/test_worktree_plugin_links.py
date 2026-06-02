@@ -2,8 +2,8 @@
 
 `plugins/` is gitignored, so `git worktree add` produces a worktree without the
 `plugins/<plugin>.vst3` symlink that configs/CLI resolve relative to cwd. The target backfills it;
-the spawn command printed by the SessionStart banner and worktree-guard chains `&& make link-
-plugins` so the link appears naturally.
+the spawn command printed by the SessionStart banner and worktree-guard chains it on so the link
+appears naturally.
 """
 
 from __future__ import annotations
@@ -15,6 +15,11 @@ from pathlib import Path
 import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+pytestmark = pytest.mark.infra
+
+# Bound subprocess calls so a hung git/make can't wedge the suite.
+_TIMEOUT_S = 60
 
 
 def _git(repo: Path, *args: str) -> None:
@@ -28,6 +33,7 @@ def _git(repo: Path, *args: str) -> None:
         check=True,
         capture_output=True,
         text=True,
+        timeout=_TIMEOUT_S,
     )
 
 
@@ -43,6 +49,7 @@ def _make_link_plugins(cwd: Path) -> str:
         check=True,
         capture_output=True,
         text=True,
+        timeout=_TIMEOUT_S,
     ).stdout
 
 
