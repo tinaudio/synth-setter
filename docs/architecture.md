@@ -98,7 +98,7 @@ synth-setter/
 │       ├── experiment/     #     Experiment configs — training (compose datamodule + model + trainer) and datagen (composes dataset.yaml)
 │       ├── compute/        #     SkyPilot Task YAMLs for the data pipeline launcher (RunPod landed; Vast.ai planned)
 │       ├── render/         #     Renderer configs (RenderConfig sub-model)
-│       ├── data/           #     DataModule configs (paths, splits, batch size)
+│       ├── datamodule/     #     DataModule configs (paths, splits, batch size)
 │       ├── model/          #     Model architecture configs
 │       ├── trainer/        #     Lightning Trainer configs
 │       ├── callbacks/      #     Callback configs (checkpointing, early stopping)

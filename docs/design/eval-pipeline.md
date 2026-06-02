@@ -221,13 +221,13 @@ Same chain in-process from the `synth-setter-eval` CLI: with `mode=predict` and 
 
 ### 5.1 Predict
 
-| Property    | Value                                                                                                                                                                                                                                              |
-| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Command** | `python -m synth_setter.cli.eval mode=predict experiment={exp} datamodule={datamodule} ckpt_path={ckpt}`                                                                                                                                           |
-| **Input**   | Trained checkpoint (`.ckpt`), test dataset (HDF5 shard or virtual dataset)                                                                                                                                                                         |
-| **Output**  | `pred-{batch_idx}.pt`, `target-audio-{batch_idx}.pt`, `target-params-{batch_idx}.pt`                                                                                                                                                               |
-| **Compute** | GPU — model forward pass                                                                                                                                                                                                                           |
-| **Config**  | Hydra composition: `src/synth_setter/configs/eval.yaml` + `src/synth_setter/configs/datamodule/{data}.yaml` + `src/synth_setter/configs/experiment/{exp}.yaml` (+ `src/synth_setter/configs/render/{spec}.yaml` when `evaluation.render_vst=true`) |
+| Property    | Value                                                                                                                                                                                                                                                    |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Command** | `python -m synth_setter.cli.eval mode=predict experiment={exp} datamodule={datamodule} ckpt_path={ckpt}`                                                                                                                                                 |
+| **Input**   | Trained checkpoint (`.ckpt`), test dataset (HDF5 shard or virtual dataset)                                                                                                                                                                               |
+| **Output**  | `pred-{batch_idx}.pt`, `target-audio-{batch_idx}.pt`, `target-params-{batch_idx}.pt`                                                                                                                                                                     |
+| **Compute** | GPU — model forward pass                                                                                                                                                                                                                                 |
+| **Config**  | Hydra composition: `src/synth_setter/configs/eval.yaml` + `src/synth_setter/configs/datamodule/{datamodule}.yaml` + `src/synth_setter/configs/experiment/{exp}.yaml` (+ `src/synth_setter/configs/render/{spec}.yaml` when `evaluation.render_vst=true`) |
 
 The predict stage loads a trained model checkpoint via PyTorch Lightning's `Trainer.predict()`, runs inference on the test split, and writes predicted parameter tensors to disk using a `PredictionWriter` callback.
 
