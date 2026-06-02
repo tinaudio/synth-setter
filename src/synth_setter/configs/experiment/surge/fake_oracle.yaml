@@ -26,9 +26,9 @@ tags:
 callbacks:
   log_per_param_mse:
     _target_: synth_setter.utils.callbacks.LogPerParamMSE
-    # Track the render group's spec so per-param MSE labels match the rendered
-    # params; this experiment always selects a render group (render_vst: true).
-    param_spec: ${render.param_spec_name}
+    # Track the render group's spec for per-param MSE labels; fall back to
+    # surge_xt when no render group is composed so the callback still instantiates.
+    param_spec: ${oc.select:render.param_spec_name,surge_xt}
   plot_proj_ii: null
 
 datamodule:
