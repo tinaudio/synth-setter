@@ -249,7 +249,7 @@ class SurgeDataModule(LightningDataModule):
         super().__init__()
 
         self.dataset_root = Path(dataset_root)
-        self._maybe_download(download_dataset_root_uri)
+        self.download_dataset_root_uri = download_dataset_root_uri
         self.use_saved_mean_and_variance = use_saved_mean_and_variance
         self.batch_size = batch_size
         self.ot = ot
@@ -262,20 +262,17 @@ class SurgeDataModule(LightningDataModule):
         self.conditioning = conditioning
         self.pin_memory = pin_memory
 
-    def _maybe_download(self, download_dataset_root_uri: str | None) -> None:
+    def prepare_data(self) -> None:
         """Hydrate ``dataset_root`` from R2 when a download URI is configured.
 
-        Opt-in: a ``None`` URI is a no-op and the local ``dataset_root`` is used
-        as-is. With a URI set, copy the prefix into ``dataset_root`` without
-        clobbering existing files so a fresh worker can run against an
-        R2-resident dataset.
-
-        :param download_dataset_root_uri: ``r2://`` prefix to pull, or ``None``.
+        Lightning calls this rank-0-only, before ``setup``, so the no-clobber R2
+        copy runs once even under DDP. Opt-in: a ``None`` URI is a no-op and the
+        local ``dataset_root`` is used as-is.
         """
-        if not download_dataset_root_uri:
+        if not self.download_dataset_root_uri:
             return
         r2_io.ensure_r2_env_loaded()
-        r2_io.download_dir_no_overwrite(download_dataset_root_uri, self.dataset_root)
+        r2_io.download_dir_no_overwrite(self.download_dataset_root_uri, self.dataset_root)
 
     def setup(self, stage: str | None = None):
         self.train_dataset = SurgeXTDataset(
@@ -308,19 +305,16 @@ class SurgeDataModule(LightningDataModule):
             read_mel=self.conditioning == "mel",
             read_m2l=self.conditioning == "m2l",
         )
-        if self.predict_file is not None:
-            self.predict_dataset = SurgeXTDataset(
-                self.predict_file,
-                batch_size=self.batch_size,
-                ot=False,
-                read_audio=True,
-                use_saved_mean_and_variance=self.use_saved_mean_and_variance,
-                fake=self.fake,
-                read_mel=self.conditioning == "mel",
-                read_m2l=self.conditioning == "m2l",
-            )
-        else:
-            self.predict_dataset = None
+        self.predict_dataset = SurgeXTDataset(
+            self.predict_file,
+            batch_size=self.batch_size,
+            ot=False,
+            read_audio=True,
+            use_saved_mean_and_variance=self.use_saved_mean_and_variance,
+            fake=self.fake,
+            read_mel=self.conditioning == "mel",
+            read_m2l=self.conditioning == "m2l",
+        )
 
     def train_dataloader(self):
         return torch.utils.data.DataLoader(
@@ -367,3 +361,4 @@ class SurgeDataModule(LightningDataModule):
         self.train_dataset.dataset_file.close()
         self.val_dataset.dataset_file.close()
         self.test_dataset.dataset_file.close()
+        self.predict_dataset.dataset_file.close()

@@ -1730,10 +1730,10 @@ class TestMainDispatchBranches:
         """Helper subprocesses ``synth_setter.cli.eval`` with the contract argv.
 
         Pins the load-bearing overrides (``experiment=surge/fake_oracle``,
-        ``data.dataset_root``, ``ckpt_path=null``, ``mode=test``) plus the
-        wandb-resume trio that routes the eval's ``test/*`` metrics onto the
-        generate run. Runs the helper directly so cfg-resolution noise can't
-        mask an argv drift.
+        ``data.dataset_root``, ``ckpt_path=null``, ``mode=predict``,
+        ``render=surge_simple``) plus the wandb-resume trio that routes the
+        eval's ``audio/*`` metrics onto the generate run. Runs the helper
+        directly so cfg-resolution noise can't mask an argv drift.
 
         :param monkeypatch: Patches the module's ``subprocess.run``.
         :param tmp_path: Stands in for the finalize download directory.

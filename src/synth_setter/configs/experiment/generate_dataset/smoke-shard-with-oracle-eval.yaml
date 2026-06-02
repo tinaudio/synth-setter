@@ -8,10 +8,9 @@ defaults:
   - /experiment/generate_dataset/smoke-shard-with-finalize@_global_
   - _self_
 
-# Override train_val_test_sizes — SurgeDataModule.setup() opens
-# {train,val,test}.h5 unconditionally, so the inline oracle eval needs
-# non-zero val/test splits to load (the upstream smoke-shard.yaml ships
-# [4, 4, 4] which fails the datamodule at FileNotFoundError on val.h5).
+# Pin non-zero val/test splits: SurgeDataModule.setup() opens
+# {train,val,test}.h5 (and the predict split) unconditionally, so a zero-sized
+# val or test split would raise FileNotFoundError during the inline oracle eval.
 # Sizes must be multiples of render.samples_per_shard=4.
 train_val_test_sizes: [4, 4, 4]
 

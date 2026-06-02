@@ -87,9 +87,7 @@ def _set_up_module(**kwargs: object) -> Iterator[SurgeDataModule]:
 
     Encapsulates the setup/teardown try/finally pattern every
     ``TestSurgeDataModule`` test needs so a forgotten ``teardown`` can't leak
-    h5py handles into the next test. Also closes the ``predict_dataset``'s
-    h5py file when one was opened, since ``teardown`` only closes the three
-    train/val/test splits.
+    h5py handles into the next test.
 
     :param \\*\\*kwargs: Forwarded to ``SurgeDataModule``.
     :yields: The set-up datamodule for assertion work inside the ``with`` block.
@@ -100,16 +98,13 @@ def _set_up_module(**kwargs: object) -> Iterator[SurgeDataModule]:
     try:
         yield module
     finally:
-        # SurgeDataModule.teardown() blindly closes train/val/test dataset_file
-        # handles; in fake mode those are None and the close call would raise.
+        # SurgeDataModule.teardown() blindly closes every split's dataset_file
+        # handle; in fake mode those are None and the close call would raise.
         # Tests that exercise teardown's real-mode behavior do so directly
         # (see test_teardown_closes_open_h5_handles) — skip it here when the
         # caller asked for fake mode.
         if not module.fake:
             module.teardown()
-        predict_dataset = module.predict_dataset
-        if predict_dataset is not None and predict_dataset.dataset_file is not None:
-            predict_dataset.dataset_file.close()
 
 
 def _unwrap(maybe_tensor: torch.Tensor | None) -> torch.Tensor:
@@ -845,10 +840,10 @@ class TestSurgeDataModule:
         assert module.dataset_root == tmp_path
         assert isinstance(module.dataset_root, Path)
 
-    def test_init_hydrates_dataset_root_from_r2_when_uri_set(
+    def test_prepare_data_hydrates_dataset_root_from_r2_when_uri_set(
         self, local_r2_remote: Path, tmp_path: Path
     ) -> None:
-        """Construction with a ``download_dataset_root_uri`` copies the R2 prefix into
+        """``prepare_data`` with a ``download_dataset_root_uri`` copies the R2 prefix into
         ``dataset_root``.
 
         :param local_r2_remote: Real rclone remote backed by the local filesystem.
@@ -860,15 +855,18 @@ class TestSurgeDataModule:
         (remote_prefix / "stats.npz").write_bytes(b"stats-bytes")
         dataset_root = tmp_path / "downloaded"
 
-        SurgeDataModule(
+        module = SurgeDataModule(
             dataset_root=str(dataset_root),
             download_dataset_root_uri="r2://intermediate-data/dataset",
         )
+        module.prepare_data()
 
         assert (dataset_root / "train.h5").read_bytes() == b"train-bytes"
         assert (dataset_root / "stats.npz").read_bytes() == b"stats-bytes"
 
-    def test_init_no_download_when_uri_none(self, local_r2_remote: Path, tmp_path: Path) -> None:
+    def test_prepare_data_no_download_when_uri_none(
+        self, local_r2_remote: Path, tmp_path: Path
+    ) -> None:
         """Default ``None`` URI leaves ``dataset_root`` untouched.
 
         :param local_r2_remote: Real rclone remote — present so a regression copies rather than
@@ -878,7 +876,8 @@ class TestSurgeDataModule:
         dataset_root = tmp_path / "downloaded"
         dataset_root.mkdir()
 
-        SurgeDataModule(dataset_root=str(dataset_root))
+        module = SurgeDataModule(dataset_root=str(dataset_root))
+        module.prepare_data()
 
         assert list(dataset_root.iterdir()) == []
 
@@ -1060,7 +1059,7 @@ class TestSurgeDataModule:
             assert loader.pin_memory is True
 
     def test_teardown_closes_open_h5_handles(self, dataset_root: Path) -> None:
-        """``teardown`` closes the three split files so the next setup can reopen them.
+        """``teardown`` closes every split file so the next setup can reopen them.
 
         :param dataset_root: Fixture-provided dataset-root directory.
         """
@@ -1071,6 +1070,7 @@ class TestSurgeDataModule:
         assert not module.train_dataset.dataset_file
         assert not module.val_dataset.dataset_file
         assert not module.test_dataset.dataset_file
+        assert not module.predict_dataset.dataset_file
 
     def test_fake_mode_setup_does_not_require_dataset_files(self, tmp_path: Path) -> None:
         """``fake=True`` setup never touches the dataset_root, so a fresh dir is enough.

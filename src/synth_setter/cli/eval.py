@@ -112,7 +112,7 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
         if cfg.get("render") is None:
             raise ValueError(
                 "evaluation.render_vst=true requires a render config group "
-                "(e.g. `+render=surge_xt`); cfg.render is unset."
+                "(e.g. `render=surge_xt`); cfg.render is unset."
             )
         if not predictions_dir.is_dir():
             raise ValueError(
