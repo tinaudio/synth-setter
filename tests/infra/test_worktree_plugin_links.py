@@ -152,6 +152,23 @@ def test_link_plugins_skips_when_primary_has_no_plugins(tmp_path: Path) -> None:
     assert not (worktree / "plugins").exists()
 
 
+def test_link_plugins_skips_when_primary_plugins_is_empty(tmp_path: Path) -> None:
+    """`make link-plugins` hints and makes no worktree plugins/ for an empty primary dir.
+
+    :param tmp_path: holds the primary checkout (empty plugins/) and its worktree.
+    """
+    primary = tmp_path / "primary"
+    _init_primary_repo(primary)
+    (primary / "plugins").mkdir()
+    worktree = tmp_path / "wt"
+    _git(primary, "worktree", "add", "--detach", "-q", str(worktree))
+
+    stdout = _make_link_plugins(worktree)
+
+    assert "No" in stdout and "install-surge-xt" in stdout
+    assert not (worktree / "plugins").exists()
+
+
 def test_link_plugins_mirrors_a_broken_symlink(tmp_path: Path) -> None:
     """`make link-plugins` mirrors a primary entry even when its symlink target is missing.
 

@@ -167,16 +167,18 @@ link-plugins: ## Mirror the primary checkout's plugins/ into the current worktre
 	if [ "$$primary" = "$$here" ]; then \
 		echo "In primary checkout — nothing to link."; exit 0; \
 	fi; \
-	if [ ! -d "$$primary/plugins" ]; then \
-		echo "No $$primary/plugins to mirror — run 'make install-surge-xt' in the primary first."; exit 0; \
-	fi; \
-	mkdir -p "$$here/plugins"; \
+	linked=0; \
 	for entry in "$$primary"/plugins/*; do \
 		[ -e "$$entry" ] || [ -L "$$entry" ] || continue; \
+		mkdir -p "$$here/plugins"; \
 		name="$$(basename "$$entry")"; \
 		ln -sfn "$$entry" "$$here/plugins/$$name"; \
 		echo "linked plugins/$$name -> $$entry"; \
-	done
+		linked=1; \
+	done; \
+	if [ "$$linked" = 0 ]; then \
+		echo "No plugins to mirror from $$primary/plugins — run 'make install-surge-xt' in the primary first."; \
+	fi
 
 # Mirrors the --cov flags used by .github/workflows/test.yml so local
 # coverage runs reproduce CI output (xml report feeds Codecov; html is for
