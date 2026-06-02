@@ -22,13 +22,13 @@ from pathlib import Path
 from typing import Any
 
 import hydra
+import wandb
 from hydra.core.hydra_config import HydraConfig
 from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 
-import wandb
 from synth_setter.cli.finalize_dataset import finalize_from_spec
 from synth_setter.data.vst.core import extract_renderer_version
 from synth_setter.pipeline import r2_io
@@ -99,7 +99,7 @@ def _run_oracle_eval_subprocess(dataset_root: Path, run_id: str) -> None:
 
     :param dataset_root: Holds the finalized HDF5 splits the eval datamodule reads.
     :param run_id: Canonical ``spec.run_id``; the eval resumes this wandb run
-        so its ``test/*`` metrics land on the generate phase's run.
+        so its ``audio/*`` metrics land on the generate phase's run.
     """
     argv = [
         sys.executable,
@@ -120,7 +120,7 @@ def _run_oracle_eval_subprocess(dataset_root: Path, run_id: str) -> None:
         "+logger.wandb.resume=must",
         # SurgeXTDataset floors len to samples // batch_size; the 128 default
         # would yield zero batches on the smoke-sized test split (4 samples),
-        # so test_step never runs and no test/* metric is logged — see #1331.
+        # so predict_step never runs and no audio/* metric is logged — see #1331.
         "data.batch_size=1",
         "mode=predict",
     ]
