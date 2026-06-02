@@ -84,8 +84,8 @@ AGENTS.md "Always" rule: the primary checkout is read-only; switch to an
 isolated worktree before editing.
 
 Recommended (current HEAD: ${branch_label}):
-  git worktree add --detach ${primary_root}/.claude/worktrees/${slug}
-  cd ${primary_root}/.claude/worktrees/${slug}
+  git worktree add --detach '${primary_root}/.claude/worktrees/${slug}'
+  cd '${primary_root}/.claude/worktrees/${slug}' && uv sync && make link-plugins
 
 ${override_hint}
 EOF

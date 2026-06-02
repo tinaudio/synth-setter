@@ -20,6 +20,11 @@ Architecture: [docs/architecture.md](docs/architecture.md).
   banner on startup/resume/clear/compact; a `PreToolUse` hook
   (`agent/hooks/worktree-guard.sh`) warns on Edit/Write inside the primary
   checkout (`WORKTREE_GUARD_MODE`: `warn` default / `block` / `off`).
+- **Each worktree gets its own `.venv`.** The spawn command runs `uv sync`;
+  `~/.bashrc` (installed by `.devcontainer/post-create.sh`) then activates
+  `./.venv` per directory, overriding the image's shared `/venv/main`. For
+  one-offs, `uv run <cmd>` targets the worktree env regardless of the
+  inherited `VIRTUAL_ENV`.
 - **Always verify the branch before push.** Run `git branch --show-current`
   and confirm it matches the target PR branch. A hook prints the branch on
   every `git commit`; don't ignore it.
@@ -126,14 +131,19 @@ unintended shell expansion. A `PreToolUse` hook
   comment has an inline reply ∧ no fresh Copilot findings — see
   `/pr-preflight`.
 - **After every push, drive the readiness loop until all four gates hold.**
-  "I pushed the fix" is not "the PR is ready." Watch CI (`gh pr checks <N> --watch` or `/loop`); on red, diagnose, fix, push, repeat. Reply inline on
-  every open review comment via `/pr-review-resolver`. Then wait ~60s (allow
-  15 min) for Copilot's post-push review on **both**
-  `repos/<OWNER>/<REPO>/pulls/<N>/comments` and
-  `repos/<OWNER>/<REPO>/pulls/<N>/reviews`; address any new findings and
-  loop. If Copilot is silent past 15 min, manually re-request and repeat at
-  most once. Full procedure (commands, endpoints, traps) in
-  [`docs/pr-readiness-loop.md`](docs/pr-readiness-loop.md).
+  "I pushed the fix" is not "the PR is ready." Run `/pr-readiness` to drive the
+  loop: watch CI (`gh pr checks <N> --watch` or `/loop`) and fix red; confirm
+  `mergeable=MERGEABLE`; reply inline on every open review comment via
+  `/pr-review-resolver`; then wait ~60s (allow 15 min) for Copilot's post-push
+  review on **both** `repos/<OWNER>/<REPO>/pulls/<N>/comments` and
+  `repos/<OWNER>/<REPO>/pulls/<N>/reviews`; address any new findings and loop.
+  If Copilot is silent past 15 min, manually re-request and repeat at most
+  once. Full procedure (commands, endpoints, traps) in
+  [`docs/pr-readiness-loop.md`](docs/pr-readiness-loop.md). A `Stop` hook
+  (`agent/hooks/pr-readiness-stop.sh`) enforces this: it blocks ending the turn
+  while gates 1-2 (CI green, `mergeable`) fail for the branch's open PR, and
+  points back here for gates 3-4 (`PR_READINESS_GATE`: `block` default /
+  `warn` / `off`).
 - **Always reply inline** on each open PR review comment (humans + Copilot),
   with a fix-commit SHA or justification. Use `/pr-review-resolver`.
 - **Advisory rewakes carry an origin-HEAD stamp.** The `pr-review-resolver`

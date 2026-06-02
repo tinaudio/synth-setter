@@ -443,6 +443,27 @@ RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
  && npm --version \
  && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
 
+# Zellij terminal multiplexer (https://github.com/zellij-org/zellij) — not in
+# the Ubuntu 22.04 apt repos, so install the upstream static musl binary,
+# verified against a pinned per-arch SHA256 (run `sha256sum` on the release
+# tarballs to refresh these when bumping ZELLIJ_VERSION).
+ARG TARGETARCH
+ARG ZELLIJ_VERSION=v0.44.3
+ARG ZELLIJ_SHA256_X86_64=0f7c346788627f506c0a28296517768633cff24fc822a739f8264b640ecad751
+ARG ZELLIJ_SHA256_AARCH64=15e6534d42644d66973d136c590c49739dcfd6a1a2a0d3d917973f16c81b45fb
+RUN case "${TARGETARCH:-}" in \
+      amd64) zellij_arch=x86_64;  zellij_sha=${ZELLIJ_SHA256_X86_64}  ;; \
+      arm64) zellij_arch=aarch64; zellij_sha=${ZELLIJ_SHA256_AARCH64} ;; \
+      *) echo "ERROR: unsupported TARGETARCH for zellij: ${TARGETARCH:-<unset>}" >&2; exit 1 ;; \
+    esac && \
+    url="https://github.com/zellij-org/zellij/releases/download/${ZELLIJ_VERSION}/zellij-${zellij_arch}-unknown-linux-musl.tar.gz" && \
+    wget -q -O /tmp/zellij.tar.gz "$url" && \
+    echo "${zellij_sha}  /tmp/zellij.tar.gz" | sha256sum -c - && \
+    tar -xzf /tmp/zellij.tar.gz -C /usr/local/bin zellij && \
+    rm /tmp/zellij.tar.gz && \
+    chmod +x /usr/local/bin/zellij && \
+    zellij --version
+
 ARG USERNAME=dev
 ARG USER_UID=1000
 ARG USER_GID=$USER_UID
@@ -464,6 +485,30 @@ RUN mkdir -p /commandhistory \
 
 # --- Non-root dev user ---
 USER $USERNAME
+
+# Appended, not prepended: root-default devcontainer sessions must not resolve
+# these dev-writable dirs ahead of system binaries.
+ENV PATH="$PATH:/home/${USERNAME}/.npm-global/bin:/home/${USERNAME}/.local/bin"
+
+# dev's `npm install -g` would EACCES on the root-owned global tree (claude-code
+# is baked in as root); a per-user prefix sends it to a writable one. $HOME is
+# unset after USER, so export it per-RUN (not ENV — that leaks to root sessions).
+ARG CODEX_VERSION=latest
+RUN export HOME="/home/${USERNAME}" \
+ && npm config set prefix "/home/${USERNAME}/.npm-global" \
+ && npm install -g "@openai/codex@${CODEX_VERSION}" \
+ && npm cache clean --force \
+ && codex --version
+
+# Antigravity (Google) ships the standalone `agy` binary, not on npm; its
+# installer fetches a SHA512-verified release into ~/.local/bin (upstream
+# latest — no version flag). Fetched to a file, not piped to bash, so a curl
+# failure is distinguishable from a script failure.
+RUN export HOME="/home/${USERNAME}" \
+ && curl -fsSL https://antigravity.google/cli/install.sh -o /tmp/agy-install.sh \
+ && bash /tmp/agy-install.sh \
+ && rm /tmp/agy-install.sh \
+ && agy --version
 
 FROM dev-base AS freeze-deps
 # Record package versions for audit / reproducibility

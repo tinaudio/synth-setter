@@ -1,6 +1,68 @@
 # CHANGELOG
 
 
+## v8.13.0 (2026-06-02)
+
+### Chores
+
+- **devcontainer**: Give each git worktree its own uv venv
+  ([#1340](https://github.com/tinaudio/synth-setter/pull/1340),
+  [`e8cb674`](https://github.com/tinaudio/synth-setter/commit/e8cb6743cb0cfc42b5bff0b60fa9554e6e610d1e))
+
+* chore(devcontainer): give each git worktree its own uv venv
+
+The image bakes VIRTUAL_ENV=/venv/main onto PATH, so every worktree shared one editable install —
+  whichever ran `uv sync` last owned it, which masked config/code edits made in other worktrees.
+
+- post-create.sh installs a ~/.bashrc snippet that activates a worktree-local ./.venv when present,
+  shadowing /venv/main (idempotent, grep-guarded) - the SessionStart banner's spawn command now ends
+  with `&& uv sync` so new worktrees build their own venv - AGENTS.md documents the per-worktree
+  venv and the `uv run` one-off path
+
+* chore(devcontainer): guard venv activation against PATH stacking
+
+Address pre-PR review WARNs on the ~/.bashrc isolation snippet: - skip re-activation when the
+  worktree venv is already active, so re-sourcing ~/.bashrc can't stack duplicate .venv/bin entries
+  on PATH - grep -qs so an absent ~/.bashrc reads as not-yet-installed, not an error
+
+* address review feedback on PR #1340
+
+Bug fixes: - .devcontainer/post-create.sh: the bashrc venv-activation snippet now walks up to the
+  .project-root anchor instead of checking only $PWD/.venv, so the worktree venv activates from any
+  subdir — not just the worktree root. From a subdir the old check left the shared /venv/main
+  active, reintroducing the cross-worktree editable-install bleed this PR fixes (comments
+  #3336253872, #3336253972). Mirrors the existing walk-up idiom in the same file.
+
+Style/nit: - agent/hooks/session-start-cwd-banner.sh: single-quote the emitted worktree path and cd
+  target so the copy-pasteable spawn command survives a $primary_root containing spaces (comments
+  #3336253939, #3336253990).
+
+### Features
+
+- **devcontainer**: Add Codex, Antigravity, zellij; per-user npm prefix
+  ([#1355](https://github.com/tinaudio/synth-setter/pull/1355),
+  [`5b880a7`](https://github.com/tinaudio/synth-setter/commit/5b880a7244b1520f4032f0584fa111c228f30c2a))
+
+The devcontainer-tools image shipped only Claude Code (installed system-wide as root). A later `npm
+  install -g` by the non-root `dev` user hit EACCES on the root-owned /usr/local/lib/node_modules
+  tree.
+
+Set the dev user's npm prefix to ~/.npm-global (writes ~/.npmrc) so global installs land in a
+  writable tree, install @openai/codex through it (overridable via CODEX_VERSION, default latest to
+  match CLAUDE_CODE_VERSION), and install Google's standalone `agy` binary via its official
+  installer into ~/.local/bin. Both bin dirs go on PATH (appended, so root sessions resolve system
+  binaries first).
+
+Add the zellij terminal multiplexer system-wide: it is not in the Ubuntu 22.04 apt repos, so install
+  the upstream static musl binary verified against a pinned per-arch SHA256, matching the pueue
+  pattern.
+
+Docker leaves $HOME unset after a USER switch, so each build-time install exports HOME explicitly
+  (scoped per-RUN, not ENV, so the root-default devcontainer sessions keep HOME=/root).
+
+Refs #1351
+
+
 ## v8.12.3 (2026-05-28)
 
 ### Bug Fixes

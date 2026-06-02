@@ -754,7 +754,7 @@ devcontainer up --workspace-folder .
 ```bash
 # Inside the container, starting from the workspace root on main:
 git worktree add .claude/worktrees/my-feature -b feat/my-feature
-cd .claude/worktrees/my-feature
+cd .claude/worktrees/my-feature && make link-plugins
 ```
 
 This is the supported local pattern. Mounting a worktree directly from the
@@ -778,6 +778,10 @@ the failure surfaces immediately rather than partway through `post-create`.
   VST-dependent tests. Host edits under `plugins/` are not visible
   inside the container; container edits under `plugins/` are not
   visible on the host.
+- A fresh worktree starts without `plugins/` (it's gitignored, so
+  `git worktree add` doesn't copy it). `make link-plugins` mirrors the
+  primary checkout's `plugins/` entries into the worktree (no-op in the
+  primary) — that's why the spawn command above chains it.
 
 ### B.3. macOS VM (Tart)
 
