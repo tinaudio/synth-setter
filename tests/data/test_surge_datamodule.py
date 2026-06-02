@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import contextlib
 import random
+import shutil
 from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import patch
@@ -55,15 +56,38 @@ _NUM_PARAMS = 11
 _ALL_TENSOR_KEYS = ("audio", "mel_spec", "m2l", "params", "noise")
 
 
+@pytest.fixture()
+def local_r2_remote(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Back the ``r2:`` rclone remote with the local filesystem for real-binary e2e.
+
+    ``RCLONE_CONFIG_R2_TYPE=local`` resolves ``r2://<bucket>/<key>`` to
+    ``<cwd>/<bucket>/<key>``, and the three secret keys satisfy
+    ``ensure_r2_env_loaded``'s presence check (their values are unused by the
+    local backend). Skips when ``rclone`` is absent.
+
+    :param tmp_path: Pytest tmp dir; the returned subdir is the fake R2 root.
+    :param monkeypatch: Sets the rclone env vars and chdirs into the remote root.
+    :return: The fake R2 root; ``r2://<bucket>/<key>`` materializes under it.
+    """
+    if shutil.which("rclone") is None:
+        pytest.skip("rclone binary not available on PATH")
+    remote_root = tmp_path / "r2"
+    remote_root.mkdir()
+    monkeypatch.setenv("RCLONE_CONFIG_R2_TYPE", "local")
+    monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", "stub")
+    monkeypatch.setenv("RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", "stub")
+    monkeypatch.setenv("RCLONE_CONFIG_R2_ENDPOINT", "stub")
+    monkeypatch.chdir(remote_root)
+    return remote_root
+
+
 @contextlib.contextmanager
 def _set_up_module(**kwargs: object) -> Iterator[SurgeDataModule]:
     """Construct a ``SurgeDataModule`` from ``**kwargs``, ``setup``, yield, then ``teardown``.
 
     Encapsulates the setup/teardown try/finally pattern every
     ``TestSurgeDataModule`` test needs so a forgotten ``teardown`` can't leak
-    h5py handles into the next test. Also closes the ``predict_dataset``'s
-    h5py file when one was opened, since ``teardown`` only closes the three
-    train/val/test splits.
+    h5py handles into the next test.
 
     :param \\*\\*kwargs: Forwarded to ``SurgeDataModule``.
     :yields: The set-up datamodule for assertion work inside the ``with`` block.
@@ -74,16 +98,7 @@ def _set_up_module(**kwargs: object) -> Iterator[SurgeDataModule]:
     try:
         yield module
     finally:
-        # SurgeDataModule.teardown() blindly closes train/val/test dataset_file
-        # handles; in fake mode those are None and the close call would raise.
-        # Tests that exercise teardown's real-mode behavior do so directly
-        # (see test_teardown_closes_open_h5_handles) — skip it here when the
-        # caller asked for fake mode.
-        if not module.fake:
-            module.teardown()
-        predict_dataset = module.predict_dataset
-        if predict_dataset is not None and predict_dataset.dataset_file is not None:
-            predict_dataset.dataset_file.close()
+        module.teardown()
 
 
 def _unwrap(maybe_tensor: torch.Tensor | None) -> torch.Tensor:
@@ -232,34 +247,26 @@ class TestSurgeXTDatasetFakeMode:
         assert len(small) == 10000
         assert len(large) == 10000
 
-    def test_fake_mode_default_flags_populate_mel_audio_params_noise(self) -> None:
-        """With default flags ``audio``/``mel_spec``/``params``/``noise`` are populated; ``m2l`` is
-        None.
+    def test_fake_mode_default_flags_populate_mel_params_noise(self) -> None:
+        """With default flags ``mel_spec``/``params``/``noise`` are populated; ``audio``/``m2l``
+        are None.
 
-        ``audio`` is populated here even though ``read_audio`` defaults to
-        False — see ``test_fake_mode_read_audio_true_returns_none_audio``
-        for the inverse pin on the asymmetric flag.
+        ``read_audio`` and ``read_m2l`` both default to False, so their slots
+        drop to None — the same flag→slot mapping as real mode.
         """
         dataset = SurgeXTDataset("ignored", batch_size=3, fake=True)
         item = dataset[0]
+        assert item["audio"] is None
         assert item["m2l"] is None
-        assert _unwrap(item["audio"]).shape == (3, 2, 44100 * 4)
         assert _unwrap(item["mel_spec"]).shape == (3, 2, 128, 401)
         assert _unwrap(item["params"]).shape == (3, 189)
         assert _unwrap(item["noise"]).shape == (3, 189)
 
-    def test_fake_mode_read_audio_true_returns_none_audio(self) -> None:
-        """Pin the asymmetric fake-mode contract: ``read_audio=True`` returns audio=None.
-
-        This is the *current* (and surprising) behavior of ``_get_fake_item``:
-        the audio ternary inverts the flag (``... if not self.read_audio else None``)
-        so the real-mode contract ``read_audio=True -> audio populated`` does
-        not hold in fake mode. Pinned here so future changes flip the test
-        either way — the asymmetry is intentional to surface in review.
-        """
+    def test_fake_mode_read_audio_true_returns_audio_tensor(self) -> None:
+        """``read_audio=True`` populates the ``audio`` slot, mirroring real mode."""
         dataset = SurgeXTDataset("ignored", batch_size=2, fake=True, read_audio=True)
         item = dataset[0]
-        assert item["audio"] is None
+        assert _unwrap(item["audio"]).shape == (2, 2, 44100 * 4)
 
     def test_fake_mode_read_m2l_returns_m2l_tensor(self) -> None:
         """``read_m2l=True`` populates the ``m2l`` slot with the documented shape."""
@@ -274,7 +281,7 @@ class TestSurgeXTDatasetFakeMode:
 
     def test_fake_mode_rescale_params_maps_into_minus_one_to_one(self) -> None:
         """``rescale_params=True`` rescales ``torch.rand`` from [0, 1) into [-1, 1)."""
-        # read_mel=False + read_audio=True skips the ~190 MB mel/audio
+        # read_mel=False + read_audio=False skips the ~190 MB mel/audio
         # allocations that fake mode would otherwise build at batch_size=128;
         # this test only inspects params.
         dataset = SurgeXTDataset(
@@ -283,7 +290,7 @@ class TestSurgeXTDatasetFakeMode:
             fake=True,
             rescale_params=True,
             read_mel=False,
-            read_audio=True,
+            read_audio=False,
         )
         params = _unwrap(dataset[0]["params"])
         assert params.min().item() >= -1.0
@@ -302,7 +309,7 @@ class TestSurgeXTDatasetFakeMode:
             fake=True,
             rescale_params=False,
             read_mel=False,
-            read_audio=True,
+            read_audio=False,
         )
         params = _unwrap(dataset[0]["params"])
         assert params.min().item() >= 0.0
@@ -819,6 +826,47 @@ class TestSurgeDataModule:
         assert module.dataset_root == tmp_path
         assert isinstance(module.dataset_root, Path)
 
+    def test_prepare_data_hydrates_dataset_root_from_r2_when_uri_set(
+        self, local_r2_remote: Path, tmp_path: Path
+    ) -> None:
+        """``prepare_data`` with a ``download_dataset_root_uri`` copies the R2 prefix into
+        ``dataset_root``.
+
+        :param local_r2_remote: Real rclone remote backed by the local filesystem.
+        :param tmp_path: Holds the (initially absent) download destination root.
+        """
+        remote_prefix = local_r2_remote / "intermediate-data" / "dataset"
+        remote_prefix.mkdir(parents=True)
+        (remote_prefix / "train.h5").write_bytes(b"train-bytes")
+        (remote_prefix / "stats.npz").write_bytes(b"stats-bytes")
+        dataset_root = tmp_path / "downloaded"
+
+        module = SurgeDataModule(
+            dataset_root=str(dataset_root),
+            download_dataset_root_uri="r2://intermediate-data/dataset",
+        )
+        module.prepare_data()
+
+        assert (dataset_root / "train.h5").read_bytes() == b"train-bytes"
+        assert (dataset_root / "stats.npz").read_bytes() == b"stats-bytes"
+
+    def test_prepare_data_no_download_when_uri_none(
+        self, local_r2_remote: Path, tmp_path: Path
+    ) -> None:
+        """Default ``None`` URI leaves ``dataset_root`` untouched.
+
+        :param local_r2_remote: Real rclone remote — present so a regression copies rather than
+            hangs.
+        :param tmp_path: Holds the pre-existing, empty dataset root.
+        """
+        dataset_root = tmp_path / "downloaded"
+        dataset_root.mkdir()
+
+        module = SurgeDataModule(dataset_root=str(dataset_root))
+        module.prepare_data()
+
+        assert list(dataset_root.iterdir()) == []
+
     def test_setup_creates_train_val_test_splits(self, dataset_root: Path) -> None:
         """``setup()`` opens the three required splits and exposes them as attrs.
 
@@ -829,13 +877,14 @@ class TestSurgeDataModule:
             assert isinstance(module.val_dataset, SurgeXTDataset)
             assert isinstance(module.test_dataset, SurgeXTDataset)
 
-    def test_setup_without_predict_file_leaves_predict_none(self, dataset_root: Path) -> None:
-        """``predict_file=None`` leaves ``predict_dataset`` as ``None``.
+    def test_setup_without_predict_file_defaults_to_test_split(self, dataset_root: Path) -> None:
+        """No ``predict_file``: ``predict_dataset`` defaults to the ``test.h5`` split.
 
         :param dataset_root: Fixture-provided dataset-root directory.
         """
         with _set_up_module(dataset_root=dataset_root, batch_size=2, ot=False) as module:
-            assert module.predict_dataset is None
+            assert module.predict_file == dataset_root / "test.h5"
+            assert isinstance(module.predict_dataset, SurgeXTDataset)
 
     def test_setup_with_predict_file_builds_predict_dataset_with_audio(
         self, dataset_root: Path
@@ -996,7 +1045,7 @@ class TestSurgeDataModule:
             assert loader.pin_memory is True
 
     def test_teardown_closes_open_h5_handles(self, dataset_root: Path) -> None:
-        """``teardown`` closes the three split files so the next setup can reopen them.
+        """``teardown`` closes every split file so the next setup can reopen them.
 
         :param dataset_root: Fixture-provided dataset-root directory.
         """
@@ -1007,6 +1056,7 @@ class TestSurgeDataModule:
         assert not module.train_dataset.dataset_file
         assert not module.val_dataset.dataset_file
         assert not module.test_dataset.dataset_file
+        assert not module.predict_dataset.dataset_file
 
     def test_fake_mode_setup_does_not_require_dataset_files(self, tmp_path: Path) -> None:
         """``fake=True`` setup never touches the dataset_root, so a fresh dir is enough.

@@ -111,7 +111,7 @@ jobs:
       # Compose train.yaml through the canonical entry pattern — exercises
       # the namespace plugin's auto-registration of `pkg://synth_setter.configs`,
       # the custom `${mul:…}` resolver in model/ffn.yaml, and every YAML in
-      # train's defaults chain (data/ksin, model/ffn, trainer/cpu, callbacks,
+      # train's defaults chain (datamodule/ksin, model/ffn, trainer/cpu, callbacks,
       # logger, paths, extras, hydra). Stops short of `hydra.utils.instantiate`
       # — that's what tests/test_configs.py covers against the editable tree.
       - name: Canonical Hydra compose against installed wheel
@@ -127,17 +127,17 @@ jobs:
           with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
               cfg = compose(
                   config_name="train.yaml",
-                  overrides=["data=ksin", "model=ffn", "trainer=cpu"],
+                  overrides=["datamodule=ksin", "model=ffn", "trainer=cpu"],
               )
 
-          assert cfg.data, "data group not composed"
+          assert cfg.datamodule, "datamodule group not composed"
           assert cfg.model, "model group not composed"
           assert cfg.trainer, "trainer group not composed"
           assert isinstance(cfg.model.net.out_dim, int), (
               f"mul resolver did not produce int for cfg.model.net.out_dim: {cfg.model.net.out_dim!r}"
           )
 
-          print("data._target_:", cfg.data._target_)
+          print("datamodule._target_:", cfg.datamodule._target_)
           print("model._target_:", cfg.model._target_)
           print("trainer._target_:", cfg.trainer._target_)
           print("model.net.out_dim (mul-resolved):", cfg.model.net.out_dim)

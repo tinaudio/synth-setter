@@ -9,8 +9,8 @@ run_name: flow_asym
 model:
   vector_field:
     projection:
-      num_params: ${mul:${data.k},3}
+      num_params: ${mul:${datamodule.k},3}
 
-data:
+datamodule:
   break_symmetry: true
   ot: true

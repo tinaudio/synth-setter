@@ -4,7 +4,7 @@
 # python train.py experiment=example
 
 defaults:
-  - override /data: ksin
+  - override /datamodule: ksin
   - override /model: ksin_flow
   - override /callbacks: default
   - override /trainer: gpu
@@ -17,7 +17,7 @@ experiment_name: flow_size
 
 tags:
   - ksin
-  - k_${data.k}
+  - k_${datamodule.k}
   - flow_size
   - no_sched
   - data_standardised
@@ -30,7 +30,7 @@ model:
     out_dim: 256
   cfm_variance: 0.0
 
-data:
+datamodule:
   k: 8
 
 seed: 12345

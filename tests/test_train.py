@@ -127,7 +127,7 @@ def test_train_ddp_sim(cfg_train: DictConfig) -> None:
         # each rank process, sidestepping cross-process tensor shm entirely.
         # This test exercises ddp_spawn coordination, not dataloader
         # parallelism, so dropping workers does not weaken coverage.
-        cfg_train.data.num_workers = 0
+        cfg_train.datamodule.num_workers = 0
     train(cfg_train)
 
 

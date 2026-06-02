@@ -6,7 +6,7 @@ defaults:
 
 run_name: mlp_sort
 
-data:
+datamodule:
   sort_frequencies: true
 
 model:

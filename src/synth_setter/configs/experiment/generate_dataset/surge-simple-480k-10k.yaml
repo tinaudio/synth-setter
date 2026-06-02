@@ -4,7 +4,7 @@
 # samples_per_shard=10000.
 
 defaults:
-  - override /data: surge_simple
+  - override /datamodule: surge_simple
   - override /render: surge_simple
   - _self_
 

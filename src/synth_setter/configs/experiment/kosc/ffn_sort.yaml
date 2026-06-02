@@ -9,7 +9,7 @@ run_name: ffn_sort
 model:
   loss_fn: mse
   net:
-    out_dim: ${mul:${data.k},3}
+    out_dim: ${mul:${datamodule.k},3}
 
-data:
+datamodule:
   sort_frequencies: true

@@ -8,8 +8,8 @@ run_name: flowmlp_asym
 
 model:
   vector_field:
-    n_params: ${mul:${data.k},3}
+    n_params: ${mul:${datamodule.k},3}
 
-data:
+datamodule:
   break_symmetry: true
   ot: true

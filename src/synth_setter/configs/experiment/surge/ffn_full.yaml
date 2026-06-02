@@ -3,7 +3,7 @@
 defaults:
   - surge/base
   - override /model: surge_ffn
-  - override /data: surge
+  - override /datamodule: surge
   - _self_
 
 run_name: ffn

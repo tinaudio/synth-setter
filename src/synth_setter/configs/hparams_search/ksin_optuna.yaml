@@ -20,7 +20,7 @@ trainer:
   min_epochs: 500
   max_epochs: 500
 
-data:
+datamodule:
   k: 8
 
 logger:

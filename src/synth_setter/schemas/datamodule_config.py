@@ -1,4 +1,4 @@
-"""Pydantic schema for the YAMLs under ``configs/data/``.
+"""Pydantic schema for the YAMLs under ``configs/datamodule/``.
 
 Datamodule kwargs vary per module (``SurgeDataModule`` is path-driven,
 ``KSinDataModule`` is synthetic) and pass through via ``extra="allow"``.
@@ -10,11 +10,11 @@ from pydantic import Field
 
 from synth_setter.schemas._types import NonBlankStr, StrictAllowExtraModel
 
-__all__ = ["DataConfig"]
+__all__ = ["DataModuleConfig"]
 
 
-class DataConfig(StrictAllowExtraModel):
-    """One of the YAMLs under ``configs/data/``; only ``_target_`` is typed.
+class DataModuleConfig(StrictAllowExtraModel):
+    """One of the YAMLs under ``configs/datamodule/``; only ``_target_`` is typed.
 
     .. attribute :: target_
 
@@ -25,6 +25,6 @@ class DataConfig(StrictAllowExtraModel):
         alias="_target_",
         description=(
             "Fully-qualified ``LightningDataModule`` class path. Resolved by "
-            "``hydra.utils.instantiate(cfg.data)`` in ``cli/train.py``."
+            "``hydra.utils.instantiate(cfg.datamodule)`` in ``cli/train.py``."
         ),
     )

@@ -4,7 +4,7 @@
 # python train.py experiment=example
 
 defaults:
-  - override /data: ksin
+  - override /datamodule: ksin
   - override /model: ksin_flow
   - override /callbacks: default
   - override /trainer: gpu
@@ -16,12 +16,12 @@ defaults:
 experiment_name: time_weighting
 run_name: ${model.p_time}_${model.w_time}
 
-data:
+datamodule:
   k: 8
 
 tags:
   - ksin
-  - k_${data.k}
+  - k_${datamodule.k}
   - time_weighting
 
 seed: 12345

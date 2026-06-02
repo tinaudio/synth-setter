@@ -12,6 +12,6 @@ model:
     projection:
       k: ${div:${out_dim},2}
 
-data:
+datamodule:
   break_symmetry: true
   ot: true

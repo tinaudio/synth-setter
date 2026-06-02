@@ -6,7 +6,7 @@ project: synth-setter
 command:
   - ${interpreter}
   - ${program}
-  - experiment=generate_dataset/smoke-shard
+  - experiment=generate_dataset/smoke-shard-with-oracle-eval
   - ${args_no_hyphens}
 name: generate_dataset_cadence_sweep
 method: grid
@@ -14,7 +14,7 @@ method: grid
 # legibility on runs that do log it.
 metric:
   goal: minimize
-  name: render.samples_per_shard
+  name: generation/samples_per_second
 parameters:
   render.plugin_reload_cadence:
     values:

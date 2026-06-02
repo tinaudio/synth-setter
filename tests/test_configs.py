@@ -19,13 +19,13 @@ def test_train_config(cfg_train: DictConfig) -> None:
     :param cfg_train: A DictConfig containing a valid training configuration.
     """
     assert cfg_train
-    assert cfg_train.data
+    assert cfg_train.datamodule
     assert cfg_train.model
     assert cfg_train.trainer
 
     HydraConfig().set_config(cfg_train)
 
-    hydra.utils.instantiate(cfg_train.data)
+    hydra.utils.instantiate(cfg_train.datamodule)
     hydra.utils.instantiate(cfg_train.model)
     hydra.utils.instantiate(cfg_train.trainer)
 
@@ -36,13 +36,13 @@ def test_eval_config(cfg_eval: DictConfig) -> None:
     :param cfg_train: A DictConfig containing a valid evaluation configuration.
     """
     assert cfg_eval
-    assert cfg_eval.data
+    assert cfg_eval.datamodule
     assert cfg_eval.model
     assert cfg_eval.trainer
 
     HydraConfig().set_config(cfg_eval)
 
-    hydra.utils.instantiate(cfg_eval.data)
+    hydra.utils.instantiate(cfg_eval.datamodule)
     hydra.utils.instantiate(cfg_eval.model)
     hydra.utils.instantiate(cfg_eval.trainer)
 
@@ -97,9 +97,10 @@ class TestWandbConfigResolvesFromEnv:
 
 # Volatile cfg branches that legitimately differ between the fixture builder and the YAML
 # compose: ``paths`` is filesystem-anchored via ``operator_workspace()``, ``hydra`` carries
-# the per-invocation runtime metadata, and ``task_name`` is interpolated from the entry-point
-# script name (test runner vs. ``train.py``).
-_VOLATILE_TOP_KEYS = ("paths", "hydra", "task_name")
+# the per-invocation runtime metadata, ``task_name`` is interpolated from the entry-point
+# script name (test runner vs. ``train.py``), and ``render`` is an eval-only group (null
+# here, selected per-run in predict mode) outside the train cfg shape this contract pins.
+_VOLATILE_TOP_KEYS = ("paths", "hydra", "task_name", "render")
 
 
 def _strip_volatile(cfg_dict: dict[Any, Any]) -> dict[Any, Any]:

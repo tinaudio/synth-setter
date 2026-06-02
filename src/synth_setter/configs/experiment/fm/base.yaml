@@ -5,7 +5,7 @@
 
 defaults:
   - /experiment/fm/algorithm: conditional
-  - override /data: fm
+  - override /datamodule: fm
   - override /callbacks: default
   - override /trainer: gpu
 
@@ -17,15 +17,15 @@ run_name: base
 
 tags:
   - fm
-  - algo_${data.algorithm}
+  - algo_${datamodule.algorithm}
 
 seed: 12345
 
 logger:
   wandb:
     tags: ${tags}
-    group: fm_${data.algorithm}_400k
-    name: fm_${data.algorithm}_${run_name}
+    group: fm_${datamodule.algorithm}_400k
+    name: fm_${datamodule.algorithm}_${run_name}
 
 callbacks:
   early_stopping: null

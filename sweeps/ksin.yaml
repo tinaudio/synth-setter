@@ -23,7 +23,7 @@ parameters:
       - ksin/ffn_asym
       - ksin/flow_asym
       - ksin/flow_fixed_asym
-  data.k:
+  datamodule.k:
     values:
       # - 1
       # - 4

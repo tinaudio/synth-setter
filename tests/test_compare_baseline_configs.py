@@ -315,9 +315,11 @@ ACCEPTED_DIFFS: tuple[str, ...] = (
     "logger.wandb.log_model",  # changed `true` → "all" (artifact upload policy, not training)
     "logger.wandb.project",  # env-derived (${oc.env:WANDB_PROJECT,synth-setter})
     # Cleared to `???` (mandatory override) in #809 — dataset locality, not a model knob.
-    "data.dataset_root",
-    "data.predict_file",
-    "data.stats_file",
+    "datamodule.dataset_root",
+    "datamodule.predict_file",
+    "datamodule.stats_file",
+    # Optional R2-download URI added in #1338; absent in v0.0.0 — locality, not a model knob.
+    "datamodule.download_dataset_root_uri",
     "evaluation",  # eval CLI predict-mode post-processing block; not a model knob
 )
 
@@ -371,9 +373,27 @@ def _strip_leaf_keys(cfg: dict, leaf_keys: tuple[str, ...]) -> dict:
     return result
 
 
+def _rename_data_group_to_datamodule(cfg: dict) -> dict:
+    """Return a deep-copy with a top-level ``data`` key renamed to ``datamodule``.
+
+    The ``data`` config group was renamed to ``datamodule`` post-v0.0.0; the
+    frozen baseline still composes it as ``data``. Run before the strip passes
+    so ``ACCEPTED_DIFFS`` paths (``datamodule.*``) match on both sides.
+
+    :param cfg: Resolved config; mutated only on the copy.
+    :returns: Copy with the group renamed, or an untouched copy when ``cfg``
+        already uses ``datamodule`` (the current side).
+    """
+    result = copy.deepcopy(cfg)
+    if "data" in result and "datamodule" not in result:
+        result["datamodule"] = result.pop("data")
+    return result
+
+
 def _normalize_for_compare(cfg: dict) -> dict:
     """Apply both strip passes used by the equality/inequality assertions."""
-    stripped = _strip_dotted_keys(cfg, INVOCATION_PATH_KEYS + ACCEPTED_DIFFS)
+    renamed = _rename_data_group_to_datamodule(cfg)
+    stripped = _strip_dotted_keys(renamed, INVOCATION_PATH_KEYS + ACCEPTED_DIFFS)
     return _strip_leaf_keys(stripped, ACCEPTED_DIFF_LEAVES)
 
 
@@ -410,6 +430,31 @@ class TestStripLeafKeys:
         cfg = {"_target_": "X", "_partial_": True, "keep": 1}
         result = _strip_leaf_keys(cfg, ("_target_", "_partial_"))
         assert result == {"keep": 1}
+
+
+class TestRenameDataGroupToDatamodule:
+    """Unit tests for the ``_rename_data_group_to_datamodule`` baseline shim."""
+
+    def test_renames_top_level_data_key(self) -> None:
+        """The frozen baseline's ``data`` group is relabelled to ``datamodule``."""
+        result = _rename_data_group_to_datamodule({"data": {"k": 8}, "model": {}})
+        assert result == {"datamodule": {"k": 8}, "model": {}}
+
+    def test_no_ops_when_already_datamodule(self) -> None:
+        """The current side (already ``datamodule``) passes through unchanged."""
+        cfg = {"datamodule": {"k": 8}}
+        assert _rename_data_group_to_datamodule(cfg) == cfg
+
+    def test_leaves_both_keys_untouched_when_both_present(self) -> None:
+        """The guard skips the rename rather than clobbering an existing ``datamodule``."""
+        cfg = {"data": {"old": 1}, "datamodule": {"new": 2}}
+        assert _rename_data_group_to_datamodule(cfg) == cfg
+
+    def test_does_not_mutate_input(self) -> None:
+        """The deep-copy contract holds — the caller's dict is untouched."""
+        cfg = {"data": {"k": 8}}
+        _ = _rename_data_group_to_datamodule(cfg)
+        assert cfg == {"data": {"k": 8}}
 
 
 def _assert_resolved_configs_equal(baseline: dict, current: dict) -> None:

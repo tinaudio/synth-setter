@@ -28,9 +28,9 @@ module load gcc
 python -m synth_setter.cli.eval \
     experiment=surge/vae_full \
     paths.log_dir=/data/EECS-C4DM-Fazekas/benhayes/surge-preds/vae_full/ \
-    data=surge \
+    datamodule=surge \
     callbacks=eval_surge \
     mode=predict \
-    data.batch_size=1024 \
-    data.num_workers=11 \
+    datamodule.batch_size=1024 \
+    datamodule.num_workers=11 \
     ckpt_path=$CKPT_PATH

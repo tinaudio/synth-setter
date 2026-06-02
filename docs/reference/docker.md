@@ -1,6 +1,6 @@
 # Docker Reference
 
-> **Last verified:** 2026-05-11
+> **Last verified:** 2026-06-02
 
 How to build, run, and debug Docker images for the synth-setter training
 pipeline. Intended for developers working locally or in CI environments.
@@ -104,7 +104,7 @@ make docker-build-dev-snapshot \
   GIT_REF="$(git rev-parse HEAD)" \
   DOCKER_BUILD_FLAGS="--load"
 
-# devcontainer-tools — dev-base + CLI tools, Node.js + Claude Code, dev user
+# devcontainer-tools — dev-base + CLI tools, Node.js + Claude Code/Codex/Antigravity, zellij, dev user
 # (see the "devcontainer-tools" stage in docker/ubuntu22_04/Dockerfile)
 make docker-build-devcontainer-tools \
   GIT_REF="$(git rev-parse HEAD)" \
@@ -115,7 +115,13 @@ The `devcontainer-tools` stage is a sibling of `dev-snapshot` — both stages
 build `FROM dev-base`, the shared parent that holds Surge XT, the venv, and
 the synth-setter source. `devcontainer-tools` adds interactive CLI tooling
 (see the stage's `apt-get install` list and the GitHub CLI install block),
-Node.js + `@anthropic-ai/claude-code` installed system-wide, a non-root
+Node.js + `@anthropic-ai/claude-code` installed system-wide, the OpenAI
+`@openai/codex` CLI installed for the `dev` user via a per-user npm prefix
+(`~/.npm-global`, on PATH) so later `npm install -g` runs avoid EACCES on the
+root-owned global tree, the Google Antigravity (`agy`) CLI installed by its
+upstream `install.sh` into `~/.local/bin` (also on PATH), the zellij
+terminal multiplexer (pinned upstream musl binary, SHA256-verified, in
+`/usr/local/bin`), a non-root
 `dev` user, chowns the baked uv venv at `/venv/main` to `dev` so
 `uv pip install` and editable installs work without sudo, and adds a
 `/commandhistory` directory (owned by `dev`) that

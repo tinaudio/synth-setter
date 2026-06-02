@@ -128,7 +128,7 @@ def cfg_train_global() -> DictConfig:
         cfg = compose(
             config_name="train.yaml",
             return_hydra_config=True,
-            overrides=["data=ksin", "model=ffn", "trainer=cpu"],
+            overrides=["datamodule=ksin", "model=ffn", "trainer=cpu"],
         )
 
         # set defaults for all tests
@@ -142,11 +142,11 @@ def cfg_train_global() -> DictConfig:
             cfg.trainer.devices = 1
             cfg.trainer.deterministic = True
             # DataLoader defaults
-            cfg.data.num_workers = 4
-            cfg.data.pin_memory = False
-            cfg.data.batch_size = 1
-            cfg.data.train_val_test_sizes = [2, 2, 2]
-            cfg.data.break_symmetry = True
+            cfg.datamodule.num_workers = 4
+            cfg.datamodule.pin_memory = False
+            cfg.datamodule.batch_size = 1
+            cfg.datamodule.train_val_test_sizes = [2, 2, 2]
+            cfg.datamodule.break_symmetry = True
             # Other defaults
             cfg.model.compile = False
             cfg.logger = None
@@ -171,7 +171,7 @@ def cfg_eval_global() -> DictConfig:
             config_name="eval.yaml",
             return_hydra_config=True,
             overrides=[
-                "data=ksin",
+                "datamodule=ksin",
                 "model=ffn",
                 "trainer=cpu",
                 "ckpt_path=.",
@@ -189,11 +189,11 @@ def cfg_eval_global() -> DictConfig:
             cfg.trainer.devices = 1
             cfg.trainer.deterministic = True
             # DataLoader defaults
-            cfg.data.num_workers = 0
-            cfg.data.pin_memory = False
-            cfg.data.batch_size = 1
-            cfg.data.train_val_test_sizes = [2, 2, 2]
-            cfg.data.break_symmetry = True
+            cfg.datamodule.num_workers = 0
+            cfg.datamodule.pin_memory = False
+            cfg.datamodule.batch_size = 1
+            cfg.datamodule.train_val_test_sizes = [2, 2, 2]
+            cfg.datamodule.break_symmetry = True
             # Other defaults
             cfg.model.compile = False
             cfg.logger = None
@@ -406,12 +406,12 @@ def _build_surge_xt_smoke_cfg(
             # SurgeDataModule's train_dataloader) drops one batch per epoch,
             # so any batch_size > dataset_size // 2 leaves the dataloader empty
             # and Lightning aborts with "Trainer.fit stopped: No training batches."
-            cfg.data.batch_size = 1
-            cfg.data.pin_memory = False
-            cfg.data.ot = False
+            cfg.datamodule.batch_size = 1
+            cfg.datamodule.pin_memory = False
+            cfg.datamodule.ot = False
             # Smoke fixture writes stats.npz via masked get_dataset_stats — see #1002.
-            cfg.data.use_saved_mean_and_variance = True
-            cfg.data.num_workers = 0
+            cfg.datamodule.use_saved_mean_and_variance = True
+            cfg.datamodule.num_workers = 0
 
             cfg.trainer.devices = 1
             cfg.trainer.max_steps = TRAINING_STEPS
@@ -590,8 +590,8 @@ def cfg_surge_xt(
     with open_dict(cfg):
         cfg.paths.output_dir = str(tmp_path)
         cfg.paths.log_dir = str(tmp_path)
-        cfg.data.dataset_root = str(surge_xt_smoke_datasets)
-        cfg.data.predict_file = str(surge_xt_smoke_datasets / "test.h5")
+        cfg.datamodule.dataset_root = str(surge_xt_smoke_datasets)
+        cfg.datamodule.predict_file = str(surge_xt_smoke_datasets / "test.h5")
 
     yield cfg
 
@@ -622,9 +622,9 @@ def cfg_surge_xt_eval(
     with open_dict(cfg):
         cfg.paths.output_dir = str(tmp_path)
         cfg.paths.log_dir = str(tmp_path)
-        cfg.data.batch_size = 1
-        cfg.data.dataset_root = str(surge_xt_smoke_datasets)
-        cfg.data.predict_file = str(surge_xt_smoke_datasets / "test.h5")
+        cfg.datamodule.batch_size = 1
+        cfg.datamodule.dataset_root = str(surge_xt_smoke_datasets)
+        cfg.datamodule.predict_file = str(surge_xt_smoke_datasets / "test.h5")
         cfg.ckpt_path = str(tmp_path / "checkpoints" / "last.ckpt")
         cfg.mode = "predict"
         cfg.evaluation = {

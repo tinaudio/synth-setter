@@ -179,3 +179,6 @@ thoughts/
 
 # Surge-XT mini-example local artifacts (e.g. learned-model presets)
 presets/*.fxp
+
+# wandb local run/sweep artifacts
+wandb/

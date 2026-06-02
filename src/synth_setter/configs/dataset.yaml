@@ -6,7 +6,7 @@
 
 defaults:
   - _self_
-  - data: ???
+  - datamodule: ???
   - render: ???
   - r2: default
   - paths: default

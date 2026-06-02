@@ -1224,7 +1224,7 @@ class TestSpecFromCfg:
         from synth_setter.cli.generate_dataset import spec_from_cfg
 
         cfg_dict: dict[str, object] = dict(valid_dataset_spec_kwargs)
-        cfg_dict["data"] = {"sample_rate": 44100}
+        cfg_dict["datamodule"] = {"sample_rate": 44100}
         cfg_dict["paths"] = {"root_dir": "/fake-root"}
         cfg_dict["hydra"] = {"runtime": {"output_dir": "/fake-out"}}
 
@@ -1730,10 +1730,10 @@ class TestMainDispatchBranches:
         """Helper subprocesses ``synth_setter.cli.eval`` with the contract argv.
 
         Pins the load-bearing overrides (``experiment=surge/fake_oracle``,
-        ``data.dataset_root``, ``ckpt_path=null``, ``mode=test``) plus the
-        wandb-resume trio that routes the eval's ``test/*`` metrics onto the
-        generate run. Runs the helper directly so cfg-resolution noise can't
-        mask an argv drift.
+        ``datamodule.dataset_root``, ``ckpt_path=null``, ``mode=predict``,
+        ``render=surge_simple``) plus the wandb-resume trio that routes the
+        eval's ``audio/*`` metrics onto the generate run. Runs the helper
+        directly so cfg-resolution noise can't mask an argv drift.
 
         :param monkeypatch: Patches the module's ``subprocess.run``.
         :param tmp_path: Stands in for the finalize download directory.
@@ -1750,23 +1750,24 @@ class TestMainDispatchBranches:
         assert "-m" in called_argv
         assert "synth_setter.cli.eval" in called_argv
         assert "experiment=surge/fake_oracle" in called_argv
-        assert f"data.dataset_root={tmp_path}" in called_argv
-        # Pins the Hydra per-run dir to the same path as data.dataset_root so
+        assert f"datamodule.dataset_root={tmp_path}" in called_argv
+        # Pins the Hydra per-run dir to the same path as datamodule.dataset_root so
         # the workflow's metrics.json glob lands at <tmp_path>/metrics/metrics.json.
         assert f"hydra.run.dir={tmp_path}" in called_argv
         assert "ckpt_path=null" in called_argv
         # The eval resumes the generate run rather than opening a fresh one, so
-        # its test/* metrics share the run id (logger=null crashed Hydra — see #1331).
+        # its audio/* metrics share the run id (logger=null crashed Hydra — see #1331).
         assert "logger=wandb" in called_argv
         # id exists in logger/wandb.yaml (plain override); resume is absent (+append).
         assert "logger.wandb.id=some-run-id" in called_argv
         assert "+logger.wandb.resume=must" in called_argv
-        # surge data config marks predict_file mandatory; mode=test never reads it.
-        assert "data.predict_file=null" in called_argv
+        # render_vst=true re-renders predicted params; select the surge_simple
+        # group (eval.yaml defaults render to null) matching the smoke dataset.
+        assert "render=surge_simple" in called_argv
         # batch_size=1 keeps the smoke-sized test split (4 samples) from
         # flooring to zero batches under the 128 default — see #1331.
-        assert "data.batch_size=1" in called_argv
-        assert "mode=test" in called_argv
+        assert "datamodule.batch_size=1" in called_argv
+        assert "mode=predict" in called_argv
 
     def test_main_oracle_eval_inline_default_false_skips(
         self,
@@ -1884,6 +1885,8 @@ class TestMainDispatchBranches:
             f"render.plugin_path={TEST_PLUGIN_VST3}",
             "finalize_inline=true",
             "oracle_eval_inline=true",
+            # smoke-shard now defaults to [4, 4, 4]; pin a zero split to exercise the guard.
+            "train_val_test_sizes=[4,0,0]",
         ]
         monkeypatch.setattr("sys.argv", argv)
         monkeypatch.setenv("HYDRA_FULL_ERROR", "1")

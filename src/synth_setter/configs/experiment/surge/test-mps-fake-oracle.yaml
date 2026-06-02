@@ -11,7 +11,7 @@
 defaults:
   - surge/base
   - override /model: surge_fake_oracle
-  - override /data: surge
+  - override /datamodule: surge
   - override /trainer: mps
   - override /callbacks: [default_surge, eval_surge]
   - _self_
@@ -26,6 +26,18 @@ tags:
 logger: null
 test: false
 
+# Predict-mode eval knobs — kept in lockstep with surge/fake_oracle.yaml (see header).
+# render defaults to null; predict-mode callers select a group (e.g. render=surge_simple)
+# and eval raises if render_vst runs without one.
+mode: predict
+render: null
+
+evaluation:
+  render_vst: true
+  compute_metrics: true
+  rerender_target: false
+  num_workers: 1
+
 model:
   compile: false
   scheduler: null
@@ -35,7 +47,7 @@ model:
     # set this to ``len(param_specs[<their-spec>])`` via the CLI override.
     d_out: ???
 
-data:
+datamodule:
   batch_size: 1
   pin_memory: false
   ot: false

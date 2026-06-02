@@ -8,7 +8,7 @@
 
 defaults:
   - override /model: surge_ffn
-  - override /data: surge
+  - override /datamodule: surge
   - override /trainer: cpu
   - override /callbacks: [default_surge, eval_surge]
   - _self_
@@ -33,7 +33,7 @@ model:
     # ``src/synth_setter/tools/surge_xt_interactive.py`` injects this automatically from ``--param-spec-name``.
     d_out: ???
 
-data:
+datamodule:
   batch_size: 1
   pin_memory: false
   ot: false

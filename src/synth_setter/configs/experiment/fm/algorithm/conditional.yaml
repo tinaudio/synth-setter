@@ -1,6 +1,6 @@
 # @package _global_
 
-data:
+datamodule:
   algorithm: conditional
 
 out_dim: 6

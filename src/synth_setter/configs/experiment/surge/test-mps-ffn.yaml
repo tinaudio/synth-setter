@@ -7,7 +7,7 @@
 defaults:
   - surge/base
   - override /model: surge_ffn
-  - override /data: surge
+  - override /datamodule: surge
   - override /trainer: mps
   - override /callbacks: [default_surge, eval_surge]
   - _self_
@@ -30,7 +30,7 @@ model:
     # set this to ``len(param_specs[<their-spec>])`` via the CLI override.
     d_out: ???
 
-data:
+datamodule:
   batch_size: 1
   pin_memory: false
   ot: false

@@ -75,7 +75,7 @@ Reference: `data-pipeline.md` §14.5 (finalize stage)
 ### 2.3 Training
 
 ```
-train.yaml + defaults (experiment, data, model, trainer, callbacks, logger)
+train.yaml + defaults (experiment, datamodule, model, trainer, callbacks, logger)
   → Hydra composes DictConfig
     → hydra.utils.instantiate() → LightningModule, DataModule, Trainer
       → trainer.fit(model, datamodule)
@@ -278,11 +278,11 @@ Gaps are configuration inputs that design docs specify or that standard practice
 
 ### 5.3 Data Portability
 
-| Input               | Type   | What's Needed                                                                                                 | Reference                 |
-| ------------------- | ------ | ------------------------------------------------------------------------------------------------------------- | ------------------------- |
-| `data.dataset_root` | string | Hardcoded paths removed (now `???`); migrate to `${paths.data_dir}` convention still open                     | training-pipeline.md §1   |
-| `data.r2_path`      | string | Optional R2 URI for remote dataset sync before training                                                       | training-pipeline.md §6.1 |
-| `data.stats_file`   | string | Hardcoded paths removed (now `???` in `nsynth.yaml`/`fsd.yaml`); replace with run-id-aware default still open | training-pipeline.md §1   |
+| Input                     | Type   | What's Needed                                                                                                 | Reference                 |
+| ------------------------- | ------ | ------------------------------------------------------------------------------------------------------------- | ------------------------- |
+| `datamodule.dataset_root` | string | Hardcoded paths removed (now `???`); migrate to `${paths.data_dir}` convention still open                     | training-pipeline.md §1   |
+| `datamodule.r2_path`      | string | Optional R2 URI for remote dataset sync before training                                                       | training-pipeline.md §6.1 |
+| `datamodule.stats_file`   | string | Hardcoded paths removed (now `???` in `nsynth.yaml`/`fsd.yaml`); replace with run-id-aware default still open | training-pipeline.md §1   |
 
 ### 5.4 Hardware & Compute
 
@@ -291,9 +291,9 @@ Gaps are configuration inputs that design docs specify or that standard practice
 | `trainer.precision`               | string | Not set in most configs — should be explicit (e.g., `"bf16-mixed"`) | Lightning Trainer option    |
 | `trainer.accumulate_grad_batches` | int    | Effective batch size scaling                                        | Lightning Trainer option    |
 | `trainer.benchmark`               | bool   | cuDNN benchmark mode for performance                                | Lightning Trainer option    |
-| `data.pin_memory`                 | bool   | Not set in active configs — should be standard for GPU training     | Lightning DataLoader option |
-| `data.persistent_workers`         | bool   | Keep workers alive between epochs — performance optimization        | Lightning DataLoader option |
-| `data.prefetch_factor`            | int    | DataLoader prefetch                                                 | Lightning DataLoader option |
+| `datamodule.pin_memory`           | bool   | Not set in active configs — should be standard for GPU training     | Lightning DataLoader option |
+| `datamodule.persistent_workers`   | bool   | Keep workers alive between epochs — performance optimization        | Lightning DataLoader option |
+| `datamodule.prefetch_factor`      | int    | DataLoader prefetch                                                 | Lightning DataLoader option |
 | `model.optimizer.fused`           | bool   | CUDA fused Adam — significant speedup on GPU                        | torch.optim.Adam option     |
 
 ### 5.5 Cloud Infrastructure

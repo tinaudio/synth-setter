@@ -61,7 +61,7 @@ original parameters.
 4. **Train** -- A single long-running job trains a model (flow matching,
    feed-forward, or FlowVAE) on the generated dataset. Checkpoints are durably
    stored in W&B via `log_model: "all"`. Hydra composes experiment configs from
-   data, model, trainer, and callback configs.
+   datamodule, model, trainer, and callback configs.
    Design: [training-pipeline.md](design/training-pipeline.md)
 
 5. **Evaluate** -- Three stages: **predict** (model inference on test data),
@@ -95,10 +95,10 @@ synth-setter/
 │   └── configs/            #   Hydra YAML configs (and SkyPilot Task templates under compute/) — #1236
 │       ├── train.yaml      #     Root training config
 │       ├── dataset.yaml    #     Root dataset-generation config (entrypoint mirrors train.yaml / eval.yaml)
-│       ├── experiment/     #     Experiment configs — training (compose data + model + trainer) and datagen (composes dataset.yaml)
+│       ├── experiment/     #     Experiment configs — training (compose datamodule + model + trainer) and datagen (composes dataset.yaml)
 │       ├── compute/        #     SkyPilot Task YAMLs for the data pipeline launcher (RunPod landed; Vast.ai planned)
 │       ├── render/         #     Renderer configs (RenderConfig sub-model)
-│       ├── data/           #     DataModule configs (paths, splits, batch size)
+│       ├── datamodule/     #     DataModule configs (paths, splits, batch size)
 │       ├── model/          #     Model architecture configs
 │       ├── trainer/        #     Lightning Trainer configs
 │       ├── callbacks/      #     Callback configs (checkpointing, early stopping)

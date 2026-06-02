@@ -1,6 +1,196 @@
 # CHANGELOG
 
 
+## v8.14.0 (2026-06-02)
+
+### Features
+
+- **eval**: R2 dataset download in the datamodule + inline oracle-eval for the generate sweep
+  ([#1338](https://github.com/tinaudio/synth-setter/pull/1338),
+  [`56dd5a1`](https://github.com/tinaudio/synth-setter/commit/56dd5a191b68fb803bb871abd1ba5bbd19f7a980))
+
+* feat(eval) download dataset from r2
+
+* add comfig
+
+* fix(eval): green up CI for eval-from-r2
+
+- sort eval.py imports (wandb back into the third-party group) - mirror fake_oracle's
+  predict/render/evaluation knobs into test-mps-fake-oracle so the cfg-lockstep test passes - pin a
+  zero split in the oracle-eval guard test now that smoke-shard defaults to [4, 4, 4]
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* test(eval): address review feedback on eval-from-r2
+
+Resolves Copilot review comments on PR #1338: - document download_dir_no_overwrite (contract,
+  --immutable semantics) and export it via __all__ (#3329436741, #3329436747) - add the module's
+  standard rclone reliability flags (-vv/--contimeout/--timeout/--retries) so a transient blip
+  retries (#3329436756) - cover the helper with real-rclone tests: prefix→dir copy, non-r2://
+  rejection, and an argv-shape test pinning --immutable + reliability flags (#3329436751) - extract
+  the download gate into _download_eval_dataset and cover both branches (hydrate-on-uri,
+  no-op-on-null) e2e through the real rclone local remote (#3329436762)
+
+PR body now links the issue so the metadata gate passes (#3329436765).
+
+* fix
+
+* internal-feat(eval): inline oracle-eval in the generate_dataset render sweep (#1341)
+
+* feat(eval): inline oracle-eval in the generate_dataset render sweep
+
+Make the generate_dataset_cadence sweep run end-to-end — generate → finalize → inline oracle-eval
+  (mode=predict) — logging audio/{mss,rms,sot, wmfcc}_{mean,std} to wandb, and add
+  sweeps/eval_render.yaml for the render cadence grid.
+
+SurgeDataModule now owns fetching its own data: a new download_dataset_root_uri ctor arg hydrates
+  dataset_root from R2 in __init__ (no-op when null), so eval/train instantiate it with plain
+  hydra.utils.instantiate(cfg.data) and no longer need a download_dataset / instantiate_datamodule
+  helper.
+
+Supporting fixes: - data/*.yaml: anchor dataset_root via the ${hydra:runtime.output_dir} resolver
+  (the dot-lookup form can't resolve under @hydra.main). - surge_datamodule: predict_file defaults
+  to <dataset_root>/test.h5; drop the h5py-intrinsic ext key. - spec.py: mask non-spec keys before
+  resolving so bare compose() works. - test-mps-fake-oracle: render null (not MISSING) so extras()
+  can resolve the config tree in mode=test.
+
+Refs #91
+
+* refactor(data): download in prepare_data; address review
+
+Move the R2 dataset hydration from SurgeDataModule.__init__ into prepare_data() so Lightning runs it
+  rank-0-only before setup (DDP-safe, matching the kosc/ksin/fm datamodules); __init__ now just
+  stores the URI.
+
+Also address review findings on the branch: - Build the predict split unconditionally (predict_file
+  always defaults to test.h5, so the old `else: predict_dataset = None` branch was dead) and close
+  its h5 handle in teardown alongside the other splits. - Drop the unused, untested
+  DatasetSpec.file_extension computed field. - Delete the broken, unreferenced
+  sweeps/eval_render.yaml. - Fix a self-contradictory train_val_test_sizes comment and the
+  misleading `+render=` hint in eval's render_vst guard (render is a defaulted group).
+
+* test(eval): align inline oracle-eval e2e with current behavior (#1350)
+
+* test(eval): align inline oracle-eval e2e + docs with current behavior
+
+test_oracle_eval_inline_resumes_generate_wandb_run (added in #1335, gated slow+r2 so it never ran in
+  CI) drifted from the code:
+
+- It looked for oracle_eval/<run_id>/ under operator_workspace()/ $SYNTH_SETTER_WORKSPACE, but
+  main() writes it under cfg.paths.output_dir (= ${hydra:runtime.output_dir}); assert against the
+  launcher's hydra dir and rename the local to eval_output_dir. - It asserted test/* history rows
+  from trainer.test, but the inline eval now runs mode=predict and logs audio/* metrics via
+  wandb.run.log; assert audio/*.
+
+Also fix the matching stale references in _run_oracle_eval_subprocess's docstring/comment (test/* ->
+  audio/*, test_step -> predict_step). Comment- and test-only; pins current behavior. Confirmed the
+  e2e passes end-to-end.
+
+* docs(eval): sync oracle-eval references to predict-mode audio/*
+
+The inline oracle eval logs audio/* metrics (mode=predict), not test/* from trainer.test. Update
+  wandb-integration.md §5f (also drop a stray + on logger.wandb.id) and the generate_dataset doc-map
+  entry to match.
+
+* fix(data): address PR #1338 review — fake-mode audio + sweep metric key
+
+- surge_datamodule: fix inverted fake-mode audio conditional so read_audio=True populates audio
+  (mirroring real mode). The predict split sets read_audio=True, so fake predict runs previously got
+  audio=None while non-audio splits got unwanted random audio. Update the two pinning tests + drop
+  read_audio=True from the rescale tests (which used it to skip the audio allocation — now
+  inverted). (Copilot comment 3343391947) - generate_dataset_cadence sweep: metric.name
+  generation.samples_per_second -> generation/samples_per_second to match the slash key the code
+  logs, so the W&B dashboard metric resolves. (Copilot comments 3329815815, 3343392128)
+
+* fix(ci): resolve dataset_root via ${paths.output_dir}; fix wandb import order
+
+- data/surge*.yaml: anchor dataset_root to ${paths.output_dir}/data instead of the raw
+  ${hydra:runtime.output_dir} resolver. Behavior-identical at runtime (paths.output_dir IS
+  ${hydra:runtime.output_dir} under @hydra.main), but it resolves under spec_uri's bare compose() —
+  which nulls paths.output_dir before resolving — so synth-setter-spec-uri --from-experiment no
+  longer raises "HydraConfig was not set" on data.dataset_root. Fixes the test_spec_uri suite. -
+  cli/eval.py: move `import wandb` into the third-party import group (ruff isort).
+
+The deeper mask-before-resolve cleanup (shared DatasetSpec.from_hydra_cfg, dropping the twin
+  _NON_SPEC_* constants) lands separately.
+
+* fix(data): make teardown fake-safe; correct stale eval test docstring
+
+- surge_datamodule.teardown(): guard each split's dataset_file.close() so fake mode
+  (dataset_file=None) no longer raises AttributeError; the test helper can now call teardown
+  unconditionally. (Copilot 3343963914) - test_eval.py: docstring referenced the non-existent
+  evaluation.download_dataset_root_uri; the gate is data.download_dataset_root_uri. (Copilot
+  3343963950)
+
+* chore(deps): relock uv.lock after merging main (8.12.3 -> 8.13.0)
+
+---------
+
+Co-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+
+## v8.13.0 (2026-06-02)
+
+### Chores
+
+- **devcontainer**: Give each git worktree its own uv venv
+  ([#1340](https://github.com/tinaudio/synth-setter/pull/1340),
+  [`e8cb674`](https://github.com/tinaudio/synth-setter/commit/e8cb6743cb0cfc42b5bff0b60fa9554e6e610d1e))
+
+* chore(devcontainer): give each git worktree its own uv venv
+
+The image bakes VIRTUAL_ENV=/venv/main onto PATH, so every worktree shared one editable install —
+  whichever ran `uv sync` last owned it, which masked config/code edits made in other worktrees.
+
+- post-create.sh installs a ~/.bashrc snippet that activates a worktree-local ./.venv when present,
+  shadowing /venv/main (idempotent, grep-guarded) - the SessionStart banner's spawn command now ends
+  with `&& uv sync` so new worktrees build their own venv - AGENTS.md documents the per-worktree
+  venv and the `uv run` one-off path
+
+* chore(devcontainer): guard venv activation against PATH stacking
+
+Address pre-PR review WARNs on the ~/.bashrc isolation snippet: - skip re-activation when the
+  worktree venv is already active, so re-sourcing ~/.bashrc can't stack duplicate .venv/bin entries
+  on PATH - grep -qs so an absent ~/.bashrc reads as not-yet-installed, not an error
+
+* address review feedback on PR #1340
+
+Bug fixes: - .devcontainer/post-create.sh: the bashrc venv-activation snippet now walks up to the
+  .project-root anchor instead of checking only $PWD/.venv, so the worktree venv activates from any
+  subdir — not just the worktree root. From a subdir the old check left the shared /venv/main
+  active, reintroducing the cross-worktree editable-install bleed this PR fixes (comments
+  #3336253872, #3336253972). Mirrors the existing walk-up idiom in the same file.
+
+Style/nit: - agent/hooks/session-start-cwd-banner.sh: single-quote the emitted worktree path and cd
+  target so the copy-pasteable spawn command survives a $primary_root containing spaces (comments
+  #3336253939, #3336253990).
+
+### Features
+
+- **devcontainer**: Add Codex, Antigravity, zellij; per-user npm prefix
+  ([#1355](https://github.com/tinaudio/synth-setter/pull/1355),
+  [`5b880a7`](https://github.com/tinaudio/synth-setter/commit/5b880a7244b1520f4032f0584fa111c228f30c2a))
+
+The devcontainer-tools image shipped only Claude Code (installed system-wide as root). A later `npm
+  install -g` by the non-root `dev` user hit EACCES on the root-owned /usr/local/lib/node_modules
+  tree.
+
+Set the dev user's npm prefix to ~/.npm-global (writes ~/.npmrc) so global installs land in a
+  writable tree, install @openai/codex through it (overridable via CODEX_VERSION, default latest to
+  match CLAUDE_CODE_VERSION), and install Google's standalone `agy` binary via its official
+  installer into ~/.local/bin. Both bin dirs go on PATH (appended, so root sessions resolve system
+  binaries first).
+
+Add the zellij terminal multiplexer system-wide: it is not in the Ubuntu 22.04 apt repos, so install
+  the upstream static musl binary verified against a pinned per-arch SHA256, matching the pueue
+  pattern.
+
+Docker leaves $HOME unset after a USER switch, so each build-time install exports HOME explicitly
+  (scoped per-RUN, not ENV, so the root-default devcontainer sessions keep HOME=/root).
+
+Refs #1351
+
+
 ## v8.12.3 (2026-05-28)
 
 ### Bug Fixes

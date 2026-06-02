@@ -23,7 +23,7 @@ parameters:
       - kosc/ffn_asym
       - kosc/flow_asym
       - kosc/flow_fixed_asym
-  data.k:
+  datamodule.k:
     values:
       - 4
       - 8

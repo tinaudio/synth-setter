@@ -68,15 +68,6 @@ def instantiate_model(
     return model
 
 
-def instantiate_datamodule(data_cfg: DictConfig):
-    logger.info("Instantiating datamodule with config:")
-    logger.info(OmegaConf.to_yaml(data_cfg))
-    dm = hydra.utils.instantiate(data_cfg)
-    dm.setup("fit")
-
-    return dm
-
-
 def sort_assignment(assignment: np.ndarray):
     assignment = np.abs(assignment)
     idxs = np.argsort(assignment, axis=-1)

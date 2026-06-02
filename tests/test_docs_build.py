@@ -24,7 +24,7 @@ pytest.importorskip("mkdocs", reason="docs extras not installed; install with -e
 
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from synth_setter.schemas.callbacks_config import CallbackInstance
-from synth_setter.schemas.data_config import DataConfig
+from synth_setter.schemas.datamodule_config import DataModuleConfig
 from synth_setter.schemas.extras_config import ExtrasConfig
 from synth_setter.schemas.logger_config import LoggerInstance
 from synth_setter.schemas.model_config import ModelConfig, OptimizerConfig, SchedulerConfig
@@ -42,7 +42,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _PAGE_TO_MODELS: dict[str, tuple[type, ...]] = {
     "config_reference/dataset_spec": (DatasetSpec,),
     "config_reference/train_config": (TrainConfig,),
-    "config_reference/data_config": (DataConfig,),
+    "config_reference/datamodule_config": (DataModuleConfig,),
     "config_reference/model_config": (ModelConfig, OptimizerConfig, SchedulerConfig),
     "config_reference/callbacks_config": (CallbackInstance,),
     "config_reference/logger_config": (LoggerInstance,),

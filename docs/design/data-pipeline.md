@@ -84,7 +84,7 @@ RunPod is used because it's the platform where GPUs are already available and co
 #    as `experiment=` is `generate_dataset/<stem>`.
 #    Hydra composes the final DatasetSpec from src/synth_setter/configs/dataset.yaml + this overlay.
 cat src/synth_setter/configs/experiment/generate_dataset/surge-simple-480k-10k.yaml
-# → task_name: surge-simple-480k-10k, defaults: [/data: surge_simple, /render: surge_simple, ...], ...
+# → task_name: surge-simple-480k-10k, defaults: [/datamodule: surge_simple, /render: surge_simple, ...], ...
 
 # 2. Run multi-shard generation on a single worker (default sequential loop;
 #    `render.parallel=true` opts into thread-pool parallel dispatch).
@@ -1365,7 +1365,7 @@ A run starts from a Hydra experiment YAML composed against `src/synth_setter/con
 # @package _global_
 
 defaults:
-  - override /data: surge_simple
+  - override /datamodule: surge_simple
   - override /render: surge_simple
   - _self_
 
@@ -1378,7 +1378,7 @@ render:
   min_loudness: -55.0
 ```
 
-`src/synth_setter/configs/dataset.yaml` is the `@hydra.main` entry. Its `defaults` list pulls in `data:` (param spec / channels / velocity / loudness floor), `render:` (renderer + plugin / preset / sample rate / batch sizes), `r2:` (bucket + prefix root), `paths:`, `hydra:`, and the named `experiment:`. Required slots are marked `???` and filled by the chosen experiment.
+`src/synth_setter/configs/dataset.yaml` is the `@hydra.main` entry. Its `defaults` list pulls in `datamodule:` (param spec / channels / velocity / loudness floor), `render:` (renderer + plugin / preset / sample rate / batch sizes), `r2:` (bucket + prefix root), `paths:`, `hydra:`, and the named `experiment:`. Required slots are marked `???` and filled by the chosen experiment.
 
 On first `generate` (`python -m synth_setter.cli.generate_dataset experiment=<id>`):
 
@@ -1455,14 +1455,14 @@ Pipeline configs live under `src/synth_setter/configs/` as Hydra groups composed
 
 ```
 src/synth_setter/configs/
-  dataset.yaml         # @hydra.main entry point; defaults list (data/render/r2/paths/hydra/experiment)
+  dataset.yaml         # @hydra.main entry point; defaults list (datamodule/render/r2/paths/hydra/experiment)
   experiment/
     generate_dataset/  # Dataset generation recipes; filename stem = dataset_config_id
       surge-simple-480k-10k.yaml
       smoke-shard.yaml
       ci-materialize-test.yaml
       10-1k-shards.yaml
-  data/                # Param spec / channels / velocity / loudness floor (shared with training)
+  datamodule/          # Param spec / channels / velocity / loudness floor (shared with training)
     surge_simple.yaml
     surge.yaml
   render/              # Renderer + plugin / preset / sample rate / batch sizes

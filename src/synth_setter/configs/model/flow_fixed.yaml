@@ -22,7 +22,7 @@ vector_field:
   conditioning_dim: ${model.encoder.out_dim}
   num_heads: 4
   d_ff: 256
-  num_tokens: ${data.k}
+  num_tokens: ${datamodule.k}
   learn_pe: false
   learn_projection: true
   pe_type: none

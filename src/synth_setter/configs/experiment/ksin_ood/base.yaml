@@ -4,7 +4,7 @@
 # python train.py experiment=example
 
 defaults:
-  - override /data: ksin_ood
+  - override /datamodule: ksin_ood
   - override /callbacks: default
   - override /trainer: gpu
 
@@ -16,7 +16,7 @@ run_name: base
 
 tags:
   - ksin_ood
-  - k_${data.k}
+  - k_${datamodule.k}
 
 seed: 12345
 
@@ -28,8 +28,8 @@ trainer:
 logger:
   wandb:
     tags: ${tags}
-    group: ${data.k}sin_ood
-    name: ${data.k}sin_ood_${run_name}
+    group: ${datamodule.k}sin_ood
+    name: ${datamodule.k}sin_ood_${run_name}
 
 callbacks:
   early_stopping: null
