@@ -426,7 +426,7 @@ src/synth_setter/configs/   # located via synth_setter.resources.configs_dir()
   trainer/            # Trainer configs (gpu, cpu, mps, ddp, ...)
   logger/             # Logger configs (wandb, csv, tensorboard, ...)
   callbacks/          # Callback configs
-  experiment/         # Experiment configs (compose data + model + overrides)
+  experiment/         # Experiment configs (compose datamodule + model + overrides)
     kosc/             # k-osc experiments
     surge/            # Surge XT experiments
     generate_dataset/ # Pipeline dataset experiments
@@ -445,7 +445,7 @@ Override any config value from the command line:
 
 ```bash
 # Change batch size
-python -m synth_setter.cli.train experiment=kosc/ffn_mse data.batch_size=32
+python -m synth_setter.cli.train experiment=kosc/ffn_mse datamodule.batch_size=32
 
 # Change learning rate
 python -m synth_setter.cli.train experiment=kosc/ffn_mse model.optimizer.lr=1e-4
@@ -543,7 +543,7 @@ make format
 Reduce the batch size:
 
 ```bash
-python -m synth_setter.cli.train experiment=kosc/ffn_mse data.batch_size=8
+python -m synth_setter.cli.train experiment=kosc/ffn_mse datamodule.batch_size=8
 ```
 
 Or switch to CPU for debugging:

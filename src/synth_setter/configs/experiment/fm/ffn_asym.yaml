@@ -11,5 +11,5 @@ model:
     out_dim: ${out_dim}
   loss_fn: mse
 
-data:
+datamodule:
   break_symmetry: true

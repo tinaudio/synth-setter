@@ -105,7 +105,7 @@ def main(
     cfg = OmegaConf.load(hparam_file)
 
     model = instantiate_model(cfg.model, ckpt_file, device)
-    datamodule = instantiate_datamodule(cfg.data)
+    datamodule = instantiate_datamodule(cfg.datamodule)
 
     logger.info("Starting REPL...")
 

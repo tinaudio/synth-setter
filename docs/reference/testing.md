@@ -86,9 +86,9 @@ ______________________________________________________________________
 
 Only needed for tests that exercise Hydra-composed configs (test_configs, test_train, test_eval, test_benchmarks, test_generate_dataset_shards, etc.).
 
-Both defined in [`tests/conftest.py`](../../tests/conftest.py) as package-scoped `*_global` fixtures wrapped by function-scoped fixtures that inject `tmp_path`. Each `*_global` fixture composes the corresponding entry-point YAML with explicit `data=` / `model=` / `trainer=` overrides at compose time, then applies test-friendly tweaks via an `open_dict(cfg):` block. Read both blocks for today's presets — they change as the fixtures evolve.
+Both defined in [`tests/conftest.py`](../../tests/conftest.py) as package-scoped `*_global` fixtures wrapped by function-scoped fixtures that inject `tmp_path`. Each `*_global` fixture composes the corresponding entry-point YAML with explicit `datamodule=` / `model=` / `trainer=` overrides at compose time, then applies test-friendly tweaks via an `open_dict(cfg):` block. Read both blocks for today's presets — they change as the fixtures evolve.
 
-`cfg_train_global` and `cfg_eval_global` compose with the **same** `data=ksin model=ffn trainer=cpu` overrides, and dataset shape is pinned via integer `train_val_test_sizes=[2,2,2]` rather than fractional `limit_*_batches`. A train→eval round-trip shares the same `data` / `model` / `callbacks` shape across both fixtures, so neither side has to copy fields from the other.
+`cfg_train_global` and `cfg_eval_global` compose with the **same** `datamodule=ksin model=ffn trainer=cpu` overrides, and dataset shape is pinned via integer `train_val_test_sizes=[2,2,2]` rather than fractional `limit_*_batches`. A train→eval round-trip shares the same `datamodule` / `model` / `callbacks` shape across both fixtures, so neither side has to copy fields from the other.
 
 Both fixtures clear global Hydra state on teardown via `GlobalHydra.instance().clear()`.
 
@@ -100,7 +100,7 @@ ______________________________________________________________________
 
 ## 5. The train → eval E2E template
 
-Reference implementation: [`tests/test_eval.py::test_train_eval`](../../tests/test_eval.py). The shape is three phases: override `cfg_train`, train + assert checkpoint, point `cfg_eval` at the checkpoint and evaluate. Because `cfg_train` and `cfg_eval` are composed with the same `data` / `model` / `trainer` overrides in `conftest.py`, no manual alignment is needed.
+Reference implementation: [`tests/test_eval.py::test_train_eval`](../../tests/test_eval.py). The shape is three phases: override `cfg_train`, train + assert checkpoint, point `cfg_eval` at the checkpoint and evaluate. Because `cfg_train` and `cfg_eval` are composed with the same `datamodule` / `model` / `trainer` overrides in `conftest.py`, no manual alignment is needed.
 
 ```python
 import math
@@ -158,7 +158,7 @@ ______________________________________________________________________
 
 1. **DataModule `setup(stage)` must cover every stage you invoke.** Lightning passes one of `{"fit", "validate", "test", "predict"}` depending on which Trainer method runs. A `setup()` that only handles `"fit"` silently builds the wrong (or no) dataloader for the others. See Lightning's [DataModule docs](https://lightning.ai/docs/pytorch/stable/data/datamodule.html) for the contract, and [`src/synth_setter/data/ksin_datamodule.py`](../../src/synth_setter/data/ksin_datamodule.py) for the canonical three-branch pattern in this repo.
 
-2. **`src/synth_setter/configs/train.yaml` and `src/synth_setter/configs/eval.yaml` require explicit `data=` / `model=`.** Both entry points use `???` for `data` and `model`, so Hydra fails fast if either is missing. Production runs pass them via an `experiment=` config; tests pass them at compose time inside `conftest.py`. There is no fallback to a researcher-local default.
+2. **`src/synth_setter/configs/train.yaml` and `src/synth_setter/configs/eval.yaml` require explicit `datamodule=` / `model=`.** Both entry points use `???` for `datamodule` and `model`, so Hydra fails fast if either is missing. Production runs pass them via an `experiment=` config; tests pass them at compose time inside `conftest.py`. There is no fallback to a researcher-local default.
 
 3. **GPU tests use a three-marker stack.** `@pytest.mark.gpu`, `@pytest.mark.slow`, `@RunIf(min_gpus=1)` each do distinct things. The CI selector for GPU tests lives in [`.github/workflows/test-gpu.yml`](../../.github/workflows/test-gpu.yml); local `make test-fast` and `make test-full-gpu` filters live in the Makefile. If the CI filter changes, the docs don't need updating — the code does.
 

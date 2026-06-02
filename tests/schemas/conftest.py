@@ -17,7 +17,7 @@ from omegaconf import OmegaConf
 
 __all__ = ["_to_dict", "compose_subtree", "compose_train_cfg"]
 
-_DEFAULT_OVERRIDES = ["data=ksin", "model=ffn", "trainer=cpu"]
+_DEFAULT_OVERRIDES = ["datamodule=ksin", "model=ffn", "trainer=cpu"]
 
 
 @pytest.fixture(autouse=True)
@@ -51,7 +51,7 @@ def compose_train_cfg(
 ) -> dict[str, Any]:
     """Compose ``configs/train.yaml`` and return it as a plain dict.
 
-    Default overrides pin ``data=ksin model=ffn trainer=cpu`` so the suite
+    Default overrides pin ``datamodule=ksin model=ffn trainer=cpu`` so the suite
     doesn't depend on root-config ``???`` sentinels; caller overrides are
     appended after.
 

@@ -31,7 +31,7 @@ class TrainConfig(StrictAllowExtraModel):
     """Top-level training config composed from ``configs/train.yaml``.
 
     Defaults below mirror ``configs/train.yaml``. Hydra-managed subtrees
-    (``data``, ``model``, ``trainer``, ...) pass through via ``extra="allow"``
+    (``datamodule``, ``model``, ``trainer``, ...) pass through via ``extra="allow"``
     — ``TrainConfig()`` does not reconstruct them on its own.
 
     .. attribute :: task_name

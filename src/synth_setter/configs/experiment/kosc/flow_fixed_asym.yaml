@@ -11,6 +11,6 @@ model:
     projection:
       params_per_token: 3
 
-data:
+datamodule:
   break_symmetry: true
   ot: true

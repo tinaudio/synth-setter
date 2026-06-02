@@ -64,10 +64,10 @@ def test_evaluate_runs_oracle_with_null_ckpt_path(
         cfg.paths.root_dir = str(operator_workspace())
         cfg.paths.output_dir = str(tmp_path)
         cfg.paths.log_dir = str(tmp_path)
-        cfg.data.dataset_root = str(surge_xt_smoke_datasets)
-        cfg.data.predict_file = str(surge_xt_smoke_datasets / "test.h5")
-        cfg.data.batch_size = 1
-        cfg.data.num_workers = 0
+        cfg.datamodule.dataset_root = str(surge_xt_smoke_datasets)
+        cfg.datamodule.predict_file = str(surge_xt_smoke_datasets / "test.h5")
+        cfg.datamodule.batch_size = 1
+        cfg.datamodule.num_workers = 0
         cfg.ckpt_path = None
 
     HydraConfig().set_config(cfg)

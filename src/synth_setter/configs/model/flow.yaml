@@ -18,8 +18,8 @@ vector_field:
     _target_: synth_setter.models.components.transformer.LearntProjection
     d_model: ${model.vector_field.d_model}
     d_token: ${model.vector_field.d_model}
-    num_params: ${mul:${data.k},2}
-    num_tokens: ${data.k}
+    num_params: ${mul:${datamodule.k},2}
+    num_tokens: ${datamodule.k}
     initial_ffn: true
     final_ffn: false
   num_layers: 5

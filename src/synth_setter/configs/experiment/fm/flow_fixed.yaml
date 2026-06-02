@@ -12,5 +12,5 @@ model:
     projection:
       k: ${div:${out_dim},2}
 
-data:
+datamodule:
   ot: true

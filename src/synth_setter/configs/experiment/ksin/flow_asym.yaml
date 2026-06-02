@@ -6,6 +6,6 @@ defaults:
 
 run_name: flow_asym
 
-data:
+datamodule:
   break_symmetry: true
   ot: true

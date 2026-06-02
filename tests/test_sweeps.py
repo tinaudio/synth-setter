@@ -8,12 +8,12 @@ from tests.helpers.run_if import RunIf
 from tests.helpers.run_sh_command import run_sh_command
 
 startfile = "src/synth_setter/cli/train.py"
-# Group selections must precede value overrides — later `model=`/`data=`
-# would re-compose the group and silently drop earlier `model.*`/`data.*`
+# Group selections must precede value overrides — later `model=`/`datamodule=`
+# would re-compose the group and silently drop earlier `model.*`/`datamodule.*`
 # tweaks (collapsing sweeps to a single run).
 _SWEEP_OVERRIDES: tuple[str, ...] = (
     "model=ffn",  # satisfies `model: ???` in configs/train.yaml
-    "data=ksin",  # satisfies `data: ???` in configs/train.yaml
+    "datamodule=ksin",  # satisfies `datamodule: ???` in configs/train.yaml
     "+run_name=sweep",  # consumed by hydra.run.dir interpolation
     "logger=[]",  # silence wandb/tensorboard for throwaway runs
     "~callbacks.lr_monitor",  # #517: LearningRateMonitor crashes with empty logger
@@ -62,8 +62,8 @@ def test_hydra_sweep_ddp_sim(tmp_path: Path) -> None:
         "+trainer.limit_train_batches=1",
         "+trainer.limit_val_batches=1",
         "+trainer.limit_test_batches=1",
-        f"data.train_val_test_sizes={list(_DDP_SIM_SPLIT)}",
-        f"data.num_workers={_DDP_SIM_NUM_WORKERS}",
+        f"datamodule.train_val_test_sizes={list(_DDP_SIM_SPLIT)}",
+        f"datamodule.num_workers={_DDP_SIM_NUM_WORKERS}",
         "model.optimizer.lr=0.005,0.01,0.02",
     ]
     run_sh_command(command)

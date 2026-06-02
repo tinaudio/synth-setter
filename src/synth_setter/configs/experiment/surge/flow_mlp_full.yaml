@@ -3,7 +3,7 @@
 defaults:
   - surge/base
   - override /model: surge_flowmlp
-  - override /data: surge
+  - override /datamodule: surge
   - _self_
 
 run_name: flowmlp

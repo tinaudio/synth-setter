@@ -1002,8 +1002,8 @@ class TestRunPredict:
         # Every path-bearing override must be absolute.
         for prefix, original in (
             ("ckpt_path=", ckpt),
-            ("data.predict_file=", predict_file),
-            ("data.dataset_root=", dataset_root),
+            ("datamodule.predict_file=", predict_file),
+            ("datamodule.dataset_root=", dataset_root),
             ("callbacks.prediction_writer.output_dir=", predictions_dir),
         ):
             arg = next(a for a in args if a.startswith(prefix))

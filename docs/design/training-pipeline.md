@@ -79,7 +79,7 @@ ______________________________________________________________________
 ```yaml
 # src/synth_setter/configs/experiment/surge/flow_simple.yaml (proposed)
 defaults:
-  - override /data: surge_simple
+  - override /datamodule: surge_simple
   - override /model: surge_flow
   - override /callbacks: default
 
@@ -537,7 +537,7 @@ ______________________________________________________________________
 | -------------------------------------------- | ---------------------------------------------------------------------------------------------- | --------------------------------- |
 | `src/synth_setter/cli/train.py`              | Main training entry point                                                                      | —                                 |
 | `src/synth_setter/configs/logger/wandb.yaml` | W&B config (`log_model: "all"` — uploads every checkpoint immediately, env-var entity/project) | —                                 |
-| `src/synth_setter/configs/data/*.yaml`       | Dataset paths                                                                                  | Shared portability cleanup needed |
+| `src/synth_setter/configs/datamodule/*.yaml` | Dataset paths                                                                                  | Shared portability cleanup needed |
 | `docker/*`                                   | Existing container setup                                                                       | Training-specific image needed    |
 | `scripts/runpod_*.py`                        | Data-pipeline-focused launchers                                                                | No training launcher              |
 

@@ -2,7 +2,7 @@
 
 defaults:
   - _self_
-  - data: ??? # choose datamodule with `test_dataloader()` for evaluation
+  - datamodule: ??? # choose datamodule with `test_dataloader()` for evaluation
   - model: ???
   - logger: null
   - trainer: gpu

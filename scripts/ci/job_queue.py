@@ -15,7 +15,7 @@ Example file::
 
     # train sweeps
     python src/synth_setter/cli/train.py experiment=surge/full_ffn
-    python src/synth_setter/cli/train.py experiment=surge/full_ffn data.batch_size=64
+    python src/synth_setter/cli/train.py experiment=surge/full_ffn datamodule.batch_size=64
 
 Example invocation::
 

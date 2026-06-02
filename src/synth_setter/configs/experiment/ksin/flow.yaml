@@ -7,5 +7,5 @@ defaults:
 
 run_name: flow
 
-data:
+datamodule:
   ot: true

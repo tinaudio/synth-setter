@@ -30,9 +30,9 @@ python -m synth_setter.cli.eval \
     model.test_cfg_strength=2.0 \
     model.test_sample_steps=100 \
     paths.log_dir=/data/EECS-C4DM-Fazekas/benhayes/surge-preds/flowmlp_simple/ \
-    data=surge_simple \
+    datamodule=surge_simple \
     callbacks=eval_surge \
     mode=predict \
-    data.batch_size=1024 \
-    data.num_workers=11 \
+    datamodule.batch_size=1024 \
+    datamodule.num_workers=11 \
     ckpt_path=$CKPT_PATH

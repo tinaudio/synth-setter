@@ -10,12 +10,12 @@ scheduler: null
 
 net:
   _target_: synth_setter.models.components.residual_mlp.CNNResidualMLP
-  in_dim: ${data.signal_length}
+  in_dim: ${datamodule.signal_length}
   channels: 24
   encoder_blocks: 4
   trunk_blocks: 4
   hidden_dim: 384
-  out_dim: ${mul:${data.k},2}
+  out_dim: ${mul:${datamodule.k},2}
   kernel_size: 7
   norm: bn
 

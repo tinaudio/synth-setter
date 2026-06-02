@@ -63,7 +63,7 @@ Training uses pure Hydra DictConfig, not Pydantic. Add `compute_config` as a top
 # src/synth_setter/configs/train.yaml
 defaults:
   - _self_
-  - data: ???
+  - datamodule: ???
   - model: ???
   - trainer: default
   # ... existing defaults ...

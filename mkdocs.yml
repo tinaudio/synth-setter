@@ -67,7 +67,7 @@ nav:
       - Image Config: config_reference/image_config.md
       - Shard Metadata: config_reference/shard_metadata.md
       - Training Config: config_reference/train_config.md
-      - Data Config: config_reference/data_config.md
+      - Datamodule Config: config_reference/datamodule_config.md
       - Model Config: config_reference/model_config.md
       - Callbacks Config: config_reference/callbacks_config.md
       - Logger Config: config_reference/logger_config.md

@@ -8,5 +8,5 @@ defaults:
 run_name: ffn_asym
 model:
   loss_fn: mse
-data:
+datamodule:
   break_symmetry: true

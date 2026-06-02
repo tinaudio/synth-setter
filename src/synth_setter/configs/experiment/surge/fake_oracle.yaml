@@ -3,7 +3,7 @@
 defaults:
   - surge/base
   - override /model: surge_fake_oracle
-  - override /data: surge
+  - override /datamodule: surge
   - override /callbacks: eval_surge
   - override /trainer: cpu
   - _self_
@@ -29,7 +29,7 @@ callbacks:
     param_spec: surge_xt
   plot_proj_ii: null
 
-data:
+datamodule:
   batch_size: 1
 
 ckpt_path: null

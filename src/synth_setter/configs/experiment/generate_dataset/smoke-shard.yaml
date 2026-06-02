@@ -5,7 +5,7 @@
 # burning compute.
 
 defaults:
-  - override /data: surge_simple
+  - override /datamodule: surge_simple
   - override /render: surge_simple
   - _self_
 

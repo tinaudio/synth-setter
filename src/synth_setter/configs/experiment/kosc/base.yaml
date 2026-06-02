@@ -4,7 +4,7 @@
 # python train.py experiment=example
 
 defaults:
-  - override /data: kosc
+  - override /datamodule: kosc
   - override /callbacks: default
   - override /trainer: gpu_400k_steps
   - _self_
@@ -16,15 +16,15 @@ experiment_name: kosc
 
 tags:
   - kosc
-  - k_${data.k}
+  - k_${datamodule.k}
 
 seed: 3123123
 
 logger:
   wandb:
     tags: ${tags}
-    group: ${data.k}osc
-    name: ${data.k}osc_${run_name}
+    group: ${datamodule.k}osc
+    name: ${datamodule.k}osc_${run_name}
 
 callbacks:
   model_checkpoint:

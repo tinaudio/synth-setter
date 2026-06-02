@@ -13,6 +13,6 @@ model:
       num_tokens: ${out_dim}
       num_params: ${out_dim}
 
-data:
+datamodule:
   break_symmetry: true
   ot: true

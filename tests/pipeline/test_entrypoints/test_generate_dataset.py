@@ -1224,7 +1224,7 @@ class TestSpecFromCfg:
         from synth_setter.cli.generate_dataset import spec_from_cfg
 
         cfg_dict: dict[str, object] = dict(valid_dataset_spec_kwargs)
-        cfg_dict["data"] = {"sample_rate": 44100}
+        cfg_dict["datamodule"] = {"sample_rate": 44100}
         cfg_dict["paths"] = {"root_dir": "/fake-root"}
         cfg_dict["hydra"] = {"runtime": {"output_dir": "/fake-out"}}
 
@@ -1730,7 +1730,7 @@ class TestMainDispatchBranches:
         """Helper subprocesses ``synth_setter.cli.eval`` with the contract argv.
 
         Pins the load-bearing overrides (``experiment=surge/fake_oracle``,
-        ``data.dataset_root``, ``ckpt_path=null``, ``mode=predict``,
+        ``datamodule.dataset_root``, ``ckpt_path=null``, ``mode=predict``,
         ``render=surge_simple``) plus the wandb-resume trio that routes the
         eval's ``audio/*`` metrics onto the generate run. Runs the helper
         directly so cfg-resolution noise can't mask an argv drift.
@@ -1750,8 +1750,8 @@ class TestMainDispatchBranches:
         assert "-m" in called_argv
         assert "synth_setter.cli.eval" in called_argv
         assert "experiment=surge/fake_oracle" in called_argv
-        assert f"data.dataset_root={tmp_path}" in called_argv
-        # Pins the Hydra per-run dir to the same path as data.dataset_root so
+        assert f"datamodule.dataset_root={tmp_path}" in called_argv
+        # Pins the Hydra per-run dir to the same path as datamodule.dataset_root so
         # the workflow's metrics.json glob lands at <tmp_path>/metrics/metrics.json.
         assert f"hydra.run.dir={tmp_path}" in called_argv
         assert "ckpt_path=null" in called_argv
@@ -1766,7 +1766,7 @@ class TestMainDispatchBranches:
         assert "render=surge_simple" in called_argv
         # batch_size=1 keeps the smoke-sized test split (4 samples) from
         # flooring to zero batches under the 128 default — see #1331.
-        assert "data.batch_size=1" in called_argv
+        assert "datamodule.batch_size=1" in called_argv
         assert "mode=predict" in called_argv
 
     def test_main_oracle_eval_inline_default_false_skips(

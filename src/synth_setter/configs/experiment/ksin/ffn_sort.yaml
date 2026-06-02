@@ -9,5 +9,5 @@ run_name: ffn_sort
 model:
   loss_fn: mse
 
-data:
+datamodule:
   sort_frequencies: true

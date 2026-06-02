@@ -74,7 +74,7 @@ _USAGE_ERROR: _UsageErrorMarker = _UsageErrorMarker()
 # ``cli.generate_dataset._NON_SPEC_KEYS`` — keep in sync if either side adds
 # a new top-level cfg sub-tree (interpolation source, dispatch group, etc.).
 _NON_SPEC_CFG_KEYS: tuple[str, ...] = (
-    "data",
+    "datamodule",
     "paths",
     "hydra",
     "run_name",

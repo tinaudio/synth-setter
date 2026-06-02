@@ -7,7 +7,7 @@ command:
   - python
   - src/synth_setter/cli/train.py
   - ${args_no_hyphens}
-  - data.k=8
+  - datamodule.k=8
 name: ksin_sweep
 method: grid
 metric:

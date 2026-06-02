@@ -173,7 +173,7 @@ docs:
         covers: "Trainer configs (CPU, GPU, MPS, DDP), accelerator settings"
       - pattern: "src/synth_setter/configs/model/**"
         covers: "Model architecture configs, encoder variants, flow/FFN/VAE configs"
-      - pattern: "src/synth_setter/configs/data/**"
+      - pattern: "src/synth_setter/configs/datamodule/**"
         covers: "Data module configs, dataset paths, batch sizes, preprocessing"
       - pattern: "src/synth_setter/configs/callbacks/**"
         covers: "Training callbacks, checkpoint saving, early stopping, visualization"

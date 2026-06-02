@@ -20,7 +20,7 @@ log = pylogger.RankedLogger(__name__, rank_zero_only=True)
 def print_config_tree(
     cfg: DictConfig,
     print_order: Sequence[str] = (
-        "data",
+        "datamodule",
         "model",
         "callbacks",
         "logger",
@@ -34,7 +34,7 @@ def print_config_tree(
     """Print the contents of a DictConfig as a tree structure using the Rich library.
 
     :param cfg: A DictConfig composed by Hydra.
-    :param print_order: Determines in what order config components are printed. Default is ``("data", "model",
+    :param print_order: Determines in what order config components are printed. Default is ``("datamodule", "model",
     "callbacks", "logger", "trainer", "paths", "extras")``.
     :param resolve: Whether to resolve reference fields of DictConfig. Default is ``False``.
     :param save_to_file: Whether to export config to the hydra output folder. Default is ``False``.

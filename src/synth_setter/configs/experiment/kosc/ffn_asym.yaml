@@ -9,6 +9,6 @@ run_name: ffn_asym
 model:
   loss_fn: mse
   net:
-    out_dim: ${mul:${data.k},3}
-data:
+    out_dim: ${mul:${datamodule.k},3}
+datamodule:
   break_symmetry: true

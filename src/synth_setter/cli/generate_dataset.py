@@ -53,7 +53,7 @@ from synth_setter.workspace import operator_workspace
 # tree for the live set. ``r2`` is *not* listed: it composes from
 # ``r2/default.yaml`` directly into the spec's nested ``R2Location`` field.
 _NON_SPEC_KEYS: tuple[str, ...] = (
-    "data",
+    "datamodule",
     "paths",
     "hydra",
     "run_name",
@@ -106,7 +106,7 @@ def _run_oracle_eval_subprocess(dataset_root: Path, run_id: str) -> None:
         "-m",
         "synth_setter.cli.eval",
         "experiment=surge/fake_oracle",
-        f"data.dataset_root={dataset_root}",
+        f"datamodule.dataset_root={dataset_root}",
         f"hydra.run.dir={dataset_root}",
         "ckpt_path=null",
         "logger=wandb",
@@ -121,7 +121,7 @@ def _run_oracle_eval_subprocess(dataset_root: Path, run_id: str) -> None:
         # SurgeXTDataset floors len to samples // batch_size; the 128 default
         # would yield zero batches on the smoke-sized test split (4 samples),
         # so predict_step never runs and no audio/* metric is logged — see #1331.
-        "data.batch_size=1",
+        "datamodule.batch_size=1",
         "mode=predict",
     ]
     logger.info(f"oracle_eval_inline subprocess: {argv}")

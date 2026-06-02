@@ -189,8 +189,8 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
         metrics from :func:`_run_predict_postprocessing` (Python ``float``),
         so callers iterating values must handle both.
     """
-    log.info(f"Instantiating datamodule <{cfg.data._target_}>")
-    datamodule: LightningDataModule = hydra.utils.instantiate(cfg.data)
+    log.info(f"Instantiating datamodule <{cfg.datamodule._target_}>")
+    datamodule: LightningDataModule = hydra.utils.instantiate(cfg.datamodule)
 
     log.info(f"Instantiating model <{cfg.model._target_}>")
     model: LightningModule = hydra.utils.instantiate(cfg.model)
