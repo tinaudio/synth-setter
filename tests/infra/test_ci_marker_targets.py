@@ -79,7 +79,8 @@ def test_workflow_invokes_make_target(project_root: Path, workflow: str, target:
     :param target: the make target it must invoke.
     """
     text = (project_root / ".github" / "workflows" / workflow).read_text()
-    assert f"make {target}" in text, (
+    invokes = re.search(rf"make {re.escape(target)}(?=\s|$)", text, re.MULTILINE)
+    assert invokes is not None, (
         f"{workflow} must run `make {target}` so its marker filter stays in the "
         f"Makefile (see #1353)"
     )
@@ -94,7 +95,10 @@ def test_workflow_has_no_inline_pytest_marker(project_root: Path, workflow: str)
     :param workflow: workflow filename that must not re-spell a marker filter.
     """
     text = (project_root / ".github" / "workflows" / workflow).read_text()
-    inline = re.search(r"pytest\b[^\n]*\s-m\s", text)
+    # Collapse `\`-continuations so a `pytest \<newline>-m gpu` invocation split
+    # across lines (the test-gpu.yml / test-mps.yml style) can't evade the guard.
+    collapsed = text.replace("\\\n", " ")
+    inline = re.search(r"pytest\b[^\n]*\s-m\s", collapsed)
     assert inline is None, (
         f"{workflow} re-spells a pytest marker filter inline ({inline.group(0)!r}); "
         f"move it into a `make test-ci-*` target to keep one source of truth (#1353)"

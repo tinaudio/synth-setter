@@ -63,8 +63,8 @@ test-infra: ## Devcontainer + GHA invariant tests — stdlib-only, no torch/Hydr
 	pytest tests/infra/ --confcutdir=tests/infra
 
 # Single source of truth for the marker expressions CI runs (see #1353): the
-# workflows call these instead of re-spelling pytest, so the filters can't
-# drift. `uv run` makes them self-contained when wrapped as `docker run … make`.
+# workflows call these instead of re-spelling pytest, so the filters can't drift.
+
 # `--cov=scripts/ci` is needed alongside `--cov=src`: pytest-cov's `--cov`
 # overrides [tool.coverage.run].source in pyproject.toml.
 CI_COV := --cov=src --cov=scripts/ci --cov-branch --cov-report=xml --cov-report=term

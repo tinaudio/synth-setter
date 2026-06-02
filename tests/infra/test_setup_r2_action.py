@@ -1,12 +1,12 @@
 """`setup-r2` composite exports every `RCLONE_CONFIG_R2_*` key rclone needs.
 
-The action is the single source of truth for the R2 environment that the
-data-pipeline workflows (`cpu-slow.yml`, `finalize-dataset.yaml`, …) previously
-spelled inline — see #1353. `is_r2_reachable()` does not apply the structural
-`setdefault` that `ensure_r2_env_loaded()` does, so the action must export both
-the structural literals AND the secret keys or `rclone lsd r2:` fails and
-`integration_r2` tests skip silently (see #1185). These tests pin that contract
-against `r2_io` so the action can't drift from the values rclone expects.
+The action exports the R2 environment the data-pipeline workflows consume — see
+#1353. `is_r2_reachable()` does not apply the structural `setdefault` that
+`ensure_r2_env_loaded()` does, so the action must export both the structural
+literals AND the secret keys or `rclone lsd r2:` fails and `integration_r2`
+tests skip silently (see #1185). These tests pin that contract against `r2_io`
+so the action can't drift from the values rclone expects, and that no workflow
+both delegates to the action and re-inlines the env it exports.
 """
 
 from __future__ import annotations
@@ -32,15 +32,31 @@ SECRET_INPUTS: dict[str, str] = {
 
 
 def _load_action(project_root: Path) -> dict[str, object]:
+    """Return the parsed ``setup-r2`` ``action.yml`` document.
+
+    :param project_root: session fixture from ``tests/infra/conftest.py``.
+    :returns: the parsed YAML mapping.
+    """
     return cast(dict[str, object], load_composite_action(project_root, ACTION_NAME))
 
 
 def _load_steps(project_root: Path) -> list[dict[str, object]]:
+    """Return the composite action's ``runs.steps`` list.
+
+    :param project_root: session fixture from ``tests/infra/conftest.py``.
+    :returns: the ordered list of step mappings.
+    """
     runs = cast(dict[str, object], _load_action(project_root)["runs"])
     return cast(list[dict[str, object]], runs["steps"])
 
 
 def _find_step(project_root: Path, name: str) -> dict[str, object]:
+    """Return the action step named ``name``, failing the test if absent.
+
+    :param project_root: session fixture from ``tests/infra/conftest.py``.
+    :param name: the step ``name:`` to locate.
+    :returns: the matching step mapping.
+    """
     for step in _load_steps(project_root):
         if step.get("name") == name:
             return step
@@ -144,3 +160,40 @@ def test_setup_r2_install_rclone_is_opt_in(project_root: Path) -> None:
     step = _find_step(project_root, INSTALL_STEP_NAME)
     assert "install-rclone" in cast(str, step.get("if", ""))
     assert "rclone" in cast(str, step["run"])
+
+
+SETUP_R2_USES = "./.github/actions/setup-r2"
+INLINE_R2_ENV_KEY = "RCLONE_CONFIG_R2_ACCESS_KEY_ID:"
+
+
+def _workflows_using_setup_r2(project_root: Path) -> list[Path]:
+    """Return every workflow file whose YAML invokes the ``setup-r2`` action.
+
+    :param project_root: session fixture from ``tests/infra/conftest.py``.
+    :returns: workflow paths under ``.github/workflows`` referencing the action.
+    """
+    workflows_dir = project_root / ".github" / "workflows"
+    paths = [*workflows_dir.glob("*.yml"), *workflows_dir.glob("*.yaml")]
+    return [p for p in paths if SETUP_R2_USES in p.read_text()]
+
+
+@pytest.mark.infra
+def test_setup_r2_callers_do_not_reinline_r2_env(project_root: Path) -> None:
+    """No workflow both delegates to ``setup-r2`` and re-inlines the R2 env.
+
+    The marker side has `test_workflow_has_no_inline_pytest_marker` as its
+    anti-drift backstop; this is the R2 analogue. A workflow that calls the
+    action AND keeps an inline ``RCLONE_CONFIG_R2_ACCESS_KEY_ID:`` env key has a
+    half-finished migration — the duplicate would silently outlive a future
+    edit to the action. (The ``with: access-key-id:`` input form does not match
+    this key, so passing the secret to the action is fine.)
+
+    :param project_root: session fixture from ``tests/infra/conftest.py``.
+    """
+    callers = _workflows_using_setup_r2(project_root)
+    assert callers, "no workflow references setup-r2 — wiring regressed (see #1353)"
+    offenders = [p.name for p in callers if INLINE_R2_ENV_KEY in p.read_text()]
+    assert not offenders, (
+        f"workflows delegate to setup-r2 but still inline {INLINE_R2_ENV_KEY!r}: "
+        f"{sorted(offenders)} — drop the inline env and rely on the action (#1353)"
+    )
