@@ -32,18 +32,14 @@ import io
 import os
 import tarfile
 import tempfile
-from functools import partial
 from pathlib import Path
 
 import numpy as np
 import pytest
 import torch
 
-from synth_setter.models.surge_fake_oracle_module import (
-    FakeOracleNet,
-    SurgeFakeOracleModule,
-)
 from synth_setter.pipeline import r2_io
+from tests.evaluation._oracle_helpers import build_oracle_module
 
 pytestmark = [pytest.mark.integration_r2, pytest.mark.r2, pytest.mark.slow]
 
@@ -139,23 +135,6 @@ def _load_param_array_from_wds_tar(local_tar: Path) -> np.ndarray:
     return np.concatenate(rows, axis=0) if rows else np.zeros((0, 0), dtype=np.float32)
 
 
-def _build_oracle_module(num_params: int) -> SurgeFakeOracleModule:
-    """Construct a bare :class:`SurgeFakeOracleModule` matching the surge/fake_oracle config.
-
-    No optimizer step is taken — ``predict_step`` is the only method exercised —
-    but the constructor still requires an optimizer factory. ``Adam`` with the
-    same hparams the config supplies keeps the module byte-identical to the one
-    Lightning would build at predict time.
-
-    :param num_params: ``d_out`` for ``FakeOracleNet``; the param-array width
-        the finalized split carries.
-    :returns: Module ready for direct ``predict_step`` calls.
-    """
-    net = FakeOracleNet(d_out=num_params)
-    optimizer = partial(torch.optim.Adam, lr=1e-4)
-    return SurgeFakeOracleModule(net=net, optimizer=optimizer, scheduler=None)
-
-
 def _download_first_train_artifact(prefix: str, work_dir: Path) -> tuple[Path, str]:
     """Probe the finalized prefix for ``train.h5`` (hdf5) or the lowest-shard tar (wds).
 
@@ -242,7 +221,7 @@ def test_finalize_train_split_passes_fake_oracle_invariants() -> None:
         "audio": torch.zeros(num_samples, 2, 16),
     }
 
-    module = _build_oracle_module(num_params=num_params)
+    module = build_oracle_module(num_params=num_params)
     preds, returned_batch = module.predict_step(batch, batch_idx=0)
     assert torch.equal(preds, params_tensor), (
         "oracle predict_step did not return batch['params'] verbatim — "

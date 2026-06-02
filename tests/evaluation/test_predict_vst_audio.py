@@ -30,6 +30,8 @@ from synth_setter.evaluation.predict_vst_audio import (  # noqa: E402
     params_to_csv,
     write_spectrograms,
 )
+from tests.helpers.audio_utils import noise as _noise  # noqa: E402
+from tests.helpers.audio_utils import sine  # noqa: E402
 
 _SR = 8000.0
 _PARAM_SPEC_NAME = "surge_simple"
@@ -38,30 +40,8 @@ _CHANNELS = 2
 _SAMPLES = 1024
 
 
-def _noise(channels: int, samples: int, *, seed: int = 0) -> np.ndarray:
-    """Deterministic ``(channels, samples)`` float32 noise — non-silent input for librosa.
-
-    :param channels: Number of audio channels.
-    :param samples: Number of audio samples per channel.
-    :param seed: Seed for the RNG to keep outputs deterministic.
-    :return: ``(channels, samples)`` float32 noise array.
-    """
-    rng = np.random.default_rng(seed)
-    return rng.standard_normal((channels, samples)).astype(np.float32)
-
-
 def _sine(channels: int, samples: int, *, freq: float, sr: float) -> np.ndarray:
-    """Constant-amplitude sine, broadcast across all channels — non-silent and band-limited.
-
-    :param channels: Number of audio channels.
-    :param samples: Number of audio samples per channel.
-    :param freq: Sine frequency in Hz.
-    :param sr: Sample rate in Hz.
-    :return: ``(channels, samples)`` float32 sine array.
-    """
-    t = np.arange(samples, dtype=np.float32) / sr
-    tone = 0.5 * np.sin(2 * np.pi * freq * t).astype(np.float32)
-    return np.broadcast_to(tone, (channels, samples)).copy()
+    return sine(freq=freq, channels=channels, sr=sr, samples=samples)
 
 
 # ---------- make_spectrogram ----------

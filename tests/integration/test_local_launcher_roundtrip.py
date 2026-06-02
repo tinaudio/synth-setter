@@ -59,7 +59,7 @@ from tests.helpers.subprocess_args import find_script_index
 
 pytestmark = [pytest.mark.integration_r2, pytest.mark.r2, pytest.mark.slow]
 
-# Mirror tests/pipeline/test_entrypoints/test_generate_dataset.py: a real
+# Mirror tests/pipeline/entrypoints/test_generate_dataset.py: a real
 # VST3 bundle with a deterministic Contents/moduleinfo.json so
 # extract_renderer_version (called by run) returns "1.0.0-test" without
 # loading any .so via pedalboard. The Hydra override below pins

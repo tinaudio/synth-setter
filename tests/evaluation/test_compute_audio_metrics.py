@@ -8,7 +8,6 @@ import numpy as np
 import pandas as pd
 import pytest
 from click.testing import CliRunner
-from pedalboard.io import AudioFile
 
 import synth_setter.evaluation.compute_audio_metrics as cam
 from synth_setter.evaluation.compute_audio_metrics import (
@@ -33,25 +32,13 @@ from synth_setter.evaluation.compute_audio_metrics import (
 from synth_setter.evaluation.compute_audio_metrics import (
     main as compute_audio_metrics_main,
 )
+from tests.helpers.audio_utils import sine, write_wav
 
 _SR = 44100
 
 
 def _sine(seconds: float = 1.0, freq: float = 440.0, amplitude: float = 0.5) -> np.ndarray:
-    """Generate a mono ``(1, N)`` sine — the shape compute-audio-metrics expects."""
-    t = np.arange(int(seconds * _SR), dtype=np.float32) / _SR
-    return (amplitude * np.sin(2 * np.pi * freq * t)).astype(np.float32).reshape(1, -1)
-
-
-def _write_wav(path: Path, audio: np.ndarray) -> None:
-    """Write a ``(channels, N)`` array to ``path`` as a 44.1 kHz WAV file.
-
-    :param path: Destination filesystem path for the WAV.
-    :param audio: ``(channels, N)`` float32 audio to write.
-    """
-    channels = audio.shape[0]
-    with AudioFile(str(path), "w", _SR, channels) as f:
-        f.write(audio)
+    return sine(freq=freq, amplitude=amplitude, channels=1, sr=_SR, seconds=seconds)
 
 
 def _make_sample_dir(parent: Path, name: str, target: np.ndarray, pred: np.ndarray) -> Path:
@@ -65,8 +52,8 @@ def _make_sample_dir(parent: Path, name: str, target: np.ndarray, pred: np.ndarr
     """
     sample_dir = parent / f"sample_{name}"
     sample_dir.mkdir(parents=True, exist_ok=True)
-    _write_wav(sample_dir / "target.wav", target)
-    _write_wav(sample_dir / "pred.wav", pred)
+    write_wav(sample_dir / "target.wav", target)
+    write_wav(sample_dir / "pred.wav", pred)
     return sample_dir
 
 

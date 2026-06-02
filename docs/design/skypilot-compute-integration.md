@@ -288,7 +288,7 @@ Replace RunPod references with SkyPilot/provider-agnostic language.
 
 - `src/synth_setter/pipeline/schemas/spec.py` — add a `compute_config` field (optional, defaults to `None`) to `DatasetSpec`
 - `src/synth_setter/configs/experiment/generate_dataset/surge-simple-480k-10k.yaml` — add an optional `compute_config` key, or leave it out for local execution
-- Tests: `tests/pipeline/test_schemas/` — add test cases for the new field, backward compat
+- Tests: `tests/pipeline/schemas/` — add test cases for the new field, backward compat
 
 Note: `DatasetSpec` is the single spec type. It's composed via Hydra — `spec_from_cfg(cfg)` over `src/synth_setter/configs/dataset.yaml` plus an experiment override — with no separate `DatasetConfig` / `DatasetPipelineSpec` / `materialize_spec()` layer in front of it.
 

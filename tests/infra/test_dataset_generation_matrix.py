@@ -18,21 +18,20 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-import yaml
+from workflow_fixtures import load_workflow
 
-WORKFLOW_RELATIVE_PATH = Path(".github") / "workflows" / "test-dataset-generation.yml"
+WORKFLOW_FILENAME = "test-dataset-generation.yml"
 LAUNCHER_JOBS = ("generate-launcher",)
 
 
 @pytest.fixture(scope="module")
 def workflow(project_root: Path) -> dict:
-    """Load `test-dataset-generation.yml` once per module.
+    """Return `test-dataset-generation.yml` parsed once per module.
 
     :param project_root: Repo root provided by the `tests/infra/conftest.py` fixture.
-    :returns: Parsed YAML as a plain dict.
-    :rtype: dict
+    :returns: The parsed workflow document.
     """
-    return yaml.safe_load((project_root / WORKFLOW_RELATIVE_PATH).read_text())
+    return load_workflow(project_root, WORKFLOW_FILENAME)
 
 
 @pytest.mark.parametrize("job_name", LAUNCHER_JOBS)

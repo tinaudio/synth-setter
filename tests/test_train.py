@@ -17,6 +17,7 @@ from tests.conftest import (
     NUM_FIXTURE_SAMPLES,
     _build_surge_xt_smoke_cfg,
 )
+from tests.evaluation._oracle_helpers import ORACLE_AUDIO_METRIC_BOUNDS
 from tests.helpers.run_if import RunIf
 
 # Experiments cycled through the Surge XT VST smoke tests below. Single source of truth so
@@ -342,9 +343,16 @@ def test_train_eval_surge_xt(
         # even with bit-identical params, so the audio metrics don't collapse to
         # zero — bounds absorb that jitter while still failing on a real regression.
         per_sample = pd.read_csv(metrics_dir / "metrics.csv")
-        assert per_sample["mss"].max() < 15.0, f"oracle mss too high: {per_sample['mss'].tolist()}"
-        assert per_sample["wmfcc"].max() < 30.0, (
+        bounds = ORACLE_AUDIO_METRIC_BOUNDS
+        assert per_sample["mss"].max() < bounds.mss_max, (
+            f"oracle mss too high: {per_sample['mss'].tolist()}"
+        )
+        assert per_sample["wmfcc"].max() < bounds.wmfcc_max, (
             f"oracle wmfcc too high: {per_sample['wmfcc'].tolist()}"
         )
-        assert per_sample["sot"].max() < 0.5, f"oracle sot too high: {per_sample['sot'].tolist()}"
-        assert per_sample["rms"].min() > 0.95, f"oracle rms too low: {per_sample['rms'].tolist()}"
+        assert per_sample["sot"].max() < bounds.sot_max, (
+            f"oracle sot too high: {per_sample['sot'].tolist()}"
+        )
+        assert per_sample["rms"].min() > bounds.rms_min, (
+            f"oracle rms too low: {per_sample['rms'].tolist()}"
+        )

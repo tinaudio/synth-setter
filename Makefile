@@ -62,9 +62,6 @@ test-vst-cpu: ## VST tests only (slow included; gpu/mps excluded). Linux: bootst
 test-infra: ## Devcontainer + GHA invariant tests — stdlib-only, no torch/Hydra.
 	pytest tests/infra/ --confcutdir=tests/infra
 
-test-bats: ## Run BATS shell tests
-	bats --recursive tests/
-
 # Local mirror of .github/workflows/deflake-mps.yml — see that workflow for the rationale on each flag.
 # `pipefail` (target-scoped via bash) ensures pytest's non-zero exit propagates through `tee`.
 deflake: SHELL := /bin/bash

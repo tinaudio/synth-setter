@@ -17,9 +17,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
-from pedalboard.io import AudioFile
 
 from synth_setter.data.vst import param_specs
+from tests.helpers.audio_utils import sine, write_wav
 
 _SR = 44100
 _DURATION_SECONDS = 1.0
@@ -32,17 +32,8 @@ _PRED_AUDIO_CHANNELS = 2
 _PRED_AUDIO_SAMPLES = 1024
 
 
-def _stereo_sine(freq: float, *, amplitude: float = 0.5) -> np.ndarray:
-    """Constant-amplitude sine broadcast across ``_CHANNELS`` channels at ``_SR`` Hz.
-
-    :param freq: Sine frequency in Hz.
-    :param amplitude: Peak amplitude in linear units (not dB).
-    :return: ``(_CHANNELS, N)`` float32 stereo audio array.
-    """
-    n = int(_DURATION_SECONDS * _SR)
-    t = np.arange(n, dtype=np.float32) / _SR
-    tone = (amplitude * np.sin(2 * np.pi * freq * t)).astype(np.float32)
-    return np.broadcast_to(tone, (_CHANNELS, n)).copy()
+def _stereo_sine(freq: float) -> np.ndarray:
+    return sine(freq=freq, channels=_CHANNELS, sr=_SR, seconds=_DURATION_SECONDS)
 
 
 def _stereo_sine_plus_noise(freq: float, *, noise_amplitude: float, seed: int) -> np.ndarray:
@@ -55,19 +46,8 @@ def _stereo_sine_plus_noise(freq: float, *, noise_amplitude: float, seed: int) -
     """
     base = _stereo_sine(freq)
     rng = np.random.default_rng(seed)
-    noise = (noise_amplitude * rng.standard_normal(base.shape)).astype(np.float32)
-    return base + noise
-
-
-def _write_wav(path: Path, audio: np.ndarray) -> None:
-    """Write ``(channels, N)`` float32 ``audio`` to ``path`` at ``_SR`` Hz.
-
-    :param path: Destination filesystem path for the WAV.
-    :param audio: ``(channels, N)`` float32 audio array.
-    """
-    channels = audio.shape[0]
-    with AudioFile(str(path), "w", _SR, channels) as f:
-        f.write(audio)
+    extra = (noise_amplitude * rng.standard_normal(base.shape)).astype(np.float32)
+    return base + extra
 
 
 @pytest.fixture(scope="session")
@@ -87,13 +67,13 @@ def fixture_audio_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
     sample_0 = audio_dir / "sample_0"
     sample_0.mkdir()
-    _write_wav(sample_0 / "target.wav", _stereo_sine(440.0))
-    _write_wav(sample_0 / "pred.wav", _stereo_sine(440.0))
+    write_wav(sample_0 / "target.wav", _stereo_sine(440.0))
+    write_wav(sample_0 / "pred.wav", _stereo_sine(440.0))
 
     sample_1 = audio_dir / "sample_1"
     sample_1.mkdir()
-    _write_wav(sample_1 / "target.wav", _stereo_sine(440.0))
-    _write_wav(sample_1 / "pred.wav", _stereo_sine_plus_noise(440.0, noise_amplitude=0.05, seed=2))
+    write_wav(sample_1 / "target.wav", _stereo_sine(440.0))
+    write_wav(sample_1 / "pred.wav", _stereo_sine_plus_noise(440.0, noise_amplitude=0.05, seed=2))
 
     return audio_dir
 

@@ -174,7 +174,7 @@ torch_backend: "cu128"
 
 Runtime inputs (`github_sha`, `issue_number`) are provided by the caller, not
 stored in the YAML. The schema is tested in
-[test_image_config.py](../../tests/pipeline/test_schemas/test_image_config.py) — covers
+[test_image_config.py](../../tests/pipeline/schemas/test_image_config.py) — covers
 validation, defaults, and drift detection against the real YAML.
 
 ______________________________________________________________________
@@ -433,4 +433,4 @@ ______________________________________________________________________
 - [wandb-integration.md](wandb-integration.md) — W&B logging and auth
 - [data-pipeline.md](../design/data-pipeline.md) — pipeline architecture, worker provisioning
 - [image_config.py](../../src/synth_setter/pipeline/schemas/image_config.py) — image config schema (Pydantic model)
-- [test_image_config.py](../../tests/pipeline/test_schemas/test_image_config.py) — config validation tests
+- [test_image_config.py](../../tests/pipeline/schemas/test_image_config.py) — config validation tests

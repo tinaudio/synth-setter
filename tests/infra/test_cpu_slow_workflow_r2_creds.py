@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-import yaml
+from workflow_fixtures import load_workflow
 
 from synth_setter.pipeline.r2_io import _R2_STRUCTURAL_DEFAULTS, _SECRET_R2_ENV_KEYS
 
@@ -40,8 +40,7 @@ def _load_workflow(project_root: Path) -> dict[str, object]:
         ``<project_root>/.github/workflows/cpu-slow.yml``.
     :returns: the parsed YAML mapping.
     """
-    workflow_path = project_root / ".github" / "workflows" / "cpu-slow.yml"
-    return cast(dict[str, object], yaml.safe_load(workflow_path.read_text()))
+    return cast(dict[str, object], load_workflow(project_root, "cpu-slow.yml"))
 
 
 def _load_run_slow_tests_job(project_root: Path) -> dict[str, object]:

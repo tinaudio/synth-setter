@@ -19,9 +19,9 @@ import subprocess
 from pathlib import Path
 
 import pytest
-import yaml
+from workflow_fixtures import load_workflow
 
-WORKFLOW_RELATIVE_PATH = Path(".github") / "workflows" / "generate-dataset-shards.yaml"
+WORKFLOW_FILENAME = "generate-dataset-shards.yaml"
 VALIDATION_STEP_NAME = "Validate hydra_overrides"
 EXPECTED_CHARACTER_CLASS = "[A-Za-z0-9._=,/-]"
 EXPECTED_REGEX_LITERAL = "^[A-Za-z0-9._=,/-]*( [A-Za-z0-9._=,/-]+)*$"
@@ -30,13 +30,12 @@ DOCKER_STEP_ID = "gen_docker"
 
 @pytest.fixture(scope="module")
 def workflow(project_root: Path) -> dict:
-    """Load `generate-dataset-shards.yaml` once per module.
+    """Return `generate-dataset-shards.yaml` parsed once per module.
 
     :param project_root: Repo root provided by the `tests/infra/conftest.py` fixture.
-    :returns: Parsed YAML as a plain dict.
-    :rtype: dict
+    :returns: The parsed workflow document.
     """
-    return yaml.safe_load((project_root / WORKFLOW_RELATIVE_PATH).read_text())
+    return load_workflow(project_root, WORKFLOW_FILENAME)
 
 
 @pytest.fixture(scope="module")
