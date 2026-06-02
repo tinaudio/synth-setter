@@ -167,6 +167,7 @@ _EXPECTED_SHARED_HOOK_COMMANDS: tuple[tuple[str, str], ...] = (
     ("No-baseline-additions", "bash agent/hooks/no-baseline-additions.sh"),
     ("No-yaml-run-comments", "bash agent/hooks/no-yaml-run-comments.sh"),
     ("PR review resolver", "bash agent/hooks/pr-review-resolver.sh"),
+    ("PR-readiness gate", "bash agent/hooks/pr-readiness-stop.sh"),
     ("Taxonomy verification", "bash agent/hooks/verify-gh-taxonomy.sh"),
     ("Worktree guard", "bash agent/hooks/worktree-guard.sh"),
     ("Worktree-status banner", "bash agent/hooks/session-start-cwd-banner.sh"),
