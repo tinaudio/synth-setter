@@ -322,7 +322,7 @@ python -m synth_setter.cli.eval datamodule.r2_path=r2:intermediate-data/data/sur
 
 # Or in an experiment config that opts in
 # src/synth_setter/configs/experiment/surge/flow_simple.yaml
-data:
+datamodule:
   r2_path: r2:intermediate-data/data/surge_simple/surge_simple-20260312T143022500Z/
 ```
 
