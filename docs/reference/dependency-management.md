@@ -20,7 +20,9 @@ it can.
 
 `.github/workflows/uv-lock-check.yml` runs `uv lock --check` on macOS + Linux
 for every PR that touches `pyproject.toml` or `uv.lock`; a stale lock is
-what it catches.
+what it catches. Locally, the `uv-lock` pre-commit hook
+(`astral-sh/uv-pre-commit` in `.pre-commit-config.yaml`) relocks `uv.lock` on
+every commit, so most drift is caught before it reaches CI.
 
 ## Mac: no backend flag
 
@@ -76,7 +78,8 @@ How to avoid it on Linux:
 
 - Add, remove, or rebound a dependency in `pyproject.toml`.
 - Want to pick up a security fix or bug fix from upstream.
-- See `uv lock --check` fail in CI on a PR you didn't expect to bump deps.
+- See the `uv-lock` pre-commit hook relock, or `uv lock --check` fail in CI,
+  on a change you didn't expect to bump deps.
 
 **Regenerate on a Mac or GPU box, not on a `--extra cpu` Linux env.** A lock
 made under `--extra cpu` will pin the CPU torch as the default-resolution
@@ -133,5 +136,7 @@ and `uv.lock` in the same commit.
 - [`uv.lock`](../../uv.lock) — the universal lockfile (macOS + Linux + Windows).
 - [`.github/workflows/uv-lock-check.yml`](../../.github/workflows/uv-lock-check.yml) —
   the per-OS lock-sync gate.
+- [`.pre-commit-config.yaml`](../../.pre-commit-config.yaml) — the `uv-lock`
+  hook, the local lock-sync gate.
 - [`docs/getting-started.md`](../getting-started.md) — first-install
   walkthrough.
