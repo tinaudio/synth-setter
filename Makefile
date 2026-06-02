@@ -172,7 +172,7 @@ link-plugins: ## Mirror the primary checkout's plugins/ into the current worktre
 	fi; \
 	mkdir -p "$$here/plugins"; \
 	for entry in "$$primary"/plugins/*; do \
-		[ -e "$$entry" ] || continue; \
+		[ -e "$$entry" ] || [ -L "$$entry" ] || continue; \
 		name="$$(basename "$$entry")"; \
 		ln -sfn "$$entry" "$$here/plugins/$$name"; \
 		echo "linked plugins/$$name -> $$entry"; \

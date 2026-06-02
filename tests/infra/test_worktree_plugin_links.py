@@ -150,3 +150,27 @@ def test_link_plugins_skips_when_primary_has_no_plugins(tmp_path: Path) -> None:
 
     assert "No" in stdout and "install-surge-xt" in stdout
     assert not (worktree / "plugins").exists()
+
+
+def test_link_plugins_mirrors_a_broken_symlink(tmp_path: Path) -> None:
+    """`make link-plugins` mirrors a primary entry even when its symlink target is missing.
+
+    A primary whose system VST isn't installed has a dangling `plugins/<x>.vst3`; the worktree
+    should still receive the (equally dangling) link, not silently skip it.
+
+    :param tmp_path: holds the primary checkout (dangling plugin symlink) and its worktree.
+    """
+    primary = tmp_path / "primary"
+    _init_primary_repo(primary)
+    (primary / "plugins").mkdir()
+    (primary / "plugins" / "Surge XT.vst3").symlink_to(tmp_path / "absent" / "Surge XT.vst3")
+    worktree = tmp_path / "wt"
+    _git(primary, "worktree", "add", "--detach", "-q", str(worktree))
+
+    _make_link_plugins(worktree)
+
+    linked = worktree / "plugins" / "Surge XT.vst3"
+    assert linked.is_symlink()
+    assert not linked.exists(), (
+        "target is still absent — the dangling link is mirrored, not resolved"
+    )
