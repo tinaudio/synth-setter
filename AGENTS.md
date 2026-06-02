@@ -20,6 +20,11 @@ Architecture: [docs/architecture.md](docs/architecture.md).
   banner on startup/resume/clear/compact; a `PreToolUse` hook
   (`agent/hooks/worktree-guard.sh`) warns on Edit/Write inside the primary
   checkout (`WORKTREE_GUARD_MODE`: `warn` default / `block` / `off`).
+- **Each worktree gets its own `.venv`.** The spawn command runs `uv sync`;
+  `~/.bashrc` (installed by `.devcontainer/post-create.sh`) then activates
+  `./.venv` per directory, overriding the image's shared `/venv/main`. For
+  one-offs, `uv run <cmd>` targets the worktree env regardless of the
+  inherited `VIRTUAL_ENV`.
 - **Always verify the branch before push.** Run `git branch --show-current`
   and confirm it matches the target PR branch. A hook prints the branch on
   every `git commit`; don't ignore it.
