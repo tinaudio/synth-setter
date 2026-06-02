@@ -369,21 +369,19 @@ def test_oracle_eval_inline_resumes_generate_wandb_run(
 
     One CLI invocation with ``oracle_eval_inline=true`` +
     ``finalize_inline=true`` under ``WANDB_MODE=offline``. After the CLI
-    exits, the launcher's hydra dir and the operator workspace's
-    ``oracle_eval/<run_id>/`` dir each hold one ``offline-run-*-<run_id>``
-    directory; the two ``<run_id>`` slugs must match (the eval child
-    resumed the same wandb run). Generate's dir must carry shard +
-    summary history rows; eval's dir must carry at least one ``test/*``
-    row from Lightning's ``trainer.test``.
+    exits, the launcher's hydra dir holds generate's
+    ``offline-run-*-<run_id>``, and its ``oracle_eval/<run_id>/`` subdir
+    holds the eval's; the two ``<run_id>`` slugs must match (the eval
+    child resumed the same wandb run). Generate's dir must carry shard +
+    summary history rows; eval's dir must carry at least one ``audio/*``
+    row from the predict-mode oracle eval's audio metrics.
 
     :param cli_env: ``(hydra_run_dir, r2_prefix)`` from the fixture — gates
         skip conditions and owns R2 cleanup.
     """
     hydra_run_dir, prefix = cli_env
-    # ``operator_workspace()`` honors ``$SYNTH_SETTER_WORKSPACE`` and
-    # decides where ``main()`` writes ``oracle_eval/<run_id>/``; pin it to
-    # the fixture's tmp_path so the eval's wandb dir is reachable from the
-    # test without depending on the checkout-root walk.
+    # Pin the operator workspace ($PROJECT_ROOT) to tmp so the generate run's
+    # paths.root_dir never touches the checkout.
     workspace = hydra_run_dir.parent
     result = _run_cli(
         hydra_run_dir=hydra_run_dir,
@@ -401,12 +399,14 @@ def test_oracle_eval_inline_resumes_generate_wandb_run(
     generate_run_dir = _find_offline_run_dir(hydra_run_dir)
     generate_run_id = generate_run_dir.name.split("-", 3)[-1]
 
-    eval_workspace_dir = workspace / "oracle_eval" / generate_run_id
-    assert eval_workspace_dir.is_dir(), (
-        f"expected eval workspace dir at {eval_workspace_dir}; "
+    # main() writes oracle_eval/<run_id>/ under cfg.paths.output_dir
+    # (= ${hydra:runtime.output_dir}), which the fixture pins to hydra_run_dir.
+    eval_output_dir = hydra_run_dir / "oracle_eval" / generate_run_id
+    assert eval_output_dir.is_dir(), (
+        f"expected eval output dir at {eval_output_dir}; "
         f"main()'s oracle_eval_inline branch did not run with the launcher's run_id"
     )
-    eval_run_dir = _find_offline_run_dir(eval_workspace_dir)
+    eval_run_dir = _find_offline_run_dir(eval_output_dir)
     eval_run_id = eval_run_dir.name.split("-", 3)[-1]
     assert eval_run_id == generate_run_id, (
         f"eval wandb run id {eval_run_id!r} does not match generate's "
@@ -425,7 +425,7 @@ def test_oracle_eval_inline_resumes_generate_wandb_run(
 
     eval_binary = _single_wandb_binary(eval_run_dir)
     eval_rows = read_history_rows(eval_binary)
-    assert any(any(k.startswith("test/") for k in r) for r in eval_rows), (
-        f"eval dir has no test/* history rows in {eval_binary}; "
-        f"oracle eval did not log Lightning test_step metrics to the resumed run"
+    assert any(any(k.startswith("audio/") for k in r) for r in eval_rows), (
+        f"eval dir has no audio/* history rows in {eval_binary}; "
+        f"the predict-mode oracle eval did not log audio metrics to the resumed run"
     )
