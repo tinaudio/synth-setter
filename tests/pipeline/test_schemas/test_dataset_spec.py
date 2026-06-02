@@ -963,3 +963,42 @@ class TestLegacyFlatR2Compat:
         emitted = _json.loads(restored.model_dump_json())
         for legacy_key in ("r2_bucket", "r2_prefix_root", "r2_prefix"):
             assert legacy_key not in emitted
+
+
+class TestFromHydraCfg:
+    """``DatasetSpec.from_hydra_cfg`` masks non-spec groups before resolving."""
+
+    @pytest.mark.usefixtures("patch_runtime_io")
+    def test_masks_unresolvable_non_spec_group_before_resolve(self) -> None:
+        """A ``${hydra:...}`` interpolation under a non-spec group is never resolved.
+
+        ``data.dataset_root`` references the ``hydra`` resolver, which is only
+        registered under ``@hydra.main``. With no ``HydraConfig`` set, resolving
+        that subtree raises ``InterpolationResolutionError``; masking to spec
+        fields first means it is never touched.
+        """
+        from omegaconf import OmegaConf
+
+        cfg = OmegaConf.create(_valid_spec_kwargs())
+        cfg.data = {"dataset_root": "${hydra:runtime.output_dir}/data"}
+
+        spec = DatasetSpec.from_hydra_cfg(cfg)
+
+        assert spec.task_name == "ci-smoke-test"
+        assert spec.r2.bucket == "intermediate-data"
+
+    def test_non_mapping_input_is_rejected(self) -> None:
+        """A non-mapping cfg is rejected before any spec is constructed.
+
+        ``OmegaConf.masked_copy`` guards ``DictConfig``-ness first and raises
+        ``ValueError`` on a list; the helper's own ``to_container`` guard then
+        raises ``TypeError`` for any masked result that is not a mapping. Either
+        boundary catching it satisfies the contract that non-mapping input never
+        reaches ``DatasetSpec(**raw)``.
+        """
+        from omegaconf import OmegaConf
+
+        cfg = OmegaConf.create([1, 2, 3])
+
+        with pytest.raises((TypeError, ValueError)):
+            DatasetSpec.from_hydra_cfg(cfg)  # type: ignore[arg-type]

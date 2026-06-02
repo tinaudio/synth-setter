@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 from functools import cached_property
 from typing import Any, Literal
 
+from omegaconf import DictConfig, OmegaConf
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -588,6 +589,28 @@ class DatasetSpec(BaseModel):
             "fields; the model validator promotes legacy-form input dicts into this shape."
         ),
     )
+
+    @classmethod
+    def from_hydra_cfg(cls, cfg: DictConfig) -> DatasetSpec:
+        """Build from a Hydra-composed cfg, dropping non-spec groups before resolving.
+
+        A composed dataset cfg carries groups that aren't spec fields (``data``,
+        ``paths``, ``hydra``, ``logger``, …) whose interpolations may reference
+        resolvers only available under ``@hydra.main`` (e.g.
+        ``data.dataset_root: ${hydra:runtime.output_dir}/data``). Masking to the
+        model's own fields *before* ``resolve=True`` means those subtrees are never
+        evaluated, so the spec resolves under a plain ``compose()`` too.
+
+        :param cfg: Composed dataset cfg; only keys matching ``cls.model_fields``
+            survive the mask, so non-spec groups need not resolve.
+        :returns: Validated spec built from the masked, resolved mapping.
+        :raises TypeError: the masked cfg did not resolve to a mapping.
+        """
+        spec_keys = [k for k in cfg if isinstance(k, str) and k in cls.model_fields]
+        raw = OmegaConf.to_container(OmegaConf.masked_copy(cfg, spec_keys), resolve=True)
+        if not isinstance(raw, dict):
+            raise TypeError(f"composed config is not a mapping: {type(raw).__name__}")
+        return cls(**{k: v for k, v in raw.items() if isinstance(k, str)})
 
     @model_validator(mode="before")
     @classmethod

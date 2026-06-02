@@ -219,10 +219,9 @@ class TestComputeSpecUriFromHydra:
         """URI equals what ``synth-setter-generate-dataset`` would compute via ``spec_from_cfg``.
 
         Pins the load-bearing claim of this whole feature: the helper and the
-        launcher exercise the same derivation, so a CI cell consuming this URI
-        will hit the same R2 object the launcher writes. Catches drift between
-        ``_NON_SPEC_CFG_KEYS`` and ``cli.generate_dataset._NON_SPEC_KEYS`` and
-        any future divergence in cfg-to-spec construction.
+        launcher exercise the same ``DatasetSpec.from_hydra_cfg`` derivation, so
+        a CI cell consuming this URI will hit the same R2 object the launcher
+        writes. Catches any future divergence in cfg-to-spec construction.
         """
         from hydra import compose, initialize_config_module
 
@@ -231,26 +230,10 @@ class TestComputeSpecUriFromHydra:
         overrides = [f"experiment={_HYDRA_EXPERIMENT}", "+run_id=parity-test"]
         with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
             cfg = compose(config_name="dataset", overrides=overrides)
-        cfg.paths.root_dir = "."
-        cfg.paths.output_dir = "."
-        cfg.paths.work_dir = "."
 
         launcher_uri = spec_from_cfg(cfg).r2.input_spec_uri()
         helper_uri = compute_spec_uri_from_hydra(_HYDRA_EXPERIMENT, "parity-test")
         assert helper_uri == launcher_uri
-
-    def test_non_spec_cfg_keys_mirror_cli_canonical(self) -> None:
-        """``_NON_SPEC_CFG_KEYS`` equals ``cli.generate_dataset._NON_SPEC_KEYS``.
-
-        Converts the comment-guarded "keep in sync" invariant into a tested
-        one. If either side gains a new top-level cfg sub-tree, this test
-        fails immediately rather than the helper silently feeding a non-spec
-        key into ``DatasetSpec(**spec_kwargs)``.
-        """
-        from synth_setter.cli.generate_dataset import _NON_SPEC_KEYS
-        from synth_setter.pipeline.ci.spec_uri import _NON_SPEC_CFG_KEYS
-
-        assert _NON_SPEC_CFG_KEYS == _NON_SPEC_KEYS
 
     def test_run_id_override_lands_in_uri(self) -> None:
         """The ``run_id_override`` argument appears verbatim in the under-prefix URI."""
