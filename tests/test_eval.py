@@ -112,77 +112,6 @@ def test_dump_metric_dict_writes_json_with_coerced_scalars(tmp_path: Path) -> No
     assert payload["raw/string"] == "v1"
 
 
-@pytest.fixture()
-def local_r2_remote(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Back the ``r2:`` rclone remote with the local filesystem for real-binary e2e.
-
-    Mirrors ``tests/pipeline``'s ``fake_r2_remote``: ``RCLONE_CONFIG_R2_TYPE=local``
-    resolves ``r2://<bucket>/<key>`` to ``<cwd>/<bucket>/<key>``, and the three
-    secret keys satisfy ``ensure_r2_env_loaded``'s presence check (their values
-    are unused by the local backend). Skips when ``rclone`` is absent.
-
-    :param tmp_path: Pytest tmp dir; the returned subdir is the fake R2 root.
-    :param monkeypatch: Sets the rclone env vars and chdirs into the remote root.
-    :return: The fake R2 root; ``r2://<bucket>/<key>`` materializes under it.
-    """
-    if shutil.which("rclone") is None:
-        pytest.skip("rclone binary not available on PATH")
-    remote_root = tmp_path / "r2"
-    remote_root.mkdir()
-    monkeypatch.setenv("RCLONE_CONFIG_R2_TYPE", "local")
-    monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", "stub")
-    monkeypatch.setenv("RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", "stub")
-    monkeypatch.setenv("RCLONE_CONFIG_R2_ENDPOINT", "stub")
-    monkeypatch.chdir(remote_root)
-    return remote_root
-
-
-def test_download_eval_dataset_hydrates_root_from_r2(
-    local_r2_remote: Path, tmp_path: Path
-) -> None:
-    """Gate on: the configured R2 prefix is copied into ``data.dataset_root``.
-
-    :param local_r2_remote: Real rclone remote backed by the local filesystem.
-    :param tmp_path: Holds the (initially absent) download destination root.
-    """
-    remote_prefix = local_r2_remote / "intermediate-data" / "dataset"
-    remote_prefix.mkdir(parents=True)
-    (remote_prefix / "train.h5").write_bytes(b"train-bytes")
-    (remote_prefix / "stats.npz").write_bytes(b"stats-bytes")
-    dataset_root = tmp_path / "downloaded"
-
-    cfg = OmegaConf.create(
-        {
-            "evaluation": {"download_dataset_root_uri": "r2://intermediate-data/dataset"},
-            "data": {"dataset_root": str(dataset_root)},
-        }
-    )
-    eval_mod._download_eval_dataset(cfg)
-
-    assert (dataset_root / "train.h5").read_bytes() == b"train-bytes"
-    assert (dataset_root / "stats.npz").read_bytes() == b"stats-bytes"
-
-
-def test_download_eval_dataset_noop_when_uri_null(local_r2_remote: Path, tmp_path: Path) -> None:
-    """Gate off (default ``null``): ``data.dataset_root`` is left untouched.
-
-    :param local_r2_remote: Real rclone remote — present so a regression copies rather than hangs.
-    :param tmp_path: Holds the pre-existing, empty dataset root.
-    """
-    dataset_root = tmp_path / "downloaded"
-    dataset_root.mkdir()
-
-    cfg = OmegaConf.create(
-        {
-            "evaluation": {"download_dataset_root_uri": None},
-            "data": {"dataset_root": str(dataset_root)},
-        }
-    )
-    eval_mod._download_eval_dataset(cfg)
-
-    assert list(dataset_root.iterdir()) == []
-
-
 @pytest.mark.requires_vst
 @pytest.mark.slow
 def test_eval_cli_downloads_dataset_from_r2_then_scores_oracle(
@@ -227,13 +156,12 @@ def test_eval_cli_downloads_dataset_from_r2_then_scores_oracle(
             "experiment=surge/test-mps-fake-oracle",
             "trainer=cpu",
             "mode=test",
-            # mode=test never renders; null satisfies the resolver that the
-            # experiment's mandatory `render: ???` would otherwise trip.
-            "render=null",
+            # render defaults to null and is read only in mode=predict's
+            # postprocessing, so mode=test needs no render group.
             "hydra.job.chdir=false",
             f"model.net.d_out={len(param_specs['surge_4'])}",
             "callbacks.log_per_param_mse.param_spec=surge_4",
-            "evaluation.download_dataset_root_uri=r2://intermediate-data/dataset",
+            "data.download_dataset_root_uri=r2://intermediate-data/dataset",
             f"data.dataset_root={dataset_root}",
             f"data.predict_file={dataset_root}/test.h5",
             "data.batch_size=1",

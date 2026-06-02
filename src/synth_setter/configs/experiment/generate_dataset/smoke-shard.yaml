@@ -22,11 +22,5 @@ render:
   min_loudness: -55.0
   samples_per_render_batch: 4
   samples_per_shard: 4
-  # Materialized so the render-matrix workflow can resolve
-  # `render.gui_toggle_cadence=<cell>` / `render.plugin_reload_cadence=<cell>`
-  # overrides against this experiment without flipping the platform-aware
-  # default in `configs/render/surge_xt.yaml`. The base values match the
-  # Pydantic schema defaults — overrides flow through the cross-field
-  # validator (`RenderConfig._always_on_requires_plugin_reload_once`).
-  gui_toggle_cadence: never
+  gui_toggle_cadence: once
   plugin_reload_cadence: render

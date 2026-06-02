@@ -9,12 +9,11 @@ from typing import Any
 
 import hydra
 import pandas as pd
-import wandb
 from lightning import Callback, LightningDataModule, LightningModule, Trainer
 from lightning.pytorch.loggers import Logger
 from omegaconf import DictConfig
 
-from synth_setter.pipeline import r2_io
+import wandb
 from synth_setter.resources import as_file, vst_headless_wrapper
 from synth_setter.utils import (
     RankedLogger,
@@ -113,7 +112,7 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
         if cfg.get("render") is None:
             raise ValueError(
                 "evaluation.render_vst=true requires a render config group "
-                "(e.g. `+render=surge_xt`); cfg.render is unset."
+                "(e.g. `render=surge_xt`); cfg.render is unset."
             )
         if not predictions_dir.is_dir():
             raise ValueError(
@@ -286,24 +285,6 @@ def _dump_metric_dict(metric_dict: dict[str, Any], output_dir: Path) -> Path:
     return out_path
 
 
-def _download_eval_dataset(cfg: DictConfig) -> None:
-    """Hydrate ``data.dataset_root`` from R2 when a download URI is configured.
-
-    Opt-in (``evaluation.download_dataset_root_uri`` defaults to ``null``): with a
-    URI set, load R2 creds then copy the prefix into ``data.dataset_root`` without
-    clobbering existing files, so eval can run against an R2-resident dataset on a
-    fresh worker. A ``null`` URI is a no-op — the local ``dataset_root`` is used as-is.
-
-    :param cfg: Composed eval config; reads ``evaluation.download_dataset_root_uri``
-        and ``data.dataset_root``.
-    """
-    dataset_uri = cfg.evaluation.download_dataset_root_uri
-    if not dataset_uri:
-        return
-    r2_io.ensure_r2_env_loaded()
-    r2_io.download_dir_no_overwrite(dataset_uri, cfg.data.dataset_root)
-
-
 @hydra.main(version_base="1.3", config_path="pkg://synth_setter.configs", config_name="eval.yaml")
 def main(cfg: DictConfig) -> None:
     """Run the evaluation entrypoint.
@@ -313,7 +294,6 @@ def main(cfg: DictConfig) -> None:
     # apply extra utilities
     # (e.g. ask for tags if none are provided in cfg, print cfg tree, etc.)
     extras(cfg)
-    _download_eval_dataset(cfg)
 
     metric_dict, _ = evaluate(cfg)
     _dump_metric_dict(metric_dict, Path(cfg.paths.output_dir))

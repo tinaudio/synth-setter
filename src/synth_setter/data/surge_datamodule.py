@@ -1,23 +1,25 @@
 import random
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Literal, Optional, Sequence, Union
+from typing import Literal
 
 import h5py
-import hdf5plugin
+import hdf5plugin  # noqa: F401  # side-effect import: registers HDF5 blosc filters for shard I/O
 import numpy as np
 import torch
 from lightning import LightningDataModule
 
 from synth_setter.data.ot import _hungarian_match
+from synth_setter.pipeline import r2_io
 
 
 class SurgeXTDataset(torch.utils.data.Dataset):
-    mean: Optional[np.ndarray] = None
-    std: Optional[np.ndarray] = None
+    mean: np.ndarray | None = None
+    std: np.ndarray | None = None
 
     def __init__(
         self,
-        dataset_file: Union[str, Path],
+        dataset_file: str | Path,
         batch_size: int,
         ot: bool = True,
         read_audio: bool = False,
@@ -49,7 +51,7 @@ class SurgeXTDataset(torch.utils.data.Dataset):
         if use_saved_mean_and_variance:
             self._load_dataset_statistics(dataset_file)
 
-    def _load_dataset_statistics(self, dataset_file: Union[str, Path]):
+    def _load_dataset_statistics(self, dataset_file: str | Path):
         # for /path/to/train.h5 we would expect to find /path/to/stats.npz
         # if not, we throw an error
         stats_file = SurgeXTDataset.get_stats_file_path(dataset_file)
@@ -64,7 +66,7 @@ class SurgeXTDataset(torch.utils.data.Dataset):
             self.std = stats["std"]
 
     @staticmethod
-    def get_stats_file_path(dataset_file: Union[str, Path]) -> Path:
+    def get_stats_file_path(dataset_file: str | Path) -> Path:
         dataset_file = Path(dataset_file)
         data_dir = dataset_file.parent
         return data_dir / "stats.npz"
@@ -76,9 +78,7 @@ class SurgeXTDataset(torch.utils.data.Dataset):
         return self.dataset_file["audio"].shape[0] // self.batch_size
 
     def _get_fake_item(self):
-        audio = (
-            torch.randn(self.batch_size, 2, 44100 * 4) if not self.read_audio else None
-        )
+        audio = torch.randn(self.batch_size, 2, 44100 * 4) if not self.read_audio else None
         mel_spec = torch.randn(self.batch_size, 2, 128, 401) if self.read_mel else None
         m2l = torch.randn(self.batch_size, 128, 42) if self.read_m2l else None
         param_array = torch.rand(self.batch_size, 189)
@@ -96,7 +96,7 @@ class SurgeXTDataset(torch.utils.data.Dataset):
             audio=audio,
         )
 
-    def _index_dataset(self, ds: h5py.Dataset, idx: Union[int, Sequence[int]]):
+    def _index_dataset(self, ds: h5py.Dataset, idx: int | Sequence[int]):
         if self.repeat_first_batch:
             return ds[: self.batch_size]
         if isinstance(idx, int):
@@ -110,7 +110,7 @@ class SurgeXTDataset(torch.utils.data.Dataset):
 
         return ds[idx]
 
-    def __getitem__(self, idx: Union[int, Sequence[int]]):
+    def __getitem__(self, idx: int | Sequence[int]):
         if self.fake:
             return self._get_fake_item()
 
@@ -185,8 +185,7 @@ class WithinChunkShuffledSampler(torch.utils.data.Sampler):
             group_sizes.append(remaining * self.batch_size)
 
         indices = [
-            np.random.permutation(group_size).reshape(-1, self.batch_size)
-            + i * samples_per_group
+            np.random.permutation(group_size).reshape(-1, self.batch_size) + i * samples_per_group
             for i, group_size in enumerate(group_sizes)
         ]
 
@@ -235,31 +234,47 @@ class ShiftedBatchSampler(torch.utils.data.BatchSampler):
 class SurgeDataModule(LightningDataModule):
     def __init__(
         self,
-        dataset_root: Union[str, Path],
+        dataset_root: str | Path,
+        download_dataset_root_uri: str | None = None,
         use_saved_mean_and_variance: bool = True,
         batch_size: int = 1024,
         ot: bool = True,
         num_workers: int = 0,
         fake: bool = False,
         repeat_first_batch: bool = False,
-        predict_file: Optional[str] = None,
+        predict_file: str | None = None,
         conditioning: Literal["mel", "m2l"] = "mel",
         pin_memory: bool = True,
     ):
         super().__init__()
 
         self.dataset_root = Path(dataset_root)
+        self.download_dataset_root_uri = download_dataset_root_uri
         self.use_saved_mean_and_variance = use_saved_mean_and_variance
         self.batch_size = batch_size
         self.ot = ot
         self.num_workers = num_workers
         self.fake = fake
         self.repeat_first_batch = repeat_first_batch
-        self.predict_file = predict_file
+        self.predict_file = (
+            predict_file if predict_file is not None else self.dataset_root / "test.h5"
+        )
         self.conditioning = conditioning
         self.pin_memory = pin_memory
 
-    def setup(self, stage: Optional[str] = None):
+    def prepare_data(self) -> None:
+        """Hydrate ``dataset_root`` from R2 when a download URI is configured.
+
+        Lightning calls this rank-0-only, before ``setup``, so the no-clobber R2
+        copy runs once even under DDP. Opt-in: a ``None`` URI is a no-op and the
+        local ``dataset_root`` is used as-is.
+        """
+        if not self.download_dataset_root_uri:
+            return
+        r2_io.ensure_r2_env_loaded()
+        r2_io.download_dir_no_overwrite(self.download_dataset_root_uri, self.dataset_root)
+
+    def setup(self, stage: str | None = None):
         self.train_dataset = SurgeXTDataset(
             self.dataset_root / "train.h5",
             batch_size=self.batch_size,
@@ -290,19 +305,16 @@ class SurgeDataModule(LightningDataModule):
             read_mel=self.conditioning == "mel",
             read_m2l=self.conditioning == "m2l",
         )
-        if self.predict_file is not None:
-            self.predict_dataset = SurgeXTDataset(
-                self.predict_file,
-                batch_size=self.batch_size,
-                ot=False,
-                read_audio=True,
-                use_saved_mean_and_variance=self.use_saved_mean_and_variance,
-                fake=self.fake,
-                read_mel=self.conditioning == "mel",
-                read_m2l=self.conditioning == "m2l",
-            )
-        else:
-            self.predict_dataset = None
+        self.predict_dataset = SurgeXTDataset(
+            self.predict_file,
+            batch_size=self.batch_size,
+            ot=False,
+            read_audio=True,
+            use_saved_mean_and_variance=self.use_saved_mean_and_variance,
+            fake=self.fake,
+            read_mel=self.conditioning == "mel",
+            read_m2l=self.conditioning == "m2l",
+        )
 
     def train_dataloader(self):
         return torch.utils.data.DataLoader(
@@ -345,7 +357,8 @@ class SurgeDataModule(LightningDataModule):
             pin_memory=self.pin_memory,
         )
 
-    def teardown(self, stage: Optional[str] = None):
+    def teardown(self, stage: str | None = None):
         self.train_dataset.dataset_file.close()
         self.val_dataset.dataset_file.close()
         self.test_dataset.dataset_file.close()
+        self.predict_dataset.dataset_file.close()
