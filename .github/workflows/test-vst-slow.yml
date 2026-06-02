@@ -127,12 +127,10 @@ jobs:
       # so it lands at ${{ github.workspace }}/coverage.xml on the host.
       - name: Upload coverage to Codecov
         if: always() && hashFiles('coverage.xml') != ''
-        uses: codecov/codecov-action@v5
+        uses: ./.github/actions/upload-coverage
         with:
-          files: coverage.xml
           flags: vst
           token: ${{ secrets.CODECOV_TOKEN }}
-          fail_ci_if_error: false
 
       - name: Surface per-bucket bench JSON files on the runner
         # ``benchmark-action/github-action-benchmark`` reads its input from

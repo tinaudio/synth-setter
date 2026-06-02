@@ -65,12 +65,10 @@ jobs:
         run: make test-ci-unit
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: ./.github/actions/upload-coverage
         with:
-          files: coverage.xml
           flags: unit-cpu,unit-cpu-linux
           token: ${{ secrets.CODECOV_TOKEN }}
-          fail_ci_if_error: false
 
   run_tests_macos:
     runs-on: ${{ matrix.os }}
@@ -112,9 +110,7 @@ jobs:
         run: make test-ci-unit
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: ./.github/actions/upload-coverage
         with:
-          files: coverage.xml
           flags: unit-cpu,unit-cpu-macos
           token: ${{ secrets.CODECOV_TOKEN }}
-          fail_ci_if_error: false

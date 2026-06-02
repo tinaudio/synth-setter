@@ -94,12 +94,10 @@ jobs:
       # in Codecov — the fast suite skips these PyTorch forward passes.
       - name: Upload coverage to Codecov
         if: always() && hashFiles('coverage.xml') != ''
-        uses: codecov/codecov-action@v5
+        uses: ./.github/actions/upload-coverage
         with:
-          files: coverage.xml
           flags: slow-cpu
           token: ${{ secrets.CODECOV_TOKEN }}
-          fail_ci_if_error: false
 
       # Auto-file a bug ticket on post-merge failure so CPU regressions in
       # main don't go silently stale. Runs only when the run failed AND the

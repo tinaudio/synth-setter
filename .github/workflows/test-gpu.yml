@@ -91,9 +91,7 @@ jobs:
 
       - name: Upload coverage to Codecov
         if: always() && hashFiles('coverage.xml') != ''
-        uses: codecov/codecov-action@v5
+        uses: ./.github/actions/upload-coverage
         with:
-          files: coverage.xml
           flags: unit-gpu
           token: ${{ secrets.CODECOV_TOKEN }}
-          fail_ci_if_error: false

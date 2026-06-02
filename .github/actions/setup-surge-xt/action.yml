@@ -1,0 +1,15 @@
+name: Set up Surge XT
+description: >-
+  Install the Surge XT VST3 cask on a macOS runner and symlink it into
+  `plugins/` where the project's render config resolves it. Docker-based
+  callers ship Surge XT in the image and do not use this action.
+
+runs:
+  using: composite
+  steps:
+    - name: Install Surge XT VST3
+      shell: bash
+      run: |
+        brew install --cask surge-xt
+        mkdir -p plugins
+        ln -sfn '/Library/Audio/Plug-Ins/VST3/Surge XT.vst3' 'plugins/Surge XT.vst3'

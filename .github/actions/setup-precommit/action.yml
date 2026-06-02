@@ -1,0 +1,28 @@
+name: Set up pre-commit
+description: >-
+  Install Python + uv, sync the dev-only dependency group (no torch), and
+  restore the pre-commit hook-environment cache. Callers run `pre-commit run`
+  themselves so each can scope it (`--all-files` vs `--files <changed>`).
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.10"
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v6
+      with:
+        enable-cache: true
+
+    - name: Install dev tools (uv sync --frozen, no torch)
+      shell: bash
+      run: uv sync --frozen --only-group dev
+
+    - name: Cache pre-commit hook environments
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pre-commit
+        key: pre-commit-${{ runner.os }}-py3.10-${{ hashFiles('.pre-commit-config.yaml') }}

@@ -1,0 +1,23 @@
+name: Upload coverage
+description: >-
+  Upload coverage.xml to Codecov under the given suite flags. Callers own the
+  step `if:` (e.g. `always() && hashFiles('coverage.xml') != ''`) so a failed
+  test run still reports partial coverage.
+
+inputs:
+  flags:
+    description: Codecov flags identifying the suite (e.g. "unit-cpu,unit-cpu-linux").
+    required: true
+  token:
+    description: secrets.CODECOV_TOKEN
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: codecov/codecov-action@v5
+      with:
+        files: coverage.xml
+        flags: ${{ inputs.flags }}
+        token: ${{ inputs.token }}
+        fail_ci_if_error: false

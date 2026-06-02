@@ -22,19 +22,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.10"
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
-        with:
-          enable-cache: true
-
-      # `--only-group dev` installs lint/type-check tools without the torch stack.
-      - name: Install dev tools (uv sync --frozen, no torch)
-        run: uv sync --frozen --only-group dev
+      - name: Set up pre-commit toolchain
+        uses: ./.github/actions/setup-precommit
 
       - name: Find changed files
         id: changed_files
@@ -44,14 +33,6 @@ jobs:
 
       - name: List changed files
         run: echo '${{ steps.changed_files.outputs.all_changed_files }}'
-
-      # Restores per-hook env caching that `pre-commit/action@v3` did implicitly;
-      # key invalidates whenever a hook pin in the config changes.
-      - name: Cache pre-commit hook environments
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pre-commit
-          key: pre-commit-${{ runner.os }}-py3.10-${{ hashFiles('.pre-commit-config.yaml') }}
 
       # `pre-commit/action@v3` shells out to `python -m pip install pre-commit`
       # against whichever python is first on PATH; with `uv sync` putting

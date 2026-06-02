@@ -55,10 +55,7 @@ jobs:
       # Mirror `test-mps.yml`'s Surge XT provisioning — same cask + symlink path
       # the configs and `--plugin_path` defaults expect.
       - name: Install Surge XT VST3
-        run: |
-          brew install --cask surge-xt
-          mkdir -p plugins
-          ln -sfn '/Library/Audio/Plug-Ins/VST3/Surge XT.vst3' 'plugins/Surge XT.vst3'
+        uses: ./.github/actions/setup-surge-xt
 
       - name: Smoke-test Surge XT plugin load
         run: |

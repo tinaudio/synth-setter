@@ -58,10 +58,7 @@ jobs:
       # and the smoke-test fixtures all assume. Mirrors the provisioning step in
       # `tart/macos.pkr.hcl` (the macOS dev VM image) and `test.yml`'s macOS job.
       - name: Install Surge XT VST3
-        run: |
-          brew install --cask surge-xt
-          mkdir -p plugins
-          ln -sfn '/Library/Audio/Plug-Ins/VST3/Surge XT.vst3' 'plugins/Surge XT.vst3'
+        uses: ./.github/actions/setup-surge-xt
 
       # Mirrors the Tart-VM smoke check in `tart/macos.pkr.hcl` — fails fast if
       # the cask install or symlink is broken before the full pytest run.
@@ -89,9 +86,7 @@ jobs:
 
       - name: Upload coverage to Codecov
         if: always() && hashFiles('coverage.xml') != ''
-        uses: codecov/codecov-action@v5
+        uses: ./.github/actions/upload-coverage
         with:
-          files: coverage.xml
           flags: unit-mps
           token: ${{ secrets.CODECOV_TOKEN }}
-          fail_ci_if_error: false
