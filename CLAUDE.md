@@ -8,7 +8,8 @@ Shared agent instructions for Claude and Codex; AGENTS.md is the canonical sourc
 
 - **Work in an isolated git worktree, never the primary checkout.** Branch switching and stash conflicts have lost work and committed to wrong branches. Use `git worktree add` (or `isolation: "worktree"` when spawning subagents). The primary checkout is read-only — `git log`, exploration, `rclone ls` only. A `SessionStart` banner (`agent/hooks/session-start-cwd-banner.sh`) and a `PreToolUse` guard (`agent/hooks/worktree-guard.sh`, `WORKTREE_GUARD_MODE`: `warn` default / `block` / `off`) enforce this.
 - **Each worktree gets its own `.venv`.** The spawn command runs `uv sync`; `~/.bashrc` then activates `./.venv` per directory, overriding the image's shared `/venv/main`. For one-offs, `uv run <cmd>` targets the worktree env regardless of the inherited `VIRTUAL_ENV`.
-  </important>
+
+</important>
 
 <important if="you need to run commands to build, test, lint, or format">
 
@@ -28,7 +29,8 @@ Never run `make docker-*` or RunPod commands without asking — they spend money
 - Pydantic `BaseModel(strict=True)` at trust boundaries (config parsing, JSON from R2, worker reports); dataclasses for internal typed containers.
 - `structlog` in pipeline code; stdlib `logging` elsewhere.
 - All `rclone` operations use `--checksum`.
-  </important>
+
+</important>
 
 <important if="you are starting any non-trivial change">
 
@@ -45,7 +47,8 @@ Invoke in order: `/tdd-implementation` (drive it test-first) → `/code-health` 
 - Test names: `test_<what>_<condition>_<expected>`.
 - `@pytest.mark.slow` marks slow tests.
 - Mutation testing: [docs/testing/mutmut.md](docs/testing/mutmut.md).
-  </important>
+
+</important>
 
 <important if="you are committing">
 
@@ -54,7 +57,8 @@ Invoke in order: `/tdd-implementation` (drive it test-first) → `/code-health` 
 - **Never add `Co-Authored-By` or agent-attribution trailers** ("Generated with …", "Claude …"). A `PreToolUse` hook (`agent/hooks/git-commit-trailer-check.sh`) blocks them.
 - **Verify the branch before push:** `git branch --show-current` must match the target PR branch.
 - **Never commit without explicit permission.** The user opts in.
-  </important>
+
+</important>
 
 <important if="a lint, pydoclint, or pyright check fails on a file your change touches">
 
@@ -75,12 +79,13 @@ Grep ALL file types, not just `.py` — include `.yaml`/`.yml`, `.md`, `.json`, 
 
 - **Link a taxonomy-compliant issue** in the body via `Closes #N` / `Fixes #N` / `Refs #N` / `Part of #N` (use `Refs` for partial fixes; `Fixes` auto-closes). Every issue traces to an Epic via Phase → Task / Bug / Feature. See `/github-taxonomy`.
 - **PR titles stand alone** — name the specific subject, not just the action; readers don't open the issue.
-- **Pre-PR gate:** run `/repo-review-full-no-comments` and address every BLOCK/WARN. A `PreToolUse` hook (`agent/hooks/pre-pr-review-gate.sh`) blocks `gh pr create` until the command carries `REVIEW_FULL=<path>` pointing at the rendered report (`.agent-reviews/repo-review-full-no-comments.<sha>.md`) — recommended as a trailing comment. The encoded SHA must be an ancestor of HEAD within `REVIEW_MAX_LAG` (default 2) first-parent commits.
+- **Pre-PR gate:** run `/repo-review-full-no-comments` and address every BLOCK/WARN. A `PreToolUse` hook (`agent/hooks/pre-pr-review-gate.sh`) blocks `gh pr create` until the command carries `REVIEW_FULL=<path>` pointing at the rendered report (`.agent-reviews/repo-review-full-no-comments.<sha>.md`) — recommended as a trailing comment so other gh-pr-create hooks still fire: `gh pr create … # REVIEW_FULL=.agent-reviews/repo-review-full-no-comments.<sha>.md`. The encoded SHA must be an ancestor of HEAD within `REVIEW_MAX_LAG` (default 2) first-parent commits.
 - **After every push, drive `/pr-readiness` until all four gates hold:** CI green ∧ `mergeable=MERGEABLE` ∧ every review comment has an inline reply ∧ no fresh Copilot findings. Full procedure: [docs/pr-readiness-loop.md](docs/pr-readiness-loop.md). A `Stop` hook (`agent/hooks/pr-readiness-stop.sh`, `PR_READINESS_GATE`: `block` default / `warn` / `off`) blocks ending the turn while gates 1-2 fail.
 - **Reply inline on every open review comment** (humans + Copilot) with a fix-commit SHA or justification, via `/pr-review-resolver`. Verification evidence goes through `/pr-checkbox`.
 - **Advisory rewakes carry an origin-HEAD stamp** — compare the `<sha7>` in a `pr-review-resolver` / `doc-drift` rewake to `git rev-parse HEAD`. If they differ the advisory crossed sessions: read it for context, but don't treat it as current-PR work.
 - **In chat**, use full markdown links for refs (`[#N](https://github.com/tinaudio/synth-setter/issues/N)`); in PR / issue bodies use bare `Fixes #N` so auto-close works.
-  </important>
+
+</important>
 
 <important if="you are reviewing code">
 
