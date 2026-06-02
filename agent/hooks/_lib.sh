@@ -139,6 +139,10 @@ run_agent_prompt() {
       return 127
       ;;
   esac
+  # Mark the spawned agent's session headless so its Stop hook
+  # (pr-readiness-stop.sh) never blocks — the resolver/doc-drift runners must
+  # finish and rewake the parent, not deadlock on their own readiness gates.
+  export PR_READINESS_HEADLESS=1
   if [[ -n "$timeout_bin" ]]; then
     "$timeout_bin" --kill-after=10 "$timeout_secs" "${cmd[@]}"
   else

@@ -96,6 +96,19 @@
         ]
       }
     ],
+    "Stop": [
+      {
+        "description": "PR-readiness gate: on Stop, if there's an open PR for the current branch whose readiness gates don't hold, blocks the turn from ending (exit 2) so the agent keeps driving the loop instead of treating 'I pushed the fix' as 'the PR is ready'. Checks gate 1 (CI green via `gh pr checks`) and gate 2 (`mergeable=MERGEABLE`) deterministically; the block message points to /pr-readiness + docs/pr-readiness-loop.md for gate 3 (every review comment answered) and gate 4 (no fresh Copilot findings). No-op outside a repo, in the primary checkout, with no PR, or in a headless/CI context (PR_READINESS_HEADLESS — exported by _lib.sh's run_agent_prompt — / CI / a .agent-reviews/worktrees/ cwd) so the pr-review-resolver and doc-drift detached-worktree agents never deadlock. Escape hatch PR_READINESS_GATE: block default / warn (loud stderr, exit 0) / off (no-op).",
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 30,
+            "statusMessage": "Checking PR readiness gates...",
+            "command": "bash agent/hooks/pr-readiness-stop.sh"
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "Edit|Write",

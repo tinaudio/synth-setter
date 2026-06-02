@@ -31,6 +31,7 @@ cp agent/hooks/_lib.sh \
    agent/hooks/verify-gh-taxonomy.sh \
    agent/hooks/worktree-guard.sh \
    agent/hooks/session-start-cwd-banner.sh \
+   agent/hooks/pr-readiness-stop.sh \
    "$SANDBOX/agent/hooks/"
 cp agent/_shared/review_sentinel.py "$SANDBOX/agent/_shared/"
 cd "$SANDBOX"
@@ -71,12 +72,22 @@ EOF
 # `gh` stub: $GH_STUB_PR governs `gh pr view`'s number output. When
 # $GH_STUB_LOG is set, every invocation appends its argv there so tests can
 # assert explicit-branch arg passing (`gh pr view <branch>`).
+# pr-readiness-stop.sh adds two more knobs: $GH_STUB_CHECKS_EXIT is the exit
+# code for `gh pr checks` (0 = green; non-zero = failing/pending), and
+# $GH_STUB_MERGEABLE is the value `gh pr view --json mergeable` reports.
 cat > "$STUBS/gh" <<'EOF'
 #!/usr/bin/env bash
 if [[ -n "${GH_STUB_LOG:-}" ]]; then
   printf '%s\n' "$*" >> "$GH_STUB_LOG"
 fi
+if [[ "$1" == "pr" && "$2" == "checks" ]]; then
+  exit "${GH_STUB_CHECKS_EXIT:-0}"
+fi
 if [[ "$1" == "pr" && "$2" == "view" ]]; then
+  if [[ "$*" == *"mergeable"* ]]; then
+    echo "${GH_STUB_MERGEABLE:-MERGEABLE}"
+    exit 0
+  fi
   if [[ -n "${GH_STUB_PR:-}" ]]; then
     echo "${GH_STUB_PR}"
     exit 0
@@ -1267,6 +1278,195 @@ T_session_start_banner_remediation_path_is_absolute_from_subdir() {
   return 0
 }
 it "session-start-banner: remediation path anchored to primary_root (works from any subdir)" T_session_start_banner_remediation_path_is_absolute_from_subdir
+
+# ===========================================================================
+# pr-readiness-stop.sh — Stop-hook gate enforcement + no-op contexts
+# ===========================================================================
+#
+# The sandbox repo is itself a primary checkout, so gate-blocking cases run the
+# hook from a linked worktree (the hook no-ops in the primary). A feature
+# branch with an open PR is simulated via GH_STUB_PR; CI/mergeable outcomes via
+# GH_STUB_CHECKS_EXIT / GH_STUB_MERGEABLE.
+
+readiness_linked_worktree() {
+  # Usage: readiness_linked_worktree <branch>
+  # Echoes the path of a fresh linked worktree on <branch>. reset_sandbox tears
+  # down linked worktrees between tests.
+  local branch="$1" wt
+  wt="$TEST_DIR/readiness-wt-${branch}"
+  rm -rf "$wt"
+  git worktree add -q -b "$branch" "$wt" >/dev/null 2>&1
+  printf '%s\n' "$wt"
+}
+
+T_readiness_no_op_in_primary() {
+  local out stderr_file
+  stderr_file="$TEST_DIR/rd_stderr.txt"
+  export GH_STUB_PR=42 GH_STUB_CHECKS_EXIT=1
+  out=$(echo '' | bash agent/hooks/pr-readiness-stop.sh 2>"$stderr_file"; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0 in primary, got: $out"; return 1; }
+  [[ -z "$(cat "$stderr_file")" ]] || { echo "primary checkout should be silent; got: $(cat "$stderr_file")"; return 1; }
+}
+it "pr-readiness-stop: in primary checkout → exit 0, silent (never blocks the primary)" T_readiness_no_op_in_primary
+
+T_readiness_no_op_outside_repo() {
+  local out scratch
+  scratch=$(mktemp -d "$TEST_DIR/rd-no-git-XXXX")
+  export GH_STUB_PR=42 GH_STUB_CHECKS_EXIT=1
+  out=$(cd "$scratch" && echo '' | bash "$SANDBOX/agent/hooks/pr-readiness-stop.sh" 2>&1; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0 outside repo, got: $out"; return 1; }
+}
+it "pr-readiness-stop: outside any git repo → exit 0" T_readiness_no_op_outside_repo
+
+T_readiness_no_op_no_pr() {
+  local out wt
+  unset GH_STUB_PR
+  export GH_STUB_CHECKS_EXIT=1
+  wt=$(readiness_linked_worktree "rd-no-pr")
+  out=$(cd "$wt" && echo '' | bash "$SANDBOX/agent/hooks/pr-readiness-stop.sh" 2>&1; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0 with no PR, got: $out"; return 1; }
+}
+it "pr-readiness-stop: no open PR for the branch → exit 0" T_readiness_no_op_no_pr
+
+T_readiness_no_op_headless_env_marker() {
+  local out wt
+  export GH_STUB_PR=42 GH_STUB_CHECKS_EXIT=1 PR_READINESS_HEADLESS=1
+  wt=$(readiness_linked_worktree "rd-headless")
+  out=$(cd "$wt" && echo '' | bash "$SANDBOX/agent/hooks/pr-readiness-stop.sh" 2>&1; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || {
+    echo "headless marker must prevent a block (deadlock guard), got: $out"
+    return 1
+  }
+}
+it "pr-readiness-stop: PR_READINESS_HEADLESS=1 → exit 0 even with a failing gate (no deadlock)" T_readiness_no_op_headless_env_marker
+
+T_readiness_no_op_in_ci() {
+  local out wt
+  export GH_STUB_PR=42 GH_STUB_CHECKS_EXIT=1 CI=true
+  wt=$(readiness_linked_worktree "rd-ci")
+  out=$(cd "$wt" && echo '' | bash "$SANDBOX/agent/hooks/pr-readiness-stop.sh" 2>&1; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "CI context must not block, got: $out"; return 1; }
+}
+it "pr-readiness-stop: CI=true → exit 0 even with a failing gate" T_readiness_no_op_in_ci
+
+T_readiness_no_op_in_headless_worktree_cwd() {
+  local out wt nested
+  export GH_STUB_PR=42 GH_STUB_CHECKS_EXIT=1
+  unset PR_READINESS_HEADLESS CI
+  wt=$(readiness_linked_worktree "rd-wt-cwd")
+  # A path matching .agent-reviews/worktrees/ is the detached worktree the
+  # resolver/doc-drift headless agents run in.
+  nested="$wt/.agent-reviews/worktrees/resolver-abc123"
+  mkdir -p "$nested"
+  out=$(cd "$nested" && echo '' | bash "$SANDBOX/agent/hooks/pr-readiness-stop.sh" 2>&1; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || {
+    echo "cwd under .agent-reviews/worktrees/ must not block, got: $out"
+    return 1
+  }
+}
+it "pr-readiness-stop: cwd under .agent-reviews/worktrees/ → exit 0 (headless runner cwd)" T_readiness_no_op_in_headless_worktree_cwd
+
+T_readiness_blocks_on_red_ci() {
+  local out stderr_file wt
+  stderr_file="$TEST_DIR/rd_stderr.txt"
+  export GH_STUB_PR=42 GH_STUB_CHECKS_EXIT=1 GH_STUB_MERGEABLE=MERGEABLE
+  unset PR_READINESS_HEADLESS CI
+  wt=$(readiness_linked_worktree "rd-red-ci")
+  out=$(cd "$wt" && echo '' | bash "$SANDBOX/agent/hooks/pr-readiness-stop.sh" 2>"$stderr_file"; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:2" ]] || { echo "expected EXIT:2 on red CI, got: $out"; return 1; }
+  grep -q "Gate 1" "$stderr_file" || { echo "stderr should name Gate 1; got: $(cat "$stderr_file")"; return 1; }
+  grep -q "/pr-readiness" "$stderr_file" || { echo "stderr should point to /pr-readiness"; return 1; }
+  grep -q "docs/pr-readiness-loop.md" "$stderr_file" || { echo "stderr should point to the loop doc"; return 1; }
+}
+it "pr-readiness-stop: red CI (gate 1) → exit 2 naming Gate 1 + pointers" T_readiness_blocks_on_red_ci
+
+T_readiness_blocks_on_not_mergeable() {
+  local out stderr_file wt
+  stderr_file="$TEST_DIR/rd_stderr.txt"
+  export GH_STUB_PR=42 GH_STUB_CHECKS_EXIT=0 GH_STUB_MERGEABLE=CONFLICTING
+  unset PR_READINESS_HEADLESS CI
+  wt=$(readiness_linked_worktree "rd-conflict")
+  out=$(cd "$wt" && echo '' | bash "$SANDBOX/agent/hooks/pr-readiness-stop.sh" 2>"$stderr_file"; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:2" ]] || { echo "expected EXIT:2 on CONFLICTING, got: $out"; return 1; }
+  grep -q "Gate 2" "$stderr_file" || { echo "stderr should name Gate 2; got: $(cat "$stderr_file")"; return 1; }
+  grep -q "CONFLICTING" "$stderr_file" || { echo "stderr should report the mergeable value"; return 1; }
+}
+it "pr-readiness-stop: green CI but mergeable=CONFLICTING (gate 2) → exit 2 naming Gate 2" T_readiness_blocks_on_not_mergeable
+
+T_readiness_blocks_on_unknown_mergeable() {
+  local out stderr_file wt
+  stderr_file="$TEST_DIR/rd_stderr.txt"
+  export GH_STUB_PR=42 GH_STUB_CHECKS_EXIT=0 GH_STUB_MERGEABLE=UNKNOWN
+  unset PR_READINESS_HEADLESS CI
+  wt=$(readiness_linked_worktree "rd-unknown")
+  out=$(cd "$wt" && echo '' | bash "$SANDBOX/agent/hooks/pr-readiness-stop.sh" 2>"$stderr_file"; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:2" ]] || { echo "expected EXIT:2 on UNKNOWN, got: $out"; return 1; }
+  grep -q "Gate 2" "$stderr_file" || { echo "stderr should name Gate 2 for UNKNOWN; got: $(cat "$stderr_file")"; return 1; }
+}
+it "pr-readiness-stop: mergeable=UNKNOWN is not a pass (gate 2) → exit 2" T_readiness_blocks_on_unknown_mergeable
+
+T_readiness_passes_when_gates_hold() {
+  local out stderr_file wt
+  stderr_file="$TEST_DIR/rd_stderr.txt"
+  export GH_STUB_PR=42 GH_STUB_CHECKS_EXIT=0 GH_STUB_MERGEABLE=MERGEABLE
+  unset PR_READINESS_HEADLESS CI
+  wt=$(readiness_linked_worktree "rd-green")
+  out=$(cd "$wt" && echo '' | bash "$SANDBOX/agent/hooks/pr-readiness-stop.sh" 2>"$stderr_file"; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0 when gates 1-2 hold, got: $out"; return 1; }
+  [[ -z "$(cat "$stderr_file")" ]] || { echo "passing case should be silent; got: $(cat "$stderr_file")"; return 1; }
+}
+it "pr-readiness-stop: green CI + MERGEABLE → exit 0, silent (gates 1-2 hold)" T_readiness_passes_when_gates_hold
+
+T_readiness_warn_mode_never_blocks() {
+  local out stderr_file wt
+  stderr_file="$TEST_DIR/rd_stderr.txt"
+  export GH_STUB_PR=42 GH_STUB_CHECKS_EXIT=1 PR_READINESS_GATE=warn
+  unset PR_READINESS_HEADLESS CI
+  wt=$(readiness_linked_worktree "rd-warn")
+  out=$(cd "$wt" && echo '' | bash "$SANDBOX/agent/hooks/pr-readiness-stop.sh" 2>"$stderr_file"; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "warn mode must exit 0, got: $out"; return 1; }
+  grep -q "WARNING" "$stderr_file" || { echo "warn mode should print WARNING; got: $(cat "$stderr_file")"; return 1; }
+}
+it "pr-readiness-stop: PR_READINESS_GATE=warn with failing gate → exit 0 with WARNING" T_readiness_warn_mode_never_blocks
+
+T_readiness_off_mode_silent() {
+  local out stderr_file wt
+  stderr_file="$TEST_DIR/rd_stderr.txt"
+  export GH_STUB_PR=42 GH_STUB_CHECKS_EXIT=1 PR_READINESS_GATE=off
+  unset PR_READINESS_HEADLESS CI
+  wt=$(readiness_linked_worktree "rd-off")
+  out=$(cd "$wt" && echo '' | bash "$SANDBOX/agent/hooks/pr-readiness-stop.sh" 2>"$stderr_file"; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "off mode must exit 0, got: $out"; return 1; }
+  [[ -z "$(cat "$stderr_file")" ]] || { echo "off mode should be silent; got: $(cat "$stderr_file")"; return 1; }
+}
+it "pr-readiness-stop: PR_READINESS_GATE=off → exit 0, silent (escape hatch)" T_readiness_off_mode_silent
+
+T_readiness_unknown_mode_logs_and_exits_zero() {
+  local out stderr_file wt
+  stderr_file="$TEST_DIR/rd_stderr.txt"
+  export GH_STUB_PR=42 GH_STUB_CHECKS_EXIT=1 PR_READINESS_GATE=bogus
+  unset PR_READINESS_HEADLESS CI
+  wt=$(readiness_linked_worktree "rd-bogus")
+  out=$(cd "$wt" && echo '' | bash "$SANDBOX/agent/hooks/pr-readiness-stop.sh" 2>"$stderr_file"; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "unknown mode must not block, got: $out"; return 1; }
+  grep -q "ignoring unknown PR_READINESS_GATE=bogus" "$stderr_file" || {
+    echo "unknown mode should log the fallback; got: $(cat "$stderr_file")"
+    return 1
+  }
+}
+it "pr-readiness-stop: unknown PR_READINESS_GATE value → exit 0 (never blocks via typo)" T_readiness_unknown_mode_logs_and_exits_zero
+
+T_readiness_drains_large_stdin() {
+  # Regression guard mirroring worktree-guard's: off/headless early-exits must
+  # drain stdin so the harness's JSON write doesn't SIGPIPE.
+  local exit_code
+  set +e
+  head -c 131072 /dev/zero | PR_READINESS_GATE=off bash agent/hooks/pr-readiness-stop.sh >/dev/null 2>&1
+  exit_code=$?
+  set -e
+  [[ "$exit_code" == "0" ]] || { echo "off-mode pipeline exit was $exit_code (likely SIGPIPE)"; return 1; }
+}
+it "pr-readiness-stop: off mode drains stdin before exiting (no SIGPIPE risk)" T_readiness_drains_large_stdin
 
 # ===========================================================================
 # Run
