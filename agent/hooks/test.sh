@@ -1441,7 +1441,7 @@ T_readiness_off_mode_silent() {
 }
 it "pr-readiness-stop: PR_READINESS_GATE=off → exit 0, silent (escape hatch)" T_readiness_off_mode_silent
 
-T_readiness_unknown_mode_falls_back_silent() {
+T_readiness_unknown_mode_logs_and_exits_zero() {
   local out stderr_file wt
   stderr_file="$TEST_DIR/rd_stderr.txt"
   export GH_STUB_PR=42 GH_STUB_CHECKS_EXIT=1 PR_READINESS_GATE=bogus
@@ -1454,7 +1454,7 @@ T_readiness_unknown_mode_falls_back_silent() {
     return 1
   }
 }
-it "pr-readiness-stop: unknown PR_READINESS_GATE value → exit 0 (never blocks via typo)" T_readiness_unknown_mode_falls_back_silent
+it "pr-readiness-stop: unknown PR_READINESS_GATE value → exit 0 (never blocks via typo)" T_readiness_unknown_mode_logs_and_exits_zero
 
 T_readiness_drains_large_stdin() {
   # Regression guard mirroring worktree-guard's: off/headless early-exits must
