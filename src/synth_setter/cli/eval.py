@@ -9,11 +9,11 @@ from typing import Any
 
 import hydra
 import pandas as pd
+import wandb
 from lightning import Callback, LightningDataModule, LightningModule, Trainer
 from lightning.pytorch.loggers import Logger
 from omegaconf import DictConfig
 
-import wandb
 from synth_setter.resources import as_file, vst_headless_wrapper
 from synth_setter.utils import (
     RankedLogger,
