@@ -14,6 +14,7 @@ from lightning import Callback, LightningDataModule, LightningModule, Trainer
 from lightning.pytorch.loggers import Logger
 from omegaconf import DictConfig
 
+from synth_setter.pipeline import r2_io
 from synth_setter.resources import as_file, vst_headless_wrapper
 from synth_setter.utils import (
     RankedLogger,
@@ -285,6 +286,27 @@ def _dump_metric_dict(metric_dict: dict[str, Any], output_dir: Path) -> Path:
     return out_path
 
 
+def _maybe_upload_output_dir(cfg: DictConfig) -> None:
+    """Mirror the whole Hydra run dir to R2 when ``evaluation.upload_output_dir_uri`` is set.
+
+    Opt-in: a null URI is a no-op. Runs last so every artifact — metrics,
+    predictions, rendered audio, config logs — is on disk before the copy. The
+    configured URI is the exact destination prefix; the run dir's contents land
+    directly beneath it. Credential validation is delegated to
+    :func:`r2_io.ensure_r2_env_loaded`, matching the datamodule's R2 prefetch.
+
+    :param cfg: Reads ``cfg.evaluation.upload_output_dir_uri`` (``r2://`` prefix or
+        null) and ``cfg.paths.output_dir`` (the local tree to copy).
+    """
+    dest_uri = cfg.evaluation.get("upload_output_dir_uri")
+    if not dest_uri:
+        return
+    output_dir = Path(cfg.paths.output_dir)
+    log.info(f"Uploading eval output dir {output_dir} to {dest_uri}")
+    r2_io.ensure_r2_env_loaded()
+    r2_io.upload_dir(output_dir, dest_uri)
+
+
 @hydra.main(version_base="1.3", config_path="pkg://synth_setter.configs", config_name="eval.yaml")
 def main(cfg: DictConfig) -> None:
     """Run the evaluation entrypoint.
@@ -297,6 +319,7 @@ def main(cfg: DictConfig) -> None:
 
     metric_dict, _ = evaluate(cfg)
     _dump_metric_dict(metric_dict, Path(cfg.paths.output_dir))
+    _maybe_upload_output_dir(cfg)
 
 
 if __name__ == "__main__":

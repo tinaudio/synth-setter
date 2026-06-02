@@ -24,6 +24,8 @@ evaluation:
   compute_metrics: false
   rerender_target: true
   num_workers: 1
+  # Opt-in: an `r2://bucket/prefix` mirror of the whole run dir, copied after eval.
+  upload_output_dir_uri: null
 
 # passing checkpoint path is necessary for evaluation
 ckpt_path: ???

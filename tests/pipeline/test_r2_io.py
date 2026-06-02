@@ -160,6 +160,59 @@ class TestDownloadDirNoOverwrite:
         assert "--retries=3" in args
 
 
+class TestUploadDir:
+    """Tests for upload_dir — directory→prefix upload (mirror of download_dir_no_overwrite)."""
+
+    def test_lands_local_tree_under_remote_prefix(
+        self, fake_r2_remote: Path, tmp_path: Path
+    ) -> None:
+        """Every file under ``local_dir`` is copied beneath the destination prefix.
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        :param tmp_path: Pytest tmp dir holding the local source tree.
+        """
+        local_dir = tmp_path / "run"
+        (local_dir / "metrics").mkdir(parents=True)
+        (local_dir / "metrics" / "metrics.json").write_text('{"ok": true}')
+        (local_dir / "config.log").write_text("cfg")
+
+        r2_io.upload_dir(local_dir, "r2://bucket/evals/run-1")
+
+        dest = fake_r2_remote / "bucket" / "evals" / "run-1"
+        assert (dest / "metrics" / "metrics.json").read_text() == '{"ok": true}'
+        assert (dest / "config.log").read_text() == "cfg"
+
+    def test_rejects_non_r2_uri(self, tmp_path: Path) -> None:
+        """A local-path destination is rejected — caller must pass an ``r2://`` URI.
+
+        :param tmp_path: Pytest tmp dir used to build a local source path.
+        """
+        with pytest.raises(ValueError, match="not an r2:// URI"):
+            r2_io.upload_dir(tmp_path / "run", "local-dest")
+
+    def test_command_carries_copy_verb_and_reliability_flags(self, tmp_path: Path) -> None:
+        """Pin the ``copy`` verb (not ``copyto``) + the reliability-flag set.
+
+        A directory upload needs ``rclone copy`` so the relative tree is
+        preserved; ``copyto`` would treat the destination as a single object.
+        The reliability flags mirror the other helpers so a transient blip
+        retries instead of failing the eval. Unlike the download helper there is
+        no ``--immutable``: the caller is pushing its own fresh run dir.
+
+        :param tmp_path: Pytest tmp dir used for the upload source path.
+        """
+        with patch.object(r2_io.subprocess, "check_call") as mock_call:
+            r2_io.upload_dir(tmp_path / "run", "r2://bucket/evals/run-1")
+        args = mock_call.call_args[0][0]
+        assert args[:2] == ["rclone", "copy"]
+        assert "--immutable" not in args
+        assert "--checksum" in args
+        assert "-vv" in args
+        assert "--contimeout=30s" in args
+        assert "--timeout=300s" in args
+        assert "--retries=3" in args
+
+
 class TestUploadToUri:
     """Tests for upload_to_uri — file→file upload with reliability flags."""
 

@@ -22,6 +22,7 @@ from synth_setter.cli.eval import (
     _COMPUTE_AUDIO_METRICS_MODULE,
     _dump_metric_dict,
     _load_audio_metrics,
+    _maybe_upload_output_dir,
     _run_predict_postprocessing,
     evaluate,
 )
@@ -110,6 +111,68 @@ def test_dump_metric_dict_writes_json_with_coerced_scalars(tmp_path: Path) -> No
     assert payload["test/per_param_mse"] == [0.0, 0.0, 0.0, 0.0]
     assert payload["audio/mss_mean"] == pytest.approx(0.5)
     assert payload["raw/string"] == "v1"
+
+
+def _upload_cfg(output_dir: Path, upload_output_dir_uri: str | None) -> DictConfig:
+    """Build the minimal cfg slice ``_maybe_upload_output_dir`` reads.
+
+    :param output_dir: Resolves to ``cfg.paths.output_dir`` — the tree to copy.
+    :param upload_output_dir_uri: Resolves to ``cfg.evaluation.upload_output_dir_uri``.
+    :returns: A :class:`DictConfig` carrying only the two keys the helper reads.
+    """
+    return OmegaConf.create(  # type: ignore[no-any-return]
+        {
+            "paths": {"output_dir": str(output_dir)},
+            "evaluation": {"upload_output_dir_uri": upload_output_dir_uri},
+        }
+    )
+
+
+def test_maybe_upload_output_dir_noop_when_uri_unset(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A null URI uploads nothing and never touches R2 credentials.
+
+    :param monkeypatch: Stubs ``r2_io`` so any R2 call would be observable.
+    :param tmp_path: Stands in for the output dir.
+    """
+    calls: list[str] = []
+    monkeypatch.setattr(
+        eval_mod.r2_io, "ensure_r2_env_loaded", lambda *a, **k: calls.append("env")
+    )
+    monkeypatch.setattr(eval_mod.r2_io, "upload_dir", lambda *a, **k: calls.append("upload"))
+
+    _maybe_upload_output_dir(_upload_cfg(tmp_path, upload_output_dir_uri=None))
+
+    assert calls == []
+
+
+def test_maybe_upload_output_dir_uploads_tree_when_uri_set(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A set URI validates credentials, then uploads the output dir to that prefix.
+
+    :param monkeypatch: Stubs ``r2_io`` so the credential check + upload are observable.
+    :param tmp_path: Stands in for the output dir passed to ``upload_dir``.
+    """
+    order: list[str] = []
+    monkeypatch.setattr(
+        eval_mod.r2_io, "ensure_r2_env_loaded", lambda *a, **k: order.append("env")
+    )
+    captured: dict[str, object] = {}
+
+    def _fake_upload_dir(local_dir: Path, r2_uri: str) -> None:
+        order.append("upload")
+        captured["local_dir"] = local_dir
+        captured["r2_uri"] = r2_uri
+
+    monkeypatch.setattr(eval_mod.r2_io, "upload_dir", _fake_upload_dir)
+
+    _maybe_upload_output_dir(_upload_cfg(tmp_path, "r2://bucket/evals/run-1"))
+
+    assert order == ["env", "upload"]
+    assert captured["local_dir"] == tmp_path
+    assert captured["r2_uri"] == "r2://bucket/evals/run-1"
 
 
 @pytest.mark.requires_vst

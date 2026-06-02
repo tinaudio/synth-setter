@@ -34,6 +34,7 @@ __all__ = [
     "shard_uri",
     "to_rclone_path",
     "upload",
+    "upload_dir",
     "upload_to_uri",
 ]
 
@@ -233,6 +234,34 @@ def upload_to_uri(local_path: Path, r2_uri: str) -> None:
         "--timeout=300s",
         "--retries=3",
         str(local_path),
+        _to_rclone_path(r2_uri),
+    ]
+    subprocess.check_call(args)  # noqa: S603 — args from validated URI
+
+
+def upload_dir(local_dir: Path, r2_uri: str) -> None:
+    """Copy a local directory tree into an R2 prefix (upload mirror of the dir download).
+
+    ``rclone copy`` walks ``local_dir`` and writes each file under ``r2_uri``,
+    preserving the relative tree. ``--checksum`` skips files already present with
+    a matching hash, so a re-run is idempotent; the reliability flags match the
+    other helpers so a transient blip retries instead of failing the caller.
+    Unlike the download helper there is no ``--immutable`` — the caller is
+    pushing its own freshly-produced directory, not guarding an immutable dataset.
+
+    :param local_dir: Local directory whose contents land directly under
+        ``r2_uri`` (the directory itself is not nested under its own name).
+    :param r2_uri: ``r2://`` destination prefix; created implicitly by rclone.
+    """
+    args = [  # noqa: S607 — rclone resolved by image's PATH
+        "rclone",
+        "copy",
+        "-vv",
+        "--checksum",
+        "--contimeout=30s",
+        "--timeout=300s",
+        "--retries=3",
+        str(local_dir),
         _to_rclone_path(r2_uri),
     ]
     subprocess.check_call(args)  # noqa: S603 — args from validated URI
