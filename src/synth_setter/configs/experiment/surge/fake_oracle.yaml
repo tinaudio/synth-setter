@@ -13,6 +13,7 @@ experiment_name: surge-fake-oracle
 
 model:
   net:
+    # TODO: update d_out -> to -1 or 0 to show that it is not used.
     d_out: 300
 
 mode: predict
@@ -24,14 +25,12 @@ tags:
 callbacks:
   log_per_param_mse:
     _target_: synth_setter.utils.callbacks.LogPerParamMSE
+    # TODO: update  param_spec: surge_xt -> ???
     param_spec: surge_xt
   plot_proj_ii: null
 
 data:
   batch_size: 1
-  predict_file: ???
-
-render: ???
 
 ckpt_path: null
 

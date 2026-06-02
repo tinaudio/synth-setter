@@ -27,8 +27,10 @@ logger: null
 test: false
 
 # Predict-mode eval knobs — kept in lockstep with surge/fake_oracle.yaml (see header).
+# render defaults to null; predict-mode callers select a group (e.g. render=surge_simple)
+# and eval raises if render_vst runs without one.
 mode: predict
-render: ???
+render: null
 
 evaluation:
   render_vst: true

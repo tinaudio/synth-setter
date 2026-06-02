@@ -97,9 +97,10 @@ class TestWandbConfigResolvesFromEnv:
 
 # Volatile cfg branches that legitimately differ between the fixture builder and the YAML
 # compose: ``paths`` is filesystem-anchored via ``operator_workspace()``, ``hydra`` carries
-# the per-invocation runtime metadata, and ``task_name`` is interpolated from the entry-point
-# script name (test runner vs. ``train.py``).
-_VOLATILE_TOP_KEYS = ("paths", "hydra", "task_name")
+# the per-invocation runtime metadata, ``task_name`` is interpolated from the entry-point
+# script name (test runner vs. ``train.py``), and ``render`` is an eval-only group (null
+# here, selected per-run in predict mode) outside the train cfg shape this contract pins.
+_VOLATILE_TOP_KEYS = ("paths", "hydra", "task_name", "render")
 
 
 def _strip_volatile(cfg_dict: dict[Any, Any]) -> dict[Any, Any]:

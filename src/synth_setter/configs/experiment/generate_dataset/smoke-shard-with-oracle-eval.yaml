@@ -11,8 +11,8 @@ defaults:
 # Override train_val_test_sizes — SurgeDataModule.setup() opens
 # {train,val,test}.h5 unconditionally, so the inline oracle eval needs
 # non-zero val/test splits to load (the upstream smoke-shard.yaml ships
-# [12, 0, 0] which fails the datamodule at FileNotFoundError on val.h5).
+# [4, 4, 4] which fails the datamodule at FileNotFoundError on val.h5).
 # Sizes must be multiples of render.samples_per_shard=4.
-train_val_test_sizes: [12, 4, 4]
+train_val_test_sizes: [4, 4, 4]
 
 oracle_eval_inline: true

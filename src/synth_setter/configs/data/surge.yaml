@@ -1,7 +1,8 @@
 _target_: synth_setter.data.surge_datamodule.SurgeDataModule
-dataset_root: ???
+dataset_root: ${hydra:runtime.output_dir}/data
+download_dataset_root_uri: null
 use_saved_mean_and_variance: true
 batch_size: 128
 ot: true
 num_workers: 11
-predict_file: ???
+predict_file: null

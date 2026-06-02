@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import contextlib
 import random
+import shutil
 from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import patch
@@ -53,6 +54,31 @@ _M2L_DIM_2 = 7
 _NUM_PARAMS = 11
 
 _ALL_TENSOR_KEYS = ("audio", "mel_spec", "m2l", "params", "noise")
+
+
+@pytest.fixture()
+def local_r2_remote(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Back the ``r2:`` rclone remote with the local filesystem for real-binary e2e.
+
+    ``RCLONE_CONFIG_R2_TYPE=local`` resolves ``r2://<bucket>/<key>`` to
+    ``<cwd>/<bucket>/<key>``, and the three secret keys satisfy
+    ``ensure_r2_env_loaded``'s presence check (their values are unused by the
+    local backend). Skips when ``rclone`` is absent.
+
+    :param tmp_path: Pytest tmp dir; the returned subdir is the fake R2 root.
+    :param monkeypatch: Sets the rclone env vars and chdirs into the remote root.
+    :return: The fake R2 root; ``r2://<bucket>/<key>`` materializes under it.
+    """
+    if shutil.which("rclone") is None:
+        pytest.skip("rclone binary not available on PATH")
+    remote_root = tmp_path / "r2"
+    remote_root.mkdir()
+    monkeypatch.setenv("RCLONE_CONFIG_R2_TYPE", "local")
+    monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", "stub")
+    monkeypatch.setenv("RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", "stub")
+    monkeypatch.setenv("RCLONE_CONFIG_R2_ENDPOINT", "stub")
+    monkeypatch.chdir(remote_root)
+    return remote_root
 
 
 @contextlib.contextmanager
@@ -819,6 +845,43 @@ class TestSurgeDataModule:
         assert module.dataset_root == tmp_path
         assert isinstance(module.dataset_root, Path)
 
+    def test_init_hydrates_dataset_root_from_r2_when_uri_set(
+        self, local_r2_remote: Path, tmp_path: Path
+    ) -> None:
+        """Construction with a ``download_dataset_root_uri`` copies the R2 prefix into
+        ``dataset_root``.
+
+        :param local_r2_remote: Real rclone remote backed by the local filesystem.
+        :param tmp_path: Holds the (initially absent) download destination root.
+        """
+        remote_prefix = local_r2_remote / "intermediate-data" / "dataset"
+        remote_prefix.mkdir(parents=True)
+        (remote_prefix / "train.h5").write_bytes(b"train-bytes")
+        (remote_prefix / "stats.npz").write_bytes(b"stats-bytes")
+        dataset_root = tmp_path / "downloaded"
+
+        SurgeDataModule(
+            dataset_root=str(dataset_root),
+            download_dataset_root_uri="r2://intermediate-data/dataset",
+        )
+
+        assert (dataset_root / "train.h5").read_bytes() == b"train-bytes"
+        assert (dataset_root / "stats.npz").read_bytes() == b"stats-bytes"
+
+    def test_init_no_download_when_uri_none(self, local_r2_remote: Path, tmp_path: Path) -> None:
+        """Default ``None`` URI leaves ``dataset_root`` untouched.
+
+        :param local_r2_remote: Real rclone remote — present so a regression copies rather than
+            hangs.
+        :param tmp_path: Holds the pre-existing, empty dataset root.
+        """
+        dataset_root = tmp_path / "downloaded"
+        dataset_root.mkdir()
+
+        SurgeDataModule(dataset_root=str(dataset_root))
+
+        assert list(dataset_root.iterdir()) == []
+
     def test_setup_creates_train_val_test_splits(self, dataset_root: Path) -> None:
         """``setup()`` opens the three required splits and exposes them as attrs.
 
@@ -829,13 +892,14 @@ class TestSurgeDataModule:
             assert isinstance(module.val_dataset, SurgeXTDataset)
             assert isinstance(module.test_dataset, SurgeXTDataset)
 
-    def test_setup_without_predict_file_leaves_predict_none(self, dataset_root: Path) -> None:
-        """``predict_file=None`` leaves ``predict_dataset`` as ``None``.
+    def test_setup_without_predict_file_defaults_to_test_split(self, dataset_root: Path) -> None:
+        """No ``predict_file``: ``predict_dataset`` defaults to the ``test.h5`` split.
 
         :param dataset_root: Fixture-provided dataset-root directory.
         """
         with _set_up_module(dataset_root=dataset_root, batch_size=2, ot=False) as module:
-            assert module.predict_dataset is None
+            assert module.predict_file == dataset_root / "test.h5"
+            assert isinstance(module.predict_dataset, SurgeXTDataset)
 
     def test_setup_with_predict_file_builds_predict_dataset_with_audio(
         self, dataset_root: Path

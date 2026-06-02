@@ -1756,17 +1756,18 @@ class TestMainDispatchBranches:
         assert f"hydra.run.dir={tmp_path}" in called_argv
         assert "ckpt_path=null" in called_argv
         # The eval resumes the generate run rather than opening a fresh one, so
-        # its test/* metrics share the run id (logger=null crashed Hydra — see #1331).
+        # its audio/* metrics share the run id (logger=null crashed Hydra — see #1331).
         assert "logger=wandb" in called_argv
         # id exists in logger/wandb.yaml (plain override); resume is absent (+append).
         assert "logger.wandb.id=some-run-id" in called_argv
         assert "+logger.wandb.resume=must" in called_argv
-        # surge data config marks predict_file mandatory; mode=test never reads it.
-        assert "data.predict_file=null" in called_argv
+        # render_vst=true re-renders predicted params; select the surge_simple
+        # group (eval.yaml defaults render to null) matching the smoke dataset.
+        assert "render=surge_simple" in called_argv
         # batch_size=1 keeps the smoke-sized test split (4 samples) from
         # flooring to zero batches under the 128 default — see #1331.
         assert "data.batch_size=1" in called_argv
-        assert "mode=test" in called_argv
+        assert "mode=predict" in called_argv
 
     def test_main_oracle_eval_inline_default_false_skips(
         self,

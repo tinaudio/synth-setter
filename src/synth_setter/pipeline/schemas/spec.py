@@ -822,3 +822,12 @@ class DatasetSpec(BaseModel):
         from synth_setter.data.vst.param_spec_registry import param_specs
 
         return len(param_specs[self.render.param_spec_name])
+
+    @computed_field  # type: ignore[prop-decorator]
+    @cached_property
+    def file_extension(self) -> str:
+        """File extension of the dataset shards.
+
+        :returns: File extension (e.g. .h5)
+        """
+        return OUTPUT_FORMAT_TO_EXTENSION[self.output_format]
