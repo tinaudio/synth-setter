@@ -15,8 +15,6 @@ For detailed internal standards (aimed at AI-assisted development), see
 - **make** (GNU Make)
 - **pre-commit** (`pip install pre-commit`)
 - **Git**
-- **[bats](https://github.com/bats-core/bats-core)** (optional, for shell tests:
-  `brew install bats-core` on macOS or `apt-get install bats` on Debian/Ubuntu)
 
 ### Clone and install
 
