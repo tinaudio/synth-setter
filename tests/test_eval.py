@@ -142,7 +142,33 @@ def test_maybe_upload_output_dir_noop_when_uri_unset(
     )
     monkeypatch.setattr(eval_mod.r2_io, "upload_dir", lambda *a, **k: calls.append("upload"))
 
-    _maybe_upload_output_dir(_upload_cfg(tmp_path, upload_output_dir_uri=None))
+    _maybe_upload_output_dir(
+        _upload_cfg(tmp_path, upload_output_dir_uri=None), is_global_zero=True
+    )
+
+    assert calls == []
+
+
+def test_maybe_upload_output_dir_skips_non_global_zero_rank(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A non-global-zero rank uploads nothing even when a URI is set.
+
+    Under DDP every rank runs ``main`` against the one shared ``output_dir``;
+    only rank zero may copy it so the other ranks don't race redundant uploads.
+
+    :param monkeypatch: Stubs ``r2_io`` so any R2 call would be observable.
+    :param tmp_path: Stands in for the output dir.
+    """
+    calls: list[str] = []
+    monkeypatch.setattr(
+        eval_mod.r2_io, "ensure_r2_env_loaded", lambda *a, **k: calls.append("env")
+    )
+    monkeypatch.setattr(eval_mod.r2_io, "upload_dir", lambda *a, **k: calls.append("upload"))
+
+    _maybe_upload_output_dir(
+        _upload_cfg(tmp_path, "r2://bucket/evals/run-1"), is_global_zero=False
+    )
 
     assert calls == []
 
@@ -168,7 +194,7 @@ def test_maybe_upload_output_dir_uploads_tree_when_uri_set(
 
     monkeypatch.setattr(eval_mod.r2_io, "upload_dir", _fake_upload_dir)
 
-    _maybe_upload_output_dir(_upload_cfg(tmp_path, "r2://bucket/evals/run-1"))
+    _maybe_upload_output_dir(_upload_cfg(tmp_path, "r2://bucket/evals/run-1"), is_global_zero=True)
 
     assert order == ["env", "upload"]
     assert captured["local_dir"] == tmp_path
