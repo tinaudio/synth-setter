@@ -1378,7 +1378,7 @@ render:
   min_loudness: -55.0
 ```
 
-`src/synth_setter/configs/dataset.yaml` is the `@hydra.main` entry. Its `defaults` list pulls in `data:` (param spec / channels / velocity / loudness floor), `render:` (renderer + plugin / preset / sample rate / batch sizes), `r2:` (bucket + prefix root), `paths:`, `hydra:`, and the named `experiment:`. Required slots are marked `???` and filled by the chosen experiment.
+`src/synth_setter/configs/dataset.yaml` is the `@hydra.main` entry. Its `defaults` list pulls in `datamodule:` (param spec / channels / velocity / loudness floor), `render:` (renderer + plugin / preset / sample rate / batch sizes), `r2:` (bucket + prefix root), `paths:`, `hydra:`, and the named `experiment:`. Required slots are marked `???` and filled by the chosen experiment.
 
 On first `generate` (`python -m synth_setter.cli.generate_dataset experiment=<id>`):
 
@@ -1462,7 +1462,7 @@ src/synth_setter/configs/
       smoke-shard.yaml
       ci-materialize-test.yaml
       10-1k-shards.yaml
-  data/                # Param spec / channels / velocity / loudness floor (shared with training)
+  datamodule/          # Param spec / channels / velocity / loudness floor (shared with training)
     surge_simple.yaml
     surge.yaml
   render/              # Renderer + plugin / preset / sample rate / batch sizes

@@ -421,7 +421,7 @@ src/synth_setter/configs/   # located via synth_setter.resources.configs_dir()
   train.yaml          # Top-level training defaults
   eval.yaml           # Top-level evaluation defaults
   dataset.yaml        # Pipeline dataset defaults
-  data/               # Data module configs (kosc, ksin, surge, ...)
+  datamodule/         # Data module configs (kosc, ksin, surge, ...)
   model/              # Model configs (ffn, flow, flowmlp, ...)
   trainer/            # Trainer configs (gpu, cpu, mps, ddp, ...)
   logger/             # Logger configs (wandb, csv, tensorboard, ...)
@@ -432,7 +432,7 @@ src/synth_setter/configs/   # located via synth_setter.resources.configs_dir()
     generate_dataset/ # Pipeline dataset experiments
 ```
 
-`src/synth_setter/configs/train.yaml` and `src/synth_setter/configs/eval.yaml` require `data=` and `model=` to be
+`src/synth_setter/configs/train.yaml` and `src/synth_setter/configs/eval.yaml` require `datamodule=` and `model=` to be
 specified — they have no default. The defaults for each model family
 (including required-for-training values like `trainer.max_steps` for surge's
 LR scheduler) live in `src/synth_setter/configs/experiment/`. Look there to see how a given
