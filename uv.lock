@@ -6022,7 +6022,7 @@ wheels = [
 
 [[package]]
 name = "synth-setter"
-version = "8.12.3"
+version = "8.13.0"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
