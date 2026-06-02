@@ -6,7 +6,7 @@ Shared agent instructions for Claude and Codex; AGENTS.md is the canonical sourc
 
 <important if="you are about to edit, write, or commit any file">
 
-- **Work in an isolated git worktree, never the primary checkout.** Branch switching and stash conflicts have lost work and committed to wrong branches. Use `git worktree add` (or `isolation: "worktree"` when spawning subagents). The primary checkout is read-only — `git log`, exploration, `rclone ls` only. A `SessionStart` banner and a `PreToolUse` guard (`agent/hooks/worktree-guard.sh`, `WORKTREE_GUARD_MODE`: `warn` default / `block` / `off`) enforce this.
+- **Work in an isolated git worktree, never the primary checkout.** Branch switching and stash conflicts have lost work and committed to wrong branches. Use `git worktree add` (or `isolation: "worktree"` when spawning subagents). The primary checkout is read-only — `git log`, exploration, `rclone ls` only. A `SessionStart` banner (`agent/hooks/session-start-cwd-banner.sh`) and a `PreToolUse` guard (`agent/hooks/worktree-guard.sh`, `WORKTREE_GUARD_MODE`: `warn` default / `block` / `off`) enforce this.
 - **Each worktree gets its own `.venv`.** The spawn command runs `uv sync`; `~/.bashrc` then activates `./.venv` per directory, overriding the image's shared `/venv/main`. For one-offs, `uv run <cmd>` targets the worktree env regardless of the inherited `VIRTUAL_ENV`.
   </important>
 
@@ -50,7 +50,7 @@ Invoke in order: `/tdd-implementation` (drive it test-first) → `/code-health` 
 <important if="you are committing">
 
 - Conventional commits, gitlint-enforced. `internal-feat:` / `internal-fix:` for unreleased code (no version bump). Scope is skill-bound — see `/github-taxonomy`.
-- Run `make format` first; pre-commit (ruff, pydoclint, prettier, mdformat, gitlint) is authoritative. **Never `--no-verify` / `-n`**, and never suppress a rule to make CI green — fix the underlying cause.
+- Run `make format` first; pre-commit (ruff, ruff-format, pydoclint, prettier, mdformat, gitlint) is authoritative. **Never `--no-verify` / `-n`**, and never suppress a rule to make CI green — fix the underlying cause.
 - **Never add `Co-Authored-By` or agent-attribution trailers** ("Generated with …", "Claude …"). A `PreToolUse` hook (`agent/hooks/git-commit-trailer-check.sh`) blocks them.
 - **Verify the branch before push:** `git branch --show-current` must match the target PR branch.
 - **Never commit without explicit permission.** The user opts in.
@@ -58,7 +58,7 @@ Invoke in order: `/tdd-implementation` (drive it test-first) → `/code-health` 
 
 <important if="a lint, pydoclint, or pyright check fails on a file your change touches">
 
-`.pydoclint-baseline.txt` (#938), `pyproject.toml`'s `[tool.ruff.lint.per-file-ignores]` / `[tool.ruff].extend-exclude`, `.pre-commit-config.yaml` per-hook `exclude:` regexes, and `pyrightconfig.json`'s `"exclude"` are **append-frozen**. The only allowed edit is a **removal** via `/lint-cleanup` (one file per PR, `chore(lint):` prefix); `[tool.pydoclint].exclude` must not be edited at all. Fix the underlying lint — never register a file as exempt. A `PreToolUse` hook (`agent/hooks/no-baseline-additions.sh`) blocks new baseline rows.
+`.pydoclint-baseline.txt` (#938), `pyproject.toml`'s `[tool.ruff.lint.per-file-ignores]` / `[tool.ruff].extend-exclude`, `.pre-commit-config.yaml` per-hook `exclude:` regexes, and `pyrightconfig.json`'s `"exclude"` are **append-frozen**. The only allowed edit is a **removal** via `/lint-cleanup` (one file per PR, `chore(lint):` prefix); `[tool.pydoclint].exclude` is infra-only (#1044) and must not be edited at all. Fix the underlying lint — never register a file as exempt. A `PreToolUse` hook (`agent/hooks/no-baseline-additions.sh`) blocks new baseline rows.
 </important>
 
 <important if="you are editing GitHub Actions workflows (.github/workflows/*.yml) or SkyPilot compute configs (src/synth_setter/configs/compute/*.yaml)">
@@ -75,7 +75,7 @@ Grep ALL file types, not just `.py` — include `.yaml`/`.yml`, `.md`, `.json`, 
 
 - **Link a taxonomy-compliant issue** in the body via `Closes #N` / `Fixes #N` / `Refs #N` / `Part of #N` (use `Refs` for partial fixes; `Fixes` auto-closes). Every issue traces to an Epic via Phase → Task / Bug / Feature. See `/github-taxonomy`.
 - **PR titles stand alone** — name the specific subject, not just the action; readers don't open the issue.
-- **Pre-PR gate:** run `/repo-review-full-no-comments` and address every BLOCK/WARN. A `PreToolUse` hook (`agent/hooks/pre-pr-review-gate.sh`) blocks `gh pr create` until the command carries `REVIEW_FULL=<path>` pointing at the rendered report — recommended as a trailing comment. The encoded SHA must be within `REVIEW_MAX_LAG` (default 2) first-parent commits of HEAD.
+- **Pre-PR gate:** run `/repo-review-full-no-comments` and address every BLOCK/WARN. A `PreToolUse` hook (`agent/hooks/pre-pr-review-gate.sh`) blocks `gh pr create` until the command carries `REVIEW_FULL=<path>` pointing at the rendered report (`.agent-reviews/repo-review-full-no-comments.<sha>.md`) — recommended as a trailing comment. The encoded SHA must be an ancestor of HEAD within `REVIEW_MAX_LAG` (default 2) first-parent commits.
 - **After every push, drive `/pr-readiness` until all four gates hold:** CI green ∧ `mergeable=MERGEABLE` ∧ every review comment has an inline reply ∧ no fresh Copilot findings. Full procedure: [docs/pr-readiness-loop.md](docs/pr-readiness-loop.md). A `Stop` hook (`agent/hooks/pr-readiness-stop.sh`, `PR_READINESS_GATE`: `block` default / `warn` / `off`) blocks ending the turn while gates 1-2 fail.
 - **Reply inline on every open review comment** (humans + Copilot) with a fix-commit SHA or justification, via `/pr-review-resolver`. Verification evidence goes through `/pr-checkbox`.
 - **Advisory rewakes carry an origin-HEAD stamp** — compare the `<sha7>` in a `pr-review-resolver` / `doc-drift` rewake to `git rev-parse HEAD`. If they differ the advisory crossed sessions: read it for context, but don't treat it as current-PR work.
