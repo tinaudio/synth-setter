@@ -21,6 +21,8 @@ docs:
         covers: "Committed universal lockfile (macOS + Linux + Windows resolution); regenerate with `uv lock` after pyproject edits and review the diff in PRs"
       - pattern: ".github/workflows/uv-lock-check.yml"
         covers: "macOS + Linux matrix running `uv lock --check` on every PR that touches pyproject.toml or uv.lock; catches stale-lock drift"
+      - pattern: ".pre-commit-config.yaml"
+        covers: "uv-lock hook (astral-sh/uv-pre-commit) relocking uv.lock on every commit; the local lock-sync gate that complements uv-lock-check.yml"
       - pattern: "docker/ubuntu22_04/Dockerfile"
         covers: "Container install via `uv sync --frozen --extra ${TORCH_BACKEND} --no-install-project` against the committed lock; dev-base stage installs the package editable on top"
 
