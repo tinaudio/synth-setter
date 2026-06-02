@@ -21,6 +21,10 @@ pytestmark = pytest.mark.infra
 # Bound subprocess calls so a hung git/make can't wedge the suite.
 _TIMEOUT_S = 60
 
+for _tool in ("git", "make"):
+    if shutil.which(_tool) is None:
+        pytest.skip(f"{_tool} not on PATH", allow_module_level=True)
+
 
 def _git(repo: Path, *args: str) -> None:
     """Run a git subcommand in ``repo``, raising on non-zero exit.
