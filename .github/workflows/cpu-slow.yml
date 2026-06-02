@@ -74,24 +74,20 @@ jobs:
       - name: List dependencies
         run: uv pip list --python .venv/bin/python
 
-      # `is_r2_reachable()` shells out to `rclone`; without the binary the
-      # `integration_r2` gate short-circuits and the tests skip silently.
-      # Mirrors the install in `test-local-launcher-roundtrip.yml` and
-      # `generate-dataset-shards.yaml`.
-      - name: Install rclone
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq rclone
+      # rclone binary + `RCLONE_CONFIG_R2_*` let `integration_r2`-marked tests
+      # reach real R2 instead of skipping via `is_r2_reachable()` — see #1185.
+      - name: Set up R2
+        uses: ./.github/actions/setup-r2
+        with:
+          access-key-id: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+          endpoint: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+          install-rclone: "true"
 
-      # `RCLONE_CONFIG_R2_*` lets `integration_r2`-marked tests reach real
-      # R2 instead of skipping via `r2_io.is_r2_reachable()` — see #1185.
       # Marker filter + coverage flags live in `make test-ci-slow` — see #1353.
       - name: Run slow (non-GPU, non-MPS, non-VST) tests
         env:
           HYDRA_FULL_ERROR: "1"
-          RCLONE_CONFIG_R2_TYPE: s3
-          RCLONE_CONFIG_R2_PROVIDER: Cloudflare
-          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
-          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
-          RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
         run: make test-ci-slow
 
       # Dedicated `slow-cpu` flag keeps this signal separable from `unit-cpu`

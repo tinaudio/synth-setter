@@ -63,15 +63,19 @@ jobs:
       # so the cleanup step can purge ``data/<task_name>/`` even when an
       # earlier step fails before the spec_uri step resolves the full prefix.
       R2_BUCKET: intermediate-data
-      RCLONE_CONFIG_R2_TYPE: s3
-      RCLONE_CONFIG_R2_PROVIDER: Cloudflare
-      RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
-      RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
-      RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      # rclone runs inside the container; the in-runner env only needs the
+      # `RCLONE_CONFIG_R2_*` values the `docker run -e <VAR>` lines forward.
+      - name: Set up R2
+        uses: ./.github/actions/setup-r2
+        with:
+          access-key-id: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+          endpoint: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
 
       - name: Pull image
         run: docker pull "$IMAGE"

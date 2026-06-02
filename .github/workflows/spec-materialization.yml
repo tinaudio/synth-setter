@@ -46,6 +46,15 @@ jobs:
       - name: Pull image
         run: docker pull tinaudio/synth-setter:${{ inputs.image_tag }}
 
+      # rclone runs inside the container; the in-runner env only supplies the
+      # `RCLONE_CONFIG_R2_*` values the `docker run -e <VAR>` lines forward.
+      - name: Set up R2
+        uses: ./.github/actions/setup-r2
+        with:
+          access-key-id: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+          endpoint: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+
       # Mount the PR's code into the container so we test THIS branch's code
       # against the image's environment (Surge XT, Python, pedalboard, etc.).
       # Image has no ENTRYPOINT (#721 dropped it for SkyPilot); CMD defaults
@@ -55,17 +64,14 @@ jobs:
       # input into the command text.
       - name: Materialize spec in Docker
         env:
-          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
-          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
-          RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
           EXPERIMENT: ${{ inputs.experiment }}
         run: |
           mkdir -p /tmp/spec-output
           docker run --rm \
             -v ${{ github.workspace }}:/home/build/synth-setter \
             -v /tmp/spec-output:/spec-output \
-            -e RCLONE_CONFIG_R2_TYPE=s3 \
-            -e RCLONE_CONFIG_R2_PROVIDER=Cloudflare \
+            -e RCLONE_CONFIG_R2_TYPE \
+            -e RCLONE_CONFIG_R2_PROVIDER \
             -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
             -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
             -e RCLONE_CONFIG_R2_ENDPOINT \

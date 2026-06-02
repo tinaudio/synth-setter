@@ -51,6 +51,15 @@ jobs:
       - name: Pull image
         run: docker pull "$IMAGE"
 
+      # rclone runs inside the container; the in-runner env only supplies the
+      # `RCLONE_CONFIG_R2_*` values the `docker run -e <VAR>` lines forward.
+      - name: Set up R2
+        uses: ./.github/actions/setup-r2
+        with:
+          access-key-id: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+          endpoint: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+
       # `run-linux-vst-headless.sh` wraps pytest because pedalboard imports
       # load the VST host which needs a live X display, so the headless
       # wrapper has to apply at the pytest level (not the entire container).
@@ -59,17 +68,14 @@ jobs:
       # without it the worker resolves `plugin_path: plugins/Surge XT.vst3`
       # (from `src/synth_setter/configs/render/surge_xt.yaml`) to a missing
       # host file.
-      # R2 credentials are passed via `-e` so the in-container rclone picks
-      # them up; `RCLONE_CONFIG_R2_TYPE/PROVIDER` are pinned as literals to
-      # match `test-local-launcher-roundtrip.yml`'s rclone config shape.
       - name: Run generate-dataset-shards e2e in Docker
         run: |
           docker run --rm \
             -v ${{ github.workspace }}:/home/build/synth-setter \
             -e HYDRA_FULL_ERROR=1 \
             -e "SYNTH_SETTER_PLUGIN_PATH=/usr/lib/vst3/Surge XT.vst3" \
-            -e RCLONE_CONFIG_R2_TYPE=s3 \
-            -e RCLONE_CONFIG_R2_PROVIDER=Cloudflare \
+            -e RCLONE_CONFIG_R2_TYPE \
+            -e RCLONE_CONFIG_R2_PROVIDER \
             -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
             -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
             -e RCLONE_CONFIG_R2_ENDPOINT \
@@ -84,7 +90,3 @@ jobs:
                   -m "integration_r2" \
                   -vv -s
             '
-        env:
-          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
-          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
-          RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}

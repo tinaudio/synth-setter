@@ -1,0 +1,51 @@
+name: Setup R2
+description: >-
+  Export the RCLONE_CONFIG_R2_* environment rclone needs to reach Cloudflare R2
+  and (optionally) install the rclone binary. Subsequent job steps see the vars
+  via $GITHUB_ENV. Structural values mirror
+  synth_setter.pipeline.r2_io._R2_STRUCTURAL_DEFAULTS; drift is caught by
+  tests/infra/test_setup_r2_action.py.
+
+inputs:
+  access-key-id:
+    description: secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID
+    required: true
+  secret-access-key:
+    description: secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY
+    required: true
+  endpoint:
+    description: secrets.RCLONE_CONFIG_R2_ENDPOINT
+    required: true
+  install-rclone:
+    description: apt-get install the rclone binary first (Ubuntu runners only).
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Install rclone
+      if: inputs.install-rclone == 'true'
+      shell: bash
+      run: sudo apt-get update -qq && sudo apt-get install -y -qq rclone
+
+    # `is_r2_reachable()` does not apply the structural setdefault that
+    # `ensure_r2_env_loaded()` does, so type/provider must be exported here too
+    # or `rclone lsd r2:` fails with "didn't find section in config file" and
+    # `integration_r2` tests skip silently — see #1185. Secrets pass through the
+    # step env rather than the inline script so they are never echoed verbatim.
+    - name: Export R2 credentials
+      shell: bash
+      env:
+        ACCESS_KEY_ID: ${{ inputs.access-key-id }}
+        SECRET_ACCESS_KEY: ${{ inputs.secret-access-key }}
+        ENDPOINT: ${{ inputs.endpoint }}
+      run: |
+        set -euo pipefail
+        {
+          echo "RCLONE_CONFIG_R2_TYPE=s3"
+          echo "RCLONE_CONFIG_R2_PROVIDER=Cloudflare"
+          echo "RCLONE_CONFIG_R2_ACCESS_KEY_ID=${ACCESS_KEY_ID}"
+          echo "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=${SECRET_ACCESS_KEY}"
+          echo "RCLONE_CONFIG_R2_ENDPOINT=${ENDPOINT}"
+        } >> "${GITHUB_ENV}"
