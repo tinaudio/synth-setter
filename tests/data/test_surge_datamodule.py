@@ -253,34 +253,26 @@ class TestSurgeXTDatasetFakeMode:
         assert len(small) == 10000
         assert len(large) == 10000
 
-    def test_fake_mode_default_flags_populate_mel_audio_params_noise(self) -> None:
-        """With default flags ``audio``/``mel_spec``/``params``/``noise`` are populated; ``m2l`` is
-        None.
+    def test_fake_mode_default_flags_populate_mel_params_noise(self) -> None:
+        """With default flags ``mel_spec``/``params``/``noise`` are populated; ``audio``/``m2l``
+        are None.
 
-        ``audio`` is populated here even though ``read_audio`` defaults to
-        False — see ``test_fake_mode_read_audio_true_returns_none_audio``
-        for the inverse pin on the asymmetric flag.
+        ``read_audio`` and ``read_m2l`` both default to False, so their slots
+        drop to None — the same flag→slot mapping as real mode.
         """
         dataset = SurgeXTDataset("ignored", batch_size=3, fake=True)
         item = dataset[0]
+        assert item["audio"] is None
         assert item["m2l"] is None
-        assert _unwrap(item["audio"]).shape == (3, 2, 44100 * 4)
         assert _unwrap(item["mel_spec"]).shape == (3, 2, 128, 401)
         assert _unwrap(item["params"]).shape == (3, 189)
         assert _unwrap(item["noise"]).shape == (3, 189)
 
-    def test_fake_mode_read_audio_true_returns_none_audio(self) -> None:
-        """Pin the asymmetric fake-mode contract: ``read_audio=True`` returns audio=None.
-
-        This is the *current* (and surprising) behavior of ``_get_fake_item``:
-        the audio ternary inverts the flag (``... if not self.read_audio else None``)
-        so the real-mode contract ``read_audio=True -> audio populated`` does
-        not hold in fake mode. Pinned here so future changes flip the test
-        either way — the asymmetry is intentional to surface in review.
-        """
+    def test_fake_mode_read_audio_true_returns_audio_tensor(self) -> None:
+        """``read_audio=True`` populates the ``audio`` slot, mirroring real mode."""
         dataset = SurgeXTDataset("ignored", batch_size=2, fake=True, read_audio=True)
         item = dataset[0]
-        assert item["audio"] is None
+        assert _unwrap(item["audio"]).shape == (2, 2, 44100 * 4)
 
     def test_fake_mode_read_m2l_returns_m2l_tensor(self) -> None:
         """``read_m2l=True`` populates the ``m2l`` slot with the documented shape."""
@@ -295,7 +287,7 @@ class TestSurgeXTDatasetFakeMode:
 
     def test_fake_mode_rescale_params_maps_into_minus_one_to_one(self) -> None:
         """``rescale_params=True`` rescales ``torch.rand`` from [0, 1) into [-1, 1)."""
-        # read_mel=False + read_audio=True skips the ~190 MB mel/audio
+        # read_mel=False + read_audio=False skips the ~190 MB mel/audio
         # allocations that fake mode would otherwise build at batch_size=128;
         # this test only inspects params.
         dataset = SurgeXTDataset(
@@ -304,7 +296,7 @@ class TestSurgeXTDatasetFakeMode:
             fake=True,
             rescale_params=True,
             read_mel=False,
-            read_audio=True,
+            read_audio=False,
         )
         params = _unwrap(dataset[0]["params"])
         assert params.min().item() >= -1.0
@@ -323,7 +315,7 @@ class TestSurgeXTDatasetFakeMode:
             fake=True,
             rescale_params=False,
             read_mel=False,
-            read_audio=True,
+            read_audio=False,
         )
         params = _unwrap(dataset[0]["params"])
         assert params.min().item() >= 0.0

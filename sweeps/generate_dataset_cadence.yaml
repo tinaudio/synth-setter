@@ -14,7 +14,7 @@ method: grid
 # legibility on runs that do log it.
 metric:
   goal: minimize
-  name: generation.samples_per_second
+  name: generation/samples_per_second
 parameters:
   render.plugin_reload_cadence:
     values:

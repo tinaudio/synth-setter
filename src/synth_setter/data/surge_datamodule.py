@@ -78,7 +78,7 @@ class SurgeXTDataset(torch.utils.data.Dataset):
         return self.dataset_file["audio"].shape[0] // self.batch_size
 
     def _get_fake_item(self):
-        audio = torch.randn(self.batch_size, 2, 44100 * 4) if not self.read_audio else None
+        audio = torch.randn(self.batch_size, 2, 44100 * 4) if self.read_audio else None
         mel_spec = torch.randn(self.batch_size, 2, 128, 401) if self.read_mel else None
         m2l = torch.randn(self.batch_size, 128, 42) if self.read_m2l else None
         param_array = torch.rand(self.batch_size, 189)
