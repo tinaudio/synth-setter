@@ -34,11 +34,11 @@ jobs:
 
       # ubuntu-latest has no CUDA/MPS device and no Surge XT VST3; gpu/mps/
       # requires_vst suites run on dev-snapshot via sibling workflows — see #1279.
+      # Marker filter lives in `make test-ci-nightly` — see #1353.
       - name: Run full test suite
         env:
           HYDRA_FULL_ERROR: "1"
-        run: |
-          uv run pytest -vv -s -m "not gpu and not mps and not requires_vst"
+        run: make test-ci-nightly
 
       - name: Notify on failure
         if: failure()

@@ -83,8 +83,7 @@ jobs:
 
       # `RCLONE_CONFIG_R2_*` lets `integration_r2`-marked tests reach real
       # R2 instead of skipping via `r2_io.is_r2_reachable()` — see #1185.
-      # `--cov=scripts/ci` is needed alongside `--cov=src`: pytest-cov's
-      # `--cov` overrides `[tool.coverage.run].source` in `pyproject.toml`.
+      # Marker filter + coverage flags live in `make test-ci-slow` — see #1353.
       - name: Run slow (non-GPU, non-MPS, non-VST) tests
         env:
           HYDRA_FULL_ERROR: "1"
@@ -93,9 +92,7 @@ jobs:
           RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
           RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
           RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
-        run: |
-          uv run pytest -vv -s -m "slow and not gpu and not mps and not requires_vst" \
-            --cov=src --cov=scripts/ci --cov-branch --cov-report=xml --cov-report=term
+        run: make test-ci-slow
 
       # Dedicated `slow-cpu` flag keeps this signal separable from `unit-cpu`
       # in Codecov — the fast suite skips these PyTorch forward passes.

@@ -57,14 +57,12 @@ jobs:
       - name: List dependencies
         run: uv pip list --python .venv/bin/python
 
-      # `--cov=scripts/ci` is needed alongside `--cov=src`: pytest-cov's
-      # `--cov` overrides `[tool.coverage.run].source` in `pyproject.toml`.
+      # Marker filter + coverage flags live in `make test-ci-unit` so they
+      # can't drift from cpu-slow.yml / nightly.yml — see #1353.
       - name: Run pytest with coverage
         env:
           HYDRA_FULL_ERROR: "1"
-        run: |
-          uv run pytest -n auto -m "not slow and not gpu and not mps" -vv -s \
-            --cov=src --cov=scripts/ci --cov-branch --cov-report=xml --cov-report=term
+        run: make test-ci-unit
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
@@ -108,13 +106,10 @@ jobs:
       - name: List dependencies
         run: uv pip list --python .venv/bin/python
 
-      # See the ubuntu job above for why `--cov=scripts/ci` is required.
       - name: Run pytest with coverage
         env:
           HYDRA_FULL_ERROR: "1"
-        run: |
-          uv run pytest -n auto -m "not slow and not gpu and not mps" -vv -s \
-            --cov=src --cov=scripts/ci --cov-branch --cov-report=xml --cov-report=term
+        run: make test-ci-unit
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5

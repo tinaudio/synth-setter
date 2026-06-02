@@ -62,6 +62,22 @@ test-vst-cpu: ## VST tests only (slow included; gpu/mps excluded). Linux: bootst
 test-infra: ## Devcontainer + GHA invariant tests — stdlib-only, no torch/Hydra.
 	pytest tests/infra/ --confcutdir=tests/infra
 
+# Single source of truth for the marker expressions CI runs (see #1353): the
+# workflows call these instead of re-spelling pytest, so the filters can't
+# drift. `uv run` makes them self-contained when wrapped as `docker run … make`.
+# `--cov=scripts/ci` is needed alongside `--cov=src`: pytest-cov's `--cov`
+# overrides [tool.coverage.run].source in pyproject.toml.
+CI_COV := --cov=src --cov=scripts/ci --cov-branch --cov-report=xml --cov-report=term
+
+test-ci-unit: ## CI fast suite (test.yml): CPU-only, excludes slow/gpu/mps.
+	uv run pytest -n auto -m "not slow and not gpu and not mps" -vv -s $(CI_COV)
+
+test-ci-slow: ## CI slow suite (cpu-slow.yml): slow CPU tests, excludes gpu/mps/vst.
+	uv run pytest -vv -s -m "slow and not gpu and not mps and not requires_vst" $(CI_COV)
+
+test-ci-nightly: ## CI nightly suite (nightly.yml): all non-hardware, non-VST (unit + slow).
+	uv run pytest -vv -s -m "not gpu and not mps and not requires_vst"
+
 # Local mirror of .github/workflows/deflake-mps.yml — see that workflow for the rationale on each flag.
 # `pipefail` (target-scoped via bash) ensures pytest's non-zero exit propagates through `tee`.
 deflake: SHELL := /bin/bash
