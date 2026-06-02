@@ -318,6 +318,8 @@ ACCEPTED_DIFFS: tuple[str, ...] = (
     "datamodule.dataset_root",
     "datamodule.predict_file",
     "datamodule.stats_file",
+    # Optional R2-download URI added in #1338; absent in v0.0.0 — locality, not a model knob.
+    "datamodule.download_dataset_root_uri",
     "evaluation",  # eval CLI predict-mode post-processing block; not a model knob
 )
 
