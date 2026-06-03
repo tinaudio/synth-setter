@@ -1699,6 +1699,9 @@ class TestMainDispatchBranches:
         monkeypatch.setattr(gd.subprocess, "run", run_mock)
 
         dataset_root = tmp_path / "data"
+        dataset_root.mkdir()
+        for name in ("train.h5", "val.h5", "test.h5", "stats.npz"):
+            (dataset_root / name).touch()
         run_dir = tmp_path / "oracle_eval" / "some-run-id"
         gd._run_oracle_eval_subprocess(dataset_root, run_dir, "some-run-id")
 
@@ -1728,6 +1731,31 @@ class TestMainDispatchBranches:
         # flooring to zero batches under the 128 default — see #1331.
         assert "datamodule.batch_size=1" in called_argv
         assert "mode=predict" in called_argv
+
+    def test_run_oracle_eval_subprocess_missing_local_artifacts_raises(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """Unpopulated ``dataset_root`` ⇒ clear ``FileNotFoundError``, no eval subprocess.
+
+        ``finalize_from_spec`` short-circuits when R2 already holds the
+        ``dataset.complete`` marker, leaving ``output_dir`` without the splits
+        on a resume; the preflight turns the downstream low-signal HDF5 read
+        error into an actionable one before shelling out.
+
+        :param monkeypatch: Patches ``subprocess.run`` to assert it never fires.
+        :param tmp_path: Empty stand-in for an unpopulated ``output_dir``.
+        """
+        import synth_setter.cli.generate_dataset as gd
+
+        run_mock = MagicMock()
+        monkeypatch.setattr(gd.subprocess, "run", run_mock)
+
+        with pytest.raises(FileNotFoundError, match=r"test\.h5"):
+            gd._run_oracle_eval_subprocess(tmp_path, tmp_path / "oracle_eval" / "rid", "rid")
+
+        run_mock.assert_not_called()
 
     def test_main_oracle_eval_inline_default_false_skips(
         self,

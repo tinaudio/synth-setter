@@ -32,7 +32,7 @@ from omegaconf import DictConfig, OmegaConf
 from synth_setter.cli.finalize_dataset import finalize_from_spec
 from synth_setter.data.vst.core import extract_renderer_version
 from synth_setter.pipeline import r2_io
-from synth_setter.pipeline.constants import WORKER_SPEC_URI_ENV
+from synth_setter.pipeline.constants import STATS_NPZ_FILENAME, WORKER_SPEC_URI_ENV
 from synth_setter.pipeline.partitioning import (
     available_cpus,
     get_my_shards,
@@ -59,6 +59,9 @@ _WORKER_REPO_ROOT = "/home/build/synth-setter"
 # Smoke-shard-sized; longer eval runs belong on the dispatch path, not inline.
 _ORACLE_EVAL_TIMEOUT_SECONDS = 600
 
+# Finalized artifacts the eval datamodule opens; all must sit in dataset_root.
+_ORACLE_EVAL_REQUIRED_ARTIFACTS = ("train.h5", "val.h5", "test.h5", STATS_NPZ_FILENAME)
+
 
 def _run_oracle_eval_subprocess(dataset_root: Path, run_dir: Path, run_id: str) -> None:
     """Run the fake-oracle eval over ``dataset_root`` to verify the param-array round-trip.
@@ -75,7 +78,18 @@ def _run_oracle_eval_subprocess(dataset_root: Path, run_dir: Path, run_id: str) 
         artifacts don't mix with the dataset files.
     :param run_id: Canonical ``spec.run_id``; the eval resumes this wandb run
         so its ``audio/*`` metrics land on the generate phase's run.
+    :raises FileNotFoundError: ``dataset_root`` is missing any finalized split
+        or ``stats.npz`` — e.g. a resume where ``finalize_from_spec``
+        short-circuited on an existing R2 marker without repopulating it.
     """
+    missing = [n for n in _ORACLE_EVAL_REQUIRED_ARTIFACTS if not (dataset_root / n).is_file()]
+    if missing:
+        raise FileNotFoundError(
+            f"inline oracle-eval expects the finalized splits + stats in {dataset_root}, "
+            f"but {missing} are absent. finalize_from_spec short-circuits when R2 already "
+            f"holds the dataset.complete marker, leaving output_dir unpopulated on a resume; "
+            f"rerun with a fresh paths.output_dir."
+        )
     argv = [
         sys.executable,
         "-m",
