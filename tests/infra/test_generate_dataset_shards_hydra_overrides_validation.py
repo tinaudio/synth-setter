@@ -252,7 +252,7 @@ def test_workflow_bash_validation_accepts_safe_inputs(value: str) -> None:
     """
     assert not _workflow_validation_rejects(value), (
         f"Workflow bash validation unexpectedly rejected safe input {value!r}; "
-        f"real callers (e.g. the render-matrix fan-out) would be blocked."
+        f"real callers (e.g. the dataset-generation provider matrix) would be blocked."
     )
 
 
