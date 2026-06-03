@@ -1,6 +1,151 @@
 # CHANGELOG
 
 
+## v8.15.1 (2026-06-03)
+
+### Bug Fixes
+
+- **pipeline**: Defer omegaconf import so validate_spec minimal env imports
+  ([#1395](https://github.com/tinaudio/synth-setter/pull/1395),
+  [`03811e2`](https://github.com/tinaudio/synth-setter/commit/03811e27b6b5c8644127c73d7b9f1daf50eb9585))
+
+`DatasetSpec.from_hydra_cfg` is the only omegaconf user in spec.py, but the import sat at module top
+  — so the CI `validate_spec` job (installed with only pydantic + python-dotenv, no omegaconf) broke
+  at import with `ModuleNotFoundError: No module named 'omegaconf'` after #1390 added it.
+
+Move `OmegaConf` to a lazy import inside `from_hydra_cfg` and `DictConfig` to a `TYPE_CHECKING`
+  block (the annotation is already a string under `from __future__ import annotations`). Add a
+  subprocess import-purity test pinning the minimal-env contract, mirroring the existing
+  launcher-pure checks.
+
+Refs #1139
+
+### Chores
+
+- **ci**: Apply setup-r2 composite to deferred R2 workflows
+  ([#1383](https://github.com/tinaudio/synth-setter/pull/1383),
+  [`81ce972`](https://github.com/tinaudio/synth-setter/commit/81ce972a74e32ac9b7cded02218a9213aab95801))
+
+Migrate the cleanly-convertible R2 workflows PR #1372 deferred onto the shared setup-r2 composite:
+  test-skypilot-local, test-skypilot-debug, oci-image-bake, generate-dataset-shards, and
+  validate-dataset-shards. Each drops its inline RCLONE_CONFIG_R2_* env and lets the action export
+  the vars to $GITHUB_ENV; docker callers switch to value-less -e forwarding and native callers opt
+  into install-rclone where they ran their own apt-get install.
+
+check-auth and r2-auth-probe stay un-converted: check-auth's bootstrap feeds the R2 trio to
+  write_provider_creds.sh alongside non-R2 secrets, so converting only its Verify step would leave
+  the workflow both delegating to setup-r2 and inlining the key (the test_setup_r2_callers_do_not_
+  reinline_r2_env invariant forbids that); r2-auth-probe deliberately omits TYPE/PROVIDER to
+  exercise ensure_r2_env_loaded's defaulting, which the composite's structural exports would defeat.
+
+Closes #1381 Refs #1372
+
+- **ci-automation**: Centralize rclone install via setup-r2 install-rclone
+  ([#1393](https://github.com/tinaudio/synth-setter/pull/1393),
+  [`e0eb0fa`](https://github.com/tinaudio/synth-setter/commit/e0eb0fa053a66bd96241840ba10782d967f9ac07))
+
+- **ci-automation**: Default Claude Code permission mode to "auto" in committed settings
+  ([#1387](https://github.com/tinaudio/synth-setter/pull/1387),
+  [`8f8de4e`](https://github.com/tinaudio/synth-setter/commit/8f8de4eacf2952411a8861d77446fa1708bdbb50))
+
+### Refactoring
+
+- **pipeline**: Collapse cfg→DatasetSpec onto one allowlist helper
+  ([#1390](https://github.com/tinaudio/synth-setter/pull/1390),
+  [`1de6c73`](https://github.com/tinaudio/synth-setter/commit/1de6c732bd7a4bd14eac9724d72068ca2dddaf02))
+
+Two code paths turned a Hydra-composed dataset cfg into a DatasetSpec, each with its own "drop
+  non-spec keys" logic and a twin constant kept in sync by a contract test. Add
+  DatasetSpec.from_hydra_cfg — an allowlist mask (k in model_fields) applied before resolve=True —
+  and route both spec_from_cfg and compute_spec_uri_from_hydra through it.
+
+This deletes _NON_SPEC_KEYS, _NON_SPEC_CFG_KEYS, the resolve-then-filter block with cfg.paths.* =
+  "." placeholders, and the now-meaningless keys-in-sync contract test. Masking before resolve means
+  non-spec groups whose interpolations need @hydra.main-only resolvers (e.g.
+  datamodule.dataset_root: ${hydra:runtime.output_dir}/data) are never evaluated, so the spec
+  resolves under a plain compose() too.
+
+Refs #91
+
+- **testing**: Chain dataset E2E + consolidate redundant generate/eval workflows
+  ([#1391](https://github.com/tinaudio/synth-setter/pull/1391),
+  [`07cea29`](https://github.com/tinaudio/synth-setter/commit/07cea2926386a60c64de7cab676d320bee9971a5))
+
+* refactor(testing): extract render/rclone subprocess dispatcher to tests/helpers
+
+Move `_materialize_shard`, the real-check_call capture, and the `_materialize_or_passthrough_rclone`
+  dispatcher out of test_generate_dataset.py into tests/helpers/render_subprocess.py so the
+  render-orchestration tests share one subprocess-patching style instead of each re-deriving it
+  (#1354 item 3).
+
+Refs #1354
+
+* refactor(ci): collapse generate-finalize-oracle-eval into an oracle_eval flag
+
+generate-finalize-oracle-eval.yaml was generate-and-finalize-dataset.yaml plus
+  oracle_eval_inline=true and two param_mse==0 assertion steps. Both are operator-dispatch-only with
+  no callers. Merge them: generate-and-finalize-dataset gains an `oracle_eval` boolean input that
+  appends the inline-eval override and gates the oracle-invariant assertions, and the superset
+  workflow is deleted — removing the redundant generate+finalize-only re-render (#1354 item 4).
+
+* refactor(testing): fold render-matrix cadence coverage into the parallel test
+
+test-dataset-generation-render-matrix.yml spent a 7-cell docker fan-out to prove real renders
+  survive each gui_toggle/plugin_reload cadence pair. The cadence cross-field validation (which
+  pairs accept/reject, incl. always_on requiring plugin_reload_cadence=once) is already unit-tested
+  in test_dataset_spec.py, so the workflow's validator job was redundant; its unique value — a real
+  render per cadence — folds into test_parallel_shard_render_linux.py, now parametrized over
+  representative cadence cells. Retire the workflow and refresh the two stale references to it.
+
+* test(ci): run the parallel-render cadence test in test-vst-slow
+
+Address pre-PR review: the parametrized cadence cells folded out of the retired render-matrix ran in
+  no CI lane (test_parallel_shard_render_linux.py is requires_vst, which only test-vst-slow
+  exercises). Wire it into test-vst-slow's pytest target and add the cadence-relevant trigger paths
+  (render_config.py, spec.py, render/experiment configs) the matrix gated. The test now self-derives
+  renderer_version from the bundle's moduleinfo.json so it runs without an operator-pinned version.
+  Also correct the render_subprocess docstring (only the entrypoint tests consume it) and soften the
+  integration docstring to "representative cells".
+
+* docs: refresh cadence + integration-test docs for the render-matrix retirement
+
+Address the doc-drift advisory: add the always_on member (and the plugin_reload_cadence=once pairing
+  + a spec.py source-of-truth pointer) to the RenderConfig snippet in data-pipeline.md; add
+  test_parallel_shard_render_linux.py to the testing.md integration table and the doc-map
+  integration class list as the new home of the retired render-matrix's cadence coverage; fix a
+  garbled comment in test-vst-slow.yml.
+
+* fix(testing): address Copilot review on the cadence render test + oracle find
+
+- Derive renderer_version lazily inside the spec builder (execution time, under the Xvfb wrapper)
+  instead of at import: extract_renderer_version falls back to loading the plugin when the bundle
+  has no moduleinfo.json (Surge XT has none), which must not happen at collection. Collection no
+  longer touches the plugin; the skip now keys only on plugin presence. - Fix the oracle metrics
+  lookup: inline eval writes under <paths.output_dir>/oracle_eval/<run_id>/metrics/, a Hydra run
+  dir, so search the workspace for that `*/oracle_eval/*/metrics/metrics.json` tail instead of only
+  ${PROJECT_ROOT}/oracle_eval.
+
+* ci(test-vst-slow): gate render/spec PRs, preserving render-matrix timing
+
+The retired test-dataset-generation-render-matrix.yml ran on pull_request, but test-vst-slow.yml
+  (the fold's new home) was push-to-main only — so the cadence real-render coverage had silently
+  moved from PR-gating to post-merge. Add a pull_request trigger sharing the push path filter (via a
+  YAML anchor) so the suite, including the parallel-render cadence cells, gates render/spec PRs
+  again. The benchmark-publish step stays push/dispatch-only, so PRs never touch gh-pages.
+
+* ci(test-vst-slow): inline pull_request paths instead of a YAML anchor
+
+The act-parse lane builds its runner image before parsing, so the anchor was not the cause of its
+  failure (an external git-lfs packagecloud 403), but inline paths avoid any anchor-compatibility
+  risk in the workflow the act lane parses. Behavior is identical to the anchored version.
+
+### Testing
+
+- **testing**: Harden offline-wandb history read against flush race
+  ([#1389](https://github.com/tinaudio/synth-setter/pull/1389),
+  [`aee8416`](https://github.com/tinaudio/synth-setter/commit/aee8416464ac75ae910d54c3c2a4d2a3cdb4e3e2))
+
+
 ## v8.15.0 (2026-06-03)
 
 ### Chores
