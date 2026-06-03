@@ -66,7 +66,7 @@ def test_canonical_entrypoint_module_references_no_private_cli_helper(test_file:
 
     :param test_file: Repo-relative path to a canonical entrypoint test module.
     """
-    tree = ast.parse((_REPO_ROOT / test_file).read_text())
+    tree = ast.parse((_REPO_ROOT / test_file).read_text(), filename=test_file)
     private = _private_cli_references(tree)
     assert not private, (
         f"{test_file} references private synth_setter.cli helpers {private}. "
