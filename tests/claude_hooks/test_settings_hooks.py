@@ -443,7 +443,7 @@ def test_pre_pr_gate_off_mode_allows_sentinel_with_comment_finding(
                 "command": f"gh pr create --title foo --body bar  # REVIEW_FULL={review}",
             },
         },
-        env={"REVIEW_COMMENT_GATE": "off"},
+        env={"REVIEW_COMMENT_GATE": "off", "REVIEW_BLOCK_GATE": "off"},
     )
     assert result.returncode == 0, (result.returncode, result.stderr)
 

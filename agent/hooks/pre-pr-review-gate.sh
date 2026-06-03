@@ -19,9 +19,9 @@
 #
 # Honor-system gate: an agent could fabricate a sentinel named after a real
 # recent SHA, but it must already know a valid recent SHA on this branch.
-# Filename-SHA + ancestry + first-parent lag are the floor; beyond a grep for
-# unresolved `[comment-hygiene:warn|block]` tags (the sub-gate below), the gate does not
-# inspect file contents or mtime.
+# Filename-SHA + ancestry + first-parent lag are the floor; beyond grepping for
+# unresolved `[comment-hygiene:warn|block]` tags and any `[<skill>:block]` tag
+# (the sub-gates below), the gate does not inspect file contents or mtime.
 #
 # CONTRACT — what the command line must carry
 #   REVIEW_FULL=<path>
@@ -34,6 +34,8 @@
 #       one commit, not the hundreds it brings in.
 #     - The file lists no unresolved `[comment-hygiene:warn|block]` findings, unless
 #       `REVIEW_COMMENT_GATE` is `warn`/`off` (default `block`).
+#     - The file lists no unresolved `[<skill>:block]` findings from any skill,
+#       unless `REVIEW_BLOCK_GATE` is `warn`/`off` (default `block`).
 #
 # INPUT (stdin)
 #   JSON with .tool_input.command — the Bash command the agent is about to run.
@@ -58,6 +60,7 @@ readonly SENTINEL_PY="${SCRIPT_DIR}/../_shared/review_sentinel.py"
 readonly MIN_REVIEW_BYTES=200
 REVIEW_MAX_LAG="${REVIEW_MAX_LAG:-2}"
 REVIEW_COMMENT_GATE="${REVIEW_COMMENT_GATE:-block}"
+REVIEW_BLOCK_GATE="${REVIEW_BLOCK_GATE:-block}"
 
 INPUT=$(cat)
 COMMAND=$(jq -r '.tool_input.command // empty' 2>/dev/null <<<"$INPUT" || true)
@@ -99,6 +102,11 @@ fi
 case "$REVIEW_COMMENT_GATE" in
   block | warn | off) ;;
   *) block "REVIEW_COMMENT_GATE must be one of block|warn|off, got: ${REVIEW_COMMENT_GATE}" ;;
+esac
+
+case "$REVIEW_BLOCK_GATE" in
+  block | warn | off) ;;
+  *) block "REVIEW_BLOCK_GATE must be one of block|warn|off, got: ${REVIEW_BLOCK_GATE}" ;;
 esac
 
 if [[ ! -f "$SENTINEL_PY" ]]; then
@@ -191,6 +199,24 @@ if [[ "$REVIEW_COMMENT_GATE" != "off" ]]; then
         "$comment_count" "$REVIEW_PATH" "$remediation" >&2
     else
       block "review still lists ${comment_count} unresolved comment-hygiene finding(s) in ${REVIEW_PATH} — ${remediation}"
+    fi
+  fi
+fi
+
+# Reject any sentinel still listing a BLOCK finding from any skill — the tag
+# is `[<skill>:block]` (synth-setter, code-health, ml-test, pr-health, ...).
+# `|| true`: tolerate grep's no-match exit-1, like the comment sub-gate above.
+if [[ "$REVIEW_BLOCK_GATE" != "off" ]]; then
+  block_findings=$(grep -oE '\[[a-z][a-z0-9-]*:block\]' "$REVIEW_PATH" || true)
+  block_count=$(printf '%s' "$block_findings" | grep -c . || true)
+  if [[ "$block_count" -gt 0 ]]; then
+    block_remediation="resolve them or set REVIEW_BLOCK_GATE=off for an intentional override"
+    if [[ "$REVIEW_BLOCK_GATE" == "warn" ]]; then
+      log "block-gate warn: ${block_count} unresolved BLOCK finding(s) in ${REVIEW_PATH}"
+      printf 'WARNING: review still lists %s unresolved BLOCK finding(s) in %s — %s\n' \
+        "$block_count" "$REVIEW_PATH" "$block_remediation" >&2
+    else
+      block "review still lists ${block_count} unresolved BLOCK finding(s) in ${REVIEW_PATH} — ${block_remediation}"
     fi
   fi
 fi
