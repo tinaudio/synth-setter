@@ -4,6 +4,8 @@ Every test composes a Hydra ``cfg`` and drives the in-process ``evaluate(cfg)``
 entrypoint. Helper-level unit tests live in the sibling ``test_eval_*`` modules:
 postprocessing argv in ``test_eval_postprocessing``, metric IO in
 ``test_eval_metrics``, and R2 upload / CLI e2e in ``test_eval_upload``.
+``tests/_meta/test_entrypoint_test_modules.py`` enforces that no private
+``synth_setter.cli`` helper is imported here.
 """
 
 import math
