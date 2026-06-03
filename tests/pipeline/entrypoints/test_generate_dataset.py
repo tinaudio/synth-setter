@@ -28,6 +28,7 @@ the cfg-composition surface isolated from R2.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 import threading
@@ -1652,16 +1653,28 @@ class TestMainDispatchBranches:
         oracle_mock = MagicMock()
         monkeypatch.setattr(gd, "_run_oracle_eval_subprocess", oracle_mock)
 
+        # Capture the resolved output_dir so the eval's dataset_root can be
+        # pinned to the exact dir generate+finalize wrote the shards into.
+        observed: dict[str, Path] = {}
+        real_spec_from_cfg = gd.spec_from_cfg
+
+        def _capture_output_dir(cfg: object) -> DatasetSpec:
+            observed["output_dir"] = Path(cfg.paths.output_dir)  # type: ignore[attr-defined]
+            return real_spec_from_cfg(cfg)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(gd, "spec_from_cfg", _capture_output_dir)
+
         gd.main()
 
         oracle_mock.assert_called_once()
         dataset_root, run_dir, _run_id = oracle_mock.call_args[0]
         assert isinstance(dataset_root, Path)
+        # The eval reads in place from the Hydra output_dir where the shards and
+        # VDS splits already live — not a downloaded copy under oracle_eval/.
+        assert dataset_root == observed["output_dir"]
         assert run_dir.parent.name == "oracle_eval", (
             f"eval run dir should land under <output_dir>/oracle_eval/<run_id>/; got {run_dir!r}"
         )
-        # Data is read in place from output_dir (the run dir's grandparent), not
-        # a downloaded copy under oracle_eval/.
         assert run_dir.parent.parent == dataset_root
 
     def test_run_oracle_eval_subprocess_builds_expected_argv(
@@ -1904,17 +1917,16 @@ class TestMainDispatchBranches:
 def _write_vds_split_with_shard(data_dir: Path) -> np.ndarray:
     """Write a real shard + a VDS ``test.h5`` + ``stats.npz`` into ``data_dir``.
 
-    Mirrors :func:`synth_setter.pipeline.data.reshard._write_split`: the split's
+    Follows the basename-VDS contract of
+    :func:`synth_setter.pipeline.data.reshard._write_split`: the split's
     ``audio`` / ``param_array`` are HDF5 virtual datasets whose source is the
     shard referenced **by basename**, so they resolve only when the shard sits
-    beside the split. This is the exact on-disk shape the inline oracle-eval
-    reads (#1396).
+    beside the split — the on-disk shape the inline oracle-eval reads (#1396).
 
     :param data_dir: Destination dir; receives ``shard-000000.h5``,
         ``test.h5``, and ``stats.npz``.
     :returns: The shard's ``audio`` array (``float16``) so callers can assert
         the read resolves to the real bytes.
-    :rtype: numpy.ndarray
     """
     rows, channels, samples, num_params = 2, 2, 8, 4
     audio_dtype = DATASET_FIELD_DTYPES["audio"]
@@ -1940,22 +1952,22 @@ def _write_vds_split_with_shard(data_dir: Path) -> np.ndarray:
             layout[0:rows] = h5py.VirtualSource(shard.name, key, shape=(rows, *tail), dtype=dtype)
             f.create_virtual_dataset(key, layout)
 
-    np.savez(data_dir / STATS_NPZ_FILENAME, mean=np.zeros(1), std=np.ones(1))
+    np.savez(
+        data_dir / STATS_NPZ_FILENAME,
+        mean=np.zeros(1, dtype=np.float32),
+        std=np.ones(1, dtype=np.float32),
+    )
     return audio
 
 
 class TestInlineOracleEvalVdsInPlaceRead:
     """Behavioral proof for #1396: the inline eval reads the VDS splits in place.
 
-    The finalized ``{split}.h5`` files are HDF5 virtual datasets that reference
-    their source shards by basename. The old inline path downloaded only the
-    split + ``stats.npz`` into a fresh ``oracle_eval/<run_id>/`` dir, so the
-    virtual mappings dangled and ``mode=predict`` read the audio dataset as
-    fill-value zeros — crashing the eval. The fix points ``dataset_root`` at the
-    local ``output_dir`` where ``generate`` + ``finalize`` already co-located the
-    shards. These tests drive the real predict read path
-    (:class:`SurgeXTDataset` with ``read_audio=True``) to pin both halves of
-    that contract.
+    The finalized ``{split}.h5`` files are HDF5 virtual datasets referencing
+    their source shards by basename, so ``mode=predict`` reads the audio dataset
+    as fill-value zeros unless the shards sit beside the split. These tests drive
+    the real predict read path (:class:`SurgeXTDataset` with ``read_audio=True``)
+    to pin that the read resolves to real bytes only when co-located.
     """
 
     def test_predict_audio_read_vds_split_beside_shards_returns_shard_data(
@@ -2002,8 +2014,6 @@ class TestInlineOracleEvalVdsInPlaceRead:
 
         :param tmp_path: Roots the populated source dir and the split-only copy.
         """
-        import shutil
-
         from synth_setter.data.surge_datamodule import SurgeXTDataset
 
         source_dir = tmp_path / "source"
