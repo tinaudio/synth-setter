@@ -19,7 +19,8 @@
 #
 # Honor-system gate: an agent could fabricate a sentinel named after a real
 # recent SHA, but it must already know a valid recent SHA on this branch.
-# Filename-SHA + ancestry + first-parent lag are the floor; the gate does not
+# Filename-SHA + ancestry + first-parent lag are the floor; beyond a grep for
+# unresolved `[comment-hygiene:warn|block]` tags (the sub-gate below), the gate does not
 # inspect file contents or mtime.
 #
 # CONTRACT — what the command line must carry
@@ -31,6 +32,8 @@
 #       first-parent commits behind HEAD (default 2; override via env). The
 #       `--first-parent` mode means merging `main` into the branch counts as
 #       one commit, not the hundreds it brings in.
+#     - The file lists no unresolved `[comment-hygiene:warn|block]` findings, unless
+#       `REVIEW_COMMENT_GATE` is `warn`/`off` (default `block`).
 #
 # INPUT (stdin)
 #   JSON with .tool_input.command — the Bash command the agent is about to run.
@@ -54,6 +57,7 @@ source "${SCRIPT_DIR}/_lib.sh"
 readonly SENTINEL_PY="${SCRIPT_DIR}/../_shared/review_sentinel.py"
 readonly MIN_REVIEW_BYTES=200
 REVIEW_MAX_LAG="${REVIEW_MAX_LAG:-2}"
+REVIEW_COMMENT_GATE="${REVIEW_COMMENT_GATE:-block}"
 
 INPUT=$(cat)
 COMMAND=$(jq -r '.tool_input.command // empty' 2>/dev/null <<<"$INPUT" || true)
@@ -91,6 +95,11 @@ block() {
 if [[ ! "$REVIEW_MAX_LAG" =~ ^[0-9]+$ ]]; then
   block "REVIEW_MAX_LAG must be a non-negative integer, got: ${REVIEW_MAX_LAG}"
 fi
+
+case "$REVIEW_COMMENT_GATE" in
+  block | warn | off) ;;
+  *) block "REVIEW_COMMENT_GATE must be one of block|warn|off, got: ${REVIEW_COMMENT_GATE}" ;;
+esac
 
 if [[ ! -f "$SENTINEL_PY" ]]; then
   block "missing companion helper at ${SENTINEL_PY} (gate cannot parse sentinel filenames without it)"
@@ -166,6 +175,24 @@ if [[ -z "$lag" ]]; then
 fi
 if [[ "$lag" -gt "$REVIEW_MAX_LAG" ]]; then
   block "review is ${lag} first-parent commits behind HEAD (max ${REVIEW_MAX_LAG}; set REVIEW_MAX_LAG=N to widen)"
+fi
+
+# Reject any sentinel still listing findings. Match the bracketed
+# `[comment-hygiene:<severity>]` tag, not the bare skill name the PASS template
+# uses. `|| true`: tolerate grep's no-match exit-1, like the counter above.
+if [[ "$REVIEW_COMMENT_GATE" != "off" ]]; then
+  comment_findings=$(grep -oE '\[comment-hygiene:(warn|block)\]' "$REVIEW_PATH" || true)
+  comment_count=$(printf '%s' "$comment_findings" | grep -c . || true)
+  if [[ "$comment_count" -gt 0 ]]; then
+    remediation="run /fix-review-comments, then refresh the sentinel with /repo-review-full-no-comments (REVIEW_COMMENT_GATE=off bypasses for an intentional finding)"
+    if [[ "$REVIEW_COMMENT_GATE" == "warn" ]]; then
+      log "comment-gate warn: ${comment_count} unresolved comment-hygiene finding(s) in ${REVIEW_PATH}"
+      printf 'WARNING: review still lists %s unresolved comment-hygiene finding(s) in %s — %s\n' \
+        "$comment_count" "$REVIEW_PATH" "$remediation" >&2
+    else
+      block "review still lists ${comment_count} unresolved comment-hygiene finding(s) in ${REVIEW_PATH} — ${remediation}"
+    fi
+  fi
 fi
 
 log "review accepted: ${REVIEW_PATH} (sha=${review_sha}, lag=${lag}/${REVIEW_MAX_LAG}, size=${review_size}B)"

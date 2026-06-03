@@ -818,6 +818,118 @@ T_gate_leading_whitespace_still_blocks() {
 }
 it "pre-pr-review-gate: leading-whitespace gh pr create without token → still blocked" T_gate_leading_whitespace_still_blocks
 
+# --- comment-hygiene sub-gate (REVIEW_COMMENT_GATE) -------------------------
+# `gate_make_finding_review` writes a HEAD-SHA sentinel that still carries one
+# unresolved comment-hygiene finding (the Step-5 `[comment-hygiene:warn]` tag),
+# padded past the 200-byte size floor.
+gate_make_finding_review() {
+  # Usage: gate_make_finding_review <sha>
+  local sha="$1" path
+  path=$(gate_sentinel_path "$sha")
+  mkdir -p "$(dirname "$path")"
+  {
+    printf '# repo-review-full-no-comments — review @ %s\n\n' "$sha"
+    printf '## Inline findings\n\n### src/x.py\n\n'
+    printf -- '- **L12** — **[comment-hygiene:warn]** C7 docstring restates the name.\n\n'
+    printf 'padding line %d\n' {1..20}
+  } > "$path"
+  printf '%s\n' "$path"
+}
+
+T_gate_comment_finding_blocks() {
+  local out stderr_file path head_sha
+  stderr_file="$TEST_DIR/gate_stderr.txt"
+  head_sha=$(git rev-parse HEAD)
+  path=$(gate_make_finding_review "$head_sha")
+  out=$(echo "{\"tool_input\":{\"command\":\"gh pr create --title x --body y  # REVIEW_FULL=$path\"}}" | bash agent/hooks/pre-pr-review-gate.sh 2>"$stderr_file"; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:2" ]] || { echo "expected EXIT:2, got: $out"; return 1; }
+  grep -q "unresolved comment-hygiene finding" "$stderr_file" || { echo "stderr should name the comment-hygiene sub-gate: $(cat "$stderr_file")"; return 1; }
+}
+it "pre-pr-review-gate: sentinel still lists a [comment-hygiene:warn] finding → exit 2 (default block)" T_gate_comment_finding_blocks
+
+T_gate_comment_finding_off_bypasses() {
+  local out path head_sha
+  head_sha=$(git rev-parse HEAD)
+  path=$(gate_make_finding_review "$head_sha")
+  out=$(REVIEW_COMMENT_GATE=off bash -c "echo '{\"tool_input\":{\"command\":\"gh pr create --title x --body y  # REVIEW_FULL=$path\"}}' | bash agent/hooks/pre-pr-review-gate.sh" 2>&1; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "REVIEW_COMMENT_GATE=off should bypass, got: $out"; return 1; }
+}
+it "pre-pr-review-gate: REVIEW_COMMENT_GATE=off bypasses the comment sub-gate → exit 0" T_gate_comment_finding_off_bypasses
+
+T_gate_comment_finding_warn_allows() {
+  local out stderr_file path head_sha
+  stderr_file="$TEST_DIR/gate_stderr.txt"
+  head_sha=$(git rev-parse HEAD)
+  path=$(gate_make_finding_review "$head_sha")
+  out=$(REVIEW_COMMENT_GATE=warn bash -c "echo '{\"tool_input\":{\"command\":\"gh pr create --title x --body y  # REVIEW_FULL=$path\"}}' | bash agent/hooks/pre-pr-review-gate.sh" 2>"$stderr_file"; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "REVIEW_COMMENT_GATE=warn should allow, got: $out"; return 1; }
+  grep -q "WARNING" "$stderr_file" || { echo "warn mode should advise on stderr: $(cat "$stderr_file")"; return 1; }
+}
+it "pre-pr-review-gate: REVIEW_COMMENT_GATE=warn advises but allows → exit 0 with WARNING" T_gate_comment_finding_warn_allows
+
+T_gate_clean_sentinel_no_false_positive() {
+  # The PASS template names "comment-hygiene" bare in a skill list; the bare
+  # form must NOT trip the bracketed `[comment-hygiene:severity]` matcher.
+  local out path head_sha
+  head_sha=$(git rev-parse HEAD)
+  path=$(gate_sentinel_path "$head_sha")
+  mkdir -p "$(dirname "$path")"
+  {
+    printf '# repo-review-full-no-comments — review @ %s\n\n' "$head_sha"
+    printf 'PASS — no findings across all skills (code-health, comment-hygiene,\n'
+    printf 'python-style, shell-style, synth-setter, tdd-impl, ml-test).\n\n'
+    printf 'padding line %d\n' {1..20}
+  } > "$path"
+  out=$(echo "{\"tool_input\":{\"command\":\"gh pr create --title x --body y  # REVIEW_FULL=$path\"}}" | bash agent/hooks/pre-pr-review-gate.sh 2>&1; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "bare skill-name in PASS template must not block, got: $out"; return 1; }
+}
+it "pre-pr-review-gate: PASS template naming comment-hygiene bare → exit 0 (no false positive)" T_gate_clean_sentinel_no_false_positive
+
+T_gate_invalid_comment_gate_mode_blocks() {
+  local out stderr_file path head_sha
+  stderr_file="$TEST_DIR/gate_stderr.txt"
+  head_sha=$(git rev-parse HEAD)
+  path=$(gate_make_sentinel_review "$head_sha")
+  out=$(REVIEW_COMMENT_GATE=bogus bash -c "echo '{\"tool_input\":{\"command\":\"gh pr create --title x --body y  # REVIEW_FULL=$path\"}}' | bash agent/hooks/pre-pr-review-gate.sh" 2>"$stderr_file"; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:2" ]] || { echo "expected EXIT:2 for bad mode, got: $out"; return 1; }
+  grep -q "REVIEW_COMMENT_GATE must be one of" "$stderr_file" || { echo "stderr should validate the mode: $(cat "$stderr_file")"; return 1; }
+}
+it "pre-pr-review-gate: invalid REVIEW_COMMENT_GATE value → exit 2 with validation reason" T_gate_invalid_comment_gate_mode_blocks
+
+T_gate_comment_finding_count_reported() {
+  # Two findings → the block message must report the count, not a hardcoded 1.
+  local out stderr_file path head_sha
+  stderr_file="$TEST_DIR/gate_stderr.txt"
+  head_sha=$(git rev-parse HEAD)
+  path=$(gate_sentinel_path "$head_sha")
+  mkdir -p "$(dirname "$path")"
+  {
+    printf '# repo-review-full-no-comments — review @ %s\n\n' "$head_sha"
+    printf -- '- **L12** — **[comment-hygiene:warn]** C7 docstring restates the name.\n'
+    printf -- '- **L40** — **[comment-hygiene:block]** C1 comment inside run-block.\n'
+    printf 'padding line %d\n' {1..20}
+  } > "$path"
+  out=$(echo "{\"tool_input\":{\"command\":\"gh pr create --title x --body y  # REVIEW_FULL=$path\"}}" | bash agent/hooks/pre-pr-review-gate.sh 2>"$stderr_file"; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:2" ]] || { echo "expected EXIT:2, got: $out"; return 1; }
+  grep -q "2 unresolved comment-hygiene finding" "$stderr_file" || { echo "block message should report the count (2): $(cat "$stderr_file")"; return 1; }
+}
+it "pre-pr-review-gate: two comment-hygiene findings → block message reports count=2" T_gate_comment_finding_count_reported
+
+T_gate_comment_off_still_runs_upstream_checks() {
+  # off bypasses ONLY the comment sub-gate — the upstream size guard must
+  # still fire. A <200B sentinel under REVIEW_COMMENT_GATE=off → exit 2.
+  local out stderr_file path head_sha
+  stderr_file="$TEST_DIR/gate_stderr.txt"
+  head_sha=$(git rev-parse HEAD)
+  path=$(gate_sentinel_path "$head_sha")
+  mkdir -p "$(dirname "$path")"
+  printf 'x\n' > "$path"
+  out=$(REVIEW_COMMENT_GATE=off bash -c "echo '{\"tool_input\":{\"command\":\"gh pr create --title x --body y  # REVIEW_FULL=$path\"}}' | bash agent/hooks/pre-pr-review-gate.sh" 2>"$stderr_file"; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:2" ]] || { echo "off must not skip the size guard, got: $out"; return 1; }
+  grep -q "suspiciously small" "$stderr_file" || { echo "upstream size guard should still fire under off: $(cat "$stderr_file")"; return 1; }
+}
+it "pre-pr-review-gate: REVIEW_COMMENT_GATE=off still enforces upstream checks (size guard)" T_gate_comment_off_still_runs_upstream_checks
+
 # ===========================================================================
 # edit-write.sh — credential-protect + Unknown mode dispatch
 # ===========================================================================

@@ -6,6 +6,7 @@ Schema reference: https://code.claude.com/docs/en/hooks.md.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -68,12 +69,16 @@ def _find_handler(description_substring: str) -> dict[str, Any]:
 
 
 def _run_hook_command(
-    command_body: str, stdin_payload: dict[str, Any]
+    command_body: str,
+    stdin_payload: dict[str, Any],
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run a hook ``command`` body the way Claude Code does (shell + JSON on stdin).
 
     :param command_body: The shell command body from a hook handler.
     :param stdin_payload: JSON payload sent to the hook on stdin.
+    :param env: Extra environment variables overlaid on the inherited environment
+        — e.g. a gate's ``REVIEW_COMMENT_GATE`` mode override.
     :returns: Completed subprocess result with captured stdout/stderr and exit code.
     """
     # Trust boundary: command_body comes from maintainer-controlled settings.json.
@@ -83,6 +88,7 @@ def _run_hook_command(
         capture_output=True,
         text=True,
         check=False,
+        env={**os.environ, **env} if env else None,
     )
 
 
@@ -360,6 +366,86 @@ def test_pre_pr_gate_allows_when_sentinel_at_head(
     )
     assert result.returncode == 0, (result.returncode, result.stderr)
     assert "BLOCKED" not in result.stderr
+
+
+def _head_sentinel_path(tmp_path: Path) -> Path:
+    """Return tmp_path joined with the sentinel filename for the repo's HEAD SHA.
+
+    :param tmp_path: Directory the synthetic review file will live in.
+    :returns: ``tmp_path / <sentinel-filename-for-HEAD>``.
+    """
+    head_sha = subprocess.run(  # noqa: S603
+        ["git", "-C", str(_REPO_ROOT), "rev-parse", "HEAD"],  # noqa: S607
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    filename = subprocess.run(  # noqa: S603
+        [  # noqa: S607
+            "python3",
+            str(_REPO_ROOT / "agent" / "_shared" / "review_sentinel.py"),
+            "make",
+            head_sha,
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    return tmp_path / filename
+
+
+def test_pre_pr_gate_blocks_when_sentinel_lists_comment_finding(
+    pre_pr_gate_command: str, tmp_path: Path
+) -> None:
+    """Gate exits 2 when a HEAD sentinel still carries a comment-hygiene finding.
+
+    :param pre_pr_gate_command: Hook command body fixture.
+    :param tmp_path: pytest tmp dir for the synthetic review file.
+    """
+    review = _head_sentinel_path(tmp_path)
+    padding = "padding\n" * 30
+    review.write_text(
+        "# repo-review-full-no-comments — HEAD\n\n"
+        "- **L12** — **[comment-hygiene:warn]** C7 docstring restates the name.\n" + padding
+    )
+
+    result = _run_hook_command(
+        pre_pr_gate_command,
+        {
+            "tool_input": {
+                "command": f"gh pr create --title foo --body bar  # REVIEW_FULL={review}",
+            },
+        },
+    )
+    assert result.returncode == 2, (result.returncode, result.stderr)
+    assert "unresolved comment-hygiene finding" in result.stderr
+
+
+def test_pre_pr_gate_off_mode_allows_sentinel_with_comment_finding(
+    pre_pr_gate_command: str, tmp_path: Path
+) -> None:
+    """``REVIEW_COMMENT_GATE=off`` is the documented escape hatch for an intentional finding.
+
+    :param pre_pr_gate_command: Hook command body fixture.
+    :param tmp_path: pytest tmp dir for the synthetic review file.
+    """
+    review = _head_sentinel_path(tmp_path)
+    padding = "padding\n" * 30
+    review.write_text(
+        "# repo-review-full-no-comments — HEAD\n\n"
+        "- **L1** — **[comment-hygiene:block]** C1 comment inside run-block.\n" + padding
+    )
+
+    result = _run_hook_command(
+        pre_pr_gate_command,
+        {
+            "tool_input": {
+                "command": f"gh pr create --title foo --body bar  # REVIEW_FULL={review}",
+            },
+        },
+        env={"REVIEW_COMMENT_GATE": "off"},
+    )
+    assert result.returncode == 0, (result.returncode, result.stderr)
 
 
 def test_branch_print_hook_announces_current_branch() -> None:

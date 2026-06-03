@@ -32,6 +32,11 @@ Never run `make docker-*` or RunPod commands without asking — they spend money
 
 </important>
 
+<important if="you are writing inline comments or docstrings">
+
+Code says **what**; comments say **why** — add prose only when it carries a constraint, unit, semantic, or rationale that names and types can't, and describe only current behavior (history belongs in the commit message). Keep comments to one line (cap two), open docstrings with the contract, and supply `:param:` / `:returns:` / `:raises:` semantics wherever pydoclint expects them — full rules in the `comment-hygiene` skill.
+</important>
+
 <important if="you are starting any non-trivial change">
 
 YAGNI. Start minimal and expand only when asked — don't add a class, config schema, or pattern speculatively. Ask "do we need this *now*?" and default to no. Present a plan before writing code.
@@ -56,7 +61,6 @@ Invoke in order: `/tdd-implementation` (drive it test-first) → `/code-health` 
 - Run `make format` first; pre-commit (ruff, ruff-format, pydoclint, prettier, mdformat, gitlint) is authoritative. **Never `--no-verify` / `-n`**, and never suppress a rule to make CI green — fix the underlying cause.
 - **Never add `Co-Authored-By` or agent-attribution trailers** ("Generated with …", "Claude …"). A `PreToolUse` hook (`agent/hooks/git-commit-trailer-check.sh`) blocks them.
 - **Verify the branch before push:** `git branch --show-current` must match the target PR branch.
-- **Never commit without explicit permission.** The user opts in.
 
 </important>
 
@@ -79,7 +83,7 @@ Grep ALL file types, not just `.py` — include `.yaml`/`.yml`, `.md`, `.json`, 
 
 - **Link a taxonomy-compliant issue** in the body via `Closes #N` / `Fixes #N` / `Refs #N` / `Part of #N` (use `Refs` for partial fixes; `Fixes` auto-closes). Every issue traces to an Epic via Phase → Task / Bug / Feature. See `/github-taxonomy`.
 - **PR titles stand alone** — name the specific subject, not just the action; readers don't open the issue.
-- **Pre-PR gate:** run `/repo-review-full-no-comments` and address every BLOCK/WARN. A `PreToolUse` hook (`agent/hooks/pre-pr-review-gate.sh`) blocks `gh pr create` until the command carries `REVIEW_FULL=<path>` pointing at the rendered report (`.agent-reviews/repo-review-full-no-comments.<sha>.md`) — recommended as a trailing comment so other gh-pr-create hooks still fire: `gh pr create … # REVIEW_FULL=.agent-reviews/repo-review-full-no-comments.<sha>.md`. Pass the path bare (no quotes). The encoded SHA must be an ancestor of HEAD within `REVIEW_MAX_LAG` (default 2) first-parent commits.
+- **Pre-PR gate:** run `/repo-review-full-no-comments` and address every BLOCK/WARN. A `PreToolUse` hook (`agent/hooks/pre-pr-review-gate.sh`) blocks `gh pr create` until the command carries `REVIEW_FULL=<path>` pointing at the rendered report (`.agent-reviews/repo-review-full-no-comments.<sha>.md`) — recommended as a trailing comment so other gh-pr-create hooks still fire: `gh pr create … # REVIEW_FULL=.agent-reviews/repo-review-full-no-comments.<sha>.md`. Pass the path bare (no quotes). The encoded SHA must be an ancestor of HEAD within `REVIEW_MAX_LAG` (default 2) first-parent commits. The gate also blocks while the sentinel still lists `[comment-hygiene:warn|block]` findings (`REVIEW_COMMENT_GATE`: `block` default / `warn` / `off`) — run `/fix-review-comments` to apply the rewrites, commit, and re-review in one pass.
 - **After every push, drive `/pr-readiness` until all four gates hold:** CI green ∧ `mergeable=MERGEABLE` ∧ every review comment has an inline reply ∧ no fresh Copilot findings. Full procedure: [docs/pr-readiness-loop.md](docs/pr-readiness-loop.md). A `Stop` hook (`agent/hooks/pr-readiness-stop.sh`, `PR_READINESS_GATE`: `block` default / `warn` / `off`) blocks ending the turn while gates 1-2 fail.
 - **Reply inline on every open review comment** (humans + Copilot) with a fix-commit SHA or justification, via `/pr-review-resolver`. Verification evidence goes through `/pr-checkbox`.
 - **Advisory rewakes carry an origin-HEAD stamp** — compare the `<sha7>` in a `pr-review-resolver` / `doc-drift` rewake to `git rev-parse HEAD`. If they differ the advisory crossed sessions: read it for context, but don't treat it as current-PR work.
@@ -92,6 +96,7 @@ Grep ALL file types, not just `.py` — include `.yaml`/`.yml`, `.md`, `.json`, 
 - `/repo-review` — MVP, single agent, inline checklist.
 - `/repo-review-full` — parallel agents, posts inline review comments.
 - `/repo-review-full-no-comments` — same fan-out, renders to chat (the pre-PR gate uses this).
+- `/fix-review-comments` — applies the sentinel's comment-hygiene findings, commits, and re-reviews.
 
 See [agent/skills/repo-review/SKILL.md](agent/skills/repo-review/SKILL.md) and [agent/skills/\_shared/repo-review-full-analysis.md](agent/skills/_shared/repo-review-full-analysis.md).
 </important>

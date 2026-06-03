@@ -28,8 +28,7 @@ Architecture: [docs/architecture.md](docs/architecture.md).
 - **Always verify the branch before push.** Run `git branch --show-current`
   and confirm it matches the target PR branch. A hook prints the branch on
   every `git commit`; don't ignore it.
-- **Never commit without explicit permission.** The user opts in. Pre-commit
-  hooks must not be skipped — see [`### Commits`](#commits).
+- **Pre-commit hooks must not be skipped** — see [`### Commits`](#commits).
 - **Never run `make docker-*` or RunPod commands without asking.** These
   spend money and burn cluster state.
 
@@ -43,6 +42,15 @@ Architecture: [docs/architecture.md](docs/architecture.md).
   pydoclint, prettier, mdformat, gitlint) is authoritative; suppressing
   rules to make CI green is forbidden — see
   [`### Lint exceptions are append-frozen`](#lint-exceptions-are-append-frozen).
+
+## Comment hygiene
+
+Code says **what**; comments say **why** — add prose only when it carries a
+constraint, unit, semantic, or rationale that names and types can't, and
+describe only current behavior (history belongs in the commit message). Keep
+comments to one line (cap two), open docstrings with the contract, and supply
+`:param:` / `:returns:` / `:raises:` semantics wherever pydoclint expects them —
+full rules in the `comment-hygiene` skill.
 
 ## Testing
 
@@ -126,7 +134,11 @@ unintended shell expansion. A `PreToolUse` hook
   The encoded SHA must be an ancestor of HEAD and within `REVIEW_MAX_LAG`
   (default 2) first-parent commits of it — merges from main count as one
   commit, not the dozens they bring in. Set `REVIEW_MAX_LAG=N` for a
-  justified larger gap.
+  justified larger gap. The gate also **blocks while the sentinel still lists
+  `[comment-hygiene:warn|block]` findings** (`REVIEW_COMMENT_GATE`: `block` default /
+  `warn` / `off`). Run `/fix-review-comments` to apply the findings' rewrites,
+  commit, and re-review in one pass; set `REVIEW_COMMENT_GATE=off` only for a
+  finding you've judged intentional.
 - **Readiness gates:** CI green ∧ `mergeable=MERGEABLE` ∧ every review
   comment has an inline reply ∧ no fresh Copilot findings — see
   `/pr-preflight`.
@@ -168,6 +180,8 @@ Local skills wrap the review workflow:
 - `/repo-review-full` (parallel agents, posts inline review comments).
 - `/repo-review-full-no-comments` (same fan-out, renders to chat — pre-PR
   gate uses this).
+- `/fix-review-comments` (applies the sentinel's comment-hygiene findings,
+  commits, and re-reviews — the remediation half of the pre-PR comment gate).
 
 See [`agent/skills/repo-review/SKILL.md`](agent/skills/repo-review/SKILL.md)
 and the shared analysis in
