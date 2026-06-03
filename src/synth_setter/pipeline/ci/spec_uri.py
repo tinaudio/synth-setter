@@ -29,7 +29,6 @@ import sys
 from pathlib import Path
 
 from hydra import compose, initialize_config_module
-from omegaconf import OmegaConf
 from pydantic import ValidationError
 
 from synth_setter.pipeline.schemas.spec import DatasetSpec
@@ -70,20 +69,6 @@ class _UsageErrorMarker:
 
 _USAGE_ERROR: _UsageErrorMarker = _UsageErrorMarker()
 
-# Composed-config keys that aren't ``DatasetSpec`` fields. Mirrors
-# ``cli.generate_dataset._NON_SPEC_KEYS`` — keep in sync if either side adds
-# a new top-level cfg sub-tree (interpolation source, dispatch group, etc.).
-_NON_SPEC_CFG_KEYS: tuple[str, ...] = (
-    "datamodule",
-    "paths",
-    "hydra",
-    "run_name",
-    "skypilot_launch",
-    "finalize_inline",
-    "oracle_eval_inline",
-    "logger",
-)
-
 
 def compute_spec_uri(spec_path: Path) -> str:
     """Read ``spec_path`` and return the spec's canonical input_spec R2 URI.
@@ -108,29 +93,19 @@ def compute_spec_uri_from_hydra(experiment: str, run_id_override: str) -> str:
     fully determined by ``(experiment, run_id_override)``.
 
     Exceptions from Hydra ``compose`` (unknown experiment, malformed override)
-    and from ``DatasetSpec`` construction propagate to the caller; the CLI
-    layer collapses both onto ``_EXIT_INVALID_SPEC`` for log scanners.
+    and from ``DatasetSpec.from_hydra_cfg`` (including ``TypeError`` when the
+    masked cfg is not a mapping) propagate to the caller; the CLI layer
+    collapses all of them onto ``_EXIT_INVALID_SPEC`` for log scanners.
 
     :param experiment: Hydra experiment name (e.g. ``generate_dataset/smoke-shard``).
     :param run_id_override: Cell-specific run_id; surfaces in the URI as the
         ``<run_id>`` path segment.
     :returns: ``r2://<bucket>/<prefix>input_spec.json`` URI string.
-    :raises TypeError: composed cfg's top level is not a mapping.
     """
     overrides = [f"experiment={experiment}", f"+run_id={run_id_override}"]
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(config_name="dataset", overrides=overrides)
-    # Placeholders so resolve() doesn't trip on the unset ${hydra:runtime.output_dir}.
-    cfg.paths.root_dir = "."
-    cfg.paths.output_dir = "."
-    cfg.paths.work_dir = "."
-    raw: object = OmegaConf.to_container(cfg, resolve=True)
-    if not isinstance(raw, dict):
-        raise TypeError(f"composed config is not a mapping: {type(raw).__name__}")
-    spec_kwargs = {
-        k: v for k, v in raw.items() if isinstance(k, str) and k not in _NON_SPEC_CFG_KEYS
-    }
-    return DatasetSpec(**spec_kwargs).r2.input_spec_uri()
+    return DatasetSpec.from_hydra_cfg(cfg).r2.input_spec_uri()
 
 
 def _parse_hydra_argv(argv: list[str]) -> tuple[str, str] | _UsageErrorMarker | None:

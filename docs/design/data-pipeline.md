@@ -1383,7 +1383,7 @@ render:
 On first `generate` (`python -m synth_setter.cli.generate_dataset experiment=<id>`):
 
 1. Hydra composes the experiment against `src/synth_setter/configs/dataset.yaml`, yielding an `OmegaConf` `DictConfig`.
-2. `spec_from_cfg(cfg)` flattens the composed groups and constructs a Pydantic `DatasetSpec` (`strict=True`, `frozen=True`) in one shot — the same model used for the on-R2 artifact.
+2. `spec_from_cfg(cfg)` (a thin wrapper over `DatasetSpec.from_hydra_cfg`) masks the cfg to `DatasetSpec`'s own fields, resolves, and constructs a Pydantic `DatasetSpec` (`strict=True`, `frozen=True`) — the same model used for the on-R2 artifact.
 3. Runtime fields (`run_id`, `r2`, `created_at`, `git_sha`, `is_repo_dirty`) auto-fill via `default_factory` when absent. `run_id` is `{task_name}-{YYYYMMDDTHHMMSSsssZ}` (millisecond precision); `r2.prefix` is `data/{task_name}/{run_id}/`. `renderer_version` is set by the configured renderer's pin; the worker re-derives via `extract_renderer_version` and refuses to render on mismatch.
 4. Computed fields (`shards`, `num_shards`, `num_params`) derive deterministically from layout + render fields.
 5. Upload the JSON-serialized `DatasetSpec` to R2 (`<r2.prefix>/input_spec.json`).
@@ -1416,7 +1416,7 @@ src/
 
     schemas/            # Pydantic models (implemented)
       __init__.py
-      spec.py           # DatasetSpec (unified config + runtime; built by spec_from_cfg in cli/generate_dataset.py), RenderConfig, ShardSpec; OUTPUT_FORMAT_TO_EXTENSION / EXTENSION_TO_OUTPUT_FORMAT inverse-pair dispatch maps (no consumer yet — shard writers/validators dispatch in PR-13)
+      spec.py           # DatasetSpec (unified config + runtime; built by its own from_hydra_cfg classmethod, called via spec_from_cfg in cli/generate_dataset.py), RenderConfig, ShardSpec; OUTPUT_FORMAT_TO_EXTENSION / EXTENSION_TO_OUTPUT_FORMAT inverse-pair dispatch maps (no consumer yet — shard writers/validators dispatch in PR-13)
       shard_metadata.py # ShardMetadata — wds tar metadata.json sidecar (leaf module, no project imports)
       prefix.py         # DatasetConfigId, DatasetRunId, R2Prefix helpers
       image_config.py   # Docker image configuration

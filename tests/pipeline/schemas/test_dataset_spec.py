@@ -963,3 +963,59 @@ class TestLegacyFlatR2Compat:
         emitted = _json.loads(restored.model_dump_json())
         for legacy_key in ("r2_bucket", "r2_prefix_root", "r2_prefix"):
             assert legacy_key not in emitted
+
+
+class TestFromHydraCfg:
+    """``DatasetSpec.from_hydra_cfg`` masks non-spec groups before resolving."""
+
+    @pytest.mark.usefixtures("patch_runtime_io")
+    def test_masks_unresolvable_non_spec_group_before_resolve(self) -> None:
+        """A ``${hydra:...}`` interpolation under a non-spec group is never resolved.
+
+        ``datamodule.dataset_root`` references the ``hydra`` resolver, which is
+        only registered under ``@hydra.main``. With no ``HydraConfig`` set,
+        resolving that subtree raises ``UnsupportedInterpolationType``; masking
+        to spec fields first means it is never touched.
+        """
+        from omegaconf import OmegaConf
+
+        cfg = OmegaConf.create(_valid_spec_kwargs())
+        cfg.datamodule = {"dataset_root": "${hydra:runtime.output_dir}/data"}
+
+        spec = DatasetSpec.from_hydra_cfg(cfg)
+
+        assert spec.task_name == "ci-smoke-test"
+        assert spec.r2.bucket == "intermediate-data"
+
+    @pytest.mark.usefixtures("patch_runtime_io")
+    def test_unknown_top_level_group_is_dropped_not_rejected(self) -> None:
+        """An unrecognized top-level cfg group is silently masked out, not rejected.
+
+        The allowlist (``k in cls.model_fields``) is intentionally more
+        forgiving than ``extra='forbid'`` at the cfg boundary: a composed cfg
+        carries dispatch/runtime groups the spec never models, and new ones get
+        added without touching this helper. Pins that dropping (not raising) is
+        the deliberate contract, so a future reader does not mistake it for a bug.
+        """
+        from omegaconf import OmegaConf
+
+        cfg = OmegaConf.create(_valid_spec_kwargs())
+        cfg.some_future_dispatch_group = {"enabled": True}
+
+        spec = DatasetSpec.from_hydra_cfg(cfg)
+
+        assert spec.task_name == "ci-smoke-test"
+
+    def test_non_mapping_input_is_rejected_as_type_error(self) -> None:
+        """A non-mapping cfg is rejected with ``TypeError``, never reaching the model.
+
+        ``OmegaConf.masked_copy`` raises ``ValueError`` on a list-shaped cfg; the
+        helper normalizes that (and any non-mapping masked result) to a single
+        ``TypeError`` so callers and tests have one stable contract.
+        """
+        from omegaconf import OmegaConf
+
+        cfg = OmegaConf.create([1, 2, 3])
+
+        with pytest.raises(TypeError):
+            DatasetSpec.from_hydra_cfg(cfg)  # type: ignore[arg-type]

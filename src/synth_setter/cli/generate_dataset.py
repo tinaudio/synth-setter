@@ -48,21 +48,6 @@ from synth_setter.resources import as_file, vst_headless_wrapper
 from synth_setter.utils.instantiators import instantiate_loggers
 from synth_setter.workspace import operator_workspace
 
-# Composed-config keys that aren't DatasetSpec fields (interpolation sources, Hydra
-# runtime, dispatch-mode sub-trees). See dataset.yaml in the shipped configs/
-# tree for the live set. ``r2`` is *not* listed: it composes from
-# ``r2/default.yaml`` directly into the spec's nested ``R2Location`` field.
-_NON_SPEC_KEYS: tuple[str, ...] = (
-    "datamodule",
-    "paths",
-    "hydra",
-    "run_name",
-    "skypilot_launch",
-    "finalize_inline",
-    "oracle_eval_inline",
-    "logger",
-)
-
 # Side effect only: publish ``PROJECT_ROOT`` so ``${oc.env:PROJECT_ROOT}``
 # in ``configs/paths/default.yaml`` resolves under @hydra.main compose.
 operator_workspace()
@@ -601,20 +586,8 @@ def _render_and_upload_shard(
 
 
 def spec_from_cfg(cfg: DictConfig) -> DatasetSpec:
-    """Build a DatasetSpec from a Hydra-composed cfg.
-
-    Drops the non-DatasetSpec sub-trees *before* resolving so their
-    interpolations are never evaluated: the spec never reads them, and they may
-    reference resolvers only available under ``@hydra.main`` (e.g. ``data``'s
-    ``dataset_root: ${hydra:runtime.output_dir}/data``). Raises if the composed
-    config is not a mapping.
-    """
-    spec_keys = [k for k in cfg if isinstance(k, str) and k not in _NON_SPEC_KEYS]
-    raw: object = OmegaConf.to_container(OmegaConf.masked_copy(cfg, spec_keys), resolve=True)
-    if not isinstance(raw, dict):
-        raise TypeError(f"composed config is not a mapping: {type(raw).__name__}")
-    spec_kwargs: dict[str, Any] = {k: v for k, v in raw.items() if isinstance(k, str)}
-    return DatasetSpec(**spec_kwargs)
+    """Build a DatasetSpec from a Hydra-composed cfg."""
+    return DatasetSpec.from_hydra_cfg(cfg)
 
 
 def _sky_cfg_from_dataset_cfg(cfg: DictConfig) -> SkypilotLaunchConfig:
