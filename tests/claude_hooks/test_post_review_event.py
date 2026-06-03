@@ -47,16 +47,28 @@ def helper() -> ModuleType:
 
 
 def test_build_review_payload_event_defaults_to_comment(helper: ModuleType) -> None:
+    """An explicit COMMENT event is set on the payload.
+
+    :param helper: The loaded ``post_review`` module.
+    """
     payload = helper.build_review_payload("body", [], [], event="COMMENT")
     assert payload["event"] == "COMMENT"
 
 
 def test_build_review_payload_request_changes_passes_through(helper: ModuleType) -> None:
+    """REQUEST_CHANGES is carried through to the payload event.
+
+    :param helper: The loaded ``post_review`` module.
+    """
     payload = helper.build_review_payload("body", [], [], event="REQUEST_CHANGES")
     assert payload["event"] == "REQUEST_CHANGES"
 
 
 def test_build_review_payload_invalid_event_raises(helper: ModuleType) -> None:
+    """An unrecognized event value raises ValueError.
+
+    :param helper: The loaded ``post_review`` module.
+    """
     with pytest.raises(ValueError, match="event"):
         helper.build_review_payload("body", [], [], event="LGTM")
 
@@ -64,12 +76,20 @@ def test_build_review_payload_invalid_event_raises(helper: ModuleType) -> None:
 def test_build_review_payload_approve_with_no_findings_omits_comments(
     helper: ModuleType,
 ) -> None:
+    """APPROVE with no findings omits the comments key (GitHub rejects it otherwise).
+
+    :param helper: The loaded ``post_review`` module.
+    """
     payload = helper.build_review_payload("clean", [], [], event="APPROVE")
     assert payload["event"] == "APPROVE"
     assert "comments" not in payload
 
 
 def test_build_review_payload_comment_keeps_empty_comments_key(helper: ModuleType) -> None:
+    """COMMENT keeps an empty comments list rather than dropping the key.
+
+    :param helper: The loaded ``post_review`` module.
+    """
     payload = helper.build_review_payload("body", [], [], event="COMMENT")
     assert payload["comments"] == []
 
@@ -92,6 +112,11 @@ def _fake_run_factory(responses: list[SimpleNamespace]) -> tuple:
 def test_submit_review_self_review_422_falls_back_to_comment(
     helper: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """A self-review 422 retries once as COMMENT with the banner prepended.
+
+    :param helper: The loaded ``post_review`` module.
+    :param monkeypatch: Pytest fixture for patching ``subprocess.run``.
+    """
     err_422 = SimpleNamespace(
         returncode=1,
         stdout="",
@@ -120,6 +145,11 @@ def test_submit_review_self_review_422_falls_back_to_comment(
 def test_submit_review_success_does_not_retry(
     helper: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """A successful first submit does not trigger the fallback retry.
+
+    :param helper: The loaded ``post_review`` module.
+    :param monkeypatch: Pytest fixture for patching ``subprocess.run``.
+    """
     ok = SimpleNamespace(
         returncode=0,
         stdout=json.dumps({"html_url": "https://example/r/2"}),
@@ -139,6 +169,11 @@ def test_submit_review_success_does_not_retry(
 def test_submit_review_non_self_422_exits(
     helper: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """A non-self-review API error propagates as SystemExit (no fallback).
+
+    :param helper: The loaded ``post_review`` module.
+    :param monkeypatch: Pytest fixture for patching ``subprocess.run``.
+    """
     err = SimpleNamespace(returncode=1, stdout="", stderr="HTTP 404: Not Found")
     fake_run, _calls = _fake_run_factory([err])
     monkeypatch.setattr(helper.subprocess, "run", fake_run)
