@@ -1,10 +1,14 @@
 name: Generate + Finalize Dataset (inline)
 
 # Runs synth-setter-generate-dataset with finalize_inline=true so the
-# canonical dataset.complete marker is written by the same CLI process
-# that uploaded the shards. Mirrors finalize-dataset.yaml's bare-runner
-# install (no docker, no SkyPilot path); the experiment chosen at
-# dispatch time decides which spec is generated.
+# canonical dataset.complete marker is written by the same CLI process that
+# uploaded the shards. With oracle_eval=true it also appends
+# oracle_eval_inline=true and asserts the surge/fake_oracle invariant
+# (test/param_mse == 0) from both the run log and the metrics.json — proving
+# the parameter-array round-trip survived generate + finalize without a second
+# render. Mirrors finalize-dataset.yaml's bare-runner install (no docker, no
+# SkyPilot path); the experiment chosen at dispatch time decides which spec is
+# generated.
 #
 # Required secrets (callers should `secrets: inherit`):
 #   RCLONE_CONFIG_R2_ACCESS_KEY_ID, RCLONE_CONFIG_R2_SECRET_ACCESS_KEY,
@@ -19,6 +23,11 @@ on:
         required: true
         type: string
         default: smoke-shard-with-finalize
+      oracle_eval:
+        description: "Also run oracle_eval_inline and assert test/param_mse == 0 (use the oracle experiment)."
+        required: false
+        type: boolean
+        default: false
       env_ref:
         description: "Git ref / SHA to check out"
         required: false
@@ -29,6 +38,10 @@ on:
       experiment:
         required: true
         type: string
+      oracle_eval:
+        required: false
+        type: boolean
+        default: false
       env_ref:
         required: true
         type: string
@@ -38,7 +51,7 @@ permissions:
 
 jobs:
   generate_and_finalize:
-    name: Run generate_dataset (finalize_inline=true)
+    name: Run generate_dataset (finalize_inline, oracle_eval=${{ inputs.oracle_eval }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -75,13 +88,52 @@ jobs:
       - name: Run synth-setter-generate-dataset (finalize_inline)
         env:
           EXPERIMENT: ${{ inputs.experiment }}
+          ORACLE_EVAL: ${{ inputs.oracle_eval }}
           PROJECT_ROOT: ${{ github.workspace }}
         run: |
           set -euo pipefail
-          uv run synth-setter-generate-dataset \
-            "experiment=generate_dataset/${EXPERIMENT}" \
-            "finalize_inline=true" \
+          overrides=("experiment=generate_dataset/${EXPERIMENT}" "finalize_inline=true")
+          if [ "${ORACLE_EVAL}" = "true" ]; then
+            overrides+=("oracle_eval_inline=true")
+          fi
+          uv run synth-setter-generate-dataset "${overrides[@]}" \
             2>&1 | tee generate-and-finalize.log
+
+      # Lightning's `trainer.test()` prints the final metrics table to stdout;
+      # parse it for `test/param_mse` and assert exactly zero — the load-bearing
+      # oracle invariant. Fails the workflow on any non-zero / missing value.
+      - name: Assert oracle test/param_mse == 0.0 (log)
+        if: ${{ inputs.oracle_eval }}
+        run: |
+          set -euo pipefail
+          uv run python -m synth_setter.evaluation.assert_oracle_invariant \
+            generate-and-finalize.log
+
+      # Independent structured cross-check: the inline eval writes metrics.json
+      # under `<paths.output_dir>/oracle_eval/<run_id>/metrics/` (a Hydra run
+      # dir, not directly under the workspace), so search the whole workspace
+      # for that `oracle_eval/*/metrics/metrics.json` tail, then assert the same
+      # invariant from a non-stdout source.
+      - name: Locate metrics.json
+        id: locate_metrics
+        if: ${{ inputs.oracle_eval }}
+        env:
+          PROJECT_ROOT: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          metrics_path=$(find "${PROJECT_ROOT}" -type f -path '*/oracle_eval/*/metrics/metrics.json' | head -n1)
+          if [ -z "${metrics_path}" ]; then
+            echo "::error::no oracle_eval metrics.json under ${PROJECT_ROOT}"; exit 1
+          fi
+          echo "path=${metrics_path}" >> "${GITHUB_OUTPUT}"
+          echo "Located metrics.json at ${metrics_path}"
+
+      - name: Assert oracle test/param_mse == 0.0 (metrics.json)
+        if: ${{ inputs.oracle_eval }}
+        run: |
+          set -euo pipefail
+          uv run python -m synth_setter.evaluation.assert_oracle_invariant \
+            --metrics-json "${{ steps.locate_metrics.outputs.path }}"
 
       - name: Upload log
         if: always()
@@ -90,4 +142,13 @@ jobs:
           name: generate-and-finalize-log-${{ inputs.experiment }}
           path: generate-and-finalize.log
           if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload metrics.json
+        if: always() && steps.locate_metrics.outputs.path != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: generate-and-finalize-metrics-${{ inputs.experiment }}
+          path: ${{ steps.locate_metrics.outputs.path }}
+          if-no-files-found: error
           retention-days: 7

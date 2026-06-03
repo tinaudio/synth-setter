@@ -1,7 +1,7 @@
 # @package _global_
 
-# Used by the generate-finalize-oracle-eval workflow; mirrors
-# smoke-shard-with-finalize.yaml but additionally runs the
+# Used by the generate-and-finalize-dataset workflow with oracle_eval=true;
+# mirrors smoke-shard-with-finalize.yaml but additionally runs the
 # surge/fake_oracle eval inline so the same CLI process verifies the
 # parameter-array round-trip survived generate + finalize.
 defaults:

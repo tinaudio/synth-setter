@@ -399,7 +399,7 @@ jobs:
       # step output `spec_path` resolves that file so later steps don't have to
       # repeat the glob.
       #
-      # 40-min step cap accommodates the 8-cell render-matrix cells (#1204)
+      # 40-min step cap accommodates the provider-matrix render cells (#1204)
       # without leaving headroom-too-thin for a hung launcher to surface; the
       # cap still bounds a hung launcher so the `if: always()` log-snapshot
       # step runs. NOTE: step-level timeout sends SIGKILL — `finally` blocks

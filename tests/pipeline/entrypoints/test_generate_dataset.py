@@ -45,6 +45,15 @@ from synth_setter.cli.generate_dataset import (
 )
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.resources import vst_headless_wrapper
+from tests.helpers.render_subprocess import (
+    REAL_CHECK_CALL as _REAL_CHECK_CALL,
+)
+from tests.helpers.render_subprocess import (
+    materialize_or_passthrough_rclone as _materialize_or_passthrough_rclone,
+)
+from tests.helpers.render_subprocess import (
+    materialize_shard as _materialize_shard,
+)
 from tests.helpers.subprocess_args import find_script_index
 
 VST_HEADLESS_WRAPPER = str(vst_headless_wrapper())
@@ -56,44 +65,6 @@ VST_HEADLESS_WRAPPER = str(vst_headless_wrapper())
 # constraint check passes.
 TEST_PLUGIN_VST3 = Path(__file__).resolve().parent.parent / "fixtures" / "TestPlugin.vst3"
 TEST_PLUGIN_VERSION = "1.0.0-test"
-
-
-def _materialize_shard(args: list[str]) -> int:
-    """subprocess.check_call side effect that writes the expected shard file.
-
-    Mirrors the production contract: generate_vst_dataset.py exits 0 only after writing the
-    HDF5 to its output path. Tests that don't supply this side effect would trip the
-    `shard_path.is_file()` check in `_render_and_upload_shard`.
-    """
-    script_idx = find_script_index(args)
-    output_file = Path(args[script_idx + 1])
-    output_file.parent.mkdir(parents=True, exist_ok=True)
-    output_file.write_bytes(b"")
-    return 0
-
-
-# Captured at import time so the rclone-passthrough side-effect below can
-# call the real subprocess.check_call without recursing back through any
-# patch that targets the same symbol the production code uses.
-_REAL_CHECK_CALL = subprocess.check_call
-
-
-def _materialize_or_passthrough_rclone(args: list[str]) -> int:
-    """Dispatch on the first argv element: rclone calls fall through to real subprocess.
-
-    Every state-based ``TestRun`` test patches the same ``subprocess.check_call``
-    symbol the renderer AND the rclone shard upload both go through, so this
-    side-effect distinguishes them: renderer calls write the expected shard
-    file (as ``_materialize_shard`` does); rclone calls invoke the real binary
-    (via ``_REAL_CHECK_CALL``) so the upload actually lands a file on the
-    fake-local remote.
-
-    :param args: argv list passed to ``subprocess.check_call``.
-    :returns: 0 on renderer simulation; rclone's exit code on the real subprocess.
-    """
-    if args and args[0] == "rclone":
-        return _REAL_CHECK_CALL(args)  # noqa: S603 — test-only passthrough
-    return _materialize_shard(args)
 
 
 def _renderer_argv_lists(mock: MagicMock) -> list[list[str]]:
