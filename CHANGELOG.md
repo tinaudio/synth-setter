@@ -1,6 +1,336 @@
 # CHANGELOG
 
 
+## v8.15.0 (2026-06-03)
+
+### Chores
+
+- **ci**: Add uv-lock pre-commit hook ([#1364](https://github.com/tinaudio/synth-setter/pull/1364),
+  [`b63a677`](https://github.com/tinaudio/synth-setter/commit/b63a677266203a8cc1bbcb8af0372afd5e5961d3))
+
+* chore(ci): add uv-lock pre-commit hook
+
+Add astral-sh/uv-pre-commit and enable the uv-lock hook so uv.lock stays in sync with pyproject.toml
+  on commit. The hook flagged existing drift (lockfile recorded the project at 8.13.0 vs 8.14.0 in
+  pyproject), now relocked.
+
+* docs(deps): note the uv-lock pre-commit hook as the local lock-sync gate
+
+dependency-management.md owns the topic of keeping uv.lock honest but only documented CI
+  (uv-lock-check.yml) and manual `uv lock`. Mention the new local hook in the CI paragraph,
+  relock-cadence triggers, and Related list, and add it as a source in doc-map.yaml.
+
+- **ci-automation**: Kill marker drift via make targets + composite actions
+  ([#1372](https://github.com/tinaudio/synth-setter/pull/1372),
+  [`224192e`](https://github.com/tinaudio/synth-setter/commit/224192e54143dcf1c80caef4d8c6c5ae58451d14))
+
+* chore(ci): centralize CI marker filters in make test-ci-* targets
+
+CI workflows re-spelled the pytest marker expressions inline, so they had drifted (test.yml omitted
+  `not requires_vst`; nightly.yml silently ran `slow`). Add `test-ci-unit`, `test-ci-slow`, and
+  `test-ci-nightly` as the single source of truth and point test.yml, cpu-slow.yml, and nightly.yml
+  at them. Each target reproduces its workflow's exact prior invocation; the shared coverage flags
+  move into a `CI_COV` variable.
+
+Refs #1353
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* chore(ci): extract setup-r2 composite action
+
+Nine workflows spelled the same `RCLONE_CONFIG_R2_*` env (and often a separate rclone-install step)
+  inline. Factor it into a single composite `.github/actions/setup-r2` that exports the structural
+  literals + secrets to $GITHUB_ENV and optionally installs rclone; the structural values mirror
+  `r2_io._R2_STRUCTURAL_DEFAULTS`.
+
+Converted: cpu-slow, finalize-dataset, generate-and-finalize-dataset, generate-finalize-oracle-eval,
+  test-dataset-finalization, test-local-launcher-roundtrip, nightly-parallel-datagen,
+  spec-materialization, test-generate-dataset-shards. Docker callers forward the vars via value-less
+  `-e <VAR>` from $GITHUB_ENV.
+
+Left inline by design: check-auth (R2 bundled with OCI/RunPod cred bootstrap), r2-auth-probe
+  (deliberate un-abstracted rclone repro), and the billable SkyPilot/OCI/provider-matrix reusable
+  workflows — a follow-up under #1353.
+
+Rework the tests/infra invariants: test_setup_r2_action.py pins the composite's contract against
+  r2_io, and test_cpu_slow_workflow_r2_creds.py now pins that cpu-slow.yml invokes setup-r2
+  (install-rclone: true) before the pytest step.
+
+* chore(ci): extract upload-coverage, setup-precommit, setup-surge-xt actions
+
+Three more composites kill repeated setup blocks the testing audit flagged (Finding 1):
+
+- upload-coverage: the codecov/codecov-action@v5 block (files + fail_ci_if_error) shared by 6 call
+  sites in test.yml (x2), cpu-slow, test-mps, test-gpu, and test-vst-slow. Callers keep their own
+  `if:` so each site's gating is preserved (test.yml uploads unconditionally; the rest guard on
+  `always() && hashFiles('coverage.xml')`). - setup-precommit: the byte-identical setup-python + uv
+  + `uv sync --only-group dev` + pre-commit cache block shared by code-quality-pr.yaml and
+  code-quality-main.yaml. The divergent run step (--files vs --all-files + SKIP) and the PR-only
+  pydoclint guard stay inline. - setup-surge-xt: the macOS brew-cask install + plugins/ symlink
+  shared by test-mps.yml and deflake-mps.yml. Docker callers ship Surge XT in the image and keep
+  their in-container smoke tests.
+
+* test(infra): pin make test-ci-* targets as the marker source of truth
+
+Add test_ci_marker_targets.py: the three CI targets carry their canonical marker expressions and
+  test.yml / cpu-slow.yml / nightly.yml invoke `make test-ci-*` with no surviving inline `pytest
+  -m`, so the Finding-1 drift can't return unnoticed. Update docs/reference/testing.md to point at
+  the targets.
+
+* test(infra): harden CI invariant tests per review
+
+Address review WARNs on the new invariants: - Anchor the `make <target>` and inline-`pytest -m`
+  guards (word boundary; collapse `\`-continuations so a multi-line pytest split can't evade the
+  marker-drift check). - Add test_setup_r2_callers_do_not_reinline_r2_env: the R2 analogue of the
+  marker anti-drift guard — no workflow may both `uses: setup-r2` and keep an inline
+  RCLONE_CONFIG_R2_ACCESS_KEY_ID env key. - Docstrings on the private action-loading helpers;
+  tighten the module docstring that overstated the migration as complete. - Drop the stale `docker
+  run … make` clause from the Makefile CI_COV comment (no workflow invokes these targets through
+  Docker).
+
+* docs(doc-map): point CI entries at the make test-ci-* targets
+
+The test.yml / cpu-slow.yml / Makefile doc-map `covers` strings re-spelled the pytest marker
+  expressions that #1353 centralized into the make targets. Point them at the targets so the doc-map
+  doesn't re-introduce the drift this PR removes.
+
+---------
+
+Co-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+- **config**: Resolve fake_oracle d_out / param_spec TODOs
+  ([#1363](https://github.com/tinaudio/synth-setter/pull/1363),
+  [`ff368b4`](https://github.com/tinaudio/synth-setter/commit/ff368b4131ca859a54618aef76b75e360a054aae))
+
+FakeOracleNet ignores model.net.d_out (it echoes batch params in predict mode), so flip the dead 300
+  to a -1 sentinel that won't read as a real output width.
+
+Replace the param_spec TODO with `${render.param_spec_name}` so the per-param MSE spec tracks the
+  selected render group (the inline oracle eval runs render=surge_simple) instead of a hardcoded
+  surge_xt. The experiment always selects a render group (render_vst: true), so the interpolation
+  always resolves; the smoke/lockstep fixtures override param_spec to a literal, so they are
+  unaffected.
+
+Refs #1338
+
+- **testing**: Retire dead test-bats target, rename pipeline test dirs, and centralize shared test
+  helpers ([#1360](https://github.com/tinaudio/synth-setter/pull/1360),
+  [`138de3e`](https://github.com/tinaudio/synth-setter/commit/138de3ec75f83c577697b66af3cf439b640872ae))
+
+* chore(testing): retire test cruft and de-dupe shared helpers
+
+Bundles testing-audit items 1, 2, and 5 (helper/dead-code cleanup only; no production code or test
+  behavior changes).
+
+Item 1 — dead code & naming: - Remove the dead `make test-bats` target (no `.bats` files tracked, no
+  workflow invokes it) and its CONTRIBUTING command-list entry. - Rename `tests/pipeline/ci/` ->
+  `ci_validate/` and `test_ci/` -> `ci_config/`; strip the `test_` prefix from `test_configs/`,
+  `test_entrypoints/`, `test_schemas/` so every pipeline subdir is unprefixed-descriptive. Updates
+  the ruff per-file-ignores, pydoclint baseline rows, cross-test path references, and docs. - Add
+  `tests/data/__init__.py` + `tests/data/vst/__init__.py` so `tests.data.vst.*` imports resolve as a
+  regular package.
+
+Item 2 — de-dupe test helpers: - `tests/helpers/audio_utils.py`: one parametrized mono/stereo
+  `sine`, a `noise` generator, and a single `write_wav`, replacing the duplicated copies across
+  `tests/evaluation`. - `tests/infra/workflow_fixtures.py`: one `load_workflow` shared by the three
+  infra files that re-parsed workflow YAML.
+
+Item 5 — centralize the oracle invariant: - `tests/evaluation/_oracle_helpers.py`:
+  `ORACLE_AUDIO_METRIC_BOUNDS` and `build_oracle_module`, consumed by `tests/test_train.py` and
+  `tests/integration/test_finalize_artifact_oracle.py`.
+
+Deferred (would risk behavior change; see PR body): relocating `tests/_meta/` +
+  `tests/claude_hooks/` to `.claude/tests/`, the VST-mock and spec-builder factories, and the
+  GlobalHydra autouse fixture.
+
+* docs(testing): complete BATS retirement in docs
+
+Remove the orphaned bats prerequisite from CONTRIBUTING and the bats-tests workflow row + template
+  link from the GHA reference, now that no .bats files, workflow, or make target remain. Drop the
+  partial tests/helpers/ enumeration that omitted newer helpers.
+
+### Documentation
+
+- **claude**: Restructure CLAUDE.md with conditional <important if> blocks
+  ([#1369](https://github.com/tinaudio/synth-setter/pull/1369),
+  [`13cb729`](https://github.com/tinaudio/synth-setter/commit/13cb7298408e9a6f101b7a08e0687f0284979799))
+
+* docs(claude): clone AGENTS.md into CLAUDE.md
+
+Replace the thin pointer with a full copy of AGENTS.md so the next commit can restructure it with
+  <important if> relevance blocks without conflating the clone and the rewrite in one diff.
+
+* docs(claude): restructure CLAUDE.md with <important if> blocks
+
+Apply the improve-claude-md skill: keep project identity, tech stack, and the full command table as
+  bare/always-on context, and wrap each domain rule (worktrees, commits, lint freeze, YAML block
+  scalars, PRs, review, GPU probes) in a targeted <important if> condition so the agent attends to
+  guidance only when the task matches.
+
+* docs(claude): correct hook names and pre-PR gate details
+
+Restore four facts softened while restructuring into <important if> blocks: name the SessionStart
+  banner hook (session-start-cwd-banner.sh), re-add ruff-format to the pre-commit list, restore the
+  [tool.pydoclint].exclude '#1044 infra-only' rationale, and restore the pre-PR gate's 'ancestor of
+  HEAD' constraint plus the report-path convention.
+
+* docs(claude): address review — flush-left <important> closings, REVIEW_FULL example
+
+Separate each block-closing </important> from its preceding list with a blank line so it is its own
+  HTML block (flush-left, unambiguous) instead of a lazy list continuation, and show the explicit '#
+  REVIEW_FULL=<path>' trailing-comment form in the pre-PR gate rule.
+
+* Potential fix for pull request finding
+
+Co-authored-by: Copilot Autofix powered by AI <175728472+Copilot@users.noreply.github.com>
+
+---------
+
+- **claude-md**: Drop 'never commit without explicit permission' line
+  ([#1380](https://github.com/tinaudio/synth-setter/pull/1380),
+  [`620e07f`](https://github.com/tinaudio/synth-setter/commit/620e07f22db7e65fbe7ffa81c9cc86e59d2504a2))
+
+Remove the standing instruction that Claude must obtain explicit permission before every commit from
+  both CLAUDE.md and AGENTS.md. In AGENTS.md the bullet retains its pre-commit-hooks clause as its
+  own entry.
+
+- **claude-md**: Re-add condensed comment-hygiene block to AGENTS.md and CLAUDE.md
+  ([#1374](https://github.com/tinaudio/synth-setter/pull/1374),
+  [`059c7bf`](https://github.com/tinaudio/synth-setter/commit/059c7bfc69572356492cb5ca4efd9c3ceb2127e5))
+
+* docs(claude-md): re-add condensed comment-hygiene guidance
+
+The #1369 restructure dropped the Claude-only comment-hygiene section when it cloned AGENTS.md.
+  Restore it as a two-sentence pointer to the comment-hygiene skill: a plain section in AGENTS.md
+  (canonical) and a matching <important if> block in CLAUDE.md.
+
+* docs(claude-md): rename AGENTS.md section to "Comment hygiene"
+
+Align the heading with the name the repo-review skill already references
+  (agent/skills/repo-review/SKILL.md:86 cites an AGENTS.md "Comment Hygiene" section), so the
+  cross-reference resolves.
+
+### Features
+
+- **eval**: Opt-in R2 upload of the whole eval output dir
+  ([#1371](https://github.com/tinaudio/synth-setter/pull/1371),
+  [`c161322`](https://github.com/tinaudio/synth-setter/commit/c161322eb6f6cb697d37026211405cd1b075b291))
+
+* feat(eval): opt-in R2 upload of the whole eval output dir
+
+Add `evaluation.upload_output_dir_uri` to eval.yaml (default null). When set to an
+  `r2://bucket/prefix`, eval.py mirrors the entire Hydra run dir — metrics, predictions, rendered
+  audio, config logs — to that prefix after scoring completes, validating credentials via
+  `ensure_r2_env_loaded` the same way the datamodule's R2 prefetch does.
+
+Add `r2_io.upload_dir`, the directory-upload counterpart to `download_dir_no_overwrite`: `rclone
+  copy` with `--checksum` and the shared reliability flags, and no `--immutable` (the caller pushes
+  its own fresh dir).
+
+* fix(eval): gate output-dir R2 upload on the global-zero rank
+
+Under DDP `main()` runs on every rank against the one shared output_dir, so an ungated upload would
+  race N redundant copies. Pass the trainer's `is_global_zero` into `_maybe_upload_output_dir` and
+  short-circuit on non-zero ranks — the same rank gate `evaluate()` already applies to predict
+  postprocessing.
+
+* test(eval): exercise R2 output-dir upload end-to-end instead of mocking
+
+The _maybe_upload_output_dir and upload_dir tests stubbed r2_io / subprocess.check_call and asserted
+  on call lists — interaction testing that proved a call happened, not that an upload did. Rewrite
+  them to run the real path against the fake_r2_remote fixture (real rclone, local-typed r2: remote)
+  and assert on materialized files:
+
+- _maybe_upload_output_dir happy path now drives the real ensure_r2_env_loaded credential ping +
+  upload_dir, asserting the tree lands under the destination prefix; the noop / non-zero-rank cases
+  assert nothing materializes. - Replace upload_dir's flag-pinning subprocess mock with a behavioral
+  re-upload test proving overwrite (absence of --immutable); the copy-verb and tree-preservation
+  behavior is already covered by the lands-tree test. - Re-export fake_r2_remote from
+  tests/conftest.py so tests/test_eval.py can use it, matching the existing worktree_for_ref
+  re-export pattern.
+
+* test(eval): e2e CLI output-dir upload + widen upload timeout to 3h
+
+Add an end-to-end test that runs the real synth-setter-eval entrypoint against a local-backed rclone
+  remote with evaluation.upload_output_dir_uri set, then asserts every locally-written file
+  reappears beneath the destination prefix and the uploaded metrics.json carries the oracle's
+  exact-zero test/param_mse — no mocks, the whole dir mirrored.
+
+Lift upload_dir's bare --timeout=300s into _UPLOAD_DIR_TIMEOUT and widen it to 3h: that flag is
+  rclone's IO idle timeout, and a whole eval run dir (rendered audio, predictions) can stream past
+  the single-file default. An argv-shape test pins the 3h timeout and the absence of --immutable.
+
+Refs #93
+
+* fix(eval): validate upload URI before the R2 credential ping
+
+_maybe_upload_output_dir ran ensure_r2_env_loaded (an auth ping) before upload_dir's own r2://
+  check, so a misconfigured upload_output_dir_uri surfaced as a credentials/auth error instead of an
+  invalid-URI one. Guard the URI shape first so the failure is attributed to the URI.
+
+### Refactoring
+
+- **config**: Rename data config group to datamodule
+  ([#1348](https://github.com/tinaudio/synth-setter/pull/1348),
+  [`7702f00`](https://github.com/tinaudio/synth-setter/commit/7702f0094693b1d10745b79998f5d514b173b231))
+
+* refactor(config): rename data config group to datamodule
+
+The Hydra config group at `configs/data/` configures a `LightningDataModule` in every YAML, and the
+  codebase already calls the concept a "datamodule" everywhere (the `*DataModule` classes,
+  `instantiate_datamodule()`, the "Instantiating datamodule" log line). The group name `data` was
+  the lone holdout and collided conceptually with the unrelated `synth_setter.data` package and
+  `pipeline/data/` tree.
+
+Rename the config group (and its matching pydantic schema) `data` -> `datamodule`:
+
+- `configs/data/` -> `configs/datamodule/`; defaults/overrides `data: ???`, `override /data:`,
+  top-level `data:` blocks, and `${data.*}` interpolations (including model configs'
+  `${data.signal_length}` / `${data.k}`) -> `datamodule`. - `cfg.data` -> `cfg.datamodule` in the
+  CLI/utils/tools; `DataConfig` -> `DataModuleConfig` (`schemas/datamodule_config.py`), and the
+  `_NON_SPEC_*KEYS` drop-lists in `cli/generate_dataset.py` / `pipeline/ci/spec_uri.py`. - CLI
+  override strings (`data=ksin`, `data.dataset_root=...`, `data.k=...`) across sweeps, job scripts,
+  tests, the package-smoke workflow, and docs. - `test_compare_baseline_configs` normalizes the
+  frozen v0.0.0 baseline's `data` group to `datamodule` before comparison (the group is a published
+  ref that can't be re-tagged).
+
+The `synth_setter.data` package and `pipeline/data/` are untouched.
+
+* docs(config): address review feedback on PR #1348
+
+- architecture.md: update the configs/ tree node `data/` → `datamodule/` to match the renamed group
+  (comment 3343751332). - eval-pipeline.md: fix the composition example placeholder
+  `configs/datamodule/{data}.yaml` → `{datamodule}` (comment 3343751387).
+
+* refactor(config): rename data → datamodule in references merged via #1338
+
+The rebase onto main pulled in #1338 (R2 download + inline oracle-eval), which added new
+  `data`-group references the original rename predated: - test_eval.py: `data.*` CLI overrides for
+  the R2-download eval path. - eval-pipeline.md: the `datamodule.r2_path` experiment-config example.
+
+* docs(config): finish data → datamodule rename in docs (review round 2)
+
+Copilot re-review surfaced more config-group references the sweep missed (bare tree nodes / prose
+  without the `=`/`.` delimiters the scan keyed on): - getting-started.md: config-tree node `data/`
+  → `datamodule/`; the "require `data=`" sentence → `datamodule=` (comments 3344012178, 3344012223).
+  - data-pipeline.md: the defaults-list prose `data:` → `datamodule:` and the config-tree node
+  `data/` → `datamodule/` (comment 3344012252).
+
+* test(config): accept datamodule.download_dataset_root_uri baseline diff
+
+#1338 added the optional R2-download URI to the surge datamodule configs but did not add it to
+  ACCEPTED_DIFFS, so the predict baseline comparison diverges from the frozen v0.0.0 config (which
+  lacks the field). It is dataset-locality, not a model knob — same category as
+  dataset_root/predict_file/stats_file — so accept it. Surfaced after rebasing this rename onto
+  #1338.
+
+- **tools**: Remove unused instantiate_datamodule from plot_param2tok
+  ([#1359](https://github.com/tinaudio/synth-setter/pull/1359),
+  [`7973ef3`](https://github.com/tinaudio/synth-setter/commit/7973ef313aa752dea6ddb971005f619ca05e4d28))
+
+It was defined but never called; main only instantiates the model.
+
+
 ## v8.14.0 (2026-06-02)
 
 ### Features
