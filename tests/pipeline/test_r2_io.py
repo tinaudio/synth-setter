@@ -3,9 +3,9 @@
 State-based tests use the ``fake_r2_remote`` fixture (see ``tests/pipeline/
 conftest.py``): rclone runs against a local-typed remote rooted at a tmp dir,
 so each test asserts on the filesystem state after the helper runs instead of
-on the rclone argv list. Two narrow argv-shape tests survive (the reliability-
-flag set on ``upload_to_uri`` and the ``lsf --format=s`` shape on
-``object_size``) to pin invariants state-based tests cannot observe.
+on the rclone argv list. A few narrow tests still inspect the argv (e.g. the
+``lsf --format=s`` shape on ``object_size``) or stub ``subprocess.run`` to
+simulate non-zero exits — invariants the filesystem state cannot reveal.
 """
 
 from __future__ import annotations
@@ -138,30 +138,32 @@ class TestDownloadDirNoOverwrite:
         with pytest.raises(ValueError, match="not an r2:// URI"):
             r2_io.download_dir_no_overwrite("local-dir", tmp_path / "root")
 
-    def test_command_carries_immutable_and_reliability_flags(self, tmp_path: Path) -> None:
-        """Pin the rclone verb + ``--immutable`` + reliability-flag set.
+    def test_redownload_over_drifted_file_hard_fails(
+        self, fake_r2_remote: Path, tmp_path: Path
+    ) -> None:
+        """``--immutable`` makes a re-download over a locally-changed file error out.
 
-        ``--immutable`` is the entire point of this helper (no-clobber) and is
-        unobservable from filesystem state alone; the reliability flags must
-        match the upload helpers so a transient blip retries instead of failing
-        the eval. One mock-based argv assertion guards both invariants.
+        The no-clobber guard is the reason this helper exists: a second download
+        into a dest whose copy drifted from the remote must surface the conflict
+        instead of silently overwriting it.
 
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
         :param tmp_path: Pytest tmp dir used for the download destination.
         """
-        with patch.object(r2_io.subprocess, "check_call") as mock_call:
-            r2_io.download_dir_no_overwrite("r2://bucket/dataset", tmp_path / "root")
-        args = mock_call.call_args[0][0]
-        assert args[:2] == ["rclone", "copy"]
-        assert "--immutable" in args
-        assert "--checksum" in args
-        assert "-vv" in args
-        assert "--contimeout=30s" in args
-        assert "--timeout=300s" in args
-        assert "--retries=3" in args
+        prefix = fake_r2_remote / "bucket" / "dataset"
+        prefix.mkdir(parents=True)
+        (prefix / "train.h5").write_text("remote")
+        dest = tmp_path / "root"
+        r2_io.download_dir_no_overwrite("r2://bucket/dataset", dest)
+
+        (dest / "train.h5").write_text("locally drifted")
+
+        with pytest.raises(subprocess.CalledProcessError):
+            r2_io.download_dir_no_overwrite("r2://bucket/dataset", dest)
 
 
 class TestUploadToUri:
-    """Tests for upload_to_uri — file→file upload with reliability flags."""
+    """Tests for upload_to_uri — file→file upload."""
 
     def test_lands_local_bytes_at_remote_uri(self, fake_r2_remote: Path, tmp_path: Path) -> None:
         """Upload writes the local file's bytes to the URI's path under the bucket.
@@ -204,29 +206,23 @@ class TestUploadToUri:
         with pytest.raises(ValueError, match="not an r2:// URI"):
             r2_io.upload_to_uri(tmp_path / "in.json", "local-dest.json")
 
-    def test_command_carries_rclone_reliability_flags(self, tmp_path: Path) -> None:
-        """Pin the rclone reliability-flag set on upload.
+    def test_reupload_overwrites_remote_object(self, fake_r2_remote: Path, tmp_path: Path) -> None:
+        """Re-uploading changed bytes replaces the existing remote object.
 
-        State-based tests cover the file-landing contract but cannot observe the
-        ``-vv / --checksum / --contimeout / --timeout / --retries`` flags. Losing
-        any of them is a silent correctness regression (e.g. dropping
-        ``--checksum`` would let half-uploaded objects pass; dropping
-        ``--retries`` would surface transient network blips as hard failures).
-        One mock-based argv assertion guards the invariant.
+        The upload path publishes the caller's own fresh file, so a second push to the same key
+        must overwrite the prior object rather than skip or no-clobber it.
 
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
         :param tmp_path: Pytest tmp dir used for the upload source file.
         """
         src = tmp_path / "in.json"
-        src.write_text("{}")
-        with patch.object(r2_io.subprocess, "check_call") as mock_call:
-            r2_io.upload_to_uri(src, "r2://bucket/key.json")
-        args = mock_call.call_args[0][0]
-        assert args[:2] == ["rclone", "copyto"]
-        assert "-vv" in args
-        assert "--checksum" in args
-        assert "--contimeout=30s" in args
-        assert "--timeout=300s" in args
-        assert "--retries=3" in args
+        src.write_text('{"v": 1}')
+        r2_io.upload_to_uri(src, "r2://bucket/key.json")
+
+        src.write_text('{"v": 2}')
+        r2_io.upload_to_uri(src, "r2://bucket/key.json")
+
+        assert (fake_r2_remote / "bucket" / "key.json").read_text() == '{"v": 2}'
 
 
 class TestIsR2Reachable:
@@ -358,21 +354,6 @@ class TestUpload:
         r2_io.upload("r2://bucket/src/key.json", "r2://bucket/dst/key.json")
 
         assert (fake_r2_remote / "bucket" / "dst" / "key.json").read_text() == '{"seed": true}'
-
-    def test_r2_uri_source_uses_rclone_copyto_with_reliability_flags(self, tmp_path: Path) -> None:
-        """R2→R2 path carries the same reliability flag set as the local-upload path.
-
-        :param tmp_path: Pytest tmp dir (unused; threaded so fixture isolation is consistent).
-        """
-        with patch.object(r2_io.subprocess, "check_call") as mock_call:
-            r2_io.upload("r2://bucket/src/key.json", "r2://bucket/dst/key.json")
-        args = mock_call.call_args[0][0]
-        assert args[:2] == ["rclone", "copyto"]
-        assert "--checksum" in args
-        assert "--contimeout=30s" in args
-        assert "--timeout=300s" in args
-        assert "--retries=3" in args
-        assert args[-2:] == ["r2:bucket/src/key.json", "r2:bucket/dst/key.json"]
 
     def test_rejects_path_whose_text_looks_like_r2_uri(self) -> None:
         """A ``Path("r2://...")`` is rejected so dispatch is unambiguous between local and R2."""
