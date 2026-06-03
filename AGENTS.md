@@ -137,10 +137,12 @@ unintended shell expansion. A `PreToolUse` hook
   justified larger gap. The gate also **blocks while the sentinel still lists
   `[comment-hygiene:warn|block]` findings** (`REVIEW_COMMENT_GATE`: `block` default /
   `warn` / `off`) and **while it lists any `[<skill>:block]` finding**
-  (`REVIEW_BLOCK_GATE`: `block` default / `warn` / `off`). Run
-  `/fix-review-comments` to apply the findings' rewrites, commit, and re-review
-  in one pass; set `REVIEW_COMMENT_GATE=off` / `REVIEW_BLOCK_GATE=off` only for
-  a finding you've judged intentional.
+  (`REVIEW_BLOCK_GATE`: `block` default / `warn` / `off`). For comment-hygiene
+  findings, run `/fix-review-comments` to apply the rewrites, commit, and
+  re-review in one pass; other `[<skill>:block]` findings need the underlying
+  issue fixed and `/repo-review-full-no-comments` re-run to regenerate the
+  sentinel. Set `REVIEW_COMMENT_GATE=off` / `REVIEW_BLOCK_GATE=off` only for a
+  finding you've judged intentional.
 - **Readiness gates:** CI green ∧ `mergeable=MERGEABLE` ∧ every review
   comment has an inline reply ∧ no fresh Copilot findings — see
   `/pr-preflight`.
