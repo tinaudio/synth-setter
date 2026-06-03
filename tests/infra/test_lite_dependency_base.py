@@ -56,6 +56,7 @@ HEAVY_DEPS = {
     "scipy",
     "pesto-pitch",
     "kymatio",
+    "pot",
     "wandb",
     "tensorboard",
 }
