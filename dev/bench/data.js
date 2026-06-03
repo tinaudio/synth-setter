@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779944139954,
+  "lastUpdate": 1780502182451,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -5118,6 +5118,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.04151242971420288,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "07cea2926386a60c64de7cab676d320bee9971a5",
+          "message": "refactor(testing): chain dataset E2E + consolidate redundant generate/eval workflows (#1391)\n\n* refactor(testing): extract render/rclone subprocess dispatcher to tests/helpers\n\nMove `_materialize_shard`, the real-check_call capture, and the\n`_materialize_or_passthrough_rclone` dispatcher out of\ntest_generate_dataset.py into tests/helpers/render_subprocess.py so the\nrender-orchestration tests share one subprocess-patching style instead of\neach re-deriving it (#1354 item 3).\n\nRefs #1354\n\n* refactor(ci): collapse generate-finalize-oracle-eval into an oracle_eval flag\n\ngenerate-finalize-oracle-eval.yaml was generate-and-finalize-dataset.yaml plus\noracle_eval_inline=true and two param_mse==0 assertion steps. Both are\noperator-dispatch-only with no callers. Merge them: generate-and-finalize-dataset\ngains an `oracle_eval` boolean input that appends the inline-eval override and\ngates the oracle-invariant assertions, and the superset workflow is deleted —\nremoving the redundant generate+finalize-only re-render (#1354 item 4).\n\nRefs #1354\n\n* refactor(testing): fold render-matrix cadence coverage into the parallel test\n\ntest-dataset-generation-render-matrix.yml spent a 7-cell docker fan-out to\nprove real renders survive each gui_toggle/plugin_reload cadence pair. The\ncadence cross-field validation (which pairs accept/reject, incl. always_on\nrequiring plugin_reload_cadence=once) is already unit-tested in\ntest_dataset_spec.py, so the workflow's validator job was redundant; its\nunique value — a real render per cadence — folds into\ntest_parallel_shard_render_linux.py, now parametrized over representative\ncadence cells. Retire the workflow and refresh the two stale references to it.\n\nRefs #1354\n\n* test(ci): run the parallel-render cadence test in test-vst-slow\n\nAddress pre-PR review: the parametrized cadence cells folded out of the\nretired render-matrix ran in no CI lane (test_parallel_shard_render_linux.py\nis requires_vst, which only test-vst-slow exercises). Wire it into\ntest-vst-slow's pytest target and add the cadence-relevant trigger paths\n(render_config.py, spec.py, render/experiment configs) the matrix gated. The\ntest now self-derives renderer_version from the bundle's moduleinfo.json so it\nruns without an operator-pinned version. Also correct the render_subprocess\ndocstring (only the entrypoint tests consume it) and soften the integration\ndocstring to \"representative cells\".\n\nRefs #1354\n\n* docs: refresh cadence + integration-test docs for the render-matrix retirement\n\nAddress the doc-drift advisory: add the always_on member (and the\nplugin_reload_cadence=once pairing + a spec.py source-of-truth pointer) to the\nRenderConfig snippet in data-pipeline.md; add test_parallel_shard_render_linux.py\nto the testing.md integration table and the doc-map integration class list as the\nnew home of the retired render-matrix's cadence coverage; fix a garbled comment\nin test-vst-slow.yml.\n\nRefs #1354\n\n* fix(testing): address Copilot review on the cadence render test + oracle find\n\n- Derive renderer_version lazily inside the spec builder (execution time, under\n  the Xvfb wrapper) instead of at import: extract_renderer_version falls back to\n  loading the plugin when the bundle has no moduleinfo.json (Surge XT has none),\n  which must not happen at collection. Collection no longer touches the plugin;\n  the skip now keys only on plugin presence.\n- Fix the oracle metrics lookup: inline eval writes under\n  <paths.output_dir>/oracle_eval/<run_id>/metrics/, a Hydra run dir, so search\n  the workspace for that `*/oracle_eval/*/metrics/metrics.json` tail instead of\n  only ${PROJECT_ROOT}/oracle_eval.\n\nRefs #1354\n\n* ci(test-vst-slow): gate render/spec PRs, preserving render-matrix timing\n\nThe retired test-dataset-generation-render-matrix.yml ran on pull_request, but\ntest-vst-slow.yml (the fold's new home) was push-to-main only — so the cadence\nreal-render coverage had silently moved from PR-gating to post-merge. Add a\npull_request trigger sharing the push path filter (via a YAML anchor) so the\nsuite, including the parallel-render cadence cells, gates render/spec PRs again.\nThe benchmark-publish step stays push/dispatch-only, so PRs never touch\ngh-pages.\n\nRefs #1354\n\n* ci(test-vst-slow): inline pull_request paths instead of a YAML anchor\n\nThe act-parse lane builds its runner image before parsing, so the anchor was\nnot the cause of its failure (an external git-lfs packagecloud 403), but inline\npaths avoid any anchor-compatibility risk in the workflow the act lane parses.\nBehavior is identical to the anchored version.\n\nRefs #1354",
+          "timestamp": "2026-06-03T11:21:15-04:00",
+          "tree_id": "7c3ec905e17ef6a08c6503d850f419d2fe91f444",
+          "url": "https://github.com/tinaudio/synth-setter/commit/07cea2926386a60c64de7cab676d320bee9971a5"
+        },
+        "date": 1780502181810,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 4.839779376983643,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 5.646147693283856,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.03600343316793442,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.048416852951049805,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.8179380893707275,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 15.003107698666659,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.839779376983643,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.319524119445123,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.03600343316793442,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.04936492443084717,
             "unit": "1-cos"
           },
           {
