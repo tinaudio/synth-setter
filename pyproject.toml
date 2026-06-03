@@ -76,8 +76,9 @@ synth-setter-spec-uri = "synth_setter.pipeline.ci.spec_uri:main"
 
 
 # PEP 735 groups hold the heavy runtime moved out of [project.dependencies]
-# (#1139); pip/uv pip ignore them, so lite CI gets a light base. `runtime`
-# aggregates every sub-group; `dev` (the default group) includes it.
+# (#1139); pip never installs them and uv pip only with `--group`, so a plain
+# `pip install -e .` keeps lite CI light. `runtime` aggregates every sub-group;
+# `dev` (the default group) includes it.
 [dependency-groups]
 docs = [
   "mkdocs",

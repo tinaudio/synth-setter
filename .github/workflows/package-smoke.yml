@@ -101,7 +101,8 @@ jobs:
       # adds the heavy runtime to run the canonical Hydra compose path through
       # it. The runtime lives in PEP 735 groups (#1139), absent from wheel
       # metadata, so `uv pip install --group runtime` adds it from the
-      # checked-out pyproject (uv ignores [tool.uv.sources] → torch from PyPI).
+      # checked-out pyproject. No cpu/cu128 extra is active, so torch resolves
+      # from PyPI (fine for this CPU smoke).
       - name: Install wheel with full deps
         run: |
           python -m venv "$RUNNER_TEMP/full"

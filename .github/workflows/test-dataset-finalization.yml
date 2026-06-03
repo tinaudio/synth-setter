@@ -197,8 +197,9 @@ jobs:
       # stay inside the same bounds `tests/test_train.py::test_train_eval_surge_xt`
       # pins for the oracle leg. Helper auto-skips when R2 is unreachable.
       # Heavy runtime lives in PEP 735 groups since #1139; `--group dev`
-      # transitively includes `runtime`. uv pip ignores [tool.uv.sources], so
-      # torch resolves from PyPI — runs on the CPU runner, as before.
+      # transitively includes `runtime`. No cpu/cu128 extra (which
+      # [tool.uv.sources] keys torch routing on) is active, so torch resolves
+      # from PyPI — runs on the CPU runner, as before.
       - name: Install project deps for oracle helper
         run: uv pip install --system --group dev -e .
 
