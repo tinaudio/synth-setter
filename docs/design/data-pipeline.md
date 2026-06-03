@@ -1219,8 +1219,9 @@ class RenderConfig(BaseModel):
     # (show_editor SIGTRAPs after ~3-4 calls, #714), "render" elsewhere
     # (preserves historical per-render warm-up). An explicit
     # gui_toggle_cadence="render" is still rejected on Darwin by a
-    # model_validator.
-    gui_toggle_cadence: Literal["never", "once", "render"] = Field(
+    # model_validator; "always_on" requires plugin_reload_cadence="once".
+    # Source of truth: _GuiToggleCadence / RenderConfig in pipeline/schemas/spec.py.
+    gui_toggle_cadence: Literal["never", "once", "render", "always_on"] = Field(
         default_factory=_default_gui_toggle_cadence
     )
 

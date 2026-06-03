@@ -41,7 +41,7 @@ on:
       - "tests/data/vst/**"
       - "tests/integration/test_parallel_shard_render_linux.py"
       - "src/synth_setter/evaluation/compute_audio_metrics.py"
-      # Cadence cross-field surface the retired render-matrix gated — the
+      # Cadence cross-field coverage the retired render-matrix gated — the
       # parallel-render cells below now cover it under real Surge (#1354).
       - "src/synth_setter/data/render_config.py"
       - "src/synth_setter/pipeline/schemas/spec.py"
