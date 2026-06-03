@@ -44,6 +44,15 @@ Architecture: [docs/architecture.md](docs/architecture.md).
   rules to make CI green is forbidden — see
   [`### Lint exceptions are append-frozen`](#lint-exceptions-are-append-frozen).
 
+## Comment hygiene
+
+Code says **what**; comments say **why** — add prose only when it carries a
+constraint, unit, semantic, or rationale that names and types can't, and
+describe only current behavior (history belongs in the commit message). Keep
+comments to one line (cap two), open docstrings with the contract, and supply
+`:param:` / `:returns:` / `:raises:` semantics wherever pydoclint expects them —
+full rules in the `comment-hygiene` skill.
+
 ## Testing
 
 - `make test-fast` is the default CPU loop; `@pytest.mark.slow` for slow.
