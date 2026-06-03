@@ -61,7 +61,6 @@ Invoke in order: `/tdd-implementation` (drive it test-first) → `/code-health` 
 - Run `make format` first; pre-commit (ruff, ruff-format, pydoclint, prettier, mdformat, gitlint) is authoritative. **Never `--no-verify` / `-n`**, and never suppress a rule to make CI green — fix the underlying cause.
 - **Never add `Co-Authored-By` or agent-attribution trailers** ("Generated with …", "Claude …"). A `PreToolUse` hook (`agent/hooks/git-commit-trailer-check.sh`) blocks them.
 - **Verify the branch before push:** `git branch --show-current` must match the target PR branch.
-- **Never commit without explicit permission.** The user opts in.
 
 </important>
 

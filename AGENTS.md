@@ -28,8 +28,7 @@ Architecture: [docs/architecture.md](docs/architecture.md).
 - **Always verify the branch before push.** Run `git branch --show-current`
   and confirm it matches the target PR branch. A hook prints the branch on
   every `git commit`; don't ignore it.
-- **Never commit without explicit permission.** The user opts in. Pre-commit
-  hooks must not be skipped — see [`### Commits`](#commits).
+- **Pre-commit hooks must not be skipped** — see [`### Commits`](#commits).
 - **Never run `make docker-*` or RunPod commands without asking.** These
   spend money and burn cluster state.
 
