@@ -183,6 +183,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      # rclone runs inside the worker container/pod, so no host install here;
+      # setup-r2 exports the `RCLONE_CONFIG_R2_*` env every downstream consumer
+      # reads — the launcher's cred bootstrap + rclone upload (native and
+      # in-container) and the `docker run -e <VAR>` shard-validation forward.
+      - name: Set up R2
+        uses: ./.github/actions/setup-r2
+        with:
+          access-key-id: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+          endpoint: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+
       # Reject hydra_overrides containing anything outside the allowed character
       # class. The docker (runpod/oci) row expands `$HYDRA_OVERRIDES_EXTRA`
       # unquoted inside `bash -c`, so an unrestricted value like
@@ -409,9 +420,6 @@ jobs:
         if: ${{ inputs.provider == 'skypilot-local' }}
         timeout-minutes: 40
         env:
-          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
-          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
-          RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           CLUSTER_NAME: ${{ steps.cluster.outputs.name }}
           WORKER_GIT_REF: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -538,9 +546,6 @@ jobs:
           OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
           OCI_REGION: ${{ secrets.OCI_REGION }}
           OCI_API_KEY_PEM: ${{ secrets.OCI_API_KEY_PEM }}
-          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
-          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
-          RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
           WORKER_GIT_REF: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -670,15 +675,12 @@ jobs:
       - name: Validate all shards from R2
         env:
           SPEC_URI: ${{ steps.spec_uri.outputs.spec_uri }}
-          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
-          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
-          RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
         run: |
           set -euo pipefail
           docker run --rm \
             -v "${{ github.workspace }}:/home/build/synth-setter:ro" \
-            -e RCLONE_CONFIG_R2_TYPE=s3 \
-            -e RCLONE_CONFIG_R2_PROVIDER=Cloudflare \
+            -e RCLONE_CONFIG_R2_TYPE \
+            -e RCLONE_CONFIG_R2_PROVIDER \
             -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
             -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
             -e RCLONE_CONFIG_R2_ENDPOINT \

@@ -124,6 +124,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      # rclone runs inside the worker pod, not on the runner; setup-r2 exports
+      # the `RCLONE_CONFIG_R2_*` env both the cred bootstrap and the SkyPilot
+      # launch step read (via `write_provider_creds.sh` and `os.environ`,
+      # respectively) and forward into the pod through `task.update_envs`.
+      - name: Set up R2
+        uses: ./.github/actions/setup-r2
+        with:
+          access-key-id: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+          endpoint: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -145,9 +156,6 @@ jobs:
       # both halves of the workflow.
       - name: Bootstrap OCI credentials
         env:
-          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
-          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
-          RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}
           OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
@@ -201,9 +209,6 @@ jobs:
           CLUSTER_NAME: ${{ steps.cluster.outputs.name }}
           TEMPLATE: ${{ env.SOURCE_TEMPLATE }}
           DEADLINE: ${{ env.LAUNCH_DEADLINE_SECONDS }}
-          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
-          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
-          RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
         run: |
           set -euo pipefail
           python - <<'PY'

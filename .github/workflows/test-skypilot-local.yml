@@ -105,6 +105,16 @@ jobs:
       - name: sky local up
         run: uv run sky local up --no-gpus
 
+      # rclone runs inside the worker pod (not on the runner); setup-r2 only
+      # exports the `RCLONE_CONFIG_R2_*` env the `sky launch` step reads via
+      # `os.environ` and forwards into the pod through `task.update_envs`.
+      - name: Set up R2
+        uses: ./.github/actions/setup-r2
+        with:
+          access-key-id: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+          endpoint: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+
       # Launch the local-debug rclone task. R2 env vars are forwarded into
       # the worker pod via task.update_envs — same wiring the production
       # launcher uses on the cloud backends, so a regression here flags an
@@ -119,10 +129,6 @@ jobs:
       # — sharing the call from inside the same Python process is the
       # robust workaround.
       - name: sky launch (local-debug rclone task)
-        env:
-          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
-          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
-          RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
         run: |
           set -o pipefail
           uv run python - <<'PY' 2>&1 | tee "$LOG_PATH"

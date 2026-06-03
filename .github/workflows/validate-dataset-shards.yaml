@@ -47,12 +47,6 @@ jobs:
     name: Validate spec structure
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    env:
-      RCLONE_CONFIG_R2_TYPE: s3
-      RCLONE_CONFIG_R2_PROVIDER: Cloudflare
-      RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
-      RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
-      RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -75,8 +69,15 @@ jobs:
           restore-keys: |
             pip-validate-spec-${{ runner.os }}-
 
-      - name: Install rclone
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq rclone
+      # Native runner with no preinstalled rclone; `validate_spec` reads the
+      # `RCLONE_CONFIG_R2_*` env this exports to pull the spec from R2.
+      - name: Set up R2
+        uses: ./.github/actions/setup-r2
+        with:
+          access-key-id: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+          endpoint: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+          install-rclone: "true"
 
       # synth_setter.pipeline.ci.validate_spec imports OUTPUT_FORMAT_TO_EXTENSION from
       # synth_setter.pipeline.schemas.spec (transitively pulls pydantic at module
@@ -110,18 +111,24 @@ jobs:
       - name: Pull dev-snapshot image
         run: docker pull "${IMAGE}"
 
+      # rclone runs inside the container; setup-r2 only exports the
+      # `RCLONE_CONFIG_R2_*` values the `docker run -e <VAR>` lines forward.
+      - name: Set up R2
+        uses: ./.github/actions/setup-r2
+        with:
+          access-key-id: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+          endpoint: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+
       - name: Validate every shard via R2
         env:
           SPEC_URI: ${{ inputs.spec_uri }}
-          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
-          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
-          RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
         run: |
           set -euo pipefail
           docker run --rm \
             -v "${{ github.workspace }}:/home/build/synth-setter:ro" \
-            -e RCLONE_CONFIG_R2_TYPE=s3 \
-            -e RCLONE_CONFIG_R2_PROVIDER=Cloudflare \
+            -e RCLONE_CONFIG_R2_TYPE \
+            -e RCLONE_CONFIG_R2_PROVIDER \
             -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
             -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
             -e RCLONE_CONFIG_R2_ENDPOINT \

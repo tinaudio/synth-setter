@@ -223,6 +223,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      # rclone runs inside the worker pod/container, not on the runner; setup-r2
+      # exports the `RCLONE_CONFIG_R2_*` env every probe row reads — inline-sky
+      # and launcher-runner via `os.environ` into `task.update_envs`, and
+      # launcher-docker via value-less `docker run -e <VAR>` forwarding.
+      - name: Set up R2
+        uses: ./.github/actions/setup-r2
+        with:
+          access-key-id: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+          endpoint: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -265,9 +276,6 @@ jobs:
           SKYPILOT_API_SERVER_ENDPOINT: ${{ secrets.SKYPILOT_API_SERVER_ENDPOINT }}
           PROVIDER: runpod
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
-          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
-          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
-          RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_BUCKET: intermediate-data
           CLUSTER_NAME: ${{ matrix.cluster_prefix }}-${{ matrix.cluster_suffix }}-${{ github.run_id }}
@@ -383,9 +391,6 @@ jobs:
         env:
           SKYPILOT_API_SERVER_ENDPOINT: ${{ secrets.SKYPILOT_API_SERVER_ENDPOINT }}
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
-          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
-          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
-          RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           PYTHONPATH: ${{ github.workspace }}
           CLUSTER_NAME: ${{ matrix.cluster_prefix }}-${{ matrix.cluster_suffix }}-${{ github.run_id }}
@@ -407,9 +412,6 @@ jobs:
         env:
           SKYPILOT_API_SERVER_ENDPOINT: ${{ secrets.SKYPILOT_API_SERVER_ENDPOINT }}
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
-          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
-          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
-          RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           CLUSTER_NAME: ${{ matrix.cluster_prefix }}-${{ matrix.cluster_suffix }}-${{ github.run_id }}
           CONFIG_PATH: ${{ matrix.config }}
