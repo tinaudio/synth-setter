@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780504213573,
+  "lastUpdate": 1780504216334,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -9187,6 +9187,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 17.795056706399997,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1de6c732bd7a4bd14eac9724d72068ca2dddaf02",
+          "message": "refactor(pipeline): collapse cfg→DatasetSpec onto one allowlist helper (#1390)\n\nTwo code paths turned a Hydra-composed dataset cfg into a DatasetSpec,\neach with its own \"drop non-spec keys\" logic and a twin constant kept in\nsync by a contract test. Add DatasetSpec.from_hydra_cfg — an allowlist\nmask (k in model_fields) applied before resolve=True — and route both\nspec_from_cfg and compute_spec_uri_from_hydra through it.\n\nThis deletes _NON_SPEC_KEYS, _NON_SPEC_CFG_KEYS, the resolve-then-filter\nblock with cfg.paths.* = \".\" placeholders, and the now-meaningless\nkeys-in-sync contract test. Masking before resolve means non-spec groups\nwhose interpolations need @hydra.main-only resolvers (e.g.\ndatamodule.dataset_root: ${hydra:runtime.output_dir}/data) are never\nevaluated, so the spec resolves under a plain compose() too.\n\nRefs #91",
+          "timestamp": "2026-06-03T11:22:01-04:00",
+          "tree_id": "5d2b358acaf7674090f8304b59483ed0f8681483",
+          "url": "https://github.com/tinaudio/synth-setter/commit/1de6c732bd7a4bd14eac9724d72068ca2dddaf02"
+        },
+        "date": 1780504215601,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 2.530276298522949,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 3.5987642724066973,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.05086597427725792,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.0073410868644714355,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 2.151733636856079,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.511361362000002,
             "unit": "seconds"
           }
         ]
