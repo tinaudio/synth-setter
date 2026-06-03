@@ -1,10 +1,10 @@
 """Shared ``subprocess.check_call`` side effects for render-orchestration tests.
 
-The state-based generate-entrypoint tests and the parallel-render integration
-test both patch the single ``subprocess.check_call`` symbol that the renderer
-*and* the rclone shard upload go through. They need one dispatch contract so the
-two lanes don't drift into incompatible subprocess-patching styles — extracting
-it here is that single source of truth (see #1354).
+The state-based generate-entrypoint tests in
+``tests/pipeline/entrypoints/test_generate_dataset.py`` patch the single
+``subprocess.check_call`` symbol that the renderer *and* the rclone shard upload
+both go through; this module is the one dispatch contract those ~11 call sites
+share instead of each re-deriving it (see #1354).
 """
 
 from __future__ import annotations

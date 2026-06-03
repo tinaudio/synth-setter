@@ -39,7 +39,14 @@ on:
     paths:
       - "src/synth_setter/data/vst/**"
       - "tests/data/vst/**"
+      - "tests/integration/test_parallel_shard_render_linux.py"
       - "src/synth_setter/evaluation/compute_audio_metrics.py"
+      # Cadence cross-field surface the retired render-matrix gated — the
+      # parallel-render cells below now cover it under real Surge (#1354).
+      - "src/synth_setter/data/render_config.py"
+      - "src/synth_setter/pipeline/schemas/spec.py"
+      - "src/synth_setter/configs/render/**"
+      - "src/synth_setter/configs/experiment/generate_dataset/**"
       - ".github/workflows/test-vst-slow.yml"
       - "pyproject.toml"
 
@@ -120,7 +127,8 @@ jobs:
                   tests/data/vst/test_generate_vst_dataset.py \
                   tests/data/vst/test_always_on_integration.py \
                   tests/data/vst/test_run_with_editor_held_open_real_plugin.py \
-                  tests/data/vst/test_pedalboard_threading_contract.py
+                  tests/data/vst/test_pedalboard_threading_contract.py \
+                  tests/integration/test_parallel_shard_render_linux.py
             '
 
       # coverage.xml is written inside the container at the workspace mount,

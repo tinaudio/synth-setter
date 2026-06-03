@@ -14,11 +14,14 @@ here gates whether per-thread ``DISPLAY`` provisioning (or wrapper edits)
 is needed; a pass closes the open question from the design doc.
 
 It is parametrized over representative ``gui_toggle_cadence`` /
-``plugin_reload_cadence`` pairs so a real render exercises each cadence's
-toggle/reload loop — the coverage the retired ``test-dataset-generation-render-matrix.yml``
-docker fan-out provided. The cadence cross-field *validation* (which pairs are
-accepted / rejected, e.g. ``always_on`` requires ``plugin_reload_cadence="once"``)
-is unit-tested in ``tests/pipeline/schemas/test_dataset_spec.py`` (#1354).
+``plugin_reload_cadence`` pairs so a real render exercises each structurally
+distinct toggle/reload loop — representative cells of the coverage the retired
+``test-dataset-generation-render-matrix.yml`` docker fan-out provided (it ran
+all valid pairs; the dispatch branches are also covered fast in
+``tests/data/vst/test_writers.py``). The cadence cross-field *validation* (which
+pairs are accepted / rejected, e.g. ``always_on`` requires
+``plugin_reload_cadence="once"``) is unit-tested in
+``tests/pipeline/schemas/test_dataset_spec.py`` (#1354).
 """
 
 from __future__ import annotations
@@ -32,6 +35,7 @@ import h5py
 import pytest
 
 from synth_setter.cli.generate_dataset import generate
+from synth_setter.data.vst.core import extract_renderer_version
 from synth_setter.data.vst.shapes import AUDIO_FIELD
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 
@@ -43,7 +47,26 @@ pytestmark = [
 
 PLUGIN_PATH = os.environ.get("SYNTH_SETTER_PLUGIN_PATH") or "plugins/Surge XT.vst3"
 PRESET_PATH = "presets/surge-base.vstpreset"
-RENDERER_VERSION = os.environ.get("SYNTH_SETTER_RENDERER_VERSION", "")
+
+
+def _renderer_version() -> str:
+    """Pin ``renderer_version`` to the plugin actually present, so the spec validates.
+
+    Prefers ``SYNTH_SETTER_RENDERER_VERSION`` when set; otherwise reads the
+    version from the bundle's ``moduleinfo.json`` (a cheap file read, no plugin
+    load) so the test runs in CI without the operator pinning a version. Empty
+    when the plugin is absent — the render-skip guard then fires instead.
+
+    :returns: the version string, or ``""`` when the plugin is not installed.
+    """
+    env = os.environ.get("SYNTH_SETTER_RENDERER_VERSION")
+    if env:
+        return env
+    plugin = Path(PLUGIN_PATH)
+    return extract_renderer_version(plugin) if plugin.exists() else ""
+
+
+RENDERER_VERSION = _renderer_version()
 
 _NUM_SHARDS = 4
 _SAMPLES_PER_SHARD = 8
