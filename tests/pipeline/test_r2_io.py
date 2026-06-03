@@ -211,6 +211,25 @@ class TestUploadDir:
         dest = fake_r2_remote / "bucket" / "evals" / "run-1"
         assert (dest / "metrics.json").read_text() == '{"param_mse": 0.0}'
 
+    def test_command_widens_io_timeout_and_omits_immutable(self, tmp_path: Path) -> None:
+        """Pin the rclone verb, the 3h IO timeout, and the absence of ``--immutable``.
+
+        The widened ``--timeout`` lets a whole run dir stream past the single-file
+        default, and the missing ``--immutable`` is what lets a re-upload overwrite
+        — both unobservable from filesystem state. One argv assertion guards them.
+
+        :param tmp_path: Pytest tmp dir used to build the local source path.
+        """
+        with patch.object(r2_io.subprocess, "check_call") as mock_call:
+            r2_io.upload_dir(tmp_path / "run", "r2://bucket/evals/run-1")
+        args = mock_call.call_args[0][0]
+        assert args[:2] == ["rclone", "copy"]
+        assert "--immutable" not in args
+        assert "--checksum" in args
+        assert "--contimeout=30s" in args
+        assert "--timeout=3h" in args
+        assert "--retries=3" in args
+
 
 class TestUploadToUri:
     """Tests for upload_to_uri — file→file upload with reliability flags."""

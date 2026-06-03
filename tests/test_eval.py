@@ -284,6 +284,77 @@ def test_eval_cli_downloads_dataset_from_r2_then_scores_oracle(
     assert metrics["test/param_mse"] == 0.0
 
 
+@pytest.mark.requires_vst
+@pytest.mark.slow
+def test_eval_cli_uploads_output_dir_to_r2(tmp_path: Path, surge_xt_smoke_datasets: Path) -> None:
+    """End-to-end through the ``synth-setter-eval`` CLI: oracle scoring then R2 upload.
+
+    No in-process shortcuts and no mocks — the real entrypoint runs with real
+    ``rclone`` (local-backed remote). With ``evaluation.upload_output_dir_uri`` set,
+    ``main``'s final step mirrors the whole run dir to that prefix, so every file
+    the eval wrote locally must reappear beneath the destination and the uploaded
+    ``metrics.json`` must carry the oracle's exact-zero ``test/param_mse``.
+
+    :param tmp_path: Root for the fake R2 remote and the local output dir.
+    :param surge_xt_smoke_datasets: Source ``{train,val,test}.h5`` + ``stats.npz``.
+    """
+    if shutil.which("rclone") is None:
+        pytest.skip("rclone binary not available on PATH")
+
+    remote_root = tmp_path / "r2"
+    remote_root.mkdir()
+    output_dir = tmp_path / "out"
+    upload_uri = "r2://eval-artifacts/run-1"
+
+    env = {
+        **os.environ,
+        "RCLONE_CONFIG_R2_TYPE": "local",
+        "RCLONE_CONFIG_R2_ACCESS_KEY_ID": "stub",
+        "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY": "stub",
+        "RCLONE_CONFIG_R2_ENDPOINT": "stub",
+    }
+    proc = subprocess.run(  # noqa: S603 — controlled argv
+        [
+            sys.executable,
+            "-m",
+            "synth_setter.cli.eval",
+            "experiment=surge/test-mps-fake-oracle",
+            "trainer=cpu",
+            "mode=test",
+            "hydra.job.chdir=false",
+            f"model.net.d_out={len(param_specs['surge_4'])}",
+            "callbacks.log_per_param_mse.param_spec=surge_4",
+            f"datamodule.dataset_root={surge_xt_smoke_datasets}",
+            f"datamodule.predict_file={surge_xt_smoke_datasets}/test.h5",
+            "datamodule.batch_size=1",
+            "datamodule.num_workers=0",
+            "ckpt_path=null",
+            f"paths.output_dir={output_dir}",
+            f"hydra.run.dir={output_dir}",
+            f"evaluation.upload_output_dir_uri={upload_uri}",
+        ],
+        cwd=remote_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+
+    local_files = {p.relative_to(output_dir) for p in output_dir.rglob("*") if p.is_file()}
+    assert local_files, "eval produced no output files to upload"
+
+    uploaded_root = remote_root / "eval-artifacts" / "run-1"
+    uploaded_files = {
+        p.relative_to(uploaded_root) for p in uploaded_root.rglob("*") if p.is_file()
+    }
+    missing = local_files - uploaded_files
+    assert not missing, f"output dir not fully uploaded; missing {sorted(map(str, missing))}"
+
+    uploaded_metrics = json.loads((uploaded_root / "metrics" / "metrics.json").read_text())
+    assert uploaded_metrics["test/param_mse"] == 0.0
+
+
 @pytest.mark.gpu
 @RunIf(min_gpus=1)
 @pytest.mark.slow

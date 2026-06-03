@@ -57,6 +57,12 @@ _R2_STRUCTURAL_DEFAULTS: dict[str, str] = {
     "RCLONE_CONFIG_R2_PROVIDER": "Cloudflare",
 }
 
+# rclone ``--timeout`` is the IO idle timeout, not a wall-clock cap. A whole eval
+# run dir — rendered audio, predictions, metrics — can stream far longer than a
+# single shard, so the directory upload bounds it generously rather than tripping
+# a healthy large transfer at the 5-minute default the single-file helpers use.
+_UPLOAD_DIR_TIMEOUT = "3h"
+
 
 def ensure_r2_env_loaded(env_file: Path | None = None) -> None:
     """Load ``RCLONE_CONFIG_R2_*`` from ``env_file`` into ``os.environ``; validate.
@@ -244,10 +250,12 @@ def upload_dir(local_dir: Path, r2_uri: str) -> None:
 
     ``rclone copy`` walks ``local_dir`` and writes each file under ``r2_uri``,
     preserving the relative tree. ``--checksum`` skips files already present with
-    a matching hash, so a re-run is idempotent; the reliability flags match the
-    other helpers so a transient blip retries instead of failing the caller.
-    Unlike the download helper there is no ``--immutable`` — the caller is
-    pushing its own freshly-produced directory, not guarding an immutable dataset.
+    a matching hash, so a re-run is idempotent; the connect-timeout and retry
+    flags match the other helpers so a transient blip retries instead of failing
+    the caller, while the IO timeout is widened to :data:`_UPLOAD_DIR_TIMEOUT`
+    because a whole run dir can stream past the single-file default. Unlike the
+    download helper there is no ``--immutable`` — the caller is pushing its own
+    freshly-produced directory, not guarding an immutable dataset.
 
     :param local_dir: Local directory whose contents land directly under
         ``r2_uri`` (the directory itself is not nested under its own name).
@@ -259,7 +267,7 @@ def upload_dir(local_dir: Path, r2_uri: str) -> None:
         "-vv",
         "--checksum",
         "--contimeout=30s",
-        "--timeout=300s",
+        f"--timeout={_UPLOAD_DIR_TIMEOUT}",
         "--retries=3",
         str(local_dir),
         _to_rclone_path(r2_uri),
