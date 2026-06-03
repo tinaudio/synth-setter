@@ -28,6 +28,7 @@ the cfg-composition surface isolated from R2.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 import threading
@@ -37,12 +38,16 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import h5py
+import numpy as np
 import pytest
 
 from synth_setter.cli.generate_dataset import (
     build_generate_args,
     generate,
 )
+from synth_setter.data.vst.shapes import DATASET_FIELD_DTYPES
+from synth_setter.pipeline.constants import STATS_NPZ_FILENAME
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.resources import vst_headless_wrapper
 from tests.helpers.render_subprocess import (
@@ -1624,11 +1629,11 @@ class TestMainDispatchBranches:
     ) -> None:
         """oracle_eval_inline=true on the local-run branch shells out to synth-setter-eval.
 
-        Asserts the eval helper fires once with ``dataset_root`` under
-        ``_OPERATOR_WORKSPACE/oracle_eval/<run_id>/`` and that
-        ``_download_finalized_splits`` populates the same path first.
+        Asserts the eval helper fires once reading the data **in place** from
+        ``cfg.paths.output_dir`` (no download), with its Hydra run dir isolated
+        under ``output_dir/oracle_eval/<run_id>/``.
 
-        :param monkeypatch: Patches argv + the four module-level seams.
+        :param monkeypatch: Patches argv + the three module-level seams.
         """
         import synth_setter.cli.generate_dataset as gd
 
@@ -1645,53 +1650,32 @@ class TestMainDispatchBranches:
         monkeypatch.setattr("sys.argv", argv)
         monkeypatch.setattr(gd, "generate", lambda _spec, _work_dir, _loggers: None)
         monkeypatch.setattr(gd, "finalize_from_spec", MagicMock())
-        download_mock = MagicMock()
-        monkeypatch.setattr(gd, "_download_finalized_splits", download_mock)
         oracle_mock = MagicMock()
         monkeypatch.setattr(gd, "_run_oracle_eval_subprocess", oracle_mock)
+
+        # Capture the resolved output_dir so the eval's dataset_root can be
+        # pinned to the exact dir generate+finalize wrote the shards into.
+        observed: dict[str, Path] = {}
+        real_spec_from_cfg = gd.spec_from_cfg
+
+        def _capture_output_dir(cfg: object) -> DatasetSpec:
+            observed["output_dir"] = Path(cfg.paths.output_dir)  # type: ignore[attr-defined]
+            return real_spec_from_cfg(cfg)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(gd, "spec_from_cfg", _capture_output_dir)
 
         gd.main()
 
         oracle_mock.assert_called_once()
-        dataset_root = oracle_mock.call_args[0][0]
+        dataset_root, run_dir, _run_id = oracle_mock.call_args[0]
         assert isinstance(dataset_root, Path)
-        assert dataset_root.parent.name == "oracle_eval", (
-            f"dataset_root should land under <workspace>/oracle_eval/<run_id>/; got {dataset_root!r}"
+        # The eval reads in place from the Hydra output_dir where the shards and
+        # VDS splits already live — not a downloaded copy under oracle_eval/.
+        assert dataset_root == observed["output_dir"]
+        assert run_dir.parent.name == "oracle_eval", (
+            f"eval run dir should land under <output_dir>/oracle_eval/<run_id>/; got {run_dir!r}"
         )
-        download_mock.assert_called_once()
-        _, downloaded_dest = download_mock.call_args[0]
-        assert downloaded_dest == dataset_root
-
-    def test_download_finalized_splits_fetches_stats_npz_beside_splits(
-        self,
-        spec: DatasetSpec,
-        monkeypatch: pytest.MonkeyPatch,
-        tmp_path: Path,
-    ) -> None:
-        """Finalize download lands ``stats.npz`` in the same dir as the splits.
-
-        The eval datamodule loads normalization stats from
-        ``<dataset_root>/stats.npz`` (``use_saved_mean_and_variance=true``);
-        without it the inline oracle eval crashes — see #1331.
-
-        :param spec: Fixture-provided ``DatasetSpec``; resolves the R2 URIs.
-        :param monkeypatch: Patches the module's ``r2_io.download_to_path``.
-        :param tmp_path: Destination dir for the downloaded artifacts.
-        """
-        import synth_setter.cli.generate_dataset as gd
-
-        downloads: dict[Path, str] = {}
-        monkeypatch.setattr(
-            gd.r2_io,
-            "download_to_path",
-            lambda uri, dest: downloads.__setitem__(Path(dest), uri),
-        )
-
-        gd._download_finalized_splits(spec, tmp_path)
-
-        assert downloads[tmp_path / "stats.npz"] == spec.r2.stats_uri()
-        for split in ("train", "val", "test"):
-            assert downloads[tmp_path / f"{split}.h5"] == spec.r2.split_h5_uri(split)
+        assert run_dir.parent.parent == dataset_root
 
     def test_run_oracle_eval_subprocess_builds_expected_argv(
         self,
@@ -1707,24 +1691,32 @@ class TestMainDispatchBranches:
         directly so cfg-resolution noise can't mask an argv drift.
 
         :param monkeypatch: Patches the module's ``subprocess.run``.
-        :param tmp_path: Stands in for the finalize download directory.
+        :param tmp_path: Roots the distinct dataset-root and eval run dirs.
         """
         import synth_setter.cli.generate_dataset as gd
 
         run_mock = MagicMock()
         monkeypatch.setattr(gd.subprocess, "run", run_mock)
 
-        gd._run_oracle_eval_subprocess(tmp_path, "some-run-id")
+        dataset_root = tmp_path / "data"
+        dataset_root.mkdir()
+        for name in ("train.h5", "val.h5", "test.h5", "stats.npz"):
+            (dataset_root / name).touch()
+        run_dir = tmp_path / "oracle_eval" / "some-run-id"
+        gd._run_oracle_eval_subprocess(dataset_root, run_dir, "some-run-id")
 
         run_mock.assert_called_once()
         called_argv = run_mock.call_args[0][0]
         assert "-m" in called_argv
         assert "synth_setter.cli.eval" in called_argv
         assert "experiment=surge/fake_oracle" in called_argv
-        assert f"datamodule.dataset_root={tmp_path}" in called_argv
-        # Pins the Hydra per-run dir to the same path as datamodule.dataset_root so
-        # the workflow's metrics.json glob lands at <tmp_path>/metrics/metrics.json.
-        assert f"hydra.run.dir={tmp_path}" in called_argv
+        # Data dir and the eval's Hydra run dir are DISTINCT: the split virtual
+        # datasets are read in place beside their shards, while eval outputs
+        # (incl. metrics/metrics.json the workflow globs) land under the
+        # oracle_eval/<run_id> run dir.
+        assert f"datamodule.dataset_root={dataset_root}" in called_argv
+        assert f"hydra.run.dir={run_dir}" in called_argv
+        assert dataset_root != run_dir
         assert "ckpt_path=null" in called_argv
         # The eval resumes the generate run rather than opening a fresh one, so
         # its audio/* metrics share the run id (logger=null crashed Hydra — see #1331).
@@ -1740,13 +1732,38 @@ class TestMainDispatchBranches:
         assert "datamodule.batch_size=1" in called_argv
         assert "mode=predict" in called_argv
 
+    def test_run_oracle_eval_subprocess_missing_local_artifacts_raises(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """Unpopulated ``dataset_root`` ⇒ clear ``FileNotFoundError``, no eval subprocess.
+
+        ``finalize_from_spec`` short-circuits when R2 already holds the
+        ``dataset.complete`` marker, leaving ``output_dir`` without the splits
+        on a resume; the preflight turns the downstream low-signal HDF5 read
+        error into an actionable one before shelling out.
+
+        :param monkeypatch: Patches ``subprocess.run`` to assert it never fires.
+        :param tmp_path: Empty stand-in for an unpopulated ``output_dir``.
+        """
+        import synth_setter.cli.generate_dataset as gd
+
+        run_mock = MagicMock()
+        monkeypatch.setattr(gd.subprocess, "run", run_mock)
+
+        with pytest.raises(FileNotFoundError, match=r"test\.h5"):
+            gd._run_oracle_eval_subprocess(tmp_path, tmp_path / "oracle_eval" / "rid", "rid")
+
+        run_mock.assert_not_called()
+
     def test_main_oracle_eval_inline_default_false_skips(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Opt-in invariant: default false ⇒ neither download nor eval subprocess fires.
+        """Opt-in invariant: default false ⇒ the eval subprocess never fires.
 
-        :param monkeypatch: Patches argv + the four module-level seams.
+        :param monkeypatch: Patches argv + the three module-level seams.
         """
         import synth_setter.cli.generate_dataset as gd
 
@@ -1759,14 +1776,11 @@ class TestMainDispatchBranches:
         monkeypatch.setattr("sys.argv", argv)
         monkeypatch.setattr(gd, "generate", lambda _spec, _work_dir, _loggers: None)
         monkeypatch.setattr(gd, "finalize_from_spec", MagicMock())
-        download_mock = MagicMock()
         oracle_mock = MagicMock()
-        monkeypatch.setattr(gd, "_download_finalized_splits", download_mock)
         monkeypatch.setattr(gd, "_run_oracle_eval_subprocess", oracle_mock)
 
         gd.main()
 
-        download_mock.assert_not_called()
         oracle_mock.assert_not_called()
 
     def test_main_oracle_eval_inline_requires_finalize_inline(
@@ -1925,6 +1939,138 @@ class TestMainDispatchBranches:
         assert len(ignored_lines) == 1, (
             f"expected exactly one INFO log mentioning 'oracle_eval_inline=True' + 'ignored'; "
             f"got messages: {info_messages!r}"
+        )
+
+
+def _write_vds_split_with_shard(data_dir: Path) -> np.ndarray:
+    """Write a real shard + a VDS ``test.h5`` + ``stats.npz`` into ``data_dir``.
+
+    Follows the basename-VDS contract of
+    :func:`synth_setter.pipeline.data.reshard._write_split`: the split's
+    ``audio`` / ``param_array`` are HDF5 virtual datasets whose source is the
+    shard referenced **by basename**, so they resolve only when the shard sits
+    beside the split — the on-disk shape the inline oracle-eval reads (#1396).
+
+    :param data_dir: Destination dir; receives ``shard-000000.h5``,
+        ``test.h5``, and ``stats.npz``.
+    :returns: The shard's ``audio`` array (``float16``) so callers can assert
+        the read resolves to the real bytes.
+    """
+    rows, channels, samples, num_params = 2, 2, 8, 4
+    audio_dtype = DATASET_FIELD_DTYPES["audio"]
+    param_dtype = DATASET_FIELD_DTYPES["param_array"]
+    # Start at 1 so every value is distinct and nonzero (a fill-value zeros read
+    # is then unmistakable) while staying in the field dtype — no scalar promotion.
+    audio = np.arange(1, rows * channels * samples + 1, dtype=audio_dtype).reshape(
+        rows, channels, samples
+    )
+    param = np.arange(1, rows * num_params + 1, dtype=param_dtype).reshape(rows, num_params)
+
+    shard = data_dir / "shard-000000.h5"
+    with h5py.File(shard, "w") as f:
+        f.create_dataset("audio", data=audio)
+        f.create_dataset("param_array", data=param)
+
+    fields = (
+        ("audio", audio_dtype, (channels, samples)),
+        ("param_array", param_dtype, (num_params,)),
+    )
+    with h5py.File(data_dir / "test.h5", "w", libver="latest") as f:
+        for key, dtype, tail in fields:
+            layout = h5py.VirtualLayout(shape=(rows, *tail), dtype=dtype)
+            layout[0:rows] = h5py.VirtualSource(shard.name, key, shape=(rows, *tail), dtype=dtype)
+            f.create_virtual_dataset(key, layout)
+
+    np.savez(
+        data_dir / STATS_NPZ_FILENAME,
+        mean=np.zeros(1, dtype=np.float32),
+        std=np.ones(1, dtype=np.float32),
+    )
+    return audio
+
+
+class TestInlineOracleEvalVdsInPlaceRead:
+    """Behavioral proof for #1396: the inline eval reads the VDS splits in place.
+
+    The finalized ``{split}.h5`` files are HDF5 virtual datasets referencing
+    their source shards by basename, so ``mode=predict`` reads the audio dataset
+    as fill-value zeros unless the shards sit beside the split. These tests drive
+    the real predict read path (:class:`SurgeXTDataset` with ``read_audio=True``)
+    to pin that the read resolves to real bytes only when co-located.
+    """
+
+    def test_predict_audio_read_vds_split_beside_shards_returns_shard_data(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """With the shard co-located, the predict-row audio read resolves to real bytes.
+
+        Reads row ``1`` — the slice that crashed in production after row 0's
+        fill-value zeros — through the same datamodule the eval uses.
+
+        :param tmp_path: Holds the co-located shard, VDS split, and stats.
+        """
+        from synth_setter.data.surge_datamodule import SurgeXTDataset
+
+        audio = _write_vds_split_with_shard(tmp_path)
+        dataset = SurgeXTDataset(
+            tmp_path / "test.h5",
+            batch_size=1,
+            ot=False,
+            read_audio=True,
+            read_mel=False,
+            use_saved_mean_and_variance=True,
+        )
+
+        assert dataset.dataset_file is not None
+        audio_ds = dataset.dataset_file["audio"]
+        assert isinstance(audio_ds, h5py.Dataset) and audio_ds.is_virtual, (
+            "split must be a virtual dataset"
+        )
+        audio_item = dataset[1]["audio"]
+        assert audio_item is not None
+        np.testing.assert_array_equal(audio_item.numpy(), audio[1:2].astype(np.float32))
+
+    def test_predict_audio_read_vds_split_without_shards_returns_dangling_zeros(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Without the shard beside it, the same read dangles to fill-value zeros.
+
+        Reproduces the #1396 failure mode: copying only the split + stats away from the shards (as
+        the old download did) makes the audio unreadable, so the read returns zeros instead of the
+        shard bytes.
+
+        :param tmp_path: Roots the populated source dir and the split-only copy.
+        """
+        from synth_setter.data.surge_datamodule import SurgeXTDataset
+
+        source_dir = tmp_path / "source"
+        source_dir.mkdir()
+        audio = _write_vds_split_with_shard(source_dir)
+
+        split_only = tmp_path / "split_only"
+        split_only.mkdir()
+        shutil.copy(source_dir / "test.h5", split_only / "test.h5")
+        shutil.copy(source_dir / STATS_NPZ_FILENAME, split_only / STATS_NPZ_FILENAME)
+
+        dataset = SurgeXTDataset(
+            split_only / "test.h5",
+            batch_size=1,
+            ot=False,
+            read_audio=True,
+            read_mel=False,
+            use_saved_mean_and_variance=True,
+        )
+
+        dangling_item = dataset[1]["audio"]
+        assert dangling_item is not None
+        dangling = dangling_item.numpy()
+        assert np.array_equal(dangling, np.zeros_like(dangling)), (
+            "dangling VDS read should fall back to fill-value zeros"
+        )
+        assert not np.array_equal(dangling, audio[1:2].astype(np.float32)), (
+            "without co-located shards the read must not reach the real audio"
         )
 
 

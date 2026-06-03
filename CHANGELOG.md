@@ -1,6 +1,83 @@
 # CHANGELOG
 
 
+## v8.15.2 (2026-06-03)
+
+### Bug Fixes
+
+- **eval**: Inline oracle-eval reads finalized VDS splits in place from the local run dir (no R2
+  download) ([#1401](https://github.com/tinaudio/synth-setter/pull/1401),
+  [`3008104`](https://github.com/tinaudio/synth-setter/commit/30081044a84c418c2cb1fd46412fe636f4386661))
+
+* fix(eval): read the local run dir for inline oracle-eval (no R2 download)
+
+The inline oracle-eval downloaded only {train,val,test}.h5 + stats.npz into a fresh
+  oracle_eval/<run_id>/ dir. Those splits are HDF5 virtual datasets that reference the shard-*.h5
+  files by basename, so without the shards co-located the eval read dangling mappings: fill-value
+  zeros for the first row, then `OSError: ... insufficient elements in destination selection` on the
+  rest, crashing mode=predict on the audio dataset.
+
+oracle_eval_inline only runs in the local branch (compute_template is None), where generate() +
+  finalize_from_spec() already wrote the shards, VDS splits, and stats.npz into output_dir. Point
+  the eval's datamodule.dataset_root there so the splits resolve in place — no R2 round-trip.
+  Decouple hydra.run.dir (kept at oracle_eval/<run_id> so the workflow's metrics.json glob still
+  resolves) from dataset_root, and drop the now-dead _download_finalized_splits helper.
+
+Refs #1396
+
+* chore(deps): sync uv.lock package version to 8.15.1
+
+pyproject was bumped to 8.15.1 in the release commit but uv.lock's synth-setter metadata stayed at
+  8.15.0; the uv-lock hook syncs it.
+
+* test(eval): prove inline oracle-eval reads VDS splits in place beside shards
+
+The inline oracle-eval fix (b5b65bb) points the eval datamodule at the local output_dir, where
+  generate + finalize already co-located the shards beside the finalized {split}.h5 virtual
+  datasets. The existing dispatch/argv tests are interaction-only (they mock the eval subprocess),
+  so nothing exercised the real read path or reproduced the #1396 crash.
+
+Add behavioral tests that build a real shard + a real VDS test.h5 that references it by basename
+  (mirroring reshard._write_split) and read the predict row through SurgeXTDataset(read_audio=True):
+
+- shard co-located -> the audio read resolves to the real shard bytes - split copied away from the
+  shard -> the same read dangles to fill-value zeros, reproducing the #1396 failure mode the
+  download path triggered.
+
+* test(eval): pin dataset_root to output_dir and tighten VDS test docstrings
+
+Address pre-PR review WARNs on the behavioral test: - assert the dispatch path passes
+  cfg.paths.output_dir as the eval dataset_root (capture it via spec_from_cfg), so a regression that
+  re-points the eval at a shard-less dir is caught directly. - drop the redundant :rtype:
+  (check-return-types is off) and trim the test-class docstring's history narration to
+  current-behavior only. - soften the helper's 'Mirrors _write_split' claim to the basename-VDS
+  contract it actually reproduces, and pin stats.npz to float32. - lift the stdlib shutil import to
+  module scope.
+
+* test(eval): build VDS fixture arrays in-dtype without scalar promotion
+
+Address Copilot review on #1401: `np.arange(..., dtype=float16) + 1.0` relies on NumPy's weak (NEP
+  50) scalar promotion to keep the float16/ float32 shard dtypes. Start the range at 1 instead so
+  the values are distinct and nonzero while staying in the field dtype regardless of the promotion
+  rules — keeps the fixture faithful to DATASET_FIELD_DTYPES.
+
+* fix(eval): preflight the inline oracle-eval's local artifacts with a clear error
+
+Address Copilot review on #1401. Reading the splits in place couples the inline oracle-eval to
+  finalize_from_spec having populated output_dir in the same process. finalize_from_spec
+  short-circuits when R2 already holds the dataset.complete marker, so a resume could leave
+  output_dir without the {train,val,test}.h5 + stats.npz the eval datamodule opens — surfacing later
+  as a low-signal dangling-VDS read.
+
+_run_oracle_eval_subprocess now preflights those artifacts and raises a FileNotFoundError naming the
+  missing files and the resume cause before shelling out, instead of failing deep in the eval.
+  Re-adds the STATS_NPZ_FILENAME import for the required-artifacts tuple.
+
+Verified end-to-end via the synth-setter-generate-dataset entrypoint (smoke-shard-with-oracle-eval):
+  generate -> finalize -> oracle_eval_inline read the in-place VDS splits and logged audio/* metrics
+  with zero 'insufficient elements' errors.
+
+
 ## v8.15.1 (2026-06-03)
 
 ### Bug Fixes
