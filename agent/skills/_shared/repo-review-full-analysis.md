@@ -106,7 +106,7 @@ Once every parallel agent returns, parse each report's BLOCK and WARN findings. 
 - **BLOCK findings** become entries in the `findings` JSON array (Step 6) — each posts as its own inline unresolved thread.
 - **WARN findings** are *not* added to `findings`. They collapse into a single `## Advisory (WARN) findings` section appended to `review_body` (Step 6), one bullet each. This keeps the inline-thread list short enough that BLOCKs stay visible.
 
-Prefix each finding body (BLOCK comment or WARN bullet) with `[<skill>:<severity>]` so reviewers can see which checklist surfaced it.
+Prefix each finding body (BLOCK comment or WARN bullet) with the `[<skill>:<severity>]` scheme so reviewers can see which checklist surfaced it — using the short-tag form from the table below (`[<short-tag>:block]` / `[<short-tag>:warn]`), not the full skill name.
 
 Severity → severity tag:
 
