@@ -304,12 +304,19 @@ def _maybe_upload_output_dir(cfg: DictConfig, is_global_zero: bool) -> None:
         null) and ``cfg.paths.output_dir`` (the local tree to copy).
     :param is_global_zero: Whether this is the global-zero rank; non-zero ranks
         return without touching R2.
+    :raises ValueError: ``upload_output_dir_uri`` is set but not an ``r2://`` URI;
+        checked before the credential ping so a misconfigured destination is
+        attributed to the URI rather than surfacing as an auth failure.
     """
     if not is_global_zero:
         return
     dest_uri = cfg.evaluation.get("upload_output_dir_uri")
     if not dest_uri:
         return
+    if not r2_io.is_r2_uri(dest_uri):
+        raise ValueError(
+            f"evaluation.upload_output_dir_uri must be an r2:// URI; got {dest_uri!r}."
+        )
     output_dir = Path(cfg.paths.output_dir)
     log.info(f"Uploading eval output dir {output_dir} to {dest_uri}")
     r2_io.ensure_r2_env_loaded()

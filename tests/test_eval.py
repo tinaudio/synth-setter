@@ -211,6 +211,24 @@ def test_maybe_upload_output_dir_mirrors_tree_when_uri_set(
     assert (dest / "metrics.json").read_text() == '{"param_mse": 0.0}'
 
 
+def test_maybe_upload_output_dir_rejects_non_r2_uri(tmp_path: Path) -> None:
+    """A non-``r2://`` URI fails on the URI shape before any credential ping.
+
+    Validating the URI first attributes a misconfiguration to the URI itself
+    rather than surfacing it as a confusing credentials/auth error from the
+    ``ensure_r2_env_loaded`` ping that would otherwise run first.
+
+    :param tmp_path: Holds the output dir the rejected upload would have copied.
+    """
+    output_dir = tmp_path / "run"
+    _write_output_tree(output_dir)
+
+    with pytest.raises(ValueError, match="must be an r2:// URI"):
+        _maybe_upload_output_dir(
+            _upload_cfg(output_dir, "s3://bucket/evals/run-1"), is_global_zero=True
+        )
+
+
 @pytest.mark.requires_vst
 @pytest.mark.slow
 def test_eval_cli_downloads_dataset_from_r2_then_scores_oracle(
