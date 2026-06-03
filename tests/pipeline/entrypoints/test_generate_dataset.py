@@ -37,12 +37,16 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import h5py
+import numpy as np
 import pytest
 
 from synth_setter.cli.generate_dataset import (
     build_generate_args,
     generate,
 )
+from synth_setter.data.vst.shapes import DATASET_FIELD_DTYPES
+from synth_setter.pipeline.constants import STATS_NPZ_FILENAME
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.resources import vst_headless_wrapper
 from tests.helpers.render_subprocess import (
@@ -1894,6 +1898,140 @@ class TestMainDispatchBranches:
         assert len(ignored_lines) == 1, (
             f"expected exactly one INFO log mentioning 'oracle_eval_inline=True' + 'ignored'; "
             f"got messages: {info_messages!r}"
+        )
+
+
+def _write_vds_split_with_shard(data_dir: Path) -> np.ndarray:
+    """Write a real shard + a VDS ``test.h5`` + ``stats.npz`` into ``data_dir``.
+
+    Mirrors :func:`synth_setter.pipeline.data.reshard._write_split`: the split's
+    ``audio`` / ``param_array`` are HDF5 virtual datasets whose source is the
+    shard referenced **by basename**, so they resolve only when the shard sits
+    beside the split. This is the exact on-disk shape the inline oracle-eval
+    reads (#1396).
+
+    :param data_dir: Destination dir; receives ``shard-000000.h5``,
+        ``test.h5``, and ``stats.npz``.
+    :returns: The shard's ``audio`` array (``float16``) so callers can assert
+        the read resolves to the real bytes.
+    :rtype: numpy.ndarray
+    """
+    rows, channels, samples, num_params = 2, 2, 8, 4
+    audio_dtype = DATASET_FIELD_DTYPES["audio"]
+    param_dtype = DATASET_FIELD_DTYPES["param_array"]
+    # Distinct per-element values so a fill-value (zeros) read is unmistakable.
+    audio = (np.arange(rows * channels * samples, dtype=audio_dtype) + 1.0).reshape(
+        rows, channels, samples
+    )
+    param = (np.arange(rows * num_params, dtype=param_dtype) + 1.0).reshape(rows, num_params)
+
+    shard = data_dir / "shard-000000.h5"
+    with h5py.File(shard, "w") as f:
+        f.create_dataset("audio", data=audio)
+        f.create_dataset("param_array", data=param)
+
+    fields = (
+        ("audio", audio_dtype, (channels, samples)),
+        ("param_array", param_dtype, (num_params,)),
+    )
+    with h5py.File(data_dir / "test.h5", "w", libver="latest") as f:
+        for key, dtype, tail in fields:
+            layout = h5py.VirtualLayout(shape=(rows, *tail), dtype=dtype)
+            layout[0:rows] = h5py.VirtualSource(shard.name, key, shape=(rows, *tail), dtype=dtype)
+            f.create_virtual_dataset(key, layout)
+
+    np.savez(data_dir / STATS_NPZ_FILENAME, mean=np.zeros(1), std=np.ones(1))
+    return audio
+
+
+class TestInlineOracleEvalVdsInPlaceRead:
+    """Behavioral proof for #1396: the inline eval reads the VDS splits in place.
+
+    The finalized ``{split}.h5`` files are HDF5 virtual datasets that reference
+    their source shards by basename. The old inline path downloaded only the
+    split + ``stats.npz`` into a fresh ``oracle_eval/<run_id>/`` dir, so the
+    virtual mappings dangled and ``mode=predict`` read the audio dataset as
+    fill-value zeros — crashing the eval. The fix points ``dataset_root`` at the
+    local ``output_dir`` where ``generate`` + ``finalize`` already co-located the
+    shards. These tests drive the real predict read path
+    (:class:`SurgeXTDataset` with ``read_audio=True``) to pin both halves of
+    that contract.
+    """
+
+    def test_predict_audio_read_vds_split_beside_shards_returns_shard_data(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """With the shard co-located, the predict-row audio read resolves to real bytes.
+
+        Reads row ``1`` — the slice that crashed in production after row 0's
+        fill-value zeros — through the same datamodule the eval uses.
+
+        :param tmp_path: Holds the co-located shard, VDS split, and stats.
+        """
+        from synth_setter.data.surge_datamodule import SurgeXTDataset
+
+        audio = _write_vds_split_with_shard(tmp_path)
+        dataset = SurgeXTDataset(
+            tmp_path / "test.h5",
+            batch_size=1,
+            ot=False,
+            read_audio=True,
+            read_mel=False,
+            use_saved_mean_and_variance=True,
+        )
+
+        assert dataset.dataset_file is not None
+        audio_ds = dataset.dataset_file["audio"]
+        assert isinstance(audio_ds, h5py.Dataset) and audio_ds.is_virtual, (
+            "split must be a virtual dataset"
+        )
+        audio_item = dataset[1]["audio"]
+        assert audio_item is not None
+        np.testing.assert_array_equal(audio_item.numpy(), audio[1:2].astype(np.float32))
+
+    def test_predict_audio_read_vds_split_without_shards_returns_dangling_zeros(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Without the shard beside it, the same read dangles to fill-value zeros.
+
+        Reproduces the #1396 failure mode: copying only the split + stats away from the shards (as
+        the old download did) makes the audio unreadable, so the read returns zeros instead of the
+        shard bytes.
+
+        :param tmp_path: Roots the populated source dir and the split-only copy.
+        """
+        import shutil
+
+        from synth_setter.data.surge_datamodule import SurgeXTDataset
+
+        source_dir = tmp_path / "source"
+        source_dir.mkdir()
+        audio = _write_vds_split_with_shard(source_dir)
+
+        split_only = tmp_path / "split_only"
+        split_only.mkdir()
+        shutil.copy(source_dir / "test.h5", split_only / "test.h5")
+        shutil.copy(source_dir / STATS_NPZ_FILENAME, split_only / STATS_NPZ_FILENAME)
+
+        dataset = SurgeXTDataset(
+            split_only / "test.h5",
+            batch_size=1,
+            ot=False,
+            read_audio=True,
+            read_mel=False,
+            use_saved_mean_and_variance=True,
+        )
+
+        dangling_item = dataset[1]["audio"]
+        assert dangling_item is not None
+        dangling = dangling_item.numpy()
+        assert np.array_equal(dangling, np.zeros_like(dangling)), (
+            "dangling VDS read should fall back to fill-value zeros"
+        )
+        assert not np.array_equal(dangling, audio[1:2].astype(np.float32)), (
+            "without co-located shards the read must not reach the real audio"
         )
 
 
