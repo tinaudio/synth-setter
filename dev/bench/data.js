@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780504216334,
+  "lastUpdate": 1780520759789,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -5286,6 +5286,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.040037453174591064,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "03811e27b6b5c8644127c73d7b9f1daf50eb9585",
+          "message": "fix(pipeline): defer omegaconf import so validate_spec minimal env imports (#1395)\n\n`DatasetSpec.from_hydra_cfg` is the only omegaconf user in spec.py, but the\nimport sat at module top — so the CI `validate_spec` job (installed with only\npydantic + python-dotenv, no omegaconf) broke at import with\n`ModuleNotFoundError: No module named 'omegaconf'` after #1390 added it.\n\nMove `OmegaConf` to a lazy import inside `from_hydra_cfg` and `DictConfig` to a\n`TYPE_CHECKING` block (the annotation is already a string under\n`from __future__ import annotations`). Add a subprocess import-purity test\npinning the minimal-env contract, mirroring the existing launcher-pure checks.\n\nRefs #1139",
+          "timestamp": "2026-06-03T16:31:48-04:00",
+          "tree_id": "6b7c6a5ef420d6a90aac452c09be59a102f082b4",
+          "url": "https://github.com/tinaudio/synth-setter/commit/03811e27b6b5c8644127c73d7b9f1daf50eb9585"
+        },
+        "date": 1780520758439,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 4.148202419281006,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.087147494703531,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.02441670000553131,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.026077568531036377,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.362902879714966,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 15.192734528666657,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.531322002410889,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.501720826476812,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.03436647355556488,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.0539247989654541,
             "unit": "1-cos"
           },
           {
