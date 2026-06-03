@@ -1,4 +1,11 @@
-"""Tests for the ``synth-setter-train`` CLI entrypoint."""
+"""Tests for the ``synth-setter-train`` CLI entrypoint.
+
+Each test composes a Hydra ``cfg`` fixture and drives the in-process
+``train(cfg)`` entrypoint (some chain ``evaluate``). Keep this module to
+cfg-entrypoint tests; unit tests for helper functions belong in sibling
+``test_*`` modules. ``tests/_meta/test_entrypoint_test_modules.py`` enforces
+that no private ``synth_setter.cli`` helper is imported here.
+"""
 
 import os
 from pathlib import Path

@@ -797,7 +797,7 @@ tests/pipeline/configs/test_experiment_yamls.py
     DOC101: Function `test_experiment_yaml_json_round_trips`: Docstring contains fewer arguments than in function signature.
     DOC103: Function `test_experiment_yaml_json_round_trips`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [experiment: str].
 --------------------
-tests/pipeline/entrypoints/test_generate_dataset.py
+tests/pipeline/entrypoints/test_generate_dataset_unit.py
     DOC101: Function `_materialize_shard`: Docstring contains fewer arguments than in function signature.
     DOC103: Function `_materialize_shard`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [args: list[str]].
     DOC201: Function `_materialize_shard` does not have a return section in docstring
