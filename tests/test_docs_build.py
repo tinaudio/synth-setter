@@ -22,11 +22,12 @@ import pytest
 # griffe-pydantic from the ``docs`` dependency-group; gating on only one lets the
 # build fail later if the other is missing.
 pytest.importorskip(
-    "mkdocs", reason="docs group not installed; install with `uv pip install --group docs -e .`"
+    "mkdocs",
+    reason="docs deps missing; run the suite with `uv pip install --group dev -e .` (dev ⊇ docs + runtime — tests/conftest.py imports the heavy runtime)",
 )
 pytest.importorskip(
     "griffe_pydantic",
-    reason="docs group not installed; install with `uv pip install --group docs -e .`",
+    reason="docs deps missing; run the suite with `uv pip install --group dev -e .` (dev ⊇ docs + runtime — tests/conftest.py imports the heavy runtime)",
 )
 
 from synth_setter.pipeline.schemas.spec import DatasetSpec

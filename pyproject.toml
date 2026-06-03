@@ -180,7 +180,8 @@ dev = [
 [tool.uv]
 # Bare `uv sync` installs `dev`, which transitively includes `runtime` (the full
 # heavy stack), so local onboarding and the ~15 full-install sites are unchanged
-# by the #1139 base trim. pip/uv pip ignore groups, so lite CI stays light.
+# by the #1139 base trim. pip never installs PEP 735 groups and `uv pip` only
+# with an explicit `--group`, so a plain `pip install -e .` keeps lite CI light.
 default-groups = ["dev"]
 # Tell the resolver `cpu` and `cu128` produce different torch wheels, so it
 # locks each branch independently into the universal lockfile. Required when
