@@ -1624,11 +1624,11 @@ class TestMainDispatchBranches:
     ) -> None:
         """oracle_eval_inline=true on the local-run branch shells out to synth-setter-eval.
 
-        Asserts the eval helper fires once with ``dataset_root`` under
-        ``_OPERATOR_WORKSPACE/oracle_eval/<run_id>/`` and that
-        ``_download_finalized_splits`` populates the same path first.
+        Asserts the eval helper fires once reading the data **in place** from
+        ``cfg.paths.output_dir`` (no download), with its Hydra run dir isolated
+        under ``output_dir/oracle_eval/<run_id>/``.
 
-        :param monkeypatch: Patches argv + the four module-level seams.
+        :param monkeypatch: Patches argv + the three module-level seams.
         """
         import synth_setter.cli.generate_dataset as gd
 
@@ -1645,53 +1645,20 @@ class TestMainDispatchBranches:
         monkeypatch.setattr("sys.argv", argv)
         monkeypatch.setattr(gd, "generate", lambda _spec, _work_dir, _loggers: None)
         monkeypatch.setattr(gd, "finalize_from_spec", MagicMock())
-        download_mock = MagicMock()
-        monkeypatch.setattr(gd, "_download_finalized_splits", download_mock)
         oracle_mock = MagicMock()
         monkeypatch.setattr(gd, "_run_oracle_eval_subprocess", oracle_mock)
 
         gd.main()
 
         oracle_mock.assert_called_once()
-        dataset_root = oracle_mock.call_args[0][0]
+        dataset_root, run_dir, _run_id = oracle_mock.call_args[0]
         assert isinstance(dataset_root, Path)
-        assert dataset_root.parent.name == "oracle_eval", (
-            f"dataset_root should land under <workspace>/oracle_eval/<run_id>/; got {dataset_root!r}"
+        assert run_dir.parent.name == "oracle_eval", (
+            f"eval run dir should land under <output_dir>/oracle_eval/<run_id>/; got {run_dir!r}"
         )
-        download_mock.assert_called_once()
-        _, downloaded_dest = download_mock.call_args[0]
-        assert downloaded_dest == dataset_root
-
-    def test_download_finalized_splits_fetches_stats_npz_beside_splits(
-        self,
-        spec: DatasetSpec,
-        monkeypatch: pytest.MonkeyPatch,
-        tmp_path: Path,
-    ) -> None:
-        """Finalize download lands ``stats.npz`` in the same dir as the splits.
-
-        The eval datamodule loads normalization stats from
-        ``<dataset_root>/stats.npz`` (``use_saved_mean_and_variance=true``);
-        without it the inline oracle eval crashes — see #1331.
-
-        :param spec: Fixture-provided ``DatasetSpec``; resolves the R2 URIs.
-        :param monkeypatch: Patches the module's ``r2_io.download_to_path``.
-        :param tmp_path: Destination dir for the downloaded artifacts.
-        """
-        import synth_setter.cli.generate_dataset as gd
-
-        downloads: dict[Path, str] = {}
-        monkeypatch.setattr(
-            gd.r2_io,
-            "download_to_path",
-            lambda uri, dest: downloads.__setitem__(Path(dest), uri),
-        )
-
-        gd._download_finalized_splits(spec, tmp_path)
-
-        assert downloads[tmp_path / "stats.npz"] == spec.r2.stats_uri()
-        for split in ("train", "val", "test"):
-            assert downloads[tmp_path / f"{split}.h5"] == spec.r2.split_h5_uri(split)
+        # Data is read in place from output_dir (the run dir's grandparent), not
+        # a downloaded copy under oracle_eval/.
+        assert run_dir.parent.parent == dataset_root
 
     def test_run_oracle_eval_subprocess_builds_expected_argv(
         self,
@@ -1707,24 +1674,29 @@ class TestMainDispatchBranches:
         directly so cfg-resolution noise can't mask an argv drift.
 
         :param monkeypatch: Patches the module's ``subprocess.run``.
-        :param tmp_path: Stands in for the finalize download directory.
+        :param tmp_path: Roots the distinct dataset-root and eval run dirs.
         """
         import synth_setter.cli.generate_dataset as gd
 
         run_mock = MagicMock()
         monkeypatch.setattr(gd.subprocess, "run", run_mock)
 
-        gd._run_oracle_eval_subprocess(tmp_path, "some-run-id")
+        dataset_root = tmp_path / "data"
+        run_dir = tmp_path / "oracle_eval" / "some-run-id"
+        gd._run_oracle_eval_subprocess(dataset_root, run_dir, "some-run-id")
 
         run_mock.assert_called_once()
         called_argv = run_mock.call_args[0][0]
         assert "-m" in called_argv
         assert "synth_setter.cli.eval" in called_argv
         assert "experiment=surge/fake_oracle" in called_argv
-        assert f"datamodule.dataset_root={tmp_path}" in called_argv
-        # Pins the Hydra per-run dir to the same path as datamodule.dataset_root so
-        # the workflow's metrics.json glob lands at <tmp_path>/metrics/metrics.json.
-        assert f"hydra.run.dir={tmp_path}" in called_argv
+        # Data dir and the eval's Hydra run dir are DISTINCT: the split virtual
+        # datasets are read in place beside their shards, while eval outputs
+        # (incl. metrics/metrics.json the workflow globs) land under the
+        # oracle_eval/<run_id> run dir.
+        assert f"datamodule.dataset_root={dataset_root}" in called_argv
+        assert f"hydra.run.dir={run_dir}" in called_argv
+        assert dataset_root != run_dir
         assert "ckpt_path=null" in called_argv
         # The eval resumes the generate run rather than opening a fresh one, so
         # its audio/* metrics share the run id (logger=null crashed Hydra — see #1331).
@@ -1744,9 +1716,9 @@ class TestMainDispatchBranches:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Opt-in invariant: default false ⇒ neither download nor eval subprocess fires.
+        """Opt-in invariant: default false ⇒ the eval subprocess never fires.
 
-        :param monkeypatch: Patches argv + the four module-level seams.
+        :param monkeypatch: Patches argv + the three module-level seams.
         """
         import synth_setter.cli.generate_dataset as gd
 
@@ -1759,14 +1731,11 @@ class TestMainDispatchBranches:
         monkeypatch.setattr("sys.argv", argv)
         monkeypatch.setattr(gd, "generate", lambda _spec, _work_dir, _loggers: None)
         monkeypatch.setattr(gd, "finalize_from_spec", MagicMock())
-        download_mock = MagicMock()
         oracle_mock = MagicMock()
-        monkeypatch.setattr(gd, "_download_finalized_splits", download_mock)
         monkeypatch.setattr(gd, "_run_oracle_eval_subprocess", oracle_mock)
 
         gd.main()
 
-        download_mock.assert_not_called()
         oracle_mock.assert_not_called()
 
     def test_main_oracle_eval_inline_requires_finalize_inline(
