@@ -26,7 +26,7 @@ cd synth-setter
 Install the project in editable mode with development dependencies:
 
 ```bash
-make install        # runs: pip install uv && uv pip install -e ".[torch,dev]"
+make install        # runs: pip install uv && uv pip install --group dev -e .
 ```
 
 `make install` does not consume the committed lockfile. For the same wheel

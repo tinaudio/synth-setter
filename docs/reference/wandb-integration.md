@@ -1,7 +1,7 @@
 # W&B Integration Reference
 
 > **Code version**: `1970388` (2026-04-25, `feat/wandb-default-logger`)
-> **PyTorch**: see `pyproject.toml` (`[project.optional-dependencies].torch`) · **Lightning**: see `pyproject.toml` (`[project.optional-dependencies].torch`)
+> **PyTorch**: see `pyproject.toml` (`[dependency-groups].torch`) · **Lightning**: see `pyproject.toml` (`[dependency-groups].torch`)
 > **Tracking**: #252, #263
 
 ______________________________________________________________________

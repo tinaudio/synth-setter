@@ -13,64 +13,16 @@ description = "Studying the effect of permutation symmetry on audio synthesiser 
 authors = [{name = "Khaled Tinubu"}, {name = "tinaudio"}]
 readme = "README.md"
 requires-python = ">=3.10,<3.14"
+# The lite import closure shared by the five lite CI sites (validate_spec,
+# r2_io.ensure_r2_env_loaded, load_image_config). Heavy runtime lives in
+# [dependency-groups] below; pip/uv pip never install PEP 735 groups, so a bare
+# `pip install -e .` yields project + this light base only. Pinned by
+# tests/infra/test_lite_dependency_base.py. See #1139 and
+# docs/design/ci-lite-dependency-groups.md.
 dependencies = [
-  # --------- hydra --------- #
-  "hydra-colorlog==1.2.0",
-  "hydra-core==1.3.2",
-  "hydra-optuna-sweeper==1.2.0",
-  # --------- loggers --------- #
-  "tensorboard",
-  "wandb",
-  # --------- pipeline --------- #
-  "click<8.2",
-  # Pin: kubernetes>=36 breaks SkyPilot pod_config validation — see #1239.
-  "kubernetes==35.0.0",
-  "numpy",
-  "oci",
   "pydantic>=2",
-  "pydantic-settings>=2",
-  "pyyaml",
-  "tomli; python_version < '3.11'",
-  # `kubernetes` extra serves skypilot-local kind-cluster CI; locking it here
-  # keeps `uv sync --frozen` self-sufficient.
-  "skypilot[runpod,oci,kubernetes]==0.12.0",
-  "structlog",
-  "tenacity",
-  "webdataset",
-  # --------- runtime --------- #
-  "dask[distributed]",
-  "einops",
-  "h5py",
-  "hdf5plugin",
-  "librosa",
-  "loguru==0.7.3",
-  "matplotlib",
-  "mido",
-  "pandas",
-  "pedalboard",
-  "POT",
-  "pyloudnorm",
   "python-dotenv",
-  "rich",
-  "runpod==1.8.1",
-  # Pin: scipy>=1.14,<1.15 — a hard ==1.14.1 patch-pin risks backtracking
-  # against torch / librosa / kymatio during lock resolution. See #1247.
-  "scipy>=1.14,<1.15",
-  "sh",
-  "threadpoolctl",
-  # --------- eval metrics --------- #
-  "pesto-pitch==2.0.1",
-  "dtw-python==1.7.4",
-  "kymatio==0.3.0",
-  # --------- torch stack (routed per-platform in [tool.uv.sources]) --------- #
-  # lightning / torchmetrics are pure-python — they MUST NOT appear in
-  # [tool.uv.sources], or uv will try to resolve them from a torch index that
-  # doesn't host them.
-  "torch>=2.0.0",
-  "torchvision>=0.15.0",
-  "torchaudio>=2.0.0",
-  "lightning>=2.6.0",
-  "torchmetrics>=0.11.4",
+  "pyyaml",
 ]
 
 [project.optional-dependencies]
@@ -100,46 +52,12 @@ cu128 = [
   "torchvision>=0.15.0",
   "torchaudio>=2.0.0",
 ]
-# Aggregations consumed by the Makefile, environment.yaml, and
-# scripts/sync_worker_checkout.sh — callsites that use plain `pip install`
-# and cannot honor [tool.uv.sources]. Retained until those migrate.
-torch = [
-  "torch>=2.0.0",
-  "torchvision>=0.15.0",
-  "torchaudio>=2.0.0",
-  "lightning>=2.6.0",
-  "torchmetrics>=0.11.4",
-]
-dev = [
-  "hypothesis",
-  "mutmut==3.5.*",
-  "pre-commit",
-  "pyright==1.1.408",
-  "pytest",
-  "pytest-benchmark",
-  "pytest-cov",
-  "pytest-randomly",
-  "pytest-repeat",
-  "pytest-xdist",
-  # Required only by the v0.0.0 baseline `src/{train,eval}.py` that
-  # tests/test_compare_baseline_configs.py runs through the live Python.
-  # Not used by `synth_setter/` itself — see #1268.
-  "rootutils",
-  "ruff",
-]
-docs = [
-  "mkdocs",
-  "mkdocs-material",
-  "mkdocstrings[python]",
-  "griffe-pydantic",
-]
-all = [
-  "synth-setter[torch,dev]",
-]
 
-# PEP 735 groups: private dev concerns, not published package features. A bare
-# `uv sync` installs the `dev` group (which transitively includes `docs`). Use
-# `uv sync --only-group dev` for lint/type-check jobs that don't import torch.
+# Heavy runtime + dev/docs tooling live in PEP 735 [dependency-groups] (#1139),
+# not in extras — pip/uv pip never install groups, so `pip install -e .` stays
+# light. Full installs use uv: bare `uv sync` (⊇ dev ⊇ runtime), or
+# `uv pip install --group dev -e .` / `--group runtime -e .`. Only the cpu/cu128
+# backend-routing extras remain here, because [tool.uv.sources] keys on extras.
 
 [project.scripts]
 synth-setter-train = "synth_setter.cli.train:main"
@@ -163,12 +81,90 @@ synth-setter-spec-uri = "synth_setter.pipeline.ci.spec_uri:main"
 
 
 
+# PEP 735 groups hold the heavy runtime moved out of [project.dependencies]
+# (#1139). They are NOT package metadata: pip/uv pip ignore them, so lite CI
+# gets a light base, while `runtime` (folded into `dev`, the default group)
+# keeps a bare `uv sync` installing everything. The torch/config/compute/data/
+# audio/metrics/util partition is for readability and future per-job slicing;
+# correctness only requires `runtime` to aggregate all of them.
 [dependency-groups]
 docs = [
   "mkdocs",
   "mkdocs-material",
   "mkdocstrings[python]",
   "griffe-pydantic",
+]
+# torch stack routed per-platform in [tool.uv.sources]. lightning / torchmetrics
+# are pure-python — they MUST NOT appear in [tool.uv.sources], or uv will try to
+# resolve them from a torch index that doesn't host them.
+torch = [
+  "torch>=2.0.0",
+  "torchvision>=0.15.0",
+  "torchaudio>=2.0.0",
+  "lightning>=2.6.0",
+  "torchmetrics>=0.11.4",
+]
+config = [
+  "hydra-core==1.3.2",
+  "hydra-colorlog==1.2.0",
+  "hydra-optuna-sweeper==1.2.0",
+  "omegaconf",
+  "pydantic-settings>=2",
+  "tomli; python_version < '3.11'",
+]
+# `kubernetes` extra serves skypilot-local kind-cluster CI; locking it here
+# keeps `uv sync --frozen` self-sufficient.
+# Pin: kubernetes>=36 breaks SkyPilot pod_config validation — see #1239.
+compute = [
+  "skypilot[runpod,oci,kubernetes]==0.12.0",
+  "runpod==1.8.1",
+  "oci",
+  "kubernetes==35.0.0",
+]
+data = [
+  "dask[distributed]",
+  "h5py",
+  "hdf5plugin",
+  "webdataset",
+  "pandas",
+  "numpy",
+]
+# Pin: scipy>=1.14,<1.15 — a hard ==1.14.1 patch-pin risks backtracking against
+# torch / librosa / kymatio during lock resolution. See #1247.
+audio = [
+  "librosa",
+  "pedalboard",
+  "pyloudnorm",
+  "mido",
+  "scipy>=1.14,<1.15",
+]
+metrics = [
+  "pesto-pitch==2.0.1",
+  "dtw-python==1.7.4",
+  "kymatio==0.3.0",
+  "POT",
+  "einops",
+]
+util = [
+  "click<8.2",
+  "structlog",
+  "tenacity",
+  "loguru==0.7.3",
+  "rich",
+  "sh",
+  "threadpoolctl",
+  "matplotlib",
+  "tensorboard",
+  "wandb",
+]
+runtime = [
+  { include-group = "torch" },
+  { include-group = "config" },
+  { include-group = "compute" },
+  { include-group = "data" },
+  { include-group = "audio" },
+  { include-group = "metrics" },
+  { include-group = "util" },
 ]
 dev = [
   "hypothesis",
@@ -187,9 +183,14 @@ dev = [
   "rootutils",
   "ruff",
   { include-group = "docs" },
+  { include-group = "runtime" },
 ]
 
 [tool.uv]
+# Bare `uv sync` installs `dev`, which transitively includes `runtime` (the full
+# heavy stack), so local onboarding and the ~15 full-install sites are unchanged
+# by the #1139 base trim. pip/uv pip ignore groups, so lite CI stays light.
+default-groups = ["dev"]
 # Tell the resolver `cpu` and `cu128` produce different torch wheels, so it
 # locks each branch independently into the universal lockfile. Required when
 # two extras route the same package to different indexes.

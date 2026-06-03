@@ -46,8 +46,14 @@ jobs:
           cache-environment-key: env-${{ hashFiles('environment.yaml', 'pyproject.toml') }}
           init-shell: bash
 
-      - name: Install package as editable
-        run: pip install -e .
+      # conda owns the torch stack (environment.yaml); the rest of the heavy
+      # runtime lives in PEP 735 groups since #1139. uv pip installs `--group
+      # dev` (⊇ runtime) on top, leaving conda's torch binaries authoritative.
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install project + runtime/dev groups (conda owns torch)
+        run: uv pip install --python "$(which python)" --group dev -e .
 
       - name: List dependencies
         run: |

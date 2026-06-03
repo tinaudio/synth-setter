@@ -49,8 +49,11 @@ jobs:
         with:
           enable-cache: true
 
+      # Heavy runtime lives in PEP 735 groups since #1139; `--group dev`
+      # transitively includes `runtime`. uv pip ignores [tool.uv.sources], so
+      # torch resolves from PyPI's MPS-capable wheel — correct for Apple Silicon.
       - name: Install dependencies
-        run: uv pip install --system -e ".[torch,dev]"
+        run: uv pip install --system --group dev -e .
 
       # Mirror `test-mps.yml`'s Surge XT provisioning — same cask + symlink path
       # the configs and `--plugin_path` defaults expect.

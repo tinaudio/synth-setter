@@ -21,4 +21,7 @@ fi
 git fetch --depth=1 origin -- "$WORKER_GIT_REF"
 git checkout FETCH_HEAD
 echo "Worker now at: $(git rev-parse HEAD)"
-uv pip install -e ".[torch]"
+# Heavy runtime lives in PEP 735 groups since #1139; `--group runtime` pulls the
+# full stack (torch + everything). uv pip ignores [tool.uv.sources], so torch
+# resolves from PyPI — matching the pre-#1139 `.[torch]` behavior on this worker.
+uv pip install --group runtime -e .

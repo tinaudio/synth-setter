@@ -62,15 +62,16 @@ jobs:
       - name: Install rclone
         run: sudo apt-get update -qq && sudo apt-get install -y -qq rclone
 
-      # Mirror `validate-dataset-shards.yaml`'s minimal-install pattern (project
-      # with --no-deps to skip torch/skypilot/librosa), but only add the deps
-      # `ensure_r2_env_loaded` actually imports: python-dotenv. (Unlike
-      # `validate_spec`, this probe's entry point does not pull in pydantic.)
-      - name: Install ensure_r2_env_loaded runtime deps
-        run: |
-          pip install --no-deps -e .
-          pip install "python-dotenv>=1"
+      # `pip install -e .` installs the project + its light base only — pip
+      # never installs PEP 735 dependency-groups, so torch/skypilot/librosa
+      # stay out (see #1139). `ensure_r2_env_loaded` needs only python-dotenv,
+      # which the light base carries.
+      - name: Install synth_setter (light base provides ensure_r2_env_loaded deps)
+        run: pip install -e .
 
+      # The probe both imports and runs the entrypoint, doubling as the import
+      # smoke-guard — it fails fast if a new top-level import on this path needs
+      # a dep the light base doesn't carry.
       - name: Probe ensure_r2_env_loaded
         run: |
           python3 -c "from synth_setter.pipeline.r2_io import ensure_r2_env_loaded; ensure_r2_env_loaded()"

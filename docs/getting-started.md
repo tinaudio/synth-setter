@@ -38,9 +38,9 @@ cd synth-setter
 1. Installs [uv](https://docs.astral.sh/uv/) if it is not already on your PATH.
 2. Creates `.venv/` using a managed Python 3.10 interpreter (downloaded by uv
    if you do not have one locally). The venv prompt label is `synth-setter`.
-3. Installs the project itself in editable mode together with its `torch`
-   and `dev` optional-dependency groups from `pyproject.toml`
-   (`uv pip install -e ".[torch,dev]"`).
+3. Installs the project itself in editable mode together with its `dev`
+   dependency-group (⊇ `runtime`) from `pyproject.toml`
+   (`uv pip install --group dev -e .`).
 4. Registers the pre-commit hooks — **unless** `git config core.hooksPath`
    is set (as it is in the dev container, where hooks are managed by the
    image). In that case `make install` prints a skip note and leaves the
@@ -525,7 +525,7 @@ Make sure your virtual environment is active and dependencies are installed:
 
 ```bash
 source .venv/bin/activate
-uv pip install -e ".[torch,dev]"
+uv pip install --group dev -e .
 ```
 
 ### `make format` fails on first run
@@ -619,7 +619,10 @@ themselves (pip, conda, pyenv, system Python, etc.).
 python3.10 -m venv .venv
 source .venv/bin/activate
 
-pip install -e ".[torch,dev]"
+# The heavy runtime lives in PEP 735 dependency-groups (see #1139), which plain
+# pip cannot install — drive the project install through uv.
+pip install uv
+uv pip install --group dev -e .
 pre-commit install
 ```
 
@@ -631,13 +634,16 @@ Drop `-e` for a non-editable install.
 conda create -n synth-setter python=3.10
 conda activate synth-setter
 
-pip install -e ".[torch,dev]"
+# conda owns the torch stack; uv pulls the rest of the runtime + dev tooling
+# from the `dev` dependency-group (plain pip can't install groups). See #1139.
+pip install uv
+uv pip install --group dev -e .
 pre-commit install
 ```
 
-The project's runtime and `torch`-extra packages (hydra-core, torch,
-lightning, etc.) ship through PyPI rather than conda-forge, so we install
-everything with pip inside the conda environment.
+The project's runtime packages (hydra-core, librosa, etc.) ship through PyPI
+rather than conda-forge, so we install everything via uv inside the conda
+environment.
 
 ### A.3. uv pip without `make install`
 
@@ -647,7 +653,7 @@ you manage yourself):
 ```bash
 uv venv --python 3.10 --prompt synth-setter .venv
 source .venv/bin/activate
-uv pip install -e ".[torch,dev]"
+uv pip install --group dev -e .
 pre-commit install
 ```
 
@@ -655,8 +661,8 @@ This is what `make install` does under the hood.
 
 ### A.4. GPU vs CPU PyTorch
 
-The `torch` extra pins `torch>=2.0.0` without fixing the CPU/CUDA build.
-After installing the project, override with the wheel you want from the
+The `torch` dependency-group pins `torch>=2.0.0` without fixing the CPU/CUDA
+build. After installing the project, override with the wheel you want from the
 [PyTorch install matrix](https://pytorch.org/get-started/locally/):
 
 ```bash
@@ -813,7 +819,7 @@ ssh admin@$(tart ip synth-setter-macos)           # password: admin
 > in `/etc/ssh/sshd_config` before exposing port 22.
 
 The image ships with the repo cloned at `~/synth-setter`, a venv with the
-project's `[torch,dev]` extras installed (CPU torch wheels — Tart VMs have no
+project's `dev` group installed (CPU torch wheels — Tart VMs have no
 GPU), Surge XT
 at `/Library/Audio/Plug-Ins/VST3/Surge XT.vst3`, and
 `source ~/synth-setter/.venv/bin/activate` appended to `~/.zshrc` so every

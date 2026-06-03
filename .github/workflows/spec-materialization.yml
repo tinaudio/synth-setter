@@ -32,16 +32,16 @@ jobs:
 
       # Host-side `Validate spec structure` step below runs
       # `python3 -m synth_setter.pipeline.ci.validate_spec` outside the docker
-      # container. Phase 3 made `synth_setter` only importable when installed
-      # (PEP src-layout, sources under `src/`). Keep the runner-side env
-      # minimal: install the project with --no-deps (the full
-      # [project.dependencies] would drag in torch, skypilot, librosa, etc.),
-      # then add pydantic in a second command so its own required
-      # `pydantic-core` resolves.
-      - name: Install validate_spec runtime deps
-        run: |
-          pip install --no-deps -e .
-          pip install "pydantic>=2,<3"
+      # container. `pip install -e .` installs the project + its light base
+      # only — pip never installs PEP 735 dependency-groups, so the heavy
+      # runtime stays out (see #1139).
+      - name: Install synth_setter (light base provides validate_spec deps)
+        run: pip install -e .
+
+      # Fail fast if a new top-level import on the validate_spec path needs a dep
+      # the light base doesn't carry (it would otherwise surface mid-run).
+      - name: Import smoke-guard for validate_spec
+        run: python3 -c "from synth_setter.pipeline.ci.validate_spec import main"
 
       - name: Pull image
         run: docker pull tinaudio/synth-setter:${{ inputs.image_tag }}

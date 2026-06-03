@@ -19,8 +19,10 @@ from pathlib import Path
 import pytest
 
 # Skip precedes the schemas imports because they transitively require
-# griffe-pydantic from the same ``[docs]`` extras group.
-pytest.importorskip("mkdocs", reason="docs extras not installed; install with -e '.[docs]'")
+# griffe-pydantic from the same ``docs`` dependency-group.
+pytest.importorskip(
+    "mkdocs", reason="docs group not installed; install with `uv pip install --group docs -e .`"
+)
 
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from synth_setter.schemas.callbacks_config import CallbackInstance
