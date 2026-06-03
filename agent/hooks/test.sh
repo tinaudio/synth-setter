@@ -425,6 +425,50 @@ T_resolver_report_lands_in_main_repo() {
 }
 it "pr-review-resolver: report file lands in main repo .agent-reviews/, not the worktree" T_resolver_report_lands_in_main_repo
 
+T_resolver_headless_agent_gets_allowedtools_for_gh() {
+  local report
+  export RESOLVER_SLEEP_SECS=1 GH_STUB_PR=99
+  unset CLAUDE_STUB_PWD_FILE CLAUDE_STUB_HEAD_FILE AGENT_ALLOWED_TOOLS
+  resolver_setup_feature_branch "feature-allowedtools"
+  echo '{"tool_input":{"command":"git push"}}' | bash agent/hooks/pr-review-resolver.sh >/dev/null 2>&1 || true
+  report=$(find .agent-reviews -maxdepth 1 -name 'pr-review-resolver-*.md' 2>/dev/null | head -1)
+  [[ -n "$report" ]] || { echo "no report written"; return 1; }
+  grep -q -- "--allowedTools" "$report" || {
+    echo "headless agent invoked without --allowedTools — gh would be auto-denied:"
+    cat "$report"
+    return 1
+  }
+  grep -q -- "Bash(gh:\*)" "$report" || {
+    echo "allowlist is missing Bash(gh:*) — the resolver can't fetch PR comments:"
+    cat "$report"
+    return 1
+  }
+}
+it "pr-review-resolver: headless agent gets --allowedTools incl. Bash(gh:*) so gh isn't auto-denied" T_resolver_headless_agent_gets_allowedtools_for_gh
+
+T_resolver_agent_allowed_tools_env_overrides_default() {
+  local report
+  export RESOLVER_SLEEP_SECS=1 GH_STUB_PR=99
+  unset CLAUDE_STUB_PWD_FILE CLAUDE_STUB_HEAD_FILE
+  export AGENT_ALLOWED_TOOLS="Bash(gh:*) Read"
+  resolver_setup_feature_branch "feature-allowedtools-override"
+  echo '{"tool_input":{"command":"git push"}}' | bash agent/hooks/pr-review-resolver.sh >/dev/null 2>&1 || true
+  report=$(find .agent-reviews -maxdepth 1 -name 'pr-review-resolver-*.md' 2>/dev/null | head -1)
+  [[ -n "$report" ]] || { echo "no report written"; return 1; }
+  grep -q -- "Bash(gh:\*) Read" "$report" || {
+    echo "AGENT_ALLOWED_TOOLS override not passed through to the agent:"
+    cat "$report"
+    return 1
+  }
+  grep -q -- "Bash(pre-commit:\*)" "$report" && {
+    echo "default allowlist leaked despite AGENT_ALLOWED_TOOLS override"
+    cat "$report"
+    return 1
+  }
+  return 0
+}
+it "pr-review-resolver: AGENT_ALLOWED_TOOLS overrides the default allowlist" T_resolver_agent_allowed_tools_env_overrides_default
+
 T_resolver_worktree_cleaned_up_after_exit() {
   export RESOLVER_SLEEP_SECS=1 GH_STUB_PR=99
   resolver_setup_feature_branch "feature-cleanup"

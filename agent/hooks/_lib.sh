@@ -129,9 +129,27 @@ run_agent_prompt() {
   else
     log "no GNU timeout/gtimeout on PATH; running agent without timeout enforcement"
   fi
+  # No TTY in a detached worktree, so the permission prompt can't be answered
+  # and any not-preapproved tool is auto-denied — pass an explicit allowlist,
+  # shared by the resolver and doc-drift runners. AGENT_ALLOWED_TOOLS replaces
+  # it (space-separated; empty/unset keeps the default). File inspection goes
+  # through first-class Read/Grep/Glob, not Bash(sed/cat/…), so edits can't slip
+  # past the Edit|Write guard hooks.
+  local -a allowed
+  read -r -a allowed <<< "${AGENT_ALLOWED_TOOLS:-}"
+  if [[ ${#allowed[@]} -eq 0 ]]; then
+    allowed=(
+      "Bash(gh:*)" "Bash(git:*)" "Bash(jq:*)"
+      Read Edit Write Grep Glob LS
+      "Bash(make:*)" "Bash(python:*)" "Bash(python3:*)" "Bash(uv:*)" "Bash(pre-commit:*)"
+    )
+  fi
+  # The prompt precedes --allowedTools: the option is variadic, so anything
+  # after it is swallowed into the tool list instead of read as the prompt.
   local -a cmd
   case "$cli" in
-    claude) cmd=(claude -p "$prompt") ;;
+    claude) cmd=(claude -p "$prompt" --allowedTools "${allowed[@]}") ;;
+    # codex uses its own approval/sandbox model; it has no --allowedTools.
     codex)  cmd=(codex exec "$prompt") ;;
     *)
       printf 'No supported headless agent CLI found; install claude or codex (AGENT_HEADLESS=%s).\n' \
