@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780520759789,
+  "lastUpdate": 1780520762529,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -9330,6 +9330,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.511361362000002,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "03811e27b6b5c8644127c73d7b9f1daf50eb9585",
+          "message": "fix(pipeline): defer omegaconf import so validate_spec minimal env imports (#1395)\n\n`DatasetSpec.from_hydra_cfg` is the only omegaconf user in spec.py, but the\nimport sat at module top — so the CI `validate_spec` job (installed with only\npydantic + python-dotenv, no omegaconf) broke at import with\n`ModuleNotFoundError: No module named 'omegaconf'` after #1390 added it.\n\nMove `OmegaConf` to a lazy import inside `from_hydra_cfg` and `DictConfig` to a\n`TYPE_CHECKING` block (the annotation is already a string under\n`from __future__ import annotations`). Add a subprocess import-purity test\npinning the minimal-env contract, mirroring the existing launcher-pure checks.\n\nRefs #1139",
+          "timestamp": "2026-06-03T16:31:48-04:00",
+          "tree_id": "6b7c6a5ef420d6a90aac452c09be59a102f082b4",
+          "url": "https://github.com/tinaudio/synth-setter/commit/03811e27b6b5c8644127c73d7b9f1daf50eb9585"
+        },
+        "date": 1780520761818,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 1.9351295232772827,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 2.056903280261904,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.016057176515460014,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.015887856483459473,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 1.6410295963287354,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 20.636765123700023,
             "unit": "seconds"
           }
         ]
