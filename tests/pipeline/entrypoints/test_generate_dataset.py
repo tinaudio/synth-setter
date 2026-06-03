@@ -1626,7 +1626,7 @@ class TestMainDispatchBranches:
 
         Asserts the eval helper fires once with ``dataset_root`` under
         ``_OPERATOR_WORKSPACE/oracle_eval/<run_id>/`` and that
-        ``_download_finalized_splits`` populates the same path first.
+        ``_download_dataset_root`` populates the same path first.
 
         :param monkeypatch: Patches argv + the four module-level seams.
         """
@@ -1646,7 +1646,7 @@ class TestMainDispatchBranches:
         monkeypatch.setattr(gd, "generate", lambda _spec, _work_dir, _loggers: None)
         monkeypatch.setattr(gd, "finalize_from_spec", MagicMock())
         download_mock = MagicMock()
-        monkeypatch.setattr(gd, "_download_finalized_splits", download_mock)
+        monkeypatch.setattr(gd, "_download_dataset_root", download_mock)
         oracle_mock = MagicMock()
         monkeypatch.setattr(gd, "_run_oracle_eval_subprocess", oracle_mock)
 
@@ -1662,36 +1662,40 @@ class TestMainDispatchBranches:
         _, downloaded_dest = download_mock.call_args[0]
         assert downloaded_dest == dataset_root
 
-    def test_download_finalized_splits_fetches_stats_npz_beside_splits(
+    def test_download_dataset_root_fetches_shards_beside_splits(
         self,
         spec: DatasetSpec,
-        monkeypatch: pytest.MonkeyPatch,
+        fake_r2_remote: Path,
         tmp_path: Path,
     ) -> None:
-        """Finalize download lands ``stats.npz`` in the same dir as the splits.
+        """The download fetches the whole dataset root — shards, not just splits + stats.
 
-        The eval datamodule loads normalization stats from
-        ``<dataset_root>/stats.npz`` (``use_saved_mean_and_variance=true``);
-        without it the inline oracle eval crashes — see #1331.
+        Split ``.h5`` files are HDF5 virtual datasets that reference the shards
+        by basename, so the eval reads dangling mappings unless the shards land
+        beside them. A splits-only download leaves those mappings unresolvable.
+        Staged through the real rclone passthrough and asserted on materialized
+        files rather than a mock's call list.
 
-        :param spec: Fixture-provided ``DatasetSpec``; resolves the R2 URIs.
-        :param monkeypatch: Patches the module's ``r2_io.download_to_path``.
-        :param tmp_path: Destination dir for the downloaded artifacts.
+        :param spec: Fixture-provided ``DatasetSpec``; resolves the dataset-root URI.
+        :param fake_r2_remote: Local-typed R2 remote rooted at a tmp dir.
+        :param tmp_path: Destination dir for the downloaded dataset root.
         """
         import synth_setter.cli.generate_dataset as gd
 
-        downloads: dict[Path, str] = {}
-        monkeypatch.setattr(
-            gd.r2_io,
-            "download_to_path",
-            lambda uri, dest: downloads.__setitem__(Path(dest), uri),
-        )
+        remote_root = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
+        remote_root.mkdir(parents=True)
+        for name in ("train.h5", "val.h5", "test.h5", "stats.npz"):
+            (remote_root / name).write_text(name)
+        for shard in spec.shards:
+            (remote_root / shard.filename).write_text("shard-bytes")
+        dest = tmp_path / "eval"
 
-        gd._download_finalized_splits(spec, tmp_path)
+        gd._download_dataset_root(spec, dest)
 
-        assert downloads[tmp_path / "stats.npz"] == spec.r2.stats_uri()
-        for split in ("train", "val", "test"):
-            assert downloads[tmp_path / f"{split}.h5"] == spec.r2.split_h5_uri(split)
+        assert (dest / "test.h5").read_text() == "test.h5"
+        assert (dest / "stats.npz").read_text() == "stats.npz"
+        for shard in spec.shards:
+            assert (dest / shard.filename).is_file()
 
     def test_run_oracle_eval_subprocess_builds_expected_argv(
         self,
@@ -1761,7 +1765,7 @@ class TestMainDispatchBranches:
         monkeypatch.setattr(gd, "finalize_from_spec", MagicMock())
         download_mock = MagicMock()
         oracle_mock = MagicMock()
-        monkeypatch.setattr(gd, "_download_finalized_splits", download_mock)
+        monkeypatch.setattr(gd, "_download_dataset_root", download_mock)
         monkeypatch.setattr(gd, "_run_oracle_eval_subprocess", oracle_mock)
 
         gd.main()

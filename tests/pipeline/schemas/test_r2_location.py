@@ -203,6 +203,15 @@ class TestR2LocationLayoutHelpers:
         loc = R2Location(bucket="intermediate-data", prefix="data/run/")
         assert loc.stats_uri() == "r2://intermediate-data/data/run/stats.npz"
 
+    def test_dataset_root_uri(self) -> None:
+        """``dataset_root_uri()`` returns the bare prefix ``r2://<bucket>/<prefix>``.
+
+        The trailing slash is preserved so a recursive ``rclone copy`` of the
+        prefix fetches the whole dataset root (shards + splits + stats).
+        """
+        loc = R2Location(bucket="intermediate-data", prefix="data/run/")
+        assert loc.dataset_root_uri() == "r2://intermediate-data/data/run/"
+
     def test_worker_staged_shard_uri(self) -> None:
         """Joins shard_id, worker_id, attempt_uuid, ext under metadata/workers/shards/."""
         loc = R2Location(bucket="intermediate-data", prefix="data/run/")
@@ -243,6 +252,7 @@ class TestR2LocationLayoutHelpers:
         assert loc.split_h5_uri("train").startswith(expected_root)
         assert loc.split_wds_brace_uri((0, 1)).startswith(expected_root)
         assert loc.stats_uri().startswith(expected_root)
+        assert loc.dataset_root_uri().startswith(expected_root)
         assert loc.worker_staged_shard_uri(
             shard_id=0, worker_id="w", attempt_uuid="u", ext=".h5"
         ).startswith(expected_root)

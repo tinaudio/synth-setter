@@ -32,7 +32,7 @@ from omegaconf import DictConfig, OmegaConf
 from synth_setter.cli.finalize_dataset import finalize_from_spec
 from synth_setter.data.vst.core import extract_renderer_version
 from synth_setter.pipeline import r2_io
-from synth_setter.pipeline.constants import STATS_NPZ_FILENAME, WORKER_SPEC_URI_ENV
+from synth_setter.pipeline.constants import WORKER_SPEC_URI_ENV
 from synth_setter.pipeline.partitioning import (
     available_cpus,
     get_my_shards,
@@ -60,20 +60,20 @@ _WORKER_REPO_ROOT = "/home/build/synth-setter"
 _ORACLE_EVAL_TIMEOUT_SECONDS = 600
 
 
-def _download_finalized_splits(spec: DatasetSpec, dest: Path) -> None:
-    """Download ``{train,val,test}.h5`` + ``stats.npz`` into ``dest``.
+def _download_dataset_root(spec: DatasetSpec, dest: Path) -> None:
+    """Download the whole finalized dataset root from R2 into ``dest``.
 
-    The eval datamodule loads normalization stats from ``dest/stats.npz``
-    (``use_saved_mean_and_variance=true``), so it must land beside the splits.
+    Fetches every object under ``spec.r2`` — the split ``.h5`` files,
+    ``stats.npz``, and the ``shard-*.h5`` files. The splits are HDF5 virtual
+    datasets that reference the shards by basename, so the shards must land
+    beside them or the eval datamodule reads dangling mappings (zeros, then an
+    ``insufficient elements`` OSError). The datamodule also loads normalization
+    stats from ``dest/stats.npz`` (``use_saved_mean_and_variance=true``).
 
-    :param spec: Resolves the R2 URIs via ``spec.r2.split_h5_uri`` /
-        ``spec.r2.stats_uri``.
-    :param dest: Local directory to receive the splits and stats file.
+    :param spec: Resolves the dataset-root prefix via ``spec.r2.dataset_root_uri``.
+    :param dest: Local directory to receive the dataset root (created by rclone).
     """
-    dest.mkdir(parents=True, exist_ok=True)
-    for split in ("train", "val", "test"):
-        r2_io.download_to_path(spec.r2.split_h5_uri(split), dest / f"{split}.h5")
-    r2_io.download_to_path(spec.r2.stats_uri(), dest / STATS_NPZ_FILENAME)
+    r2_io.download_dir_no_overwrite(spec.r2.dataset_root_uri(), dest)
 
 
 def _run_oracle_eval_subprocess(dataset_root: Path, run_id: str) -> None:
@@ -761,7 +761,7 @@ def main(cfg: DictConfig) -> None:
             finalize_from_spec(spec, Path(cfg.paths.output_dir))
         if cfg.oracle_eval_inline:
             eval_dir = Path(cfg.paths.output_dir) / "oracle_eval" / spec.run_id
-            _download_finalized_splits(spec, eval_dir)
+            _download_dataset_root(spec, eval_dir)
             _run_oracle_eval_subprocess(eval_dir, spec.run_id)
         return
 

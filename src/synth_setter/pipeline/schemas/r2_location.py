@@ -164,6 +164,19 @@ class R2Location(BaseModel):
         """
         return f"{R2_URI_SCHEME}{self.bucket}/{self.prefix}{name}"
 
+    def dataset_root_uri(self) -> str:
+        """R2 URI of the dataset-root prefix itself: ``r2://<bucket>/<prefix>``.
+
+        The directory-level analogue of the per-object helpers — shards, splits,
+        and ``stats.npz`` all live flat beneath this prefix, so a recursive copy
+        of it fetches the whole dataset root. Split ``.h5`` files are HDF5 virtual
+        datasets that reference the shards by basename, so a consumer must fetch
+        the root (not just the splits) to keep those mappings resolvable.
+
+        :returns: ``r2://<bucket>/<prefix>`` URI string (trailing slash preserved).
+        """
+        return self._under_prefix("")
+
     def shard_uri(self, shard: ShardSpec) -> str:
         """Return the canonical R2 URI for ``shard``: ``r2://<bucket>/<prefix><filename>``.
 
