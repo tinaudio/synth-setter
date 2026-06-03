@@ -21,8 +21,12 @@ Input format on stdin:
       ]
     }
 
-The submitted review uses event=COMMENT so threads stay open (not approved or
-rejected).
+The review event comes from the request's optional top-level ``event`` field
+(default ``COMMENT``; one of ``COMMENT`` / ``REQUEST_CHANGES`` / ``APPROVE``).
+GitHub rejects ``REQUEST_CHANGES`` and ``APPROVE`` on the bot's own PR with an
+HTTP 422, so ``submit_review`` retries once as ``COMMENT`` with a banner
+prepended to the body — preserving the finding threads even when the API won't
+let the bot formally request changes.
 
 Typical invocation::
 
@@ -277,44 +281,63 @@ def anchor_finding(
     )
 
 
+_VALID_EVENTS = frozenset({"COMMENT", "REQUEST_CHANGES", "APPROVE"})
+
+
 def build_review_payload(
-    review_body: str, anchored: list[AnchoredComment], orphaned: list[Finding]
+    review_body: str,
+    anchored: list[AnchoredComment],
+    orphaned: list[Finding],
+    event: str = "COMMENT",
 ) -> dict[str, object]:
     """Compose the JSON body for POST /repos/.../pulls/N/reviews.
 
     :param review_body: Top-level review body markdown.
     :param anchored: Findings that can be posted as inline comments.
     :param orphaned: Findings whose files are outside the PR diff.
-    :returns: GitHub review API payload.
+    :param event: Review event; one of COMMENT, REQUEST_CHANGES, APPROVE.
+    :returns: GitHub review API payload. The ``comments`` key is omitted for
+        APPROVE with no findings, which GitHub requires.
     :rtype: dict[str, object]
+    :raises ValueError: If ``event`` is not a recognized GitHub review event.
     """
+    if event not in _VALID_EVENTS:
+        raise ValueError(
+            f"unsupported review event: {event!r}; expected one of {sorted(_VALID_EVENTS)}"
+        )
     body = review_body
     if orphaned:
         body += "\n\n## Findings on files outside the diff\n\n"
         for finding in orphaned:
             indented = finding.body.replace("\n", "\n  ")
             body += f"- `{finding.path}:{finding.line}` — {indented}\n"
-    return {
-        "body": body,
-        "event": "COMMENT",
-        "comments": [
-            {"path": comment.path, "line": comment.line, "body": comment.body}
-            for comment in anchored
-        ],
-    }
+    comments = [
+        {"path": comment.path, "line": comment.line, "body": comment.body} for comment in anchored
+    ]
+    payload: dict[str, object] = {"body": body, "event": event}
+    # GitHub rejects APPROVE carrying an empty `comments`; omit the key in that case.
+    if comments or event != "APPROVE":
+        payload["comments"] = comments
+    return payload
 
 
-def submit_review(repo: str, pr_number: int, payload: dict[str, object]) -> dict[str, object]:
-    """POST the review and return the parsed response.
+_SELF_REVIEW_422_RE = re.compile(
+    r"can not (?:request changes|approve) (?:on )?your own", re.IGNORECASE
+)
+
+
+def _post_review(
+    repo: str, pr_number: int, payload: dict[str, object]
+) -> subprocess.CompletedProcess[str]:
+    """POST one review payload via `gh api` without inspecting the outcome.
 
     :param repo: GitHub repository in `owner/name` form.
     :param pr_number: Pull request number.
     :param payload: GitHub review API payload.
-    :returns: Parsed JSON response from GitHub.
-    :rtype: dict[str, object]
+    :returns: The completed `gh api` process.
+    :rtype: subprocess.CompletedProcess[str]
     """
-    payload_json = json.dumps(payload)
-    result = subprocess.run(  # noqa: S603
+    return subprocess.run(  # noqa: S603
         [
             gh_executable(),
             "api",
@@ -324,15 +347,44 @@ def submit_review(repo: str, pr_number: int, payload: dict[str, object]) -> dict
             "--input",
             "-",
         ],
-        input=payload_json,
+        input=json.dumps(payload),
         capture_output=True,
         text=True,
         check=False,
     )
-    if result.returncode != 0:
-        sys.stderr.write(result.stderr)
-        sys.exit(result.returncode)
-    return json.loads(result.stdout)
+
+
+def submit_review(
+    repo: str, pr_number: int, payload: dict[str, object], fallback_banner: str
+) -> dict[str, object]:
+    """POST the review, falling back to COMMENT on a self-review 422.
+
+    GitHub rejects REQUEST_CHANGES/APPROVE on the bot's own PR with an HTTP 422.
+    On that specific failure, retry once as COMMENT with ``fallback_banner``
+    prepended to the body so the blocking intent stays visible.
+
+    :param repo: GitHub repository in `owner/name` form.
+    :param pr_number: Pull request number.
+    :param payload: GitHub review API payload.
+    :param fallback_banner: Banner prepended to the body on the COMMENT retry.
+    :returns: Parsed JSON response from GitHub.
+    :rtype: dict[str, object]
+    """
+    result = _post_review(repo, pr_number, payload)
+    if result.returncode == 0:
+        return json.loads(result.stdout)
+    if _SELF_REVIEW_422_RE.search(result.stderr):
+        sys.stderr.write(
+            "Self-review 422: falling back to event=COMMENT with a blocking banner.\n"
+        )
+        retry = dict(payload)
+        retry["event"] = "COMMENT"
+        retry["body"] = f"{fallback_banner}\n\n{payload.get('body', '')}"
+        result = _post_review(repo, pr_number, retry)
+        if result.returncode == 0:
+            return json.loads(result.stdout)
+    sys.stderr.write(result.stderr)
+    sys.exit(result.returncode)
 
 
 def main() -> int:
@@ -353,6 +405,7 @@ def main() -> int:
     repo: str = request["repo"]
     pr_number: int = int(request["pr_number"])
     review_body: str = request.get("review_body", "")
+    event: str = request.get("event", "COMMENT")
     findings = [Finding(**raw) for raw in request["findings"]]
 
     diff_text = fetch_diff(repo, pr_number)
@@ -367,7 +420,7 @@ def main() -> int:
         else:
             anchored.append(result)
 
-    payload = build_review_payload(review_body, anchored, orphaned)
+    payload = build_review_payload(review_body, anchored, orphaned, event=event)
 
     sys.stderr.write(
         f"Resolved {len(anchored)} inline anchor(s) "
@@ -380,7 +433,11 @@ def main() -> int:
         sys.stdout.write("\n")
         return 0
 
-    response = submit_review(repo, pr_number, payload)
+    block_count = review_body.count(":block]") + sum(f.body.count(":block]") for f in findings)
+    banner = (
+        f"⛔ {block_count} BLOCKING finding(s) — changes required (self-review: posted as COMMENT)"
+    )
+    response = submit_review(repo, pr_number, payload, fallback_banner=banner)
     html_url = response.get("html_url")
     sys.stdout.write(html_url if isinstance(html_url, str) else json.dumps(response))
     sys.stdout.write("\n")
