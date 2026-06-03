@@ -175,7 +175,13 @@ def test_generate_logs_per_shard_and_summary_metrics_offline(
     )
     assert len(binary_files) == 1, f"expected exactly one .wandb binary, found {binary_files}"
 
-    rows = read_history_rows(Path(binary_files[0]))
+    rows = read_history_rows(
+        Path(binary_files[0]),
+        until=lambda scanned: (
+            sum("shard/bytes" in r for r in scanned) >= spec.num_shards
+            and any("shards/rendered" in r for r in scanned)
+        ),
+    )
     shard_rows = [r for r in rows if "shard/bytes" in r]
     assert len(shard_rows) == spec.num_shards, (
         f"expected {spec.num_shards} per-shard history rows, got {len(shard_rows)}: {shard_rows}"

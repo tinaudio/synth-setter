@@ -250,7 +250,13 @@ def test_phase_1_and_2_cli_emits_run_id_plus_shard_and_summary_history(
     assert len(wandb_binaries) == 1, (
         f"expected exactly one .wandb binary under {run_dir}; got {wandb_binaries}"
     )
-    rows = read_history_rows(wandb_binaries[0])
+    rows = read_history_rows(
+        wandb_binaries[0],
+        until=lambda scanned: (
+            sum("shard/bytes" in r for r in scanned) >= _SMOKE_NUM_SHARDS
+            and any("shards/rendered" in r for r in scanned)
+        ),
+    )
 
     shard_rows = [r for r in rows if "shard/bytes" in r]
     assert len(shard_rows) == _SMOKE_NUM_SHARDS, (
@@ -415,7 +421,13 @@ def test_oracle_eval_inline_resumes_generate_wandb_run(
     )
 
     generate_binary = _single_wandb_binary(generate_run_dir)
-    generate_rows = read_history_rows(generate_binary)
+    generate_rows = read_history_rows(
+        generate_binary,
+        until=lambda scanned: (
+            any("shard/bytes" in r for r in scanned)
+            and any("shards/rendered" in r for r in scanned)
+        ),
+    )
     assert any("shard/bytes" in r for r in generate_rows), (
         f"generate dir missing per-shard history rows in {generate_binary}"
     )
@@ -424,7 +436,10 @@ def test_oracle_eval_inline_resumes_generate_wandb_run(
     )
 
     eval_binary = _single_wandb_binary(eval_run_dir)
-    eval_rows = read_history_rows(eval_binary)
+    eval_rows = read_history_rows(
+        eval_binary,
+        until=lambda scanned: any(any(k.startswith("audio/") for k in r) for r in scanned),
+    )
     assert any(any(k.startswith("audio/") for k in r) for r in eval_rows), (
         f"eval dir has no audio/* history rows in {eval_binary}; "
         f"the predict-mode oracle eval did not log audio metrics to the resumed run"
