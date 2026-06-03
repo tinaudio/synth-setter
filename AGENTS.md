@@ -44,7 +44,7 @@ Architecture: [docs/architecture.md](docs/architecture.md).
   rules to make CI green is forbidden — see
   [`### Lint exceptions are append-frozen`](#lint-exceptions-are-append-frozen).
 
-## Comments
+## Comment hygiene
 
 Code says **what**; comments say **why** — add prose only when it carries a
 constraint, unit, semantic, or rationale that names and types can't, and
