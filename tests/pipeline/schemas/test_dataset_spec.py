@@ -816,6 +816,33 @@ class TestSpecImportStaysLauncherPure:
             f"stdout={result.stdout}\nstderr={result.stderr}"
         )
 
+    def test_bare_spec_import_does_not_pull_omegaconf(self) -> None:
+        """Bare spec import must not load ``omegaconf`` at module level.
+
+        ``omegaconf`` is only needed by ``DatasetSpec.from_hydra_cfg`` and runs
+        lazily inside it. The CI ``validate_spec`` job installs a minimal env
+        (pydantic + python-dotenv, no omegaconf); promoting the import back to
+        module level fails this test before that job breaks at runtime.
+        """
+        script = (
+            "import sys\n"
+            "import synth_setter.pipeline.schemas.spec  # noqa: F401\n"
+            "assert 'omegaconf' not in sys.modules, (\n"
+            "    'omegaconf leaked into spec module import; this breaks the '\n"
+            "    'validate_spec minimal-env contract'\n"
+            ")\n"
+        )
+        result = subprocess.run(  # noqa: S603 — sys.executable + literal script
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, (
+            f"bare spec import now pulls omegaconf:\n"
+            f"stdout={result.stdout}\nstderr={result.stderr}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Stronger pedalboard-free invariant — construction + serialization must not

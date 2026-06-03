@@ -15,9 +15,8 @@ import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from functools import cached_property
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
-from omegaconf import DictConfig, OmegaConf
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -34,6 +33,9 @@ from synth_setter.pipeline.schemas.prefix import (
     make_r2_prefix,
 )
 from synth_setter.pipeline.schemas.r2_location import R2Location
+
+if TYPE_CHECKING:
+    from omegaconf import DictConfig
 
 __all__ = [
     "EXTENSION_TO_OUTPUT_FORMAT",
@@ -608,6 +610,10 @@ class DatasetSpec(BaseModel):
             which ``masked_copy`` rejects with ``ValueError``) or the masked cfg
             did not resolve to a mapping — both normalized to one stable type.
         """
+        # Lazy import: omegaconf is absent from the minimal-env CI install that
+        # runs `validate_spec`, which imports this module but never calls this.
+        from omegaconf import OmegaConf
+
         spec_keys = [k for k in cfg if isinstance(k, str) and k in cls.model_fields]
         try:
             masked = OmegaConf.masked_copy(cfg, spec_keys)
