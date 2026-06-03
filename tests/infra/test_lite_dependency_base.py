@@ -77,7 +77,7 @@ def _requirement_name(spec: str) -> str:
 
 @pytest.fixture(scope="session")
 def project_dependency_names(project_root: Path) -> set[str]:
-    """Normalized distribution names declared in `[project.dependencies]`.
+    """Return normalized distribution names declared in `[project.dependencies]`.
 
     :param project_root: Repo root holding ``pyproject.toml`` (from conftest).
     :returns: The base install's declared dependency names.
