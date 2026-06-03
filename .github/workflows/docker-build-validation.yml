@@ -75,10 +75,10 @@ jobs:
         with:
           enable-cache: true
 
-      # `uv pip install -e .` installs the project + its light base only — uv
-      # pip never installs PEP 735 dependency-groups, so torch/skypilot/librosa
-      # stay out (see #1139). load_image_config needs only pyyaml + pydantic,
-      # both in the light base.
+      # `uv pip install -e .` with no `--group` installs the project + its light
+      # base only — PEP 735 dependency-groups install only when explicitly
+      # requested, so torch/skypilot/librosa stay out (see #1139).
+      # load_image_config needs only pyyaml + pydantic, both in the light base.
       - name: Install synth_setter (light base provides load_image_config deps)
         run: uv pip install --system -e .
 

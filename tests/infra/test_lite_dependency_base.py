@@ -3,8 +3,9 @@
 Lite CI jobs install the project with a bare `pip install -e .` and rely on the
 base staying light — only the union closure of the three lite entrypoints
 (`validate_spec.main`, `r2_io.ensure_r2_env_loaded`, `load_image_config.main`).
-The heavy runtime lives in PEP 735 `[dependency-groups]`, which pip/uv pip never
-install. These tests fail fast if the base silently grows a heavy dep back in.
+The heavy runtime lives in PEP 735 `[dependency-groups]`, which a plain
+`pip install -e .` does not pull in. These tests fail fast if the base silently
+grows a heavy dep back in.
 
 Rationale: docs/reference/dependency-management.md.
 """
