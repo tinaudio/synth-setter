@@ -68,7 +68,10 @@
           "tmux": {
             "path": "tmux",
             "args": [
-              "new-session"
+              "new-session",
+              "-A",
+              "-s",
+              "main"
             ]
           },
           "bash": {
