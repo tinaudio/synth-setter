@@ -223,16 +223,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      # rclone runs inside the worker pod/container, not on the runner; setup-r2
-      # exports the `RCLONE_CONFIG_R2_*` env every probe row reads — inline-sky
-      # and launcher-runner via `os.environ` into `task.update_envs`, and
-      # launcher-docker via value-less `docker run -e <VAR>` forwarding.
+      # setup-r2 exports RCLONE_CONFIG_R2_* for every probe row; only
+      # launcher-runner runs `rclone copyto` on the runner (spec_io.upload_spec),
+      # so only it installs rclone — other rows ship/run it on the worker.
       - name: Set up R2
         uses: ./.github/actions/setup-r2
         with:
           access-key-id: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
           secret-access-key: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
           endpoint: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+          install-rclone: ${{ matrix.mode == 'launcher-runner' }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -366,15 +366,6 @@ jobs:
       - name: Install launcher deps (launcher-runner mode)
         if: matrix.mode == 'launcher-runner'
         run: uv sync --frozen --extra cpu --no-default-groups --group dev
-
-      # `spec_io.upload_spec` shells out to `rclone copyto` to ship the
-      # materialized spec to R2. The dev-snapshot image has rclone baked in,
-      # but the bare GH-actions runner doesn't — install it for
-      # launcher-runner mode only. launcher-docker mode runs the launcher
-      # inside the image and skips this.
-      - name: Install rclone (launcher-runner mode)
-        if: matrix.mode == 'launcher-runner'
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq rclone
 
       # Launcher invokes the cred-bootstrap script itself (capturing stdout
       # via subprocess.run) and bridges RCLONE_CONFIG_R2_* from worker_env

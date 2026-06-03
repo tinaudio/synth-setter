@@ -183,16 +183,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      # rclone runs inside the worker container/pod, so no host install here;
-      # setup-r2 exports the `RCLONE_CONFIG_R2_*` env every downstream consumer
-      # reads — the launcher's cred bootstrap + rclone upload (native and
-      # in-container) and the `docker run -e <VAR>` shard-validation forward.
+      # setup-r2 exports RCLONE_CONFIG_R2_* for every downstream consumer; only
+      # skypilot-local runs `rclone copyto` on the runner, so only it installs
+      # rclone — runpod/oci run it in the worker container/pod.
       - name: Set up R2
         uses: ./.github/actions/setup-r2
         with:
           access-key-id: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
           secret-access-key: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
           endpoint: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+          install-rclone: ${{ inputs.provider == 'skypilot-local' }}
 
       # Reject hydra_overrides containing anything outside the allowed character
       # class. The docker (runpod/oci) row expands `$HYDRA_OVERRIDES_EXTRA`
@@ -355,7 +355,6 @@ jobs:
           set -euo pipefail
           uv sync --frozen --extra cpu --no-default-groups --group dev
           echo "${UV_PROJECT_ENVIRONMENT}/bin" >> "${GITHUB_PATH}"
-          sudo apt-get install -y -qq rclone
 
       - name: sky local up (skypilot-local row)
         if: ${{ inputs.provider == 'skypilot-local' }}
