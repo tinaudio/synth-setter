@@ -32,6 +32,11 @@ Never run `make docker-*` or RunPod commands without asking — they spend money
 
 </important>
 
+<important if="you are writing inline comments or docstrings">
+
+Code says **what**; comments say **why** — add prose only when it carries a constraint, unit, semantic, or rationale that names and types can't, and describe only current behavior (history belongs in the commit message). Keep comments to one line (cap two), open docstrings with the contract, and supply `:param:` / `:returns:` / `:raises:` semantics wherever pydoclint expects them — full rules in the `comment-hygiene` skill.
+</important>
+
 <important if="you are starting any non-trivial change">
 
 YAGNI. Start minimal and expand only when asked — don't add a class, config schema, or pattern speculatively. Ask "do we need this *now*?" and default to no. Present a plan before writing code.
