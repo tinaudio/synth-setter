@@ -59,40 +59,44 @@ _WORKER_REPO_ROOT = "/home/build/synth-setter"
 # Smoke-shard-sized; longer eval runs belong on the dispatch path, not inline.
 _ORACLE_EVAL_TIMEOUT_SECONDS = 600
 
-
-def _download_finalized_splits(spec: DatasetSpec, dest: Path) -> None:
-    """Download ``{train,val,test}.h5`` + ``stats.npz`` into ``dest``.
-
-    The eval datamodule loads normalization stats from ``dest/stats.npz``
-    (``use_saved_mean_and_variance=true``), so it must land beside the splits.
-
-    :param spec: Resolves the R2 URIs via ``spec.r2.split_h5_uri`` /
-        ``spec.r2.stats_uri``.
-    :param dest: Local directory to receive the splits and stats file.
-    """
-    dest.mkdir(parents=True, exist_ok=True)
-    for split in ("train", "val", "test"):
-        r2_io.download_to_path(spec.r2.split_h5_uri(split), dest / f"{split}.h5")
-    r2_io.download_to_path(spec.r2.stats_uri(), dest / STATS_NPZ_FILENAME)
+# Finalized artifacts the eval datamodule opens; all must sit in dataset_root.
+_ORACLE_EVAL_REQUIRED_ARTIFACTS = ("train.h5", "val.h5", "test.h5", STATS_NPZ_FILENAME)
 
 
-def _run_oracle_eval_subprocess(dataset_root: Path, run_id: str) -> None:
-    """Run the fake-oracle eval on ``dataset_root`` to verify the param-array round-trip.
+def _run_oracle_eval_subprocess(dataset_root: Path, run_dir: Path, run_id: str) -> None:
+    """Run the fake-oracle eval over ``dataset_root`` to verify the param-array round-trip.
 
     ``check=True`` so a non-zero eval exit (or wall-clock timeout) propagates
     to the caller.
 
-    :param dataset_root: Holds the finalized HDF5 splits the eval datamodule reads.
+    :param dataset_root: Dir holding the finalized HDF5 splits, their source
+        shards, and ``stats.npz``. The splits are virtual datasets that
+        reference the shards by basename, so they resolve only when read in
+        place beside those shards.
+    :param run_dir: Hydra per-run dir for the eval's own outputs (predictions,
+        ``metrics/metrics.json``), kept separate from ``dataset_root`` so eval
+        artifacts don't mix with the dataset files.
     :param run_id: Canonical ``spec.run_id``; the eval resumes this wandb run
         so its ``audio/*`` metrics land on the generate phase's run.
+    :raises FileNotFoundError: ``dataset_root`` is missing any finalized split
+        or ``stats.npz`` — e.g. a resume where ``finalize_from_spec``
+        short-circuited on an existing R2 marker without repopulating it.
     """
+    missing = [n for n in _ORACLE_EVAL_REQUIRED_ARTIFACTS if not (dataset_root / n).is_file()]
+    if missing:
+        raise FileNotFoundError(
+            f"inline oracle-eval expects the finalized splits + stats in {dataset_root}, "
+            f"but {missing} are absent. finalize_from_spec short-circuits when R2 already "
+            f"holds the dataset.complete marker, leaving output_dir unpopulated on a resume; "
+            f"rerun with a fresh paths.output_dir."
+        )
     argv = [
         sys.executable,
         "-m",
         "synth_setter.cli.eval",
         "experiment=surge/fake_oracle",
         f"datamodule.dataset_root={dataset_root}",
-        f"hydra.run.dir={dataset_root}",
+        f"hydra.run.dir={run_dir}",
         "ckpt_path=null",
         "logger=wandb",
         # eval.yaml defaults render to null; render_vst=true re-renders the
@@ -760,9 +764,12 @@ def main(cfg: DictConfig) -> None:
         if cfg.finalize_inline:
             finalize_from_spec(spec, Path(cfg.paths.output_dir))
         if cfg.oracle_eval_inline:
-            eval_dir = Path(cfg.paths.output_dir) / "oracle_eval" / spec.run_id
-            _download_finalized_splits(spec, eval_dir)
-            _run_oracle_eval_subprocess(eval_dir, spec.run_id)
+            # generate + finalize already wrote the shards, VDS splits, and
+            # stats.npz into output_dir; the splits reference the shards by
+            # basename, so read them in place — no R2 round-trip.
+            output_dir = Path(cfg.paths.output_dir)
+            eval_run_dir = output_dir / "oracle_eval" / spec.run_id
+            _run_oracle_eval_subprocess(output_dir, eval_run_dir, spec.run_id)
         return
 
     if cfg.finalize_inline or cfg.oracle_eval_inline:
