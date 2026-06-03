@@ -97,16 +97,18 @@ jobs:
       # Closes the gap that editable installs mask: tests in test.yml run
       # against `pip install -e .` where src/.../configs/ is the source dir,
       # so a broken [tool.setuptools.package-data] glob still passes pytest
-      # but breaks for real users. This step installs the built wheel with
-      # full deps and runs the canonical Hydra compose path through it.
-      # Install the explicit wheel path (quoted to keep bash from globbing
-      # the `[torch]`) so pip can't prefer a higher version from PyPI.
+      # but breaks for real users. This step installs the built wheel, then
+      # adds the heavy runtime to run the canonical Hydra compose path through
+      # it. The runtime lives in PEP 735 groups (#1139), absent from wheel
+      # metadata, so `uv pip install --group runtime` adds it from the
+      # checked-out pyproject (uv ignores [tool.uv.sources] → torch from PyPI).
       - name: Install wheel with full deps
         run: |
           python -m venv "$RUNNER_TEMP/full"
-          "$RUNNER_TEMP/full/bin/pip" install --upgrade pip
+          "$RUNNER_TEMP/full/bin/pip" install --upgrade pip uv
           WHL=$(ls dist/synth_setter-*.whl)
-          "$RUNNER_TEMP/full/bin/pip" install "${WHL}[torch]"
+          "$RUNNER_TEMP/full/bin/pip" install "${WHL}"
+          "$RUNNER_TEMP/full/bin/uv" pip install --python "$RUNNER_TEMP/full/bin/python" --group runtime
 
       # Compose train.yaml through the canonical entry pattern — exercises
       # the namespace plugin's auto-registration of `pkg://synth_setter.configs`,
