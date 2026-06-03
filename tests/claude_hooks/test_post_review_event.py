@@ -142,6 +142,38 @@ def test_submit_review_self_review_422_falls_back_to_comment(
     assert "Original review." in retried["body"]
 
 
+def test_submit_review_self_approve_422_falls_back_to_comment(
+    helper: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A self-APPROVE 422 also falls back to COMMENT (regex covers approve + request-changes).
+
+    :param helper: The loaded ``post_review`` module.
+    :param monkeypatch: Pytest fixture for patching ``subprocess.run``.
+    """
+    err_422 = SimpleNamespace(
+        returncode=1,
+        stdout="",
+        stderr="HTTP 422: Can not approve your own pull request",
+    )
+    ok = SimpleNamespace(
+        returncode=0,
+        stdout=json.dumps({"html_url": "https://example/r/3"}),
+        stderr="",
+    )
+    fake_run, calls = _fake_run_factory([err_422, ok])
+    monkeypatch.setattr(helper.subprocess, "run", fake_run)
+    monkeypatch.setattr(helper, "gh_executable", lambda: "/usr/bin/gh")
+
+    payload = {"body": "Clean review.", "event": "APPROVE"}
+    response = helper.submit_review("o/r", 7, payload, fallback_banner="✅ No findings")
+
+    assert response["html_url"] == "https://example/r/3"
+    assert len(calls) == 2
+    retried = json.loads(calls[1])
+    assert retried["event"] == "COMMENT"
+    assert retried["body"].startswith("✅ No findings")
+
+
 def test_submit_review_success_does_not_retry(
     helper: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -375,7 +375,7 @@ def submit_review(
         return json.loads(result.stdout)
     if _SELF_REVIEW_422_RE.search(result.stderr):
         sys.stderr.write(
-            "Self-review 422: falling back to event=COMMENT with a blocking banner.\n"
+            "Self-review 422: falling back to event=COMMENT with the fallback banner.\n"
         )
         retry = dict(payload)
         retry["event"] = "COMMENT"
@@ -433,10 +433,16 @@ def main() -> int:
         sys.stdout.write("\n")
         return 0
 
-    block_count = review_body.count(":block]") + sum(f.body.count(":block]") for f in findings)
-    banner = (
-        f"⛔ {block_count} BLOCKING finding(s) — changes required (self-review: posted as COMMENT)"
-    )
+    # Only REQUEST_CHANGES/APPROVE can 422 on a self-review; phrase the banner to match
+    # the intent GitHub refused (an APPROVE downgrade carries no "changes required").
+    if event == "APPROVE":
+        banner = "✅ No findings (self-review: APPROVE not allowed on own PR — posted as COMMENT)"
+    else:
+        block_count = review_body.count(":block]") + sum(f.body.count(":block]") for f in findings)
+        banner = (
+            f"⛔ {block_count} BLOCKING finding(s) — changes required "
+            "(self-review: posted as COMMENT)"
+        )
     response = submit_review(repo, pr_number, payload, fallback_banner=banner)
     html_url = response.get("html_url")
     sys.stdout.write(html_url if isinstance(html_url, str) else json.dumps(response))
