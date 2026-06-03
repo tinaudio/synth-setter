@@ -36,7 +36,7 @@ on:
     # the ``gh-pages`` benchmark chart from this PR before merging to main.
     # Revert to ``[main]`` once the chart exists.
     branches: [main, test/vst-roundtrip-xfail-tests]
-    paths:
+    paths: &vst_slow_paths
       - "src/synth_setter/data/vst/**"
       - "tests/data/vst/**"
       - "tests/integration/test_parallel_shard_render_linux.py"
@@ -49,6 +49,11 @@ on:
       - "src/synth_setter/configs/experiment/generate_dataset/**"
       - ".github/workflows/test-vst-slow.yml"
       - "pyproject.toml"
+  # render-matrix gated these paths at PR time; preserve that by running the
+  # suite (incl. the parallel-render cadence cells) pre-merge. The benchmark
+  # publish step is push/dispatch-only, so PRs never touch gh-pages (#1354).
+  pull_request:
+    paths: *vst_slow_paths
 
 concurrency:
   group: test-vst-slow-${{ github.ref }}
