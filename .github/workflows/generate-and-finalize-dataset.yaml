@@ -109,10 +109,11 @@ jobs:
           uv run python -m synth_setter.evaluation.assert_oracle_invariant \
             generate-and-finalize.log
 
-      # Independent structured cross-check: `cli/eval.py` writes the metric_dict
-      # JSON under <eval-dir>/metrics/metrics.json. Globbing under the operator
-      # workspace finds the one inline-eval run's artifact regardless of the
-      # spec's run_id, then asserts the same invariant from a non-stdout source.
+      # Independent structured cross-check: the inline eval writes metrics.json
+      # under `<paths.output_dir>/oracle_eval/<run_id>/metrics/` (a Hydra run
+      # dir, not directly under the workspace), so search the whole workspace
+      # for that `oracle_eval/*/metrics/metrics.json` tail, then assert the same
+      # invariant from a non-stdout source.
       - name: Locate metrics.json
         id: locate_metrics
         if: ${{ inputs.oracle_eval }}
@@ -120,9 +121,9 @@ jobs:
           PROJECT_ROOT: ${{ github.workspace }}
         run: |
           set -euo pipefail
-          metrics_path=$(find "${PROJECT_ROOT}/oracle_eval" -type f -name 'metrics.json' | head -n1)
+          metrics_path=$(find "${PROJECT_ROOT}" -type f -path '*/oracle_eval/*/metrics/metrics.json' | head -n1)
           if [ -z "${metrics_path}" ]; then
-            echo "::error::no metrics.json under ${PROJECT_ROOT}/oracle_eval"; exit 1
+            echo "::error::no oracle_eval metrics.json under ${PROJECT_ROOT}"; exit 1
           fi
           echo "path=${metrics_path}" >> "${GITHUB_OUTPUT}"
           echo "Located metrics.json at ${metrics_path}"

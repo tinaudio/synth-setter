@@ -48,26 +48,6 @@ pytestmark = [
 PLUGIN_PATH = os.environ.get("SYNTH_SETTER_PLUGIN_PATH") or "plugins/Surge XT.vst3"
 PRESET_PATH = "presets/surge-base.vstpreset"
 
-
-def _renderer_version() -> str:
-    """Pin ``renderer_version`` to the plugin actually present, so the spec validates.
-
-    Prefers ``SYNTH_SETTER_RENDERER_VERSION`` when set; otherwise reads the
-    version from the bundle's ``moduleinfo.json`` (a cheap file read, no plugin
-    load) so the test runs in CI without the operator pinning a version. Empty
-    when the plugin is absent — the render-skip guard then fires instead.
-
-    :returns: the version string, or ``""`` when the plugin is not installed.
-    """
-    env = os.environ.get("SYNTH_SETTER_RENDERER_VERSION")
-    if env:
-        return env
-    plugin = Path(PLUGIN_PATH)
-    return extract_renderer_version(plugin) if plugin.exists() else ""
-
-
-RENDERER_VERSION = _renderer_version()
-
 _NUM_SHARDS = 4
 _SAMPLES_PER_SHARD = 8
 
@@ -85,10 +65,6 @@ _CADENCE_CELLS = [
 @pytest.mark.skipif(
     not Path(PLUGIN_PATH).exists(),
     reason=f"VST plugin not found at {PLUGIN_PATH}",
-)
-@pytest.mark.skipif(
-    not RENDERER_VERSION,
-    reason="SYNTH_SETTER_RENDERER_VERSION must be set to the baked plugin version",
 )
 @pytest.mark.parametrize(
     ("gui_toggle_cadence", "plugin_reload_cadence"),
@@ -146,6 +122,13 @@ def _build_real_surge_spec(
     :returns: ``DatasetSpec`` with ``render.parallel=True``, ``_NUM_SHARDS``
         shards, and ``_SAMPLES_PER_SHARD`` samples per shard.
     """
+    # Derive the version here, not at import — `extract_renderer_version` falls
+    # back to loading the plugin (needs X11) when the bundle has no
+    # moduleinfo.json (Surge XT does not), and this runs inside the Xvfb wrapper
+    # at execution time, never during collection. Operators can still pin it.
+    renderer_version = os.environ.get("SYNTH_SETTER_RENDERER_VERSION") or (
+        extract_renderer_version(Path(PLUGIN_PATH))
+    )
     task_name = f"parallel-xvfb-stress-{gui_toggle_cadence}-{plugin_reload_cadence}"
     run_id = f"{task_name}-20260520T000000000Z"
     kwargs: dict[str, object] = {
@@ -165,7 +148,7 @@ def _build_real_surge_spec(
             "plugin_path": PLUGIN_PATH,
             "preset_path": PRESET_PATH,
             "param_spec_name": "surge_simple",
-            "renderer_version": RENDERER_VERSION,
+            "renderer_version": renderer_version,
             "sample_rate": 44100,
             "channels": 2,
             "velocity": 100,
