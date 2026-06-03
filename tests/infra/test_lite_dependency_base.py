@@ -6,11 +6,12 @@ base staying light — only the union closure of the three lite entrypoints
 The heavy runtime lives in PEP 735 `[dependency-groups]`, which pip/uv pip never
 install. These tests fail fast if the base silently grows a heavy dep back in.
 
-Design: docs/design/ci-lite-dependency-groups.md (§7).
+Rationale: docs/reference/dependency-management.md.
 """
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -61,27 +62,43 @@ HEAVY_DEPS = {
 
 
 def _requirement_name(spec: str) -> str:
-    """Return the lowercased distribution name from a PEP 508 requirement string."""
+    """Return the PEP 503-normalized distribution name from a PEP 508 requirement.
+
+    :param spec: A requirement string, e.g. ``"pydantic>=2"`` or ``"dask[distributed]"``.
+    :returns: Name lowercased with runs of ``-``/``_``/``.`` collapsed to a single
+        ``-``, so equivalent spellings compare equal against ``LITE_CLOSURE`` /
+        ``HEAVY_DEPS``.
+    """
     name = spec.strip()
     for delim in _NAME_DELIMS:
         name = name.split(delim, 1)[0]
-    return name.strip().lower()
+    return re.sub(r"[-_.]+", "-", name.strip().lower())
 
 
 @pytest.fixture(scope="session")
 def project_dependency_names(project_root: Path) -> set[str]:
-    """Distribution names declared in `[project.dependencies]` of pyproject.toml."""
+    """Normalized distribution names declared in `[project.dependencies]`.
+
+    :param project_root: Repo root holding ``pyproject.toml`` (from conftest).
+    :returns: The base install's declared dependency names.
+    """
     with (project_root / "pyproject.toml").open("rb") as fh:
         pyproject = tomllib.load(fh)
     return {_requirement_name(dep) for dep in pyproject["project"]["dependencies"]}
 
 
 def test_project_dependencies_equal_lite_closure(project_dependency_names: set[str]) -> None:
-    """`[project.dependencies]` is exactly the lite union closure — nothing more."""
+    """`[project.dependencies]` is exactly the lite union closure — nothing more.
+
+    :param project_dependency_names: Declared base dependency names (fixture).
+    """
     assert project_dependency_names == LITE_CLOSURE
 
 
 def test_project_dependencies_exclude_heavy_runtime(project_dependency_names: set[str]) -> None:
-    """No heavy runtime dep leaks into the base lite install."""
+    """No heavy runtime dep leaks into the base lite install.
+
+    :param project_dependency_names: Declared base dependency names (fixture).
+    """
     leaked = project_dependency_names & HEAVY_DEPS
     assert not leaked, f"heavy deps leaked into [project.dependencies]: {sorted(leaked)}"

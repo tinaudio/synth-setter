@@ -27,7 +27,7 @@ channels:
 #   guarantee that.
 #
 # The torch-stack version specs here are kept in lock-step with
-# pyproject.toml's [project.dependencies] torch entries: if those raise a
+# pyproject.toml's [dependency-groups].torch entries: if those raise a
 # lower bound, bump the matching spec here too. Otherwise conda could legally
 # resolve to an older version than the pip spec allows, and pip would
 # reinstall from PyPI on top of conda's binary — defeating the whole reason
