@@ -47,11 +47,11 @@ def helper() -> ModuleType:
 
 
 def test_build_review_payload_event_defaults_to_comment(helper: ModuleType) -> None:
-    """An explicit COMMENT event is set on the payload.
+    """The event defaults to COMMENT when the argument is omitted.
 
     :param helper: The loaded ``post_review`` module.
     """
-    payload = helper.build_review_payload("body", [], [], event="COMMENT")
+    payload = helper.build_review_payload("body", [], [])
     assert payload["event"] == "COMMENT"
 
 
