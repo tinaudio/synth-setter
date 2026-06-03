@@ -1,4 +1,5 @@
 {
+  "permissions": { "defaultMode": "auto" },
   "enabledPlugins": { "tinaudio-synth-setter-skills@tinaudio-skills": true },
   "extraKnownMarketplaces": {
     "tinaudio-skills": {
