@@ -128,77 +128,87 @@ def _upload_cfg(output_dir: Path, upload_output_dir_uri: str | None) -> DictConf
     )
 
 
-def test_maybe_upload_output_dir_noop_when_uri_unset(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """A null URI uploads nothing and never touches R2 credentials.
+@pytest.fixture()
+def r2_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Set the three secret keys :func:`r2_io.ensure_r2_env_loaded` requires present.
 
-    :param monkeypatch: Stubs ``r2_io`` so any R2 call would be observable.
-    :param tmp_path: Stands in for the output dir.
+    Paired with ``fake_r2_remote`` (which sets ``RCLONE_CONFIG_R2_TYPE=local``),
+    these dummy values satisfy the presence check and let the real ``rclone lsd
+    r2:`` auth ping resolve the local backend instead of dialing Cloudflare.
+
+    :param monkeypatch: Sets the secret env vars for the test's duration.
     """
-    calls: list[str] = []
-    monkeypatch.setattr(
-        eval_mod.r2_io, "ensure_r2_env_loaded", lambda *a, **k: calls.append("env")
-    )
-    monkeypatch.setattr(eval_mod.r2_io, "upload_dir", lambda *a, **k: calls.append("upload"))
+    monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", "test-access-key")
+    monkeypatch.setenv("RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", "test-secret-key")
+    monkeypatch.setenv("RCLONE_CONFIG_R2_ENDPOINT", "http://localhost:0")
+
+
+def _write_output_tree(output_dir: Path) -> None:
+    """Populate ``output_dir`` with a nested file and a top-level file to mirror.
+
+    :param output_dir: Created here, then filled with the two-level tree.
+    """
+    (output_dir / "predictions").mkdir(parents=True)
+    (output_dir / "predictions" / "pred.json").write_text('{"ok": true}')
+    (output_dir / "metrics.json").write_text('{"param_mse": 0.0}')
+
+
+def test_maybe_upload_output_dir_noop_when_uri_unset(fake_r2_remote: Path, tmp_path: Path) -> None:
+    """A null URI lands no objects in the remote.
+
+    :param fake_r2_remote: Local-backed ``r2:`` remote; its tree is asserted empty.
+    :param tmp_path: Holds the output dir that a non-null URI would have mirrored.
+    """
+    output_dir = tmp_path / "run"
+    _write_output_tree(output_dir)
 
     _maybe_upload_output_dir(
-        _upload_cfg(tmp_path, upload_output_dir_uri=None), is_global_zero=True
+        _upload_cfg(output_dir, upload_output_dir_uri=None), is_global_zero=True
     )
 
-    assert calls == []
+    assert list(fake_r2_remote.glob("bucket/**/*")) == []
 
 
 def test_maybe_upload_output_dir_skips_non_global_zero_rank(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    fake_r2_remote: Path, tmp_path: Path
 ) -> None:
-    """A non-global-zero rank uploads nothing even when a URI is set.
+    """A non-global-zero rank lands no objects even when a URI is set.
 
     Under DDP every rank runs ``main`` against the one shared ``output_dir``;
     only rank zero may copy it so the other ranks don't race redundant uploads.
 
-    :param monkeypatch: Stubs ``r2_io`` so any R2 call would be observable.
-    :param tmp_path: Stands in for the output dir.
+    :param fake_r2_remote: Local-backed ``r2:`` remote; its tree is asserted empty.
+    :param tmp_path: Holds the output dir rank zero would have mirrored.
     """
-    calls: list[str] = []
-    monkeypatch.setattr(
-        eval_mod.r2_io, "ensure_r2_env_loaded", lambda *a, **k: calls.append("env")
-    )
-    monkeypatch.setattr(eval_mod.r2_io, "upload_dir", lambda *a, **k: calls.append("upload"))
+    output_dir = tmp_path / "run"
+    _write_output_tree(output_dir)
 
     _maybe_upload_output_dir(
-        _upload_cfg(tmp_path, "r2://bucket/evals/run-1"), is_global_zero=False
+        _upload_cfg(output_dir, "r2://bucket/evals/run-1"), is_global_zero=False
     )
 
-    assert calls == []
+    assert list(fake_r2_remote.glob("bucket/**/*")) == []
 
 
-def test_maybe_upload_output_dir_uploads_tree_when_uri_set(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_maybe_upload_output_dir_mirrors_tree_when_uri_set(
+    fake_r2_remote: Path, r2_credentials: None, tmp_path: Path
 ) -> None:
-    """A set URI validates credentials, then uploads the output dir to that prefix.
+    """A set URI mirrors the whole output dir beneath the destination prefix.
 
-    :param monkeypatch: Stubs ``r2_io`` so the credential check + upload are observable.
-    :param tmp_path: Stands in for the output dir passed to ``upload_dir``.
+    :param fake_r2_remote: Local-backed ``r2:`` remote where the mirror lands.
+    :param r2_credentials: Dummy secrets so the real credential check passes.
+    :param tmp_path: Holds the output dir copied to R2.
     """
-    order: list[str] = []
-    monkeypatch.setattr(
-        eval_mod.r2_io, "ensure_r2_env_loaded", lambda *a, **k: order.append("env")
+    output_dir = tmp_path / "run"
+    _write_output_tree(output_dir)
+
+    _maybe_upload_output_dir(
+        _upload_cfg(output_dir, "r2://bucket/evals/run-1"), is_global_zero=True
     )
-    captured: dict[str, object] = {}
 
-    def _fake_upload_dir(local_dir: Path, r2_uri: str) -> None:
-        order.append("upload")
-        captured["local_dir"] = local_dir
-        captured["r2_uri"] = r2_uri
-
-    monkeypatch.setattr(eval_mod.r2_io, "upload_dir", _fake_upload_dir)
-
-    _maybe_upload_output_dir(_upload_cfg(tmp_path, "r2://bucket/evals/run-1"), is_global_zero=True)
-
-    assert order == ["env", "upload"]
-    assert captured["local_dir"] == tmp_path
-    assert captured["r2_uri"] == "r2://bucket/evals/run-1"
+    dest = fake_r2_remote / "bucket" / "evals" / "run-1"
+    assert (dest / "predictions" / "pred.json").read_text() == '{"ok": true}'
+    assert (dest / "metrics.json").read_text() == '{"param_mse": 0.0}'
 
 
 @pytest.mark.requires_vst

@@ -190,27 +190,26 @@ class TestUploadDir:
         with pytest.raises(ValueError, match="not an r2:// URI"):
             r2_io.upload_dir(tmp_path / "run", "local-dest")
 
-    def test_command_carries_copy_verb_and_reliability_flags(self, tmp_path: Path) -> None:
-        """Pin the ``copy`` verb (not ``copyto``) + the reliability-flag set.
+    def test_reupload_overwrites_changed_file(self, fake_r2_remote: Path, tmp_path: Path) -> None:
+        """Re-uploading a changed source overwrites the remote copy — no ``--immutable``.
 
-        A directory upload needs ``rclone copy`` so the relative tree is
-        preserved; ``copyto`` would treat the destination as a single object.
-        The reliability flags mirror the other helpers so a transient blip
-        retries instead of failing the eval. Unlike the download helper there is
-        no ``--immutable``: the caller is pushing its own fresh run dir.
+        The caller pushes its own freshly-produced run dir, so a second upload
+        must replace stale objects rather than hard-fail the way the
+        ``--immutable`` download guard would.
 
-        :param tmp_path: Pytest tmp dir used for the upload source path.
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        :param tmp_path: Pytest tmp dir holding the local source tree.
         """
-        with patch.object(r2_io.subprocess, "check_call") as mock_call:
-            r2_io.upload_dir(tmp_path / "run", "r2://bucket/evals/run-1")
-        args = mock_call.call_args[0][0]
-        assert args[:2] == ["rclone", "copy"]
-        assert "--immutable" not in args
-        assert "--checksum" in args
-        assert "-vv" in args
-        assert "--contimeout=30s" in args
-        assert "--timeout=300s" in args
-        assert "--retries=3" in args
+        local_dir = tmp_path / "run"
+        local_dir.mkdir()
+        (local_dir / "metrics.json").write_text('{"param_mse": 1.0}')
+        r2_io.upload_dir(local_dir, "r2://bucket/evals/run-1")
+
+        (local_dir / "metrics.json").write_text('{"param_mse": 0.0}')
+        r2_io.upload_dir(local_dir, "r2://bucket/evals/run-1")
+
+        dest = fake_r2_remote / "bucket" / "evals" / "run-1"
+        assert (dest / "metrics.json").read_text() == '{"param_mse": 0.0}'
 
 
 class TestUploadToUri:

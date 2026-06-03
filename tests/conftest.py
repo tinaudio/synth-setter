@@ -22,6 +22,7 @@ from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
 from tests._baseline_worktree import worktree_for_ref  # noqa: F401 — pytest fixture re-export
 from tests.data.vst._fake_plugin import FakeVST3Plugin
+from tests.pipeline.conftest import fake_r2_remote  # noqa: F401 — pytest fixture re-export
 
 # Per-clip dimensions for the smoke fixture's HDF5 output. ``RenderConfig`` in
 # ``synth_setter.pipeline.schemas.spec`` declares no field defaults — the fixture passes
