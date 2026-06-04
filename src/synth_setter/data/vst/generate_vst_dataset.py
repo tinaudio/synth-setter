@@ -236,6 +236,53 @@ def create_datasets_and_get_start_idx(
     )
 
 
+def fixed_params_from_dataset(
+    source_shard: Path | str,
+    param_spec: ParamSpec,
+) -> tuple[list[dict[str, float]], list[dict[str, int | tuple[float, float]]]]:
+    """Decode an existing shard's ``param_array`` into fixed synth/note param lists.
+
+    Reads the ``param_array`` dataset from ``source_shard`` and decodes each row
+    via ``param_spec.decode``, yielding the per-row fixed params that reproduce
+    the source dataset under a fresh render. The two returned lists are
+    row-aligned and ready to pass to ``make_hdf5_dataset`` / ``make_wds_dataset``
+    as ``fixed_synth_params_list`` / ``fixed_note_params_list``.
+
+    :param source_shard: Source shard whose ``param_array`` rows are decoded.
+    :param param_spec: Param spec the source was encoded with; its encoded width
+        must equal the source's ``param_array`` column count.
+    :returns: ``(synth_params_list, note_params_list)``, one dict per source row.
+    :raises ValueError: ``source_shard`` lacks a ``param_array`` dataset, that
+        dataset is not 2-D, or its column count does not match ``len(param_spec)``
+        — any of which would make the per-row decode mis-align.
+    """
+    with h5py.File(source_shard, "r") as h5:
+        if PARAM_ARRAY_FIELD not in h5:
+            raise ValueError(
+                f"source shard {source_shard} has no {PARAM_ARRAY_FIELD!r} dataset; "
+                "it is not a parameter-bearing dataset shard."
+            )
+        param_array = h5[PARAM_ARRAY_FIELD][:]
+    if param_array.ndim != 2:
+        raise ValueError(
+            f"source shard {source_shard} {PARAM_ARRAY_FIELD!r} must be 2-D "
+            f"(num_rows, num_params), got shape {param_array.shape}."
+        )
+    if param_array.shape[1] != len(param_spec):
+        raise ValueError(
+            f"source shard {source_shard} param_array has {param_array.shape[1]} columns "
+            f"but param_spec has {len(param_spec)}; the copy source must share the target's "
+            "param_spec_name (same encoding width)."
+        )
+    synth_params_list: list[dict[str, float]] = []
+    note_params_list: list[dict[str, int | tuple[float, float]]] = []
+    for row in param_array:
+        synth_params, note_params = param_spec.decode(row)
+        synth_params_list.append(synth_params)
+        note_params_list.append(note_params)
+    return synth_params_list, note_params_list
+
+
 class _GenerateCliArgs(RenderConfig, BaseSettings):
     """Pydantic-settings CLI binding for ``generate_vst_dataset.py``.
 
@@ -243,7 +290,13 @@ class _GenerateCliArgs(RenderConfig, BaseSettings):
     automatically — adding or removing a field on ``RenderConfig`` extends or
     shrinks the CLI surface without a parallel update here. Adds ``data_file``
     as the sole positional arg (the destination shard path; suffix selects
-    writer via ``EXTENSION_TO_OUTPUT_FORMAT``).
+    writer via ``EXTENSION_TO_OUTPUT_FORMAT``), and an optional
+    ``copy_dataset_root`` that triggers the param-copy path.
+
+    .. attribute :: copy_dataset_root
+
+        Optional copy source; when set, the same-named source shard's params
+        are decoded and re-rendered instead of sampling fresh ones.
     """
 
     model_config = SettingsConfigDict(
@@ -255,6 +308,7 @@ class _GenerateCliArgs(RenderConfig, BaseSettings):
     )
 
     data_file: CliPositionalArg[str]
+    copy_dataset_root: str | None = None
 
 
 def main() -> None:
@@ -264,24 +318,58 @@ def main() -> None:
     ``EXTENSION_TO_OUTPUT_FORMAT`` (``.h5`` → HDF5, ``.tar`` → wds). An unknown
     suffix raises ``SystemExit`` rather than silently producing a half-written
     file in the wrong format.
+
+    When ``--copy_dataset_root`` is set, the params of the same-named source
+    shard under that root are decoded into fixed synth/note lists and
+    re-rendered instead of sampling fresh params. The source is read as an HDF5
+    ``param_array``, so copy is supported for hdf5 output only (a ``.tar`` output
+    has no same-named HDF5 source); a wds output with ``--copy_dataset_root``
+    raises ``SystemExit``.
     """
     # Import lazily so that the writer module's webdataset dep only loads when
     # this CLI entrypoint is invoked, not when callers merely import this
     # module to reach VSTDataSample / generate_sample. (h5py is already a
     # module-level import here, so it is not what the lazy load avoids.)
+    from synth_setter.data.vst.param_spec_registry import param_specs
     from synth_setter.data.vst.writers import make_hdf5_dataset, make_wds_dataset
 
     args = CliApp.run(_GenerateCliArgs)
-    render_cfg = RenderConfig(**args.model_dump(exclude={"data_file"}))
+    render_cfg = RenderConfig(**args.model_dump(exclude={"data_file", "copy_dataset_root"}))
+
     suffix = Path(args.data_file).suffix
     fmt = EXTENSION_TO_OUTPUT_FORMAT.get(suffix)
-    if fmt == "hdf5":
-        make_hdf5_dataset(args.data_file, render_cfg)
-    elif fmt == "wds":
-        make_wds_dataset(args.data_file, render_cfg)
-    else:
+    if fmt is None:
         raise SystemExit(
             f"data_file must end in one of {sorted(EXTENSION_TO_OUTPUT_FORMAT)}, got {suffix!r}"
+        )
+
+    fixed_synth_params_list = None
+    fixed_note_params_list = None
+    if args.copy_dataset_root is not None:
+        if fmt != "hdf5":
+            raise SystemExit(
+                "--copy_dataset_root supports hdf5 output only; the source params are "
+                f"read from a same-named HDF5 shard, but data_file suffix is {suffix!r}."
+            )
+        # Same shard filename under the copy root names the source HDF5 shard.
+        source_shard = Path(args.copy_dataset_root) / Path(args.data_file).name
+        fixed_synth_params_list, fixed_note_params_list = fixed_params_from_dataset(
+            source_shard, param_specs[render_cfg.param_spec_name]
+        )
+
+    if fmt == "hdf5":
+        make_hdf5_dataset(
+            args.data_file,
+            render_cfg,
+            fixed_synth_params_list=fixed_synth_params_list,
+            fixed_note_params_list=fixed_note_params_list,
+        )
+    else:  # fmt == "wds", validated above
+        make_wds_dataset(
+            args.data_file,
+            render_cfg,
+            fixed_synth_params_list=fixed_synth_params_list,
+            fixed_note_params_list=fixed_note_params_list,
         )
 
 

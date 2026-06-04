@@ -25,6 +25,13 @@ run_name: ${task_name}
 output_format: hdf5
 base_seed: 42
 
+# Optional dataset-copy source. ``null`` samples fresh params (the default).
+# Set ``datasetsrc.copy_dataset_root`` to a directory of source shards to
+# instead re-render each same-named shard's params; the source must share this
+# config's ``render.param_spec_name``. Override as a mapping, e.g.
+# ``datasetsrc='{copy_dataset_root: /data/source-dataset}'``.
+datasetsrc: null
+
 # Forwarded by ``synth-setter-finalize-dataset`` to ``stream_stats_wds`` /
 # ``get_stats_hdf5``; ``true`` substitutes ``std=1.0`` at zero-variance mel
 # bins instead of raising. Smoke configs override to ``true``.
