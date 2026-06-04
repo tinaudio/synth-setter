@@ -203,11 +203,14 @@ if [[ "$REVIEW_COMMENT_GATE" != "off" ]]; then
   fi
 fi
 
-# Reject any sentinel still listing a BLOCK finding from any skill — the tag
-# is `[<skill>:block]` (synth-setter, code-health, ml-test, pr-health, ...).
+# Reject any sentinel still listing a BLOCK finding from a non-comment-hygiene
+# skill (`[<skill>:block]`: synth-setter, code-health, ml-test, pr-health, ...).
+# comment-hygiene blocks are the comment sub-gate's domain, excluded here so the
+# gates don't overlap and REVIEW_COMMENT_GATE=off fully owns comment-hygiene.
 # `|| true`: tolerate grep's no-match exit-1, like the comment sub-gate above.
 if [[ "$REVIEW_BLOCK_GATE" != "off" ]]; then
-  block_findings=$(grep -oE '\[[a-z][a-z0-9-]*:block\]' "$REVIEW_PATH" || true)
+  block_findings=$(grep -oE '\[[a-z][a-z0-9-]*:block\]' "$REVIEW_PATH" \
+    | grep -vF '[comment-hygiene:block]' || true)
   block_count=$(printf '%s' "$block_findings" | grep -c . || true)
   if [[ "$block_count" -gt 0 ]]; then
     block_remediation="resolve them or set REVIEW_BLOCK_GATE=off for an intentional override"

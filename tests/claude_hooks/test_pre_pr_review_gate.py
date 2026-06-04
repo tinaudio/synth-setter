@@ -123,6 +123,23 @@ def test_gate_does_not_fire_on_warn_only_sentinel(tmp_path: Path) -> None:
     assert result.returncode == 0, (result.returncode, result.stderr)
 
 
+def test_block_gate_excludes_comment_hygiene_blocks(tmp_path: Path) -> None:
+    """A ``[comment-hygiene:block]`` finding is the comment-gate's domain, not the block-gate's.
+
+    With ``REVIEW_COMMENT_GATE=off`` and the default block-gate, the comment-hygiene
+    block passes (exit 0) — proving the two gates don't overlap.
+
+    :param tmp_path: pytest tmp dir for the synthetic sentinel.
+    """
+    review = _head_sentinel(
+        tmp_path,
+        "# repo-review-full-no-comments\n\n"
+        "- **L9** — **[comment-hygiene:block]** comment inside a run: block-scalar.\n",
+    )
+    result = _run_gate(review, env={"REVIEW_COMMENT_GATE": "off"})
+    assert result.returncode == 0, (result.returncode, result.stderr)
+
+
 def test_gate_allows_clean_pass_sentinel(tmp_path: Path) -> None:
     """A clean PASS sentinel (no bracketed findings) passes (exit 0).
 
