@@ -209,6 +209,9 @@ def test_title_gate_rejects_invalid_gate_value(tmp_path: Path) -> None:
     )
     assert result.returncode == 2, (result.returncode, result.stderr)
     assert "PR_TITLE_GATE must be one of" in result.stderr
+    # The help block is the title-gate help, not the REVIEW_FULL help.
+    assert "conventional commit" in result.stderr
+    assert "REVIEW_FULL=<value>" not in result.stderr
     assert not stdin_log.exists()
 
 

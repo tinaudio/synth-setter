@@ -101,8 +101,10 @@ Allowed <type>s are defined in .gitlint. Set PR_TITLE_GATE=off to bypass
 
 block() {
   local reason="$1"
+  # Optional 2nd arg overrides the help block; defaults to the REVIEW_FULL help.
+  local help="${2:-$BLOCK_HELP}"
   log "blocking: $reason"
-  printf 'BLOCKED: %s\n\n%s\n' "$reason" "$BLOCK_HELP" >&2
+  printf 'BLOCKED: %s\n\n%s\n' "$reason" "$help" >&2
   exit 2
 }
 
@@ -122,7 +124,7 @@ esac
 
 case "$PR_TITLE_GATE" in
   block | warn | off) ;;
-  *) block "PR_TITLE_GATE must be one of block|warn|off, got: ${PR_TITLE_GATE}" ;;
+  *) block "PR_TITLE_GATE must be one of block|warn|off, got: ${PR_TITLE_GATE}" "$TITLE_HELP" ;;
 esac
 
 # PR title sub-gate — lint the title against .gitlint before the review-file
