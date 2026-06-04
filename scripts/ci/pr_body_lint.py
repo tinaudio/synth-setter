@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 import sys
 from collections.abc import Mapping
-from typing import Literal
+from typing import Literal, TextIO
 
 import click
 
@@ -169,7 +169,7 @@ def lint_pr_body(body: str) -> list[Finding]:
     default="-",
     help="File to read the PR body from (default: stdin).",
 )
-def main(mode: Literal["warn", "block"], body_file: click.utils.LazyFile) -> None:
+def main(mode: Literal["warn", "block"], body_file: TextIO) -> None:
     """Lint a PR body read from ``--body-file`` (or stdin) and annotate findings.
 
     Emits GitHub Actions annotations (``::warning::`` / ``::error::``) so findings
