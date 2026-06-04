@@ -38,6 +38,8 @@ from tests.evaluation._oracle_helpers import ORACLE_AUDIO_METRIC_BOUNDS
 # only keys in ``metrics.json`` (see ``synth_setter.evaluation.compute_audio_metrics``).
 _ORACLE_AUDIO_METRICS = ("mss", "wmfcc", "sot", "rms")
 
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
 
 def test_cfg_dataset_composes_and_validates_as_dataset_spec(
     cfg_dataset: DictConfig,
@@ -98,6 +100,41 @@ def test_cfg_dataset_datasetsrc_with_wds_output_is_rejected(
 
     with pytest.raises(ValueError, match="supports output_format='hdf5' only"):
         spec_from_cfg(cfg_dataset)
+
+
+@pytest.mark.slow
+def test_main_skips_schema_invalid_cadence_cell_without_failing(
+    tmp_path: Path,
+) -> None:
+    """The CLI no-ops (exit 0) on a cadence grid cell ``RenderConfig`` rejects.
+
+    ``gui_toggle_cadence=always_on`` is valid only with ``plugin_reload_cadence=once``,
+    so the render arm of a cadence grid sweep hits an invalid cell. ``main`` logs a
+    warning and returns instead of raising, which a wandb grid relies on to keep the
+    trial from failing. Driven as a real subprocess so the whole entrypoint — Hydra
+    compose, ``RenderConfig`` validation, and the skip guard — is exercised; the skip
+    returns before any render, so no VST/R2 is needed.
+
+    :param tmp_path: Hydra run dir, kept out of the repo tree.
+    """
+    result = subprocess.run(  # noqa: S603 — fixed argv, no shell, trusted entrypoint
+        [
+            sys.executable,
+            "-m",
+            "synth_setter.cli.generate_dataset",
+            "experiment=generate_dataset/smoke-shard",
+            "render.plugin_reload_cadence=render",
+            "render.gui_toggle_cadence=always_on",
+            f"hydra.run.dir={tmp_path}",
+        ],
+        cwd=_REPO_ROOT,
+        env={**os.environ, "PROJECT_ROOT": str(_REPO_ROOT), "WANDB_MODE": "disabled"},
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "skipping run" in (result.stdout + result.stderr)
 
 
 @pytest.mark.integration_r2

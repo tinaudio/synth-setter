@@ -63,7 +63,14 @@ _ORACLE_EVAL_TIMEOUT_SECONDS = 600
 _ORACLE_EVAL_REQUIRED_ARTIFACTS = ("train.h5", "val.h5", "test.h5", STATS_NPZ_FILENAME)
 
 
-def _run_oracle_eval_subprocess(dataset_root: Path, run_dir: Path, run_id: str) -> None:
+def _run_oracle_eval_subprocess(
+    dataset_root: Path,
+    run_dir: Path,
+    run_id: str,
+    *,
+    param_spec_name: str,
+    preset_path: str,
+) -> None:
     """Run the fake-oracle eval over ``dataset_root`` to verify the param-array round-trip.
 
     ``check=True`` so a non-zero eval exit (or wall-clock timeout) propagates
@@ -78,6 +85,10 @@ def _run_oracle_eval_subprocess(dataset_root: Path, run_dir: Path, run_id: str) 
         artifacts don't mix with the dataset files.
     :param run_id: Canonical ``spec.run_id``; the eval resumes this wandb run
         so its ``audio/*`` metrics land on the generate phase's run.
+    :param param_spec_name: ``render.param_spec_name`` used at generation; the
+        eval must re-render predictions through this same spec.
+    :param preset_path: ``render.preset_path`` used at generation; paired with
+        ``param_spec_name`` so the re-render preset matches.
     :raises FileNotFoundError: ``dataset_root`` is missing any finalized split
         or ``stats.npz`` — e.g. a resume where ``finalize_from_spec``
         short-circuited on an existing R2 marker without repopulating it.
@@ -99,10 +110,13 @@ def _run_oracle_eval_subprocess(dataset_root: Path, run_dir: Path, run_id: str) 
         f"hydra.run.dir={run_dir}",
         "ckpt_path=null",
         "logger=wandb",
-        # eval.yaml defaults render to null; render_vst=true re-renders the
-        # predicted params, so select the surge_simple group the smoke shard
-        # was generated with (param spec + preset must match the dataset).
+        # eval.yaml leaves render null; render_vst=true re-renders predicted
+        # params. Take the surge_simple group's structural render fields, then
+        # override the param spec + preset to match the dataset's generation
+        # render so the round-trip uses the same spec.
         "render=surge_simple",
+        f"render.param_spec_name={param_spec_name}",
+        f"render.preset_path={preset_path}",
         # id already exists in logger/wandb.yaml (id: null) so a plain
         # override suffices; resume is absent there and needs +append.
         f"logger.wandb.id={run_id}",
@@ -115,6 +129,29 @@ def _run_oracle_eval_subprocess(dataset_root: Path, run_dir: Path, run_id: str) 
     ]
     logger.info(f"oracle_eval_inline subprocess: {argv}")
     subprocess.run(argv, check=True, timeout=_ORACLE_EVAL_TIMEOUT_SECONDS)  # noqa: S603
+
+
+def _unsupported_cadence_reason(render_cfg: DictConfig) -> str | None:
+    """Return why this render cadence combination is schema-invalid, else ``None``.
+
+    Mirrors ``RenderConfig._always_on_requires_plugin_reload_once`` so ``main`` can
+    skip a wandb-grid cell the validator would otherwise raise on. Kept in sync
+    with that validator by hand.
+
+    :param render_cfg: Composed ``render`` group; reads ``gui_toggle_cadence`` and
+        ``plugin_reload_cadence``.
+    :returns: A reason string when the combination is unsupported, else ``None``.
+    """
+    if (
+        render_cfg.get("gui_toggle_cadence") == "always_on"
+        and render_cfg.get("plugin_reload_cadence") != "once"
+    ):
+        reload_cadence = render_cfg.get("plugin_reload_cadence")
+        return (
+            f"gui_toggle_cadence=always_on requires plugin_reload_cadence=once, "
+            f"got plugin_reload_cadence={reload_cadence!r}"
+        )
+    return None
 
 
 def _rclone_copy(src: str, dest: str) -> None:
@@ -720,12 +757,26 @@ def main(cfg: DictConfig) -> None:
     the launcher/worker composition matches byte-for-byte; ``HydraConfig`` is
     the authoritative source for the operator's task overrides.
 
+    A schema-invalid render cadence combination (see
+    :func:`_unsupported_cadence_reason`) is a logged no-op rather than a raise,
+    so a wandb grid sweep can enumerate the cell without failing the trial.
+
     :param cfg: Hydra-composed dataset cfg.
     :raises ValueError: ``oracle_eval_inline=true`` without
         ``finalize_inline=true``, with ``output_format!=hdf5``, or with
         a zero-size train / val / test split (the eval datamodule opens
         all three split files unconditionally).
     """
+    render_cfg = cfg.get("render")
+    skip_reason = None if render_cfg is None else _unsupported_cadence_reason(render_cfg)
+    if skip_reason is not None:
+        logger.warning(
+            f"skipping run: unsupported render cadence combination ({skip_reason}). "
+            "No dataset generated — a no-op so a wandb grid sweep can enumerate this "
+            "cell without failing the trial."
+        )
+        return
+
     overrides = list(HydraConfig.get().overrides.task)
     spec = spec_from_cfg(cfg)
     sky_cfg = _sky_cfg_from_dataset_cfg(cfg)
@@ -773,7 +824,13 @@ def main(cfg: DictConfig) -> None:
             # basename, so read them in place — no R2 round-trip.
             output_dir = Path(cfg.paths.output_dir)
             eval_run_dir = output_dir / "oracle_eval" / spec.run_id
-            _run_oracle_eval_subprocess(output_dir, eval_run_dir, spec.run_id)
+            _run_oracle_eval_subprocess(
+                output_dir,
+                eval_run_dir,
+                spec.run_id,
+                param_spec_name=spec.render.param_spec_name,
+                preset_path=spec.render.preset_path,
+            )
         return
 
     if cfg.finalize_inline or cfg.oracle_eval_inline:

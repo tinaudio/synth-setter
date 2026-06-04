@@ -1692,6 +1692,10 @@ class TestMainDispatchBranches:
         oracle_mock.assert_called_once()
         dataset_root, run_dir, _run_id = oracle_mock.call_args[0]
         assert isinstance(dataset_root, Path)
+        # The generation render spec + preset flow through (keyword-only) so the
+        # eval re-renders predictions through the same spec; smoke-shard is surge_simple.
+        assert oracle_mock.call_args.kwargs["param_spec_name"] == "surge_simple"
+        assert oracle_mock.call_args.kwargs["preset_path"] == "presets/surge-simple.vstpreset"
         # The eval reads in place from the Hydra output_dir where the shards and
         # VDS splits already live — not a downloaded copy under oracle_eval/.
         assert dataset_root == observed["output_dir"]
@@ -1708,10 +1712,11 @@ class TestMainDispatchBranches:
         """Helper subprocesses ``synth_setter.cli.eval`` with the contract argv.
 
         Pins the load-bearing overrides (``experiment=surge/fake_oracle``,
-        ``datamodule.dataset_root``, ``ckpt_path=null``, ``mode=predict``,
-        ``render=surge_simple``) plus the wandb-resume trio that routes the
-        eval's ``audio/*`` metrics onto the generate run. Runs the helper
-        directly so cfg-resolution noise can't mask an argv drift.
+        ``datamodule.dataset_root``, ``ckpt_path=null``, ``mode=predict``), the
+        wandb-resume trio that routes the eval's ``audio/*`` metrics onto the
+        generate run, and the ``param_spec_name`` / ``preset_path`` passed through
+        from the generation render so the eval re-renders through that same spec.
+        Runs the helper directly so cfg-resolution noise can't mask an argv drift.
 
         :param monkeypatch: Patches the module's ``subprocess.run``.
         :param tmp_path: Roots the distinct dataset-root and eval run dirs.
@@ -1726,7 +1731,13 @@ class TestMainDispatchBranches:
         for name in ("train.h5", "val.h5", "test.h5", "stats.npz"):
             (dataset_root / name).touch()
         run_dir = tmp_path / "oracle_eval" / "some-run-id"
-        gd._run_oracle_eval_subprocess(dataset_root, run_dir, "some-run-id")
+        gd._run_oracle_eval_subprocess(
+            dataset_root,
+            run_dir,
+            "some-run-id",
+            param_spec_name="surge_xt",
+            preset_path="presets/surge-base.vstpreset",
+        )
 
         run_mock.assert_called_once()
         called_argv = run_mock.call_args[0][0]
@@ -1747,9 +1758,12 @@ class TestMainDispatchBranches:
         # id exists in logger/wandb.yaml (plain override); resume is absent (+append).
         assert "logger.wandb.id=some-run-id" in called_argv
         assert "+logger.wandb.resume=must" in called_argv
-        # render_vst=true re-renders predicted params; select the surge_simple
-        # group (eval.yaml defaults render to null) matching the smoke dataset.
+        # render_vst=true re-renders predicted params; surge_simple supplies the
+        # structural render fields, while param spec + preset are overridden to the
+        # generation render group so the dataset re-renders through its own spec.
         assert "render=surge_simple" in called_argv
+        assert "render.param_spec_name=surge_xt" in called_argv
+        assert "render.preset_path=presets/surge-base.vstpreset" in called_argv
         # batch_size=1 keeps the smoke-sized test split (4 samples) from
         # flooring to zero batches under the 128 default — see #1331.
         assert "datamodule.batch_size=1" in called_argv
@@ -1776,7 +1790,13 @@ class TestMainDispatchBranches:
         monkeypatch.setattr(gd.subprocess, "run", run_mock)
 
         with pytest.raises(FileNotFoundError, match=r"test\.h5"):
-            gd._run_oracle_eval_subprocess(tmp_path, tmp_path / "oracle_eval" / "rid", "rid")
+            gd._run_oracle_eval_subprocess(
+                tmp_path,
+                tmp_path / "oracle_eval" / "rid",
+                "rid",
+                param_spec_name="surge_simple",
+                preset_path="presets/surge-simple.vstpreset",
+            )
 
         run_mock.assert_not_called()
 
@@ -1805,6 +1825,40 @@ class TestMainDispatchBranches:
         gd.main()
 
         oracle_mock.assert_not_called()
+
+    def test_main_always_on_with_render_reload_skips_with_warning(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``gui_toggle_cadence=always_on`` + ``plugin_reload_cadence=render`` is a no-op skip.
+
+        The render arm of a cadence grid sweep hits this schema-invalid cell; ``main``
+        logs a warning and returns before building the spec (which would otherwise raise
+        in ``RenderConfig``), so the wandb trial completes instead of crashing.
+
+        :param monkeypatch: Patches argv, the warning sink, and ``generate``.
+        """
+        import synth_setter.cli.generate_dataset as gd
+
+        argv = [
+            "synth-setter-generate-dataset",
+            "experiment=generate_dataset/smoke-shard",
+            f"render.plugin_path={TEST_PLUGIN_VST3}",
+            "render.plugin_reload_cadence=render",
+            "render.gui_toggle_cadence=always_on",
+        ]
+        monkeypatch.setattr("sys.argv", argv)
+        warn_mock = MagicMock()
+        monkeypatch.setattr(gd.logger, "warning", warn_mock)
+        generate_mock = MagicMock()
+        monkeypatch.setattr(gd, "generate", generate_mock)
+
+        gd.main()
+
+        # Skipped before generation, with a warning naming the offending knob.
+        generate_mock.assert_not_called()
+        warn_mock.assert_called_once()
+        assert "always_on" in warn_mock.call_args[0][0]
 
     def test_main_oracle_eval_inline_requires_finalize_inline(
         self,
