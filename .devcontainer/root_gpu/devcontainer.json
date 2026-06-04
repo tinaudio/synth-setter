@@ -61,8 +61,11 @@
         "python.testing.pytestArgs": [
           "tests"
         ],
-        "terminal.integrated.defaultProfile.linux": "tmux",
+        "terminal.integrated.defaultProfile.linux": "zellij",
         "terminal.integrated.profiles.linux": {
+          "zellij": {
+            "path": "zellij"
+          },
           "tmux": {
             "path": "tmux",
             "args": [
