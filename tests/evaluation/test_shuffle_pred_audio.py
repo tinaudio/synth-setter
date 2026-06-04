@@ -11,6 +11,15 @@ import pytest
 from synth_setter.evaluation.shuffle_pred_audio import shuffle_pred_audio
 
 _UNIFORM_PARAMS_CSV = ",pred,target\ncutoff,0.5,0.5\nresonance,0.2,0.2\n"
+# A params.csv differing from _UNIFORM_PARAMS_CSV, used to trip the uniform-params gate.
+_DIFFERENT_PARAMS_CSV = ",pred,target\ncutoff,0.9,0.9\n"
+
+# Default sample-dir count and seed shared by the behaviour tests. Individual
+# tests override only for a boundary cardinality (a pair, a single dir, or none),
+# which is the behaviour under test rather than an arbitrary value.
+_SAMPLE_COUNT = 6
+_PAIR = 2
+_SEED = 42
 
 
 def _make_sample_dir(
@@ -35,7 +44,7 @@ def _make_sample_dir(
     return sample_dir
 
 
-def _build_audio_dir(base: Path, n: int) -> Path:
+def _build_audio_dir(base: Path, n: int = _SAMPLE_COUNT) -> Path:
     """Create ``base/audio`` with ``n`` uniform-params sample dirs.
 
     :param base: Directory under which ``audio/`` is created.
@@ -54,10 +63,12 @@ def test_shuffle_pred_audio_reassigns_pred_to_permuted_source(tmp_path: Path) ->
 
     :param tmp_path: Holds the ``audio/`` tree the shuffle rewrites.
     """
-    audio_dir = _build_audio_dir(tmp_path, 6)
-    original = {i: (audio_dir / f"sample_{i}" / "pred.wav").read_bytes() for i in range(6)}
+    audio_dir = _build_audio_dir(tmp_path)
+    original = {
+        i: (audio_dir / f"sample_{i}" / "pred.wav").read_bytes() for i in range(_SAMPLE_COUNT)
+    }
 
-    permutation = shuffle_pred_audio(audio_dir, seed=42)
+    permutation = shuffle_pred_audio(audio_dir, seed=_SEED)
 
     for dest_idx, src_idx in enumerate(permutation):
         assert (audio_dir / f"sample_{dest_idx}" / "pred.wav").read_bytes() == original[src_idx]
@@ -68,12 +79,16 @@ def test_shuffle_pred_audio_preserves_every_pred_file(tmp_path: Path) -> None:
 
     :param tmp_path: Holds the ``audio/`` tree the shuffle rewrites.
     """
-    audio_dir = _build_audio_dir(tmp_path, 6)
-    before = sorted((audio_dir / f"sample_{i}" / "pred.wav").read_bytes() for i in range(6))
+    audio_dir = _build_audio_dir(tmp_path)
+    before = sorted(
+        (audio_dir / f"sample_{i}" / "pred.wav").read_bytes() for i in range(_SAMPLE_COUNT)
+    )
 
-    shuffle_pred_audio(audio_dir, seed=42)
+    shuffle_pred_audio(audio_dir, seed=_SEED)
 
-    after = sorted((audio_dir / f"sample_{i}" / "pred.wav").read_bytes() for i in range(6))
+    after = sorted(
+        (audio_dir / f"sample_{i}" / "pred.wav").read_bytes() for i in range(_SAMPLE_COUNT)
+    )
     assert after == before
 
 
@@ -82,14 +97,14 @@ def test_shuffle_pred_audio_changes_pred_arrangement(tmp_path: Path) -> None:
 
     :param tmp_path: Holds the ``audio/`` tree the shuffle rewrites.
     """
-    audio_dir = _build_audio_dir(tmp_path, 8)
-    before = [(audio_dir / f"sample_{i}" / "pred.wav").read_bytes() for i in range(8)]
+    audio_dir = _build_audio_dir(tmp_path)
+    before = [(audio_dir / f"sample_{i}" / "pred.wav").read_bytes() for i in range(_SAMPLE_COUNT)]
 
-    permutation = shuffle_pred_audio(audio_dir, seed=42)
+    permutation = shuffle_pred_audio(audio_dir, seed=_SEED)
 
-    after = [(audio_dir / f"sample_{i}" / "pred.wav").read_bytes() for i in range(8)]
+    after = [(audio_dir / f"sample_{i}" / "pred.wav").read_bytes() for i in range(_SAMPLE_COUNT)]
     assert after != before
-    assert permutation != list(range(8))
+    assert permutation != list(range(_SAMPLE_COUNT))
 
 
 def test_shuffle_pred_audio_never_returns_identity_for_two_dirs(tmp_path: Path) -> None:
@@ -100,9 +115,9 @@ def test_shuffle_pred_audio_never_returns_identity_for_two_dirs(tmp_path: Path) 
 
     :param tmp_path: Holds the two-dir ``audio/`` tree the shuffle rewrites.
     """
-    audio_dir = _build_audio_dir(tmp_path, 2)
+    audio_dir = _build_audio_dir(tmp_path, _PAIR)
 
-    permutation = shuffle_pred_audio(audio_dir, seed=0)
+    permutation = shuffle_pred_audio(audio_dir, seed=_SEED)
 
     assert permutation == [1, 0]
 
@@ -116,12 +131,12 @@ def test_shuffle_pred_audio_recovers_baseline_from_full_snapshot_set(tmp_path: P
 
     :param tmp_path: Holds the ``audio/`` tree seeded with a full snapshot set.
     """
-    audio_dir = _build_audio_dir(tmp_path, 2)
-    for i in range(2):
+    audio_dir = _build_audio_dir(tmp_path, _PAIR)
+    for i in range(_PAIR):
         (audio_dir / f"sample_{i}" / "pred.wav").write_bytes(f"junk-{i}".encode())
         (audio_dir / f"sample_{i}" / "pred.wav.shuffle-src").write_bytes(f"pred-{i}".encode())
 
-    shuffle_pred_audio(audio_dir, seed=0)
+    shuffle_pred_audio(audio_dir, seed=_SEED)
 
     assert (audio_dir / "sample_0" / "pred.wav").read_bytes() == b"pred-1"
     assert (audio_dir / "sample_1" / "pred.wav").read_bytes() == b"pred-0"
@@ -130,16 +145,16 @@ def test_shuffle_pred_audio_recovers_baseline_from_full_snapshot_set(tmp_path: P
 def test_shuffle_pred_audio_raises_on_partial_snapshot_set(tmp_path: Path) -> None:
     """A partial ``.shuffle-src`` set is ambiguous, so the shuffle refuses to run.
 
-    :param tmp_path: Holds the ``audio/`` tree with a snapshot in only one of three dirs.
+    :param tmp_path: Holds the ``audio/`` tree with a snapshot in only one dir.
     """
-    audio_dir = _build_audio_dir(tmp_path, 3)
+    audio_dir = _build_audio_dir(tmp_path)
     (audio_dir / "sample_1" / "pred.wav.shuffle-src").write_bytes(b"orphan")
-    before = [(audio_dir / f"sample_{i}" / "pred.wav").read_bytes() for i in range(3)]
+    before = [(audio_dir / f"sample_{i}" / "pred.wav").read_bytes() for i in range(_SAMPLE_COUNT)]
 
     with pytest.raises(ValueError, match="ambiguous"):
-        shuffle_pred_audio(audio_dir, seed=1)
+        shuffle_pred_audio(audio_dir, seed=_SEED)
 
-    after = [(audio_dir / f"sample_{i}" / "pred.wav").read_bytes() for i in range(3)]
+    after = [(audio_dir / f"sample_{i}" / "pred.wav").read_bytes() for i in range(_SAMPLE_COUNT)]
     assert after == before
 
 
@@ -148,9 +163,9 @@ def test_shuffle_pred_audio_removes_snapshots_after_run(tmp_path: Path) -> None:
 
     :param tmp_path: Holds the ``audio/`` tree the shuffle rewrites.
     """
-    audio_dir = _build_audio_dir(tmp_path, 4)
+    audio_dir = _build_audio_dir(tmp_path)
 
-    shuffle_pred_audio(audio_dir, seed=1)
+    shuffle_pred_audio(audio_dir, seed=_SEED)
 
     assert list(audio_dir.glob("*/pred.wav.shuffle-src")) == []
 
@@ -160,11 +175,11 @@ def test_shuffle_pred_audio_same_seed_yields_same_permutation(tmp_path: Path) ->
 
     :param tmp_path: Parents two independent ``audio/`` trees shuffled with one seed.
     """
-    audio_dir_a = _build_audio_dir(tmp_path / "a", 6)
-    audio_dir_b = _build_audio_dir(tmp_path / "b", 6)
+    audio_dir_a = _build_audio_dir(tmp_path / "a")
+    audio_dir_b = _build_audio_dir(tmp_path / "b")
 
-    perm_a = shuffle_pred_audio(audio_dir_a, seed=7)
-    perm_b = shuffle_pred_audio(audio_dir_b, seed=7)
+    perm_a = shuffle_pred_audio(audio_dir_a, seed=_SEED)
+    perm_b = shuffle_pred_audio(audio_dir_b, seed=_SEED)
 
     assert perm_a == perm_b
 
@@ -174,11 +189,11 @@ def test_shuffle_pred_audio_leaves_target_wav_in_place(tmp_path: Path) -> None:
 
     :param tmp_path: Holds the ``audio/`` tree the shuffle rewrites.
     """
-    audio_dir = _build_audio_dir(tmp_path, 4)
+    audio_dir = _build_audio_dir(tmp_path)
 
-    shuffle_pred_audio(audio_dir, seed=1)
+    shuffle_pred_audio(audio_dir, seed=_SEED)
 
-    for i in range(4):
+    for i in range(_SAMPLE_COUNT):
         assert (audio_dir / f"sample_{i}" / "target.wav").read_bytes() == f"target-{i}".encode()
 
 
@@ -187,11 +202,11 @@ def test_shuffle_pred_audio_raises_when_params_differ(tmp_path: Path) -> None:
 
     :param tmp_path: Holds the ``audio/`` tree with one mismatched params.csv.
     """
-    audio_dir = _build_audio_dir(tmp_path, 3)
-    (audio_dir / "sample_2" / "params.csv").write_text(",pred,target\ncutoff,0.9,0.9\n")
+    audio_dir = _build_audio_dir(tmp_path)
+    (audio_dir / "sample_2" / "params.csv").write_text(_DIFFERENT_PARAMS_CSV)
 
     with pytest.raises(ValueError, match="identical params"):
-        shuffle_pred_audio(audio_dir, seed=1)
+        shuffle_pred_audio(audio_dir, seed=_SEED)
 
 
 def test_shuffle_pred_audio_does_not_move_files_when_params_differ(tmp_path: Path) -> None:
@@ -199,14 +214,14 @@ def test_shuffle_pred_audio_does_not_move_files_when_params_differ(tmp_path: Pat
 
     :param tmp_path: Holds the ``audio/`` tree with one mismatched params.csv.
     """
-    audio_dir = _build_audio_dir(tmp_path, 3)
-    (audio_dir / "sample_2" / "params.csv").write_text(",pred,target\ncutoff,0.9,0.9\n")
-    before = [(audio_dir / f"sample_{i}" / "pred.wav").read_bytes() for i in range(3)]
+    audio_dir = _build_audio_dir(tmp_path)
+    (audio_dir / "sample_2" / "params.csv").write_text(_DIFFERENT_PARAMS_CSV)
+    before = [(audio_dir / f"sample_{i}" / "pred.wav").read_bytes() for i in range(_SAMPLE_COUNT)]
 
     with pytest.raises(ValueError):
-        shuffle_pred_audio(audio_dir, seed=1)
+        shuffle_pred_audio(audio_dir, seed=_SEED)
 
-    after = [(audio_dir / f"sample_{i}" / "pred.wav").read_bytes() for i in range(3)]
+    after = [(audio_dir / f"sample_{i}" / "pred.wav").read_bytes() for i in range(_SAMPLE_COUNT)]
     assert after == before
 
 
@@ -217,7 +232,7 @@ def test_shuffle_pred_audio_single_dir_is_noop(tmp_path: Path) -> None:
     """
     audio_dir = _build_audio_dir(tmp_path, 1)
 
-    permutation = shuffle_pred_audio(audio_dir, seed=1)
+    permutation = shuffle_pred_audio(audio_dir, seed=_SEED)
 
     assert permutation == [0]
     assert (audio_dir / "sample_0" / "pred.wav").read_bytes() == b"pred-0"
@@ -231,22 +246,22 @@ def test_shuffle_pred_audio_no_samples_returns_empty(tmp_path: Path) -> None:
     audio_dir = tmp_path / "audio"
     audio_dir.mkdir()
 
-    assert shuffle_pred_audio(audio_dir, seed=1) == []
+    assert shuffle_pred_audio(audio_dir, seed=_SEED) == []
 
 
 def test_shuffle_pred_audio_ignores_non_sample_dirs(tmp_path: Path) -> None:
     """Only ``sample_*`` dirs count, even when a stray dir holds both files.
 
-    :param tmp_path: Holds an ``audio/`` tree with two samples plus a non-sample dir
-        that has a pred.wav + params.csv (must still be excluded by the glob).
+    :param tmp_path: Holds an ``audio/`` tree with the default samples plus a
+        non-sample dir that has a pred.wav + params.csv (must still be excluded).
     """
-    audio_dir = _build_audio_dir(tmp_path, 2)
+    audio_dir = _build_audio_dir(tmp_path)
     stray = audio_dir / "metrics_scratch"
     stray.mkdir()
     (stray / "pred.wav").write_bytes(b"stray")
     (stray / "params.csv").write_text(_UNIFORM_PARAMS_CSV)
 
-    permutation = shuffle_pred_audio(audio_dir, seed=3)
+    permutation = shuffle_pred_audio(audio_dir, seed=_SEED)
 
-    assert len(permutation) == 2
+    assert len(permutation) == _SAMPLE_COUNT
     assert (stray / "pred.wav").read_bytes() == b"stray"
