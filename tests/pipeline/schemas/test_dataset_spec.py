@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from synth_setter.data.vst import param_specs
 from synth_setter.pipeline.schemas.spec import (
     DatasetSpec,
+    DatasetSrcConfig,
     RenderConfig,
     ShardSpec,
 )
@@ -1061,3 +1062,56 @@ class TestFromHydraCfg:
 
         with pytest.raises(TypeError):
             DatasetSpec.from_hydra_cfg(cfg)  # type: ignore[arg-type]
+
+
+class TestDatasetSrc:
+    """``DatasetSpec.datasetsrc`` — optional dataset-copy source."""
+
+    def test_datasetsrc_defaults_to_none(self) -> None:
+        """A spec built without ``datasetsrc`` leaves the copy path disabled."""
+        spec = DatasetSpec(**_valid_spec_kwargs())
+
+        assert spec.datasetsrc is None
+
+    def test_datasetsrc_mapping_validates_into_nested_config(self) -> None:
+        """A ``datasetsrc`` mapping composes into a nested ``DatasetSrcConfig``."""
+        spec = DatasetSpec(
+            **_valid_spec_kwargs(datasetsrc={"copy_dataset_root": "/data/source-dataset"})
+        )
+
+        assert isinstance(spec.datasetsrc, DatasetSrcConfig)
+        assert spec.datasetsrc.copy_dataset_root == "/data/source-dataset"
+
+    def test_datasetsrc_blank_copy_dataset_root_is_rejected(self) -> None:
+        """A blank ``copy_dataset_root`` raises so the per-shard source path is never empty."""
+        with pytest.raises(ValidationError, match="copy_dataset_root must not be blank"):
+            DatasetSrcConfig(copy_dataset_root="   ")
+
+    def test_datasetsrc_with_wds_output_is_rejected(self) -> None:
+        """Copy requires hdf5 output — pairing ``datasetsrc`` with wds fails at spec build.
+
+        A ``.tar`` output has no same-named HDF5 source to read params from, so the
+        misconfig should surface at launch (spec construction), not per-shard.
+        """
+        with pytest.raises(ValidationError, match="supports output_format='hdf5' only"):
+            DatasetSpec(
+                **_valid_spec_kwargs(
+                    output_format="wds",
+                    datasetsrc={"copy_dataset_root": "/data/source-dataset"},
+                )
+            )
+
+    def test_datasetsrc_extra_key_is_rejected(self) -> None:
+        """``DatasetSrcConfig`` is a strict trust boundary — unknown keys raise."""
+        with pytest.raises(ValidationError):
+            DatasetSrcConfig(copy_dataset_root="/data/src", unexpected="x")  # type: ignore[call-arg]
+
+    def test_datasetsrc_survives_json_round_trip(self) -> None:
+        """A worker reconstructing the spec from JSON sees the same copy source."""
+        spec = DatasetSpec(
+            **_valid_spec_kwargs(datasetsrc={"copy_dataset_root": "/data/source-dataset"})
+        )
+
+        restored = DatasetSpec.model_validate_json(spec.model_dump_json())
+
+        assert restored.datasetsrc == spec.datasetsrc

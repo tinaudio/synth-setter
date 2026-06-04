@@ -1,6 +1,355 @@
 # CHANGELOG
 
 
+## v8.16.0 (2026-06-04)
+
+### Chores
+
+- **code-health**: Stop VS Code deleting unused imports on save
+  ([#1432](https://github.com/tinaudio/synth-setter/pull/1432),
+  [`20be118`](https://github.com/tinaudio/synth-setter/commit/20be118b75e2e3fd1d7a85113ec8519e588c1e23))
+
+The committed .vscode/settings.json runs source.fixAll.ruff on save, which applies the F401
+  unused-import autofix — deleting imports out from under you mid-edit. Add an editor-server-only
+  ruff override marking F401 unfixable:
+
+"ruff.configuration": { "lint": { "unfixable": ["F401"] } }
+
+This scopes only to the VS Code ruff LSP. CLI `ruff check --fix` and the pre-commit ruff hook read
+  pyproject.toml (no `unfixable`) and still strip unused imports; all other on-save autofixes and
+  import sorting are unchanged. F401 stays visible as an editor diagnostic, just no longer
+  auto-deleted.
+
+Refs #1431
+
+- **devcontainer**: Default the VS Code terminal to zellij with persistent sessions
+  ([#1411](https://github.com/tinaudio/synth-setter/pull/1411),
+  [`28f9bc9`](https://github.com/tinaudio/synth-setter/commit/28f9bc943dda0d8fd4dd89b4274e82262a95b72c))
+
+* chore(devcontainer): default VS Code terminal to zellij
+
+The base image already bakes zellij (v0.44.3) and a config.kdl, but the devcontainer configs still
+  launched tmux as the default VS Code terminal profile. Switch the default to zellij across
+  cpu/gpu/root_gpu while keeping tmux selectable. Each zellij profile launches a plain session (one
+  independent session per terminal).
+
+Mount synth-setter-zellij-cache{,-root} named volumes at ~/.cache/zellij for dev and root in cpu/gpu
+  so zellij's serialized sessions (session_serialization defaults on) survive container rebuilds,
+  mirroring the tmux-resurrect volumes.
+
+Refs #1410
+
+* docs(docker): drop temporal 'now' from zellij terminal-default note
+
+* chore(devcontainer): make tmux session restore opt-in
+
+tmux-continuum was set to @continuum-restore 'on', which auto-restored the last saved session on
+  every tmux start. Flip it to 'off' so a rebuilt container starts clean; continuum keeps
+  auto-saving (5-min interval), and the saved session is brought back on demand with prefix + Ctrl-r
+  (tmux-resurrect).
+
+### Continuous Integration
+
+- Set HYDRA_FULL_ERROR=1 for datagen @hydra.main entrypoints
+  ([#1412](https://github.com/tinaudio/synth-setter/pull/1412),
+  [`6d7ca49`](https://github.com/tinaudio/synth-setter/commit/6d7ca499d4833b2b07d4cff7e3aeac2d9445d2ac))
+
+The launcher entrypoint synth-setter-generate-dataset (cli/generate_dataset.py) is wrapped in
+  @hydra.main, so an exception in the launcher (spec materialize, R2 upload, or SkyPilot dispatch)
+  surfaces only Hydra's truncated one-line summary in CI logs unless HYDRA_FULL_ERROR is set. Export
+  it at every call site that drives that entrypoint:
+
+- generate-dataset-shards.yaml: gen_local (host) and gen_docker (in-container, forwarded via -e
+  HYDRA_FULL_ERROR). This reusable also covers test-dataset-generation.yml, which dispatches through
+  it. - test-skypilot-debug.yml: launcher-runner and launcher-docker modes.
+
+The spec-materialization / validate workflows are intentionally untouched: materialize_spec uses the
+  Hydra compose API (not @hydra.main) and already catches HydraException, and validate_spec /
+  validate_shard are not Hydra entrypoints, so HYDRA_FULL_ERROR would be inert there.
+
+- **ci-automation**: Reclaim CodeQL tool-cache + log df before kind load (skypilot-local row)
+  ([#1421](https://github.com/tinaudio/synth-setter/pull/1421),
+  [`9cd75aa`](https://github.com/tinaudio/synth-setter/commit/9cd75aace27314c0dfda5d641c519f47fe138548))
+
+The skypilot-local row intermittently hits `no space left on device` at `kind load docker-image`,
+  which shells to `docker save` under `/var/lib/docker/tmp/` before re-extracting the CUDA image
+  into the kind node's containerd (~30 GB peak on `/`).
+
+PR #1280 hand-purged `/opt/hostedtoolcache/CodeQL` (~5 GB). PR #1292 replaced that with
+  `jlumbroso/free-disk-space` at `tool-cache: false`, which retains all of `/opt/hostedtoolcache`
+  (the action can only delete the whole dir, and `helm/kind-action` aborts when it is missing) — so
+  the ~5 GB CodeQL reclaim was silently dropped.
+
+Re-add a targeted `rm -rf /opt/hostedtoolcache/CodeQL` that deletes only the unused subtree: the
+  parent dir stays present for kind-action, and Python (resolved from the cache by the later
+  setup-python step) is left intact. Also print `df -h /` in that step and at the head of the
+  kind-load step so a future ENOSPC shows the margin at the failing moment.
+
+Band-aid only — the root fix (a CPU-torch `dev-snapshot` variant for this GPU-less row) remains
+  tracked on the issue.
+
+Refs #1278
+
+- **testing**: Run Mutation Testing on Python 3.11 to fix mutmut pyproject parse
+  ([#1416](https://github.com/tinaudio/synth-setter/pull/1416),
+  [`7c5a6f0`](https://github.com/tinaudio/synth-setter/commit/7c5a6f040feb7553f95704527a5bdda58e3836fd))
+
+* ci(testing): run Mutation Testing on Python 3.11 to fix mutmut toml parse
+
+mutmut parses the entire pyproject.toml; on Python 3.10 it falls back to the legacy `toml` lib,
+  which crashes (IndexError in load_array) on PEP 735 arrays that mix strings with inline tables —
+  the `dev` dependency-group. The weekly Mutation Testing workflow has failed every scheduled run
+  since 4d2c5c88. Python 3.11+ uses stdlib tomllib, which parses the file cleanly.
+
+Refs #1414
+
+* docs(testing): note mutmut requires Python 3.11+
+
+A developer running `make mutmut` locally on 3.10 hits the same legacy-toml crash the CI workflow
+  does. Document the 3.11+ requirement alongside the other mutmut gotchas.
+
+### Documentation
+
+- **eval**: Sync R2-download + dataset-path docs with the shipped prepare_data() API
+  ([#1413](https://github.com/tinaudio/synth-setter/pull/1413),
+  [`f14a732`](https://github.com/tinaudio/synth-setter/commit/f14a732d66b9a9e44867e056355bf9055e351148))
+
+* docs(eval): sync R2 download + dataset-path docs with prepare_data()
+
+#1338 moved R2 dataset download into SurgeDataModule.prepare_data() behind a new
+  download_dataset_root_uri config field, and gave dataset_root/predict_file defaults instead of
+  mandatory ???. The reference and design docs still named the never-implemented r2_path/rclone_sync
+  and described the configs as using ???.
+
+- configuration-reference.md: rename datamodule.r2_path row to datamodule.download_dataset_root_uri;
+  dataset_root now defaults to ${paths.output_dir}/data. - eval-pipeline.md: surge*.yaml use the
+  dataset_root default + predict_file: null; R2 download is download_dataset_root_uri ->
+  r2_io.download_dir_no_overwrite (rclone copy --immutable --checksum), configs carry an explicit
+  download_dataset_root_uri: null opt-in line. Also corrects the implementation roadmap
+  (data/rclone.py -> pipeline/r2_io.py, stale test paths), completes the datamodule-configs table
+  (??? defaults; all four surge configs), drops the drift-prone Lines column from the Eval Scripts
+  table, and marks the §6.1 experiment snippet as illustrative. - training-pipeline.md: §6.1
+  dataset-access example/behavior named the same removed r2_path field; renamed to
+  download_dataset_root_uri (no-clobber copy).
+
+Supersedes #1356, which carried the same intent but forked before the configs/data ->
+  configs/datamodule rename and bundled already-merged feature commits.
+
+Refs #1365
+
+* docs(eval): mark shipped R2 download as current, not unsupported/new
+
+The eval-pipeline §6.1 documents the opt-in R2 dataset download (`download_dataset_root_uri` →
+  `prepare_data()` no-clobber copy) as current behavior, but §1 coupling table and §7.5 as-is/to-be
+  tables still framed R2 dataset access as unavailable, contradicting §6.1 and the
+  already-re-baselined "Dataset path" rows.
+
+- §1 coupling, "Data locality" impact: "No remote download capability" → "Opt-in R2 download exists;
+  no default remote source" (#3352912400) - §7.5 as-is, "R2 dataset access": "Not supported" →
+  opt-in `download_dataset_root_uri` no-clobber download, pointing at `surge_datamodule.py`
+  (`prepare_data`) (#3352912412) - §7.5 to-be, "R2 dataset access" change: "New" → "Already shipped"
+  so the row no longer reads as future work (#3352912420)
+
+Table line-churn is mdformat re-padding after cell-width changes.
+
+* Potential fix for pull request finding
+
+Co-authored-by: Copilot Autofix powered by AI <175728472+Copilot@users.noreply.github.com>
+
+* docs(eval): fix §5.3 reference targets and training-pipeline dataset_root default
+
+Address Copilot review on #1413:
+
+- configuration-reference.md §5.3: repoint datamodule.dataset_root from training-pipeline.md §1
+  (Context & Motivation) to §6.1 (Dataset Access); repoint datamodule.stats_file to
+  nsynth.yaml/fsd.yaml (no training-pipeline section discusses it). - training-pipeline.md §6.1:
+  show the shipped ${paths.output_dir}/data default for dataset_root and frame the
+  ${paths.data_dir}/{config_id}/{run_id} provenance layout as an optional fixed-dataset override, so
+  the snippet no longer conflicts with the actual surge*.yaml defaults.
+
+The Type-column nullability nit (string -> string | null) was already applied in aa6fc17e.
+
+* docs(eval): use full src/ paths for surge_datamodule references
+
+Address Copilot review on PR #1413:
+
+- configuration-reference.md §5.3: Reference cell now points at
+  `src/synth_setter/data/surge_datamodule.py` instead of the bare `surge_datamodule.py`, which
+  matched no real repo path (comment 3353096531). - training-pipeline.md §6.1: config glob now reads
+  `src/synth_setter/configs/datamodule/surge*.yaml`; top-level `configs/datamodule/` does not exist
+  in this checkout (comment 3353096542).
+
+Table line-churn is mdformat re-padding after the cell-width change.
+
+---------
+
+### Features
+
+- **generate_dataset**: Copy an existing dataset's params into a new generate_dataset run
+  ([#1430](https://github.com/tinaudio/synth-setter/pull/1430),
+  [`1cf2daf`](https://github.com/tinaudio/synth-setter/commit/1cf2daf421b1370e7f42df8ccb7b1f2da8425fd6))
+
+* internal-feat(data): copy an existing dataset's params into a generate_dataset run
+
+Add an optional ``datasetsrc`` config to dataset generation so a run can copy an existing dataset
+  instead of sampling fresh parameters. When ``datasetsrc.copy_dataset_root`` is set, each output
+  shard reads the same-named source shard, decodes its ``param_array`` into fixed synth/note param
+  lists (via ``param_spec.decode``), and re-renders those — reproducing the source dataset's
+  parameters under a fresh render.
+
+- ``DatasetSrcConfig`` (strict/frozen) nested as ``DatasetSpec.datasetsrc``. - launcher forwards
+  ``--copy_dataset_root`` to the renderer subprocess only when set;
+  ``generate_vst_dataset.fixed_params_from_dataset`` does the decode. - writers' fixed-params lists
+  are now full-shard length, indexed by absolute row, so a resumed shard re-renders its tail from
+  the matching source rows and a source whose row count differs from ``samples_per_shard`` fails
+  fast.
+
+Refs #1429
+
+* docs(data): document the dataset-copy generation mode
+
+Render the new ``DatasetSrcConfig`` block in the autogenerated dataset-spec reference, note the copy
+  mode in the data-pipeline design doc (hdf5-only, same-named HDF5 source, absolute-row resume), and
+  update the doc-map covers text. Surfaces #1429's ``datasetsrc.copy_dataset_root`` knob in docs.
+
+* internal-feat(data): reject datasetsrc with non-hdf5 output at spec validation
+
+Per PR review: enforce the hdf5-only dataset-copy constraint at spec construction (a DatasetSpec
+  model validator) so a wds output paired with datasetsrc fails fast at launch, not per-shard in the
+  renderer subprocess. The subprocess SystemExit guard stays as defense-in-depth for direct CLI use.
+
+* test(data): cfg-entrypoint coverage for the datasetsrc copy contract
+
+### Internal-Feat
+
+- **ci-automation**: Canonical PR-body template + warn-mode section-hierarchy gate
+  ([#1422](https://github.com/tinaudio/synth-setter/pull/1422),
+  [`c957107`](https://github.com/tinaudio/synth-setter/commit/c95710759afaacd7fd25b8e352c9b27b638804ec))
+
+* internal-feat(ci-automation): canonical PR-body template + warn-mode section-hierarchy gate
+
+Replace the unused PR template with the canonical Why -> What changed -> Test plan -> Out of scope
+  hierarchy, and add a structural linter (scripts/ci/pr_body_lint.py) wired into pr-metadata-gate as
+  a warn-mode check-pr-body-shape job. An analysis of the last 300 PRs found the old template
+  ignored and the de facto sections fragmented across 11 heading names; the linter maps legacy names
+  to canonical ones and flags missing/out-of-order sections.
+
+Finding is written as an explicit-__init__ class, not a dataclass: under pydoclint 0.8.3 + sphinx,
+  class-level annotated fields have no satisfiable docstring form for DOC601/603. Tracked in #1420.
+
+Closes #1419 Refs #1420
+
+* internal-fix(ci-automation): handle legacy '?' headings and nested fences in PR-body linter
+
+Addresses Copilot review on #1422: - Strip a trailing '?' from headings so the old template's '##
+  What does this PR do?' is recognized via the alias map instead of being reported as a missing
+  'What changed' section. - Track the opening fence's char and length so a shorter fence nested in a
+  longer one no longer closes it early and leak headings from inside. - Add regression tests for
+  both, plus the legacy heading.
+
+Also syncs docs for the new check-pr-body-shape gate (doc-drift): the github-actions workflow
+  catalog, the doc-map coverage entries (including the new linter source), and the CONTRIBUTING
+  PR-requirements list.
+
+Refs #1419
+
+* internal-fix(ci-automation): annotate main's body_file as TextIO, not Click-internal LazyFile
+
+Addresses Copilot review on #1422: `click.utils.LazyFile` is a Click implementation detail that can
+  change across releases. `main` only needs a readable text stream, so the public signature now uses
+  `typing.TextIO`. Annotation-only; behavior is unchanged and already covered by the --body-file and
+  stdin CLI tests.
+
+### Internal-Fix
+
+- **ci**: Drop inherited packagecloud git-lfs apt source in act-runner image
+  ([#1418](https://github.com/tinaudio/synth-setter/pull/1418),
+  [`3010e2b`](https://github.com/tinaudio/synth-setter/commit/3010e2b3aed4632d41be0f971cd3dfa1a2128fbb))
+
+The catthehacker base image ships a packagecloud.io git-lfs apt source. Our Dockerfile only adds the
+  gh CLI, but `apt-get update` reads every configured source — so when packagecloud returns 403 for
+  the git-lfs repo (rate-limited/decommissioned), `apt-get update` exits non-zero and `set -eux`
+  fails the whole build. This is what reddens the "Verify act setup" workflow's --no-cache
+  runner-image build.
+
+Remove any packagecloud.io source from /etc/apt/sources.list.d before the first apt-get update.
+  git-lfs is already installed in the base image and we never needed that repo, so the build no
+  longer depends on it.
+
+- **devcontainer**: Set WANDB_DATA_DIR to writable .cache path
+  ([#1424](https://github.com/tinaudio/synth-setter/pull/1424),
+  [`ae8d891`](https://github.com/tinaudio/synth-setter/commit/ae8d89178aff3e5130e16a693dcb3def2bf18dce))
+
+wandb stages artifacts under WANDB_DATA_DIR (default ~/.local/share/wandb), which is not
+  dev-writable in the devcontainer, so log_spec_artifact failed with 'Unable to write staging
+  files'. Point it at dev-owned .cache, which wandb creates on demand.
+
+Refs #1423
+
+### Testing
+
+- Assert oracle-eval audio metric values in the generate-dataset smoke run
+  ([#1425](https://github.com/tinaudio/synth-setter/pull/1425),
+  [`4e6cded`](https://github.com/tinaudio/synth-setter/commit/4e6cdedd9d5b06ad37128ddb43e8f1e7577409b1))
+
+* test(testing): assert oracle-eval audio metrics in generate-dataset smoke run
+
+Add an integration_r2 + requires_vst test that runs the real `synth-setter-generate-dataset` CLI
+  with `experiment=generate_dataset/smoke-shard-with-oracle-eval` and asserts the inline oracle
+  eval's `metrics.json` holds bounded `audio/*` aggregates.
+
+The inline oracle eval only runs via the launcher `main` (not `from_hydra`) and spawns its own
+  `synth_setter.cli.eval` subprocess, so the test drives the CLI directly. It reads the dumped
+  `metrics.json` from `oracle_eval/<run_id>/metrics/` and asserts every `audio/*` aggregate is a
+  finite float, with the mean distances / `rms` cosine inside `ORACLE_AUDIO_METRIC_BOUNDS` — the
+  same envelope `tests/test_train.py` pins per-sample. Runs offline-wandb and tmp-pinned, with a
+  unique `r2.prefix` and a `finally` purge for isolation.
+
+Refs #1394
+
+* docs(testing): catalog the oracle-eval metrics test shape in testing.md
+
+Add the E2E generate-dataset CLI-subprocess → assert inline-oracle-eval metrics.json shape to the §3
+  "which shape fits your test?" table, matching the new test in tests/test_generate_dataset.py.
+
+Part of #1345
+
+- **testing**: Split eval/generate-dataset entrypoint tests into cfg-only modules + invariant
+  ([#1402](https://github.com/tinaudio/synth-setter/pull/1402),
+  [`aa5e477`](https://github.com/tinaudio/synth-setter/commit/aa5e4778dace9e1d54760a535746bb89d88d94ce))
+
+* test(testing): split eval/generate-dataset entrypoint tests into cfg-only modules
+
+Mirror tests/test_train.py: keep the canonical tests/test_eval.py and tests/test_generate_dataset.py
+  to cfg-entrypoint tests only, and relocate the helper/unit tests to clearly-named sibling modules.
+
+eval: move the postprocessing argv tests, metric-IO tests, and the _maybe_upload_output_dir +
+  CLI-e2e tests out of tests/test_eval.py into test_eval_postprocessing.py, test_eval_metrics.py,
+  and test_eval_upload.py.
+
+generate-dataset: promote test_generate_dataset_shards.py to the canonical
+  tests/test_generate_dataset.py (from_hydra(cfg_dataset) entrypoint tests), and rename the
+  direct-call generate()/main() suite to tests/pipeline/entrypoints/test_generate_dataset_unit.py
+  (content unchanged).
+
+Add tests/_meta/test_entrypoint_test_modules.py: fails if a canonical entrypoint test module imports
+  a private synth_setter.cli helper, so the cfg-only split can't silently erode; each module
+  docstring carries a matching nudge.
+
+Update the generate-dataset-shards GHA workflow, docs/reference/testing.md, the helper comment refs,
+  and repath the renamed file's existing .pydoclint-baseline.txt entry. The collected test-node set
+  is unchanged.
+
+Refs #1400
+
+* docs(testing): point test_eval docstring at the entrypoint invariant
+
+Match test_train.py / test_generate_dataset.py: name tests/_meta/test_entrypoint_test_modules.py as
+  the enforcer in the test_eval.py module docstring. Addresses a Copilot review note on #1402.
+
+* test(testing): pass filename to ast.parse in entrypoint invariant for clearer parse errors
+
+
 ## v8.15.2 (2026-06-03)
 
 ### Bug Fixes

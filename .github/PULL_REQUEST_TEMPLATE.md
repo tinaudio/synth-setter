@@ -1,22 +1,38 @@
-## What does this PR do?
-
 <!--
-Please include a summary of the change and which issue is fixed.
-Please also include relevant motivation and context.
-List any dependencies that are required for this change.
-List all the breaking changes introduced by this pull request.
+Title: conventional-commit, self-contained — name the subject, not just the action.
+  e.g. "fix(storage): retry R2 puts on 5xx", not "fix bug".
+Keep the canonical section order below (Why → What changed → Test plan). A CI check
+(pr-metadata-gate) flags missing or misnamed sections. Delete these comments before submitting.
 -->
 
-Fixes #\<issue_number>
+## Why
 
-## Before submitting
+<!-- The problem or motivation in 1-3 sentences, and the linked issue. What was wrong or missing? -->
 
-- [ ] Did you make sure **title is self-explanatory** and **the description concisely explains the PR**?
-- [ ] Did you make sure your **PR does only one thing**, instead of bundling different changes together?
-- [ ] Did you list all the **breaking changes** introduced by this pull request?
-- [ ] Did you **test your PR locally** with `pytest` command?
-- [ ] Did you **run pre-commit hooks** with `pre-commit run -a` command?
+Refs #<!-- issue number; use Closes/Fixes to auto-close, Refs/Part of for partial work -->
 
-## Did you have fun?
+## What changed
 
-Make sure you had fun coding 🙃
+<!-- The actual change as bullets. Lead with the load-bearing edit; mechanics after. -->
+
+-
+
+## Test plan
+
+<!--
+How a reviewer knows it is correct: commands run + outcomes, or a linked CI run.
+Do NOT restate "CI green" / "ruff clean" — CI proves that automatically. Capture what CI can't:
+behavior verified, manual steps, and what you deliberately did not test and why.
+-->
+
+-
+
+## Out of scope
+
+<!-- Deliberate non-goals and follow-ups. Delete this whole section if there are none. -->
+
+-
+
+______________________________________________________________________
+
+- [ ] One logical change; any breaking changes are called out above.

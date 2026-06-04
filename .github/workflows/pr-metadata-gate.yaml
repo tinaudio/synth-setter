@@ -6,6 +6,7 @@ on:
     branches: [main, "release/*", "dev"]
 
 permissions:
+  contents: read
   pull-requests: read
   issues: read
 
@@ -337,3 +338,38 @@ jobs:
           fi
 
           echo "✓ All linked issues trace to an Epic."
+
+  # Structural check on the PR body's section hierarchy (Why → What changed → Test plan).
+  # Runs in `warn` mode: annotates missing/misnamed/misordered sections without failing
+  # the PR. Flip PR_BODY_SHAPE_MODE to `block` once authors have migrated.
+  check-pr-body-shape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      PR_BODY_SHAPE_MODE: warn
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      # Pin matches the repo's other click CLIs (job-queue-validate) — click >=8.2
+      # has shifted CliRunner/Choice behavior the linter and its tests rely on.
+      - name: Install linter dependency
+        run: pip install "click<8.2"
+
+      - name: Lint PR body section hierarchy
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          REPO="${{ github.repository }}"
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          PR_BODY=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.body // ""') || {
+            echo "::error::Failed to fetch PR body from GitHub API"
+            exit 1
+          }
+          printf '%s' "${PR_BODY}" | python scripts/ci/pr_body_lint.py --mode "${PR_BODY_SHAPE_MODE}"
