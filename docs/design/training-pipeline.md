@@ -290,13 +290,13 @@ Training uses the same dataset provenance convention as the storage spec:
 ```yaml
 dataset_root: ${paths.data_dir}/{dataset_config_id}/{dataset_wandb_run_id}
 # Optional:
-# r2_path: r2:intermediate-data/data/{dataset_config_id}/{dataset_wandb_run_id}/
+# download_dataset_root_uri: r2://intermediate-data/data/{dataset_config_id}/{dataset_wandb_run_id}/
 ```
 
 Behavior:
 
 - Local-only by default
-- If `r2_path` is specified, sync dataset before training
+- If `download_dataset_root_uri` is specified, no-clobber-copy the dataset before training
 - No hidden default R2 fetch
 
 ### 6.2 Checkpoint Durability via W&B
