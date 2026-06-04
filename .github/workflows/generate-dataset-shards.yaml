@@ -429,6 +429,7 @@ jobs:
           INPUT_HYDRA_OVERRIDES: ${{ inputs.hydra_overrides }}
           INPUT_RUN_ID: ${{ inputs.run_id || format('{0}-{1}', github.run_id, github.run_attempt) }}
           SYNTH_SETTER_CI_MODE: "1"
+          HYDRA_FULL_ERROR: "1"
         run: |
           set -euo pipefail
           OVERRIDES=(
@@ -553,6 +554,7 @@ jobs:
           LOCAL_OVERRIDE: ${{ inputs.local && 'skypilot_launch.local=true' || '' }}
           HYDRA_OVERRIDES_EXTRA: ${{ inputs.hydra_overrides }}
           INPUT_RUN_ID: ${{ inputs.run_id || format('{0}-{1}', github.run_id, github.run_attempt) }}
+          HYDRA_FULL_ERROR: "1"
         run: |
           set -euo pipefail
           docker run --rm \
@@ -581,6 +583,7 @@ jobs:
             -e LOCAL_OVERRIDE \
             -e HYDRA_OVERRIDES_EXTRA \
             -e INPUT_RUN_ID \
+            -e HYDRA_FULL_ERROR \
             "${IMAGE}" \
             bash -c '
               set -euo pipefail
