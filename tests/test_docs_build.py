@@ -5,8 +5,8 @@ config-reference page renders an anchor for every typed pydantic field on
 its documented model. Field names are derived from ``model_fields`` at test
 time so a rename surfaces as a missing anchor without a parallel list.
 
-Whole module skips on a minimal ``[dev]`` install via
-``pytest.importorskip("mkdocs")``.
+Whole module skips when the ``docs`` dependency-group is absent (gated on
+both ``mkdocs`` and ``griffe_pydantic``).
 """
 
 from __future__ import annotations
@@ -18,9 +18,17 @@ from pathlib import Path
 
 import pytest
 
-# Skip precedes the schemas imports because they transitively require
-# griffe-pydantic from the same ``[docs]`` extras group.
-pytest.importorskip("mkdocs", reason="docs extras not installed; install with -e '.[docs]'")
+# Skip precedes the schemas imports because the docs build needs both mkdocs and
+# griffe-pydantic from the ``docs`` dependency-group; gating on only one lets the
+# build fail later if the other is missing.
+pytest.importorskip(
+    "mkdocs",
+    reason="docs deps missing; run the suite with `uv pip install --group dev -e .` (dev ⊇ docs + runtime — tests/conftest.py imports the heavy runtime)",
+)
+pytest.importorskip(
+    "griffe_pydantic",
+    reason="docs deps missing; run the suite with `uv pip install --group dev -e .` (dev ⊇ docs + runtime — tests/conftest.py imports the heavy runtime)",
+)
 
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from synth_setter.schemas.callbacks_config import CallbackInstance

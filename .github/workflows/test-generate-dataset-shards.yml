@@ -1,7 +1,7 @@
 name: Test Generate Dataset Shards (Real R2 + VST)
 
 # Runs the `integration_r2`-gated end-to-end test in
-# `tests/test_generate_dataset_shards.py` against real Cloudflare R2 inside
+# `tests/test_generate_dataset.py` against real Cloudflare R2 inside
 # the `tinaudio/synth-setter:dev-snapshot` Docker image so the real Surge XT
 # render path (Xvfb + xsettingsd + dbus) runs against the live R2 bucket.
 # Mirrors `test-local-launcher-roundtrip.yml`'s R2 secrets + fork-PR gate
@@ -16,7 +16,7 @@ on:
         default: "dev-snapshot"
   pull_request:
     paths:
-      - "tests/test_generate_dataset_shards.py"
+      - "tests/test_generate_dataset.py"
       - "tests/conftest.py"
       - "src/synth_setter/configs/dataset.yaml"
       - "src/synth_setter/configs/experiment/generate_dataset/**"
@@ -86,7 +86,7 @@ jobs:
               git config --global --add safe.directory /home/build/synth-setter
               bash docker/ubuntu22_04/ensure_plugin_symlinks.sh
               src/synth_setter/scripts/run-linux-vst-headless.sh \
-                pytest tests/test_generate_dataset_shards.py \
+                pytest tests/test_generate_dataset.py \
                   -m "integration_r2" \
                   -vv -s
             '

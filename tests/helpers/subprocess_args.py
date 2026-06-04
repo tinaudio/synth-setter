@@ -1,7 +1,7 @@
 """Test helpers for inspecting subprocess argv lists produced by the launcher.
 
 Extracted so the two test files that need this — the unit-tier
-``tests/pipeline/entrypoints/test_generate_dataset.py`` mocks and the
+``tests/pipeline/entrypoints/test_generate_dataset_unit.py`` mocks and the
 launcher-roundtrip ``tests/integration/test_local_launcher_roundtrip.py`` —
 share one source of truth; if the renderer script name or the launcher's
 argv layout ever changes, both lanes pick the change up automatically.

@@ -4,6 +4,12 @@ Covers two shapes: a cheap Hydra-compose round-trip through ``DatasetSpec``,
 and an ``integration_r2``-gated end-to-end render that drives ``from_hydra``
 against ``cfg_dataset`` and asserts every shard lands at the spec-derived R2
 URI in real Cloudflare R2 (auto-skips when ``rclone`` / R2 creds are absent).
+
+Keep this module to cfg-entrypoint tests; direct-call unit tests for
+``generate`` / ``main`` and the arg-builders live in
+``tests/pipeline/entrypoints/test_generate_dataset_unit.py``.
+``tests/_meta/test_entrypoint_test_modules.py`` enforces that no private
+``synth_setter.cli`` helper is imported here.
 """
 
 from __future__ import annotations

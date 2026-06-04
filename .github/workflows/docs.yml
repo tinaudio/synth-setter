@@ -67,8 +67,16 @@ jobs:
           cache: "pip"
           cache-dependency-path: pyproject.toml
 
-      - name: Install docs and dev extras
-        run: pip install -e '.[docs,dev]'
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      # Heavy runtime lives in PEP 735 groups since #1139; `--group dev`
+      # transitively includes `docs` + `runtime`, so mkdocstrings can import the
+      # package and the schema/docs-build pytest steps have the full stack.
+      - name: Install docs + dev groups
+        run: uv pip install --system --group dev -e .
 
       # Two pytest invocations because the conftest hygiene differs per path — see PR #1065.
       - name: Run schema tests (preserves tests/schemas/conftest.py)
@@ -104,8 +112,15 @@ jobs:
           cache: "pip"
           cache-dependency-path: pyproject.toml
 
-      - name: Install docs extras
-        run: pip install -e '.[docs]'
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      # mkdocstrings imports the package, so the docs build needs the heavy
+      # runtime (in PEP 735 groups since #1139) plus the `docs` group.
+      - name: Install docs + runtime groups
+        run: uv pip install --system --group docs --group runtime -e .
 
       - name: Build site
         run: mkdocs build --strict

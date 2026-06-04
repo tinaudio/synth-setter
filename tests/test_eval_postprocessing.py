@@ -1,0 +1,465 @@
+"""Fast unit tests for ``synth_setter.cli.eval._run_predict_postprocessing``.
+
+Assert the render / metrics subprocess argv per gate and the user-facing
+validation errors. ``subprocess.run`` is monkeypatched so no real VST plugin
+or Python subprocess is launched.
+"""
+
+import sys
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Any
+
+import pytest
+from omegaconf import DictConfig, OmegaConf
+
+from synth_setter.cli import eval as eval_mod
+from synth_setter.cli.eval import _COMPUTE_AUDIO_METRICS_MODULE, _run_predict_postprocessing
+
+_FAKE_WRAPPER = "/fake/vst-headless-wrapper"
+
+_AGGREGATED_METRICS_CSV = ",mean,std\nmss,0.5,0.1\nwmfcc,0.3,0.05\nsot,0.2,0.02\nrms,0.9,0.01\n"
+
+_EXPECTED_AUDIO_METRICS = {
+    "audio/mss_mean": pytest.approx(0.5),
+    "audio/mss_std": pytest.approx(0.1),
+    "audio/wmfcc_mean": pytest.approx(0.3),
+    "audio/wmfcc_std": pytest.approx(0.05),
+    "audio/sot_mean": pytest.approx(0.2),
+    "audio/sot_std": pytest.approx(0.02),
+    "audio/rms_mean": pytest.approx(0.9),
+    "audio/rms_std": pytest.approx(0.01),
+}
+
+
+def _build_postprocess_cfg(
+    output_dir: Path,
+    *,
+    render_vst: bool = True,
+    compute_metrics: bool = True,
+    rerender_target: bool = True,
+    num_workers: int = 1,
+    render: dict[str, Any] | None = None,
+) -> DictConfig:
+    """Build a minimal cfg accepted by ``_run_predict_postprocessing``.
+
+    :param output_dir: Resolves to ``cfg.paths.output_dir``; the helper derives
+        ``predictions/`` / ``audio/`` / ``metrics/`` under it.
+    :param render_vst: Drives ``cfg.evaluation.render_vst``.
+    :param compute_metrics: Drives ``cfg.evaluation.compute_metrics``.
+    :param rerender_target: Drives ``cfg.evaluation.rerender_target``.
+    :param num_workers: Drives ``cfg.evaluation.num_workers``.
+    :param render: Drives ``cfg.render``; pass ``None`` to test the unset-render branch.
+    :returns: Minimal :class:`DictConfig` shaped the way the helper reads it.
+    """
+    return OmegaConf.create(  # type: ignore[no-any-return]
+        {
+            "paths": {"output_dir": str(output_dir)},
+            "evaluation": {
+                "render_vst": render_vst,
+                "compute_metrics": compute_metrics,
+                "rerender_target": rerender_target,
+                "num_workers": num_workers,
+            },
+            "render": render,
+        }
+    )
+
+
+def _writes_metrics_csv(audio_metrics_dir: Path, csv_body: str) -> Any:
+    """Build a fake ``subprocess.run`` that materializes the aggregated CSV before returning.
+
+    :param audio_metrics_dir: Destination directory for the synthesized ``aggregated_metrics.csv``.
+    :param csv_body: Raw CSV content the fake subprocess "wrote".
+    :returns: A no-arg-compatible stand-in for ``subprocess.run`` used by ``monkeypatch``.
+    """
+
+    def _fake_run(args: list[str], **_kwargs: Any) -> None:
+        if _COMPUTE_AUDIO_METRICS_MODULE not in args:
+            return
+        audio_metrics_dir.mkdir(parents=True, exist_ok=True)
+        (audio_metrics_dir / "aggregated_metrics.csv").write_text(csv_body)
+
+    return _fake_run
+
+
+@pytest.fixture
+def captured_argv(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+    """Capture every ``subprocess.run`` argv from the eval module without launching it.
+
+    The metrics subprocess also materializes a placeholder ``aggregated_metrics.csv``
+    under the metrics output dir (``<audio_dir>/../metrics``) so the load step in
+    :func:`_run_predict_postprocessing` finds a CSV after the fake "subprocess" returns.
+
+    :param monkeypatch: Used to stub ``subprocess.run``, ``as_file``, and
+        ``vst_headless_wrapper`` so the helper builds argv without touching
+        the real VST subprocess or package-data extraction.
+    :returns: List that grows by one entry per intercepted ``subprocess.run`` call.
+    """
+    captured: list[list[str]] = []
+
+    def _fake_run(args: list[str], **_kwargs: Any) -> None:
+        captured.append(list(args))
+        if _COMPUTE_AUDIO_METRICS_MODULE not in args:
+            return
+        metrics_dir = Path(args[args.index(_COMPUTE_AUDIO_METRICS_MODULE) + 2])
+        metrics_dir.mkdir(parents=True, exist_ok=True)
+        (metrics_dir / "aggregated_metrics.csv").write_text(_AGGREGATED_METRICS_CSV)
+
+    monkeypatch.setattr(eval_mod.subprocess, "run", _fake_run)
+
+    # The render branch wraps the VST3 host with an Xvfb wrapper extracted from
+    # package resources; stub the extractor so we don't touch the package data.
+    @contextmanager
+    def _fake_as_file(_traversable: Any) -> Any:
+        yield Path(_FAKE_WRAPPER)
+
+    monkeypatch.setattr(eval_mod, "as_file", _fake_as_file)
+    monkeypatch.setattr(eval_mod, "vst_headless_wrapper", lambda: object())
+    return captured
+
+
+@pytest.fixture
+def predictions_tree(tmp_path: Path) -> Path:
+    """Create a ``predictions/`` and ``audio/`` subtree so existence guards pass.
+
+    :param tmp_path: Pytest-provided per-test temporary directory; receives the
+        ``predictions/`` and ``audio/`` children the helper checks for.
+    :returns: ``tmp_path`` itself — used as ``cfg.paths.output_dir`` by callers.
+    """
+    (tmp_path / "predictions").mkdir()
+    (tmp_path / "audio").mkdir()
+    return tmp_path
+
+
+def test_postprocessing_linux_argv_has_wrapper_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+    predictions_tree: Path,
+    captured_argv: list[list[str]],
+) -> None:
+    """On Linux the render argv starts with the Xvfb wrapper path.
+
+    :param monkeypatch: Pins ``sys.platform`` to ``linux`` so the wrapper branch fires.
+    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created.
+    :param captured_argv: Captured argv list populated by the fixture.
+    """
+    monkeypatch.setattr(eval_mod.sys, "platform", "linux")
+    cfg = _build_postprocess_cfg(
+        predictions_tree,
+        compute_metrics=False,
+        rerender_target=False,
+        render={"param_spec_name": "surge/fake_oracle", "preset_path": "preset.fxp"},
+    )
+
+    _run_predict_postprocessing(cfg)
+
+    assert len(captured_argv) == 1
+    render_argv = captured_argv[0]
+    assert render_argv[0] == _FAKE_WRAPPER
+    assert render_argv[1:3] == [sys.executable, "-m"]
+    assert render_argv[3] == "synth_setter.evaluation.predict_vst_audio"
+
+
+def test_postprocessing_non_linux_argv_omits_wrapper(
+    monkeypatch: pytest.MonkeyPatch,
+    predictions_tree: Path,
+    captured_argv: list[list[str]],
+) -> None:
+    """Off-Linux platforms must invoke the python entrypoint directly.
+
+    :param monkeypatch: Pins ``sys.platform`` to ``darwin`` so the wrapper branch is skipped.
+    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created.
+    :param captured_argv: Captured argv list populated by the fixture.
+    """
+    monkeypatch.setattr(eval_mod.sys, "platform", "darwin")
+    cfg = _build_postprocess_cfg(
+        predictions_tree,
+        compute_metrics=False,
+        rerender_target=False,
+        render={"param_spec_name": "surge/fake_oracle", "preset_path": "preset.fxp"},
+    )
+
+    _run_predict_postprocessing(cfg)
+
+    render_argv = captured_argv[0]
+    assert render_argv[0] == sys.executable
+    assert render_argv[1] == "-m"
+    assert _FAKE_WRAPPER not in render_argv
+
+
+def test_postprocessing_plugin_path_gate(
+    monkeypatch: pytest.MonkeyPatch,
+    predictions_tree: Path,
+    captured_argv: list[list[str]],
+) -> None:
+    """``cfg.render.plugin_path`` adds ``--plugin_path <value>`` to the render argv only when set.
+
+    :param monkeypatch: Pins ``sys.platform`` to ``darwin`` so the headless wrapper
+        prefix doesn't shift argv indices the test asserts on.
+    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created
+        so the helper's existence guards pass.
+    :param captured_argv: List of every ``subprocess.run`` argv the helper would have
+        spawned; populated by the fixture's monkeypatch.
+    """
+    monkeypatch.setattr(eval_mod.sys, "platform", "darwin")
+    plugin_path = str(predictions_tree / "Surge XT.vst3")
+    cfg = _build_postprocess_cfg(
+        predictions_tree,
+        compute_metrics=False,
+        rerender_target=False,
+        render={
+            "param_spec_name": "surge/fake_oracle",
+            "preset_path": "preset.fxp",
+            "plugin_path": plugin_path,
+        },
+    )
+
+    _run_predict_postprocessing(cfg)
+
+    render_argv = captured_argv[0]
+    assert "--plugin_path" in render_argv
+    plugin_idx = render_argv.index("--plugin_path")
+    assert render_argv[plugin_idx + 1] == plugin_path
+
+
+def test_postprocessing_rerender_target_gate(
+    monkeypatch: pytest.MonkeyPatch,
+    predictions_tree: Path,
+    captured_argv: list[list[str]],
+) -> None:
+    """``evaluation.rerender_target`` appends ``-t`` only when truthy.
+
+    :param monkeypatch: Pins ``sys.platform`` to ``darwin`` so the wrapper branch is skipped.
+    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created.
+    :param captured_argv: Captured argv list populated by the fixture.
+    """
+    monkeypatch.setattr(eval_mod.sys, "platform", "darwin")
+    render = {"param_spec_name": "surge/fake_oracle", "preset_path": "preset.fxp"}
+
+    _run_predict_postprocessing(
+        _build_postprocess_cfg(
+            predictions_tree, compute_metrics=False, rerender_target=True, render=render
+        )
+    )
+    _run_predict_postprocessing(
+        _build_postprocess_cfg(
+            predictions_tree, compute_metrics=False, rerender_target=False, render=render
+        )
+    )
+
+    assert "-t" in captured_argv[0]
+    assert "-t" not in captured_argv[1]
+
+
+def test_postprocessing_metrics_argv_includes_num_workers(
+    monkeypatch: pytest.MonkeyPatch,
+    predictions_tree: Path,
+    captured_argv: list[list[str]],
+) -> None:
+    """The metrics subprocess receives ``-w <num_workers>`` from ``cfg.evaluation``.
+
+    :param monkeypatch: Pins ``sys.platform`` to ``darwin`` so render-branch monkeypatches
+        (still installed by the fixture) don't influence the metrics-only argv.
+    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created.
+    :param captured_argv: Captured argv list populated by the fixture.
+    """
+    monkeypatch.setattr(eval_mod.sys, "platform", "darwin")
+    cfg = _build_postprocess_cfg(
+        predictions_tree,
+        render_vst=False,
+        compute_metrics=True,
+        num_workers=4,
+    )
+
+    _run_predict_postprocessing(cfg)
+
+    assert len(captured_argv) == 1
+    metrics_argv = captured_argv[0]
+    assert metrics_argv[:3] == [
+        sys.executable,
+        "-m",
+        "synth_setter.evaluation.compute_audio_metrics",
+    ]
+    assert metrics_argv[-2:] == ["-w", "4"]
+
+
+def test_postprocessing_no_op_when_both_gates_off(
+    predictions_tree: Path,
+    captured_argv: list[list[str]],
+) -> None:
+    """No subprocess fires when ``render_vst`` and ``compute_metrics`` are both off.
+
+    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created.
+    :param captured_argv: Captured argv list — asserted empty.
+    """
+    cfg = _build_postprocess_cfg(
+        predictions_tree, render_vst=False, compute_metrics=False, render=None
+    )
+
+    _run_predict_postprocessing(cfg)
+
+    assert captured_argv == []
+
+
+def test_postprocessing_render_requires_render_cfg(
+    predictions_tree: Path,
+    captured_argv: list[list[str]],
+) -> None:
+    """``render_vst=True`` with ``cfg.render is None`` raises a directed ``ValueError``.
+
+    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created.
+    :param captured_argv: Captured argv list — asserted empty (helper fails before dispatch).
+    """
+    cfg = _build_postprocess_cfg(predictions_tree, compute_metrics=False, render=None)
+
+    with pytest.raises(ValueError, match="render config group"):
+        _run_predict_postprocessing(cfg)
+    assert captured_argv == []
+
+
+def test_postprocessing_render_requires_predictions_dir(
+    tmp_path: Path,
+    captured_argv: list[list[str]],
+) -> None:
+    """Missing ``predictions/`` dir surfaces a callback-pointing ``ValueError``.
+
+    :param tmp_path: Pytest temp dir used as ``output_dir`` without pre-creating subtrees.
+    :param captured_argv: Captured argv list — asserted empty (helper fails before dispatch).
+    """
+    cfg = _build_postprocess_cfg(
+        tmp_path,
+        compute_metrics=False,
+        render={"param_spec_name": "surge/fake_oracle", "preset_path": "preset.fxp"},
+    )
+
+    with pytest.raises(ValueError, match="PredictionWriter"):
+        _run_predict_postprocessing(cfg)
+    assert captured_argv == []
+
+
+def test_postprocessing_metrics_requires_audio_dir(
+    tmp_path: Path,
+    captured_argv: list[list[str]],
+) -> None:
+    """Missing ``audio/`` dir surfaces a render-pointing ``ValueError`` for metrics-only runs.
+
+    :param tmp_path: Pytest temp dir used as ``output_dir`` without pre-creating subtrees.
+    :param captured_argv: Captured argv list — asserted empty (helper fails before dispatch).
+    """
+    cfg = _build_postprocess_cfg(tmp_path, render_vst=False, compute_metrics=True)
+
+    with pytest.raises(ValueError, match="render_vst"):
+        _run_predict_postprocessing(cfg)
+    assert captured_argv == []
+
+
+def test_postprocessing_returns_empty_when_compute_metrics_off(
+    predictions_tree: Path,
+    captured_argv: list[list[str]],
+) -> None:
+    """Helper returns ``{}`` so callers can unconditionally merge into ``callback_metrics``.
+
+    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created.
+    :param captured_argv: Captured argv list — asserted untouched after the no-op return.
+    """
+    cfg = _build_postprocess_cfg(
+        predictions_tree,
+        render_vst=False,
+        compute_metrics=False,
+        render=None,
+    )
+
+    assert _run_predict_postprocessing(cfg) == {}
+
+
+def test_postprocessing_returns_loaded_audio_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+    predictions_tree: Path,
+) -> None:
+    """Helper returns the parsed audio metrics so ``evaluate()`` can stash them.
+
+    :param monkeypatch: Replaces ``subprocess.run`` with a fake that writes the
+        aggregated CSV before returning, mimicking the real subprocess effect.
+    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created.
+    """
+    metrics_dir = predictions_tree / "metrics"
+    monkeypatch.setattr(
+        eval_mod.subprocess,
+        "run",
+        _writes_metrics_csv(metrics_dir, _AGGREGATED_METRICS_CSV),
+    )
+    cfg = _build_postprocess_cfg(
+        predictions_tree,
+        render_vst=False,
+        compute_metrics=True,
+    )
+
+    result = _run_predict_postprocessing(cfg)
+
+    assert result == _EXPECTED_AUDIO_METRICS
+
+
+def test_postprocessing_logs_audio_metrics_to_active_wandb_run(
+    monkeypatch: pytest.MonkeyPatch,
+    predictions_tree: Path,
+) -> None:
+    """When ``wandb.run`` is set, the loaded audio metrics are forwarded to ``run.log`` once.
+
+    :param monkeypatch: Stubs ``subprocess.run`` so the CSV materializes without launching
+        the real subprocess, and stubs ``wandb.run`` so logging is observable.
+    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created.
+    """
+    metrics_dir = predictions_tree / "metrics"
+    monkeypatch.setattr(
+        eval_mod.subprocess,
+        "run",
+        _writes_metrics_csv(metrics_dir, _AGGREGATED_METRICS_CSV),
+    )
+
+    logged: list[dict[str, float]] = []
+
+    class _FakeRun:
+        def log(self, payload: dict[str, float]) -> None:
+            logged.append(payload)
+
+    monkeypatch.setattr(eval_mod.wandb, "run", _FakeRun())
+
+    cfg = _build_postprocess_cfg(
+        predictions_tree,
+        render_vst=False,
+        compute_metrics=True,
+    )
+
+    _run_predict_postprocessing(cfg)
+
+    assert logged == [_EXPECTED_AUDIO_METRICS]
+
+
+def test_postprocessing_skips_wandb_when_no_run(
+    monkeypatch: pytest.MonkeyPatch,
+    predictions_tree: Path,
+) -> None:
+    """No active wandb run → metrics are still returned but ``wandb.log`` is not touched.
+
+    :param monkeypatch: Stubs ``subprocess.run`` so the CSV materializes, and pins
+        ``wandb.run`` to ``None`` so the no-run branch is exercised.
+    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created.
+    """
+    metrics_dir = predictions_tree / "metrics"
+    monkeypatch.setattr(
+        eval_mod.subprocess,
+        "run",
+        _writes_metrics_csv(metrics_dir, _AGGREGATED_METRICS_CSV),
+    )
+
+    monkeypatch.setattr(eval_mod.wandb, "run", None)
+
+    cfg = _build_postprocess_cfg(
+        predictions_tree,
+        render_vst=False,
+        compute_metrics=True,
+    )
+
+    result = _run_predict_postprocessing(cfg)
+
+    assert result == _EXPECTED_AUDIO_METRICS

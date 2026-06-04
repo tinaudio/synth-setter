@@ -105,7 +105,7 @@ install: ## End-to-end: install uv, create .venv (Python 3.10), install deps, se
 	else \
 		"$$UV" venv --python 3.10 --prompt synth-setter .venv; \
 	fi; \
-	"$$UV" pip install --python .venv/bin/python -e ".[torch,dev]"; \
+	"$$UV" pip install --python .venv/bin/python --group dev -e .; \
 	if [ -n "$$(git config --get core.hooksPath 2>/dev/null)" ]; then \
 		echo "Skipping pre-commit install (core.hooksPath is set; run '.venv/bin/pre-commit install' manually if you want to override)."; \
 	else \

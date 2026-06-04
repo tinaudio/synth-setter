@@ -56,11 +56,11 @@ jobs:
         with:
           python-version: "3.10"
 
-      # The install below is inline (`pip install --no-deps -e .` + two extra
-      # packages), so setup-python's `cache: 'pip'` (requirements-file driven)
-      # doesn't apply. Cache the pip download dir keyed on this workflow's hash
-      # so a touch-free re-run hits the cache for the pydantic / python-dotenv
-      # wheels (~2-4s win).
+      # `pip install -e .` installs the project + its light base only — pip
+      # never installs PEP 735 dependency-groups, so the heavy runtime stays
+      # out (see #1139). setup-python's `cache: 'pip'` is requirements-file
+      # driven and doesn't apply to an editable install, so cache the pip
+      # download dir keyed on this workflow's hash for the base wheels.
       - name: Cache pip downloads
         uses: actions/cache@v4
         with:
@@ -79,18 +79,13 @@ jobs:
           endpoint: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
           install-rclone: "true"
 
-      # synth_setter.pipeline.ci.validate_spec imports OUTPUT_FORMAT_TO_EXTENSION from
-      # synth_setter.pipeline.schemas.spec (transitively pulls pydantic at module
-      # top), and indirectly imports r2_io.py (transitively pulls python-dotenv
-      # at module top via `ensure_r2_env_loaded` in #1120). Keep the runner-side
-      # env minimal: install the project with --no-deps (the full
-      # [project.dependencies] would drag in torch, skypilot, librosa, etc.),
-      # then add the two top-level imports above so their own required
-      # transitive deps resolve. Long-term cleanup tracked at #1139.
-      - name: Install validate_spec runtime deps
-        run: |
-          pip install --no-deps -e .
-          pip install "pydantic>=2,<3" python-dotenv
+      - name: Install synth_setter (light base provides validate_spec deps)
+        run: pip install -e .
+
+      # Fail fast if a new top-level import on the validate_spec path needs a dep
+      # the light base doesn't carry (it would otherwise surface mid-run).
+      - name: Import smoke-guard for validate_spec
+        run: python3 -c "from synth_setter.pipeline.ci.validate_spec import main"
 
       - name: Validate spec structure
         run: python3 -m synth_setter.pipeline.ci.validate_spec "${{ inputs.spec_uri }}"

@@ -91,7 +91,7 @@ set -a && source .env && set +a
 > **Prefer pip or conda?** If you'd rather manage the Python interpreter and
 > venv yourself, see
 > [docs/getting-started.md Appendix A](docs/getting-started.md#appendix-a-manual-environment-setup)
-> for a walkthrough using `pip install -e ".[torch,dev]"` inside your own
+> for a walkthrough using `uv pip install --group dev -e .` inside your own
 > environment.
 
 ### GPU vs CPU

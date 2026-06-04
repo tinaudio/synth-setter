@@ -101,6 +101,11 @@ jobs:
         with:
           python-version: "3.10"
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
       - name: Set up R2
         uses: ./.github/actions/setup-r2
         with:
@@ -191,8 +196,12 @@ jobs:
       # `batch["params"]` verbatim, so audio metrics on the finalized dataset
       # stay inside the same bounds `tests/test_train.py::test_train_eval_surge_xt`
       # pins for the oracle leg. Helper auto-skips when R2 is unreachable.
+      # Heavy runtime lives in PEP 735 groups since #1139; `--group dev`
+      # transitively includes `runtime`. No cpu/cu128 extra (which
+      # [tool.uv.sources] keys torch routing on) is active, so torch resolves
+      # from PyPI — runs on the CPU runner, as before.
       - name: Install project deps for oracle helper
-        run: pip install -e ".[torch,dev]"
+        run: uv pip install --system --group dev -e .
 
       - name: Run finalize-artifact oracle helper
         env:

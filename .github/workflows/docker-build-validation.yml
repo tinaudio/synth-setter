@@ -75,15 +75,17 @@ jobs:
         with:
           enable-cache: true
 
-      # load_image_config only needs pyyaml + pydantic (pydantic-core
-      # resolves transitively). Keep the runner-side env minimal: install
-      # the project with --no-deps so the full [project.dependencies]
-      # doesn't drag in torch/skypilot/librosa, then add pyyaml and
-      # pydantic in a second command with their own deps.
-      - name: Install synth_setter (editable; provides the load_image_config CLI plus its pyyaml + pydantic deps)
-        run: |
-          uv pip install --system --no-deps -e .
-          uv pip install --system pyyaml pydantic
+      # `uv pip install -e .` with no `--group` installs the project + its light
+      # base only — PEP 735 dependency-groups install only when explicitly
+      # requested, so torch/skypilot/librosa stay out (see #1139).
+      # load_image_config needs only pyyaml + pydantic, both in the light base.
+      - name: Install synth_setter (light base provides load_image_config deps)
+        run: uv pip install --system -e .
+
+      # Fail fast if a new top-level import on the load_image_config path needs a
+      # dep the light base doesn't carry (it would otherwise surface mid-run).
+      - name: Import smoke-guard for load_image_config
+        run: python -c "from synth_setter.pipeline.ci.load_image_config import main"
 
       - name: Load image config
         id: config

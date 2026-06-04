@@ -26,6 +26,11 @@ When the shared file says "the calling skill," that's this skill:
 - Phrase the `review_body` lead-in to reflect that every BLOCK/WARN is being
   posted as an unresolved inline thread (sample wording is already in the
   shared file).
+- Set the top-level `"event"` field in the JSON payload: `REQUEST_CHANGES` if
+  any finding is a BLOCK (any `[*:block]`, including the folded PR-health
+  BLOCKs), else `COMMENT` if any WARN exists, else `APPROVE`. The self-review
+  COMMENT fallback (when the bot is the PR author) is automatic in
+  `post_review.py`.
 
 Return here once Step 6 has produced the JSON payload on disk.
 
@@ -40,7 +45,7 @@ python3 agent/skills/_shared/post_review.py < /tmp/repo-review-full-findings.jso
 - Anchors each finding to its target line if that line falls inside a diff hunk.
 - Falls back to the nearest in-hunk line on the same file with a cross-ref note prepended to the body.
 - Rolls orphan findings (file outside the diff) into the review body under `## Findings on files outside the diff`.
-- Submits as `event=COMMENT`. Threads stay unresolved.
+- Submits with the payload's `event` (REQUEST_CHANGES / COMMENT / APPROVE). On a self-review 422 (the bot is the PR author) it retries once as `event=COMMENT` with an event-aware intent banner prepended — `⛔ N BLOCKING finding(s) — changes required` for a REQUEST_CHANGES downgrade, `✅ No findings` for an APPROVE downgrade — so the original intent stays visible. Threads stay unresolved.
 
 Report the helper's `html_url` back to the user along with a one-line summary (`Posted N findings: B BLOCK + W WARN across K skills; PR-health flags: <M merge-conflict / F failing-check>`). If PR-health found nothing, drop the trailing `; PR-health flags: ...` clause.
 

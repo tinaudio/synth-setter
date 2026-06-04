@@ -91,21 +91,31 @@ lockfile change can move a result. The `uv-lock-check.yml` matrix can only
 prove the lock is consistent with `pyproject.toml`, not that the new pins
 are the ones you wanted.
 
-## Backward-compat shims
+## Light base + dependency-groups (#1139)
 
-`pyproject.toml` retains `[project.optional-dependencies]` entries for
-`torch`, `dev`, `docs`, and `all`. These exist so `pip install -e ".[torch,dev]"`
-keeps working for callsites that cannot honor `[tool.uv.sources]`, including:
+`[project.dependencies]` is trimmed to the lite import closure
+(`pydantic`, `python-dotenv`, `pyyaml`) — the union closure of the lite CI
+entrypoints (`validate_spec`, `r2_io.ensure_r2_env_loaded`,
+`load_image_config`). The heavy runtime lives in PEP 735 `[dependency-groups]`
+(`torch`/`config`/`compute`/`data`/`audio`/`metrics`/`util`, aggregated under
+`runtime`, folded into `dev`). pip never installs groups, and `uv pip` only with
+an explicit `--group`, so a plain `pip install -e .` yields a light env;
+`default-groups = ["dev"]` keeps a bare `uv sync` installing everything.
+`tests/infra/test_lite_dependency_base.py` pins the base to the lite closure.
 
-- `Makefile`'s `make install` target.
-- `environment.yaml` (Conda envs).
-- `scripts/sync_worker_checkout.sh` (SkyPilot worker setup).
-- `.github/workflows/docs.yml` (mkdocs build).
-- `.github/workflows/test-dataset-finalization.yml` (`pip install -e ".[torch,dev]"` smoke).
+Lite CI jobs install with a bare `pip install -e .` (no `--no-deps`, no
+hand-picked deps) plus an import smoke-guard. Full installs that cannot honor
+`[tool.uv.sources]` (plain pip / conda) drive the heavy stack through uv groups:
 
-The shims do not produce a lockfile-validated install; they re-resolve every
-time. Prefer `uv sync --frozen` for any new install path. Removal of the
-shims tracks alongside migration of the callsites above.
+- `Makefile`'s `make install` → `uv pip install --group dev -e .`.
+- `scripts/sync_worker_checkout.sh` (SkyPilot worker) → `uv pip install --group runtime -e .`.
+- `environment.yaml` + `.github/workflows/test-conda.yml` (Conda) → conda owns
+  torch; `uv pip install --group dev -e .` pulls the rest.
+- `.github/workflows/docs.yml` (mkdocs build) → `uv pip install --group dev`/`--group docs --group runtime`.
+- `.github/workflows/test-dataset-finalization.yml` (oracle smoke) → `uv pip install --group dev -e .`.
+
+Only the `cpu`/`cu128` backend-routing extras remain in
+`[project.optional-dependencies]`, because `[tool.uv.sources]` keys on extras.
 
 ## Adding a new extra or dependency group
 
