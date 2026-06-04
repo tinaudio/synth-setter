@@ -373,3 +373,30 @@ jobs:
             exit 1
           }
           printf '%s' "${PR_BODY}" | python scripts/ci/pr_body_lint.py --mode "${PR_BODY_SHAPE_MODE}"
+
+  check-pr-title:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # contents:read is needed for checkout — the top-level permissions block
+    # drops it to none. Scoped to this job; the metadata job above is API-only.
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      # On squash-merge the PR title becomes the commit subject on main, yet it
+      # never passes through gitlint's commit-msg hook. Lint it here against the
+      # same .gitlint config so titles obey the same conventional-commit rule.
+      # gitlint's CLI ships in gitlint-core; pin to the .pre-commit-config rev.
+      # PR_TITLE is read from the environment, never interpolated into the
+      # script body, so a crafted title cannot inject shell.
+      - name: Check PR title is a conventional commit
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: printf '%s\n' "$PR_TITLE" | uvx --from gitlint-core@0.19.1 gitlint --config .gitlint
