@@ -1072,6 +1072,20 @@ class TestDatasetSrc:
         with pytest.raises(ValidationError, match="copy_dataset_root must not be blank"):
             DatasetSrcConfig(copy_dataset_root="   ")
 
+    def test_datasetsrc_with_wds_output_is_rejected(self) -> None:
+        """Copy requires hdf5 output — pairing ``datasetsrc`` with wds fails at spec build.
+
+        A ``.tar`` output has no same-named HDF5 source to read params from, so the
+        misconfig should surface at launch (spec construction), not per-shard.
+        """
+        with pytest.raises(ValidationError, match="supports output_format='hdf5' only"):
+            DatasetSpec(
+                **_valid_spec_kwargs(
+                    output_format="wds",
+                    datasetsrc={"copy_dataset_root": "/data/source-dataset"},
+                )
+            )
+
     def test_datasetsrc_extra_key_is_rejected(self) -> None:
         """``DatasetSrcConfig`` is a strict trust boundary — unknown keys raise."""
         with pytest.raises(ValidationError):

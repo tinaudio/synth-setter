@@ -850,6 +850,26 @@ class DatasetSpec(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _datasetsrc_requires_hdf5_output(self) -> DatasetSpec:
+        """Reject a dataset-copy source paired with non-hdf5 output.
+
+        The copy path reads each source shard as an HDF5 ``param_array`` of the
+        same shard filename, so a ``.tar`` output has no readable same-named
+        source. Failing at spec construction surfaces the misconfig at launch
+        rather than per-shard inside the renderer subprocess.
+
+        :returns: ``self`` when ``datasetsrc`` is unset or output is hdf5.
+        :raises ValueError: ``datasetsrc`` is set with ``output_format != "hdf5"``.
+        """
+        if self.datasetsrc is not None and self.output_format != "hdf5":
+            raise ValueError(
+                "datasetsrc (dataset copy) supports output_format='hdf5' only; got "
+                f"output_format={self.output_format!r}. The source is read as an HDF5 "
+                "param_array of the same shard filename."
+            )
+        return self
+
+    @model_validator(mode="after")
     def _shard_filenames_match_output_format(self) -> DatasetSpec:
         """Defense-in-depth: every computed shard filename ends with the format's extension."""
         expected_ext = OUTPUT_FORMAT_TO_EXTENSION[self.output_format]
