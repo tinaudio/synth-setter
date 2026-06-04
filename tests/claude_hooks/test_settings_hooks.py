@@ -269,7 +269,7 @@ def test_pre_pr_gate_blocks_when_review_path_absent(pre_pr_gate_command: str) ->
     """
     result = _run_hook_command(
         pre_pr_gate_command,
-        {"tool_input": {"command": "gh pr create --title foo --body bar"}},
+        {"tool_input": {"command": "gh pr create --title 'fix: x' --body bar"}},
     )
     assert result.returncode == 2, (result.returncode, result.stderr)
     assert "BLOCKED" in result.stderr
@@ -286,7 +286,7 @@ def test_pre_pr_gate_blocks_when_review_file_missing(pre_pr_gate_command: str) -
         {
             "tool_input": {
                 "command": (
-                    "gh pr create --title foo --body bar  "
+                    "gh pr create --title 'fix: x' --body bar  "
                     "# REVIEW_FULL=.agent-reviews/does-not-exist.md"
                 ),
             },
@@ -313,7 +313,7 @@ def test_pre_pr_gate_blocks_when_filename_not_sentinel(
         pre_pr_gate_command,
         {
             "tool_input": {
-                "command": f"gh pr create --title foo --body bar  # REVIEW_FULL={review}",
+                "command": f"gh pr create --title 'fix: x' --body bar  # REVIEW_FULL={review}",
             },
         },
     )
@@ -360,7 +360,7 @@ def test_pre_pr_gate_allows_when_sentinel_at_head(
         pre_pr_gate_command,
         {
             "tool_input": {
-                "command": f"gh pr create --title foo --body bar  # REVIEW_FULL={review}",
+                "command": f"gh pr create --title 'fix: x' --body bar  # REVIEW_FULL={review}",
             },
         },
     )
@@ -413,7 +413,7 @@ def test_pre_pr_gate_blocks_when_sentinel_lists_comment_finding(
         pre_pr_gate_command,
         {
             "tool_input": {
-                "command": f"gh pr create --title foo --body bar  # REVIEW_FULL={review}",
+                "command": f"gh pr create --title 'fix: x' --body bar  # REVIEW_FULL={review}",
             },
         },
     )
@@ -440,7 +440,7 @@ def test_pre_pr_gate_off_mode_allows_sentinel_with_comment_finding(
         pre_pr_gate_command,
         {
             "tool_input": {
-                "command": f"gh pr create --title foo --body bar  # REVIEW_FULL={review}",
+                "command": f"gh pr create --title 'fix: x' --body bar  # REVIEW_FULL={review}",
             },
         },
         env={"REVIEW_COMMENT_GATE": "off"},
