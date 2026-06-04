@@ -24,6 +24,11 @@ evaluation:
   compute_metrics: false
   rerender_target: true
   num_workers: 1
+  # Opt-in render-order probe: permute pred.wav across sample dirs (gated on
+  # uniform params) between render and metrics, isolating render-order from
+  # parameter variation in the audio loss (#489).
+  shuffle_pred_audio: false
+  shuffle_seed: 0
   # Opt-in: an `r2://bucket/prefix` mirror of the whole run dir, copied after eval.
   upload_output_dir_uri: null
 

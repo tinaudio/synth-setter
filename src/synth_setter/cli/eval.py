@@ -14,6 +14,7 @@ from lightning import Callback, LightningDataModule, LightningModule, Trainer
 from lightning.pytorch.loggers import Logger
 from omegaconf import DictConfig
 
+from synth_setter.evaluation.shuffle_pred_audio import shuffle_pred_audio
 from synth_setter.pipeline import r2_io
 from synth_setter.resources import as_file, vst_headless_wrapper
 from synth_setter.utils import (
@@ -87,19 +88,22 @@ def _log_audio_metrics_to_wandb(audio_metrics: dict[str, float]) -> None:
 
 
 def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: DOC502,DOC503
-    """Render VST audio, compute audio metrics, and return their aggregated values.
+    """Render VST audio, optionally shuffle it, compute audio metrics, return them.
 
     The VST render subprocess is prefixed with the headless wrapper on Linux so
     the VST3 plugin gets an Xvfb display before pedalboard imports it; the
-    metrics subprocess is CPU-only and needs no wrapper.
+    metrics subprocess is CPU-only and needs no wrapper. The optional shuffle
+    runs between render and metrics — see #489.
 
-    :param cfg: Reads ``cfg.evaluation`` (gates + ``num_workers``), ``cfg.render``
-        (param spec, preset, optional plugin path), and ``cfg.paths.output_dir``
-        (base for ``predictions/``, ``audio/``, ``metrics/``).
+    :param cfg: Reads ``cfg.evaluation`` (gates + ``num_workers`` +
+        ``shuffle_pred_audio`` / ``shuffle_seed``), ``cfg.render`` (param spec,
+        preset, optional plugin path), and ``cfg.paths.output_dir`` (base for
+        ``predictions/``, ``audio/``, ``metrics/``).
     :returns: ``{"audio/<name>_<stat>": value}`` when ``compute_metrics`` ran;
         empty dict otherwise. Always rank-zero — the caller gates DDP duplication.
     :raises ValueError: if ``evaluation.render_vst`` is enabled but ``cfg.render`` is
-        unset, or the expected input directory for a stage is missing.
+        unset, the expected input directory for a stage is missing, or the shuffle
+        gate finds non-uniform params across sample dirs.
     :raises subprocess.CalledProcessError: propagated from a non-zero subprocess exit.
     :raises subprocess.TimeoutExpired: propagated when a subprocess exceeds
         :data:`_SUBPROCESS_TIMEOUT_SECONDS`.
@@ -147,6 +151,17 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
                 check=True,
                 timeout=_SUBPROCESS_TIMEOUT_SECONDS,
             )
+
+    if cfg.evaluation.get("shuffle_pred_audio"):
+        if not audio_dir.is_dir():
+            raise ValueError(
+                f"evaluation.shuffle_pred_audio=true expects rendered audio at {audio_dir} "
+                "— enable evaluation.render_vst or point cfg.paths.output_dir at a "
+                "directory containing an `audio/` subdirectory."
+            )
+        seed = cfg.evaluation.get("shuffle_seed", 0)
+        permutation = shuffle_pred_audio(audio_dir, seed)
+        log.info(f"Shuffled pred audio across {len(permutation)} sample dirs (seed={seed}).")
 
     if cfg.evaluation.compute_metrics:
         if not audio_dir.is_dir():

@@ -23,6 +23,7 @@ from synth_setter.cli.eval import evaluate
 from synth_setter.cli.train import train
 from synth_setter.data.vst import param_specs
 from synth_setter.workspace import operator_workspace
+from tests.conftest import NUM_FIXTURE_SAMPLES
 from tests.helpers.run_if import RunIf
 
 
@@ -77,6 +78,48 @@ def test_evaluate_runs_oracle_with_null_ckpt_path(
     assert param_mse.dtype.is_floating_point
     assert torch.isfinite(param_mse), f"oracle test/param_mse must be finite; got {param_mse!r}"
     assert param_mse.item() == 0.0
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+def test_evaluate_predict_shuffle_pred_audio_reaches_metrics(
+    tmp_path: Path,
+    cfg_surge_xt: DictConfig,
+    cfg_surge_xt_eval: DictConfig,
+) -> None:
+    """``evaluate()`` predict mode with the shuffle on still lands finite audio metrics.
+
+    Drives the real train->eval roundtrip end-to-end with ``shuffle_pred_audio``
+    enabled, exercising the ``evaluate()`` -> ``_run_predict_postprocessing`` ->
+    shuffle wiring (rank-zero gate, cfg default, render->shuffle->metrics order).
+    Asserts the metrics still aggregate and every pred.wav survives the permutation
+    (#489); the shuffle deliberately mismatches pred to target, so metric magnitudes
+    are not asserted — only that they are present and finite.
+
+    :param tmp_path: Shared output dir for the train run and the eval run.
+    :param cfg_surge_xt: Surge XT smoke-test training config.
+    :param cfg_surge_xt_eval: Matching predict-mode eval config (render + metrics on).
+    """
+    HydraConfig().set_config(cfg_surge_xt)
+    train(cfg_surge_xt)
+    assert Path(cfg_surge_xt_eval.ckpt_path).exists()
+
+    with open_dict(cfg_surge_xt_eval):
+        cfg_surge_xt_eval.evaluation.shuffle_pred_audio = True
+        cfg_surge_xt_eval.evaluation.shuffle_seed = 42
+
+    HydraConfig().set_config(cfg_surge_xt_eval)
+    metric_dict, _ = evaluate(cfg_surge_xt_eval)
+
+    audio_metric_keys = [key for key in metric_dict if key.startswith("audio/")]
+    assert audio_metric_keys, f"expected audio/* metrics; got {sorted(metric_dict)}"
+    for key in audio_metric_keys:
+        assert math.isfinite(float(metric_dict[key])), f"{key} not finite: {metric_dict[key]!r}"
+
+    sample_dirs = sorted(d for d in (tmp_path / "audio").iterdir() if d.is_dir())
+    assert len(sample_dirs) == NUM_FIXTURE_SAMPLES
+    for sample_dir in sample_dirs:
+        assert (sample_dir / "pred.wav").is_file()
 
 
 @pytest.mark.gpu

@@ -39,6 +39,8 @@ def _build_postprocess_cfg(
     compute_metrics: bool = True,
     rerender_target: bool = True,
     num_workers: int = 1,
+    shuffle_pred_audio: bool = False,
+    shuffle_seed: int = 0,
     render: dict[str, Any] | None = None,
 ) -> DictConfig:
     """Build a minimal cfg accepted by ``_run_predict_postprocessing``.
@@ -49,6 +51,8 @@ def _build_postprocess_cfg(
     :param compute_metrics: Drives ``cfg.evaluation.compute_metrics``.
     :param rerender_target: Drives ``cfg.evaluation.rerender_target``.
     :param num_workers: Drives ``cfg.evaluation.num_workers``.
+    :param shuffle_pred_audio: Drives ``cfg.evaluation.shuffle_pred_audio``.
+    :param shuffle_seed: Drives ``cfg.evaluation.shuffle_seed``.
     :param render: Drives ``cfg.render``; pass ``None`` to test the unset-render branch.
     :returns: Minimal :class:`DictConfig` shaped the way the helper reads it.
     """
@@ -60,6 +64,8 @@ def _build_postprocess_cfg(
                 "compute_metrics": compute_metrics,
                 "rerender_target": rerender_target,
                 "num_workers": num_workers,
+                "shuffle_pred_audio": shuffle_pred_audio,
+                "shuffle_seed": shuffle_seed,
             },
             "render": render,
         }
@@ -463,3 +469,126 @@ def test_postprocessing_skips_wandb_when_no_run(
     result = _run_predict_postprocessing(cfg)
 
     assert result == _EXPECTED_AUDIO_METRICS
+
+
+def _populate_audio_samples(audio_dir: Path, n: int) -> None:
+    """Fill ``audio_dir`` with ``n`` uniform-params sample dirs holding tagged pred.wav.
+
+    :param audio_dir: Pre-existing ``audio/`` dir to populate.
+    :param n: Number of ``sample_<i>`` dirs to create; each pred.wav is tagged
+        ``pred-<i>`` so a shuffle is observable by reading bytes back.
+    """
+    params_csv = ",pred,target\ncutoff,0.5,0.5\n"
+    for i in range(n):
+        sample_dir = audio_dir / f"sample_{i}"
+        sample_dir.mkdir()
+        (sample_dir / "pred.wav").write_bytes(f"pred-{i}".encode())
+        (sample_dir / "target.wav").write_bytes(b"target")
+        (sample_dir / "params.csv").write_text(params_csv)
+
+
+def test_postprocessing_shuffles_pred_audio_when_enabled(
+    predictions_tree: Path,
+    captured_argv: list[list[str]],
+) -> None:
+    """``shuffle_pred_audio=true`` permutes pred.wav across sample dirs, no subprocess.
+
+    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created.
+    :param captured_argv: Captured argv list — asserted empty since shuffle is in-process.
+    """
+    audio_dir = predictions_tree / "audio"
+    _populate_audio_samples(audio_dir, 8)
+    before = [(audio_dir / f"sample_{i}" / "pred.wav").read_bytes() for i in range(8)]
+    cfg = _build_postprocess_cfg(
+        predictions_tree,
+        render_vst=False,
+        compute_metrics=False,
+        shuffle_pred_audio=True,
+        shuffle_seed=42,
+    )
+
+    _run_predict_postprocessing(cfg)
+
+    after = [(audio_dir / f"sample_{i}" / "pred.wav").read_bytes() for i in range(8)]
+    assert after != before
+    assert set(after) == set(before)
+    assert captured_argv == []
+
+
+def test_postprocessing_does_not_shuffle_when_disabled(predictions_tree: Path) -> None:
+    """``shuffle_pred_audio`` defaulting off leaves each pred.wav in its own dir.
+
+    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created.
+    """
+    audio_dir = predictions_tree / "audio"
+    _populate_audio_samples(audio_dir, 4)
+    cfg = _build_postprocess_cfg(predictions_tree, render_vst=False, compute_metrics=False)
+
+    _run_predict_postprocessing(cfg)
+
+    for i in range(4):
+        assert (audio_dir / f"sample_{i}" / "pred.wav").read_bytes() == f"pred-{i}".encode()
+
+
+def test_postprocessing_shuffle_requires_audio_dir(
+    tmp_path: Path,
+    captured_argv: list[list[str]],
+) -> None:
+    """``shuffle_pred_audio=true`` with no ``audio/`` dir surfaces a directed ``ValueError``.
+
+    :param tmp_path: Pytest temp dir used as ``output_dir`` without pre-creating subtrees.
+    :param captured_argv: Captured argv list — asserted empty (helper fails before dispatch).
+    """
+    cfg = _build_postprocess_cfg(
+        tmp_path,
+        render_vst=False,
+        compute_metrics=False,
+        shuffle_pred_audio=True,
+    )
+
+    with pytest.raises(ValueError, match="shuffle_pred_audio"):
+        _run_predict_postprocessing(cfg)
+    assert captured_argv == []
+
+
+def test_postprocessing_shuffle_runs_before_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+    predictions_tree: Path,
+) -> None:
+    """The metrics subprocess sees the post-shuffle pred arrangement, pinning the ordering.
+
+    :param monkeypatch: Stubs ``subprocess.run`` with a fake that snapshots pred.wav
+        bytes when the metrics module is dispatched, and pins ``wandb.run`` to ``None``.
+    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created.
+    """
+    audio_dir = predictions_tree / "audio"
+    _populate_audio_samples(audio_dir, 8)
+    before = [(audio_dir / f"sample_{i}" / "pred.wav").read_bytes() for i in range(8)]
+
+    seen_by_metrics: list[bytes] = []
+
+    def _snapshot_then_write(args: list[str], **_kwargs: Any) -> None:
+        if _COMPUTE_AUDIO_METRICS_MODULE not in args:
+            return
+        seen_by_metrics.extend(
+            (audio_dir / f"sample_{i}" / "pred.wav").read_bytes() for i in range(8)
+        )
+        metrics_dir = Path(args[args.index(_COMPUTE_AUDIO_METRICS_MODULE) + 2])
+        metrics_dir.mkdir(parents=True, exist_ok=True)
+        (metrics_dir / "aggregated_metrics.csv").write_text(_AGGREGATED_METRICS_CSV)
+
+    monkeypatch.setattr(eval_mod.subprocess, "run", _snapshot_then_write)
+    monkeypatch.setattr(eval_mod.wandb, "run", None)
+
+    cfg = _build_postprocess_cfg(
+        predictions_tree,
+        render_vst=False,
+        compute_metrics=True,
+        shuffle_pred_audio=True,
+        shuffle_seed=42,
+    )
+
+    _run_predict_postprocessing(cfg)
+
+    assert seen_by_metrics != before
+    assert sorted(seen_by_metrics) == sorted(before)
