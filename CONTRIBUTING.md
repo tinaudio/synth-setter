@@ -207,6 +207,7 @@ These prefixes do not trigger a release:
 | `style:`         | Formatting, whitespace                                                            |
 | `build:`         | Build system or dependency changes                                                |
 | `monitoring:`    | Observability and monitoring changes                                              |
+| `automation:`    | Agent tooling, CI gates, and review-automation changes                            |
 
 ### Guidelines
 
