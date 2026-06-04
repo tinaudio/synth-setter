@@ -139,6 +139,18 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
             ]
             if cfg.render.get("plugin_path"):
                 args += ["--plugin_path", cfg.render.plugin_path]
+            # Forward the remaining render fields predict_vst_audio renders with so the
+            # re-render matches the dataset's generation render rather than this module's
+            # CLI defaults. Gated like plugin_path so a partial render cfg still works.
+            for flag, key in (
+                ("--sample_rate", "sample_rate"),
+                ("--channels", "channels"),
+                ("--velocity", "velocity"),
+                ("--signal_duration_seconds", "signal_duration_seconds"),
+            ):
+                value = cfg.render.get(key)
+                if value is not None:
+                    args += [flag, str(value)]
             if cfg.evaluation.rerender_target:
                 args.append("-t")
             log.info(f"Rendering predicted audio: {args}")

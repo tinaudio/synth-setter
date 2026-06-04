@@ -39,7 +39,7 @@ from synth_setter.pipeline.partitioning import (
     read_rank_world_from_env,
 )
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
-from synth_setter.pipeline.schemas.spec import DatasetSpec, ShardSpec
+from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig, ShardSpec
 from synth_setter.pipeline.spec_io import (
     upload_spec,
     write_spec_locally,
@@ -68,18 +68,12 @@ def _run_oracle_eval_subprocess(
     run_dir: Path,
     run_id: str,
     *,
-    param_spec_name: str,
-    preset_path: str,
-    plugin_path: str,
+    render: RenderConfig,
 ) -> None:
     """Run the fake-oracle eval over ``dataset_root`` to verify the param-array round-trip.
 
     ``check=True`` so a non-zero eval exit (or wall-clock timeout) propagates
     to the caller.
-
-    The eval re-renders predictions via ``predict_vst_audio``, which reads exactly
-    ``param_spec_name`` / ``preset_path`` / ``plugin_path`` from ``cfg.render``; all
-    three are passed through from the generation render so the re-render matches it.
 
     :param dataset_root: Dir holding the finalized HDF5 splits, their source
         shards, and ``stats.npz``. The splits are virtual datasets that
@@ -90,12 +84,11 @@ def _run_oracle_eval_subprocess(
         artifacts don't mix with the dataset files.
     :param run_id: Canonical ``spec.run_id``; the eval resumes this wandb run
         so its ``audio/*`` metrics land on the generate phase's run.
-    :param param_spec_name: ``render.param_spec_name`` used at generation; the
-        eval must re-render predictions through this same spec.
-    :param preset_path: ``render.preset_path`` used at generation; paired with
-        ``param_spec_name`` so the re-render preset matches.
-    :param plugin_path: ``render.plugin_path`` used at generation; re-rendering
-        with a different plugin binary would invalidate the ``audio/*`` metrics.
+    :param render: The generation ``RenderConfig``. The eval re-renders
+        predictions via ``predict_vst_audio``; every render field it renders with
+        (param spec, preset, plugin, sample rate, channels, velocity, signal
+        duration) is overridden from this so the re-render matches generation
+        exactly rather than falling back to the render group / CLI defaults.
     :raises FileNotFoundError: ``dataset_root`` is missing any finalized split
         or ``stats.npz`` — e.g. a resume where ``finalize_from_spec``
         short-circuited on an existing R2 marker without repopulating it.
@@ -118,13 +111,17 @@ def _run_oracle_eval_subprocess(
         "ckpt_path=null",
         "logger=wandb",
         # eval.yaml leaves render null; render_vst=true re-renders predicted
-        # params. Take the surge_simple group for structure, then override the
-        # three fields predict_vst_audio reads (param spec, preset, plugin) to
-        # the dataset's generation render so the round-trip matches it exactly.
+        # params. Take the surge_simple group for structure, then override every
+        # render field predict_vst_audio renders with to the generation render so
+        # the round-trip matches it exactly (not the group / CLI defaults).
         "render=surge_simple",
-        f"render.param_spec_name={param_spec_name}",
-        f"render.preset_path={preset_path}",
-        f"render.plugin_path={plugin_path}",
+        f"render.param_spec_name={render.param_spec_name}",
+        f"render.preset_path={render.preset_path}",
+        f"render.plugin_path={render.plugin_path}",
+        f"render.sample_rate={render.sample_rate}",
+        f"render.channels={render.channels}",
+        f"render.velocity={render.velocity}",
+        f"render.signal_duration_seconds={render.signal_duration_seconds}",
         # id already exists in logger/wandb.yaml (id: null) so a plain
         # override suffices; resume is absent there and needs +append.
         f"logger.wandb.id={run_id}",
@@ -838,9 +835,7 @@ def main(cfg: DictConfig) -> None:
                 output_dir,
                 eval_run_dir,
                 spec.run_id,
-                param_spec_name=spec.render.param_spec_name,
-                preset_path=spec.render.preset_path,
-                plugin_path=spec.render.plugin_path,
+                render=spec.render,
             )
         return
 

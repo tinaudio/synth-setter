@@ -1692,13 +1692,14 @@ class TestMainDispatchBranches:
         oracle_mock.assert_called_once()
         dataset_root, run_dir, _run_id = oracle_mock.call_args[0]
         assert isinstance(dataset_root, Path)
-        # The generation render's spec / preset / plugin flow through (keyword-only)
-        # so the eval re-renders through the same spec; smoke-shard is surge_simple.
-        assert oracle_mock.call_args.kwargs["param_spec_name"] == "surge_simple"
-        assert oracle_mock.call_args.kwargs["preset_path"] == "presets/surge-simple.vstpreset"
+        # The whole generation RenderConfig flows through (keyword-only) so the eval
+        # re-renders through the same spec; smoke-shard is surge_simple.
+        render_arg = oracle_mock.call_args.kwargs["render"]
+        assert render_arg.param_spec_name == "surge_simple"
+        assert render_arg.preset_path == "presets/surge-simple.vstpreset"
         # plugin_path is the TEST_PLUGIN_VST3 this test overrode at generation —
         # proving a non-default plugin flows through to the eval re-render.
-        assert oracle_mock.call_args.kwargs["plugin_path"] == str(TEST_PLUGIN_VST3)
+        assert render_arg.plugin_path == str(TEST_PLUGIN_VST3)
         # The eval reads in place from the Hydra output_dir where the shards and
         # VDS splits already live — not a downloaded copy under oracle_eval/.
         assert dataset_root == observed["output_dir"]
@@ -1711,18 +1712,20 @@ class TestMainDispatchBranches:
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
+        spec: DatasetSpec,
     ) -> None:
         """Helper subprocesses ``synth_setter.cli.eval`` with the contract argv.
 
         Pins the load-bearing overrides (``experiment=surge/fake_oracle``,
         ``datamodule.dataset_root``, ``ckpt_path=null``, ``mode=predict``), the
         wandb-resume trio that routes the eval's ``audio/*`` metrics onto the
-        generate run, and the ``param_spec_name`` / ``preset_path`` passed through
-        from the generation render so the eval re-renders through that same spec.
+        generate run, and every render field passed through from the generation
+        ``RenderConfig`` so the eval re-renders identically (here a surge_xt spec).
         Runs the helper directly so cfg-resolution noise can't mask an argv drift.
 
         :param monkeypatch: Patches the module's ``subprocess.run``.
         :param tmp_path: Roots the distinct dataset-root and eval run dirs.
+        :param spec: Source of a valid ``RenderConfig`` to derive the eval render from.
         """
         import synth_setter.cli.generate_dataset as gd
 
@@ -1734,14 +1737,14 @@ class TestMainDispatchBranches:
         for name in ("train.h5", "val.h5", "test.h5", "stats.npz"):
             (dataset_root / name).touch()
         run_dir = tmp_path / "oracle_eval" / "some-run-id"
-        gd._run_oracle_eval_subprocess(
-            dataset_root,
-            run_dir,
-            "some-run-id",
-            param_spec_name="surge_xt",
-            preset_path="presets/surge-base.vstpreset",
-            plugin_path="plugins/Surge XT.vst3",
+        render = spec.render.model_copy(
+            update={
+                "param_spec_name": "surge_xt",
+                "preset_path": "presets/surge-base.vstpreset",
+                "plugin_path": "plugins/Surge XT.vst3",
+            }
         )
+        gd._run_oracle_eval_subprocess(dataset_root, run_dir, "some-run-id", render=render)
 
         run_mock.assert_called_once()
         called_argv = run_mock.call_args[0][0]
@@ -1763,12 +1766,16 @@ class TestMainDispatchBranches:
         assert "logger.wandb.id=some-run-id" in called_argv
         assert "+logger.wandb.resume=must" in called_argv
         # render_vst=true re-renders predicted params; surge_simple supplies the
-        # structural render fields, while param spec + preset are overridden to the
-        # generation render group so the dataset re-renders through its own spec.
+        # group structure, while every render field predict_vst_audio renders with
+        # is overridden from the generation RenderConfig so the re-render matches it.
         assert "render=surge_simple" in called_argv
         assert "render.param_spec_name=surge_xt" in called_argv
         assert "render.preset_path=presets/surge-base.vstpreset" in called_argv
         assert "render.plugin_path=plugins/Surge XT.vst3" in called_argv
+        assert f"render.sample_rate={render.sample_rate}" in called_argv
+        assert f"render.channels={render.channels}" in called_argv
+        assert f"render.velocity={render.velocity}" in called_argv
+        assert f"render.signal_duration_seconds={render.signal_duration_seconds}" in called_argv
         # batch_size=1 keeps the smoke-sized test split (4 samples) from
         # flooring to zero batches under the 128 default — see #1331.
         assert "datamodule.batch_size=1" in called_argv
@@ -1778,6 +1785,7 @@ class TestMainDispatchBranches:
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
+        spec: DatasetSpec,
     ) -> None:
         """Unpopulated ``dataset_root`` ⇒ clear ``FileNotFoundError``, no eval subprocess.
 
@@ -1788,6 +1796,7 @@ class TestMainDispatchBranches:
 
         :param monkeypatch: Patches ``subprocess.run`` to assert it never fires.
         :param tmp_path: Empty stand-in for an unpopulated ``output_dir``.
+        :param spec: Source of a valid ``RenderConfig`` for the call signature.
         """
         import synth_setter.cli.generate_dataset as gd
 
@@ -1799,9 +1808,7 @@ class TestMainDispatchBranches:
                 tmp_path,
                 tmp_path / "oracle_eval" / "rid",
                 "rid",
-                param_spec_name="surge_simple",
-                preset_path="presets/surge-simple.vstpreset",
-                plugin_path="plugins/Surge XT.vst3",
+                render=spec.render,
             )
 
         run_mock.assert_not_called()

@@ -222,6 +222,50 @@ def test_postprocessing_plugin_path_gate(
     assert render_argv[plugin_idx + 1] == plugin_path
 
 
+def test_postprocessing_forwards_render_audio_fields(
+    monkeypatch: pytest.MonkeyPatch,
+    predictions_tree: Path,
+    captured_argv: list[list[str]],
+) -> None:
+    """Render fields predict_vst_audio renders with are forwarded from ``cfg.render``.
+
+    sample_rate / channels / velocity / signal_duration_seconds must reach the render
+    argv so the re-render matches the dataset's generation render instead of
+    predict_vst_audio's CLI defaults.
+
+    :param monkeypatch: Pins ``sys.platform`` to ``darwin`` so the wrapper prefix
+        doesn't shift the argv the test inspects.
+    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created.
+    :param captured_argv: Captured argv list populated by the fixture.
+    """
+    monkeypatch.setattr(eval_mod.sys, "platform", "darwin")
+    cfg = _build_postprocess_cfg(
+        predictions_tree,
+        compute_metrics=False,
+        rerender_target=False,
+        render={
+            "param_spec_name": "surge/fake_oracle",
+            "preset_path": "preset.fxp",
+            "sample_rate": 22050,
+            "channels": 1,
+            "velocity": 64,
+            "signal_duration_seconds": 2.5,
+        },
+    )
+
+    _run_predict_postprocessing(cfg)
+
+    render_argv = captured_argv[0]
+    for flag, value in (
+        ("--sample_rate", "22050"),
+        ("--channels", "1"),
+        ("--velocity", "64"),
+        ("--signal_duration_seconds", "2.5"),
+    ):
+        assert flag in render_argv, f"{flag} not forwarded"
+        assert render_argv[render_argv.index(flag) + 1] == value
+
+
 def test_postprocessing_rerender_target_gate(
     monkeypatch: pytest.MonkeyPatch,
     predictions_tree: Path,
