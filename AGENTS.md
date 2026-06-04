@@ -142,7 +142,10 @@ unintended shell expansion. A `PreToolUse` hook
   re-review in one pass; other `[<skill>:block]` findings need the underlying
   issue fixed and `/repo-review-full-no-comments` re-run to regenerate the
   sentinel. Set `REVIEW_COMMENT_GATE=off` / `REVIEW_BLOCK_GATE=off` only for a
-  finding you've judged intentional.
+  finding you've judged intentional. The gate also **blocks while the PR's
+  inline `--title` is not a conventional commit** (`PR_TITLE_GATE`: `block`
+  default / `warn` / `off`) — best-effort and fails open on any uvx/network
+  error, since the `pr-metadata-gate` workflow re-checks the title regardless.
 - **Readiness gates:** CI green ∧ `mergeable=MERGEABLE` ∧ every review
   comment has an inline reply ∧ no fresh Copilot findings — see
   `/pr-preflight`.
