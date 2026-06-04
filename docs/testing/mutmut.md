@@ -6,6 +6,15 @@ This is the authoritative entry point — the CI workflow
 `.github/workflows/mutmut.yaml` runs it on Linux (`workflow_dispatch` + weekly
 cron).
 
+## Requires Python 3.11+
+
+mutmut parses the whole `pyproject.toml`. On Python 3.10 it falls back to the
+legacy `toml` library, which crashes (`IndexError` in `load_array`) on the
+PEP 735 `dev` group's mixed string/inline-table arrays; 3.11+ uses stdlib
+`tomllib`, which parses it cleanly ([#1414](https://github.com/tinaudio/synth-setter/issues/1414)).
+Run `make mutmut` under a 3.11+ interpreter — the CI workflow pins 3.11 for
+this reason.
+
 ## `also_copy` covers the full package
 
 mutmut copies the paths under `paths_to_mutate` into a `mutants/` sandbox and
