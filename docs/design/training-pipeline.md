@@ -285,7 +285,7 @@ R2 checkpoint upload is not enabled on `main` — checkpoint durability is W&B-o
 
 ### 6.1 Dataset Access
 
-The shipped `configs/datamodule/surge*.yaml` default `dataset_root` to the per-run Hydra
+The shipped `src/synth_setter/configs/datamodule/surge*.yaml` default `dataset_root` to the per-run Hydra
 output dir; a fixed dataset is pinned by overriding to the storage-spec provenance layout:
 
 ```yaml
