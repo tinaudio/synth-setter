@@ -1,11 +1,12 @@
-"""Unit tests for the offline-wandb history decoder's flush-race polling.
+"""Unit tests for the offline-wandb readers' flush-race polling.
 
-The offline writer serializes history records to the ``run-*.wandb`` binary
-asynchronously, so a single-shot read can land before the records flush
-(observed as a conda-only 0-rows flake). ``read_history_rows(until=...)``
-polls until the caller's predicate holds; these tests pin that retry contract
-by stubbing the per-attempt scan and freezing the clock so no real datastore
-binary or wall-clock wait is needed.
+The offline writer serializes records to the ``run-*.wandb`` binary
+asynchronously, so a single-shot read can land before they flush (observed as a
+conda-only 0-records flake). Both ``read_history_rows`` (decoded rows) and
+``read_run_binary`` (raw bytes) poll until the caller's predicate holds via the
+shared ``_poll_until`` loop; these tests pin that retry contract by stubbing the
+per-attempt read and freezing the clock so no real datastore binary or
+wall-clock wait is needed.
 """
 
 from __future__ import annotations
@@ -109,3 +110,99 @@ def test_without_predicate_reads_once(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert rows == []
     assert scan_count == 1
+
+
+def test_run_binary_until_predicate_retries_until_record_flushes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Header-only early reads are retried — one ``sleep`` per gap — until the marker lands.
+
+    Mirrors the history-row retry contract for the raw-bytes ``read_run_binary``
+    path, which assertions on artifact records (absent from the decoded rows)
+    rely on.
+
+    :param monkeypatch: Replaces ``Path.read_bytes`` and counts ``sleep`` so the
+        flush lag is simulated without a real binary or wall-clock wait.
+    """
+    reads = iter([b":W&B", b":W&B", b":W&B...my-artifact...dataset-spec"])
+    read_count = 0
+    sleep_count = 0
+
+    def _read(_self: Path) -> bytes:
+        nonlocal read_count
+        read_count += 1
+        return next(reads)
+
+    def _sleep(_s: float) -> None:
+        nonlocal sleep_count
+        sleep_count += 1
+
+    monkeypatch.setattr(Path, "read_bytes", _read)
+    monkeypatch.setattr(wandb_offline.time, "sleep", _sleep)
+
+    payload = wandb_offline.read_run_binary(
+        Path("ignored.wandb"),
+        until=lambda data: b"my-artifact" in data and b"dataset-spec" in data,
+    )
+
+    assert payload == b":W&B...my-artifact...dataset-spec"
+    assert read_count == 3
+    assert sleep_count == 2
+
+
+def test_run_binary_until_predicate_polls_to_deadline_then_returns_last_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A never-satisfied predicate polls to the deadline, then returns the last (header-only) read.
+
+    Pins that a genuine never-flushed record returns bytes for the caller's own
+    assertion to fail on, rather than hanging or raising.
+
+    :param monkeypatch: Stubs ``read_bytes`` to stay header-only, advances a fake
+        clock, and freezes ``sleep`` so the timeout is reached instantly.
+    """
+    ticks = iter(range(100))
+    read_count = 0
+
+    def _read(_self: Path) -> bytes:
+        nonlocal read_count
+        read_count += 1
+        return b":W&B"
+
+    monkeypatch.setattr(Path, "read_bytes", _read)
+    monkeypatch.setattr(wandb_offline.time, "monotonic", lambda: float(next(ticks)))
+    monkeypatch.setattr(wandb_offline.time, "sleep", lambda _s: None)
+
+    payload = wandb_offline.read_run_binary(
+        Path("ignored.wandb"),
+        until=lambda data: b"never" in data,
+        timeout_s=2.5,
+    )
+
+    assert payload == b":W&B"
+    # Pins the deadline-exit branch, not a first-iteration short-circuit.
+    assert read_count > 1
+
+
+def test_run_binary_without_predicate_reads_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Omitting ``until`` keeps the single-shot contract — one read, never sleeps.
+
+    :param monkeypatch: Counts ``read_bytes`` invocations and fails ``sleep`` to
+        prove no retry loop runs.
+    """
+    read_count = 0
+
+    def _read(_self: Path) -> bytes:
+        nonlocal read_count
+        read_count += 1
+        return b":W&B"
+
+    monkeypatch.setattr(Path, "read_bytes", _read)
+    monkeypatch.setattr(
+        wandb_offline.time, "sleep", lambda _s: pytest.fail("single-shot read must not sleep")
+    )
+
+    payload = wandb_offline.read_run_binary(Path("ignored.wandb"))
+
+    assert payload == b":W&B"
+    assert read_count == 1

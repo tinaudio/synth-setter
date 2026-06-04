@@ -20,7 +20,7 @@ from lightning.pytorch.loggers.wandb import WandbLogger
 
 from synth_setter.cli.generate_dataset import generate
 from synth_setter.pipeline.schemas.spec import DatasetSpec
-from tests.helpers.wandb_offline import read_history_rows
+from tests.helpers.wandb_offline import read_history_rows, read_run_binary
 
 
 def _build_spec() -> DatasetSpec:
@@ -62,13 +62,20 @@ def _build_spec() -> DatasetSpec:
     return DatasetSpec(**kwargs)  # type: ignore[arg-type]
 
 
-def _scrub_wandb_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Drop ambient ``WANDB_*`` env so a host dotenv can't steer the offline run.
+def _offline_wandb_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Pin a hermetic offline wandb env so a host dotenv or home dir can't steer the run.
 
-    :param monkeypatch: ``delenv`` is applied per-key for the calling test.
+    Scrubs ambient ``WANDB_*`` env, forces ``WANDB_MODE=offline``, and points
+    ``WANDB_DATA_DIR`` at ``tmp_path`` so artifact staging never falls back to a
+    (possibly read-only) ``~/.local/share/wandb``.
+
+    :param monkeypatch: ``delenv`` / ``setenv`` are applied for the calling test.
+    :param tmp_path: Per-test tmp dir hosting the offline run and artifact staging.
     """
     for key in [k for k in os.environ if k.startswith("WANDB_")]:
         monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("WANDB_MODE", "offline")
+    monkeypatch.setenv("WANDB_DATA_DIR", str(tmp_path / "wandb-data"))
 
 
 @pytest.fixture(autouse=True)
@@ -87,11 +94,10 @@ def test_generate_logs_spec_as_hyperparams_and_artifact_offline(
 
     :param tmp_path: Per-test tmp dir; the offline run lands at
         ``tmp_path/wandb/offline-run-*-<run_id>``.
-    :param monkeypatch: Used to scrub ambient ``WANDB_*`` env and stub
+    :param monkeypatch: Used to pin a hermetic offline ``WANDB_*`` env and stub
         ``object_size`` + ``extract_renderer_version``.
     """
-    _scrub_wandb_env(monkeypatch)
-    monkeypatch.setenv("WANDB_MODE", "offline")
+    _offline_wandb_env(monkeypatch, tmp_path)
 
     spec = _build_spec()
 
@@ -111,8 +117,9 @@ def test_generate_logs_spec_as_hyperparams_and_artifact_offline(
     )
 
     generate(spec, tmp_path, [wandb_logger])
-    # ``generate``'s finally block calls ``wandb.finish()``, so the offline
-    # ``.wandb`` binary is already flushed before the assertions run.
+    # ``generate``'s finally block calls ``wandb.finish()``, which closes the
+    # run; the offline writer still flushes the ``.wandb`` binary asynchronously
+    # (handled by the polling read below).
     assert wandb.run is None, "generate() did not close the wandb run on return"
 
     offline_dirs = list((tmp_path / "wandb").glob(f"offline-run-*-{spec.run_id}"))
@@ -124,8 +131,13 @@ def test_generate_logs_spec_as_hyperparams_and_artifact_offline(
     assert len(binary_files) == 1, (
         f"expected one .wandb binary in {offline_dirs[0]}, found {binary_files}"
     )
-    payload = Path(binary_files[0]).read_bytes()
+    # The offline writer flushes the artifact record asynchronously, so poll
+    # the binary until both markers land rather than reading once and racing.
     artifact_name = f"{spec.task_name}-input-spec"
+    payload = read_run_binary(
+        Path(binary_files[0]),
+        until=lambda data: artifact_name.encode() in data and b"dataset-spec" in data,
+    )
     assert artifact_name.encode() in payload, (
         f"artifact name {artifact_name!r} not recorded in offline run binary"
     )
@@ -145,11 +157,10 @@ def test_generate_logs_per_shard_and_summary_metrics_offline(
 
     :param tmp_path: Per-test tmp dir; the offline run lands at
         ``tmp_path/wandb/offline-run-*-<run_id>``.
-    :param monkeypatch: Used to scrub ambient ``WANDB_*`` env and stub
+    :param monkeypatch: Used to pin a hermetic offline ``WANDB_*`` env and stub
         ``object_size`` + ``extract_renderer_version``.
     """
-    _scrub_wandb_env(monkeypatch)
-    monkeypatch.setenv("WANDB_MODE", "offline")
+    _offline_wandb_env(monkeypatch, tmp_path)
 
     spec = _build_spec()
 

@@ -17,9 +17,12 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import TypeVar
 
 import pytest
 import wandb
+
+_T = TypeVar("_T")
 
 # Verified against wandb 0.26.x. ``wandb.proto.wandb_internal_pb2.Record`` and
 # ``wandb.sdk.internal.datastore.DataStore`` are wandb internals — a future
@@ -39,6 +42,58 @@ _FLUSH_TIMEOUT_S = 10.0
 _FLUSH_POLL_S = 0.05
 
 
+def _poll_until(
+    read_once: Callable[[], _T],
+    until: Callable[[_T], bool] | None,
+    timeout_s: float,
+) -> _T:
+    """Re-invoke ``read_once`` until ``until`` holds, or return its last result at ``timeout_s``.
+
+    The offline writer flushes the ``run-*.wandb`` datastore asynchronously, so
+    a read right after ``wandb.finish()`` can race ahead and capture a
+    not-yet-flushed binary (the conda-only 0-records flake). On timeout the last
+    read is returned, not raised, so the caller's own assertion reports the
+    shortfall.
+
+    :param read_once: Single read; must be safe to call repeatedly.
+    :param until: Predicate over a read; when ``None`` ``read_once`` runs exactly
+        once (no polling).
+    :param timeout_s: Upper bound on polling; ignored when ``until`` is ``None``.
+    :returns: The result of the final ``read_once`` call.
+    """
+    if until is None:
+        return read_once()
+    deadline = time.monotonic() + timeout_s
+    while True:
+        result = read_once()
+        if until(result) or time.monotonic() >= deadline:
+            return result
+        time.sleep(_FLUSH_POLL_S)
+
+
+def read_run_binary(
+    wandb_binary: Path,
+    *,
+    until: Callable[[bytes], bool] | None = None,
+    timeout_s: float = _FLUSH_TIMEOUT_S,
+) -> bytes:
+    """Read an offline ``run-*.wandb`` binary, optionally polling until flushed.
+
+    Raw-bytes sibling of ``read_history_rows`` for assertions on records the
+    datastore decoder doesn't surface (e.g. artifact name/type). Pass ``until``
+    to re-read until the predicate holds — see ``_poll_until`` for the
+    flush-race rationale and the on-timeout semantics.
+
+    :param wandb_binary: Path to the offline ``run-*.wandb`` file.
+    :param until: Predicate over the raw bytes; when omitted the file is read
+        exactly once (no polling).
+    :param timeout_s: Upper bound on flush polling; ignored when ``until`` is
+        ``None``.
+    :returns: Bytes from the final read (the last poll on timeout).
+    """
+    return _poll_until(wandb_binary.read_bytes, until, timeout_s)
+
+
 def read_history_rows(
     wandb_binary: Path,
     *,
@@ -49,12 +104,9 @@ def read_history_rows(
 
     Slash-paths arrive as ``nested_key`` (e.g. ``['shard', 'bytes']``); the
     rejoiner reconstructs the keys callers passed to ``log_metrics`` so the
-    caller's assertions read like the production payload.
-
-    The offline writer flushes history asynchronously, so a single scan can
-    race ahead of the records (a conda-only 0-rows flake). Pass ``until`` to
-    re-scan until the predicate holds; on timeout the last scan is returned so
-    the caller's own assertion reports the shortfall.
+    caller's assertions read like the production payload. Pass ``until`` to
+    re-scan until the predicate holds — see ``_poll_until`` for the flush-race
+    rationale and the on-timeout semantics.
 
     :param wandb_binary: Path to the offline ``run-*.wandb`` file.
     :param until: Predicate over the decoded rows; when omitted the binary is
@@ -64,14 +116,7 @@ def read_history_rows(
     :returns: One dict per history record; values are JSON-encoded strings
         (as the datastore stores them).
     """
-    if until is None:
-        return _scan_history_rows(wandb_binary)
-    deadline = time.monotonic() + timeout_s
-    while True:
-        rows = _scan_history_rows(wandb_binary)
-        if until(rows) or time.monotonic() >= deadline:
-            return rows
-        time.sleep(_FLUSH_POLL_S)
+    return _poll_until(lambda: _scan_history_rows(wandb_binary), until, timeout_s)
 
 
 def _scan_history_rows(wandb_binary: Path) -> list[dict[str, str]]:
