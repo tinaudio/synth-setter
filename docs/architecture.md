@@ -90,7 +90,7 @@ synth-setter/
 │   │   ├── data/           #     Dataset-shaping utilities (reshard, rewrite_to_latest, stats, r2_report, ...)
 │   │   ├── skypilot_launch.py  # SkyPilot launcher CLI
 │   │   └── constants.py    #     Shared constants (`INPUT_SPEC_FILENAME`)
-│   ├── evaluation/         #   predict_vst_audio, compute_audio_metrics (library code called by cli/eval.py)
+│   ├── evaluation/         #   predict_vst_audio, compute_audio_metrics, shuffle_pred_audio (library code called by cli/eval.py)
 │   ├── tools/              #   `python -m` utilities (surge_xt_interactive, plot_param2tok, ...)
 │   └── configs/            #   Hydra YAML configs (and SkyPilot Task templates under compute/) — #1236
 │       ├── train.yaml      #     Root training config

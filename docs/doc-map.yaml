@@ -197,6 +197,8 @@ docs:
         covers: "Audio prediction script, VST rendering, parameter-to-audio pipeline"
       - pattern: "src/synth_setter/evaluation/compute_audio_metrics.py"
         covers: "Audio metric computation, MSS/wMFCC/SOT/RMS distance metrics, parallel workers"
+      - pattern: "src/synth_setter/evaluation/shuffle_pred_audio.py"
+        covers: "Render-order probe — permutes pred.wav across sample dirs (params-uniform gate, crash-safe snapshots) between render and metrics (#489)"
       - pattern: "renderscript.sh"
         covers: "Cross-platform rendering script, Xvfb auto-detection"
       - pattern: "src/synth_setter/configs/eval.yaml"

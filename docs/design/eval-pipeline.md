@@ -240,14 +240,16 @@ The predict stage loads a trained model checkpoint via PyTorch Lightning's `Trai
 
 #### Predict-mode post-processing (in-process)
 
-When `cfg.mode == "predict"`, `cli/eval.py` invokes `_run_predict_postprocessing()` after `trainer.predict()`. Both phases shell out to the existing CLIs (`predict_vst_audio.py`, `compute_audio_metrics.py`) and are gated by `cfg.evaluation`:
+When `cfg.mode == "predict"`, `cli/eval.py` invokes `_run_predict_postprocessing()` after `trainer.predict()`. The render and metrics phases shell out to the existing CLIs (`predict_vst_audio.py`, `compute_audio_metrics.py`); an optional in-process shuffle (`shuffle_pred_audio.py`) runs between them. All are gated by `cfg.evaluation`:
 
-| Key                          | Default | Effect when true                                                                                                                                                                                 |
-| ---------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `evaluation.render_vst`      | `false` | Subprocess-renders `${paths.output_dir}/audio/sample_*/{pred.wav, target.wav, spec.png, params.csv}`; requires `cfg.render.{param_spec_name, preset_path}` and optional `cfg.render.plugin_path` |
-| `evaluation.compute_metrics` | `false` | Subprocess-computes `${paths.output_dir}/metrics/{metrics, aggregated_metrics}.csv` against the rendered pairs                                                                                   |
-| `evaluation.rerender_target` | `true`  | Forwards `-t` to `predict_vst_audio` so `target.wav` is re-synthesized from stored target params (comparable to the rendered `pred.wav`) instead of replayed from `target-audio-*.pt`            |
-| `evaluation.num_workers`     | `1`     | Forwarded as `-w` to `compute_audio_metrics`                                                                                                                                                     |
+| Key                             | Default | Effect when true                                                                                                                                                                                                         |
+| ------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `evaluation.render_vst`         | `false` | Subprocess-renders `${paths.output_dir}/audio/sample_*/{pred.wav, target.wav, spec.png, params.csv}`; requires `cfg.render.{param_spec_name, preset_path}` and optional `cfg.render.plugin_path`                         |
+| `evaluation.compute_metrics`    | `false` | Subprocess-computes `${paths.output_dir}/metrics/{metrics, aggregated_metrics}.csv` against the rendered pairs                                                                                                           |
+| `evaluation.rerender_target`    | `true`  | Forwards `-t` to `predict_vst_audio` so `target.wav` is re-synthesized from stored target params (comparable to the rendered `pred.wav`) instead of replayed from `target-audio-*.pt`                                    |
+| `evaluation.num_workers`        | `1`     | Forwarded as `-w` to `compute_audio_metrics`                                                                                                                                                                             |
+| `evaluation.shuffle_pred_audio` | `false` | In-process step (between render and metrics) that permutes `pred.wav` across `sample_*` dirs, gated on every dir's `params.csv` being identical; isolates render-order from parameter variation in the audio loss (#489) |
+| `evaluation.shuffle_seed`       | `0`     | Seed for the `shuffle_pred_audio` permutation; identical seeds reproduce it                                                                                                                                              |
 
 On Linux the render subprocess is prefixed with the headless wrapper materialised via `synth_setter.resources.vst_headless_wrapper()` so the VST3 plugin sees an Xvfb display before pedalboard imports it; the metrics subprocess is CPU-only and runs unwrapped. Both default-off so `mode: test` and `mode: validate` paths are unchanged.
 
