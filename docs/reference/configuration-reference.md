@@ -280,9 +280,9 @@ Gaps are configuration inputs that design docs specify or that standard practice
 
 | Input                                  | Type   | What's Needed                                                                                                  | Reference                           |
 | -------------------------------------- | ------ | -------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
-| `datamodule.dataset_root`              | string | Defaults to `${paths.output_dir}/data` (Hydra per-run dir); CLI/experiment override for fixed datasets         | training-pipeline.md §1             |
-| `datamodule.download_dataset_root_uri` | string | Optional `r2://` directory URI; `prepare_data()` no-clobber-copies it into `dataset_root` before training/eval | surge_datamodule.py §`prepare_data` |
-| `datamodule.stats_file`                | string | Hardcoded paths removed (now `???` in `nsynth.yaml`/`fsd.yaml`); replace with run-id-aware default still open  | training-pipeline.md §1             |
+| `datamodule.dataset_root`              | string            | Defaults to `${paths.output_dir}/data` (Hydra per-run dir); CLI/experiment override for fixed datasets         | training-pipeline.md §1             |
+| `datamodule.download_dataset_root_uri` | string \| null    | Optional `r2://` directory URI; `prepare_data()` no-clobber-copies it into `dataset_root` before training/eval | surge_datamodule.py §`prepare_data` |
+| `datamodule.stats_file`                | string            | Hardcoded paths removed (now `???` in `nsynth.yaml`/`fsd.yaml`); replace with run-id-aware default still open  | training-pipeline.md §1             |
 
 ### 5.4 Hardware & Compute
 
