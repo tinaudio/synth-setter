@@ -132,7 +132,7 @@ volumes at `/home/dev/.local/share/tmux/resurrect` and
 `/root/.local/share/tmux/resurrect` so tmux sessions saved by
 tmux-continuum (configured in `.devcontainer/tmux.conf`) survive container
 rebuilds for both `DEVCONTAINER_USER=dev` (the default) and opt-in
-`DEVCONTAINER_USER=root` sessions. The VS Code terminal now defaults to the
+`DEVCONTAINER_USER=root` sessions. The VS Code terminal defaults to the
 `zellij` profile (tmux stays selectable); the `synth-setter-zellij-cache` and
 `synth-setter-zellij-cache-root` named volumes at `/home/dev/.cache/zellij`
 and `/root/.cache/zellij` persist zellij's serialized (resurrectable) sessions
