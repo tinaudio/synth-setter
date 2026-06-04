@@ -20,7 +20,7 @@ from synth_setter.pipeline.ci.validate_shard import (
     check_shards_present,
 )
 from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME
-from synth_setter.pipeline.schemas.spec import DatasetSpec
+from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat
 from synth_setter.pipeline.spec_io import load_spec_from_uri
 
 # Output filenames, in the order ``main`` writes them.
@@ -101,10 +101,10 @@ def _load_spec(spec_uri: str | None, dataset_root: Path) -> DatasetSpec:
         # (a ValueError subclass) for malformed / stale specs both land here.
         raise click.ClickException(f"DatasetSpec at {resolved_uri} is invalid: {exc}") from exc
 
-    if spec.output_format != "hdf5":
+    if spec.output_format is not OutputFormat.HDF5:
         raise click.ClickException(
             f"reshard only supports output_format='hdf5'; spec at {resolved_uri} "
-            f"declares output_format={spec.output_format!r}."
+            f"declares output_format={spec.output_format.value!r}."
         )
     return spec
 

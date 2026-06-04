@@ -14,6 +14,7 @@ from __future__ import annotations
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
+from enum import Enum
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -38,10 +39,9 @@ if TYPE_CHECKING:
     from omegaconf import DictConfig
 
 __all__ = [
-    "EXTENSION_TO_OUTPUT_FORMAT",
-    "OUTPUT_FORMAT_TO_EXTENSION",
     "DatasetSpec",
     "DatasetSrcConfig",
+    "OutputFormat",
     "R2Location",
     "RenderConfig",
     "ShardSpec",
@@ -58,22 +58,58 @@ _LEGACY_FLAT_R2_KEYS: dict[str, str] = {
     "r2_prefix": "prefix",
 }
 
-# Source-of-truth mapping from ``output_format`` to shard filename suffix.
-# Adding a format means adding a row here; missing entries surface as KeyError
-# at construction rather than producing a silently-wrong filename.
-OUTPUT_FORMAT_TO_EXTENSION: dict[str, str] = {"hdf5": ".h5", "wds": ".tar"}
 
-# Reverse lookup for dispatching shard writers/validators by file suffix;
-# derived from the forward map so adding a format stays a one-place edit.
-# Two formats must never share an extension — a collision would silently drop
-# an entry from the dict-comprehension (last-key-wins) and route the wrong
-# format downstream, so guard at import time.
-EXTENSION_TO_OUTPUT_FORMAT: dict[str, str] = {v: k for k, v in OUTPUT_FORMAT_TO_EXTENSION.items()}
-if len(EXTENSION_TO_OUTPUT_FORMAT) != len(OUTPUT_FORMAT_TO_EXTENSION):
+class OutputFormat(str, Enum):
+    """Shard container format; the enum value is the on-disk / JSON token.
+
+    Subclasses ``str`` (rather than 3.11's ``StrEnum``, unavailable on the
+    ``>=3.10`` floor) so a value compares equal to and serializes as its plain
+    string token across the Hydra / R2-JSON boundary.
+
+    .. attribute :: HDF5
+
+        HDF5 container; shards are written as ``.h5`` files.
+
+    .. attribute :: WDS
+
+        WebDataset container; shards are written as ``.tar`` archives.
+    """
+
+    HDF5 = "hdf5"
+    WDS = "wds"
+
+    @property
+    def extension(self) -> str:
+        """Shard filename suffix for this format, leading dot included."""
+        return _OUTPUT_FORMAT_EXTENSIONS[self]
+
+    @classmethod
+    def from_extension(cls, suffix: str) -> OutputFormat | None:
+        """Return the format whose shards carry ``suffix``, dispatching by file type.
+
+        :param suffix: Filename suffix including the leading dot (e.g. ``.h5``).
+        :returns: Matching format, or ``None`` when ``suffix`` is unregistered.
+        """
+        return _OUTPUT_FORMAT_BY_EXTENSION.get(suffix)
+
+
+# Source-of-truth suffix per format (leading dot included). A missing row
+# surfaces as KeyError at ``.extension`` rather than a silently-wrong filename.
+_OUTPUT_FORMAT_EXTENSIONS: dict[OutputFormat, str] = {
+    OutputFormat.HDF5: ".h5",
+    OutputFormat.WDS: ".tar",
+}
+
+# Reverse map for suffix dispatch, derived from the forward map. The import
+# guard below rejects a shared suffix (last-key-wins would silently misroute).
+_OUTPUT_FORMAT_BY_EXTENSION: dict[str, OutputFormat] = {
+    ext: fmt for fmt, ext in _OUTPUT_FORMAT_EXTENSIONS.items()
+}
+if len(_OUTPUT_FORMAT_BY_EXTENSION) != len(_OUTPUT_FORMAT_EXTENSIONS):
     raise RuntimeError(
-        "Duplicate extensions in OUTPUT_FORMAT_TO_EXTENSION — "
+        "Duplicate extensions in _OUTPUT_FORMAT_EXTENSIONS — "
         "two output formats map to the same suffix: "
-        f"{OUTPUT_FORMAT_TO_EXTENSION!r}"
+        f"{_OUTPUT_FORMAT_EXTENSIONS!r}"
     )
 
 
@@ -563,10 +599,13 @@ class DatasetSpec(BaseModel):
             "config-id path segment of ``r2.prefix`` (``<root>/<task_name>/<run_id>/``)."
         )
     )
-    output_format: Literal["hdf5", "wds"] = Field(
+    # strict=False so Hydra-composed dicts and R2 JSON (raw string tokens) coerce
+    # into the enum; an unknown token still raises, matching the prior Literal.
+    output_format: OutputFormat = Field(
+        strict=False,
         description=(
             "Shard container format; ``hdf5`` writes ``.h5``, ``wds`` writes WebDataset ``.tar``."
-        )
+        ),
     )
     train_val_test_sizes: tuple[int, int, int] = Field(
         description=(
@@ -872,12 +911,12 @@ class DatasetSpec(BaseModel):
     @model_validator(mode="after")
     def _shard_filenames_match_output_format(self) -> DatasetSpec:
         """Defense-in-depth: every computed shard filename ends with the format's extension."""
-        expected_ext = OUTPUT_FORMAT_TO_EXTENSION[self.output_format]
+        expected_ext = self.output_format.extension
         for shard in self.shards:
             if not shard.filename.endswith(expected_ext):
                 raise ValueError(
                     f"shard {shard.shard_id} filename {shard.filename!r} does not match "
-                    f"output_format {self.output_format!r} (expected suffix {expected_ext!r})"
+                    f"output_format {self.output_format.value!r} (expected suffix {expected_ext!r})"
                 )
         return self
 
@@ -887,7 +926,7 @@ class DatasetSpec(BaseModel):
         """Shard identities derived from total sample counts and ``samples_per_shard``."""
         sps = self.render.samples_per_shard
         total_shards = sum(self.train_val_test_sizes) // sps
-        ext = OUTPUT_FORMAT_TO_EXTENSION[self.output_format]
+        ext = self.output_format.extension
         return tuple(
             ShardSpec(
                 shard_id=i,

@@ -842,7 +842,7 @@ No `check_tasks` method exists. Provider APIs answer the wrong question ("is the
 
 ### 7.10 Output Format: HDF5 vs WebDataset
 
-The pipeline supports two output formats, selected via `output_format` in the config and frozen in the spec. The format determines both what the worker emits and how training consumes the data — the renderer CLI dispatches on the shard's filename suffix (`.h5` → `make_hdf5_dataset`, `.tar` → `make_wds_dataset`) via `EXTENSION_TO_OUTPUT_FORMAT`.
+The pipeline supports two output formats, selected via `output_format` in the config and frozen in the spec. The format determines both what the worker emits and how training consumes the data — the renderer CLI dispatches on the shard's filename suffix (`.h5` → `make_hdf5_dataset`, `.tar` → `make_wds_dataset`) via `OutputFormat.from_extension`.
 
 **Why two formats:**
 
@@ -1419,7 +1419,7 @@ src/
 
     schemas/            # Pydantic models (implemented)
       __init__.py
-      spec.py           # DatasetSpec (unified config + runtime; built by its own from_hydra_cfg classmethod, called via spec_from_cfg in cli/generate_dataset.py), RenderConfig, ShardSpec; OUTPUT_FORMAT_TO_EXTENSION / EXTENSION_TO_OUTPUT_FORMAT inverse-pair dispatch maps (no consumer yet — shard writers/validators dispatch in PR-13)
+      spec.py           # DatasetSpec (unified config + runtime; built by its own from_hydra_cfg classmethod, called via spec_from_cfg in cli/generate_dataset.py), RenderConfig, ShardSpec; OutputFormat str-enum carrying format↔suffix dispatch (.extension property + .from_extension reverse lookup)
       shard_metadata.py # ShardMetadata — wds tar metadata.json sidecar (leaf module, no project imports)
       prefix.py         # DatasetConfigId, DatasetRunId, R2Prefix helpers
       image_config.py   # Docker image configuration

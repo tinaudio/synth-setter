@@ -1,30 +1,50 @@
-"""Tests for the forward/reverse output-format <-> extension maps in ``spec.py``."""
+"""Tests for ``OutputFormat`` — the shard-container enum and its extension dispatch."""
 
 from __future__ import annotations
 
-from synth_setter.pipeline.schemas.spec import (
-    EXTENSION_TO_OUTPUT_FORMAT,
-    OUTPUT_FORMAT_TO_EXTENSION,
-)
+import pytest
+
+from synth_setter.pipeline.schemas.spec import OutputFormat
 
 
-def test_extension_to_output_format_is_inverse_of_forward_map() -> None:
-    """``EXTENSION_TO_OUTPUT_FORMAT`` round-trips every entry in the forward map."""
-    for output_format, extension in OUTPUT_FORMAT_TO_EXTENSION.items():
-        assert EXTENSION_TO_OUTPUT_FORMAT[extension] == output_format
+def test_output_format_extension_hdf5_is_h5() -> None:
+    """``HDF5`` shards carry the ``.h5`` suffix."""
+    assert OutputFormat.HDF5.extension == ".h5"
 
 
-def test_extension_to_output_format_covers_h5_and_tar() -> None:
-    """The reverse map dispatches the two formats the pipeline writes today."""
-    assert EXTENSION_TO_OUTPUT_FORMAT[".h5"] == "hdf5"
-    assert EXTENSION_TO_OUTPUT_FORMAT[".tar"] == "wds"
+def test_output_format_extension_wds_is_tar() -> None:
+    """``WDS`` shards carry the WebDataset ``.tar`` suffix."""
+    assert OutputFormat.WDS.extension == ".tar"
 
 
-def test_reverse_map_has_no_silent_collisions() -> None:
-    """The reverse map never loses entries to last-key-wins collisions.
+def test_from_extension_h5_returns_hdf5() -> None:
+    """``.h5`` reverse-maps to the HDF5 format."""
+    assert OutputFormat.from_extension(".h5") is OutputFormat.HDF5
 
-    The forward map must use distinct extensions per format, so reversing it
-    preserves cardinality. This pins the invariant the import-time guard in
-    ``spec.py`` enforces.
+
+def test_from_extension_tar_returns_wds() -> None:
+    """``.tar`` reverse-maps to the WDS format."""
+    assert OutputFormat.from_extension(".tar") is OutputFormat.WDS
+
+
+def test_from_extension_unknown_suffix_returns_none() -> None:
+    """An unregistered suffix reverse-maps to ``None`` so callers raise their own error."""
+    assert OutputFormat.from_extension(".parquet") is None
+
+
+@pytest.mark.parametrize("fmt", list(OutputFormat))
+def test_extension_round_trips_through_from_extension(fmt: OutputFormat) -> None:
+    """Every format's ``.extension`` reverse-maps back to that same format.
+
+    Pins the no-collision invariant the import-time guard in ``spec.py``
+    enforces: if two formats shared a suffix, one would fail to round-trip.
+
+    :param fmt: The output format under test (swept over every enum member).
     """
-    assert len(EXTENSION_TO_OUTPUT_FORMAT) == len(OUTPUT_FORMAT_TO_EXTENSION)
+    assert OutputFormat.from_extension(fmt.extension) is fmt
+
+
+def test_value_is_the_lowercase_token() -> None:
+    """Enum values are the on-disk / JSON tokens used at the Hydra / R2 boundary."""
+    assert OutputFormat.HDF5 == "hdf5"
+    assert OutputFormat.WDS == "wds"

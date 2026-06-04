@@ -26,7 +26,7 @@ from synth_setter.data.vst.shapes import (
     param_array_dataset_shape,
 )
 from synth_setter.pipeline.schemas.spec import (
-    EXTENSION_TO_OUTPUT_FORMAT,
+    OutputFormat,
     RenderConfig,
 )
 
@@ -290,7 +290,7 @@ class _GenerateCliArgs(RenderConfig, BaseSettings):
     automatically — adding or removing a field on ``RenderConfig`` extends or
     shrinks the CLI surface without a parallel update here. Adds ``data_file``
     as the sole positional arg (the destination shard path; suffix selects
-    writer via ``EXTENSION_TO_OUTPUT_FORMAT``), and an optional
+    writer via ``OutputFormat.from_extension``), and an optional
     ``copy_dataset_root`` that triggers the param-copy path.
 
     .. attribute :: copy_dataset_root
@@ -315,7 +315,7 @@ def main() -> None:
     """Entry point — parse CLI args into a ``RenderConfig`` and render one shard.
 
     The writer is dispatched on ``data_file``'s suffix via
-    ``EXTENSION_TO_OUTPUT_FORMAT`` (``.h5`` → HDF5, ``.tar`` → wds). An unknown
+    ``OutputFormat.from_extension`` (``.h5`` → HDF5, ``.tar`` → wds). An unknown
     suffix raises ``SystemExit`` rather than silently producing a half-written
     file in the wrong format.
 
@@ -337,16 +337,17 @@ def main() -> None:
     render_cfg = RenderConfig(**args.model_dump(exclude={"data_file", "copy_dataset_root"}))
 
     suffix = Path(args.data_file).suffix
-    fmt = EXTENSION_TO_OUTPUT_FORMAT.get(suffix)
+    fmt = OutputFormat.from_extension(suffix)
     if fmt is None:
         raise SystemExit(
-            f"data_file must end in one of {sorted(EXTENSION_TO_OUTPUT_FORMAT)}, got {suffix!r}"
+            f"data_file must end in one of {sorted(f.extension for f in OutputFormat)}, "
+            f"got {suffix!r}"
         )
 
     fixed_synth_params_list = None
     fixed_note_params_list = None
     if args.copy_dataset_root is not None:
-        if fmt != "hdf5":
+        if fmt is not OutputFormat.HDF5:
             raise SystemExit(
                 "--copy_dataset_root supports hdf5 output only; the source params are "
                 f"read from a same-named HDF5 shard, but data_file suffix is {suffix!r}."
@@ -357,14 +358,14 @@ def main() -> None:
             source_shard, param_specs[render_cfg.param_spec_name]
         )
 
-    if fmt == "hdf5":
+    if fmt is OutputFormat.HDF5:
         make_hdf5_dataset(
             args.data_file,
             render_cfg,
             fixed_synth_params_list=fixed_synth_params_list,
             fixed_note_params_list=fixed_note_params_list,
         )
-    else:  # fmt == "wds", validated above
+    else:  # fmt is OutputFormat.WDS, validated above
         make_wds_dataset(
             args.data_file,
             render_cfg,

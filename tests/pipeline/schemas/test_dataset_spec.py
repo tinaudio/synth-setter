@@ -14,6 +14,7 @@ from synth_setter.data.vst import param_specs
 from synth_setter.pipeline.schemas.spec import (
     DatasetSpec,
     DatasetSrcConfig,
+    OutputFormat,
     RenderConfig,
     ShardSpec,
 )
@@ -469,11 +470,13 @@ class TestDatasetSpecValidators:
         with pytest.raises(ValidationError, match="must sum to a positive count"):
             DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[0, 0, 0]))
 
-    def test_invalid_output_format_literal_raises(self, patch_runtime_io: None) -> None:
-        """An output_format outside the supported Literal set is rejected.
+    def test_invalid_output_format_token_raises(self, patch_runtime_io: None) -> None:
+        """An output_format outside the ``OutputFormat`` enum is rejected.
 
-        ``parquet`` stays outside the Literal even as new formats (wds) join — pinning
+        ``parquet`` stays outside the enum even as new formats (wds) join — pinning
         the rejection here prevents a typo (``parquet`` vs. ``wds``) from sneaking in.
+
+        :param patch_runtime_io: Fixture stubbing git/clock runtime fields.
         """
         with pytest.raises(ValidationError):
             DatasetSpec(**_valid_spec_kwargs(output_format="parquet"))
@@ -482,6 +485,42 @@ class TestDatasetSpecValidators:
         """``output_format='wds'`` is accepted (unblocks the wds writer landing in PR-13)."""
         spec = DatasetSpec(**_valid_spec_kwargs(output_format="wds"))
         assert spec.output_format == "wds"
+
+    def test_string_token_coerces_into_output_format_enum(self, patch_runtime_io: None) -> None:
+        """The raw ``hdf5`` token from Hydra / R2 JSON becomes an ``OutputFormat`` member.
+
+        Pins that callers can reach ``.extension`` on a constructed spec rather than
+        re-deriving the suffix from a bare string.
+
+        :param patch_runtime_io: Fixture stubbing git/clock runtime fields.
+        """
+        spec = DatasetSpec(**_valid_spec_kwargs(output_format="hdf5"))
+        assert spec.output_format is OutputFormat.HDF5
+        assert spec.output_format.extension == ".h5"
+
+    def test_output_format_serializes_as_plain_token(self, patch_runtime_io: None) -> None:
+        """JSON serialization emits the bare token, not the enum repr (R2 / Hydra contract).
+
+        The reason ``OutputFormat`` subclasses ``str``: the materialized
+        ``input_spec.json`` on R2 must round-trip as ``"wds"``, not ``"OutputFormat.WDS"``.
+
+        :param patch_runtime_io: Fixture stubbing git/clock runtime fields.
+        """
+        spec = DatasetSpec(**_valid_spec_kwargs(output_format="wds"))
+        assert '"output_format":"wds"' in spec.model_dump_json()
+
+    def test_non_string_output_format_rejected_despite_non_strict_field(
+        self, patch_runtime_io: None
+    ) -> None:
+        """``Field(strict=False)`` still rejects a non-string scalar, not just unknown tokens.
+
+        The field opts out of strict mode only to coerce raw string tokens; an
+        ``int`` must not silently become a format.
+
+        :param patch_runtime_io: Fixture stubbing git/clock runtime fields.
+        """
+        with pytest.raises(ValidationError):
+            DatasetSpec(**_valid_spec_kwargs(output_format=1))
 
     def test_strict_mode_rejects_int_for_string_field(self, patch_runtime_io: None) -> None:
         """Strict mode rejects silent int→str coercion at the trust boundary."""

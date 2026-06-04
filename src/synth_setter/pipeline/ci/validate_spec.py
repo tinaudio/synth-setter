@@ -12,8 +12,8 @@ import sys
 from typing import Any
 
 from synth_setter.pipeline.schemas.spec import (
-    OUTPUT_FORMAT_TO_EXTENSION,
     DatasetSpec,
+    OutputFormat,
     RenderConfig,
 )
 from synth_setter.pipeline.spec_io import read_spec_text
@@ -25,6 +25,21 @@ _REQUIRED_TOP_LEVEL_FIELDS: tuple[str, ...] = tuple(
     sorted(set(DatasetSpec.model_fields) | set(DatasetSpec.model_computed_fields))
 )
 _REQUIRED_RENDER_FIELDS: tuple[str, ...] = tuple(sorted(RenderConfig.model_fields))
+
+
+def _parse_output_format(value: Any) -> OutputFormat | None:
+    """Coerce a raw spec-dict ``output_format`` value to ``OutputFormat``, or ``None``.
+
+    Validates the raw JSON value without constructing a ``DatasetSpec`` (these
+    checks run on the spec dict before model construction).
+
+    :param value: Raw ``output_format`` value from a spec dict.
+    :returns: The matching format, or ``None`` when ``value`` is not a known token.
+    """
+    try:
+        return OutputFormat(value)
+    except ValueError:
+        return None
 
 
 def validate_structure(spec: dict[str, Any]) -> list[str]:
@@ -52,10 +67,10 @@ def validate_structure(spec: dict[str, Any]) -> list[str]:
     if not (len(cv) == 40 and all(c in "0123456789abcdef" for c in cv)):
         errors.append(f"git_sha is not a valid 40-char hex SHA: {cv!r}")
 
-    if "output_format" in spec and spec["output_format"] not in OUTPUT_FORMAT_TO_EXTENSION:
+    raw_format = spec.get("output_format")
+    if raw_format is not None and _parse_output_format(raw_format) is None:
         errors.append(
-            f"output_format {spec['output_format']!r} is not one of "
-            f"{sorted(OUTPUT_FORMAT_TO_EXTENSION)}"
+            f"output_format {raw_format!r} is not one of {sorted(f.value for f in OutputFormat)}"
         )
 
     if not render.get("renderer_version"):
@@ -85,14 +100,15 @@ def validate_test_values(spec: dict[str, Any]) -> list[str]:
         errors.append(f"expected seeds [42, 43, 44], got {seeds}")
 
     filenames = [s["filename"] for s in shards]
-    output_format = spec.get("output_format", "hdf5")
-    ext = OUTPUT_FORMAT_TO_EXTENSION.get(output_format)
-    if ext is None:
+    raw_format = spec.get("output_format", OutputFormat.HDF5.value)
+    output_format = _parse_output_format(raw_format)
+    if output_format is None:
         errors.append(
-            f"cannot compute expected filenames: output_format {output_format!r} is not one of "
-            f"{sorted(OUTPUT_FORMAT_TO_EXTENSION)}"
+            f"cannot compute expected filenames: output_format {raw_format!r} is not one of "
+            f"{sorted(f.value for f in OutputFormat)}"
         )
     else:
+        ext = output_format.extension
         expected_filenames = [f"shard-{i:06d}{ext}" for i in range(3)]
         if filenames != expected_filenames:
             errors.append(f"expected filenames {expected_filenames}, got {filenames}")

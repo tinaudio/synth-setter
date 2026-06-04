@@ -14,7 +14,7 @@ from pydantic_settings import CliApp
 
 from synth_setter.cli.generate_dataset import build_generate_args
 from synth_setter.data.vst.generate_vst_dataset import _GenerateCliArgs
-from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
+from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat, RenderConfig
 
 
 def test_cli_args_class_inherits_every_render_config_field() -> None:
@@ -62,7 +62,7 @@ def _smoke_spec() -> DatasetSpec:
     )
     return DatasetSpec(
         task_name="ci-smoke-test",
-        output_format="hdf5",
+        output_format=OutputFormat.HDF5,
         train_val_test_sizes=(440000, 20000, 20000),
         base_seed=42,
         r2={"bucket": "intermediate-data"},  # type: ignore[arg-type]

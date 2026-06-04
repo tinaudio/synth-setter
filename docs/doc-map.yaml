@@ -99,11 +99,11 @@ docs:
       - pattern: "src/synth_setter/pipeline/schemas/r2_location.py"
         covers: "`R2Location` nested R2-storage model (bucket + prefix_root + prefix) plus `uri()` / `rclone_prefix()` / `shard_uri()` helpers — the single source of R2 URI construction"
       - pattern: "src/synth_setter/pipeline/schemas/spec.py"
-        covers: "DatasetSpec (carries a nested `R2Location` via the `r2` field), RenderConfig, ShardSpec; OUTPUT_FORMAT_TO_EXTENSION / EXTENSION_TO_OUTPUT_FORMAT inverse-pair dispatch maps (DatasetSpec is built from a Hydra-composed cfg by the `DatasetSpec.from_hydra_cfg` classmethod, which masks the cfg to `model_fields` before `resolve=True`; `cli/generate_dataset.spec_from_cfg` is a thin wrapper over it; the suffix-dispatch maps are consumed by the renderer CLI's main() in data/vst/generate_vst_dataset.py — main() reads Path(data_file).suffix, looks it up in EXTENSION_TO_OUTPUT_FORMAT, and calls writers.make_hdf5_dataset or writers.make_wds_dataset)"
+        covers: "DatasetSpec (carries a nested `R2Location` via the `r2` field), RenderConfig, ShardSpec; `OutputFormat` str-enum carrying the format↔suffix dispatch via its `.extension` property and `.from_extension()` reverse lookup (DatasetSpec is built from a Hydra-composed cfg by the `DatasetSpec.from_hydra_cfg` classmethod, which masks the cfg to `model_fields` before `resolve=True`; `cli/generate_dataset.spec_from_cfg` is a thin wrapper over it; the suffix dispatch is consumed by the renderer CLI's main() in data/vst/generate_vst_dataset.py — main() reads Path(data_file).suffix, resolves it via OutputFormat.from_extension, and calls writers.make_hdf5_dataset or writers.make_wds_dataset)"
       - pattern: "src/synth_setter/pipeline/schemas/shard_metadata.py"
         covers: "ShardMetadata — strict pydantic sidecar payload written into wds tar shards as metadata.json and into HDF5 shards as audio.attrs; mirrored across both formats by make_hdf5_dataset / make_wds_dataset in writers.py."
       - pattern: "src/synth_setter/data/vst/writers.py"
-        covers: "make_hdf5_dataset + make_wds_dataset entrypoints; per-batch sample-save helpers; ShardMetadata sidecar wiring; CLI suffix dispatch via EXTENSION_TO_OUTPUT_FORMAT."
+        covers: "make_hdf5_dataset + make_wds_dataset entrypoints; per-batch sample-save helpers; ShardMetadata sidecar wiring; CLI suffix dispatch via OutputFormat.from_extension."
       - pattern: "src/synth_setter/data/vst/shapes.py"
         covers: "Shared shape primitives consumed by writers + (planned) shard validator — DATASET_FIELD_NAMES, mel-front-end constants, audio_dataset_shape / mel_dataset_shape / param_array_dataset_shape."
 

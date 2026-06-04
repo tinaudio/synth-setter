@@ -155,7 +155,7 @@ def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -
     config field surfaces as a ``--<field>`` option automatically; adding a
     field on the model auto-extends the CLI invocation. The writer is dispatched
     on ``shard.filename``'s suffix inside the subprocess via
-    ``EXTENSION_TO_OUTPUT_FORMAT``. When ``spec.datasetsrc`` is set, the copy
+    ``OutputFormat.from_extension``. When ``spec.datasetsrc`` is set, the copy
     root is forwarded as ``--copy_dataset_root`` so the subprocess re-renders the
     same-named source shard's params instead of sampling fresh ones.
     """
