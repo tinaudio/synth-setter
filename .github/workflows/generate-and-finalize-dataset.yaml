@@ -6,9 +6,13 @@ name: Generate + Finalize Dataset (inline)
 # oracle_eval_inline=true and asserts the surge/fake_oracle invariant
 # (test/param_mse == 0) from both the run log and the metrics.json — proving
 # the parameter-array round-trip survived generate + finalize without a second
-# render. Mirrors finalize-dataset.yaml's bare-runner install (no docker, no
-# SkyPilot path); the experiment chosen at dispatch time decides which spec is
+# render. The experiment chosen at dispatch time decides which spec is
 # generated.
+#
+# Generation renders real audio with the Surge XT VST3, so the job runs the
+# dev-snapshot image (which bakes the plugin + headless X11 stack) under the
+# Xvfb wrapper — a bare ubuntu-latest runner has no plugin and fails at
+# extract_renderer_version (#1336). Mirrors nightly-parallel-datagen.yml.
 #
 # Required secrets (callers should `secrets: inherit`):
 #   RCLONE_CONFIG_R2_ACCESS_KEY_ID, RCLONE_CONFIG_R2_SECRET_ACCESS_KEY,
@@ -29,10 +33,15 @@ on:
         type: boolean
         default: false
       env_ref:
-        description: "Git ref / SHA to check out"
+        description: "Git ref / SHA to check out (mounted over the image's baked checkout)"
         required: false
         type: string
         default: ""
+      image_tag:
+        description: "Docker image tag (e.g. dev-snapshot, dev-snapshot-<sha>)"
+        required: false
+        type: string
+        default: dev-snapshot
   workflow_call:
     inputs:
       experiment:
@@ -45,6 +54,10 @@ on:
       env_ref:
         required: true
         type: string
+      image_tag:
+        required: false
+        type: string
+        default: dev-snapshot
 
 permissions:
   contents: read
@@ -55,6 +68,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
+      IMAGE: tinaudio/synth-setter:${{ inputs.image_tag || 'dev-snapshot' }}
       HYDRA_FULL_ERROR: "1"
     steps:
       - name: Checkout
@@ -62,78 +76,119 @@ jobs:
         with:
           ref: ${{ inputs.env_ref != '' && inputs.env_ref || github.sha }}
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.10"
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
-        with:
-          enable-cache: true
-
+      # rclone runs inside the container; the runner env only needs the
+      # RCLONE_CONFIG_R2_* values the `docker run -e <VAR>` lines forward.
       - name: Set up R2
         uses: ./.github/actions/setup-r2
         with:
           access-key-id: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
           secret-access-key: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
           endpoint: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
-          install-rclone: "true"
 
-      # `pipeline.data.reshard` transitively touches the torch-gated `data/`
-      # package — CPU torch is the minimum that resolves all imports.
-      - name: Install project deps (uv sync --frozen, CPU torch)
-        run: uv sync --frozen --extra cpu --no-default-groups --group dev
+      - name: Pull image
+        run: docker pull "$IMAGE"
 
+      # Fail fast if the plugin / image / mount layout is broken before the
+      # longer generate run — mirrors nightly-parallel-datagen.yml.
+      - name: Smoke-test Surge XT plugin load
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/home/build/synth-setter:ro" \
+            "$IMAGE" \
+            bash -c '
+              set -euo pipefail
+              cd /home/build/synth-setter
+              git config --global --add safe.directory /home/build/synth-setter
+              src/synth_setter/scripts/run-linux-vst-headless.sh \
+                python -X faulthandler -c "from synth_setter.data.vst.core import load_plugin; load_plugin(\"/usr/lib/vst3/Surge XT.vst3\")"
+            '
+
+      # ensure_plugin_symlinks.sh restores the Surge symlink the bind-mount shadows;
+      # hydra.run.dir is pinned under the workspace so the host reads metrics.json +
+      # the tee'd log. oracle_eval runs WANDB_MODE=offline for a hermetic resume=must
+      # — see tests/integration/test_generate_dataset_cli_wandb_e2e.py.
       - name: Run synth-setter-generate-dataset (finalize_inline)
         env:
           EXPERIMENT: ${{ inputs.experiment }}
           ORACLE_EVAL: ${{ inputs.oracle_eval }}
-          PROJECT_ROOT: ${{ github.workspace }}
         run: |
           set -euo pipefail
-          overrides=("experiment=generate_dataset/${EXPERIMENT}" "finalize_inline=true")
-          if [ "${ORACLE_EVAL}" = "true" ]; then
-            overrides+=("oracle_eval_inline=true")
-          fi
-          uv run synth-setter-generate-dataset "${overrides[@]}" \
+          docker run --rm \
+            -v "${{ github.workspace }}:/home/build/synth-setter" \
+            -e RCLONE_CONFIG_R2_TYPE \
+            -e RCLONE_CONFIG_R2_PROVIDER \
+            -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
+            -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
+            -e RCLONE_CONFIG_R2_ENDPOINT \
+            -e EXPERIMENT \
+            -e ORACLE_EVAL \
+            -e HYDRA_FULL_ERROR \
+            "$IMAGE" \
+            bash -c '
+              set -euo pipefail
+              cd /home/build/synth-setter
+              git config --global --add safe.directory /home/build/synth-setter
+              bash docker/ubuntu22_04/ensure_plugin_symlinks.sh
+              overrides=("experiment=generate_dataset/${EXPERIMENT}" "finalize_inline=true")
+              if [[ "${ORACLE_EVAL}" == "true" ]]; then
+                overrides+=("oracle_eval_inline=true")
+                export WANDB_MODE=offline
+              fi
+              src/synth_setter/scripts/run-linux-vst-headless.sh \
+                synth-setter-generate-dataset "${overrides[@]}" \
+                  "hydra.run.dir=/home/build/synth-setter/generate-run"
+            ' \
             2>&1 | tee generate-and-finalize.log
 
-      # Lightning's `trainer.test()` prints the final metrics table to stdout;
-      # parse it for `test/param_mse` and assert exactly zero — the load-bearing
-      # oracle invariant. Fails the workflow on any non-zero / missing value.
+      # Lightning's trainer.test() prints the final metrics table to stdout
+      # (tee'd to the host log above); parse it for test/param_mse and assert
+      # exactly zero — the load-bearing oracle invariant.
       - name: Assert oracle test/param_mse == 0.0 (log)
         if: ${{ inputs.oracle_eval }}
         run: |
           set -euo pipefail
-          uv run python -m synth_setter.evaluation.assert_oracle_invariant \
-            generate-and-finalize.log
+          docker run --rm \
+            -v "${{ github.workspace }}:/home/build/synth-setter:ro" \
+            "$IMAGE" \
+            bash -c '
+              set -euo pipefail
+              cd /home/build/synth-setter
+              python3 -m synth_setter.evaluation.assert_oracle_invariant \
+                generate-and-finalize.log
+            '
 
       # Independent structured cross-check: the inline eval writes metrics.json
-      # under `<paths.output_dir>/oracle_eval/<run_id>/metrics/` (a Hydra run
-      # dir, not directly under the workspace), so search the whole workspace
-      # for that `oracle_eval/*/metrics/metrics.json` tail, then assert the same
-      # invariant from a non-stdout source.
+      # under <hydra.run.dir>/oracle_eval/<run_id>/metrics/ (pinned to
+      # generate-run/ above). Emit a workspace-relative path so the docker assert
+      # and the host upload both resolve it.
       - name: Locate metrics.json
         id: locate_metrics
         if: ${{ inputs.oracle_eval }}
-        env:
-          PROJECT_ROOT: ${{ github.workspace }}
         run: |
           set -euo pipefail
-          metrics_path=$(find "${PROJECT_ROOT}" -type f -path '*/oracle_eval/*/metrics/metrics.json' | head -n1)
-          if [ -z "${metrics_path}" ]; then
-            echo "::error::no oracle_eval metrics.json under ${PROJECT_ROOT}"; exit 1
+          rel=$(cd "${{ github.workspace }}" && find generate-run -type f -path '*/oracle_eval/*/metrics/metrics.json' -print -quit)
+          if [[ -z "${rel}" ]]; then
+            echo "::error::no oracle_eval metrics.json under generate-run/"; exit 1
           fi
-          echo "path=${metrics_path}" >> "${GITHUB_OUTPUT}"
-          echo "Located metrics.json at ${metrics_path}"
+          echo "rel=${rel}" >> "${GITHUB_OUTPUT}"
+          echo "Located metrics.json at ${rel}"
 
       - name: Assert oracle test/param_mse == 0.0 (metrics.json)
         if: ${{ inputs.oracle_eval }}
+        env:
+          METRICS_REL: ${{ steps.locate_metrics.outputs.rel }}
         run: |
           set -euo pipefail
-          uv run python -m synth_setter.evaluation.assert_oracle_invariant \
-            --metrics-json "${{ steps.locate_metrics.outputs.path }}"
+          docker run --rm \
+            -v "${{ github.workspace }}:/home/build/synth-setter:ro" \
+            -e METRICS_REL \
+            "$IMAGE" \
+            bash -c '
+              set -euo pipefail
+              cd /home/build/synth-setter
+              python3 -m synth_setter.evaluation.assert_oracle_invariant \
+                --metrics-json "${METRICS_REL}"
+            '
 
       - name: Upload log
         if: always()
@@ -145,10 +200,10 @@ jobs:
           retention-days: 7
 
       - name: Upload metrics.json
-        if: always() && steps.locate_metrics.outputs.path != ''
+        if: always() && steps.locate_metrics.outputs.rel != ''
         uses: actions/upload-artifact@v4
         with:
           name: generate-and-finalize-metrics-${{ inputs.experiment }}
-          path: ${{ steps.locate_metrics.outputs.path }}
+          path: ${{ steps.locate_metrics.outputs.rel }}
           if-no-files-found: error
           retention-days: 7
