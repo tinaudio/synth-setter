@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import uuid
 
+import h5py
+import numpy as np
 import pytest
 from omegaconf import DictConfig, open_dict
 
@@ -72,5 +74,49 @@ def test_generate_dataset_renders_shards_to_r2(
         for shard in spec.shards:
             size = r2_io.object_size(spec.r2.shard_uri(shard))
             assert size is not None and size > 0, f"shard missing in R2: {shard.filename}"
+    finally:
+        r2_io.purge_prefix(spec.r2.bucket, spec.r2.prefix)
+
+
+@pytest.mark.integration_r2
+@pytest.mark.r2
+@pytest.mark.requires_vst
+@pytest.mark.slow
+def test_generate_dataset_shard_cadence_renders_one_identical_patch_per_shard(
+    cfg_dataset: DictConfig,
+) -> None:
+    """``render.param_sample_cadence="shard"`` makes every sample in a shard share one patch.
+
+    Drives the real ``generate_dataset`` entrypoint (``from_hydra``) end-to-end
+    under shard cadence, then downloads each shard and asserts its ``param_array``
+    rows are all identical — the one-patch-per-shard invariant the #489 variance
+    probe relies on. Auto-skips without R2; purges the unique prefix in
+    ``finally`` so a failure can't leak shards.
+
+    :param cfg_dataset: Hydra DictConfig composed with the
+        ``generate_dataset/smoke-shard`` experiment.
+    """
+    if not r2_io.is_r2_reachable():
+        pytest.skip("R2 not reachable (rclone not on PATH or `rclone lsd r2:` failed)")
+
+    unique_prefix = f"test-runs/test_generate_dataset_shard_cadence/{uuid.uuid4().hex[:12]}/"
+    with open_dict(cfg_dataset):
+        cfg_dataset.r2.prefix = unique_prefix
+        cfg_dataset.render.param_sample_cadence = "shard"
+
+    spec = spec_from_cfg(cfg_dataset)
+    assert spec.render.param_sample_cadence == "shard"
+    try:
+        from_hydra(cfg_dataset)
+        for shard in spec.shards:
+            with r2_io.downloaded_to_tempfile(spec.r2.shard_uri(shard)) as local:
+                with h5py.File(local, "r") as f:
+                    param_dataset = f["param_array"]
+                    assert isinstance(param_dataset, h5py.Dataset)
+                    params = param_dataset[:]
+            assert params.shape[0] == spec.render.samples_per_shard
+            assert np.array_equal(params, np.broadcast_to(params[0], params.shape)), (
+                f"shard {shard.filename} has non-identical param rows under shard cadence"
+            )
     finally:
         r2_io.purge_prefix(spec.r2.bucket, spec.r2.prefix)

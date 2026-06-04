@@ -1224,6 +1224,10 @@ class RenderConfig(BaseModel):
     gui_toggle_cadence: Literal["never", "once", "render", "always_on"] = Field(
         default_factory=_default_gui_toggle_cadence
     )
+    # "shard" reuses one patch for every sample in the shard (a #489 per-patch
+    # variance probe; a partial shard re-renders from row 0 rather than resuming).
+    # Source of truth: _ParamSampleCadence / RenderConfig in pipeline/schemas/spec.py.
+    param_sample_cadence: Literal["sample", "shard"] = "sample"
 
 class DatasetSpec(BaseModel):
     """Unified dataset specification — input config + materialized runtime in one model."""

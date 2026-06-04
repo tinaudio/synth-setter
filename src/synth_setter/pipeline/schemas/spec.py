@@ -136,6 +136,7 @@ def _current_platform() -> str:
 
 _GuiToggleCadence = Literal["never", "once", "render", "always_on"]
 _PluginReloadCadence = Literal["once", "render"]
+_ParamSampleCadence = Literal["sample", "shard"]
 
 
 def _default_gui_toggle_cadence() -> _GuiToggleCadence:
@@ -249,6 +250,17 @@ class RenderConfig(BaseModel):
             '``"always_on"`` is permitted on Darwin because it opens the editor '
             "once per shard, not cumulatively. The default factory yields "
             '``"never"`` on Darwin.'
+        ),
+    )
+    param_sample_cadence: _ParamSampleCadence = Field(
+        default="sample",
+        description=(
+            'Per-shard parameter draw policy: ``"sample"`` (default, historical) '
+            'draws a fresh patch for every sample; ``"shard"`` draws one patch (the '
+            "first sample, via the normal loudness-gated path) and reuses it for the "
+            "rest of the shard — one identical patch per shard, a probe for the "
+            "per-patch render variance tracked in #489. The patch is drawn fresh each "
+            "run (no seeding), so shard cadence is not reproducible across runs."
         ),
     )
 
