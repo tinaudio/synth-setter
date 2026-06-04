@@ -140,42 +140,39 @@ def save_wds_samples(
 def _validate_fixed_params_lengths(
     *,
     num_samples: int,
-    start_idx: int,
     fixed_synth_params_list: list[dict[str, float]] | None,
     fixed_note_params_list: list[dict[str, int | tuple[float, float]]] | None,
 ) -> None:
-    """Raise ``ValueError`` unless each fixed-params list exactly matches the tail length.
+    """Raise ``ValueError`` unless each fixed-params list spans the whole shard.
 
-    The writer indexes fixed params by ``i - start_idx`` (see
-    ``_generate_sample_for_index``), so on a resumed run with ``start_idx > 0``
-    each list must hold only the rows still to render — passing a shard-length
-    list would silently shift indices (row ``start_idx`` would use ``list[0]``).
-    We require exact equality (not ``>=``) so that mismatch is caught here
-    instead of silently truncated.
+    Fixed params are indexed by absolute row ``i`` (see
+    ``_generate_sample_for_index``), so each list holds one entry per shard row —
+    ``num_samples`` entries — even on a resumed run that only re-renders the tail
+    (the already-written rows keep their list slots). We require exact equality
+    (not ``>=``) so a mismatched source — e.g. a dataset copy whose shard row
+    count differs from ``samples_per_shard`` — is caught here instead of silently
+    truncated.
 
-    :param num_samples: Total number of samples this shard will hold.
-    :param start_idx: First row index this run will write (non-zero on a resume).
-    :param fixed_synth_params_list: Optional pre-set synth params, one dict per row to render.
-    :param fixed_note_params_list: Optional pre-set note params, one dict per row to render.
-    :raises ValueError: If either list's length is not exactly ``num_samples - start_idx``.
+    :param num_samples: Number of samples this shard holds (``samples_per_shard``).
+    :param fixed_synth_params_list: Optional pre-set synth params, one dict per shard row.
+    :param fixed_note_params_list: Optional pre-set note params, one dict per shard row.
+    :raises ValueError: If either list's length is not exactly ``num_samples``.
     """
-    expected_fixed_len = num_samples - start_idx
     for name, lst in [
         ("fixed_synth_params_list", fixed_synth_params_list),
         ("fixed_note_params_list", fixed_note_params_list),
     ]:
-        if lst is not None and len(lst) != expected_fixed_len:
+        if lst is not None and len(lst) != num_samples:
             raise ValueError(
                 f"{name} has length {len(lst)}, expected exactly "
-                f"num_samples - start_idx = {expected_fixed_len} "
-                f"(num_samples={num_samples}, start_idx={start_idx}); "
-                "on a resumed run pass only the rows still to render, not the full shard"
+                f"num_samples = {num_samples} (one entry per shard row); "
+                "for a dataset copy, the source shard's row count must equal "
+                "samples_per_shard"
             )
 
 
 def _generate_sample_for_index(
     i: int,
-    start_idx: int,
     *,
     plugin_path: str,
     preset_path: str,
@@ -190,10 +187,13 @@ def _generate_sample_for_index(
     plugin: VST3Plugin | None = None,
     warmup: bool = False,
 ) -> VSTDataSample:
-    """Render the ``i``-th sample, picking up the ``(i - start_idx)``-th fixed-params entry.
+    """Render the ``i``-th sample, picking up the ``i``-th fixed-params entry.
 
-    :param i: Absolute row index this call is rendering.
-    :param start_idx: Row index of the first sample in this run (offset for resume).
+    Fixed params are indexed by absolute row ``i`` so a resumed run (which only
+    re-renders rows ``[start_idx, num_samples)``) still reads the source row that
+    matches each output row.
+
+    :param i: Absolute row index this call is rendering, and the fixed-params index.
     :param plugin_path: Path to the VST3 bundle to load (ignored when ``plugin`` is supplied).
     :param preset_path: Path to the ``.vstpreset`` to apply (ignored when ``plugin`` is supplied).
     :param velocity: MIDI velocity in ``[0, 127]``.
@@ -202,14 +202,13 @@ def _generate_sample_for_index(
     :param channels: Number of audio channels rendered.
     :param min_loudness: Loudness gate threshold in LUFS.
     :param param_spec: Parameter spec used to sample/encode parameters.
-    :param fixed_synth_params_list: Optional pre-set synth params, indexed by ``i - start_idx``.
-    :param fixed_note_params_list: Optional pre-set note params, indexed by ``i - start_idx``.
+    :param fixed_synth_params_list: Optional pre-set synth params, indexed by ``i``.
+    :param fixed_note_params_list: Optional pre-set note params, indexed by ``i``.
     :param plugin: Optional pre-loaded plugin reused across the shard's renders.
     :param warmup: Run ``warmup_plugin`` on the plugin used for this render.
     :returns: The freshly rendered sample.
     :rtype: VSTDataSample
     """
-    fixed_idx = i - start_idx
     return generate_sample(
         plugin_path,
         velocity=velocity,
@@ -220,10 +219,10 @@ def _generate_sample_for_index(
         param_spec=param_spec,
         preset_path=preset_path,
         fixed_synth_params=(
-            fixed_synth_params_list[fixed_idx] if fixed_synth_params_list is not None else None
+            fixed_synth_params_list[i] if fixed_synth_params_list is not None else None
         ),
         fixed_note_params=(
-            fixed_note_params_list[fixed_idx] if fixed_note_params_list is not None else None
+            fixed_note_params_list[i] if fixed_note_params_list is not None else None
         ),
         plugin=plugin,
         warmup=warmup,
@@ -249,8 +248,8 @@ def _render_in_batches(
     :param render_cfg: Per-shard renderer config from the dataset spec.
     :param param_spec: Resolved parameter spec for the render.
     :param start_idx: First absolute row index this run renders (non-zero on resume).
-    :param fixed_synth_params_list: Optional pre-set synth params, indexed in write order.
-    :param fixed_note_params_list: Optional pre-set note params, indexed in write order.
+    :param fixed_synth_params_list: Optional pre-set synth params, indexed by absolute row.
+    :param fixed_note_params_list: Optional pre-set note params, indexed by absolute row.
     :param flush_batch: Called with ``(batch, batch_start_idx)`` to persist each batch.
     :raises RuntimeError: ``gui_toggle_cadence="always_on"`` reaches the
         renderer without ``plugin_reload_cadence="once"`` (validator regression).
@@ -275,7 +274,6 @@ def _render_in_batches(
             sample_batch.append(
                 _generate_sample_for_index(
                     i,
-                    start_idx,
                     plugin_path=render_cfg.plugin_path,
                     preset_path=render_cfg.preset_path,
                     velocity=render_cfg.velocity,
@@ -357,16 +355,23 @@ def make_hdf5_dataset(
     :param hdf5_file: Destination HDF5 path; opened in append mode so partial
         files can resume.
     :param render_cfg: Per-shard renderer config from the dataset spec.
-    :param fixed_synth_params_list: Optional pre-set synth params for the rows
-        this run will render. Must have length ``samples_per_shard - start_idx``;
-        on a fresh run that's the full shard, on a resumed run that's only the
-        tail still to render (``list[0]`` lands at row ``start_idx``). Caller
-        is responsible for slicing a full-length list before passing it in.
-    :param fixed_note_params_list: Optional pre-set note params; same
-        tail-aligned contract as ``fixed_synth_params_list``.
+    :param fixed_synth_params_list: Optional pre-set synth params, one dict per
+        shard row. Must have length ``samples_per_shard`` (the full shard); rows
+        are indexed absolutely, so a resumed run re-renders only its tail while
+        still reading the matching source row.
+    :param fixed_note_params_list: Optional pre-set note params; same full-shard
+        contract as ``fixed_synth_params_list``.
     """
     param_spec = param_specs[render_cfg.param_spec_name]
     meta = _shard_metadata_from_render(render_cfg)
+    # Validate before opening the file so a bad fixed-params list (e.g. a copy
+    # source whose row count != samples_per_shard) fails without leaving an
+    # empty output shard on disk.
+    _validate_fixed_params_lengths(
+        num_samples=render_cfg.samples_per_shard,
+        fixed_synth_params_list=fixed_synth_params_list,
+        fixed_note_params_list=fixed_note_params_list,
+    )
     with h5py.File(hdf5_file, "a") as h5:
         audio_dataset, mel_dataset, param_dataset, start_idx = create_datasets_and_get_start_idx(
             hdf5_file=h5,
@@ -375,13 +380,6 @@ def make_hdf5_dataset(
             sample_rate=render_cfg.sample_rate,
             signal_duration_seconds=render_cfg.signal_duration_seconds,
             num_params=len(param_spec),
-        )
-
-        _validate_fixed_params_lengths(
-            num_samples=render_cfg.samples_per_shard,
-            start_idx=start_idx,
-            fixed_synth_params_list=fixed_synth_params_list,
-            fixed_note_params_list=fixed_note_params_list,
         )
 
         for k, v in meta.model_dump().items():
@@ -419,18 +417,16 @@ def make_wds_dataset(
     :param wds_file: Destination tar path passed to ``webdataset.TarWriter``.
     :param render_cfg: Per-shard renderer config from the dataset spec.
     :param fixed_synth_params_list: Optional pre-set synth params, one dict per
-        row this run will render. Must have length ``samples_per_shard``: the
-        wds path is non-resumable (``start_idx = 0``), so the tail is the
-        whole shard. ``list[0]`` lands at row 0.
-    :param fixed_note_params_list: Optional pre-set note params; same contract
-        as ``fixed_synth_params_list``.
+        shard row. Must have length ``samples_per_shard``; ``list[0]`` lands at
+        row 0 (the wds path is non-resumable, ``start_idx = 0``).
+    :param fixed_note_params_list: Optional pre-set note params; same full-shard
+        contract as ``fixed_synth_params_list``.
     """
     param_spec = param_specs[render_cfg.param_spec_name]
     meta = _shard_metadata_from_render(render_cfg)
     start_idx = 0
     _validate_fixed_params_lengths(
         num_samples=render_cfg.samples_per_shard,
-        start_idx=start_idx,
         fixed_synth_params_list=fixed_synth_params_list,
         fixed_note_params_list=fixed_note_params_list,
     )

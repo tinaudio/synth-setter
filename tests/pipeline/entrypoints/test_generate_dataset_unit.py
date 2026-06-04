@@ -1178,6 +1178,29 @@ class TestBuildGenerateArgs:
 
         assert args[1] == "src/synth_setter/data/vst/generate_vst_dataset.py"
 
+    def test_copy_dataset_root_absent_when_datasetsrc_unset(self, spec: DatasetSpec) -> None:
+        """No ``--copy_dataset_root`` flag is emitted when the spec has no copy source.
+
+        :param spec: Single-shard spec fixture with no ``datasetsrc``.
+        """
+        args = build_generate_args(spec, spec.shards[0], Path("out"))
+
+        assert "--copy_dataset_root" not in args
+
+    def test_copy_dataset_root_forwarded_when_datasetsrc_set(self, tmp_path: Path) -> None:
+        """``datasetsrc.copy_dataset_root`` is forwarded as a ``--copy_dataset_root`` flag.
+
+        :param tmp_path: Pytest temp dir pinning the spec's plugin/output paths.
+        """
+        spec = DatasetSpec(
+            **_base_spec_kwargs(tmp_path, datasetsrc={"copy_dataset_root": "/data/source"})  # type: ignore[arg-type]
+        )
+
+        args = build_generate_args(spec, spec.shards[0], Path("out"))
+
+        flag_idx = args.index("--copy_dataset_root")
+        assert args[flag_idx + 1] == "/data/source"
+
 
 # ---------------------------------------------------------------------------
 # spec_from_cfg — Hydra-composed cfg → DatasetSpec

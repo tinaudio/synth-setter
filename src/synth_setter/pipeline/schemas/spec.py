@@ -41,6 +41,7 @@ __all__ = [
     "EXTENSION_TO_OUTPUT_FORMAT",
     "OUTPUT_FORMAT_TO_EXTENSION",
     "DatasetSpec",
+    "DatasetSrcConfig",
     "R2Location",
     "RenderConfig",
     "ShardSpec",
@@ -164,6 +165,48 @@ class ShardSpec(BaseModel):
         )
     )
     seed: int = Field(description="Per-shard RNG seed, derived as ``base_seed + shard_id``.")
+
+
+class DatasetSrcConfig(BaseModel):
+    """Source for a dataset-copy run, nested as ``DatasetSpec.datasetsrc``.
+
+    When set, each output shard decodes the same-named source shard's
+    ``param_array`` into fixed synth/note params and re-renders them instead of
+    sampling fresh. The source must be a complete hdf5 shard set sharing the
+    target's ``render.param_spec_name`` (same encoding width). Re-renders apply
+    the *target's* ``min_loudness`` to fixed (non-resampled) synth params, so a
+    copied patch landing below it raises — set a low ``min_loudness`` when the
+    target render settings differ from the source's (#724).
+
+    .. attribute :: model_config
+
+        Pydantic model config sentinel — strict/frozen/extra-forbid trust boundary.
+
+    .. attribute :: copy_dataset_root
+
+        Directory of source shards whose params are copied per output shard.
+    """
+
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
+
+    copy_dataset_root: str = Field(
+        description=(
+            "Directory holding the source shards to copy params from; each output "
+            "shard reads ``<copy_dataset_root>/<shard.filename>`` (a worker-local "
+            "filesystem path — R2 sources must be synced locally first)."
+        )
+    )
+
+    @model_validator(mode="after")
+    def _copy_dataset_root_must_not_be_blank(self) -> DatasetSrcConfig:
+        """Reject a blank ``copy_dataset_root`` so the per-shard source path is never empty.
+
+        :returns: ``self`` unchanged when ``copy_dataset_root`` is non-blank.
+        :raises ValueError: ``copy_dataset_root`` is empty or whitespace-only.
+        """
+        if not self.copy_dataset_root.strip():
+            raise ValueError("copy_dataset_root must not be blank")
+        return self
 
 
 class RenderConfig(BaseModel):
@@ -481,6 +524,10 @@ class DatasetSpec(BaseModel):
 
         Nested ``RenderConfig`` carrying every per-shard renderer input.
 
+    .. attribute :: datasetsrc
+
+        Optional ``DatasetSrcConfig`` copy source; ``None`` samples fresh params.
+
     .. attribute :: mask_degenerate_bins
 
         Whether finalize substitutes ``std=1.0`` at zero-variance mel bins
@@ -541,6 +588,15 @@ class DatasetSpec(BaseModel):
 
     render: RenderConfig = Field(
         description="Nested ``RenderConfig`` carrying every per-shard renderer input."
+    )
+
+    datasetsrc: DatasetSrcConfig | None = Field(
+        default=None,
+        description=(
+            "Optional dataset-copy source; when set, each shard re-renders the params "
+            "of the same-named shard under ``datasetsrc.copy_dataset_root`` instead of "
+            "sampling fresh ones. ``None`` (the default) samples fresh params."
+        ),
     )
 
     mask_degenerate_bins: bool = Field(
