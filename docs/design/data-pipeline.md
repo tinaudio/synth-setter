@@ -855,7 +855,7 @@ HDF5 is random-access oriented. Multi-GPU DataLoaders need to stream shards sequ
 
 **HDF5 is resumable; WDS is not:**
 
-`make_hdf5_dataset` is resumable — a partially-written file picks up at the first all-zero row, so a crashed worker can re-run with the same render config and only the missing tail is regenerated. `make_wds_dataset` is not resumable today (the tar writer overwrites the destination on open); a crashed wds worker re-renders the whole shard. The staging/canonical split is unaffected by output format.
+`make_hdf5_dataset` is resumable — a partially-written file picks up at the first all-zero row, so a crashed worker can re-run with the same render config and only the missing tail is regenerated, except under `render.param_sample_cadence="shard"`, where a partially-written shard is re-rendered from row 0 (a mid-shard resume can't preserve the one-patch-per-shard invariant). `make_wds_dataset` is not resumable today (the tar writer overwrites the destination on open); a crashed wds worker re-renders the whole shard. The staging/canonical split is unaffected by output format.
 
 **WebDataset shard structure:**
 
