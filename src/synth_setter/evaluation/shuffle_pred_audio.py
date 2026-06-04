@@ -77,7 +77,8 @@ def shuffle_pred_audio(audio_dir: Path, seed: int) -> list[int]:  # noqa: DOC502
     returned and no file is touched. Otherwise the params gate runs before any
     write, so a rejection leaves the tree untouched. The permutation is applied
     from per-dir ``.shuffle-src`` snapshots, so the unshuffled baseline survives a
-    crash and the next run restores each ``pred.wav`` from its snapshot first.
+    crash: when a full snapshot set is present the next run restores each
+    ``pred.wav`` from its snapshot first, while a partial set raises (see below).
 
     :param audio_dir: ``audio/`` dir of ``sample_*`` subdirs, each with a
         ``pred.wav`` and a ``params.csv``.
