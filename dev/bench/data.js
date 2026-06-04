@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780520762529,
+  "lastUpdate": 1780535586056,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -5370,6 +5370,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.0539247989654541,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "fa9f9040d68241eb324c1aa0977965c233c2c263",
+          "message": "deps: split heavy runtime into PEP 735 dependency-groups\n\n* chore(ci-automation): split heavy runtime into PEP 735 groups so lite CI drops --no-deps\n\nLightweight CI jobs (validate_spec, r2_io.ensure_r2_env_loaded,\nload_image_config) need synth_setter importable without the full torch/skypilot/\nlibrosa/h5py runtime. Because that runtime lived in [project.dependencies],\nthose jobs used a fragile `pip install --no-deps -e .` + hand-picked dep list\nthat broke silently whenever a new top-level import landed (#1120 dotenv, #1390\nomegaconf).\n\nMove the heavy runtime out of [project.dependencies] into PEP 735\n[dependency-groups] (torch/config/compute/data/audio/metrics/util), trim the\nbase to the union lite closure (pydantic + python-dotenv + pyyaml), aggregate\nthe heavy groups under a `runtime` meta-group folded into `dev`, and set\ndefault-groups = [\"dev\"]. pip/uv pip never install PEP 735 groups, so a bare\n`pip install -e .` yields project + the light base only, while a bare `uv sync`\n(⊇ dev ⊇ runtime) still installs everything — local onboarding and the ~15\nfull-install sites are unchanged.\n\nLite CI sites drop --no-deps and the hand-picked list for `pip install -e .`\nplus an import smoke-guard; full-install extras callsites repoint from\n.[torch,dev] to `uv pip install --group dev -e .`. The cpu/cu128 backend extras\nand their [tool.uv.sources] routing are preserved. A tests/infra drift guard\npins [project.dependencies] to the lite closure.\n\nCloses #1139\n\n* chore(ci-automation): address pre-PR review on the dependency-group split\n\n- Repoint the design-doc references (pyproject, drift-test docstring) to the\n  in-repo docs/reference/dependency-management.md so the PR is self-contained\n  (the design doc lives in a separate PR).\n- Trim the duplicated \"pip ignores PEP 735 groups\" rationale that repeated\n  across pyproject.toml and environment.yaml; drop speculative wording.\n- Fix the stale environment.yaml comment that pointed torch lock-step at\n  [project.dependencies] instead of [dependency-groups].torch.\n- Document all params in the drift-test docstrings (pydoclint DOC103) and\n  PEP 503-normalize requirement names so equivalent spellings compare equal.\n\nRefs #1139\n\n* chore(ci-automation): fix D401 imperative mood in drift-test docstring\n\nRefs #1139\n\n* fix(ci-automation): install runtime group in package-smoke after wheel install\n\nThe wheel install with the `[torch]` extra no longer pulls the full deps: the\nheavy runtime (incl. hydra) moved from [project.dependencies] into PEP 735\ngroups (#1139), which wheel metadata can't express. Install the bare wheel,\nthen `uv pip install --group runtime` to add the runtime from the checked-out\npyproject so the canonical Hydra-compose smoke step finds hydra.\n\nRefs #1139\n\n* chore(ci-automation): address Copilot review on lite dependency-group split\n\nGate the docs-build test on both mkdocs and griffe-pydantic so a partial\ndocs group install skips cleanly instead of failing mid-build, and add the\nnormalized POT name to the drift guard's heavy-dep leak list.\n\nRefs #1139\n\n* chore(ci-automation): address second Copilot pass — comment accuracy\n\n- test_docs_build skip reason: recommend `uv pip install --group dev -e .`\n  (dev ⊇ docs + runtime) since tests/conftest.py imports the heavy runtime, so\n  installing only the docs group would error rather than skip cleanly.\n- sync_worker_checkout.sh: state the real torch-from-PyPI reason (neither the\n  cpu nor cu128 extra that [tool.uv.sources] keys routing on is active) instead\n  of attributing it to uv pip ignoring [tool.uv.sources].\n- pyproject [tool.uv]: clarify pip never installs PEP 735 groups and uv pip only\n  with an explicit --group, so a plain `pip install -e .` keeps lite CI light.\n\nRefs #1139\n\n* chore(ci-automation): fix remaining torch-routing / group-install comment phrasings\n\nCopilot's second pass flagged the same two imprecise phrasings in files the\nearlier fix missed:\n- \"uv pip ignores [tool.uv.sources]\" → state the real condition (no cpu/cu128\n  extra active; markers don't match on macOS) in package-smoke.yml,\n  test-dataset-finalization.yml, deflake-mps.yml.\n- \"pip/uv pip ignore groups\" → pip never installs PEP 735 groups; uv pip only\n  with explicit --group, in pyproject.toml and dependency-management.md.\n\nRefs #1139\n\n* chore(ci-automation): correct last two \"groups never install\" comment phrasings\n\n- drift-test docstring: PEP 735 groups are what a plain `pip install -e .` does\n  not pull in (don't claim uv pip never installs them).\n- docker-build-validation.yml: groups install only when explicitly requested\n  via --group; this `uv pip install -e .` passes none, so the heavy runtime\n  stays out. Removes the line-break ambiguity that read as \"uv pip never\n  installs groups\".\n\nRefs #1139\n\n* chore(ci-automation): drop redundant pip install uv in test-conda\n\nenvironment.yaml's pip section already installs uv into the micromamba env, so\nthe separate `pip install uv` step was redundant and risked changing the uv\nversion. Run `uv pip install --group dev -e .` directly.\n\nRefs #1139",
+          "timestamp": "2026-06-03T20:39:45-04:00",
+          "tree_id": "f19614f65e86cfbd5c198ff59eabd886106c9f66",
+          "url": "https://github.com/tinaudio/synth-setter/commit/fa9f9040d68241eb324c1aa0977965c233c2c263"
+        },
+        "date": 1780535584891,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 2.800585985183716,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 4.564840124305338,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.0177583210170269,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.012330830097198486,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 2.9370062351226807,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 14.951155965750004,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 3.87786865234375,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.753405329994857,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.02256646566092968,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.02179586887359619,
             "unit": "1-cos"
           },
           {
