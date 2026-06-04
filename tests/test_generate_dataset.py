@@ -128,7 +128,14 @@ def test_main_skips_schema_invalid_cadence_cell_without_failing(
             f"hydra.run.dir={tmp_path}",
         ],
         cwd=_REPO_ROOT,
-        env={**os.environ, "PROJECT_ROOT": str(_REPO_ROOT), "WANDB_MODE": "disabled"},
+        # Prepend this worktree's src so the subprocess imports the same
+        # synth_setter / configs as the collected test, not a sibling editable install.
+        env={
+            **os.environ,
+            "PROJECT_ROOT": str(_REPO_ROOT),
+            "PYTHONPATH": f"{_REPO_ROOT / 'src'}:{os.environ.get('PYTHONPATH', '')}",
+            "WANDB_MODE": "disabled",
+        },
         capture_output=True,
         text=True,
         timeout=300,

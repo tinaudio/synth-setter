@@ -1692,10 +1692,13 @@ class TestMainDispatchBranches:
         oracle_mock.assert_called_once()
         dataset_root, run_dir, _run_id = oracle_mock.call_args[0]
         assert isinstance(dataset_root, Path)
-        # The generation render spec + preset flow through (keyword-only) so the
-        # eval re-renders predictions through the same spec; smoke-shard is surge_simple.
+        # The generation render's spec / preset / plugin flow through (keyword-only)
+        # so the eval re-renders through the same spec; smoke-shard is surge_simple.
         assert oracle_mock.call_args.kwargs["param_spec_name"] == "surge_simple"
         assert oracle_mock.call_args.kwargs["preset_path"] == "presets/surge-simple.vstpreset"
+        # plugin_path is the TEST_PLUGIN_VST3 this test overrode at generation —
+        # proving a non-default plugin flows through to the eval re-render.
+        assert oracle_mock.call_args.kwargs["plugin_path"] == str(TEST_PLUGIN_VST3)
         # The eval reads in place from the Hydra output_dir where the shards and
         # VDS splits already live — not a downloaded copy under oracle_eval/.
         assert dataset_root == observed["output_dir"]
@@ -1737,6 +1740,7 @@ class TestMainDispatchBranches:
             "some-run-id",
             param_spec_name="surge_xt",
             preset_path="presets/surge-base.vstpreset",
+            plugin_path="plugins/Surge XT.vst3",
         )
 
         run_mock.assert_called_once()
@@ -1764,6 +1768,7 @@ class TestMainDispatchBranches:
         assert "render=surge_simple" in called_argv
         assert "render.param_spec_name=surge_xt" in called_argv
         assert "render.preset_path=presets/surge-base.vstpreset" in called_argv
+        assert "render.plugin_path=plugins/Surge XT.vst3" in called_argv
         # batch_size=1 keeps the smoke-sized test split (4 samples) from
         # flooring to zero batches under the 128 default — see #1331.
         assert "datamodule.batch_size=1" in called_argv
@@ -1796,6 +1801,7 @@ class TestMainDispatchBranches:
                 "rid",
                 param_spec_name="surge_simple",
                 preset_path="presets/surge-simple.vstpreset",
+                plugin_path="plugins/Surge XT.vst3",
             )
 
         run_mock.assert_not_called()

@@ -70,11 +70,16 @@ def _run_oracle_eval_subprocess(
     *,
     param_spec_name: str,
     preset_path: str,
+    plugin_path: str,
 ) -> None:
     """Run the fake-oracle eval over ``dataset_root`` to verify the param-array round-trip.
 
     ``check=True`` so a non-zero eval exit (or wall-clock timeout) propagates
     to the caller.
+
+    The eval re-renders predictions via ``predict_vst_audio``, which reads exactly
+    ``param_spec_name`` / ``preset_path`` / ``plugin_path`` from ``cfg.render``; all
+    three are passed through from the generation render so the re-render matches it.
 
     :param dataset_root: Dir holding the finalized HDF5 splits, their source
         shards, and ``stats.npz``. The splits are virtual datasets that
@@ -89,6 +94,8 @@ def _run_oracle_eval_subprocess(
         eval must re-render predictions through this same spec.
     :param preset_path: ``render.preset_path`` used at generation; paired with
         ``param_spec_name`` so the re-render preset matches.
+    :param plugin_path: ``render.plugin_path`` used at generation; re-rendering
+        with a different plugin binary would invalidate the ``audio/*`` metrics.
     :raises FileNotFoundError: ``dataset_root`` is missing any finalized split
         or ``stats.npz`` — e.g. a resume where ``finalize_from_spec``
         short-circuited on an existing R2 marker without repopulating it.
@@ -111,12 +118,13 @@ def _run_oracle_eval_subprocess(
         "ckpt_path=null",
         "logger=wandb",
         # eval.yaml leaves render null; render_vst=true re-renders predicted
-        # params. Take the surge_simple group's structural render fields, then
-        # override the param spec + preset to match the dataset's generation
-        # render so the round-trip uses the same spec.
+        # params. Take the surge_simple group for structure, then override the
+        # three fields predict_vst_audio reads (param spec, preset, plugin) to
+        # the dataset's generation render so the round-trip matches it exactly.
         "render=surge_simple",
         f"render.param_spec_name={param_spec_name}",
         f"render.preset_path={preset_path}",
+        f"render.plugin_path={plugin_path}",
         # id already exists in logger/wandb.yaml (id: null) so a plain
         # override suffices; resume is absent there and needs +append.
         f"logger.wandb.id={run_id}",
@@ -132,11 +140,12 @@ def _run_oracle_eval_subprocess(
 
 
 def _unsupported_cadence_reason(render_cfg: DictConfig) -> str | None:
-    """Return why this render cadence combination is schema-invalid, else ``None``.
+    """Return the reason if ``gui_toggle_cadence=always_on`` lacks ``plugin_reload_cadence=once``.
 
-    Mirrors ``RenderConfig._always_on_requires_plugin_reload_once`` so ``main`` can
-    skip a wandb-grid cell the validator would otherwise raise on. Kept in sync
-    with that validator by hand.
+    Covers only that one combination — it mirrors
+    ``RenderConfig._always_on_requires_plugin_reload_once`` so ``main`` can skip the
+    grid cell that validator would raise on. Other ``RenderConfig`` validation errors
+    are not pre-empted here. Kept in sync with that validator by hand.
 
     :param render_cfg: Composed ``render`` group; reads ``gui_toggle_cadence`` and
         ``plugin_reload_cadence``.
@@ -757,9 +766,10 @@ def main(cfg: DictConfig) -> None:
     the launcher/worker composition matches byte-for-byte; ``HydraConfig`` is
     the authoritative source for the operator's task overrides.
 
-    A schema-invalid render cadence combination (see
-    :func:`_unsupported_cadence_reason`) is a logged no-op rather than a raise,
-    so a wandb grid sweep can enumerate the cell without failing the trial.
+    The one schema-invalid cadence cell ``gui_toggle_cadence=always_on`` +
+    ``plugin_reload_cadence!=once`` (see :func:`_unsupported_cadence_reason`) is a
+    logged no-op rather than a raise, so a wandb grid sweep can enumerate it without
+    failing the trial; other ``RenderConfig`` validation errors still raise.
 
     :param cfg: Hydra-composed dataset cfg.
     :raises ValueError: ``oracle_eval_inline=true`` without
@@ -830,6 +840,7 @@ def main(cfg: DictConfig) -> None:
                 spec.run_id,
                 param_spec_name=spec.render.param_spec_name,
                 preset_path=spec.render.preset_path,
+                plugin_path=spec.render.plugin_path,
             )
         return
 
