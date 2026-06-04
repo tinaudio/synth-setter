@@ -38,6 +38,53 @@ def test_cfg_dataset_composes_and_validates_as_dataset_spec(
     assert spec.render.samples_per_shard >= 1
 
 
+def test_cfg_dataset_without_datasetsrc_composes_with_no_copy_source(
+    cfg_dataset: DictConfig,
+) -> None:
+    """A default compose leaves ``spec.datasetsrc`` unset (``dataset.yaml`` sets ``null``).
+
+    :param cfg_dataset: Function-scoped fixture composing ``dataset.yaml`` with the
+        ``generate_dataset/smoke-shard`` experiment and ``tmp_path``-pinned paths.
+    """
+    spec = spec_from_cfg(cfg_dataset)
+    assert spec.datasetsrc is None
+
+
+def test_cfg_dataset_with_datasetsrc_composes_copy_source_into_spec(
+    cfg_dataset: DictConfig,
+) -> None:
+    """A ``datasetsrc`` override flows through ``spec_from_cfg`` into ``DatasetSpec``.
+
+    :param cfg_dataset: Function-scoped fixture composing ``dataset.yaml`` with the
+        ``generate_dataset/smoke-shard`` experiment and ``tmp_path``-pinned paths.
+    """
+    with open_dict(cfg_dataset):
+        cfg_dataset.datasetsrc = {"copy_dataset_root": "/data/source-dataset"}
+
+    spec = spec_from_cfg(cfg_dataset)
+    assert spec.datasetsrc is not None
+    assert spec.datasetsrc.copy_dataset_root == "/data/source-dataset"
+
+
+def test_cfg_dataset_datasetsrc_with_wds_output_is_rejected(
+    cfg_dataset: DictConfig,
+) -> None:
+    """``spec_from_cfg`` rejects a ``datasetsrc`` paired with ``output_format='wds'``.
+
+    The copy path reads each source shard as an HDF5 ``param_array``, so the
+    ``DatasetSpec`` validator fails the spec at construction when output is not hdf5.
+
+    :param cfg_dataset: Function-scoped fixture composing ``dataset.yaml`` with the
+        ``generate_dataset/smoke-shard`` experiment and ``tmp_path``-pinned paths.
+    """
+    with open_dict(cfg_dataset):
+        cfg_dataset.datasetsrc = {"copy_dataset_root": "/data/source-dataset"}
+        cfg_dataset.output_format = "wds"
+
+    with pytest.raises(ValueError, match="supports output_format='hdf5' only"):
+        spec_from_cfg(cfg_dataset)
+
+
 @pytest.mark.integration_r2
 @pytest.mark.r2
 @pytest.mark.requires_vst
