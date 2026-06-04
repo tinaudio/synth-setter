@@ -377,10 +377,6 @@ jobs:
   check-pr-title:
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    # contents:read is needed for checkout — the top-level permissions block
-    # drops it to none. Scoped to this job; the metadata job above is API-only.
-    permissions:
-      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v6
