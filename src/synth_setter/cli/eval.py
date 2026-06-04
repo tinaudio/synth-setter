@@ -161,7 +161,12 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
             )
         seed = cfg.evaluation.get("shuffle_seed", 0)
         permutation = shuffle_pred_audio(audio_dir, seed)
-        log.info(f"Shuffled pred audio across {len(permutation)} sample dirs (seed={seed}).")
+        if len(permutation) < 2:
+            log.info(
+                f"Shuffle skipped: {len(permutation)} sample dir(s) in {audio_dir} (need >=2)."
+            )
+        else:
+            log.info(f"Shuffled pred audio across {len(permutation)} sample dirs (seed={seed}).")
 
     if cfg.evaluation.compute_metrics:
         if not audio_dir.is_dir():

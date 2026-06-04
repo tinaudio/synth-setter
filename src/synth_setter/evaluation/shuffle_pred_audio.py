@@ -26,7 +26,7 @@ def _sample_dirs(audio_dir: Path) -> list[Path]:
     """
     return sorted(
         d
-        for d in audio_dir.glob("*")
+        for d in audio_dir.glob("sample_*")
         if d.is_dir() and (d / _PRED_FILENAME).is_file() and (d / _PARAMS_FILENAME).is_file()
     )
 
@@ -84,7 +84,8 @@ def shuffle_pred_audio(audio_dir: Path, seed: int) -> list[int]:  # noqa: DOC502
     :param seed: Seed for the permutation; identical seeds reproduce it.
     :returns: The permutation as ``dest_idx -> src_idx`` over the sorted sample
         dirs — sample dir ``i`` ends up holding the pred.wav of dir ``perm[i]``.
-    :raises ValueError: when the params gate finds a non-uniform ``params.csv``.
+    :raises ValueError: when the params gate finds a non-uniform ``params.csv``,
+        or a partial set of ``.shuffle-src`` snapshots makes the tree ambiguous.
     """
     sample_dirs = _sample_dirs(audio_dir)
     if len(sample_dirs) < 2:
@@ -93,8 +94,15 @@ def shuffle_pred_audio(audio_dir: Path, seed: int) -> list[int]:  # noqa: DOC502
     _assert_uniform_params(sample_dirs)
 
     snapshots = [d / (_PRED_FILENAME + _SNAPSHOT_SUFFIX) for d in sample_dirs]
-    # A snapshot left by an interrupted run holds that dir's pre-shuffle pred.wav;
-    # restore it so a retry starts from the baseline rather than a half-shuffled tree.
+    present = [s for s in snapshots if s.exists()]
+    if present and len(present) != len(snapshots):
+        raise ValueError(
+            f"shuffle_pred_audio found {len(present)} of {len(snapshots)} .shuffle-src "
+            f"snapshots (e.g. {present[0]}) — an interrupted shuffle left an ambiguous "
+            "tree. Restore each pred.wav from its snapshot or delete the snapshots before retrying."
+        )
+    # A full set of snapshots is left by an interrupted run and holds the pre-shuffle
+    # pred.wav; restore from them so a retry starts from the baseline, not a half-shuffled tree.
     for sample_dir, snapshot in zip(sample_dirs, snapshots):
         if snapshot.exists():
             shutil.copyfile(snapshot, sample_dir / _PRED_FILENAME)
@@ -108,7 +116,8 @@ def shuffle_pred_audio(audio_dir: Path, seed: int) -> list[int]:  # noqa: DOC502
     for dest_idx, src_idx in enumerate(permutation):
         shutil.copyfile(snapshots[src_idx], sample_dirs[dest_idx] / _PRED_FILENAME)
 
+    # missing_ok: a successful shuffle must not raise if a snapshot is already gone.
     for snapshot in snapshots:
-        snapshot.unlink()
+        snapshot.unlink(missing_ok=True)
 
     return permutation

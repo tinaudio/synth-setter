@@ -107,14 +107,14 @@ def test_shuffle_pred_audio_never_returns_identity_for_two_dirs(tmp_path: Path) 
     assert permutation == [1, 0]
 
 
-def test_shuffle_pred_audio_recovers_baseline_from_stale_snapshot(tmp_path: Path) -> None:
-    """A leftover ``.shuffle-src`` snapshot restores the baseline before re-shuffling.
+def test_shuffle_pred_audio_recovers_baseline_from_full_snapshot_set(tmp_path: Path) -> None:
+    """A full set of ``.shuffle-src`` snapshots restores the baseline before re-shuffling.
 
     Simulates an interrupted run: each pred.wav holds half-overwritten junk while
     its snapshot holds the true baseline. The retry must discard the junk, recover
     the baseline from the snapshots, and permute that — yielding the clean result.
 
-    :param tmp_path: Holds the ``audio/`` tree seeded with stale snapshots.
+    :param tmp_path: Holds the ``audio/`` tree seeded with a full snapshot set.
     """
     audio_dir = _build_audio_dir(tmp_path, 2)
     for i in range(2):
@@ -125,6 +125,22 @@ def test_shuffle_pred_audio_recovers_baseline_from_stale_snapshot(tmp_path: Path
 
     assert (audio_dir / "sample_0" / "pred.wav").read_bytes() == b"pred-1"
     assert (audio_dir / "sample_1" / "pred.wav").read_bytes() == b"pred-0"
+
+
+def test_shuffle_pred_audio_raises_on_partial_snapshot_set(tmp_path: Path) -> None:
+    """A partial ``.shuffle-src`` set is ambiguous, so the shuffle refuses to run.
+
+    :param tmp_path: Holds the ``audio/`` tree with a snapshot in only one of three dirs.
+    """
+    audio_dir = _build_audio_dir(tmp_path, 3)
+    (audio_dir / "sample_1" / "pred.wav.shuffle-src").write_bytes(b"orphan")
+    before = [(audio_dir / f"sample_{i}" / "pred.wav").read_bytes() for i in range(3)]
+
+    with pytest.raises(ValueError, match="ambiguous"):
+        shuffle_pred_audio(audio_dir, seed=1)
+
+    after = [(audio_dir / f"sample_{i}" / "pred.wav").read_bytes() for i in range(3)]
+    assert after == before
 
 
 def test_shuffle_pred_audio_removes_snapshots_after_run(tmp_path: Path) -> None:
@@ -218,16 +234,19 @@ def test_shuffle_pred_audio_no_samples_returns_empty(tmp_path: Path) -> None:
     assert shuffle_pred_audio(audio_dir, seed=1) == []
 
 
-def test_shuffle_pred_audio_ignores_dirs_without_pred(tmp_path: Path) -> None:
-    """Stray dirs lacking a pred.wav are not counted as sample dirs.
+def test_shuffle_pred_audio_ignores_non_sample_dirs(tmp_path: Path) -> None:
+    """Only ``sample_*`` dirs count, even when a stray dir holds both files.
 
-    :param tmp_path: Holds an ``audio/`` tree with two samples plus a stray dir.
+    :param tmp_path: Holds an ``audio/`` tree with two samples plus a non-sample dir
+        that has a pred.wav + params.csv (must still be excluded by the glob).
     """
     audio_dir = _build_audio_dir(tmp_path, 2)
     stray = audio_dir / "metrics_scratch"
     stray.mkdir()
+    (stray / "pred.wav").write_bytes(b"stray")
     (stray / "params.csv").write_text(_UNIFORM_PARAMS_CSV)
 
     permutation = shuffle_pred_audio(audio_dir, seed=3)
 
     assert len(permutation) == 2
+    assert (stray / "pred.wav").read_bytes() == b"stray"
