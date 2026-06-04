@@ -23,7 +23,6 @@ from synth_setter.cli.eval import evaluate
 from synth_setter.cli.train import train
 from synth_setter.data.vst import param_specs
 from synth_setter.workspace import operator_workspace
-from tests.conftest import NUM_FIXTURE_SAMPLES
 from tests.helpers.run_if import RunIf
 
 
@@ -82,23 +81,24 @@ def test_evaluate_runs_oracle_with_null_ckpt_path(
 
 @pytest.mark.requires_vst
 @pytest.mark.slow
-def test_evaluate_predict_shuffle_pred_audio_reaches_metrics(
-    tmp_path: Path,
+def test_evaluate_predict_shuffle_pred_audio_rejects_nonuniform_params(
     cfg_surge_xt: DictConfig,
     cfg_surge_xt_eval: DictConfig,
 ) -> None:
-    """``evaluate()`` predict mode with the shuffle on still lands finite audio metrics.
+    """``evaluate()`` predict mode with the shuffle on raises the directed gate error.
 
     Drives the real train->eval roundtrip end-to-end with ``shuffle_pred_audio``
     enabled, exercising the ``evaluate()`` -> ``_run_predict_postprocessing`` ->
-    shuffle wiring (rank-zero gate, cfg default, render->shuffle->metrics order).
-    Asserts the metrics still aggregate and every pred.wav survives the permutation
-    (#489); the shuffle deliberately mismatches pred to target, so metric magnitudes
-    are not asserted — only that they are present and finite.
+    shuffle wiring. The smoke dataset renders distinct params per sample, so the
+    uniform-params gate must reject it (after render, before metrics) — confirming
+    the gate is wired through the real entrypoint (#489). The successful-permutation
+    path needs a uniform-params tree (only meaningful for the render-order probe)
+    and is covered by ``tests/evaluation/test_shuffle_pred_audio.py`` and the
+    ``_run_predict_postprocessing`` integration test in ``test_eval_postprocessing``.
 
-    :param tmp_path: Shared output dir for the train run and the eval run.
     :param cfg_surge_xt: Surge XT smoke-test training config.
-    :param cfg_surge_xt_eval: Matching predict-mode eval config (render + metrics on).
+    :param cfg_surge_xt_eval: Matching predict-mode eval config (render + metrics on),
+        sharing ``tmp_path`` so eval reads the checkpoint training writes.
     """
     HydraConfig().set_config(cfg_surge_xt)
     train(cfg_surge_xt)
@@ -106,20 +106,10 @@ def test_evaluate_predict_shuffle_pred_audio_reaches_metrics(
 
     with open_dict(cfg_surge_xt_eval):
         cfg_surge_xt_eval.evaluation.shuffle_pred_audio = True
-        cfg_surge_xt_eval.evaluation.shuffle_seed = 42
 
     HydraConfig().set_config(cfg_surge_xt_eval)
-    metric_dict, _ = evaluate(cfg_surge_xt_eval)
-
-    audio_metric_keys = [key for key in metric_dict if key.startswith("audio/")]
-    assert audio_metric_keys, f"expected audio/* metrics; got {sorted(metric_dict)}"
-    for key in audio_metric_keys:
-        assert math.isfinite(float(metric_dict[key])), f"{key} not finite: {metric_dict[key]!r}"
-
-    sample_dirs = sorted(d for d in (tmp_path / "audio").iterdir() if d.is_dir())
-    assert len(sample_dirs) == NUM_FIXTURE_SAMPLES
-    for sample_dir in sample_dirs:
-        assert (sample_dir / "pred.wav").is_file()
+    with pytest.raises(ValueError, match="identical params"):
+        evaluate(cfg_surge_xt_eval)
 
 
 @pytest.mark.gpu
