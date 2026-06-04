@@ -12,7 +12,7 @@ from pydantic_settings import BaseSettings, CliApp, CliPositionalArg, SettingsCo
 from pyloudnorm import Meter
 
 from synth_setter.data.vst.core import render_params
-from synth_setter.data.vst.param_spec import ParamSpec
+from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
     MEL_N_MELS,
@@ -34,7 +34,7 @@ from synth_setter.pipeline.schemas.spec import (
 @dataclass
 class VSTDataSample:
     synth_params: dict[str, float]
-    note_params: dict[str, float]
+    note_params: NoteParams
 
     sample_rate: float
     channels: int
@@ -74,7 +74,7 @@ def generate_sample(
     param_spec: ParamSpec,
     preset_path: str,
     fixed_synth_params: dict[str, float] | None = None,
-    fixed_note_params: dict[str, int | tuple[float, float]] | None = None,
+    fixed_note_params: NoteParams | None = None,
     *,
     plugin: VST3Plugin | None = None,
     warmup: bool = False,

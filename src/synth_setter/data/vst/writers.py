@@ -27,7 +27,7 @@ from synth_setter.data.vst.generate_vst_dataset import (
     create_datasets_and_get_start_idx,
     generate_sample,
 )
-from synth_setter.data.vst.param_spec import ParamSpec
+from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
 from synth_setter.data.vst.shapes import DATASET_FIELD_NAMES
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from synth_setter.pipeline.schemas.spec import RenderConfig
@@ -142,7 +142,7 @@ def _validate_fixed_params_lengths(
     num_samples: int,
     start_idx: int,
     fixed_synth_params_list: list[dict[str, float]] | None,
-    fixed_note_params_list: list[dict[str, int | tuple[float, float]]] | None,
+    fixed_note_params_list: list[NoteParams] | None,
 ) -> None:
     """Raise ``ValueError`` unless each fixed-params list exactly matches the tail length.
 
@@ -186,7 +186,7 @@ def _generate_sample_for_index(
     min_loudness: float,
     param_spec: ParamSpec,
     fixed_synth_params_list: list[dict[str, float]] | None,
-    fixed_note_params_list: list[dict[str, int | tuple[float, float]]] | None,
+    fixed_note_params_list: list[NoteParams] | None,
     plugin: VST3Plugin | None = None,
     warmup: bool = False,
 ) -> VSTDataSample:
@@ -236,7 +236,7 @@ def _render_in_batches(
     param_spec: ParamSpec,
     start_idx: int,
     fixed_synth_params_list: list[dict[str, float]] | None,
-    fixed_note_params_list: list[dict[str, int | tuple[float, float]]] | None,
+    fixed_note_params_list: list[NoteParams] | None,
     flush_batch: Callable[[list[VSTDataSample], int], None],
 ) -> None:
     """Render samples from ``start_idx`` to ``render_cfg.samples_per_shard`` in fixed-size batches.
@@ -341,7 +341,7 @@ def make_hdf5_dataset(
     render_cfg: RenderConfig,
     *,
     fixed_synth_params_list: list[dict[str, float]] | None = None,
-    fixed_note_params_list: list[dict[str, int | tuple[float, float]]] | None = None,
+    fixed_note_params_list: list[NoteParams] | None = None,
 ) -> None:
     """Render ``render_cfg.samples_per_shard`` samples to an HDF5 file at ``hdf5_file``.
 
@@ -405,7 +405,7 @@ def make_wds_dataset(
     render_cfg: RenderConfig,
     *,
     fixed_synth_params_list: list[dict[str, float]] | None = None,
-    fixed_note_params_list: list[dict[str, int | tuple[float, float]]] | None = None,
+    fixed_note_params_list: list[NoteParams] | None = None,
 ) -> None:
     """Render ``render_cfg.samples_per_shard`` samples to a webdataset tar at ``wds_file``.
 

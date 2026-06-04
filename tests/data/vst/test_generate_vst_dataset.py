@@ -20,7 +20,7 @@ import pytest
 
 from synth_setter.data.vst import param_specs
 from synth_setter.data.vst.core import load_plugin, load_preset, render_params
-from synth_setter.data.vst.param_spec import ParamSpec
+from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
 from synth_setter.data.vst.writers import make_hdf5_dataset
 from synth_setter.evaluation.compute_audio_metrics import (
     compute_mss,
@@ -295,7 +295,7 @@ _HARDCODED_SYNTH_PARAMS: dict[str, float] = {
     "fx_a3_output_mix": 0.0,
 }
 
-_HARDCODED_NOTE_PARAMS: dict[str, int | tuple[float, float]] = {
+_HARDCODED_NOTE_PARAMS: NoteParams = {
     "pitch": 64,
     "note_start_and_end": (0.77033705, 2.2995389),
 }
@@ -357,7 +357,7 @@ def _assert_h5_structure_is_valid(
 @contextmanager
 def _patched_sample(
     spec: ParamSpec,
-    replay: list[tuple[dict[str, float], dict[str, int | tuple[float, float]]]],
+    replay: list[tuple[dict[str, float], NoteParams]],
 ) -> Iterator[None]:
     """Patch ``spec.sample`` with a deterministic replay over the lifetime of the block.
 
@@ -370,7 +370,7 @@ def _patched_sample(
     replay_iter = iter(replay)
     pull_count = [0]
 
-    def fake_sample() -> tuple[dict[str, float], dict[str, int | tuple[float, float]]]:
+    def fake_sample() -> tuple[dict[str, float], NoteParams]:
         pull_count[0] += 1
         return next(replay_iter)
 
@@ -663,7 +663,7 @@ def _assert_round_trip_matches(
     expected_mel: np.ndarray,
     expected_params: np.ndarray,
     expected_synth_patches: list[dict[str, float]],
-    expected_note_patches: list[dict[str, int | tuple[float, float]]],
+    expected_note_patches: list[NoteParams],
     spec: ParamSpec,
     num_samples: int,
 ) -> RoundTripMetrics:
@@ -883,7 +883,7 @@ def test_datasets_from_sampled_params_are_identical(tmp_path: Path) -> None:
     # inputs for the second ``make_hdf5_dataset`` run — guaranteed past the loudness
     # gate by construction (the candidate render survived stage 1).
     synth_patches: list[dict[str, float]] = []
-    note_patches: list[dict[str, int | tuple[float, float]]] = []
+    note_patches: list[NoteParams] = []
     for i in range(_NUM_SAMPLES):
         decoded_synth_params, decoded_note_params = spec.decode(expected_params[i])
         synth_patches.append(decoded_synth_params)
@@ -1378,10 +1378,7 @@ def test_make_dataset_uses_fixed_params_lists_when_provided(
     )
 
     _, _, params = _assert_h5_structure_is_valid(out, spec, num_samples)
-    # ParamSpec.encode is annotated dict[str, float] on main but accepts the runtime
-    # note-param shape (pitch is int, note_start_and_end is a tuple); annotation gets
-    # corrected in a sibling PR.
-    expected = spec.encode(_HARDCODED_SYNTH_PARAMS, _HARDCODED_NOTE_PARAMS)  # pyright: ignore[reportArgumentType]
+    expected = spec.encode(_HARDCODED_SYNTH_PARAMS, _HARDCODED_NOTE_PARAMS)
     for i in range(num_samples):
         assert np.allclose(params[i], expected, atol=_ABSOLUTE_TOLERANCE), (
             f"row {i} did not match fixed params"
