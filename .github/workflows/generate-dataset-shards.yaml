@@ -262,6 +262,19 @@ jobs:
           docker-images: true
           swap-storage: true
 
+      # `free-disk-space` keeps `/opt/hostedtoolcache` (tool-cache: false) because
+      # `helm/kind-action` aborts when that directory is missing. CodeQL is the
+      # largest unused subtree under it (~5 GB) and this row never runs it, so
+      # purge only that subdir: the parent dir stays present for kind-action, and
+      # Python (resolved from the cache by the later setup-python step) is left
+      # intact. `df -h /` is best-effort diagnostics — see the kind-load step.
+      - name: Purge unused CodeQL tool-cache for kind headroom (skypilot-local row)
+        if: ${{ inputs.provider == 'skypilot-local' }}
+        run: |
+          set -euo pipefail
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          df -h / || true
+
       # A2 (#1164): pull the worker image in the background so the kind binary
       # install + Python / uv setup can run in parallel. The pull only fills
       # the host Docker cache; nothing downstream of this step reads from it
@@ -384,9 +397,15 @@ jobs:
           fi
           echo "docker pull completed for ${IMAGE}"
 
+      # `kind load` shells to `docker save` under `/var/lib/docker/tmp/`, so log
+      # the root-fs margin first — a future ENOSPC here (#1278) then shows the
+      # headroom at the moment that matters instead of only the post-reclaim total.
       - name: Load dev-snapshot image into kind (skypilot-local row)
         if: ${{ inputs.provider == 'skypilot-local' }}
-        run: kind load docker-image "${IMAGE}" --name skypilot
+        run: |
+          set -euo pipefail
+          df -h / || true
+          kind load docker-image "${IMAGE}" --name skypilot
 
       # SYNTH_SETTER_CI_MODE=1 activates the launcher's
       # `_ensure_ci_sky_config()` (in src/synth_setter/pipeline/skypilot_launch.py),
