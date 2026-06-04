@@ -228,7 +228,7 @@ docs:
       - pattern: ".devcontainer/root_gpu/devcontainer.json"
         covers: "Root-user GPU dev container variant — remoteUser defaults to root, docker-in-docker + act features, --gpus all, VS Code terminal profile defaulting to zellij (tmux still selectable)"
       - pattern: ".devcontainer/tmux.conf"
-        covers: "tmux config installed to ~/.tmux.conf by post-create.sh — mouse mode, true color, 1-indexed windows, larger scrollback, vi copy mode, intuitive split keys, TPM plugin manager + tmux-resurrect + tmux-continuum (auto-restore on, 5-min save interval, resurrect state pinned to ~/.local/share/tmux/resurrect so the named volume can persist it, claude/gh panes revived as themselves on restore)"
+        covers: "tmux config installed to ~/.tmux.conf by post-create.sh — mouse mode, true color, 1-indexed windows, larger scrollback, vi copy mode, intuitive split keys, TPM plugin manager + tmux-resurrect + tmux-continuum (auto-restore off — restore is opt-in via prefix + Ctrl-r, 5-min save interval, resurrect state pinned to ~/.local/share/tmux/resurrect so the named volume can persist it, claude/gh panes revived as themselves on restore)"
       - pattern: ".devcontainer/initialize.sh"
         covers: "Host-side initializeCommand — refuses pointer-file `.git` (worktree/submodule/--separate-git-dir), ensures .env exists"
       - pattern: ".devcontainer/post-create.sh"
