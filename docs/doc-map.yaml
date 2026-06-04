@@ -242,11 +242,13 @@ docs:
     description: Issue types, labels, milestones, project board, CI metadata gate
     sources:
       - pattern: ".github/workflows/pr-metadata-gate.yaml"
-        covers: "Domain label list, issue type validation, milestone enforcement"
+        covers: "Domain label list, issue type validation, milestone enforcement + PR-body section-hierarchy lint (check-pr-body-shape job, warn mode)"
       - pattern: ".github/ISSUE_TEMPLATE/**"
         covers: "Issue templates, required fields, type-specific forms"
       - pattern: ".github/PULL_REQUEST_TEMPLATE.md"
         covers: "PR template structure, required sections"
+      - pattern: "scripts/ci/pr_body_lint.py"
+        covers: "Canonical PR-body section linter (Why → What changed → Test plan, alias map, warn/block modes) backing the check-pr-body-shape gate"
 
   # ── Configuration reference ────────────────────────────────────
   - doc: docs/reference/configuration-reference.md

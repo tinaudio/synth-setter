@@ -47,7 +47,8 @@ ALIASES: Mapping[str, str] = {
 }
 
 _HEADING_RE = re.compile(r"^#{1,6}\s+(.+?)\s*$")
-_FENCE_RE = re.compile(r"^\s*(```|~~~)")
+# Up to 3 spaces of indent, then a run of >=3 backticks or tildes (CommonMark).
+_FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 
 
 # Plain class, not @dataclass: pydoclint 0.8.3 fires DOC601/603 on class-level
@@ -69,23 +70,30 @@ def extract_headings(body: str) -> list[str]:
     """Return the ATX headings of ``body`` in document order.
 
     Headings inside fenced code blocks are skipped — a ``#`` line there is shell
-    or markup, not a section. Each returned heading is stripped of a trailing
-    colon and surrounding whitespace.
+    or markup, not a section. A fence closes only on a line of the same character
+    that is at least as long as the opener, so a shorter fence nested in a longer
+    one does not end it early. Each heading is stripped of a trailing colon,
+    question mark (legacy templates used ``?``), and surrounding whitespace.
 
     :param body: the PR-body markdown.
     :returns: the ordered heading texts (e.g. ``["Why", "What changed"]``).
     """
     headings: list[str] = []
-    in_fence = False
+    open_fence: str | None = None
     for line in body.splitlines():
-        if _FENCE_RE.match(line):
-            in_fence = not in_fence
+        fence = _FENCE_RE.match(line)
+        if fence:
+            marker = fence.group(1)
+            if open_fence is None:
+                open_fence = marker
+            elif marker[0] == open_fence[0] and len(marker) >= len(open_fence):
+                open_fence = None
             continue
-        if in_fence:
+        if open_fence is not None:
             continue
         match = _HEADING_RE.match(line)
         if match:
-            headings.append(match.group(1).rstrip(":").strip())
+            headings.append(match.group(1).rstrip(" :?"))
     return headings
 
 

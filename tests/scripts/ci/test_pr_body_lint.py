@@ -77,6 +77,21 @@ def test_extract_headings_ignores_headings_inside_tilde_fenced_blocks() -> None:
     assert extract_headings(body) == ["Why", "What changed"]
 
 
+def test_extract_headings_strips_trailing_question_mark() -> None:
+    """A heading written ``## Why?`` normalizes to ``Why`` (legacy templates used ``?``)."""
+    assert extract_headings("## Why?\n") == ["Why"]
+
+
+def test_extract_headings_longer_fence_is_not_closed_by_shorter_inner_fence() -> None:
+    """A 4-backtick fence embedding a 3-backtick line stays open until the matching close.
+
+    A shorter ``` line inside the outer ```` fence must not end it early, or a ``#``
+    heading in the embedded block would be misread as a section.
+    """
+    body = "## Why\n\n````\n```\n# not a heading\n```\n````\n\n## What changed\n"
+    assert extract_headings(body) == ["Why", "What changed"]
+
+
 # ---------------------------------------------------------------------------
 # lint_pr_body — missing required sections
 # ---------------------------------------------------------------------------
@@ -147,6 +162,19 @@ def test_lint_verification_heading_flagged_as_alias_for_test_plan() -> None:
     body = "## Why\n\na\n\n## What changed\n\nb\n\n## Verification\n\nc\n"
     messages = [f.message for f in lint_pr_body(body) if f.code == "aliased-heading"]
     assert messages == ["Rename '## Verification' to the canonical '## Test plan'"]
+
+
+def test_lint_legacy_what_does_this_pr_do_heading_maps_to_what_changed() -> None:
+    """The old template's ``## What does this PR do?`` is recognized as the What changed section.
+
+    The trailing ``?`` must not defeat the alias, so a PR still on the old template
+    is not told its What changed section is missing.
+    """
+    body = "## Why\n\na\n\n## What does this PR do?\n\nb\n\n## Test plan\n\nc\n"
+    findings = lint_pr_body(body)
+    assert "missing-section" not in {f.code for f in findings}
+    aliases = [f.message for f in findings if f.code == "aliased-heading"]
+    assert aliases == ["Rename '## What does this PR do' to the canonical '## What changed'"]
 
 
 def test_lint_alias_satisfies_the_missing_section_check() -> None:
