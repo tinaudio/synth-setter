@@ -1862,7 +1862,7 @@ def _prewrite_resumable_head(
     param rows take the caller-supplied encodings so the head's stored params are
     known and can be asserted intact after the resume.
 
-    :param out: Destination shard path, opened in append mode.
+    :param out: Destination shard path; this helper opens it in append mode.
     :param spec: Param spec fixing the ``param_array`` column count.
     :param num_samples: Total shard rows (dataset length).
     :param head_rows: Number of leading rows to mark as already written.
