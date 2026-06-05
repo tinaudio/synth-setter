@@ -17,6 +17,7 @@ import pytest
 
 from synth_setter.data.vst import writers
 from synth_setter.data.vst.generate_vst_dataset import VSTDataSample
+from synth_setter.data.vst.param_spec import ParamSpec
 from synth_setter.data.vst.writers import _render_in_batches, _shard_metadata_from_render
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from synth_setter.pipeline.schemas.spec import RenderConfig
@@ -899,7 +900,7 @@ def _install_writer_level_fakes(
         {"a_amp_eg_attack": 0.5},
         {"pitch": 64, "note_start_and_end": (0.1, 0.9)},
     )
-    fake_spec = MagicMock(name="param_spec")
+    fake_spec = MagicMock(spec=ParamSpec, name="param_spec")
     fake_spec.sample.return_value = fake_spec_payload
     fake_spec.encode.return_value = np.zeros((4,), dtype=np.float32)
 
