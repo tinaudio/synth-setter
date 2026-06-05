@@ -13,6 +13,7 @@ from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import numpy as np
 import pytest
 
 from synth_setter.data.vst import writers
@@ -814,7 +815,6 @@ def _silent_render() -> object:
 
     :return: Zero-filled stereo audio array shaped like a real render.
     """
-    import numpy as np
 
     return np.zeros(_RENDERER_FAKE_AUDIO_SHAPE, dtype=np.float32)
 
@@ -826,7 +826,6 @@ def _loud_render() -> object:
 
     :return: 440 Hz sine wave stereo audio array shaped like a real render.
     """
-    import numpy as np
 
     n = _RENDERER_FAKE_AUDIO_SHAPE[1]
     t = np.arange(n) / 44100.0
@@ -858,7 +857,6 @@ def _install_writer_level_fakes(
         ``generate_sample`` call.
     :returns: ``(warmup_mock, fake_spec)``.
     """
-    import numpy as np
 
     from synth_setter.data.vst import generate_vst_dataset
 
@@ -1036,3 +1034,128 @@ def test_render_in_batches_sample_cadence_draws_param_spec_per_sample(
     )
 
     assert fake_spec.sample.call_count == n
+
+
+# ---------------------------------------------------------------------------
+# Seeding behaviour — _render_in_batches seeds global RNGs from render_cfg.seed
+# ---------------------------------------------------------------------------
+
+
+def _fake_generate_sample_using_real_spec(
+    plugin_path: str,
+    *,
+    param_spec: object,
+    velocity: int,
+    signal_duration_seconds: float,
+    sample_rate: int,
+    channels: int,
+    **_kw: object,
+) -> VSTDataSample:
+    """Stand-in for ``generate_sample`` that does real param sampling but skips the plugin.
+
+    Calls ``param_spec.sample()`` so ``_render_in_batches``'s RNG seeding is
+    observable through the returned ``VSTDataSample.param_array``.  Audio is a
+    trivially non-silent constant array (loudness gate is bypassed by skipping
+    the meter).
+
+    :param plugin_path: Ignored; accepted so the signature matches ``generate_sample``.
+    :param param_spec: The ``ParamSpec`` used to draw synth and note parameters.
+    :param velocity: MIDI velocity forwarded to ``VSTDataSample``.
+    :param signal_duration_seconds: Audio duration; used to size the dummy audio array.
+    :param sample_rate: Sample rate forwarded to ``VSTDataSample``.
+    :param channels: Channel count forwarded to ``VSTDataSample``.
+    :param **_kw: Extra keyword arguments; silently ignored.
+    :returns: A ``VSTDataSample`` with real param draws and constant dummy audio.
+    """
+    from synth_setter.data.vst.param_spec import ParamSpec
+
+    assert isinstance(param_spec, ParamSpec)
+    synth, note = param_spec.sample()
+    n_audio = int(sample_rate * signal_duration_seconds)
+    audio = np.ones((channels, n_audio), dtype=np.float32)
+    mel_spec = np.zeros((channels, 128, 401), dtype=np.float32)
+    return VSTDataSample(
+        synth_params=synth,
+        note_params=note,
+        audio=audio,
+        mel_spec=mel_spec,
+        sample_rate=float(sample_rate),
+        channels=channels,
+        param_spec=param_spec,
+    )
+
+
+def test_render_in_batches_same_seed_produces_identical_param_arrays(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two ``_render_in_batches`` calls with the same seed produce the same param arrays.
+
+    Uses real ``param_spec.sample()`` (via the stand-in) so the seeded RNGs
+    drive actual param draws.  Both runs produce identical ``param_array``
+    values — the behavioural invariant of per-shard reproducibility.
+
+    :param monkeypatch: Patches ``generate_sample`` to the stand-in that does
+        real sampling without needing a VST plugin.
+    """
+    from synth_setter.data.vst.param_spec_registry import param_specs
+
+    monkeypatch.setattr(writers, "generate_sample", _fake_generate_sample_using_real_spec)
+    spec = param_specs["surge_simple"]
+    render_cfg = _smoke_render_cfg(seed=42, samples_per_shard=4, samples_per_render_batch=4)
+
+    def _collect(render_cfg: RenderConfig) -> list[np.ndarray]:
+        arrays: list[np.ndarray] = []
+        _render_in_batches(
+            render_cfg=render_cfg,
+            param_spec=spec,
+            start_idx=0,
+            fixed_synth_params_list=None,
+            fixed_note_params_list=None,
+            flush_batch=lambda batch, _start: arrays.extend(s.param_array for s in batch),
+        )
+        return arrays
+
+    run_a = _collect(render_cfg)
+    run_b = _collect(render_cfg)
+
+    assert len(run_a) == len(run_b) == 4
+    for arr_a, arr_b in zip(run_a, run_b):
+        np.testing.assert_array_equal(arr_a, arr_b)
+
+
+def test_render_in_batches_different_seeds_produce_different_param_arrays(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two ``_render_in_batches`` calls with different seeds produce different param arrays.
+
+    Confirms that seed differentiation actually changes the sampled params —
+    a seed that is a no-op would make reproducibility meaningless.
+
+    :param monkeypatch: Patches ``generate_sample`` to the stand-in.
+    """
+    from synth_setter.data.vst.param_spec_registry import param_specs
+
+    monkeypatch.setattr(writers, "generate_sample", _fake_generate_sample_using_real_spec)
+    spec = param_specs["surge_simple"]
+
+    def _collect(seed: int) -> list[np.ndarray]:
+        arrays: list[np.ndarray] = []
+        cfg = _smoke_render_cfg(seed=seed, samples_per_shard=4, samples_per_render_batch=4)
+        _render_in_batches(
+            render_cfg=cfg,
+            param_spec=spec,
+            start_idx=0,
+            fixed_synth_params_list=None,
+            fixed_note_params_list=None,
+            flush_batch=lambda batch, _start: arrays.extend(s.param_array for s in batch),
+        )
+        return arrays
+
+    run_seed1 = _collect(seed=1)
+    run_seed2 = _collect(seed=2)
+
+    stacked_1 = np.stack(run_seed1)
+    stacked_2 = np.stack(run_seed2)
+    assert not np.array_equal(stacked_1, stacked_2), (
+        "Different seeds must produce different param arrays"
+    )

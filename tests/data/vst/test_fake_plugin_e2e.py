@@ -96,3 +96,89 @@ def test_make_hdf5_dataset_writes_valid_shard_under_fake_plugin(
     assert fake_logger.exception.call_count == 0, (
         f"unexpected logger.exception calls: {fake_logger.exception.call_args_list}"
     )
+
+
+@pytest.mark.fake_vst
+def test_same_seed_produces_identical_param_arrays(
+    tmp_path: Path,
+    install_fake_plugin: FakeVST3Plugin,
+) -> None:
+    """Two ``make_hdf5_dataset`` runs with the same seed write identical ``param_array`` datasets.
+
+    Exercises the full shard-render stack — RNG seeding → ``param_spec.sample()``
+    → HDF5 write — so the per-shard reproducibility guarantee is validated
+    end-to-end.
+
+    :param tmp_path: Destination directory for the two output shards.
+    :param install_fake_plugin: Swaps the real loader for the fake so no VST binary is needed.
+    """
+    num_samples = 4
+    render_cfg = _render_cfg(
+        num_samples=num_samples,
+        samples_per_render_batch=2,
+        plugin_reload_cadence="once",
+        gui_toggle_cadence="never",
+    ).model_copy(
+        update={
+            "plugin_path": _PLUGIN_PATH,
+            "preset_path": _PRESET_PATH,
+            "renderer_version": _RENDERER_VERSION,
+            "seed": 77,
+        }
+    )
+
+    out_a = tmp_path / "shard_a.h5"
+    out_b = tmp_path / "shard_b.h5"
+    make_hdf5_dataset(hdf5_file=out_a, render_cfg=render_cfg)
+    make_hdf5_dataset(hdf5_file=out_b, render_cfg=render_cfg)
+
+    with h5py.File(out_a, "r") as fa, h5py.File(out_b, "r") as fb:
+        params_a = np.asarray(fa["param_array"])
+        params_b = np.asarray(fb["param_array"])
+
+    np.testing.assert_array_equal(params_a, params_b)
+
+
+@pytest.mark.fake_vst
+def test_different_seeds_produce_different_param_arrays(
+    tmp_path: Path,
+    install_fake_plugin: FakeVST3Plugin,
+) -> None:
+    """Two ``make_hdf5_dataset`` runs with different seeds write different ``param_array``
+    datasets.
+
+    Confirms the seed actually changes sampled params — a no-op seeding would make reproducibility
+    meaningless.
+
+    :param tmp_path: Destination directory for the two output shards.
+    :param install_fake_plugin: Swaps the real loader for the fake so no VST binary is needed.
+    """
+    num_samples = 4
+
+    def _cfg(seed: int):
+        return _render_cfg(
+            num_samples=num_samples,
+            samples_per_render_batch=2,
+            plugin_reload_cadence="once",
+            gui_toggle_cadence="never",
+        ).model_copy(
+            update={
+                "plugin_path": _PLUGIN_PATH,
+                "preset_path": _PRESET_PATH,
+                "renderer_version": _RENDERER_VERSION,
+                "seed": seed,
+            }
+        )
+
+    out_1 = tmp_path / "shard_seed1.h5"
+    out_2 = tmp_path / "shard_seed2.h5"
+    make_hdf5_dataset(hdf5_file=out_1, render_cfg=_cfg(seed=1))
+    make_hdf5_dataset(hdf5_file=out_2, render_cfg=_cfg(seed=2))
+
+    with h5py.File(out_1, "r") as f1, h5py.File(out_2, "r") as f2:
+        params_1 = np.asarray(f1["param_array"])
+        params_2 = np.asarray(f2["param_array"])
+
+    assert not np.array_equal(params_1, params_2), (
+        "Different seeds must produce different param arrays"
+    )

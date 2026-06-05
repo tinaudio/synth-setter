@@ -201,6 +201,10 @@ def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -
     ``OutputFormat.from_extension``. When ``spec.datasetsrc`` is set, the copy
     root is forwarded as ``--copy_dataset_root`` so the subprocess re-renders the
     same-named source shard's params instead of sampling fresh ones.
+
+    ``shard.seed`` (= ``base_seed + shard_id``) overrides ``spec.render.seed`` so
+    each subprocess receives its deterministic per-shard seed regardless of what
+    the spec-level ``render.seed`` carries.
     """
     output_path = output_dir / shard.filename
     args = [
@@ -208,7 +212,8 @@ def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -
         "src/synth_setter/data/vst/generate_vst_dataset.py",
         str(output_path),
     ]
-    for key, value in spec.render.model_dump().items():
+    render_with_seed = spec.render.model_copy(update={"seed": shard.seed})
+    for key, value in render_with_seed.model_dump().items():
         args.extend([f"--{key}", str(value)])
     if spec.datasetsrc is not None:
         args.extend(["--copy_dataset_root", spec.datasetsrc.copy_dataset_root])

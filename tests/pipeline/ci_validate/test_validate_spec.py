@@ -50,6 +50,7 @@ def _make_valid_spec(*, output_format: str = "hdf5", **overrides: object) -> dic
             "plugin_reload_cadence": "render",
             "gui_toggle_cadence": "never",
             "param_sample_cadence": "sample",
+            "seed": None,
         },
         "shards": [
             {"shard_id": i, "filename": f"shard-{i:06d}{ext}", "seed": 42 + i} for i in range(3)

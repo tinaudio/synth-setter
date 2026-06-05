@@ -35,6 +35,7 @@ def test_cli_args_class_adds_only_data_file_and_copy_dataset_root_beyond_render_
 
     Guards against accidental CLI bloat — adding a flag here should be a deliberate decision,
     not silent drift. ``copy_dataset_root`` is the deliberate dataset-copy opt-in.
+    ``seed`` lives on ``RenderConfig`` so it is NOT counted as an extra here.
     """
     cli_fields = set(_GenerateCliArgs.model_fields.keys())
     render_fields = set(RenderConfig.model_fields.keys())
@@ -71,19 +72,26 @@ def _smoke_spec() -> DatasetSpec:
 
 
 def test_build_generate_args_roundtrips_through_cli_parser() -> None:
-    """Args emitted by ``build_generate_args`` parse back into the same ``RenderConfig``.
+    """Args emitted by ``build_generate_args`` parse back as a ``RenderConfig`` with shard seed.
+
+    ``build_generate_args`` overrides ``spec.render.seed`` with the shard's
+    deterministic seed (``base_seed + shard_id``).  The round-trip therefore
+    reconstructs a ``RenderConfig`` whose ``seed`` equals ``spec.shards[0].seed``
+    rather than ``spec.render.seed`` (which is ``None`` by default).
 
     Pins the full producer↔consumer contract: a divergence in flag spelling (kebab vs.
     underscore), value coercion (int vs. float), or ``extra="forbid"`` rejection would
     break this round-trip even when the field-set parity tests still pass.
     """
     spec = _smoke_spec()
-    args = build_generate_args(spec, spec.shards[0], Path("/tmp"))
+    shard = spec.shards[0]
+    args = build_generate_args(spec, shard, Path("/tmp"))
 
     parsed = CliApp.run(_GenerateCliArgs, cli_args=args[2:])
     reconstructed = RenderConfig(**parsed.model_dump(exclude={"data_file", "copy_dataset_root"}))
 
-    assert reconstructed == spec.render
+    # The shard's seed overrides spec.render.seed (None → base_seed+shard_id).
+    assert reconstructed == spec.render.model_copy(update={"seed": shard.seed})
     assert parsed.data_file == "/tmp/shard-000000.h5"
     # No copy source on this spec, so the CLI flag is absent and parses to None.
     assert parsed.copy_dataset_root is None

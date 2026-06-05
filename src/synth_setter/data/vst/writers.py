@@ -8,6 +8,7 @@ writer using ``webdataset.TarWriter``.
 
 from __future__ import annotations
 
+import random
 from collections.abc import Callable
 from pathlib import Path
 from types import TracebackType
@@ -198,6 +199,10 @@ def _render_in_batches(
     :raises ValueError: ``param_sample_cadence="shard"`` combined with
         caller-supplied fixed-params lists (shard cadence owns its own patch).
     """
+    if render_cfg.seed is not None:
+        random.seed(render_cfg.seed)
+        np.random.seed(render_cfg.seed)
+
     num_samples = render_cfg.samples_per_shard
     share_params = render_cfg.param_sample_cadence == "shard"
     # Shard cadence draws and owns the shard's single patch, so caller-supplied

@@ -1675,7 +1675,8 @@ def test_main_copy_dataset_root_feeds_decoded_params_to_writer(
     out = tmp_path / "shard-000000.h5"
     argv = ["generate_vst_dataset", str(out)]
     for key, value in _render_cfg(num_rows).model_dump().items():
-        argv += [f"--{key}", str(value)]
+        if value is not None:
+            argv += [f"--{key}", str(value)]
     argv += ["--copy_dataset_root", str(source_dir)]
     monkeypatch.setattr(sys, "argv", argv)
 
@@ -1699,7 +1700,8 @@ def test_main_copy_dataset_root_rejects_wds_output(
     out = tmp_path / "shard-000000.tar"
     argv = ["generate_vst_dataset", str(out)]
     for key, value in _render_cfg(2).model_dump().items():
-        argv += [f"--{key}", str(value)]
+        if value is not None:
+            argv += [f"--{key}", str(value)]
     argv += ["--copy_dataset_root", str(tmp_path)]
     monkeypatch.setattr(sys, "argv", argv)
 
@@ -1727,7 +1729,8 @@ def test_main_copy_dataset_root_propagates_source_validation_error(
     out = tmp_path / "shard-000000.h5"
     argv = ["generate_vst_dataset", str(out)]
     for key, value in _render_cfg(3).model_dump().items():
-        argv += [f"--{key}", str(value)]
+        if value is not None:
+            argv += [f"--{key}", str(value)]
     argv += ["--copy_dataset_root", str(source_dir)]
     monkeypatch.setattr(sys, "argv", argv)
 

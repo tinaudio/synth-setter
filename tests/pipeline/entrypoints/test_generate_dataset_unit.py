@@ -1201,6 +1201,41 @@ class TestBuildGenerateArgs:
         flag_idx = args.index("--copy_dataset_root")
         assert args[flag_idx + 1] == "/data/source"
 
+    def test_shard_seed_forwarded_as_seed_flag(self, tmp_path: Path) -> None:
+        """``--seed`` flag carries the shard's deterministic seed (base_seed + shard_id).
+
+        ``ShardSpec.seed == base_seed + shard_id``, so shard 0 with base_seed=7 must
+        produce ``--seed 7`` in the generated argv.
+
+        :param tmp_path: Pytest tmp dir for the plugin path.
+        """
+        spec = DatasetSpec(**_base_spec_kwargs(tmp_path, base_seed=7))  # type: ignore[arg-type]
+
+        args = build_generate_args(spec, spec.shards[0], Path("out"))
+
+        flag_idx = args.index("--seed")
+        assert args[flag_idx + 1] == "7"
+
+    def test_seed_increments_per_shard(self, tmp_path: Path) -> None:
+        """Each shard's ``--seed`` value is one greater than the previous shard's.
+
+        Verifies the ``base_seed + shard_id`` derivation propagates through
+        ``build_generate_args`` for both shard 0 and shard 1.
+
+        :param tmp_path: Pytest tmp dir for the plugin path.
+        """
+        spec = DatasetSpec(
+            **_base_spec_kwargs(tmp_path, base_seed=7, train_val_test_sizes=[20000, 0, 0])  # type: ignore[arg-type]
+        )
+
+        args0 = build_generate_args(spec, spec.shards[0], Path("out"))
+        args1 = build_generate_args(spec, spec.shards[1], Path("out"))
+
+        seed0 = args0[args0.index("--seed") + 1]
+        seed1 = args1[args1.index("--seed") + 1]
+        assert seed0 == "7"
+        assert seed1 == "8"
+
 
 # ---------------------------------------------------------------------------
 # spec_from_cfg — Hydra-composed cfg → DatasetSpec

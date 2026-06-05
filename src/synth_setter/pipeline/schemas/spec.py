@@ -253,6 +253,10 @@ class RenderConfig(BaseModel):
     parameter arrays for its assigned shard. ``param_spec_name`` is resolved
     against the in-process registry inside the writer (not at the launcher),
     so launcher-side construction stays interpreter-only.
+
+    .. attribute :: seed
+
+       Per-shard RNG seed; seeds ``random`` and ``np.random`` at shard start.
     """
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
@@ -338,8 +342,16 @@ class RenderConfig(BaseModel):
             'draws a fresh patch for every sample; ``"shard"`` draws one patch (the '
             "first sample, via the normal loudness-gated path) and reuses it for the "
             "rest of the shard — one identical patch per shard, a probe for the "
-            "per-patch render variance tracked in #489. The patch is drawn fresh each "
-            "run (no seeding), so shard cadence is not reproducible across runs."
+            "per-patch render variance tracked in #489."
+        ),
+    )
+    seed: int | None = Field(
+        default=None,
+        description=(
+            "Per-shard RNG seed; when set, ``random`` and ``np.random`` are seeded at "
+            "the start of the shard render so param sampling is reproducible. ``None`` "
+            "(default) retains the historical unseeded behaviour. Set automatically by "
+            "``build_generate_args`` to ``base_seed + shard_id`` for each subprocess."
         ),
     )
 
