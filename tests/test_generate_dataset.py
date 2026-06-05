@@ -129,20 +129,12 @@ _NO_CADENCE_EXPERIMENT = "experiment=generate_dataset/ci-materialize-test"
 def _spec_from_dataset_overrides(overrides: list[str]) -> DatasetSpec:
     """Compose ``dataset.yaml`` with extra overrides and round-trip through ``DatasetSpec``.
 
-    On Darwin, injects ``render.gui_toggle_cadence=never`` as a safe baseline unless
-    the caller's overrides already set it — ``"render"`` is rejected by the Darwin
-    validator (#714) and ``surge_xt.yaml`` now surfaces ``"render"`` as the Linux
-    default, which would fail every spec construction on macOS.
-
     :param overrides: Hydra override strings appended after the experiment selector.
     :returns: The validated spec built from the composed cfg.
     """
-    base: list[str] = [_NO_CADENCE_EXPERIMENT]
-    if sys.platform == "darwin" and not any("gui_toggle_cadence" in o for o in overrides):
-        base.append("render.gui_toggle_cadence=never")
     try:
         with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
-            cfg = compose(config_name="dataset", overrides=[*base, *overrides])
+            cfg = compose(config_name="dataset", overrides=[_NO_CADENCE_EXPERIMENT, *overrides])
         return spec_from_cfg(cfg)
     finally:
         GlobalHydra.instance().clear()
@@ -165,22 +157,18 @@ def test_base_render_config_accepts_plain_override_for_surfaced_default(
     assert getattr(spec.render, field) == override_value
 
 
-@pytest.mark.skipif(
-    sys.platform == "darwin",
-    reason="gui_toggle_cadence='render' is rejected on Darwin (#714); the YAML default is Linux-only",
-)
 def test_base_render_config_defaults_match_render_config_model() -> None:
-    """A no-override compose yields the RenderConfig model defaults on non-Darwin.
+    """A no-override compose yields the surfaced YAML defaults on all platforms.
 
-    ``gui_toggle_cadence`` is surfaced as the static non-Darwin factory value
-    (``"render"``); the suite is skipped on Darwin where that value is invalid (#714).
+    ``gui_toggle_cadence`` is surfaced as ``"once"`` (safe on all platforms including
+    Darwin, where ``"render"`` is rejected by the validator — #714).
     """
     spec = _spec_from_dataset_overrides([])
     assert spec.render.samples_per_render_batch == 32
     assert spec.render.max_retries == 0
     assert spec.render.parallel is False
     assert spec.render.plugin_reload_cadence == "render"
-    assert spec.render.gui_toggle_cadence == "render"
+    assert spec.render.gui_toggle_cadence == "once"
     assert spec.render.param_sample_cadence == "sample"
 
 
