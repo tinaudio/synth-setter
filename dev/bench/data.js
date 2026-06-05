@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780703122086,
+  "lastUpdate": 1780703124986,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -10474,6 +10474,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 19.61252636979998,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "927e54c3c7c414ff90d7d989bb0326ac12eb87db",
+          "message": "refactor(testing): bind writer param_spec mock to ParamSpec interface (#1454)\n\n* refactor(testing): bind writer param_spec mock to ParamSpec interface\n\nThe writer-level fake in `_install_writer_level_fakes` configured a bare\n`MagicMock(name=\"param_spec\")` with `.sample`/`.encode` return values to\nstand in for the real `ParamSpec` collaborator. A bare mock silently\naccepts a renamed or removed method, so production drift would pass the\ntest. Bind it with `spec=ParamSpec` so the mock rejects attributes the\nreal class does not have, catching interface drift, while keeping the\nconfigured `.sample`/`.encode` returns.\n\nRefs #1445\n\n* refactor(testing): tighten param_spec mock to spec_set=ParamSpec\n\nUse `spec_set` instead of `spec` so the writer-level `param_spec` fake also\nrejects *setting* attributes absent from `ParamSpec`, not just reading them.\nThis strengthens interface-drift detection while preserving the configured\n`.sample`/`.encode` returns (both are real `ParamSpec` attributes).\n\nRefs #1445",
+          "timestamp": "2026-06-05T19:06:18-04:00",
+          "tree_id": "5b75825f33b8ca86e1a0b585da89ed73439bde78",
+          "url": "https://github.com/tinaudio/synth-setter/commit/927e54c3c7c414ff90d7d989bb0326ac12eb87db"
+        },
+        "date": 1780703124323,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 1.733903408050537,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 2.379814672097564,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.007725453935563564,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.0034219026565551758,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 1.7852660417556763,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.870015229,
             "unit": "seconds"
           }
         ]
