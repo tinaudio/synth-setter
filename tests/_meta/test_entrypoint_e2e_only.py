@@ -24,7 +24,7 @@ _ENTRYPOINT_ONLY_TEST_FILES: tuple[str, ...] = (
 
 _BANNED_HYDRA_IMPORTS = frozenset(
     {
-        "initialize",
+        "initialize",  # legacy Hydra 1.x alias; same lifecycle semantics as initialize_config_module
         "initialize_config_dir",
         "initialize_config_module",
     }
