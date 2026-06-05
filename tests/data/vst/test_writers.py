@@ -900,7 +900,7 @@ def _install_writer_level_fakes(
         {"a_amp_eg_attack": 0.5},
         {"pitch": 64, "note_start_and_end": (0.1, 0.9)},
     )
-    fake_spec = MagicMock(spec=ParamSpec, name="param_spec")
+    fake_spec = MagicMock(spec_set=ParamSpec, name="param_spec")
     fake_spec.sample.return_value = fake_spec_payload
     fake_spec.encode.return_value = np.zeros((4,), dtype=np.float32)
 
