@@ -19,7 +19,9 @@ train_val_test_sizes: [4, 4, 4]
 
 render:
   sample_rate: 44100
-  min_loudness: -55.0
+  # Smoke tests verify behavior, not quality; -60 dB gives headroom for
+  # shard-cadence seeded renders where one patch may land near the floor.
+  min_loudness: -60.0
   samples_per_render_batch: 4
   samples_per_shard: 4
   gui_toggle_cadence: once
