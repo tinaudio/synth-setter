@@ -115,7 +115,7 @@ def write_dummy_tar_shard(output_path: Path, spec: DatasetSpec) -> None:
         tar.addfile(info, io.BytesIO(payload))
 
 
-def stub_renderer(spec: DatasetSpec) -> Callable[[list[str]], int]:
+def stub_renderer(spec: DatasetSpec) -> Callable[[list[str]], None]:
     """Return a ``subprocess.check_call`` side effect that writes dummy shards.
 
     Dispatches on the renderer output path's suffix via ``OutputFormat.from_extension``,
@@ -128,9 +128,10 @@ def stub_renderer(spec: DatasetSpec) -> Callable[[list[str]], int]:
     :returns: A callable matching ``subprocess.check_call``'s side-effect contract.
     """
 
-    def _side_effect(args: list[str]) -> int:
+    def _side_effect(args: list[str]) -> None:
         if args and args[0] == "rclone":
-            return _REAL_CHECK_CALL(args)  # noqa: S603 — passthrough to real rclone
+            _REAL_CHECK_CALL(args)  # noqa: S603 — passthrough to real rclone
+            return
         script_idx = find_script_index(args)
         output_file = Path(args[script_idx + 1])
         output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -143,6 +144,5 @@ def stub_renderer(spec: DatasetSpec) -> Callable[[list[str]], int]:
             raise AssertionError(
                 f"stubbed renderer cannot write output with suffix {output_file.suffix!r}"
             )
-        return 0
 
     return _side_effect

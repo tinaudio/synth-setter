@@ -212,13 +212,13 @@ def test_launcher_roundtrip_with_stubbed_renderer(
     # exercises the production resumability invariant (#750) end-to-end.
     renderer_invocations = 0
 
-    def _no_renderer_side_effect(args: list[str]) -> int:
+    def _no_renderer_side_effect(args: list[str]) -> None:
         nonlocal renderer_invocations
         if not (args and args[0] == "rclone"):
             renderer_invocations += 1
         # ``side_effect`` already passes rclone through to the real binary and
         # writes a dummy shard otherwise; we only need to count the renderer arm.
-        return side_effect(args)
+        side_effect(args)
 
     with patch(
         "synth_setter.cli.generate_dataset.subprocess.check_call",

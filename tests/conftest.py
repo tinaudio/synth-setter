@@ -595,9 +595,10 @@ def fake_surge_smoke_datasets(
     The fast counterpart to :func:`surge_xt_smoke_datasets`: ``install_fake_plugin``
     swaps the loader for ``FakeVST3Plugin`` so ``make_hdf5_dataset`` produces a
     structurally-valid ``train.h5`` (audio/mel/param) with no Surge XT subprocess,
-    then ``get_stats_hdf5`` writes the sibling ``stats.npz`` in-process and the
-    split is copied to ``val.h5`` / ``test.h5``. Lets oracle-eval tests that only
-    need a loadable dataset (not real audio fidelity) run on the CPU-fast loop.
+    then ``_write_smoke_stats_npz`` runs the stats CLI as a subprocess to write the
+    sibling ``stats.npz`` and the split is copied to ``val.h5`` / ``test.h5``. Lets
+    oracle-eval tests that only need a loadable dataset (not real audio fidelity)
+    run on the CPU-fast loop.
 
     :param tmp_path: Per-test temporary directory; the dataset is written under
         ``tmp_path / "data" / "smoke"``.

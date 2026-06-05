@@ -240,6 +240,9 @@ def _compose_fake_oracle_eval_cfg(
         cfg.datamodule.num_workers = 0
         cfg.datamodule.use_saved_mean_and_variance = True
         cfg.ckpt_path = None
+        # surge/base enables the wandb logger; null it so the fast loop never hits
+        # wandb init/network/login (these tests don't assert on logging).
+        cfg.logger = None
         # surge/base disables validation (limit_val_batches=0) since fake_oracle is
         # a predict-mode experiment; re-enable it so mode=val/validate actually runs.
         cfg.trainer.limit_val_batches = 1.0
