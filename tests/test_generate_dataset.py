@@ -179,11 +179,11 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
 
     renderer_invocations = 0
 
-    def _count_renderer(args: list[str]) -> int:
+    def _count_renderer(args: list[str]) -> None:
         nonlocal renderer_invocations
         if not (args and args[0] == "rclone"):
             renderer_invocations += 1
-        return render_shard(args)
+        render_shard(args)
 
     with patch(
         "synth_setter.cli.generate_dataset.subprocess.check_call",
