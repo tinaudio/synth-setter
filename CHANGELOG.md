@@ -1,6 +1,169 @@
 # CHANGELOG
 
 
+## v8.18.3 (2026-06-05)
+
+### Bug Fixes
+
+- **monitoring**: Capture wandb console at fd level for non-empty logs
+  ([#1466](https://github.com/tinaudio/synth-setter/pull/1466),
+  [`32ca777`](https://github.com/tinaudio/synth-setter/commit/32ca777283171d32620198eb6e2f672bb9014a5b))
+
+* fix(monitoring): capture wandb console at fd level via console=redirect
+
+WandbLogger left console capture at the default ``console=auto``, which resolves to ``wrap`` on
+  non-TTY workers. ``wrap`` only patches the parent's ``sys.stdout``, so it sees neither
+  generate_dataset's loguru output (bound to ``sys.stderr`` at import, before wandb.init) nor the
+  render-subprocess output — runs appeared in wandb with an empty log stream. Pin
+  ``console=redirect`` for fd-level capture, which survives loguru's early stderr binding and
+  captures child-process output.
+
+Refs #1464
+
+* docs(monitoring): document wandb console=redirect capture in wandb-integration
+
+doc-drift flagged the §1 settings table: it described the block as only ``code_dir`` and the
+  line-range pointer undershot the appended ``console`` field. Add a Console capture row and convert
+  the stale ``:17-19`` ref to a ``§ wandb.settings`` symbol pointer.
+
+Refs #1465
+
+### Internal-Feat
+
+- **data**: Preflight dataset-copy runs against the source spec
+  ([#1459](https://github.com/tinaudio/synth-setter/pull/1459),
+  [`9c16c71`](https://github.com/tinaudio/synth-setter/commit/9c16c71ddf39aafc94f1b4e53980938994f71f10))
+
+The copy path matches source→target shards purely by filename, silently assuming the target run is
+  configured to mirror the source's layout. A mismatched param_spec_name, samples_per_shard, split
+  sizes, or shard count would otherwise surface one render (or one re-run) at a time, or produce a
+  faithful-looking copy with a different train/val/test partition.
+
+Add DatasetSpec.validate_copy_source, a pure comparison that asserts the source reproduces the
+  target on every copy-relevant value and aggregates all mismatches into one error. The generate()
+  chokepoint loads the source's input_spec.json (via load_spec_from_uri) and runs it before the
+  first render, so a misconfigured copy — or an unsynced source spec — fails loudly at launch.
+
+Refs #1429
+
+### Refactoring
+
+- **testing**: Bind writer param_spec mock to ParamSpec interface
+  ([#1454](https://github.com/tinaudio/synth-setter/pull/1454),
+  [`927e54c`](https://github.com/tinaudio/synth-setter/commit/927e54c3c7c414ff90d7d989bb0326ac12eb87db))
+
+* refactor(testing): bind writer param_spec mock to ParamSpec interface
+
+The writer-level fake in `_install_writer_level_fakes` configured a bare
+  `MagicMock(name="param_spec")` with `.sample`/`.encode` return values to stand in for the real
+  `ParamSpec` collaborator. A bare mock silently accepts a renamed or removed method, so production
+  drift would pass the test. Bind it with `spec=ParamSpec` so the mock rejects attributes the real
+  class does not have, catching interface drift, while keeping the configured `.sample`/`.encode`
+  returns.
+
+Refs #1445
+
+* refactor(testing): tighten param_spec mock to spec_set=ParamSpec
+
+Use `spec_set` instead of `spec` so the writer-level `param_spec` fake also rejects *setting*
+  attributes absent from `ParamSpec`, not just reading them. This strengthens interface-drift
+  detection while preserving the configured `.sample`/`.encode` returns (both are real `ParamSpec`
+  attributes).
+
+- **testing**: Patch a _utcnow seam in prefix default-time test
+  ([#1456](https://github.com/tinaudio/synth-setter/pull/1456),
+  [`ffb028b`](https://github.com/tinaudio/synth-setter/commit/ffb028b9ad31ae75b9c631dec5927f08de41848f))
+
+* refactor(pipeline): add _utcnow seam for prefix run-id default-path test
+
+The default-path test for make_dataset_wandb_run_id patched the entire datetime class and rebuilt
+  the constructor via side_effect, reimplementing a stdlib type to keep ordinary datetime()
+  construction working while stubbing now(). That is fragile.
+
+Introduce a one-line _utcnow() indirection that the default path calls, and patch prefix._utcnow in
+  the test. Behaviour is unchanged: _utcnow() returns datetime.now(timezone.utc). freezegun is not a
+  dev dependency and no seam existed, so option 3 (minimal production seam) was the least-invasive
+  fix.
+
+Refs #1445
+
+* refactor(testing): rename prefix seam to _utc_now for package consistency
+
+Match the existing _utc_now helper in pipeline/schemas/spec.py (Copilot review feedback) so the
+  UTC-clock seam has one name across the package and is easy to grep. Updates the patch target, mock
+  variable, and docstring in the test.
+
+- **testing**: Share VST no-logger-exceptions crash-gate helper
+  ([#1458](https://github.com/tinaudio/synth-setter/pull/1458),
+  [`baf3080`](https://github.com/tinaudio/synth-setter/commit/baf3080c76762e0c0ac516eb68cbd9907116e68b))
+
+* refactor(testing): extract shared no-logger-exceptions crash gate helper
+
+The VST end-to-end tests test_fake_plugin_e2e.py and test_always_on_integration.py each carried an
+  identical inline block that wrapped core.logger with MagicMock(wraps=...) and asserted
+  exception.call_count == 0 — the loguru crash gate caplog cannot observe.
+
+Promote that idiom to tests/helpers/logger_assertions.py as the assert_no_logger_exceptions context
+  manager (single owner) and refactor both call sites to use it. Behaviour and coverage are
+  unchanged; only .exception is gated, matching what both sites assert.
+
+Refs #1445
+
+* refactor(testing): restore patched logger on context exit, not at teardown
+
+Address Copilot review on #1458: scope the monkeypatch via a nested monkeypatch.context() so
+  assert_no_logger_exceptions reverts module.logger deterministically when the with-block exits,
+  including when the body raises. The crash-gate assertion still runs only on clean exit so a body
+  exception propagates unmasked. Drop the now-unnecessary monkeypatch.undo() from the restore test
+  and add a body-raises restore case.
+
+- **testing**: Spec the Trainer stand-in in callbacks tests
+  ([#1455](https://github.com/tinaudio/synth-setter/pull/1455),
+  [`f1b0935`](https://github.com/tinaudio/synth-setter/commit/f1b0935f3d3e72c64f825f2258ba1405bcf9f4b8))
+
+The `_make_trainer` helper used a bare `MagicMock()` for the Lightning Trainer stand-in. Unlike the
+  logger mocks in the same helper, which pin `spec=` to their real classes, the bare mock
+  auto-creates any attribute on access, so a typo'd attribute read in `_log_figure` (which reads
+  only `loggers`, `global_step`, `is_global_zero`) would pass undetected.
+
+Pin `spec=Trainer` so the mock is confined to the real Trainer interface and a typo'd attribute
+  access raises AttributeError. Keeps the existing value-setup and the logger-mock call
+  introspection unchanged.
+
+Refs #1445
+
+### Testing
+
+- **testing**: Assert R2-cred state at upload, loosen log-copy checks
+  ([#1457](https://github.com/tinaudio/synth-setter/pull/1457),
+  [`616cb72`](https://github.com/tinaudio/synth-setter/commit/616cb72ad0744d556c70ce772e56b8c640278323))
+
+* test(testing): assert R2-cred state at upload, loosen log-copy checks
+
+Replace the call-order assertion in ``test_main_ensures_r2_env_loaded_before_upload`` (renamed to
+  ``test_main_uploads_spec_with_r2_creds_present_in_env``) with a state assertion: the
+  ``upload_spec`` stub records whether the R2 secret key is in ``os.environ`` at call time, and the
+  ``ensure_r2_env_loaded`` stub sets it. This pins the observable invariant (creds present when
+  upload runs) instead of internal ``mock_calls`` ordering, so a benign re-ordering passes while a
+  real regression (upload before creds load) fails.
+
+Loosen two brittle log-copy substring asserts to fire-once checks beside their existing state
+  assertions (``finalize_mock.assert_not_called`` / ``generate_mock.assert_not_called``), so
+  reworded messages no longer break the tests.
+
+Refs #1445
+
+* test(testing): address Copilot review on cred-state + log-token checks
+
+Two Copilot findings on PR #1457:
+
+- The loosened ``mock_logger.info.assert_called()`` was vacuous — ``main`` always emits INFO logs,
+  so removing the ignore-path log would not fail the test. Match stable tokens (``finalize_inline=``
+  + ``ignored``) instead: survives rewording, but fails if the ignore-path log is dropped (verified
+  by mutation). - ``_load_creds`` now sets the probe key via ``monkeypatch.setenv`` instead of a raw
+  ``os.environ`` write, so the env is restored on teardown even if the test fails partway through.
+
+
 ## v8.18.2 (2026-06-05)
 
 ### Bug Fixes
