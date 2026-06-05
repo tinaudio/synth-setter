@@ -1236,6 +1236,56 @@ class TestBuildGenerateArgs:
         assert seed0 == "7"
         assert seed1 == "8"
 
+    def test_render_config_seed_negative_raises_validation_error(self) -> None:
+        """``RenderConfig`` rejects a negative seed — ``np.random.seed`` requires uint32.
+
+        Constructs a complete ``RenderConfig`` so the seed check in
+        ``_ranges_must_be_sane`` is the only validation that can fail.
+        """
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="np.random compatibility"):
+            RenderConfig(
+                plugin_path="plugins/Surge XT.vst3",
+                preset_path="presets/surge-base.vstpreset",
+                param_spec_name="surge_simple",
+                renderer_version="1.3.4",
+                sample_rate=44100,
+                channels=2,
+                velocity=100,
+                signal_duration_seconds=4.0,
+                min_loudness=-55.0,
+                samples_per_render_batch=32,
+                samples_per_shard=1000,
+                gui_toggle_cadence="never",
+                seed=-1,
+            )
+
+    def test_render_config_seed_above_uint32_max_raises_validation_error(self) -> None:
+        """``RenderConfig`` rejects seeds above 2^32-1 — ``np.random.seed`` requires uint32.
+
+        Constructs a complete ``RenderConfig`` so the seed check in
+        ``_ranges_must_be_sane`` is the only validation that can fail.
+        """
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="np.random compatibility"):
+            RenderConfig(
+                plugin_path="plugins/Surge XT.vst3",
+                preset_path="presets/surge-base.vstpreset",
+                param_spec_name="surge_simple",
+                renderer_version="1.3.4",
+                sample_rate=44100,
+                channels=2,
+                velocity=100,
+                signal_duration_seconds=4.0,
+                min_loudness=-55.0,
+                samples_per_render_batch=32,
+                samples_per_shard=1000,
+                gui_toggle_cadence="never",
+                seed=2**32,
+            )
+
 
 # ---------------------------------------------------------------------------
 # spec_from_cfg — Hydra-composed cfg → DatasetSpec

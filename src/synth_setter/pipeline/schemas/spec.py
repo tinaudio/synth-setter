@@ -201,7 +201,11 @@ class ShardSpec(BaseModel):
             "(``shard-NNNNNN.h5`` or ``shard-NNNNNN.tar``)."
         )
     )
-    seed: int = Field(description="Per-shard RNG seed, derived as ``base_seed + shard_id``.")
+    seed: int = Field(
+        ge=0,
+        le=2**32 - 1,
+        description="Per-shard RNG seed, derived as ``base_seed + shard_id``.",
+    )
 
 
 class DatasetSrcConfig(BaseModel):
@@ -374,6 +378,10 @@ class RenderConfig(BaseModel):
             raise ValueError("param_spec_name must not be blank")
         if not self.renderer_version.strip():
             raise ValueError("renderer_version must not be blank")
+        if self.seed is not None and not (0 <= self.seed <= 2**32 - 1):
+            raise ValueError(
+                f"seed must be in [0, 2**32-1] for np.random compatibility; got {self.seed}"
+            )
         return self
 
     @model_validator(mode="after")
