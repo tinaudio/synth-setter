@@ -1036,9 +1036,7 @@ def test_render_in_batches_sample_cadence_draws_param_spec_per_sample(
     assert fake_spec.sample.call_count == n
 
 
-# ---------------------------------------------------------------------------
 # Seeding behaviour — _render_in_batches seeds global RNGs from render_cfg.seed
-# ---------------------------------------------------------------------------
 
 
 def _fake_generate_sample_using_real_spec(

@@ -85,6 +85,24 @@ def test_cfg_dataset_with_datasetsrc_composes_copy_source_into_spec(
     assert spec.datasetsrc.copy_dataset_root == "/data/source-dataset"
 
 
+def test_cfg_dataset_shard_seeds_derive_from_base_seed(
+    cfg_dataset: DictConfig,
+) -> None:
+    """Each ``ShardSpec.seed`` equals ``base_seed + shard_id`` after Hydra compose.
+
+    Pins the full path: Hydra ``base_seed`` → ``spec_from_cfg`` → ``DatasetSpec.shards``.
+    ``render.seed`` remains ``None`` (unseeded default) — only the per-shard value
+    carries a concrete integer.
+
+    :param cfg_dataset: Function-scoped fixture composing ``dataset.yaml`` with the
+        ``generate_dataset/smoke-shard`` experiment and ``tmp_path``-pinned paths.
+    """
+    spec = spec_from_cfg(cfg_dataset)
+    assert spec.render.seed is None
+    for shard in spec.shards:
+        assert shard.seed == spec.base_seed + shard.shard_id
+
+
 def test_cfg_dataset_datasetsrc_with_wds_output_is_rejected(
     cfg_dataset: DictConfig,
 ) -> None:

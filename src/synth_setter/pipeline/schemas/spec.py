@@ -350,7 +350,7 @@ class RenderConfig(BaseModel):
         description=(
             "Per-shard RNG seed; when set, ``random`` and ``np.random`` are seeded at "
             "the start of the shard render so param sampling is reproducible. ``None`` "
-            "(default) retains the historical unseeded behaviour. Set automatically by "
+            "(default) leaves RNGs unseeded. Set automatically by "
             "``build_generate_args`` to ``base_seed + shard_id`` for each subprocess."
         ),
     )

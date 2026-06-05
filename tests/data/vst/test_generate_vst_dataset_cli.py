@@ -90,7 +90,6 @@ def test_build_generate_args_roundtrips_through_cli_parser() -> None:
     parsed = CliApp.run(_GenerateCliArgs, cli_args=args[2:])
     reconstructed = RenderConfig(**parsed.model_dump(exclude={"data_file", "copy_dataset_root"}))
 
-    # The shard's seed overrides spec.render.seed (None → base_seed+shard_id).
     assert reconstructed == spec.render.model_copy(update={"seed": shard.seed})
     assert parsed.data_file == "/tmp/shard-000000.h5"
     # No copy source on this spec, so the CLI flag is absent and parses to None.
