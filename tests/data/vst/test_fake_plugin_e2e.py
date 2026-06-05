@@ -11,7 +11,6 @@ work" gate; this is the "does our pipeline still work" gate.
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import h5py
 import hdf5plugin  # noqa: F401  side-effect: registers Blosc2 filter for h5py reads
@@ -29,6 +28,7 @@ from tests.data.vst.test_generate_vst_dataset import (  # noqa: E402  pinned can
     _HARDCODED_SYNTH_PARAMS,
     _render_cfg,
 )
+from tests.helpers.logger_assertions import assert_no_logger_exceptions  # noqa: E402
 
 _PLUGIN_PATH = "plugins/fake.vst3"  # never touched on disk — load_plugin is patched
 _PRESET_PATH = "presets/fake.vstpreset"
@@ -72,15 +72,14 @@ def test_make_hdf5_dataset_writes_valid_shard_under_fake_plugin(
     out = tmp_path / "shard-000000.h5"
     fixed_synth = [_HARDCODED_SYNTH_PARAMS] * num_samples
     fixed_note = [_HARDCODED_NOTE_PARAMS] * num_samples
-    fake_logger = MagicMock(wraps=core.logger)
-    monkeypatch.setattr(core, "logger", fake_logger)
 
-    make_hdf5_dataset(
-        hdf5_file=out,
-        render_cfg=render_cfg,
-        fixed_synth_params_list=fixed_synth,
-        fixed_note_params_list=fixed_note,
-    )
+    with assert_no_logger_exceptions(monkeypatch, core):
+        make_hdf5_dataset(
+            hdf5_file=out,
+            render_cfg=render_cfg,
+            fixed_synth_params_list=fixed_synth,
+            fixed_note_params_list=fixed_note,
+        )
 
     assert out.exists()
     with h5py.File(out, "r") as f:
@@ -92,7 +91,3 @@ def test_make_hdf5_dataset_writes_valid_shard_under_fake_plugin(
         audio = audio_ds[...]
     assert np.isfinite(audio).all(), "rendered audio contains NaN/Inf"
     assert (np.abs(audio) <= 1.0).all(), "rendered audio exceeds [-1, 1] bounds"
-
-    assert fake_logger.exception.call_count == 0, (
-        f"unexpected logger.exception calls: {fake_logger.exception.call_args_list}"
-    )
