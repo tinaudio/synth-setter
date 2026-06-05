@@ -1,6 +1,27 @@
 # CHANGELOG
 
 
+## v8.18.2 (2026-06-05)
+
+### Bug Fixes
+
+- **eval**: Forward num_workers to inline oracle-eval predict DataLoader
+  ([#1463](https://github.com/tinaudio/synth-setter/pull/1463),
+  [`6a4ce6b`](https://github.com/tinaudio/synth-setter/commit/6a4ce6b0a9bda3f48e4170add9da6ea60641b67a))
+
+The inline oracle-eval subprocess built its argv with a fixed num_workers (11, from the eval's surge
+  datamodule). On macOS the multiprocessing start method is spawn, which pickles the dataset to each
+  DataLoader worker, but SurgeXTDataset holds an open h5py handle that cannot be pickled, so every
+  oracle_eval_inline run crashed with "h5py objects cannot be pickled". A datamodule.num_workers=0
+  override on the generate command never reached the eval, since the argv did not forward it.
+
+Forward the generate run's datamodule.num_workers into the eval argv so the eval honours the
+  configured worker count. Callers set num_workers=0 on macOS; Linux (fork) keeps its default. The
+  open-h5py dataset is unchanged.
+
+Fixes #1462
+
+
 ## v8.18.1 (2026-06-05)
 
 ### Bug Fixes
