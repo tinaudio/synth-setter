@@ -1,10 +1,10 @@
-"""Invariant: canonical entrypoint test modules contain only e2e tests.
+"""Invariant: canonical entrypoint test modules must not import Hydra config-initializers.
 
-``test_generate_dataset.py`` and ``test_train.py`` are for tests that drive the
-real CLI entrypoint (``from_hydra``, ``train``, or ``subprocess``). Config-layer
-tests (Hydra compose + ``spec_from_cfg`` without running the entrypoint) belong in
-``tests/pipeline/configs/``. The tell is a direct ``initialize_config_module``
-import — it means the test manages its own Hydra lifecycle.
+``test_generate_dataset.py`` and ``test_train.py`` drive the real CLI entrypoint
+(``from_hydra``, ``train``, or ``subprocess``) and receive a pre-composed cfg via
+fixture. Tests that manage their own Hydra lifecycle (via ``initialize``,
+``initialize_config_dir``, or ``initialize_config_module``) are config-layer tests
+and belong in ``tests/pipeline/configs/``.
 
 ``test_eval.py`` is excluded: it composes a cfg inline and immediately calls
 ``evaluate(cfg)``, which is e2e. Refs #1345.
