@@ -1226,6 +1226,7 @@ T_worktree_guard_warns_in_primary() {
   grep -q "WARNING" "$stderr_file" || { echo "stderr should contain WARNING; got: $(cat "$stderr_file")"; return 1; }
   grep -q "git worktree add" "$stderr_file" || { echo "stderr should suggest 'git worktree add'"; return 1; }
   grep -q "make link-plugins" "$stderr_file" || { echo "remediation should chain 'make link-plugins' so the new worktree gets the VST symlink; got: $(cat "$stderr_file")"; return 1; }
+  grep -q "make link-thoughts" "$stderr_file" || { echo "remediation should chain 'make link-thoughts' so the new worktree shares central thoughts/; got: $(cat "$stderr_file")"; return 1; }
 }
 it "worktree-guard: edit in primary (warn mode default) → exit 0 with WARNING + remediation on stderr" T_worktree_guard_warns_in_primary
 
@@ -1366,6 +1367,7 @@ T_session_start_banner_in_primary() {
   [[ "$out" == *"PRIMARY CHECKOUT"* ]] || { echo "banner should flag PRIMARY CHECKOUT; got: $out"; return 1; }
   [[ "$out" == *"git worktree add"* ]] || { echo "banner should suggest 'git worktree add'; got: $out"; return 1; }
   [[ "$out" == *"make link-plugins"* ]] || { echo "spawn command should chain 'make link-plugins' so the new worktree gets the VST symlink; got: $out"; return 1; }
+  [[ "$out" == *"make link-thoughts"* ]] || { echo "spawn command should chain 'make link-thoughts' so the new worktree shares central thoughts/; got: $out"; return 1; }
 }
 it "session-start-banner: in primary → stdout flags PRIMARY CHECKOUT and shows remediation" T_session_start_banner_in_primary
 

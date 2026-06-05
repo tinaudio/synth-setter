@@ -85,7 +85,7 @@ isolated worktree before editing.
 
 Recommended (current HEAD: ${branch_label}):
   git worktree add --detach '${primary_root}/.claude/worktrees/${slug}'
-  cd '${primary_root}/.claude/worktrees/${slug}' && uv sync && make link-plugins
+  cd '${primary_root}/.claude/worktrees/${slug}' && uv sync && make link-plugins && make link-thoughts
 
 ${override_hint}
 EOF

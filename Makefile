@@ -191,6 +191,40 @@ link-plugins: ## Mirror the primary checkout's plugins/ into the current worktre
 		echo "linked plugins/$$name -> $$entry"; \
 	done
 
+# Symlink this worktree's gitignored thoughts/ to the primary's central thoughts/
+# so qrspi docs from every worktree converge; migrates pre-existing files first.
+link-thoughts: ## Symlink this worktree's thoughts/ to the primary checkout's central thoughts/ (no-op in primary)
+	@set -e; \
+	primary="$$(cd "$$(dirname "$$(git rev-parse --git-common-dir)")" && pwd)"; \
+	here="$$(git rev-parse --show-toplevel)"; \
+	if [ "$$primary" = "$$here" ]; then \
+		echo "In primary checkout — thoughts/ is already central."; exit 0; \
+	fi; \
+	central="$$primary/thoughts"; \
+	mkdir -p "$$central"; \
+	if [ -L "$$here/thoughts" ]; then \
+		echo "thoughts/ already linked -> $$(readlink "$$here/thoughts")"; exit 0; \
+	fi; \
+	if [ -d "$$here/thoughts" ]; then \
+		find "$$here/thoughts" -type f | while read -r f; do \
+			rel="$${f#"$$here/thoughts/"}"; \
+			if [ -e "$$central/$$rel" ]; then \
+				if ! cmp -s "$$f" "$$central/$$rel"; then \
+					alt="$$rel.from-$$(basename "$$here")"; \
+					cp "$$f" "$$central/$$alt" || exit 1; \
+					echo "collision: kept central/$$rel; saved worktree copy as $$alt"; \
+				fi; \
+			else \
+				mkdir -p "$$central/$$(dirname "$$rel")" || exit 1; \
+				cp "$$f" "$$central/$$rel" || exit 1; \
+				echo "migrated $$rel"; \
+			fi; \
+		done; \
+		rm -rf "$$here/thoughts"; \
+	fi; \
+	ln -sfn "$$central" "$$here/thoughts"; \
+	echo "linked thoughts/ -> $$central"
+
 # Mirrors the --cov flags used by .github/workflows/test.yml so local
 # coverage runs reproduce CI output (xml report feeds Codecov; html is for
 # local browsing).

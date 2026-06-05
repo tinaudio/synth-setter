@@ -49,8 +49,9 @@ main() {
     printf 'Spawn a worktree before editing:\n'
     # Anchor to $primary_root so the command works even when the session started in a subdir.
     # `uv sync` builds the worktree's own .venv; `make link-plugins` backfills the
-    # gitignored plugins/ symlink. Single-quote the paths so the command survives spaces.
-    printf "  git worktree add --detach '%s/.claude/worktrees/%s' && cd '%s/.claude/worktrees/%s' && uv sync && make link-plugins\n" \
+    # gitignored plugins/ symlink; `make link-thoughts` points thoughts/ at the
+    # central primary copy. Single-quote the paths so the command survives spaces.
+    printf "  git worktree add --detach '%s/.claude/worktrees/%s' && cd '%s/.claude/worktrees/%s' && uv sync && make link-plugins && make link-thoughts\n" \
       "$primary_root" "$slug" "$primary_root" "$slug"
   else
     printf '  status   : isolated worktree (OK)\n'

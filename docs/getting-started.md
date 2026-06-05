@@ -760,7 +760,7 @@ devcontainer up --workspace-folder .
 ```bash
 # Inside the container, starting from the workspace root on main:
 git worktree add .claude/worktrees/my-feature -b feat/my-feature
-cd .claude/worktrees/my-feature && make link-plugins
+cd .claude/worktrees/my-feature && make link-plugins && make link-thoughts
 ```
 
 This is the supported local pattern. Mounting a worktree directly from the
@@ -788,6 +788,13 @@ the failure surfaces immediately rather than partway through `post-create`.
   `git worktree add` doesn't copy it). `make link-plugins` mirrors the
   primary checkout's `plugins/` entries into the worktree (no-op in the
   primary) — that's why the spawn command above chains it.
+- `thoughts/` is gitignored too, so each worktree would otherwise grow its
+  own copy and scatter qrspi docs (research/structure/plan/design) across
+  worktrees. `make link-thoughts` replaces the worktree's `thoughts/` with a
+  symlink to the primary checkout's central `thoughts/` (migrating any
+  pre-existing worktree files, preserving collisions as `<name>.from-<worktree>`),
+  so every worktree's qrspi output lands in one place — that's why the spawn
+  command chains it after `make link-plugins`.
 
 ### B.3. macOS VM (Tart)
 
