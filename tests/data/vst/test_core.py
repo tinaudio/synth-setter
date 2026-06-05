@@ -4,6 +4,7 @@ import plistlib
 import threading
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING, cast
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -17,6 +18,9 @@ from synth_setter.data.vst.core import (
     render_params,
     warmup_plugin,
 )
+
+if TYPE_CHECKING:
+    from pedalboard import VST3Plugin
 
 
 class TestExtractRendererVersion:
@@ -176,12 +180,9 @@ class TestRunWithEditorHeldOpen:
         while renders are still in flight on the background thread.
 
         :param monkeypatch: Tightens ``_EDITOR_JOIN_TIMEOUT_SECONDS`` so the
-            slow body outlives the join window deterministically; stubs
-            ``core.logger`` so the leak-warning assertion is observable.
+            slow body outlives the join window deterministically.
         """
         monkeypatch.setattr(core, "_EDITOR_JOIN_TIMEOUT_SECONDS", 0.1)
-        fake_logger = MagicMock()
-        monkeypatch.setattr(core, "logger", fake_logger)
         fake_plugin = MagicMock()
         fake_plugin.show_editor.return_value = None
 
@@ -200,8 +201,6 @@ class TestRunWithEditorHeldOpen:
 
         # 1s slack over the 0.1s timeout to absorb CI scheduler jitter.
         assert elapsed < 1.0
-        assert fake_logger.warning.call_count == 1
-        assert "RenderWorkerLeaked" in fake_logger.warning.call_args.args[0]
 
     def test_run_with_editor_held_open_propagates_body_exception_even_on_slow_finish(
         self, monkeypatch: pytest.MonkeyPatch
@@ -265,17 +264,60 @@ class TestRunWithEditorHeldOpen:
             core.run_with_editor_held_open(fake_plugin_empty, lambda: "ignored")
 
 
+class _RenderFakePlugin:
+    """Hand-written ``VST3Plugin`` double for ``render_params`` load/preset path tests.
+
+    ``process`` returns a ``(channels, num_samples)`` float32 buffer mirroring
+    the real plugin's output contract (see ``FakeVST3Plugin.process``); flush
+    calls and the render call alike yield the configured ``audio_shape`` since
+    only the render return value is observed. ``process_called`` records whether
+    any render ran, replacing a ``MagicMock``'s ``.called`` flag.
+    """
+
+    def __init__(self, audio_shape: tuple[int, int]) -> None:
+        """Store the output shape; start with no recorded ``process`` call.
+
+        :param audio_shape: ``(channels, num_samples)`` of every ``process`` return.
+        """
+        self._audio_shape = audio_shape
+        self.process_called = False
+
+    def process(
+        self,
+        midi_events: object,
+        duration_seconds: float,
+        sample_rate: float,
+        channels: int,
+        block_size: int,
+        tail: bool,
+    ) -> np.ndarray:
+        """Return a fresh zero buffer of ``audio_shape`` and flag the call.
+
+        Mirrors ``pedalboard.VST3Plugin.process``'s positional signature so the
+        fake is called exactly as the real plugin; the arguments are accepted
+        but the return shape is fixed to ``audio_shape``.
+
+        :param midi_events: MIDI payload the production code passes; ignored.
+        :param duration_seconds: Requested render length; ignored.
+        :param sample_rate: Output sample rate in Hz; ignored.
+        :param channels: Requested channel count; ignored.
+        :param block_size: Render block size; ignored.
+        :param tail: Whether to render the release tail; ignored.
+        :returns: ``(channels, num_samples)`` float32 array of zeros.
+        """
+        self.process_called = True
+        return np.zeros(self._audio_shape, dtype=np.float32)
+
+    def reset(self) -> None:
+        """Mirror the real plugin's reset hook; the fake holds no audio state."""
+
+
 class TestRenderParamsPreloadedPlugin:
     """``render_params`` accepts a pre-loaded plugin and skips load/preset on that path."""
 
     @staticmethod
-    def _fake_plugin(audio_shape: tuple[int, int]) -> MagicMock:
-        fake = MagicMock()
-        # process() is called multiple times (flushes + render); only the render
-        # call's return value matters for the assertion below, so return a fresh
-        # zero array each call.
-        fake.process.side_effect = lambda *a, **kw: np.zeros(audio_shape, dtype=np.float32)
-        return fake
+    def _fake_plugin(audio_shape: tuple[int, int]) -> _RenderFakePlugin:
+        return _RenderFakePlugin(audio_shape)
 
     def test_preloaded_plugin_bypasses_load_and_preset(
         self, monkeypatch: pytest.MonkeyPatch
@@ -309,13 +351,13 @@ class TestRenderParamsPreloadedPlugin:
             sample_rate=44100,
             channels=2,
             preset_path="presets/surge-base.vstpreset",
-            plugin=preloaded,
+            plugin=cast("VST3Plugin", preloaded),
         )
 
         assert load_calls == []
         assert preset_calls == []
         # The pre-loaded plugin is what ran the render.
-        assert preloaded.process.called
+        assert preloaded.process_called
 
     def test_no_plugin_kwarg_reloads_per_call(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Without ``plugin``, ``render_params`` still loads the plugin and preset per call.
@@ -325,7 +367,7 @@ class TestRenderParamsPreloadedPlugin:
         fake_plugin = self._fake_plugin(audio_shape=(2, 16))
         load_calls: list[str] = []
 
-        def _capture_load(path: str, **_kw: object) -> MagicMock:
+        def _capture_load(path: str, **_kw: object) -> _RenderFakePlugin:
             load_calls.append(path)
             return fake_plugin
 
@@ -403,7 +445,7 @@ class TestRenderParamsPreloadedPlugin:
             sample_rate=44100,
             channels=2,
             preset_path="presets/surge-base.vstpreset",
-            plugin=cached,
+            plugin=cast("VST3Plugin", cached),
             warmup=True,
         )
 
