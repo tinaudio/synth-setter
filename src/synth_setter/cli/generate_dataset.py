@@ -32,7 +32,11 @@ import wandb
 from synth_setter.cli.finalize_dataset import finalize_from_spec
 from synth_setter.data.vst.core import extract_renderer_version
 from synth_setter.pipeline import r2_io
-from synth_setter.pipeline.constants import STATS_NPZ_FILENAME, WORKER_SPEC_URI_ENV
+from synth_setter.pipeline.constants import (
+    INPUT_SPEC_FILENAME,
+    STATS_NPZ_FILENAME,
+    WORKER_SPEC_URI_ENV,
+)
 from synth_setter.pipeline.partitioning import (
     available_cpus,
     get_my_shards,
@@ -41,6 +45,7 @@ from synth_setter.pipeline.partitioning import (
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig, ShardSpec
 from synth_setter.pipeline.spec_io import (
+    load_spec_from_uri,
     upload_spec,
     write_spec_locally,
 )
@@ -225,6 +230,33 @@ def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -
     return args
 
 
+def _validate_copy_source(spec: DatasetSpec) -> None:
+    """Preflight a dataset-copy run against the source's persisted spec.
+
+    No-op unless ``spec.datasetsrc`` is set. Otherwise loads the source's
+    ``input_spec.json`` from ``<copy_dataset_root>/`` (the spec sits beside the
+    shards at the dataset prefix root) and delegates to
+    :meth:`DatasetSpec.validate_copy_source`, so a source that disagrees on any
+    copy-relevant value fails once at launch rather than per-shard mid-render.
+
+    :param spec: The target dataset spec about to be rendered.
+    :raises ValueError: ``copy_dataset_root`` holds no ``input_spec.json``, or
+        the source spec mismatches ``spec`` on a copy-relevant value.
+    """
+    if spec.datasetsrc is None:
+        return
+    source_spec_path = Path(spec.datasetsrc.copy_dataset_root) / INPUT_SPEC_FILENAME
+    if not source_spec_path.is_file():
+        raise ValueError(
+            f"dataset-copy source has no {INPUT_SPEC_FILENAME} at {source_spec_path}; "
+            "sync the source dataset's spec alongside its shards (it lives beside the "
+            "shards at the R2 dataset prefix root) so the copy can be validated."
+        )
+    source = load_spec_from_uri(str(source_spec_path))
+    spec.validate_copy_source(source)
+    logger.info(f"dataset-copy source OK: {source_spec_path} matches the target spec")
+
+
 def generate(spec: DatasetSpec, work_dir: Path, loggers: list[Logger]) -> None:  # noqa: DOC503
     """Render+upload each owned shard; writes shards under ``work_dir``.
 
@@ -265,6 +297,8 @@ def generate(spec: DatasetSpec, work_dir: Path, loggers: list[Logger]) -> None: 
         # leaks un-closed on the helper's exception path.
         _log_hyperparams(loggers, spec)
         _log_spec_artifact(loggers, spec)
+        # Fail a misconfigured dataset-copy at launch, before the first render.
+        _validate_copy_source(spec)
         render = spec.render
         actual_renderer_version = extract_renderer_version(Path(render.plugin_path))
         if actual_renderer_version != render.renderer_version:
