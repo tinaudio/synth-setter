@@ -1678,11 +1678,12 @@ class TestMainDispatchBranches:
 
         # Capture the resolved output_dir so the eval's dataset_root can be
         # pinned to the exact dir generate+finalize wrote the shards into.
-        observed: dict[str, Path] = {}
+        observed: dict[str, object] = {}
         real_spec_from_cfg = gd.spec_from_cfg
 
         def _capture_output_dir(cfg: object) -> DatasetSpec:
             observed["output_dir"] = Path(cfg.paths.output_dir)  # type: ignore[attr-defined]
+            observed["num_workers"] = cfg.datamodule.num_workers  # type: ignore[attr-defined]
             return real_spec_from_cfg(cfg)  # type: ignore[arg-type]
 
         monkeypatch.setattr(gd, "spec_from_cfg", _capture_output_dir)
@@ -1696,6 +1697,9 @@ class TestMainDispatchBranches:
         # re-renders through the same spec; smoke-shard is surge_simple.
         render_arg = oracle_mock.call_args.kwargs["render"]
         assert render_arg.param_spec_name == "surge_simple"
+        # The eval inherits the generate run's datamodule worker count verbatim,
+        # so a Darwin override (num_workers=0) reaches the predict DataLoader.
+        assert oracle_mock.call_args.kwargs["num_workers"] == observed["num_workers"]
         assert render_arg.preset_path == "presets/surge-simple.vstpreset"
         # plugin_path is the TEST_PLUGIN_VST3 this test overrode at generation —
         # proving a non-default plugin flows through to the eval re-render.
@@ -1744,7 +1748,9 @@ class TestMainDispatchBranches:
                 "plugin_path": "plugins/Surge XT.vst3",
             }
         )
-        gd._run_oracle_eval_subprocess(dataset_root, run_dir, "some-run-id", render=render)
+        gd._run_oracle_eval_subprocess(
+            dataset_root, run_dir, "some-run-id", render=render, num_workers=7
+        )
 
         run_mock.assert_called_once()
         called_argv = run_mock.call_args[0][0]
@@ -1779,6 +1785,8 @@ class TestMainDispatchBranches:
         # batch_size=1 keeps the smoke-sized test split (4 samples) from
         # flooring to zero batches under the 128 default — see #1331.
         assert "datamodule.batch_size=1" in called_argv
+        # Sentinel 7 (no config default) proves the value is forwarded, not hardcoded.
+        assert "datamodule.num_workers=7" in called_argv
         assert "mode=predict" in called_argv
 
     def test_run_oracle_eval_subprocess_missing_local_artifacts_raises(
@@ -1809,6 +1817,7 @@ class TestMainDispatchBranches:
                 tmp_path / "oracle_eval" / "rid",
                 "rid",
                 render=spec.render,
+                num_workers=0,
             )
 
         run_mock.assert_not_called()

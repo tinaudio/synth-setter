@@ -22,13 +22,13 @@ from pathlib import Path
 from typing import Any
 
 import hydra
-import wandb
 from hydra.core.hydra_config import HydraConfig
 from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 
+import wandb
 from synth_setter.cli.finalize_dataset import finalize_from_spec
 from synth_setter.data.vst.core import extract_renderer_version
 from synth_setter.pipeline import r2_io
@@ -69,6 +69,7 @@ def _run_oracle_eval_subprocess(
     run_id: str,
     *,
     render: RenderConfig,
+    num_workers: int,
 ) -> None:
     """Run the fake-oracle eval over ``dataset_root`` to verify the param-array round-trip.
 
@@ -89,6 +90,11 @@ def _run_oracle_eval_subprocess(
         (param spec, preset, plugin, sample rate, channels, velocity, signal
         duration) is overridden from this so the re-render matches generation
         exactly rather than falling back to the render group / CLI defaults.
+    :param num_workers: Predict DataLoader worker count, forwarded verbatim from
+        the generate run's ``datamodule`` config — no platform guard. On
+        spawn-start-method platforms (Darwin) the caller must configure ``0``:
+        workers pickle the dataset, but ``SurgeXTDataset`` holds an open h5py
+        handle that cannot be pickled.
     :raises FileNotFoundError: ``dataset_root`` is missing any finalized split
         or ``stats.npz`` — e.g. a resume where ``finalize_from_spec``
         short-circuited on an existing R2 marker without repopulating it.
@@ -130,6 +136,9 @@ def _run_oracle_eval_subprocess(
         # would yield zero batches on the smoke-sized test split (4 samples),
         # so predict_step never runs and no audio/* metric is logged — see #1331.
         "datamodule.batch_size=1",
+        # Forwarded from the generate run so the eval honours the same worker
+        # count; pass 0 on Darwin where the open-h5py dataset can't be pickled.
+        f"datamodule.num_workers={num_workers}",
         "mode=predict",
     ]
     logger.info(f"oracle_eval_inline subprocess: {argv}")
@@ -836,6 +845,7 @@ def main(cfg: DictConfig) -> None:
                 eval_run_dir,
                 spec.run_id,
                 render=spec.render,
+                num_workers=cfg.datamodule.num_workers,
             )
         return
 
