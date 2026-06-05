@@ -269,7 +269,7 @@ class ParamSpec:
 
         return np.concatenate((synth_params, note_params))
 
-    def decode(self, params: np.ndarray) -> tuple[dict[str, float], dict[str, float]]:
+    def decode(self, params: np.ndarray) -> tuple[dict[str, float], NoteParams]:
         synth_params_to_process = [(p, len(p)) for p in self.synth_params]
         note_params_to_process = [(p, len(p)) for p in self.note_params]
 
@@ -287,7 +287,9 @@ class ParamSpec:
             note_params[param.name] = param_value
             pointer += length
 
-        return synth_params, note_params
+        # Keys come from runtime ``Parameter.name`` values, so the checker can't
+        # prove the NoteParams key->type mapping; assert it at this one source.
+        return synth_params, cast(NoteParams, note_params)
 
     @property
     def synth_param_names(self) -> list[str]:

@@ -85,7 +85,7 @@ src/synth_setter/evaluation/compute_audio_metrics.py
 --------------------
 src/synth_setter/evaluation/predict_vst_audio.py
     DOC101: Function `params_to_csv`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `params_to_csv`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [param_spec: ParamSpec, pred_note_params: dict[str, float], pred_synth_params: dict[str, float], save_path: str, target_note_params: dict[str, float], target_synth_params: dict[str, float]].
+    DOC103: Function `params_to_csv`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [param_spec: ParamSpec, pred_note_params: NoteParams, pred_synth_params: dict[str, float], save_path: str, target_note_params: NoteParams | None, target_synth_params: dict[str, float] | None].
 --------------------
 src/synth_setter/metrics.py
     DOC101: Method `LogSpectralDistance.__init__`: Docstring contains fewer arguments than in function signature.

@@ -23,6 +23,7 @@ import torch  # noqa: E402
 from click.testing import CliRunner, Result  # noqa: E402
 
 from synth_setter.data.vst import param_specs  # noqa: E402
+from synth_setter.data.vst.param_spec import NoteParams  # noqa: E402
 from synth_setter.evaluation import predict_vst_audio  # noqa: E402
 from synth_setter.evaluation.predict_vst_audio import (  # noqa: E402
     main,
@@ -114,11 +115,11 @@ def test_write_spectrograms_closes_figure_to_avoid_leaks(tmp_path: Path) -> None
 # ---------- params_to_csv ----------
 
 
-def _sample_param_dicts(seed: int = 0) -> tuple[dict[str, float], dict[str, float]]:
+def _sample_param_dicts(seed: int = 0) -> tuple[dict[str, float], NoteParams]:
     """Deterministic ``(synth_params, note_params)`` pair via ``_PARAM_SPEC.decode``.
 
     :param seed: Seed for the per-call RNG.
-    :return: ``(synth_params, note_params)`` dict pair decoded from a random encoding.
+    :return: ``(synth_params, note_params)`` pair decoded from a random encoding.
     """
     rng = np.random.default_rng(seed)
     encoded = rng.random(len(_PARAM_SPEC)).astype(np.float32)
@@ -144,14 +145,14 @@ def test_params_to_csv_writes_pred_and_target_columns(tmp_path: Path) -> None:
 
 
 def test_params_to_csv_none_target_leaves_target_column_nan(tmp_path: Path) -> None:
-    """The CLI's ``--no-params`` path passes ``None`` past the source's stricter annotation.
+    """``None`` target params (the CLI's ``--no-params`` path) leave an all-NaN target column.
 
     :param tmp_path: Pytest fixture providing a fresh test directory.
     """
     pred_s, pred_n = _sample_param_dicts()
     out = tmp_path / "params.csv"
 
-    params_to_csv(None, None, pred_s, pred_n, str(out), _PARAM_SPEC)  # type: ignore[arg-type]
+    params_to_csv(None, None, pred_s, pred_n, str(out), _PARAM_SPEC)
 
     df = pd.read_csv(out, index_col=0)
     assert bool(df["pred"].notna().all())

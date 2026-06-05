@@ -14,7 +14,7 @@ from tqdm import tqdm, trange
 
 from synth_setter.data.vst import param_specs
 from synth_setter.data.vst.core import render_params
-from synth_setter.data.vst.param_spec import ParamSpec
+from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
 
 
 def make_spectrogram(audio: np.ndarray, sample_rate: float) -> np.ndarray:
@@ -81,10 +81,10 @@ def write_spectrograms(
 
 
 def params_to_csv(
-    target_synth_params: dict[str, float],
-    target_note_params: dict[str, float],
+    target_synth_params: dict[str, float] | None,
+    target_note_params: NoteParams | None,
     pred_synth_params: dict[str, float],
-    pred_note_params: dict[str, float],
+    pred_note_params: NoteParams,
     save_path: str,
     param_spec: ParamSpec,
 ) -> None:
@@ -125,7 +125,7 @@ def main(
     no_params: bool = False,
     skip_spectrogram: bool = False,
 ):
-    param_spec = param_specs[param_spec]
+    spec = param_specs[param_spec]
     os.makedirs(output_dir, exist_ok=True)
 
     # render_params loads the plugin (and applies preset_path) on every call,
@@ -133,15 +133,15 @@ def main(
 
     # list the .pt files with accompanying indices (each file has name
     # pred-{index}.pt, and we want to sort by index)
-    pred_dir = Path(pred_dir)
-    pred_files = [f for f in pred_dir.glob("pred-*.pt") if f.is_file()]
+    pred_path = Path(pred_dir)
+    pred_files = [f for f in pred_path.glob("pred-*.pt") if f.is_file()]
     indices = [int(f.stem.split("-")[1]) for f in pred_files]
-    target_audio_files = [pred_dir / f"target-audio-{i}.pt" for i in indices]
+    target_audio_files = [pred_path / f"target-audio-{i}.pt" for i in indices]
 
     if no_params:
         target_param_files = [None] * len(pred_files)
     else:
-        target_param_files = [pred_dir / f"target-params-{i}.pt" for i in indices]
+        target_param_files = [pred_path / f"target-params-{i}.pt" for i in indices]
 
     # 4. foreach .pt file
     current_offset = 0
@@ -165,7 +165,7 @@ def main(
             row_params = pred_params[j].float().numpy()
             row_params_scaled = (row_params + 1) / 2
             row_params_scaled = np.clip(row_params_scaled, 0, 1)
-            synth_params, note_params = param_spec.decode(row_params_scaled)
+            synth_params, note_params = spec.decode(row_params_scaled)
 
             pred_audio = render_params(
                 plugin_path,
@@ -180,14 +180,14 @@ def main(
             )
 
             target_synth_params: dict[str, float] | None = None
-            target_note_params: dict[str, float] | None = None
+            target_note_params: NoteParams | None = None
 
             out_target = os.path.join(sample_dir, "target.wav")
             if rerender_target and target_params is not None:
                 target_params_ = target_params[j].numpy()
                 target_params_ = (target_params_ + 1) / 2
                 target_params_ = np.clip(target_params_, 0, 1)
-                target_synth_params, target_note_params = param_spec.decode(target_params_)
+                target_synth_params, target_note_params = spec.decode(target_params_)
 
                 new_target = render_params(
                     plugin_path,
@@ -225,7 +225,7 @@ def main(
                 synth_params,
                 note_params,
                 os.path.join(sample_dir, "params.csv"),
-                param_spec,
+                spec,
             )
 
         current_offset += pred_params.shape[0]

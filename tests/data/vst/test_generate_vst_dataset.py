@@ -890,10 +890,7 @@ def test_datasets_from_sampled_params_are_identical(tmp_path: Path) -> None:
     for i in range(_NUM_SAMPLES):
         decoded_synth_params, decoded_note_params = spec.decode(expected_params[i])
         synth_patches.append(decoded_synth_params)
-        # ParamSpec.decode is annotated dict[str, float] on main but actually returns
-        # dict[str, int | tuple[float, float]] at runtime (pitch is int, note_start_and_end
-        # is a tuple). Annotation gets corrected in a sibling PR.
-        note_patches.append(decoded_note_params)  # pyright: ignore[reportArgumentType]
+        note_patches.append(decoded_note_params)
     log.info("synth_patches: %s", synth_patches)
     log.info("note_patches: %s", note_patches)
 
@@ -1767,9 +1764,7 @@ def test_make_hdf5_resume_indexes_fixed_params_by_absolute_row(
         for i in range(start_idx):
             audio[i] = 1.0
             mel[i] = 1.0
-            # encode is annotated dict[str, float]; _HARDCODED_NOTE_PARAMS carries
-            # the runtime int/tuple note shape.
-            params[i] = spec.encode(synth_rows[i], note_rows[i])  # pyright: ignore[reportArgumentType]
+            params[i] = spec.encode(synth_rows[i], note_rows[i])
 
     seen_synth: list[dict[str, float]] = []
 
