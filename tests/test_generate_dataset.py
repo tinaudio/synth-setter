@@ -157,11 +157,12 @@ def test_base_render_config_accepts_plain_override_for_surfaced_default(
     assert getattr(spec.render, field) == override_value
 
 
-def test_base_render_config_defaults_match_render_config_model() -> None:
-    """A no-override compose yields the surfaced YAML defaults on all platforms.
+def test_base_render_config_surfaced_defaults_compose_correctly() -> None:
+    """A no-override compose yields the values surfaced in ``surge_xt.yaml`` on all platforms.
 
-    ``gui_toggle_cadence`` is surfaced as ``"once"`` (safe on all platforms including
-    Darwin, where ``"render"`` is rejected by the validator — #714).
+    Pins the values written to the YAML (not the ``RenderConfig`` model's
+    ``default_factory`` values, which are platform-dependent). ``gui_toggle_cadence``
+    is ``"once"`` — safe on Darwin where ``"render"`` is rejected (#714).
     """
     spec = _spec_from_dataset_overrides([])
     assert spec.render.samples_per_render_batch == 32
