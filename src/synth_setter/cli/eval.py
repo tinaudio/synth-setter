@@ -91,11 +91,16 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
 
     The VST render subprocess is prefixed with the headless wrapper on Linux so
     the VST3 plugin gets an Xvfb display before pedalboard imports it; the
-    metrics subprocess is CPU-only and needs no wrapper.
+    metrics subprocess is CPU-only and needs no wrapper. When
+    ``evaluation.shuffle_pred_audio`` is set, ``--shuffle_pred_audio`` /
+    ``--shuffle_seed`` are forwarded to the metrics subprocess, which scores a
+    symlink view permuting pred.wav across sample dirs (#489) — no effect unless
+    ``compute_metrics`` is also enabled.
 
-    :param cfg: Reads ``cfg.evaluation`` (gates + ``num_workers``), ``cfg.render``
-        (param spec, preset, optional plugin path), and ``cfg.paths.output_dir``
-        (base for ``predictions/``, ``audio/``, ``metrics/``).
+    :param cfg: Reads ``cfg.evaluation`` (gates + ``num_workers`` +
+        ``shuffle_pred_audio`` / ``shuffle_seed``), ``cfg.render`` (param spec,
+        preset, optional plugin path), and ``cfg.paths.output_dir`` (base for
+        ``predictions/``, ``audio/``, ``metrics/``).
     :returns: ``{"audio/<name>_<stat>": value}`` when ``compute_metrics`` ran;
         empty dict otherwise. Always rank-zero — the caller gates DDP duplication.
     :raises ValueError: if ``evaluation.render_vst`` is enabled but ``cfg.render`` is
@@ -176,6 +181,12 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
             "-w",
             str(cfg.evaluation.num_workers),
         ]
+        if cfg.evaluation.get("shuffle_pred_audio"):
+            args += [
+                "--shuffle_pred_audio",
+                "--shuffle_seed",
+                str(cfg.evaluation.get("shuffle_seed", 0)),
+            ]
         log.info(f"Computing audio metrics: {args}")
         subprocess.run(  # noqa: S603
             args,

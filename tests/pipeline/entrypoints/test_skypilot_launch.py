@@ -14,10 +14,11 @@ import os
 import re
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, create_autospec
 
 import click
 import pytest
+import sky
 import yaml
 
 from synth_setter.pipeline.constants import WORKER_SPEC_URI_ENV
@@ -371,16 +372,19 @@ class TestOverrideImageId:
     """
 
     @staticmethod
-    def _make_resource(cloud: object) -> MagicMock:
-        """Fake ``sky.Resources`` with a ``.cloud`` attr and a ``.copy()`` that records image_id.
+    def _make_resource(cloud: object) -> Any:
+        """Autospec ``sky.Resources`` with a ``.cloud`` attr and a ``.copy()`` recording image_id.
 
-        :param cloud: Pytest fixture.
+        ``create_autospec`` binds the mock surface to the real SDK class, so a renamed or
+        removed attribute fails the test instead of silently passing a stale hand-listed spec.
+
+        :param cloud: Cloud object assigned to ``.cloud`` (a real OCI instance or a sentinel).
         """
-        res = MagicMock(spec=["cloud", "copy"])
+        res = create_autospec(sky.Resources, instance=True)
         res.cloud = cloud
 
-        def _copy(**kwargs: Any) -> MagicMock:
-            new = MagicMock(spec=["cloud", "image_id"])
+        def _copy(**kwargs: Any) -> Any:
+            new = create_autospec(sky.Resources, instance=True)
             new.cloud = cloud
             new.image_id = kwargs.get("image_id")
             return new
@@ -389,12 +393,12 @@ class TestOverrideImageId:
         return res
 
     @staticmethod
-    def _make_task(resources: list[Any]) -> MagicMock:
-        """Fake ``sky.Task`` carrying ``resources`` (as a list, so ``type(...)`` is ``list``).
+    def _make_task(resources: list[Any]) -> Any:
+        """Autospec ``sky.Task`` carrying ``resources`` (as a list, so ``type(...)`` is ``list``).
 
-        :param resources: Pytest fixture.
+        :param resources: Resources entries assigned to ``task.resources``.
         """
-        task = MagicMock(spec=["resources", "set_resources"])
+        task = create_autospec(sky.Task, instance=True)
         task.resources = list(resources)
         return task
 

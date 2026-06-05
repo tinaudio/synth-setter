@@ -560,3 +560,147 @@ def test_compute_f0_different_inputs_is_finite() -> None:
     pred = _sine(seconds=1.0, freq=880.0)
     dist = compute_f0(target, pred)
     assert np.isfinite(dist)
+
+
+# main --shuffle_pred_audio render-order probe (#489)
+
+_UNIFORM_PARAMS_CSV = ",pred,target\ncutoff,0.5,0.5\nresonance,0.2,0.2\n"
+
+
+def _make_uniform_sample_dir(
+    parent: Path,
+    name: str,
+    target: np.ndarray,
+    pred: np.ndarray,
+    *,
+    params_csv: str = _UNIFORM_PARAMS_CSV,
+) -> Path:
+    """Create a ``sample_<name>`` dir with target/pred wavs and a ``params.csv``.
+
+    :param parent: Parent directory under which the sample directory is created.
+    :param name: Sample identifier (becomes the ``sample_<name>`` directory suffix).
+    :param target: ``target.wav`` audio array.
+    :param pred: ``pred.wav`` audio array.
+    :param params_csv: Body written to ``params.csv``; vary it to break the gate.
+    :return: Path of the created sample directory.
+    """
+    sample_dir = _make_sample_dir(parent, name, target, pred)
+    (sample_dir / "params.csv").write_text(params_csv)
+    return sample_dir
+
+
+@pytest.mark.slow
+def test_main_shuffle_pred_audio_builds_symlink_dir_and_scores_it(tmp_path: Path) -> None:
+    """``--shuffle_pred_audio`` builds a symlink view under output_dir and scores it.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    audio_root = tmp_path / "audio"
+    audio_root.mkdir()
+    metrics_dir = tmp_path / "metrics"
+    _make_uniform_sample_dir(audio_root, "0", _sine(seconds=0.3), _sine(seconds=0.3))
+    _make_uniform_sample_dir(
+        audio_root, "1", _sine(seconds=0.3, freq=440.0), _sine(seconds=0.3, freq=880.0)
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        compute_audio_metrics_main,
+        [
+            str(audio_root),
+            str(metrics_dir),
+            "-w",
+            "1",
+            "--shuffle_pred_audio",
+            "--shuffle_seed",
+            "7",
+        ],
+        catch_exceptions=False,
+    )
+    assert result.exit_code == 0, result.output
+
+    shuffled_dir = metrics_dir / "shuffled_audio"
+    assert (shuffled_dir / "sample_0" / "pred.wav").is_symlink()
+    metrics_df = pd.read_csv(metrics_dir / "metrics.csv")
+    assert len(metrics_df) == 2
+
+
+@pytest.mark.slow
+def test_main_shuffle_pred_audio_does_not_mutate_source(tmp_path: Path) -> None:
+    """The original ``audio/`` tree is byte-identical after a shuffled metrics run.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    audio_root = tmp_path / "audio"
+    audio_root.mkdir()
+    metrics_dir = tmp_path / "metrics"
+    _make_uniform_sample_dir(audio_root, "0", _sine(seconds=0.3), _sine(seconds=0.3))
+    _make_uniform_sample_dir(
+        audio_root, "1", _sine(seconds=0.3, freq=440.0), _sine(seconds=0.3, freq=880.0)
+    )
+    before = {
+        p.relative_to(audio_root): p.read_bytes() for p in audio_root.rglob("*") if p.is_file()
+    }
+
+    runner = CliRunner()
+    result = runner.invoke(
+        compute_audio_metrics_main,
+        [str(audio_root), str(metrics_dir), "-w", "1", "--shuffle_pred_audio"],
+        catch_exceptions=False,
+    )
+    assert result.exit_code == 0, result.output
+
+    after = {
+        p.relative_to(audio_root): p.read_bytes() for p in audio_root.rglob("*") if p.is_file()
+    }
+    assert after == before
+
+
+def test_main_shuffle_pred_audio_nonuniform_params_exits_nonzero(tmp_path: Path) -> None:
+    """The uniform-params gate trips inside the CLI when a params.csv differs.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    audio_root = tmp_path / "audio"
+    audio_root.mkdir()
+    metrics_dir = tmp_path / "metrics"
+    _make_uniform_sample_dir(audio_root, "0", _sine(seconds=0.3), _sine(seconds=0.3))
+    _make_uniform_sample_dir(
+        audio_root,
+        "1",
+        _sine(seconds=0.3),
+        _sine(seconds=0.3),
+        params_csv=",pred,target\ncutoff,0.9,0.9\n",
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        compute_audio_metrics_main,
+        [str(audio_root), str(metrics_dir), "-w", "1", "--shuffle_pred_audio"],
+    )
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, ValueError)
+
+
+def test_main_without_shuffle_does_not_create_shuffled_dir(tmp_path: Path) -> None:
+    """Without the flag, no ``shuffled_audio`` view is built.
+
+    Drives ``main`` with a single sample dir so the real metric compute is cheap;
+    the assertion is purely on filesystem state, not metric values.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    audio_root = tmp_path / "audio"
+    audio_root.mkdir()
+    metrics_dir = tmp_path / "metrics"
+    _make_uniform_sample_dir(audio_root, "0", _sine(seconds=0.2), _sine(seconds=0.2))
+
+    runner = CliRunner()
+    result = runner.invoke(
+        compute_audio_metrics_main,
+        [str(audio_root), str(metrics_dir), "-w", "1"],
+        catch_exceptions=False,
+    )
+    assert result.exit_code == 0, result.output
+    assert not (metrics_dir / "shuffled_audio").exists()

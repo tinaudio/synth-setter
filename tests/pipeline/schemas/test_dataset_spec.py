@@ -1154,3 +1154,116 @@ class TestDatasetSrc:
         restored = DatasetSpec.model_validate_json(spec.model_dump_json())
 
         assert restored.datasetsrc == spec.datasetsrc
+
+
+class TestValidateCopySource:
+    """``DatasetSpec.validate_copy_source`` — preflight a copy source against the target.
+
+    Rejects a source that disagrees on any value the filename-matched per-shard copy depends on
+    (param spec, per-shard rows, split sizes, shard filenames).
+    """
+
+    def test_matching_source_does_not_raise(self) -> None:
+        """A source matching the four copy-relevant fields validates clean.
+
+        The source carries a different ``task_name`` (hence a different run_id /
+        r2 prefix) to pin that only the copy-relevant fields gate the copy —
+        identity fields that legitimately differ between datasets do not.
+        """
+        target = DatasetSpec(**_valid_spec_kwargs(task_name="target-dataset"))
+        source = DatasetSpec(**_valid_spec_kwargs(task_name="source-dataset"))
+
+        target.validate_copy_source(source)  # no raise
+
+    def test_param_spec_name_mismatch_raises(self) -> None:
+        """A differing ``param_spec_name`` (encoding width) is rejected, naming both values."""
+        target = DatasetSpec(**_valid_spec_kwargs())
+        source = DatasetSpec(
+            **_valid_spec_kwargs(render={**_valid_render_kwargs(), "param_spec_name": "surge_xt"})
+        )
+
+        with pytest.raises(ValueError) as excinfo:
+            target.validate_copy_source(source)
+
+        message = str(excinfo.value)
+        assert "param_spec_name" in message
+        assert "surge_xt" in message  # source value
+        assert "surge_simple" in message  # target value
+
+    def test_samples_per_shard_mismatch_raises(self) -> None:
+        """A differing ``samples_per_shard`` (per-shard row count) is rejected.
+
+        The assertion checks the rendered ``source=50 != target=100`` value pair,
+        not just the field name, so the samples_per_shard branch is pinned even
+        though the differing shard count co-triggers the filename mismatch.
+        """
+        target = DatasetSpec(**_valid_spec_kwargs())  # sps=100 -> 3 shards
+        source = DatasetSpec(
+            **_valid_spec_kwargs(
+                render={**_valid_render_kwargs(), "samples_per_shard": 50}
+            )  # sps=50, same [300,0,0] -> 6 shards
+        )
+
+        with pytest.raises(ValueError) as excinfo:
+            target.validate_copy_source(source)
+
+        message = str(excinfo.value)
+        assert "samples_per_shard: source=50 != target=100" in message
+
+    def test_train_val_test_sizes_mismatch_raises(self) -> None:
+        """A differing split layout is rejected even when total/count/filenames match.
+
+        The copy would otherwise partition identical shards into different train/val/test splits
+        than the source.
+        """
+        target = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[300, 0, 0]))
+        source = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[100, 100, 100]))
+
+        with pytest.raises(ValueError, match="train_val_test_sizes"):
+            target.validate_copy_source(source)
+
+    def test_shard_filename_set_mismatch_raises(self) -> None:
+        """A source whose shard filenames differ (``.tar`` vs ``.h5``) is rejected.
+
+        A different ``output_format`` yields a non-matching shard-filename set,
+        so no same-named source shard exists for the target's ``.h5`` shards.
+        """
+        target = DatasetSpec(**_valid_spec_kwargs(output_format="hdf5"))
+        source = DatasetSpec(**_valid_spec_kwargs(output_format="wds"))
+
+        with pytest.raises(ValueError, match="shard"):
+            target.validate_copy_source(source)
+
+    def test_shard_filename_partial_overlap_names_the_extra_shard(self) -> None:
+        """A source with extra shards is rejected, naming a shard absent from the target.
+
+        Pins the set-difference + sampled-filename rendering: a source covering
+        ``shard-000000..3`` against a 3-shard target must surface the extra
+        ``shard-000003.h5`` rather than a bare count.
+        """
+        target = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[300, 0, 0]))  # 3 shards
+        source = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[400, 0, 0]))  # 4 shards
+
+        with pytest.raises(ValueError) as excinfo:
+            target.validate_copy_source(source)
+
+        assert "shard-000003.h5" in str(excinfo.value)
+
+    def test_multiple_mismatches_are_all_reported(self) -> None:
+        """Every mismatch surfaces as its own bullet in one error, not one launch at a time."""
+        target = DatasetSpec(**_valid_spec_kwargs(output_format="hdf5"))
+        source = DatasetSpec(
+            **_valid_spec_kwargs(
+                output_format="wds",
+                render={**_valid_render_kwargs(), "param_spec_name": "surge_xt"},
+            )
+        )
+
+        with pytest.raises(ValueError) as excinfo:
+            target.validate_copy_source(source)
+
+        message = str(excinfo.value)
+        assert "param_spec_name" in message
+        assert "shard filenames" in message
+        # Two distinct mismatches (param_spec_name + shard filenames), each its own bullet.
+        assert message.count("\n  - ") == 2

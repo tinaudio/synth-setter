@@ -323,9 +323,14 @@ def test_finalize_raises_on_unsupported_output_format(
     Pins the dispatcher's exhaustiveness contract — adding a third format
     without wiring its branch must trip this test rather than silently
     skip the artifact upload and write a misleading ``dataset.complete``.
+    The fail-fast ``download_to_path`` / ``upload`` stubs make this a
+    positive short-circuit check: the ValueError alone would still pass if
+    the spec load moved *after* dispatch, but a download or upload firing
+    before the raise proves dispatch ran and fails the test.
 
     :param tmp_path: Pytest tmp dir; hosts the Hydra-style output_dir.
-    :param monkeypatch: Pytest fixture used to install a stub loader.
+    :param monkeypatch: Pytest fixture used to install a stub loader plus
+        fail-fast download/upload stubs.
     :param stub_finalize_setup: Installs the auth + marker-probe stubs so the
         dispatcher (not the marker check) is the failure surface.
     """
@@ -334,6 +339,14 @@ def test_finalize_raises_on_unsupported_output_format(
     )
     monkeypatch.setattr(
         "synth_setter.cli.finalize_dataset.load_spec_from_uri", lambda _uri: bad_spec
+    )
+    monkeypatch.setattr(
+        "synth_setter.pipeline.r2_io.download_to_path",
+        lambda *a, **kw: pytest.fail("download_to_path should not be reached"),
+    )
+    monkeypatch.setattr(
+        "synth_setter.pipeline.r2_io.upload",
+        lambda *a, **kw: pytest.fail("upload should not be reached"),
     )
     output_dir = tmp_path / "hydra_output"
     output_dir.mkdir()

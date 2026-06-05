@@ -27,7 +27,7 @@ from synth_setter.data.vst.generate_vst_dataset import (
     create_datasets_and_get_start_idx,
     generate_sample,
 )
-from synth_setter.data.vst.param_spec import ParamSpec
+from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
 from synth_setter.data.vst.shapes import DATASET_FIELD_NAMES
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from synth_setter.pipeline.schemas.spec import RenderConfig
@@ -141,7 +141,7 @@ def _validate_fixed_params_lengths(
     *,
     num_samples: int,
     fixed_synth_params_list: list[dict[str, float]] | None,
-    fixed_note_params_list: list[dict[str, int | tuple[float, float]]] | None,
+    fixed_note_params_list: list[NoteParams] | None,
 ) -> None:
     """Raise ``ValueError`` unless each fixed-params list spans the whole shard.
 
@@ -177,7 +177,7 @@ def _render_in_batches(
     param_spec: ParamSpec,
     start_idx: int,
     fixed_synth_params_list: list[dict[str, float]] | None,
-    fixed_note_params_list: list[dict[str, int | tuple[float, float]]] | None,
+    fixed_note_params_list: list[NoteParams] | None,
     flush_batch: Callable[[list[VSTDataSample], int], None],
 ) -> None:
     """Render samples from ``start_idx`` to ``render_cfg.samples_per_shard`` in fixed-size batches.
@@ -225,7 +225,7 @@ def _render_in_batches(
         # loudness-gated path; every later render reuses them so the whole shard
         # is one identical patch (#489 variance probe).
         shared_synth: dict[str, float] | None = None
-        shared_note: dict[str, int | tuple[float, float]] | None = None
+        shared_note: NoteParams | None = None
         for i in trange(start_idx, num_samples):
             logger.info(f"Making sample {i}")
             warmup_this_render = render_cfg.gui_toggle_cadence == "render" or (
@@ -234,7 +234,7 @@ def _render_in_batches(
             # Fixed params are indexed by absolute row ``i`` (full-shard lists),
             # so a resumed run still reads the source row matching each output row.
             fixed_synth: dict[str, float] | None
-            fixed_note: dict[str, int | tuple[float, float]] | None
+            fixed_note: NoteParams | None
             if share_params and shared_synth is not None:
                 fixed_synth, fixed_note = shared_synth, shared_note
             else:
@@ -260,9 +260,7 @@ def _render_in_batches(
             )
             if share_params and shared_synth is None:
                 shared_synth = sample.synth_params
-                # VSTDataSample.note_params is annotated dict[str, float] but carries
-                # the int pitch / tuple note-window that fixed_note_params expects.
-                shared_note = cast("dict[str, int | tuple[float, float]]", sample.note_params)
+                shared_note = sample.note_params
             sample_batch.append(sample)
             if warmup_this_render and render_cfg.gui_toggle_cadence == "once":
                 warmup_done = True
@@ -315,7 +313,7 @@ def make_hdf5_dataset(
     render_cfg: RenderConfig,
     *,
     fixed_synth_params_list: list[dict[str, float]] | None = None,
-    fixed_note_params_list: list[dict[str, int | tuple[float, float]]] | None = None,
+    fixed_note_params_list: list[NoteParams] | None = None,
 ) -> None:
     """Render ``render_cfg.samples_per_shard`` samples to an HDF5 file at ``hdf5_file``.
 
@@ -390,7 +388,7 @@ def make_wds_dataset(
     render_cfg: RenderConfig,
     *,
     fixed_synth_params_list: list[dict[str, float]] | None = None,
-    fixed_note_params_list: list[dict[str, int | tuple[float, float]]] | None = None,
+    fixed_note_params_list: list[NoteParams] | None = None,
 ) -> None:
     """Render ``render_cfg.samples_per_shard`` samples to a webdataset tar at ``wds_file``.
 

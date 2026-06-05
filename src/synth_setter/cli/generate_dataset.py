@@ -22,17 +22,21 @@ from pathlib import Path
 from typing import Any
 
 import hydra
-import wandb
 from hydra.core.hydra_config import HydraConfig
 from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 
+import wandb
 from synth_setter.cli.finalize_dataset import finalize_from_spec
 from synth_setter.data.vst.core import extract_renderer_version
 from synth_setter.pipeline import r2_io
-from synth_setter.pipeline.constants import STATS_NPZ_FILENAME, WORKER_SPEC_URI_ENV
+from synth_setter.pipeline.constants import (
+    INPUT_SPEC_FILENAME,
+    STATS_NPZ_FILENAME,
+    WORKER_SPEC_URI_ENV,
+)
 from synth_setter.pipeline.partitioning import (
     available_cpus,
     get_my_shards,
@@ -41,6 +45,7 @@ from synth_setter.pipeline.partitioning import (
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig, ShardSpec
 from synth_setter.pipeline.spec_io import (
+    load_spec_from_uri,
     upload_spec,
     write_spec_locally,
 )
@@ -69,6 +74,7 @@ def _run_oracle_eval_subprocess(
     run_id: str,
     *,
     render: RenderConfig,
+    num_workers: int,
 ) -> None:
     """Run the fake-oracle eval over ``dataset_root`` to verify the param-array round-trip.
 
@@ -89,6 +95,11 @@ def _run_oracle_eval_subprocess(
         (param spec, preset, plugin, sample rate, channels, velocity, signal
         duration) is overridden from this so the re-render matches generation
         exactly rather than falling back to the render group / CLI defaults.
+    :param num_workers: Predict DataLoader worker count, forwarded verbatim from
+        the generate run's ``datamodule`` config — no platform guard. On
+        spawn-start-method platforms (Darwin) the caller must configure ``0``:
+        workers pickle the dataset, but ``SurgeXTDataset`` holds an open h5py
+        handle that cannot be pickled.
     :raises FileNotFoundError: ``dataset_root`` is missing any finalized split
         or ``stats.npz`` — e.g. a resume where ``finalize_from_spec``
         short-circuited on an existing R2 marker without repopulating it.
@@ -130,6 +141,9 @@ def _run_oracle_eval_subprocess(
         # would yield zero batches on the smoke-sized test split (4 samples),
         # so predict_step never runs and no audio/* metric is logged — see #1331.
         "datamodule.batch_size=1",
+        # Forwarded from the generate run so the eval honours the same worker
+        # count; pass 0 on Darwin where the open-h5py dataset can't be pickled.
+        f"datamodule.num_workers={num_workers}",
         "mode=predict",
     ]
     logger.info(f"oracle_eval_inline subprocess: {argv}")
@@ -216,6 +230,33 @@ def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -
     return args
 
 
+def _validate_copy_source(spec: DatasetSpec) -> None:
+    """Preflight a dataset-copy run against the source's persisted spec.
+
+    No-op unless ``spec.datasetsrc`` is set. Otherwise loads the source's
+    ``input_spec.json`` from ``<copy_dataset_root>/`` (the spec sits beside the
+    shards at the dataset prefix root) and delegates to
+    :meth:`DatasetSpec.validate_copy_source`, so a source that disagrees on any
+    copy-relevant value fails once at launch rather than per-shard mid-render.
+
+    :param spec: The target dataset spec about to be rendered.
+    :raises ValueError: ``copy_dataset_root`` holds no ``input_spec.json``, or
+        the source spec mismatches ``spec`` on a copy-relevant value.
+    """
+    if spec.datasetsrc is None:
+        return
+    source_spec_path = Path(spec.datasetsrc.copy_dataset_root) / INPUT_SPEC_FILENAME
+    if not source_spec_path.is_file():
+        raise ValueError(
+            f"dataset-copy source has no {INPUT_SPEC_FILENAME} at {source_spec_path}; "
+            "sync the source dataset's spec alongside its shards (it lives beside the "
+            "shards at the R2 dataset prefix root) so the copy can be validated."
+        )
+    source = load_spec_from_uri(str(source_spec_path))
+    spec.validate_copy_source(source)
+    logger.info(f"dataset-copy source OK: {source_spec_path} matches the target spec")
+
+
 def generate(spec: DatasetSpec, work_dir: Path, loggers: list[Logger]) -> None:  # noqa: DOC503
     """Render+upload each owned shard; writes shards under ``work_dir``.
 
@@ -256,6 +297,8 @@ def generate(spec: DatasetSpec, work_dir: Path, loggers: list[Logger]) -> None: 
         # leaks un-closed on the helper's exception path.
         _log_hyperparams(loggers, spec)
         _log_spec_artifact(loggers, spec)
+        # Fail a misconfigured dataset-copy at launch, before the first render.
+        _validate_copy_source(spec)
         render = spec.render
         actual_renderer_version = extract_renderer_version(Path(render.plugin_path))
         if actual_renderer_version != render.renderer_version:
@@ -836,6 +879,7 @@ def main(cfg: DictConfig) -> None:
                 eval_run_dir,
                 spec.run_id,
                 render=spec.render,
+                num_workers=cfg.datamodule.num_workers,
             )
         return
 

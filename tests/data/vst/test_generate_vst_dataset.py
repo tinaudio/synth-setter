@@ -22,7 +22,7 @@ import pytest
 from synth_setter.data.vst import param_specs
 from synth_setter.data.vst.core import load_plugin, load_preset, render_params
 from synth_setter.data.vst.generate_vst_dataset import fixed_params_from_dataset
-from synth_setter.data.vst.param_spec import ParamSpec
+from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
 from synth_setter.data.vst.shapes import PARAM_ARRAY_FIELD
 from synth_setter.data.vst.writers import make_hdf5_dataset
 from synth_setter.evaluation.compute_audio_metrics import (
@@ -298,7 +298,7 @@ _HARDCODED_SYNTH_PARAMS: dict[str, float] = {
     "fx_a3_output_mix": 0.0,
 }
 
-_HARDCODED_NOTE_PARAMS: dict[str, int | tuple[float, float]] = {
+_HARDCODED_NOTE_PARAMS: NoteParams = {
     "pitch": 64,
     "note_start_and_end": (0.77033705, 2.2995389),
 }
@@ -360,7 +360,7 @@ def _assert_h5_structure_is_valid(
 @contextmanager
 def _patched_sample(
     spec: ParamSpec,
-    replay: list[tuple[dict[str, float], dict[str, int | tuple[float, float]]]],
+    replay: list[tuple[dict[str, float], NoteParams]],
 ) -> Iterator[None]:
     """Patch ``spec.sample`` with a deterministic replay over the lifetime of the block.
 
@@ -373,7 +373,7 @@ def _patched_sample(
     replay_iter = iter(replay)
     pull_count = [0]
 
-    def fake_sample() -> tuple[dict[str, float], dict[str, int | tuple[float, float]]]:
+    def fake_sample() -> tuple[dict[str, float], NoteParams]:
         pull_count[0] += 1
         return next(replay_iter)
 
@@ -666,7 +666,7 @@ def _assert_round_trip_matches(
     expected_mel: np.ndarray,
     expected_params: np.ndarray,
     expected_synth_patches: list[dict[str, float]],
-    expected_note_patches: list[dict[str, int | tuple[float, float]]],
+    expected_note_patches: list[NoteParams],
     spec: ParamSpec,
     num_samples: int,
 ) -> RoundTripMetrics:
@@ -886,14 +886,11 @@ def test_datasets_from_sampled_params_are_identical(tmp_path: Path) -> None:
     # inputs for the second ``make_hdf5_dataset`` run — guaranteed past the loudness
     # gate by construction (the candidate render survived stage 1).
     synth_patches: list[dict[str, float]] = []
-    note_patches: list[dict[str, int | tuple[float, float]]] = []
+    note_patches: list[NoteParams] = []
     for i in range(_NUM_SAMPLES):
         decoded_synth_params, decoded_note_params = spec.decode(expected_params[i])
         synth_patches.append(decoded_synth_params)
-        # ParamSpec.decode is annotated dict[str, float] on main but actually returns
-        # dict[str, int | tuple[float, float]] at runtime (pitch is int, note_start_and_end
-        # is a tuple). Annotation gets corrected in a sibling PR.
-        note_patches.append(decoded_note_params)  # pyright: ignore[reportArgumentType]
+        note_patches.append(decoded_note_params)
     log.info("synth_patches: %s", synth_patches)
     log.info("note_patches: %s", note_patches)
 
@@ -1390,10 +1387,7 @@ def test_make_dataset_uses_fixed_params_lists_when_provided(
     )
 
     _, _, params = _assert_h5_structure_is_valid(out, spec, num_samples)
-    # ParamSpec.encode is annotated dict[str, float] on main but accepts the runtime
-    # note-param shape (pitch is int, note_start_and_end is a tuple); annotation gets
-    # corrected in a sibling PR.
-    expected = spec.encode(_HARDCODED_SYNTH_PARAMS, _HARDCODED_NOTE_PARAMS)  # pyright: ignore[reportArgumentType]
+    expected = spec.encode(_HARDCODED_SYNTH_PARAMS, _HARDCODED_NOTE_PARAMS)
     for i in range(num_samples):
         assert np.allclose(params[i], expected, atol=_ABSOLUTE_TOLERANCE), (
             f"row {i} did not match fixed params"
@@ -1579,9 +1573,7 @@ def test_fixed_params_from_dataset_round_trips_encoded_param_array(tmp_path: Pat
     spec = param_specs[_SPEC_NAME]
     num_rows = 4
     expected_synth: list[dict[str, float]] = []
-    # spec.sample() is annotated dict[str, float]; pitch is int and
-    # note_start_and_end a tuple at runtime, but the annotation is what we match.
-    expected_note: list[dict[str, float]] = []
+    expected_note: list[NoteParams] = []
     rows = []
     for _ in range(num_rows):
         synth, note = spec.sample()
@@ -1772,9 +1764,7 @@ def test_make_hdf5_resume_indexes_fixed_params_by_absolute_row(
         for i in range(start_idx):
             audio[i] = 1.0
             mel[i] = 1.0
-            # encode is annotated dict[str, float]; _HARDCODED_NOTE_PARAMS carries
-            # the runtime int/tuple note shape.
-            params[i] = spec.encode(synth_rows[i], note_rows[i])  # pyright: ignore[reportArgumentType]
+            params[i] = spec.encode(synth_rows[i], note_rows[i])
 
     seen_synth: list[dict[str, float]] = []
 
@@ -1897,7 +1887,7 @@ def _read_dataset(h5: h5py.File, name: str) -> np.ndarray:
     return dataset[...]
 
 
-def _distinct_note_rows(num_rows: int) -> list[dict[str, int | tuple[float, float]]]:
+def _distinct_note_rows(num_rows: int) -> list[NoteParams]:
     """Build note params with a distinct pitch per row.
 
     Distinct per-row values are what let a resume test tell absolute indexing
@@ -1912,7 +1902,7 @@ def _distinct_note_rows(num_rows: int) -> list[dict[str, int | tuple[float, floa
 def _encode_rows(
     spec: ParamSpec,
     synth_rows: list[dict[str, float]],
-    note_rows: list[dict[str, int | tuple[float, float]]],
+    note_rows: list[NoteParams],
 ) -> list[np.ndarray]:
     """Encode each ``(synth, note)`` row pair into its ``param_array`` row.
 
@@ -1921,10 +1911,7 @@ def _encode_rows(
     :param note_rows: Per-row note params, aligned with ``synth_rows``.
     :returns: One encoded ``param_array`` row per input pair.
     """
-    return [
-        spec.encode(synth_rows[i], note_rows[i])  # pyright: ignore[reportArgumentType]
-        for i in range(len(synth_rows))
-    ]
+    return [spec.encode(synth_rows[i], note_rows[i]) for i in range(len(synth_rows))]
 
 
 def test_make_hdf5_resume_indexes_note_params_by_absolute_row(

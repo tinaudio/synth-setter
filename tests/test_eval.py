@@ -10,6 +10,7 @@ postprocessing argv in ``test_eval_postprocessing``, metric IO in
 
 import math
 import os
+import subprocess
 from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
@@ -92,6 +93,41 @@ def test_evaluate_runs_oracle_with_null_ckpt_path(
     assert param_mse.dtype.is_floating_point
     assert torch.isfinite(param_mse), f"oracle test/param_mse must be finite; got {param_mse!r}"
     assert param_mse.item() == 0.0
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+def test_evaluate_predict_shuffle_pred_audio_rejects_nonuniform_params_via_subprocess(
+    cfg_surge_xt: DictConfig,
+    cfg_surge_xt_eval: DictConfig,
+) -> None:
+    """``evaluate()`` predict mode with the shuffle on fails the metrics subprocess.
+
+    Drives the real train->eval roundtrip end-to-end with ``shuffle_pred_audio``
+    enabled, exercising the ``evaluate()`` -> ``_run_predict_postprocessing`` ->
+    metrics-subprocess wiring. The smoke dataset renders distinct params per
+    sample, so the uniform-params gate (now inside compute_audio_metrics) rejects
+    it and the subprocess exits non-zero, surfacing as ``CalledProcessError`` —
+    confirming the gate is wired through the real entrypoint (#489). The
+    successful-permutation path needs a uniform-params tree (only meaningful for
+    the render-order probe) and is covered by
+    ``tests/evaluation/test_shuffle_pred_audio.py`` and the
+    ``tests/evaluation/test_compute_audio_metrics.py`` CLI tests.
+
+    :param cfg_surge_xt: Surge XT smoke-test training config.
+    :param cfg_surge_xt_eval: Matching predict-mode eval config (render + metrics on),
+        sharing ``tmp_path`` so eval reads the checkpoint training writes.
+    """
+    HydraConfig().set_config(cfg_surge_xt)
+    train(cfg_surge_xt)
+    assert Path(cfg_surge_xt_eval.ckpt_path).exists()
+
+    with open_dict(cfg_surge_xt_eval):
+        cfg_surge_xt_eval.evaluation.shuffle_pred_audio = True
+
+    HydraConfig().set_config(cfg_surge_xt_eval)
+    with pytest.raises(subprocess.CalledProcessError):
+        evaluate(cfg_surge_xt_eval)
 
 
 @pytest.mark.gpu

@@ -1,6 +1,456 @@
 # CHANGELOG
 
 
+## v8.18.2 (2026-06-05)
+
+### Bug Fixes
+
+- **eval**: Forward num_workers to inline oracle-eval predict DataLoader
+  ([#1463](https://github.com/tinaudio/synth-setter/pull/1463),
+  [`6a4ce6b`](https://github.com/tinaudio/synth-setter/commit/6a4ce6b0a9bda3f48e4170add9da6ea60641b67a))
+
+The inline oracle-eval subprocess built its argv with a fixed num_workers (11, from the eval's surge
+  datamodule). On macOS the multiprocessing start method is spawn, which pickles the dataset to each
+  DataLoader worker, but SurgeXTDataset holds an open h5py handle that cannot be pickled, so every
+  oracle_eval_inline run crashed with "h5py objects cannot be pickled". A datamodule.num_workers=0
+  override on the generate command never reached the eval, since the argv did not forward it.
+
+Forward the generate run's datamodule.num_workers into the eval argv so the eval honours the
+  configured worker count. Callers set num_workers=0 on macOS; Linux (fork) keeps its default. The
+  open-h5py dataset is unchanged.
+
+Fixes #1462
+
+
+## v8.18.1 (2026-06-05)
+
+### Bug Fixes
+
+- **configs**: Surface RenderConfig defaults in base render config
+  ([#1450](https://github.com/tinaudio/synth-setter/pull/1450),
+  [`4684bc5`](https://github.com/tinaudio/synth-setter/commit/4684bc5d2f2d4e8bba0b958759fcc89e2545eae8))
+
+* feat(configs): surface RenderConfig defaults in base render config
+
+Hydra struct mode rejects plain render.X= overrides when X is absent from the composed tree;
+  on-demand surfacing them as defaults makes every experiment capable of sweeping cadence knobs
+  without +render.X= syntax. The #489 cadence sweeps now work against any experiment, not just
+  smoke-shard (which pre-declared these fields). gui_toggle_cadence is pinned to the non-Darwin
+  factory value ("render"); spec construction on macOS requires overriding to "never"/"once" per
+  #714.
+
+Refs #489
+
+* fix(tests): guard Darwin rejection of gui_toggle_cadence=render in render-defaults tests
+
+_spec_from_dataset_overrides injects render.gui_toggle_cadence=never on Darwin when the caller does
+  not override it, since surge_xt.yaml now surfaces "render" as the Linux default and RenderConfig
+  rejects that value on macOS (#714).
+
+test_base_render_config_defaults_match_render_config_model is marked skipif darwin for the same
+  reason — the assertion gui_toggle_cadence=="render" is only valid on non-Darwin.
+
+* docs: add render/** entry to data-pipeline doc-map; fix samples_per_render_batch default
+
+Adds render/** → data-pipeline.md entry so doc-drift tooling detects future drift between
+  surge_xt.yaml and the pipeline design doc. Fixes the RenderConfig pseudocode in data-pipeline.md
+  which was missing the =32 default for samples_per_render_batch (surfaced by this branch in
+  surge_xt.yaml).
+
+* fix(configs): use gui_toggle_cadence=once instead of render in surge_xt.yaml
+
+"render" is rejected on Darwin by the RenderConfig validator (#714) and broke every experiment that
+  didn't override it on macOS CI. "once" warms the editor once per shard, is safe on all platforms,
+  and is still overridable via a plain render.gui_toggle_cadence= CLI override (the goal of this
+  branch).
+
+Fixes the macOS test failures in test_experiment_yamls.py, test_materialize_spec.py, and the new
+  render-defaults tests.
+
+* fix(tests,docs): address Copilot review — rename test, fix doc-map description
+
+Rename test_base_render_config_defaults_match_render_config_model to
+  test_base_render_config_surfaced_defaults_compose_correctly: the old name implied it pins
+  RenderConfig model defaults, but gui_toggle_cadence diverges from the platform-dependent factory
+  default on macOS (surfaced as "once", factory returns "never" on Darwin).
+
+Fix doc-map.yaml render/** entry to not say "composed by dataset.yaml defaults" — dataset.yaml
+  requires render via ??? and experiments must select a render group explicitly.
+
+* fix(tests): use off-default value for gui_toggle_cadence in _SURFACED_RENDER_DEFAULTS
+
+"once" matched the surge_xt.yaml surfaced default so the parametrised plain-override test would pass
+  even if the override were silently dropped. Changed to "never" — a valid value (Literal),
+  Darwin-safe, and clearly off-default — making the assertion meaningful.
+
+Also syncs uv.lock to pyproject.toml 8.17.0 (was stale at 8.16.0 from a [skip ci] version bump on
+  main that did not update the lock).
+
+Refs #1450
+
+* refactor(tests): move render-config override tests to tests/pipeline/configs/
+
+tests/test_generate_dataset.py is for from_hydra / CLI subprocess tests only; the surfaced-defaults
+  override tests belong in the config-composition layer. Also fixes gui_toggle_cadence override
+  value from "once" (same as YAML default) to "never" (genuinely off-default), strengthening the
+  parametrized assertion.
+
+* ci: re-trigger workflow after rebase push race condition
+
+The previous push (68161388) landed on the remote but did not fire the PR synchronize event, so CI
+  was not triggered. This empty commit is the retrigger; no logical changes.
+
+* deps: update aiohttp 3.13.5 -> 3.14.0 to fix lock-check CI
+
+aiohttp 3.14.0 was released 2026-06-01, after uv.lock was last regenerated. uv lock --check (running
+  a fresh resolution) detects the newer version is available and fails. Regenerated with ``uv lock
+  --upgrade-package aiohttp`` to keep all other pins unchanged.
+
+* refactor(tests): replace spec_from_cfg import with DatasetSpec.from_hydra_cfg
+
+spec_from_cfg is a one-liner wrapper around DatasetSpec.from_hydra_cfg; importing the CLI module
+  brings in wandb/lightning and fires operator_workspace() at import time, which is unwanted in a
+  config-composition test.
+
+* deps: upgrade all transitive deps to latest to fix lock-check CI
+
+Fresh uv lock --upgrade resolves lock-check failures caused by new releases of boto3/botocore
+  (1.43.14→1.43.23), aiohttp (3.14.0 already pinned), and ~15 other transitive deps since the lock
+  was last regenerated.
+
+* deps: sync uv.lock (tqdm 4.68.0 → 4.68.1)
+
+Keeps CI lock-check green; no functional changes.
+
+* ci(lock-check): key UV cache on uv.lock content
+
+The `cache-dependency-glob` defaulted to `**/*requirements*.txt`, which matches nothing in this
+  project and produces a static cache key. Each push therefore reused cached package metadata from
+  the first CI run, causing `uv lock --check` to resolve against stale metadata and report false
+  drift when a transitive dependency (e.g. tqdm) was released between the local lock generation and
+  CI.
+
+Keying on `uv.lock` ensures the UV metadata cache is busted whenever the lock file changes.
+
+### Refactoring
+
+- **eval**: Type decode + predict_vst_audio notes with NoteParams
+  ([#1451](https://github.com/tinaudio/synth-setter/pull/1451),
+  [`b6e5962`](https://github.com/tinaudio/synth-setter/commit/b6e596275772b8eb966e39278459ca75a2533125))
+
+* refactor(eval): type ParamSpec.decode + predict_vst_audio note params with NoteParams
+
+Follow-up to #1427, which threaded NoteParams through the VST generate path but left the decode side
+  returning tuple[dict[str, float], dict[str, float]] — imprecise because the note half's
+  note_start_and_end is a tuple, not a float.
+
+- param_spec.py: ParamSpec.decode returns tuple[dict[str, float], NoteParams] via a single cast at
+  the dynamic-construction source, mirroring sample(). - predict_vst_audio.py: untangle the
+  pre-existing errors that blocked this in #1427 — param_spec/pred_dir no longer reassigned across
+  str/ParamSpec/Path (new spec/pred_path locals), params_to_csv's target params widen to optionals
+  (the --no-params path passes None), and the note params adopt NoteParams; the :195/197
+  None-subscripts fall out of the narrowed decode type. - tests: drop the now-stale decode- and
+  encode-fed reportArgumentType ignores and the params_to_csv None type:ignore; _sample_param_dicts
+  returns NoteParams. - .pydoclint-baseline.txt: params_to_csv's existing DOC103 row updated in
+  place for the new annotations (no new rows).
+
+Type-only; no runtime behavior change.
+
+Fixes #1428
+
+* refactor(data): drop now-redundant NoteParams cast in generate_vst_dataset
+
+Now that ParamSpec.decode returns NoteParams (prior commit), the cast in fixed_params_from_dataset
+  is the identity and its comment ("decode is annotated dict[str, float]") is false — remove both.
+
+Also sync the NoteParams docstring to credit decode alongside sample, and reword decode's cast
+  comment so it no longer claims to be the sole source.
+
+Surfaced by the doc-drift advisory on this PR. Type-only; no runtime change.
+
+Refs #1428
+
+- **testing**: Hand-written process fake, raise-based leak assert
+  ([#1448](https://github.com/tinaudio/synth-setter/pull/1448),
+  [`2c0d0cd`](https://github.com/tinaudio/synth-setter/commit/2c0d0cd3c8b57ee5f4efa65e5e2be3929269558f))
+
+* refactor(testing): replace MagicMock process double and brittle warning assertion in vst core
+  tests
+
+Swap the ``MagicMock``-backed ``_fake_plugin`` for a tiny hand-written ``_RenderFakePlugin`` whose
+  ``process`` returns a correctly-shaped ``(channels, num_samples)`` float32 buffer, mirroring the
+  canonical ``FakeVST3Plugin.process`` output contract; track render via an explicit
+  ``process_called`` flag instead of the mock's ``.called``.
+
+Replace the brittle ``logger.warning.call_count == 1`` assertion in the worker-leak test with the
+  real observable behaviour — the raised ``RenderWorkerLeaked`` (already asserted via
+  ``pytest.raises``) — and drop the now-unused logger stub. Justified threading mocks are unchanged.
+
+Refs #1445
+
+* refactor(testing): make _RenderFakePlugin honour channels and flush shape
+
+Address Copilot review: the fake now mirrors FakeVST3Plugin.process — flush calls (empty
+  midi_events) return (channels, 0) and renders return (channels, num_samples) derived from the
+  caller's channels/duration/sample_rate, so a wrong channel count from render_params would surface
+  here. Drops the unused audio_shape constructor arg and the misleading "fixed shape" docstring.
+
+* refactor(testing): reuse canonical FakeVST3Plugin in vst core tests
+
+Drop the duplicated _RenderFakePlugin double from test_core.py and reuse the canonical
+  FakeVST3Plugin already shared via conftest. The preloaded-plugin test now asserts on observable
+  state — render_params returns non-silent audio for the note-on render — instead of a
+  process_called flag, so no shared-fake change was needed.
+
+- **testing**: Replace MagicMock render stubs with hand-written fakes
+  ([#1449](https://github.com/tinaudio/synth-setter/pull/1449),
+  [`8f6622c`](https://github.com/tinaudio/synth-setter/commit/8f6622c4107bef1c5a3ae0f1d3a0bdf750f3d803))
+
+`_stub_render_dependencies` in the writers test returned bare `MagicMock` instances for the loaded
+  plugin and the rendered sample. The writer loop only threads the plugin through (tests assert
+  identity) and collects samples into a flush batch (tests assert length), so neither needs the
+  attribute-fabricating behaviour of a mock. Swap them for explicit `_FakePlugin` /
+  `_FakeVSTDataSample` classes, matching the list-based capture idiom the sibling
+  `test_generate_vst_dataset.py` already uses. Behaviour and assertions are unchanged.
+
+Refs #1445
+
+### Testing
+
+- **_meta**: Ban config-layer imports in entrypoint test modules
+  ([#1453](https://github.com/tinaudio/synth-setter/pull/1453),
+  [`8345581`](https://github.com/tinaudio/synth-setter/commit/83455814e775281b89f3d10985ad573a16789f29))
+
+* test(_meta): hard-block Hydra config-initializer imports in entrypoint test modules
+
+test_generate_dataset.py and test_train.py are for e2e tests that drive from_hydra / train /
+  subprocess. Config-layer tests (Hydra compose + spec_from_cfg without running the entrypoint)
+  belong in tests/pipeline/configs/.
+
+The tell is a direct initialize_config_module (or its variants) import: it means the test manages
+  its own Hydra lifecycle, which is config-layer work. This AST check bans those imports from the
+  canonical entrypoint modules so the invariant is hard-blocked going forward.
+
+test_eval.py is excluded — it legitimately composes a cfg inline and immediately calls
+  evaluate(cfg), which is e2e.
+
+Refs #1455
+
+* fixup! test(_meta): hard-block Hydra config-initializer imports in entrypoint test modules
+
+Apply comment-hygiene + code-health fixes from pre-PR review: - Trim module docstring from 16 lines
+  to 9 (essay→contract); refs #1345 - Sort _BANNED_HYDRA_IMPORTS alphabetically - Add explicit
+  tuple[str, ...] annotation to _ENTRYPOINT_ONLY_TEST_FILES - Tighten _direct_hydra_compose_imports
+  docstring summary line
+
+Adds inline comment explaining that the bare ``initialize`` is the legacy Hydra 1.x alias and
+  carries the same lifecycle semantics as ``initialize_config_module`` — not a duplicate entry.
+
+* deps: sync uv.lock to synth-setter 8.18.0
+
+Lock was at 8.17.0 from before the 8.18.0 release landed on main.
+
+* docs: update testing.md and doc-map.yaml for tests/_meta/
+
+- Move test_generate_dataset.py from "Hydra-config validation" to a new "E2E dataset-generation
+  entrypoint" row — the meta-test asserts it must stay entrypoint-only - Add "Structural invariants
+  (meta-tests)" row for tests/_meta/ - Add tests/_meta/** source entry to doc-map.yaml
+
+* docs(meta): tighten module docstring to state the actual enforced invariant
+
+The docstring said "contain only e2e tests" but the check only bans Hydra config-initializer
+  imports; over-promising what is enforced. Reword to describe the specific import restriction that
+  is asserted.
+
+* docs(meta): restore shuffle_pred_audio entry; tighten doc-map covers
+
+Restore the `shuffle_pred_audio.py` source entry in doc-map.yaml that was accidentally dropped when
+  the testing.md doc-drift changes were applied. Tighten the `tests/_meta/**` covers text to
+  describe only the invariant that is actually implemented.
+
+Tighten _direct_hydra_compose_imports :returns: to name what the function actually returns.
+
+Refs #1345
+
+* docs(meta): tighten testing.md row to match enforced invariant
+
+The test_generate_dataset.py table row claimed the module is 'e2e only (enforced by
+  tests/_meta/test_entrypoint_e2e_only.py)', but the meta-test only blocks direct Hydra
+  config-initializer imports (initialize/initialize_config_dir/initialize_config_module) — it does
+  not prevent other non-e2e assertions from existing. Reword to state the specific invariant being
+  enforced.
+
+
+## v8.18.0 (2026-06-05)
+
+### Continuous Integration
+
+- Fix generate-and-finalize-dataset workflow
+  ([`f744dcd`](https://github.com/tinaudio/synth-setter/commit/f744dcd7a3bb0947aeb27199b25aa305268b2c2b))
+
+The consolidated generate-and-finalize-dataset workflow ran synth-setter-generate-dataset on a bare
+  ubuntu-latest runner with no Surge XT VST3, so generation failed at extract_renderer_version with
+  "Plugin path does not exist: plugins/Surge XT.vst3" before any render. Generation renders real
+  audio and needs the plugin + headless X11 stack only the dev-snapshot image bakes.
+
+Run the job inside the dev-snapshot image under the Xvfb wrapper, mirroring
+  nightly-parallel-datagen.yml: docker run the CLI after ensure_plugin_symlinks.sh recreates the
+  plugins symlink the bind-mount shadows, with hydra.run.dir pinned under the mounted workspace so
+  the host reads the eval's metrics.json and log. WANDB_MODE=offline is set in-container only for
+  oracle_eval so the inline eval's resume=must stays hermetic. New image_tag input pins a specific
+  image.
+
+This ports the fix from the deleted generate-finalize-oracle-eval.yaml (closed PR #1337) onto the
+  workflow #1391 consolidated it into.
+
+Refs #1336
+
+### Features
+
+- **evaluation**: Symlink shuffle of pred audio to probe render order
+  ([#1444](https://github.com/tinaudio/synth-setter/pull/1444),
+  [`e7fb24b`](https://github.com/tinaudio/synth-setter/commit/e7fb24b75ef707dea0b1f95635df2192acf0a4f6))
+
+* feat(evaluation): symlink shuffle of pred audio to probe render order
+
+Add `shuffle_pred_audio`, an opt-in eval probe that builds a *new* directory of symlinks permuting
+  each `sample_*/pred.wav` across the rendered `audio/` dir while `target.wav` links back to its own
+  sample. Recomputing audio metrics against this view scores each target against a pred rendered
+  from the same params but a different render-order position — isolating render-order from parameter
+  variation (#489).
+
+Because the view is symlinks into the untouched source tree, nothing is mutated and no
+  crash-recovery snapshots are needed. The build is gated on every sample's `params.csv` being
+  identical (a permutation is only meaningful when each pred renders the same params) and the
+  permutation is redrawn until it differs from the identity.
+
+The probe is folded into `compute_audio_metrics` behind `--shuffle_pred_audio` / `--shuffle_seed`:
+  when set, it scores `output_dir/shuffled_audio` instead of the original. `cli/eval.py` forwards
+  the flags to the metrics subprocess when `evaluation.shuffle_pred_audio` is enabled (no effect
+  unless `compute_metrics` is also on). Defaults keep `mode: test`/`validate` unchanged.
+
+Refs #489
+
+* chore: sync uv.lock to package version 8.17.0
+
+The 8.17.0 release commit on main bumped pyproject.toml under [skip ci], so uv.lock kept the stale
+  8.16.0 editable-package version and `uv lock --check` fails on any branch cut from main.
+  Regenerate the lockfile to match.
+
+* fix(evaluation): harden shuffle_pred_audio against missing targets and unsafe dest
+
+Require target.wav in the sample-dir predicate so a dir missing it is skipped rather than producing
+  a dangling symlink. Reject a dest_dir nested inside audio_dir, and clear a stale dest that is a
+  file or symlink (not just a real dir) before building. Reword the docstring: the permutation is
+  non-identity overall but may keep some pred.wav in place — it is not a derangement.
+
+* docs(evaluation): clarify shuffle_pred_audio dest_dir clearing is build-gated
+
+The <2-sample-dir path returns the identity before any write, so a pre-existing dest_dir is left
+  untouched there rather than 'cleared first' as the docstring implied. Reword so the clearing is
+  described as part of a proceeding shuffle (>=2 dirs, uniform params), matching
+  validate-before-write. Addresses Copilot.
+
+### Refactoring
+
+- **data**: Type VST note params with a NoteParams TypedDict
+  ([#1427](https://github.com/tinaudio/synth-setter/pull/1427),
+  [`f09ded2`](https://github.com/tinaudio/synth-setter/commit/f09ded2c6649bab1238130a9e2f3f135efcb7cb7))
+
+The note-params dict is heterogeneous (pitch: int, note_start_and_end: tuple[float, float]) but was
+  typed as a flat dict, collapsing every key to the value-type union and tripping Pylance
+  reportArgumentType at the render_params call sites in generate_vst_dataset.py.
+
+Introduce a closed NoteParams TypedDict in param_spec.py and thread it through the generate path:
+  sample() returns it (one cast at the runtime-key construction source), and VSTDataSample,
+  generate_sample's fixed_note_params, and writers' fixed_note_params_list adopt it.
+  ParamSpec.encode's note_param_dict widens to Mapping[str, object] so the TypedDict flows in
+  without fighting the dynamic-key iteration.
+
+Propagate NoteParams to the VST tests: the shared _HARDCODED_NOTE_PARAMS fixture and the
+  _patched_sample / _assert_round_trip_matches helpers adopt it, and the now-satisfied encode
+  reportArgumentType ignore is dropped. The tests are not pyright-excluded, so this keeps the repo
+  pyright-clean.
+
+Touching param_spec.py also triggered ruff's pending typing-alias modernization (List/Tuple/Optional
+  -> builtins) across the file.
+
+No behavior change. predict_vst_audio.py and ParamSpec.decode are out of scope (unrelated
+  pre-existing type errors).
+
+Fixes #1426
+
+- **schemas**: Type output_format as an OutputFormat enum with .extension
+  ([#1438](https://github.com/tinaudio/synth-setter/pull/1438),
+  [`ee2f690`](https://github.com/tinaudio/synth-setter/commit/ee2f690bf3d439dc33b64dd3d33e4fd8b54d2b97))
+
+Replace the inline ``Literal["hdf5", "wds"]`` field type and the paired
+  ``OUTPUT_FORMAT_TO_EXTENSION`` / ``EXTENSION_TO_OUTPUT_FORMAT`` module maps with a single
+  ``OutputFormat(str, Enum)`` domain type. The enum owns the format↔suffix mapping as an
+  ``.extension`` property and a ``.from_extension`` reverse-lookup classmethod, so a format and its
+  shard suffix live in one place instead of two parallel dicts that had to be kept inverse by an
+  import-time guard.
+
+Subclasses ``str`` (not 3.11's ``StrEnum`` — the floor is 3.10) and the field sets
+  ``Field(strict=False)`` so raw "hdf5"/"wds" tokens from Hydra-composed configs and R2 JSON still
+  coerce; unknown tokens raise exactly as the prior Literal did, and JSON serialization is unchanged
+  (the enum value is the token).
+
+All consumers — finalize/reshard dispatch, the renderer-CLI suffix dispatch, and the
+  pre-construction spec validator — now dispatch on enum members or ``OutputFormat.from_extension``
+  instead of the removed maps.
+
+Refs #1436
+
+- **testing**: Autospec sky.Resources/Task in skypilot launcher tests
+  ([#1447](https://github.com/tinaudio/synth-setter/pull/1447),
+  [`3fc373f`](https://github.com/tinaudio/synth-setter/commit/3fc373f4100ddd0339636453833e9bc0cc3f9cdb))
+
+Replace the hand-maintained MagicMock(spec=[...]) attribute lists for sky.Resources and sky.Task in
+  TestOverrideImageId with unittest.mock.create_autospec against the real SDK classes. The spec now
+  tracks the installed SkyPilot surface automatically, so a renamed or removed attribute (copy /
+  set_resources / cloud / image_id) fails the test instead of silently passing a stale spec.
+
+Refs #1445
+
+### Testing
+
+- **generate_dataset**: Add resume-correctness tests for h5
+  ([#1441](https://github.com/tinaudio/synth-setter/pull/1441),
+  [`68c7ded`](https://github.com/tinaudio/synth-setter/commit/68c7ded9e68678a981b9fd2c0bf39b7135565228))
+
+* test(data): pin HDF5 resume correctness under absolute-row fixed-params contract
+
+PR #1430 changed the writer's fixed-params indexing from tail-aligned (fixed_list[i - start_idx],
+  length num_samples - start_idx) to absolute row (fixed_list[i], length num_samples). This adds
+  CPU-only regression tests (render_params stubbed, no plugin) pinning that h5 resume still
+  reconstructs the exact dataset a single uninterrupted run would:
+
+- note params are absolute-indexed on resume (the existing pin only varies synth params, so it
+  cannot distinguish absolute from tail for note rows); - a plain sampled-params resume preserves
+  already-written head rows; - a crashed-then-resumed copy reproduces the single-shot param_array; -
+  a re-run on a complete shard renders nothing (start_idx == num_samples); - a resume starting
+  mid-batch indexes by absolute row.
+
+Refs #1429
+
+* test(data): clarify _prewrite_resumable_head opens the shard path
+
+Address Copilot review: the helper itself opens `out` in append mode; reword the param doc to say so
+  rather than implying the path arrives open.
+
+- **testing**: Positively assert finalize short-circuits on bad output_format
+  ([#1446](https://github.com/tinaudio/synth-setter/pull/1446),
+  [`eda352f`](https://github.com/tinaudio/synth-setter/commit/eda352f8f7107f71505f082e98d687d8104b9ebd))
+
+The unsupported-output_format test asserted only that a ValueError is raised, coupling its pass to
+  the spec-load happening before dispatch: if the load moved after dispatch the test would silently
+  still pass. Add fail-fast download_to_path / upload stubs so a download or upload firing before
+  the raise — proof that a format branch ran — fails the test.
+
+Refs #1445
+
+
 ## v8.17.0 (2026-06-05)
 
 ### Features
