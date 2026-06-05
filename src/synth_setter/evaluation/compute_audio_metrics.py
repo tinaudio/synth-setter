@@ -39,6 +39,8 @@ from kymatio.numpy import Scattering1D
 from loguru import logger
 from pedalboard.io import AudioFile
 
+from synth_setter.evaluation.shuffle_pred_audio import shuffle_pred_audio
+
 
 def subdir_matches_pattern(dir: Path) -> bool:
     """Return ``True`` if ``dir`` contains ``pred.wav`` and ``target.wav``."""
@@ -281,7 +283,15 @@ def compute_metrics(audio_dirs: list[Path], output_dir: Path):
 @click.argument("audio_dir", type=str)
 @click.argument("output_dir", type=str, default="metrics")
 @click.option("--num_workers", "-w", type=int, default=8)
-def main(audio_dir: str, output_dir: str, num_workers: int):
+@click.option(
+    "--shuffle_pred_audio",
+    "shuffle",
+    is_flag=True,
+    default=False,
+    help="Score against a symlink view that permutes pred.wav across sample dirs (#489).",
+)
+@click.option("--shuffle_seed", type=int, default=0, help="Seed for --shuffle_pred_audio.")
+def main(audio_dir: str, output_dir: str, num_workers: int, shuffle: bool, shuffle_seed: int):
     # 1. make a list of all subdirectories that match the expected structure
     # 2. divide list up into sublists per worker
     # 3. send each list to a worker and begin processing. each worker dumps metrics to
@@ -290,10 +300,25 @@ def main(audio_dir: str, output_dir: str, num_workers: int):
     # 5. when all workers are done, compute the mean of each metric across the master
     # list
     audio_dir = Path(audio_dir)
-    audio_dirs = find_possible_subdirs(audio_dir)
 
     os.makedirs(output_dir, exist_ok=True)
     output_dir = Path(output_dir)
+
+    if shuffle:
+        shuffled_dir = output_dir / "shuffled_audio"
+        permutation = shuffle_pred_audio(audio_dir, shuffled_dir, shuffle_seed)
+        if len(permutation) >= 2:
+            logger.info(
+                "Scoring shuffled pred audio: permuted {n} sample dirs (seed={s}) into {d}",
+                n=len(permutation),
+                s=shuffle_seed,
+                d=shuffled_dir,
+            )
+            audio_dir = shuffled_dir
+        else:
+            logger.info("Shuffle skipped: <2 sample dirs; scoring the original audio dir")
+
+    audio_dirs = find_possible_subdirs(audio_dir)
 
     sublist_length = len(audio_dirs) // num_workers
     sublists = [

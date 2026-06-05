@@ -39,6 +39,8 @@ def _build_postprocess_cfg(
     compute_metrics: bool = True,
     rerender_target: bool = True,
     num_workers: int = 1,
+    shuffle_pred_audio: bool = False,
+    shuffle_seed: int = 0,
     render: dict[str, Any] | None = None,
 ) -> DictConfig:
     """Build a minimal cfg accepted by ``_run_predict_postprocessing``.
@@ -49,6 +51,8 @@ def _build_postprocess_cfg(
     :param compute_metrics: Drives ``cfg.evaluation.compute_metrics``.
     :param rerender_target: Drives ``cfg.evaluation.rerender_target``.
     :param num_workers: Drives ``cfg.evaluation.num_workers``.
+    :param shuffle_pred_audio: Drives ``cfg.evaluation.shuffle_pred_audio``.
+    :param shuffle_seed: Drives ``cfg.evaluation.shuffle_seed``.
     :param render: Drives ``cfg.render``; pass ``None`` to test the unset-render branch.
     :returns: Minimal :class:`DictConfig` shaped the way the helper reads it.
     """
@@ -60,6 +64,8 @@ def _build_postprocess_cfg(
                 "compute_metrics": compute_metrics,
                 "rerender_target": rerender_target,
                 "num_workers": num_workers,
+                "shuffle_pred_audio": shuffle_pred_audio,
+                "shuffle_seed": shuffle_seed,
             },
             "render": render,
         }
@@ -325,6 +331,82 @@ def test_postprocessing_metrics_argv_includes_num_workers(
         "synth_setter.evaluation.compute_audio_metrics",
     ]
     assert metrics_argv[-2:] == ["-w", "4"]
+
+
+def test_postprocessing_forwards_shuffle_flags_to_metrics_subprocess(
+    monkeypatch: pytest.MonkeyPatch,
+    predictions_tree: Path,
+    captured_argv: list[list[str]],
+) -> None:
+    """``shuffle_pred_audio`` forwards ``--shuffle_pred_audio``/``--shuffle_seed`` to metrics.
+
+    :param monkeypatch: Pins ``sys.platform`` to ``darwin`` so the metrics-only argv is asserted.
+    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created.
+    :param captured_argv: Captured argv list populated by the fixture.
+    """
+    monkeypatch.setattr(eval_mod.sys, "platform", "darwin")
+    cfg = _build_postprocess_cfg(
+        predictions_tree,
+        render_vst=False,
+        compute_metrics=True,
+        shuffle_pred_audio=True,
+        shuffle_seed=7,
+    )
+
+    _run_predict_postprocessing(cfg)
+
+    metrics_argv = captured_argv[0]
+    assert "--shuffle_pred_audio" in metrics_argv
+    seed_idx = metrics_argv.index("--shuffle_seed")
+    assert metrics_argv[seed_idx + 1] == "7"
+
+
+def test_postprocessing_omits_shuffle_flags_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+    predictions_tree: Path,
+    captured_argv: list[list[str]],
+) -> None:
+    """With ``shuffle_pred_audio`` off, neither shuffle flag reaches the metrics argv.
+
+    :param monkeypatch: Pins ``sys.platform`` to ``darwin`` so the metrics-only argv is asserted.
+    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created.
+    :param captured_argv: Captured argv list populated by the fixture.
+    """
+    monkeypatch.setattr(eval_mod.sys, "platform", "darwin")
+    cfg = _build_postprocess_cfg(
+        predictions_tree,
+        render_vst=False,
+        compute_metrics=True,
+        shuffle_pred_audio=False,
+    )
+
+    _run_predict_postprocessing(cfg)
+
+    metrics_argv = captured_argv[0]
+    assert "--shuffle_pred_audio" not in metrics_argv
+    assert "--shuffle_seed" not in metrics_argv
+
+
+def test_postprocessing_shuffle_without_compute_metrics_is_noop(
+    predictions_tree: Path,
+    captured_argv: list[list[str]],
+) -> None:
+    """``shuffle_pred_audio`` has no effect unless ``compute_metrics`` is also enabled.
+
+    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created.
+    :param captured_argv: Captured argv list — asserted empty (no subprocess fires).
+    """
+    cfg = _build_postprocess_cfg(
+        predictions_tree,
+        render_vst=False,
+        compute_metrics=False,
+        shuffle_pred_audio=True,
+        render=None,
+    )
+
+    _run_predict_postprocessing(cfg)
+
+    assert captured_argv == []
 
 
 def test_postprocessing_no_op_when_both_gates_off(
