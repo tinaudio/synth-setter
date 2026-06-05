@@ -48,6 +48,21 @@ class TestLoggerConfigAcceptsEveryComposition:
         assert len(parsed.root) > 1
 
 
+class TestWandbConsoleCapture:
+    """The wandb logger must capture console output at the file-descriptor level."""
+
+    def test_wandb_settings_console_is_redirect(self) -> None:
+        """The composed ``wandb.settings.console`` pins ``redirect`` (not the ``auto`` default).
+
+        Config-pin guard: asserts the value, not the runtime capture. ``redirect`` is required
+        because ``auto`` resolves to ``wrap`` on non-TTY workers, which patches ``sys.stdout``
+        only and so misses loguru's import-time ``sys.stderr`` binding and subprocess output —
+        leaving the run's log stream empty.
+        """
+        logger_subtree = compose_subtree("logger", "wandb")
+        assert logger_subtree["wandb"]["settings"]["console"] == "redirect"
+
+
 _VALID_LOGGER = {
     "_target_": "lightning.pytorch.loggers.csv_logs.CSVLogger",
     "save_dir": "/tmp/csv",  # noqa: S108
