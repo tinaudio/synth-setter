@@ -4,8 +4,8 @@ Covers three shapes: ``spec_from_cfg`` round-trips via the ``cfg_dataset``
 fixture that exercise config composition and spec validation; a
 ``@pytest.mark.slow`` CLI subprocess test that drives the full entrypoint
 without VST or R2; and ``integration_r2``-gated end-to-end tests that drive
-``from_hydra`` against real Cloudflare R2. The integration tests auto-skip
-when ``rclone`` / R2 creds are absent.
+``from_hydra`` or the full CLI subprocess against real Cloudflare R2. The
+integration tests auto-skip when ``rclone`` / R2 creds are absent.
 
 Keep this module to cfg-entrypoint tests. Pure Hydra config-composition
 tests (without a ``spec_from_cfg`` round-trip) live in
