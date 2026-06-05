@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780671194954,
+  "lastUpdate": 1780673417361,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -5622,6 +5622,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.01896113157272339,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ee2f690bf3d439dc33b64dd3d33e4fd8b54d2b97",
+          "message": "refactor(schemas): type output_format as an OutputFormat enum with .extension (#1438)\n\nReplace the inline ``Literal[\"hdf5\", \"wds\"]`` field type and the paired\n``OUTPUT_FORMAT_TO_EXTENSION`` / ``EXTENSION_TO_OUTPUT_FORMAT`` module maps with a\nsingle ``OutputFormat(str, Enum)`` domain type. The enum owns the format↔suffix\nmapping as an ``.extension`` property and a ``.from_extension`` reverse-lookup\nclassmethod, so a format and its shard suffix live in one place instead of two\nparallel dicts that had to be kept inverse by an import-time guard.\n\nSubclasses ``str`` (not 3.11's ``StrEnum`` — the floor is 3.10) and the field\nsets ``Field(strict=False)`` so raw \"hdf5\"/\"wds\" tokens from Hydra-composed\nconfigs and R2 JSON still coerce; unknown tokens raise exactly as the prior\nLiteral did, and JSON serialization is unchanged (the enum value is the token).\n\nAll consumers — finalize/reshard dispatch, the renderer-CLI suffix dispatch, and\nthe pre-construction spec validator — now dispatch on enum members or\n``OutputFormat.from_extension`` instead of the removed maps.\n\nRefs #1436",
+          "timestamp": "2026-06-05T10:22:18-04:00",
+          "tree_id": "e084c7f4774e484f196fd9690222f145b969d30f",
+          "url": "https://github.com/tinaudio/synth-setter/commit/ee2f690bf3d439dc33b64dd3d33e4fd8b54d2b97"
+        },
+        "date": 1780673416750,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.4693844318389893,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 5.783688038103282,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.022564545273780823,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.01289820671081543,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.0167410373687744,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 15.170556392666668,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.353996276855469,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.781253455467522,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.030008452013134956,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.03224837779998779,
             "unit": "1-cos"
           },
           {
