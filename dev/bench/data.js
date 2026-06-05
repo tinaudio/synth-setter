@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780675669968,
+  "lastUpdate": 1780677859795,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -5790,6 +5790,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.055387914180755615,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b6e596275772b8eb966e39278459ca75a2533125",
+          "message": "refactor(eval): type decode + predict_vst_audio notes with NoteParams (#1451)\n\n* refactor(eval): type ParamSpec.decode + predict_vst_audio note params with NoteParams\n\nFollow-up to #1427, which threaded NoteParams through the VST generate path\nbut left the decode side returning tuple[dict[str, float], dict[str, float]] —\nimprecise because the note half's note_start_and_end is a tuple, not a float.\n\n- param_spec.py: ParamSpec.decode returns tuple[dict[str, float], NoteParams]\n  via a single cast at the dynamic-construction source, mirroring sample().\n- predict_vst_audio.py: untangle the pre-existing errors that blocked this in\n  #1427 — param_spec/pred_dir no longer reassigned across str/ParamSpec/Path\n  (new spec/pred_path locals), params_to_csv's target params widen to\n  optionals (the --no-params path passes None), and the note params adopt\n  NoteParams; the :195/197 None-subscripts fall out of the narrowed decode type.\n- tests: drop the now-stale decode- and encode-fed reportArgumentType ignores\n  and the params_to_csv None type:ignore; _sample_param_dicts returns NoteParams.\n- .pydoclint-baseline.txt: params_to_csv's existing DOC103 row updated in place\n  for the new annotations (no new rows).\n\nType-only; no runtime behavior change.\n\nFixes #1428\n\n* refactor(data): drop now-redundant NoteParams cast in generate_vst_dataset\n\nNow that ParamSpec.decode returns NoteParams (prior commit), the cast in\nfixed_params_from_dataset is the identity and its comment (\"decode is\nannotated dict[str, float]\") is false — remove both.\n\nAlso sync the NoteParams docstring to credit decode alongside sample, and\nreword decode's cast comment so it no longer claims to be the sole source.\n\nSurfaced by the doc-drift advisory on this PR. Type-only; no runtime change.\n\nRefs #1428",
+          "timestamp": "2026-06-05T11:55:13-04:00",
+          "tree_id": "6e1618383a9730c1b89237afd88e93d0a82b52f7",
+          "url": "https://github.com/tinaudio/synth-setter/commit/b6e596275772b8eb966e39278459ca75a2533125"
+        },
+        "date": 1780677859157,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.449207305908203,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 5.929771597434301,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.02001812867820263,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.016460180282592773,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 2.887805461883545,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 15.079321322999988,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.691455364227295,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.820598676763475,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.0335729755461216,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.05992227792739868,
             "unit": "1-cos"
           },
           {
