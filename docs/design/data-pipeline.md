@@ -855,7 +855,7 @@ HDF5 is random-access oriented. Multi-GPU DataLoaders need to stream shards sequ
 
 **HDF5 is resumable; WDS is not:**
 
-`make_hdf5_dataset` is resumable — a partially-written file picks up at the first all-zero row, so a crashed worker can re-run with the same render config and only the missing tail is regenerated. `make_wds_dataset` is not resumable today (the tar writer overwrites the destination on open); a crashed wds worker re-renders the whole shard. The staging/canonical split is unaffected by output format.
+`make_hdf5_dataset` is resumable — a partially-written file picks up at the first all-zero row, so a crashed worker can re-run with the same render config and only the missing tail is regenerated, except under `render.param_sample_cadence="shard"`, where a partially-written shard is re-rendered from row 0 (a mid-shard resume can't preserve the one-patch-per-shard invariant). `make_wds_dataset` is not resumable today (the tar writer overwrites the destination on open); a crashed wds worker re-renders the whole shard. The staging/canonical split is unaffected by output format.
 
 **Copying an existing dataset:** when `datasetsrc.copy_dataset_root` is set on the spec, generation re-renders the parameters of an existing dataset instead of sampling fresh ones. The launcher forwards `--copy_dataset_root` to the renderer subprocess, which reads the same-named source shard's `param_array`, decodes each row into fixed synth/note params via `fixed_params_from_dataset` (`param_spec.decode`), and renders those. This is hdf5-only — the source is read as an HDF5 `param_array` of the same shard filename, so a `.tar` output with `--copy_dataset_root` raises `SystemExit`. The source must share the target's `render.param_spec_name` (same encoding width) and have row count equal to `samples_per_shard`. Fixed params are indexed by absolute row, so resume re-renders only the missing tail from the matching source rows.
 
@@ -1226,6 +1226,10 @@ class RenderConfig(BaseModel):
     gui_toggle_cadence: Literal["never", "once", "render", "always_on"] = Field(
         default_factory=_default_gui_toggle_cadence
     )
+    # "shard" reuses one patch for every sample in the shard (a #489 per-patch
+    # variance probe; a partial shard re-renders from row 0 rather than resuming).
+    # Source of truth: _ParamSampleCadence / RenderConfig in pipeline/schemas/spec.py.
+    param_sample_cadence: Literal["sample", "shard"] = "sample"
 
 class DatasetSpec(BaseModel):
     """Unified dataset specification — input config + materialized runtime in one model."""

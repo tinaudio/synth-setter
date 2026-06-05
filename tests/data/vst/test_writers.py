@@ -241,6 +241,166 @@ def _stub_render_dependencies(
     return captured
 
 
+def test_render_in_batches_shard_cadence_reuses_first_sample_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``param_sample_cadence="shard"`` draws once, then fixes every later render to it.
+
+    Sample 0 is rendered with no fixed params (the normal loudness-gated draw);
+    samples 1..N receive that first sample's ``synth_params`` / ``note_params``
+    as the fixed override, so the whole shard is one identical patch.
+
+    :param monkeypatch: Pytest fixture used to patch module-level callables.
+    """
+    n = 4
+    render_cfg = _smoke_render_cfg(
+        samples_per_shard=n,
+        samples_per_render_batch=n,
+        param_sample_cadence="shard",
+    )
+
+    returned: list[MagicMock] = []
+    captured: list[dict[str, object]] = []
+
+    def _fake_generate_sample(_plugin_path: str, **kwargs: object) -> MagicMock:
+        captured.append(dict(kwargs))
+        sample = MagicMock(name=f"sample_{len(returned)}")
+        returned.append(sample)
+        return sample
+
+    monkeypatch.setattr(writers, "generate_sample", _fake_generate_sample)
+
+    _render_in_batches(
+        render_cfg=render_cfg,
+        param_spec=MagicMock(name="param_spec"),
+        start_idx=0,
+        fixed_synth_params_list=None,
+        fixed_note_params_list=None,
+        flush_batch=lambda _batch, _start: None,
+    )
+
+    assert len(captured) == n
+    assert captured[0]["fixed_synth_params"] is None
+    assert captured[0]["fixed_note_params"] is None
+    first = returned[0]
+    for call_kwargs in captured[1:]:
+        assert call_kwargs["fixed_synth_params"] is first.synth_params
+        assert call_kwargs["fixed_note_params"] is first.note_params
+
+
+def test_render_in_batches_sample_cadence_draws_fresh_params_every_render(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``param_sample_cadence="sample"`` (default) never fixes params from a prior render.
+
+    :param monkeypatch: Pytest fixture used to patch module-level callables.
+    """
+    n = 3
+    render_cfg = _smoke_render_cfg(
+        samples_per_shard=n,
+        samples_per_render_batch=n,
+        param_sample_cadence="sample",
+    )
+    captured = _stub_render_dependencies(monkeypatch, load_plugin_calls=[], load_preset_calls=[])
+
+    _render_in_batches(
+        render_cfg=render_cfg,
+        param_spec=MagicMock(name="param_spec"),
+        start_idx=0,
+        fixed_synth_params_list=None,
+        fixed_note_params_list=None,
+        flush_batch=lambda _batch, _start: None,
+    )
+
+    assert len(captured) == n
+    for call_kwargs in captured:
+        assert call_kwargs["fixed_synth_params"] is None
+        assert call_kwargs["fixed_note_params"] is None
+
+
+def test_render_in_batches_shard_cadence_rejects_caller_fixed_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Shard cadence plus caller-supplied fixed lists is contradictory and raises.
+
+    :param monkeypatch: Pytest fixture used to patch module-level callables.
+    """
+    render_cfg = _smoke_render_cfg(
+        samples_per_shard=2,
+        samples_per_render_batch=2,
+        param_sample_cadence="shard",
+    )
+    _stub_render_dependencies(monkeypatch, load_plugin_calls=[], load_preset_calls=[])
+
+    with pytest.raises(ValueError, match="param_sample_cadence"):
+        _render_in_batches(
+            render_cfg=render_cfg,
+            param_spec=MagicMock(name="param_spec"),
+            start_idx=0,
+            fixed_synth_params_list=[{"a": 0.5}, {"a": 0.5}],
+            fixed_note_params_list=None,
+            flush_batch=lambda _batch, _start: None,
+        )
+
+
+def test_make_hdf5_dataset_shard_cadence_rerenders_partial_shard_from_row_zero(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A partial HDF5 shard under shard cadence re-renders from row 0, not the resume tail.
+
+    A mid-shard resume can't preserve the one-patch-per-shard invariant (the
+    partial rows hold an earlier patch), so ``make_hdf5_dataset`` resets the
+    resume ``start_idx`` to 0 before rendering. Stubs the dataset/resume seam to
+    report a partial shard (``start_idx=2``) and captures the index the render
+    loop actually receives.
+
+    :param monkeypatch: Pytest fixture used to patch module-level callables.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    render_cfg = _smoke_render_cfg(samples_per_shard=4, param_sample_cadence="shard")
+    monkeypatch.setattr(
+        writers,
+        "create_datasets_and_get_start_idx",
+        lambda **_kw: (MagicMock(name="audio"), MagicMock(name="mel"), MagicMock(name="param"), 2),
+    )
+    captured_start_idx: list[int] = []
+    monkeypatch.setattr(
+        writers,
+        "_render_in_batches",
+        lambda **kw: captured_start_idx.append(kw["start_idx"]),
+    )
+
+    writers.make_hdf5_dataset(tmp_path / "shard-000000.h5", render_cfg)
+
+    assert captured_start_idx == [0]
+
+
+def test_make_hdf5_dataset_sample_cadence_resumes_from_partial_start_idx(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Default cadence keeps the resume ``start_idx`` — only shard cadence re-renders.
+
+    :param monkeypatch: Pytest fixture used to patch module-level callables.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    render_cfg = _smoke_render_cfg(samples_per_shard=4, param_sample_cadence="sample")
+    monkeypatch.setattr(
+        writers,
+        "create_datasets_and_get_start_idx",
+        lambda **_kw: (MagicMock(name="audio"), MagicMock(name="mel"), MagicMock(name="param"), 2),
+    )
+    captured_start_idx: list[int] = []
+    monkeypatch.setattr(
+        writers,
+        "_render_in_batches",
+        lambda **kw: captured_start_idx.append(kw["start_idx"]),
+    )
+
+    writers.make_hdf5_dataset(tmp_path / "shard-000000.h5", render_cfg)
+
+    assert captured_start_idx == [2]
+
+
 def test_render_in_batches_caches_plugin_when_reload_cadence_is_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -809,3 +969,70 @@ def test_render_in_batches_render_cadence_warms_once_per_generate_sample_call(
     # after the first attempt of each ``generate_sample`` call, so sample 0's
     # silent retries do NOT add to the count.
     assert warmup_mock.call_count == n
+
+
+def test_render_in_batches_shard_cadence_draws_param_spec_once_for_whole_shard(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``param_sample_cadence="shard"`` calls ``param_spec.sample()`` once and reuses the patch.
+
+    Drives the real ``generate_sample`` (only ``render_params`` /
+    ``make_spectrogram`` are faked), so this pins observable behaviour through
+    the production code path: exactly one draw for the shard, and every flushed
+    sample carries that same patch.
+
+    :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
+    """
+    n = 4
+    render_cfg = _smoke_render_cfg(
+        samples_per_shard=n,
+        samples_per_render_batch=n,
+        param_sample_cadence="shard",
+    )
+    _warmup_mock, fake_spec = _install_writer_level_fakes(monkeypatch, retry_on_first_sample=0)
+
+    flushed: list[VSTDataSample] = []
+    _render_in_batches(
+        render_cfg=render_cfg,
+        param_spec=fake_spec,
+        start_idx=0,
+        fixed_synth_params_list=None,
+        fixed_note_params_list=None,
+        flush_batch=lambda batch, _start: flushed.extend(batch),
+    )
+
+    assert fake_spec.sample.call_count == 1
+    assert len(flushed) == n
+    assert all(s.synth_params == {"a_amp_eg_attack": 0.5} for s in flushed)
+    assert all(s.note_params == {"pitch": 64, "note_start_and_end": (0.1, 0.9)} for s in flushed)
+
+
+def test_render_in_batches_sample_cadence_draws_param_spec_per_sample(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``param_sample_cadence="sample"`` draws a fresh patch for every sample in the shard.
+
+    The contrast case to the shard-cadence draw-once test: the default cadence
+    calls ``param_spec.sample()`` once per sample through the real
+    ``generate_sample`` path.
+
+    :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
+    """
+    n = 4
+    render_cfg = _smoke_render_cfg(
+        samples_per_shard=n,
+        samples_per_render_batch=n,
+        param_sample_cadence="sample",
+    )
+    _warmup_mock, fake_spec = _install_writer_level_fakes(monkeypatch, retry_on_first_sample=0)
+
+    _render_in_batches(
+        render_cfg=render_cfg,
+        param_spec=fake_spec,
+        start_idx=0,
+        fixed_synth_params_list=None,
+        fixed_note_params_list=None,
+        flush_batch=lambda _batch, _start: None,
+    )
+
+    assert fake_spec.sample.call_count == n

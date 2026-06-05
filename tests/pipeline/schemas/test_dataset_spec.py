@@ -320,6 +320,21 @@ class TestRenderConfig:
         assert cfg.gui_toggle_cadence == "always_on"
         assert cfg.plugin_reload_cadence == "once"
 
+    def test_param_sample_cadence_defaults_to_sample(self) -> None:
+        """Omitting ``param_sample_cadence`` keeps the historical per-sample draw."""
+        cfg = RenderConfig(**_valid_render_kwargs())
+        assert cfg.param_sample_cadence == "sample"
+
+    def test_param_sample_cadence_shard_accepted(self) -> None:
+        """``param_sample_cadence="shard"`` constructs — one patch reused across the shard."""
+        cfg = RenderConfig(**{**_valid_render_kwargs(), "param_sample_cadence": "shard"})
+        assert cfg.param_sample_cadence == "shard"
+
+    def test_param_sample_cadence_rejects_unknown_value(self) -> None:
+        """A value outside the literal set raises rather than silently passing through."""
+        with pytest.raises(ValidationError):
+            RenderConfig(**{**_valid_render_kwargs(), "param_sample_cadence": "batch"})
+
 
 # ---------------------------------------------------------------------------
 # DatasetSpec — construction & runtime-field auto-fill

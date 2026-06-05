@@ -145,8 +145,8 @@ def _validate_fixed_params_lengths(
 ) -> None:
     """Raise ``ValueError`` unless each fixed-params list spans the whole shard.
 
-    Fixed params are indexed by absolute row ``i`` (see
-    ``_generate_sample_for_index``), so each list holds one entry per shard row —
+    Fixed params are indexed by absolute row ``i`` (see the loop in
+    ``_render_in_batches``), so each list holds one entry per shard row —
     ``num_samples`` entries — even on a resumed run that only re-renders the tail
     (the already-written rows keep their list slots). We require exact equality
     (not ``>=``) so a mismatched source — e.g. a dataset copy whose shard row
@@ -169,64 +169,6 @@ def _validate_fixed_params_lengths(
                 "for a dataset copy, the source shard's row count must equal "
                 "samples_per_shard"
             )
-
-
-def _generate_sample_for_index(
-    i: int,
-    *,
-    plugin_path: str,
-    preset_path: str,
-    velocity: int,
-    signal_duration_seconds: float,
-    sample_rate: float,
-    channels: int,
-    min_loudness: float,
-    param_spec: ParamSpec,
-    fixed_synth_params_list: list[dict[str, float]] | None,
-    fixed_note_params_list: list[dict[str, int | tuple[float, float]]] | None,
-    plugin: VST3Plugin | None = None,
-    warmup: bool = False,
-) -> VSTDataSample:
-    """Render the ``i``-th sample, picking up the ``i``-th fixed-params entry.
-
-    Fixed params are indexed by absolute row ``i`` so a resumed run (which only
-    re-renders rows ``[start_idx, num_samples)``) still reads the source row that
-    matches each output row.
-
-    :param i: Absolute row index this call is rendering, and the fixed-params index.
-    :param plugin_path: Path to the VST3 bundle to load (ignored when ``plugin`` is supplied).
-    :param preset_path: Path to the ``.vstpreset`` to apply (ignored when ``plugin`` is supplied).
-    :param velocity: MIDI velocity in ``[0, 127]``.
-    :param signal_duration_seconds: Duration of the rendered clip in seconds.
-    :param sample_rate: Sample rate of the rendered clip in Hz.
-    :param channels: Number of audio channels rendered.
-    :param min_loudness: Loudness gate threshold in LUFS.
-    :param param_spec: Parameter spec used to sample/encode parameters.
-    :param fixed_synth_params_list: Optional pre-set synth params, indexed by ``i``.
-    :param fixed_note_params_list: Optional pre-set note params, indexed by ``i``.
-    :param plugin: Optional pre-loaded plugin reused across the shard's renders.
-    :param warmup: Run ``warmup_plugin`` on the plugin used for this render.
-    :returns: The freshly rendered sample.
-    :rtype: VSTDataSample
-    """
-    return generate_sample(
-        plugin_path,
-        velocity=velocity,
-        signal_duration_seconds=signal_duration_seconds,
-        sample_rate=sample_rate,
-        channels=channels,
-        min_loudness=min_loudness,
-        param_spec=param_spec,
-        preset_path=preset_path,
-        fixed_synth_params=(
-            fixed_synth_params_list[i] if fixed_synth_params_list is not None else None
-        ),
-        fixed_note_params=(
-            fixed_note_params_list[i] if fixed_note_params_list is not None else None
-        ),
-        plugin=plugin,
-        warmup=warmup,
-    )
 
 
 def _render_in_batches(
@@ -253,8 +195,21 @@ def _render_in_batches(
     :param flush_batch: Called with ``(batch, batch_start_idx)`` to persist each batch.
     :raises RuntimeError: ``gui_toggle_cadence="always_on"`` reaches the
         renderer without ``plugin_reload_cadence="once"`` (validator regression).
+    :raises ValueError: ``param_sample_cadence="shard"`` combined with
+        caller-supplied fixed-params lists (shard cadence owns its own patch).
     """
     num_samples = render_cfg.samples_per_shard
+    share_params = render_cfg.param_sample_cadence == "shard"
+    # Shard cadence draws and owns the shard's single patch, so caller-supplied
+    # fixed lists are contradictory (make_hdf5_dataset keeps start_idx at 0 here).
+    if share_params and (
+        fixed_synth_params_list is not None or fixed_note_params_list is not None
+    ):
+        raise ValueError(
+            'param_sample_cadence="shard" cannot be combined with caller-supplied '
+            "fixed-params lists; shard cadence draws and reuses its own single patch"
+        )
+
     # plugin_reload_cadence="once": load + preset once per shard, reuse instance (#705).
     # "render" (default): cached_plugin stays None; each render reloads (#489 historical).
     cached_plugin: VST3Plugin | None = None
@@ -266,28 +221,49 @@ def _render_in_batches(
         sample_batch: list[VSTDataSample] = []
         sample_batch_start = start_idx
         warmup_done = False
+        # param_sample_cadence="shard": sample 0 draws params via the normal
+        # loudness-gated path; every later render reuses them so the whole shard
+        # is one identical patch (#489 variance probe).
+        shared_synth: dict[str, float] | None = None
+        shared_note: dict[str, int | tuple[float, float]] | None = None
         for i in trange(start_idx, num_samples):
             logger.info(f"Making sample {i}")
             warmup_this_render = render_cfg.gui_toggle_cadence == "render" or (
                 render_cfg.gui_toggle_cadence == "once" and not warmup_done
             )
-            sample_batch.append(
-                _generate_sample_for_index(
-                    i,
-                    plugin_path=render_cfg.plugin_path,
-                    preset_path=render_cfg.preset_path,
-                    velocity=render_cfg.velocity,
-                    signal_duration_seconds=render_cfg.signal_duration_seconds,
-                    sample_rate=render_cfg.sample_rate,
-                    channels=render_cfg.channels,
-                    min_loudness=render_cfg.min_loudness,
-                    param_spec=param_spec,
-                    fixed_synth_params_list=fixed_synth_params_list,
-                    fixed_note_params_list=fixed_note_params_list,
-                    plugin=cached_plugin,
-                    warmup=warmup_this_render,
+            # Fixed params are indexed by absolute row ``i`` (full-shard lists),
+            # so a resumed run still reads the source row matching each output row.
+            fixed_synth: dict[str, float] | None
+            fixed_note: dict[str, int | tuple[float, float]] | None
+            if share_params and shared_synth is not None:
+                fixed_synth, fixed_note = shared_synth, shared_note
+            else:
+                fixed_synth = (
+                    fixed_synth_params_list[i] if fixed_synth_params_list is not None else None
                 )
+                fixed_note = (
+                    fixed_note_params_list[i] if fixed_note_params_list is not None else None
+                )
+            sample = generate_sample(
+                render_cfg.plugin_path,
+                velocity=render_cfg.velocity,
+                signal_duration_seconds=render_cfg.signal_duration_seconds,
+                sample_rate=render_cfg.sample_rate,
+                channels=render_cfg.channels,
+                min_loudness=render_cfg.min_loudness,
+                param_spec=param_spec,
+                preset_path=render_cfg.preset_path,
+                fixed_synth_params=fixed_synth,
+                fixed_note_params=fixed_note,
+                plugin=cached_plugin,
+                warmup=warmup_this_render,
             )
+            if share_params and shared_synth is None:
+                shared_synth = sample.synth_params
+                # VSTDataSample.note_params is annotated dict[str, float] but carries
+                # the int pitch / tuple note-window that fixed_note_params expects.
+                shared_note = cast("dict[str, int | tuple[float, float]]", sample.note_params)
+            sample_batch.append(sample)
             if warmup_this_render and render_cfg.gui_toggle_cadence == "once":
                 warmup_done = True
             if len(sample_batch) == render_cfg.samples_per_render_batch:
@@ -345,7 +321,9 @@ def make_hdf5_dataset(
 
     Resumable: a partially-written file picks up at the first all-zero row, so
     a crashed worker can re-run with the same args and only the missing tail is
-    rendered. Audio is stored as ``float16`` (Blosc2-compressed); ``mel_spec``
+    rendered — except under ``render_cfg.param_sample_cadence="shard"``, where a
+    partial shard is re-rendered from row 0 (a mid-shard resume can't preserve
+    the one-patch-per-shard invariant). Audio is stored as ``float16`` (Blosc2-compressed); ``mel_spec``
     and ``param_array`` are ``float32``. The five sidecar attrs (velocity,
     signal duration, sample rate, channels, min_loudness) are written to
     ``audio.attrs`` from a single ``ShardMetadata`` instance — the same
@@ -381,6 +359,15 @@ def make_hdf5_dataset(
             signal_duration_seconds=render_cfg.signal_duration_seconds,
             num_params=len(param_spec),
         )
+
+        # Shard cadence is one patch per shard; a mid-shard resume holds an
+        # earlier, now-lost patch, so re-render from row 0 (rows overwritten in place).
+        if render_cfg.param_sample_cadence == "shard" and start_idx != 0:
+            logger.info(
+                f"param_sample_cadence='shard': re-rendering partial shard {hdf5_file} "
+                f"from row 0 (was resuming at {start_idx}) to keep one patch per shard"
+            )
+            start_idx = 0
 
         for k, v in meta.model_dump().items():
             audio_dataset.attrs[k] = v
