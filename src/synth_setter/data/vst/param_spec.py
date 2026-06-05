@@ -223,7 +223,7 @@ class NoteDurationParameter(Parameter):
 class NoteParams(TypedDict):  # noqa: DOC601, DOC603
     """Note-conditioning params consumed by ``render_params``.
 
-    Closed and total: ``ParamSpec.sample`` emits exactly these two keys.
+    Closed and total: ``ParamSpec.sample`` and ``ParamSpec.decode`` emit exactly these two keys.
     """
 
     pitch: int
@@ -287,8 +287,8 @@ class ParamSpec:
             note_params[param.name] = param_value
             pointer += length
 
-        # Keys come from runtime ``Parameter.name`` values, so the checker can't
-        # prove the NoteParams key->type mapping; assert it at this one source.
+        # Same cast as sample(): keys come from runtime ``Parameter.name`` values,
+        # so the checker can't prove the NoteParams key->type mapping.
         return synth_params, cast(NoteParams, note_params)
 
     @property

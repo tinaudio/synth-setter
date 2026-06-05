@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import h5py
 import hdf5plugin
@@ -279,9 +279,7 @@ def fixed_params_from_dataset(
     for row in param_array:
         synth_params, note_params = param_spec.decode(row)
         synth_params_list.append(synth_params)
-        # decode is annotated dict[str, float]; pitch is int and note_start_and_end
-        # a tuple at runtime, matching NoteParams' closed shape.
-        note_params_list.append(cast(NoteParams, note_params))
+        note_params_list.append(note_params)
     return synth_params_list, note_params_list
 
 
