@@ -47,7 +47,7 @@ from synth_setter.cli.generate_dataset import (
     generate,
 )
 from synth_setter.data.vst.shapes import DATASET_FIELD_DTYPES
-from synth_setter.pipeline.constants import STATS_NPZ_FILENAME
+from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME, STATS_NPZ_FILENAME
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.resources import vst_headless_wrapper
 from tests.helpers.render_subprocess import (
@@ -250,6 +250,28 @@ class TestRun:
         # args = [VST_HEADLESS_WRAPPER (linux only), python, generate_vst_dataset.py, ...]
         assert any("generate_vst_dataset.py" in a for a in args)
         assert str(spec.render.samples_per_shard) in args
+
+    def test_aborts_before_render_when_copy_source_spec_is_missing(
+        self,
+        patched_subprocess: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """A dataset-copy run whose source spec is unsynced fails before any render.
+
+        :param patched_subprocess: Renderer/rclone dispatcher; asserted to receive
+            no renderer call because the copy preflight aborts first.
+        :param tmp_path: Work dir for ``generate()`` and the (empty) copy root.
+        """
+        copy_root = tmp_path / "source"
+        copy_root.mkdir()
+        spec = DatasetSpec(
+            **_base_spec_kwargs(tmp_path, datasetsrc={"copy_dataset_root": str(copy_root)})  # type: ignore[arg-type]
+        )
+
+        with pytest.raises(ValueError, match=INPUT_SPEC_FILENAME):
+            generate(spec, tmp_path, [])
+
+        assert _renderer_argv_lists(patched_subprocess) == []
 
     def test_shard_generation_runs_under_headless_vst_wrapper(
         self,
@@ -2446,3 +2468,79 @@ def test_smoke_job_name_rejects_unsafe_task_name() -> None:
     bad_spec = SimpleNamespace(task_name="bad.task.name")
     with pytest.raises(ValueError, match=r"fix spec.task_name or pin"):
         _smoke_job_name(bad_spec)  # type: ignore[arg-type]
+
+
+class TestValidateCopySource:
+    """``_validate_copy_source`` — the imperative shell around the preflight.
+
+    Loads a copy source's ``input_spec.json`` and validates it against the
+    target spec before any render.
+    """
+
+    def test_no_datasetsrc_is_a_noop(self, spec: DatasetSpec) -> None:
+        """A spec with no copy source skips the preflight entirely (no disk read).
+
+        :param spec: Single-shard spec fixture with ``datasetsrc`` unset.
+        """
+        from synth_setter.cli.generate_dataset import _validate_copy_source
+
+        _validate_copy_source(spec)  # no raise, no source dir needed
+
+    def test_matching_source_spec_passes(self, tmp_path: Path) -> None:
+        """A copy root holding a matching ``input_spec.json`` validates clean.
+
+        :param tmp_path: Pytest tmp dir used as the synced copy source root.
+        """
+        from synth_setter.cli.generate_dataset import _validate_copy_source
+
+        copy_root = tmp_path / "source"
+        copy_root.mkdir()
+        source = DatasetSpec(**_base_spec_kwargs(tmp_path))  # type: ignore[arg-type]
+        (copy_root / INPUT_SPEC_FILENAME).write_text(source.model_dump_json())
+        target = DatasetSpec(
+            **_base_spec_kwargs(tmp_path, datasetsrc={"copy_dataset_root": str(copy_root)})  # type: ignore[arg-type]
+        )
+
+        _validate_copy_source(target)  # no raise
+
+    def test_missing_source_spec_raises_with_path(self, tmp_path: Path) -> None:
+        """A copy root without an ``input_spec.json`` fails loudly, naming the file.
+
+        :param tmp_path: Pytest tmp dir; the copy root is left without a spec.
+        """
+        from synth_setter.cli.generate_dataset import _validate_copy_source
+
+        copy_root = tmp_path / "source"
+        copy_root.mkdir()
+        target = DatasetSpec(
+            **_base_spec_kwargs(tmp_path, datasetsrc={"copy_dataset_root": str(copy_root)})  # type: ignore[arg-type]
+        )
+
+        with pytest.raises(ValueError, match=INPUT_SPEC_FILENAME):
+            _validate_copy_source(target)
+
+    def test_mismatched_source_spec_raises(self, tmp_path: Path) -> None:
+        """A source spec with a different ``param_spec_name`` is rejected at preflight.
+
+        :param tmp_path: Pytest tmp dir used as the synced copy source root.
+        """
+        from synth_setter.cli.generate_dataset import _validate_copy_source
+
+        copy_root = tmp_path / "source"
+        copy_root.mkdir()
+        source = DatasetSpec(
+            **_base_spec_kwargs(
+                tmp_path,
+                render={
+                    **_base_spec_kwargs(tmp_path)["render"],  # type: ignore[dict-item]
+                    "param_spec_name": "surge_xt",
+                },
+            )  # type: ignore[arg-type]
+        )
+        (copy_root / INPUT_SPEC_FILENAME).write_text(source.model_dump_json())
+        target = DatasetSpec(
+            **_base_spec_kwargs(tmp_path, datasetsrc={"copy_dataset_root": str(copy_root)})  # type: ignore[arg-type]
+        )
+
+        with pytest.raises(ValueError, match="param_spec_name"):
+            _validate_copy_source(target)
