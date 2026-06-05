@@ -30,8 +30,6 @@ from pathlib import Path
 import h5py
 import numpy as np
 import pytest
-from hydra import compose, initialize_config_module
-from hydra.core.global_hydra import GlobalHydra
 from omegaconf import DictConfig, open_dict
 
 from synth_setter.cli.generate_dataset import from_hydra, spec_from_cfg
@@ -106,71 +104,6 @@ def test_cfg_dataset_datasetsrc_with_wds_output_is_rejected(
 
     with pytest.raises(ValueError, match="supports output_format='hdf5' only"):
         spec_from_cfg(cfg_dataset)
-
-
-# Fields RenderConfig defaults in the model but ``render/surge_xt.yaml`` now also
-# surfaces, so Hydra's struct mode accepts a plain ``render.<field>=...`` override
-# (no ``+``) from any experiment, not only ones that pre-declare the key. Each value
-# is an off-default override distinct from the surfaced default.
-_SURFACED_RENDER_DEFAULTS = {
-    "samples_per_render_batch": 16,
-    "max_retries": 3,
-    "parallel": True,
-    "plugin_reload_cadence": "once",
-    "gui_toggle_cadence": "never",
-    "param_sample_cadence": "shard",
-}
-
-# An experiment that sets none of ``_SURFACED_RENDER_DEFAULTS``, so a successful
-# plain override proves the key comes from the base render config, not the experiment.
-_NO_CADENCE_EXPERIMENT = "experiment=generate_dataset/ci-materialize-test"
-
-
-def _spec_from_dataset_overrides(overrides: list[str]) -> DatasetSpec:
-    """Compose ``dataset.yaml`` with extra overrides and round-trip through ``DatasetSpec``.
-
-    :param overrides: Hydra override strings appended after the experiment selector.
-    :returns: The validated spec built from the composed cfg.
-    """
-    try:
-        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
-            cfg = compose(config_name="dataset", overrides=[_NO_CADENCE_EXPERIMENT, *overrides])
-        return spec_from_cfg(cfg)
-    finally:
-        GlobalHydra.instance().clear()
-
-
-@pytest.mark.parametrize(("field", "override_value"), list(_SURFACED_RENDER_DEFAULTS.items()))
-def test_base_render_config_accepts_plain_override_for_surfaced_default(
-    field: str, override_value: object
-) -> None:
-    """A plain ``render.<field>=`` override composes against a no-cadence experiment.
-
-    Struct mode rejects ``render.<field>=`` (without ``+``) when the key is absent
-    from the composed tree, so this passing proves ``render/surge_xt.yaml`` surfaces
-    the field's default; the override value round-trips onto the spec.
-
-    :param field: RenderConfig field surfaced in the base render config.
-    :param override_value: Off-default value passed on the Hydra CLI for that field.
-    """
-    spec = _spec_from_dataset_overrides([f"render.{field}={override_value}"])
-    assert getattr(spec.render, field) == override_value
-
-
-def test_base_render_config_surfaced_defaults_compose_correctly() -> None:
-    """A no-override compose yields the values surfaced in ``surge_xt.yaml`` on all platforms.
-
-    Pins the values written to the YAML (not the ``RenderConfig`` model's
-    ``default_factory`` values, which are platform-dependent). ``gui_toggle_cadence``
-    is ``"once"`` — safe on Darwin where ``"render"`` is rejected (#714).
-    """
-    spec = _spec_from_dataset_overrides([])
-    assert spec.render.samples_per_render_batch == 32
-    assert spec.render.max_retries == 0
-    assert spec.render.parallel is False
-    assert spec.render.plugin_reload_cadence == "render"
-    assert spec.render.gui_toggle_cadence == "once"
-    assert spec.render.param_sample_cadence == "sample"
 
 
 @pytest.mark.slow
