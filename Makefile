@@ -209,7 +209,9 @@ link-thoughts: ## Symlink this worktree's thoughts/ to the primary checkout's ce
 		rm -f "$$here/thoughts"; \
 	fi; \
 	if [ -d "$$here/thoughts" ]; then \
-		find "$$here/thoughts" -type f | while IFS= read -r f; do \
+		list="$$(mktemp)"; \
+		find "$$here/thoughts" -type f > "$$list" || { rm -f "$$list"; exit 1; }; \
+		while IFS= read -r f; do \
 			rel="$${f#"$$here/thoughts/"}"; \
 			if [ -e "$$central/$$rel" ]; then \
 				if ! cmp -s "$$f" "$$central/$$rel"; then \
@@ -222,7 +224,8 @@ link-thoughts: ## Symlink this worktree's thoughts/ to the primary checkout's ce
 				cp "$$f" "$$central/$$rel" || exit 1; \
 				echo "migrated $$rel"; \
 			fi; \
-		done; \
+		done < "$$list"; \
+		rm -f "$$list"; \
 		rm -rf "$$here/thoughts"; \
 	fi; \
 	ln -sfn "$$central" "$$here/thoughts"; \
