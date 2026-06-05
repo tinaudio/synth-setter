@@ -199,6 +199,28 @@ def test_main_rejects_unknown_suffix(tmp_path: Path) -> None:
     mock_wds.assert_not_called()
 
 
+class _FakePlugin:
+    """Stand-in for a loaded VST plugin handle.
+
+    Carries no behaviour — the writer loop only threads it through and tests
+    assert identity (``is``), so a bare object with a debug ``repr`` suffices.
+    """
+
+    def __repr__(self) -> str:
+        return "_FakePlugin()"
+
+
+class _FakeVSTDataSample:
+    """Stand-in for the sample object returned by ``generate_sample``.
+
+    The writer loop only collects these into the flush batch; tests assert on batch length, so a
+    bare object suffices.
+    """
+
+    def __repr__(self) -> str:
+        return "_FakeVSTDataSample()"
+
+
 def _stub_render_dependencies(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -209,8 +231,8 @@ def _stub_render_dependencies(
     """Patch ``load_plugin``, ``load_preset``, and ``generate_sample`` for the writer loop.
 
     Returns the kwargs captured from each ``generate_sample`` call. If
-    ``cached_plugin_holder`` is supplied, the MagicMock returned by the fake
-    ``load_plugin`` is appended to it so tests can assert identity-equality
+    ``cached_plugin_holder`` is supplied, the ``_FakePlugin`` returned by the
+    fake ``load_plugin`` is appended to it so tests can assert identity-equality
     against the instance threaded into per-render calls.
 
     :param monkeypatch: Pytest fixture used to patch module-level callables.
@@ -221,8 +243,8 @@ def _stub_render_dependencies(
     """
     captured: list[dict[str, object]] = []
 
-    def _fake_load_plugin(path: str) -> MagicMock:
-        plugin = MagicMock(name="cached_plugin")
+    def _fake_load_plugin(path: str) -> _FakePlugin:
+        plugin = _FakePlugin()
         load_plugin_calls.append({"path": path})
         if cached_plugin_holder is not None:
             cached_plugin_holder.append(plugin)
@@ -231,9 +253,9 @@ def _stub_render_dependencies(
     def _fake_load_preset(plugin: object, preset: str) -> None:
         load_preset_calls.append({"plugin": plugin, "preset": preset})
 
-    def _fake_generate_sample(_plugin_path: str, **kwargs: object) -> object:
+    def _fake_generate_sample(_plugin_path: str, **kwargs: object) -> _FakeVSTDataSample:
         captured.append(dict(kwargs))
-        return MagicMock(name="vst_sample")
+        return _FakeVSTDataSample()
 
     monkeypatch.setattr(writers, "load_plugin", _fake_load_plugin)
     monkeypatch.setattr(writers, "load_preset", _fake_load_preset)
