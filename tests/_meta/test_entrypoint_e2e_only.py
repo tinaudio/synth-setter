@@ -1,18 +1,13 @@
-"""Invariant: canonical entrypoint test modules do not contain config-layer tests.
+"""Invariant: canonical entrypoint test modules contain only e2e tests.
 
 ``test_generate_dataset.py`` and ``test_train.py`` are for tests that drive the
-real CLI entrypoint (``from_hydra``, ``train``, or ``subprocess``). Config-level
-tests — Hydra compose + ``spec_from_cfg`` / schema validation without running the
-entrypoint — belong in ``tests/pipeline/configs/``.
+real CLI entrypoint (``from_hydra``, ``train``, or ``subprocess``). Config-layer
+tests (Hydra compose + ``spec_from_cfg`` without running the entrypoint) belong in
+``tests/pipeline/configs/``. The tell is a direct ``initialize_config_module``
+import — it means the test manages its own Hydra lifecycle.
 
-The tell is a direct ``initialize_config_module`` import: it indicates the test
-manages its own Hydra lifecycle, meaning it is doing config-layer work rather
-than driving the entrypoint through a fixture. Tests that exercise the real
-entrypoint receive a composed ``cfg`` via fixture and call ``from_hydra(cfg)`` /
-``train(cfg)`` / ``subprocess.run([..., "synth-setter-..."])``.
-
-Note: ``test_eval.py`` is excluded — it legitimately composes a cfg inline and
-immediately calls ``evaluate(cfg)``, which is e2e.
+``test_eval.py`` is excluded: it composes a cfg inline and immediately calls
+``evaluate(cfg)``, which is e2e. Refs #1345.
 """
 
 import ast
@@ -22,25 +17,25 @@ import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
-_ENTRYPOINT_ONLY_TEST_FILES = (
+_ENTRYPOINT_ONLY_TEST_FILES: tuple[str, ...] = (
     "tests/test_generate_dataset.py",
     "tests/test_train.py",
 )
 
 _BANNED_HYDRA_IMPORTS = frozenset(
     {
-        "initialize_config_module",
         "initialize",
         "initialize_config_dir",
+        "initialize_config_module",
     }
 )
 
 
 def _direct_hydra_compose_imports(tree: ast.AST) -> list[str]:
-    """Return names of hydra config-initializer functions imported at module level.
+    """Return sorted banned hydra config-initializer names imported in ``tree``.
 
     :param tree: Parsed AST of the test module.
-    :returns: Sorted list of banned hydra function names imported in the module.
+    :returns: Sorted list of banned hydra function names found in the module.
     """
     found: list[str] = []
     for node in ast.walk(tree):
