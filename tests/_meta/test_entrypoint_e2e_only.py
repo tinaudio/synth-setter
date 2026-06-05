@@ -34,7 +34,7 @@ _BANNED_HYDRA_IMPORTS = frozenset(
 def _direct_hydra_compose_imports(tree: ast.AST) -> list[str]:
     """Return sorted banned hydra config-initializer names imported in ``tree``.
 
-    :param tree: Module AST from ``ast.parse``; only ``ast.ImportFrom`` nodes are walked.
+    :param tree: Parsed module AST; caller need not pre-filter node types.
     :returns: Sorted, deduplicated list of banned names found; empty when the module is clean.
     """
     found: list[str] = []
