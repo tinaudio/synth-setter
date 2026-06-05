@@ -117,7 +117,7 @@ _SURFACED_RENDER_DEFAULTS = {
     "max_retries": 3,
     "parallel": True,
     "plugin_reload_cadence": "once",
-    "gui_toggle_cadence": "once",
+    "gui_toggle_cadence": "never",
     "param_sample_cadence": "shard",
 }
 
