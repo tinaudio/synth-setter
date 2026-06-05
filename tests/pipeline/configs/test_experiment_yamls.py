@@ -29,11 +29,8 @@ from synth_setter.pipeline.schemas.spec import DatasetSpec
 # interpolations resolve to a real on-disk path during unit tests.
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
-# Curated allowlist of datagen experiments (those that compose dataset.yaml),
-# mapped to the ``task_name`` each composes to. See the module docstring for why
-# this is an allowlist rather than a directory scan. task_name is normally the
-# experiment's file stem, but the ``smoke-shard-with-*`` configs layer flags onto
-# ``smoke-shard`` via ``@_global_`` defaults chaining and inherit its task_name.
+# Curated allowlist — see module docstring for why. ``smoke-shard-with-*`` configs
+# inherit ``smoke-shard``'s task_name via ``@_global_`` defaults chaining.
 DATASET_EXPERIMENTS: dict[str, str] = {
     "generate_dataset/10-1k-shards": "10-1k-shards",
     "generate_dataset/ci-materialize-test": "ci-materialize-test",

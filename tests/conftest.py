@@ -632,9 +632,7 @@ def fake_surge_smoke_datasets(
     make_hdf5_dataset(train_h5, render_cfg)
     _validate_surge_dataset(train_h5, NUM_FIXTURE_SAMPLES)
 
-    # Stats run in a subprocess (mirrors surge_xt_smoke_datasets): the in-process
-    # dask path can't see the hdf5plugin Blosc2 filter from its workers, so the
-    # `python -m` entry — which registers it on import — is the reliable route.
+    # Subprocess path: in-process dask workers miss the hdf5plugin Blosc2 filter.
     _write_smoke_stats_npz(train_h5)
 
     shutil.copy(train_h5, smoke_dataset_dir / "val.h5")

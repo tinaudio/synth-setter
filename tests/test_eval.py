@@ -10,9 +10,9 @@ postprocessing argv in ``test_eval_postprocessing``, metric IO in
 
 import math
 import os
+from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Any
 
 import pytest
 import torch
@@ -217,7 +217,9 @@ def _compose_fake_oracle_eval_cfg(
     return cfg
 
 
-def _fake_postprocessing_subprocess(audio_metrics_csv: str) -> Any:
+def _fake_postprocessing_subprocess(
+    audio_metrics_csv: str,
+) -> Callable[[list[str]], None]:
     """Build a fake ``subprocess.run`` that materializes the render/metrics outputs.
 
     Routes on the worker module name in argv: the render call creates the ``audio/``
@@ -229,7 +231,7 @@ def _fake_postprocessing_subprocess(audio_metrics_csv: str) -> Any:
     :returns: A ``subprocess.run``-compatible callable for ``monkeypatch.setattr``.
     """
 
-    def _fake_run(args: list[str], **_kwargs: Any) -> None:
+    def _fake_run(args: list[str], **_kwargs: object) -> None:
         is_render = any(_PREDICT_VST_AUDIO_FRAGMENT in a for a in args)
         is_metrics = any(_COMPUTE_AUDIO_METRICS_FRAGMENT in a for a in args)
         if not (is_render or is_metrics):

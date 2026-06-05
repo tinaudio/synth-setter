@@ -145,15 +145,11 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
         # from_hydra rebuilds internally derive the same shard URIs — an unpinned
         # created_at would fire its default factory twice and diverge the run_id.
         cfg_dataset.r2.prefix = "fake-r2/test-run/"
-        # Drop the wandb logger: dataset.yaml defaults it on (offline=false), and
-        # generate() would call wandb.init() and hang on the network. The
-        # render/upload/skip loop under test needs no logger (generate() accepts []).
+        # Disable the default wandb logger: generate() would call wandb.init() and block.
         cfg_dataset.logger = None
 
-    # ``rclone lsf`` against the local-backed fake remote errors on a missing path,
-    # whereas real R2 returns empty (size None). Bridge that one gap so the skip
-    # probe sees R2's absent-object contract; a present shard still returns its
-    # real rclone-reported size, so generate()'s skip logic runs unchanged.
+    # Local rclone errors on a missing path; real R2 returns None. Wrap to bridge
+    # that gap so the skip probe sees the absent-object contract unchanged.
     real_object_size = r2_io.object_size
 
     def _fake_r2_object_size(r2_uri: str) -> int | None:
@@ -165,8 +161,7 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     monkeypatch.setattr(r2_io, "object_size", _fake_r2_object_size)
 
     spec = spec_from_cfg(cfg_dataset)
-    # smoke-shard is [4, 4, 4] at samples_per_shard=4 — one shard per split, so
-    # the render covers the full train→val→test shard partition.
+    # smoke-shard partitions into one shard per split, so the stub covers train→val→test.
     assert spec.split_shard_ranges == {"train": (0, 1), "val": (1, 2), "test": (2, 3)}
 
     render_shard = stub_renderer(spec)

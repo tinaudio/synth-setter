@@ -73,6 +73,7 @@ def write_dummy_tar_shard(output_path: Path, spec: DatasetSpec) -> None:
     :param output_path: Destination ``.tar`` file path; parent dir must exist.
     :param spec: Dataset spec whose ``render`` config and ``num_params`` drive the
         per-field array shapes and the ``ShardMetadata`` field values.
+    :raises ValueError: If a field name is not in ``DATASET_FIELD_NAMES``.
     """
     render = spec.render
     n = render.samples_per_shard
@@ -100,7 +101,8 @@ def write_dummy_tar_shard(output_path: Path, spec: DatasetSpec) -> None:
             (MEL_SPEC_FIELD, mel),
             (PARAM_ARRAY_FIELD, params),
         ):
-            assert field_name in DATASET_FIELD_NAMES
+            if field_name not in DATASET_FIELD_NAMES:
+                raise ValueError(f"Unknown field: {field_name!r}")
             buf = io.BytesIO()
             np.save(buf, arr, allow_pickle=False)
             payload = buf.getvalue()

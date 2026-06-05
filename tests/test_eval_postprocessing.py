@@ -521,7 +521,6 @@ def test_log_audio_metrics_to_wandb_log_raises_is_swallowed(
     """A ``wandb.run.log`` exception is swallowed so metrics still flow back to the caller.
 
     :param monkeypatch: Pins ``wandb.run`` to a fake whose ``.log`` raises ``RuntimeError``.
-    :returns: None — the call must return ``None`` without propagating.
     """
 
     class _RaisingRun:
