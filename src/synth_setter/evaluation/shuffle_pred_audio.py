@@ -79,15 +79,17 @@ def shuffle_pred_audio(audio_dir: Path, dest_dir: Path, seed: int) -> list[int]:
     """Build ``dest_dir`` as a symlinked view of ``audio_dir`` with ``pred.wav`` permuted.
 
     Fewer than two sample dirs cannot be shuffled, so the identity permutation is
-    returned and ``dest_dir`` is not created — the caller falls back to ``audio_dir``.
-    Otherwise the params gate runs before any write, so a rejection leaves the
-    filesystem untouched. Each ``dest_dir/sample_i`` holds two symlinks to absolute
-    source paths: ``target.wav`` to its own sample's target and ``pred.wav`` to the
-    pred of the permuted source dir. The source tree is never modified.
+    returned and ``dest_dir`` is left untouched — the caller falls back to
+    ``audio_dir``. Otherwise the params gate runs before any write, so a rejection
+    leaves the filesystem untouched. Each ``dest_dir/sample_i`` holds two symlinks
+    to absolute source paths: ``target.wav`` to its own sample's target and
+    ``pred.wav`` to the pred of the permuted source dir. The source tree is never
+    modified.
 
-    A pre-existing ``dest_dir`` is cleared first — a symlink or file is unlinked,
-    a real directory is removed wholesale. Because the dest tree holds only
-    symlinks, clearing it never touches the real audio it points at.
+    When the shuffle proceeds, a pre-existing ``dest_dir`` is cleared before the
+    rebuild — a symlink or file is unlinked, a real directory removed wholesale.
+    Because the dest tree holds only symlinks, clearing never touches the real
+    audio it points at.
 
     :param audio_dir: ``audio/`` dir of ``sample_*`` subdirs, each with a
         ``pred.wav``, a ``target.wav``, and a ``params.csv``.
