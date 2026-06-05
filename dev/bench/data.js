@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780671192599,
+  "lastUpdate": 1780671194954,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -9759,6 +9759,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 21.02227744559998,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2b0c7ccd501f458c70efea5d6aa427d193153dcc",
+          "message": "feat(generate_dataset): add param_sample_cadence (#1439)\n\n* feat(pipeline): render a whole shard from one identical patch via param_sample_cadence\n\nAdd a `param_sample_cadence` knob to `RenderConfig` (default `\"sample\"`,\nhistorical per-sample draw). Set to `\"shard\"` and the shard's first sample\ndraws params through the normal loudness-gated path while every remaining\nsample reuses that exact patch — so the whole shard is a single identical\npatch. This is a controlled probe for the per-patch render variance tracked\nin #489: with params held constant, any residual audio variance is the\nrenderer's, not the parameters'. (Confirmed against the real Surge XT plugin:\nall `param_array` rows come out byte-identical while the audio rows still\ndiffer — exactly the #489 phenomenon.)\n\nThe field flows end-to-end automatically — `_GenerateCliArgs` inherits every\n`RenderConfig` field, so the CLI grows a `--param_sample_cadence` flag and\n`build_generate_args` forwards it from the dataset spec.\n\nImplementation reuses the existing `fixed_*_params` seam in\n`_render_in_batches`: sample 0 renders with no fixed params, then its\n`synth_params` / `note_params` are captured and threaded into samples 1..N.\nCombining `\"shard\"` with caller-supplied fixed-params lists raises `ValueError`.\nA mid-shard HDF5 resume can't preserve the one-patch invariant, so\n`make_hdf5_dataset` re-renders a partial shard from row 0 rather than\nresuming — keeping worker-retry resilience intact instead of failing hard.\n\nRefs #489\n\n* docs(pipeline): note shard-cadence resume exception in data-pipeline resumability prose\n\nThe HDF5 resumability paragraph stated the missing tail is always regenerated;\nunder param_sample_cadence=\"shard\" a partial shard re-renders from row 0\ninstead. Surfaced by doc-drift on PR #1439.\n\nRefs #489\n\n* test(pipeline): add param_sample_cadence to validate_spec render fixture\n\nvalidate_structure derives required render fields from RenderConfig.model_fields,\nso the new param_sample_cadence field must appear in the hand-written render dict\nor structural validation reports it missing.\n\nRefs #489",
+          "timestamp": "2026-06-05T10:10:06-04:00",
+          "tree_id": "7df52d0e0fc8db5be951700aad23c9014a93321a",
+          "url": "https://github.com/tinaudio/synth-setter/commit/2b0c7ccd501f458c70efea5d6aa427d193153dcc"
+        },
+        "date": 1780671194344,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 2.311663866043091,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 2.885906473528594,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.011879246681928635,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.008947670459747314,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 1.7864607572555542,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 20.58729226470002,
             "unit": "seconds"
           }
         ]
