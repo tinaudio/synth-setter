@@ -35,7 +35,7 @@ def _direct_hydra_compose_imports(tree: ast.AST) -> list[str]:
     """Return sorted banned hydra config-initializer names imported in ``tree``.
 
     :param tree: Parsed AST of the test module.
-    :returns: Sorted list of banned hydra function names found in the module.
+    :returns: Sorted list of banned hydra config-initializer names.
     """
     found: list[str] = []
     for node in ast.walk(tree):
