@@ -24,6 +24,7 @@ import subprocess
 import sys
 import uuid
 from pathlib import Path
+from unittest.mock import patch
 
 import h5py
 import numpy as np
@@ -34,6 +35,7 @@ from synth_setter.cli.generate_dataset import from_hydra, spec_from_cfg
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from tests.evaluation._oracle_helpers import ORACLE_AUDIO_METRIC_BOUNDS
+from tests.helpers.dummy_shards import stub_renderer
 
 # The predict-mode oracle eval (surge/fake_oracle) dumps one mean+std per audio
 # metric; predict leaves ``trainer.callback_metrics`` empty, so these are the
@@ -41,6 +43,12 @@ from tests.evaluation._oracle_helpers import ORACLE_AUDIO_METRIC_BOUNDS
 _ORACLE_AUDIO_METRICS = ("mss", "wmfcc", "sot", "rms")
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
+
+# Moduleinfo-only VST3 bundle: extract_renderer_version reads its
+# Contents/moduleinfo.json and returns the pinned version without loading any
+# .so, so generate()'s renderer-version guard passes with no real plugin.
+_TEST_PLUGIN_VST3 = Path(__file__).resolve().parent / "pipeline" / "fixtures" / "TestPlugin.vst3"
+_TEST_PLUGIN_VERSION = "1.0.0-test"
 
 
 def test_cfg_dataset_composes_and_validates_as_dataset_spec(
@@ -102,6 +110,92 @@ def test_cfg_dataset_datasetsrc_with_wds_output_is_rejected(
 
     with pytest.raises(ValueError, match="supports output_format='hdf5' only"):
         spec_from_cfg(cfg_dataset)
+
+
+@pytest.mark.fake_vst
+def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
+    cfg_dataset: DictConfig,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``from_hydra`` renders every owned shard to a fake R2, then skips them on resume.
+
+    Drives the real worker entrypoint end-to-end on the CPU-fast loop: the Surge
+    VST3 subprocess is replaced by ``stub_renderer`` (writes a deterministic
+    validation-shaped shard) and ``r2:`` is a local-filesystem rclone remote via
+    ``fake_r2_remote``, so the partition → render → ``rclone copy`` upload →
+    skip-existing probe loop (#750) runs with no real plugin and no real R2.
+    Asserts (1) ``smoke-shard`` partitions into one shard per split, (2) every
+    shard lands under its spec-derived R2 URI, and (3) a second ``from_hydra``
+    pass renders nothing because the probe finds all shards already present.
+
+    :param cfg_dataset: Hydra cfg composed with ``generate_dataset/smoke-shard``
+        and ``tmp_path``-pinned paths (the same ``tmp_path`` ``fake_r2_remote``
+        backs ``r2:`` against).
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
+    :param monkeypatch: Pins the single-worker rank/world env contract and the
+        moduleinfo-only plugin so the renderer-version guard passes.
+    """
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    with open_dict(cfg_dataset):
+        cfg_dataset.render.plugin_path = str(_TEST_PLUGIN_VST3)
+        cfg_dataset.render.renderer_version = _TEST_PLUGIN_VERSION
+        # Pin r2.prefix so the spec built here for assertions and the one
+        # from_hydra rebuilds internally derive the same shard URIs — an unpinned
+        # created_at would fire its default factory twice and diverge the run_id.
+        cfg_dataset.r2.prefix = "fake-r2/test-run/"
+        # Drop the wandb logger: dataset.yaml defaults it on (offline=false), and
+        # generate() would call wandb.init() and hang on the network. The
+        # render/upload/skip loop under test needs no logger (generate() accepts []).
+        cfg_dataset.logger = None
+
+    # ``rclone lsf`` against the local-backed fake remote errors on a missing path,
+    # whereas real R2 returns empty (size None). Bridge that one gap so the skip
+    # probe sees R2's absent-object contract; a present shard still returns its
+    # real rclone-reported size, so generate()'s skip logic runs unchanged.
+    real_object_size = r2_io.object_size
+
+    def _fake_r2_object_size(r2_uri: str) -> int | None:
+        try:
+            return real_object_size(r2_uri)
+        except subprocess.CalledProcessError:
+            return None
+
+    monkeypatch.setattr(r2_io, "object_size", _fake_r2_object_size)
+
+    spec = spec_from_cfg(cfg_dataset)
+    # smoke-shard is [4, 4, 4] at samples_per_shard=4 — one shard per split, so
+    # the render covers the full train→val→test shard partition.
+    assert spec.split_shard_ranges == {"train": (0, 1), "val": (1, 2), "test": (2, 3)}
+
+    render_shard = stub_renderer(spec)
+    with patch(
+        "synth_setter.cli.generate_dataset.subprocess.check_call",
+        side_effect=render_shard,
+    ):
+        from_hydra(cfg_dataset)
+
+    for shard in spec.shards:
+        size = r2_io.object_size(spec.r2.shard_uri(shard))
+        assert size is not None and size > 0, f"shard missing in fake R2: {shard.filename}"
+
+    renderer_invocations = 0
+
+    def _count_renderer(args: list[str]) -> int:
+        nonlocal renderer_invocations
+        if not (args and args[0] == "rclone"):
+            renderer_invocations += 1
+        return render_shard(args)
+
+    with patch(
+        "synth_setter.cli.generate_dataset.subprocess.check_call",
+        side_effect=_count_renderer,
+    ):
+        from_hydra(cfg_dataset)
+    assert renderer_invocations == 0, (
+        f"resume re-rendered {renderer_invocations} shard(s) already present in R2"
+    )
 
 
 @pytest.mark.slow

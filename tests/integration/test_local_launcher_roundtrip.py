@@ -22,40 +22,22 @@ even when the test body raises.
 
 from __future__ import annotations
 
-import io
 import json
 import os
 import subprocess
 import sys
-import tarfile
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-import h5py
-import numpy as np
 import pytest
 
-from synth_setter.data.vst.shapes import (
-    AUDIO_FIELD,
-    DATASET_FIELD_NAMES,
-    MEL_SPEC_FIELD,
-    PARAM_ARRAY_FIELD,
-    audio_dataset_shape,
-    mel_dataset_shape,
-    param_array_dataset_shape,
-)
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.ci.validate_shard import validate_all_shards_from_r2
 from synth_setter.pipeline.ci.validate_spec import validate_structure
-from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
-from synth_setter.pipeline.schemas.spec import (
-    DatasetSpec,
-    OutputFormat,
-)
-from tests.helpers.subprocess_args import find_script_index
+from tests.helpers.dummy_shards import stub_renderer
 
 pytestmark = [pytest.mark.integration_r2, pytest.mark.r2, pytest.mark.slow]
 
@@ -68,124 +50,6 @@ TEST_PLUGIN_VST3 = (
     Path(__file__).resolve().parent.parent / "pipeline" / "fixtures" / "TestPlugin.vst3"
 )
 TEST_PLUGIN_VERSION = "1.0.0-test"
-
-
-# Captured at import time so the rclone-passthrough side-effect can call the
-# real subprocess.check_call without recursing through any patch that targets
-# the same symbol the production code uses.
-_REAL_CHECK_CALL = subprocess.check_call
-
-
-def _write_dummy_h5_shard(output_path: Path, spec: DatasetSpec) -> None:
-    """Write a validation-passing HDF5 shard with zeroed datasets.
-
-    The datasets' full shapes match the writer's source-of-truth helpers in
-    ``synth_setter.data.vst.shapes`` so ``validate_shard`` accepts the output.
-    Values are all zeros — the validator only checks structure and shape, not
-    content; determinism is preserved because no RNG is involved.
-
-    :param output_path: Destination ``.h5`` file path; parent dir must exist.
-    :param spec: Dataset spec whose ``render`` config and ``num_params`` drive
-        the per-field array shapes the writer must reproduce.
-    """
-    render = spec.render
-    n = render.samples_per_shard
-    audio_shape = audio_dataset_shape(
-        n, render.channels, render.sample_rate, render.signal_duration_seconds
-    )
-    mel_shape = mel_dataset_shape(
-        n, render.channels, render.sample_rate, render.signal_duration_seconds
-    )
-    param_shape = param_array_dataset_shape(n, spec.num_params)
-    with h5py.File(output_path, "w") as f:
-        f.create_dataset(AUDIO_FIELD, data=np.zeros(audio_shape, dtype=np.float16))
-        f.create_dataset(MEL_SPEC_FIELD, data=np.zeros(mel_shape, dtype=np.float32))
-        f.create_dataset(PARAM_ARRAY_FIELD, data=np.zeros(param_shape, dtype=np.float32))
-
-
-def _write_dummy_tar_shard(output_path: Path, spec: DatasetSpec) -> None:
-    """Write a validation-passing WDS tar shard.
-
-    A single batch keyed by ``00000000`` holds ``samples_per_shard`` rows for
-    every writer field; ``metadata.json`` mirrors the ``RenderConfig`` fields
-    that ``ShardMetadata`` requires. Validation is structural so all-zero
-    arrays are accepted.
-
-    :param output_path: Destination ``.tar`` file path; parent dir must exist.
-    :param spec: Dataset spec whose ``render`` config and ``num_params`` drive
-        the per-field array shapes and the ``ShardMetadata`` field values.
-    """
-    render = spec.render
-    n = render.samples_per_shard
-    audio = np.zeros(
-        audio_dataset_shape(
-            n, render.channels, render.sample_rate, render.signal_duration_seconds
-        ),
-        dtype=np.float16,
-    )
-    mel = np.zeros(
-        mel_dataset_shape(n, render.channels, render.sample_rate, render.signal_duration_seconds),
-        dtype=np.float32,
-    )
-    params = np.zeros(param_array_dataset_shape(n, spec.num_params), dtype=np.float32)
-    metadata = ShardMetadata(
-        velocity=render.velocity,
-        signal_duration_seconds=render.signal_duration_seconds,
-        sample_rate=render.sample_rate,
-        channels=render.channels,
-        min_loudness=render.min_loudness,
-    )
-    with tarfile.open(output_path, mode="w") as tar:
-        for field_name, arr in (
-            (AUDIO_FIELD, audio),
-            (MEL_SPEC_FIELD, mel),
-            (PARAM_ARRAY_FIELD, params),
-        ):
-            assert field_name in DATASET_FIELD_NAMES
-            buf = io.BytesIO()
-            np.save(buf, arr, allow_pickle=False)
-            payload = buf.getvalue()
-            info = tarfile.TarInfo(name=f"00000000.{field_name}.npy")
-            info.size = len(payload)
-            tar.addfile(info, io.BytesIO(payload))
-        payload = metadata.model_dump_json().encode("utf-8")
-        info = tarfile.TarInfo(name="metadata.json")
-        info.size = len(payload)
-        tar.addfile(info, io.BytesIO(payload))
-
-
-def _stub_renderer(spec: DatasetSpec) -> Callable[[list[str]], int]:
-    """Return a subprocess.check_call side-effect that writes dummy shards.
-
-    Dispatches on the renderer's output-path suffix via
-    ``OutputFormat.from_extension``, so the same factory backs both the hdf5
-    and wds parametrizations. ``rclone`` invocations fall through to the real
-    binary so the R2 upload, the skip-existing probe, and the finalize purge
-    all hit real R2.
-
-    :param spec: Dataset spec the launcher will materialize; threaded into
-        the dummy-shard writers so shapes match the validator's expectations.
-    :returns: A callable matching ``subprocess.check_call``'s side-effect contract.
-    """
-
-    def _side_effect(args: list[str]) -> int:
-        if args and args[0] == "rclone":
-            return _REAL_CHECK_CALL(args)  # noqa: S603 — passthrough to real rclone
-        script_idx = find_script_index(args)
-        output_file = Path(args[script_idx + 1])
-        output_file.parent.mkdir(parents=True, exist_ok=True)
-        fmt = OutputFormat.from_extension(output_file.suffix)
-        if fmt is OutputFormat.HDF5:
-            _write_dummy_h5_shard(output_file, spec)
-        elif fmt is OutputFormat.WDS:
-            _write_dummy_tar_shard(output_file, spec)
-        else:
-            raise AssertionError(
-                f"stubbed renderer cannot write output with suffix {output_file.suffix!r}"
-            )
-        return 0
-
-    return _side_effect
 
 
 def _unique_r2_prefix() -> str:
@@ -321,7 +185,7 @@ def test_launcher_roundtrip_with_stubbed_renderer(
     cfg.paths.work_dir = str(repo_root)
     expected_spec = gd.spec_from_cfg(cfg)
 
-    side_effect = _stub_renderer(expected_spec)
+    side_effect = stub_renderer(expected_spec)
     with patch(
         "synth_setter.cli.generate_dataset.subprocess.check_call",
         side_effect=side_effect,
@@ -350,9 +214,10 @@ def test_launcher_roundtrip_with_stubbed_renderer(
 
     def _no_renderer_side_effect(args: list[str]) -> int:
         nonlocal renderer_invocations
-        if args and args[0] == "rclone":
-            return _REAL_CHECK_CALL(args)  # noqa: S603 — passthrough to real rclone
-        renderer_invocations += 1
+        if not (args and args[0] == "rclone"):
+            renderer_invocations += 1
+        # ``side_effect`` already passes rclone through to the real binary and
+        # writes a dummy shard otherwise; we only need to count the renderer arm.
         return side_effect(args)
 
     with patch(

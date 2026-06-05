@@ -5,6 +5,7 @@ validation errors. ``subprocess.run`` is monkeypatched so no real VST plugin
 or Python subprocess is launched.
 """
 
+import subprocess
 import sys
 from contextlib import contextmanager
 from pathlib import Path
@@ -14,7 +15,12 @@ import pytest
 from omegaconf import DictConfig, OmegaConf
 
 from synth_setter.cli import eval as eval_mod
-from synth_setter.cli.eval import _COMPUTE_AUDIO_METRICS_MODULE, _run_predict_postprocessing
+from synth_setter.cli.eval import (
+    _COMPUTE_AUDIO_METRICS_MODULE,
+    _PREDICT_VST_AUDIO_MODULE,
+    _log_audio_metrics_to_wandb,
+    _run_predict_postprocessing,
+)
 
 _FAKE_WRAPPER = "/fake/vst-headless-wrapper"
 
@@ -441,6 +447,90 @@ def test_postprocessing_returns_loaded_audio_metrics(
     result = _run_predict_postprocessing(cfg)
 
     assert result == _EXPECTED_AUDIO_METRICS
+
+
+def test_postprocessing_render_subprocess_nonzero_exit_raises(
+    monkeypatch: pytest.MonkeyPatch,
+    predictions_tree: Path,
+    captured_argv: list[list[str]],
+) -> None:
+    """A non-zero render subprocess exit propagates ``CalledProcessError`` to the caller.
+
+    :param monkeypatch: Re-patches ``subprocess.run`` (over the fixture's stub) so the
+        render module's invocation raises, and pins ``sys.platform`` to ``darwin``.
+    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created.
+    :param captured_argv: Captured argv list — unused here but installs the fixture's
+        ``as_file`` / ``vst_headless_wrapper`` stubs the render branch needs.
+    """
+    monkeypatch.setattr(eval_mod.sys, "platform", "darwin")
+
+    def _raise_on_render(args: list[str], **_kwargs: Any) -> None:
+        if _PREDICT_VST_AUDIO_MODULE in args:
+            raise subprocess.CalledProcessError(returncode=1, cmd=args)
+
+    monkeypatch.setattr(eval_mod.subprocess, "run", _raise_on_render)
+    cfg = _build_postprocess_cfg(
+        predictions_tree,
+        compute_metrics=False,
+        rerender_target=False,
+        render={"param_spec_name": "surge/fake_oracle", "preset_path": "preset.fxp"},
+    )
+
+    with pytest.raises(subprocess.CalledProcessError):
+        _run_predict_postprocessing(cfg)
+
+
+def test_postprocessing_metrics_subprocess_timeout_raises(
+    monkeypatch: pytest.MonkeyPatch,
+    predictions_tree: Path,
+    captured_argv: list[list[str]],
+) -> None:
+    """A metrics subprocess timeout propagates ``TimeoutExpired`` to the caller.
+
+    The render call no-ops; only the compute-metrics module's invocation raises, so the
+    propagation is attributed to the metrics stage.
+
+    :param monkeypatch: Re-patches ``subprocess.run`` (over the fixture's stub) so the
+        metrics module's invocation times out, and pins ``sys.platform`` to ``darwin``.
+    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created
+        so the metrics branch's ``audio/`` guard passes.
+    :param captured_argv: Captured argv list — unused here but installs the fixture's
+        ``as_file`` / ``vst_headless_wrapper`` stubs the render branch needs.
+    """
+    monkeypatch.setattr(eval_mod.sys, "platform", "darwin")
+
+    def _timeout_on_metrics(args: list[str], **_kwargs: Any) -> None:
+        if _COMPUTE_AUDIO_METRICS_MODULE in args:
+            raise subprocess.TimeoutExpired(cmd=args, timeout=1)
+
+    monkeypatch.setattr(eval_mod.subprocess, "run", _timeout_on_metrics)
+    cfg = _build_postprocess_cfg(
+        predictions_tree,
+        compute_metrics=True,
+        rerender_target=False,
+        render={"param_spec_name": "surge/fake_oracle", "preset_path": "preset.fxp"},
+    )
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        _run_predict_postprocessing(cfg)
+
+
+def test_log_audio_metrics_to_wandb_log_raises_is_swallowed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A ``wandb.run.log`` exception is swallowed so metrics still flow back to the caller.
+
+    :param monkeypatch: Pins ``wandb.run`` to a fake whose ``.log`` raises ``RuntimeError``.
+    :returns: None — the call must return ``None`` without propagating.
+    """
+
+    class _RaisingRun:
+        def log(self, _payload: dict[str, float]) -> None:
+            raise RuntimeError("wandb backend unavailable")
+
+    monkeypatch.setattr(eval_mod.wandb, "run", _RaisingRun())
+
+    assert _log_audio_metrics_to_wandb({"audio/mss_mean": 0.5}) is None
 
 
 def test_postprocessing_logs_audio_metrics_to_active_wandb_run(

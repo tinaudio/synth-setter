@@ -112,6 +112,47 @@ def _validate_surge_dataset(path: Path, num_samples: int) -> None:
         )
 
 
+def _write_smoke_stats_npz(train_h5: Path) -> None:
+    """Write the sibling ``stats.npz`` for a smoke dataset via the stats CLI subprocess.
+
+    Runs ``python -m synth_setter.pipeline.data.stats <train_h5> --mask-degenerate-bins``;
+    the subprocess registers the hdf5plugin Blosc2 filter on import, which the
+    in-process dask path does not surface to its workers. Fails loud on timeout
+    or non-zero exit so a broken stats fold surfaces here, not as a downstream
+    datamodule load error.
+
+    :param train_h5: Path to the rendered ``train.h5``; ``stats.npz`` is written beside it.
+    """
+    stats_args = [
+        sys.executable,
+        "-m",
+        "synth_setter.pipeline.data.stats",
+        str(train_h5),
+        "--mask-degenerate-bins",
+    ]
+    try:
+        result = subprocess.run(  # noqa: S603
+            stats_args, text=True, check=False, timeout=_VST_SUBPROCESS_TIMEOUT_SECONDS
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail(
+            f"get_dataset_stats timed out after {_VST_SUBPROCESS_TIMEOUT_SECONDS}s\n"
+            f"command: {stats_args}\n"
+            f"(child stdout/stderr printed above; rerun with `pytest -s` if captured)",
+            pytrace=False,
+        )
+    if result.returncode != 0:
+        pytest.fail(
+            f"get_dataset_stats failed (exit {result.returncode})\n"
+            f"command: {stats_args}\n"
+            f"(child stdout/stderr printed above; rerun with `pytest -s` if captured)",
+            pytrace=False,
+        )
+    assert train_h5.parent.joinpath("stats.npz").exists(), (
+        "get_dataset_stats failed to produce stats.npz fixture"
+    )
+
+
 # Register custom OmegaConf resolvers (mul, div) needed to parse Hydra configs.
 # This import pulls in torch/lightning transitively via synth_setter.utils.utils, but every
 # test in this suite already requires those dependencies, so there is no benefit to
@@ -538,41 +579,67 @@ def surge_xt_smoke_datasets(tmp_path: Path, param_spec_name: str) -> Path:
     _validate_surge_dataset(smoke_dataset_dir / "train.h5", NUM_FIXTURE_SAMPLES)
 
     # Sibling stats.npz; shared across train/val/test splits — see #1002.
-    stats_args = [
-        sys.executable,
-        "-m",
-        "synth_setter.pipeline.data.stats",
-        str(smoke_dataset_dir / "train.h5"),
-        "--mask-degenerate-bins",
-    ]
-    try:
-        result = subprocess.run(  # noqa: S603
-            stats_args,
-            text=True,
-            check=False,
-            timeout=_VST_SUBPROCESS_TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired:
-        pytest.fail(
-            f"get_dataset_stats timed out after {_VST_SUBPROCESS_TIMEOUT_SECONDS}s\n"
-            f"command: {stats_args}\n"
-            f"(child stdout/stderr printed above; rerun with `pytest -s` if captured)",
-            pytrace=False,
-        )
-    if result.returncode != 0:
-        pytest.fail(
-            f"get_dataset_stats failed (exit {result.returncode})\n"
-            f"command: {stats_args}\n"
-            f"(child stdout/stderr printed above; rerun with `pytest -s` if captured)",
-            pytrace=False,
-        )
-    assert (smoke_dataset_dir / "stats.npz").exists(), (
-        "get_dataset_stats failed to produce stats.npz fixture"
-    )
+    _write_smoke_stats_npz(smoke_dataset_dir / "train.h5")
 
     shutil.copy(smoke_dataset_dir / "train.h5", smoke_dataset_dir / "val.h5")
     shutil.copy(smoke_dataset_dir / "train.h5", smoke_dataset_dir / "test.h5")
     return Path(smoke_dataset_dir)
+
+
+@pytest.fixture(scope="function")
+def fake_surge_smoke_datasets(
+    tmp_path: Path, param_spec_name: str, install_fake_plugin: FakeVST3Plugin
+) -> Path:
+    """Render the N-sample Surge dataset in-process via the fake plugin (no real VST/X11).
+
+    The fast counterpart to :func:`surge_xt_smoke_datasets`: ``install_fake_plugin``
+    swaps the loader for ``FakeVST3Plugin`` so ``make_hdf5_dataset`` produces a
+    structurally-valid ``train.h5`` (audio/mel/param) with no Surge XT subprocess,
+    then ``get_stats_hdf5`` writes the sibling ``stats.npz`` in-process and the
+    split is copied to ``val.h5`` / ``test.h5``. Lets oracle-eval tests that only
+    need a loadable dataset (not real audio fidelity) run on the CPU-fast loop.
+
+    :param tmp_path: Per-test temporary directory; the dataset is written under
+        ``tmp_path / "data" / "smoke"``.
+    :param param_spec_name: Param spec name (key into :data:`synth_setter.data.vst.param_specs`
+        and :data:`synth_setter.data.vst.preset_paths`); defaults to ``"surge_4"``.
+    :param install_fake_plugin: Swaps ``core.load_plugin`` / ``core.VST3Plugin``
+        for the fake so the render needs no real VST3 binary or display server.
+
+    :return: Path to the directory holding ``{train,val,test}.h5`` and ``stats.npz``.
+    """
+    from synth_setter.data.vst.writers import make_hdf5_dataset
+    from synth_setter.pipeline.schemas.spec import RenderConfig
+
+    smoke_dataset_dir = tmp_path / "data" / "smoke"
+    smoke_dataset_dir.mkdir(parents=True, exist_ok=True)
+    train_h5 = smoke_dataset_dir / "train.h5"
+
+    render_cfg = RenderConfig(
+        plugin_path=_SURGE_FIXTURE_PLUGIN_PATH,
+        preset_path=str(preset_paths[param_spec_name]),
+        param_spec_name=param_spec_name,
+        renderer_version=_SURGE_FIXTURE_RENDERER_VERSION,
+        sample_rate=_SURGE_FIXTURE_SAMPLE_RATE,
+        channels=_SURGE_FIXTURE_CHANNELS,
+        velocity=_SURGE_FIXTURE_VELOCITY,
+        signal_duration_seconds=_SURGE_FIXTURE_DURATION_SECONDS,
+        min_loudness=_SURGE_FIXTURE_MIN_LOUDNESS,
+        samples_per_render_batch=NUM_FIXTURE_SAMPLES,
+        samples_per_shard=NUM_FIXTURE_SAMPLES,
+        gui_toggle_cadence="never",
+    )
+    make_hdf5_dataset(train_h5, render_cfg)
+    _validate_surge_dataset(train_h5, NUM_FIXTURE_SAMPLES)
+
+    # Stats run in a subprocess (mirrors surge_xt_smoke_datasets): the in-process
+    # dask path can't see the hdf5plugin Blosc2 filter from its workers, so the
+    # `python -m` entry — which registers it on import — is the reliable route.
+    _write_smoke_stats_npz(train_h5)
+
+    shutil.copy(train_h5, smoke_dataset_dir / "val.h5")
+    shutil.copy(train_h5, smoke_dataset_dir / "test.h5")
+    return smoke_dataset_dir
 
 
 @pytest.fixture(scope="function")

@@ -29,17 +29,22 @@ from synth_setter.pipeline.schemas.spec import DatasetSpec
 # interpolations resolve to a real on-disk path during unit tests.
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
-# Curated list of datagen experiments (those that compose dataset.yaml). See the
-# module docstring for why this is an allowlist rather than a directory scan.
-DATASET_EXPERIMENTS: tuple[str, ...] = (
-    "generate_dataset/10-1k-shards",
-    "generate_dataset/ci-materialize-test",
-    "generate_dataset/ci-materialize-test-wds",
-    "generate_dataset/nightly-parallel-smoke",
-    "generate_dataset/smoke-shard",
-    "generate_dataset/smoke-shard-wds",
-    "generate_dataset/surge-simple-480k-10k",
-)
+# Curated allowlist of datagen experiments (those that compose dataset.yaml),
+# mapped to the ``task_name`` each composes to. See the module docstring for why
+# this is an allowlist rather than a directory scan. task_name is normally the
+# experiment's file stem, but the ``smoke-shard-with-*`` configs layer flags onto
+# ``smoke-shard`` via ``@_global_`` defaults chaining and inherit its task_name.
+DATASET_EXPERIMENTS: dict[str, str] = {
+    "generate_dataset/10-1k-shards": "10-1k-shards",
+    "generate_dataset/ci-materialize-test": "ci-materialize-test",
+    "generate_dataset/ci-materialize-test-wds": "ci-materialize-test-wds",
+    "generate_dataset/nightly-parallel-smoke": "nightly-parallel-smoke",
+    "generate_dataset/smoke-shard": "smoke-shard",
+    "generate_dataset/smoke-shard-wds": "smoke-shard-wds",
+    "generate_dataset/surge-simple-480k-10k": "surge-simple-480k-10k",
+    "generate_dataset/smoke-shard-with-finalize": "smoke-shard",
+    "generate_dataset/smoke-shard-with-oracle-eval": "smoke-shard",
+}
 
 
 def _compose_dataset_spec(experiment: str) -> DatasetSpec:
@@ -56,13 +61,19 @@ def _compose_dataset_spec(experiment: str) -> DatasetSpec:
     return spec_from_cfg(cfg)
 
 
-@pytest.mark.parametrize("experiment", DATASET_EXPERIMENTS)
-def test_experiment_yaml_validates_as_dataset_spec(experiment: str) -> None:
-    """Each composed experiment validates as DatasetSpec."""
+@pytest.mark.parametrize(("experiment", "expected_task_name"), DATASET_EXPERIMENTS.items())
+def test_experiment_yaml_validates_as_dataset_spec(
+    experiment: str, expected_task_name: str
+) -> None:
+    """Each composed experiment validates as DatasetSpec with its expected task_name.
+
+    :param experiment: Hydra experiment id under ``configs/experiment/generate_dataset/``.
+    :param expected_task_name: ``task_name`` the experiment composes to — the file
+        stem for standalone configs, or the inherited ``smoke-shard`` for the
+        ``smoke-shard-with-*`` configs that chain it via ``@_global_`` defaults.
+    """
     spec = _compose_dataset_spec(experiment)
-    # task_name is the filename stem (the leaf), independent of the Hydra config-group
-    # path used to compose it — DatasetConfigId and R2 paths use the stem, not the group.
-    assert spec.task_name == experiment.rsplit("/", 1)[-1]
+    assert spec.task_name == expected_task_name
     assert spec.num_shards >= 1
     assert spec.num_params > 0
 

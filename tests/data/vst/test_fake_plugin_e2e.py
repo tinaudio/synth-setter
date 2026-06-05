@@ -10,6 +10,8 @@ work" gate; this is the "does our pipeline still work" gate.
 
 from __future__ import annotations
 
+import io
+import tarfile
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -19,7 +21,9 @@ import numpy as np
 import pytest
 
 from synth_setter.data.vst import core
-from synth_setter.data.vst.writers import make_hdf5_dataset
+from synth_setter.data.vst.shapes import AUDIO_FIELD
+from synth_setter.data.vst.writers import make_hdf5_dataset, make_wds_dataset
+from synth_setter.pipeline.schemas.spec import RenderConfig
 
 _ = hdf5plugin  # keep type checkers from flagging the side-effect import
 
@@ -33,6 +37,47 @@ from tests.data.vst.test_generate_vst_dataset import (  # noqa: E402  pinned can
 _PLUGIN_PATH = "plugins/fake.vst3"  # never touched on disk — load_plugin is patched
 _PRESET_PATH = "presets/fake.vstpreset"
 _RENDERER_VERSION = "fake-0.0.0"
+
+
+def _fake_render_cfg(**overrides: object) -> RenderConfig:
+    """Build a ``RenderConfig`` pointing at the fake plugin paths.
+
+    Wraps the canonical ``_render_cfg`` and rebinds ``plugin_path`` / ``preset_path`` /
+    ``renderer_version`` to the never-touched fake-plugin strings so the writer runs
+    entirely under ``install_fake_plugin``.
+
+    :param \\*\\*overrides: Passed through to ``_render_cfg`` (e.g. ``num_samples``,
+        ``samples_per_render_batch``, ``param_sample_cadence`` via ``model_copy``).
+    :returns: A ``RenderConfig`` wired for the fake plugin.
+    """
+    num_samples = overrides.pop("num_samples")
+    cadence = overrides.pop("param_sample_cadence", None)
+    cfg = _render_cfg(num_samples=num_samples, **overrides)  # type: ignore[arg-type]
+    update: dict[str, object] = {
+        "plugin_path": _PLUGIN_PATH,
+        "preset_path": _PRESET_PATH,
+        "renderer_version": _RENDERER_VERSION,
+    }
+    if cadence is not None:
+        update["param_sample_cadence"] = cadence
+    return cfg.model_copy(update=update)
+
+
+def _count_wds_audio_rows(tar_path: Path) -> int:
+    """Sum the first-axis length of every ``*.audio.npy`` member in a wds tar.
+
+    :param tar_path: Path to a webdataset ``.tar`` shard.
+    :returns: Total rendered-sample row count across all audio members.
+    """
+    rows = 0
+    with tarfile.open(tar_path, mode="r") as tar:
+        for member in tar.getmembers():
+            if not member.name.endswith(f".{AUDIO_FIELD}.npy"):
+                continue
+            extracted = tar.extractfile(member)
+            assert extracted is not None, f"unreadable tar member {member.name}"
+            rows += int(np.load(io.BytesIO(extracted.read()), allow_pickle=False).shape[0])
+    return rows
 
 
 @pytest.mark.fake_vst
@@ -95,4 +140,72 @@ def test_make_hdf5_dataset_writes_valid_shard_under_fake_plugin(
 
     assert fake_logger.exception.call_count == 0, (
         f"unexpected logger.exception calls: {fake_logger.exception.call_args_list}"
+    )
+
+
+@pytest.mark.fake_vst
+def test_make_hdf5_dataset_shard_cadence_writes_one_identical_patch_per_shard(
+    tmp_path: Path,
+    install_fake_plugin: FakeVST3Plugin,
+) -> None:
+    """``param_sample_cadence="shard"`` writes a shard whose ``param_array`` rows are identical.
+
+    The on-disk counterpart to the writer-level draws-once pins in
+    ``test_writers.py``: drives the real ``make_hdf5_dataset`` writer end-to-end
+    under the fake plugin (no fixed-params list — shard cadence draws its own
+    single patch) and reads the produced shard back to confirm every encoded
+    parameter row equals row 0. This is the #489 variance probe's one-patch-per-
+    shard invariant, asserted on the fast CPU loop rather than only under real R2.
+
+    :param tmp_path: Destination directory for the shard HDF5 file under test.
+    :param install_fake_plugin: Swaps ``core.load_plugin`` / ``core.VST3Plugin``
+        for the fake so the per-render draw runs without a real VST3 or X11.
+    """
+    num_samples = 4
+    render_cfg = _fake_render_cfg(
+        num_samples=num_samples,
+        samples_per_render_batch=2,
+        param_sample_cadence="shard",
+    )
+    out = tmp_path / "shard-000000.h5"
+
+    make_hdf5_dataset(hdf5_file=out, render_cfg=render_cfg)
+
+    with h5py.File(out, "r") as f:
+        param_ds = f["param_array"]
+        assert isinstance(param_ds, h5py.Dataset)
+        params = param_ds[...]
+    assert params.shape[0] == num_samples
+    assert np.array_equal(params, np.broadcast_to(params[0], params.shape)), (
+        "shard-cadence shard has non-identical param rows"
+    )
+
+
+@pytest.mark.fake_vst
+def test_make_wds_dataset_rerun_overwrites_rather_than_appends(
+    tmp_path: Path,
+    install_fake_plugin: FakeVST3Plugin,
+) -> None:
+    """Re-running the wds writer on an existing path overwrites it (non-resumable).
+
+    ``make_wds_dataset`` pins ``start_idx=0`` and opens the path with
+    ``wds.TarWriter`` in write mode, so a re-run must truncate — a second pass
+    yields exactly ``samples_per_shard`` rows, not double. Pins the
+    non-resumability contract on the fast loop (HDF5 resume is covered in
+    ``test_generate_vst_dataset.py``; this is its wds counterpart).
+
+    :param tmp_path: Destination directory for the wds tar shard under test.
+    :param install_fake_plugin: Swaps the plugin loader for the fake so the
+        render runs without a real VST3 or X11.
+    """
+    num_samples = 4
+    render_cfg = _fake_render_cfg(num_samples=num_samples, samples_per_render_batch=2)
+    out = tmp_path / "shard-000000.tar"
+
+    make_wds_dataset(wds_file=out, render_cfg=render_cfg)
+    assert _count_wds_audio_rows(out) == num_samples
+
+    make_wds_dataset(wds_file=out, render_cfg=render_cfg)
+    assert _count_wds_audio_rows(out) == num_samples, (
+        "wds re-run appended instead of overwriting the shard"
     )
