@@ -1638,9 +1638,14 @@ class TestMainDispatchBranches:
         gd.main()
 
         finalize_mock.assert_not_called()
-        # State assertion above is the contract; here we only require that the
-        # override-ignored path logged (exact wording is not pinned).
-        mock_logger.info.assert_called()
+        # State assertion above is the contract. The log check matches stable
+        # tokens (knob name + "ignored") so a reworded message survives, but a
+        # vacuous ``assert_called`` would not — ``main`` always emits INFO logs.
+        info_messages = [str(c.args[0]) for c in mock_logger.info.call_args_list]
+        ignored_lines = [m for m in info_messages if "finalize_inline=" in m and "ignored" in m]
+        assert len(ignored_lines) == 1, (
+            f"expected one INFO log marking the override ignored; got: {info_messages!r}"
+        )
 
     def test_main_oracle_eval_inline_true_invokes_subprocess(
         self,
@@ -2333,7 +2338,8 @@ class TestMainSpecPersistence:
         monkeypatch.setattr("sys.argv", argv)
 
         def _load_creds(*_a: object, **_k: object) -> None:
-            os.environ[probe_key] = "stub-access-key-id"
+            # setenv (not raw os.environ) so monkeypatch restores it on teardown.
+            monkeypatch.setenv(probe_key, "stub-access-key-id")
 
         monkeypatch.setattr(gd.r2_io, "ensure_r2_env_loaded", _load_creds)
 
