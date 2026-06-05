@@ -223,7 +223,7 @@ docs:
     description: Onboarding — local dev, Codespaces, and dev container flows
     sources:
       - pattern: "Makefile"
-        covers: "Local dev targets — install (uv + .venv + deps + pre-commit), install-surge-xt (download + md5 verify + extract Surge XT VST3), link-plugins (mirror primary's plugins/ into a worktree), SURGE_XT_VERSION + related vars"
+        covers: "Local dev targets — install (uv + .venv + deps + pre-commit), install-surge-xt (download + md5 verify + extract Surge XT VST3), link-plugins (mirror primary's plugins/ into a worktree), link-thoughts (symlink a worktree's thoughts/ to the primary's central copy; no-op in primary), SURGE_XT_VERSION + related vars"
         scope: "local-dev"
       - pattern: ".devcontainer/cpu/devcontainer.json"
         covers: "CPU dev container config — remoteUser, mounts (bash-history named volume + per-user tmux-resurrect and zellij-cache named volumes for dev and root + plugins/ anonymous overlay), --env-file .env, initializeCommand, postCreateCommand, VS Code terminal profile defaulting to zellij (tmux still selectable)"
