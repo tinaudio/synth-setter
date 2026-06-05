@@ -3,6 +3,7 @@ from __future__ import annotations
 import plistlib
 import threading
 import time
+from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 from unittest.mock import MagicMock
@@ -267,46 +268,43 @@ class TestRunWithEditorHeldOpen:
 class _RenderFakePlugin:
     """Hand-written ``VST3Plugin`` double for ``render_params`` load/preset path tests.
 
-    ``process`` returns a ``(channels, num_samples)`` float32 buffer mirroring
-    the real plugin's output contract (see ``FakeVST3Plugin.process``); flush
-    calls and the render call alike yield the configured ``audio_shape`` since
-    only the render return value is observed. ``process_called`` records whether
-    any render ran, replacing a ``MagicMock``'s ``.called`` flag.
+    ``process`` honours the caller's ``channels`` and returns a zero buffer
+    shaped like the canonical ``FakeVST3Plugin.process``: ``(channels, 0)`` for
+    flush calls (empty ``midi_events``) and ``(channels, num_samples)`` for a
+    render, so a wrong channel count from ``render_params`` would surface here.
+    ``process_called`` records whether any render ran, replacing a
+    ``MagicMock``'s ``.called`` flag.
     """
 
-    def __init__(self, audio_shape: tuple[int, int]) -> None:
-        """Store the output shape; start with no recorded ``process`` call.
-
-        :param audio_shape: ``(channels, num_samples)`` of every ``process`` return.
-        """
-        self._audio_shape = audio_shape
+    def __init__(self) -> None:
+        """Start with no recorded render."""
         self.process_called = False
 
     def process(
         self,
-        midi_events: object,
+        midi_events: Sequence[object],
         duration_seconds: float,
         sample_rate: float,
         channels: int,
         block_size: int,
         tail: bool,
     ) -> np.ndarray:
-        """Return a fresh zero buffer of ``audio_shape`` and flag the call.
+        """Return a zero buffer shaped per the flush-vs-render contract.
 
-        Mirrors ``pedalboard.VST3Plugin.process``'s positional signature so the
-        fake is called exactly as the real plugin; the arguments are accepted
-        but the return shape is fixed to ``audio_shape``.
-
-        :param midi_events: MIDI payload the production code passes; ignored.
-        :param duration_seconds: Requested render length; ignored.
-        :param sample_rate: Output sample rate in Hz; ignored.
-        :param channels: Requested channel count; ignored.
-        :param block_size: Render block size; ignored.
-        :param tail: Whether to render the release tail; ignored.
-        :returns: ``(channels, num_samples)`` float32 array of zeros.
+        :param midi_events: Empty for a flush, non-empty for a render.
+        :param duration_seconds: Render length; ``num_samples = duration * sample_rate``.
+        :param sample_rate: Output sample rate in Hz.
+        :param channels: Channel count of the returned array (axis 0).
+        :param block_size: Accepted to match the real signature; unused.
+        :param tail: Accepted to match the real signature; unused.
+        :returns: ``(channels, 0)`` for a flush or ``(channels, num_samples)``
+            for a render, float32 zeros.
         """
+        if not midi_events:
+            return np.zeros((channels, 0), dtype=np.float32)
         self.process_called = True
-        return np.zeros(self._audio_shape, dtype=np.float32)
+        num_samples = int(duration_seconds * sample_rate)
+        return np.zeros((channels, num_samples), dtype=np.float32)
 
     def reset(self) -> None:
         """Mirror the real plugin's reset hook; the fake holds no audio state."""
@@ -316,8 +314,8 @@ class TestRenderParamsPreloadedPlugin:
     """``render_params`` accepts a pre-loaded plugin and skips load/preset on that path."""
 
     @staticmethod
-    def _fake_plugin(audio_shape: tuple[int, int]) -> _RenderFakePlugin:
-        return _RenderFakePlugin(audio_shape)
+    def _fake_plugin() -> _RenderFakePlugin:
+        return _RenderFakePlugin()
 
     def test_preloaded_plugin_bypasses_load_and_preset(
         self, monkeypatch: pytest.MonkeyPatch
@@ -339,7 +337,7 @@ class TestRenderParamsPreloadedPlugin:
             lambda plugin, path: preset_calls.append((plugin, path)),
         )
 
-        preloaded = self._fake_plugin(audio_shape=(2, 16))
+        preloaded = self._fake_plugin()
 
         render_params(
             "plugins/Surge XT.vst3",
@@ -364,7 +362,7 @@ class TestRenderParamsPreloadedPlugin:
 
         :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
         """
-        fake_plugin = self._fake_plugin(audio_shape=(2, 16))
+        fake_plugin = self._fake_plugin()
         load_calls: list[str] = []
 
         def _capture_load(path: str, **_kw: object) -> _RenderFakePlugin:
@@ -401,7 +399,7 @@ class TestRenderParamsPreloadedPlugin:
 
         :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
         """
-        fake_plugin = self._fake_plugin(audio_shape=(2, 16))
+        fake_plugin = self._fake_plugin()
         warmup_calls: list[object] = []
 
         monkeypatch.setattr(core, "load_plugin", lambda _path: fake_plugin)
@@ -430,7 +428,7 @@ class TestRenderParamsPreloadedPlugin:
 
         :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
         """
-        cached = self._fake_plugin(audio_shape=(2, 16))
+        cached = self._fake_plugin()
         warmup_calls: list[object] = []
 
         monkeypatch.setattr(core, "warmup_plugin", lambda plugin: warmup_calls.append(plugin))
