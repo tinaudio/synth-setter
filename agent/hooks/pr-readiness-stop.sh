@@ -88,6 +88,12 @@ main() {
   pr=$(gh pr view "$branch" --json number -q .number 2>/dev/null || true)
   [[ -n "$pr" ]] || exit 0
 
+  # Merged PRs satisfy all gates by definition — mergeable=UNKNOWN is expected
+  # for closed/merged PRs and must not be treated as a gate failure.
+  local pr_state
+  pr_state=$(gh pr view "$pr" --json state -q .state 2>/dev/null || true)
+  [[ "$pr_state" == "MERGED" || "$pr_state" == "CLOSED" ]] && exit 0
+
   local mergeable failed_gate=""
   if ! ci_is_green "$pr"; then
     failed_gate="Gate 1 (CI not fully green — checks failing or still pending)"
