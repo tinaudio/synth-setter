@@ -18,3 +18,7 @@ Nested under `DatasetSpec.render`:
 Nested entries inside the computed `DatasetSpec.shards` tuple:
 
 ::: synth_setter.pipeline.schemas.spec.ShardSpec
+
+Nested under `DatasetSpec.datasetsrc` (the optional dataset-copy source):
+
+::: synth_setter.pipeline.schemas.spec.DatasetSrcConfig

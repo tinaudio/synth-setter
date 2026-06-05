@@ -388,6 +388,7 @@ jobs:
           CONFIG_PATH: ${{ matrix.config }}
           TEMPLATE: ${{ matrix.template }}
           LOG_PATH: /tmp/debug-pure-sky-${{ matrix.cluster_suffix }}.log
+          HYDRA_FULL_ERROR: "1"
         run: |
           set -euo pipefail
           uv run synth-setter-generate-dataset \
@@ -408,6 +409,7 @@ jobs:
           CONFIG_PATH: ${{ matrix.config }}
           TEMPLATE: ${{ matrix.template }}
           LOG_PATH: /tmp/debug-pure-sky-${{ matrix.cluster_suffix }}.log
+          HYDRA_FULL_ERROR: "1"
         run: |
           set -euo pipefail
           docker pull "$IMAGE"
@@ -422,6 +424,7 @@ jobs:
             -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
             -e RCLONE_CONFIG_R2_ENDPOINT \
             -e R2_ACCOUNT_ID \
+            -e HYDRA_FULL_ERROR \
             "$IMAGE" \
             bash -c '
               set -euo pipefail

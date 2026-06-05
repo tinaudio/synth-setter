@@ -24,6 +24,7 @@ def _make_valid_spec(*, output_format: str = "hdf5", **overrides: object) -> dic
         "train_val_test_sizes": [32, 32, 32],
         "train_val_test_seeds": None,
         "base_seed": 42,
+        "datasetsrc": None,
         "mask_degenerate_bins": False,
         "num_params": 92,
         "num_shards": 3,
@@ -48,6 +49,7 @@ def _make_valid_spec(*, output_format: str = "hdf5", **overrides: object) -> dic
             "parallel": False,
             "plugin_reload_cadence": "render",
             "gui_toggle_cadence": "never",
+            "param_sample_cadence": "sample",
         },
         "shards": [
             {"shard_id": i, "filename": f"shard-{i:06d}{ext}", "seed": 42 + i} for i in range(3)

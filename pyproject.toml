@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "synth-setter"
-version = "8.15.2"
+version = "8.17.0"
 description = "Studying the effect of permutation symmetry on audio synthesiser parameter inference."
 authors = [{name = "Khaled Tinubu"}, {name = "tinaudio"}]
 readme = "README.md"
@@ -79,6 +79,9 @@ synth-setter-spec-uri = "synth_setter.pipeline.ci.spec_uri:main"
 # (#1139); pip never installs them and uv pip only with `--group`, so a plain
 # `pip install -e .` keeps lite CI light. `runtime` aggregates every sub-group;
 # `dev` (the default group) includes it.
+
+
+
 [dependency-groups]
 docs = [
   "mkdocs",
@@ -450,7 +453,7 @@ changelog_file = "CHANGELOG.md"
 # Major bumps: handled by default via "feat!:" prefix or "BREAKING CHANGE:" footer
 # Pre-1.0: breaking changes bump minor (standard semver pre-1.0 behavior)
 [tool.semantic_release.commit_parser_options]
-allowed_tags = ["build", "chore", "ci", "docs", "feat", "fix", "internal-feat", "internal-fix", "monitoring", "perf", "refactor", "revert", "style", "test"]
+allowed_tags = ["automation", "build", "chore", "ci", "docs", "feat", "fix", "internal-feat", "internal-fix", "monitoring", "perf", "refactor", "revert", "style", "test"]
 minor_tags = ["feat"]
 patch_tags = ["fix", "perf", "revert"]
 

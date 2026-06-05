@@ -20,7 +20,7 @@ from synth_setter.pipeline.ci.validate_shard import (
     validate_all_shards_from_r2,
     validate_shard,
 )
-from synth_setter.pipeline.schemas.spec import DatasetSpec
+from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat
 
 # ---------------------------------------------------------------------------
 # Fixtures and helpers
@@ -61,7 +61,7 @@ def real_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> DatasetSpec:
 
     return DatasetSpec(
         task_name="test-dataset",
-        output_format="hdf5",
+        output_format=OutputFormat.HDF5,
         train_val_test_sizes=(10, 0, 0),
         base_seed=42,
         r2={"bucket": "intermediate-data"},  # type: ignore[arg-type]

@@ -13,6 +13,8 @@ from pydantic import ValidationError
 from synth_setter.data.vst import param_specs
 from synth_setter.pipeline.schemas.spec import (
     DatasetSpec,
+    DatasetSrcConfig,
+    OutputFormat,
     RenderConfig,
     ShardSpec,
 )
@@ -319,6 +321,21 @@ class TestRenderConfig:
         assert cfg.gui_toggle_cadence == "always_on"
         assert cfg.plugin_reload_cadence == "once"
 
+    def test_param_sample_cadence_defaults_to_sample(self) -> None:
+        """Omitting ``param_sample_cadence`` keeps the historical per-sample draw."""
+        cfg = RenderConfig(**_valid_render_kwargs())
+        assert cfg.param_sample_cadence == "sample"
+
+    def test_param_sample_cadence_shard_accepted(self) -> None:
+        """``param_sample_cadence="shard"`` constructs — one patch reused across the shard."""
+        cfg = RenderConfig(**{**_valid_render_kwargs(), "param_sample_cadence": "shard"})
+        assert cfg.param_sample_cadence == "shard"
+
+    def test_param_sample_cadence_rejects_unknown_value(self) -> None:
+        """A value outside the literal set raises rather than silently passing through."""
+        with pytest.raises(ValidationError):
+            RenderConfig(**{**_valid_render_kwargs(), "param_sample_cadence": "batch"})
+
 
 # ---------------------------------------------------------------------------
 # DatasetSpec — construction & runtime-field auto-fill
@@ -468,11 +485,13 @@ class TestDatasetSpecValidators:
         with pytest.raises(ValidationError, match="must sum to a positive count"):
             DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[0, 0, 0]))
 
-    def test_invalid_output_format_literal_raises(self, patch_runtime_io: None) -> None:
-        """An output_format outside the supported Literal set is rejected.
+    def test_invalid_output_format_token_raises(self, patch_runtime_io: None) -> None:
+        """An output_format outside the ``OutputFormat`` enum is rejected.
 
-        ``parquet`` stays outside the Literal even as new formats (wds) join — pinning
+        ``parquet`` stays outside the enum even as new formats (wds) join — pinning
         the rejection here prevents a typo (``parquet`` vs. ``wds``) from sneaking in.
+
+        :param patch_runtime_io: Fixture stubbing git/clock runtime fields.
         """
         with pytest.raises(ValidationError):
             DatasetSpec(**_valid_spec_kwargs(output_format="parquet"))
@@ -481,6 +500,42 @@ class TestDatasetSpecValidators:
         """``output_format='wds'`` is accepted (unblocks the wds writer landing in PR-13)."""
         spec = DatasetSpec(**_valid_spec_kwargs(output_format="wds"))
         assert spec.output_format == "wds"
+
+    def test_string_token_coerces_into_output_format_enum(self, patch_runtime_io: None) -> None:
+        """The raw ``hdf5`` token from Hydra / R2 JSON becomes an ``OutputFormat`` member.
+
+        Pins that callers can reach ``.extension`` on a constructed spec rather than
+        re-deriving the suffix from a bare string.
+
+        :param patch_runtime_io: Fixture stubbing git/clock runtime fields.
+        """
+        spec = DatasetSpec(**_valid_spec_kwargs(output_format="hdf5"))
+        assert spec.output_format is OutputFormat.HDF5
+        assert spec.output_format.extension == ".h5"
+
+    def test_output_format_serializes_as_plain_token(self, patch_runtime_io: None) -> None:
+        """JSON serialization emits the bare token, not the enum repr (R2 / Hydra contract).
+
+        The reason ``OutputFormat`` subclasses ``str``: the materialized
+        ``input_spec.json`` on R2 must round-trip as ``"wds"``, not ``"OutputFormat.WDS"``.
+
+        :param patch_runtime_io: Fixture stubbing git/clock runtime fields.
+        """
+        spec = DatasetSpec(**_valid_spec_kwargs(output_format="wds"))
+        assert '"output_format":"wds"' in spec.model_dump_json()
+
+    def test_non_string_output_format_rejected_despite_non_strict_field(
+        self, patch_runtime_io: None
+    ) -> None:
+        """``Field(strict=False)`` still rejects a non-string scalar, not just unknown tokens.
+
+        The field opts out of strict mode only to coerce raw string tokens; an
+        ``int`` must not silently become a format.
+
+        :param patch_runtime_io: Fixture stubbing git/clock runtime fields.
+        """
+        with pytest.raises(ValidationError):
+            DatasetSpec(**_valid_spec_kwargs(output_format=1))
 
     def test_strict_mode_rejects_int_for_string_field(self, patch_runtime_io: None) -> None:
         """Strict mode rejects silent int→str coercion at the trust boundary."""
@@ -1046,3 +1101,56 @@ class TestFromHydraCfg:
 
         with pytest.raises(TypeError):
             DatasetSpec.from_hydra_cfg(cfg)  # type: ignore[arg-type]
+
+
+class TestDatasetSrc:
+    """``DatasetSpec.datasetsrc`` — optional dataset-copy source."""
+
+    def test_datasetsrc_defaults_to_none(self) -> None:
+        """A spec built without ``datasetsrc`` leaves the copy path disabled."""
+        spec = DatasetSpec(**_valid_spec_kwargs())
+
+        assert spec.datasetsrc is None
+
+    def test_datasetsrc_mapping_validates_into_nested_config(self) -> None:
+        """A ``datasetsrc`` mapping composes into a nested ``DatasetSrcConfig``."""
+        spec = DatasetSpec(
+            **_valid_spec_kwargs(datasetsrc={"copy_dataset_root": "/data/source-dataset"})
+        )
+
+        assert isinstance(spec.datasetsrc, DatasetSrcConfig)
+        assert spec.datasetsrc.copy_dataset_root == "/data/source-dataset"
+
+    def test_datasetsrc_blank_copy_dataset_root_is_rejected(self) -> None:
+        """A blank ``copy_dataset_root`` raises so the per-shard source path is never empty."""
+        with pytest.raises(ValidationError, match="copy_dataset_root must not be blank"):
+            DatasetSrcConfig(copy_dataset_root="   ")
+
+    def test_datasetsrc_with_wds_output_is_rejected(self) -> None:
+        """Copy requires hdf5 output — pairing ``datasetsrc`` with wds fails at spec build.
+
+        A ``.tar`` output has no same-named HDF5 source to read params from, so the
+        misconfig should surface at launch (spec construction), not per-shard.
+        """
+        with pytest.raises(ValidationError, match="supports output_format='hdf5' only"):
+            DatasetSpec(
+                **_valid_spec_kwargs(
+                    output_format="wds",
+                    datasetsrc={"copy_dataset_root": "/data/source-dataset"},
+                )
+            )
+
+    def test_datasetsrc_extra_key_is_rejected(self) -> None:
+        """``DatasetSrcConfig`` is a strict trust boundary — unknown keys raise."""
+        with pytest.raises(ValidationError):
+            DatasetSrcConfig(copy_dataset_root="/data/src", unexpected="x")  # type: ignore[call-arg]
+
+    def test_datasetsrc_survives_json_round_trip(self) -> None:
+        """A worker reconstructing the spec from JSON sees the same copy source."""
+        spec = DatasetSpec(
+            **_valid_spec_kwargs(datasetsrc={"copy_dataset_root": "/data/source-dataset"})
+        )
+
+        restored = DatasetSpec.model_validate_json(spec.model_dump_json())
+
+        assert restored.datasetsrc == spec.datasetsrc

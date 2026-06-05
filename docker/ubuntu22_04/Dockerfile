@@ -490,6 +490,10 @@ USER $USERNAME
 # these dev-writable dirs ahead of system binaries.
 ENV PATH="$PATH:/home/${USERNAME}/.npm-global/bin:/home/${USERNAME}/.local/bin"
 
+# wandb's default staging dir (~/.local/share/wandb) isn't writable at runtime in
+# the devcontainer (see #1423); stage under .cache, which wandb creates on demand.
+ENV WANDB_DATA_DIR="/home/${USERNAME}/.cache/wandb"
+
 # dev's `npm install -g` would EACCES on the root-owned global tree (claude-code
 # is baked in as root); a per-user prefix sends it to a writable one. $HOME is
 # unset after USER, so export it per-RUN (not ENV — that leaks to root sessions).

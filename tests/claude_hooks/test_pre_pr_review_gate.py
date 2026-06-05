@@ -54,8 +54,9 @@ def _head_sentinel(tmp_path: Path, body: str) -> Path:
 def _run_gate(review: Path, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     """Invoke the hook with a ``gh pr create`` command carrying ``REVIEW_FULL=<review>``.
 
-    cwd is the repo root and ``REVIEW_MAX_LAG`` is widened so only the
-    block-gate logic under test can change the outcome.
+    cwd is the repo root, ``REVIEW_MAX_LAG`` is widened, and ``PR_TITLE_GATE``
+    is off so only the block-gate logic under test can change the outcome (the
+    title gate has its own module).
 
     :param review: Sentinel path passed as the trailing ``REVIEW_FULL=`` comment.
     :param env: Extra environment variables overlaid on the inherited environment.
@@ -66,7 +67,7 @@ def _run_gate(review: Path, env: dict[str, str] | None = None) -> subprocess.Com
             "command": f"gh pr create --title x --body y  # REVIEW_FULL={review}",
         },
     }
-    overlay = {"REVIEW_MAX_LAG": "1000"}
+    overlay = {"REVIEW_MAX_LAG": "1000", "PR_TITLE_GATE": "off"}
     if env:
         overlay.update(env)
     return subprocess.run(  # noqa: S603

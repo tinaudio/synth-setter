@@ -14,6 +14,7 @@ from __future__ import annotations
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
+from enum import Enum
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -38,9 +39,9 @@ if TYPE_CHECKING:
     from omegaconf import DictConfig
 
 __all__ = [
-    "EXTENSION_TO_OUTPUT_FORMAT",
-    "OUTPUT_FORMAT_TO_EXTENSION",
     "DatasetSpec",
+    "DatasetSrcConfig",
+    "OutputFormat",
     "R2Location",
     "RenderConfig",
     "ShardSpec",
@@ -57,22 +58,58 @@ _LEGACY_FLAT_R2_KEYS: dict[str, str] = {
     "r2_prefix": "prefix",
 }
 
-# Source-of-truth mapping from ``output_format`` to shard filename suffix.
-# Adding a format means adding a row here; missing entries surface as KeyError
-# at construction rather than producing a silently-wrong filename.
-OUTPUT_FORMAT_TO_EXTENSION: dict[str, str] = {"hdf5": ".h5", "wds": ".tar"}
 
-# Reverse lookup for dispatching shard writers/validators by file suffix;
-# derived from the forward map so adding a format stays a one-place edit.
-# Two formats must never share an extension — a collision would silently drop
-# an entry from the dict-comprehension (last-key-wins) and route the wrong
-# format downstream, so guard at import time.
-EXTENSION_TO_OUTPUT_FORMAT: dict[str, str] = {v: k for k, v in OUTPUT_FORMAT_TO_EXTENSION.items()}
-if len(EXTENSION_TO_OUTPUT_FORMAT) != len(OUTPUT_FORMAT_TO_EXTENSION):
+class OutputFormat(str, Enum):
+    """Shard container format; the enum value is the on-disk / JSON token.
+
+    Subclasses ``str`` (rather than 3.11's ``StrEnum``, unavailable on the
+    ``>=3.10`` floor) so a value compares equal to and serializes as its plain
+    string token across the Hydra / R2-JSON boundary.
+
+    .. attribute :: HDF5
+
+        HDF5 container; shards are written as ``.h5`` files.
+
+    .. attribute :: WDS
+
+        WebDataset container; shards are written as ``.tar`` archives.
+    """
+
+    HDF5 = "hdf5"
+    WDS = "wds"
+
+    @property
+    def extension(self) -> str:
+        """Shard filename suffix for this format, leading dot included."""
+        return _OUTPUT_FORMAT_EXTENSIONS[self]
+
+    @classmethod
+    def from_extension(cls, suffix: str) -> OutputFormat | None:
+        """Return the format whose shards carry ``suffix``, dispatching by file type.
+
+        :param suffix: Filename suffix including the leading dot (e.g. ``.h5``).
+        :returns: Matching format, or ``None`` when ``suffix`` is unregistered.
+        """
+        return _OUTPUT_FORMAT_BY_EXTENSION.get(suffix)
+
+
+# Source-of-truth suffix per format (leading dot included). A missing row
+# surfaces as KeyError at ``.extension`` rather than a silently-wrong filename.
+_OUTPUT_FORMAT_EXTENSIONS: dict[OutputFormat, str] = {
+    OutputFormat.HDF5: ".h5",
+    OutputFormat.WDS: ".tar",
+}
+
+# Reverse map for suffix dispatch, derived from the forward map. The import
+# guard below rejects a shared suffix (last-key-wins would silently misroute).
+_OUTPUT_FORMAT_BY_EXTENSION: dict[str, OutputFormat] = {
+    ext: fmt for fmt, ext in _OUTPUT_FORMAT_EXTENSIONS.items()
+}
+if len(_OUTPUT_FORMAT_BY_EXTENSION) != len(_OUTPUT_FORMAT_EXTENSIONS):
     raise RuntimeError(
-        "Duplicate extensions in OUTPUT_FORMAT_TO_EXTENSION — "
+        "Duplicate extensions in _OUTPUT_FORMAT_EXTENSIONS — "
         "two output formats map to the same suffix: "
-        f"{OUTPUT_FORMAT_TO_EXTENSION!r}"
+        f"{_OUTPUT_FORMAT_EXTENSIONS!r}"
     )
 
 
@@ -136,6 +173,7 @@ def _current_platform() -> str:
 
 _GuiToggleCadence = Literal["never", "once", "render", "always_on"]
 _PluginReloadCadence = Literal["once", "render"]
+_ParamSampleCadence = Literal["sample", "shard"]
 
 
 def _default_gui_toggle_cadence() -> _GuiToggleCadence:
@@ -164,6 +202,48 @@ class ShardSpec(BaseModel):
         )
     )
     seed: int = Field(description="Per-shard RNG seed, derived as ``base_seed + shard_id``.")
+
+
+class DatasetSrcConfig(BaseModel):
+    """Source for a dataset-copy run, nested as ``DatasetSpec.datasetsrc``.
+
+    When set, each output shard decodes the same-named source shard's
+    ``param_array`` into fixed synth/note params and re-renders them instead of
+    sampling fresh. The source must be a complete hdf5 shard set sharing the
+    target's ``render.param_spec_name`` (same encoding width). Re-renders apply
+    the *target's* ``min_loudness`` to fixed (non-resampled) synth params, so a
+    copied patch landing below it raises — set a low ``min_loudness`` when the
+    target render settings differ from the source's (#724).
+
+    .. attribute :: model_config
+
+        Pydantic model config sentinel — strict/frozen/extra-forbid trust boundary.
+
+    .. attribute :: copy_dataset_root
+
+        Directory of source shards whose params are copied per output shard.
+    """
+
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
+
+    copy_dataset_root: str = Field(
+        description=(
+            "Directory holding the source shards to copy params from; each output "
+            "shard reads ``<copy_dataset_root>/<shard.filename>`` (a worker-local "
+            "filesystem path — R2 sources must be synced locally first)."
+        )
+    )
+
+    @model_validator(mode="after")
+    def _copy_dataset_root_must_not_be_blank(self) -> DatasetSrcConfig:
+        """Reject a blank ``copy_dataset_root`` so the per-shard source path is never empty.
+
+        :returns: ``self`` unchanged when ``copy_dataset_root`` is non-blank.
+        :raises ValueError: ``copy_dataset_root`` is empty or whitespace-only.
+        """
+        if not self.copy_dataset_root.strip():
+            raise ValueError("copy_dataset_root must not be blank")
+        return self
 
 
 class RenderConfig(BaseModel):
@@ -249,6 +329,17 @@ class RenderConfig(BaseModel):
             '``"always_on"`` is permitted on Darwin because it opens the editor '
             "once per shard, not cumulatively. The default factory yields "
             '``"never"`` on Darwin.'
+        ),
+    )
+    param_sample_cadence: _ParamSampleCadence = Field(
+        default="sample",
+        description=(
+            'Per-shard parameter draw policy: ``"sample"`` (default, historical) '
+            'draws a fresh patch for every sample; ``"shard"`` draws one patch (the '
+            "first sample, via the normal loudness-gated path) and reuses it for the "
+            "rest of the shard — one identical patch per shard, a probe for the "
+            "per-patch render variance tracked in #489. The patch is drawn fresh each "
+            "run (no seeding), so shard cadence is not reproducible across runs."
         ),
     )
 
@@ -481,6 +572,10 @@ class DatasetSpec(BaseModel):
 
         Nested ``RenderConfig`` carrying every per-shard renderer input.
 
+    .. attribute :: datasetsrc
+
+        Optional ``DatasetSrcConfig`` copy source; ``None`` samples fresh params.
+
     .. attribute :: mask_degenerate_bins
 
         Whether finalize substitutes ``std=1.0`` at zero-variance mel bins
@@ -516,10 +611,13 @@ class DatasetSpec(BaseModel):
             "config-id path segment of ``r2.prefix`` (``<root>/<task_name>/<run_id>/``)."
         )
     )
-    output_format: Literal["hdf5", "wds"] = Field(
+    # strict=False so Hydra-composed dicts and R2 JSON (raw string tokens) coerce
+    # into the enum; an unknown token still raises, matching the prior Literal.
+    output_format: OutputFormat = Field(
+        strict=False,
         description=(
             "Shard container format; ``hdf5`` writes ``.h5``, ``wds`` writes WebDataset ``.tar``."
-        )
+        ),
     )
     train_val_test_sizes: tuple[int, int, int] = Field(
         description=(
@@ -541,6 +639,15 @@ class DatasetSpec(BaseModel):
 
     render: RenderConfig = Field(
         description="Nested ``RenderConfig`` carrying every per-shard renderer input."
+    )
+
+    datasetsrc: DatasetSrcConfig | None = Field(
+        default=None,
+        description=(
+            "Optional dataset-copy source; when set, each shard re-renders the params "
+            "of the same-named shard under ``datasetsrc.copy_dataset_root`` instead of "
+            "sampling fresh ones. ``None`` (the default) samples fresh params."
+        ),
     )
 
     mask_degenerate_bins: bool = Field(
@@ -794,14 +901,34 @@ class DatasetSpec(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _datasetsrc_requires_hdf5_output(self) -> DatasetSpec:
+        """Reject a dataset-copy source paired with non-hdf5 output.
+
+        The copy path reads each source shard as an HDF5 ``param_array`` of the
+        same shard filename, so a ``.tar`` output has no readable same-named
+        source. Failing at spec construction surfaces the misconfig at launch
+        rather than per-shard inside the renderer subprocess.
+
+        :returns: ``self`` when ``datasetsrc`` is unset or output is hdf5.
+        :raises ValueError: ``datasetsrc`` is set with ``output_format != "hdf5"``.
+        """
+        if self.datasetsrc is not None and self.output_format != "hdf5":
+            raise ValueError(
+                "datasetsrc (dataset copy) supports output_format='hdf5' only; got "
+                f"output_format={self.output_format!r}. The source is read as an HDF5 "
+                "param_array of the same shard filename."
+            )
+        return self
+
+    @model_validator(mode="after")
     def _shard_filenames_match_output_format(self) -> DatasetSpec:
         """Defense-in-depth: every computed shard filename ends with the format's extension."""
-        expected_ext = OUTPUT_FORMAT_TO_EXTENSION[self.output_format]
+        expected_ext = self.output_format.extension
         for shard in self.shards:
             if not shard.filename.endswith(expected_ext):
                 raise ValueError(
                     f"shard {shard.shard_id} filename {shard.filename!r} does not match "
-                    f"output_format {self.output_format!r} (expected suffix {expected_ext!r})"
+                    f"output_format {self.output_format.value!r} (expected suffix {expected_ext!r})"
                 )
         return self
 
@@ -811,7 +938,7 @@ class DatasetSpec(BaseModel):
         """Shard identities derived from total sample counts and ``samples_per_shard``."""
         sps = self.render.samples_per_shard
         total_shards = sum(self.train_val_test_sizes) // sps
-        ext = OUTPUT_FORMAT_TO_EXTENSION[self.output_format]
+        ext = self.output_format.extension
         return tuple(
             ShardSpec(
                 shard_id=i,

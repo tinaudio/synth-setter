@@ -58,9 +58,14 @@ source "${SCRIPT_DIR}/_lib.sh"
 
 readonly SENTINEL_PY="${SCRIPT_DIR}/../_shared/review_sentinel.py"
 readonly MIN_REVIEW_BYTES=200
+# gitlint ships its CLI in the `gitlint-core` distribution; pin to the rev in
+# .pre-commit-config.yaml so a PR title obeys the same conventional-commit rule
+# as commit messages. `uvx` fetches it on demand — no install on PATH needed.
+readonly GITLINT_PKG="gitlint-core@0.19.1"
 REVIEW_MAX_LAG="${REVIEW_MAX_LAG:-2}"
 REVIEW_COMMENT_GATE="${REVIEW_COMMENT_GATE:-block}"
 REVIEW_BLOCK_GATE="${REVIEW_BLOCK_GATE:-block}"
+PR_TITLE_GATE="${PR_TITLE_GATE:-block}"
 
 INPUT=$(cat)
 COMMAND=$(jq -r '.tool_input.command // empty' 2>/dev/null <<<"$INPUT" || true)
@@ -88,10 +93,18 @@ The encoded SHA must be an ancestor of HEAD and within REVIEW_MAX_LAG
 first-parent commits behind it (default 2; override via the REVIEW_MAX_LAG
 env var, must be a non-negative integer).'
 
+# shellcheck disable=SC2016  # intentional: no expansion wanted in the help block
+readonly TITLE_HELP='The PR title is the squash-merge subject, so it lands on main as a commit
+and must be a conventional commit: <type>(<optional-scope>): <description>.
+Allowed <type>s are defined in .gitlint. Set PR_TITLE_GATE=off to bypass
+(the pr-metadata-gate workflow re-checks the title regardless).'
+
 block() {
   local reason="$1"
+  # Optional 2nd arg overrides the help block; defaults to the REVIEW_FULL help.
+  local help="${2:-$BLOCK_HELP}"
   log "blocking: $reason"
-  printf 'BLOCKED: %s\n\n%s\n' "$reason" "$BLOCK_HELP" >&2
+  printf 'BLOCKED: %s\n\n%s\n' "$reason" "$help" >&2
   exit 2
 }
 
@@ -108,6 +121,69 @@ case "$REVIEW_BLOCK_GATE" in
   block | warn | off) ;;
   *) block "REVIEW_BLOCK_GATE must be one of block|warn|off, got: ${REVIEW_BLOCK_GATE}" ;;
 esac
+
+case "$PR_TITLE_GATE" in
+  block | warn | off) ;;
+  *) block "PR_TITLE_GATE must be one of block|warn|off, got: ${PR_TITLE_GATE}" "$TITLE_HELP" ;;
+esac
+
+# PR title sub-gate — lint the title against .gitlint before the review-file
+# checks so a malformed title fails fast. Best-effort: only an inline --title/-t
+# value is visible, and a uvx/network failure fails open (the pr-metadata-gate
+# workflow is the authority).
+if [[ "$PR_TITLE_GATE" != "off" ]]; then
+  # shlex-tokenize the command so a quoted title with spaces/colons survives;
+  # comments=True drops the trailing `# REVIEW_FULL=...`. Empty when no flag.
+  pr_title=$(COMMAND="$COMMAND" python3 - <<'PY' || true
+import os
+import shlex
+
+try:
+    tokens = shlex.split(os.environ["COMMAND"], comments=True)
+except ValueError:
+    raise SystemExit(0)
+for i, tok in enumerate(tokens):
+    if tok in ("--title", "-t") and i + 1 < len(tokens):
+        print(tokens[i + 1])
+        break
+    if tok.startswith("--title="):
+        print(tok[len("--title=") :])
+        break
+PY
+  )
+
+  if [[ -n "$pr_title" ]]; then
+    repo_root=$(git rev-parse --show-toplevel 2>/dev/null || echo ".")
+    # `&& ... || title_rc=$?` keeps a non-zero gitlint exit from tripping
+    # `set -e`; under pipefail the pipeline carries uvx/gitlint's own code.
+    title_output=$(printf '%s\n' "$pr_title" \
+      | uvx --from "$GITLINT_PKG" gitlint --config "${repo_root}/.gitlint" 2>&1) \
+      && title_rc=0 || title_rc=$?
+    # Decide on the OUTPUT, not the exit code: gitlint's code is its violation
+    # COUNT (2 problems → exit 2), and uvx's own launch failure is also exit 2,
+    # so the code alone can't separate "rejected" from "could not run". A real
+    # gitlint verdict line is `<lineno>: <RULEID> ...` (e.g. `1: CT1 ...`).
+    if [[ "$title_rc" -eq 0 ]]; then
+      :
+    elif grep -qE '^[0-9]+: [A-Z]+[0-9]+' <<<"$title_output"; then
+      if [[ "$PR_TITLE_GATE" == "warn" ]]; then
+        log "title-gate warn: ${title_output}"
+        printf 'WARNING: PR title is not a conventional commit:\n%s\n' "$title_output" >&2
+      else
+        log "blocking (title): ${title_output}"
+        printf 'BLOCKED: PR title is not a conventional commit:\n%s\n\n%s\n' \
+          "$title_output" "$TITLE_HELP" >&2
+        exit 2
+      fi
+    else
+      # No verdict line — uvx/gitlint could not run (offline, no writable cache,
+      # not installed). Fail open; CI is the authority.
+      log "title-gate fail-open: gitlint exit ${title_rc}: ${title_output}"
+      printf 'WARNING: could not lint the PR title (gitlint exit %s); skipped — CI enforces it.\n' \
+        "$title_rc" >&2
+    fi
+  fi
+fi
 
 if [[ ! -f "$SENTINEL_PY" ]]; then
   block "missing companion helper at ${SENTINEL_PY} (gate cannot parse sentinel filenames without it)"

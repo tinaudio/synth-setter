@@ -11,7 +11,7 @@ from synth_setter.pipeline.ci.spec_uri import (
     compute_spec_uri_from_hydra,
     main,
 )
-from synth_setter.pipeline.schemas.spec import DatasetSpec
+from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat
 
 
 def _write_spec(tmp_path: Path, bucket: str = "intermediate-data") -> Path:
@@ -23,7 +23,7 @@ def _write_spec(tmp_path: Path, bucket: str = "intermediate-data") -> Path:
     """
     spec = DatasetSpec(
         task_name="ci-task",
-        output_format="hdf5",
+        output_format=OutputFormat.HDF5,
         train_val_test_sizes=(1, 0, 0),
         base_seed=42,
         r2={"bucket": bucket},  # type: ignore[arg-type]

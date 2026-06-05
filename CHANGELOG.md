@@ -1,6 +1,611 @@
 # CHANGELOG
 
 
+## v8.17.0 (2026-06-05)
+
+### Features
+
+- **generate_dataset**: Add param_sample_cadence
+  ([#1439](https://github.com/tinaudio/synth-setter/pull/1439),
+  [`2b0c7cc`](https://github.com/tinaudio/synth-setter/commit/2b0c7ccd501f458c70efea5d6aa427d193153dcc))
+
+* feat(pipeline): render a whole shard from one identical patch via param_sample_cadence
+
+Add a `param_sample_cadence` knob to `RenderConfig` (default `"sample"`, historical per-sample
+  draw). Set to `"shard"` and the shard's first sample draws params through the normal
+  loudness-gated path while every remaining sample reuses that exact patch — so the whole shard is a
+  single identical patch. This is a controlled probe for the per-patch render variance tracked in
+  #489: with params held constant, any residual audio variance is the renderer's, not the
+  parameters'. (Confirmed against the real Surge XT plugin: all `param_array` rows come out
+  byte-identical while the audio rows still differ — exactly the #489 phenomenon.)
+
+The field flows end-to-end automatically — `_GenerateCliArgs` inherits every `RenderConfig` field,
+  so the CLI grows a `--param_sample_cadence` flag and `build_generate_args` forwards it from the
+  dataset spec.
+
+Implementation reuses the existing `fixed_*_params` seam in `_render_in_batches`: sample 0 renders
+  with no fixed params, then its `synth_params` / `note_params` are captured and threaded into
+  samples 1..N. Combining `"shard"` with caller-supplied fixed-params lists raises `ValueError`. A
+  mid-shard HDF5 resume can't preserve the one-patch invariant, so `make_hdf5_dataset` re-renders a
+  partial shard from row 0 rather than resuming — keeping worker-retry resilience intact instead of
+  failing hard.
+
+Refs #489
+
+* docs(pipeline): note shard-cadence resume exception in data-pipeline resumability prose
+
+The HDF5 resumability paragraph stated the missing tail is always regenerated; under
+  param_sample_cadence="shard" a partial shard re-renders from row 0 instead. Surfaced by doc-drift
+  on PR #1439.
+
+* test(pipeline): add param_sample_cadence to validate_spec render fixture
+
+validate_structure derives required render fields from RenderConfig.model_fields, so the new
+  param_sample_cadence field must appear in the hand-written render dict or structural validation
+  reports it missing.
+
+
+## v8.16.1 (2026-06-05)
+
+### Bug Fixes
+
+- **eval**: Use configured render vals in oracle predict_vst_audio
+  ([#1433](https://github.com/tinaudio/synth-setter/pull/1433),
+  [`2e4d115`](https://github.com/tinaudio/synth-setter/commit/2e4d11510c3507a272b474a01dceb81083ae4689))
+
+* feat(pipeline): cadence sweep configs for both param sets + spec-aware oracle eval
+
+Add two wandb sweep configs that grid plugin_reload_cadence x gui_toggle_cadence through
+  generate_dataset + inline oracle eval:
+
+- sweeps/generate_dataset_cadence_surge_simple.yaml (reduced 92-param set) -
+  sweeps/generate_dataset_cadence_surge_xt.yaml (full 300-param set, the configuration where #489's
+  every-other-render junk was measured)
+
+Two supporting changes make the full-set sweep produce valid results:
+
+- _run_oracle_eval_subprocess hardcoded render=surge_simple, so a surge_xt dataset (300 params) was
+  re-rendered through the 92-param surge_simple spec, misaligning every audio/* metric. Pass the
+  generation render's param_spec_name + preset_path (keyword-only) through to the eval so the
+  round-trip matches generation; surge_simple datasets are unaffected.
+
+- The grid crosses both plugin_reload_cadence values with gui_toggle_cadence, but
+  gui_toggle_cadence=always_on is schema-valid only with plugin_reload_cadence=once. main() now logs
+  a warning and skips that cell as a no-op (exit 0) instead of raising, so the grid stays a plain
+  cross-product and the wandb trial completes rather than failing.
+
+Refs #489
+
+* address Copilot review on PR #1433
+
+- generate_dataset.py: pass render.plugin_path through to the inline oracle eval too.
+  predict_vst_audio reads exactly param_spec_name/preset_path/plugin_path from cfg.render, so
+  syncing all three makes the re-render fully match the generation render — a non-default plugin no
+  longer invalidates audio/* metrics (comment 3357753832). - test_generate_dataset.py: pin
+  PYTHONPATH to this worktree's src/ in the skip test's subprocess env so it can't import
+  synth_setter from a sibling editable install (comment 3357439807). - generate_dataset.py: tighten
+  _unsupported_cadence_reason and main() docstrings to state they cover only the always_on +
+  plugin_reload_cadence!=once cell, not arbitrary RenderConfig errors (comments 3357753871,
+  3357753899).
+
+* make the inline oracle eval mirror the full generation render
+
+Pass the whole spec.render RenderConfig to _run_oracle_eval_subprocess (one cohesive object instead
+  of three loose strings) and override *every* render field predict_vst_audio renders with —
+  param_spec_name, preset_path, plugin_path, sample_rate, channels, velocity,
+  signal_duration_seconds — so the re-render reproduces the generation render exactly.
+
+eval.py previously forwarded only param_spec/preset/plugin to predict_vst_audio; the other
+  audio-affecting fields silently fell back to predict_vst_audio's CLI defaults, so a non-default
+  generation sample_rate/velocity/etc. would not be reproduced and could skew audio/* metrics.
+  Forward them all (gated like plugin_path so a partial render cfg still works).
+
+Verified end-to-end: a surge_xt generate + inline oracle eval re-renders with all seven fields and
+  writes aligned metrics.
+
+* ci: re-trigger flaky Xvfb VST-GUI smoke (BadWindow during show_editor warmup on shard render;
+  unrelated to this diff)
+
+### Continuous Integration
+
+- Enforce conventional-commit PR titles via gitlint
+  ([#1443](https://github.com/tinaudio/synth-setter/pull/1443),
+  [`0baaa56`](https://github.com/tinaudio/synth-setter/commit/0baaa56a9207ba5bb16d55806969c1acc875459e))
+
+* chore: add automation to the allowed commit-message types
+
+`automation:` is used on recent squash subjects but was not a recognized conventional-commit type,
+  so it would fail the new PR-title gate. Add it to the three sources that must agree: .gitlint
+  (lint rule), pyproject.toml [tool.semantic_release] allowed_tags (no-bump, so it triggers no
+  release), and the CONTRIBUTING.md no-bump prefix table.
+
+* ci: gate PR titles on the gitlint conventional-commit rule
+
+On squash-merge the PR title becomes the commit subject on main, yet gitlint (a commit-msg hook)
+  never sees a PR title. Add a check-pr-title job to the pr-metadata-gate workflow that lints the
+  title with the repo's own .gitlint config via `uvx --from gitlint-core gitlint`, so titles obey
+  the same rule as commit messages with one source of truth.
+
+Also add a best-effort title sub-gate to the pre-pr-review-gate hook for fast local feedback: it
+  extracts the inline --title, lints it via the same uvx invocation, blocks on a genuine rejection,
+  and fails open (warn, allow) on any uvx/network error so a hiccup never blocks `gh pr create`.
+  Gated by PR_TITLE_GATE (block/warn/off).
+
+* docs: note the PR-title gate in workflow + hook references
+
+The PR-title conventional-commit check lands in two documented surfaces, so keep their references in
+  sync: the pr-metadata-gate row in docs/reference/github-actions.md now mentions the check-pr-title
+  job, and the pre-pr-review-gate bullets in AGENTS.md / CLAUDE.md enumerate the new PR_TITLE_GATE
+  toggle.
+
+* chore: sync uv.lock project version to 8.16.0
+
+The 8.16.0 release commit bumped pyproject.toml but not uv.lock (release commits run with [skip
+  ci]), leaving the lock at 8.15.2. This PR touches pyproject.toml, so uv-lock-check runs and needs
+  the lock in sync.
+
+* ci: drop redundant job-level permissions on check-pr-title
+
+After merging the canonical-PR-body work, the workflow's top-level permissions already grant
+  `contents: read`, so the job-level override (and its now-stale "drops it to none" comment) is
+  redundant. check-pr-body-shape relies on the same top-level grant.
+
+* ci: route invalid PR_TITLE_GATE error to the title-gate help
+
+Address Copilot review on PR #1443: an out-of-enum PR_TITLE_GATE value called block(), which always
+  printed BLOCK_HELP (the REVIEW_FULL instructions) — misleading for a title-gate misconfiguration.
+  block() now takes an optional help-text override; the PR_TITLE_GATE validation passes TITLE_HELP
+  so the error points at the title contract. The other gate validations keep BLOCK_HELP, which is
+  correct for them.
+
+Refs #1442
+
+* test: give settings-hook pre-PR-gate tests a conventional title
+
+The new PR-title sub-gate runs before the review-file checks, so the existing test_settings_hooks
+  pre-PR-gate cases (which used `--title foo`) tripped it whenever uvx/gitlint was actually runnable
+  — as in the conda CI runner, though not locally where uvx fails open. Use a valid `fix: x` title
+  so these cases exercise the review-file gate they target, regardless of uvx availability.
+
+### Testing
+
+- Deflake offline wandb artifact assertion
+  ([#1435](https://github.com/tinaudio/synth-setter/pull/1435),
+  [`4a7140c`](https://github.com/tinaudio/synth-setter/commit/4a7140c0340e75a6fc2d59d683b12897c107f792))
+
+test_generate_logs_spec_as_hyperparams_and_artifact_offline read the offline run binary exactly once
+  right after generate() returns. The wandb offline writer flushes its datastore records
+  asynchronously, so the read could race ahead and capture only the 6-byte datastore header — the
+  same 0-records flake read_history_rows already guards against — failing with "artifact name ...
+  not recorded in offline run binary".
+
+- Add read_run_binary(until=...) to tests/helpers/wandb_offline.py, a raw- bytes sibling of
+  read_history_rows that re-reads until a predicate holds (or times out), and poll until both
+  artifact markers land. - Extract the shared poll-until-deadline loop into _poll_until so both
+  readers delegate to one implementation, and pin read_run_binary's retry / deadline / single-shot
+  contract in tests/test_wandb_offline_helper.py. - Pin a hermetic offline env via
+  _offline_wandb_env: the env scrubber was also dropping WANDB_DATA_DIR, so artifact staging fell
+  back to ~/.local/share/wandb and failed wherever that path is read-only. Point it at tmp_path so
+  staging is per-test and writable. (Defensive — CI staging was writable, so this hardens a second,
+  untriggered failure mode.)
+
+
+## v8.16.0 (2026-06-04)
+
+### Automation
+
+- Collapse repo-review-full WARN findings into an advisory summary
+  ([#1407](https://github.com/tinaudio/synth-setter/pull/1407),
+  [`933d64f`](https://github.com/tinaudio/synth-setter/commit/933d64f5add0941b2d49456c517fabc56f2399ba))
+
+* fix(ci-automation): collapse repo-review-full WARN findings into an advisory summary
+
+* fix(ci-automation): clarify short-tag form in the WARN/BLOCK prefix scheme
+
+- Pre-pr-review-gate enforces all BLOCK severities
+  ([#1408](https://github.com/tinaudio/synth-setter/pull/1408),
+  [`a8756e7`](https://github.com/tinaudio/synth-setter/commit/a8756e7ddb0ee5555abc8a57ff3133d191e0ff83))
+
+* fix(ci-automation): pre-pr-review-gate enforces all BLOCK severities
+
+The pre-PR review gate only blocked `gh pr create` on unresolved `[comment-hygiene:*]` tags, so a
+  `[synth-setter:block]`, `[code-health:block]`, `[ml-test:block]`, etc. sailed through.
+
+Add a parallel `REVIEW_BLOCK_GATE` sub-gate (block default / warn / off, validated like
+  REVIEW_COMMENT_GATE) that greps the sentinel for any `[<skill>:block]` tag and blocks when one
+  remains. Document the knob in the hook header, CLAUDE.md, and AGENTS.md, and add a regression
+  test.
+
+Part of #1404
+
+* docs(ci-automation): clarify REVIEW_BLOCK_GATE remediation path
+
+/fix-review-comments only drains comment-hygiene findings; other [<skill>:block] findings need the
+  underlying issue fixed and the sentinel regenerated via /repo-review-full-no-comments. Separate
+  the two remediation paths in CLAUDE.md and AGENTS.md so contributors don't read
+  /fix-review-comments as the general-purpose fixer for both gates.
+
+* fix(ci-automation): exclude comment-hygiene from the block-gate to avoid overlap
+
+Address Copilot review on #1408: the block-gate regex also matched [comment-hygiene:block], so
+  REVIEW_COMMENT_GATE=off could not bypass an intentional comment-hygiene BLOCK. Exclude
+  comment-hygiene from the block-gate so the comment sub-gate solely owns it; add a regression test
+  and drop the now unnecessary REVIEW_BLOCK_GATE=off workaround in the comment-gate test.
+
+- Repo-review-full requests changes when BLOCK findings exist
+  ([#1409](https://github.com/tinaudio/synth-setter/pull/1409),
+  [`8e08172`](https://github.com/tinaudio/synth-setter/commit/8e081721ce388d811ef2e3d8ab66c8c092ea44df))
+
+* fix(ci-automation): repo-review-full requests changes when BLOCK findings exist
+
+post_review.py now derives the review event from the request's optional top-level "event" field
+  (COMMENT / REQUEST_CHANGES / APPROVE) instead of hardcoding COMMENT. GitHub rejects
+  REQUEST_CHANGES/APPROVE on the bot's own PR with an HTTP 422, so submit_review retries once as
+  COMMENT with a loud blocking banner prepended to the body, keeping the intent visible. The
+  repo-review-full skill now computes the event (BLOCK -> REQUEST_CHANGES, WARN-only -> COMMENT,
+  clean -> APPROVE); the MVP repo-review skill is unchanged.
+
+* test(ci-automation): document post_review event tests to satisfy docstring lint
+
+* fix(ci-automation): event-aware self-review fallback banner for post_review
+
+Address Copilot review on #1409: an APPROVE that 422s on the bot's own PR no longer falls back with
+  a nonsensical "BLOCKING — changes required" banner; neutralize the fallback log wording; add the
+  self-APPROVE 422 test.
+
+* fix(ci-automation): exercise default event in test and sync SKILL.md banner wording
+
+Address fresh Copilot review on #1409: the defaults-to-COMMENT test now omits the event arg so it
+  actually covers the default, and the repo-review-full SKILL.md describes the event-aware fallback
+  banner.
+
+### Chores
+
+- **code-health**: Stop VS Code deleting unused imports on save
+  ([#1432](https://github.com/tinaudio/synth-setter/pull/1432),
+  [`20be118`](https://github.com/tinaudio/synth-setter/commit/20be118b75e2e3fd1d7a85113ec8519e588c1e23))
+
+The committed .vscode/settings.json runs source.fixAll.ruff on save, which applies the F401
+  unused-import autofix — deleting imports out from under you mid-edit. Add an editor-server-only
+  ruff override marking F401 unfixable:
+
+"ruff.configuration": { "lint": { "unfixable": ["F401"] } }
+
+This scopes only to the VS Code ruff LSP. CLI `ruff check --fix` and the pre-commit ruff hook read
+  pyproject.toml (no `unfixable`) and still strip unused imports; all other on-save autofixes and
+  import sorting are unchanged. F401 stays visible as an editor diagnostic, just no longer
+  auto-deleted.
+
+Refs #1431
+
+- **devcontainer**: Default the VS Code terminal to zellij with persistent sessions
+  ([#1411](https://github.com/tinaudio/synth-setter/pull/1411),
+  [`28f9bc9`](https://github.com/tinaudio/synth-setter/commit/28f9bc943dda0d8fd4dd89b4274e82262a95b72c))
+
+* chore(devcontainer): default VS Code terminal to zellij
+
+The base image already bakes zellij (v0.44.3) and a config.kdl, but the devcontainer configs still
+  launched tmux as the default VS Code terminal profile. Switch the default to zellij across
+  cpu/gpu/root_gpu while keeping tmux selectable. Each zellij profile launches a plain session (one
+  independent session per terminal).
+
+Mount synth-setter-zellij-cache{,-root} named volumes at ~/.cache/zellij for dev and root in cpu/gpu
+  so zellij's serialized sessions (session_serialization defaults on) survive container rebuilds,
+  mirroring the tmux-resurrect volumes.
+
+Refs #1410
+
+* docs(docker): drop temporal 'now' from zellij terminal-default note
+
+* chore(devcontainer): make tmux session restore opt-in
+
+tmux-continuum was set to @continuum-restore 'on', which auto-restored the last saved session on
+  every tmux start. Flip it to 'off' so a rebuilt container starts clean; continuum keeps
+  auto-saving (5-min interval), and the saved session is brought back on demand with prefix + Ctrl-r
+  (tmux-resurrect).
+
+### Continuous Integration
+
+- Set HYDRA_FULL_ERROR=1 for datagen @hydra.main entrypoints
+  ([#1412](https://github.com/tinaudio/synth-setter/pull/1412),
+  [`6d7ca49`](https://github.com/tinaudio/synth-setter/commit/6d7ca499d4833b2b07d4cff7e3aeac2d9445d2ac))
+
+The launcher entrypoint synth-setter-generate-dataset (cli/generate_dataset.py) is wrapped in
+  @hydra.main, so an exception in the launcher (spec materialize, R2 upload, or SkyPilot dispatch)
+  surfaces only Hydra's truncated one-line summary in CI logs unless HYDRA_FULL_ERROR is set. Export
+  it at every call site that drives that entrypoint:
+
+- generate-dataset-shards.yaml: gen_local (host) and gen_docker (in-container, forwarded via -e
+  HYDRA_FULL_ERROR). This reusable also covers test-dataset-generation.yml, which dispatches through
+  it. - test-skypilot-debug.yml: launcher-runner and launcher-docker modes.
+
+The spec-materialization / validate workflows are intentionally untouched: materialize_spec uses the
+  Hydra compose API (not @hydra.main) and already catches HydraException, and validate_spec /
+  validate_shard are not Hydra entrypoints, so HYDRA_FULL_ERROR would be inert there.
+
+- **ci-automation**: Reclaim CodeQL tool-cache + log df before kind load (skypilot-local row)
+  ([#1421](https://github.com/tinaudio/synth-setter/pull/1421),
+  [`9cd75aa`](https://github.com/tinaudio/synth-setter/commit/9cd75aace27314c0dfda5d641c519f47fe138548))
+
+The skypilot-local row intermittently hits `no space left on device` at `kind load docker-image`,
+  which shells to `docker save` under `/var/lib/docker/tmp/` before re-extracting the CUDA image
+  into the kind node's containerd (~30 GB peak on `/`).
+
+PR #1280 hand-purged `/opt/hostedtoolcache/CodeQL` (~5 GB). PR #1292 replaced that with
+  `jlumbroso/free-disk-space` at `tool-cache: false`, which retains all of `/opt/hostedtoolcache`
+  (the action can only delete the whole dir, and `helm/kind-action` aborts when it is missing) — so
+  the ~5 GB CodeQL reclaim was silently dropped.
+
+Re-add a targeted `rm -rf /opt/hostedtoolcache/CodeQL` that deletes only the unused subtree: the
+  parent dir stays present for kind-action, and Python (resolved from the cache by the later
+  setup-python step) is left intact. Also print `df -h /` in that step and at the head of the
+  kind-load step so a future ENOSPC shows the margin at the failing moment.
+
+Band-aid only — the root fix (a CPU-torch `dev-snapshot` variant for this GPU-less row) remains
+  tracked on the issue.
+
+Refs #1278
+
+- **testing**: Run Mutation Testing on Python 3.11 to fix mutmut pyproject parse
+  ([#1416](https://github.com/tinaudio/synth-setter/pull/1416),
+  [`7c5a6f0`](https://github.com/tinaudio/synth-setter/commit/7c5a6f040feb7553f95704527a5bdda58e3836fd))
+
+* ci(testing): run Mutation Testing on Python 3.11 to fix mutmut toml parse
+
+mutmut parses the entire pyproject.toml; on Python 3.10 it falls back to the legacy `toml` lib,
+  which crashes (IndexError in load_array) on PEP 735 arrays that mix strings with inline tables —
+  the `dev` dependency-group. The weekly Mutation Testing workflow has failed every scheduled run
+  since 4d2c5c88. Python 3.11+ uses stdlib tomllib, which parses the file cleanly.
+
+Refs #1414
+
+* docs(testing): note mutmut requires Python 3.11+
+
+A developer running `make mutmut` locally on 3.10 hits the same legacy-toml crash the CI workflow
+  does. Document the 3.11+ requirement alongside the other mutmut gotchas.
+
+### Documentation
+
+- **eval**: Sync R2-download + dataset-path docs with the shipped prepare_data() API
+  ([#1413](https://github.com/tinaudio/synth-setter/pull/1413),
+  [`f14a732`](https://github.com/tinaudio/synth-setter/commit/f14a732d66b9a9e44867e056355bf9055e351148))
+
+* docs(eval): sync R2 download + dataset-path docs with prepare_data()
+
+#1338 moved R2 dataset download into SurgeDataModule.prepare_data() behind a new
+  download_dataset_root_uri config field, and gave dataset_root/predict_file defaults instead of
+  mandatory ???. The reference and design docs still named the never-implemented r2_path/rclone_sync
+  and described the configs as using ???.
+
+- configuration-reference.md: rename datamodule.r2_path row to datamodule.download_dataset_root_uri;
+  dataset_root now defaults to ${paths.output_dir}/data. - eval-pipeline.md: surge*.yaml use the
+  dataset_root default + predict_file: null; R2 download is download_dataset_root_uri ->
+  r2_io.download_dir_no_overwrite (rclone copy --immutable --checksum), configs carry an explicit
+  download_dataset_root_uri: null opt-in line. Also corrects the implementation roadmap
+  (data/rclone.py -> pipeline/r2_io.py, stale test paths), completes the datamodule-configs table
+  (??? defaults; all four surge configs), drops the drift-prone Lines column from the Eval Scripts
+  table, and marks the §6.1 experiment snippet as illustrative. - training-pipeline.md: §6.1
+  dataset-access example/behavior named the same removed r2_path field; renamed to
+  download_dataset_root_uri (no-clobber copy).
+
+Supersedes #1356, which carried the same intent but forked before the configs/data ->
+  configs/datamodule rename and bundled already-merged feature commits.
+
+Refs #1365
+
+* docs(eval): mark shipped R2 download as current, not unsupported/new
+
+The eval-pipeline §6.1 documents the opt-in R2 dataset download (`download_dataset_root_uri` →
+  `prepare_data()` no-clobber copy) as current behavior, but §1 coupling table and §7.5 as-is/to-be
+  tables still framed R2 dataset access as unavailable, contradicting §6.1 and the
+  already-re-baselined "Dataset path" rows.
+
+- §1 coupling, "Data locality" impact: "No remote download capability" → "Opt-in R2 download exists;
+  no default remote source" (#3352912400) - §7.5 as-is, "R2 dataset access": "Not supported" →
+  opt-in `download_dataset_root_uri` no-clobber download, pointing at `surge_datamodule.py`
+  (`prepare_data`) (#3352912412) - §7.5 to-be, "R2 dataset access" change: "New" → "Already shipped"
+  so the row no longer reads as future work (#3352912420)
+
+Table line-churn is mdformat re-padding after cell-width changes.
+
+* Potential fix for pull request finding
+
+Co-authored-by: Copilot Autofix powered by AI <175728472+Copilot@users.noreply.github.com>
+
+* docs(eval): fix §5.3 reference targets and training-pipeline dataset_root default
+
+Address Copilot review on #1413:
+
+- configuration-reference.md §5.3: repoint datamodule.dataset_root from training-pipeline.md §1
+  (Context & Motivation) to §6.1 (Dataset Access); repoint datamodule.stats_file to
+  nsynth.yaml/fsd.yaml (no training-pipeline section discusses it). - training-pipeline.md §6.1:
+  show the shipped ${paths.output_dir}/data default for dataset_root and frame the
+  ${paths.data_dir}/{config_id}/{run_id} provenance layout as an optional fixed-dataset override, so
+  the snippet no longer conflicts with the actual surge*.yaml defaults.
+
+The Type-column nullability nit (string -> string | null) was already applied in aa6fc17e.
+
+* docs(eval): use full src/ paths for surge_datamodule references
+
+Address Copilot review on PR #1413:
+
+- configuration-reference.md §5.3: Reference cell now points at
+  `src/synth_setter/data/surge_datamodule.py` instead of the bare `surge_datamodule.py`, which
+  matched no real repo path (comment 3353096531). - training-pipeline.md §6.1: config glob now reads
+  `src/synth_setter/configs/datamodule/surge*.yaml`; top-level `configs/datamodule/` does not exist
+  in this checkout (comment 3353096542).
+
+Table line-churn is mdformat re-padding after the cell-width change.
+
+---------
+
+### Features
+
+- **generate_dataset**: Copy an existing dataset's params into a new generate_dataset run
+  ([#1430](https://github.com/tinaudio/synth-setter/pull/1430),
+  [`1cf2daf`](https://github.com/tinaudio/synth-setter/commit/1cf2daf421b1370e7f42df8ccb7b1f2da8425fd6))
+
+* internal-feat(data): copy an existing dataset's params into a generate_dataset run
+
+Add an optional ``datasetsrc`` config to dataset generation so a run can copy an existing dataset
+  instead of sampling fresh parameters. When ``datasetsrc.copy_dataset_root`` is set, each output
+  shard reads the same-named source shard, decodes its ``param_array`` into fixed synth/note param
+  lists (via ``param_spec.decode``), and re-renders those — reproducing the source dataset's
+  parameters under a fresh render.
+
+- ``DatasetSrcConfig`` (strict/frozen) nested as ``DatasetSpec.datasetsrc``. - launcher forwards
+  ``--copy_dataset_root`` to the renderer subprocess only when set;
+  ``generate_vst_dataset.fixed_params_from_dataset`` does the decode. - writers' fixed-params lists
+  are now full-shard length, indexed by absolute row, so a resumed shard re-renders its tail from
+  the matching source rows and a source whose row count differs from ``samples_per_shard`` fails
+  fast.
+
+Refs #1429
+
+* docs(data): document the dataset-copy generation mode
+
+Render the new ``DatasetSrcConfig`` block in the autogenerated dataset-spec reference, note the copy
+  mode in the data-pipeline design doc (hdf5-only, same-named HDF5 source, absolute-row resume), and
+  update the doc-map covers text. Surfaces #1429's ``datasetsrc.copy_dataset_root`` knob in docs.
+
+* internal-feat(data): reject datasetsrc with non-hdf5 output at spec validation
+
+Per PR review: enforce the hdf5-only dataset-copy constraint at spec construction (a DatasetSpec
+  model validator) so a wds output paired with datasetsrc fails fast at launch, not per-shard in the
+  renderer subprocess. The subprocess SystemExit guard stays as defense-in-depth for direct CLI use.
+
+* test(data): cfg-entrypoint coverage for the datasetsrc copy contract
+
+### Internal-Feat
+
+- **ci-automation**: Canonical PR-body template + warn-mode section-hierarchy gate
+  ([#1422](https://github.com/tinaudio/synth-setter/pull/1422),
+  [`c957107`](https://github.com/tinaudio/synth-setter/commit/c95710759afaacd7fd25b8e352c9b27b638804ec))
+
+* internal-feat(ci-automation): canonical PR-body template + warn-mode section-hierarchy gate
+
+Replace the unused PR template with the canonical Why -> What changed -> Test plan -> Out of scope
+  hierarchy, and add a structural linter (scripts/ci/pr_body_lint.py) wired into pr-metadata-gate as
+  a warn-mode check-pr-body-shape job. An analysis of the last 300 PRs found the old template
+  ignored and the de facto sections fragmented across 11 heading names; the linter maps legacy names
+  to canonical ones and flags missing/out-of-order sections.
+
+Finding is written as an explicit-__init__ class, not a dataclass: under pydoclint 0.8.3 + sphinx,
+  class-level annotated fields have no satisfiable docstring form for DOC601/603. Tracked in #1420.
+
+Closes #1419 Refs #1420
+
+* internal-fix(ci-automation): handle legacy '?' headings and nested fences in PR-body linter
+
+Addresses Copilot review on #1422: - Strip a trailing '?' from headings so the old template's '##
+  What does this PR do?' is recognized via the alias map instead of being reported as a missing
+  'What changed' section. - Track the opening fence's char and length so a shorter fence nested in a
+  longer one no longer closes it early and leak headings from inside. - Add regression tests for
+  both, plus the legacy heading.
+
+Also syncs docs for the new check-pr-body-shape gate (doc-drift): the github-actions workflow
+  catalog, the doc-map coverage entries (including the new linter source), and the CONTRIBUTING
+  PR-requirements list.
+
+Refs #1419
+
+* internal-fix(ci-automation): annotate main's body_file as TextIO, not Click-internal LazyFile
+
+Addresses Copilot review on #1422: `click.utils.LazyFile` is a Click implementation detail that can
+  change across releases. `main` only needs a readable text stream, so the public signature now uses
+  `typing.TextIO`. Annotation-only; behavior is unchanged and already covered by the --body-file and
+  stdin CLI tests.
+
+### Internal-Fix
+
+- **ci**: Drop inherited packagecloud git-lfs apt source in act-runner image
+  ([#1418](https://github.com/tinaudio/synth-setter/pull/1418),
+  [`3010e2b`](https://github.com/tinaudio/synth-setter/commit/3010e2b3aed4632d41be0f971cd3dfa1a2128fbb))
+
+The catthehacker base image ships a packagecloud.io git-lfs apt source. Our Dockerfile only adds the
+  gh CLI, but `apt-get update` reads every configured source — so when packagecloud returns 403 for
+  the git-lfs repo (rate-limited/decommissioned), `apt-get update` exits non-zero and `set -eux`
+  fails the whole build. This is what reddens the "Verify act setup" workflow's --no-cache
+  runner-image build.
+
+Remove any packagecloud.io source from /etc/apt/sources.list.d before the first apt-get update.
+  git-lfs is already installed in the base image and we never needed that repo, so the build no
+  longer depends on it.
+
+- **devcontainer**: Set WANDB_DATA_DIR to writable .cache path
+  ([#1424](https://github.com/tinaudio/synth-setter/pull/1424),
+  [`ae8d891`](https://github.com/tinaudio/synth-setter/commit/ae8d89178aff3e5130e16a693dcb3def2bf18dce))
+
+wandb stages artifacts under WANDB_DATA_DIR (default ~/.local/share/wandb), which is not
+  dev-writable in the devcontainer, so log_spec_artifact failed with 'Unable to write staging
+  files'. Point it at dev-owned .cache, which wandb creates on demand.
+
+Refs #1423
+
+### Testing
+
+- Assert oracle-eval audio metric values in the generate-dataset smoke run
+  ([#1425](https://github.com/tinaudio/synth-setter/pull/1425),
+  [`4e6cded`](https://github.com/tinaudio/synth-setter/commit/4e6cdedd9d5b06ad37128ddb43e8f1e7577409b1))
+
+* test(testing): assert oracle-eval audio metrics in generate-dataset smoke run
+
+Add an integration_r2 + requires_vst test that runs the real `synth-setter-generate-dataset` CLI
+  with `experiment=generate_dataset/smoke-shard-with-oracle-eval` and asserts the inline oracle
+  eval's `metrics.json` holds bounded `audio/*` aggregates.
+
+The inline oracle eval only runs via the launcher `main` (not `from_hydra`) and spawns its own
+  `synth_setter.cli.eval` subprocess, so the test drives the CLI directly. It reads the dumped
+  `metrics.json` from `oracle_eval/<run_id>/metrics/` and asserts every `audio/*` aggregate is a
+  finite float, with the mean distances / `rms` cosine inside `ORACLE_AUDIO_METRIC_BOUNDS` — the
+  same envelope `tests/test_train.py` pins per-sample. Runs offline-wandb and tmp-pinned, with a
+  unique `r2.prefix` and a `finally` purge for isolation.
+
+Refs #1394
+
+* docs(testing): catalog the oracle-eval metrics test shape in testing.md
+
+Add the E2E generate-dataset CLI-subprocess → assert inline-oracle-eval metrics.json shape to the §3
+  "which shape fits your test?" table, matching the new test in tests/test_generate_dataset.py.
+
+Part of #1345
+
+- **testing**: Split eval/generate-dataset entrypoint tests into cfg-only modules + invariant
+  ([#1402](https://github.com/tinaudio/synth-setter/pull/1402),
+  [`aa5e477`](https://github.com/tinaudio/synth-setter/commit/aa5e4778dace9e1d54760a535746bb89d88d94ce))
+
+* test(testing): split eval/generate-dataset entrypoint tests into cfg-only modules
+
+Mirror tests/test_train.py: keep the canonical tests/test_eval.py and tests/test_generate_dataset.py
+  to cfg-entrypoint tests only, and relocate the helper/unit tests to clearly-named sibling modules.
+
+eval: move the postprocessing argv tests, metric-IO tests, and the _maybe_upload_output_dir +
+  CLI-e2e tests out of tests/test_eval.py into test_eval_postprocessing.py, test_eval_metrics.py,
+  and test_eval_upload.py.
+
+generate-dataset: promote test_generate_dataset_shards.py to the canonical
+  tests/test_generate_dataset.py (from_hydra(cfg_dataset) entrypoint tests), and rename the
+  direct-call generate()/main() suite to tests/pipeline/entrypoints/test_generate_dataset_unit.py
+  (content unchanged).
+
+Add tests/_meta/test_entrypoint_test_modules.py: fails if a canonical entrypoint test module imports
+  a private synth_setter.cli helper, so the cfg-only split can't silently erode; each module
+  docstring carries a matching nudge.
+
+Update the generate-dataset-shards GHA workflow, docs/reference/testing.md, the helper comment refs,
+  and repath the renamed file's existing .pydoclint-baseline.txt entry. The collected test-node set
+  is unchanged.
+
+Refs #1400
+
+* docs(testing): point test_eval docstring at the entrypoint invariant
+
+Match test_train.py / test_generate_dataset.py: name tests/_meta/test_entrypoint_test_modules.py as
+  the enforcer in the test_eval.py module docstring. Addresses a Copilot review note on #1402.
+
+* test(testing): pass filename to ast.parse in entrypoint invariant for clearer parse errors
+
+
 ## v8.15.2 (2026-06-03)
 
 ### Bug Fixes
@@ -79,6 +684,37 @@ Verified end-to-end via the synth-setter-generate-dataset entrypoint (smoke-shar
 
 
 ## v8.15.1 (2026-06-03)
+
+### Automation
+
+- Enforce comment-hygiene at the pre-PR gate + /fix-review-comments skill
+  ([#1388](https://github.com/tinaudio/synth-setter/pull/1388),
+  [`1ab3521`](https://github.com/tinaudio/synth-setter/commit/1ab352155084d89283b086e1971cbdb8aa356e1a))
+
+The pre-PR review gate validated only the sentinel's existence, SHA ancestry, lag, and size — never
+  its contents, so a PR could open with comment-hygiene findings unaddressed.
+
+- pre-pr-review-gate.sh: block gh pr create while the sentinel still lists [comment-hygiene:*]
+  findings. New REVIEW_COMMENT_GATE knob (block default / warn / off), mirroring PR_READINESS_GATE.
+  - New /fix-review-comments skill: parse the sentinel, apply the comment-hygiene rewrites
+  content-anchored + bottom-up, commit, and re-review to refresh the sentinel. - Mitigation: never
+  invent a placeholder issue ref to satisfy C5/C10 — source a real one or surface the finding, so
+  the hard gate cannot be silently satisfied with wrong content.
+
+- Grant headless review agents --allowedTools so gh works
+  ([#1384](https://github.com/tinaudio/synth-setter/pull/1384),
+  [`4c862dd`](https://github.com/tinaudio/synth-setter/commit/4c862dd338bce55007cabaa65b2bc51dd903a97a))
+
+The pr-review-resolver and doc-drift hooks run `claude -p` headlessly in a detached worktree. With
+  no TTY the permission prompt can't be answered, so any tool that isn't pre-approved is auto-denied
+  — pr-review-resolver hit this on every `gh` call and couldn't fetch or reply to PR review
+  comments. The detached worktree also lacks the primary checkout's .claude/settings.local.json,
+  which is what grants `gh` in interactive sessions.
+
+Pass an explicit --allowedTools allowlist (gh, git, file tools, and the make/python/uv/pre-commit
+  commands the resolver uses to validate fixes), overridable via AGENT_ALLOWED_TOOLS. The prompt is
+  ordered before the variadic --allowedTools so it isn't swallowed into the tool list. PreToolUse
+  safety hooks still fire on top of the allowlist, so commits stay guarded.
 
 ### Bug Fixes
 
@@ -682,6 +1318,77 @@ Co-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
 
 
 ## v8.13.0 (2026-06-02)
+
+### Automation
+
+- Enforce the PR readiness loop via a Stop hook + /pr-readiness skill
+  ([#1347](https://github.com/tinaudio/synth-setter/pull/1347),
+  [`21f0768`](https://github.com/tinaudio/synth-setter/commit/21f0768dd7ea63628c0384d40c0df9fdf46bc674))
+
+* feat(ci-automation): enforce the PR readiness loop via a Stop hook + /pr-readiness skill
+
+The PR readiness loop (docs/pr-readiness-loop.md) was advisory prose that agents silently skipped.
+  Add two enforcement mechanisms:
+
+- agent/hooks/pr-readiness-stop.sh: a Stop hook that blocks the turn from ending (exit 2) when the
+  current branch's open PR fails gate 1 (CI green, via gh pr checks) or gate 2
+  (mergeable=MERGEABLE). No-op outside a repo, in the primary checkout, with no PR, or in a
+  headless/CI context so the pr-review-resolver and doc-drift detached-worktree agents never
+  deadlock. Escape hatch PR_READINESS_GATE (block default / warn / off). -
+  agent/skills/pr-readiness: a /pr-readiness skill driving the full loop (watch CI, check mergeable,
+  reply inline via /pr-review-resolver, wait for Copilot) for the fuzzier gates 3-4 the hook cannot
+  decide in bash.
+
+run_agent_prompt now exports PR_READINESS_HEADLESS=1 so spawned headless agents inherit the no-block
+  signal at the single chokepoint.
+
+Register the Stop hook in settings.json, point the AGENTS.md readiness bullet at the skill + hook,
+  and cover the hook in agent/hooks/test.sh.
+
+Refs #1346
+
+* test(ci-automation): rename unknown-mode test to reflect its stderr-log assertion
+
+The body asserts the hook logs an 'ignoring unknown PR_READINESS_GATE' line to stderr, so 'silent'
+  in the helper name was misleading.
+
+* chore(ci-automation): re-trigger CI after a flaky wandb offline-artifact test
+
+run_tests_conda flaked on test_generate_logs_spec_as_hyperparams_and_artifact_offline (unrelated to
+  this PR's hook/skill changes; passes locally and on the prior commit). Empty commit to re-run the
+  suite.
+
+- Mirror plugins/ symlink into fresh worktrees
+  ([#1344](https://github.com/tinaudio/synth-setter/pull/1344),
+  [`a2a4a69`](https://github.com/tinaudio/synth-setter/commit/a2a4a6974a4eb1cfed817f659d48dc8fab40c619))
+
+* feat(ci-automation): mirror plugins/ symlink into fresh worktrees
+
+plugins/ is gitignored, so `git worktree add` produces a worktree without the plugins/Surge XT.vst3
+  symlink that configs/CLI resolve relative to cwd. Add a `make link-plugins` target that mirrors
+  each of the primary checkout's plugins/ entries into the current worktree (no-op in the primary),
+  and chain `&& make link-plugins` onto the worktree-spawn commands printed by the SessionStart
+  banner and the worktree-guard remediation so the link is created as part of the standard spawn
+  flow.
+
+* test(ci-automation): address Copilot review on worktree-plugin-link tests
+
+Tag the module with the infra marker, bound the git/make subprocess calls with a timeout so a hang
+  can't wedge the suite, and keep the `make link-plugins` code literal on one line in the module
+  docstring.
+
+* fix(ci-automation): address Copilot's second pass on the worktree-guard remediation
+
+Single-quote the worktree paths in the worktree-guard spawn command (and chain uv sync) so it
+  matches the session-start banner and survives a repo path with spaces. Strengthen both
+  subdir-anchoring assertions to require the quoting rather than tolerate its absence. Skip the
+  infra test module when git or make is missing from PATH instead of erroring.
+
+* fix(ci-automation): mirror broken plugin symlinks in link-plugins
+
+Gate the per-entry loop on `-e || -L` so a dangling symlink in the primary (e.g. when the system VST
+  isn't installed) is still mirrored into the worktree rather than silently skipped, while the
+  glob-no-match case stays skipped. Add a test pinning the broken-symlink behavior.
 
 ### Chores
 
@@ -1608,6 +2315,22 @@ Address Copilot review comments on #1303:
 
 
 ## v8.8.0 (2026-05-27)
+
+### Automation
+
+- **devcontainer**: Scrub core.hooksPath across all scopes before pre-commit install
+  ([#1300](https://github.com/tinaudio/synth-setter/pull/1300),
+  [`1a37462`](https://github.com/tinaudio/synth-setter/commit/1a374622b5906142229b23baf37b0d23b9a13705))
+
+post-create.sh only unset core.hooksPath at --local, so a stray entry in /root/.gitconfig,
+  /home/dev/.gitconfig, or /etc/gitconfig made `pre-commit install` abort with "Cowardly refusing to
+  install hooks with core.hooksPath set" and, worse, silently shadowed .git/hooks/pre-commit for any
+  commit that did succeed.
+
+--global is per-user, so the cleanup is now split: the root pre-exec scrubs --system and
+  /root/.gitconfig before the runuser drop (these writes land outside the workspace, so the
+  no-root-owned-files invariant still holds), and the dev pass scrubs --global, --local, and
+  --worktree.
 
 ### Chores
 
@@ -3220,6 +3943,96 @@ Fixes #1250
 
 
 ## v8.6.0 (2026-05-24)
+
+### Automation
+
+- **claude-hooks**: Edit guard + session-start cwd banner
+  ([#1223](https://github.com/tinaudio/synth-setter/pull/1223),
+  [`1ed2ce8`](https://github.com/tinaudio/synth-setter/commit/1ed2ce866f115f5b865c8aa968ac3cebfd990788))
+
+* internal-feat(claude-hooks): warn on edits in primary checkout + session-start cwd banner
+
+Surface AGENTS.md's "always work in an isolated git worktree" rule at the two moments it matters:
+  when a session resumes and before each Edit/Write. The rule lives in AGENTS.md (not CLAUDE.md), so
+  it never enters the system reminder; agents that don't proactively read AGENTS.md miss it and
+  default to editing the primary checkout — exactly the bug class this addresses.
+
+agent/hooks/worktree-guard.sh — PreToolUse Edit|Write. Detects primary via `git rev-parse --git-dir`
+  vs `--git-common-dir` (equal in primary, differ in linked worktrees). Default
+  WORKTREE_GUARD_MODE=warn prints a loud stderr with the exact `git worktree add` command and exits
+  0; =block upgrades to exit 2; =off disables. Linked worktrees and out-of-repo edits fall through
+  silently.
+
+agent/hooks/session-start-cwd-banner.sh — SessionStart (startup, resume, clear, compact). Prints
+  cwd, branch, primary-vs-worktree verdict, and worktree count to stdout. In primary, includes the
+  recommended `git worktree add` invocation so post-compaction agents see remediation without
+  re-reading AGENTS.md.
+
+Both wired into .claude/settings.json alongside the existing PreToolUse gates (credential-protect,
+  no-baseline-additions, no-yaml-run-comments, pre-pr-review-gate, git-commit-trailer-check). 9 new
+  tests in agent/hooks/test.sh cover warn/block/off modes, linked worktrees, edits outside any git
+  repo, and banner content per cwd; suite stays green at 62 PASS / 0 FAIL.
+
+* docs(claude-hooks): cite worktree hooks in AGENTS.md + register in test inventory
+
+Doc-drift advisory on PR #1223 surfaced three real gaps:
+
+- AGENTS.md "Always work in an isolated git worktree" bullet didn't cite the new enforcement hooks.
+  Every other "Always"/append-frozen rule in AGENTS.md pairs with an agent/hooks/<name>.sh citation;
+  the worktree rule was the outlier after the hooks landed. Adds a sentence naming both hooks and
+  the WORKTREE_GUARD_MODE knob. - Terminology mismatch: AGENTS.md said "main checkout" while the new
+  hooks, banner, and settings.json descriptions uniformly say "primary checkout." An agent reading
+  BLOCKED stderr and grepping AGENTS.md for "primary checkout" found nothing. Harmonized on
+  "primary" — disambiguates from the `main` branch. - tests/claude_hooks/test_settings_hooks.py
+  _EXPECTED_SHARED_HOOK_COMMANDS tuple is the documented inventory of bash-shared-hook handlers.
+  Added the two new entries so the parametrized test_named_handlers_use_shared_agent_hook_paths
+  covers them; the test doesn't enforce completeness today but the tuple is read as canonical.
+
+* fix(claude-hooks): detached-HEAD detection + early-exit stdin drain (Copilot review)
+
+Three issues raised by Copilot on PR #1223:
+
+- `git rev-parse --abbrev-ref HEAD` returns the literal string "HEAD" when detached (exit 0), so the
+  `|| echo "<detached>"` fallback was unreachable in both hooks; the banner printed `branch: HEAD`
+  and the remediation baked "HEAD" into the `git worktree add ... <branch>` command. Switch both
+  probes to `git branch --show-current` (empty when detached) and label the no-branch case as
+  `(detached HEAD <short-sha>)`.
+
+- `git worktree add .claude/worktrees/<slug> <branch>` fails when <branch> is already checked out in
+  the primary — i.e. the exact case the guard fires in. Switch both remediations to `git worktree
+  add --detach`, which always works and matches the existing convention in
+  `_lib.sh::make_isolated_worktree` (and the worktree this PR was authored in).
+
+- worktree-guard's `WORKTREE_GUARD_MODE=off` and unknown-mode paths exited before the stdin drain,
+  so a harness writing >64KB of JSON payload would block then SIGPIPE on read-end close. Move the
+  drain above the mode dispatch so every code path drains.
+
+Tests: three new T_* cases pin the fixes (SIGPIPE regression via a finite `head -c 131072 /dev/zero`
+  source so the test only fires when the *consumer* fails to read; detached-HEAD banner+guard
+  messaging). 65 PASS / 0 FAIL.
+
+* fix(claude-hooks): log-fn guard + remediation path anchored to primary_root (Copilot review)
+
+Five fresh Copilot findings on the f9a4f80 push:
+
+- worktree-guard.sh: `command -v log` succeeds for /usr/bin/log on macOS, invoking the system binary
+  under set -e instead of the shell function. Switch to `declare -F log` so only the sourced helper
+  matches.
+
+- worktree-guard.sh + session-start-cwd-banner.sh: the recommended `git worktree add --detach
+  .claude/worktrees/<slug>` used a relative path, so an agent invoked from a subdir of primary (the
+  common case) created the worktree under that subdir, not the repo root. Anchor both remediations
+  and the follow-up `cd` to $primary_root, which the scripts already compute from `git rev-parse
+  --git-common-dir`.
+
+- agent/hooks/test.sh: add two regression tests pinning the subdir anchoring — one for the guard,
+  one for the banner — by mkdir'ing $SANDBOX/src/nested* and grep'ing the absolute-prefixed path out
+  of the message.
+
+- tests/claude_hooks/test_settings_hooks.py: `_matcher_entries` docstring said
+  "PreToolUse/PostToolUse" but the iteration covers every value under `hooks` (which now includes
+  SessionStart). Tighten the docstring to match — implementation already correctly picks up new
+  event types.
 
 ### Chores
 
@@ -22022,6 +22835,25 @@ Move 3 wandb env var resolution tests from standalone test_wandb_integration.py 
 
 
 ## v0.1.1 (2026-03-26)
+
+### Automation
+
+- **ci**: Use GitHub App token for semantic-release push
+  ([#300](https://github.com/tinaudio/synth-setter/pull/300),
+  [`3791a56`](https://github.com/tinaudio/synth-setter/commit/3791a565195d2dec6d73aab315f811a443016615))
+
+* fix(ci): use GitHub App token for semantic-release push
+
+* fix(ci): reuse existing approval bot secrets for semantic-release
+
+Use APPROVAL_BOT_APP_ID and APPROVAL_BOT_PRIVATE_KEY (already configured for auto-approve.yml)
+  instead of creating new secrets.
+
+* Apply suggestions from code review
+
+Co-authored-by: Copilot <175728472+Copilot@users.noreply.github.com>
+
+---------
 
 ### Bug Fixes
 

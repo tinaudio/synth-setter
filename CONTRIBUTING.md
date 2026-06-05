@@ -207,6 +207,7 @@ These prefixes do not trigger a release:
 | `style:`         | Formatting, whitespace                                                            |
 | `build:`         | Build system or dependency changes                                                |
 | `monitoring:`    | Observability and monitoring changes                                              |
+| `automation:`    | Agent tooling, CI gates, and review-automation changes                            |
 
 ### Guidelines
 
@@ -256,6 +257,10 @@ Every PR must:
   - Domain label is present
   - Milestone is assigned
   - The linked issue traces to an Epic via the sub-issue hierarchy
+- **Structure the PR body** with the canonical sections from
+  [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md) — Why →
+  What changed → Test plan (optional Out of scope). The `check-pr-body-shape`
+  job lints this; it is currently warn-only and does not block.
 
 ### PR title
 

@@ -3,12 +3,13 @@
 import json
 import logging
 import os
+import sys
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, NoReturn
 from unittest.mock import MagicMock, patch
 
 import h5py
@@ -20,7 +21,9 @@ import pytest
 
 from synth_setter.data.vst import param_specs
 from synth_setter.data.vst.core import load_plugin, load_preset, render_params
+from synth_setter.data.vst.generate_vst_dataset import fixed_params_from_dataset
 from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
+from synth_setter.data.vst.shapes import PARAM_ARRAY_FIELD
 from synth_setter.data.vst.writers import make_hdf5_dataset
 from synth_setter.evaluation.compute_audio_metrics import (
     compute_mss,
@@ -1079,10 +1082,18 @@ def test_reload_per_render_matches_cached_plugin() -> None:
             )
 
 
-def test_make_dataset_raises_when_fixed_params_list_is_too_short(
+def test_make_dataset_raises_when_fixed_params_list_length_ne_samples_per_shard(
     tmp_path: Path,
 ) -> None:
-    """make_hdf5_dataset rejects fixed_*_params_list shorter than samples_per_shard - start_idx."""
+    """make_hdf5_dataset rejects a fixed_*_params_list whose length != samples_per_shard.
+
+    Also the guard a dataset copy relies on: a source shard whose row count
+    differs from ``samples_per_shard`` surfaces here rather than silently
+    truncating. Validation happens before the file is opened, so no orphan
+    output shard is left behind.
+
+    :param tmp_path: Pytest temp dir for the (never-written) output path.
+    """
     out = tmp_path / "should_not_write.h5"
     with pytest.raises(ValueError, match="fixed_synth_params_list has length"):
         make_hdf5_dataset(
@@ -1090,6 +1101,7 @@ def test_make_dataset_raises_when_fixed_params_list_is_too_short(
             render_cfg=_render_cfg(num_samples=3),
             fixed_synth_params_list=[_HARDCODED_SYNTH_PARAMS],
         )
+    assert not out.exists(), "validation must fail before any output file is created"
 
 
 # Unit tests for the loudness-loop retry/raise semantics. Mocking
@@ -1534,3 +1546,627 @@ def test_emit_benchmark_appends_to_existing_file(
     entries = json.loads((tmp_path / "bucket-e.json").read_text())
     # Six round-trip entries per call (no render-seconds), twice = 12 total.
     assert len(entries) == 12
+
+
+# Dataset-copy path: fixed_params_from_dataset + --copy_dataset_root wiring.
+# CPU-only except the VST round-trip; conversion + CLI plumbing run mocked.
+
+# float32 round-trips an encoded param to ~1e-7 rel; note_start_and_end scales
+# by note-duration seconds, so a few-µs absolute slack covers it.
+_FIXED_PARAMS_ATOL = 1e-4
+
+
+def _write_param_array_shard(path: Path, param_array: np.ndarray) -> None:
+    """Write a minimal source shard holding only a ``param_array`` dataset.
+
+    :param path: Destination ``.h5`` path for the synthetic source shard.
+    :param param_array: ``(num_rows, num_params)`` float32 encoded params.
+    """
+    # Uncompressed: the reader is compression-agnostic and this keeps the
+    # synthetic fixture free of the Blosc2 filter the real writer applies.
+    with h5py.File(path, "w") as h5:
+        h5.create_dataset(PARAM_ARRAY_FIELD, data=param_array)
+
+
+def test_fixed_params_from_dataset_round_trips_encoded_param_array(tmp_path: Path) -> None:
+    """fixed_params_from_dataset decodes each param_array row back to its synth/note dicts.
+
+    :param tmp_path: Pytest temp dir holding the synthetic source shard.
+    """
+    spec = param_specs[_SPEC_NAME]
+    num_rows = 4
+    expected_synth: list[dict[str, float]] = []
+    expected_note: list[NoteParams] = []
+    rows = []
+    for _ in range(num_rows):
+        synth, note = spec.sample()
+        expected_synth.append(synth)
+        expected_note.append(note)
+        rows.append(spec.encode(synth, note))
+    source = tmp_path / "shard-000000.h5"
+    _write_param_array_shard(source, np.stack(rows).astype(np.float32))
+
+    synth_list, note_list = fixed_params_from_dataset(source, spec)
+
+    assert len(synth_list) == num_rows
+    assert len(note_list) == num_rows
+    for i in range(num_rows):
+        assert synth_list[i] == pytest.approx(expected_synth[i], abs=_FIXED_PARAMS_ATOL)
+        assert note_list[i]["pitch"] == expected_note[i]["pitch"]
+        assert note_list[i]["note_start_and_end"] == pytest.approx(
+            expected_note[i]["note_start_and_end"], abs=_FIXED_PARAMS_ATOL
+        )
+
+
+def test_fixed_params_from_dataset_rejects_param_width_mismatch(tmp_path: Path) -> None:
+    """A source whose param_array width disagrees with the param_spec raises ValueError.
+
+    :param tmp_path: Pytest temp dir holding the malformed source shard.
+    """
+    spec = param_specs[_SPEC_NAME]
+    source = tmp_path / "shard-000000.h5"
+    _write_param_array_shard(source, np.zeros((2, len(spec) - 1), dtype=np.float32))
+
+    with pytest.raises(ValueError, match="must share the target's"):
+        fixed_params_from_dataset(source, spec)
+
+
+def test_fixed_params_from_dataset_rejects_malformed_source(tmp_path: Path) -> None:
+    """A source missing ``param_array`` or holding a non-2-D array raises ValueError.
+
+    The source is external input, so its shape is validated before decode; both
+    failures must surface as the documented ``ValueError``, not a bare
+    ``KeyError`` / ``IndexError``.
+
+    :param tmp_path: Pytest temp dir holding the malformed source shards.
+    """
+    spec = param_specs[_SPEC_NAME]
+
+    no_param_array = tmp_path / "no_param_array.h5"
+    with h5py.File(no_param_array, "w") as h5:
+        h5.create_dataset("something_else", data=np.zeros((2, len(spec)), dtype=np.float32))
+    with pytest.raises(ValueError, match="no 'param_array' dataset"):
+        fixed_params_from_dataset(no_param_array, spec)
+
+    one_dimensional = tmp_path / "one_dimensional.h5"
+    _write_param_array_shard(one_dimensional, np.zeros((len(spec),), dtype=np.float32))
+    with pytest.raises(ValueError, match="must be 2-D"):
+        fixed_params_from_dataset(one_dimensional, spec)
+
+
+def test_main_copy_dataset_root_feeds_decoded_params_to_writer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``--copy_dataset_root`` makes main() pass the same-named shard's decoded params to the writer.
+
+    Exercises the CLI wiring without a plugin: ``make_hdf5_dataset`` is stubbed
+    to capture its arguments, so the assertion is purely that the decoded fixed
+    lists reach the writer (not that audio renders).
+
+    :param tmp_path: Pytest temp dir holding the source shard and output path.
+    :param monkeypatch: Patches ``sys.argv`` and the writer entrypoint.
+    """
+    from synth_setter.data.vst import generate_vst_dataset, writers
+
+    spec = param_specs[_SPEC_NAME]
+    num_rows = 3
+    rows = [spec.encode(*spec.sample()) for _ in range(num_rows)]
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source_shard = source_dir / "shard-000000.h5"
+    _write_param_array_shard(source_shard, np.stack(rows).astype(np.float32))
+    expected_synth, expected_note = fixed_params_from_dataset(source_shard, spec)
+
+    captured: dict[str, object] = {}
+
+    def _fake_make_hdf5_dataset(
+        data_file: Path | str,
+        render_cfg: RenderConfig,
+        *,
+        fixed_synth_params_list: list[dict[str, float]] | None = None,
+        fixed_note_params_list: list[dict[str, int | tuple[float, float]]] | None = None,
+    ) -> None:
+        captured["data_file"] = data_file
+        captured["fixed_synth_params_list"] = fixed_synth_params_list
+        captured["fixed_note_params_list"] = fixed_note_params_list
+
+    monkeypatch.setattr(writers, "make_hdf5_dataset", _fake_make_hdf5_dataset)
+
+    out = tmp_path / "shard-000000.h5"
+    argv = ["generate_vst_dataset", str(out)]
+    for key, value in _render_cfg(num_rows).model_dump().items():
+        argv += [f"--{key}", str(value)]
+    argv += ["--copy_dataset_root", str(source_dir)]
+    monkeypatch.setattr(sys, "argv", argv)
+
+    generate_vst_dataset.main()
+
+    assert captured["data_file"] == str(out)
+    assert captured["fixed_synth_params_list"] == expected_synth
+    assert captured["fixed_note_params_list"] == expected_note
+
+
+def test_main_copy_dataset_root_rejects_wds_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``--copy_dataset_root`` with a wds (.tar) output raises SystemExit — copy is hdf5-only.
+
+    :param tmp_path: Pytest temp dir for the would-be output path.
+    :param monkeypatch: Patches ``sys.argv``.
+    """
+    from synth_setter.data.vst import generate_vst_dataset
+
+    out = tmp_path / "shard-000000.tar"
+    argv = ["generate_vst_dataset", str(out)]
+    for key, value in _render_cfg(2).model_dump().items():
+        argv += [f"--{key}", str(value)]
+    argv += ["--copy_dataset_root", str(tmp_path)]
+    monkeypatch.setattr(sys, "argv", argv)
+
+    with pytest.raises(SystemExit, match="supports hdf5 output only"):
+        generate_vst_dataset.main()
+
+
+def test_main_copy_dataset_root_propagates_source_validation_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A malformed copy source surfaces its ValueError out of main() (not swallowed).
+
+    :param tmp_path: Pytest temp dir holding the malformed source shard.
+    :param monkeypatch: Patches ``sys.argv``.
+    """
+    from synth_setter.data.vst import generate_vst_dataset
+
+    spec = param_specs[_SPEC_NAME]
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    # Width-mismatched source shard, named to match the output shard.
+    _write_param_array_shard(
+        source_dir / "shard-000000.h5", np.zeros((3, len(spec) - 1), dtype=np.float32)
+    )
+    out = tmp_path / "shard-000000.h5"
+    argv = ["generate_vst_dataset", str(out)]
+    for key, value in _render_cfg(3).model_dump().items():
+        argv += [f"--{key}", str(value)]
+    argv += ["--copy_dataset_root", str(source_dir)]
+    monkeypatch.setattr(sys, "argv", argv)
+
+    with pytest.raises(ValueError, match="must share the target's"):
+        generate_vst_dataset.main()
+    assert not out.exists(), "a failed copy must not leave an output shard behind"
+
+
+def test_make_hdf5_resume_indexes_fixed_params_by_absolute_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On resume, output row i re-renders fixed_*_list[i] (absolute), not a tail offset.
+
+    Regression pin for the full-length absolute-indexed fixed-params contract the
+    dataset-copy path depends on.
+
+    :param tmp_path: Pytest temp dir holding the partially-written shard.
+    :param monkeypatch: Stubs ``render_params`` so the test runs without a plugin.
+    """
+    from synth_setter.data.vst import generate_vst_dataset
+    from synth_setter.data.vst.generate_vst_dataset import create_datasets_and_get_start_idx
+
+    spec = param_specs[_SPEC_NAME]
+    num_samples = 4
+    start_idx = 2
+    render_cfg = _render_cfg(num_samples)
+    synth_rows = [spec.sample()[0] for _ in range(num_samples)]
+    note_rows = [_HARDCODED_NOTE_PARAMS] * num_samples
+
+    out = tmp_path / "resume.h5"
+    # Pre-write rows [0, start_idx) non-zero across all three datasets so
+    # get_first_unwritten_idx reports start_idx and only the tail re-renders.
+    with h5py.File(out, "a") as h5:
+        audio, mel, params, _ = create_datasets_and_get_start_idx(
+            h5, num_samples, _CHANNELS, _SAMPLE_RATE, _DURATION, len(spec)
+        )
+        for i in range(start_idx):
+            audio[i] = 1.0
+            mel[i] = 1.0
+            # encode is annotated dict[str, float]; _HARDCODED_NOTE_PARAMS carries
+            # the runtime int/tuple note shape.
+            params[i] = spec.encode(synth_rows[i], note_rows[i])  # pyright: ignore[reportArgumentType]
+
+    seen_synth: list[dict[str, float]] = []
+
+    def _capture_render(
+        plugin_path: str, synth_params: dict[str, float], *a: object, **kw: object
+    ):
+        seen_synth.append(dict(synth_params))
+        return _loud_audio()
+
+    monkeypatch.setattr(generate_vst_dataset, "render_params", _capture_render)
+
+    make_hdf5_dataset(
+        hdf5_file=out,
+        render_cfg=render_cfg,
+        fixed_synth_params_list=synth_rows,
+        fixed_note_params_list=note_rows,
+    )
+
+    assert seen_synth == synth_rows[start_idx:]
+
+
+@pytest.mark.slow
+@pytest.mark.requires_vst
+@skip_no_vst
+def test_copy_dataset_reproduces_source_param_array(tmp_path: Path) -> None:
+    """A copy run re-renders a source dataset's params, reproducing its param_array.
+
+    Stage 1 renders a random source shard; stage 2 decodes it via
+    ``fixed_params_from_dataset`` and re-renders through ``make_hdf5_dataset``
+    with those fixed params. The param_arrays must match within float32
+    tolerance — params are deterministic even though audio is not (#489).
+    ``min_loudness=-inf`` on the replay disables the loudness gate so a
+    barely-loud stage-1 row can't trip the fixed-synth raise on re-render.
+
+    :param tmp_path: Pytest temp dir holding the source and copied shards.
+    """
+    spec = param_specs[_SPEC_NAME]
+    source = tmp_path / "source" / "shard-000000.h5"
+    source.parent.mkdir()
+    make_hdf5_dataset(hdf5_file=source, render_cfg=_render_cfg(_NUM_SAMPLES))
+    _, _, source_params = _assert_h5_structure_is_valid(source, spec, _NUM_SAMPLES)
+
+    synth_list, note_list = fixed_params_from_dataset(source, spec)
+
+    out = tmp_path / "copy.h5"
+    make_hdf5_dataset(
+        hdf5_file=out,
+        render_cfg=_render_cfg(_NUM_SAMPLES, min_loudness=float("-inf")),
+        fixed_synth_params_list=synth_list,
+        fixed_note_params_list=note_list,
+    )
+    _, _, copy_params = _assert_h5_structure_is_valid(
+        out, spec, _NUM_SAMPLES, min_loudness=float("-inf")
+    )
+
+    np.testing.assert_allclose(
+        copy_params,
+        source_params,
+        rtol=_RELATIVE_TOLERANCE,
+        atol=_ABSOLUTE_TOLERANCE,
+        err_msg="copied dataset param_array does not match source",
+    )
+
+
+# HDF5 resume correctness: output row i renders fixed_*_params_list[i] by absolute
+# index, for both the copy (fixed params) and plain (sampled) paths — see #1430.
+# render_params is stubbed, so no plugin is needed and the stored param_array is a
+# deterministic param_spec.encode of the per-row fixed params.
+
+
+def _prewrite_resumable_head(
+    out: Path,
+    spec: ParamSpec,
+    num_samples: int,
+    head_rows: int,
+    param_rows: list[np.ndarray],
+    *,
+    audio_fill: float = 1.0,
+    mel_fill: float = 1.0,
+) -> None:
+    """Pre-write rows ``[0, head_rows)`` so a resume reports ``start_idx == head_rows``.
+
+    All three datasets are filled non-zero across the head so the writer's
+    min-across-datasets ``get_first_unwritten_idx`` lands at ``head_rows``; the
+    param rows take the caller-supplied encodings so the head's stored params are
+    known and can be asserted intact after the resume.
+
+    :param out: Destination shard path; this helper opens it in append mode.
+    :param spec: Param spec fixing the ``param_array`` column count.
+    :param num_samples: Total shard rows (dataset length).
+    :param head_rows: Number of leading rows to mark as already written.
+    :param param_rows: Per-head-row encoded param arrays; length must be ``head_rows``.
+    :param audio_fill: Sentinel written to every head audio cell (non-zero).
+    :param mel_fill: Sentinel written to every head mel cell (non-zero).
+    """
+    from synth_setter.data.vst.generate_vst_dataset import create_datasets_and_get_start_idx
+
+    with h5py.File(out, "a") as h5:
+        audio, mel, params, _ = create_datasets_and_get_start_idx(
+            h5, num_samples, _CHANNELS, _SAMPLE_RATE, _DURATION, len(spec)
+        )
+        for i in range(head_rows):
+            audio[i] = audio_fill
+            mel[i] = mel_fill
+            params[i] = param_rows[i]
+
+
+def _read_dataset(h5: h5py.File, name: str) -> np.ndarray:
+    """Read a full HDF5 dataset as a numpy array, narrowing the ``h5[name]`` union.
+
+    ``h5py.File.__getitem__`` is typed ``Group | Dataset | Datatype``; the
+    ``isinstance`` assert narrows it to ``Dataset`` so the slice type-checks.
+
+    :param h5: Open HDF5 file handle.
+    :param name: Dataset key to read.
+    :returns: The whole dataset materialized as a numpy array.
+    """
+    dataset = h5[name]
+    assert isinstance(dataset, h5py.Dataset)
+    return dataset[...]
+
+
+def _distinct_note_rows(num_rows: int) -> list[NoteParams]:
+    """Build note params with a distinct pitch per row.
+
+    Distinct per-row values are what let a resume test tell absolute indexing
+    apart from a tail offset: identical rows would render the same regardless.
+
+    :param num_rows: Number of note-param dicts to build.
+    :returns: ``num_rows`` note-param dicts, each with a unique pitch.
+    """
+    return [{"pitch": 40 + 2 * i, "note_start_and_end": (0.5, 2.0)} for i in range(num_rows)]
+
+
+def _encode_rows(
+    spec: ParamSpec,
+    synth_rows: list[dict[str, float]],
+    note_rows: list[NoteParams],
+) -> list[np.ndarray]:
+    """Encode each ``(synth, note)`` row pair into its ``param_array`` row.
+
+    :param spec: Param spec doing the encode.
+    :param synth_rows: Per-row synth params.
+    :param note_rows: Per-row note params, aligned with ``synth_rows``.
+    :returns: One encoded ``param_array`` row per input pair.
+    """
+    return [spec.encode(synth_rows[i], note_rows[i]) for i in range(len(synth_rows))]
+
+
+def test_make_hdf5_resume_indexes_note_params_by_absolute_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On resume, output row i re-renders ``fixed_note_params_list[i]`` by absolute index.
+
+    Complements the synth-params regression pin: that test holds note params
+    constant across rows, so it cannot tell absolute from tail indexing for the
+    note list. Here each row carries a distinct pitch, so a tail-offset bug would
+    surface as the wrong pitch reaching the renderer.
+
+    :param tmp_path: Pytest temp dir holding the partially-written shard.
+    :param monkeypatch: Stubs ``render_params`` so the test runs without a plugin.
+    """
+    from synth_setter.data.vst import generate_vst_dataset
+
+    spec = param_specs[_SPEC_NAME]
+    num_samples = 4
+    start_idx = 2
+    synth_rows = [spec.sample()[0] for _ in range(num_samples)]
+    note_rows = _distinct_note_rows(num_samples)
+    head_params = _encode_rows(spec, synth_rows[:start_idx], note_rows[:start_idx])
+
+    out = tmp_path / "resume.h5"
+    _prewrite_resumable_head(out, spec, num_samples, start_idx, head_params)
+
+    seen_pitch: list[int] = []
+
+    # pitch is the third positional arg generate_sample passes to render_params.
+    def _capture_render(
+        plugin_path: str, synth_params: dict[str, float], pitch: int, *a: object, **kw: object
+    ) -> np.ndarray:
+        seen_pitch.append(pitch)
+        return _loud_audio()
+
+    monkeypatch.setattr(generate_vst_dataset, "render_params", _capture_render)
+
+    make_hdf5_dataset(
+        hdf5_file=out,
+        render_cfg=_render_cfg(num_samples),
+        fixed_synth_params_list=synth_rows,
+        fixed_note_params_list=note_rows,
+    )
+
+    assert seen_pitch == [note_rows[i]["pitch"] for i in range(start_idx, num_samples)]
+
+
+def test_make_hdf5_resume_preserves_already_written_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A plain (sampled-params) resume re-renders only the tail and leaves the head intact.
+
+    Guards the non-copy resume path the indexing change also touched: rows
+    ``[0, start_idx)`` written by an earlier run keep their exact bytes, while
+    only ``[start_idx, num_samples)`` are overwritten by the resumed render.
+
+    :param tmp_path: Pytest temp dir holding the partially-written shard.
+    :param monkeypatch: Stubs ``render_params`` so the test runs without a plugin.
+    """
+    from synth_setter.data.vst import generate_vst_dataset
+
+    spec = param_specs[_SPEC_NAME]
+    num_samples = 4
+    start_idx = 2
+    head_audio_fill = 0.123
+    head_mel_fill = 0.456
+    head_params = _encode_rows(
+        spec, [_HARDCODED_SYNTH_PARAMS] * start_idx, [_HARDCODED_NOTE_PARAMS] * start_idx
+    )
+
+    out = tmp_path / "resume.h5"
+    _prewrite_resumable_head(
+        out,
+        spec,
+        num_samples,
+        start_idx,
+        head_params,
+        audio_fill=head_audio_fill,
+        mel_fill=head_mel_fill,
+    )
+
+    monkeypatch.setattr(generate_vst_dataset, "render_params", lambda *a, **kw: _loud_audio())
+
+    make_hdf5_dataset(hdf5_file=out, render_cfg=_render_cfg(num_samples))
+
+    with h5py.File(out, "r") as h5:
+        audio = _read_dataset(h5, "audio").astype(np.float32)
+        mel = _read_dataset(h5, "mel_spec")
+        params = _read_dataset(h5, "param_array")
+
+    # audio is stored as float16, so compare against the round-tripped fill.
+    head_audio = np.float32(np.float16(head_audio_fill))
+    for i in range(start_idx):
+        assert np.all(audio[i] == head_audio), f"head audio row {i} overwritten"
+        assert np.all(mel[i] == np.float32(head_mel_fill)), f"head mel row {i} overwritten"
+        np.testing.assert_array_equal(params[i], head_params[i])
+    for i in range(start_idx, num_samples):
+        assert not np.all(audio[i] == head_audio), f"tail row {i} not rendered"
+
+
+def test_make_hdf5_crash_then_resume_copy_reproduces_single_shot_param_array(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A crashed-then-resumed copy run reconstructs the param_array of a single-shot copy.
+
+    The headline resume-correctness property for the dataset-copy path: render
+    crashes mid-shard, the worker re-runs, and the absolute-row indexing makes the
+    resumed tail read the same source rows it would have on an uninterrupted run.
+    Per-row batching makes the crash drop exactly ``start_idx`` written rows.
+
+    :param tmp_path: Pytest temp dir holding the single-shot and resumed shards.
+    :param monkeypatch: Stubs ``render_params`` (one crashing, one healthy).
+    """
+    from synth_setter.data.vst import generate_vst_dataset
+
+    spec = param_specs[_SPEC_NAME]
+    num_samples = 4
+    start_idx = 2
+    synth_rows = [spec.sample()[0] for _ in range(num_samples)]
+    note_rows = _distinct_note_rows(num_samples)
+    expected_params = _encode_rows(spec, synth_rows, note_rows)
+    render_cfg = _render_cfg(num_samples, samples_per_render_batch=1)
+
+    single_shot = tmp_path / "single_shot.h5"
+    monkeypatch.setattr(generate_vst_dataset, "render_params", lambda *a, **kw: _loud_audio())
+    make_hdf5_dataset(
+        hdf5_file=single_shot,
+        render_cfg=render_cfg,
+        fixed_synth_params_list=synth_rows,
+        fixed_note_params_list=note_rows,
+    )
+    with h5py.File(single_shot, "r") as h5:
+        single_shot_params = _read_dataset(h5, "param_array")
+
+    rendered = {"count": 0}
+
+    def _crash_after_start_idx(*a: object, **kw: object) -> np.ndarray:
+        if rendered["count"] >= start_idx:
+            raise RuntimeError("simulated renderer crash")
+        rendered["count"] += 1
+        return _loud_audio()
+
+    resumed = tmp_path / "resumed.h5"
+    monkeypatch.setattr(generate_vst_dataset, "render_params", _crash_after_start_idx)
+    with pytest.raises(RuntimeError, match="simulated renderer crash"):
+        make_hdf5_dataset(
+            hdf5_file=resumed,
+            render_cfg=render_cfg,
+            fixed_synth_params_list=synth_rows,
+            fixed_note_params_list=note_rows,
+        )
+
+    # The crash must leave exactly start_idx rows persisted, so resume picks up there.
+    with h5py.File(resumed, "r") as h5:
+        crashed_param_ds = h5["param_array"]
+        assert isinstance(crashed_param_ds, h5py.Dataset)
+        assert generate_vst_dataset.get_first_unwritten_idx(crashed_param_ds) == start_idx
+
+    monkeypatch.setattr(generate_vst_dataset, "render_params", lambda *a, **kw: _loud_audio())
+    make_hdf5_dataset(
+        hdf5_file=resumed,
+        render_cfg=render_cfg,
+        fixed_synth_params_list=synth_rows,
+        fixed_note_params_list=note_rows,
+    )
+    with h5py.File(resumed, "r") as h5:
+        resumed_params = _read_dataset(h5, "param_array")
+
+    np.testing.assert_array_equal(resumed_params, single_shot_params)
+    for i in range(num_samples):
+        np.testing.assert_array_equal(resumed_params[i], expected_params[i])
+
+
+def test_make_hdf5_rerun_on_complete_shard_renders_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Re-running on a fully-written shard renders no rows and leaves the data untouched.
+
+    The ``start_idx == num_samples`` resume boundary: a complete shard re-run is a
+    no-op even when full-length fixed lists are supplied (the length check passes,
+    nothing is rendered).
+
+    :param tmp_path: Pytest temp dir holding the complete shard.
+    :param monkeypatch: Stubs ``render_params`` to assert it is never invoked.
+    """
+    from synth_setter.data.vst import generate_vst_dataset
+
+    spec = param_specs[_SPEC_NAME]
+    num_samples = 3
+    synth_rows = [spec.sample()[0] for _ in range(num_samples)]
+    note_rows = _distinct_note_rows(num_samples)
+    full_params = _encode_rows(spec, synth_rows, note_rows)
+
+    out = tmp_path / "complete.h5"
+    _prewrite_resumable_head(out, spec, num_samples, num_samples, full_params)
+
+    def _fail_if_called(*a: object, **kw: object) -> NoReturn:
+        raise AssertionError("render_params called on a complete shard")
+
+    monkeypatch.setattr(generate_vst_dataset, "render_params", _fail_if_called)
+
+    make_hdf5_dataset(
+        hdf5_file=out,
+        render_cfg=_render_cfg(num_samples),
+        fixed_synth_params_list=synth_rows,
+        fixed_note_params_list=note_rows,
+    )
+
+    with h5py.File(out, "r") as h5:
+        params = _read_dataset(h5, "param_array")
+    for i in range(num_samples):
+        np.testing.assert_array_equal(params[i], full_params[i])
+
+
+def test_make_hdf5_resume_across_batch_boundary_indexes_by_absolute_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A resume starting mid-batch writes each tail row at its absolute index with ``fixed[i]``.
+
+    Pins the batch-flush offset and absolute fixed-params indexing jointly: with
+    ``samples_per_render_batch`` smaller than the shard and ``start_idx`` not on a
+    batch edge, every row's stored params must still equal ``encode(fixed[i])`` —
+    a tail-offset or mis-aligned flush would land the wrong params at the wrong row.
+
+    :param tmp_path: Pytest temp dir holding the partially-written shard.
+    :param monkeypatch: Stubs ``render_params`` so the test runs without a plugin.
+    """
+    from synth_setter.data.vst import generate_vst_dataset
+
+    spec = param_specs[_SPEC_NAME]
+    num_samples = 6
+    start_idx = 3
+    synth_rows = [spec.sample()[0] for _ in range(num_samples)]
+    note_rows = _distinct_note_rows(num_samples)
+    full_params = _encode_rows(spec, synth_rows, note_rows)
+
+    out = tmp_path / "resume_batched.h5"
+    _prewrite_resumable_head(out, spec, num_samples, start_idx, full_params[:start_idx])
+
+    monkeypatch.setattr(generate_vst_dataset, "render_params", lambda *a, **kw: _loud_audio())
+
+    make_hdf5_dataset(
+        hdf5_file=out,
+        render_cfg=_render_cfg(num_samples, samples_per_render_batch=2),
+        fixed_synth_params_list=synth_rows,
+        fixed_note_params_list=note_rows,
+    )
+
+    with h5py.File(out, "r") as h5:
+        params = _read_dataset(h5, "param_array")
+    for i in range(num_samples):
+        np.testing.assert_array_equal(params[i], full_params[i])

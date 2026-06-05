@@ -52,8 +52,8 @@ from synth_setter.pipeline.ci.validate_shard import validate_all_shards_from_r2
 from synth_setter.pipeline.ci.validate_spec import validate_structure
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from synth_setter.pipeline.schemas.spec import (
-    EXTENSION_TO_OUTPUT_FORMAT,
     DatasetSpec,
+    OutputFormat,
 )
 from tests.helpers.subprocess_args import find_script_index
 
@@ -158,7 +158,7 @@ def _stub_renderer(spec: DatasetSpec) -> Callable[[list[str]], int]:
     """Return a subprocess.check_call side-effect that writes dummy shards.
 
     Dispatches on the renderer's output-path suffix via
-    ``EXTENSION_TO_OUTPUT_FORMAT``, so the same factory backs both the hdf5
+    ``OutputFormat.from_extension``, so the same factory backs both the hdf5
     and wds parametrizations. ``rclone`` invocations fall through to the real
     binary so the R2 upload, the skip-existing probe, and the finalize purge
     all hit real R2.
@@ -174,10 +174,10 @@ def _stub_renderer(spec: DatasetSpec) -> Callable[[list[str]], int]:
         script_idx = find_script_index(args)
         output_file = Path(args[script_idx + 1])
         output_file.parent.mkdir(parents=True, exist_ok=True)
-        fmt = EXTENSION_TO_OUTPUT_FORMAT.get(output_file.suffix)
-        if fmt == "hdf5":
+        fmt = OutputFormat.from_extension(output_file.suffix)
+        if fmt is OutputFormat.HDF5:
             _write_dummy_h5_shard(output_file, spec)
-        elif fmt == "wds":
+        elif fmt is OutputFormat.WDS:
             _write_dummy_tar_shard(output_file, spec)
         else:
             raise AssertionError(

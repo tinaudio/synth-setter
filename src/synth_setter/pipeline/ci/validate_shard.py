@@ -2,7 +2,7 @@
 """Validate dataset shards against a DatasetSpec.
 
 Performs full per-shard validation. Each shard file is dispatched by its
-filename suffix via ``synth_setter.pipeline.schemas.spec.EXTENSION_TO_OUTPUT_FORMAT``
+filename suffix via ``synth_setter.pipeline.schemas.spec.OutputFormat.from_extension``
 to either the HDF5 path (``.h5``) or the wds tar path (``.tar``):
 
 - HDF5 path: each top-level dataset's full ``.shape`` matches the writer's
@@ -48,7 +48,7 @@ from synth_setter.data.vst.shapes import (
 )
 from synth_setter.pipeline.r2_io import downloaded_to_tempfile
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
-from synth_setter.pipeline.schemas.spec import EXTENSION_TO_OUTPUT_FORMAT, DatasetSpec
+from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat
 from synth_setter.pipeline.spec_io import read_spec_text
 
 _TAR_METADATA_MEMBER = "metadata.json"
@@ -177,7 +177,7 @@ def _expected_dataset_shapes(spec: DatasetSpec) -> dict[str, tuple[int, ...]]:
 def validate_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
     """Validate one shard against a DatasetSpec, dispatching by filename suffix.
 
-    Suffix dispatch via ``EXTENSION_TO_OUTPUT_FORMAT``: ``.h5`` -> HDF5 path,
+    Suffix dispatch via ``OutputFormat.from_extension``: ``.h5`` -> HDF5 path,
     ``.tar`` -> tar/wds path. Any other suffix is rejected with an error
     naming the registered set so a typo or wrong-format file does not
     surface as a misleading "not valid HDF5".
@@ -190,14 +190,14 @@ def validate_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
     if not shard_path.exists():
         return [f"shard file not found: {shard_path}"]
 
-    fmt = EXTENSION_TO_OUTPUT_FORMAT.get(shard_path.suffix)
-    if fmt == "hdf5":
+    fmt = OutputFormat.from_extension(shard_path.suffix)
+    if fmt is OutputFormat.HDF5:
         return _validate_h5_shard(shard_path, spec)
-    if fmt == "wds":
+    if fmt is OutputFormat.WDS:
         return _validate_tar_shard(shard_path, spec)
     return [
         f"unsupported shard suffix {shard_path.suffix!r} "
-        f"(expected one of: {sorted(EXTENSION_TO_OUTPUT_FORMAT)})"
+        f"(expected one of: {sorted(f.extension for f in OutputFormat)})"
     ]
 
 

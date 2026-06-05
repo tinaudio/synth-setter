@@ -1,0 +1,34 @@
+program: src/synth_setter/cli/generate_dataset.py
+# Pinned in YAML — wandb sweep CLI does not support OmegaConf resolvers and ignores
+# WANDB_ENTITY / WANDB_PROJECT at sweep-creation time (those only steer wandb.init in each trial).
+entity: tinaudio
+project: synth-setter
+# Full Surge XT param set — overrides the smoke shard's surge_simple default for both generation
+# and the inline oracle eval. See #489.
+command:
+  - ${interpreter}
+  - ${program}
+  - experiment=generate_dataset/smoke-shard-with-oracle-eval
+  - render.param_spec_name=surge_xt
+  - render.preset_path=presets/surge-base.vstpreset
+  - ${args_no_hyphens}
+name: generate_dataset_cadence_surge_xt
+method: grid
+# grid ignores `metric` at scheduling time; the field stays for dashboard
+# legibility on runs that do log it. mss_mean is the oracle-eval audio loss.
+metric:
+  goal: minimize
+  name: audio/mss_mean
+# 2x4 grid. The render x always_on cell is schema-invalid; generate_dataset logs a warning and
+# skips it, so the grid stays a plain cross-product. See #489.
+parameters:
+  render.plugin_reload_cadence:
+    values:
+      - once
+      - render
+  render.gui_toggle_cadence:
+    values:
+      - never
+      - once
+      - render
+      - "always_on"
