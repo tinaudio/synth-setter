@@ -464,7 +464,7 @@ def test_postprocessing_render_subprocess_nonzero_exit_raises(
     """
     monkeypatch.setattr(eval_mod.sys, "platform", "darwin")
 
-    def _raise_on_render(args: list[str], **_kwargs: Any) -> None:
+    def _raise_on_render(args: list[str], **_kwargs: object) -> None:
         if _PREDICT_VST_AUDIO_MODULE in args:
             raise subprocess.CalledProcessError(returncode=1, cmd=args)
 
@@ -499,7 +499,7 @@ def test_postprocessing_metrics_subprocess_timeout_raises(
     """
     monkeypatch.setattr(eval_mod.sys, "platform", "darwin")
 
-    def _timeout_on_metrics(args: list[str], **_kwargs: Any) -> None:
+    def _timeout_on_metrics(args: list[str], **_kwargs: object) -> None:
         if _COMPUTE_AUDIO_METRICS_MODULE in args:
             raise subprocess.TimeoutExpired(cmd=args, timeout=1)
 
