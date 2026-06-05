@@ -12,8 +12,8 @@ R2Prefix = NewType("R2Prefix", str)
 DEFAULT_R2_PREFIX_ROOT = "data"
 
 
-def _utcnow() -> datetime:
-    """Return the current UTC time as a seam tests can patch.
+def _utc_now() -> datetime:
+    """Return the current time as a timezone-aware UTC datetime.
 
     :returns: A timezone-aware ``datetime`` in UTC.
     """
@@ -32,7 +32,7 @@ def make_dataset_wandb_run_id(
         a zero-padded 3-digit millisecond field.
     """
     if timestamp is None:
-        timestamp = _utcnow()
+        timestamp = _utc_now()
     if timestamp.tzinfo is None:
         raise ValueError("timestamp must be timezone-aware (got naive datetime)")
     offset = timestamp.utcoffset()

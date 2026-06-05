@@ -38,14 +38,14 @@ class TestMakeDatasetWandbRunId:
         id2 = make_dataset_wandb_run_id(DatasetConfigId("cfg"), timestamp=ts2)
         assert id1 != id2
 
-    @patch("synth_setter.pipeline.schemas.prefix._utcnow", return_value=FIXED_NOW)
-    def test_make_run_id_default_timestamp_is_utc(self, mock_utcnow):
+    @patch("synth_setter.pipeline.schemas.prefix._utc_now", return_value=FIXED_NOW)
+    def test_make_run_id_default_timestamp_is_utc(self, mock_utc_now):
         """Default (no timestamp) stamps the current UTC time and produces the expected ID.
 
-        :param mock_utcnow: Patched ``prefix._utcnow`` returning ``FIXED_NOW``.
+        :param mock_utc_now: Patched ``prefix._utc_now`` returning ``FIXED_NOW``.
         """
         result = make_dataset_wandb_run_id(DatasetConfigId("test-config"))
-        mock_utcnow.assert_called_once_with()
+        mock_utc_now.assert_called_once_with()
         assert result == "test-config-20260615T123045000Z"
 
     def test_make_run_id_rejects_naive_timestamp(self):
