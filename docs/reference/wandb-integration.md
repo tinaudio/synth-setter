@@ -21,15 +21,16 @@ ______________________________________________________________________
 
 ## 1. Initialization
 
-| Concern           | How it works                                                                                             | File                                                |
-| ----------------- | -------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| W&B run creation  | `WandbLogger` instantiated by Hydra — included in the default `many_loggers` compose (W&B + CSV + TB)    | `src/synth_setter/configs/logger/wandb.yaml`        |
-| Entity / project  | Env-var driven: `entity: ${oc.env:WANDB_ENTITY,null}`, `project: "${oc.env:WANDB_PROJECT,synth-setter}"` | `src/synth_setter/configs/logger/wandb.yaml:10,13`  |
-| Default compose   | `many_loggers` composes `csv + tensorboard + wandb` (W&B enabled by default)                             | `src/synth_setter/configs/logger/many_loggers.yaml` |
-| Run ID            | `null` (W&B auto-generates)                                                                              | `src/synth_setter/configs/logger/wandb.yaml:8`      |
-| Checkpoint upload | `log_model: "all"`                                                                                       | `src/synth_setter/configs/logger/wandb.yaml:11`     |
-| Code saving       | `wandb.Settings(code_dir=".")`                                                                           | `src/synth_setter/configs/logger/wandb.yaml:17-19`  |
-| Run teardown      | `wandb.finish()` in `task_wrapper` finally block                                                         | `src/synth_setter/utils/utils.py:101-106`           |
+| Concern           | How it works                                                                                                                      | File                                                            |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| W&B run creation  | `WandbLogger` instantiated by Hydra — included in the default `many_loggers` compose (W&B + CSV + TB)                             | `src/synth_setter/configs/logger/wandb.yaml`                    |
+| Entity / project  | Env-var driven: `entity: ${oc.env:WANDB_ENTITY,null}`, `project: "${oc.env:WANDB_PROJECT,synth-setter}"`                          | `src/synth_setter/configs/logger/wandb.yaml:10,13`              |
+| Default compose   | `many_loggers` composes `csv + tensorboard + wandb` (W&B enabled by default)                                                      | `src/synth_setter/configs/logger/many_loggers.yaml`             |
+| Run ID            | `null` (W&B auto-generates)                                                                                                       | `src/synth_setter/configs/logger/wandb.yaml:8`                  |
+| Checkpoint upload | `log_model: "all"`                                                                                                                | `src/synth_setter/configs/logger/wandb.yaml:11`                 |
+| Code saving       | `wandb.Settings(code_dir=".")`                                                                                                    | `src/synth_setter/configs/logger/wandb.yaml` § `wandb.settings` |
+| Console capture   | `wandb.Settings(console="redirect")` — fd-level redirect so non-TTY worker logs (loguru stderr + subprocess output) reach the run | `src/synth_setter/configs/logger/wandb.yaml` § `wandb.settings` |
+| Run teardown      | `wandb.finish()` in `task_wrapper` finally block                                                                                  | `src/synth_setter/utils/utils.py:101-106`                       |
 
 **No direct `wandb.init()` calls exist in runtime code.** One `wandb.config.update()` call exists: `log_wandb_provenance()` in `src/synth_setter/utils/logging_utils.py:91` writes provenance metadata (see [2g](#2g-provenance-metadata-logged-once-at-run-start)).
 

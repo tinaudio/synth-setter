@@ -8,3 +8,15 @@ velocity: 100
 signal_duration_seconds: 4.0
 min_loudness: -55.0
 samples_per_shard: 10000
+
+# Surfaced at their RenderConfig defaults so Hydra struct mode accepts a plain
+# ``render.<field>=...`` override (no ``+``) from any experiment — needed for the
+# #489 cadence sweeps. gui_toggle_cadence uses "once" rather than the non-Darwin
+# factory value "render": "render" is rejected on macOS (#714) and would break
+# every experiment that does not override it. "once" is safe on all platforms.
+samples_per_render_batch: 32
+max_retries: 0
+parallel: false
+plugin_reload_cadence: render
+gui_toggle_cadence: once
+param_sample_cadence: sample

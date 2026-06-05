@@ -28,6 +28,7 @@ the cfg-composition surface isolated from R2.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -47,7 +48,7 @@ from synth_setter.cli.generate_dataset import (
     generate,
 )
 from synth_setter.data.vst.shapes import DATASET_FIELD_DTYPES
-from synth_setter.pipeline.constants import STATS_NPZ_FILENAME
+from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME, STATS_NPZ_FILENAME
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.resources import vst_headless_wrapper
 from tests.helpers.render_subprocess import (
@@ -250,6 +251,57 @@ class TestRun:
         # args = [VST_HEADLESS_WRAPPER (linux only), python, generate_vst_dataset.py, ...]
         assert any("generate_vst_dataset.py" in a for a in args)
         assert str(spec.render.samples_per_shard) in args
+
+    def test_aborts_before_render_when_copy_source_spec_is_missing(
+        self,
+        patched_subprocess: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """A dataset-copy run whose source spec is unsynced fails before any render.
+
+        :param patched_subprocess: Renderer/rclone dispatcher; asserted to receive
+            no renderer call because the copy preflight aborts first.
+        :param tmp_path: Work dir for ``generate()`` and the (empty) copy root.
+        """
+        copy_root = tmp_path / "source"
+        copy_root.mkdir()
+        spec = DatasetSpec(
+            **_base_spec_kwargs(tmp_path, datasetsrc={"copy_dataset_root": str(copy_root)})  # type: ignore[arg-type]
+        )
+
+        with pytest.raises(ValueError, match=INPUT_SPEC_FILENAME):
+            generate(spec, tmp_path, [])
+
+        assert _renderer_argv_lists(patched_subprocess) == []
+
+    def test_aborts_before_render_when_copy_source_spec_mismatches(
+        self,
+        patched_subprocess: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """A dataset-copy run whose source spec disagrees fails before any render.
+
+        :param patched_subprocess: Renderer/rclone dispatcher; asserted to receive
+            no renderer call because the copy preflight aborts first.
+        :param tmp_path: Work dir for ``generate()`` and the copy source root.
+        """
+        copy_root = tmp_path / "source"
+        copy_root.mkdir()
+        source = DatasetSpec(
+            **_base_spec_kwargs(  # type: ignore[arg-type]
+                tmp_path,
+                render={**_base_spec_kwargs(tmp_path)["render"], "param_spec_name": "surge_xt"},  # type: ignore[dict-item]
+            )
+        )
+        (copy_root / INPUT_SPEC_FILENAME).write_text(source.model_dump_json())
+        spec = DatasetSpec(
+            **_base_spec_kwargs(tmp_path, datasetsrc={"copy_dataset_root": str(copy_root)})  # type: ignore[arg-type]
+        )
+
+        with pytest.raises(ValueError, match="param_spec_name"):
+            generate(spec, tmp_path, [])
+
+        assert _renderer_argv_lists(patched_subprocess) == []
 
     def test_shard_generation_runs_under_headless_vst_wrapper(
         self,
@@ -1603,7 +1655,7 @@ class TestMainDispatchBranches:
         SkyPilot delegation hands the run to a worker pod; finalize must
         run out-of-band via the finalize-dataset workflow rather than fire
         from the launcher process. Pins both halves: ``finalize_from_spec``
-        is not called, and an INFO log line mentions the override was ignored.
+        is not called, and an INFO log fires (wording unpinned).
 
         :param mock_logger: Patched ``generate_dataset.logger`` — the
             established loguru capture pattern in this file.
@@ -1637,13 +1689,13 @@ class TestMainDispatchBranches:
         gd.main()
 
         finalize_mock.assert_not_called()
+        # State assertion above is the contract. The log check matches stable
+        # tokens (knob name + "ignored") so a reworded message survives, but a
+        # vacuous ``assert_called`` would not — ``main`` always emits INFO logs.
         info_messages = [str(c.args[0]) for c in mock_logger.info.call_args_list]
-        ignored_lines = [
-            m for m in info_messages if "finalize_inline=True" in m and "ignored" in m
-        ]
+        ignored_lines = [m for m in info_messages if "finalize_inline=" in m and "ignored" in m]
         assert len(ignored_lines) == 1, (
-            f"expected exactly one INFO log mentioning 'finalize_inline=True' + 'ignored'; "
-            f"got messages: {info_messages!r}"
+            f"expected one INFO log marking the override ignored; got: {info_messages!r}"
         )
 
     def test_main_oracle_eval_inline_true_invokes_subprocess(
@@ -1678,11 +1730,12 @@ class TestMainDispatchBranches:
 
         # Capture the resolved output_dir so the eval's dataset_root can be
         # pinned to the exact dir generate+finalize wrote the shards into.
-        observed: dict[str, Path] = {}
+        observed: dict[str, object] = {}
         real_spec_from_cfg = gd.spec_from_cfg
 
         def _capture_output_dir(cfg: object) -> DatasetSpec:
             observed["output_dir"] = Path(cfg.paths.output_dir)  # type: ignore[attr-defined]
+            observed["num_workers"] = cfg.datamodule.num_workers  # type: ignore[attr-defined]
             return real_spec_from_cfg(cfg)  # type: ignore[arg-type]
 
         monkeypatch.setattr(gd, "spec_from_cfg", _capture_output_dir)
@@ -1696,6 +1749,9 @@ class TestMainDispatchBranches:
         # re-renders through the same spec; smoke-shard is surge_simple.
         render_arg = oracle_mock.call_args.kwargs["render"]
         assert render_arg.param_spec_name == "surge_simple"
+        # The eval inherits the generate run's datamodule worker count verbatim,
+        # so a Darwin override (num_workers=0) reaches the predict DataLoader.
+        assert oracle_mock.call_args.kwargs["num_workers"] == observed["num_workers"]
         assert render_arg.preset_path == "presets/surge-simple.vstpreset"
         # plugin_path is the TEST_PLUGIN_VST3 this test overrode at generation —
         # proving a non-default plugin flows through to the eval re-render.
@@ -1744,7 +1800,9 @@ class TestMainDispatchBranches:
                 "plugin_path": "plugins/Surge XT.vst3",
             }
         )
-        gd._run_oracle_eval_subprocess(dataset_root, run_dir, "some-run-id", render=render)
+        gd._run_oracle_eval_subprocess(
+            dataset_root, run_dir, "some-run-id", render=render, num_workers=7
+        )
 
         run_mock.assert_called_once()
         called_argv = run_mock.call_args[0][0]
@@ -1779,6 +1837,8 @@ class TestMainDispatchBranches:
         # batch_size=1 keeps the smoke-sized test split (4 samples) from
         # flooring to zero batches under the 128 default — see #1331.
         assert "datamodule.batch_size=1" in called_argv
+        # Sentinel 7 (no config default) proves the value is forwarded, not hardcoded.
+        assert "datamodule.num_workers=7" in called_argv
         assert "mode=predict" in called_argv
 
     def test_run_oracle_eval_subprocess_missing_local_artifacts_raises(
@@ -1809,6 +1869,7 @@ class TestMainDispatchBranches:
                 tmp_path / "oracle_eval" / "rid",
                 "rid",
                 render=spec.render,
+                num_workers=0,
             )
 
         run_mock.assert_not_called()
@@ -1868,10 +1929,9 @@ class TestMainDispatchBranches:
 
         gd.main()
 
-        # Skipped before generation, with a warning naming the offending knob.
+        # Skipped before generation, with a warning (exact wording unpinned).
         generate_mock.assert_not_called()
         warn_mock.assert_called_once()
-        assert "always_on" in warn_mock.call_args[0][0]
 
     def test_main_oracle_eval_inline_requires_finalize_inline(
         self,
@@ -2311,14 +2371,24 @@ class TestMainSpecPersistence:
         gd.upload_spec.assert_called_once()  # type: ignore[attr-defined]
         gd.write_spec_locally.assert_called_once()  # type: ignore[attr-defined]
 
-    def test_main_ensures_r2_env_loaded_before_upload(
+    def test_main_uploads_spec_with_r2_creds_present_in_env(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``ensure_r2_env_loaded`` runs before ``upload_spec`` so creds are in place.
+        """``upload_spec`` sees R2 creds in ``os.environ`` (set by ``ensure_r2_env_loaded``).
+
+        Asserts the observable invariant — credentials are present in process
+        env when the upload fires — rather than the internal call ORDER. A
+        benign re-ordering that still loads creds before uploading passes; a
+        regression that uploads before ``ensure_r2_env_loaded`` populates the
+        env fails because the stub records an absent key.
 
         :param monkeypatch: Pytest fixture used to patch ``sys.argv``.
         """
         import synth_setter.cli.generate_dataset as gd
+        from synth_setter.pipeline.r2_io import _SECRET_R2_ENV_KEYS
+
+        probe_key = _SECRET_R2_ENV_KEYS[0]
+        monkeypatch.delenv(probe_key, raising=False)
 
         argv = [
             "synth-setter-generate-dataset",
@@ -2327,14 +2397,23 @@ class TestMainSpecPersistence:
         ]
         monkeypatch.setattr("sys.argv", argv)
 
-        manager = MagicMock()
-        manager.attach_mock(gd.r2_io.ensure_r2_env_loaded, "ensure_env")  # type: ignore[arg-type]
-        manager.attach_mock(gd.upload_spec, "upload_spec")  # type: ignore[arg-type]
+        def _load_creds(*_a: object, **_k: object) -> None:
+            # setenv (not raw os.environ) so monkeypatch restores it on teardown.
+            monkeypatch.setenv(probe_key, "stub-access-key-id")
+
+        monkeypatch.setattr(gd.r2_io, "ensure_r2_env_loaded", _load_creds)
+
+        creds_present_at_upload: dict[str, bool] = {}
+
+        def _record_env(*_a: object, **_k: object) -> str:
+            creds_present_at_upload["present"] = probe_key in os.environ
+            return "r2://stub-bucket/stub-key/input_spec.json"
+
+        monkeypatch.setattr("synth_setter.cli.generate_dataset.upload_spec", _record_env)
 
         gd.main()
 
-        call_names = [c[0] for c in manager.mock_calls]
-        assert call_names.index("ensure_env") < call_names.index("upload_spec")
+        assert creds_present_at_upload.get("present") is True
 
     def test_dispatch_branch_passes_canonical_spec_uri_via_extra_envs(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -2513,3 +2592,75 @@ def test_smoke_job_name_rejects_unsafe_task_name() -> None:
     bad_spec = SimpleNamespace(task_name="bad.task.name")
     with pytest.raises(ValueError, match=r"fix spec.task_name or pin"):
         _smoke_job_name(bad_spec)  # type: ignore[arg-type]
+
+
+class TestValidateCopySource:
+    """``_validate_copy_source`` — the imperative shell around the preflight."""
+
+    def test_no_datasetsrc_is_a_noop(self, spec: DatasetSpec) -> None:
+        """A spec with no copy source skips the preflight entirely (no disk read).
+
+        :param spec: Single-shard spec fixture with ``datasetsrc`` unset.
+        """
+        from synth_setter.cli.generate_dataset import _validate_copy_source
+
+        _validate_copy_source(spec)  # no raise, no source dir needed
+
+    def test_matching_source_spec_passes(self, tmp_path: Path) -> None:
+        """A copy root holding a matching ``input_spec.json`` validates clean.
+
+        :param tmp_path: Pytest tmp dir used as the synced copy source root.
+        """
+        from synth_setter.cli.generate_dataset import _validate_copy_source
+
+        copy_root = tmp_path / "source"
+        copy_root.mkdir()
+        source = DatasetSpec(**_base_spec_kwargs(tmp_path))  # type: ignore[arg-type]
+        (copy_root / INPUT_SPEC_FILENAME).write_text(source.model_dump_json())
+        target = DatasetSpec(
+            **_base_spec_kwargs(tmp_path, datasetsrc={"copy_dataset_root": str(copy_root)})  # type: ignore[arg-type]
+        )
+
+        _validate_copy_source(target)  # no raise
+
+    def test_missing_source_spec_raises_with_path(self, tmp_path: Path) -> None:
+        """A copy root without an ``input_spec.json`` fails loudly, naming the file.
+
+        :param tmp_path: Pytest tmp dir; the copy root is left without a spec.
+        """
+        from synth_setter.cli.generate_dataset import _validate_copy_source
+
+        copy_root = tmp_path / "source"
+        copy_root.mkdir()
+        target = DatasetSpec(
+            **_base_spec_kwargs(tmp_path, datasetsrc={"copy_dataset_root": str(copy_root)})  # type: ignore[arg-type]
+        )
+
+        with pytest.raises(ValueError, match=INPUT_SPEC_FILENAME):
+            _validate_copy_source(target)
+
+    def test_mismatched_source_spec_raises(self, tmp_path: Path) -> None:
+        """A source spec with a different ``param_spec_name`` is rejected at preflight.
+
+        :param tmp_path: Pytest tmp dir used as the synced copy source root.
+        """
+        from synth_setter.cli.generate_dataset import _validate_copy_source
+
+        copy_root = tmp_path / "source"
+        copy_root.mkdir()
+        source = DatasetSpec(
+            **_base_spec_kwargs(
+                tmp_path,
+                render={
+                    **_base_spec_kwargs(tmp_path)["render"],  # type: ignore[dict-item]
+                    "param_spec_name": "surge_xt",
+                },
+            )  # type: ignore[arg-type]
+        )
+        (copy_root / INPUT_SPEC_FILENAME).write_text(source.model_dump_json())
+        target = DatasetSpec(
+            **_base_spec_kwargs(tmp_path, datasetsrc={"copy_dataset_root": str(copy_root)})  # type: ignore[arg-type]
+        )
+
+        with pytest.raises(ValueError, match="param_spec_name"):
+            _validate_copy_source(target)

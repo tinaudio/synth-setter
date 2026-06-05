@@ -187,6 +187,21 @@ def _default_gui_toggle_cadence() -> _GuiToggleCadence:
     return "never" if _current_platform() == "darwin" else "render"
 
 
+# Cap on shard filenames listed in a copy-source mismatch error before eliding.
+_MISMATCH_FILENAMES_SHOWN = 3
+
+
+def _sample_filenames(names: list[str]) -> str:
+    """Render up to ``_MISMATCH_FILENAMES_SHOWN`` names, noting any elided remainder.
+
+    :param names: Filenames to sample for a copy-source mismatch message.
+    :returns: The leading sample, suffixed with ``(+N more)`` when truncated.
+    """
+    shown = names[:_MISMATCH_FILENAMES_SHOWN]
+    elided = len(names) - len(shown)
+    return f"{shown} (+{elided} more)" if elided else f"{shown}"
+
+
 class ShardSpec(BaseModel):
     """Per-shard identity and pre-computed derived values."""
 
@@ -215,6 +230,11 @@ class DatasetSrcConfig(BaseModel):
     copied patch landing below it raises — set a low ``min_loudness`` when the
     target render settings differ from the source's (#724).
 
+    The source's ``input_spec.json`` must be synced beside its shards (it lives
+    at the dataset prefix root): ``generate`` loads it and runs
+    :meth:`DatasetSpec.validate_copy_source` before any render, so a source that
+    disagrees on a copy-relevant value fails at launch, not mid-render.
+
     .. attribute :: model_config
 
         Pydantic model config sentinel — strict/frozen/extra-forbid trust boundary.
@@ -228,9 +248,10 @@ class DatasetSrcConfig(BaseModel):
 
     copy_dataset_root: str = Field(
         description=(
-            "Directory holding the source shards to copy params from; each output "
-            "shard reads ``<copy_dataset_root>/<shard.filename>`` (a worker-local "
-            "filesystem path — R2 sources must be synced locally first)."
+            "Directory holding the source shards (and their ``input_spec.json``) to "
+            "copy params from; each output shard reads ``<copy_dataset_root>/"
+            "<shard.filename>`` (a worker-local filesystem path — R2 sources must be "
+            "synced locally first)."
         )
     )
 
@@ -931,6 +952,56 @@ class DatasetSpec(BaseModel):
                     f"output_format {self.output_format.value!r} (expected suffix {expected_ext!r})"
                 )
         return self
+
+    def validate_copy_source(self, source: DatasetSpec) -> None:
+        """Assert ``source`` reproduces this spec for a filename-matched param copy.
+
+        A dataset-copy run reads ``<copy_dataset_root>/<shard.filename>`` per
+        output shard and re-renders that shard's decoded params, so the copy is
+        faithful only when the source agrees on every value fixing the per-shard
+        contract: ``param_spec_name`` (encoding width), ``samples_per_shard``
+        (rows per shard), ``train_val_test_sizes`` (total rows and the
+        train/val/test split layout), and the derived shard-filename set. Every
+        mismatch is aggregated so a misconfigured copy surfaces them all in one
+        launch instead of one render — or one re-run — at a time.
+
+        :param source: Spec of the copy source, parsed from its ``input_spec.json``.
+        :raises ValueError: ``source`` differs from ``self`` on any copy-relevant
+            value; the message enumerates every mismatch.
+        """
+        mismatches: list[str] = []
+        if source.render.param_spec_name != self.render.param_spec_name:
+            mismatches.append(
+                f"param_spec_name: source={source.render.param_spec_name!r} != "
+                f"target={self.render.param_spec_name!r}"
+            )
+        if source.render.samples_per_shard != self.render.samples_per_shard:
+            mismatches.append(
+                f"samples_per_shard: source={source.render.samples_per_shard} != "
+                f"target={self.render.samples_per_shard}"
+            )
+        if source.train_val_test_sizes != self.train_val_test_sizes:
+            mismatches.append(
+                f"train_val_test_sizes: source={source.train_val_test_sizes} != "
+                f"target={self.train_val_test_sizes}"
+            )
+        source_filenames = tuple(shard.filename for shard in source.shards)
+        target_filenames = tuple(shard.filename for shard in self.shards)
+        if source_filenames != target_filenames:
+            only_in_source = sorted(set(source_filenames) - set(target_filenames))
+            only_in_target = sorted(set(target_filenames) - set(source_filenames))
+            mismatches.append(
+                f"shard filenames: source has {len(source_filenames)}, "
+                f"target has {len(target_filenames)} "
+                f"(only in source: {_sample_filenames(only_in_source)}; "
+                f"only in target: {_sample_filenames(only_in_target)})"
+            )
+        if mismatches:
+            joined = "\n  - ".join(mismatches)
+            raise ValueError(
+                "dataset-copy source spec does not match the target on copy-relevant "
+                f"values:\n  - {joined}"
+            )
 
     @computed_field  # type: ignore[prop-decorator]
     @cached_property

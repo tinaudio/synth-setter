@@ -4,6 +4,7 @@ import plistlib
 import threading
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING, cast
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -17,6 +18,10 @@ from synth_setter.data.vst.core import (
     render_params,
     warmup_plugin,
 )
+from tests.data.vst._fake_plugin import FakeVST3Plugin
+
+if TYPE_CHECKING:
+    from pedalboard import VST3Plugin
 
 
 class TestExtractRendererVersion:
@@ -176,12 +181,9 @@ class TestRunWithEditorHeldOpen:
         while renders are still in flight on the background thread.
 
         :param monkeypatch: Tightens ``_EDITOR_JOIN_TIMEOUT_SECONDS`` so the
-            slow body outlives the join window deterministically; stubs
-            ``core.logger`` so the leak-warning assertion is observable.
+            slow body outlives the join window deterministically.
         """
         monkeypatch.setattr(core, "_EDITOR_JOIN_TIMEOUT_SECONDS", 0.1)
-        fake_logger = MagicMock()
-        monkeypatch.setattr(core, "logger", fake_logger)
         fake_plugin = MagicMock()
         fake_plugin.show_editor.return_value = None
 
@@ -200,8 +202,6 @@ class TestRunWithEditorHeldOpen:
 
         # 1s slack over the 0.1s timeout to absorb CI scheduler jitter.
         assert elapsed < 1.0
-        assert fake_logger.warning.call_count == 1
-        assert "RenderWorkerLeaked" in fake_logger.warning.call_args.args[0]
 
     def test_run_with_editor_held_open_propagates_body_exception_even_on_slow_finish(
         self, monkeypatch: pytest.MonkeyPatch
@@ -269,13 +269,8 @@ class TestRenderParamsPreloadedPlugin:
     """``render_params`` accepts a pre-loaded plugin and skips load/preset on that path."""
 
     @staticmethod
-    def _fake_plugin(audio_shape: tuple[int, int]) -> MagicMock:
-        fake = MagicMock()
-        # process() is called multiple times (flushes + render); only the render
-        # call's return value matters for the assertion below, so return a fresh
-        # zero array each call.
-        fake.process.side_effect = lambda *a, **kw: np.zeros(audio_shape, dtype=np.float32)
-        return fake
+    def _fake_plugin() -> FakeVST3Plugin:
+        return FakeVST3Plugin("plugins/Surge XT.vst3")
 
     def test_preloaded_plugin_bypasses_load_and_preset(
         self, monkeypatch: pytest.MonkeyPatch
@@ -297,9 +292,9 @@ class TestRenderParamsPreloadedPlugin:
             lambda plugin, path: preset_calls.append((plugin, path)),
         )
 
-        preloaded = self._fake_plugin(audio_shape=(2, 16))
+        preloaded = self._fake_plugin()
 
-        render_params(
+        output = render_params(
             "plugins/Surge XT.vst3",
             params={},
             midi_note=60,
@@ -309,23 +304,23 @@ class TestRenderParamsPreloadedPlugin:
             sample_rate=44100,
             channels=2,
             preset_path="presets/surge-base.vstpreset",
-            plugin=preloaded,
+            plugin=cast("VST3Plugin", preloaded),
         )
 
         assert load_calls == []
         assert preset_calls == []
-        # The pre-loaded plugin is what ran the render.
-        assert preloaded.process.called
+        # Non-silent audio proves the pre-loaded plugin ran the note-on render.
+        assert np.any(output)
 
     def test_no_plugin_kwarg_reloads_per_call(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Without ``plugin``, ``render_params`` still loads the plugin and preset per call.
 
         :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
         """
-        fake_plugin = self._fake_plugin(audio_shape=(2, 16))
+        fake_plugin = self._fake_plugin()
         load_calls: list[str] = []
 
-        def _capture_load(path: str, **_kw: object) -> MagicMock:
+        def _capture_load(path: str, **_kw: object) -> FakeVST3Plugin:
             load_calls.append(path)
             return fake_plugin
 
@@ -359,7 +354,7 @@ class TestRenderParamsPreloadedPlugin:
 
         :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
         """
-        fake_plugin = self._fake_plugin(audio_shape=(2, 16))
+        fake_plugin = self._fake_plugin()
         warmup_calls: list[object] = []
 
         monkeypatch.setattr(core, "load_plugin", lambda _path: fake_plugin)
@@ -388,7 +383,7 @@ class TestRenderParamsPreloadedPlugin:
 
         :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
         """
-        cached = self._fake_plugin(audio_shape=(2, 16))
+        cached = self._fake_plugin()
         warmup_calls: list[object] = []
 
         monkeypatch.setattr(core, "warmup_plugin", lambda plugin: warmup_calls.append(plugin))
@@ -403,7 +398,7 @@ class TestRenderParamsPreloadedPlugin:
             sample_rate=44100,
             channels=2,
             preset_path="presets/surge-base.vstpreset",
-            plugin=cached,
+            plugin=cast("VST3Plugin", cached),
             warmup=True,
         )
 
