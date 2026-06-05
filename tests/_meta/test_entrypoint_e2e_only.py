@@ -34,8 +34,8 @@ _BANNED_HYDRA_IMPORTS = frozenset(
 def _direct_hydra_compose_imports(tree: ast.AST) -> list[str]:
     """Return sorted banned hydra config-initializer names imported in ``tree``.
 
-    :param tree: Parsed AST of the test module.
-    :returns: Sorted list of banned hydra config-initializer names.
+    :param tree: Parsed module AST; caller need not pre-filter node types.
+    :returns: Sorted, deduplicated list of banned names found; empty when the module is clean.
     """
     found: list[str] = []
     for node in ast.walk(tree):
@@ -55,7 +55,7 @@ def test_entrypoint_module_does_not_contain_config_layer_imports(test_file: str)
     ``initialize_config_module`` (or the older ``initialize`` / ``initialize_config_dir``
     variants) in these files is the tell.
 
-    :param test_file: Repo-relative path to a canonical entrypoint test module.
+    :param test_file: Repo-relative path resolved from ``_REPO_ROOT``; must exist on disk.
     """
     path = _REPO_ROOT / test_file
     tree = ast.parse(path.read_text(), filename=test_file)
