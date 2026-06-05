@@ -20,6 +20,14 @@ def _module_with_logger() -> ModuleType:
     return cast(ModuleType, SimpleNamespace(logger=logger))
 
 
+def _raise_boom() -> None:
+    """Raise ``RuntimeError`` to drive the helper's body-error restore path.
+
+    :raises RuntimeError: Always, with message ``boom``.
+    """
+    raise RuntimeError("boom")
+
+
 def test_assert_no_logger_exceptions_no_calls_passes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -46,10 +54,10 @@ def test_assert_no_logger_exceptions_on_exception_call_raises(
             module.logger.exception("boom")
 
 
-def test_assert_no_logger_exceptions_restores_logger(
+def test_assert_no_logger_exceptions_restores_logger_on_exit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The patched ``logger`` is reverted once monkeypatch tears down.
+    """The patched ``logger`` is restored when the context exits, not at teardown.
 
     :param monkeypatch: Pytest monkeypatch fixture passed to the helper.
     """
@@ -57,5 +65,19 @@ def test_assert_no_logger_exceptions_restores_logger(
     original = module.logger
     with assert_no_logger_exceptions(monkeypatch, module):
         assert module.logger is not original
-    monkeypatch.undo()
+    assert module.logger is original
+
+
+def test_assert_no_logger_exceptions_restores_logger_on_body_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A body that raises still restores the original ``logger`` on exit.
+
+    :param monkeypatch: Pytest monkeypatch fixture passed to the helper.
+    """
+    module = _module_with_logger()
+    original = module.logger
+    with pytest.raises(RuntimeError, match="boom"):
+        with assert_no_logger_exceptions(monkeypatch, module):
+            _raise_boom()
     assert module.logger is original
