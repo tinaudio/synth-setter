@@ -185,6 +185,43 @@ def test_link_thoughts_skips_identical_collision_quietly(tmp_path: Path) -> None
     assert not list((primary / "thoughts" / "shared" / "plans").glob("*.from-*"))
 
 
+def test_link_thoughts_relinks_a_symlink_pointing_elsewhere(tmp_path: Path) -> None:
+    """A thoughts symlink aimed off-central is repointed to central, not treated as a no-op.
+
+    :param tmp_path: holds the primary checkout, the worktree, and a stray link target.
+    """
+    primary = tmp_path / "primary"
+    _init_primary_repo(primary)
+    worktree = tmp_path / "wt"
+    _git(primary, "worktree", "add", "--detach", "-q", str(worktree))
+    stray = tmp_path / "stray"
+    stray.mkdir()
+    (worktree / "thoughts").symlink_to(stray)
+
+    stdout = _make_link_thoughts(worktree)
+
+    assert "already linked" not in stdout
+    assert (worktree / "thoughts").resolve() == (primary / "thoughts").resolve()
+
+
+def test_link_thoughts_migrates_a_path_with_spaces(tmp_path: Path) -> None:
+    """A worktree file whose path contains spaces migrates to the matching central path intact.
+
+    :param tmp_path: holds the primary checkout and the worktree with a spaced doc path.
+    """
+    primary = tmp_path / "primary"
+    _init_primary_repo(primary)
+    worktree = tmp_path / "wt"
+    _git(primary, "worktree", "add", "--detach", "-q", str(worktree))
+    doc = worktree / "thoughts" / "shared" / "my notes" / "a doc.md"
+    doc.parent.mkdir(parents=True)
+    doc.write_text("spaced")
+
+    _make_link_thoughts(worktree)
+
+    assert (primary / "thoughts" / "shared" / "my notes" / "a doc.md").read_text() == "spaced"
+
+
 def test_link_thoughts_symlink_is_gitignored(tmp_path: Path) -> None:
     """After linking, the worktree's thoughts symlink is gitignored, not a dirty untracked entry.
 

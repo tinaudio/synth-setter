@@ -203,10 +203,13 @@ link-thoughts: ## Symlink this worktree's thoughts/ to the primary checkout's ce
 	central="$$primary/thoughts"; \
 	mkdir -p "$$central"; \
 	if [ -L "$$here/thoughts" ]; then \
-		echo "thoughts/ already linked -> $$(readlink "$$here/thoughts")"; exit 0; \
+		if [ "$$(readlink "$$here/thoughts")" = "$$central" ]; then \
+			echo "thoughts/ already linked -> $$central"; exit 0; \
+		fi; \
+		rm -f "$$here/thoughts"; \
 	fi; \
 	if [ -d "$$here/thoughts" ]; then \
-		find "$$here/thoughts" -type f | while read -r f; do \
+		find "$$here/thoughts" -type f | while IFS= read -r f; do \
 			rel="$${f#"$$here/thoughts/"}"; \
 			if [ -e "$$central/$$rel" ]; then \
 				if ! cmp -s "$$f" "$$central/$$rel"; then \
