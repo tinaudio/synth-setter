@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780677861635,
+  "lastUpdate": 1780684256475,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -5874,6 +5874,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.05992227792739868,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2c0d0cd3c8b57ee5f4efa65e5e2be3929269558f",
+          "message": "refactor(testing): hand-written process fake, raise-based leak assert (#1448)\n\n* refactor(testing): replace MagicMock process double and brittle warning assertion in vst core tests\n\nSwap the ``MagicMock``-backed ``_fake_plugin`` for a tiny hand-written\n``_RenderFakePlugin`` whose ``process`` returns a correctly-shaped\n``(channels, num_samples)`` float32 buffer, mirroring the canonical\n``FakeVST3Plugin.process`` output contract; track render via an explicit\n``process_called`` flag instead of the mock's ``.called``.\n\nReplace the brittle ``logger.warning.call_count == 1`` assertion in the\nworker-leak test with the real observable behaviour — the raised\n``RenderWorkerLeaked`` (already asserted via ``pytest.raises``) — and drop\nthe now-unused logger stub. Justified threading mocks are unchanged.\n\nRefs #1445\n\n* refactor(testing): make _RenderFakePlugin honour channels and flush shape\n\nAddress Copilot review: the fake now mirrors FakeVST3Plugin.process — flush\ncalls (empty midi_events) return (channels, 0) and renders return\n(channels, num_samples) derived from the caller's channels/duration/sample_rate,\nso a wrong channel count from render_params would surface here. Drops the unused\naudio_shape constructor arg and the misleading \"fixed shape\" docstring.\n\nRefs #1445\n\n* refactor(testing): reuse canonical FakeVST3Plugin in vst core tests\n\nDrop the duplicated _RenderFakePlugin double from test_core.py and reuse\nthe canonical FakeVST3Plugin already shared via conftest. The preloaded-\nplugin test now asserts on observable state — render_params returns\nnon-silent audio for the note-on render — instead of a process_called\nflag, so no shared-fake change was needed.\n\nRefs #1445",
+          "timestamp": "2026-06-05T13:50:26-04:00",
+          "tree_id": "a617f208128a84e8f6b4df2df6847691e8d8259b",
+          "url": "https://github.com/tinaudio/synth-setter/commit/2c0d0cd3c8b57ee5f4efa65e5e2be3929269558f"
+        },
+        "date": 1780684255433,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.239885091781616,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 5.325652413321659,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.01861080713570118,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.014451742172241211,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.1317944526672363,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 15.345890336666685,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.363929748535156,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.619336991105229,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.028001565486192703,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.029003441333770752,
             "unit": "1-cos"
           },
           {
