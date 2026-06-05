@@ -7,6 +7,7 @@ no TensorBoard file writes).
 
 from unittest.mock import MagicMock
 
+from lightning.pytorch import Trainer
 from lightning.pytorch.loggers import CSVLogger, TensorBoardLogger, WandbLogger
 from matplotlib.figure import Figure
 
@@ -18,8 +19,13 @@ def _make_trainer(
     global_step: int = 42,
     is_global_zero: bool = True,
 ) -> MagicMock:
-    """Build a stand-in ``Trainer`` exposing ``loggers``, ``global_step``, and rank."""
-    trainer = MagicMock()
+    """Build a stand-in ``Trainer`` exposing ``loggers``, ``global_step``, and rank.
+
+    ``spec=Trainer`` confines the mock to the real ``Trainer`` interface, so a
+    typo'd attribute access in the code under test raises ``AttributeError``
+    instead of silently auto-creating a child mock.
+    """
+    trainer = MagicMock(spec=Trainer)
     trainer.loggers = loggers
     trainer.global_step = global_step
     trainer.is_global_zero = is_global_zero
