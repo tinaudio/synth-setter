@@ -1,9 +1,10 @@
 """Build a symlinked view of rendered audio with ``pred.wav`` permuted across sample dirs.
 
 Each ``sample_*`` child symlinks ``target.wav`` to its own target and ``pred.wav``
-to a *different* sample's pred (seeded non-identity permutation), so recomputed
-metrics score each target against a pred rendered from identical params but a
-different render-order position. The source ``audio/`` dir is never modified.
+under a seeded non-identity permutation, so recomputed metrics score each target
+against a pred rendered from identical params but a different render-order
+position. The permutation moves at least one ``pred.wav`` but may keep others in
+place. The source ``audio/`` dir is never modified.
 Gated on uniform params across dirs — see #489.
 """
 
@@ -18,7 +19,10 @@ _PARAMS_FILENAME = "params.csv"
 
 
 def _sample_dirs(audio_dir: Path) -> list[Path]:
-    """Find the sample dirs holding both a ``pred.wav`` and a ``params.csv``.
+    """Find the sample dirs holding a ``pred.wav``, a ``target.wav``, and a ``params.csv``.
+
+    All three are required because the shuffle symlinks both ``pred.wav`` and
+    ``target.wav``; a dir missing either would yield a dangling link.
 
     :param audio_dir: Directory whose ``sample_*`` children are candidates.
     :returns: Matches sorted by path, so the permutation is stable across filesystems.
@@ -26,7 +30,10 @@ def _sample_dirs(audio_dir: Path) -> list[Path]:
     return sorted(
         d
         for d in audio_dir.glob("sample_*")
-        if d.is_dir() and (d / _PRED_FILENAME).is_file() and (d / _PARAMS_FILENAME).is_file()
+        if d.is_dir()
+        and (d / _PRED_FILENAME).is_file()
+        and (d / _TARGET_FILENAME).is_file()
+        and (d / _PARAMS_FILENAME).is_file()
     )
 
 
@@ -68,7 +75,7 @@ def _draw_non_identity_permutation(n: int, seed: int) -> list[int]:
     return permutation
 
 
-def shuffle_pred_audio(audio_dir: Path, dest_dir: Path, seed: int) -> list[int]:  # noqa: DOC502
+def shuffle_pred_audio(audio_dir: Path, dest_dir: Path, seed: int) -> list[int]:
     """Build ``dest_dir`` as a symlinked view of ``audio_dir`` with ``pred.wav`` permuted.
 
     Fewer than two sample dirs cannot be shuffled, so the identity permutation is
@@ -78,24 +85,37 @@ def shuffle_pred_audio(audio_dir: Path, dest_dir: Path, seed: int) -> list[int]:
     source paths: ``target.wav`` to its own sample's target and ``pred.wav`` to the
     pred of the permuted source dir. The source tree is never modified.
 
-    A pre-existing ``dest_dir`` is cleared first; because it holds only symlinks,
-    deleting it never touches the real audio it points at.
+    A pre-existing ``dest_dir`` is cleared first — a symlink or file is unlinked,
+    a real directory is removed wholesale. Because the dest tree holds only
+    symlinks, clearing it never touches the real audio it points at.
 
     :param audio_dir: ``audio/`` dir of ``sample_*`` subdirs, each with a
-        ``pred.wav`` and a ``params.csv``.
-    :param dest_dir: Directory to build; must not be inside ``audio_dir``.
+        ``pred.wav``, a ``target.wav``, and a ``params.csv``.
+    :param dest_dir: Directory to build; must not be inside ``audio_dir``, so
+        that clearing or building it cannot mutate the source tree.
     :param seed: Seed for the permutation; identical seeds reproduce it.
     :returns: The permutation as ``dest_idx -> src_idx`` over the sorted sample
         dirs — ``dest_dir/sample_i/pred.wav`` links to the pred of dir ``perm[i]``.
-    :raises ValueError: when the params gate finds a non-uniform ``params.csv``.
+    :raises ValueError: when ``dest_dir`` is inside ``audio_dir``, or when the
+        params gate finds a non-uniform ``params.csv``.
     """
+    resolved_audio = audio_dir.resolve()
+    resolved_dest = dest_dir.resolve()
+    if resolved_dest == resolved_audio or resolved_audio in resolved_dest.parents:
+        raise ValueError(
+            f"dest_dir ({dest_dir}) must not be inside audio_dir ({audio_dir}); "
+            "building the symlink view there would mutate the source tree."
+        )
+
     sample_dirs = _sample_dirs(audio_dir)
     if len(sample_dirs) < 2:
         return list(range(len(sample_dirs)))
 
     _assert_uniform_params(sample_dirs)
 
-    if dest_dir.exists():
+    if dest_dir.is_symlink() or dest_dir.is_file():
+        dest_dir.unlink()
+    elif dest_dir.is_dir():
         shutil.rmtree(dest_dir)
 
     permutation = _draw_non_identity_permutation(len(sample_dirs), seed)

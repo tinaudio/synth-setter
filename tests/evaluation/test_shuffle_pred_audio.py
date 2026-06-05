@@ -281,6 +281,66 @@ def test_shuffle_pred_audio_no_samples_returns_empty_no_dest(tmp_path: Path) -> 
     assert not dest_dir.exists()
 
 
+def test_shuffle_pred_audio_excludes_sample_dir_missing_target(tmp_path: Path) -> None:
+    """A ``sample_*`` dir without target.wav is skipped, never linked into the dest.
+
+    :param tmp_path: Holds the default samples plus one missing its target.wav.
+    """
+    audio_dir = _build_audio_dir(tmp_path)
+    (audio_dir / "sample_3" / "target.wav").unlink()
+    dest_dir = tmp_path / "shuffled"
+
+    permutation = shuffle_pred_audio(audio_dir, dest_dir, seed=_SEED)
+
+    assert len(permutation) == _SAMPLE_COUNT - 1
+    assert not (dest_dir / "sample_3").exists()
+
+
+def test_shuffle_pred_audio_clears_stale_dest_symlink(tmp_path: Path) -> None:
+    """A dest path that is a symlink (not a dir) is unlinked before the build.
+
+    :param tmp_path: Parents the source tree and a symlink standing in for dest.
+    """
+    audio_dir = _build_audio_dir(tmp_path)
+    stale_target = tmp_path / "stale_dir"
+    stale_target.mkdir()
+    dest_dir = tmp_path / "shuffled"
+    dest_dir.symlink_to(stale_target)
+
+    permutation = shuffle_pred_audio(audio_dir, dest_dir, seed=_SEED)
+
+    assert not dest_dir.is_symlink()
+    assert len(list(dest_dir.glob("sample_*"))) == len(permutation)
+
+
+def test_shuffle_pred_audio_clears_stale_dest_file(tmp_path: Path) -> None:
+    """A dest path that is a regular file is unlinked before the build.
+
+    :param tmp_path: Parents the source tree and a file standing in for dest.
+    """
+    audio_dir = _build_audio_dir(tmp_path)
+    dest_dir = tmp_path / "shuffled"
+    dest_dir.write_text("stale")
+
+    shuffle_pred_audio(audio_dir, dest_dir, seed=_SEED)
+
+    assert dest_dir.is_dir()
+
+
+def test_shuffle_pred_audio_rejects_dest_inside_audio_dir(tmp_path: Path) -> None:
+    """A dest dir nested under audio_dir is refused, leaving the source untouched.
+
+    :param tmp_path: Parents the source tree whose dest would nest inside it.
+    """
+    audio_dir = _build_audio_dir(tmp_path)
+    dest_dir = audio_dir / "shuffled"
+
+    with pytest.raises(ValueError, match="must not be inside"):
+        shuffle_pred_audio(audio_dir, dest_dir, seed=_SEED)
+
+    assert not dest_dir.exists()
+
+
 def test_shuffle_pred_audio_ignores_non_sample_dirs(tmp_path: Path) -> None:
     """Only ``sample_*`` dirs count, even when a stray dir holds both files.
 
