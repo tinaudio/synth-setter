@@ -75,6 +75,12 @@ MEL_PARAMS = [
 
 
 def compute_mel_specs(y: np.ndarray, sample_rate: float = 44100.0) -> list[np.ndarray]:
+    """Compute log-Mel spectrograms for each entry in ``MEL_PARAMS``.
+
+    :param y: Mono audio waveform, shape ``(T,)``.
+    :param sample_rate: Sample rate in Hz.
+    :returns: One dB-scaled mel spectrogram per ``MEL_PARAMS`` entry.
+    """
     mel_specs = []
     for window_size, hop_size, n_mels in MEL_PARAMS:
         window_size = int(window_size * sample_rate / 1000.0)
@@ -111,6 +117,16 @@ scatter = None
 
 
 def compute_jtfs(y: np.ndarray, J: int = 10, Q: int = 12) -> np.ndarray:
+    """Apply the joint time-frequency scattering transform to ``y``.
+
+    Caches the ``Scattering1D`` object module-wide keyed on the input shape;
+    reinitialised automatically when the shape changes.
+
+    :param y: Audio waveform array.
+    :param J: Log-scale resolution (number of octaves).
+    :param Q: Quality factor (wavelets per octave).
+    :returns: Scattering coefficients array.
+    """
     global scatter
     if scatter is None:
         scatter = Scattering1D(J=J, Q=Q, shape=y.shape[-1])
@@ -234,6 +250,13 @@ def compute_sot(target: np.ndarray, pred: np.ndarray) -> float:
 
 
 def compute_rms(target: np.ndarray, pred: np.ndarray, sample_rate: float = 44100.0) -> float:
+    """Return the cosine similarity of the RMS amplitude envelopes of ``target`` and ``pred``.
+
+    :param target: Target audio, shape ``(C, T)``.
+    :param pred: Predicted audio, same shape as ``target``.
+    :param sample_rate: Sample rate in Hz; governs window and hop lengths.
+    :returns: Cosine similarity in ``[-1, 1]``, or ``0.0`` when either envelope is silent.
+    """
     logger.info("Computing amp env...")
     win_length = int(0.05 * sample_rate)
     hop_length = int(0.025 * sample_rate)
@@ -266,6 +289,11 @@ def compute_rms(target: np.ndarray, pred: np.ndarray, sample_rate: float = 44100
 
 
 def compute_metrics_on_dir(audio_dir: Path) -> dict[str, float]:
+    """Load ``target.wav`` and ``pred.wav`` from ``audio_dir`` and return all metric scores.
+
+    :param audio_dir: Directory containing ``target.wav`` and ``pred.wav``.
+    :returns: Dict mapping metric name to scalar score.
+    """
     with AudioFile(str(audio_dir / "target.wav")) as target_file:
         target = target_file.read(target_file.frames)
     with AudioFile(str(audio_dir / "pred.wav")) as pred_file:
@@ -280,6 +308,12 @@ def compute_metrics_on_dir(audio_dir: Path) -> dict[str, float]:
 
 
 def compute_metrics(audio_dirs: list[Path], output_dir: Path) -> Path:
+    """Score each dir in ``audio_dirs`` and write a per-sample CSV to ``output_dir``.
+
+    :param audio_dirs: Sample dirs to score (each must contain ``target.wav`` + ``pred.wav``).
+    :param output_dir: Directory for the per-worker ``metrics-<pid>.csv`` output file.
+    :returns: Path to the written CSV file.
+    """
     idxs = []
     rows = []
     for sample_dir in audio_dirs:
@@ -299,8 +333,8 @@ def compute_metrics(audio_dirs: list[Path], output_dir: Path) -> Path:
 def _aggregate_metrics(audio_dirs: list[Path], work_dir: Path, num_workers: int) -> pd.DataFrame:
     """Run the parallel per-sample metrics pass and return the concatenated DataFrame.
 
-    Intermediate per-worker CSVs are written to ``work_dir`` and left there so the
-    caller can write ``metrics.csv`` from them if desired.
+    Intermediate per-worker CSVs are written to ``work_dir`` and cleaned up by the
+    caller when no longer needed.
 
     :param audio_dirs: Sample dirs to score (each must contain ``target.wav`` + ``pred.wav``).
     :param work_dir: Directory for per-worker intermediate ``metrics-<pid>.csv`` files.
@@ -309,7 +343,11 @@ def _aggregate_metrics(audio_dirs: list[Path], work_dir: Path, num_workers: int)
     """
     sublist_length = math.ceil(len(audio_dirs) / num_workers) if audio_dirs else 1
     sublists = [
-        audio_dirs[i * sublist_length : (i + 1) * sublist_length] for i in range(num_workers)
+        s
+        for s in (
+            audio_dirs[i * sublist_length : (i + 1) * sublist_length] for i in range(num_workers)
+        )
+        if s
     ]
     metric_dfs = []
     with ProcessPoolExecutor(max_workers=num_workers) as executor:
@@ -348,17 +386,21 @@ def main(audio_dir: str, output_dir: str, num_workers: int, shuffle_seed: int) -
     :param num_workers: Number of parallel worker processes.
     :param shuffle_seed: Permutation seed for the render-order probe; non-zero
         implies the probe is intended and raises if params are not uniform.
-    :raises ValueError: when ``shuffle_seed`` is non-zero but ``params.csv``
-        files are not uniform across sample dirs.
+    :raises ValueError: when no valid sample dirs are found, or when
+        ``shuffle_seed`` is non-zero but ``params.csv`` files are not uniform.
     """
-    audio_dir = Path(audio_dir)
+    audio_dir_path = Path(audio_dir)
     os.makedirs(output_dir, exist_ok=True)
-    output_dir = Path(output_dir)
+    output_dir_path = Path(output_dir)
 
-    audio_dirs = find_possible_subdirs(audio_dir)
+    audio_dirs = find_possible_subdirs(audio_dir_path)
+    if not audio_dirs:
+        raise ValueError(
+            f"No valid sample dirs with pred.wav and target.wav found under {audio_dir_path}."
+        )
 
-    df = _aggregate_metrics(audio_dirs, output_dir, num_workers)
-    df.to_csv(output_dir / "metrics.csv")
+    df = _aggregate_metrics(audio_dirs, output_dir_path, num_workers)
+    df.to_csv(output_dir_path / "metrics.csv")
 
     columnwise_means = df.mean(axis=0)
     columnwise_stds = df.std(axis=0)
@@ -366,7 +408,7 @@ def main(audio_dir: str, output_dir: str, num_workers: int, shuffle_seed: int) -
     logger.info("metric stds:\n{s}", s=columnwise_stds.to_string())
 
     pd.DataFrame({"mean": columnwise_means, "std": columnwise_stds}).to_csv(
-        output_dir / "aggregated_metrics.csv"
+        output_dir_path / "aggregated_metrics.csv"
     )
 
     # Render-order probe (#489): filter to sample_* dirs to match shuffle_pred_audio._sample_dirs
@@ -380,20 +422,20 @@ def main(audio_dir: str, output_dir: str, num_workers: int, shuffle_seed: int) -
             "dataset or omit --shuffle_seed to silently skip the probe."
         )
     if uniform and len(probe_dirs) >= 2:
-        shuffled_view = output_dir / "shuffled_audio"
-        permutation = shuffle_pred_audio(audio_dir, shuffled_view, shuffle_seed)
+        shuffled_view = output_dir_path / "shuffled_audio"
+        permutation = shuffle_pred_audio(audio_dir_path, shuffled_view, shuffle_seed)
         if len(permutation) >= 2:
             logger.info(
                 "Render-order probe: scoring permuted pred audio (seed={s})", s=shuffle_seed
             )
             shuffled_dirs = find_possible_subdirs(shuffled_view)
-            shuffled_tmp = output_dir / "_shuffle_tmp"
+            shuffled_tmp = output_dir_path / "_shuffle_tmp"
             shuffled_tmp.mkdir(exist_ok=True)
             try:
                 shuffled_df = _aggregate_metrics(shuffled_dirs, shuffled_tmp, num_workers)
                 pd.DataFrame(
                     {"mean": shuffled_df.mean(axis=0), "std": shuffled_df.std(axis=0)}
-                ).to_csv(output_dir / "aggregated_metrics_shuffled.csv")
+                ).to_csv(output_dir_path / "aggregated_metrics_shuffled.csv")
             finally:
                 shutil.rmtree(shuffled_tmp, ignore_errors=True)
 

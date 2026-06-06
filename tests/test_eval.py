@@ -384,6 +384,60 @@ def test_evaluate_unknown_mode_returns_only_callback_metrics(
     assert metric_dict == {}
 
 
+@pytest.mark.fake_vst
+def test_evaluate_predict_mode_includes_shuffled_audio_metrics_when_subprocess_writes_shuffled_csv(
+    tmp_path: Path,
+    fake_surge_smoke_datasets: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Merges ``shuffled_audio/*`` keys when the metrics subprocess also writes the shuffled CSV.
+
+    The fake subprocess writes both ``aggregated_metrics.csv`` and
+    ``aggregated_metrics_shuffled.csv``, exercising the ``evaluate()`` →
+    ``_run_predict_postprocessing`` → ``_load_audio_metrics`` path that merges
+    the shuffled probe output into the returned metric dict under the
+    ``shuffled_audio/`` prefix. Pins that the new branch in ``_load_audio_metrics``
+    is wired through the real ``evaluate()`` entrypoint (#489).
+
+    :param tmp_path: Hydra ``output_dir``; output files are derived beneath it.
+    :param fake_surge_smoke_datasets: CPU-fast surge_4 dataset (no real VST).
+    :param monkeypatch: Stubs render/metrics subprocesses; no real VST launches.
+    """
+    _SHUFFLED_CSV = ",mean,std\nmss,0.8,0.05\nwmfcc,0.4,0.03\nsot,0.3,0.02\nrms,0.7,0.01\n"
+
+    def _fake_run_with_shuffled(args: list[str], **_kwargs: object) -> None:
+        is_render = any(_PREDICT_VST_AUDIO_FRAGMENT in a for a in args)
+        is_metrics = any(_COMPUTE_AUDIO_METRICS_FRAGMENT in a for a in args)
+        if not (is_render or is_metrics):
+            return
+        out_dir = Path(args[args.index("-m") + 3])
+        out_dir.mkdir(parents=True, exist_ok=True)
+        if is_metrics:
+            (out_dir / "aggregated_metrics.csv").write_text(_FAKE_AGGREGATED_METRICS_CSV)
+            (out_dir / "aggregated_metrics_shuffled.csv").write_text(_SHUFFLED_CSV)
+
+    cfg = _compose_fake_oracle_eval_cfg(tmp_path, fake_surge_smoke_datasets, mode="predict")
+    monkeypatch.setattr("synth_setter.cli.eval.subprocess.run", _fake_run_with_shuffled)
+    monkeypatch.setattr("synth_setter.cli.eval.vst_headless_wrapper", lambda: object())
+    monkeypatch.setattr(
+        "synth_setter.cli.eval.as_file",
+        lambda _traversable: nullcontext(Path("/fake/headless-wrapper")),
+    )
+
+    HydraConfig().set_config(cfg)
+    try:
+        metric_dict, _ = evaluate(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert metric_dict["shuffled_audio/mss_mean"] == pytest.approx(0.8)
+    assert metric_dict["shuffled_audio/rms_std"] == pytest.approx(0.01)
+    for key in ("mss", "wmfcc", "sot", "rms"):
+        for stat in ("mean", "std"):
+            value = metric_dict[f"shuffled_audio/{key}_{stat}"]
+            assert isinstance(value, float) and math.isfinite(value)
+
+
 @pytest.mark.parametrize("render_group", ["surge_simple", "surge_xt"])
 def test_eval_render_group_exposes_postprocessing_keys(render_group: str) -> None:
     """Composing ``render=<group>`` into eval exposes the three keys postprocessing reads.
