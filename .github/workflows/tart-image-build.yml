@@ -148,13 +148,18 @@ jobs:
       # The build pulls the cirruslabs base image, runs every provisioner, and
       # leaves a local VM named "$VM_NAME". On failure the provisioner output
       # (brew/uv/pytest) is the diagnostic — packer streams it verbatim.
+      # `vm_name` is passed through so the subsequent push/delete steps target
+      # the same VM regardless of the packer template's default.
       - name: packer build
         working-directory: tart
         env:
           GIT_REF: ${{ steps.ref.outputs.ref }}
         run: |
           set -euo pipefail
-          packer build -var "synth_setter_git_ref=${GIT_REF}" macos.pkr.hcl
+          packer build \
+            -var "synth_setter_git_ref=${GIT_REF}" \
+            -var "vm_name=${VM_NAME}" \
+            macos.pkr.hcl
 
       # `tart login` reads username then password from stdin when invoked
       # non-interactively. The subsequent `tart push` inherits the auth token.

@@ -323,7 +323,7 @@ docs:
     description: macOS VM dev-env path via Tart — prebuilt image or Packer build (§ B.3)
     sources:
       - pattern: "tart/**"
-        covers: "Packer template, packer variables (synth_setter_git_ref/python_version/uv_version/vm_name/surge_xt_version/codex_version), provisioner steps, brew packages (git/gh/jq/rclone/bats-core/tmux/zellij/node), Codex CLI + Antigravity (agy) installs, venv layout via `uv sync --frozen` (MPS-capable torch from PyPI), VST3 path, smoke tests, .zshrc auto-activation, ~/.zprofile env defaults (HYDRA_FULL_ERROR/PYTHONDONTWRITEBYTECODE/PYTHONFAULTHANDLER/PYTHONUNBUFFERED/WANDB_DATA_DIR), prebuilt image at registry-1.docker.io/tinaudio/synth-setter-macos, Docker Hub publishing workflow"
+        covers: "Packer template, packer variables (synth_setter_git_ref/python_version/uv_version/vm_name/surge_xt_version/codex_version/base_image_digest), provisioner steps, brew packages (git/gh/jq/rclone/bats-core/tmux/zellij/node), Codex CLI + Antigravity (agy) installs, venv layout via `uv sync --frozen` (MPS-capable torch from PyPI), VST3 path, smoke tests, .zshrc auto-activation, ~/.zprofile env defaults (HYDRA_FULL_ERROR/PYTHONDONTWRITEBYTECODE/PYTHONFAULTHANDLER/PYTHONUNBUFFERED/WANDB_DATA_DIR), prebuilt image at registry-1.docker.io/tinaudio/synth-setter-macos, Docker Hub publishing workflow"
         scope: "tart"
 
   # ── Surge XT interactive guide ──────────────────────────────────

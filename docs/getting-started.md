@@ -824,9 +824,11 @@ ssh admin@$(tart ip synth-setter-macos)           # password: admin
 > in `/etc/ssh/sshd_config` before exposing port 22.
 
 The image ships with the repo cloned at `~/synth-setter`, a venv synced from
-`uv.lock` (MPS-capable torch wheels from PyPI via `[tool.uv.sources]`
-`sys_platform` markers), Surge XT at `/Library/Audio/Plug-Ins/VST3/Surge XT.vst3`,
-and `source ~/synth-setter/.venv/bin/activate` appended to `~/.zshrc` so every
+`uv.lock` (MPS-capable torch wheels from PyPI's default index — the
+`[tool.uv.sources]` markers route Linux/Windows to the CUDA/CPU indexes but
+don't match `darwin`, so macOS falls through to PyPI), Surge XT at
+`/Library/Audio/Plug-Ins/VST3/Surge XT.vst3`, and
+`source ~/synth-setter/.venv/bin/activate` appended to `~/.zshrc` so every
 interactive shell has the venv active from login.
 
 Credentials for Claude Code, `gh`, R2, and W&B are **not** baked in — log in
