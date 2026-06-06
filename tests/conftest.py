@@ -830,7 +830,7 @@ def _cgroup_aware_cpu_count() -> int:
     """Return CPUs available to this process, honouring cgroup quota and affinity.
 
     Takes min(affinity, cgroup_quota) so ``-n auto`` doesn't over-subscribe the
-    container — see #1490 for the "worker crashed" failure mode this fixes.
+    container — see #1493 for the "worker crashed" failure mode this fixes.
 
     :returns: Usable CPU count, always at least 1.
     """
