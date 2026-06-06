@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -13,7 +14,6 @@ from pydantic import ValidationError
 from synth_setter.data.vst import param_specs
 from synth_setter.pipeline.schemas.spec import (
     DatasetSpec,
-    DatasetSrcConfig,
     OutputFormat,
     RenderConfig,
     ShardSpec,
@@ -1102,32 +1102,44 @@ class TestFromHydraCfg:
         with pytest.raises(TypeError):
             DatasetSpec.from_hydra_cfg(cfg)  # type: ignore[arg-type]
 
+    def test_stale_datasetsrc_key_is_rejected_with_migration_pointer(self) -> None:
+        """A composed cfg carrying ``datasetsrc`` raises instead of silently dropping it.
 
-class TestDatasetSrc:
-    """``DatasetSpec.datasetsrc`` — optional dataset-copy source."""
+        The mask keeps only model fields, so the back-compat shim never sees a
+        Hydra-side ``datasetsrc`` override; ``from_hydra_cfg`` rejects it up front
+        with a pointer to ``copy_dataset_root``.
+        """
+        from omegaconf import OmegaConf
 
-    def test_datasetsrc_defaults_to_none(self) -> None:
-        """A spec built without ``datasetsrc`` leaves the copy path disabled."""
+        cfg = OmegaConf.create(_valid_spec_kwargs())
+        cfg.datasetsrc = {"copy_dataset_root": "/data/source-dataset"}
+
+        with pytest.raises(ValueError, match="no longer a config key"):
+            DatasetSpec.from_hydra_cfg(cfg)
+
+
+class TestCopyDatasetRoot:
+    """``DatasetSpec.copy_dataset_root`` — optional flat dataset-copy source."""
+
+    def test_copy_dataset_root_defaults_to_none(self) -> None:
+        """A spec built without ``copy_dataset_root`` leaves the copy path disabled."""
         spec = DatasetSpec(**_valid_spec_kwargs())
 
-        assert spec.datasetsrc is None
+        assert spec.copy_dataset_root is None
 
-    def test_datasetsrc_mapping_validates_into_nested_config(self) -> None:
-        """A ``datasetsrc`` mapping composes into a nested ``DatasetSrcConfig``."""
-        spec = DatasetSpec(
-            **_valid_spec_kwargs(datasetsrc={"copy_dataset_root": "/data/source-dataset"})
-        )
+    def test_copy_dataset_root_string_is_stored_as_is(self) -> None:
+        """A ``copy_dataset_root`` string is kept verbatim on the spec."""
+        spec = DatasetSpec(**_valid_spec_kwargs(copy_dataset_root="/data/source-dataset"))
 
-        assert isinstance(spec.datasetsrc, DatasetSrcConfig)
-        assert spec.datasetsrc.copy_dataset_root == "/data/source-dataset"
+        assert spec.copy_dataset_root == "/data/source-dataset"
 
-    def test_datasetsrc_blank_copy_dataset_root_is_rejected(self) -> None:
+    def test_copy_dataset_root_blank_is_rejected(self) -> None:
         """A blank ``copy_dataset_root`` raises so the per-shard source path is never empty."""
         with pytest.raises(ValidationError, match="copy_dataset_root must not be blank"):
-            DatasetSrcConfig(copy_dataset_root="   ")
+            DatasetSpec(**_valid_spec_kwargs(copy_dataset_root="   "))
 
-    def test_datasetsrc_with_wds_output_is_rejected(self) -> None:
-        """Copy requires hdf5 output — pairing ``datasetsrc`` with wds fails at spec build.
+    def test_copy_dataset_root_with_wds_output_is_rejected(self) -> None:
+        """Copy requires hdf5 output — pairing it with wds fails at spec build.
 
         A ``.tar`` output has no same-named HDF5 source to read params from, so the
         misconfig should surface at launch (spec construction), not per-shard.
@@ -1136,24 +1148,81 @@ class TestDatasetSrc:
             DatasetSpec(
                 **_valid_spec_kwargs(
                     output_format="wds",
-                    datasetsrc={"copy_dataset_root": "/data/source-dataset"},
+                    copy_dataset_root="/data/source-dataset",
                 )
             )
 
-    def test_datasetsrc_extra_key_is_rejected(self) -> None:
-        """``DatasetSrcConfig`` is a strict trust boundary — unknown keys raise."""
-        with pytest.raises(ValidationError):
-            DatasetSrcConfig(copy_dataset_root="/data/src", unexpected="x")  # type: ignore[call-arg]
-
-    def test_datasetsrc_survives_json_round_trip(self) -> None:
+    def test_copy_dataset_root_survives_json_round_trip(self) -> None:
         """A worker reconstructing the spec from JSON sees the same copy source."""
+        spec = DatasetSpec(**_valid_spec_kwargs(copy_dataset_root="/data/source-dataset"))
+
+        restored = DatasetSpec.model_validate_json(spec.model_dump_json())
+
+        assert restored.copy_dataset_root == spec.copy_dataset_root
+
+    def test_legacy_datasetsrc_mapping_is_promoted(self) -> None:
+        """A legacy ``datasetsrc`` mapping from an old spec promotes to the flat field."""
         spec = DatasetSpec(
             **_valid_spec_kwargs(datasetsrc={"copy_dataset_root": "/data/source-dataset"})
         )
 
-        restored = DatasetSpec.model_validate_json(spec.model_dump_json())
+        assert spec.copy_dataset_root == "/data/source-dataset"
 
-        assert restored.datasetsrc == spec.datasetsrc
+    def test_legacy_datasetsrc_null_is_dropped(self) -> None:
+        """A legacy ``datasetsrc: null`` from an old spec loads as no copy source."""
+        spec = DatasetSpec(**_valid_spec_kwargs(datasetsrc=None))
+
+        assert spec.copy_dataset_root is None
+
+    def test_both_legacy_and_flat_keys_are_rejected(self) -> None:
+        """Carrying both shapes is ambiguous and raises."""
+        with pytest.raises(ValidationError, match="pass one shape, not both"):
+            DatasetSpec(
+                **_valid_spec_kwargs(
+                    datasetsrc={"copy_dataset_root": "/data/a"},
+                    copy_dataset_root="/data/b",
+                )
+            )
+
+    def test_legacy_datasetsrc_non_mapping_is_rejected(self) -> None:
+        """A legacy ``datasetsrc`` that is neither a mapping nor null is rejected."""
+        with pytest.raises(ValidationError, match="must be a mapping or null"):
+            DatasetSpec(**_valid_spec_kwargs(datasetsrc="/data/source-dataset"))
+
+    def test_legacy_datasetsrc_empty_mapping_is_rejected(self) -> None:
+        """A legacy ``datasetsrc: {}`` raises rather than silently disabling copy.
+
+        The removed ``DatasetSrcConfig`` required ``copy_dataset_root``; ``datasetsrc:
+        null`` is the way to disable copy, so an empty mapping is a misconfig.
+        """
+        with pytest.raises(ValidationError, match="must hold exactly a non-null"):
+            DatasetSpec(**_valid_spec_kwargs(datasetsrc={}))
+
+    def test_legacy_datasetsrc_null_inner_is_rejected(self) -> None:
+        """A legacy ``datasetsrc: {copy_dataset_root: null}`` raises, matching the old contract."""
+        with pytest.raises(ValidationError, match="must hold exactly a non-null"):
+            DatasetSpec(**_valid_spec_kwargs(datasetsrc={"copy_dataset_root": None}))
+
+    def test_legacy_datasetsrc_mapping_with_unexpected_key_is_rejected(self) -> None:
+        """A legacy ``datasetsrc`` mapping keeps the old single-key strictness."""
+        with pytest.raises(ValidationError, match="must hold exactly a non-null"):
+            DatasetSpec(
+                **_valid_spec_kwargs(datasetsrc={"copy_dataset_root": "/data/src", "stray": 1})
+            )
+
+    def test_legacy_datasetsrc_json_loads_via_model_validate_json(self) -> None:
+        """A serialized legacy-shaped spec (nested ``datasetsrc``) loads through the shim.
+
+        Exercises the shim's stated purpose: ``input_spec.json`` files materialized
+        before the flatten are reloaded from JSON, not just constructed in-memory.
+        """
+        data = json.loads(DatasetSpec(**_valid_spec_kwargs()).model_dump_json())
+        data.pop("copy_dataset_root")
+        data["datasetsrc"] = {"copy_dataset_root": "/data/source-dataset"}
+
+        restored = DatasetSpec.model_validate_json(json.dumps(data))
+
+        assert restored.copy_dataset_root == "/data/source-dataset"
 
 
 class TestValidateCopySource:

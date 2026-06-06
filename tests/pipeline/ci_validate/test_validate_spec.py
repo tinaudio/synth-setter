@@ -24,7 +24,7 @@ def _make_valid_spec(*, output_format: str = "hdf5", **overrides: object) -> dic
         "train_val_test_sizes": [32, 32, 32],
         "train_val_test_seeds": None,
         "base_seed": 42,
-        "datasetsrc": None,
+        "copy_dataset_root": None,
         "mask_degenerate_bins": False,
         "num_params": 92,
         "num_shards": 3,
