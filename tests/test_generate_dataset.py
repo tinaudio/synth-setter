@@ -3,10 +3,14 @@
 Covers tests that exercise ``from_hydra`` or the CLI subprocess end-to-end:
 an ``integration_r2``-gated end-to-end render that drives ``from_hydra``
 against ``cfg_dataset`` and asserts every shard lands at the spec-derived R2
-URI in real Cloudflare R2; and an ``integration_r2`` subprocess run of the
+URI in real Cloudflare R2; an ``integration_r2`` subprocess run of the
 ``smoke-shard-with-oracle-eval`` experiment that asserts the inline oracle
-eval's ``metrics.json`` holds bounded ``audio/*`` metrics. The integration
-tests auto-skip when ``rclone`` / R2 creds are absent.
+eval's per-split ``metrics.json`` holds bounded audio metrics under the bare
+``audio/*`` key for ``test`` and the namespaced ``<split>/audio/*`` key for
+``train``/``val``; and a variant with ``param_sample_cadence=shard`` that
+asserts the ``shuffled_audio/*`` group also appears (under the same per-split
+prefix) when all sample dirs share uniform ``params.csv`` (#489). The
+integration tests auto-skip when ``rclone`` / R2 creds are absent.
 
 Keep this module to tests that drive ``from_hydra`` or the real CLI subprocess.
 Config-composition and ``spec_from_cfg`` unit tests live in
@@ -67,38 +71,37 @@ def test_cfg_dataset_composes_and_validates_as_dataset_spec(
     assert spec.render.samples_per_shard >= 1
 
 
-def test_cfg_dataset_without_datasetsrc_composes_with_no_copy_source(
+def test_cfg_dataset_without_copy_dataset_root_composes_with_no_copy_source(
     cfg_dataset: DictConfig,
 ) -> None:
-    """A default compose leaves ``spec.datasetsrc`` unset (``dataset.yaml`` sets ``null``).
+    """A default compose leaves ``spec.copy_dataset_root`` unset (``dataset.yaml`` sets ``null``).
 
     :param cfg_dataset: Function-scoped fixture composing ``dataset.yaml`` with the
         ``generate_dataset/smoke-shard`` experiment and ``tmp_path``-pinned paths.
     """
     spec = spec_from_cfg(cfg_dataset)
-    assert spec.datasetsrc is None
+    assert spec.copy_dataset_root is None
 
 
-def test_cfg_dataset_with_datasetsrc_composes_copy_source_into_spec(
+def test_cfg_dataset_with_copy_dataset_root_composes_copy_source_into_spec(
     cfg_dataset: DictConfig,
 ) -> None:
-    """A ``datasetsrc`` override flows through ``spec_from_cfg`` into ``DatasetSpec``.
+    """A ``copy_dataset_root`` override flows through ``spec_from_cfg`` into ``DatasetSpec``.
 
     :param cfg_dataset: Function-scoped fixture composing ``dataset.yaml`` with the
         ``generate_dataset/smoke-shard`` experiment and ``tmp_path``-pinned paths.
     """
     with open_dict(cfg_dataset):
-        cfg_dataset.datasetsrc = {"copy_dataset_root": "/data/source-dataset"}
+        cfg_dataset.copy_dataset_root = "/data/source-dataset"
 
     spec = spec_from_cfg(cfg_dataset)
-    assert spec.datasetsrc is not None
-    assert spec.datasetsrc.copy_dataset_root == "/data/source-dataset"
+    assert spec.copy_dataset_root == "/data/source-dataset"
 
 
-def test_cfg_dataset_datasetsrc_with_wds_output_is_rejected(
+def test_cfg_dataset_copy_dataset_root_with_wds_output_is_rejected(
     cfg_dataset: DictConfig,
 ) -> None:
-    """``spec_from_cfg`` rejects a ``datasetsrc`` paired with ``output_format='wds'``.
+    """``spec_from_cfg`` rejects a ``copy_dataset_root`` paired with ``output_format='wds'``.
 
     The copy path reads each source shard as an HDF5 ``param_array``, so the
     ``DatasetSpec`` validator fails the spec at construction when output is not hdf5.
@@ -107,7 +110,7 @@ def test_cfg_dataset_datasetsrc_with_wds_output_is_rejected(
         ``generate_dataset/smoke-shard`` experiment and ``tmp_path``-pinned paths.
     """
     with open_dict(cfg_dataset):
-        cfg_dataset.datasetsrc = {"copy_dataset_root": "/data/source-dataset"}
+        cfg_dataset.copy_dataset_root = "/data/source-dataset"
         cfg_dataset.output_format = "wds"
 
     with pytest.raises(ValueError, match="supports output_format='hdf5' only"):
@@ -376,8 +379,10 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
     if not r2_io.is_r2_reachable():
         pytest.skip("R2 not reachable (rclone not on PATH or `rclone lsd r2:` failed)")
 
-    prefix = (
-        f"test-runs/test_oracle_eval_inline_writes_bounded_audio_metrics/{uuid.uuid4().hex[:12]}/"
+    # Override prefix_root (not prefix) so finalize_from_spec's assert_r2_prefix_matches
+    # passes — the check validates prefix == make_r2_prefix(prefix_root, task_name, run_id).
+    prefix_root = (
+        f"test-runs/test_oracle_eval_inline_writes_bounded_audio_metrics/{uuid.uuid4().hex[:12]}"
     )
     run_dir = tmp_path / "hydra_run"
     worktree_src = Path(__file__).resolve().parents[1] / "src"
@@ -396,7 +401,7 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
                 "-m",
                 "synth_setter.cli.generate_dataset",
                 "experiment=generate_dataset/smoke-shard-with-oracle-eval",
-                f"+r2.prefix={prefix}",
+                f"r2.prefix_root={prefix_root}",
                 f"hydra.run.dir={run_dir}",
             ],
             env=env,
@@ -411,7 +416,7 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
             f"--- STDERR (tail) ---\n{result.stderr[-2000:]}"
         )
 
-        # One metrics.json per split: oracle_eval/<split>/<run_id>/.
+        # One metrics.json per split: oracle_eval/<split>/<run_id>/metrics/metrics.json.
         metrics_files = list(run_dir.glob("oracle_eval/*/*/metrics/metrics.json"))
         assert len(metrics_files) == 3, (
             f"expected three oracle-eval metrics.json files (one per split) under "
@@ -420,33 +425,139 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
         bounds = ORACLE_AUDIO_METRIC_BOUNDS
         for mf in metrics_files:
             metrics = json.loads(mf.read_text())
+            # All splits resume one wandb run: test keeps the bare ``audio/*`` key
+            # while train/val are namespaced ``<split>/audio/*`` so none overwrites.
+            split = mf.parent.parent.parent.name
+            metric_prefix = "" if split == "test" else f"{split}/"
             for name in _ORACLE_AUDIO_METRICS:
                 for stat in ("mean", "std"):
-                    key = f"audio/{name}_{stat}"
+                    key = f"{metric_prefix}audio/{name}_{stat}"
                     value = metrics.get(key)
                     assert isinstance(value, float) and math.isfinite(value), (
-                        f"{key} is not a finite float: {value!r} (split={mf.parent.parent.parent.name}, "
-                        f"metrics={metrics})"
+                        f"{key} is not a finite float: {value!r} (split={split}, metrics={metrics})"
                     )
 
             # fake_oracle returns params verbatim, so the re-rendered audio matches
             # the target up to Surge XT render jitter: mean distances stay under the
             # canonical envelope and the rms cosine stays above its floor.
-            assert metrics["audio/mss_mean"] < bounds.mss_max, (
-                mf.parent.parent.parent.name,
-                metrics,
-            )
-            assert metrics["audio/wmfcc_mean"] < bounds.wmfcc_max, (
-                mf.parent.parent.parent.name,
-                metrics,
-            )
-            assert metrics["audio/sot_mean"] < bounds.sot_max, (
-                mf.parent.parent.parent.name,
-                metrics,
-            )
-            assert metrics["audio/rms_mean"] > bounds.rms_min, (
-                mf.parent.parent.parent.name,
-                metrics,
-            )
+            assert metrics[f"{metric_prefix}audio/mss_mean"] < bounds.mss_max, (split, metrics)
+            assert metrics[f"{metric_prefix}audio/wmfcc_mean"] < bounds.wmfcc_max, (split, metrics)
+            assert metrics[f"{metric_prefix}audio/sot_mean"] < bounds.sot_max, (split, metrics)
+            assert metrics[f"{metric_prefix}audio/rms_mean"] > bounds.rms_min, (split, metrics)
     finally:
-        r2_io.purge_prefix(cfg_dataset.r2.bucket, prefix)
+        r2_io.purge_prefix(cfg_dataset.r2.bucket, f"{prefix_root}/")
+
+
+@pytest.mark.integration_r2
+@pytest.mark.r2
+@pytest.mark.requires_vst
+@pytest.mark.slow
+def test_oracle_eval_inline_writes_shuffled_audio_metrics_when_params_uniform(
+    cfg_dataset: DictConfig,
+    tmp_path: Path,
+) -> None:
+    """Oracle eval with ``param_sample_cadence=shard`` writes bounded ``shuffled_audio/*`` metrics.
+
+    ``param_sample_cadence=shard`` gives every sample in the test shard the
+    same ``params.csv``. The auto-shuffle probe (#489) in
+    ``compute_audio_metrics`` detects uniform params and runs a second metrics
+    pass with permuted ``pred.wav``, writing ``aggregated_metrics_shuffled.csv``;
+    ``_load_audio_metrics`` then merges those values into ``metrics.json`` under
+    ``shuffled_audio/<name>_{mean,std}``.
+
+    Asserts each audio metric (mss, wmfcc, sot, rms) produces a finite, bounded
+    value under both the ``audio/`` and ``shuffled_audio/`` prefixes.  Because
+    all samples share one patch, shuffled predictions match the same target as
+    the originals, so the shuffled means satisfy the same
+    ``ORACLE_AUDIO_METRIC_BOUNDS`` envelope.
+
+    :param cfg_dataset: Composed config; read only for ``r2.bucket`` (cleanup
+        purge).
+    :param tmp_path: Holds the Hydra run dir (hence the eval's
+        ``metrics.json``) and the pinned operator workspace.
+    """
+    if not r2_io.is_r2_reachable():
+        pytest.skip("R2 not reachable (rclone not on PATH or `rclone lsd r2:` failed)")
+
+    # Override prefix_root (not prefix) so finalize_from_spec's assert_r2_prefix_matches
+    # passes — the check validates prefix == make_r2_prefix(prefix_root, task_name, run_id).
+    r2_prefix_root = f"test-runs/test_oracle_eval_shuffled_audio_metrics/{uuid.uuid4().hex[:12]}"
+    run_dir = tmp_path / "hydra_run"
+    worktree_src = Path(__file__).resolve().parents[1] / "src"
+    env = {
+        **os.environ,
+        "WANDB_MODE": "offline",
+        "PYTHONPATH": f"{worktree_src}:{os.environ.get('PYTHONPATH', '')}",
+        "SYNTH_SETTER_WORKSPACE": str(tmp_path),
+    }
+    try:
+        result = subprocess.run(  # noqa: S603 — args are test-controlled literals
+            [
+                sys.executable,
+                "-m",
+                "synth_setter.cli.generate_dataset",
+                "experiment=generate_dataset/smoke-shard-with-oracle-eval",
+                f"r2.prefix_root={r2_prefix_root}",
+                f"hydra.run.dir={run_dir}",
+                # Uniform params within each shard so the auto-shuffle probe fires.
+                "render.param_sample_cadence=shard",
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=600,
+        )
+        assert result.returncode == 0, (
+            f"generate-dataset CLI exited {result.returncode}\n"
+            f"--- STDOUT (tail) ---\n{result.stdout[-2000:]}\n"
+            f"--- STDERR (tail) ---\n{result.stderr[-2000:]}"
+        )
+
+        # One metrics.json per split: oracle_eval/<split>/<run_id>/. Each split is
+        # a single 4-sample shard, so cadence=shard makes every split's params
+        # uniform and the shuffle probe fires for all three.
+        metrics_files = list(run_dir.glob("oracle_eval/*/*/metrics/metrics.json"))
+        assert len(metrics_files) == 3, (
+            f"expected three oracle-eval metrics.json files (one per split) under "
+            f"{run_dir}/oracle_eval/; got {metrics_files}"
+        )
+
+        bounds = ORACLE_AUDIO_METRIC_BOUNDS
+        for mf in metrics_files:
+            metrics = json.loads(mf.read_text())
+            # test keeps bare keys; train/val are namespaced — the prefix applies
+            # to both the audio/ and shuffled_audio/ groups.
+            split = mf.parent.parent.parent.name
+            metric_prefix = "" if split == "test" else f"{split}/"
+            for name in _ORACLE_AUDIO_METRICS:
+                for stat in ("mean", "std"):
+                    for group in ("audio", "shuffled_audio"):
+                        key = f"{metric_prefix}{group}/{name}_{stat}"
+                        value = metrics.get(key)
+                        assert isinstance(value, float) and math.isfinite(value), (
+                            f"{key} is not a finite float: {value!r} "
+                            f"(split={split}, metrics={metrics})"
+                        )
+
+            # Uniform params → shuffled pred matches the same target; means satisfy
+            # the same oracle envelope as the non-shuffled pass.
+            for group in ("audio", "shuffled_audio"):
+                assert metrics[f"{metric_prefix}{group}/mss_mean"] < bounds.mss_max, (
+                    split,
+                    metrics,
+                )
+                assert metrics[f"{metric_prefix}{group}/wmfcc_mean"] < bounds.wmfcc_max, (
+                    split,
+                    metrics,
+                )
+                assert metrics[f"{metric_prefix}{group}/sot_mean"] < bounds.sot_max, (
+                    split,
+                    metrics,
+                )
+                assert metrics[f"{metric_prefix}{group}/rms_mean"] > bounds.rms_min, (
+                    split,
+                    metrics,
+                )
+    finally:
+        r2_io.purge_prefix(cfg_dataset.r2.bucket, f"{r2_prefix_root}/")

@@ -24,13 +24,19 @@ evaluation:
   compute_metrics: false
   rerender_target: true
   num_workers: 1
-  # Opt-in render-order probe (#489): forwarded to compute_audio_metrics, which
-  # scores a symlink view permuting pred.wav across sample dirs (gated on uniform
-  # params). No effect unless compute_metrics is also true.
-  shuffle_pred_audio: false
+  # Render-order probe (#489): probe runs automatically when params are uniform;
+  # non-zero seed raises if params are non-uniform rather than silently skipping.
   shuffle_seed: 0
   # Opt-in: an `r2://bucket/prefix` mirror of the whole run dir, copied after eval.
   upload_output_dir_uri: null
 
 # passing checkpoint path is necessary for evaluation
 ckpt_path: ???
+
+# Opt-in W&B lineage (storage-provenance-spec §5): the train + dataset config_ids this
+# eval consumes. When set + a WandbLogger is active, eval consumes
+# `model-{consumed_train_config_id}` and `data-{consumed_dataset_config_id}` (each at
+# `consumed_artifact_alias`) before testing; each null ref is skipped.
+consumed_train_config_id: null
+consumed_dataset_config_id: null
+consumed_artifact_alias: latest

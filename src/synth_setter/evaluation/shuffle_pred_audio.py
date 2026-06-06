@@ -46,9 +46,27 @@ def _assert_uniform_params(sample_dirs: list[Path]) -> None:
     :param sample_dirs: Dirs to compare against ``sample_dirs[0]``.
     :raises ValueError: when any ``params.csv`` differs, naming the offending dir.
     """
-    reference = (sample_dirs[0] / _PARAMS_FILENAME).read_text()
+    if params_are_uniform(sample_dirs):
+        return
+    # Second pass only to name the offending dir; wraps FileNotFoundError so the
+    # contract (:raises ValueError) holds even when params_are_uniform returned
+    # False due to a missing file rather than a content mismatch.
+    try:
+        reference = (sample_dirs[0] / _PARAMS_FILENAME).read_text()
+    except FileNotFoundError:
+        raise ValueError(
+            f"shuffle_pred_audio requires params.csv in every sample dir; "
+            f"{sample_dirs[0].name}/{_PARAMS_FILENAME} is missing."
+        ) from None
     for sample_dir in sample_dirs[1:]:
-        if (sample_dir / _PARAMS_FILENAME).read_text() != reference:
+        try:
+            content = (sample_dir / _PARAMS_FILENAME).read_text()
+        except FileNotFoundError:
+            raise ValueError(
+                f"shuffle_pred_audio requires params.csv in every sample dir; "
+                f"{sample_dir.name}/{_PARAMS_FILENAME} is missing."
+            ) from None
+        if content != reference:
             raise ValueError(
                 "shuffle_pred_audio requires identical params across all sample dirs; "
                 f"{sample_dir.name}/{_PARAMS_FILENAME} differs from "
@@ -73,6 +91,30 @@ def _draw_non_identity_permutation(n: int, seed: int) -> list[int]:
     while permutation == identity:
         permutation = rng.permutation(n).tolist()
     return permutation
+
+
+def params_are_uniform(sample_dirs: list[Path]) -> bool:
+    """Return True when all ``params.csv`` files are byte-identical, or fewer than two dirs exist.
+
+    Missing ``params.csv`` in any dir returns False — signals a non-oracle dataset where
+    shuffle is not meaningful.
+
+    :param sample_dirs: Candidate dirs to compare (typically from ``find_possible_subdirs``).
+    :returns: True when uniformity holds or the list is too short to compare.
+    """
+    if len(sample_dirs) < 2:
+        return True
+    try:
+        reference = (sample_dirs[0] / _PARAMS_FILENAME).read_text()
+    except FileNotFoundError:
+        return False
+    for sample_dir in sample_dirs[1:]:
+        try:
+            if (sample_dir / _PARAMS_FILENAME).read_text() != reference:
+                return False
+        except FileNotFoundError:
+            return False
+    return True
 
 
 def shuffle_pred_audio(audio_dir: Path, dest_dir: Path, seed: int) -> list[int]:

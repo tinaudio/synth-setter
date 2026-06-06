@@ -60,6 +60,23 @@ class TestToRclonePath:
             r2_io._to_rclone_path("local-spec.json")
 
 
+class TestToS3Uri:
+    """Tests for to_s3_uri — r2:// → s3:// scheme rewrite for W&B references."""
+
+    def test_rewrites_r2_scheme_to_s3(self) -> None:
+        """`r2://bucket/key` becomes `s3://bucket/key`, preserving the path verbatim."""
+        assert r2_io.to_s3_uri("r2://bucket/key.ckpt") == "s3://bucket/key.ckpt"
+
+    def test_preserves_nested_prefix(self) -> None:
+        """Nested key paths under the bucket are preserved unchanged."""
+        assert r2_io.to_s3_uri("r2://bucket/a/b/last.ckpt") == "s3://bucket/a/b/last.ckpt"
+
+    def test_rejects_non_r2_scheme(self) -> None:
+        """A non-r2:// URI raises ValueError rather than silently passing through."""
+        with pytest.raises(ValueError, match="r2://"):
+            r2_io.to_s3_uri("s3://bucket/already-s3.ckpt")
+
+
 class TestDownloadToPath:
     """Tests for download_to_path — file→file copy."""
 

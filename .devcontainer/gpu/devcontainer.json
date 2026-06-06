@@ -19,13 +19,12 @@
     ".env"
   ],
   "containerEnv": {
-    "MODE": "idle"
+    "MODE": "idle",
+    "PYTEST_XDIST_AUTO_NUM_WORKERS": "4"
   },
   "remoteUser": "${localEnv:DEVCONTAINER_USER:dev}",
   "mounts": [
     "source=synth-setter-bashhistory,target=/commandhistory,type=volume",
-    "source=synth-setter-tmux-resurrect,target=/home/dev/.local/share/tmux/resurrect,type=volume",
-    "source=synth-setter-tmux-resurrect-root,target=/root/.local/share/tmux/resurrect,type=volume",
     "source=synth-setter-zellij-cache,target=/home/dev/.cache/zellij,type=volume",
     "source=synth-setter-zellij-cache-root,target=/root/.cache/zellij,type=volume",
     "target=/home/build/synth-setter/plugins,type=volume"

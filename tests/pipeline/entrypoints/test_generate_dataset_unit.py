@@ -266,7 +266,7 @@ class TestRun:
         copy_root = tmp_path / "source"
         copy_root.mkdir()
         spec = DatasetSpec(
-            **_base_spec_kwargs(tmp_path, datasetsrc={"copy_dataset_root": str(copy_root)})  # type: ignore[arg-type]
+            **_base_spec_kwargs(tmp_path, copy_dataset_root=str(copy_root))  # type: ignore[arg-type]
         )
 
         with pytest.raises(ValueError, match=INPUT_SPEC_FILENAME):
@@ -295,7 +295,7 @@ class TestRun:
         )
         (copy_root / INPUT_SPEC_FILENAME).write_text(source.model_dump_json())
         spec = DatasetSpec(
-            **_base_spec_kwargs(tmp_path, datasetsrc={"copy_dataset_root": str(copy_root)})  # type: ignore[arg-type]
+            **_base_spec_kwargs(tmp_path, copy_dataset_root=str(copy_root))  # type: ignore[arg-type]
         )
 
         with pytest.raises(ValueError, match="param_spec_name"):
@@ -1256,22 +1256,22 @@ class TestBuildGenerateArgs:
 
         assert args[1] == "src/synth_setter/data/vst/generate_vst_dataset.py"
 
-    def test_copy_dataset_root_absent_when_datasetsrc_unset(self, spec: DatasetSpec) -> None:
+    def test_copy_dataset_root_absent_when_unset(self, spec: DatasetSpec) -> None:
         """No ``--copy_dataset_root`` flag is emitted when the spec has no copy source.
 
-        :param spec: Single-shard spec fixture with no ``datasetsrc``.
+        :param spec: Single-shard spec fixture with no ``copy_dataset_root``.
         """
         args = build_generate_args(spec, spec.shards[0], Path("out"))
 
         assert "--copy_dataset_root" not in args
 
-    def test_copy_dataset_root_forwarded_when_datasetsrc_set(self, tmp_path: Path) -> None:
-        """``datasetsrc.copy_dataset_root`` is forwarded as a ``--copy_dataset_root`` flag.
+    def test_copy_dataset_root_forwarded_when_set(self, tmp_path: Path) -> None:
+        """``spec.copy_dataset_root`` is forwarded as a ``--copy_dataset_root`` flag.
 
         :param tmp_path: Pytest temp dir pinning the spec's plugin/output paths.
         """
         spec = DatasetSpec(
-            **_base_spec_kwargs(tmp_path, datasetsrc={"copy_dataset_root": "/data/source"})  # type: ignore[arg-type]
+            **_base_spec_kwargs(tmp_path, copy_dataset_root="/data/source")  # type: ignore[arg-type]
         )
 
         args = build_generate_args(spec, spec.shards[0], Path("out"))
@@ -1812,7 +1812,12 @@ class TestMainDispatchBranches:
         assert isinstance(output_dir, Path)
         splits = ("train", "val", "test")
         split_h5s = ("train.h5", "val.h5", "test.h5")
-        for call, split, split_h5 in zip(oracle_mock.call_args_list, splits, split_h5s):
+        # test stays bare ``audio/*``; train/val are namespaced so the shared
+        # wandb run keeps one summary key per split instead of overwriting.
+        split_prefixes = ("train/", "val/", "")
+        for call, split, split_h5, prefix in zip(
+            oracle_mock.call_args_list, splits, split_h5s, split_prefixes
+        ):
             dataset_root, run_dir, _run_id = call[0]
             # The whole generation RenderConfig flows through (keyword-only) so
             # the eval re-renders through the same spec; smoke-shard is surge_simple.
@@ -1837,6 +1842,7 @@ class TestMainDispatchBranches:
             )
             assert run_dir.parent.name == split
             assert run_dir.parent.parent.parent == dataset_root
+            assert call.kwargs["metric_prefix"] == prefix
 
     def test_run_oracle_eval_subprocess_builds_expected_argv(
         self,
@@ -1920,6 +1926,49 @@ class TestMainDispatchBranches:
         assert "mode=predict" in called_argv
         # predict_file routes the datamodule to this split's HDF5.
         assert f"datamodule.predict_file={predict_file}" in called_argv
+        # Default (test split) carries no prefix override: its keys stay bare
+        # ``audio/*`` so existing sweeps/dashboards keep working.
+        assert not any(a.startswith("+evaluation.metric_prefix=") for a in called_argv)
+
+    def test_run_oracle_eval_subprocess_metric_prefix_adds_override(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        spec: DatasetSpec,
+    ) -> None:
+        """A non-empty ``metric_prefix`` appends the eval override that namespaces audio keys.
+
+        The override routes through to ``cfg.evaluation.metric_prefix`` in the
+        eval subprocess, which prepends it to every ``audio/*`` key so the
+        per-split passes don't overwrite each other on the shared wandb run.
+
+        :param monkeypatch: Patches the module's ``subprocess.run``.
+        :param tmp_path: Roots the dataset-root and eval run dirs.
+        :param spec: Source of a valid ``RenderConfig``.
+        """
+        import synth_setter.cli.generate_dataset as gd
+
+        run_mock = MagicMock()
+        monkeypatch.setattr(gd.subprocess, "run", run_mock)
+
+        dataset_root = tmp_path / "data"
+        dataset_root.mkdir()
+        for name in ("train.h5", "val.h5", "test.h5", "stats.npz"):
+            (dataset_root / name).touch()
+        predict_file = dataset_root / "train.h5"
+        gd._run_oracle_eval_subprocess(
+            dataset_root,
+            tmp_path / "oracle_eval" / "train" / "some-run-id",
+            "some-run-id",
+            render=spec.render,
+            num_workers=0,
+            predict_file=predict_file,
+            metric_prefix="train/",
+        )
+
+        called_argv = run_mock.call_args[0][0]
+        # ``+`` appends the key: it is absent from eval.yaml's evaluation group.
+        assert "+evaluation.metric_prefix=train/" in called_argv
 
     def test_run_oracle_eval_subprocess_missing_local_artifacts_raises(
         self,
@@ -2716,10 +2765,10 @@ def test_smoke_job_name_rejects_unsafe_task_name() -> None:
 class TestValidateCopySource:
     """``_validate_copy_source`` — the imperative shell around the preflight."""
 
-    def test_no_datasetsrc_is_a_noop(self, spec: DatasetSpec) -> None:
+    def test_no_copy_dataset_root_is_a_noop(self, spec: DatasetSpec) -> None:
         """A spec with no copy source skips the preflight entirely (no disk read).
 
-        :param spec: Single-shard spec fixture with ``datasetsrc`` unset.
+        :param spec: Single-shard spec fixture with ``copy_dataset_root`` unset.
         """
         from synth_setter.cli.generate_dataset import _validate_copy_source
 
@@ -2737,7 +2786,7 @@ class TestValidateCopySource:
         source = DatasetSpec(**_base_spec_kwargs(tmp_path))  # type: ignore[arg-type]
         (copy_root / INPUT_SPEC_FILENAME).write_text(source.model_dump_json())
         target = DatasetSpec(
-            **_base_spec_kwargs(tmp_path, datasetsrc={"copy_dataset_root": str(copy_root)})  # type: ignore[arg-type]
+            **_base_spec_kwargs(tmp_path, copy_dataset_root=str(copy_root))  # type: ignore[arg-type]
         )
 
         _validate_copy_source(target)  # no raise
@@ -2752,7 +2801,7 @@ class TestValidateCopySource:
         copy_root = tmp_path / "source"
         copy_root.mkdir()
         target = DatasetSpec(
-            **_base_spec_kwargs(tmp_path, datasetsrc={"copy_dataset_root": str(copy_root)})  # type: ignore[arg-type]
+            **_base_spec_kwargs(tmp_path, copy_dataset_root=str(copy_root))  # type: ignore[arg-type]
         )
 
         with pytest.raises(ValueError, match=INPUT_SPEC_FILENAME):
@@ -2778,7 +2827,7 @@ class TestValidateCopySource:
         )
         (copy_root / INPUT_SPEC_FILENAME).write_text(source.model_dump_json())
         target = DatasetSpec(
-            **_base_spec_kwargs(tmp_path, datasetsrc={"copy_dataset_root": str(copy_root)})  # type: ignore[arg-type]
+            **_base_spec_kwargs(tmp_path, copy_dataset_root=str(copy_root))  # type: ignore[arg-type]
         )
 
         with pytest.raises(ValueError, match="param_spec_name"):

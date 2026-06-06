@@ -21,16 +21,16 @@ ______________________________________________________________________
 
 ## 1. Initialization
 
-| Concern           | How it works                                                                                                                      | File                                                            |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| W&B run creation  | `WandbLogger` instantiated by Hydra — included in the default `many_loggers` compose (W&B + CSV + TB)                             | `src/synth_setter/configs/logger/wandb.yaml`                    |
-| Entity / project  | Env-var driven: `entity: ${oc.env:WANDB_ENTITY,null}`, `project: "${oc.env:WANDB_PROJECT,synth-setter}"`                          | `src/synth_setter/configs/logger/wandb.yaml:10,13`              |
-| Default compose   | `many_loggers` composes `csv + tensorboard + wandb` (W&B enabled by default)                                                      | `src/synth_setter/configs/logger/many_loggers.yaml`             |
-| Run ID            | `null` (W&B auto-generates)                                                                                                       | `src/synth_setter/configs/logger/wandb.yaml:8`                  |
-| Checkpoint upload | `log_model: "all"`                                                                                                                | `src/synth_setter/configs/logger/wandb.yaml:11`                 |
-| Code saving       | `wandb.Settings(code_dir=".")`                                                                                                    | `src/synth_setter/configs/logger/wandb.yaml` § `wandb.settings` |
-| Console capture   | `wandb.Settings(console="redirect")` — fd-level redirect so non-TTY worker logs (loguru stderr + subprocess output) reach the run | `src/synth_setter/configs/logger/wandb.yaml` § `wandb.settings` |
-| Run teardown      | `wandb.finish()` in `task_wrapper` finally block                                                                                  | `src/synth_setter/utils/utils.py:101-106`                       |
+| Concern           | How it works                                                                                                                                                                          | File                                                            |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| W&B run creation  | `WandbLogger` instantiated by Hydra — included in the default `many_loggers` compose (W&B + CSV + TB)                                                                                 | `src/synth_setter/configs/logger/wandb.yaml`                    |
+| Entity / project  | Env-var driven: `entity: ${oc.env:WANDB_ENTITY,null}`, `project: "${oc.env:WANDB_PROJECT,synth-setter}"`                                                                              | `src/synth_setter/configs/logger/wandb.yaml:10,13`              |
+| Default compose   | `many_loggers` composes `csv + tensorboard + wandb` (W&B enabled by default)                                                                                                          | `src/synth_setter/configs/logger/many_loggers.yaml`             |
+| Run ID            | `null` (W&B auto-generates)                                                                                                                                                           | `src/synth_setter/configs/logger/wandb.yaml:8`                  |
+| Checkpoint upload | `log_model: "all"`                                                                                                                                                                    | `src/synth_setter/configs/logger/wandb.yaml:11`                 |
+| Code saving       | `wandb.Settings(code_dir=".")`                                                                                                                                                        | `src/synth_setter/configs/logger/wandb.yaml` § `wandb.settings` |
+| Console capture   | `wandb.Settings(console="wrap")` — `redirect` captures into a local `output.log` that wandb 0.26.x never uploads (empty UI Logs tab); `wrap` is the only mode that reaches the server | `src/synth_setter/configs/logger/wandb.yaml` § `wandb.settings` |
+| Run teardown      | `wandb.finish()` in `task_wrapper` finally block                                                                                                                                      | `src/synth_setter/utils/utils.py:98-108`                        |
 
 **No direct `wandb.init()` calls exist in runtime code.** One `wandb.config.update()` call exists: `log_wandb_provenance()` in `src/synth_setter/utils/logging_utils.py:91` writes provenance metadata (see [2g](#2g-provenance-metadata-logged-once-at-run-start)).
 
@@ -162,7 +162,7 @@ When `synth-setter-eval mode=predict evaluation.compute_metrics=true` runs and a
 | `audio/rms_std`            | Same, standard deviation                                                                                                    |
 | `audio/per_sample_metrics` | Per-sample metrics from `metrics.csv` as a `wandb.Table`; columns match `compute_audio_metrics` output (one row per sample) |
 
-`_log_metrics_csv_to_wandb` (`src/synth_setter/cli/eval.py`) is a no-op when `metrics.csv` is absent or `wandb.run` is unset; wandb errors are swallowed so a logging failure never aborts the run.
+When the auto-shuffle probe ran (uniform params, ≥ 2 sample dirs), a parallel set of `shuffled_audio/<metric>_{mean,std}` keys is also logged from `aggregated_metrics_shuffled.csv`. `_log_metrics_csv_to_wandb` (`src/synth_setter/cli/eval.py`) is a no-op when `metrics.csv` is absent or `wandb.run` is unset; wandb errors are swallowed so a logging failure never aborts the run.
 
 The aggregated scalar metrics dict is also merged into the dict returned by `evaluate()` alongside Lightning's `trainer.callback_metrics`; the `audio/per_sample_metrics` Table is W&B-only and is not included in that dict. See [eval-pipeline.md §5.1](../design/eval-pipeline.md) for the surrounding subprocess chain.
 
@@ -170,24 +170,30 @@ ______________________________________________________________________
 
 ## 3. Artifacts
 
-| Artifact                 | Source                                                             | When                                                                                                |
-| ------------------------ | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
-| Model checkpoints        | `ModelCheckpoint` + `log_model: "all"`                             | Every 5000 steps (with `default_surge` callbacks) + best + last, all uploaded immediately           |
-| Source code              | `wandb.Settings(code_dir=".")`                                     | Run start                                                                                           |
-| `<task_name>-input-spec` | `_log_spec_artifact` in `src/synth_setter/cli/generate_dataset.py` | Dataset-generation run start; artifact type `dataset-spec`, payload = `DatasetSpec.model_dump_json` |
+| Artifact                 | Source                                                                                           | When                                                                                                                                                                                                 |
+| ------------------------ | ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Model checkpoints        | `ModelCheckpoint` + `log_model: "all"`                                                           | Every 5000 steps (with `default_surge` callbacks) + best + last, all uploaded immediately                                                                                                            |
+| Source code              | `wandb.Settings(code_dir=".")`                                                                   | Run start                                                                                                                                                                                            |
+| `<task_name>-input-spec` | `_log_spec_artifact` in `src/synth_setter/cli/generate_dataset.py`                               | Dataset-generation run start; artifact type `dataset-spec`, payload = `DatasetSpec.model_dump_json`                                                                                                  |
+| `data-{task_name}`       | `build_dataset_artifact` / `_log_dataset_artifact` in `src/synth_setter/cli/finalize_dataset.py` | Finalize, after the R2 outputs land; type `dataset`, `s3://` R2 references (`checksum=False`), metadata `shard_count` / `n_samples` / `git_sha`                                                      |
+| `model-{config_id}`      | `build_model_artifact` / `_log_model_artifact` in `src/synth_setter/cli/train.py`                | Train end, after fit/test; type `model`, metadata `git_sha`; opt-in `s3://` R2 reference (`checksum=False`) when `training.upload_checkpoints_uri` is set, else lineage-only (R2 ckpt upload is #92) |
+| `eval-{config_id}`       | `build_eval_results_artifact` / `_log_eval_results_artifact` in `src/synth_setter/cli/eval.py`   | After the eval output dir is mirrored to R2 (global-zero only); type `eval-results`, `s3://` R2 reference (`checksum=False`), metadata = scalar summary metrics + `git_sha`                          |
 
 ______________________________________________________________________
 
 ## 4. Entry Points
 
-| Entry point                                | W&B usage                                                                                                                                                                                                                                                 | File                                       |
-| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
-| `src/synth_setter/cli/train.py`            | Full: logger init → hparams → provenance → train metrics → test metrics → teardown                                                                                                                                                                        | `src/synth_setter/cli/train.py`            |
-| `src/synth_setter/cli/eval.py`             | Full: logger init → hparams → provenance → test/val metrics (+ optional predictions) → predict-mode `audio/<metric>_{mean,std}` scalars from `_log_audio_metrics_to_wandb` + `audio/per_sample_metrics` Table from `_log_metrics_csv_to_wandb` → teardown | `src/synth_setter/cli/eval.py`             |
-| `src/synth_setter/cli/generate_dataset.py` | Dataset-generation: logger init pinned to `spec.run_id` → spec hparams → provenance → `<task_name>-input-spec` artifact → per-shard metrics → run summary → `finalize(status)` + `wandb.finish()`                                                         | `src/synth_setter/cli/generate_dataset.py` |
+\<<\<<\<<< HEAD
+
+| Entry point                                | W&B usage                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | File                                       |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
+| `src/synth_setter/cli/train.py`            | Full: logger init → hparams → provenance → dataset `use_artifact` lineage (`use_input_artifacts`, opt-in `consumed_dataset_config_id`) → train metrics → test metrics → `model-{config_id}` `model` artifact → teardown                                                                                                                                                                                                                                                                                         | `src/synth_setter/cli/train.py`            |
+| `src/synth_setter/cli/eval.py`             | Full: logger init → hparams → provenance → model+dataset `use_artifact` lineage (`use_input_artifacts`, opt-in `consumed_train_config_id`/`consumed_dataset_config_id`) → test/val metrics (+ optional predictions) → predict-mode `audio/<metric>_{mean,std}` keys from `_log_audio_metrics_to_wandb` + `audio/per_sample_metrics` Table from `_log_metrics_csv_to_wandb` → (global-zero, when `upload_output_dir_uri` is set) `eval-{config_id}` `eval-results` artifact with `s3://` R2 reference → teardown | `src/synth_setter/cli/eval.py`             |
+| `src/synth_setter/cli/generate_dataset.py` | Dataset-generation: logger init pinned to `spec.run_id` → spec hparams → provenance → `<task_name>-input-spec` artifact → per-shard metrics → run summary → `finalize(status)` + `wandb.finish()`                                                                                                                                                                                                                                                                                                               | `src/synth_setter/cli/generate_dataset.py` |
+| `src/synth_setter/cli/finalize_dataset.py` | Dataset-finalize: resumes the data-generation run (`id=spec.run_id`, `job_type=data-generation`, `resume=allow`) → logs the `data-{config_id}` `dataset` artifact with `s3://` R2 references → `close_loggers`. Best-effort: a finalize without `WANDB_API_KEY` / logger group degrades to a no-op                                                                                                                                                                                                              | `src/synth_setter/cli/finalize_dataset.py` |
 
 Both training and eval use `@task_wrapper` which ensures `wandb.finish()` runs even on exception.
-`generate_dataset` brackets `generate(...)` in its own `try/finally` that calls `_close_loggers` — see §5 for the metric / run-id contract.
+`generate_dataset` brackets `generate(...)` in its own `try/finally` that calls `close_loggers` (now in `synth_setter.utils.instantiators`, shared with finalize) — see §5 for the metric / run-id contract.
 
 ______________________________________________________________________
 
@@ -232,7 +238,7 @@ Emitted by `_log_summary` after the dispatcher returns. The dispatcher is fail-f
 is no partial-success path. Either every owned shard's contract is fulfilled (rendered or
 short-circuited by the R2-skip probe) and `finalize(status)` records `"success"`, or any
 shard's exception propagates up `generate()`'s `try/except`, `status` flips to `"failed"`,
-the summary is not emitted, and `_close_loggers` calls `finalize("failed")` + `wandb.finish()`
+the summary is not emitted, and `close_loggers` calls `finalize("failed")` + `wandb.finish()`
 in the `finally`.
 
 ### 5d. Linked issues
@@ -267,10 +273,16 @@ When `oracle_eval_inline=true`, the local-run path shells out to
 `synth_setter.cli.eval` **once per split (train, val, test)** after `generate(...)` has closed its run.
 `_run_oracle_eval_subprocess` (`src/synth_setter/cli/generate_dataset.py`)
 re-opens the same run via `logger.wandb.id=<spec.run_id> +logger.wandb.resume=must`, runs `mode=predict` with `render=surge_simple` to
-re-render the predicted params, and deposits `audio/*` audio-similarity
-metrics onto the generate run — a `wandb sync` then merges both phases under
-one run id. The eval subprocess inherits `WANDB_MODE` from the launcher, so
-its offline/online posture follows the parent's.
+re-render the predicted params, and deposits audio-similarity metrics onto the
+generate run — a `wandb sync` then merges both phases under one run id. Because
+all three splits resume the **same** run, the metric keys are namespaced per
+split so they don't overwrite each other's run summary: `test` keeps the bare
+`audio/*` key, while `train`/`val` are logged under `train/audio/*` and
+`val/audio/*` (via `+evaluation.metric_prefix=<split>/`). The prefix applies to
+every metric key, so the `shuffled_audio/*` keys (§2) become `train/shuffled_audio/*`
+etc. too. The eval subprocess
+inherits `WANDB_MODE` from the launcher, so its offline/online posture follows
+the parent's.
 
 ______________________________________________________________________
 

@@ -1,17 +1,94 @@
-"""Hyperparameter logging helpers and wandb-config provenance writer."""
+"""Hyperparameter logging helpers, run-id conventions, and wandb-config provenance writer."""
 
 import os
 import subprocess
 import sys
+from collections.abc import Iterable
 from importlib.util import find_spec
+from pathlib import PurePosixPath
 from typing import Any
 
+from hydra.core.hydra_config import HydraConfig
+from lightning.pytorch.loggers import Logger
 from lightning_utilities.core.rank_zero import rank_zero_only
-from omegaconf import OmegaConf
+from omegaconf import DictConfig, OmegaConf
 
 from synth_setter.utils import pylogger
 
 log = pylogger.RankedLogger(__name__, rank_zero_only=True)
+
+
+def resolve_run_config_id(cfg: DictConfig) -> str:
+    """Resolve the run config_id from the chosen Hydra experiment, else ``task_name``.
+
+    The experiment choice (e.g. ``surge/flow_simple``) is the train/eval analog of
+    the dataset config stem; its basename becomes the config_id. Falls back to
+    ``cfg.task_name`` when no experiment is selected or there is no Hydra context.
+
+    :param cfg: Hydra-composed cfg carrying ``task_name``.
+    :returns: The experiment basename, or ``cfg.task_name`` as a fallback.
+    """
+    try:
+        experiment = HydraConfig.get().runtime.choices.get("experiment")
+    except ValueError:
+        experiment = None
+    if experiment in (None, "null"):
+        return cfg.task_name
+    return PurePosixPath(experiment).name
+
+
+def pin_wandb_run_id(cfg: DictConfig, run_id: str, job_type: str) -> None:
+    """Pin the W&B run id and ``job_type`` onto ``cfg`` before logger instantiation.
+
+    No-op when the cfg has no ``logger.wandb`` group (e.g. ``logger=tensorboard``
+    or ``logger=null``), so ``OmegaConf.update`` never raises on the missing key.
+
+    :param cfg: Hydra-composed cfg; ``logger.wandb.{id,job_type}`` are updated in place.
+    :param run_id: The W&B run id to pin (see :func:`synth_setter.run_id.make_wandb_run_id`).
+    :param job_type: W&B ``job_type`` (``training`` / ``evaluation`` / ``data-generation``).
+    """
+    if OmegaConf.select(cfg, "logger.wandb") is None:
+        return
+    OmegaConf.update(cfg, "logger.wandb.id", run_id)
+    OmegaConf.update(cfg, "logger.wandb.job_type", job_type)
+
+
+@rank_zero_only
+def use_input_artifacts(loggers: Iterable[Logger], refs: Iterable[tuple[str, str]]) -> None:
+    """Record consumed-artifact edges on each ``WandbLogger`` for the lineage DAG.
+
+    Calls ``run.use_artifact(f"{name}:{alias}")`` per ref on every ``WandbLogger``
+    in ``loggers`` (``storage-provenance-spec.md`` §5: only ``use_artifact`` —
+    not ``api.artifact`` — links lineage). Non-``WandbLogger`` entries and an
+    empty ``refs`` are a no-op, so wandb-free runs need no special-casing. A
+    wandb failure warns and is swallowed, mirroring
+    ``finalize_dataset._log_dataset_artifact`` — a lineage edge must never abort
+    a run whose real work already succeeded. Rank-zero-only so DDP/spawned runs
+    record each edge once on the rank that owns the live W&B run.
+
+    :param loggers: Lightning loggers; only ``WandbLogger`` entries record edges.
+    :param refs: ``(name, alias)`` pairs naming each consumed artifact, e.g.
+        ``("data-diva-v1", "latest")``.
+    """
+    # Probe before importing so a wandb-free install is a true no-op (mirrors
+    # ``instantiators.close_loggers``); the import is deferred for the same reason.
+    if not find_spec("wandb"):
+        return
+    from lightning.pytorch.loggers.wandb import WandbLogger
+
+    wandb_loggers = [lg for lg in loggers if isinstance(lg, WandbLogger)]
+    if not wandb_loggers:
+        return
+    # Materialize once so a generator ``refs`` is not exhausted by the first logger.
+    ref_list = list(refs)
+    for lg in wandb_loggers:
+        for name, alias in ref_list:
+            try:
+                lg.experiment.use_artifact(f"{name}:{alias}")
+            except Exception as exc:  # noqa: BLE001 — lineage failure must not abort the run
+                log.warning(
+                    f"use_input_artifacts failed for {name}:{alias} on {type(lg).__name__}: {exc}"
+                )
 
 
 @rank_zero_only
@@ -63,6 +140,28 @@ def log_hyperparameters(object_dict: dict[str, Any]) -> None:
         logger.log_hyperparams(hparams)
 
 
+def resolve_git_sha() -> str:
+    """Return the current ``HEAD`` commit SHA, or ``"unknown"`` outside a git tree.
+
+    Shared by :func:`log_wandb_provenance` (writes ``github_sha`` to
+    ``wandb.config``) and the train CLI's model-artifact metadata so both record
+    the same provenance value, per storage-provenance-spec.md §6.
+
+    :returns: The 40-char ``HEAD`` SHA, or ``"unknown"`` when git is unavailable.
+    """
+    try:
+        return (
+            subprocess.check_output(
+                ["git", "rev-parse", "HEAD"],  # noqa: S603, S607
+                stderr=subprocess.DEVNULL,
+            )
+            .decode()
+            .strip()
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return "unknown"
+
+
 @rank_zero_only
 def log_wandb_provenance() -> None:
     """Log provenance metadata to wandb.config.
@@ -78,21 +177,9 @@ def log_wandb_provenance() -> None:
     if not wandb.run:
         return
 
-    try:
-        sha = (
-            subprocess.check_output(
-                ["git", "rev-parse", "HEAD"],  # noqa: S603, S607
-                stderr=subprocess.DEVNULL,
-            )
-            .decode()
-            .strip()
-        )
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        sha = "unknown"
-
     wandb.config.update(
         {
-            "github_sha": sha,
+            "github_sha": resolve_git_sha(),
             "image_tag": os.environ.get("IMAGE_TAG", "unknown"),
             "command": " ".join(sys.argv),
         },

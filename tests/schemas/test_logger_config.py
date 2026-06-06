@@ -49,18 +49,17 @@ class TestLoggerConfigAcceptsEveryComposition:
 
 
 class TestWandbConsoleCapture:
-    """The wandb logger must capture console output at the file-descriptor level."""
+    """The wandb logger must stream console output to the run's server-side Logs tab."""
 
-    def test_wandb_settings_console_is_redirect(self) -> None:
-        """The composed ``wandb.settings.console`` pins ``redirect`` (not the ``auto`` default).
+    def test_wandb_settings_console_is_wrap(self) -> None:
+        """The composed ``wandb.settings.console`` pins ``wrap`` (not ``redirect``/``auto``).
 
-        Config-pin guard: asserts the value, not the runtime capture. ``redirect`` is required
-        because ``auto`` resolves to ``wrap`` on non-TTY workers, which patches ``sys.stdout``
-        only and so misses loguru's import-time ``sys.stderr`` binding and subprocess output —
-        leaving the run's log stream empty.
+        Config-pin guard: asserts the value, not runtime capture. ``redirect``'s local
+        ``output.log`` is never uploaded by wandb 0.26.x, leaving the UI Logs tab empty;
+        ``wrap`` is the only mode whose output reaches the server (#1465).
         """
         logger_subtree = compose_subtree("logger", "wandb")
-        assert logger_subtree["wandb"]["settings"]["console"] == "redirect"
+        assert logger_subtree["wandb"]["settings"]["console"] == "wrap"
 
 
 _VALID_LOGGER = {

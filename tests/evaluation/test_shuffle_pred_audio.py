@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from synth_setter.evaluation.shuffle_pred_audio import shuffle_pred_audio
+from synth_setter.evaluation.shuffle_pred_audio import params_are_uniform, shuffle_pred_audio
 
 _UNIFORM_PARAMS_CSV = ",pred,target\ncutoff,0.5,0.5\nresonance,0.2,0.2\n"
 # A params.csv differing from _UNIFORM_PARAMS_CSV, used to trip the uniform-params gate.
@@ -339,6 +339,55 @@ def test_shuffle_pred_audio_rejects_dest_inside_audio_dir(tmp_path: Path) -> Non
         shuffle_pred_audio(audio_dir, dest_dir, seed=_SEED)
 
     assert not dest_dir.exists()
+
+
+def test_params_are_uniform_returns_true_for_identical_params(tmp_path: Path) -> None:
+    """All dirs with byte-identical params.csv → True.
+
+    :param tmp_path: Scratch directory for sample dirs.
+    """
+    dirs = [_make_sample_dir(tmp_path / "audio", i) for i in range(3)]
+
+    assert params_are_uniform(dirs) is True
+
+
+def test_params_are_uniform_returns_false_when_any_differ(tmp_path: Path) -> None:
+    """Any differing params.csv → False, regardless of position.
+
+    :param tmp_path: Scratch directory for sample dirs.
+    """
+    audio = tmp_path / "audio"
+    dirs = [_make_sample_dir(audio, i) for i in range(3)]
+    (dirs[1] / "params.csv").write_text(_DIFFERENT_PARAMS_CSV)
+
+    assert params_are_uniform(dirs) is False
+
+
+def test_params_are_uniform_returns_false_when_params_csv_missing(tmp_path: Path) -> None:
+    """A dir without params.csv → False (non-oracle dataset).
+
+    :param tmp_path: Scratch directory for sample dirs.
+    """
+    audio = tmp_path / "audio"
+    dirs = [_make_sample_dir(audio, i) for i in range(2)]
+    (dirs[0] / "params.csv").unlink()
+
+    assert params_are_uniform(dirs) is False
+
+
+def test_params_are_uniform_returns_true_for_single_dir(tmp_path: Path) -> None:
+    """One dir — nothing to compare, trivially uniform.
+
+    :param tmp_path: Scratch directory for sample dirs.
+    """
+    dirs = [_make_sample_dir(tmp_path / "audio", 0)]
+
+    assert params_are_uniform(dirs) is True
+
+
+def test_params_are_uniform_returns_true_for_empty_list() -> None:
+    """Empty list — trivially uniform."""
+    assert params_are_uniform([]) is True
 
 
 def test_shuffle_pred_audio_ignores_non_sample_dirs(tmp_path: Path) -> None:

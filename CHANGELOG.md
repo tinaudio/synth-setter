@@ -1,6 +1,986 @@
 # CHANGELOG
 
 
+## v8.26.0 (2026-06-06)
+
+### Continuous Integration
+
+- **vst-slow**: Raise job timeout to 120 min
+  ([#1522](https://github.com/tinaudio/synth-setter/pull/1522),
+  [`008bc04`](https://github.com/tinaudio/synth-setter/commit/008bc0416f7802fc3f007cb9d3ba5a70180b976b))
+
+The VST Slow Tests job chronically hits the 60-min job timeout and is cancelled rather than failing
+  on an assertion (3 of the last 5 main runs were cancelled at the timeout). Double timeout-minutes
+  to 120 to give the slow audio-similarity suite room to finish.
+
+### Features
+
+- **storage**: Wire use_artifact lineage across train and eval
+  ([#1509](https://github.com/tinaudio/synth-setter/pull/1509),
+  [`93afaea`](https://github.com/tinaudio/synth-setter/commit/93afaea18f3c8186fb2bd3af52da9c6e0505c192))
+
+* feat(storage): wire use_artifact lineage across train and eval
+
+Per storage-provenance-spec §5, every run must call run.use_artifact() on its inputs so the W&B
+  lineage DAG forms. No use_artifact() calls existed in src/, leaving runs disconnected.
+
+Add use_input_artifacts() in logging_utils: for each WandbLogger it calls
+  lg.experiment.use_artifact("{name}:{alias}") per ref — the experiment object (not wandb.Api) is
+  what records lineage edges. Failures warn and are swallowed so a lineage edge never aborts a run,
+  mirroring finalize_dataset._log_dataset_artifact.
+
+Training consumes data-{consumed_dataset_config_id} before fit; eval consumes
+  model-{consumed_train_config_id} then data-{consumed_dataset_config_id} before testing. The
+  consumed refs come from new opt-in cfg fields (null default, alias default `latest`); a null ref
+  is skipped, so wandb-free and unconfigured runs are a no-op. This PR is the consumer only — it
+  references producer artifacts by name and logs none.
+
+Refs #1467, #1470, #128 Closes #1474
+
+* fix(storage): make use_input_artifacts a true wandb-free no-op
+
+Copilot review: the helper imported lightning's WandbLogger unconditionally, which can raise when
+  wandb is absent even with no W&B loggers configured — contradicting the documented no-op contract
+  — and materialized refs before checking for any WandbLogger.
+
+Guard on find_spec("wandb") before the import and return early when no WandbLogger is present,
+  mirroring instantiators.close_loggers. refs is now materialized only after that gate, so a
+  wandb-free or non-wandb run never touches the refs iterable.
+
+* docs(provenance): record use_artifact lineage now wired in config + wandb docs
+
+This PR closes the dataset use_artifact / dataset_config_id-linkage Known Gaps in
+  configuration-reference §5; drop those rows, note the opt-in consumed_dataset_config_id /
+  consumed_train_config_id / consumed_artifact_alias keys, and add the lineage step to the
+  train/eval wandb-integration entry flows. Surfaced by the PR's doc-drift advisory.
+
+Refs #1467
+
+* fix(storage): rank-gate lineage and record it on test-only runs
+
+Addresses two Copilot review comments on PR #1509:
+
+- logging_utils.py: decorate use_input_artifacts with @rank_zero_only so DDP/spawned runs record
+  each consumed-artifact edge once on rank 0, matching log_hyperparameters / log_wandb_provenance in
+  the same module (comment 3366983053). - cli/train.py: hoist use_input_artifacts out of the train
+  block and gate on train OR test so a test-only run (train: False, test: True) still records the
+  dataset edge, satisfying storage-provenance-spec §5's every-run-consumes-its-inputs invariant
+  (comment 3366983063).
+
+Adds a rank!=0 no-op test for use_input_artifacts.
+
+Refs #1467, #1470, #128
+
+* test(provenance): pin use_artifact lineage calls in train and eval
+
+The use_input_artifacts helper and the _consumed_artifact_refs ref-builder were each unit-tested in
+  isolation, but nothing asserted that train() and evaluate() actually call the helper with the
+  right refs at the right point. Add seam tests that drive the real entrypoints with heavy
+  collaborators stubbed and pin: the train gate (train or test), the train no-edge path, and the
+  eval model-before-data ordering.
+
+Refs #1474
+
+* test(provenance): reset HydraConfig singleton between tests
+
+The provenance-wiring suite added on main asserts resolve_run_config_id falls back to cfg.task_name
+  outside a Hydra run. But tests that call HydraConfig().set_config (e.g.
+  test_train_surge_xt[surge/fake_oracle]) populate a process-global singleton that
+  GlobalHydra.instance().clear() leaves untouched, so the stale runtime.choices.experiment leaked
+  into test_train_provenance.py and pinned the run id to fake_oracle-<ts> instead of
+  flow_simple-<ts>. Merging main shifted the xdist distribution and surfaced the latent flake on the
+  3.10 worker.
+
+Add an autouse fixture in tests/conftest.py that clears the HydraConfig singleton on teardown, plus
+  a contract test pinning the reset.
+
+### Internal-Fix
+
+- **monitoring**: Wandb console=wrap fixes empty data-gen logs
+  ([#1506](https://github.com/tinaudio/synth-setter/pull/1506),
+  [`cf53fe8`](https://github.com/tinaudio/synth-setter/commit/cf53fe891d39f0d66399890b36c1862c355d644f))
+
+* internal-fix(monitoring): pin wandb console=wrap so data-gen logs reach the UI
+
+console=redirect (set in #1466) captures stdout/stderr into a local output.log at the fd level but
+  wandb 0.26.x never transmits that file to the run's filestream, so the UI Logs tab is empty even
+  on a clean finish(). Verified end-to-end against online runs: redirect -> logLineCount=0 and no
+  server-side output.log; wrap -> logLineCount>0 and output.log uploaded.
+
+Pin console=wrap, the only mode whose output reliably reaches the server, and invert the config-pin
+  guard accordingly.
+
+* internal-fix(monitoring): correct task_wrapper finally-block line range in wandb doc
+
+The W&B integration reference cited utils.py:101-106 for the wandb.finish() teardown, but the
+  finally block spans lines 98-108 and finish() is at 108 — the cited range excluded the actual call
+  (PR #1506 comment).
+
+Refs #1465
+
+### Refactoring
+
+- **data**: Flatten datasetsrc into flat copy_dataset_root field
+  ([#1505](https://github.com/tinaudio/synth-setter/pull/1505),
+  [`0c6b18d`](https://github.com/tinaudio/synth-setter/commit/0c6b18dd9c694833fd91dfcae966fe2eccef78f2))
+
+* refactor(data): flatten datasetsrc wrapper into a flat copy_dataset_root field
+
+The dataset-copy source was a single-field wrapper model (``DatasetSrcConfig.copy_dataset_root``)
+  nested under ``DatasetSpec.datasetsrc``, defaulting to ``datasetsrc: null`` in ``dataset.yaml``.
+  That null default is a Hydra struct footgun: a dotted ``datasetsrc.copy_dataset_root=...``
+  override fails because OmegaConf cannot index into a null node, forcing the awkward mapping form
+  ``datasetsrc='{copy_dataset_root: ...}'``.
+
+Replace the wrapper with a flat ``DatasetSpec.copy_dataset_root: str | None`` (``copy_dataset_root:
+  null`` in ``dataset.yaml``), so the override is simply ``copy_dataset_root=<path>``. The
+  blank-string and hdf5-only validators move onto ``DatasetSpec``; the rich copy-source rationale
+  (#724 min_loudness note) moves onto the field description.
+
+Back-compat: a ``mode="before"`` shim (mirroring ``_normalize_r2_input``)
+
+promotes legacy ``datasetsrc: {copy_dataset_root: X}`` to the flat key and drops ``datasetsrc:
+  null``, so ``input_spec.json`` files already materialized to R2 still load (verified against an
+  existing smoke-shard spec).
+
+Refs #1429
+
+* refactor(data): tighten copy_dataset_root docs and cover legacy shim edges
+
+Address pre-PR review WARNs: trim the ``copy_dataset_root`` field description to its contract (the
+  hdf5-only and param_spec_name constraints are owned by the validators and
+  ``validate_copy_source``), and add tests for the back-compat shim's previously-uncovered branches
+  — a non-mapping legacy ``datasetsrc`` is rejected, an empty legacy mapping disables copy, and a
+  serialized legacy-shaped spec reloads through ``model_validate_json``.
+
+* docs(data): note legacy datasetsrc back-compat shim in the copy section
+
+Refs #1502
+
+* refactor(data): reject unexpected keys in legacy datasetsrc mapping
+
+Per review: the back-compat shim previously read only copy_dataset_root from a legacy datasetsrc
+  mapping, silently dropping any other key. Restore the single-key strictness the removed
+  DatasetSrcConfig (extra="forbid") enforced so a typo'd legacy key fails loudly instead of silently
+  disabling the copy path.
+
+* refactor(data): make legacy datasetsrc back-compat strict and loud
+
+Address Copilot re-review: (1) from_hydra_cfg masks the composed cfg to model fields before the
+  promotion shim runs, so a stale Hydra `datasetsrc` override would silently vanish — reject it with
+  a migration pointer to copy_dataset_root. (2) A non-null legacy datasetsrc mapping must hold
+  exactly a non-null copy_dataset_root (empty/null-inner now raises) so a typo can't quietly disable
+  copy; use `datasetsrc: null` to disable. Mirrors the removed DatasetSrcConfig's required-field
+  contract on the back-compat path.
+
+### Testing
+
+- **testing**: Clamp pytest-xdist -n auto by available memory
+  ([#1524](https://github.com/tinaudio/synth-setter/pull/1524),
+  [`972ae62`](https://github.com/tinaudio/synth-setter/commit/972ae6245bc87112268e3c4486b9b0a958a81c6d))
+
+The cgroup-aware CPU clamp only bounds workers by CPU quota. On a shared host with no
+  cpu.max/memory.max set, -n auto spawns one worker per host core; aggregate worker RSS across
+  concurrent worktree runs exhausts RAM and the OOM-killer SIGTERMs the run (exit 143).
+
+Add a memory-aware clamp: min(host MemAvailable, cgroup memory limit) / per-worker budget
+  (PYTEST_XDIST_WORKER_MEM_MB, default 1 GiB); the hook now returns min(cpu, memory). Add a low
+  PYTEST_XDIST_AUTO_NUM_WORKERS default to the devcontainer configs so shared-host worktrees default
+  low, with the per-run override preserved.
+
+
+## v8.25.0 (2026-06-06)
+
+### Chores
+
+- **lint**: Disable docformatter summary wrap (ruff D205 deadlock)
+  ([#1516](https://github.com/tinaudio/synth-setter/pull/1516),
+  [`c00c127`](https://github.com/tinaudio/synth-setter/commit/c00c1277a0838e8dc16c7cb6b1611f4664c28f7d))
+
+* chore(lint): stop docformatter wrapping summaries to end D205 deadlock
+
+docformatter's wrap-summaries=99 reflows an over-99-column summary onto a second physical line.
+  ruff's D205 then reads that continuation as a description with no blank line before it and raises
+  an error that no tool can auto-fix (not even --unsafe-fixes), and that docformatter will not undo
+  — a hard deadlock surfacing only on the *next* hook run after docformatter rewrites the file. The
+  CHANGELOG shows this recurring as manual reflow workarounds (e.g. the #1270 CI failure:
+  "docformatter wanted the two-line summary joined onto the 100-col second line").
+
+Set wrap-summaries=0 so summaries stay on one physical line, the shape D205 and pydoclint's parser
+  assume. Descriptions still wrap at 99 — they sit after the blank line, so D205 does not apply.
+
+Add a config-invariant test pinning "D205 selected => wrap-summaries == 0" so the conflicting
+  combination cannot be reintroduced.
+
+* test(lint): harden D205 detection to ruff prefix semantics
+
+The invariant test matched the literal "D205" in select, so a refactor to a prefix selector
+  ("D"/"D2") or extend-select would silently stop guarding the docformatter↔D205 deadlock (Copilot
+  review on #1516).
+
+Resolve D205 via ruff's prefix + specificity rules (longest matching prefix wins, select wins ties,
+  "ALL" matches everything), merging extend-select / extend-ignore. Add parametrized cases covering
+  exact code, family prefix, select-all, and ignore-override resolution.
+
+### Features
+
+- **evaluation**: Log eval-{config_id} W&B artifact with R2 references
+  ([#1507](https://github.com/tinaudio/synth-setter/pull/1507),
+  [`106cd22`](https://github.com/tinaudio/synth-setter/commit/106cd22d672a301b6efacceb6b439a025e0af06e))
+
+* feat(evaluation): log eval-{config_id} W&B artifact with R2 references
+
+Log an eval-results artifact (name eval-{config_id}, type eval-results) from the eval entrypoint
+  after the output dir is mirrored to R2, mirroring finalize_dataset's dataset-artifact pattern. The
+  artifact add_references the R2 output prefix as an s3:// URI and records the scalar summary
+  metrics plus git_sha in metadata, anchoring the lineage-DAG tail per storage-provenance-spec
+  sections 4-6. Best-effort: a wandb failure warns and is swallowed so artifact logging never aborts
+  a completed eval; no-op without a WandbLogger, a null upload URI, or off the global-zero rank.
+
+Adds a shared r2_io.to_s3_uri helper rather than duplicating finalize's private rewrite, and reuses
+  spec._get_git_sha for the commit SHA.
+
+Closes #1473 Refs #1467, #1470, #93
+
+* docs(wandb): document eval-results artifact in wandb-integration tables
+
+The new eval-{config_id} eval-results artifact this PR logs was missing from §3 (Artifacts) and the
+  §4 eval.py entry-points row; add it symmetrically with the data-{config_id} rows. Surfaced by the
+  PR's doc-drift advisory.
+
+Refs #1467
+
+* fix(evaluation): log eval-results artifact before task_wrapper closes wandb
+
+Copilot review: evaluate() is @task_wrapper, whose finally calls wandb.finish() on return, so
+  logging the eval-results artifact from main() afterward attached to a closed run. Move the metrics
+  dump + R2 mirror + artifact logging into the tail of evaluate(), before the run is finished, and
+  only shell out for git_sha on the path that actually logs (global-zero with a configured upload
+  URI).
+
+Refs #1473, #1467
+
+* fix(evaluation): gate metrics dump on global-zero and export to_s3_uri
+
+Address Copilot review on PR #1507:
+
+- eval.py: gate _dump_metric_dict on trainer.is_global_zero so DDP ranks sharing one output_dir do
+  not race-write metrics.json, matching the existing global-zero gate on the upload + artifact log
+  (comment 3366953500). - r2_io.py: add to_s3_uri to __all__ so the public helper is exported
+  alongside to_rclone_path (comment 3366953515).
+
+Refs #1473
+
+* test(provenance): add offline-wandb e2e for eval-results artifact wiring
+
+The eval-results artifact tests were all unit-level: a real wandb.Artifact plus a
+  MagicMock(spec=WandbLogger). Nothing drove the real evaluate() entrypoint with a live WandbLogger,
+  so the load-bearing "log the artifact while the run is still open" ordering inside evaluate()
+  (before @task_wrapper closes the run) could silently regress to a no-op with every test still
+  green.
+
+Add an offline-wandb e2e that drives evaluate(cfg) against a WandbLogger(offline=True) and a
+  local-backed r2:// upload prefix, then decodes the offline run-*.wandb binary to assert the
+  eval-{config_id} artifact, its eval-results type, the s3:// reference, and the git_sha +
+  test/param_mse metadata actually landed on the live run. Verified it fails when the in-evaluate
+  artifact log is removed.
+
+* Potential fix for pull request finding
+
+Co-authored-by: Copilot Autofix powered by AI <175728472+Copilot@users.noreply.github.com>
+
+* style(docs): align eval-results row in wandb-integration artifact table
+
+mdformat re-aligned the table after the eval-{config_id} row was added; CI mdformat hook on PR #1507
+  flagged the one-space drift.
+
+---------
+
+### Testing
+
+- **finalize**: Cover finalize() orchestration error and resume paths
+  ([#1515](https://github.com/tinaudio/synth-setter/pull/1515),
+  [`f697a56`](https://github.com/tinaudio/synth-setter/commit/f697a56125e467489b4fd47ebe1f5c31f75ac8f2))
+
+* test(finalize): cover finalize() orchestration error and wandb-resume paths
+
+Add four tests to the finalize entrypoint suite, pinning the outer finalize(cfg) orchestration
+  branches that the branch-level finalize_wds/finalize_hdf5 tests leave uncovered:
+
+- finalize() closes loggers with status="failed" when finalize_from_spec raises (the try/finally
+  re-raise + cleanup contract), asserted via a real offline WandbLogger and wandb.run is None after.
+  - _log_dataset_artifact swallows a wandb artifact-build failure and finalize still returns with
+  stats.npz + dataset.complete intact on the fake remote. - resume="allow" is forced onto
+  logger.wandb when a wandb group is present, captured off the cfg instantiate_loggers receives. - A
+  contract guard that the stubbed get_stats_hdf5 / stream_stats_wds signatures match the real ones
+  via inspect.signature, so stub drift can't mask a production break.
+
+Refs #1511
+
+* test(finalize): assert close_loggers status via spy in failed-path test
+
+The wandb.run-is-None state witness alone did not pin the failed-close contract: a finally that
+  skips close_loggers entirely still leaves wandb.run None via teardown, and it cannot tell
+  status="success" from "failed". Wrap close_loggers with a spy that delegates to the real helper
+  and assert it is called exactly once with "failed". Mutation-verified: dropping the finally close
+  and dropping status="failed" both now fail the test.
+
+* test(finalize): address Copilot review on orchestration tests
+
+- Assert build_dataset_artifact is invoked in the swallow test so a skipped artifact path can't pass
+  it vacuously. - Rename the resume test to ..._when_wandb_cfg_present and reword its docstring: the
+  branch is gated on logger.wandb existing, not a wandb group field.
+
+The close_loggers status spy Copilot asked for was already added in the prior commit.
+
+- **finalize**: Exercise the real finalize_dataset.yaml Hydra config layer
+  ([#1517](https://github.com/tinaudio/synth-setter/pull/1517),
+  [`e6a0adf`](https://github.com/tinaudio/synth-setter/commit/e6a0adf3b7a3540b09e48e62e2a188dd760a53d7))
+
+The finalize suite built every spec by hand via OmegaConf.create and never composed
+  finalize_dataset.yaml, so a break in its defaults/paths/logger composition passed the whole suite
+  and only failed in production. Peer entrypoints (eval, generate_dataset) already have config-layer
+  coverage.
+
+Add a cfg_finalize fixture (function-scoped, tmp_path-pinned) mirroring cfg_dataset, and a
+  tests/pipeline/configs/test_finalize_dataset_config.py that composes finalize_dataset.yaml and
+  pins the load-bearing fields finalize() reads: dataset_spec_uri override, paths.output_dir, the
+  wandb logger group, and the hydra run.dir / job_logging interpolations.
+
+Closes #1512
+
+
+## v8.24.0 (2026-06-06)
+
+### Documentation
+
+- **agents**: Add import-ordering rule to avoid F401 autofix churn
+  ([#1519](https://github.com/tinaudio/synth-setter/pull/1519),
+  [`50b536a`](https://github.com/tinaudio/synth-setter/commit/50b536a6898adeeadcb3d7f796f9f48f790d1516))
+
+Agents repeatedly lose a cycle when an import is added in one edit and `make format` runs before the
+  using code lands: ruff's F401 autofix deletes the momentarily-unused import, forcing a re-add.
+  Document the fix (import with first use, or imports last) in AGENTS.md and mirror it into
+  CLAUDE.md's Python block.
+
+### Features
+
+- **training**: Log model-{config_id} W&B artifact with R2 reference
+  ([#1508](https://github.com/tinaudio/synth-setter/pull/1508),
+  [`a9b894e`](https://github.com/tinaudio/synth-setter/commit/a9b894eb746caaedf9705613dee8cbfff070d1b1))
+
+* chore(deps): sync uv.lock version to 8.23.0
+
+The 8.23.0 [skip ci] release commit bumped pyproject.toml but not uv.lock, leaving the lock's
+  synth-setter version at 8.22.0. Regenerate so CI's lock-check passes on branches cut from this
+  main.
+
+* feat(training): log explicit model-{config_id} W&B artifact with R2 reference
+
+train.py now logs a canonical model-{train_config_id} artifact (type model) to any configured
+  WandbLogger at train end, superseding reliance on Lightning's implicitly-named log_model:"all"
+  artifact (storage-provenance-spec §4-6). build_model_artifact records git_sha in artifact.metadata
+  and, when the new opt-in training.upload_checkpoints_uri (r2:// prefix or null) is set, adds an
+  s3:// reference to it (checksum=False, since R2's custom endpoint is not reachable by W&B's
+  reference handler). The null default logs a lineage-only artifact with no reference because R2
+  checkpoint upload is not implemented yet (#92). The opt-in URI mirrors eval's
+  evaluation.upload_output_dir_uri.
+
+_log_model_artifact is best-effort (warn-and-swallow) and a no-op without a WandbLogger, so
+  wandb-free callers are unchanged. Adds a shared r2_io.to_s3_uri helper and extracts
+  logging_utils.resolve_git_sha so train and provenance share one git-sha source.
+
+Closes #1472 Refs #1467, #1470, #146, #254
+
+* test(training): accept new training config block in baseline comparison
+
+train.yaml gained an opt-in training.upload_checkpoints_uri block, which the v0.0.0 baseline lacks.
+  Add training to ACCEPTED_DIFFS (mirroring evaluation) so the resolved-config equality test treats
+  the new block as a benign, non-model-knob divergence rather than drift.
+
+Refs #1472
+
+* fix(training): gate model-artifact logging to global-zero rank
+
+Copilot review: guard _log_model_artifact behind trainer.is_global_zero so DDP/FSDP ranks don't race
+  duplicate model artifact versions. Also drop the now-resolved 'Model run.log_artifact()' row from
+  configuration-reference §5.2 (this PR implements it); the dataset use_artifact row stays a gap
+  until #1474.
+
+Refs #1472, #1467
+
+* test(provenance): add offline-wandb e2e for model artifact wiring
+
+Drive the real train(cfg) entrypoint with a real WandbLogger(offline=True) and decode the
+  run-*.wandb binary to assert the model-{config_id} artifact (type model, git_sha metadata, opt-in
+  s3:// reference) actually lands. The existing unit tests feed a logger list to _log_model_artifact
+  directly and the cfg-level train tests pin a null logger, so dropping or mis-gating the
+  train()-end call passed every prior test; this closes that gap.
+
+* Potential fix for pull request finding
+
+Co-authored-by: Copilot Autofix powered by AI <175728472+Copilot@users.noreply.github.com>
+
+---------
+
+
+## v8.23.2 (2026-06-06)
+
+### Bug Fixes
+
+- **storage**: Make finalize R2 prefix check advisory, not fatal
+  ([#1510](https://github.com/tinaudio/synth-setter/pull/1510),
+  [`b8a9636`](https://github.com/tinaudio/synth-setter/commit/b8a96368763a9040020472ba3292f055461beded))
+
+* fix(storage): make finalize R2 prefix check advisory, not fatal
+
+The #281 write-time guard (assert_r2_prefix_matches in finalize_from_spec) aborted finalize whenever
+  spec.r2.prefix diverged from the canonical data/{task_name}/{run_id}/ shape. But a custom prefix
+  is legitimate — the oracle-eval e2e isolates its objects under test-runs/<test>/<uuid>/, and
+  finalize reads the same prefix generate wrote to, so the spec is self-consistent. The guard could
+  not distinguish intentional override from drift, so it broke the "Generate dataset shards -> real
+  R2 (Docker + VST)" job (test_oracle_eval_inline/shuffled_audio_metrics).
+
+Catch the ValueError and log a warning instead of aborting; the assert_r2_prefix_matches helper and
+  its unit tests are unchanged (still strict for callers that want it). Replaces the obsolete
+  test_finalize_from_spec_drifted_prefix_raises_before_any_upload (which pinned the now-removed
+  abort) with a test that a non-canonical prefix finalizes and lands its artifacts.
+
+Refs #281, #1471
+
+* docs(storage): mark finalize prefix check advisory in flow diagram + helper docstring
+
+doc-drift from the advisory-guard change: configuration-reference.md's finalize flow labeled the
+  prefix step a fatal 'prefix-drift guard'; prefix.py's assert_r2_prefix_matches docstring implied
+  finalize hard-stops. Both now state the check is advisory in finalize (warns, never aborts).
+
+Refs #281
+
+
+## v8.23.1 (2026-06-06)
+
+### Bug Fixes
+
+- **eval**: Namespace inline oracle-eval audio metrics per split
+  ([#1500](https://github.com/tinaudio/synth-setter/pull/1500),
+  [`6a2ac93`](https://github.com/tinaudio/synth-setter/commit/6a2ac935e73f1d5ef6ac64cce8176ba41b64b39f))
+
+* fix(eval): namespace inline oracle-eval audio metrics per split
+
+The inline oracle eval shells out to synth_setter.cli.eval once per split (train, val, test), and
+  every subprocess resumes the SAME wandb run via logger.wandb.id=<run_id>
+  +logger.wandb.resume=must. Each split logged the bare audio/<name>_<stat> key, so the run summary
+  kept only the last split (test) and silently overwrote train/val — and any sweep optimizing
+  audio/mss_mean was tuning on test alone, mislabeled as the whole dataset.
+
+Add an opt-in evaluation.metric_prefix that _run_predict_postprocessing prepends to every audio
+  metric key (incl. shuffled_audio/*). generate_dataset passes "train/" and "val/" for those splits
+  while leaving test bare, so the three passes land as distinct, labeled summary keys instead of
+  colliding. Default is empty, preserving the bare-key behavior for every other caller.
+
+* docs(eval): note per-split audio-metric namespacing in wandb docs + doc-map
+
+Address doc-drift on #1500: doc-map.yaml's generate_dataset coverage text and wandb-integration.md
+  §5f said the inline oracle eval appends bare `audio/*` rows. The eval now namespaces every metric
+  key per split (`train/audio/*`, `val/audio/*`, plus the matching `shuffled_audio/*`), leaving only
+  `test` bare.
+
+* test(eval): rename per-split prefix var to metric_prefix to avoid shadowing
+
+Copilot flagged that the per-split metric `prefix` local in the oracle-eval integration tests could
+  shadow an R2 cleanup prefix used in `finally`. The rebase onto main already renamed the R2 var to
+  `prefix_root`, so no collision remains; rename the metric local to `metric_prefix` to match the
+  production parameter and remove any ambiguity.
+
+* ci: re-trigger CI to clear flaky run_tests_ubuntu py3.11 skypilot xdist failure
+
+### Testing
+
+- **provenance**: Pin wandb provenance fields across entrypoints
+  ([#1503](https://github.com/tinaudio/synth-setter/pull/1503),
+  [`0abbf2f`](https://github.com/tinaudio/synth-setter/commit/0abbf2fb00757e04a73baf3b35c4ea569c34865b))
+
+* test(provenance): pin wandb.config provenance-field invariants for train and eval entrypoints
+
+Adds entrypoint-seam wiring tests for train.py and eval.py asserting the storage-provenance-spec.md
+  §7-8 invariants: the run id is pinned in the {config_id}-{timestamp} convention, job_type is
+  pinned to training / evaluation, and log_wandb_provenance is invoked once a logger exists. The
+  generate_dataset entrypoint and the seam units (log_wandb_provenance, pin_wandb_run_id,
+  resolve_run_config_id, make_wandb_run_id) are already covered by test_generate_dataset_wandb.py,
+  test_logging_utils.py, and test_run_id.py.
+
+Heavy collaborators are stubbed at their seams so the tests isolate the wiring without running a
+  real fit / eval. Placed in sibling modules per the tests/_meta entrypoint-only rule. Test-only; no
+  production code changed.
+
+* docs(provenance): cite spec invariants by topic, not section number
+
+The §7-8 citation was wrong for 2 of the 3 pinned invariants (run-id lives in §1, W&B-provenance in
+  §6/§12); reference by topic so it can't drift when the spec is re-sectioned. Surfaced by the PR's
+  doc-drift advisory.
+
+Refs #1467
+
+
+## v8.23.0 (2026-06-06)
+
+### Chores
+
+- **devcontainer**: Remove tmux session persistence (TPM + resurrect + continuum)
+  ([#1497](https://github.com/tinaudio/synth-setter/pull/1497),
+  [`f6bfc6e`](https://github.com/tinaudio/synth-setter/commit/f6bfc6eff6cd113a16fa46ed0f22cd9426b1a119))
+
+Drop the tmux session-persistence stack from the devcontainer: the TPM bootstrap and non-interactive
+  plugin install in post-create.sh, the tmux-resurrect/tmux-continuum `@plugin` lines and tuning in
+  tmux.conf, and the per-user `synth-setter-tmux-resurrect{,-root}` named volumes from the cpu/gpu
+  devcontainer configs. tmux itself stays installed and selectable as a VS Code terminal profile
+  with the generic defaults (mouse, color, key bindings); only the cross-rebuild session
+  save/restore is removed.
+
+Add infra regression guards asserting no devcontainer mounts a tmux-resurrect volume, tmux.conf
+  declares no persistence plugins, and post-create.sh no longer bootstraps TPM. Update docker.md and
+  doc-map.yaml to match. Sync uv.lock to the 8.22.0 release version so the lock-check gate passes.
+
+- **storage**: R2 prefix write-time assertion helper
+  ([#1494](https://github.com/tinaudio/synth-setter/pull/1494),
+  [`285042b`](https://github.com/tinaudio/synth-setter/commit/285042bb5436f95c453b285385e04ee9038b38e9))
+
+* feat(storage): R2 prefix write-time assertion helper
+
+Add assert_r2_prefix_matches() to pipeline/schemas/prefix.py — a single-call guard that verifies a
+  materialized R2Location.prefix matches what make_r2_prefix() would derive from the same config_id,
+  run_id, and prefix_root. Called in finalize_from_spec() before any R2 objects are written so a
+  drifted prefix is caught at finalize time rather than silently corrupting the keyspace.
+
+Closes #281 Refs #1467
+
+* chore(storage): address review findings on r2-prefix-assertion
+
+- Drop redundant str() coercions in assert_r2_prefix_matches - Extend finalize_from_spec :raises:
+  docstring to cover prefix-mismatch ValueError - Derive _ASSERT_EXPECTED from make_r2_prefix (no
+  hardcoded string literals) - Move test constants to module level to satisfy pydoclint DOC601/603
+
+Refs #281
+
+* docs(storage): update finalize flow diagram and doc-map for assert_r2_prefix_matches
+
+Patch docs to reflect the new prefix-drift guard added to finalize_from_spec in the accompanying
+  implementation commit: - configuration-reference.md: insert assertion step in pseudocode flow -
+  doc-map.yaml: update finalize_dataset.py and prefix.py covers strings - data-pipeline.md: add
+  assert_r2_prefix_matches to module inventory comment
+
+### Features
+
+- **storage**: Log dataset W&B artifact with R2 refs on finalize
+  ([#1498](https://github.com/tinaudio/synth-setter/pull/1498),
+  [`14cb207`](https://github.com/tinaudio/synth-setter/commit/14cb207a40c6f0eb388ad0f57b4eafde6be15c5a))
+
+* chore(deps): sync uv.lock version to 8.22.0
+
+The 8.22.0 [skip ci] release commit bumped pyproject.toml but not uv.lock, leaving the lock's
+  synth-setter version at 8.21.0. Regenerate so CI's lock-check passes on branches cut from this
+  main.
+
+* refactor(logging): extract close_loggers from generate_dataset to instantiators
+
+The logger-finalize + guarded wandb.finish dance is needed by both the generate and finalize
+  data-pipeline entrypoints. Promote it from a private generate_dataset helper to a public
+  synth_setter.utils.instantiators.close_loggers (home of instantiate_loggers) so finalize can reuse
+  it without a cross-module private import. Behavior-preserving move; generate_dataset's call site
+  and the mirroring comment are updated.
+
+* feat(storage): log dataset W&B artifact with R2 references on finalize
+
+finalize now logs a canonical `data-{dataset_config_id}` artifact (type `dataset`) to any configured
+  WandbLogger, resuming the data-generation run pinned to spec.run_id so it lands on the producer
+  node of the lineage DAG (storage-provenance-spec §4-6). build_dataset_artifact references the
+  finalized R2 objects as s3:// URIs (per-split .h5 + stats.npz for hdf5; the shard prefix +
+  stats.npz for wds; checksum=False since R2's custom endpoint is unreachable by W&B's reference
+  handler) and records shard_count / n_samples / git_sha in artifact.metadata.
+
+Wiring is gated on a configured logger group, so the existing wandb-free finalize callers are an
+  unchanged no-op. Enabling it in production finalize composition is deferred to the finalize Docker
+  mode (#408).
+
+Also pins the merged #281 prefix-drift guard at the finalize_from_spec call site with an integration
+  test.
+
+Refs #1471, #1470, #1467
+
+* docs(storage): note dataset artifact logging in finalize_dataset doc-map covers
+
+* feat(storage): compose wandb logger in finalize so the dataset artifact logs in production
+
+The prior commit wired the artifact-logging path but gated it on a configured logger group, which
+  finalize_dataset.yaml did not compose — so the producer node of the lineage DAG never fired in the
+  live generate→finalize pipeline (generate-dataset-shards.yaml's unconditional finalize chain). Add
+  `logger: wandb` to the finalize config and forward the inherited WANDB_API_KEY secret into the
+  finalize-dataset.yaml run step. WandbLogger inits lazily and logging is best-effort, so a finalize
+  run without WANDB_API_KEY degrades to a no-op rather than aborting.
+
+Tests: the hydra-startup test now composes the wandb group (WANDB_MODE=disabled
+
+keeps it hermetic); the offline e2e pins the exact stats s3:// reference and the metadata
+  round-trip; adds a _r2_to_s3_uri non-r2-scheme guard test.
+
+Refs #1471
+
+* docs(storage): tighten finalize_dataset doc-map covers per review (C12)
+
+* docs(storage): sync wandb + provenance docs with finalize artifact logging
+
+Doc-drift from this PR's refactor + shipped feature: - wandb-integration.md: _close_loggers →
+  close_loggers (moved to instantiators); add data-{task_name} artifact row + finalize_dataset.py
+  entry-point row - storage-provenance-spec.md §4: drop '(planned)' from the dataset row, point
+  Logged By at finalize_dataset.py, refresh the note - doc-map.yaml: note the finalize config's
+  logger: wandb default
+
+### Testing
+
+- **fix**: Correct oracle-eval glob depth in shuffled-metrics test
+  ([#1495](https://github.com/tinaudio/synth-setter/pull/1495),
+  [`9c5572e`](https://github.com/tinaudio/synth-setter/commit/9c5572e3da85c79b3e94eee6e4eadf97f509d0e2))
+
+* fix(test): correct oracle-eval glob to oracle_eval/*/*/metrics/metrics.json
+
+The shuffled-metrics integration test used oracle_eval/*/metrics/metrics.json but the real layout
+  written by generate_dataset is oracle_eval/<split>/<run_id>/metrics/metrics.json — one wildcard
+  level short. The glob returned [] so the assertion always failed.
+
+Aligns with test_oracle_eval_inline_writes_bounded_audio_metrics which already uses the two-wildcard
+  form and asserts len == 3 (one file per split).
+
+Refs #489
+
+* fix(test): clarify oracle-eval metrics path template in comment
+
+Expands the trailing `/.' in the inline comment to show the full path template including the
+  `metrics/metrics.json` suffix, matching what the glob pattern encodes. Applies to both oracle-eval
+  integration tests.
+
+* fix(test): include split path in non-finite metrics assertion message
+
+Copilot finding: the failure message didn't identify which split's metrics.json caused the
+  assertion, making CI debugging harder. `metrics_file.parent.parent.name` is the split name
+  (train/val/test) since the layout is oracle_eval/<split>/<run_id>/metrics/metrics.json.
+
+* fix(test): use prefix_root override to satisfy assert_r2_prefix_matches
+
+Both oracle-eval integration tests used +r2.prefix=test-runs/... for R2 isolation, but
+  finalize_from_spec (PR #1494) now calls assert_r2_prefix_matches which validates that
+  spec.r2.prefix equals make_r2_prefix(prefix_root, task_name, run_id). A test-runs prefix doesn't
+  match the data/ canonical form derived from spec fields.
+
+Fix: override r2.prefix_root instead of r2.prefix. The spec model derives prefix from prefix_root +
+  task_name + run_id automatically (via _fill_default_r2_prefix), so the assertion holds. Cleanup
+  purges prefix_root + "/" which covers the derived subtree.
+
+
+## v8.22.0 (2026-06-06)
+
+### Features
+
+- **eval**: Auto-shuffle render-order probe when params are uniform
+  ([#1491](https://github.com/tinaudio/synth-setter/pull/1491),
+  [`9a3f219`](https://github.com/tinaudio/synth-setter/commit/9a3f2194bcc9bb86527f1bdde673d1efdaf9c404))
+
+* feat(eval): auto-shuffle render-order probe when params are uniform
+
+compute_audio_metrics now detects uniform params.csv across sample dirs automatically and, when
+  found, scores a second shuffled pred.wav view (#489), writing aggregated_metrics_shuffled.csv
+  alongside the normal aggregated_metrics.csv. eval._load_audio_metrics merges the shuffled CSV into
+  the returned dict under the shuffled_audio/ prefix.
+
+The --shuffle_pred_audio CLI flag is removed; --shuffle_seed (default 0) remains as an optional
+  override. A non-zero seed with non-uniform params raises ValueError so the misconfiguration is
+  visible rather than silently skipped.
+
+Also removes the now-dead evaluation.shuffle_pred_audio config field from eval.yaml and adds
+  params_are_uniform() to shuffle_pred_audio.py.
+
+* fix(eval): address pre-PR review BLOCKs for auto-shuffle metrics
+
+- compute_audio_metrics: add return-type annotations to compute_mel_specs, compute_jtfs, get_stft,
+  compute_metrics; add -> None + docstring to main() - compute_audio_metrics: replace print() with
+  logger.info() in main() - compute_audio_metrics: guard _aggregate_metrics against pd.concat([])
+  when metric_dfs is empty (num_workers > len(audio_dirs) edge case) - compute_audio_metrics:
+  clarify render-order probe comment to explain why params_are_uniform/find_possible_subdirs dir
+  sets agree when uniform=True - test_eval: rename e2e test and replace stale
+  shuffle_pred_audio=True with shuffle_seed=7 so the CalledProcessError contract is still exercised
+  - test_compute_audio_metrics: add @pytest.mark.slow to three CLI tests that use real wav I/O; fix
+  stale docstring on nonuniform-params test - test_eval_postprocessing: add behavior test for the
+  shuffled_audio/* key path through _run_predict_postprocessing (tdd-impl Gate 1)
+
+Refs #489
+
+* fix(evaluation): resolve all round-2 review BLOCKs for auto-shuffle metrics
+
+- compute_audio_metrics: add import math; rename `dir` param to `sample_dir`; add docstrings to
+  subdir_matches_pattern, find_possible_subdirs, _l1_distance; move nested l1 to module-level
+  _l1_distance; add sample_rate param to compute_rms; fix AudioFile resource leak with `with`
+  context managers; fix tail truncation in _aggregate_metrics using math.ceil; fix glob mismatch by
+  computing probe_dirs = [d if d.name.startswith("sample_")] before the uniformity check and >= 2
+  gate; update comment - shuffle_pred_audio: rewrite _assert_uniform_params to delegate to
+  params_are_uniform, eliminating DRY violation and aligning exception contracts - tests: add
+  `assert shuffled` guard before vacuous all() assertion; remove change-detector assert for removed
+  --shuffle_pred_audio flag
+
+* fix(evaluation): resolve all round-3 review BLOCKs for auto-shuffle metrics
+
+- compute_audio_metrics: add docstrings to compute_mel_specs, compute_jtfs, compute_rms,
+  compute_metrics_on_dir, compute_metrics; filter empty sublists in _aggregate_metrics when
+  num_workers > len(audio_dirs); add empty audio_dirs guard in main(); rename audio_dir/output_dir
+  locals to avoid str→Path rebind shadowing - tests/test_eval.py: add success-path test
+  test_evaluate_predict_mode_includes_shuffled_audio_metrics_when_subprocess_writes_shuffled_csv —
+  drives evaluate() end-to-end with fake subprocess writing both metric CSVs and asserts
+  shuffled_audio/* keys appear in the returned metric dict
+
+* chore(eval): fix comment-hygiene WARNs from pre-PR review
+
+- Add full docstrings to compute_mss, compute_jtfs_distance, compute_wmfcc, compute_f0, get_stft,
+  compute_sot (pydoclint requires :param:/:returns:) - Fix D205 wrapping in get_stft and compute_sot
+  one-liners - Trim implementation-narrative sentences from _assert_uniform_params docstring -
+  Condense two-line render-order probe comment to one - Remove decorative section-separator comment
+  in test_compute_audio_metrics - Remove restatement comment in test_eval_postprocessing
+
+* docs(eval): update docs for auto-shuffle probe (#489)
+
+- Remove stale shuffle_pred_audio config key from eval-pipeline.md and configuration-reference.md
+  (flag deleted in this PR) - Update shuffle_seed semantics: always-forwarded, non-zero implies
+  intent - Add shuffled_audio/* W&B keys to eval-pipeline.md and wandb-integration.md - Add
+  aggregated_metrics_shuffled.csv to metrics stage output table - Update doc-map.yaml covers for
+  compute_audio_metrics.py and shuffle_pred_audio.py (automatic probe, params_are_uniform public
+  API)
+
+* fix(evaluation): resolve round-4 review BLOCKs for auto-shuffle metrics
+
+- Extract _run_shuffle_probe from main() to fix 6-level nesting BLOCK - Wrap FileNotFoundError in
+  _assert_uniform_params to honour :raises ValueError: contract - Add docstrings to compute_mfcc,
+  get_pesto_activations, batched_wasserstein_distance_np - Correct eval.yaml shuffle_seed comment
+  (probe runs on uniform params regardless of seed value)
+
+* fix(eval): apply Copilot docstring + nested-layout guard fixes to PR #1491
+
+Corrects three docstring inaccuracies flagged by Copilot review: - compute_mel_specs: param y shape
+  was (T,) but callers pass (C, T); multi-channel input is accepted by the underlying mel transform
+  - compute_jtfs: removed false 'keyed on input shape; reinitialised automatically' claim; instance
+  is cached once and reused unconditionally - _aggregate_metrics: removed 'cleaned up by caller';
+  intermediates are left alongside the aggregated output in work_dir
+
+Adds nested-layout guard to _run_shuffle_probe: when output_dir is inside audio_dir (e.g.
+  audio/metrics), shuffled_audio would nest inside the source tree and cause shuffle_pred_audio to
+  raise. With seed=0 (default automatic probe) the CLI now warns and skips gracefully; with an
+  explicit non-zero seed it raises a directed ValueError. Two @pytest.mark.slow tests cover both
+  branches.
+
+* test(eval): add oracle-eval integration test asserting shuffled_audio metrics
+
+Adds test_oracle_eval_inline_writes_shuffled_audio_metrics_when_params_uniform to
+  test_generate_dataset.py; exercises the full generate → oracle-eval → metrics.json path with
+  param_sample_cadence=shard so the auto-shuffle probe (#489) fires and both audio/ and
+  shuffled_audio/ keys appear in metrics.json.
+
+* chore(sync): sync uv.lock to synth-setter 8.21.0
+
+pyproject.toml was bumped to 8.21.0 in the release commit (757a6ea5) but uv.lock was not updated
+  ([skip ci] skipped the uv-lock pre-commit hook). Regenerate to bring the lock in sync.
+
+* fix(eval): address Copilot round-2/3 findings on compute_audio_metrics
+
+- compute_mfcc: downmix (C,T) to mono before librosa.feature.mfcc; docstring previously claimed
+  channel-averaging but code passed raw multi-channel arrays - get_pesto_activations: fix return
+  annotation np.ndarray -> tuple[np.ndarray,np.ndarray] - main: raise ValueError when
+  shuffle_seed!=0 but fewer than 2 sample_* dirs exist (explicit seed implies intent; was previously
+  silently skipped) - --num_workers: use click.IntRange(min=1) to reject 0/negative at CLI boundary
+
+Tests: three new cases — multichannel mfcc shape, num_workers=0 rejection, explicit seed with single
+  sample dir raises.
+
+Closes #489 (partial)
+
+* fix(eval): cap _aggregate_metrics workers to len(audio_dirs)
+
+Avoids spawning idle ProcessPoolExecutor workers when num_workers exceeds the number of sample dirs;
+  effective_workers = min(num_workers, len(audio_dirs)). Addresses comment #3366628343 on PR #1491.
+
+* fix(eval): correct compute_mfcc handling — docstring fix not behavioral change
+
+The prior commit added a channel-averaging downmix to compute_mfcc, but that changes the behavior:
+  compute_wmfcc relies on the (C, 20, frames) output for its reshape(-1, frames) + DTW path. Revert
+  the downmix; fix only the docstring to say what the code actually does (passes (C,T) through to
+  librosa as-is).
+
+Also adds tempfile import (TemporaryDirectory replaces shutil.rmtree in _run_shuffle_probe) and
+  updates the multichannel test to assert the real (C, 20, frames) shape rather than the downmixed
+  (20, frames) shape.
+
+* fix(eval): guard compute_metrics row index against dirs without underscore
+
+rsplit("_", 1)[-1] is safe for any dir name; [1] raised IndexError when the name contained no
+  underscore. Addresses Copilot comment #3366682407 on PR #1491.
+
+### Testing
+
+- Cgroup-aware cpu count for pytest-xdist -n auto
+  ([#1492](https://github.com/tinaudio/synth-setter/pull/1492),
+  [`4ac24bc`](https://github.com/tinaudio/synth-setter/commit/4ac24bcf3d6127480cface5d5ee6c842716f4266))
+
+* fix(testing): cgroup-aware cpu count for pytest-xdist -n auto
+
+Inside a dev container, os.cpu_count() returns the host's total core count, causing -n auto to spawn
+  far more xdist workers than the container's CPU quota allows. The resulting over-subscription hits
+  the memory ceiling and the OOM-killer reaps a worker, surfacing as a "worker gwN crashed" failure.
+
+Add pytest_xdist_auto_num_workers to tests/conftest.py that reads both sched_getaffinity (respects
+  --cpuset-cpus) and the cgroup CPU quota (respects --cpus), then takes the minimum. On an
+  unconstrained host the hook returns the same value -n auto would, so CI is unaffected.
+
+Closes #1490
+
+Add pytest_xdist_auto_num_workers to tests/conftest.py that reads both sched_getaffinity (respects
+  --cpuset-cpus) and the cgroup CPU quota (respects --cpus), then takes the minimum. On an
+  unconstrained host the hook returns the same value -n auto would, so CI is unaffected. The env-var
+  escape hatch (PYTEST_XDIST_AUTO_NUM_WORKERS) is preserved.
+
+Add 10 unit tests in tests/test__conftest_cpu.py covering all branches: v2 quota, v2 max sentinel,
+  v1 quota, v1 unlimited (-1), no cgroup, quota > affinity, fractional quota floored to 1, empty v2
+  (no-limit), and invalid v2 token falling through to v1.
+
+* fix(testing): add raising=False to monkeypatch for macOS portability
+
+os.sched_getaffinity does not exist on macOS; monkeypatch.setattr raises AttributeError without
+  raising=False. Apply raising=False to all ten sched_getaffinity patches so the test file passes on
+  both Linux and macOS.
+
+
+## v8.21.0 (2026-06-06)
+
+### Automation
+
+- **dev**: Auto-link plugins and thoughts after worktree add
+  ([#1487](https://github.com/tinaudio/synth-setter/pull/1487),
+  [`feb1bf1`](https://github.com/tinaudio/synth-setter/commit/feb1bf1935be0fb45f922e50e7b50345e26d057f))
+
+* feat(ci-automation): auto-run link-plugins and link-thoughts after git worktree add
+
+PostToolUse hook (worktree-post-setup.sh) fires on every `git worktree add` command, parses the
+  target path via shlex, and runs make link-plugins && make link-thoughts there. Eliminates the
+  manual follow-up step that was causing "VST not found" errors in fresh worktrees.
+
+Closes #1343
+
+* fix(ci-automation): resolve comment-hygiene and flag-parsing issues in worktree-post-setup
+
+- Remove C3 flag-name enumeration from _parse_worktree_path comment - Trim file header to 2 lines
+  (C5) - Fix --orphan flag: it is boolean, not a flag that consumes an argument - Use jq for JSON
+  extraction; one import per line in Python heredoc - Drop Closes #1343 from settings.json
+  description field
+
+Refs #1343
+
+* docs(ci-automation): update getting-started and AGENTS.md for worktree-post-setup hook
+
+Document that Claude Code automatically runs make link-plugins && make link-thoughts after git
+  worktree add via the new PostToolUse hook. Update getting-started.md to distinguish Claude Code
+  sessions (automatic) from plain terminal (manual chain). Add hook inventory entry in AGENTS.md so
+  agents know not to chain the targets manually.
+
+* fix(ci-automation): add log() fallback, restore --orphan arg parsing, add hook tests
+
+- Add declare -F log fallback stub so fail-safe branches don't accidentally invoke /usr/bin/log on
+  macOS when _lib.sh is absent - Restore --orphan to flags_with_args: git 2.42+ uses --orphan
+  <branch> <path> so it must consume the next token, not be treated as a boolean flag - Add 7 tests
+  in agent/hooks/test.sh covering: valid path runs make in the right directory, missing path,
+  malformed JSON, unrelated command, -b parsing, --orphan parsing, and quoted paths with spaces
+
+* fix(ci-automation): handle -- end-of-options marker in worktree path parser
+
+`git worktree add -- <path>` is valid; the old parser treated `--` as an unknown boolean flag (i+1
+  skip) and then the path token (which may start with `-`) also as a flag, so the hook silently
+  skipped link-plugins/thoughts.
+
+Fix: detect `tok == "--"` before the generic `startswith("-")` branch and treat the very next token
+  as the path unconditionally, mirroring POSIX end-of-options semantics (comment #3366544594).
+
+Also adds T_wt_post_setup_parse_end_of_options_marker to cover this case.
+
+* chore(ci): sync uv.lock to 8.20.0
+
+lock-check failed because the merge of this branch with origin/main produces pyproject.toml=8.20.0
+  vs uv.lock=8.18.4.
+
+* fix(ci-automation): handle compound commands in worktree path parser
+
+- Replace glob case-check with boundary-aware grep matching doc-drift.sh pattern — avoids matching
+  echo/"quoted" non-invocations. - Find the git-worktree-add subsequence instead of assuming prefix,
+  so compound commands like `cd repo && git worktree add <path>` extract the correct worktree path
+  rather than silently skipping the link step. - Add T_wt_post_setup_parse_compound_command test
+  covering the regression.
+
+* test(ci-automation): add quoted-substring rejection test for worktree-post-setup
+
+Adds T_wt_post_setup_quoted_substring_not_matched to verify the boundary-aware guard rejects `echo
+  "git worktree add ..."` as a non-invocation (no make call, exit 0). Complements the
+  compound-command test added in e7f4842c.
+
+### Documentation
+
+- **agents**: Probe VST/R2 before skipping; add auto-skip hook + tests
+  ([#1486](https://github.com/tinaudio/synth-setter/pull/1486),
+  [`3a4bfd1`](https://github.com/tinaudio/synth-setter/commit/3a4bfd1478f73fb168c8f7fa12250082445dfe24))
+
+* docs(agents): add VST/R2 verification section; auto-skip when absent
+
+AGENTS.md gains a "VST and R2 verification" section (mirrors the GPU verification pattern) that
+  tells agents to probe SYNTH_SETTER_PLUGIN_PATH and RCLONE_CONFIG_R2_ACCESS_KEY_ID before labelling
+  integration tests as unrunnable, and directs them to run make test-vst-cpu / pytest -m
+  integration_r2 instead of writing SKIP in PR verification tables.
+
+conftest.py adds pytest_configure + pytest_collection_modifyitems hooks that probe VST file
+  existence and R2 env vars at collection time, auto-skipping requires_vst / integration_r2 tests
+  only when the resources are genuinely absent. In this devcontainer both are present so all tests
+  collect normally; in CI they're excluded by marker filter before the hook fires.
+
+Fixes the pattern seen in #1485 where agent-authored PR descriptions listed these tests as "SKIP:
+  requires VST / R2" instead of running them.
+
+* test(infra): add skip-hook tests; simplify conftest hook
+
+Remove the pytest_configure indirection — since both hooks live in the same module,
+  pytest_collection_modifyitems can read _VST_AVAILABLE and _R2_AVAILABLE directly without copying
+  them onto config.
+
+Add tests/infra/test_conftest_skip_hooks.py: five @pytest.mark.infra tests covering the
+  skip-inserted and run-through branches for both requires_vst and integration_r2 markers, plus the
+  unmarked-item case.
+
+Fix comment-hygiene C6 in pytest_collection_modifyitems: drop the type-restating opener from the
+  items :param: line.
+
+* chore(lint): tighten comment hygiene in skip-hook files
+
+Trim conftest.py module docstring to mention skip hooks; collapse three-line probe comment to two;
+  drop :param: type-restatements in test_conftest_skip_hooks.py and use pytest.MarkDecorator instead
+  of Any.
+
+### Features
+
+- **storage**: Deterministic structured W&B run IDs across data, train, and eval
+  ([#1490](https://github.com/tinaudio/synth-setter/pull/1490),
+  [`bedd9a9`](https://github.com/tinaudio/synth-setter/commit/bedd9a9e4d87cb0c181b136e33a08e5aae8c7bc8))
+
+Add synth_setter.run_id.make_wandb_run_id as the single source of truth for the
+  {config_id}-{timestamp} W&B run-id convention, stdlib-only so the launcher-pure pipeline.schemas
+  layer can import it without omegaconf/hydra.
+
+Training and eval pin a deterministic run id derived from the chosen Hydra experiment
+  (resolve_run_config_id), falling back to task_name; data-generation keeps pinning spec.run_id so
+  the W&B run stays in lockstep with the R2 prefix. pin_wandb_run_id centralizes writing id +
+  job_type onto the wandb logger cfg and no-ops when no wandb logger group is present.
+
+Refs #403
+
+
 ## v8.20.0 (2026-06-06)
 
 ### Features

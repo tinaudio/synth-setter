@@ -17,6 +17,7 @@ import pytest
 import torch
 from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
+from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, open_dict
 
 from synth_setter.data.vst import core, param_specs, preset_paths
@@ -189,6 +190,29 @@ def _write_smoke_stats_npz(train_h5: Path) -> None:
 register_resolvers()
 
 
+def reset_hydra_config_singleton() -> None:
+    """Clear Hydra's ``HydraConfig`` singleton so its ``cfg`` reads as unset.
+
+    ``HydraConfig`` is a Hydra ``Singleton`` distinct from ``GlobalHydra``; tests
+    that call ``HydraConfig().set_config(...)`` populate a process-global
+    singleton that ``GlobalHydra.instance().clear()`` leaves untouched. The stale
+    ``runtime.choices.experiment`` then leaks into a later, Hydra-context-free
+    test via :func:`synth_setter.utils.logging_utils.resolve_run_config_id`,
+    which reads a stale experiment instead of falling back to ``task_name``.
+    """
+    HydraConfig.instance().cfg = None
+
+
+@pytest.fixture(autouse=True)
+def _clear_hydra_config_singleton() -> Iterator[None]:
+    """Reset the ``HydraConfig`` singleton after every test.
+
+    :yields None: Control to the test, then clears the singleton on teardown.
+    """
+    yield
+    reset_hydra_config_singleton()
+
+
 @pytest.fixture(scope="package")
 def cfg_train_global() -> DictConfig:
     """Build a default Hydra DictConfig for training.
@@ -351,6 +375,50 @@ def cfg_dataset(cfg_dataset_global: DictConfig, tmp_path: Path) -> Iterator[Dict
     with open_dict(cfg):
         cfg.paths.output_dir = str(tmp_path)
         cfg.paths.work_dir = str(tmp_path)
+        cfg.paths.log_dir = str(tmp_path)
+
+    yield cfg
+
+    GlobalHydra.instance().clear()
+
+
+@pytest.fixture(scope="package")
+def cfg_finalize_global() -> DictConfig:
+    """Build a default Hydra DictConfig for ``finalize_dataset``.
+
+    Composes with ``return_hydra_config=True`` so the ``hydra.run.dir`` /
+    ``job_logging`` interpolations finalize relies on are present in the tree
+    (the entrypoint overrides ``hydra.run.dir`` because the shared group
+    references ``${run_name}``, which this cfg does not surface). Supplies the
+    required ``dataset_spec_uri`` so every ``???`` field is populated.
+
+    :return: A DictConfig composed from ``configs/finalize_dataset.yaml`` with
+        ``dataset_spec_uri`` set and ``paths.root_dir`` pinned to the workspace.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="finalize_dataset",
+            return_hydra_config=True,
+            overrides=["dataset_spec_uri=r2://bucket/spec.json"],
+        )
+        with open_dict(cfg):
+            cfg.paths.root_dir = str(operator_workspace())
+    return cfg
+
+
+@pytest.fixture(scope="function")
+def cfg_finalize(cfg_finalize_global: DictConfig, tmp_path: Path) -> Iterator[DictConfig]:
+    """Build on top of ``cfg_finalize_global()`` and redirect paths into ``tmp_path``.
+
+    :param cfg_finalize_global: The package-scoped finalize DictConfig to copy.
+    :param tmp_path: The per-test temporary path used as output/log root.
+
+    :yields DictConfig: ``paths.{output_dir,log_dir}`` pinned to ``tmp_path``;
+        teardown clears Hydra's global singleton.
+    """
+    cfg = cfg_finalize_global.copy()
+    with open_dict(cfg):
+        cfg.paths.output_dir = str(tmp_path)
         cfg.paths.log_dir = str(tmp_path)
 
     yield cfg
@@ -824,6 +892,143 @@ def dataset_spec_factory() -> Callable[..., DatasetSpec]:
         return DatasetSpec(**kwargs)  # type: ignore[arg-type]
 
     return factory
+
+
+def _cgroup_aware_cpu_count() -> int:
+    """Return CPUs available to this process, honouring cgroup quota and affinity.
+
+    Takes min(affinity, cgroup_quota) so ``-n auto`` doesn't over-subscribe the
+    container — see #1490 for the "worker crashed" failure mode this fixes.
+
+    :returns: Usable CPU count, always at least 1.
+    """
+    if hasattr(os, "sched_getaffinity"):
+        affinity = len(os.sched_getaffinity(0))
+    else:
+        affinity = os.cpu_count() or 1
+
+    quota: float | None = None
+    try:  # cgroup v2: unified hierarchy, kernel >= 4.5
+        with open("/sys/fs/cgroup/cpu.max") as fh:
+            parts = fh.read().split()
+            if len(parts) >= 2 and parts[0] != "max":
+                quota = int(parts[0]) / int(parts[1])
+    except (OSError, ValueError, ZeroDivisionError):
+        try:  # cgroup v1: legacy per-subsystem hierarchy
+            with open("/sys/fs/cgroup/cpu/cpu.cfs_quota_us") as fh:
+                quota_us = int(fh.read())
+            with open("/sys/fs/cgroup/cpu/cpu.cfs_period_us") as fh:
+                period_us = int(fh.read())
+            if quota_us > 0 and period_us > 0:
+                quota = quota_us / period_us
+        except (OSError, ValueError, ZeroDivisionError):
+            pass  # no cgroup limit; use affinity only
+
+    cpus = affinity if quota is None else min(affinity, quota)
+    return max(1, int(cpus))
+
+
+# Per-worker resident-memory budget for the -n auto memory clamp, overridable
+# via PYTEST_XDIST_WORKER_MEM_MB. 1 GiB suits a torch+h5py+Hydra worker.
+_DEFAULT_WORKER_MEM_MB = 1024
+
+# A v1 memory.limit_in_bytes at or above this is the kernel's unlimited sentinel.
+_MEM_UNLIMITED_SENTINEL = 1 << 62
+
+
+def _meminfo_available_bytes() -> int | None:
+    """Read ``MemAvailable`` from ``/proc/meminfo`` as bytes.
+
+    :returns: Host available memory in bytes, or None if the field is unreadable.
+    """
+    try:
+        with open("/proc/meminfo") as fh:
+            for line in fh:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) * 1024  # field is in kibibytes
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def _cgroup_memory_limit_bytes() -> int | None:
+    """Read the cgroup memory limit in bytes, honouring v2 then v1.
+
+    :returns: The cgroup memory cap in bytes, or None when unset or unlimited.
+    """
+    try:  # cgroup v2: unified hierarchy, kernel >= 4.5
+        with open("/sys/fs/cgroup/memory.max") as fh:
+            limit_field = fh.read().split()[0]
+            if limit_field != "max":
+                return int(limit_field)
+            return None
+    except (OSError, ValueError, IndexError):
+        pass
+    try:  # cgroup v1: legacy per-subsystem hierarchy
+        with open("/sys/fs/cgroup/memory/memory.limit_in_bytes") as fh:
+            limit = int(fh.read())
+        if 0 < limit < _MEM_UNLIMITED_SENTINEL:
+            return limit
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def _available_memory_bytes() -> int | None:
+    """Return usable memory as ``min(host MemAvailable, cgroup limit)``.
+
+    On a shared host the cgroup limit is usually unset, so host MemAvailable is the real ceiling;
+    in a memory-capped container the cgroup limit wins.
+
+    :returns: The tighter of the two figures in bytes, or None if neither is known.
+    """
+    candidates = [
+        value
+        for value in (_meminfo_available_bytes(), _cgroup_memory_limit_bytes())
+        if value is not None
+    ]
+    return min(candidates) if candidates else None
+
+
+def _memory_aware_worker_count() -> int | None:
+    """Cap ``-n auto`` workers by available memory and a per-worker budget.
+
+    Divides available memory by ``PYTEST_XDIST_WORKER_MEM_MB`` (default 1 GiB) so
+    a busy shared host doesn't OOM-kill the run — the failure #1490's CPU clamp
+    can't catch, since neither cpu.max nor memory.max is set on a shared host.
+
+    :returns: Memory-bounded worker count (>=1), or None when memory is unknown.
+    """
+    available = _available_memory_bytes()
+    if available is None:
+        return None
+    raw_budget = os.environ.get("PYTEST_XDIST_WORKER_MEM_MB")
+    try:
+        budget_mb = int(raw_budget) if raw_budget else _DEFAULT_WORKER_MEM_MB
+    except ValueError:
+        budget_mb = _DEFAULT_WORKER_MEM_MB
+    if budget_mb <= 0:
+        budget_mb = _DEFAULT_WORKER_MEM_MB
+    return max(1, available // (budget_mb * 1024 * 1024))
+
+
+def pytest_xdist_auto_num_workers(config: pytest.Config) -> int:  # noqa: ARG001
+    """Override pytest-xdist ``-n auto`` to fit the host's CPU and memory headroom.
+
+    Checks ``PYTEST_XDIST_AUTO_NUM_WORKERS`` first so the env-var escape hatch
+    that xdist's built-in implementation honours is preserved even when this
+    hook wins the ``firstresult`` race. Otherwise returns ``min(cpu, memory)``
+    so neither resource is over-subscribed.
+
+    :param config: The pytest config object (unused; required by the hook signature).
+    :returns: Worker count clamped to the host's real CPU and memory allocation.
+    """
+    env_override = os.environ.get("PYTEST_XDIST_AUTO_NUM_WORKERS")
+    if env_override is not None:
+        return max(1, int(env_override))
+    cpu_workers = _cgroup_aware_cpu_count()
+    mem_workers = _memory_aware_worker_count()
+    return cpu_workers if mem_workers is None else min(cpu_workers, mem_workers)
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:

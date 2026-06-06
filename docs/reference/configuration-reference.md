@@ -59,6 +59,7 @@ synth-setter-finalize-dataset dataset_spec_uri=r2://…/input_spec.json
   → @hydra.main composes DictConfig from src/synth_setter/configs/finalize_dataset.yaml
     → load_spec_from_uri(cfg.dataset_spec_uri) → DatasetSpec (the frozen spec generate uploaded)
       → r2_io.object_size(spec.r2.dataset_complete_marker_uri()) probe (idempotency short-circuit)
+      → assert_r2_prefix_matches(…) (advisory: warns on a non-canonical prefix, never aborts — custom prefixes like the oracle-eval e2e's test-runs/ are legitimate)
       → branch on spec.output_format:
           ├─ wds:  finalize_wds  — Welford-stream stats over train shards → upload stats.npz
           └─ hdf5: finalize_hdf5 — download every shard → reshard into {train,val,test}.h5 → stats.npz
@@ -92,7 +93,7 @@ Reference: `training-pipeline.md` §4–5
 
 ```
 eval.yaml + experiment config (pins model + data + checkpoint)
-  + evaluation: {render_vst, compute_metrics, rerender_target, num_workers, shuffle_pred_audio, shuffle_seed}
+  + evaluation: {render_vst, compute_metrics, rerender_target, num_workers, shuffle_seed}
   + render: {param_spec_name, preset_path, plugin_path?}   # required when render_vst=true
   → Hydra composes DictConfig → predict (→ render → metrics if mode=predict and gates on)
 ```
@@ -260,21 +261,20 @@ Gaps are configuration inputs that design docs specify or that standard practice
 | Input                          | Type   | What's Needed                                                                  | Reference                   |
 | ------------------------------ | ------ | ------------------------------------------------------------------------------ | --------------------------- |
 | `train_wandb_run_id`           | string | `{train_config_id}-{YYYYMMDDTHHMMSSsssZ}` — structured, reconstructible run ID | storage-provenance-spec §1  |
-| `dataset_config_id` linkage    | string | Explicit link from training config to consumed dataset                         | storage-provenance-spec §2  |
 | `dataset_wandb_run_id` linkage | string | Explicit link to specific dataset run version                                  | storage-provenance-spec §2  |
 | `job_type`                     | string | Must be `"training"` in W&B config — currently empty                           | storage-provenance-spec §7  |
 | `github_sha` in `wandb.config` | string | Logged via `log_wandb_provenance()` but not in Hydra config                    | wandb-integration.md gap #3 |
 
 ### 5.2 W&B / Artifact Lineage
 
-| Input                        | Type   | What's Needed                                                    | Reference                   |
-| ---------------------------- | ------ | ---------------------------------------------------------------- | --------------------------- |
-| `logger.wandb.log_model`     | string | `"all"` — uploads every checkpoint immediately (crash-resilient) | training-pipeline.md §6.2   |
-| `logger.wandb.id`            | string | `{train_config_id}-{YYYYMMDDTHHMMSSsssZ}` instead of null/random | wandb-integration.md gap #8 |
-| `logger.wandb.job_type`      | string | `"training"` instead of empty                                    | storage-provenance-spec §7  |
-| `logger.wandb.resume`        | string | `"allow"` for W&B resume support                                 | training-pipeline.md §5.3   |
-| Dataset `run.use_artifact()` | code   | Lineage link to consumed dataset artifact                        | storage-provenance-spec §5  |
-| Model `run.log_artifact()`   | code   | Lineage link for produced model artifact                         | storage-provenance-spec §5  |
+| Input                    | Type   | What's Needed                                                    | Reference                   |
+| ------------------------ | ------ | ---------------------------------------------------------------- | --------------------------- |
+| `logger.wandb.log_model` | string | `"all"` — uploads every checkpoint immediately (crash-resilient) | training-pipeline.md §6.2   |
+| `logger.wandb.id`        | string | `{train_config_id}-{YYYYMMDDTHHMMSSsssZ}` instead of null/random | wandb-integration.md gap #8 |
+| `logger.wandb.job_type`  | string | `"training"` instead of empty                                    | storage-provenance-spec §7  |
+| `logger.wandb.resume`    | string | `"allow"` for W&B resume support                                 | training-pipeline.md §5.3   |
+
+Model `run.log_artifact()` lineage is wired via `_log_model_artifact()` (train), which logs the canonical `model-{config_id}` artifact. Dataset `run.use_artifact()` lineage is wired via `use_input_artifacts()` (train/eval), activated by the opt-in `consumed_dataset_config_id` / `consumed_train_config_id` config keys (default `null` = no edge; alias from `consumed_artifact_alias`, default `latest`).
 
 ### 5.3 Data Portability
 

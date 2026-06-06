@@ -1,8 +1,11 @@
 """General-purpose utilities: OmegaConf resolvers, task wrappers, and gradient watching."""
 
+import hashlib
+import re
 import warnings
 from collections.abc import Callable
 from importlib.util import find_spec
+from pathlib import Path
 from typing import Any
 
 import torch
@@ -14,6 +17,10 @@ from synth_setter.utils import pylogger, rich_utils
 
 log = pylogger.RankedLogger(__name__, rank_zero_only=True)
 
+# Cap the readable cache-key slug so "<slug>-<sha256[:12]>" stays within the
+# common 255-byte filename limit; the hash suffix preserves uniqueness.
+_MAX_SLUG_LEN = 200
+
 
 def register_resolvers() -> None:
     # Avoid double-registration when modules are imported multiple times in tests
@@ -21,6 +28,90 @@ def register_resolvers() -> None:
         OmegaConf.register_new_resolver("mul", lambda x, y: x * y)
     if not OmegaConf.has_resolver("div"):
         OmegaConf.register_new_resolver("div", lambda x, y: int(x) // int(y))
+    if not OmegaConf.has_resolver("wandb"):
+        OmegaConf.register_new_resolver("wandb", _resolve_wandb_checkpoint)
+
+
+def _resolve_wandb_checkpoint(ref: str) -> str:
+    """Resolve a W&B model-artifact reference to a local cached checkpoint path.
+
+    Downloads the artifact under ``$PROJECT_ROOT/.cache/checkpoints/<key>`` once
+    and reuses it on later resolutions, so re-resolving the same ``ref`` never
+    re-downloads — unless the cached dir holds no ``.ckpt`` (a partial download),
+    in which case it is refetched. The cache key (see :func:`_cache_key`) is a
+    path-safe slug plus a hash, so a hostile ref (``..``, ``:``) can never escape
+    the cache root and distinct refs never collide. ``wandb`` is imported lazily
+    so importing this module never requires it.
+
+    :param ref: Artifact ref such as ``entity/project/model-x:alias`` or
+        ``model-x:latest``.
+    :returns: Absolute path to the checkpoint inside the downloaded artifact —
+        ``model.ckpt`` if present, else the sole ``.ckpt`` (see
+        :func:`_select_checkpoint` for the no-ckpt / ambiguous-ckpt errors).
+    :raises ModuleNotFoundError: If the optional ``wandb`` package is not installed.
+    """
+    if not find_spec("wandb"):
+        raise ModuleNotFoundError(
+            f"Resolving ${{wandb:{ref}}} requires the optional 'wandb' package; "
+            "install the 'util' dependency group (aggregated into 'runtime'/'dev') "
+            "to use this resolver."
+        )
+    import wandb
+
+    from synth_setter.workspace import operator_workspace
+
+    cache_dir = operator_workspace() / ".cache" / "checkpoints" / _cache_key(ref)
+    checkpoints = sorted(cache_dir.glob("**/*.ckpt"))
+    # A cached dir with no .ckpt is a partial download — refetch rather than trust it.
+    if not checkpoints:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        wandb.Api().artifact(ref).download(root=str(cache_dir))
+        checkpoints = sorted(cache_dir.glob("**/*.ckpt"))
+    return _select_checkpoint(ref, checkpoints)
+
+
+def _cache_key(ref: str) -> str:
+    """Build a collision-free, path-safe cache-dir name for a W&B artifact ref.
+
+    The readable slug excludes ``.`` so no ``ref`` can produce a ``.`` / ``..``
+    path segment that escapes the cache root; a short ``sha256`` suffix keeps
+    distinct refs that slug identically (e.g. ``a/b`` vs ``a:b``) from colliding
+    onto the same cache dir and returning the wrong checkpoint. The slug is
+    capped so the name stays under the common 255-byte filename limit; the hash
+    suffix preserves uniqueness across refs that share a truncated slug.
+
+    :param ref: Artifact ref such as ``entity/project/model-x:alias``.
+    :returns: ``<slug>-<sha256[:12]>``, safe as a single path component.
+    """
+    slug = re.sub(r"[^A-Za-z0-9_-]", "_", ref)[:_MAX_SLUG_LEN]
+    digest = hashlib.sha256(ref.encode()).hexdigest()[:12]
+    return f"{slug}-{digest}"
+
+
+def _select_checkpoint(ref: str, checkpoints: list[Path]) -> str:
+    """Pick the checkpoint a ``ref`` resolves to, erroring on an ambiguous artifact.
+
+    :param ref: Originating artifact ref, used only for error messages.
+    :param checkpoints: ``.ckpt`` paths found in the downloaded artifact.
+    :returns: The sole ``model.ckpt`` if present, else the sole checkpoint.
+    :raises FileNotFoundError: If ``checkpoints`` is empty.
+    :raises ValueError: If several ``model.ckpt`` files, or several
+        non-``model.ckpt`` checkpoints, make the selection ambiguous.
+    """
+    if not checkpoints:
+        raise FileNotFoundError(f"W&B artifact {ref!r} contains no .ckpt")
+    preferred = [p for p in checkpoints if p.name == "model.ckpt"]
+    if len(preferred) > 1:
+        paths = ", ".join(str(p) for p in preferred)
+        raise ValueError(f"W&B artifact {ref!r} has ambiguous model.ckpt files ({paths})")
+    if preferred:
+        return str(preferred[0])
+    if len(checkpoints) > 1:
+        names = ", ".join(p.name for p in checkpoints)
+        raise ValueError(
+            f"W&B artifact {ref!r} has ambiguous checkpoints ({names}); none named model.ckpt"
+        )
+    return str(checkpoints[0])
 
 
 def extras(cfg: DictConfig) -> None:

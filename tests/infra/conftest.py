@@ -54,6 +54,16 @@ def post_create_script(devcontainer_dir: Path) -> Path:
 
 
 @pytest.fixture(scope="session")
+def tmux_conf(devcontainer_dir: Path) -> Path:
+    """Absolute path to `.devcontainer/tmux.conf`.
+
+    :param devcontainer_dir: The `.devcontainer/` directory.
+    :returns: Path to `.devcontainer/tmux.conf`.
+    """
+    return devcontainer_dir / "tmux.conf"
+
+
+@pytest.fixture(scope="session")
 def initialize_script(devcontainer_dir: Path) -> Path:
     """Absolute path to `.devcontainer/initialize.sh`."""
     return devcontainer_dir / "initialize.sh"

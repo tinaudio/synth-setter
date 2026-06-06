@@ -54,11 +54,11 @@ docs:
       - pattern: "src/synth_setter/configs/logger/many_loggers.yaml"
         covers: "Default logger compose — which loggers are enabled out of the box"
       - pattern: "src/synth_setter/cli/train.py"
-        covers: "WandbLogger instantiation, trainer integration, run lifecycle"
+        covers: "WandbLogger instantiation, trainer integration, run lifecycle, model-{config_id} artifact logged at train end with opt-in s3:// checkpoint reference"
       - pattern: "src/synth_setter/cli/eval.py"
         covers: "Checkpoint resolution from W&B, evaluation logging"
       - pattern: "src/synth_setter/cli/generate_dataset.py"
-        covers: "WandbLogger lifecycle for dataset generation: spec → hyperparams + dataset-spec artifact, per-shard + summary history rows, run id pinned to spec.run_id, inline oracle eval resuming the run to append audio/* rows"
+        covers: "WandbLogger lifecycle for dataset generation: spec → hyperparams + dataset-spec artifact, per-shard + summary history rows, run id pinned to spec.run_id, inline oracle eval resuming the run to append per-split-namespaced audio rows (test bare audio/*; train/val under <split>/audio/* via +evaluation.metric_prefix)"
       - pattern: "src/synth_setter/configs/dataset.yaml"
         covers: "Default `logger: wandb` for dataset generation; entity/project sourced from logger/wandb.yaml"
       - pattern: "sweeps/**"
@@ -79,9 +79,9 @@ docs:
       - pattern: "src/synth_setter/cli/generate_dataset.py"
         covers: "Dataset generation entrypoint: sequential or (when `render.parallel=True`) thread-pool-parallel multi-shard dispatch with R2 skip-existing probe (worker-side resumability MVP, #750) and per-shard `render.max_retries` retry loop around the renderer subprocess; @hydra.main CLI (`python -m synth_setter.cli.generate_dataset experiment=<id>`) composed from src/synth_setter/configs/dataset.yaml"
       - pattern: "src/synth_setter/configs/finalize_dataset.yaml"
-        covers: "Finalize @hydra.main entry config; required `dataset_spec_uri` loads the persisted DatasetSpec from R2 (file://, r2://, or bare path); overrides `hydra.run.dir` because `task_name`/`run_name` are not in this cfg"
+        covers: "Finalize @hydra.main entry config; required `dataset_spec_uri` loads the persisted DatasetSpec from R2 (file://, r2://, or bare path); overrides `hydra.run.dir` because `task_name`/`run_name` are not in this cfg; composes the `logger: wandb` group so finalize logs the dataset artifact (best-effort no-op without `WANDB_API_KEY`)"
       - pattern: "src/synth_setter/cli/finalize_dataset.py"
-        covers: "Finalize entrypoint: loads DatasetSpec from `cfg.dataset_spec_uri` via `load_spec_from_uri`, dispatches on `spec.output_format` (wds → `finalize_wds` streaming Welford / hdf5 → `finalize_hdf5` reshard + stats), writes `dataset.complete` marker last (R2 source-of-truth idempotency)"
+        covers: "Finalize entrypoint: loads the frozen DatasetSpec, dispatches on `spec.output_format` (wds → `finalize_wds`, hdf5 → `finalize_hdf5`), warns (never aborts) on a non-canonical R2 prefix, writes the `dataset.complete` marker last for idempotency, then logs the canonical `data-{config_id}` dataset W&B artifact with s3:// R2 references"
       - pattern: ".github/workflows/generate-dataset-shards.yaml"
         covers: "Reusable launcher fan-out across providers (skypilot-local kind, runpod, oci); per-provider artifact upload; emits a `spec_uri` workflow output (the materialized spec's canonical under-prefix `input_spec.json` URI, computed by the `synth-setter-spec-uri` console script — see `src/synth_setter/pipeline/ci/spec_uri.py`) consumed by validate-dataset-shards"
       - pattern: ".github/workflows/validate-dataset-shards.yaml"
@@ -198,9 +198,9 @@ docs:
       - pattern: "src/synth_setter/evaluation/predict_vst_audio.py"
         covers: "Audio prediction script, VST rendering, parameter-to-audio pipeline"
       - pattern: "src/synth_setter/evaluation/compute_audio_metrics.py"
-        covers: "Audio metric computation, MSS/wMFCC/SOT/RMS distance metrics, parallel workers, optional --shuffle_pred_audio render-order probe"
+        covers: "Audio metric computation, MSS/wMFCC/SOT/RMS distance metrics, parallel workers, automatic render-order probe (auto-shuffles when params are uniform, writes aggregated_metrics_shuffled.csv)"
       - pattern: "src/synth_setter/evaluation/shuffle_pred_audio.py"
-        covers: "Render-order probe (#489) — builds a symlink view permuting pred.wav across sample dirs (uniform-params gate), invoked by compute_audio_metrics behind --shuffle_pred_audio"
+        covers: "Render-order probe (#489) — builds a symlink view permuting pred.wav across sample dirs; auto-invoked by compute_audio_metrics.main() when params_are_uniform returns True. params_are_uniform is also the gating predicate imported by compute_audio_metrics."
       - pattern: "renderscript.sh"
         covers: "Cross-platform rendering script, Xvfb auto-detection"
       - pattern: "src/synth_setter/configs/eval.yaml"
@@ -226,17 +226,17 @@ docs:
         covers: "Local dev targets — install (uv + .venv + deps + pre-commit), install-surge-xt (download + md5 verify + extract Surge XT VST3), link-plugins (mirror primary's plugins/ into a worktree), link-thoughts (symlink a worktree's thoughts/ to the primary's central copy; no-op in primary), SURGE_XT_VERSION + related vars"
         scope: "local-dev"
       - pattern: ".devcontainer/cpu/devcontainer.json"
-        covers: "CPU dev container config — remoteUser, mounts (bash-history named volume + per-user tmux-resurrect and zellij-cache named volumes for dev and root + plugins/ anonymous overlay), --env-file .env, initializeCommand, postCreateCommand, VS Code terminal profile defaulting to zellij (tmux still selectable)"
+        covers: "CPU dev container config — remoteUser, mounts (bash-history named volume + per-user zellij-cache named volumes for dev and root + plugins/ anonymous overlay), --env-file .env, initializeCommand, postCreateCommand, VS Code terminal profile defaulting to zellij (tmux still selectable)"
       - pattern: ".devcontainer/gpu/devcontainer.json"
-        covers: "GPU dev container config — remoteUser, mounts (bash-history named volume + per-user tmux-resurrect and zellij-cache named volumes for dev and root + plugins/ anonymous overlay), --env-file .env, initializeCommand, postCreateCommand, VS Code terminal profile defaulting to zellij (tmux still selectable)"
+        covers: "GPU dev container config — remoteUser, mounts (bash-history named volume + per-user zellij-cache named volumes for dev and root + plugins/ anonymous overlay), --env-file .env, initializeCommand, postCreateCommand, VS Code terminal profile defaulting to zellij (tmux still selectable)"
       - pattern: ".devcontainer/root_gpu/devcontainer.json"
         covers: "Root-user GPU dev container variant — remoteUser defaults to root, docker-in-docker + act features, --gpus all, VS Code terminal profile defaulting to zellij (tmux still selectable)"
       - pattern: ".devcontainer/tmux.conf"
-        covers: "tmux config installed to ~/.tmux.conf by post-create.sh — mouse mode, true color, 1-indexed windows, larger scrollback, vi copy mode, intuitive split keys, TPM plugin manager + tmux-resurrect + tmux-continuum (auto-restore off — restore is opt-in via prefix + Ctrl-r, 5-min save interval, resurrect state pinned to ~/.local/share/tmux/resurrect so the named volume can persist it, claude/gh panes revived as themselves on restore)"
+        covers: "tmux config installed to ~/.tmux.conf by post-create.sh — mouse mode, true color, 1-indexed windows, larger scrollback, vi copy mode, intuitive split keys (no session-persistence plugins)"
       - pattern: ".devcontainer/initialize.sh"
         covers: "Host-side initializeCommand — refuses pointer-file `.git` (worktree/submodule/--separate-git-dir), ensures .env exists"
       - pattern: ".devcontainer/post-create.sh"
-        covers: "First-run setup — git safety, pre-commit install, root-to-dev privilege drop, install ~/.tmux.conf for both root and dev users, bootstrap TPM in $HOME/.tmux/plugins/tpm and install tmux plugins (tmux-resurrect, tmux-continuum) non-interactively for both root and dev users"
+        covers: "First-run setup — git safety, pre-commit install, root-to-dev privilege drop, install ~/.tmux.conf for both root and dev users"
       - pattern: "src/synth_setter/configs/logger/many_loggers.yaml"
         covers: "Default logger compose — referenced in §4c for enable/disable workflow"
         scope: "wandb-config"
@@ -275,7 +275,7 @@ docs:
       - pattern: "src/synth_setter/configs/logger/wandb.yaml"
         covers: "W&B logger config, log_model, entity/project"
       - pattern: "src/synth_setter/pipeline/schemas/prefix.py"
-        covers: "DatasetConfigId, DatasetRunId, R2Prefix, make_r2_prefix()"
+        covers: "DatasetConfigId, DatasetRunId, R2Prefix, make_r2_prefix(), assert_r2_prefix_matches()"
       - pattern: "src/synth_setter/pipeline/constants.py"
         covers: "INPUT_SPEC_FILENAME constant"
 
@@ -347,10 +347,10 @@ docs:
 
   # ── Config reference (autogenerated mkdocstrings pages) ────────
   - doc: docs/config_reference/dataset_spec.md
-    description: Autogenerated Pydantic field reference for DatasetSpec / RenderConfig / ShardSpec / DatasetSrcConfig
+    description: Autogenerated Pydantic field reference for DatasetSpec / RenderConfig / ShardSpec
     sources:
       - pattern: "src/synth_setter/pipeline/schemas/spec.py"
-        covers: "DatasetSpec / RenderConfig / ShardSpec / DatasetSrcConfig Field(description=...) one-liners rendered by mkdocstrings + griffe-pydantic"
+        covers: "DatasetSpec / RenderConfig / ShardSpec Field(description=...) one-liners rendered by mkdocstrings + griffe-pydantic"
 
   - doc: docs/config_reference/image_config.md
     description: Autogenerated Pydantic field reference for ImageConfig

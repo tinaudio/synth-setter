@@ -5,9 +5,12 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
+import pytest
+
 from synth_setter.pipeline.schemas.prefix import (
     DatasetConfigId,
     DatasetRunId,
+    assert_r2_prefix_matches,
     make_dataset_wandb_run_id,
     make_r2_prefix,
 )
@@ -50,7 +53,6 @@ class TestMakeDatasetWandbRunId:
 
     def test_make_run_id_rejects_naive_timestamp(self):
         """Naive datetime (no tzinfo) raises ValueError."""
-        import pytest
 
         naive = datetime(2026, 3, 13, 10, 0, 0)
         with pytest.raises(ValueError, match="timezone-aware"):
@@ -58,7 +60,6 @@ class TestMakeDatasetWandbRunId:
 
     def test_make_run_id_rejects_non_utc_timezone(self):
         """Non-UTC timezone raises ValueError."""
-        import pytest
 
         non_utc = datetime(2026, 3, 13, 10, 0, 0, tzinfo=timezone(timedelta(hours=5)))
         with pytest.raises(ValueError, match="must be UTC"):
@@ -108,8 +109,55 @@ class TestMakeR2Prefix:
 
     def test_make_r2_prefix_rejects_empty_root(self):
         """Slash-only or empty ``prefix_root`` raises rather than producing ``/a/b/``."""
-        import pytest
 
         for bad in ("", "/", "///"):
             with pytest.raises(ValueError, match="prefix_root"):
                 make_r2_prefix(DatasetConfigId("a"), DatasetRunId("b"), prefix_root=bad)
+
+
+_ASSERT_CONFIG_ID = DatasetConfigId("surge-simple")
+_ASSERT_RUN_ID = DatasetRunId("surge-simple-20260313T100000000Z")
+_ASSERT_EXPECTED = make_r2_prefix(_ASSERT_CONFIG_ID, _ASSERT_RUN_ID)
+
+
+class TestAssertR2PrefixMatches:
+    """Tests for assert_r2_prefix_matches."""
+
+    def test_matching_prefix_does_not_raise(self) -> None:
+        """No exception when the materialized prefix matches the derived value."""
+        assert_r2_prefix_matches(_ASSERT_EXPECTED, _ASSERT_CONFIG_ID, _ASSERT_RUN_ID)
+
+    def test_matching_prefix_with_explicit_root_does_not_raise(self) -> None:
+        """Custom prefix_root matches when prefix was built with the same root."""
+        prefix = make_r2_prefix(_ASSERT_CONFIG_ID, _ASSERT_RUN_ID, prefix_root="datasets")
+        assert_r2_prefix_matches(prefix, _ASSERT_CONFIG_ID, _ASSERT_RUN_ID, prefix_root="datasets")
+
+    def test_wrong_config_id_raises(self) -> None:
+        """ValueError when config_id doesn't match what the prefix encodes."""
+        with pytest.raises(ValueError, match="mismatch"):
+            assert_r2_prefix_matches(
+                _ASSERT_EXPECTED, DatasetConfigId("other-cfg"), _ASSERT_RUN_ID
+            )
+
+    def test_wrong_run_id_raises(self) -> None:
+        """ValueError when run_id doesn't match what the prefix encodes."""
+        with pytest.raises(ValueError, match="mismatch"):
+            assert_r2_prefix_matches(
+                _ASSERT_EXPECTED, _ASSERT_CONFIG_ID, DatasetRunId("other-20260313T100000000Z")
+            )
+
+    def test_wrong_prefix_root_raises(self) -> None:
+        """ValueError when the prefix_root doesn't match the prefix's root segment."""
+        with pytest.raises(ValueError, match="mismatch"):
+            assert_r2_prefix_matches(
+                _ASSERT_EXPECTED, _ASSERT_CONFIG_ID, _ASSERT_RUN_ID, prefix_root="train"
+            )
+
+    def test_error_message_includes_actual_and_expected(self) -> None:
+        """ValueError message carries both the received and expected prefix strings."""
+        bad_prefix = "data/wrong-cfg/wrong-run/"
+        with pytest.raises(ValueError, match="mismatch") as exc_info:
+            assert_r2_prefix_matches(bad_prefix, _ASSERT_CONFIG_ID, _ASSERT_RUN_ID)
+        msg = str(exc_info.value)
+        assert bad_prefix in msg
+        assert _ASSERT_EXPECTED in msg

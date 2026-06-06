@@ -50,8 +50,8 @@ from synth_setter.pipeline.spec_io import (
     write_spec_locally,
 )
 from synth_setter.resources import as_file, vst_headless_wrapper
-from synth_setter.utils import extras, log_wandb_provenance, register_resolvers
-from synth_setter.utils.instantiators import instantiate_loggers
+from synth_setter.utils import extras, log_wandb_provenance, pin_wandb_run_id, register_resolvers
+from synth_setter.utils.instantiators import close_loggers, instantiate_loggers
 from synth_setter.workspace import operator_workspace
 
 # Side effect only: publish ``PROJECT_ROOT`` so ``${oc.env:PROJECT_ROOT}``
@@ -81,6 +81,7 @@ def _run_oracle_eval_subprocess(
     render: RenderConfig,
     num_workers: int,
     predict_file: Path,
+    metric_prefix: str = "",
 ) -> None:
     """Run the fake-oracle eval over one split of ``dataset_root``.
 
@@ -108,6 +109,11 @@ def _run_oracle_eval_subprocess(
         handle that cannot be pickled.
     :param predict_file: HDF5 split file for the datamodule's predict dataloader
         (e.g. ``dataset_root / "train.h5"``).
+    :param metric_prefix: Prepended to every audio metric key the eval logs
+        (both ``audio/*`` and ``shuffled_audio/*``). All splits resume one wandb
+        run, so a bare key is overwritten by the last split; pass ``"<split>/"``
+        to namespace it. Empty (the default) leaves keys bare — used for the
+        canonical ``test`` split.
     :raises FileNotFoundError: ``dataset_root`` is missing any finalized split
         or ``stats.npz`` — e.g. a resume where ``finalize_from_spec``
         short-circuited on an existing R2 marker without repopulating it.
@@ -163,6 +169,10 @@ def _run_oracle_eval_subprocess(
         f"datamodule.predict_file={predict_file}",
         "mode=predict",
     ]
+    # +append: metric_prefix is absent from eval.yaml's evaluation group. Empty
+    # (test split) leaves keys bare so existing sweeps/dashboards keep resolving.
+    if metric_prefix:
+        argv.append(f"+evaluation.metric_prefix={metric_prefix}")
     logger.info(f"oracle_eval_inline subprocess: {argv}")
     subprocess.run(argv, check=True, timeout=_ORACLE_EVAL_TIMEOUT_SECONDS)  # noqa: S603
 
@@ -229,8 +239,8 @@ def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -
     config field surfaces as a ``--<field>`` option automatically; adding a
     field on the model auto-extends the CLI invocation. The writer is dispatched
     on ``shard.filename``'s suffix inside the subprocess via
-    ``OutputFormat.from_extension``. When ``spec.datasetsrc`` is set, the copy
-    root is forwarded as ``--copy_dataset_root`` so the subprocess re-renders the
+    ``OutputFormat.from_extension``. When ``spec.copy_dataset_root`` is set, it
+    is forwarded as ``--copy_dataset_root`` so the subprocess re-renders the
     same-named source shard's params instead of sampling fresh ones.
     """
     output_path = output_dir / shard.filename
@@ -241,8 +251,8 @@ def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -
     ]
     for key, value in spec.render.model_dump().items():
         args.extend([f"--{key}", str(value)])
-    if spec.datasetsrc is not None:
-        args.extend(["--copy_dataset_root", spec.datasetsrc.copy_dataset_root])
+    if spec.copy_dataset_root is not None:
+        args.extend(["--copy_dataset_root", spec.copy_dataset_root])
 
     return args
 
@@ -250,7 +260,7 @@ def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -
 def _validate_copy_source(spec: DatasetSpec) -> None:
     """Preflight a dataset-copy run against the source's persisted spec.
 
-    No-op unless ``spec.datasetsrc`` is set. Otherwise loads the source's
+    No-op unless ``spec.copy_dataset_root`` is set. Otherwise loads the source's
     ``input_spec.json`` from ``<copy_dataset_root>/`` (the spec sits beside the
     shards at the dataset prefix root) and delegates to
     :meth:`DatasetSpec.validate_copy_source`, so a source that disagrees on any
@@ -260,9 +270,9 @@ def _validate_copy_source(spec: DatasetSpec) -> None:
     :raises ValueError: ``copy_dataset_root`` holds no ``input_spec.json``, or
         the source spec mismatches ``spec`` on a copy-relevant value.
     """
-    if spec.datasetsrc is None:
+    if spec.copy_dataset_root is None:
         return
-    source_spec_path = Path(spec.datasetsrc.copy_dataset_root) / INPUT_SPEC_FILENAME
+    source_spec_path = Path(spec.copy_dataset_root) / INPUT_SPEC_FILENAME
     if not source_spec_path.is_file():
         raise ValueError(
             f"dataset-copy source has no {INPUT_SPEC_FILENAME} at {source_spec_path}; "
@@ -314,7 +324,7 @@ def generate(spec: DatasetSpec, work_dir: Path, loggers: list[Logger]) -> None: 
         # leaks un-closed on the helper's exception path.
         _log_hyperparams(loggers, spec)
         # Provenance mutates the process-global ``wandb.run``; only stamp it when
-        # a ``WandbLogger`` here owns the run, mirroring ``_close_loggers`` — else
+        # a ``WandbLogger`` here owns the run, mirroring ``close_loggers`` — else
         # an empty-logger run would stamp a foreign run started elsewhere.
         if any(isinstance(lg, WandbLogger) for lg in loggers):
             log_wandb_provenance()
@@ -371,7 +381,7 @@ def generate(spec: DatasetSpec, work_dir: Path, loggers: list[Logger]) -> None: 
         status = "failed"
         raise
     finally:
-        _close_loggers(loggers, status)
+        close_loggers(loggers, status)
 
 
 def _log_hyperparams(loggers: list[Logger], spec: DatasetSpec) -> None:
@@ -480,34 +490,6 @@ def _log_summary(
             lg.log_metrics(payload)
         except Exception as exc:  # noqa: BLE001 — third-party logger failures must not abort the run
             logger.warning(f"log_metrics(summary) failed on {type(lg).__name__}: {exc}")
-
-
-def _close_loggers(loggers: list[Logger], status: str) -> None:
-    """Finalize each logger and flush any live wandb run.
-
-    ``WandbLogger.finalize`` records status but does not close the run;
-    ``wandb.finish()`` is what flushes the offline ``.wandb`` binary
-    (matches the pattern in ``synth_setter.utils.utils``).
-
-    :param loggers: Lightning loggers — finalize is invoked on each.
-    :param status: ``"success"`` or ``"failed"``; forwarded verbatim to the
-        loggers' ``finalize`` contract.
-    """
-    for lg in loggers:
-        try:
-            lg.finalize(status)
-        except Exception as exc:  # noqa: BLE001 — finalize errors must not mask the original raise
-            logger.warning(f"logger finalize failed on {type(lg).__name__}: {exc}")
-    # Only close the wandb run if a ``WandbLogger`` is in ``loggers`` — i.e. we
-    # opened it. Otherwise a stale ``wandb.run`` started elsewhere in the
-    # process (e.g. another library, a sibling test) would be silently
-    # finished here.
-    have_wandb_logger = any(isinstance(lg, WandbLogger) for lg in loggers)
-    if have_wandb_logger and wandb.run is not None:
-        try:
-            wandb.finish()
-        except Exception as exc:  # noqa: BLE001 — finish errors must not mask the original raise
-            logger.warning(f"wandb.finish() failed: {exc}")
 
 
 def _dispatch_shards_serial(
@@ -801,10 +783,8 @@ def _loggers_pinned_to_spec(cfg: DictConfig, spec: DatasetSpec) -> list[Logger]:
         dataset.
     :returns: Loggers list — empty when ``cfg.logger`` is omitted/null.
     """
-    # Guard against non-wandb logger groups (e.g. ``logger=tensorboard``) where
-    # ``logger.wandb`` is absent and ``OmegaConf.update`` would raise.
-    if OmegaConf.select(cfg, "logger.wandb") is not None:
-        OmegaConf.update(cfg, "logger.wandb.id", spec.run_id)
+    # spec.run_id (not a fresh stamp) keeps the wandb run in lockstep with the R2 prefix.
+    pin_wandb_run_id(cfg, spec.run_id, "data-generation")
     return instantiate_loggers(cfg.get("logger"))
 
 
@@ -898,6 +878,9 @@ def main(cfg: DictConfig) -> None:
             # basename, so read them in place — no R2 round-trip.
             output_dir = Path(cfg.paths.output_dir)
             for split in ("train", "val", "test"):
+                # test stays bare; train/val are namespaced so the shared run
+                # keeps one summary key per split (see _run_oracle_eval_subprocess).
+                metric_prefix = "" if split == "test" else f"{split}/"
                 _run_oracle_eval_subprocess(
                     output_dir,
                     output_dir / "oracle_eval" / split / spec.run_id,
@@ -905,6 +888,7 @@ def main(cfg: DictConfig) -> None:
                     render=spec.render,
                     num_workers=cfg.datamodule.num_workers,
                     predict_file=output_dir / f"{split}.h5",
+                    metric_prefix=metric_prefix,
                 )
         return
 

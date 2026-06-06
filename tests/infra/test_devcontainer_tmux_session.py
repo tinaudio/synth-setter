@@ -108,3 +108,63 @@ def test_post_create_installs_tmux_conf_to_home(post_create_script: Path) -> Non
         f"BEFORE the root→dev exec (line {root_drop_line}) so /root/.tmux.conf "
         f"is populated for the root variant."
     )
+
+
+# Substrings that would reintroduce tmux session persistence (the TPM plugin
+# stack) if they reappeared in the devcontainer. `plugins/tpm` (not bare `tpm`)
+# anchors on the plugin path so incidental three-letter tokens can't false-fire.
+_PERSISTENCE_MARKERS = ("resurrect", "continuum", "tmux-plugins", "@plugin", "plugins/tpm")
+
+
+@pytest.mark.infra
+def test_no_devcontainer_mounts_tmux_resurrect_volume(
+    devcontainer_json_paths: list[Path],
+) -> None:
+    """No `mounts` entry may reference a tmux-resurrect volume.
+
+    Matches on `resurrect` so a renamed source still trips the guard as long as
+    it targets the `~/.local/share/tmux/resurrect` state dir.
+
+    :param devcontainer_json_paths: Paths to every `<flavor>/devcontainer.json`,
+        provided by the `tests/infra/conftest.py` fixture.
+    """
+    for path in devcontainer_json_paths:
+        config = _load_devcontainer(path)
+        offenders = [m for m in config.get("mounts", []) if "resurrect" in m]
+        assert not offenders, (
+            f"{path}: tmux session persistence was removed — no mount may reference a "
+            f"tmux-resurrect volume. Offending mounts: {offenders!r}"
+        )
+
+
+@pytest.mark.infra
+def test_tmux_conf_declares_no_session_persistence_plugins(tmux_conf: Path) -> None:
+    """`tmux.conf` must not declare TPM / resurrect / continuum plugins.
+
+    :param tmux_conf: Path to `.devcontainer/tmux.conf`, provided by the `tests/infra/conftest.py`
+        fixture.
+    """
+    text = tmux_conf.read_text().lower()
+    offenders = [marker for marker in _PERSISTENCE_MARKERS if marker in text]
+    assert not offenders, (
+        f"{tmux_conf}: tmux session persistence was removed — these plugin markers "
+        f"must not appear: {offenders!r}"
+    )
+
+
+@pytest.mark.infra
+def test_post_create_does_not_bootstrap_tmux_plugins(post_create_script: Path) -> None:
+    """`post-create.sh` must not bootstrap TPM or run `install_plugins`.
+
+    Installing `tmux.conf` itself is still required — see
+    `test_post_create_installs_tmux_conf_to_home`.
+
+    :param post_create_script: Path to `.devcontainer/post-create.sh`, provided
+        by the `tests/infra/conftest.py` fixture.
+    """
+    text = post_create_script.read_text().lower()
+    offenders = [marker for marker in (*_PERSISTENCE_MARKERS, "install_plugins") if marker in text]
+    assert not offenders, (
+        f"{post_create_script}: tmux session persistence was removed — these markers "
+        f"must not appear: {offenders!r}"
+    )

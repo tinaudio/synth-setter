@@ -12,10 +12,13 @@ import pandas as pd
 import wandb
 from lightning import Callback, LightningDataModule, LightningModule, Trainer
 from lightning.pytorch.loggers import Logger
-from omegaconf import DictConfig
+from lightning.pytorch.loggers.wandb import WandbLogger
+from omegaconf import DictConfig, OmegaConf
 
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.schemas.spec import _get_git_sha
 from synth_setter.resources import as_file, vst_headless_wrapper
+from synth_setter.run_id import make_wandb_run_id
 from synth_setter.utils import (
     RankedLogger,
     extras,
@@ -23,8 +26,11 @@ from synth_setter.utils import (
     instantiate_loggers,
     log_hyperparameters,
     log_wandb_provenance,
+    pin_wandb_run_id,
     register_resolvers,
+    resolve_run_config_id,
     task_wrapper,
+    use_input_artifacts,
 )
 from synth_setter.workspace import operator_workspace
 
@@ -33,6 +39,7 @@ _COMPUTE_AUDIO_METRICS_MODULE = "synth_setter.evaluation.compute_audio_metrics"
 _SUBPROCESS_TIMEOUT_SECONDS = 600
 _AGGREGATED_METRICS_FILENAME = "aggregated_metrics.csv"
 _METRICS_FILENAME = "metrics.csv"
+_AGGREGATED_METRICS_SHUFFLED_FILENAME = "aggregated_metrics_shuffled.csv"
 _AGGREGATED_METRICS_STATS: tuple[str, ...] = ("mean", "std")
 
 # Resolve workspace at import so ``${oc.env:PROJECT_ROOT}`` in
@@ -67,11 +74,28 @@ def _load_audio_metrics(metrics_dir: Path) -> dict[str, float]:
         raise ValueError(
             f"{csv_path} missing required stat columns {missing}; got {list(df.columns)}."
         )
-    return {
+    result: dict[str, float] = {
         f"audio/{metric}_{stat}": float(df.at[metric, stat])
         for metric in df.index
         for stat in _AGGREGATED_METRICS_STATS
     }
+    shuffled_path = metrics_dir / _AGGREGATED_METRICS_SHUFFLED_FILENAME
+    if shuffled_path.is_file():
+        shuffled_df = pd.read_csv(shuffled_path, index_col=0)
+        missing_s = [s for s in _AGGREGATED_METRICS_STATS if s not in shuffled_df.columns]
+        if missing_s:
+            raise ValueError(
+                f"{shuffled_path} missing required stat columns {missing_s}; "
+                f"got {list(shuffled_df.columns)}."
+            )
+        result.update(
+            {
+                f"shuffled_audio/{metric}_{stat}": float(shuffled_df.at[metric, stat])
+                for metric in shuffled_df.index
+                for stat in _AGGREGATED_METRICS_STATS
+            }
+        )
+    return result
 
 
 def _log_audio_metrics_to_wandb(audio_metrics: dict[str, float]) -> None:
@@ -115,18 +139,17 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
 
     The VST render subprocess is prefixed with the headless wrapper on Linux so
     the VST3 plugin gets an Xvfb display before pedalboard imports it; the
-    metrics subprocess is CPU-only and needs no wrapper. When
-    ``evaluation.shuffle_pred_audio`` is set, ``--shuffle_pred_audio`` /
-    ``--shuffle_seed`` are forwarded to the metrics subprocess, which scores a
-    symlink view permuting pred.wav across sample dirs (#489) — no effect unless
-    ``compute_metrics`` is also enabled.
+    metrics subprocess is CPU-only and needs no wrapper. ``--shuffle_seed`` is
+    always forwarded; the render-order probe (#489) runs automatically inside
+    ``compute_audio_metrics`` when all sample dirs have identical params.
 
-    :param cfg: Reads ``cfg.evaluation`` (gates + ``num_workers`` +
-        ``shuffle_pred_audio`` / ``shuffle_seed``), ``cfg.render`` (param spec,
-        preset, optional plugin path), and ``cfg.paths.output_dir`` (base for
-        ``predictions/``, ``audio/``, ``metrics/``).
-    :returns: ``{"audio/<name>_<stat>": value}`` when ``compute_metrics`` ran;
-        empty dict otherwise. Always rank-zero — the caller gates DDP duplication.
+    :param cfg: Reads ``cfg.evaluation`` (gates + ``num_workers`` + ``shuffle_seed``
+        + optional ``metric_prefix``), ``cfg.render`` (param spec, preset, optional
+        plugin path), and ``cfg.paths.output_dir`` (base for ``predictions/``,
+        ``audio/``, ``metrics/``).
+    :returns: ``{"<metric_prefix>audio/<name>_<stat>": value}`` when ``compute_metrics``
+        ran (``metric_prefix`` empty by default); empty dict otherwise. Always
+        rank-zero — the caller gates DDP duplication.
     :raises ValueError: if ``evaluation.render_vst`` is enabled but ``cfg.render`` is
         unset, or the expected input directory for a stage is missing.
     :raises subprocess.CalledProcessError: propagated from a non-zero subprocess exit.
@@ -202,15 +225,11 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
             _COMPUTE_AUDIO_METRICS_MODULE,
             str(audio_dir),
             str(metrics_dir),
+            "--shuffle_seed",
+            str(cfg.evaluation.get("shuffle_seed", 0)),
             "-w",
             str(cfg.evaluation.num_workers),
         ]
-        if cfg.evaluation.get("shuffle_pred_audio"):
-            args += [
-                "--shuffle_pred_audio",
-                "--shuffle_seed",
-                str(cfg.evaluation.get("shuffle_seed", 0)),
-            ]
         log.info(f"Computing audio metrics: {args}")
         subprocess.run(  # noqa: S603
             args,
@@ -218,11 +237,41 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
             timeout=_SUBPROCESS_TIMEOUT_SECONDS,
         )
         audio_metrics = _load_audio_metrics(metrics_dir)
+        # Namespace every key (audio/* and shuffled_audio/*) per caller — e.g. one
+        # wandb run shared across splits — so passes don't overwrite each other.
+        prefix = cfg.evaluation.get("metric_prefix", "")
+        if prefix:
+            audio_metrics = {f"{prefix}{key}": value for key, value in audio_metrics.items()}
         _log_audio_metrics_to_wandb(audio_metrics)
         _log_metrics_csv_to_wandb(metrics_dir)
         return audio_metrics
 
     return {}
+
+
+def _consumed_artifact_refs(cfg: DictConfig) -> list[tuple[str, str]]:
+    """Build the consumed-artifact lineage edges for an eval run (spec §5).
+
+    Eval consumes both the model it scores and the dataset it scores it on; the
+    model edge is recorded first to match the DAG's left-to-right read. Each
+    edge is opt-in: a null ``consumed_*_config_id`` is omitted, so an eval
+    without the fields set records no lineage and never calls ``use_artifact``.
+
+    :param cfg: Hydra-composed cfg; reads ``consumed_train_config_id``,
+        ``consumed_dataset_config_id``, and ``consumed_artifact_alias``
+        (default ``latest``).
+    :returns: ``(name, alias)`` edges for whichever ids are set, model before
+        dataset; ``[]`` when both are null.
+    """
+    alias = cfg.get("consumed_artifact_alias") or "latest"
+    refs: list[tuple[str, str]] = []
+    train_id = cfg.get("consumed_train_config_id")
+    if train_id:
+        refs.append((f"model-{train_id}", alias))
+    dataset_id = cfg.get("consumed_dataset_config_id")
+    if dataset_id:
+        refs.append((f"data-{dataset_id}", alias))
+    return refs
 
 
 @task_wrapper
@@ -248,6 +297,7 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     callbacks: list[Callback] = instantiate_callbacks(cfg.get("callbacks"))
 
     log.info("Instantiating loggers...")
+    pin_wandb_run_id(cfg, make_wandb_run_id(resolve_run_config_id(cfg)), "evaluation")
     logger: list[Logger] = instantiate_loggers(cfg.get("logger"))
 
     log.info(f"Instantiating trainer <{cfg.trainer._target_}>")
@@ -266,6 +316,10 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
         log.info("Logging hyperparameters!")
         log_hyperparameters(object_dict)
         log_wandb_provenance()
+
+    # Record the model + dataset lineage edges before evaluation so the run links
+    # to both inputs in the W&B DAG (storage-provenance-spec §5).
+    use_input_artifacts(logger, _consumed_artifact_refs(cfg))
 
     mode = cfg.get("mode", "test")
 
@@ -303,6 +357,20 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     metric_dict: dict[str, Any] = dict(trainer.callback_metrics)
     metric_dict.update(audio_metrics)
 
+    # Persist + publish results here, not after evaluate() returns: @task_wrapper's
+    # finally closes the W&B run on return, so the eval-results artifact has to be
+    # logged while the run is still open or it would attach to nothing.
+    # All ranks share one output_dir, so gate the dump on global-zero (as with the
+    # upload + artifact log below) to avoid concurrent writers corrupting metrics.json.
+    if trainer.is_global_zero:
+        _dump_metric_dict(metric_dict, Path(cfg.paths.output_dir))
+    _maybe_upload_output_dir(cfg, trainer.is_global_zero)
+    upload_uri = _upload_output_dir_uri(cfg)
+    # _get_git_sha() shells out, so only invoke it on the path that actually logs
+    # the artifact (global-zero with a configured R2 prefix).
+    if trainer.is_global_zero and upload_uri:
+        _log_eval_results_artifact(logger, cfg, upload_uri, metric_dict, _get_git_sha())
+
     return metric_dict, object_dict
 
 
@@ -334,6 +402,106 @@ def _dump_metric_dict(metric_dict: dict[str, Any], output_dir: Path) -> Path:
     return out_path
 
 
+def _eval_summary_metrics(metric_dict: dict[str, Any]) -> dict[str, float]:
+    """Reduce ``metric_dict`` to JSON-safe scalar floats for artifact metadata.
+
+    Keeps ``artifact.metadata`` small per ``storage-provenance-spec.md`` §6:
+    single-element tensors (``ndim == 0``) are coerced via ``.item()``; Python
+    ``float`` / ``int`` pass through; vectors and other non-scalars are dropped.
+    ``bool`` is excluded — it subclasses ``int`` but is not a metric value.
+
+    :param metric_dict: :func:`evaluate`'s first tuple element (tensors + floats).
+    :returns: ``{name: float}`` over the scalar entries only.
+    """
+    summary: dict[str, float] = {}
+    for key, value in metric_dict.items():
+        if hasattr(value, "item") and getattr(value, "ndim", 0) == 0:
+            summary[key] = float(value.item())
+        elif isinstance(value, (int, float)) and not isinstance(value, bool):
+            summary[key] = float(value)
+    return summary
+
+
+def build_eval_results_artifact(
+    cfg: DictConfig,
+    output_dir_uri: str,
+    metric_dict: dict[str, Any],
+    git_sha: str,
+) -> wandb.Artifact:
+    """Build the canonical ``eval-results`` W&B artifact for an eval run.
+
+    Names the artifact ``eval-{config_id}`` (type ``eval-results``) per
+    ``storage-provenance-spec.md`` §4, where ``config_id`` is
+    :func:`resolve_run_config_id`. References the R2 output prefix as an
+    ``s3://`` URI and records the scalar summary metrics plus ``git_sha`` in
+    ``artifact.metadata`` per §6. The reference uses ``checksum=False`` because
+    R2's custom S3 endpoint is not reachable by W&B's default reference handler
+    — the URI records lineage, not a content hash.
+
+    :param cfg: Hydra-composed cfg; resolves the config_id for the name.
+    :param output_dir_uri: The ``r2://`` prefix the eval output dir was mirrored
+        to; rewritten to ``s3://`` for the reference.
+    :param metric_dict: :func:`evaluate`'s first tuple element; reduced to a
+        scalar summary for metadata.
+    :param git_sha: Commit SHA recorded in metadata for lineage.
+    :returns: An unlogged ``wandb.Artifact`` ready for ``log_artifact``.
+    """
+    artifact = wandb.Artifact(
+        name=f"eval-{resolve_run_config_id(cfg)}",
+        type="eval-results",
+        metadata={**_eval_summary_metrics(metric_dict), "git_sha": git_sha},
+    )
+    artifact.add_reference(r2_io.to_s3_uri(output_dir_uri), checksum=False)
+    return artifact
+
+
+def _log_eval_results_artifact(
+    loggers: list[Logger],
+    cfg: DictConfig,
+    output_dir_uri: str | None,
+    metric_dict: dict[str, Any],
+    git_sha: str,
+) -> None:
+    """Log the ``eval-results`` artifact to each ``WandbLogger`` in ``loggers``.
+
+    Mirrors ``finalize_dataset._log_dataset_artifact``: a wandb failure warns
+    and is swallowed so artifact logging never aborts a completed eval — the R2
+    outputs are already mirrored. No-op when ``output_dir_uri`` is null (nothing
+    to reference) or when no entry is a ``WandbLogger``.
+
+    :param loggers: Lightning loggers; only ``WandbLogger`` entries log.
+    :param cfg: Forwarded to :func:`build_eval_results_artifact` for the name.
+    :param output_dir_uri: The ``r2://`` prefix the output dir was mirrored to,
+        or null to skip logging.
+    :param metric_dict: Forwarded to :func:`build_eval_results_artifact`.
+    :param git_sha: Forwarded to :func:`build_eval_results_artifact`.
+    """
+    if not output_dir_uri:
+        return
+    for lg in loggers:
+        if not isinstance(lg, WandbLogger):
+            continue
+        try:
+            lg.experiment.log_artifact(
+                build_eval_results_artifact(cfg, output_dir_uri, metric_dict, git_sha)
+            )
+        except Exception as exc:  # noqa: BLE001 — wandb artifact failure must not abort eval
+            log.warning(f"_log_eval_results_artifact failed on {type(lg).__name__}: {exc}")
+
+
+def _upload_output_dir_uri(cfg: DictConfig) -> str | None:
+    """Resolve ``cfg.evaluation.upload_output_dir_uri``, tolerating an absent section.
+
+    The R2 mirror is opt-in, so a missing ``evaluation`` group or unset key means
+    "no upload" rather than a misconfiguration. ``OmegaConf.select`` returns
+    ``None`` for any missing path segment without raising, unlike attribute access.
+
+    :param cfg: Hydra-composed eval cfg.
+    :returns: The configured destination URI, or ``None`` when unset/absent.
+    """
+    return OmegaConf.select(cfg, "evaluation.upload_output_dir_uri")
+
+
 def _maybe_upload_output_dir(cfg: DictConfig, is_global_zero: bool) -> None:
     """Mirror the whole Hydra run dir to R2 when ``evaluation.upload_output_dir_uri`` is set.
 
@@ -358,7 +526,7 @@ def _maybe_upload_output_dir(cfg: DictConfig, is_global_zero: bool) -> None:
     """
     if not is_global_zero:
         return
-    dest_uri = cfg.evaluation.get("upload_output_dir_uri")
+    dest_uri = _upload_output_dir_uri(cfg)
     if not dest_uri:
         return
     if not r2_io.is_r2_uri(dest_uri):
@@ -381,9 +549,9 @@ def main(cfg: DictConfig) -> None:
     # (e.g. ask for tags if none are provided in cfg, print cfg tree, etc.)
     extras(cfg)
 
-    metric_dict, object_dict = evaluate(cfg)
-    _dump_metric_dict(metric_dict, Path(cfg.paths.output_dir))
-    _maybe_upload_output_dir(cfg, object_dict["trainer"].is_global_zero)
+    # evaluate() persists metrics, mirrors the output dir to R2, and logs the
+    # eval-results artifact internally (before @task_wrapper closes the run).
+    evaluate(cfg)
 
 
 if __name__ == "__main__":
