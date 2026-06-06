@@ -60,6 +60,19 @@ class TestToRclonePath:
             r2_io._to_rclone_path("local-spec.json")
 
 
+class TestToS3Uri:
+    """Tests for to_s3_uri scheme rewrite (R2's S3-compatible API)."""
+
+    def test_rewrites_r2_scheme_to_s3(self) -> None:
+        """`r2://bucket/key` becomes `s3://bucket/key`, preserving the path."""
+        assert r2_io.to_s3_uri("r2://bucket/a/b/c.h5") == "s3://bucket/a/b/c.h5"
+
+    def test_rejects_non_r2_uri(self) -> None:
+        """A non-r2 URI raises ValueError so a malformed lineage ref never logs."""
+        with pytest.raises(ValueError, match="r2://"):
+            r2_io.to_s3_uri("s3://bucket/already-s3.h5")
+
+
 class TestDownloadToPath:
     """Tests for download_to_path — file→file copy."""
 

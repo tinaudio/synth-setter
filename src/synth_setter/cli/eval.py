@@ -12,9 +12,11 @@ import pandas as pd
 import wandb
 from lightning import Callback, LightningDataModule, LightningModule, Trainer
 from lightning.pytorch.loggers import Logger
+from lightning.pytorch.loggers.wandb import WandbLogger
 from omegaconf import DictConfig
 
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.schemas.spec import _get_git_sha
 from synth_setter.resources import as_file, vst_headless_wrapper
 from synth_setter.run_id import make_wandb_run_id
 from synth_setter.utils import (
@@ -324,6 +326,93 @@ def _dump_metric_dict(metric_dict: dict[str, Any], output_dir: Path) -> Path:
     return out_path
 
 
+def _eval_summary_metrics(metric_dict: dict[str, Any]) -> dict[str, float]:
+    """Reduce ``metric_dict`` to JSON-safe scalar floats for artifact metadata.
+
+    Keeps ``artifact.metadata`` small per ``storage-provenance-spec.md`` §6:
+    single-element tensors (``ndim == 0``) are coerced via ``.item()``; Python
+    ``float`` / ``int`` pass through; vectors and other non-scalars are dropped.
+    ``bool`` is excluded — it subclasses ``int`` but is not a metric value.
+
+    :param metric_dict: :func:`evaluate`'s first tuple element (tensors + floats).
+    :returns: ``{name: float}`` over the scalar entries only.
+    """
+    summary: dict[str, float] = {}
+    for key, value in metric_dict.items():
+        if hasattr(value, "item") and getattr(value, "ndim", 0) == 0:
+            summary[key] = float(value.item())
+        elif isinstance(value, (int, float)) and not isinstance(value, bool):
+            summary[key] = float(value)
+    return summary
+
+
+def build_eval_results_artifact(
+    cfg: DictConfig,
+    output_dir_uri: str,
+    metric_dict: dict[str, Any],
+    git_sha: str,
+) -> wandb.Artifact:
+    """Build the canonical ``eval-results`` W&B artifact for an eval run.
+
+    Names the artifact ``eval-{config_id}`` (type ``eval-results``) per
+    ``storage-provenance-spec.md`` §4, where ``config_id`` is
+    :func:`resolve_run_config_id`. References the R2 output prefix as an
+    ``s3://`` URI and records the scalar summary metrics plus ``git_sha`` in
+    ``artifact.metadata`` per §6. The reference uses ``checksum=False`` because
+    R2's custom S3 endpoint is not reachable by W&B's default reference handler
+    — the URI records lineage, not a content hash.
+
+    :param cfg: Hydra-composed cfg; resolves the config_id for the name.
+    :param output_dir_uri: The ``r2://`` prefix the eval output dir was mirrored
+        to; rewritten to ``s3://`` for the reference.
+    :param metric_dict: :func:`evaluate`'s first tuple element; reduced to a
+        scalar summary for metadata.
+    :param git_sha: Commit SHA recorded in metadata for lineage.
+    :returns: An unlogged ``wandb.Artifact`` ready for ``log_artifact``.
+    """
+    artifact = wandb.Artifact(
+        name=f"eval-{resolve_run_config_id(cfg)}",
+        type="eval-results",
+        metadata={**_eval_summary_metrics(metric_dict), "git_sha": git_sha},
+    )
+    artifact.add_reference(r2_io.to_s3_uri(output_dir_uri), checksum=False)
+    return artifact
+
+
+def _log_eval_results_artifact(
+    loggers: list[Logger],
+    cfg: DictConfig,
+    output_dir_uri: str | None,
+    metric_dict: dict[str, Any],
+    git_sha: str,
+) -> None:
+    """Log the ``eval-results`` artifact to each ``WandbLogger`` in ``loggers``.
+
+    Mirrors ``finalize_dataset._log_dataset_artifact``: a wandb failure warns
+    and is swallowed so artifact logging never aborts a completed eval — the R2
+    outputs are already mirrored. No-op when ``output_dir_uri`` is null (nothing
+    to reference) or when no entry is a ``WandbLogger``.
+
+    :param loggers: Lightning loggers; only ``WandbLogger`` entries log.
+    :param cfg: Forwarded to :func:`build_eval_results_artifact` for the name.
+    :param output_dir_uri: The ``r2://`` prefix the output dir was mirrored to,
+        or null to skip logging.
+    :param metric_dict: Forwarded to :func:`build_eval_results_artifact`.
+    :param git_sha: Forwarded to :func:`build_eval_results_artifact`.
+    """
+    if not output_dir_uri:
+        return
+    for lg in loggers:
+        if not isinstance(lg, WandbLogger):
+            continue
+        try:
+            lg.experiment.log_artifact(
+                build_eval_results_artifact(cfg, output_dir_uri, metric_dict, git_sha)
+            )
+        except Exception as exc:  # noqa: BLE001 — wandb artifact failure must not abort eval
+            log.warning(f"_log_eval_results_artifact failed on {type(lg).__name__}: {exc}")
+
+
 def _maybe_upload_output_dir(cfg: DictConfig, is_global_zero: bool) -> None:
     """Mirror the whole Hydra run dir to R2 when ``evaluation.upload_output_dir_uri`` is set.
 
@@ -373,7 +462,16 @@ def main(cfg: DictConfig) -> None:
 
     metric_dict, object_dict = evaluate(cfg)
     _dump_metric_dict(metric_dict, Path(cfg.paths.output_dir))
-    _maybe_upload_output_dir(cfg, object_dict["trainer"].is_global_zero)
+    is_global_zero = object_dict["trainer"].is_global_zero
+    _maybe_upload_output_dir(cfg, is_global_zero)
+    if is_global_zero:
+        _log_eval_results_artifact(
+            object_dict["logger"],
+            cfg,
+            cfg.evaluation.get("upload_output_dir_uri"),
+            metric_dict,
+            _get_git_sha(),
+        )
 
 
 if __name__ == "__main__":
