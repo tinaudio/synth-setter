@@ -67,10 +67,16 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Point the workspace anchor at ``tmp_path`` so the cache lands under it.
 
     :param tmp_path: Per-test temp dir used as ``$PROJECT_ROOT``.
-    :param monkeypatch: Sets ``SYNTH_SETTER_WORKSPACE`` and clears the lru_cache.
+    :param monkeypatch: Sets ``SYNTH_SETTER_WORKSPACE`` and ``PROJECT_ROOT``, and
+        clears ``operator_workspace``'s ``@cache``.
     :returns: The temp workspace root.
     """
     monkeypatch.setenv("SYNTH_SETTER_WORKSPACE", str(tmp_path))
+    # operator_workspace() publishes PROJECT_ROOT via os.environ.setdefault. Pin
+    # it through monkeypatch (not delenv, which is a no-op when PROJECT_ROOT is
+    # unset and so registers no undo) so teardown always restores it rather than
+    # leaking tmp_path into later (order-dependent) tests.
+    monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
     from synth_setter import workspace as workspace_mod
 
     workspace_mod.operator_workspace.cache_clear()
