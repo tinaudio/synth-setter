@@ -126,16 +126,10 @@ terminal multiplexer (pinned upstream musl binary, SHA256-verified, in
 `uv pip install` and editable installs work without sudo, and adds a
 `/commandhistory` directory (owned by `dev`) that
 `.devcontainer/{cpu,gpu}/devcontainer.json` mounts as a named volume so bash
-history survives container rebuilds. The same configs also mount the
-`synth-setter-tmux-resurrect` and `synth-setter-tmux-resurrect-root` named
-volumes at `/home/dev/.local/share/tmux/resurrect` and
-`/root/.local/share/tmux/resurrect` so tmux sessions saved by
-tmux-continuum (configured in `.devcontainer/tmux.conf`) survive container
-rebuilds for both `DEVCONTAINER_USER=dev` (the default) and opt-in
-`DEVCONTAINER_USER=root` sessions. Restore is opt-in (`@continuum-restore off`):
-a rebuilt container starts clean, and the saved session is brought back on
-demand with `prefix + Ctrl-r`. The VS Code terminal defaults to the
-`zellij` profile (tmux stays selectable); the `synth-setter-zellij-cache` and
+history survives container rebuilds. The VS Code terminal defaults to the
+`zellij` profile (tmux stays selectable, with the generic defaults in
+`.devcontainer/tmux.conf` — mouse mode, true color, key bindings — but no
+session persistence); the `synth-setter-zellij-cache` and
 `synth-setter-zellij-cache-root` named volumes at `/home/dev/.cache/zellij`
 and `/root/.cache/zellij` persist zellij's serialized (resurrectable) sessions
 across rebuilds for the same two users. The same devcontainer configs also
