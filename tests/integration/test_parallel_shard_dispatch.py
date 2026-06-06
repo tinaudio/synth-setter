@@ -19,7 +19,7 @@ from __future__ import annotations
 import shutil
 import sys
 import textwrap
-from datetime import datetime, timezone
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -59,45 +59,33 @@ def _write_fake_renderer(tmp_path: Path) -> Path:
     return script_path
 
 
-def _build_spec() -> DatasetSpec:
-    """Return a ``DatasetSpec`` with ``num_shards=4`` and ``parallel=True``.
+_RUN_ID = "parallel-dispatch-xplat-20260520T000000000Z"
+
+
+def _build_spec(dataset_spec_factory: Callable[..., DatasetSpec]) -> DatasetSpec:
+    """Build a 4-shard ``parallel=True`` spec from the shared factory.
 
     Pins the renderer/plugin paths to placeholders — the real check is bypassed
     by monkeypatching ``extract_renderer_version`` in the test body, so the
     paths only need to round-trip through Pydantic.
 
+    :param dataset_spec_factory: Shared ``conftest`` factory.
     :returns: Spec yielding 4 shards of ``_SAMPLES_PER_SHARD`` rows each.
     """
-    kwargs: dict[str, object] = {
-        "task_name": "parallel-dispatch-xplat",
-        "run_id": "parallel-dispatch-xplat-20260520T000000000Z",
-        "created_at": datetime(2026, 5, 20, 0, 0, 0, tzinfo=timezone.utc),
-        "git_sha": "0" * 40,
-        "is_repo_dirty": False,
-        "output_format": "hdf5",
-        "train_val_test_sizes": [_SAMPLES_PER_SHARD * _NUM_SHARDS, 0, 0],
-        "base_seed": 42,
-        "r2": {
+    return dataset_spec_factory(
+        task_name="parallel-dispatch-xplat",
+        run_id=_RUN_ID,
+        train_val_test_sizes=[_SAMPLES_PER_SHARD * _NUM_SHARDS, 0, 0],
+        r2={
             "bucket": "parallel-dispatch-bucket",
-            "prefix": "data/parallel-dispatch-xplat/parallel-dispatch-xplat-20260520T000000000Z/",
+            "prefix": f"data/parallel-dispatch-xplat/{_RUN_ID}/",
         },
-        "render": {
-            "plugin_path": "plugins/fake.vst3",
-            "preset_path": "presets/fake.vstpreset",
-            "param_spec_name": "surge_simple",
-            "renderer_version": "0.0.0-fake",
-            "sample_rate": 44100,
-            "channels": 2,
-            "velocity": 100,
-            "signal_duration_seconds": 1.0,
-            "min_loudness": -60.0,
+        render={
             "samples_per_render_batch": _SAMPLES_PER_SHARD,
             "samples_per_shard": _SAMPLES_PER_SHARD,
             "parallel": True,
-            "gui_toggle_cadence": "never",
         },
-    }
-    return DatasetSpec(**kwargs)  # type: ignore[arg-type]
+    )
 
 
 def _wire_generate_into_fake_renderer(
@@ -142,6 +130,7 @@ def test_parallel_dispatch_crosses_real_subprocess_boundary(
     fake_r2_remote: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    dataset_spec_factory: Callable[..., DatasetSpec],
 ) -> None:
     """``parallel=True`` + 4 shards uploads every shard via real subprocess + real rclone.
 
@@ -151,8 +140,9 @@ def test_parallel_dispatch_crosses_real_subprocess_boundary(
     :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
     :param tmp_path: Per-test tmp dir for the fake renderer script.
     :param monkeypatch: Used to pin pool size and swap version/probe/args.
+    :param dataset_spec_factory: Shared ``conftest`` ``DatasetSpec`` factory.
     """
-    spec = _build_spec()
+    spec = _build_spec(dataset_spec_factory)
     assert len(spec.shards) == _NUM_SHARDS
 
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
@@ -172,6 +162,7 @@ def test_two_ranks_render_disjoint_complete_shard_partition(
     fake_r2_remote: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    dataset_spec_factory: Callable[..., DatasetSpec],
 ) -> None:
     """Two ranks (0/2 + 1/2) over the same spec produce a disjoint, complete shard set.
 
@@ -187,8 +178,9 @@ def test_two_ranks_render_disjoint_complete_shard_partition(
     :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
     :param tmp_path: Per-test tmp dir for the fake renderer script.
     :param monkeypatch: Used by the shared setup helper plus per-rank env injection.
+    :param dataset_spec_factory: Shared ``conftest`` ``DatasetSpec`` factory.
     """
-    spec = _build_spec()
+    spec = _build_spec(dataset_spec_factory)
     assert len(spec.shards) == _NUM_SHARDS
 
     _wire_generate_into_fake_renderer(spec, tmp_path, monkeypatch)

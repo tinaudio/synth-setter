@@ -11,7 +11,7 @@ from __future__ import annotations
 import glob
 import json
 import os
-from datetime import datetime, timezone
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -22,44 +22,28 @@ from synth_setter.cli.generate_dataset import generate
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from tests.helpers.wandb_offline import read_history_rows, read_run_binary
 
+_RUN_ID = "wandb-track-test-20260520T000000000Z"
 
-def _build_spec() -> DatasetSpec:
-    """Hand-built spec with a fixed ``run_id`` and 2 shards; renderer paths are placeholders.
+
+def _build_spec(dataset_spec_factory: Callable[..., DatasetSpec]) -> DatasetSpec:
+    """Build a 2-shard wandb-tracking spec from the shared factory.
 
     ``extract_renderer_version`` is stubbed in the test so the placeholder
     ``plugin_path`` never has to resolve.
 
+    :param dataset_spec_factory: Shared ``conftest`` factory.
     :returns: Spec with ``num_shards == 2`` and a deterministic ``run_id``.
     """
-    kwargs: dict[str, object] = {
-        "task_name": "wandb-track-test",
-        "run_id": "wandb-track-test-20260520T000000000Z",
-        "created_at": datetime(2026, 5, 20, 0, 0, 0, tzinfo=timezone.utc),
-        "git_sha": "0" * 40,
-        "is_repo_dirty": False,
-        "output_format": "hdf5",
-        "train_val_test_sizes": [8, 0, 0],
-        "base_seed": 42,
-        "r2": {
+    return dataset_spec_factory(
+        task_name="wandb-track-test",
+        run_id=_RUN_ID,
+        train_val_test_sizes=[8, 0, 0],
+        r2={
             "bucket": "wandb-track-bucket",
-            "prefix": "data/wandb-track-test/wandb-track-test-20260520T000000000Z/",
+            "prefix": f"data/wandb-track-test/{_RUN_ID}/",
         },
-        "render": {
-            "plugin_path": "plugins/fake.vst3",
-            "preset_path": "presets/fake.vstpreset",
-            "param_spec_name": "surge_simple",
-            "renderer_version": "0.0.0-fake",
-            "sample_rate": 44100,
-            "channels": 2,
-            "velocity": 100,
-            "signal_duration_seconds": 1.0,
-            "min_loudness": -60.0,
-            "samples_per_render_batch": 4,
-            "samples_per_shard": 4,
-            "gui_toggle_cadence": "never",
-        },
-    }
-    return DatasetSpec(**kwargs)  # type: ignore[arg-type]
+        render={"samples_per_render_batch": 4, "samples_per_shard": 4},
+    )
 
 
 def _offline_wandb_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -85,7 +69,9 @@ def _reset_wandb_session_state() -> None:
 
 
 def test_generate_logs_spec_as_hyperparams_and_artifact_offline(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    dataset_spec_factory: Callable[..., DatasetSpec],
 ) -> None:
     """``generate`` pushes the spec as hyperparams + uploads a spec artifact.
 
@@ -96,10 +82,11 @@ def test_generate_logs_spec_as_hyperparams_and_artifact_offline(
         ``tmp_path/wandb/offline-run-*-<run_id>``.
     :param monkeypatch: Used to pin a hermetic offline ``WANDB_*`` env and stub
         ``object_size`` + ``extract_renderer_version``.
+    :param dataset_spec_factory: Shared ``conftest`` ``DatasetSpec`` factory.
     """
     _offline_wandb_env(monkeypatch, tmp_path)
 
-    spec = _build_spec()
+    spec = _build_spec(dataset_spec_factory)
 
     monkeypatch.setattr(
         "synth_setter.cli.generate_dataset.extract_renderer_version",
@@ -145,7 +132,9 @@ def test_generate_logs_spec_as_hyperparams_and_artifact_offline(
 
 
 def test_generate_logs_per_shard_and_summary_metrics_offline(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    dataset_spec_factory: Callable[..., DatasetSpec],
 ) -> None:
     """``generate`` emits one history row per shard plus a terminal summary row.
 
@@ -159,10 +148,11 @@ def test_generate_logs_per_shard_and_summary_metrics_offline(
         ``tmp_path/wandb/offline-run-*-<run_id>``.
     :param monkeypatch: Used to pin a hermetic offline ``WANDB_*`` env and stub
         ``object_size`` + ``extract_renderer_version``.
+    :param dataset_spec_factory: Shared ``conftest`` ``DatasetSpec`` factory.
     """
     _offline_wandb_env(monkeypatch, tmp_path)
 
-    spec = _build_spec()
+    spec = _build_spec(dataset_spec_factory)
 
     monkeypatch.setattr(
         "synth_setter.cli.generate_dataset.extract_renderer_version",

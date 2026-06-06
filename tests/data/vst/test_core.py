@@ -87,15 +87,34 @@ class TestLoadPluginNoWarmup:
 
 
 class TestWarmupPlugin:
-    """``warmup_plugin`` runs ``show_editor`` on the passed-in plugin once."""
+    """``warmup_plugin`` runs ``show_editor`` once and sets the close event so it returns."""
 
-    def test_warmup_plugin_calls_show_editor(self) -> None:
-        """``warmup_plugin`` invokes ``show_editor`` exactly once on the supplied plugin."""
-        fake_plugin = MagicMock()
+    def test_warmup_plugin_opens_editor_once_and_sets_close_event(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``warmup_plugin`` opens the editor once and signals close so the call unblocks.
 
-        warmup_plugin(fake_plugin)
+        Drives the real ``FakeVST3Plugin``, whose ``show_editor`` blocks on
+        ``close_event.wait()``. ``warmup_plugin`` returning at all proves it set
+        the event; the recorded event's ``is_set()`` pins that observable effect
+        rather than merely asserting the method was invoked.
 
-        fake_plugin.show_editor.assert_called_once()
+        :param monkeypatch: Shrinks ``_EDITOR_INIT_DELAY_SECONDS`` so the
+            production close-timer fires promptly — the delay value is not under
+            test, only that the event ends up set.
+        """
+        monkeypatch.setattr(core, "_EDITOR_INIT_DELAY_SECONDS", 0.0)
+        opened: list[threading.Event] = []
+
+        class _RecordingPlugin(FakeVST3Plugin):
+            def show_editor(self, close_event: threading.Event) -> None:
+                opened.append(close_event)
+                super().show_editor(close_event)
+
+        warmup_plugin(cast("VST3Plugin", _RecordingPlugin("plugins/Surge XT.vst3")))
+
+        assert len(opened) == 1
+        assert opened[0].is_set()
 
 
 class TestRunWithEditorHeldOpen:
@@ -218,10 +237,17 @@ class TestRunWithEditorHeldOpen:
         """
         monkeypatch.setattr(core, "_EDITOR_JOIN_TIMEOUT_SECONDS", 1.0)
         fake_plugin = MagicMock()
-        fake_plugin.show_editor.side_effect = lambda event: event.wait(timeout=5.0)
+
+        # ``body_started`` releases ``show_editor`` the instant the worker is
+        # running, so the editor returns while the body is still mid-flight —
+        # the "slow finish" race — without a wall-clock sleep. The body then
+        # raises within the join window, exercising body-exception precedence
+        # over the leak path.
+        body_started = threading.Event()
+        fake_plugin.show_editor.side_effect = lambda event: body_started.wait(timeout=5.0)
 
         def body() -> None:
-            time.sleep(0.05)
+            body_started.set()
             raise ValueError("body slow-failed")
 
         with pytest.raises(ValueError, match="body slow-failed"):

@@ -1,11 +1,14 @@
 """This file prepares config fixtures for other tests."""
 
+import copy
 import os
 import shutil
 import subprocess
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import h5py
 import hdf5plugin  # noqa: F401   side-effect import: registers HDF5_PLUGIN_PATH so h5py can load Blosc2 filters in fixtures
@@ -17,6 +20,7 @@ from hydra.core.global_hydra import GlobalHydra
 from omegaconf import DictConfig, open_dict
 
 from synth_setter.data.vst import core, param_specs, preset_paths
+from synth_setter.pipeline.schemas.spec import DatasetSpec
 from synth_setter.resources import vst_headless_wrapper
 from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
@@ -741,6 +745,60 @@ def install_fake_plugin(
     monkeypatch.setattr(core, "load_plugin", lambda _path, **_kw: fake_vst3_plugin)
     monkeypatch.setattr(core, "VST3Plugin", lambda _path: fake_vst3_plugin)
     return fake_vst3_plugin
+
+
+def _base_dataset_spec_kwargs() -> dict[str, Any]:
+    """Return the skeleton shared by hand-built ``DatasetSpec`` test specs.
+
+    Carries the fields both the wandb-tracking and parallel-dispatch tests fix
+    identically (deterministic ``created_at`` / ``git_sha``, hdf5 output, the
+    Darwin-portable ``gui_toggle_cadence``); per-test fields (``task_name``,
+    ``run_id``, ``r2``, shard sizes, ``parallel``) come in as overrides.
+
+    :returns: A fresh kwargs dict safe for in-place override per call.
+    """
+    return {
+        "created_at": datetime(2026, 5, 20, 0, 0, 0, tzinfo=timezone.utc),
+        "git_sha": "0" * 40,
+        "is_repo_dirty": False,
+        "output_format": "hdf5",
+        "base_seed": 42,
+        "render": {
+            "plugin_path": "plugins/fake.vst3",
+            "preset_path": "presets/fake.vstpreset",
+            "param_spec_name": "surge_simple",
+            "renderer_version": "0.0.0-fake",
+            "sample_rate": 44100,
+            "channels": 2,
+            "velocity": 100,
+            "signal_duration_seconds": 1.0,
+            "min_loudness": -60.0,
+            # Darwin-portable (#714).
+            "gui_toggle_cadence": "never",
+        },
+    }
+
+
+@pytest.fixture()
+def dataset_spec_factory() -> Callable[..., DatasetSpec]:
+    """Build a ``DatasetSpec`` from the shared skeleton plus per-test overrides.
+
+    ``render`` overrides deep-merge into the skeleton's ``render`` block; all
+    other keyword arguments replace top-level fields. Consolidates the
+    previously duplicated ``_build_spec`` helpers in the wandb-tracking and
+    parallel-dispatch tests.
+
+    :returns: ``factory(*, render=None, **overrides) -> DatasetSpec``.
+    """
+
+    def factory(*, render: dict[str, Any] | None = None, **overrides: Any) -> DatasetSpec:
+        kwargs = copy.deepcopy(_base_dataset_spec_kwargs())
+        if render is not None:
+            kwargs["render"].update(render)
+        kwargs.update(overrides)
+        return DatasetSpec(**kwargs)  # type: ignore[arg-type]
+
+    return factory
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:

@@ -17,7 +17,8 @@ assignment is genuinely the minimum-cost one. This catches subtle bugs the
 from __future__ import annotations
 
 import itertools
-from typing import Iterator, TypeVar
+from collections.abc import Iterator
+from typing import TypeVar
 from unittest.mock import patch
 
 import numpy as np
@@ -178,7 +179,8 @@ class TestHungarianMatchPermutation:
     """The returned ordering must be a bijection over [0, B-1]."""
 
     def test_returned_params_are_a_permutation_of_input(self) -> None:
-        """No row is duplicated or dropped — output params is a bijective row-permutation of input.
+        """No row is duplicated or dropped — output params is a bijective row-permutation of
+        input.
 
         A row-equality matrix between input and output rows must be a permutation matrix (exactly
         one True per row and per column), which rules out duplicates or drops even when input rows
@@ -475,23 +477,33 @@ class TestOtCollateTuple:
     """`_ot_collate_tuple` collates then applies :func:`_hungarian_match` to (noise, params,
     sins)."""
 
-    def test_calls_hungarian_match_with_three_aligned_tensors(self) -> None:
-        """The OT call sees noise, params, and sins — three positional args."""
+    def test_sins_co_data_follows_params_under_optimal_pairing(self) -> None:
+        """Real OT pairs noise→params optimally and moves ``sins`` in lockstep.
+
+        Patches only ``torch.randn_like`` to a fixed noise that is ``params``
+        reordered by a known non-identity permutation, so the zero-cost optimal
+        matching *is* that permutation. ``sins`` rows are bonded to their
+        ``params`` rows by index, so asserting the post-OT ``sins`` order equals
+        the permutation proves co-data alignment — not merely that OT was called.
+        """
         sin_fn = object()
-        batch = [(torch.zeros(2, 5), torch.ones(2, 3), sin_fn) for _ in range(2)]
+        # params rows are distinct unit vectors so the optimal pairing is unique.
+        params_pre = torch.eye(4, 3)
+        # Each sins row carries its params index in column 0 for provenance.
+        sins_pre = torch.zeros(4, 5)
+        sins_pre[:, 0] = torch.arange(4, dtype=torch.float32)
+        permutation = [2, 0, 3, 1]
+        fixed_noise = params_pre[permutation].clone()
 
-        with patch(
-            "synth_setter.data.ot._hungarian_match",
-            side_effect=lambda n, p, s: (n, p, s),
-        ) as patched:
-            sins, params, noise, sin_fn_out = _ot_collate_tuple(batch)
+        batch = [(sins_pre[i : i + 1], params_pre[i : i + 1], sin_fn) for i in range(4)]
 
-        patched.assert_called_once()
-        args = patched.call_args.args
-        assert len(args) == 3
-        assert args[0].shape == (4, 3)  # noise (matches params shape)
-        assert args[1].shape == (4, 3)  # params
-        assert args[2].shape == (4, 5)  # sins
+        with patch("synth_setter.data.ot.torch.randn_like", return_value=fixed_noise.clone()):
+            sins_out, params_out, noise_out, sin_fn_out = _ot_collate_tuple(batch)
+
+        # Zero-cost match: each noise row paired with the identical params row.
+        torch.testing.assert_close(noise_out, params_out)
+        # sins must be reordered by the same permutation that aligns params to noise.
+        assert sins_out[:, 0].tolist() == [float(p) for p in permutation]
         assert sin_fn_out is sin_fn
 
     def test_end_to_end_with_real_hungarian_match_returns_optimal_pairing(self) -> None:
@@ -511,9 +523,7 @@ class TestOtCollateTuple:
         fixed_noise = torch.randn(4, 3, generator=torch.Generator().manual_seed(99))
         brute_force_cost = _brute_force_optimal_cost(fixed_noise, params_pre)
 
-        with patch(
-            "synth_setter.data.ot.torch.randn_like", return_value=fixed_noise.clone()
-        ):
+        with patch("synth_setter.data.ot.torch.randn_like", return_value=fixed_noise.clone()):
             _, params_out, noise_out, _ = _ot_collate_tuple(batch)
 
         hungarian_cost = _total_pairwise_cost(noise_out, params_out)

@@ -15,18 +15,17 @@ Pattern compared:
 
 import os
 import sys
-import threading
-import time
 from pathlib import Path
 
 import pytest
 from pedalboard import VST3Plugin
 
+from synth_setter.data.vst.core import warmup_plugin
+
 _PLUGIN_PATH = os.environ.get("SYNTH_SETTER_PLUGIN_PATH") or "plugins/Surge XT.vst3"
 _PRESET_DIR = Path("presets")
 _SAMPLE_RATE = 44100.0
 _CHANNELS = 2
-_EDITOR_SLEEP_S = 0.5
 _FLUSH_DURATION_S = 32.0
 _FLUSH_BLOCK_SIZE = 2048
 
@@ -49,20 +48,6 @@ def _flush(plugin: VST3Plugin) -> None:
     """Run a silent process()+reset() to commit pending preset state."""
     plugin.process([], _FLUSH_DURATION_S, _SAMPLE_RATE, _CHANNELS, _FLUSH_BLOCK_SIZE, True)
     plugin.reset()
-
-
-def _open_editor_briefly(plugin: VST3Plugin) -> None:
-    """Open and close the plugin editor (the spotify/pedalboard#394 workaround)."""
-    stop_event = threading.Event()
-
-    def _closer() -> None:
-        time.sleep(_EDITOR_SLEEP_S)
-        stop_event.set()
-
-    t = threading.Thread(target=_closer, daemon=True)
-    t.start()
-    plugin.show_editor(stop_event)
-    t.join(timeout=1.0)
 
 
 def _read_all_params(plugin: VST3Plugin) -> dict[str, float]:
@@ -89,7 +74,9 @@ def test_flush_pattern_matches_show_editor_pattern(preset_path: str) -> None:
     no_editor_state = _read_all_params(p_no)
 
     p_we = VST3Plugin(_PLUGIN_PATH)
-    _open_editor_briefly(p_we)
+    # Production's editor warm-up (spotify/pedalboard#394): show_editor closes via
+    # the threading.Event the editor exposes, not a test-local wall-clock sleep.
+    warmup_plugin(p_we)
     p_we.load_preset(preset_path)
     _flush(p_we)
     with_editor_state = _read_all_params(p_we)
