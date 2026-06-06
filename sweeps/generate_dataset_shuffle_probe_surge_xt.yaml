@@ -1,0 +1,35 @@
+program: src/synth_setter/cli/generate_dataset.py
+# Pinned in YAML — wandb sweep CLI does not support OmegaConf resolvers and ignores
+# WANDB_ENTITY / WANDB_PROJECT at sweep-creation time (those only steer wandb.init in each trial).
+entity: tinaudio
+project: synth-setter
+# Render-order vs phase-init probe for #489: param_sample_cadence=shard gives every sample one
+# identical patch, so the inline oracle eval auto-fires the shuffle probe (shuffled_audio/* vs audio/*).
+command:
+  - ${interpreter}
+  - ${program}
+  - experiment=generate_dataset/smoke-shard-with-oracle-eval
+  - render.param_spec_name=surge_xt
+  - render.preset_path=presets/surge-base.vstpreset
+  - render.param_sample_cadence=shard
+  - ${args_no_hyphens}
+name: generate_dataset_shuffle_probe_surge_xt
+method: grid
+# grid ignores `metric` at scheduling time; the field stays for dashboard
+# legibility on runs that do log it. mss_mean is the oracle-eval audio loss.
+metric:
+  goal: minimize
+  name: audio/mss_mean
+# 2x4 grid: `once` reuses one plugin instance across the shard (the #489 stale-state hypothesis),
+# `render` reloads per call (phase-init floor). The render x always_on cell is skipped as schema-invalid.
+parameters:
+  render.plugin_reload_cadence:
+    values:
+      - once
+      - render
+  render.gui_toggle_cadence:
+    values:
+      - never
+      - once
+      - render
+      - "always_on"
