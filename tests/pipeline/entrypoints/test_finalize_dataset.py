@@ -22,6 +22,7 @@ them cleanly:
 from __future__ import annotations
 
 import glob
+import inspect
 import io
 import os
 import shutil
@@ -29,6 +30,7 @@ import tarfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, NoReturn, cast
+from unittest.mock import MagicMock
 
 import h5py
 import numpy as np
@@ -47,6 +49,8 @@ from synth_setter.data.vst.shapes import (
     param_array_dataset_shape,
 )
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.data.stats import get_stats_hdf5 as real_get_stats_hdf5
+from synth_setter.pipeline.data.stats import stream_stats_wds as real_stream_stats_wds
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from tests.helpers.wandb_offline import read_run_binary
 
@@ -291,6 +295,51 @@ def test_finalize_from_spec_uploads_stats_then_marker_at_canonical_uris(
     assert upload_order.count(marker_uri) == 1
     assert upload_order.index(marker_uri) == len(upload_order) - 1
     assert upload_order.index(stats_uri) < upload_order.index(marker_uri)
+
+
+def test_finalize_from_spec_non_canonical_prefix_warns_and_proceeds(
+    tmp_path: Path,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001 — installs stubs only
+) -> None:
+    """A custom (non-canonical) ``r2.prefix`` is finalized, not rejected.
+
+    Specs may set ``r2.prefix`` independently of ``task_name``/``run_id`` — e.g.
+    the oracle-eval e2e isolates its objects under ``test-runs/<test>/<uuid>/``.
+    finalize reads the same prefix generate wrote to, so the spec is
+    self-consistent; a prefix that diverges from ``make_r2_prefix`` is advisory
+    (logged), never fatal. Pins both halves: finalize emits the warning and
+    still lands its artifacts at the custom prefix.
+
+    :param tmp_path: Hosts the scratch ``work_dir``.
+    :param fake_r2_remote: Local-typed rclone remote; shards + outputs land here.
+    :param monkeypatch: Patches ``finalize_dataset.logger`` with a recording
+        mock (loguru output does not reach pytest ``caplog``).
+    :param stub_finalize_setup: Installs the auth + marker-probe stubs.
+    """
+    spec = _build_wds_smoke_spec(task_name="finalize-custom-prefix")
+    custom_r2 = spec.r2.model_copy(
+        update={"prefix": "test-runs/finalize-custom-prefix/abc123def456/"}
+    )
+    custom_spec = spec.model_copy(update={"r2": custom_r2})
+    _seed_train_shards(fake_r2_remote, custom_spec)
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+
+    recording_logger = MagicMock(wraps=finalize_dataset.logger)
+    monkeypatch.setattr(finalize_dataset, "logger", recording_logger)
+
+    finalize_dataset.finalize_from_spec(custom_spec, work_dir)
+
+    assert _uri_to_local_path(fake_r2_remote, custom_spec.r2.stats_uri()).is_file()
+    assert _uri_to_local_path(
+        fake_r2_remote, custom_spec.r2.dataset_complete_marker_uri()
+    ).is_file()
+    assert any(
+        "non-canonical r2 prefix" in str(call.args[0])
+        for call in recording_logger.warning.call_args_list
+    ), recording_logger.warning.call_args_list
 
 
 def test_finalize_is_idempotent_when_marker_already_exists(
@@ -1101,40 +1150,6 @@ def test_finalize_wds_unlinks_each_shard_after_folding(
     assert concurrent_shards_seen == [1, 1]
 
 
-def test_finalize_from_spec_drifted_prefix_raises_before_any_upload(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001 — installs stubs only
-) -> None:
-    """A drifted ``r2.prefix`` raises ``ValueError`` before any R2 write or scratch dir.
-
-    Integration-level companion to ``test_prefix.py``'s unit coverage of
-    ``assert_r2_prefix_matches``: it pins the guard at the ``finalize_from_spec``
-    call site so a future reordering (e.g. moving the assertion past the
-    dispatch) trips here. The fail-fast ``upload`` stub turns a leaked write
-    into a test failure, proving the abort precedes the marker-last upload
-    sequence; the ``work_dir`` assertion proves it precedes ``work_dir.mkdir``.
-
-    :param tmp_path: Hosts the scratch ``work_dir`` path (asserted never created).
-    :param monkeypatch: Installs a fail-fast ``upload`` stub.
-    :param stub_finalize_setup: Installs the auth + marker-probe stubs so the
-        guard (not the marker check) is the failure surface.
-    """
-    spec = _build_wds_smoke_spec(task_name="finalize-drifted-prefix")
-    drifted_r2 = spec.r2.model_copy(update={"prefix": "data/wrong-cfg/wrong-run/"})
-    drifted_spec = spec.model_copy(update={"r2": drifted_r2})
-
-    def fail_fast_upload(src: str | Path, dst: str) -> NoReturn:
-        raise AssertionError(f"upload must not run on a drifted prefix (got {dst!r})")
-
-    monkeypatch.setattr("synth_setter.pipeline.r2_io.upload", fail_fast_upload)
-    work_dir = tmp_path / "work"
-
-    with pytest.raises(ValueError, match="prefix mismatch"):
-        finalize_dataset.finalize_from_spec(drifted_spec, work_dir)
-    assert not work_dir.exists()
-
-
 def _build_finalize_cfg_with_offline_wandb(
     spec_uri: str, output_dir: Path, save_dir: Path
 ) -> DictConfig:
@@ -1237,3 +1252,198 @@ def test_finalize_logs_dataset_artifact_to_offline_wandb_run(
     assert b"n_samples" in payload and b"git_sha" in payload, (
         "artifact metadata (n_samples / git_sha) not recorded in offline run binary"
     )
+
+
+def test_finalize_closes_loggers_failed_when_finalize_from_spec_raises(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001 — installs stubs only
+) -> None:
+    """A ``finalize_from_spec`` failure propagates but still closes the wandb run as failed.
+
+    Pins the ``finalize()`` ``try/finally`` contract (finalize_dataset.py:322-330):
+    the body's exception must re-raise *and* the loggers must be closed with
+    ``status="failed"`` so the data-generation run is not left dangling. A real
+    offline ``WandbLogger`` is instantiated (via the offline-wandb cfg builder)
+    so the close path runs ``wandb.finish()`` for real. ``close_loggers`` is
+    wrapped with a spy that still delegates to the real helper: the spy captures
+    the forwarded ``status`` (the state-based ``wandb.run is None`` witness alone
+    can't distinguish ``"success"`` from ``"failed"``, nor a ``finally`` that
+    skips the close entirely, because wandb teardown can null the run by other
+    means). The failure is injected at ``finalize_from_spec`` so the ``except``
+    sets ``status="failed"`` before re-raising.
+
+    :param tmp_path: Hosts the spec JSON, scratch work_dir, and offline run dir.
+    :param monkeypatch: Pins a hermetic offline ``WANDB_*`` env, raises from
+        ``finalize_from_spec``, and wraps ``close_loggers`` with the status spy.
+    :param stub_finalize_setup: Installs the auth + marker-probe stubs.
+    """
+    for key in [k for k in os.environ if k.startswith("WANDB_")]:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("WANDB_MODE", "offline")
+    monkeypatch.setenv("WANDB_DATA_DIR", str(tmp_path / "wandb-data"))
+    wandb.teardown()
+
+    def boom(spec: DatasetSpec, work_dir: Path) -> NoReturn:
+        del spec, work_dir
+        raise RuntimeError("simulated finalize_from_spec failure")
+
+    monkeypatch.setattr("synth_setter.cli.finalize_dataset.finalize_from_spec", boom)
+
+    real_close = finalize_dataset.close_loggers
+    close_statuses: list[str] = []
+
+    def spy_close(loggers: list[object], status: str) -> None:
+        close_statuses.append(status)
+        real_close(loggers, status)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("synth_setter.cli.finalize_dataset.close_loggers", spy_close)
+
+    spec = _build_wds_smoke_spec(task_name="finalize-failed-close")
+    output_dir = tmp_path / "work"
+    output_dir.mkdir()
+    cfg = _build_finalize_cfg_with_offline_wandb(
+        _write_spec_to_file(spec, tmp_path), output_dir, tmp_path
+    )
+
+    with pytest.raises(RuntimeError, match="simulated finalize_from_spec failure"):
+        finalize_dataset.finalize(cfg)
+
+    assert close_statuses == ["failed"], (
+        f"finalize() must close loggers exactly once as failed, got {close_statuses}"
+    )
+    assert wandb.run is None, "finalize() left the wandb run open after a failed body"
+
+
+def test_finalize_swallows_artifact_log_failure_and_keeps_r2_artifacts(
+    tmp_path: Path,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001 — installs stubs only
+) -> None:
+    """A wandb ``log_artifact`` failure is swallowed; ``finalize()`` still lands R2 artifacts.
+
+    Pins ``_log_dataset_artifact``'s swallow contract (finalize_dataset.py:288-291):
+    artifact logging runs *after* the R2 outputs and ``dataset.complete`` marker
+    are already written, so a wandb failure must not abort the completed
+    finalize. Injects the failure at ``build_dataset_artifact`` (called inside the
+    ``try``) rather than spying ``log_artifact`` because the production wds path
+    references the prefix dir — patching the builder is the smallest seam that
+    drives the ``except`` branch deterministically. A ``called`` flag asserts the
+    builder actually ran, so a logger-type mismatch that skipped the artifact
+    path entirely could not pass the test vacuously. State-based witness: the
+    return is exception-free and both ``stats.npz`` and the marker exist on the
+    fake remote.
+
+    :param tmp_path: Hosts the spec JSON, scratch work_dir, and offline run dir.
+    :param fake_r2_remote: Local-typed rclone remote; seeded train shards land
+        here so the wds stats pass has real tars and the outputs materialize.
+    :param monkeypatch: Pins a hermetic offline ``WANDB_*`` env and raises from
+        ``build_dataset_artifact``.
+    :param stub_finalize_setup: Installs the auth + marker-probe stubs.
+    """
+    for key in [k for k in os.environ if k.startswith("WANDB_")]:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("WANDB_MODE", "offline")
+    monkeypatch.setenv("WANDB_DATA_DIR", str(tmp_path / "wandb-data"))
+    wandb.teardown()
+
+    builder_calls: list[str] = []
+
+    def boom(spec: DatasetSpec) -> NoReturn:
+        builder_calls.append(spec.task_name)
+        raise RuntimeError("simulated build_dataset_artifact failure")
+
+    monkeypatch.setattr("synth_setter.cli.finalize_dataset.build_dataset_artifact", boom)
+
+    spec = _build_wds_smoke_spec(task_name="finalize-artifact-swallow")
+    _seed_train_shards(fake_r2_remote, spec)
+    output_dir = tmp_path / "work"
+    output_dir.mkdir()
+    cfg = _build_finalize_cfg_with_offline_wandb(
+        _write_spec_to_file(spec, tmp_path), output_dir, tmp_path
+    )
+
+    finalize_dataset.finalize(cfg)
+
+    assert builder_calls == [spec.task_name], (
+        f"build_dataset_artifact was not invoked (artifact path skipped?): {builder_calls}"
+    )
+    assert _uri_to_local_path(fake_r2_remote, spec.r2.stats_uri()).is_file()
+    assert _uri_to_local_path(fake_r2_remote, spec.r2.dataset_complete_marker_uri()).is_file()
+    assert wandb.run is None, "finalize() left the wandb run open after swallowing the failure"
+
+
+def test_finalize_forces_wandb_resume_allow_when_wandb_cfg_present(
+    tmp_path: Path,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001 — installs stubs only
+) -> None:
+    """``finalize()`` forces ``logger.wandb.resume="allow"`` before instantiating loggers.
+
+    Pins finalize_dataset.py:319-320: when ``logger.wandb`` is present in the cfg
+    the run must attach to the pinned generation run rather than mint a new one.
+    Captures the cfg ``instantiate_loggers`` actually receives (the cfg object is
+    mutated in-place, so the captured reference reflects the forced value) and
+    stops the body early via a ``finalize_from_spec`` raise — the resume mutation
+    happens *before* dispatch, so no R2 work is needed and the offline run never
+    opens.
+
+    :param tmp_path: Hosts the spec JSON and scratch work_dir.
+    :param fake_r2_remote: Local-typed rclone remote (unused for I/O; the body
+        short-circuits) kept so the env-rooted cfg builder stays consistent.
+    :param monkeypatch: Captures the ``instantiate_loggers`` argument and raises
+        from ``finalize_from_spec`` to halt before any dispatch.
+    :param stub_finalize_setup: Installs the auth + marker-probe stubs.
+    """
+    del fake_r2_remote
+    captured_logger_cfg: dict[str, DictConfig] = {}
+
+    def capture_instantiate(logger_cfg: DictConfig) -> list[object]:
+        captured_logger_cfg["cfg"] = logger_cfg
+        return []
+
+    monkeypatch.setattr(
+        "synth_setter.cli.finalize_dataset.instantiate_loggers", capture_instantiate
+    )
+
+    def boom(spec: DatasetSpec, work_dir: Path) -> NoReturn:
+        del spec, work_dir
+        raise RuntimeError("halt after logger setup")
+
+    monkeypatch.setattr("synth_setter.cli.finalize_dataset.finalize_from_spec", boom)
+
+    spec = _build_wds_smoke_spec(task_name="finalize-resume-allow")
+    output_dir = tmp_path / "work"
+    output_dir.mkdir()
+    cfg = _build_finalize_cfg_with_offline_wandb(
+        _write_spec_to_file(spec, tmp_path), output_dir, tmp_path
+    )
+
+    with pytest.raises(RuntimeError, match="halt after logger setup"):
+        finalize_dataset.finalize(cfg)
+
+    assert OmegaConf.select(cfg, "logger.wandb.resume") == "allow"
+    assert OmegaConf.select(captured_logger_cfg["cfg"], "wandb.resume") == "allow"
+
+
+def test_stubbed_stats_signatures_match_production() -> None:
+    """Stub stats signatures in this file match the real stats functions.
+
+    Several tests stub ``finalize_dataset.get_stats_hdf5`` and
+    ``finalize_dataset.stream_stats_wds`` with hand-written signatures
+    (``(train_h5_path, mask_degenerate=False)`` and
+    ``(shard_paths, mask_degenerate=False)``). If production renamed a kwarg or
+    changed a default, those stubs would keep passing while masking a real
+    break. Compare the production parameter names and defaults via
+    ``inspect.signature`` — a state-based contract check, since there is no
+    runtime behavior to observe here.
+    """
+    real_get_stats = inspect.signature(real_get_stats_hdf5)
+    assert list(real_get_stats.parameters) == ["filename", "mask_degenerate"]
+    assert real_get_stats.parameters["mask_degenerate"].default is False
+
+    real_stream = inspect.signature(real_stream_stats_wds)
+    assert list(real_stream.parameters) == ["shard_paths", "mask_degenerate"]
+    assert real_stream.parameters["mask_degenerate"].default is False

@@ -33,6 +33,7 @@ __all__ = [
     "purge_prefix",
     "shard_uri",
     "to_rclone_path",
+    "to_s3_uri",
     "upload",
     "upload_dir",
     "upload_to_uri",
@@ -176,6 +177,22 @@ def to_rclone_path(r2_uri: str) -> str:
 
 # Backward-compatible alias for the previously-private translator.
 _to_rclone_path = to_rclone_path
+
+
+def to_s3_uri(r2_uri: str) -> str:
+    """Rewrite an `r2://bucket/key` URI to the `s3://` scheme W&B references record.
+
+    R2 exposes an S3-compatible API; only the scheme differs, so the
+    bucket/key path is preserved verbatim. ``storage-provenance-spec.md`` §4
+    logs artifact references as ``s3://``.
+
+    :param r2_uri: Canonical ``r2://bucket/key`` URI string.
+    :returns: The same location as ``s3://bucket/key``.
+    :raises ValueError: ``r2_uri`` is not an ``r2://`` URI.
+    """
+    if not is_r2_uri(r2_uri):
+        raise ValueError(f"not an r2:// URI: {r2_uri!r}")
+    return "s3://" + r2_uri[len(R2_URI_SCHEME) :]
 
 
 def download_dir_no_overwrite(r2_uri: str, dest_path: Path) -> None:

@@ -81,6 +81,7 @@ def _run_oracle_eval_subprocess(
     render: RenderConfig,
     num_workers: int,
     predict_file: Path,
+    metric_prefix: str = "",
 ) -> None:
     """Run the fake-oracle eval over one split of ``dataset_root``.
 
@@ -108,6 +109,11 @@ def _run_oracle_eval_subprocess(
         handle that cannot be pickled.
     :param predict_file: HDF5 split file for the datamodule's predict dataloader
         (e.g. ``dataset_root / "train.h5"``).
+    :param metric_prefix: Prepended to every audio metric key the eval logs
+        (both ``audio/*`` and ``shuffled_audio/*``). All splits resume one wandb
+        run, so a bare key is overwritten by the last split; pass ``"<split>/"``
+        to namespace it. Empty (the default) leaves keys bare — used for the
+        canonical ``test`` split.
     :raises FileNotFoundError: ``dataset_root`` is missing any finalized split
         or ``stats.npz`` — e.g. a resume where ``finalize_from_spec``
         short-circuited on an existing R2 marker without repopulating it.
@@ -163,6 +169,10 @@ def _run_oracle_eval_subprocess(
         f"datamodule.predict_file={predict_file}",
         "mode=predict",
     ]
+    # +append: metric_prefix is absent from eval.yaml's evaluation group. Empty
+    # (test split) leaves keys bare so existing sweeps/dashboards keep resolving.
+    if metric_prefix:
+        argv.append(f"+evaluation.metric_prefix={metric_prefix}")
     logger.info(f"oracle_eval_inline subprocess: {argv}")
     subprocess.run(argv, check=True, timeout=_ORACLE_EVAL_TIMEOUT_SECONDS)  # noqa: S603
 
@@ -868,6 +878,9 @@ def main(cfg: DictConfig) -> None:
             # basename, so read them in place — no R2 round-trip.
             output_dir = Path(cfg.paths.output_dir)
             for split in ("train", "val", "test"):
+                # test stays bare; train/val are namespaced so the shared run
+                # keeps one summary key per split (see _run_oracle_eval_subprocess).
+                metric_prefix = "" if split == "test" else f"{split}/"
                 _run_oracle_eval_subprocess(
                     output_dir,
                     output_dir / "oracle_eval" / split / spec.run_id,
@@ -875,6 +888,7 @@ def main(cfg: DictConfig) -> None:
                     render=spec.render,
                     num_workers=cfg.datamodule.num_workers,
                     predict_file=output_dir / f"{split}.h5",
+                    metric_prefix=metric_prefix,
                 )
         return
 

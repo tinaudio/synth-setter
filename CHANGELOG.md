@@ -1,6 +1,178 @@
 # CHANGELOG
 
 
+## v8.24.0 (2026-06-06)
+
+### Documentation
+
+- **agents**: Add import-ordering rule to avoid F401 autofix churn
+  ([#1519](https://github.com/tinaudio/synth-setter/pull/1519),
+  [`50b536a`](https://github.com/tinaudio/synth-setter/commit/50b536a6898adeeadcb3d7f796f9f48f790d1516))
+
+Agents repeatedly lose a cycle when an import is added in one edit and `make format` runs before the
+  using code lands: ruff's F401 autofix deletes the momentarily-unused import, forcing a re-add.
+  Document the fix (import with first use, or imports last) in AGENTS.md and mirror it into
+  CLAUDE.md's Python block.
+
+### Features
+
+- **training**: Log model-{config_id} W&B artifact with R2 reference
+  ([#1508](https://github.com/tinaudio/synth-setter/pull/1508),
+  [`a9b894e`](https://github.com/tinaudio/synth-setter/commit/a9b894eb746caaedf9705613dee8cbfff070d1b1))
+
+* chore(deps): sync uv.lock version to 8.23.0
+
+The 8.23.0 [skip ci] release commit bumped pyproject.toml but not uv.lock, leaving the lock's
+  synth-setter version at 8.22.0. Regenerate so CI's lock-check passes on branches cut from this
+  main.
+
+* feat(training): log explicit model-{config_id} W&B artifact with R2 reference
+
+train.py now logs a canonical model-{train_config_id} artifact (type model) to any configured
+  WandbLogger at train end, superseding reliance on Lightning's implicitly-named log_model:"all"
+  artifact (storage-provenance-spec §4-6). build_model_artifact records git_sha in artifact.metadata
+  and, when the new opt-in training.upload_checkpoints_uri (r2:// prefix or null) is set, adds an
+  s3:// reference to it (checksum=False, since R2's custom endpoint is not reachable by W&B's
+  reference handler). The null default logs a lineage-only artifact with no reference because R2
+  checkpoint upload is not implemented yet (#92). The opt-in URI mirrors eval's
+  evaluation.upload_output_dir_uri.
+
+_log_model_artifact is best-effort (warn-and-swallow) and a no-op without a WandbLogger, so
+  wandb-free callers are unchanged. Adds a shared r2_io.to_s3_uri helper and extracts
+  logging_utils.resolve_git_sha so train and provenance share one git-sha source.
+
+Closes #1472 Refs #1467, #1470, #146, #254
+
+* test(training): accept new training config block in baseline comparison
+
+train.yaml gained an opt-in training.upload_checkpoints_uri block, which the v0.0.0 baseline lacks.
+  Add training to ACCEPTED_DIFFS (mirroring evaluation) so the resolved-config equality test treats
+  the new block as a benign, non-model-knob divergence rather than drift.
+
+Refs #1472
+
+* fix(training): gate model-artifact logging to global-zero rank
+
+Copilot review: guard _log_model_artifact behind trainer.is_global_zero so DDP/FSDP ranks don't race
+  duplicate model artifact versions. Also drop the now-resolved 'Model run.log_artifact()' row from
+  configuration-reference §5.2 (this PR implements it); the dataset use_artifact row stays a gap
+  until #1474.
+
+Refs #1472, #1467
+
+* test(provenance): add offline-wandb e2e for model artifact wiring
+
+Drive the real train(cfg) entrypoint with a real WandbLogger(offline=True) and decode the
+  run-*.wandb binary to assert the model-{config_id} artifact (type model, git_sha metadata, opt-in
+  s3:// reference) actually lands. The existing unit tests feed a logger list to _log_model_artifact
+  directly and the cfg-level train tests pin a null logger, so dropping or mis-gating the
+  train()-end call passed every prior test; this closes that gap.
+
+* Potential fix for pull request finding
+
+Co-authored-by: Copilot Autofix powered by AI <175728472+Copilot@users.noreply.github.com>
+
+---------
+
+
+## v8.23.2 (2026-06-06)
+
+### Bug Fixes
+
+- **storage**: Make finalize R2 prefix check advisory, not fatal
+  ([#1510](https://github.com/tinaudio/synth-setter/pull/1510),
+  [`b8a9636`](https://github.com/tinaudio/synth-setter/commit/b8a96368763a9040020472ba3292f055461beded))
+
+* fix(storage): make finalize R2 prefix check advisory, not fatal
+
+The #281 write-time guard (assert_r2_prefix_matches in finalize_from_spec) aborted finalize whenever
+  spec.r2.prefix diverged from the canonical data/{task_name}/{run_id}/ shape. But a custom prefix
+  is legitimate — the oracle-eval e2e isolates its objects under test-runs/<test>/<uuid>/, and
+  finalize reads the same prefix generate wrote to, so the spec is self-consistent. The guard could
+  not distinguish intentional override from drift, so it broke the "Generate dataset shards -> real
+  R2 (Docker + VST)" job (test_oracle_eval_inline/shuffled_audio_metrics).
+
+Catch the ValueError and log a warning instead of aborting; the assert_r2_prefix_matches helper and
+  its unit tests are unchanged (still strict for callers that want it). Replaces the obsolete
+  test_finalize_from_spec_drifted_prefix_raises_before_any_upload (which pinned the now-removed
+  abort) with a test that a non-canonical prefix finalizes and lands its artifacts.
+
+Refs #281, #1471
+
+* docs(storage): mark finalize prefix check advisory in flow diagram + helper docstring
+
+doc-drift from the advisory-guard change: configuration-reference.md's finalize flow labeled the
+  prefix step a fatal 'prefix-drift guard'; prefix.py's assert_r2_prefix_matches docstring implied
+  finalize hard-stops. Both now state the check is advisory in finalize (warns, never aborts).
+
+Refs #281
+
+
+## v8.23.1 (2026-06-06)
+
+### Bug Fixes
+
+- **eval**: Namespace inline oracle-eval audio metrics per split
+  ([#1500](https://github.com/tinaudio/synth-setter/pull/1500),
+  [`6a2ac93`](https://github.com/tinaudio/synth-setter/commit/6a2ac935e73f1d5ef6ac64cce8176ba41b64b39f))
+
+* fix(eval): namespace inline oracle-eval audio metrics per split
+
+The inline oracle eval shells out to synth_setter.cli.eval once per split (train, val, test), and
+  every subprocess resumes the SAME wandb run via logger.wandb.id=<run_id>
+  +logger.wandb.resume=must. Each split logged the bare audio/<name>_<stat> key, so the run summary
+  kept only the last split (test) and silently overwrote train/val — and any sweep optimizing
+  audio/mss_mean was tuning on test alone, mislabeled as the whole dataset.
+
+Add an opt-in evaluation.metric_prefix that _run_predict_postprocessing prepends to every audio
+  metric key (incl. shuffled_audio/*). generate_dataset passes "train/" and "val/" for those splits
+  while leaving test bare, so the three passes land as distinct, labeled summary keys instead of
+  colliding. Default is empty, preserving the bare-key behavior for every other caller.
+
+* docs(eval): note per-split audio-metric namespacing in wandb docs + doc-map
+
+Address doc-drift on #1500: doc-map.yaml's generate_dataset coverage text and wandb-integration.md
+  §5f said the inline oracle eval appends bare `audio/*` rows. The eval now namespaces every metric
+  key per split (`train/audio/*`, `val/audio/*`, plus the matching `shuffled_audio/*`), leaving only
+  `test` bare.
+
+* test(eval): rename per-split prefix var to metric_prefix to avoid shadowing
+
+Copilot flagged that the per-split metric `prefix` local in the oracle-eval integration tests could
+  shadow an R2 cleanup prefix used in `finally`. The rebase onto main already renamed the R2 var to
+  `prefix_root`, so no collision remains; rename the metric local to `metric_prefix` to match the
+  production parameter and remove any ambiguity.
+
+* ci: re-trigger CI to clear flaky run_tests_ubuntu py3.11 skypilot xdist failure
+
+### Testing
+
+- **provenance**: Pin wandb provenance fields across entrypoints
+  ([#1503](https://github.com/tinaudio/synth-setter/pull/1503),
+  [`0abbf2f`](https://github.com/tinaudio/synth-setter/commit/0abbf2fb00757e04a73baf3b35c4ea569c34865b))
+
+* test(provenance): pin wandb.config provenance-field invariants for train and eval entrypoints
+
+Adds entrypoint-seam wiring tests for train.py and eval.py asserting the storage-provenance-spec.md
+  §7-8 invariants: the run id is pinned in the {config_id}-{timestamp} convention, job_type is
+  pinned to training / evaluation, and log_wandb_provenance is invoked once a logger exists. The
+  generate_dataset entrypoint and the seam units (log_wandb_provenance, pin_wandb_run_id,
+  resolve_run_config_id, make_wandb_run_id) are already covered by test_generate_dataset_wandb.py,
+  test_logging_utils.py, and test_run_id.py.
+
+Heavy collaborators are stubbed at their seams so the tests isolate the wiring without running a
+  real fit / eval. Placed in sibling modules per the tests/_meta entrypoint-only rule. Test-only; no
+  production code changed.
+
+* docs(provenance): cite spec invariants by topic, not section number
+
+The §7-8 citation was wrong for 2 of the 3 pinned invariants (run-id lives in §1, W&B-provenance in
+  §6/§12); reference by topic so it can't drift when the spec is re-sectioned. Surfaced by the PR's
+  doc-drift advisory.
+
+Refs #1467
+
+
 ## v8.23.0 (2026-06-06)
 
 ### Chores
