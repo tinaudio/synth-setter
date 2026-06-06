@@ -373,7 +373,8 @@ def submit_review(
     result = _post_review(repo, pr_number, payload)
     if result.returncode == 0:
         return json.loads(result.stdout)
-    if _SELF_REVIEW_422_RE.search(result.stderr):
+    # gh writes the JSON error body to stdout and only "HTTP 422" to stderr, so scan both.
+    if _SELF_REVIEW_422_RE.search(f"{result.stdout}\n{result.stderr}"):
         sys.stderr.write(
             "Self-review 422: falling back to event=COMMENT with the fallback banner.\n"
         )
