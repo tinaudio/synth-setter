@@ -273,7 +273,9 @@ generate run — a `wandb sync` then merges both phases under one run id. Becaus
 all three splits resume the **same** run, the metric keys are namespaced per
 split so they don't overwrite each other's run summary: `test` keeps the bare
 `audio/*` key, while `train`/`val` are logged under `train/audio/*` and
-`val/audio/*` (via `+evaluation.metric_prefix=<split>/`). The eval subprocess
+`val/audio/*` (via `+evaluation.metric_prefix=<split>/`). The prefix applies to
+every metric key, so the `shuffled_audio/*` keys (§2) become `train/shuffled_audio/*`
+etc. too. The eval subprocess
 inherits `WANDB_MODE` from the launcher, so its offline/online posture follows
 the parent's.
 
