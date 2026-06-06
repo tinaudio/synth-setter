@@ -1,6 +1,82 @@
 # CHANGELOG
 
 
+## v8.29.0 (2026-06-06)
+
+### Features
+
+- **eval**: Log per-sample metrics.csv to wandb as Table
+  ([#1488](https://github.com/tinaudio/synth-setter/pull/1488),
+  [`652d77c`](https://github.com/tinaudio/synth-setter/commit/652d77ca97b81509a5f7d4e1dbea3c4d281cbb5c))
+
+* feat(eval): log per-sample metrics.csv to wandb as Table
+
+Add _log_metrics_csv_to_wandb that reads metrics.csv written by compute_audio_metrics and uploads it
+  as a wandb.Table under audio/per_sample_metrics; called in _run_predict_postprocessing immediately
+  after the existing scalar-metrics log.
+
+* test(eval): add e2e coverage for metrics-csv Table wiring through evaluate()
+
+Assert that mode=predict with an active wandb.run uploads metrics.csv as a wandb.Table under
+  audio/per_sample_metrics, exercising the call path through _run_predict_postprocessing →
+  _log_metrics_csv_to_wandb.
+
+Refs #1473
+
+* style(eval): hoist imports and remove stale section separator
+
+Move module-level wandb and logging imports out of test function bodies into the module-level import
+  block; drop the decorative section-separator comment and a no-value inline comment.
+
+* docs(eval): update wandb-integration and eval-pipeline docs for per-sample metrics Table
+
+Add `audio/per_sample_metrics` wandb.Table row to §2i, note no-op behaviour, update §4 entry points
+  description, extend §5.1 paragraph, and correct §7.4 storage split to show per-sample metrics land
+  in both R2 (CSV file) and W&B (Table).
+
+* fix(eval): normalise metrics.csv index name and fixture format
+
+- Name the unnamed index column "sample_id" before reset_index() so the wandb Table always carries a
+  human-readable column header instead of "Unnamed: 0" or "index" (Copilot comment #3366533630) -
+  Update _FAKE_METRICS_CSV in test_eval.py and _METRICS_CSV in test_eval_postprocessing.py to use
+  the real on-disk format written by compute_audio_metrics (leading-comma unnamed index, not
+  "sample_id" header) so schema regressions are caught (#3366533642, #3366533646)
+
+* docs(eval): clarify metrics.csv Table is W&B-only, not in evaluate() return dict
+
+The previous wording implied the wandb.Table from metrics.csv was merged into evaluate()'s returned
+  metric_dict alongside the aggregated scalars. Only the aggregated scalars
+  (audio/<name>_{mean,std}) enter the return dict; the per-sample Table is logged to W&B only.
+
+Addresses Copilot comment #3366548786.
+
+* docs(eval): clarify wandb-integration §2i — Table is W&B-only, not in return dict
+
+Fixes ambiguous "The same dict is also merged" sentence that implied the per-sample Table is
+  included in evaluate()'s return value. Only the aggregated scalar metrics dict is merged;
+  audio/per_sample_metrics is W&B-only.
+
+* fix(eval): honor metric_prefix for per-sample metrics Table
+
+The merge with main brought in evaluation.metric_prefix (added for the shuffled-audio metrics). The
+  per-sample metrics Table introduced by this PR logged under a fixed audio/per_sample_metrics key,
+  so two splits sharing one wandb run would overwrite each other's Table. Thread the computed prefix
+  through _log_metrics_csv_to_wandb to match the scalar metrics. Also remove a stray merge-conflict
+  marker left in the rendered wandb-integration docs.
+
+* fix(eval): make per-sample table log-failure warning accurate
+
+The except block wraps pd.read_csv / wandb.Table / run.log, but the warning blamed wandb.run.log
+  specifically, so a CSV-parse failure would point logs at the wrong source. Use a generic message
+  naming the operation, not one call within it.
+
+* test(eval): stub wandb.finish in per-sample table e2e test
+
+task_wrapper's teardown calls module-level wandb.finish() whenever wandb.run is truthy, and this
+  test sets wandb.run to a spy — so the real wandb.finish() ran during the test. Patch it to a no-op
+  so only the spy run's log payload is exercised, removing the side-effect/flakiness risk.
+
+
 ## v8.28.0 (2026-06-06)
 
 ### Features
