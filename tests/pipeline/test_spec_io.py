@@ -376,5 +376,52 @@ class TestReadSpecText:
 
     def test_unsupported_scheme_is_rejected_with_value_error(self) -> None:
         """An unsupported scheme (e.g. ``s3://``) raises a clear ``ValueError``."""
-        with pytest.raises(ValueError, match="unsupported spec_uri scheme 's3'"):
+        with pytest.raises(ValueError, match="unsupported URI scheme 's3'"):
             spec_io.read_spec_text("s3://bucket/spec.json")
+
+
+class TestLocalizedUri:
+    """``spec_io.localized_uri`` yields a local path for r2://, file://, and bare paths."""
+
+    def test_bare_local_path_yields_path_in_place(self, tmp_path: Path) -> None:
+        """A non-URI argument yields the path itself, with no copy.
+
+        :param tmp_path: Pytest tmp dir.
+        """
+        target = tmp_path / "shard.h5"
+        target.write_text("payload")
+
+        with spec_io.localized_uri(str(target)) as local:
+            assert local == target
+            assert local.read_text() == "payload"
+
+    def test_file_uri_yields_decoded_local_path(self, tmp_path: Path) -> None:
+        """A ``file://`` URI is decoded to its local path.
+
+        :param tmp_path: Pytest tmp dir.
+        """
+        target = tmp_path / "shard.h5"
+        target.write_text("payload")
+
+        with spec_io.localized_uri(target.as_uri()) as local:
+            assert local == target
+
+    def test_r2_uri_downloads_to_tempfile_and_cleans_up(self) -> None:
+        """An ``r2://`` URI is fetched to a tempfile that is removed on exit."""
+
+        def fake_check_call(args: list[str]) -> None:
+            Path(args[-1]).write_text("from-r2")
+
+        with patch(
+            "synth_setter.pipeline.r2_io.subprocess.check_call", side_effect=fake_check_call
+        ):
+            with spec_io.localized_uri("r2://bucket/shard.h5") as local:
+                assert local.read_text() == "from-r2"
+                fetched = local
+        assert not fetched.exists()
+
+    def test_unsupported_scheme_is_rejected_with_value_error(self) -> None:
+        """An unsupported scheme (e.g. ``s3://``) raises a clear ``ValueError``."""
+        with pytest.raises(ValueError, match="unsupported URI scheme 's3'"):
+            with spec_io.localized_uri("s3://bucket/shard.h5"):
+                pass

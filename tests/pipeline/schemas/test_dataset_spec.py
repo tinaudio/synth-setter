@@ -1107,7 +1107,7 @@ class TestFromHydraCfg:
 
         The mask keeps only model fields, so the back-compat shim never sees a
         Hydra-side ``datasetsrc`` override; ``from_hydra_cfg`` rejects it up front
-        with a pointer to ``copy_dataset_root``.
+        with a pointer to ``copy_dataset_root_uri``.
         """
         from omegaconf import OmegaConf
 
@@ -1117,28 +1117,51 @@ class TestFromHydraCfg:
         with pytest.raises(ValueError, match="no longer a config key"):
             DatasetSpec.from_hydra_cfg(cfg)
 
+    def test_stale_copy_dataset_root_key_is_rejected_with_migration_pointer(self) -> None:
+        """A composed cfg carrying the renamed ``copy_dataset_root`` raises up front.
 
-class TestCopyDatasetRoot:
-    """``DatasetSpec.copy_dataset_root`` — optional flat dataset-copy source."""
+        ``copy_dataset_root`` is no longer a model field, so the mask would drop a
+        Hydra-side override silently and disable copy; ``from_hydra_cfg`` rejects
+        it with a pointer to ``copy_dataset_root_uri``.
+        """
+        from omegaconf import OmegaConf
 
-    def test_copy_dataset_root_defaults_to_none(self) -> None:
-        """A spec built without ``copy_dataset_root`` leaves the copy path disabled."""
+        cfg = OmegaConf.create(_valid_spec_kwargs())
+        cfg.copy_dataset_root = "/data/source-dataset"
+
+        with pytest.raises(ValueError, match="no longer a config key"):
+            DatasetSpec.from_hydra_cfg(cfg)
+
+
+class TestCopyDatasetRootUri:
+    """``DatasetSpec.copy_dataset_root_uri`` — optional dataset-copy source root URI."""
+
+    def test_copy_dataset_root_uri_defaults_to_none(self) -> None:
+        """A spec built without ``copy_dataset_root_uri`` leaves the copy path disabled."""
         spec = DatasetSpec(**_valid_spec_kwargs())
 
-        assert spec.copy_dataset_root is None
+        assert spec.copy_dataset_root_uri is None
 
-    def test_copy_dataset_root_string_is_stored_as_is(self) -> None:
-        """A ``copy_dataset_root`` string is kept verbatim on the spec."""
-        spec = DatasetSpec(**_valid_spec_kwargs(copy_dataset_root="/data/source-dataset"))
+    def test_copy_dataset_root_uri_bare_path_is_stored_as_is(self) -> None:
+        """A bare-path ``copy_dataset_root_uri`` is kept verbatim on the spec."""
+        spec = DatasetSpec(**_valid_spec_kwargs(copy_dataset_root_uri="/data/source-dataset"))
 
-        assert spec.copy_dataset_root == "/data/source-dataset"
+        assert spec.copy_dataset_root_uri == "/data/source-dataset"
 
-    def test_copy_dataset_root_blank_is_rejected(self) -> None:
-        """A blank ``copy_dataset_root`` raises so the per-shard source path is never empty."""
-        with pytest.raises(ValidationError, match="copy_dataset_root must not be blank"):
-            DatasetSpec(**_valid_spec_kwargs(copy_dataset_root="   "))
+    def test_copy_dataset_root_uri_r2_uri_is_stored_as_is(self) -> None:
+        """An ``r2://`` ``copy_dataset_root_uri`` is kept verbatim (resolved at copy time)."""
+        spec = DatasetSpec(
+            **_valid_spec_kwargs(copy_dataset_root_uri="r2://bucket/prefix/task/run")
+        )
 
-    def test_copy_dataset_root_with_wds_output_is_rejected(self) -> None:
+        assert spec.copy_dataset_root_uri == "r2://bucket/prefix/task/run"
+
+    def test_copy_dataset_root_uri_blank_is_rejected(self) -> None:
+        """A blank ``copy_dataset_root_uri`` raises so the per-shard source URI is never empty."""
+        with pytest.raises(ValidationError, match="copy_dataset_root_uri must not be blank"):
+            DatasetSpec(**_valid_spec_kwargs(copy_dataset_root_uri="   "))
+
+    def test_copy_dataset_root_uri_with_wds_output_is_rejected(self) -> None:
         """Copy requires hdf5 output — pairing it with wds fails at spec build.
 
         A ``.tar`` output has no same-named HDF5 source to read params from, so the
@@ -1148,39 +1171,69 @@ class TestCopyDatasetRoot:
             DatasetSpec(
                 **_valid_spec_kwargs(
                     output_format="wds",
-                    copy_dataset_root="/data/source-dataset",
+                    copy_dataset_root_uri="/data/source-dataset",
                 )
             )
 
-    def test_copy_dataset_root_survives_json_round_trip(self) -> None:
+    def test_copy_dataset_root_uri_survives_json_round_trip(self) -> None:
         """A worker reconstructing the spec from JSON sees the same copy source."""
-        spec = DatasetSpec(**_valid_spec_kwargs(copy_dataset_root="/data/source-dataset"))
+        spec = DatasetSpec(**_valid_spec_kwargs(copy_dataset_root_uri="r2://bucket/source"))
 
         restored = DatasetSpec.model_validate_json(spec.model_dump_json())
 
-        assert restored.copy_dataset_root == spec.copy_dataset_root
+        assert restored.copy_dataset_root_uri == spec.copy_dataset_root_uri
+
+    def test_legacy_flat_copy_dataset_root_is_promoted(self) -> None:
+        """A pre-rename flat ``copy_dataset_root`` promotes to ``copy_dataset_root_uri``."""
+        spec = DatasetSpec(**_valid_spec_kwargs(copy_dataset_root="/data/source-dataset"))
+
+        assert spec.copy_dataset_root_uri == "/data/source-dataset"
+
+    def test_legacy_flat_copy_dataset_root_json_loads_via_model_validate_json(self) -> None:
+        """A serialized pre-rename spec (flat ``copy_dataset_root``) loads through the shim.
+
+        Exercises back-compat for ``input_spec.json`` files materialized before the
+        URI rename, reloaded from JSON rather than constructed in-memory.
+        """
+        data = json.loads(DatasetSpec(**_valid_spec_kwargs()).model_dump_json())
+        data.pop("copy_dataset_root_uri")
+        data["copy_dataset_root"] = "/data/source-dataset"
+
+        restored = DatasetSpec.model_validate_json(json.dumps(data))
+
+        assert restored.copy_dataset_root_uri == "/data/source-dataset"
+
+    def test_both_flat_legacy_and_uri_keys_are_rejected(self) -> None:
+        """Carrying both ``copy_dataset_root`` and ``copy_dataset_root_uri`` is ambiguous."""
+        with pytest.raises(ValidationError, match="multiple dataset-copy source keys"):
+            DatasetSpec(
+                **_valid_spec_kwargs(
+                    copy_dataset_root="/data/a",
+                    copy_dataset_root_uri="/data/b",
+                )
+            )
 
     def test_legacy_datasetsrc_mapping_is_promoted(self) -> None:
-        """A legacy ``datasetsrc`` mapping from an old spec promotes to the flat field."""
+        """A legacy ``datasetsrc`` mapping from an old spec promotes to the URI field."""
         spec = DatasetSpec(
             **_valid_spec_kwargs(datasetsrc={"copy_dataset_root": "/data/source-dataset"})
         )
 
-        assert spec.copy_dataset_root == "/data/source-dataset"
+        assert spec.copy_dataset_root_uri == "/data/source-dataset"
 
     def test_legacy_datasetsrc_null_is_dropped(self) -> None:
         """A legacy ``datasetsrc: null`` from an old spec loads as no copy source."""
         spec = DatasetSpec(**_valid_spec_kwargs(datasetsrc=None))
 
-        assert spec.copy_dataset_root is None
+        assert spec.copy_dataset_root_uri is None
 
-    def test_both_legacy_and_flat_keys_are_rejected(self) -> None:
-        """Carrying both shapes is ambiguous and raises."""
-        with pytest.raises(ValidationError, match="pass one shape, not both"):
+    def test_both_legacy_datasetsrc_and_uri_keys_are_rejected(self) -> None:
+        """Carrying both ``datasetsrc`` and ``copy_dataset_root_uri`` is ambiguous and raises."""
+        with pytest.raises(ValidationError, match="multiple dataset-copy source keys"):
             DatasetSpec(
                 **_valid_spec_kwargs(
                     datasetsrc={"copy_dataset_root": "/data/a"},
-                    copy_dataset_root="/data/b",
+                    copy_dataset_root_uri="/data/b",
                 )
             )
 
@@ -1217,12 +1270,12 @@ class TestCopyDatasetRoot:
         before the flatten are reloaded from JSON, not just constructed in-memory.
         """
         data = json.loads(DatasetSpec(**_valid_spec_kwargs()).model_dump_json())
-        data.pop("copy_dataset_root")
+        data.pop("copy_dataset_root_uri")
         data["datasetsrc"] = {"copy_dataset_root": "/data/source-dataset"}
 
         restored = DatasetSpec.model_validate_json(json.dumps(data))
 
-        assert restored.copy_dataset_root == "/data/source-dataset"
+        assert restored.copy_dataset_root_uri == "/data/source-dataset"
 
 
 class TestValidateCopySource:

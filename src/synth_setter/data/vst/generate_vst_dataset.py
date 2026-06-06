@@ -29,6 +29,7 @@ from synth_setter.pipeline.schemas.spec import (
     OutputFormat,
     RenderConfig,
 )
+from synth_setter.pipeline.spec_io import localized_uri
 
 
 @dataclass
@@ -291,12 +292,12 @@ class _GenerateCliArgs(RenderConfig, BaseSettings):
     shrinks the CLI surface without a parallel update here. Adds ``data_file``
     as the sole positional arg (the destination shard path; suffix selects
     writer via ``OutputFormat.from_extension``), and an optional
-    ``copy_dataset_root`` that triggers the param-copy path.
+    ``copy_dataset_root_uri`` that triggers the param-copy path.
 
-    .. attribute :: copy_dataset_root
+    .. attribute :: copy_dataset_root_uri
 
-        Optional copy source; when set, the same-named source shard's params
-        are decoded and re-rendered instead of sampling fresh ones.
+        Optional copy source root URI; when set, the same-named source shard's
+        params are decoded and re-rendered instead of sampling fresh ones.
     """
 
     model_config = SettingsConfigDict(
@@ -308,7 +309,7 @@ class _GenerateCliArgs(RenderConfig, BaseSettings):
     )
 
     data_file: CliPositionalArg[str]
-    copy_dataset_root: str | None = None
+    copy_dataset_root_uri: str | None = None
 
 
 def main() -> None:
@@ -319,12 +320,14 @@ def main() -> None:
     suffix raises ``SystemExit`` rather than silently producing a half-written
     file in the wrong format.
 
-    When ``--copy_dataset_root`` is set, the params of the same-named source
-    shard under that root are decoded into fixed synth/note lists and
-    re-rendered instead of sampling fresh params. The source is read as an HDF5
-    ``param_array``, so copy is supported for hdf5 output only (a ``.tar`` output
-    has no same-named HDF5 source); a wds output with ``--copy_dataset_root``
-    raises ``SystemExit``.
+    When ``--copy_dataset_root_uri`` is set, the params of the same-named source
+    shard under that root URI are decoded into fixed synth/note lists and
+    re-rendered instead of sampling fresh params. The root URI may be a bare
+    path, ``file://`` URI, or ``r2://`` URI (an ``r2://`` shard is downloaded to
+    a tempfile for the decode). The source is read as an HDF5 ``param_array``, so
+    copy is supported for hdf5 output only (a ``.tar`` output has no same-named
+    HDF5 source); a wds output with ``--copy_dataset_root_uri`` raises
+    ``SystemExit``.
     """
     # Import lazily so that the writer module's webdataset dep only loads when
     # this CLI entrypoint is invoked, not when callers merely import this
@@ -334,7 +337,7 @@ def main() -> None:
     from synth_setter.data.vst.writers import make_hdf5_dataset, make_wds_dataset
 
     args = CliApp.run(_GenerateCliArgs)
-    render_cfg = RenderConfig(**args.model_dump(exclude={"data_file", "copy_dataset_root"}))
+    render_cfg = RenderConfig(**args.model_dump(exclude={"data_file", "copy_dataset_root_uri"}))
 
     suffix = Path(args.data_file).suffix
     fmt = OutputFormat.from_extension(suffix)
@@ -346,17 +349,19 @@ def main() -> None:
 
     fixed_synth_params_list = None
     fixed_note_params_list = None
-    if args.copy_dataset_root is not None:
+    if args.copy_dataset_root_uri is not None:
         if fmt is not OutputFormat.HDF5:
             raise SystemExit(
-                "--copy_dataset_root supports hdf5 output only; the source params are "
+                "--copy_dataset_root_uri supports hdf5 output only; the source params are "
                 f"read from a same-named HDF5 shard, but data_file suffix is {suffix!r}."
             )
-        # Same shard filename under the copy root names the source HDF5 shard.
-        source_shard = Path(args.copy_dataset_root) / Path(args.data_file).name
-        fixed_synth_params_list, fixed_note_params_list = fixed_params_from_dataset(
-            source_shard, param_specs[render_cfg.param_spec_name]
-        )
+        # Same shard filename under the copy root URI names the source HDF5 shard;
+        # localized_uri downloads it locally first when the root is an r2:// URI.
+        source_shard_uri = f"{args.copy_dataset_root_uri.rstrip('/')}/{Path(args.data_file).name}"
+        with localized_uri(source_shard_uri) as source_shard:
+            fixed_synth_params_list, fixed_note_params_list = fixed_params_from_dataset(
+                source_shard, param_specs[render_cfg.param_spec_name]
+            )
 
     if fmt is OutputFormat.HDF5:
         make_hdf5_dataset(

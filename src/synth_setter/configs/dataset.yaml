@@ -31,11 +31,13 @@ base_seed: 42
 # Masked out of ``DatasetSpec`` by ``from_hydra_cfg`` (not a spec field).
 tags: ["dev", "generate_dataset"]
 
-# Optional dataset-copy source. ``null`` samples fresh params (the default).
-# Set to a directory of source shards to instead re-render each same-named
-# shard's params; the source must share this config's ``render.param_spec_name``.
-# Override directly, e.g. ``copy_dataset_root=/data/source-dataset``.
-copy_dataset_root: null
+# Optional dataset-copy source root URI. ``null`` samples fresh params (the
+# default). Set to a root of source shards (bare path, ``file://``, or ``r2://``)
+# to instead re-render each same-named shard's params; the source must share
+# this config's ``render.param_spec_name``. An ``r2://`` source is downloaded
+# per shard at copy time. Override directly, e.g.
+# ``copy_dataset_root_uri=r2://bucket/prefix/task/run``.
+copy_dataset_root_uri: null
 
 # Forwarded by ``synth-setter-finalize-dataset`` to ``stream_stats_wds`` /
 # ``get_stats_hdf5``; ``true`` substitutes ``std=1.0`` at zero-variance mel
