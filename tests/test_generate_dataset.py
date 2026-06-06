@@ -3,10 +3,12 @@
 Covers tests that exercise ``from_hydra`` or the CLI subprocess end-to-end:
 an ``integration_r2``-gated end-to-end render that drives ``from_hydra``
 against ``cfg_dataset`` and asserts every shard lands at the spec-derived R2
-URI in real Cloudflare R2; and an ``integration_r2`` subprocess run of the
+URI in real Cloudflare R2; an ``integration_r2`` subprocess run of the
 ``smoke-shard-with-oracle-eval`` experiment that asserts the inline oracle
-eval's ``metrics.json`` holds bounded ``audio/*`` metrics. The integration
-tests auto-skip when ``rclone`` / R2 creds are absent.
+eval's ``metrics.json`` holds bounded ``audio/*`` metrics; and a variant with
+``param_sample_cadence=shard`` that asserts ``shuffled_audio/*`` metrics also
+appear when all sample dirs share uniform ``params.csv`` (#489). The
+integration tests auto-skip when ``rclone`` / R2 creds are absent.
 
 Keep this module to tests that drive ``from_hydra`` or the real CLI subprocess.
 Config-composition and ``spec_from_cfg`` unit tests live in
@@ -450,3 +452,96 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
             )
     finally:
         r2_io.purge_prefix(cfg_dataset.r2.bucket, prefix)
+
+
+@pytest.mark.integration_r2
+@pytest.mark.r2
+@pytest.mark.requires_vst
+@pytest.mark.slow
+def test_oracle_eval_inline_writes_shuffled_audio_metrics_when_params_uniform(
+    cfg_dataset: DictConfig,
+    tmp_path: Path,
+) -> None:
+    """Oracle eval with ``param_sample_cadence=shard`` writes bounded ``shuffled_audio/*`` metrics.
+
+    ``param_sample_cadence=shard`` gives every sample in the test shard the
+    same ``params.csv``. The auto-shuffle probe (#489) in
+    ``compute_audio_metrics`` detects uniform params and runs a second metrics
+    pass with permuted ``pred.wav``, writing ``aggregated_metrics_shuffled.csv``;
+    ``_load_audio_metrics`` then merges those values into ``metrics.json`` under
+    ``shuffled_audio/<name>_{mean,std}``.
+
+    Asserts each audio metric (mss, wmfcc, sot, rms) produces a finite, bounded
+    value under both the ``audio/`` and ``shuffled_audio/`` prefixes.  Because
+    all samples share one patch, shuffled predictions match the same target as
+    the originals, so the shuffled means satisfy the same
+    ``ORACLE_AUDIO_METRIC_BOUNDS`` envelope.
+
+    :param cfg_dataset: Composed config; read only for ``r2.bucket`` (cleanup
+        purge).
+    :param tmp_path: Holds the Hydra run dir (hence the eval's
+        ``metrics.json``) and the pinned operator workspace.
+    """
+    if not r2_io.is_r2_reachable():
+        pytest.skip("R2 not reachable (rclone not on PATH or `rclone lsd r2:` failed)")
+
+    r2_prefix = f"test-runs/test_oracle_eval_shuffled_audio_metrics/{uuid.uuid4().hex[:12]}/"
+    run_dir = tmp_path / "hydra_run"
+    worktree_src = Path(__file__).resolve().parents[1] / "src"
+    env = {
+        **os.environ,
+        "WANDB_MODE": "offline",
+        "PYTHONPATH": f"{worktree_src}:{os.environ.get('PYTHONPATH', '')}",
+        "SYNTH_SETTER_WORKSPACE": str(tmp_path),
+    }
+    try:
+        result = subprocess.run(  # noqa: S603 — args are test-controlled literals
+            [
+                sys.executable,
+                "-m",
+                "synth_setter.cli.generate_dataset",
+                "experiment=generate_dataset/smoke-shard-with-oracle-eval",
+                f"+r2.prefix={r2_prefix}",
+                f"hydra.run.dir={run_dir}",
+                # Uniform params within each shard so the auto-shuffle probe fires.
+                "render.param_sample_cadence=shard",
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=600,
+        )
+        assert result.returncode == 0, (
+            f"generate-dataset CLI exited {result.returncode}\n"
+            f"--- STDOUT (tail) ---\n{result.stdout[-2000:]}\n"
+            f"--- STDERR (tail) ---\n{result.stderr[-2000:]}"
+        )
+
+        metrics_files = list(run_dir.glob("oracle_eval/*/metrics/metrics.json"))
+        assert len(metrics_files) == 1, (
+            f"expected one oracle-eval metrics.json under {run_dir}/oracle_eval/; "
+            f"got {metrics_files}"
+        )
+        metrics = json.loads(metrics_files[0].read_text())
+
+        # Both audio/ and shuffled_audio/ must be present for each metric split.
+        for name in _ORACLE_AUDIO_METRICS:
+            for stat in ("mean", "std"):
+                for group in ("audio", "shuffled_audio"):
+                    key = f"{group}/{name}_{stat}"
+                    value = metrics.get(key)
+                    assert isinstance(value, float) and math.isfinite(value), (
+                        f"{key} is not a finite float: {value!r} (metrics={metrics})"
+                    )
+
+        # Uniform params → shuffled pred matches the same target; means satisfy
+        # the same oracle envelope as the non-shuffled pass.
+        bounds = ORACLE_AUDIO_METRIC_BOUNDS
+        for group in ("audio", "shuffled_audio"):
+            assert metrics[f"{group}/mss_mean"] < bounds.mss_max, metrics
+            assert metrics[f"{group}/wmfcc_mean"] < bounds.wmfcc_max, metrics
+            assert metrics[f"{group}/sot_mean"] < bounds.sot_max, metrics
+            assert metrics[f"{group}/rms_mean"] > bounds.rms_min, metrics
+    finally:
+        r2_io.purge_prefix(cfg_dataset.r2.bucket, r2_prefix)
