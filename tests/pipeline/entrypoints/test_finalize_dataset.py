@@ -368,13 +368,16 @@ def test_finalize_dataset_main_resolves_hydra_logging_under_at_hydra_main(
     """Invoking ``main()`` under @hydra.main resolves every interpolation in the shared groups.
 
     The shared ``hydra/default.yaml`` interpolates ``${task_name}`` into both
-    ``run.dir`` and ``job_logging.handlers.file.filename``. A missing override
-    surfaces as a Hydra startup ``InterpolationKeyError`` *before*
-    ``finalize()`` fires — a structure-only compose check (``return_hydra_config=True``)
-    inspects unresolved templates and misses this. Drive the decorated
-    ``main()`` for real with the marker-probe stub set to "present" so the
-    body short-circuits at the idempotency check, isolating the test to
-    Hydra-side resolution.
+    ``run.dir`` and ``job_logging.handlers.file.filename``, and the composed
+    ``logger: wandb`` group interpolates ``${paths.output_dir}`` +
+    ``${oc.env:WANDB_*}``. A missing override surfaces as a Hydra startup
+    ``InterpolationKeyError`` *before* ``finalize()`` fires — a structure-only
+    compose check (``return_hydra_config=True``) inspects unresolved templates
+    and misses this. Drive the decorated ``main()`` for real with the
+    marker-probe stub set to "present" so the body short-circuits at the
+    idempotency check, isolating the test to Hydra-side resolution.
+    ``WANDB_MODE=disabled`` makes the composed WandbLogger a no-op so no
+    network or run dir is created.
 
     :param tmp_path: Hosts ``PROJECT_ROOT``, the on-disk spec JSON, and Hydra's run dir.
     :param monkeypatch: Pytest fixture used to point ``PROJECT_ROOT`` + ``sys.argv``.
@@ -382,6 +385,7 @@ def test_finalize_dataset_main_resolves_hydra_logging_under_at_hydra_main(
         body skips the wds/hdf5 dispatch.
     """
     stub_finalize_setup(0)
+    monkeypatch.setenv("WANDB_MODE", "disabled")
     monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
     spec = _build_wds_smoke_spec(task_name="hydra-startup")
     spec_uri = _write_spec_to_file(spec, tmp_path)
@@ -1214,12 +1218,22 @@ def test_finalize_logs_dataset_artifact_to_offline_wandb_run(
     )
 
     artifact_name = f"data-{spec.task_name}"
+    # The wds run references the prefix dir + stats.npz; pin the exact stats
+    # s3 URI rather than a bare `s3://` so the assertion can't pass on an
+    # incidental reference. Bucket/prefix come straight off the spec.
+    stats_ref = f"s3://{spec.r2.bucket}/{spec.r2.prefix}stats.npz"
     payload = read_run_binary(
         Path(binary_files[0]),
-        until=lambda data: artifact_name.encode() in data and b"s3://" in data,
+        until=lambda data: artifact_name.encode() in data and stats_ref.encode() in data,
     )
     assert artifact_name.encode() in payload, (
         f"dataset artifact {artifact_name!r} not recorded in offline run binary"
     )
     assert b"dataset" in payload, "artifact type 'dataset' not recorded"
-    assert b"s3://" in payload, "no s3:// R2 reference recorded on the artifact"
+    assert stats_ref.encode() in payload, (
+        f"finalized stats reference {stats_ref!r} not recorded on the artifact"
+    )
+    # Metadata block round-trips through the real log → binary path.
+    assert b"n_samples" in payload and b"git_sha" in payload, (
+        "artifact metadata (n_samples / git_sha) not recorded in offline run binary"
+    )

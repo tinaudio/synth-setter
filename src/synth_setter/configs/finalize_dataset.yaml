@@ -2,9 +2,16 @@
 defaults:
   - paths: default
   - hydra: default
+  - logger: wandb
   - _self_
 
 dataset_spec_uri: ???
+
+# Logger group resumes the data-generation run (id pinned to spec.run_id,
+# resume=allow forced in `finalize`) so the canonical `data-{config_id}`
+# dataset artifact lands on the producer node of the W&B lineage DAG.
+# WandbLogger inits lazily, so a finalize run without WANDB_API_KEY degrades
+# to a best-effort no-op rather than aborting (see `_log_dataset_artifact`).
 
 # Surfaces ${task_name} so hydra/default.yaml's run.dir + job_logging
 # interpolations resolve; run.dir is also overridden below because the
