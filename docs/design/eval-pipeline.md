@@ -242,18 +242,17 @@ The predict stage loads a trained model checkpoint via PyTorch Lightning's `Trai
 
 When `cfg.mode == "predict"`, `cli/eval.py` invokes `_run_predict_postprocessing()` after `trainer.predict()`. Both phases shell out to the existing CLIs (`predict_vst_audio.py`, `compute_audio_metrics.py`) and are gated by `cfg.evaluation`:
 
-| Key                             | Default | Effect when true                                                                                                                                                                                                                                               |
-| ------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `evaluation.render_vst`         | `false` | Subprocess-renders `${paths.output_dir}/audio/sample_*/{pred.wav, target.wav, spec.png, params.csv}`; requires `cfg.render.{param_spec_name, preset_path}` and optional `cfg.render.plugin_path`                                                               |
-| `evaluation.compute_metrics`    | `false` | Subprocess-computes `${paths.output_dir}/metrics/{metrics, aggregated_metrics}.csv` against the rendered pairs                                                                                                                                                 |
-| `evaluation.rerender_target`    | `true`  | Forwards `-t` to `predict_vst_audio` so `target.wav` is re-synthesized from stored target params (comparable to the rendered `pred.wav`) instead of replayed from `target-audio-*.pt`                                                                          |
-| `evaluation.num_workers`        | `1`     | Forwarded as `-w` to `compute_audio_metrics`                                                                                                                                                                                                                   |
-| `evaluation.shuffle_pred_audio` | `false` | Forwards `--shuffle_pred_audio` to `compute_audio_metrics`, which scores a symlink view permuting `pred.wav` across sample dirs (uniform-params gate) to isolate render-order from parameter variation (#489); no effect unless `compute_metrics` is also true |
-| `evaluation.shuffle_seed`       | `0`     | Forwarded as `--shuffle_seed`; identical seeds reproduce the permutation                                                                                                                                                                                       |
+| Key                          | Default | Effect when true                                                                                                                                                                                                 |
+| ---------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `evaluation.render_vst`      | `false` | Subprocess-renders `${paths.output_dir}/audio/sample_*/{pred.wav, target.wav, spec.png, params.csv}`; requires `cfg.render.{param_spec_name, preset_path}` and optional `cfg.render.plugin_path`                 |
+| `evaluation.compute_metrics` | `false` | Subprocess-computes `${paths.output_dir}/metrics/{metrics, aggregated_metrics}.csv` against the rendered pairs                                                                                                   |
+| `evaluation.rerender_target` | `true`  | Forwards `-t` to `predict_vst_audio` so `target.wav` is re-synthesized from stored target params (comparable to the rendered `pred.wav`) instead of replayed from `target-audio-*.pt`                            |
+| `evaluation.num_workers`     | `1`     | Forwarded as `-w` to `compute_audio_metrics`                                                                                                                                                                     |
+| `evaluation.shuffle_seed`    | `0`     | Always forwarded to `compute_audio_metrics`. Non-zero implies the render-order probe is intended — raises if `params.csv` files are non-uniform; `0` runs the auto-probe silently when params are uniform (#489) |
 
 On Linux the render subprocess is prefixed with the headless wrapper materialised via `synth_setter.resources.vst_headless_wrapper()` so the VST3 plugin sees an Xvfb display before pedalboard imports it; the metrics subprocess is CPU-only and runs unwrapped. Both default-off so `mode: test` and `mode: validate` paths are unchanged.
 
-When `evaluation.compute_metrics` runs, the aggregated values from `aggregated_metrics.csv` are also surfaced to the active wandb run (as `audio/<name>_{mean,std}`) and merged into the dict returned by `evaluate()` alongside Lightning's `trainer.callback_metrics`, so the same wandb run that holds `test/param_mse` can carry the audio metrics too.
+When `evaluation.compute_metrics` runs, the aggregated values from `aggregated_metrics.csv` are also surfaced to the active wandb run (as `audio/<name>_{mean,std}`) and, when the auto-shuffle probe ran, `shuffled_audio/<name>_{mean,std}` from `aggregated_metrics_shuffled.csv` — and merged into the dict returned by `evaluate()` alongside Lightning's `trainer.callback_metrics`, so the same wandb run that holds `test/param_mse` can carry the audio metrics too.
 
 ### 5.2 Render
 
@@ -278,12 +277,12 @@ The render stage loads each predicted parameter tensor, decodes it using the `Pa
 
 ### 5.3 Metrics
 
-| Property    | Value                                                                                     |
-| ----------- | ----------------------------------------------------------------------------------------- |
-| **Command** | `python -m synth_setter.evaluation.compute_audio_metrics {audio_dir} {output_dir}`        |
-| **Input**   | Directory of `sample_{N}/` subdirectories, each containing `pred.wav` and `target.wav`    |
-| **Output**  | `metrics.csv` (per-sample), `aggregated_metrics.csv` (mean/std across samples)            |
-| **Compute** | CPU — spectral analysis, DTW, optimal transport (parallelized with `ProcessPoolExecutor`) |
+| Property    | Value                                                                                                                                                                |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Command** | `python -m synth_setter.evaluation.compute_audio_metrics {audio_dir} {output_dir}`                                                                                   |
+| **Input**   | Directory of `sample_{N}/` subdirectories, each containing `pred.wav` and `target.wav`                                                                               |
+| **Output**  | `metrics.csv` (per-sample), `aggregated_metrics.csv` (mean/std), `aggregated_metrics_shuffled.csv` (mean/std of shuffled pass — present when auto-shuffle probe ran) |
+| **Compute** | CPU — spectral analysis, DTW, optimal transport (parallelized with `ProcessPoolExecutor`)                                                                            |
 
 Four metrics are computed for each (predicted, target) audio pair:
 

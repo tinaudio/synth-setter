@@ -92,7 +92,7 @@ Reference: `training-pipeline.md` §4–5
 
 ```
 eval.yaml + experiment config (pins model + data + checkpoint)
-  + evaluation: {render_vst, compute_metrics, rerender_target, num_workers, shuffle_pred_audio, shuffle_seed}
+  + evaluation: {render_vst, compute_metrics, rerender_target, num_workers, shuffle_seed}
   + render: {param_spec_name, preset_path, plugin_path?}   # required when render_vst=true
   → Hydra composes DictConfig → predict (→ render → metrics if mode=predict and gates on)
 ```

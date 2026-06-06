@@ -161,6 +161,8 @@ When `synth-setter-eval mode=predict evaluation.compute_metrics=true` runs and a
 | `audio/rms_mean`   | RMS envelope cosine similarity, mean                        |
 | `audio/rms_std`    | Same, standard deviation                                    |
 
+When the auto-shuffle probe ran (uniform params, ≥ 2 sample dirs), a parallel set of `shuffled_audio/<metric>_{mean,std}` keys is also logged from `aggregated_metrics_shuffled.csv`.
+
 The same dict is also merged into the dict returned by `evaluate()` alongside Lightning's `trainer.callback_metrics`. See [eval-pipeline.md §5.1](../design/eval-pipeline.md) for the surrounding subprocess chain.
 
 ______________________________________________________________________
