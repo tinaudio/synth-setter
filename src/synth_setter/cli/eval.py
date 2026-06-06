@@ -135,7 +135,9 @@ def _log_metrics_csv_to_wandb(metrics_dir: Path, prefix: str = "") -> None:
             {f"{prefix}audio/per_sample_metrics": wandb.Table(dataframe=df.reset_index())}
         )
     except Exception as exc:
-        log.warning(f"wandb.run.log raised {type(exc).__name__}: {exc}; per-sample table skipped.")
+        log.warning(
+            f"per-sample metrics table logging failed with {type(exc).__name__}: {exc}; skipped."
+        )
 
 
 def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: DOC502,DOC503
