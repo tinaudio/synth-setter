@@ -164,10 +164,10 @@ build {
       # docker/ubuntu22_04/Dockerfile's python-base / devcontainer-tools.
       # PYTORCH_CUDA_ALLOC_CONF is omitted: macOS uses MPS, not CUDA.
       "grep -qxF 'export HYDRA_FULL_ERROR=1' ~/.zprofile || printf '\\nexport HYDRA_FULL_ERROR=1\\n' >> ~/.zprofile",
-      "grep -qxF 'export PYTHONDONTWRITEBYTECODE=1' ~/.zprofile || printf 'export PYTHONDONTWRITEBYTECODE=1\\n' >> ~/.zprofile",
-      "grep -qxF 'export PYTHONFAULTHANDLER=1' ~/.zprofile || printf 'export PYTHONFAULTHANDLER=1\\n' >> ~/.zprofile",
-      "grep -qxF 'export PYTHONUNBUFFERED=1' ~/.zprofile || printf 'export PYTHONUNBUFFERED=1\\n' >> ~/.zprofile",
-      "grep -qxF 'export WANDB_DATA_DIR=\"$HOME/.cache/wandb\"' ~/.zprofile || printf 'export WANDB_DATA_DIR=\"$HOME/.cache/wandb\"\\n' >> ~/.zprofile",
+      "grep -qxF 'export PYTHONDONTWRITEBYTECODE=1' ~/.zprofile || printf '\\nexport PYTHONDONTWRITEBYTECODE=1\\n' >> ~/.zprofile",
+      "grep -qxF 'export PYTHONFAULTHANDLER=1' ~/.zprofile || printf '\\nexport PYTHONFAULTHANDLER=1\\n' >> ~/.zprofile",
+      "grep -qxF 'export PYTHONUNBUFFERED=1' ~/.zprofile || printf '\\nexport PYTHONUNBUFFERED=1\\n' >> ~/.zprofile",
+      "grep -qxF 'export WANDB_DATA_DIR=\"$HOME/.cache/wandb\"' ~/.zprofile || printf '\\nexport WANDB_DATA_DIR=\"$HOME/.cache/wandb\"\\n' >> ~/.zprofile",
     ]
   }
 
