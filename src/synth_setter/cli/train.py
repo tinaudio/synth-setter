@@ -162,8 +162,10 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     test_metrics = trainer.callback_metrics
 
     # Log the canonical model-{config_id} artifact once train/test are done so the
-    # best checkpoint exists; no-op when no WandbLogger is configured.
-    _log_model_artifact(logger, cfg)
+    # best checkpoint exists; global-zero only so DDP ranks don't race duplicate
+    # versions, and a no-op when no WandbLogger is configured.
+    if trainer.is_global_zero:
+        _log_model_artifact(logger, cfg)
 
     # merge train and test metrics
     metric_dict = {**train_metrics, **test_metrics}
