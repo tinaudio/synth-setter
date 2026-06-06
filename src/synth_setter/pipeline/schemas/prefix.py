@@ -55,3 +55,32 @@ def make_r2_prefix(
     if not normalized_root:
         raise ValueError(f"prefix_root must not be empty or slash-only (got {prefix_root!r})")
     return R2Prefix(f"{normalized_root}/{dataset_config_id}/{dataset_wandb_run_id}/")
+
+
+def assert_r2_prefix_matches(
+    prefix: R2Prefix | str,
+    dataset_config_id: DatasetConfigId | str,
+    dataset_wandb_run_id: DatasetRunId | str,
+    prefix_root: str = DEFAULT_R2_PREFIX_ROOT,
+) -> None:
+    """Assert a materialized R2 prefix matches the canonical value for the given IDs.
+
+    Call this at write time (e.g. in finalize) to catch prefix drift before any
+    R2 objects are written — a mismatch means the spec's config/run IDs diverge
+    from the prefix it carries.
+
+    :param prefix: The materialized prefix to check (from ``R2Location.prefix``).
+    :param dataset_config_id: The dataset config identifier (e.g. ``spec.task_name``).
+    :param dataset_wandb_run_id: The W&B run ID (e.g. ``spec.run_id``).
+    :param prefix_root: Root path component (default ``"data"``); must match the
+        root used when the prefix was originally built.
+    :raises ValueError: If ``prefix`` differs from
+        ``make_r2_prefix(dataset_config_id, dataset_wandb_run_id, prefix_root)``.
+    """
+    expected = make_r2_prefix(dataset_config_id, dataset_wandb_run_id, prefix_root)
+    if prefix != expected:
+        raise ValueError(
+            f"R2 prefix mismatch: got {prefix!r}, expected {expected!r} "
+            f"(config_id={dataset_config_id!r}, run_id={dataset_wandb_run_id!r}, "
+            f"prefix_root={prefix_root!r})"
+        )
