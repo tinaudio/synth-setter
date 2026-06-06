@@ -216,3 +216,29 @@ class TestHookCombinesCpuAndMemory:
         """
         monkeypatch.setenv("PYTEST_XDIST_AUTO_NUM_WORKERS", "0")
         assert pytest_xdist_auto_num_workers(cast("pytest.Config", None)) == 1
+
+    def test_env_override_non_integer_falls_back_to_clamps(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A non-integer env override is ignored, not fatal — clamps still apply.
+
+        :param monkeypatch: Pytest monkeypatch fixture.
+        """
+        monkeypatch.setenv("PYTEST_XDIST_AUTO_NUM_WORKERS", "auto")
+        monkeypatch.delenv("PYTEST_XDIST_WORKER_MEM_MB", raising=False)
+        monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: {0, 1, 2}, raising=False)
+        with patch("builtins.open", side_effect=_make_open({})):
+            assert pytest_xdist_auto_num_workers(cast("pytest.Config", None)) == 3
+
+    def test_env_override_empty_string_falls_back_to_clamps(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An empty env override means "unset" → fall through to the clamps.
+
+        :param monkeypatch: Pytest monkeypatch fixture.
+        """
+        monkeypatch.setenv("PYTEST_XDIST_AUTO_NUM_WORKERS", "")
+        monkeypatch.delenv("PYTEST_XDIST_WORKER_MEM_MB", raising=False)
+        monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: {0, 1, 2, 3}, raising=False)
+        with patch("builtins.open", side_effect=_make_open({})):
+            assert pytest_xdist_auto_num_workers(cast("pytest.Config", None)) == 4
