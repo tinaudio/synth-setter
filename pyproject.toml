@@ -398,8 +398,10 @@ ignore-init-method = true
 ignore-module = true
 ignore-nested-functions = true
 
+# wrap-summaries = 0 (not 99): a wrapped summary's 2nd line trips ruff D205, which
+# no tool auto-fixes. Pinned by tests/infra/test_docstring_tooling_consistency.py.
 [tool.docformatter]
-wrap-summaries = 99
+wrap-summaries = 0
 wrap-descriptions = 99
 style = "sphinx"
 black = true
