@@ -249,20 +249,20 @@ train: ## Train the model
 # All vars are expensive — enable only while actively reproducing a crash.
 # CUDA_LAUNCH_BLOCKING serialises kernel launches so tracebacks name the offending kernel.
 export-debug-envars: ## Print CUDA/PyTorch debug export commands (eval $(make export-debug-envars))
-	@echo "export CUDA_LAUNCH_BLOCKING=1"
-	@echo "export TORCH_SHOW_CPP_STACKTRACES=1"
-	@echo "export TORCH_DISTRIBUTED_DEBUG=DETAIL"
-	@echo "export NCCL_DEBUG=INFO"
-	@echo "export TORCH_LOGS=all"
-	@echo "export TORCHDYNAMO_VERBOSE=1"
+	@echo "export CUDA_LAUNCH_BLOCKING=1;"
+	@echo "export TORCH_SHOW_CPP_STACKTRACES=1;"
+	@echo "export TORCH_DISTRIBUTED_DEBUG=DETAIL;"
+	@echo "export NCCL_DEBUG=INFO;"
+	@echo "export TORCH_LOGS=all;"
+	@echo "export TORCHDYNAMO_VERBOSE=1;"
 
 unset-debug-envars: ## Print unset commands to clear CUDA/PyTorch debug variables (eval $(make unset-debug-envars))
-	@echo "unset CUDA_LAUNCH_BLOCKING"
-	@echo "unset TORCH_SHOW_CPP_STACKTRACES"
-	@echo "unset TORCH_DISTRIBUTED_DEBUG"
-	@echo "unset NCCL_DEBUG"
-	@echo "unset TORCH_LOGS"
-	@echo "unset TORCHDYNAMO_VERBOSE"
+	@echo "unset CUDA_LAUNCH_BLOCKING;"
+	@echo "unset TORCH_SHOW_CPP_STACKTRACES;"
+	@echo "unset TORCH_DISTRIBUTED_DEBUG;"
+	@echo "unset NCCL_DEBUG;"
+	@echo "unset TORCH_LOGS;"
+	@echo "unset TORCHDYNAMO_VERBOSE;"
 
 # =====================================================================
 # Docker targets
