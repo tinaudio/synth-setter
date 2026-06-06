@@ -105,12 +105,12 @@ class TestEvalProvenanceWiring:
     ) -> None:
         """Clearing a leaked ``HydraConfig`` restores the ``task_name`` run-id fallback.
 
-        Regression guard for the ``_reset_hydra_config_singleton`` autouse fixture
-        (``tests/conftest.py``): a foreign ``runtime.choices.experiment`` left in the
-        process-global singleton must not bleed into the pinned run id once the
-        singleton is cleared between tests, so the id resolves to
-        ``{task_name}-{timestamp}`` rather than the leaked experiment basename
-        (#1518, #1523).
+        Pins the contract that the autouse ``_reset_hydra_config_singleton`` fixture
+        (``tests/conftest.py``) relies on: after a foreign
+        ``runtime.choices.experiment`` is cleared from the process-global singleton,
+        the pinned run id resolves to ``{task_name}-{timestamp}`` rather than the
+        leaked experiment basename — the xdist flake fixed in #1518, #1523. The test
+        clears the singleton itself so it is deterministic regardless of ordering.
 
         :param stubbed_eval_entrypoint: Collaborator-stub fixture.
         """
