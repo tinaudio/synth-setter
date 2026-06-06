@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import shutil
 import sys
 import time
 from collections.abc import Iterator
@@ -1545,7 +1546,7 @@ def test_emit_benchmark_appends_to_existing_file(
     assert len(entries) == 12
 
 
-# Dataset-copy path: fixed_params_from_dataset + --copy_dataset_root wiring.
+# Dataset-copy path: fixed_params_from_dataset + --copy_dataset_root_uri wiring.
 # CPU-only except the VST round-trip; conversion + CLI plumbing run mocked.
 
 # float32 round-trips an encoded param to ~1e-7 rel; note_start_and_end scales
@@ -1631,10 +1632,10 @@ def test_fixed_params_from_dataset_rejects_malformed_source(tmp_path: Path) -> N
         fixed_params_from_dataset(one_dimensional, spec)
 
 
-def test_main_copy_dataset_root_feeds_decoded_params_to_writer(
+def test_main_copy_dataset_root_uri_feeds_decoded_params_to_writer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``--copy_dataset_root`` makes main() pass the same-named shard's decoded params to the writer.
+    """``--copy_dataset_root_uri`` makes main() pass the same-named shard's decoded params to the writer.
 
     Exercises the CLI wiring without a plugin: ``make_hdf5_dataset`` is stubbed
     to capture its arguments, so the assertion is purely that the decoded fixed
@@ -1673,7 +1674,7 @@ def test_main_copy_dataset_root_feeds_decoded_params_to_writer(
     argv = ["generate_vst_dataset", str(out)]
     for key, value in _render_cfg(num_rows).model_dump().items():
         argv += [f"--{key}", str(value)]
-    argv += ["--copy_dataset_root", str(source_dir)]
+    argv += ["--copy_dataset_root_uri", str(source_dir)]
     monkeypatch.setattr(sys, "argv", argv)
 
     generate_vst_dataset.main()
@@ -1683,10 +1684,72 @@ def test_main_copy_dataset_root_feeds_decoded_params_to_writer(
     assert captured["fixed_note_params_list"] == expected_note
 
 
-def test_main_copy_dataset_root_rejects_wds_output(
+def test_main_copy_dataset_root_uri_downloads_r2_source_shard(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``--copy_dataset_root`` with a wds (.tar) output raises SystemExit — copy is hdf5-only.
+    """An ``r2://`` copy root URI downloads the same-named shard before decoding it.
+
+    The rclone subprocess is stubbed to copy the local fixture into the tempfile
+    ``localized_uri`` requests, so the assertion is that the worker resolves an
+    ``r2://`` root to a local shard and feeds its decoded params to the writer.
+
+    :param tmp_path: Pytest temp dir holding the source fixture and output path.
+    :param monkeypatch: Patches ``sys.argv``, the writer, and rclone.
+    """
+    from synth_setter.data.vst import generate_vst_dataset, writers
+    from synth_setter.pipeline import r2_io
+
+    spec = param_specs[_SPEC_NAME]
+    num_rows = 3
+    rows = [spec.encode(*spec.sample()) for _ in range(num_rows)]
+    fixture_shard = tmp_path / "fixture" / "shard-000000.h5"
+    fixture_shard.parent.mkdir()
+    _write_param_array_shard(fixture_shard, np.stack(rows).astype(np.float32))
+    expected_synth, expected_note = fixed_params_from_dataset(fixture_shard, spec)
+
+    rclone_args: dict[str, list[str]] = {}
+
+    def _fake_check_call(args: list[str]) -> None:
+        # rclone copyto <remote> <dest>; serve the fixture as the downloaded shard.
+        rclone_args["args"] = args
+        shutil.copy(fixture_shard, args[-1])
+
+    monkeypatch.setattr(r2_io.subprocess, "check_call", _fake_check_call)
+
+    captured: dict[str, object] = {}
+
+    def _fake_make_hdf5_dataset(
+        data_file: Path | str,
+        render_cfg: RenderConfig,
+        *,
+        fixed_synth_params_list: list[dict[str, float]] | None = None,
+        fixed_note_params_list: list[dict[str, int | tuple[float, float]]] | None = None,
+    ) -> None:
+        captured["fixed_synth_params_list"] = fixed_synth_params_list
+        captured["fixed_note_params_list"] = fixed_note_params_list
+
+    monkeypatch.setattr(writers, "make_hdf5_dataset", _fake_make_hdf5_dataset)
+
+    out = tmp_path / "shard-000000.h5"
+    argv = ["generate_vst_dataset", str(out)]
+    for key, value in _render_cfg(num_rows).model_dump().items():
+        argv += [f"--{key}", str(value)]
+    argv += ["--copy_dataset_root_uri", "r2://bucket/prefix/task/run"]
+    monkeypatch.setattr(sys, "argv", argv)
+
+    generate_vst_dataset.main()
+
+    # rclone must target the shard joined under the root (basename preserved); r2_io
+    # rewrites the r2:// URI to rclone's r2: remote syntax.
+    assert "r2:bucket/prefix/task/run/shard-000000.h5" in rclone_args["args"]
+    assert captured["fixed_synth_params_list"] == expected_synth
+    assert captured["fixed_note_params_list"] == expected_note
+
+
+def test_main_copy_dataset_root_uri_rejects_wds_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``--copy_dataset_root_uri`` with a wds (.tar) output raises SystemExit — copy is hdf5-only.
 
     :param tmp_path: Pytest temp dir for the would-be output path.
     :param monkeypatch: Patches ``sys.argv``.
@@ -1697,14 +1760,14 @@ def test_main_copy_dataset_root_rejects_wds_output(
     argv = ["generate_vst_dataset", str(out)]
     for key, value in _render_cfg(2).model_dump().items():
         argv += [f"--{key}", str(value)]
-    argv += ["--copy_dataset_root", str(tmp_path)]
+    argv += ["--copy_dataset_root_uri", str(tmp_path)]
     monkeypatch.setattr(sys, "argv", argv)
 
     with pytest.raises(SystemExit, match="supports hdf5 output only"):
         generate_vst_dataset.main()
 
 
-def test_main_copy_dataset_root_propagates_source_validation_error(
+def test_main_copy_dataset_root_uri_propagates_source_validation_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A malformed copy source surfaces its ValueError out of main() (not swallowed).
@@ -1725,7 +1788,7 @@ def test_main_copy_dataset_root_propagates_source_validation_error(
     argv = ["generate_vst_dataset", str(out)]
     for key, value in _render_cfg(3).model_dump().items():
         argv += [f"--{key}", str(value)]
-    argv += ["--copy_dataset_root", str(source_dir)]
+    argv += ["--copy_dataset_root_uri", str(source_dir)]
     monkeypatch.setattr(sys, "argv", argv)
 
     with pytest.raises(ValueError, match="must share the target's"):

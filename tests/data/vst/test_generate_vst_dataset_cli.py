@@ -29,18 +29,20 @@ def test_cli_args_class_inherits_every_render_config_field() -> None:
     assert render_fields <= cli_fields
 
 
-def test_cli_args_class_adds_only_data_file_and_copy_dataset_root_beyond_render_config() -> None:
+def test_cli_args_class_adds_only_data_file_and_copy_dataset_root_uri_beyond_render_config() -> (
+    None
+):
     """Beyond ``RenderConfig`` fields, the CLI's only extras are ``data_file`` +
-    ``copy_dataset_root``.
+    ``copy_dataset_root_uri``.
 
     Guards against accidental CLI bloat — adding a flag here should be a deliberate decision,
-    not silent drift. ``copy_dataset_root`` is the deliberate dataset-copy opt-in.
+    not silent drift. ``copy_dataset_root_uri`` is the deliberate dataset-copy opt-in.
     """
     cli_fields = set(_GenerateCliArgs.model_fields.keys())
     render_fields = set(RenderConfig.model_fields.keys())
 
     extra = cli_fields - render_fields
-    assert extra == {"data_file", "copy_dataset_root"}
+    assert extra == {"data_file", "copy_dataset_root_uri"}
 
 
 def _smoke_spec() -> DatasetSpec:
@@ -81,9 +83,11 @@ def test_build_generate_args_roundtrips_through_cli_parser() -> None:
     args = build_generate_args(spec, spec.shards[0], Path("/tmp"))
 
     parsed = CliApp.run(_GenerateCliArgs, cli_args=args[2:])
-    reconstructed = RenderConfig(**parsed.model_dump(exclude={"data_file", "copy_dataset_root"}))
+    reconstructed = RenderConfig(
+        **parsed.model_dump(exclude={"data_file", "copy_dataset_root_uri"})
+    )
 
     assert reconstructed == spec.render
     assert parsed.data_file == "/tmp/shard-000000.h5"
     # No copy source on this spec, so the CLI flag is absent and parses to None.
-    assert parsed.copy_dataset_root is None
+    assert parsed.copy_dataset_root_uri is None

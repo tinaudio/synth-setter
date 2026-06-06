@@ -126,6 +126,26 @@ class TestDownloadToPath:
         with pytest.raises(ValueError, match="not an r2:// URI"):
             r2_io.download_to_path("local-spec.json", tmp_path / "out.json")
 
+    def test_command_carries_rclone_reliability_flags(self, tmp_path: Path) -> None:
+        """Pin the rclone reliability-flag set on the per-shard copy-source fetch.
+
+        This is the ``r2://`` copy-root download on the renderer hot path; dropping
+        ``--retries`` would surface a transient network blip as a hard mid-render
+        failure rather than a retried fetch. One mock-based argv assertion guards
+        the invariant the state-based tests cannot observe.
+
+        :param tmp_path: Pytest tmp dir used for the download destination.
+        """
+        with patch.object(r2_io.subprocess, "check_call") as mock_call:
+            r2_io.download_to_path("r2://bucket/key.json", tmp_path / "out.json")
+        args = mock_call.call_args[0][0]
+        assert args[:2] == ["rclone", "copyto"]
+        assert "-vv" in args
+        assert "--checksum" in args
+        assert "--contimeout=30s" in args
+        assert "--timeout=300s" in args
+        assert "--retries=3" in args
+
 
 class TestDownloadDirNoOverwrite:
     """Tests for download_dir_no_overwrite — prefix→directory copy."""

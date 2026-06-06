@@ -28,6 +28,7 @@ from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
+from pydantic import ValidationError
 
 from synth_setter.cli.finalize_dataset import finalize_from_spec
 from synth_setter.data.vst.core import extract_renderer_version
@@ -45,7 +46,7 @@ from synth_setter.pipeline.partitioning import (
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig, ShardSpec
 from synth_setter.pipeline.spec_io import (
-    load_spec_from_uri,
+    load_spec_from_root,
     upload_spec,
     write_spec_locally,
 )
@@ -239,9 +240,9 @@ def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -
     config field surfaces as a ``--<field>`` option automatically; adding a
     field on the model auto-extends the CLI invocation. The writer is dispatched
     on ``shard.filename``'s suffix inside the subprocess via
-    ``OutputFormat.from_extension``. When ``spec.copy_dataset_root`` is set, it
-    is forwarded as ``--copy_dataset_root`` so the subprocess re-renders the
-    same-named source shard's params instead of sampling fresh ones.
+    ``OutputFormat.from_extension``. When ``spec.copy_dataset_root_uri`` is set,
+    it is forwarded as ``--copy_dataset_root_uri`` so the subprocess re-renders
+    the same-named source shard's params instead of sampling fresh ones.
     """
     output_path = output_dir / shard.filename
     args = [
@@ -251,8 +252,8 @@ def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -
     ]
     for key, value in spec.render.model_dump().items():
         args.extend([f"--{key}", str(value)])
-    if spec.copy_dataset_root is not None:
-        args.extend(["--copy_dataset_root", spec.copy_dataset_root])
+    if spec.copy_dataset_root_uri is not None:
+        args.extend(["--copy_dataset_root_uri", spec.copy_dataset_root_uri])
 
     return args
 
@@ -260,28 +261,50 @@ def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -
 def _validate_copy_source(spec: DatasetSpec) -> None:
     """Preflight a dataset-copy run against the source's persisted spec.
 
-    No-op unless ``spec.copy_dataset_root`` is set. Otherwise loads the source's
-    ``input_spec.json`` from ``<copy_dataset_root>/`` (the spec sits beside the
-    shards at the dataset prefix root) and delegates to
+    No-op unless ``spec.copy_dataset_root_uri`` is set. Otherwise loads the
+    source's ``input_spec.json`` from under the root URI (the spec sits beside
+    the shards at the dataset prefix root) and delegates to
     :meth:`DatasetSpec.validate_copy_source`, so a source that disagrees on any
     copy-relevant value fails once at launch rather than per-shard mid-render.
+    The root URI may be a bare path, ``file://`` URI, or ``r2://`` URI.
+
+    A genuinely absent spec (``FileNotFoundError``) and an object-store access
+    failure (``CalledProcessError`` from the ``r2://`` rclone fetch — auth,
+    network, config) get distinct messages: conflating them would point the
+    operator at "sync the spec" when the real fault is credentials or
+    connectivity.
 
     :param spec: The target dataset spec about to be rendered.
-    :raises ValueError: ``copy_dataset_root`` holds no ``input_spec.json``, or
-        the source spec mismatches ``spec`` on a copy-relevant value.
+    :raises ValueError: the copy root URI holds no ``input_spec.json``; the
+        source spec could not be fetched from the object store; the source spec
+        JSON is malformed or stale; or the source spec mismatches ``spec`` on a
+        copy-relevant value.
     """
-    if spec.copy_dataset_root is None:
+    if spec.copy_dataset_root_uri is None:
         return
-    source_spec_path = Path(spec.copy_dataset_root) / INPUT_SPEC_FILENAME
-    if not source_spec_path.is_file():
+    try:
+        source = load_spec_from_root(spec.copy_dataset_root_uri)
+    except FileNotFoundError as exc:
         raise ValueError(
-            f"dataset-copy source has no {INPUT_SPEC_FILENAME} at {source_spec_path}; "
-            "sync the source dataset's spec alongside its shards (it lives beside the "
-            "shards at the R2 dataset prefix root) so the copy can be validated."
-        )
-    source = load_spec_from_uri(str(source_spec_path))
+            f"dataset-copy source has no {INPUT_SPEC_FILENAME} under "
+            f"{spec.copy_dataset_root_uri!r}; sync the source dataset's spec alongside its "
+            "shards (it lives beside the shards at the dataset prefix root) so the copy "
+            "can be validated."
+        ) from exc
+    except subprocess.CalledProcessError as exc:
+        raise ValueError(
+            f"dataset-copy source spec under {spec.copy_dataset_root_uri!r} could not be "
+            f"fetched: rclone command {exc.cmd!r} exited {exc.returncode}. This is an "
+            "object-store access failure (auth/network/config), not a missing spec — check "
+            "R2 credentials and connectivity."
+        ) from exc
+    except ValidationError as exc:
+        raise ValueError(
+            f"dataset-copy source spec under {spec.copy_dataset_root_uri!r} is malformed or "
+            "stale; re-materialize it from the source dataset's current spec."
+        ) from exc
     spec.validate_copy_source(source)
-    logger.info(f"dataset-copy source OK: {source_spec_path} matches the target spec")
+    logger.info(f"dataset-copy source OK: {spec.copy_dataset_root_uri} matches the target spec")
 
 
 def generate(spec: DatasetSpec, work_dir: Path, loggers: list[Logger]) -> None:  # noqa: DOC503

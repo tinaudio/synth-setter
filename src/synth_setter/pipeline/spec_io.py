@@ -24,6 +24,8 @@ rewrites the same bytes to the same path / key.
 from __future__ import annotations
 
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -34,14 +36,33 @@ from synth_setter.pipeline.schemas.spec import DatasetSpec
 
 __all__ = [
     "find_input_specs",
+    "join_uri",
     "load_spec_from_root",
     "load_spec_from_uri",
     "local_spec_path",
+    "localized_uri",
     "read_spec_text",
     "upload_spec",
     "write_spec_locally",
     "write_spec_to_path",
 ]
+
+
+def join_uri(root: str, name: str) -> str:
+    """Join ``name`` onto a root URI under a single ``/`` separator.
+
+    Shared joiner for the dataset-root layout (a child object sitting directly
+    under a run-prefix root): collapses a present-or-absent trailing slash on
+    ``root`` so every call site composes ``root`` + ``name`` identically,
+    whether ``root`` is a bare path, ``file://`` URI, or ``r2://`` URI.
+
+    :param root: Root path or URI; a trailing ``/`` is tolerated.
+    :param name: Child basename to append (e.g. a shard filename or
+        :data:`~synth_setter.pipeline.constants.INPUT_SPEC_FILENAME`).
+    :returns: ``root`` and ``name`` joined under exactly one ``/``.
+    """
+    return f"{root.rstrip('/')}/{name}"
+
 
 # Top-level local directory that mirrors the R2 ``prefix_root``. Hard-coded
 # per ``storage-provenance-spec.md`` §3a — the local mirror always sits under
@@ -56,33 +77,51 @@ _LOCAL_FILESYSTEM_SCHEMES: frozenset[str] = frozenset({"", "file"})
 _REMOTE_OBJECT_SCHEMES: frozenset[str] = frozenset({"r2"})
 
 
+@contextmanager
+def localized_uri(uri: str) -> Iterator[Path]:  # noqa: DOC502
+    """Yield a local filesystem path for a bare path, ``file://`` URI, or ``r2://`` URI.
+
+    Front-of-pipeline dispatcher: parses the scheme via :func:`urllib.parse.urlparse`
+    and routes to the matching backend. Bare paths and ``file://`` URIs yield
+    the resolved path in place (no copy; relative paths resolve against the
+    process CWD, same as ``rclone`` / ``fsspec`` / Arrow). An ``r2://`` URI is
+    downloaded to a tempfile that is removed when the context exits, so binary
+    readers (e.g. ``h5py``) can open a remote object as a local file.
+
+    :param uri: Local filesystem path, ``file://`` URI, or ``r2://`` URI.
+    :yields Path: A local path readable for the duration of the context.
+    :raises ValueError: ``uri`` carries a scheme other than ``file://`` or
+        ``r2://``, or is a malformed ``file://`` URI (propagated from
+        :func:`~synth_setter.pipeline.file_uri.file_uri_to_path`).
+    """
+    scheme = urlparse(uri).scheme
+    if scheme in _LOCAL_FILESYSTEM_SCHEMES:
+        yield file_uri_to_path(uri) if scheme == "file" else Path(uri)
+    elif scheme in _REMOTE_OBJECT_SCHEMES:
+        with downloaded_to_tempfile(uri) as fetched:
+            yield fetched
+    else:
+        raise ValueError(
+            f"unsupported URI scheme {scheme!r}: {uri!r}. "
+            f"Supported: bare local paths, ``file://``, ``r2://``."
+        )
+
+
 def read_spec_text(spec_uri: str) -> str:  # noqa: DOC502
     """Read spec JSON text from a bare path, ``file://`` URI, or ``r2://`` URI.
 
-    Front-of-pipeline dispatcher: parses the scheme via :func:`urllib.parse.urlparse`
-    and routes to the matching backend. Inputs without a scheme are treated as
-    local paths (relative paths resolve against the process CWD, same as
-    ``rclone`` / ``fsspec`` / Arrow). Unsupported schemes raise ``ValueError``
-    so a typo (e.g. ``s3://``) fails loudly instead of being silently passed
-    to :class:`~pathlib.Path`.
+    Thin wrapper over :func:`localized_uri` that reads the localized file's
+    text; a typo (e.g. ``s3://``) fails loudly there instead of being silently
+    passed to :class:`~pathlib.Path`.
 
     :param spec_uri: Local filesystem path, ``file://`` URI, or ``r2://`` URI.
     :returns: The JSON text content of the spec file.
     :raises ValueError: ``spec_uri`` carries a scheme other than ``file://``
         or ``r2://``, or is a malformed ``file://`` URI (propagated from
-        :func:`~synth_setter.pipeline.file_uri.file_uri_to_path`).
+        :func:`localized_uri`).
     """
-    scheme = urlparse(spec_uri).scheme
-    if scheme in _LOCAL_FILESYSTEM_SCHEMES:
-        local_path = file_uri_to_path(spec_uri) if scheme == "file" else Path(spec_uri)
+    with localized_uri(spec_uri) as local_path:
         return local_path.read_text()
-    if scheme in _REMOTE_OBJECT_SCHEMES:
-        with downloaded_to_tempfile(spec_uri) as fetched:
-            return fetched.read_text()
-    raise ValueError(
-        f"unsupported spec_uri scheme {scheme!r}: {spec_uri!r}. "
-        f"Supported: bare local paths, ``file://``, ``r2://``."
-    )
 
 
 def load_spec_from_uri(spec_uri: str) -> DatasetSpec:  # noqa: DOC502
@@ -118,8 +157,7 @@ def load_spec_from_root(dataset_root_uri: str) -> DatasetSpec:  # noqa: DOC502
         (propagated from :func:`read_spec_text`); also the base class of
         ``pydantic.ValidationError`` for malformed/stale spec JSON.
     """
-    spec_uri = f"{dataset_root_uri.rstrip('/')}/{INPUT_SPEC_FILENAME}"
-    return load_spec_from_uri(spec_uri)
+    return load_spec_from_uri(join_uri(dataset_root_uri, INPUT_SPEC_FILENAME))
 
 
 def local_spec_path(spec: DatasetSpec, output_dir: Path) -> Path:

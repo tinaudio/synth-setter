@@ -28,7 +28,9 @@ the cfg-composition surface isolated from R2.
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -311,7 +313,7 @@ class TestRun:
         copy_root = tmp_path / "source"
         copy_root.mkdir()
         spec = DatasetSpec(
-            **_base_spec_kwargs(tmp_path, copy_dataset_root=str(copy_root))  # type: ignore[arg-type]
+            **_base_spec_kwargs(tmp_path, copy_dataset_root_uri=str(copy_root))  # type: ignore[arg-type]
         )
 
         with pytest.raises(ValueError, match=INPUT_SPEC_FILENAME):
@@ -340,7 +342,7 @@ class TestRun:
         )
         (copy_root / INPUT_SPEC_FILENAME).write_text(source.model_dump_json())
         spec = DatasetSpec(
-            **_base_spec_kwargs(tmp_path, copy_dataset_root=str(copy_root))  # type: ignore[arg-type]
+            **_base_spec_kwargs(tmp_path, copy_dataset_root_uri=str(copy_root))  # type: ignore[arg-type]
         )
 
         with pytest.raises(ValueError, match="param_spec_name"):
@@ -1301,28 +1303,28 @@ class TestBuildGenerateArgs:
 
         assert args[1] == "src/synth_setter/data/vst/generate_vst_dataset.py"
 
-    def test_copy_dataset_root_absent_when_unset(self, spec: DatasetSpec) -> None:
-        """No ``--copy_dataset_root`` flag is emitted when the spec has no copy source.
+    def test_copy_dataset_root_uri_absent_when_unset(self, spec: DatasetSpec) -> None:
+        """No ``--copy_dataset_root_uri`` flag is emitted when the spec has no copy source.
 
-        :param spec: Single-shard spec fixture with no ``copy_dataset_root``.
+        :param spec: Single-shard spec fixture with no ``copy_dataset_root_uri``.
         """
         args = build_generate_args(spec, spec.shards[0], Path("out"))
 
-        assert "--copy_dataset_root" not in args
+        assert "--copy_dataset_root_uri" not in args
 
-    def test_copy_dataset_root_forwarded_when_set(self, tmp_path: Path) -> None:
-        """``spec.copy_dataset_root`` is forwarded as a ``--copy_dataset_root`` flag.
+    def test_copy_dataset_root_uri_forwarded_when_set(self, tmp_path: Path) -> None:
+        """``spec.copy_dataset_root_uri`` is forwarded as a ``--copy_dataset_root_uri`` flag.
 
         :param tmp_path: Pytest temp dir pinning the spec's plugin/output paths.
         """
         spec = DatasetSpec(
-            **_base_spec_kwargs(tmp_path, copy_dataset_root="/data/source")  # type: ignore[arg-type]
+            **_base_spec_kwargs(tmp_path, copy_dataset_root_uri="r2://bucket/source")  # type: ignore[arg-type]
         )
 
         args = build_generate_args(spec, spec.shards[0], Path("out"))
 
-        flag_idx = args.index("--copy_dataset_root")
-        assert args[flag_idx + 1] == "/data/source"
+        flag_idx = args.index("--copy_dataset_root_uri")
+        assert args[flag_idx + 1] == "r2://bucket/source"
 
 
 # ---------------------------------------------------------------------------
@@ -2810,10 +2812,10 @@ def test_smoke_job_name_rejects_unsafe_task_name() -> None:
 class TestValidateCopySource:
     """``_validate_copy_source`` — the imperative shell around the preflight."""
 
-    def test_no_copy_dataset_root_is_a_noop(self, spec: DatasetSpec) -> None:
+    def test_no_copy_dataset_root_uri_is_a_noop(self, spec: DatasetSpec) -> None:
         """A spec with no copy source skips the preflight entirely (no disk read).
 
-        :param spec: Single-shard spec fixture with ``copy_dataset_root`` unset.
+        :param spec: Single-shard spec fixture with ``copy_dataset_root_uri`` unset.
         """
         from synth_setter.cli.generate_dataset import _validate_copy_source
 
@@ -2831,13 +2833,13 @@ class TestValidateCopySource:
         source = DatasetSpec(**_base_spec_kwargs(tmp_path))  # type: ignore[arg-type]
         (copy_root / INPUT_SPEC_FILENAME).write_text(source.model_dump_json())
         target = DatasetSpec(
-            **_base_spec_kwargs(tmp_path, copy_dataset_root=str(copy_root))  # type: ignore[arg-type]
+            **_base_spec_kwargs(tmp_path, copy_dataset_root_uri=str(copy_root))  # type: ignore[arg-type]
         )
 
         _validate_copy_source(target)  # no raise
 
-    def test_missing_source_spec_raises_with_path(self, tmp_path: Path) -> None:
-        """A copy root without an ``input_spec.json`` fails loudly, naming the file.
+    def test_missing_source_spec_raises_with_root_uri(self, tmp_path: Path) -> None:
+        """A copy root without an ``input_spec.json`` fails loudly, naming the root URI.
 
         :param tmp_path: Pytest tmp dir; the copy root is left without a spec.
         """
@@ -2846,10 +2848,57 @@ class TestValidateCopySource:
         copy_root = tmp_path / "source"
         copy_root.mkdir()
         target = DatasetSpec(
-            **_base_spec_kwargs(tmp_path, copy_dataset_root=str(copy_root))  # type: ignore[arg-type]
+            **_base_spec_kwargs(tmp_path, copy_dataset_root_uri=str(copy_root))  # type: ignore[arg-type]
         )
 
-        with pytest.raises(ValueError, match=INPUT_SPEC_FILENAME):
+        with pytest.raises(ValueError, match=re.escape(str(copy_root))):
+            _validate_copy_source(target)
+
+    def test_rclone_fetch_failure_raises_distinct_from_missing_spec(self, tmp_path: Path) -> None:
+        """A non-zero rclone exit on an ``r2://`` copy root surfaces as an access failure.
+
+        The ``CalledProcessError`` arm must not be folded into the "sync the
+        spec" message — an auth/network fault is not a missing object.
+
+        :param tmp_path: Pytest tmp dir (only the target spec needs a home).
+        """
+        from synth_setter.cli.generate_dataset import _validate_copy_source
+
+        target = DatasetSpec(
+            **_base_spec_kwargs(  # type: ignore[arg-type]
+                tmp_path, copy_dataset_root_uri="r2://bucket/source"
+            )
+        )
+
+        def fail_rclone(args: list[str]) -> None:
+            raise subprocess.CalledProcessError(7, args)
+
+        with patch("synth_setter.pipeline.r2_io.subprocess.check_call", side_effect=fail_rclone):
+            with pytest.raises(ValueError, match="object-store access failure") as excinfo:
+                _validate_copy_source(target)
+        assert "exited 7" in str(excinfo.value)
+        assert isinstance(excinfo.value.__cause__, subprocess.CalledProcessError)
+
+    def test_malformed_source_spec_raises_as_malformed(self, tmp_path: Path) -> None:
+        """A source ``input_spec.json`` that fails schema validation is named as malformed.
+
+        :param tmp_path: Pytest tmp dir holding a copy root with a corrupted spec.
+        """
+        from synth_setter.cli.generate_dataset import _validate_copy_source
+
+        copy_root = tmp_path / "source"
+        copy_root.mkdir()
+        source = DatasetSpec(**_base_spec_kwargs(tmp_path))  # type: ignore[arg-type]
+        # A complete spec whose strict-typed field is corrupted parses past the
+        # before-validators and then fails strict validation → ValidationError.
+        corrupt = json.loads(source.model_dump_json())
+        corrupt["base_seed"] = "not-an-int"
+        (copy_root / INPUT_SPEC_FILENAME).write_text(json.dumps(corrupt))
+        target = DatasetSpec(
+            **_base_spec_kwargs(tmp_path, copy_dataset_root_uri=str(copy_root))  # type: ignore[arg-type]
+        )
+
+        with pytest.raises(ValueError, match="malformed or stale"):
             _validate_copy_source(target)
 
     def test_mismatched_source_spec_raises(self, tmp_path: Path) -> None:
@@ -2872,7 +2921,7 @@ class TestValidateCopySource:
         )
         (copy_root / INPUT_SPEC_FILENAME).write_text(source.model_dump_json())
         target = DatasetSpec(
-            **_base_spec_kwargs(tmp_path, copy_dataset_root=str(copy_root))  # type: ignore[arg-type]
+            **_base_spec_kwargs(tmp_path, copy_dataset_root_uri=str(copy_root))  # type: ignore[arg-type]
         )
 
         with pytest.raises(ValueError, match="param_spec_name"):
