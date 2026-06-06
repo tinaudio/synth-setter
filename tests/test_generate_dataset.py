@@ -553,3 +553,24 @@ def test_oracle_eval_inline_writes_shuffled_audio_metrics_when_params_uniform(
                 assert metrics[f"{group}/rms_mean"] > bounds.rms_min, metrics
     finally:
         r2_io.purge_prefix(cfg_dataset.r2.bucket, f"{r2_prefix_root}/")
+
+
+def test_oracle_eval_metrics_file_parent_depth_resolves_to_split_name(
+    tmp_path: Path,
+) -> None:
+    """Path depth used in oracle-eval assertions: .parent.parent.parent.name == split.
+
+    oracle_eval/<split>/<run_id>/metrics/metrics.json
+    - .parent       -> metrics/
+    - .parent.parent      -> <run_id>/
+    - .parent.parent.parent -> <split>/  ← the correct level
+
+    :param tmp_path: pytest temporary directory fixture.
+    """
+    split = "val"
+    run_id = "dataset-config-20250101-120000-abc"
+    metrics_file = tmp_path / "oracle_eval" / split / run_id / "metrics" / "metrics.json"
+    metrics_file.parent.mkdir(parents=True)
+    metrics_file.write_text("{}")
+
+    assert metrics_file.parent.parent.parent.name == split
