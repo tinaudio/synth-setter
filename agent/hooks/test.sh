@@ -1817,6 +1817,28 @@ MAKE_STUB
 }
 it "worktree-post-setup: compound command (cd && git worktree add) — path extracted correctly" T_wt_post_setup_parse_compound_command
 
+T_wt_post_setup_quoted_substring_not_matched() {
+  local out make_log
+  reset_sandbox
+  make_log="$TEST_DIR/make-quoted-$$.txt"
+  cat > "$STUBS/make" <<MAKE_STUB
+#!/usr/bin/env bash
+echo "CALLED" >> "$make_log"
+MAKE_STUB
+  chmod +x "$STUBS/make"
+  # `echo "git worktree add /path"` contains the substring but is NOT an invocation.
+  # The boundary-aware guard must reject it and exit 0 without running make.
+  out=$(cd "$SANDBOX" && \
+    echo '{"tool_name":"Bash","tool_input":{"command":"echo \"git worktree add /some/path\""}}' | \
+    bash "$SANDBOX/agent/hooks/worktree-post-setup.sh" 2>&1; echo "EXIT:$?")
+  rm -f "$STUBS/make"
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected exit 0, got: $out"; return 1; }
+  [[ ! -f "$make_log" ]] || {
+    echo "make should not have run for quoted substring; log: $(cat "$make_log")"; return 1
+  }
+}
+it "worktree-post-setup: echo with quoted 'git worktree add' — boundary guard rejects, make not called" T_wt_post_setup_quoted_substring_not_matched
+
 # ===========================================================================
 # Run
 # ===========================================================================
