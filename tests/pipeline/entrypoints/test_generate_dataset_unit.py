@@ -1483,6 +1483,44 @@ class TestMainDispatchBranches:
         assert isinstance(spec, DatasetSpec)
         assert spec.render.plugin_path == str(TEST_PLUGIN_VST3)
 
+    def test_local_run_applies_extras_writing_tags_and_config_tree(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``main()`` runs ``extras(cfg)`` before generating, materializing its artifacts.
+
+        ``dataset.yaml`` composes ``extras: default`` (``enforce_tags`` +
+        ``print_config`` true) and a non-empty ``tags``, so ``extras(cfg)``
+        exports ``tags.log`` and ``config_tree.log`` to ``cfg.paths.output_dir``.
+        Asserting those files exist verifies the entrypoint applied extras via
+        its observable side effects rather than mocking the call.
+
+        :param monkeypatch: Pytest fixture used to patch argv + ``generate``.
+        """
+        import synth_setter.cli.generate_dataset as gd
+
+        argv = [
+            "synth-setter-generate-dataset",
+            "experiment=generate_dataset/smoke-shard",
+            f"render.plugin_path={TEST_PLUGIN_VST3}",
+        ]
+        monkeypatch.setattr("sys.argv", argv)
+
+        recorded: dict[str, Path] = {}
+
+        def _fake_run(_spec: object, work_dir: Path, _loggers: object) -> None:
+            recorded["work_dir"] = work_dir
+
+        monkeypatch.setattr(gd, "generate", _fake_run)
+
+        gd.main()
+
+        output_dir = recorded["work_dir"]
+        for artifact in ("tags.log", "config_tree.log"):
+            path = output_dir / artifact
+            assert path.is_file(), f"extras did not write {artifact}"
+            assert path.stat().st_size > 0, f"{artifact} is empty"
+
     def test_compute_template_set_calls_dispatch_via_skypilot(
         self,
         monkeypatch: pytest.MonkeyPatch,

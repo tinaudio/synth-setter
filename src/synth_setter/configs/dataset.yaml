@@ -14,6 +14,7 @@ defaults:
   - skypilot_launch: default
   - experiment: ???
   - logger: wandb
+  - extras: default
 
 task_name: ???
 # ``configs/hydra/default.yaml`` interpolates ``${run_name}`` into ``hydra.run.dir``;
@@ -24,6 +25,11 @@ task_name: ???
 run_name: ${task_name}
 output_format: hdf5
 base_seed: 42
+
+# Wandb run tags; parity with train.yaml/eval.yaml. ``extras: default`` sets
+# ``enforce_tags: True`` — a non-empty default keeps that path from prompting/raising.
+# Masked out of ``DatasetSpec`` by ``from_hydra_cfg`` (not a spec field).
+tags: ["dev", "generate_dataset"]
 
 # Optional dataset-copy source. ``null`` samples fresh params (the default).
 # Set ``datasetsrc.copy_dataset_root`` to a directory of source shards to

@@ -22,13 +22,13 @@ from pathlib import Path
 from typing import Any
 
 import hydra
+import wandb
 from hydra.core.hydra_config import HydraConfig
 from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 
-import wandb
 from synth_setter.cli.finalize_dataset import finalize_from_spec
 from synth_setter.data.vst.core import extract_renderer_version
 from synth_setter.pipeline import r2_io
@@ -50,12 +50,17 @@ from synth_setter.pipeline.spec_io import (
     write_spec_locally,
 )
 from synth_setter.resources import as_file, vst_headless_wrapper
+from synth_setter.utils import extras, log_wandb_provenance, register_resolvers
 from synth_setter.utils.instantiators import instantiate_loggers
 from synth_setter.workspace import operator_workspace
 
 # Side effect only: publish ``PROJECT_ROOT`` so ``${oc.env:PROJECT_ROOT}``
 # in ``configs/paths/default.yaml`` resolves under @hydra.main compose.
 operator_workspace()
+
+# Defensive parity with train.py/eval.py. The dataset compose path uses no
+# ``${mul:}``/``${div:}`` resolvers today, so this is parity-only, not required.
+register_resolvers()
 
 # Worker-side checkout path — baked WORKDIR of the dev-snapshot image, not the
 # launcher's workspace (which may not exist on the worker filesystem).
@@ -296,6 +301,7 @@ def generate(spec: DatasetSpec, work_dir: Path, loggers: list[Logger]) -> None: 
         # ``wandb.finish()`` in the ``finally`` — otherwise the wandb run
         # leaks un-closed on the helper's exception path.
         _log_hyperparams(loggers, spec)
+        log_wandb_provenance()
         _log_spec_artifact(loggers, spec)
         # Fail a misconfigured dataset-copy at launch, before the first render.
         _validate_copy_source(spec)
@@ -793,6 +799,7 @@ def from_hydra(cfg: DictConfig) -> None:
     :param cfg: Composed Hydra dataset cfg supplied by ``@hydra.main`` from
         the worker's argv overrides.
     """
+    extras(cfg)
     spec = spec_from_cfg(cfg)
     loggers = _loggers_pinned_to_spec(cfg, spec)
     generate(spec, Path(cfg.paths.output_dir), loggers)
@@ -817,6 +824,7 @@ def main(cfg: DictConfig) -> None:
         a zero-size train / val / test split (the eval datamodule opens
         all three split files unconditionally).
     """
+    extras(cfg)
     render_cfg = cfg.get("render")
     skip_reason = None if render_cfg is None else _unsupported_cadence_reason(render_cfg)
     if skip_reason is not None:
