@@ -284,7 +284,7 @@ docs:
     description: Test layout, fixtures, markers, and the cpu/mps/gpu CI lane split
     sources:
       - pattern: "tests/conftest.py"
-        covers: 'Hydra cfg_train/cfg_eval/cfg_dataset/cfg_surge_xt fixtures, accelerator parametrize, param_spec_name parametrize, experiment_name parametrize, _build_surge_xt_smoke_cfg, surge_xt_smoke_datasets, _validate_surge_dataset, shared constants (NUM_FIXTURE_SAMPLES, VST_HEADLESS_WRAPPER, _VST_SUBPROCESS_TIMEOUT_SECONDS), pytest_collection_modifyitems collection-time skip hook, _VST_AVAILABLE (Path(_SURGE_FIXTURE_PLUGIN_PATH).exists()), _R2_AVAILABLE (bool(os.environ.get("RCLONE_CONFIG_R2_ACCESS_KEY_ID")))'
+        covers: "Hydra cfg_train/cfg_eval/cfg_dataset/cfg_surge_xt fixtures, accelerator parametrize, param_spec_name parametrize, experiment_name parametrize, _build_surge_xt_smoke_cfg, surge_xt_smoke_datasets, _validate_surge_dataset, shared constants (NUM_FIXTURE_SAMPLES, VST_HEADLESS_WRAPPER, _VST_SUBPROCESS_TIMEOUT_SECONDS), pytest_collection_modifyitems collection-time skip hook, _VST_AVAILABLE (VST plugin path exists check), _R2_AVAILABLE (R2 credentials env-var check)"
       - pattern: "tests/test_train.py"
         covers: "E2E Hydra train / resume / Surge XT smoke + train→eval round-trip"
       - pattern: "tests/test_eval.py"
@@ -312,7 +312,7 @@ docs:
       - pattern: "tests/_meta/**"
         covers: "AST-based meta-tests enforcing structural invariants on other test modules (e.g., no Hydra config-initializer imports in canonical entrypoint test files)"
       - pattern: "tests/infra/**"
-        covers: "Devcontainer + GHA invariant tests — attached-mode MODE=idle, gh-auth flow, no baked secrets, post-create budget, act --list parse; conftest skip-hook unit tests (test_conftest_skip_hooks.py — monkeypatches _VST_AVAILABLE/_R2_AVAILABLE on conftest_module to verify pytest_collection_modifyitems)"
+        covers: "Devcontainer + GHA invariant tests — attached-mode MODE=idle, gh-auth flow, no baked secrets, post-create budget, act --list parse; test_conftest_skip_hooks.py (monkeypatch _VST_AVAILABLE/_R2_AVAILABLE to verify pytest_collection_modifyitems)"
       - pattern: "tests/integration/**"
         covers: "Three classes of integration tests: (1) launcher-against-real-R2 round-trips with a stubbed VST renderer subprocess (`integration_r2` marker) — fast PR-tier alternative to the kind + dev-snapshot matrix in `test-dataset-generation.yml`, run by `test-local-launcher-roundtrip.yml` on same-repo PRs; (2) unmarked cross-platform shard-dispatch tests (`test_parallel_shard_dispatch.py`) that run in the default fast lane via `test.yml`; and (3) real-Surge parallel renders parametrized over cadence cells (`test_parallel_shard_render_linux.py`, `requires_vst`+`slow`) run by `test-vst-slow.yml` — the cadence coverage retired from `test-dataset-generation-render-matrix.yml`."
       - pattern: ".github/workflows/test-local-launcher-roundtrip.yml"
