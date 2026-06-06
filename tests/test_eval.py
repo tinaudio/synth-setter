@@ -25,8 +25,10 @@ from omegaconf import DictConfig, open_dict
 from synth_setter.cli.eval import evaluate
 from synth_setter.cli.train import train
 from synth_setter.data.vst import param_specs, preset_paths
+from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
 from tests.helpers.run_if import RunIf
+from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
 
 # Public worker module names the predict-postprocessing subprocesses run; matched
 # as argv substrings so the fake ``subprocess.run`` can route render vs metrics
@@ -461,3 +463,60 @@ def test_eval_render_group_exposes_postprocessing_keys(render_group: str) -> Non
         assert cfg.render.plugin_path
     finally:
         GlobalHydra.instance().clear()
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+@pytest.mark.skipif(
+    not os.environ.get("WANDB_API_KEY"),
+    reason="real W&B round-trip needs WANDB_API_KEY (injected on trusted CI only)",
+)
+@pytest.mark.parametrize("experiment_name", ["surge/ffn_full"], indirect=True)
+def test_evaluate_loads_wandb_resolved_checkpoint_and_runs_inference(
+    tmp_path: Path,
+    cfg_surge_xt: DictConfig,
+    cfg_surge_xt_eval: DictConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    experiment_name: str,
+) -> None:
+    """Predict eval resolves ckpt_path via ``${wandb:...}`` from the live registry, loads it, and runs inference.
+
+    The full wandb_checkpoint contract end to end: train a real checkpoint, publish it to
+    ``tinaudio/synth-setter-citest``, then pin ``ckpt_path: ${wandb:...}`` (no CLI path, the form
+    the ``surge/wandb_checkpoint/<id>`` overlay produces) and run ``evaluate()`` in predict mode.
+    The resolver downloads the artifact, Lightning loads the weights, and predict-mode inference
+    writes finite per-sample predictions — the contract a fake-stub test cannot prove.
+
+    :param tmp_path: Shared output dir; also the workspace root the resolver caches under.
+    :param cfg_surge_xt: Surge XT smoke training config — one step produces the checkpoint.
+    :param cfg_surge_xt_eval: Matching predict-mode eval config; its ckpt_path is repinned here.
+    :param monkeypatch: Pins ``SYNTH_SETTER_WORKSPACE`` so the download cache stays under tmp_path.
+    :param experiment_name: Pinned to ``surge/ffn_full`` — the artifact id need only round-trip.
+    """
+    HydraConfig().set_config(cfg_surge_xt)
+    train(cfg_surge_xt)
+    ckpt = Path(cfg_surge_xt_eval.ckpt_path)
+    assert ckpt.is_file(), "train step did not write the checkpoint"
+
+    ref = publish_checkpoint_artifact(ckpt, "model-citest-ffn_full-eval", tmp_path / "wandb")
+
+    # Contain the resolver's download cache under tmp_path so each run fetches fresh (a warm
+    # self-hosted runner must not reuse a stale cached ckpt for the same :latest ref).
+    monkeypatch.setenv("SYNTH_SETTER_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
+    operator_workspace.cache_clear()
+    register_resolvers()
+    with open_dict(cfg_surge_xt_eval):
+        cfg_surge_xt_eval.ckpt_path = "${wandb:" + ref + "}"
+
+    HydraConfig().set_config(cfg_surge_xt_eval)
+    evaluate(cfg_surge_xt_eval)
+
+    assert (tmp_path / ".cache" / "checkpoints").is_dir(), "resolver did not download the artifact"
+    predictions_dir = tmp_path / "predictions"
+    assert predictions_dir.is_dir()
+    preds = sorted(predictions_dir.glob("pred-*.pt"))
+    assert preds, "predict mode wrote no predictions"
+    for pred_file in preds:
+        tensor = torch.load(pred_file, weights_only=True)
+        assert torch.isfinite(tensor).all(), f"{pred_file.name} contains NaN/Inf"

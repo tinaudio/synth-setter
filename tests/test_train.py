@@ -8,24 +8,31 @@ that no private ``synth_setter.cli`` helper is imported here.
 """
 
 import os
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
 import pytest
 import torch
+from hydra import compose, initialize_config_module
+from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, open_dict
 
 from synth_setter.cli.eval import evaluate
 from synth_setter.cli.train import train
 from synth_setter.data.vst import param_specs
+from synth_setter.utils.utils import register_resolvers
+from synth_setter.workspace import operator_workspace
 from tests.conftest import (
     NUM_FIXTURE_SAMPLES,
     _build_surge_xt_smoke_cfg,
 )
 from tests.evaluation._oracle_helpers import ORACLE_AUDIO_METRIC_BOUNDS
 from tests.helpers.run_if import RunIf
+from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
 
 # Experiments cycled through the Surge XT VST smoke tests below. Single source of truth so
 # the parametrize lists on the two ``test_train_*_surge_xt`` tests cannot drift apart.
@@ -203,6 +210,47 @@ def test_cfg_surge_xt_global_wires_param_spec(param_spec_name: str) -> None:
     assert cfg.callbacks.log_per_param_mse.param_spec == param_spec_name
 
 
+@pytest.mark.parametrize("experiment", ["ffn_full", "flow_full", "vae_full", "flow_mlp_simple"])
+def test_train_surge_experiment_composes_null_ckpt_without_wandb_resolution(
+    experiment: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A surge training experiment composes ``ckpt_path=null`` and never invokes the W&B resolver.
+
+    Regression guard for the wandb_checkpoint overlay split (#128): the ``${wandb:...}`` pin
+    lives only in the predict-side ``surge/wandb_checkpoint/<id>`` overlay, never in the shared
+    ``surge/<id>`` experiment that ``train.yaml`` composes. Were it to leak back, ``train.py``'s
+    ``trainer.fit(ckpt_path=cfg.get("ckpt_path"))`` would resolve the artifact — needing a W&B
+    key — and silently resume training from the published model on every run. Fast and
+    key-free so regular CI catches the regression at PR time, not just the MPS smoke leg.
+
+    :param experiment: Surge experiment basename composed under ``train.yaml``.
+    :param monkeypatch: Injects a call-recording ``wandb`` stub so any stray resolution shows
+        up as a recorded call rather than a confusing import/key error.
+    """
+    calls: list[str] = []
+    artifact = SimpleNamespace(download=lambda root: calls.append(root))
+    fake_wandb = SimpleNamespace(
+        Api=lambda: SimpleNamespace(artifact=lambda ref: artifact),
+        __spec__=SimpleNamespace(),
+    )
+    monkeypatch.setitem(sys.modules, "wandb", fake_wandb)
+    register_resolvers()
+
+    try:
+        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+            cfg = compose(
+                config_name="train.yaml",
+                overrides=[f"experiment=surge/{experiment}", "trainer=cpu"],
+            )
+            # train.py reads exactly cfg.get("ckpt_path"); it must stay None and fire no resolver.
+            ckpt_path = cfg.get("ckpt_path")
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert ckpt_path is None
+    assert calls == []
+
+
 @pytest.mark.requires_vst
 @pytest.mark.slow
 @pytest.mark.parametrize("experiment_name", _SURGE_SMOKE_EXPERIMENTS, indirect=True)
@@ -363,3 +411,57 @@ def test_train_eval_surge_xt(
         assert per_sample["rms"].min() > bounds.rms_min, (
             f"oracle rms too low: {per_sample['rms'].tolist()}"
         )
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+@pytest.mark.skipif(
+    not os.environ.get("WANDB_API_KEY"),
+    reason="real W&B round-trip needs WANDB_API_KEY (injected on trusted CI only)",
+)
+@pytest.mark.parametrize("experiment_name", ["surge/ffn_full"], indirect=True)
+def test_train_resumes_from_wandb_resolved_checkpoint(
+    tmp_path: Path,
+    cfg_surge_xt: DictConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    experiment_name: str,
+) -> None:
+    """Training resumes from a ``ckpt_path`` pinned as ``${wandb:...}``, downloaded from the live registry.
+
+    Exercises the exact train-side seam the wandb_checkpoint split protects: ``train.py`` reads
+    ``cfg.get("ckpt_path")`` into ``trainer.fit(ckpt_path=...)``. A first one-step run produces a
+    real Lightning checkpoint, published to ``tinaudio/synth-setter-citest``; a second run pins
+    that artifact via ``${wandb:...}`` and must download + resume it, advancing ``global_step``.
+    Proves the resolver works through the real W&B API on the train entrypoint, not just a fake.
+
+    :param tmp_path: Shared output dir; also the workspace root the resolver caches under.
+    :param cfg_surge_xt: Surge XT smoke-test training config (one step on the fixture dataset).
+    :param monkeypatch: Pins ``SYNTH_SETTER_WORKSPACE`` so the download cache stays under tmp_path.
+    :param experiment_name: Pinned to ``surge/ffn_full`` — the artifact id need only round-trip.
+    """
+    HydraConfig().set_config(cfg_surge_xt)
+    _, first = train(cfg_surge_xt)
+    step_after_first = first["trainer"].global_step
+    ckpt = tmp_path / "checkpoints" / "last.ckpt"
+    assert ckpt.is_file(), "first train step did not write last.ckpt"
+
+    ref = publish_checkpoint_artifact(ckpt, "model-citest-ffn_full-resume", tmp_path / "wandb")
+
+    # Contain the resolver's download cache under tmp_path so each run fetches fresh (a warm
+    # self-hosted runner must not reuse a stale cached ckpt for the same :latest ref).
+    monkeypatch.setenv("SYNTH_SETTER_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
+    operator_workspace.cache_clear()
+    register_resolvers()
+    with open_dict(cfg_surge_xt):
+        cfg_surge_xt.ckpt_path = "${wandb:" + ref + "}"
+        cfg_surge_xt.trainer.max_steps = step_after_first + 1
+
+    HydraConfig().set_config(cfg_surge_xt)
+    _, second = train(cfg_surge_xt)
+    step_after_resume = second["trainer"].global_step
+
+    assert (tmp_path / ".cache" / "checkpoints").is_dir(), "resolver did not download the artifact"
+    assert step_after_resume > step_after_first, (
+        f"resume did not advance training: before={step_after_first}, after={step_after_resume}"
+    )

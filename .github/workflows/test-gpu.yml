@@ -73,11 +73,14 @@ jobs:
       # NVIDIA driver.
       # coverage.xml written inside the container lands at
       # ${{ github.workspace }}/coverage.xml via the workspace bind-mount.
+      # WANDB_API_KEY forwards into the container for the wandb_checkpoint round-trip
+      # tests; absent it those tests skip (see their skipif), leaving the suite green.
       - name: Run GPU tests in Docker
         run: |
           docker run --rm --gpus all \
             -v ${{ github.workspace }}:/home/build/synth-setter \
             -e HYDRA_FULL_ERROR=1 \
+            -e "WANDB_API_KEY=${{ secrets.WANDB_API_KEY }}" \
             -e "SYNTH_SETTER_PLUGIN_PATH=/usr/lib/vst3/Surge XT.vst3" \
             "$IMAGE" \
             bash -c '

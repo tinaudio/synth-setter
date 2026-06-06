@@ -308,10 +308,11 @@ def test_eval_ckpt_path_wandb_override_resolves_to_cached_checkpoint(
         GlobalHydra.instance().clear()
 
 
-# Surge predict experiments and the ``model-{config_id}`` artifact each pins, where
+# Surge wandb_checkpoint overlays and the ``model-{config_id}`` artifact each pins, where
 # config_id is the experiment basename (see ``resolve_run_config_id``). Pins the
-# ckpt-wiring contract: a launcher composing ``experiment=surge/<name>`` inherits a
-# ``${wandb:tinaudio/synth-setter/model-<name>:latest}`` ckpt_path with no CLI override.
+# ckpt-wiring contract: a launcher composing ``experiment=surge/wandb_checkpoint/<name>``
+# inherits a ``${wandb:tinaudio/synth-setter/model-<name>:latest}`` ckpt_path with no CLI
+# override, while the train-side ``surge/<name>`` config carries no ckpt_path.
 _WIRED_PREDICT_EXPERIMENTS: tuple[str, ...] = (
     "ffn_full",
     "ffn_simple",
@@ -328,13 +329,13 @@ _WIRED_PREDICT_EXPERIMENTS: tuple[str, ...] = (
 def test_surge_experiment_pins_wandb_model_artifact_ckpt(
     experiment: str, workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Each wired surge experiment resolves ``ckpt_path`` to its ``model-<id>`` artifact.
+    """Each surge wandb_checkpoint overlay resolves ``ckpt_path`` to its ``model-<id>`` artifact.
 
-    Composes ``experiment=surge/<name>`` with no ``ckpt_path`` CLI override, proving
-    the experiment config alone pins ``${wandb:tinaudio/synth-setter/model-<name>:latest}``
-    — the config-pinned replacement for ``get-ckpt-from-wandb.sh``. The fake artifact's
-    download dir name encodes the ref slug, so the assertion confirms the per-experiment
-    artifact id reached the resolver.
+    Composes ``experiment=surge/wandb_checkpoint/<name>`` with no ``ckpt_path`` CLI override,
+    proving the overlay alone pins ``${wandb:tinaudio/synth-setter/model-<name>:latest}`` —
+    the config-pinned replacement for ``get-ckpt-from-wandb.sh``. The fake artifact's download
+    dir name encodes the ref slug, so the assertion confirms the per-experiment artifact id
+    reached the resolver.
 
     :param experiment: Surge experiment basename, also the ``model-<id>`` artifact id.
     :param workspace: Temp ``$PROJECT_ROOT`` the cache lands under.
@@ -348,7 +349,7 @@ def test_surge_experiment_pins_wandb_model_artifact_ckpt(
         with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
             cfg = compose(
                 config_name="eval.yaml",
-                overrides=[f"experiment=surge/{experiment}", "trainer=cpu"],
+                overrides=[f"experiment=surge/wandb_checkpoint/{experiment}", "trainer=cpu"],
             )
             raw_container = cast("dict[str, Any]", OmegaConf.to_container(cfg, resolve=False))
             raw_ckpt = raw_container["ckpt_path"]

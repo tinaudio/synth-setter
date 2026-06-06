@@ -1,7 +1,7 @@
 # @package _global_
 
 defaults:
-  - surge/base
+  - /experiment/surge/base
   - override /model: surge_flow
   - _self_
 
@@ -10,7 +10,3 @@ model:
 
 experiment_name: surge-simple-onehot
 run_name: flow
-
-# Pinned model-{config_id} artifact (config_id == experiment basename) resolved
-# lazily by the ${wandb:...} resolver. Replaces get-ckpt-from-wandb.sh.
-ckpt_path: ${wandb:tinaudio/synth-setter/model-flow_simple:latest}

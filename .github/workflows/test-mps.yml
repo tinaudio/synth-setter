@@ -77,9 +77,13 @@ jobs:
       - name: List dependencies
         run: uv pip list --python .venv/bin/python
 
+      # WANDB_API_KEY lets the wandb_checkpoint round-trip tests publish a smoke
+      # checkpoint to tinaudio/synth-setter-citest and resolve it back; absent it
+      # those tests skip (see their skipif), so the rest of the MPS suite is unaffected.
       - name: Run MPS tests
         env:
           HYDRA_FULL_ERROR: "1"
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
         run: |
           uv run pytest -vv -s -m mps \
             --cov=src --cov-branch --cov-report=xml --cov-report=term

@@ -22,7 +22,7 @@ rm -rf ~/.triton/cache
 mamba activate perm
 module load gcc
 python -m synth_setter.cli.eval \
-    experiment=surge/vae_full \
+    experiment=surge/wandb_checkpoint/vae_full \
     paths.log_dir=/data/EECS-C4DM-Fazekas/benhayes/surge-preds/vae_fsd/ \
     datamodule=fsd \
     callbacks=eval_surge \
