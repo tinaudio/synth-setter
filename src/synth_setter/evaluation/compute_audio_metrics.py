@@ -159,6 +159,12 @@ def compute_jtfs_distance(target: np.ndarray, pred: np.ndarray, J: int = 10, Q: 
 
 
 def compute_mfcc(target: np.ndarray, sample_rate: float = 44100.0) -> np.ndarray:
+    """Return MFCC features for ``target``, shape ``(C, T)``; output shape ``(20, frames)``.
+
+    :param target: Audio waveform; channels are averaged before feature extraction.
+    :param sample_rate: Sample rate in Hz; governs window and hop lengths.
+    :returns: MFCC matrix, shape ``(20, frames)``.
+    """
     window_length = int(0.05 * sample_rate)
     hop_length = int(0.01 * sample_rate)
 
@@ -210,6 +216,15 @@ pesto_model = None
 def get_pesto_activations(
     target: np.ndarray, pred: np.ndarray, sample_rate: float = 44100.0
 ) -> np.ndarray:
+    """Return PESTO F0 activations for ``target`` and ``pred``, both shape ``(C, T)``.
+
+    Filters to frames where both signals exceed the 0.85 confidence threshold.
+
+    :param target: Target audio.
+    :param pred: Predicted audio.
+    :param sample_rate: Sample rate in Hz.
+    :returns: Tuple ``(target_f0, pred_f0)`` — 1-D arrays of Hz values at confident frames.
+    """
     global pesto_model
     if pesto_model is None:
         pesto_model = pesto.load_model("mir-1k_g7", step_size=20.0)
@@ -262,6 +277,12 @@ def batched_wasserstein_distance_np(
     hist1: np.ndarray,
     hist2: np.ndarray,
 ) -> np.ndarray:
+    """Return the Wasserstein-1 distance between row-normalised histograms.
+
+    :param hist1: Normalised histogram batch, shape ``(frames, bins)``.
+    :param hist2: Second batch, same shape as ``hist1``.
+    :returns: Per-frame distance, shape ``(frames,)``.
+    """
     bin_width = 1 / hist1.shape[-1]
     cdf1 = np.cumsum(hist1, axis=-1)
     cdf2 = np.cumsum(hist2, axis=-1)
@@ -459,29 +480,48 @@ def main(audio_dir: str, output_dir: str, num_workers: int, shuffle_seed: int) -
             "dataset or omit --shuffle_seed to silently skip the probe."
         )
     if uniform and len(probe_dirs) >= 2:
-        shuffled_view = output_dir_path / "shuffled_audio"
-        permutation = shuffle_pred_audio(audio_dir_path, shuffled_view, shuffle_seed)
-        if len(permutation) >= 2:
-            logger.info(
-                "Render-order probe: scoring permuted pred audio (seed={s})", s=shuffle_seed
-            )
-            shuffled_dirs = find_possible_subdirs(shuffled_view)
-            if not shuffled_dirs:
-                logger.warning(
-                    "Render-order probe: no valid sample dirs found in shuffled view {v}; "
-                    "skipping shuffled metrics",
-                    v=shuffled_view,
-                )
-            else:
-                shuffled_tmp = output_dir_path / "_shuffle_tmp"
-                shuffled_tmp.mkdir(exist_ok=True)
-                try:
-                    shuffled_df = _aggregate_metrics(shuffled_dirs, shuffled_tmp, num_workers)
-                    pd.DataFrame(
-                        {"mean": shuffled_df.mean(axis=0), "std": shuffled_df.std(axis=0)}
-                    ).to_csv(output_dir_path / "aggregated_metrics_shuffled.csv")
-                finally:
-                    shutil.rmtree(shuffled_tmp, ignore_errors=True)
+        _run_shuffle_probe(audio_dir_path, output_dir_path, shuffle_seed, num_workers)
+
+
+def _run_shuffle_probe(
+    audio_dir_path: Path,
+    output_dir_path: Path,
+    shuffle_seed: int,
+    num_workers: int,
+) -> None:
+    """Run the render-order probe and write ``aggregated_metrics_shuffled.csv``.
+
+    Builds a symlink view with permuted ``pred.wav`` files, runs
+    :func:`_aggregate_metrics` over it, and writes the shuffled aggregation.
+    Cleans up the intermediate temp dir in all cases.
+
+    :param audio_dir_path: Root audio directory passed to :func:`shuffle_pred_audio`.
+    :param output_dir_path: Destination dir for ``aggregated_metrics_shuffled.csv``.
+    :param shuffle_seed: Permutation seed forwarded to :func:`shuffle_pred_audio`.
+    :param num_workers: Worker count forwarded to :func:`_aggregate_metrics`.
+    """
+    shuffled_view = output_dir_path / "shuffled_audio"
+    permutation = shuffle_pred_audio(audio_dir_path, shuffled_view, shuffle_seed)
+    if len(permutation) < 2:
+        return
+    logger.info("Render-order probe: scoring permuted pred audio (seed={s})", s=shuffle_seed)
+    shuffled_dirs = find_possible_subdirs(shuffled_view)
+    if not shuffled_dirs:
+        logger.warning(
+            "Render-order probe: no valid sample dirs found in shuffled view {v}; "
+            "skipping shuffled metrics",
+            v=shuffled_view,
+        )
+        return
+    shuffled_tmp = output_dir_path / "_shuffle_tmp"
+    shuffled_tmp.mkdir(exist_ok=True)
+    try:
+        shuffled_df = _aggregate_metrics(shuffled_dirs, shuffled_tmp, num_workers)
+        pd.DataFrame({"mean": shuffled_df.mean(axis=0), "std": shuffled_df.std(axis=0)}).to_csv(
+            output_dir_path / "aggregated_metrics_shuffled.csv"
+        )
+    finally:
+        shutil.rmtree(shuffled_tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":

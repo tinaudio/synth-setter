@@ -24,8 +24,8 @@ evaluation:
   compute_metrics: false
   rerender_target: true
   num_workers: 1
-  # Render-order probe (#489): seed for the auto-shuffle pass in compute_audio_metrics.
-  # Non-zero implies shuffle is intended; raises if params are non-uniform.
+  # Render-order probe (#489): probe runs automatically when params are uniform;
+  # non-zero seed raises if params are non-uniform rather than silently skipping.
   shuffle_seed: 0
   # Opt-in: an `r2://bucket/prefix` mirror of the whole run dir, copied after eval.
   upload_output_dir_uri: null
