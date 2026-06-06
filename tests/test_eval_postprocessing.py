@@ -25,6 +25,9 @@ from synth_setter.cli.eval import (
 _FAKE_WRAPPER = "/fake/vst-headless-wrapper"
 
 _AGGREGATED_METRICS_CSV = ",mean,std\nmss,0.5,0.1\nwmfcc,0.3,0.05\nsot,0.2,0.02\nrms,0.9,0.01\n"
+_AGGREGATED_METRICS_SHUFFLED_CSV = (
+    ",mean,std\nmss,0.6,0.12\nwmfcc,0.35,0.06\nsot,0.25,0.025\nrms,0.85,0.015\n"
+)
 
 _EXPECTED_AUDIO_METRICS = {
     "audio/mss_mean": pytest.approx(0.5),
@@ -523,6 +526,43 @@ def test_postprocessing_returns_loaded_audio_metrics(
     result = _run_predict_postprocessing(cfg)
 
     assert result == _EXPECTED_AUDIO_METRICS
+
+
+def test_postprocessing_returns_shuffled_audio_metrics_when_subprocess_writes_shuffled_csv(
+    monkeypatch: pytest.MonkeyPatch,
+    predictions_tree: Path,
+) -> None:
+    """``shuffled_audio/*`` keys are returned when the metrics subprocess writes both CSVs.
+
+    Verifies the ``_load_audio_metrics`` shuffled-CSV branch is wired through
+    ``_run_predict_postprocessing``; deleting that branch would cause this test to fail.
+
+    :param monkeypatch: Replaces ``subprocess.run`` with a fake that writes both
+        ``aggregated_metrics.csv`` and ``aggregated_metrics_shuffled.csv``.
+    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created.
+    """
+    metrics_dir = predictions_tree / "metrics"
+
+    def _writes_both_csvs(args: list[str], **_kwargs: object) -> None:
+        if _COMPUTE_AUDIO_METRICS_MODULE not in args:
+            return
+        metrics_dir.mkdir(parents=True, exist_ok=True)
+        (metrics_dir / "aggregated_metrics.csv").write_text(_AGGREGATED_METRICS_CSV)
+        (metrics_dir / "aggregated_metrics_shuffled.csv").write_text(
+            _AGGREGATED_METRICS_SHUFFLED_CSV
+        )
+
+    monkeypatch.setattr(eval_mod.subprocess, "run", _writes_both_csvs)
+    cfg = _build_postprocess_cfg(predictions_tree, render_vst=False, compute_metrics=True)
+
+    result = _run_predict_postprocessing(cfg)
+
+    assert "shuffled_audio/mss_mean" in result
+    assert result["shuffled_audio/mss_mean"] == pytest.approx(0.6)
+    assert result["shuffled_audio/mss_std"] == pytest.approx(0.12)
+    # Normal audio/* keys must still be present alongside shuffled ones.
+    assert "audio/mss_mean" in result
+    assert result["audio/mss_mean"] == pytest.approx(0.5)
 
 
 def test_postprocessing_render_subprocess_nonzero_exit_raises(

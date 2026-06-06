@@ -674,13 +674,14 @@ def test_main_auto_shuffle_does_not_mutate_source(tmp_path: Path) -> None:
     assert after == before
 
 
+@pytest.mark.slow
 def test_main_nonuniform_params_default_seed_skips_shuffle_no_shuffled_csv(
     tmp_path: Path,
 ) -> None:
     """Non-uniform params + default seed → shuffle silently skipped, no shuffled CSV.
 
-    Drives ``main`` without the real metric compute (no wav files, single-dir so process
-    pool produces an empty DataFrame); assertion is on filesystem state only.
+    Creates two sample dirs with real wav data but differing params.csv; with the default seed (0)
+    the probe is skipped and no aggregated_metrics_shuffled.csv appears.
 
     :param tmp_path: Pytest fixture providing a fresh test directory.
     """
@@ -702,6 +703,7 @@ def test_main_nonuniform_params_default_seed_skips_shuffle_no_shuffled_csv(
     assert not (metrics_dir / "aggregated_metrics_shuffled.csv").exists()
 
 
+@pytest.mark.slow
 def test_main_nonuniform_params_explicit_seed_raises(tmp_path: Path) -> None:
     """Non-uniform params + explicit non-zero seed → ``ValueError`` (seed implies intent).
 
@@ -725,6 +727,7 @@ def test_main_nonuniform_params_explicit_seed_raises(tmp_path: Path) -> None:
     assert isinstance(result.exception, ValueError)
 
 
+@pytest.mark.slow
 def test_main_single_sample_dir_no_shuffled_csv(tmp_path: Path) -> None:
     """Single sample dir cannot be shuffled → no ``aggregated_metrics_shuffled.csv``.
 

@@ -64,7 +64,7 @@ MEL_PARAMS = [
 ]
 
 
-def compute_mel_specs(y: np.ndarray, sample_rate: float = 44100.0):
+def compute_mel_specs(y: np.ndarray, sample_rate: float = 44100.0) -> list[np.ndarray]:
     mel_specs = []
     for window_size, hop_size, n_mels in MEL_PARAMS:
         window_size = int(window_size * sample_rate / 1000.0)
@@ -100,7 +100,7 @@ def compute_mss(target: np.ndarray, pred: np.ndarray) -> float:
 scatter = None
 
 
-def compute_jtfs(y: np.ndarray, J: int = 10, Q: int = 12):
+def compute_jtfs(y: np.ndarray, J: int = 10, Q: int = 12) -> np.ndarray:
     global scatter
     if scatter is None:
         scatter = Scattering1D(J=J, Q=Q, shape=y.shape[-1])
@@ -179,7 +179,7 @@ def compute_f0(target: np.ndarray, pred: np.ndarray) -> float:
     return np.mean(np.abs(target_f0 - pred_f0))
 
 
-def get_stft(y: np.ndarray, sample_rate: float = 44100.0):
+def get_stft(y: np.ndarray, sample_rate: float = 44100.0) -> np.ndarray:
     win_length = int(0.05 * sample_rate)
     hop_length = int(0.02 * sample_rate)
     stft = librosa.stft(
@@ -266,7 +266,7 @@ def compute_metrics_on_dir(audio_dir: Path) -> dict[str, float]:
     return dict(mss=mss, wmfcc=wmfcc, sot=sot, rms=rms)
 
 
-def compute_metrics(audio_dirs: list[Path], output_dir: Path):
+def compute_metrics(audio_dirs: list[Path], output_dir: Path) -> Path:
     idxs = []
     rows = []
     for dir in audio_dirs:
@@ -306,6 +306,8 @@ def _aggregate_metrics(audio_dirs: list[Path], work_dir: Path, num_workers: int)
             metric_df = pd.read_csv(metric_file)
             metric_df.set_index(metric_df.columns[0], inplace=True)
             metric_dfs.append(metric_df)
+    if not metric_dfs:
+        return pd.DataFrame()
     return pd.concat(metric_dfs)
 
 
@@ -319,7 +321,23 @@ def _aggregate_metrics(audio_dirs: list[Path], work_dir: Path, num_workers: int)
     default=0,
     help="Seed for the render-order probe permutation. Non-zero implies shuffle is intended.",
 )
-def main(audio_dir: str, output_dir: str, num_workers: int, shuffle_seed: int):
+def main(audio_dir: str, output_dir: str, num_workers: int, shuffle_seed: int) -> None:
+    """Score rendered audio under ``audio_dir`` and write aggregated metrics to ``output_dir``.
+
+    Runs the parallel per-sample pass writing ``metrics.csv`` and
+    ``aggregated_metrics.csv``. When all sample dirs share identical
+    ``params.csv`` (render-order probe, #489), a second pass with permuted
+    ``pred.wav`` symlinks writes ``aggregated_metrics_shuffled.csv``.
+
+    :param audio_dir: Root containing per-sample subdirectories
+        (each must have ``pred.wav`` and ``target.wav``).
+    :param output_dir: Destination for CSV outputs.
+    :param num_workers: Number of parallel worker processes.
+    :param shuffle_seed: Permutation seed for the render-order probe; non-zero
+        implies the probe is intended and raises if params are not uniform.
+    :raises ValueError: when ``shuffle_seed`` is non-zero but ``params.csv``
+        files are not uniform across sample dirs.
+    """
     audio_dir = Path(audio_dir)
     os.makedirs(output_dir, exist_ok=True)
     output_dir = Path(output_dir)
@@ -331,18 +349,16 @@ def main(audio_dir: str, output_dir: str, num_workers: int, shuffle_seed: int):
 
     columnwise_means = df.mean(axis=0)
     columnwise_stds = df.std(axis=0)
-    print("Means...")
-    print(columnwise_means)
-    print("Stds...")
-    print(columnwise_stds)
+    logger.info("metric means:\n{m}", m=columnwise_means.to_string())
+    logger.info("metric stds:\n{s}", s=columnwise_stds.to_string())
 
     pd.DataFrame({"mean": columnwise_means, "std": columnwise_stds}).to_csv(
         output_dir / "aggregated_metrics.csv"
     )
 
-    # Render-order probe (#489): auto-shuffle when all sample dirs have identical params.
-    # A non-zero shuffle_seed signals explicit intent; raise if params are non-uniform so
-    # the misconfiguration is visible rather than silently skipped.
+    # Render-order probe (#489): auto-shuffle when params are uniform. params_are_uniform
+    # returns False on any missing params.csv, so when uniform=True every dir in
+    # audio_dirs has params.csv — shuffle_pred_audio._sample_dirs sees the same set.
     uniform = params_are_uniform(audio_dirs)
     if not uniform and shuffle_seed != 0:
         raise ValueError(

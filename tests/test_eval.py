@@ -97,22 +97,20 @@ def test_evaluate_runs_oracle_with_null_ckpt_path(
 
 @pytest.mark.requires_vst
 @pytest.mark.slow
-def test_evaluate_predict_shuffle_pred_audio_rejects_nonuniform_params_via_subprocess(
+def test_evaluate_predict_explicit_shuffle_seed_rejects_nonuniform_params_via_subprocess(
     cfg_surge_xt: DictConfig,
     cfg_surge_xt_eval: DictConfig,
 ) -> None:
-    """``evaluate()`` predict mode with the shuffle on fails the metrics subprocess.
+    """Non-zero ``shuffle_seed`` with non-uniform params causes the metrics subprocess to fail.
 
-    Drives the real train->eval roundtrip end-to-end with ``shuffle_pred_audio``
-    enabled, exercising the ``evaluate()`` -> ``_run_predict_postprocessing`` ->
+    Drives the real train→eval roundtrip end-to-end with ``shuffle_seed=7``,
+    exercising the ``evaluate()`` → ``_run_predict_postprocessing`` →
     metrics-subprocess wiring. The smoke dataset renders distinct params per
-    sample, so the uniform-params gate (now inside compute_audio_metrics) rejects
-    it and the subprocess exits non-zero, surfacing as ``CalledProcessError`` —
-    confirming the gate is wired through the real entrypoint (#489). The
-    successful-permutation path needs a uniform-params tree (only meaningful for
-    the render-order probe) and is covered by
-    ``tests/evaluation/test_shuffle_pred_audio.py`` and the
-    ``tests/evaluation/test_compute_audio_metrics.py`` CLI tests.
+    sample, so the uniform-params guard inside ``compute_audio_metrics`` raises
+    ``ValueError`` (non-zero seed + non-uniform = misconfiguration), the
+    subprocess exits non-zero, and ``CalledProcessError`` surfaces at the
+    ``evaluate()`` boundary — confirming the gate is wired through the real
+    entrypoint (#489).
 
     :param cfg_surge_xt: Surge XT smoke-test training config.
     :param cfg_surge_xt_eval: Matching predict-mode eval config (render + metrics on),
@@ -123,7 +121,7 @@ def test_evaluate_predict_shuffle_pred_audio_rejects_nonuniform_params_via_subpr
     assert Path(cfg_surge_xt_eval.ckpt_path).exists()
 
     with open_dict(cfg_surge_xt_eval):
-        cfg_surge_xt_eval.evaluation.shuffle_pred_audio = True
+        cfg_surge_xt_eval.evaluation.shuffle_seed = 7
 
     HydraConfig().set_config(cfg_surge_xt_eval)
     with pytest.raises(subprocess.CalledProcessError):
