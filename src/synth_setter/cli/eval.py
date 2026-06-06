@@ -295,6 +295,17 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     metric_dict: dict[str, Any] = dict(trainer.callback_metrics)
     metric_dict.update(audio_metrics)
 
+    # Persist + publish results here, not after evaluate() returns: @task_wrapper's
+    # finally closes the W&B run on return, so the eval-results artifact has to be
+    # logged while the run is still open or it would attach to nothing.
+    _dump_metric_dict(metric_dict, Path(cfg.paths.output_dir))
+    _maybe_upload_output_dir(cfg, trainer.is_global_zero)
+    upload_uri = cfg.evaluation.get("upload_output_dir_uri")
+    # _get_git_sha() shells out, so only invoke it on the path that actually logs
+    # the artifact (global-zero with a configured R2 prefix).
+    if trainer.is_global_zero and upload_uri:
+        _log_eval_results_artifact(logger, cfg, upload_uri, metric_dict, _get_git_sha())
+
     return metric_dict, object_dict
 
 
@@ -460,18 +471,9 @@ def main(cfg: DictConfig) -> None:
     # (e.g. ask for tags if none are provided in cfg, print cfg tree, etc.)
     extras(cfg)
 
-    metric_dict, object_dict = evaluate(cfg)
-    _dump_metric_dict(metric_dict, Path(cfg.paths.output_dir))
-    is_global_zero = object_dict["trainer"].is_global_zero
-    _maybe_upload_output_dir(cfg, is_global_zero)
-    if is_global_zero:
-        _log_eval_results_artifact(
-            object_dict["logger"],
-            cfg,
-            cfg.evaluation.get("upload_output_dir_uri"),
-            metric_dict,
-            _get_git_sha(),
-        )
+    # evaluate() persists metrics, mirrors the output dir to R2, and logs the
+    # eval-results artifact internally (before @task_wrapper closes the run).
+    evaluate(cfg)
 
 
 if __name__ == "__main__":
