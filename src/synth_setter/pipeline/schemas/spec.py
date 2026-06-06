@@ -691,11 +691,22 @@ class DatasetSpec(BaseModel):
         :raises TypeError: ``cfg`` is not mapping-shaped (e.g. a ``ListConfig``,
             which ``masked_copy`` rejects with ``ValueError``) or the masked cfg
             did not resolve to a mapping — both normalized to one stable type.
+        :raises ValueError: ``cfg`` carries a stale ``datasetsrc`` key; the mask
+            below would silently drop it (the model's ``_promote_legacy_datasetsrc``
+            shim never runs on the masked dict), so a migration error is raised.
         """
         # Lazy import: omegaconf is absent from the minimal-env CI install that
         # runs `validate_spec`, which imports this module but never calls this.
         from omegaconf import OmegaConf
 
+        # `datasetsrc` was flattened to `copy_dataset_root`. The mask keeps only
+        # model fields, so a stale Hydra override would vanish silently and
+        # disable copy with no signal; reject it with a migration pointer.
+        if "datasetsrc" in cfg:
+            raise ValueError(
+                "'datasetsrc' is no longer a config key; it was flattened to "
+                "'copy_dataset_root'. Use copy_dataset_root=<path>."
+            )
         spec_keys = [k for k in cfg if isinstance(k, str) and k in cls.model_fields]
         try:
             masked = OmegaConf.masked_copy(cfg, spec_keys)
@@ -755,15 +766,17 @@ class DatasetSpec(BaseModel):
         single-field ``datasetsrc`` wrapper was flattened: ``datasetsrc: null``
         is dropped (the field defaults to ``None``) and
         ``datasetsrc: {copy_dataset_root: X}`` becomes ``copy_dataset_root: X``.
-        The legacy mapping is held to the same single-key strictness the removed
-        ``DatasetSrcConfig`` enforced — any other key is rejected, not dropped.
+        A non-null legacy mapping is held to the removed ``DatasetSrcConfig``'s
+        contract — exactly the ``copy_dataset_root`` key, non-null — so a typo'd
+        or empty mapping raises instead of silently disabling copy (use
+        ``datasetsrc: null`` to disable).
 
         :param data: Raw validator input (typically a dict; pass-through otherwise).
         :returns: Same input when no ``datasetsrc`` key is present; otherwise a new
             dict with the legacy key promoted and removed.
         :raises ValueError: ``data`` carries both ``datasetsrc`` and
             ``copy_dataset_root`` (ambiguous); ``datasetsrc`` is neither a mapping
-            nor ``null``; or the legacy mapping has keys other than
+            nor ``null``; or the legacy mapping is not exactly a non-null
             ``copy_dataset_root``.
         """
         if not isinstance(data, dict) or "datasetsrc" not in data:
@@ -776,13 +789,12 @@ class DatasetSpec(BaseModel):
                 "pass one shape, not both"
             )
         if isinstance(legacy, dict):
-            unexpected = set(legacy) - {"copy_dataset_root"}
-            if unexpected:
+            if set(legacy) != {"copy_dataset_root"} or legacy["copy_dataset_root"] is None:
                 raise ValueError(
-                    f"legacy 'datasetsrc' mapping has unexpected keys {sorted(unexpected)}; "
-                    "only 'copy_dataset_root' is supported"
+                    "legacy 'datasetsrc' mapping must hold exactly a non-null "
+                    "'copy_dataset_root'; use datasetsrc: null to disable copy"
                 )
-            data["copy_dataset_root"] = legacy.get("copy_dataset_root")
+            data["copy_dataset_root"] = legacy["copy_dataset_root"]
         elif legacy is not None:
             raise ValueError(
                 f"legacy 'datasetsrc' must be a mapping or null, got {type(legacy).__name__}"

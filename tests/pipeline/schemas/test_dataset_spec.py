@@ -1102,6 +1102,21 @@ class TestFromHydraCfg:
         with pytest.raises(TypeError):
             DatasetSpec.from_hydra_cfg(cfg)  # type: ignore[arg-type]
 
+    def test_stale_datasetsrc_key_is_rejected_with_migration_pointer(self) -> None:
+        """A composed cfg carrying ``datasetsrc`` raises instead of silently dropping it.
+
+        The mask keeps only model fields, so the back-compat shim never sees a
+        Hydra-side ``datasetsrc`` override; ``from_hydra_cfg`` rejects it up front
+        with a pointer to ``copy_dataset_root``.
+        """
+        from omegaconf import OmegaConf
+
+        cfg = OmegaConf.create(_valid_spec_kwargs())
+        cfg.datasetsrc = {"copy_dataset_root": "/data/source-dataset"}
+
+        with pytest.raises(ValueError, match="no longer a config key"):
+            DatasetSpec.from_hydra_cfg(cfg)
+
 
 class TestCopyDatasetRoot:
     """``DatasetSpec.copy_dataset_root`` — optional flat dataset-copy source."""
@@ -1174,15 +1189,23 @@ class TestCopyDatasetRoot:
         with pytest.raises(ValidationError, match="must be a mapping or null"):
             DatasetSpec(**_valid_spec_kwargs(datasetsrc="/data/source-dataset"))
 
-    def test_legacy_datasetsrc_empty_mapping_disables_copy(self) -> None:
-        """A legacy ``datasetsrc`` mapping without ``copy_dataset_root`` disables the copy path."""
-        spec = DatasetSpec(**_valid_spec_kwargs(datasetsrc={}))
+    def test_legacy_datasetsrc_empty_mapping_is_rejected(self) -> None:
+        """A legacy ``datasetsrc: {}`` raises rather than silently disabling copy.
 
-        assert spec.copy_dataset_root is None
+        The removed ``DatasetSrcConfig`` required ``copy_dataset_root``; ``datasetsrc:
+        null`` is the way to disable copy, so an empty mapping is a misconfig.
+        """
+        with pytest.raises(ValidationError, match="must hold exactly a non-null"):
+            DatasetSpec(**_valid_spec_kwargs(datasetsrc={}))
+
+    def test_legacy_datasetsrc_null_inner_is_rejected(self) -> None:
+        """A legacy ``datasetsrc: {copy_dataset_root: null}`` raises, matching the old contract."""
+        with pytest.raises(ValidationError, match="must hold exactly a non-null"):
+            DatasetSpec(**_valid_spec_kwargs(datasetsrc={"copy_dataset_root": None}))
 
     def test_legacy_datasetsrc_mapping_with_unexpected_key_is_rejected(self) -> None:
         """A legacy ``datasetsrc`` mapping keeps the old single-key strictness."""
-        with pytest.raises(ValidationError, match="unexpected keys"):
+        with pytest.raises(ValidationError, match="must hold exactly a non-null"):
             DatasetSpec(
                 **_valid_spec_kwargs(datasetsrc={"copy_dataset_root": "/data/src", "stray": 1})
             )
