@@ -395,6 +395,9 @@ def test_evaluate_predict_mode_logs_per_sample_metrics_table_to_wandb(
         lambda _traversable: nullcontext(Path("/fake/headless-wrapper")),
     )
     monkeypatch.setattr(wandb, "run", _Spy())
+    # task_wrapper's teardown calls module-level wandb.finish() while wandb.run is
+    # truthy (utils.py); stub it so the spy run is the only wandb surface exercised.
+    monkeypatch.setattr(wandb, "finish", lambda *_args, **_kwargs: None)
 
     HydraConfig().set_config(cfg)
     try:
