@@ -1,8 +1,10 @@
 """General-purpose utilities: OmegaConf resolvers, task wrappers, and gradient watching."""
 
+import re
 import warnings
 from collections.abc import Callable
 from importlib.util import find_spec
+from pathlib import Path
 from typing import Any
 
 import torch
@@ -28,26 +30,51 @@ def register_resolvers() -> None:
 def _resolve_wandb_checkpoint(ref: str) -> str:
     """Resolve a W&B model-artifact reference to a local cached checkpoint path.
 
-    Downloads the artifact under ``$PROJECT_ROOT/.cache/checkpoints/<ref>`` once
-    and reuses that directory on subsequent resolutions, so re-resolving the same
-    ``ref`` never re-downloads. ``wandb`` is imported lazily so importing this
-    module never requires it.
+    Downloads the artifact under ``$PROJECT_ROOT/.cache/checkpoints/<key>`` once
+    and reuses it on later resolutions, so re-resolving the same ``ref`` never
+    re-downloads — unless the cached dir holds no ``.ckpt`` (a partial download),
+    in which case it is refetched. The cache key is a slug of ``ref`` so a hostile
+    ref (``..``, ``:``) can never escape the cache root. ``wandb`` is imported
+    lazily so importing this module never requires it.
 
     :param ref: Artifact ref such as ``entity/project/model-x:alias`` or
         ``model-x:latest``.
-    :returns: Absolute path to the ``.ckpt`` file inside the downloaded artifact.
-    :raises FileNotFoundError: If the downloaded artifact contains no ``.ckpt``.
+    :returns: Absolute path to the checkpoint inside the downloaded artifact —
+        ``model.ckpt`` if present, else the sole ``.ckpt`` (see
+        :func:`_select_checkpoint` for the no-ckpt / ambiguous-ckpt errors).
     """
     import wandb
 
     from synth_setter.workspace import operator_workspace
 
-    cache_dir = operator_workspace() / ".cache" / "checkpoints" / ref.replace("/", "__")
-    if not cache_dir.exists():
+    key = re.sub(r"[^A-Za-z0-9._-]", "_", ref)
+    cache_dir = operator_workspace() / ".cache" / "checkpoints" / key
+    # A cached dir with no .ckpt is a partial download — refetch rather than trust it.
+    if not sorted(cache_dir.glob("**/*.ckpt")):
         wandb.Api().artifact(ref).download(root=str(cache_dir))
-    checkpoints = sorted(cache_dir.rglob("*.ckpt"))
+    return _select_checkpoint(ref, sorted(cache_dir.glob("**/*.ckpt")))
+
+
+def _select_checkpoint(ref: str, checkpoints: list[Path]) -> str:
+    """Pick the checkpoint a ``ref`` resolves to, erroring on an ambiguous artifact.
+
+    :param ref: Originating artifact ref, used only for error messages.
+    :param checkpoints: ``.ckpt`` paths found in the downloaded artifact.
+    :returns: ``model.ckpt`` if present, else the sole checkpoint.
+    :raises FileNotFoundError: If ``checkpoints`` is empty.
+    :raises ValueError: If several non-``model.ckpt`` checkpoints make the
+        selection ambiguous.
+    """
     if not checkpoints:
-        raise FileNotFoundError(f"W&B artifact {ref!r} contains no .ckpt under {cache_dir}")
+        raise FileNotFoundError(f"W&B artifact {ref!r} contains no .ckpt")
+    preferred = [p for p in checkpoints if p.name == "model.ckpt"]
+    if preferred:
+        return str(preferred[0])
+    if len(checkpoints) > 1:
+        names = ", ".join(p.name for p in checkpoints)
+        raise ValueError(
+            f"W&B artifact {ref!r} has ambiguous checkpoints ({names}); none named model.ckpt"
+        )
     return str(checkpoints[0])
 
 
