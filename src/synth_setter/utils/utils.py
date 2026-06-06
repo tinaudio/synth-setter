@@ -21,6 +21,34 @@ def register_resolvers() -> None:
         OmegaConf.register_new_resolver("mul", lambda x, y: x * y)
     if not OmegaConf.has_resolver("div"):
         OmegaConf.register_new_resolver("div", lambda x, y: int(x) // int(y))
+    if not OmegaConf.has_resolver("wandb"):
+        OmegaConf.register_new_resolver("wandb", _resolve_wandb_checkpoint)
+
+
+def _resolve_wandb_checkpoint(ref: str) -> str:
+    """Resolve a W&B model-artifact reference to a local cached checkpoint path.
+
+    Downloads the artifact under ``$PROJECT_ROOT/.cache/checkpoints/<ref>`` once
+    and reuses that directory on subsequent resolutions, so re-resolving the same
+    ``ref`` never re-downloads. ``wandb`` is imported lazily so importing this
+    module never requires it.
+
+    :param ref: Artifact ref such as ``entity/project/model-x:alias`` or
+        ``model-x:latest``.
+    :returns: Absolute path to the ``.ckpt`` file inside the downloaded artifact.
+    :raises FileNotFoundError: If the downloaded artifact contains no ``.ckpt``.
+    """
+    import wandb
+
+    from synth_setter.workspace import operator_workspace
+
+    cache_dir = operator_workspace() / ".cache" / "checkpoints" / ref.replace("/", "__")
+    if not cache_dir.exists():
+        wandb.Api().artifact(ref).download(root=str(cache_dir))
+    checkpoints = sorted(cache_dir.rglob("*.ckpt"))
+    if not checkpoints:
+        raise FileNotFoundError(f"W&B artifact {ref!r} contains no .ckpt under {cache_dir}")
+    return str(checkpoints[0])
 
 
 def extras(cfg: DictConfig) -> None:
