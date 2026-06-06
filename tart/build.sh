@@ -64,6 +64,17 @@ main() {
     return 0
   fi
 
+  # --build drives Tart's Virtualization.framework — Apple Silicon macOS only.
+  # Fail fast here rather than leaving Packer/Tart to emit a cryptic error.
+  if [[ "$(uname -sm)" != "Darwin arm64" ]]; then
+    err "--build needs an Apple Silicon macOS host (got: $(uname -sm))"
+    return 1
+  fi
+  if ! command -v tart >/dev/null; then
+    err "tart not found on PATH — install: brew install cirruslabs/cli/tart"
+    return 127
+  fi
+
   local git_ref vm_name
   git_ref="${SYNTH_SETTER_GIT_REF:-$(git -C "${HERE}" rev-parse HEAD)}"
   vm_name="${VM_NAME:-synth-setter-macos-build}"
