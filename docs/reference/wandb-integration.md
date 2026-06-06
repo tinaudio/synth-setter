@@ -30,7 +30,7 @@ ______________________________________________________________________
 | Checkpoint upload | `log_model: "all"`                                                                                                                                                                    | `src/synth_setter/configs/logger/wandb.yaml:11`                 |
 | Code saving       | `wandb.Settings(code_dir=".")`                                                                                                                                                        | `src/synth_setter/configs/logger/wandb.yaml` § `wandb.settings` |
 | Console capture   | `wandb.Settings(console="wrap")` — `redirect` captures into a local `output.log` that wandb 0.26.x never uploads (empty UI Logs tab); `wrap` is the only mode that reaches the server | `src/synth_setter/configs/logger/wandb.yaml` § `wandb.settings` |
-| Run teardown      | `wandb.finish()` in `task_wrapper` finally block                                                                                                                                      | `src/synth_setter/utils/utils.py:101-106`                       |
+| Run teardown      | `wandb.finish()` in `task_wrapper` finally block                                                                                                                                      | `src/synth_setter/utils/utils.py:98-108`                        |
 
 **No direct `wandb.init()` calls exist in runtime code.** One `wandb.config.update()` call exists: `log_wandb_provenance()` in `src/synth_setter/utils/logging_utils.py:91` writes provenance metadata (see [2g](#2g-provenance-metadata-logged-once-at-run-start)).
 
