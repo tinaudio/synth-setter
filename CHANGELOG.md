@@ -1,6 +1,134 @@
 # CHANGELOG
 
 
+## v8.21.0 (2026-06-06)
+
+### Automation
+
+- **dev**: Auto-link plugins and thoughts after worktree add
+  ([#1487](https://github.com/tinaudio/synth-setter/pull/1487),
+  [`feb1bf1`](https://github.com/tinaudio/synth-setter/commit/feb1bf1935be0fb45f922e50e7b50345e26d057f))
+
+* feat(ci-automation): auto-run link-plugins and link-thoughts after git worktree add
+
+PostToolUse hook (worktree-post-setup.sh) fires on every `git worktree add` command, parses the
+  target path via shlex, and runs make link-plugins && make link-thoughts there. Eliminates the
+  manual follow-up step that was causing "VST not found" errors in fresh worktrees.
+
+Closes #1343
+
+* fix(ci-automation): resolve comment-hygiene and flag-parsing issues in worktree-post-setup
+
+- Remove C3 flag-name enumeration from _parse_worktree_path comment - Trim file header to 2 lines
+  (C5) - Fix --orphan flag: it is boolean, not a flag that consumes an argument - Use jq for JSON
+  extraction; one import per line in Python heredoc - Drop Closes #1343 from settings.json
+  description field
+
+Refs #1343
+
+* docs(ci-automation): update getting-started and AGENTS.md for worktree-post-setup hook
+
+Document that Claude Code automatically runs make link-plugins && make link-thoughts after git
+  worktree add via the new PostToolUse hook. Update getting-started.md to distinguish Claude Code
+  sessions (automatic) from plain terminal (manual chain). Add hook inventory entry in AGENTS.md so
+  agents know not to chain the targets manually.
+
+* fix(ci-automation): add log() fallback, restore --orphan arg parsing, add hook tests
+
+- Add declare -F log fallback stub so fail-safe branches don't accidentally invoke /usr/bin/log on
+  macOS when _lib.sh is absent - Restore --orphan to flags_with_args: git 2.42+ uses --orphan
+  <branch> <path> so it must consume the next token, not be treated as a boolean flag - Add 7 tests
+  in agent/hooks/test.sh covering: valid path runs make in the right directory, missing path,
+  malformed JSON, unrelated command, -b parsing, --orphan parsing, and quoted paths with spaces
+
+* fix(ci-automation): handle -- end-of-options marker in worktree path parser
+
+`git worktree add -- <path>` is valid; the old parser treated `--` as an unknown boolean flag (i+1
+  skip) and then the path token (which may start with `-`) also as a flag, so the hook silently
+  skipped link-plugins/thoughts.
+
+Fix: detect `tok == "--"` before the generic `startswith("-")` branch and treat the very next token
+  as the path unconditionally, mirroring POSIX end-of-options semantics (comment #3366544594).
+
+Also adds T_wt_post_setup_parse_end_of_options_marker to cover this case.
+
+* chore(ci): sync uv.lock to 8.20.0
+
+lock-check failed because the merge of this branch with origin/main produces pyproject.toml=8.20.0
+  vs uv.lock=8.18.4.
+
+* fix(ci-automation): handle compound commands in worktree path parser
+
+- Replace glob case-check with boundary-aware grep matching doc-drift.sh pattern — avoids matching
+  echo/"quoted" non-invocations. - Find the git-worktree-add subsequence instead of assuming prefix,
+  so compound commands like `cd repo && git worktree add <path>` extract the correct worktree path
+  rather than silently skipping the link step. - Add T_wt_post_setup_parse_compound_command test
+  covering the regression.
+
+* test(ci-automation): add quoted-substring rejection test for worktree-post-setup
+
+Adds T_wt_post_setup_quoted_substring_not_matched to verify the boundary-aware guard rejects `echo
+  "git worktree add ..."` as a non-invocation (no make call, exit 0). Complements the
+  compound-command test added in e7f4842c.
+
+### Documentation
+
+- **agents**: Probe VST/R2 before skipping; add auto-skip hook + tests
+  ([#1486](https://github.com/tinaudio/synth-setter/pull/1486),
+  [`3a4bfd1`](https://github.com/tinaudio/synth-setter/commit/3a4bfd1478f73fb168c8f7fa12250082445dfe24))
+
+* docs(agents): add VST/R2 verification section; auto-skip when absent
+
+AGENTS.md gains a "VST and R2 verification" section (mirrors the GPU verification pattern) that
+  tells agents to probe SYNTH_SETTER_PLUGIN_PATH and RCLONE_CONFIG_R2_ACCESS_KEY_ID before labelling
+  integration tests as unrunnable, and directs them to run make test-vst-cpu / pytest -m
+  integration_r2 instead of writing SKIP in PR verification tables.
+
+conftest.py adds pytest_configure + pytest_collection_modifyitems hooks that probe VST file
+  existence and R2 env vars at collection time, auto-skipping requires_vst / integration_r2 tests
+  only when the resources are genuinely absent. In this devcontainer both are present so all tests
+  collect normally; in CI they're excluded by marker filter before the hook fires.
+
+Fixes the pattern seen in #1485 where agent-authored PR descriptions listed these tests as "SKIP:
+  requires VST / R2" instead of running them.
+
+* test(infra): add skip-hook tests; simplify conftest hook
+
+Remove the pytest_configure indirection — since both hooks live in the same module,
+  pytest_collection_modifyitems can read _VST_AVAILABLE and _R2_AVAILABLE directly without copying
+  them onto config.
+
+Add tests/infra/test_conftest_skip_hooks.py: five @pytest.mark.infra tests covering the
+  skip-inserted and run-through branches for both requires_vst and integration_r2 markers, plus the
+  unmarked-item case.
+
+Fix comment-hygiene C6 in pytest_collection_modifyitems: drop the type-restating opener from the
+  items :param: line.
+
+* chore(lint): tighten comment hygiene in skip-hook files
+
+Trim conftest.py module docstring to mention skip hooks; collapse three-line probe comment to two;
+  drop :param: type-restatements in test_conftest_skip_hooks.py and use pytest.MarkDecorator instead
+  of Any.
+
+### Features
+
+- **storage**: Deterministic structured W&B run IDs across data, train, and eval
+  ([#1490](https://github.com/tinaudio/synth-setter/pull/1490),
+  [`bedd9a9`](https://github.com/tinaudio/synth-setter/commit/bedd9a9e4d87cb0c181b136e33a08e5aae8c7bc8))
+
+Add synth_setter.run_id.make_wandb_run_id as the single source of truth for the
+  {config_id}-{timestamp} W&B run-id convention, stdlib-only so the launcher-pure pipeline.schemas
+  layer can import it without omegaconf/hydra.
+
+Training and eval pin a deterministic run id derived from the chosen Hydra experiment
+  (resolve_run_config_id), falling back to task_name; data-generation keeps pinning spec.run_id so
+  the W&B run stays in lockstep with the R2 prefix. pin_wandb_run_id centralizes writing id +
+  job_type onto the wandb logger cfg and no-ops when no wandb logger group is present.
+
+Refs #403
+
+
 ## v8.20.0 (2026-06-06)
 
 ### Features
