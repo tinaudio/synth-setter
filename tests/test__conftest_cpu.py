@@ -68,7 +68,7 @@ class TestCgroupAwareCpuCount:
 
         :param monkeypatch: Pytest monkeypatch fixture.
         """
-        monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: {0, 1, 2, 3})
+        monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: {0, 1, 2, 3}, raising=False)
         with patch("builtins.open", side_effect=_open_none):
             assert _cgroup_aware_cpu_count() == 4
 
@@ -77,7 +77,7 @@ class TestCgroupAwareCpuCount:
 
         :param monkeypatch: Pytest monkeypatch fixture.
         """
-        monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: set(range(8)))
+        monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: set(range(8)), raising=False)
         with patch("builtins.open", side_effect=_open_v2(200_000, 100_000)):
             assert _cgroup_aware_cpu_count() == 2
 
@@ -88,7 +88,7 @@ class TestCgroupAwareCpuCount:
 
         :param monkeypatch: Pytest monkeypatch fixture.
         """
-        monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: {0, 1})
+        monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: {0, 1}, raising=False)
         with patch("builtins.open", side_effect=_open_v2(800_000, 100_000)):
             assert _cgroup_aware_cpu_count() == 2
 
@@ -97,7 +97,7 @@ class TestCgroupAwareCpuCount:
 
         :param monkeypatch: Pytest monkeypatch fixture.
         """
-        monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: {0, 1, 2})
+        monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: {0, 1, 2}, raising=False)
 
         def _max_open(path: str, *_a: object, **_k: object) -> io.StringIO:
             if path == _V2_PATH:
@@ -112,7 +112,7 @@ class TestCgroupAwareCpuCount:
 
         :param monkeypatch: Pytest monkeypatch fixture.
         """
-        monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: set(range(4)))
+        monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: set(range(4)), raising=False)
         with patch("builtins.open", side_effect=_open_v1(100_000, 100_000)):
             assert _cgroup_aware_cpu_count() == 1
 
@@ -121,7 +121,7 @@ class TestCgroupAwareCpuCount:
 
         :param monkeypatch: Pytest monkeypatch fixture.
         """
-        monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: {0, 1, 2})
+        monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: {0, 1, 2}, raising=False)
         with patch("builtins.open", side_effect=_open_v1(-1, 100_000)):
             assert _cgroup_aware_cpu_count() == 3
 
@@ -130,7 +130,7 @@ class TestCgroupAwareCpuCount:
 
         :param monkeypatch: Pytest monkeypatch fixture.
         """
-        monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: set(range(4)))
+        monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: set(range(4)), raising=False)
         with patch("builtins.open", side_effect=_open_v2(50_000, 100_000)):
             assert _cgroup_aware_cpu_count() == 1
 
@@ -142,7 +142,7 @@ class TestCgroupAwareCpuCount:
 
         :param monkeypatch: Pytest monkeypatch fixture.
         """
-        monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: set(range(8)))
+        monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: set(range(8)), raising=False)
 
         def _empty_v2(path: str, *_a: object, **_k: object) -> io.StringIO:
             if path == _V2_PATH:
@@ -159,7 +159,7 @@ class TestCgroupAwareCpuCount:
 
         :param monkeypatch: Pytest monkeypatch fixture.
         """
-        monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: set(range(8)))
+        monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: set(range(8)), raising=False)
 
         def _bad_v2_good_v1(path: str, *_a: object, **_k: object) -> io.StringIO:
             if path == _V2_PATH:
@@ -180,7 +180,7 @@ class TestCgroupAwareCpuCount:
 
         :param monkeypatch: Pytest monkeypatch fixture.
         """
-        monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: {0, 1, 2})
+        monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: {0, 1, 2}, raising=False)
 
         def _bad_all(path: str, *_a: object, **_k: object) -> io.StringIO:
             if path == _V2_PATH:
