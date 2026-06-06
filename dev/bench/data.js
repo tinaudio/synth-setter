@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780703124986,
+  "lastUpdate": 1780705298990,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -6042,6 +6042,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.06292814016342163,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9c16c71ddf39aafc94f1b4e53980938994f71f10",
+          "message": "internal-feat(data): preflight dataset-copy runs against the source spec (#1459)\n\nThe copy path matches source→target shards purely by filename, silently\nassuming the target run is configured to mirror the source's layout. A\nmismatched param_spec_name, samples_per_shard, split sizes, or shard count\nwould otherwise surface one render (or one re-run) at a time, or produce a\nfaithful-looking copy with a different train/val/test partition.\n\nAdd DatasetSpec.validate_copy_source, a pure comparison that asserts the\nsource reproduces the target on every copy-relevant value and aggregates all\nmismatches into one error. The generate() chokepoint loads the source's\ninput_spec.json (via load_spec_from_uri) and runs it before the first render,\nso a misconfigured copy — or an unsynced source spec — fails loudly at launch.\n\nRefs #1429",
+          "timestamp": "2026-06-05T19:14:17-04:00",
+          "tree_id": "649035b641260be2258f497b74a709cfac590a01",
+          "url": "https://github.com/tinaudio/synth-setter/commit/9c16c71ddf39aafc94f1b4e53980938994f71f10"
+        },
+        "date": 1780705297757,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.879089117050171,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.491927277352661,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.02435939945280552,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.023459553718566895,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.7289555072784424,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 15.049816320249988,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 3.960341691970825,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.694928535334766,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.027928201481699944,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.031188547611236572,
             "unit": "1-cos"
           },
           {
