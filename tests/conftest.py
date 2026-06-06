@@ -56,6 +56,41 @@ _VST_SUBPROCESS_TIMEOUT_SECONDS = 600
 
 NUM_FIXTURE_SAMPLES = 5
 
+# Probe results cached at collection time so pytest_collection_modifyitems
+# can skip unavailable-resource tests without re-probing per item.
+_VST_AVAILABLE = Path(_SURGE_FIXTURE_PLUGIN_PATH).exists()
+_R2_AVAILABLE = bool(os.environ.get("RCLONE_CONFIG_R2_ACCESS_KEY_ID"))
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Cache VST and R2 availability on the config object for the skip hook.
+
+    :param config: pytest config object; receives ``_vst_available`` and ``_r2_available`` attrs.
+    """
+    config._vst_available = _VST_AVAILABLE  # type: ignore[attr-defined]
+    config._r2_available = _R2_AVAILABLE  # type: ignore[attr-defined]
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Auto-skip requires_vst / integration_r2 tests when resources are absent.
+
+    :param config: pytest config carrying the pre-probed availability flags.
+    :param items: collected test items, mutated in-place.
+    """
+    skip_vst = pytest.mark.skip(
+        reason=f"Surge XT VST not found at {_SURGE_FIXTURE_PLUGIN_PATH!r} "
+        f"(set SYNTH_SETTER_PLUGIN_PATH or place plugin at that path)"
+    )
+    skip_r2 = pytest.mark.skip(
+        reason="R2 credentials absent (RCLONE_CONFIG_R2_ACCESS_KEY_ID not set); "
+        "run `rclone lsd r2:` to verify"
+    )
+    for item in items:
+        if "requires_vst" in item.keywords and not config._vst_available:  # type: ignore[attr-defined]
+            item.add_marker(skip_vst)
+        if "integration_r2" in item.keywords and not config._r2_available:  # type: ignore[attr-defined]
+            item.add_marker(skip_r2)
+
 
 # Bootstraps Xvfb + xsettingsd + dbus for VST3 plugin init; ships inside
 # the ``synth_setter`` package via :mod:`synth_setter.resources`. X11
