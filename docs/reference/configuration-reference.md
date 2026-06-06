@@ -262,7 +262,6 @@ Gaps are configuration inputs that design docs specify or that standard practice
 | ------------------------------ | ------ | ------------------------------------------------------------------------------ | --------------------------- |
 | `train_wandb_run_id`           | string | `{train_config_id}-{YYYYMMDDTHHMMSSsssZ}` — structured, reconstructible run ID | storage-provenance-spec §1  |
 | `dataset_wandb_run_id` linkage | string | Explicit link to specific dataset run version                                  | storage-provenance-spec §2  |
-| `job_type`                     | string | Must be `"training"` in W&B config — currently empty                           | storage-provenance-spec §7  |
 | `github_sha` in `wandb.config` | string | Logged via `log_wandb_provenance()` but not in Hydra config                    | wandb-integration.md gap #3 |
 
 ### 5.2 W&B / Artifact Lineage
@@ -271,7 +270,6 @@ Gaps are configuration inputs that design docs specify or that standard practice
 | ------------------------ | ------ | ---------------------------------------------------------------- | --------------------------- |
 | `logger.wandb.log_model` | string | `"all"` — uploads every checkpoint immediately (crash-resilient) | training-pipeline.md §6.2   |
 | `logger.wandb.id`        | string | `{train_config_id}-{YYYYMMDDTHHMMSSsssZ}` instead of null/random | wandb-integration.md gap #8 |
-| `logger.wandb.job_type`  | string | `"training"` instead of empty                                    | storage-provenance-spec §7  |
 | `logger.wandb.resume`    | string | `"allow"` for W&B resume support                                 | training-pipeline.md §5.3   |
 
 Model `run.log_artifact()` lineage is wired via `_log_model_artifact()` (train), which logs the canonical `model-{config_id}` artifact. Dataset `run.use_artifact()` lineage is wired via `use_input_artifacts()` (train/eval), activated by the opt-in `consumed_dataset_config_id` / `consumed_train_config_id` config keys (default `null` = no edge; alias from `consumed_artifact_alias`, default `latest`).
