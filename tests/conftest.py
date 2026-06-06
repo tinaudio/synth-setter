@@ -1,4 +1,4 @@
-"""This file prepares config fixtures for other tests."""
+"""Config fixtures and collection-time skip hooks for the test suite."""
 
 import copy
 import os
@@ -56,9 +56,8 @@ _VST_SUBPROCESS_TIMEOUT_SECONDS = 600
 
 NUM_FIXTURE_SAMPLES = 5
 
-# Probed once at module import so pytest_collection_modifyitems doesn't re-probe per item.
-# _R2_AVAILABLE uses the env var (fast, no network); AGENTS.md's `rclone lsd r2:` is
-# the interactive verification command, not the skip criterion.
+# Probed once at module import; _R2_AVAILABLE uses the env var (no network hit)
+# — AGENTS.md's `rclone lsd r2:` is for interactive verification, not the skip criterion.
 _VST_AVAILABLE = Path(_SURGE_FIXTURE_PLUGIN_PATH).exists()
 _R2_AVAILABLE = bool(os.environ.get("RCLONE_CONFIG_R2_ACCESS_KEY_ID"))
 

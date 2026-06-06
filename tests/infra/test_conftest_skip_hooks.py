@@ -6,7 +6,7 @@ to verify both the skip-inserted and run-through branches for each marker.
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import cast
 
 import pytest
 
@@ -16,18 +16,18 @@ import tests.conftest as conftest_module
 class _FakeItem:
     """Minimal pytest item double sufficient for the skip hook."""
 
-    def __init__(self, keywords: dict[str, Any]) -> None:
+    def __init__(self, keywords: dict[str, pytest.MarkDecorator]) -> None:
         """Initialise with a keyword dict that mimics ``item.keywords``.
 
-        :param keywords: mapping from marker name to a truthy marker object.
+        :param keywords: marker-name-to-marker mapping the hook inspects.
         """
         self.keywords = keywords
-        self.added_markers: list[Any] = []
+        self.added_markers: list[pytest.MarkDecorator] = []
 
-    def add_marker(self, marker: Any) -> None:
+    def add_marker(self, marker: pytest.MarkDecorator) -> None:
         """Record the marker — mirrors ``pytest.Item.add_marker``.
 
-        :param marker: the marker passed by the hook.
+        :param marker: appended to ``added_markers`` for assertion.
         """
         self.added_markers.append(marker)
 
@@ -36,7 +36,7 @@ class _FakeItem:
 def test_requires_vst_item_skipped_when_vst_absent(monkeypatch: pytest.MonkeyPatch) -> None:
     """requires_vst item gets a skip marker with a path-specific reason when VST is absent.
 
-    :param monkeypatch: pytest fixture for patching module attributes.
+    :param monkeypatch: rebinds ``_VST_AVAILABLE`` on ``conftest_module``.
     """
     monkeypatch.setattr(conftest_module, "_VST_AVAILABLE", False)
     item = _FakeItem({"requires_vst": pytest.mark.requires_vst})
@@ -49,7 +49,7 @@ def test_requires_vst_item_skipped_when_vst_absent(monkeypatch: pytest.MonkeyPat
 def test_integration_r2_item_skipped_when_r2_absent(monkeypatch: pytest.MonkeyPatch) -> None:
     """integration_r2 item gets a skip marker with a credential hint when R2 is absent.
 
-    :param monkeypatch: pytest fixture for patching module attributes.
+    :param monkeypatch: rebinds ``_R2_AVAILABLE`` on ``conftest_module``.
     """
     monkeypatch.setattr(conftest_module, "_R2_AVAILABLE", False)
     item = _FakeItem({"integration_r2": pytest.mark.integration_r2})
@@ -62,7 +62,7 @@ def test_integration_r2_item_skipped_when_r2_absent(monkeypatch: pytest.MonkeyPa
 def test_requires_vst_item_not_skipped_when_vst_present(monkeypatch: pytest.MonkeyPatch) -> None:
     """requires_vst item receives no skip marker when VST is present.
 
-    :param monkeypatch: pytest fixture for patching module attributes.
+    :param monkeypatch: rebinds ``_VST_AVAILABLE`` on ``conftest_module``.
     """
     monkeypatch.setattr(conftest_module, "_VST_AVAILABLE", True)
     item = _FakeItem({"requires_vst": pytest.mark.requires_vst})
@@ -74,7 +74,7 @@ def test_requires_vst_item_not_skipped_when_vst_present(monkeypatch: pytest.Monk
 def test_integration_r2_item_not_skipped_when_r2_present(monkeypatch: pytest.MonkeyPatch) -> None:
     """integration_r2 item receives no skip marker when R2 credentials are present.
 
-    :param monkeypatch: pytest fixture for patching module attributes.
+    :param monkeypatch: rebinds ``_R2_AVAILABLE`` on ``conftest_module``.
     """
     monkeypatch.setattr(conftest_module, "_R2_AVAILABLE", True)
     item = _FakeItem({"integration_r2": pytest.mark.integration_r2})
@@ -86,7 +86,7 @@ def test_integration_r2_item_not_skipped_when_r2_present(monkeypatch: pytest.Mon
 def test_unmarked_item_receives_no_skip_markers(monkeypatch: pytest.MonkeyPatch) -> None:
     """An item with no VST/R2 markers is untouched regardless of resource availability.
 
-    :param monkeypatch: pytest fixture for patching module attributes.
+    :param monkeypatch: rebinds both ``_VST_AVAILABLE`` and ``_R2_AVAILABLE`` to False.
     """
     monkeypatch.setattr(conftest_module, "_VST_AVAILABLE", False)
     monkeypatch.setattr(conftest_module, "_R2_AVAILABLE", False)
