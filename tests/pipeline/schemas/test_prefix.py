@@ -115,46 +115,49 @@ class TestMakeR2Prefix:
                 make_r2_prefix(DatasetConfigId("a"), DatasetRunId("b"), prefix_root=bad)
 
 
+_ASSERT_CONFIG_ID = DatasetConfigId("surge-simple")
+_ASSERT_RUN_ID = DatasetRunId("surge-simple-20260313T100000000Z")
+_ASSERT_EXPECTED = make_r2_prefix(_ASSERT_CONFIG_ID, _ASSERT_RUN_ID)
+
+
 class TestAssertR2PrefixMatches:
     """Tests for assert_r2_prefix_matches."""
 
-    _CONFIG_ID = DatasetConfigId("surge-simple")
-    _RUN_ID = DatasetRunId("surge-simple-20260313T100000000Z")
-    _EXPECTED = "data/surge-simple/surge-simple-20260313T100000000Z/"
-
     def test_matching_prefix_does_not_raise(self) -> None:
         """No exception when the materialized prefix matches the derived value."""
-        assert_r2_prefix_matches(self._EXPECTED, self._CONFIG_ID, self._RUN_ID)
+        assert_r2_prefix_matches(_ASSERT_EXPECTED, _ASSERT_CONFIG_ID, _ASSERT_RUN_ID)
 
     def test_matching_prefix_with_explicit_root_does_not_raise(self) -> None:
         """Custom prefix_root matches when prefix was built with the same root."""
-        prefix = make_r2_prefix(self._CONFIG_ID, self._RUN_ID, prefix_root="datasets")
-        assert_r2_prefix_matches(prefix, self._CONFIG_ID, self._RUN_ID, prefix_root="datasets")
+        prefix = make_r2_prefix(_ASSERT_CONFIG_ID, _ASSERT_RUN_ID, prefix_root="datasets")
+        assert_r2_prefix_matches(prefix, _ASSERT_CONFIG_ID, _ASSERT_RUN_ID, prefix_root="datasets")
 
     def test_wrong_config_id_raises(self) -> None:
         """ValueError when config_id doesn't match what the prefix encodes."""
         with pytest.raises(ValueError, match="mismatch"):
-            assert_r2_prefix_matches(self._EXPECTED, DatasetConfigId("other-cfg"), self._RUN_ID)
+            assert_r2_prefix_matches(
+                _ASSERT_EXPECTED, DatasetConfigId("other-cfg"), _ASSERT_RUN_ID
+            )
 
     def test_wrong_run_id_raises(self) -> None:
         """ValueError when run_id doesn't match what the prefix encodes."""
         with pytest.raises(ValueError, match="mismatch"):
             assert_r2_prefix_matches(
-                self._EXPECTED, self._CONFIG_ID, DatasetRunId("other-20260313T100000000Z")
+                _ASSERT_EXPECTED, _ASSERT_CONFIG_ID, DatasetRunId("other-20260313T100000000Z")
             )
 
     def test_wrong_prefix_root_raises(self) -> None:
         """ValueError when the prefix_root doesn't match the prefix's root segment."""
         with pytest.raises(ValueError, match="mismatch"):
             assert_r2_prefix_matches(
-                self._EXPECTED, self._CONFIG_ID, self._RUN_ID, prefix_root="train"
+                _ASSERT_EXPECTED, _ASSERT_CONFIG_ID, _ASSERT_RUN_ID, prefix_root="train"
             )
 
     def test_error_message_includes_actual_and_expected(self) -> None:
         """ValueError message carries both the received and expected prefix strings."""
         bad_prefix = "data/wrong-cfg/wrong-run/"
-        with pytest.raises(ValueError) as exc_info:
-            assert_r2_prefix_matches(bad_prefix, self._CONFIG_ID, self._RUN_ID)
+        with pytest.raises(ValueError, match="mismatch") as exc_info:
+            assert_r2_prefix_matches(bad_prefix, _ASSERT_CONFIG_ID, _ASSERT_RUN_ID)
         msg = str(exc_info.value)
         assert bad_prefix in msg
-        assert self._EXPECTED in msg
+        assert _ASSERT_EXPECTED in msg

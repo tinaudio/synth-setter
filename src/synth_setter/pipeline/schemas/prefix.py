@@ -78,9 +78,9 @@ def assert_r2_prefix_matches(
         ``make_r2_prefix(dataset_config_id, dataset_wandb_run_id, prefix_root)``.
     """
     expected = make_r2_prefix(dataset_config_id, dataset_wandb_run_id, prefix_root)
-    if str(prefix) != str(expected):
+    if prefix != expected:
         raise ValueError(
-            f"R2 prefix mismatch: got {str(prefix)!r}, expected {str(expected)!r} "
+            f"R2 prefix mismatch: got {prefix!r}, expected {expected!r} "
             f"(config_id={dataset_config_id!r}, run_id={dataset_wandb_run_id!r}, "
             f"prefix_root={prefix_root!r})"
         )

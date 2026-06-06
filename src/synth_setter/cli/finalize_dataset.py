@@ -169,7 +169,10 @@ def finalize_from_spec(spec: DatasetSpec, work_dir: Path) -> None:
     :param spec: Validated dataset spec.
     :param work_dir: Writable scratch dir; created if missing; retained
         after the call (multi-GB on the hdf5 branch).
-    :raises ValueError: ``spec.output_format`` is neither ``"hdf5"`` nor ``"wds"``.
+    :raises ValueError: ``spec.r2.prefix`` does not match
+        ``make_r2_prefix(spec.task_name, spec.run_id, spec.r2.prefix_root)``
+        (prefix drift detected before any R2 writes), or ``spec.output_format``
+        is neither ``"hdf5"`` nor ``"wds"``.
     """
     marker_uri = spec.r2.dataset_complete_marker_uri()
     if r2_io.object_size(marker_uri) is not None:
