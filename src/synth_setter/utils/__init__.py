@@ -5,6 +5,7 @@ from synth_setter.utils.logging_utils import (
     pin_wandb_run_id,
     resolve_git_sha,
     resolve_run_config_id,
+    use_input_artifacts,
 )
 from synth_setter.utils.pylogger import RankedLogger
 from synth_setter.utils.rich_utils import enforce_tags, print_config_tree

@@ -190,18 +190,27 @@ def _write_smoke_stats_npz(train_h5: Path) -> None:
 register_resolvers()
 
 
-@pytest.fixture(autouse=True)
-def _reset_hydra_config_singleton() -> Iterator[None]:
-    """Clear the process-global ``HydraConfig`` after each test.
+def reset_hydra_config_singleton() -> None:
+    """Clear Hydra's ``HydraConfig`` singleton so its ``cfg`` reads as unset.
 
     ``HydraConfig`` is a Hydra ``Singleton`` distinct from ``GlobalHydra``; tests
-    that call ``HydraConfig().set_config(...)`` otherwise leak the stored config
-    (and its ``runtime.choices.experiment``) into later tests, so
-    ``resolve_run_config_id`` reads a stale experiment instead of falling back to
-    ``task_name``.
+    that call ``HydraConfig().set_config(...)`` populate a process-global
+    singleton that ``GlobalHydra.instance().clear()`` leaves untouched. The stale
+    ``runtime.choices.experiment`` then leaks into a later, Hydra-context-free
+    test via :func:`synth_setter.utils.logging_utils.resolve_run_config_id`,
+    which reads a stale experiment instead of falling back to ``task_name``.
+    """
+    HydraConfig.instance().cfg = None
+
+
+@pytest.fixture(autouse=True)
+def _clear_hydra_config_singleton() -> Iterator[None]:
+    """Reset the ``HydraConfig`` singleton after every test.
+
+    :yields None: Control to the test, then clears the singleton on teardown.
     """
     yield
-    HydraConfig.instance().cfg = None
+    reset_hydra_config_singleton()
 
 
 @pytest.fixture(scope="package")

@@ -6,16 +6,22 @@ See python-testing.md §Fakes.
 
 import os
 import subprocess
+from collections.abc import Iterator
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import patch
 
 import pytest
+from lightning.pytorch.loggers import Logger
+from lightning.pytorch.loggers.wandb import WandbLogger
+from lightning_utilities.core.rank_zero import rank_zero_only
 from omegaconf import OmegaConf
 
 from synth_setter.utils.logging_utils import (
     log_wandb_provenance,
     pin_wandb_run_id,
     resolve_run_config_id,
+    use_input_artifacts,
 )
 
 # ---------------------------------------------------------------------------
@@ -204,6 +210,42 @@ class TestResolveRunConfigId:
 
 
 # ---------------------------------------------------------------------------
+# HydraConfig singleton isolation — set_config leaks the experiment choice
+# ---------------------------------------------------------------------------
+
+
+class TestHydraConfigSingletonReset:
+    """A populated ``HydraConfig`` singleton must not leak into the next test.
+
+    Tests that call ``HydraConfig().set_config`` populate a process-global
+    singleton that ``GlobalHydra.instance().clear()`` does not touch; the leaked
+    ``runtime.choices.experiment`` then makes ``resolve_run_config_id`` return a
+    stale config_id for an unrelated, Hydra-context-free test.
+    """
+
+    def test_reset_clears_a_populated_singleton(self) -> None:
+        """``reset_hydra_config_singleton`` makes ``initialized()`` False again."""
+        from hydra import compose, initialize_config_module
+        from hydra.core.hydra_config import HydraConfig
+
+        from tests.conftest import reset_hydra_config_singleton
+
+        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+            cfg = compose(
+                config_name="train",
+                overrides=["experiment=surge/fake_oracle"],
+                return_hydra_config=True,
+            )
+        HydraConfig.instance().set_config(cfg)
+        assert HydraConfig.initialized()
+        assert HydraConfig.get().runtime.choices["experiment"] == "surge/fake_oracle"
+
+        reset_hydra_config_singleton()
+
+        assert not HydraConfig.initialized()
+
+
+# ---------------------------------------------------------------------------
 # pin_wandb_run_id — write run id + job_type before logger instantiation
 # ---------------------------------------------------------------------------
 
@@ -227,3 +269,123 @@ class TestPinWandbRunId:
         pin_wandb_run_id(cfg, "flow_simple", "training")
 
         assert "wandb" not in cfg.logger
+
+
+# ---------------------------------------------------------------------------
+# use_input_artifacts — consumed-artifact lineage edges (spec §5)
+# ---------------------------------------------------------------------------
+
+
+class FakeWandbRun:
+    """Fake wandb run recording every ``use_artifact`` call as inspectable state."""
+
+    def __init__(self, raises: bool = False) -> None:
+        """:param raises: When true, ``use_artifact`` raises after recording the call."""
+        self.consumed: list[str] = []
+        self._raises = raises
+
+    def use_artifact(self, name_alias: str) -> None:
+        """Record the requested ``name:alias`` (or raise to model a wandb outage).
+
+        :param name_alias: The ``{name}:{alias}`` lineage edge requested.
+        :raises RuntimeError: when the fake was built with ``raises=True``.
+        """
+        self.consumed.append(name_alias)
+        if self._raises:
+            raise RuntimeError("wandb down")
+
+
+class FakeWandbLogger(WandbLogger):
+    """A ``WandbLogger`` whose ``experiment`` is a fake run; bypasses ``wandb.init``."""
+
+    def __init__(self, run: FakeWandbRun) -> None:
+        """:param run: Fake run returned in place of the live wandb run."""
+        self._fake_run = run
+
+    @property
+    def experiment(self) -> FakeWandbRun:  # type: ignore[override]
+        """:returns: The injected fake run standing in for the live wandb run."""
+        return self._fake_run
+
+
+class TestUseInputArtifacts:
+    """Recording consumed-artifact edges on WandbLoggers for the lineage DAG."""
+
+    def test_wandb_logger_present_records_name_alias_edge(self) -> None:
+        """A set ref forwards ``name:alias`` to the run's ``use_artifact``."""
+        run = FakeWandbRun()
+
+        use_input_artifacts([FakeWandbLogger(run)], [("data-diva-v1", "latest")])
+
+        assert run.consumed == ["data-diva-v1:latest"]
+
+    def test_multiple_refs_record_one_edge_each(self) -> None:
+        """Eval consumes both model and dataset — one edge recorded per ref."""
+        run = FakeWandbRun()
+
+        use_input_artifacts(
+            [FakeWandbLogger(run)],
+            [("model-flow-simple", "best"), ("data-diva-v1", "latest")],
+        )
+
+        assert run.consumed == ["model-flow-simple:best", "data-diva-v1:latest"]
+
+    def test_non_wandb_logger_records_no_edge(self) -> None:
+        """A logger list without a WandbLogger is a silent no-op."""
+        run = FakeWandbRun()
+        non_wandb_logger = cast(Logger, SimpleNamespace(experiment=run))
+
+        use_input_artifacts([non_wandb_logger], [("data-diva-v1", "latest")])
+
+        assert run.consumed == []
+
+    def test_empty_refs_records_no_edge(self) -> None:
+        """No refs means no lineage edge, so use_artifact is never called."""
+        run = FakeWandbRun()
+
+        use_input_artifacts([FakeWandbLogger(run)], [])
+
+        assert run.consumed == []
+
+    def test_no_wandb_logger_does_not_consume_refs_iterable(self) -> None:
+        """With no WandbLogger, ``refs`` is never iterated — the materialize is gated."""
+        run = FakeWandbRun()
+        non_wandb_logger = cast(Logger, SimpleNamespace(experiment=run))
+
+        def _exploding_refs() -> Iterator[tuple[str, str]]:
+            raise AssertionError("refs iterated despite no WandbLogger present")
+            yield ("unreachable", "x")  # pragma: no cover — marks this a generator
+
+        use_input_artifacts([non_wandb_logger], _exploding_refs())
+
+        assert run.consumed == []
+
+    def test_generator_refs_record_on_every_wandb_logger(self) -> None:
+        """A one-shot generator ``refs`` records on both loggers, not just the first."""
+        run_a, run_b = FakeWandbRun(), FakeWandbRun()
+        refs = (edge for edge in [("data-diva-v1", "latest")])
+
+        use_input_artifacts([FakeWandbLogger(run_a), FakeWandbLogger(run_b)], refs)
+
+        assert run_a.consumed == ["data-diva-v1:latest"]
+        assert run_b.consumed == ["data-diva-v1:latest"]
+
+    def test_use_artifact_failure_is_swallowed(self) -> None:
+        """A wandb failure is swallowed so a run is never aborted by lineage."""
+        run = FakeWandbRun(raises=True)
+
+        use_input_artifacts([FakeWandbLogger(run)], [("data-diva-v1", "latest")])
+
+        assert run.consumed == ["data-diva-v1:latest"]
+
+    def test_non_zero_rank_records_no_edge(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """On a non-zero DDP rank the helper is a no-op — only rank 0 records lineage.
+
+        :param monkeypatch: Sets ``rank_zero_only.rank`` to a non-zero rank.
+        """
+        run = FakeWandbRun()
+        monkeypatch.setattr(rank_zero_only, "rank", 1)
+
+        use_input_artifacts([FakeWandbLogger(run)], [("data-diva-v1", "latest")])
+
+        assert run.consumed == []
