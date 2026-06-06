@@ -826,6 +826,56 @@ def dataset_spec_factory() -> Callable[..., DatasetSpec]:
     return factory
 
 
+def _cgroup_aware_cpu_count() -> int:
+    """Return CPUs available to this process, honouring cgroup quota and affinity.
+
+    Takes min(affinity, cgroup_quota) so ``-n auto`` doesn't over-subscribe the
+    container — see #1490 for the "worker crashed" failure mode this fixes.
+
+    :returns: Usable CPU count, always at least 1.
+    """
+    if hasattr(os, "sched_getaffinity"):
+        affinity = len(os.sched_getaffinity(0))
+    else:
+        affinity = os.cpu_count() or 1
+
+    quota: float | None = None
+    try:  # cgroup v2: unified hierarchy, kernel >= 4.5
+        with open("/sys/fs/cgroup/cpu.max") as fh:
+            parts = fh.read().split()
+            if len(parts) >= 2 and parts[0] != "max":
+                quota = int(parts[0]) / int(parts[1])
+    except (OSError, ValueError, ZeroDivisionError):
+        try:  # cgroup v1: legacy per-subsystem hierarchy
+            with open("/sys/fs/cgroup/cpu/cpu.cfs_quota_us") as fh:
+                quota_us = int(fh.read())
+            with open("/sys/fs/cgroup/cpu/cpu.cfs_period_us") as fh:
+                period_us = int(fh.read())
+            if quota_us > 0 and period_us > 0:
+                quota = quota_us / period_us
+        except (OSError, ValueError, ZeroDivisionError):
+            pass  # no cgroup limit; use affinity only
+
+    cpus = affinity if quota is None else min(affinity, quota)
+    return max(1, int(cpus))
+
+
+def pytest_xdist_auto_num_workers(config: pytest.Config) -> int:  # noqa: ARG001
+    """Override pytest-xdist ``-n auto`` to respect the container's cgroup CPU quota.
+
+    Checks ``PYTEST_XDIST_AUTO_NUM_WORKERS`` first so the env-var escape hatch
+    that xdist's built-in implementation honours is preserved even when this
+    hook wins the ``firstresult`` race.
+
+    :param config: The pytest config object (unused; required by the hook signature).
+    :returns: Worker count clamped to the container's real CPU allocation.
+    """
+    env_override = os.environ.get("PYTEST_XDIST_AUTO_NUM_WORKERS")
+    if env_override is not None:
+        return max(1, int(env_override))
+    return _cgroup_aware_cpu_count()
+
+
 def pytest_addoption(parser: pytest.Parser) -> None:
     """Register custom CLI options for the test suite."""
     parser.addoption(
