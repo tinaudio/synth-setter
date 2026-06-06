@@ -919,20 +919,107 @@ def _cgroup_aware_cpu_count() -> int:
     return max(1, int(cpus))
 
 
+# Per-worker resident-memory budget for the -n auto memory clamp, overridable
+# via PYTEST_XDIST_WORKER_MEM_MB. 1 GiB suits a torch+h5py+Hydra worker.
+_DEFAULT_WORKER_MEM_MB = 1024
+
+# A v1 memory.limit_in_bytes at or above this is the kernel's unlimited sentinel.
+_MEM_UNLIMITED_SENTINEL = 1 << 62
+
+
+def _meminfo_available_bytes() -> int | None:
+    """Read ``MemAvailable`` from ``/proc/meminfo`` as bytes.
+
+    :returns: Host available memory in bytes, or None if the field is unreadable.
+    """
+    try:
+        with open("/proc/meminfo") as fh:
+            for line in fh:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) * 1024  # field is in kibibytes
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def _cgroup_memory_limit_bytes() -> int | None:
+    """Read the cgroup memory limit in bytes, honouring v2 then v1.
+
+    :returns: The cgroup memory cap in bytes, or None when unset or unlimited.
+    """
+    try:  # cgroup v2: unified hierarchy, kernel >= 4.5
+        with open("/sys/fs/cgroup/memory.max") as fh:
+            limit_field = fh.read().split()[0]
+            if limit_field != "max":
+                return int(limit_field)
+            return None
+    except (OSError, ValueError, IndexError):
+        pass
+    try:  # cgroup v1: legacy per-subsystem hierarchy
+        with open("/sys/fs/cgroup/memory/memory.limit_in_bytes") as fh:
+            limit = int(fh.read())
+        if 0 < limit < _MEM_UNLIMITED_SENTINEL:
+            return limit
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def _available_memory_bytes() -> int | None:
+    """Return usable memory as ``min(host MemAvailable, cgroup limit)``.
+
+    On a shared host the cgroup limit is usually unset, so host MemAvailable is the real ceiling;
+    in a memory-capped container the cgroup limit wins.
+
+    :returns: The tighter of the two figures in bytes, or None if neither is known.
+    """
+    candidates = [
+        value
+        for value in (_meminfo_available_bytes(), _cgroup_memory_limit_bytes())
+        if value is not None
+    ]
+    return min(candidates) if candidates else None
+
+
+def _memory_aware_worker_count() -> int | None:
+    """Cap ``-n auto`` workers by available memory and a per-worker budget.
+
+    Divides available memory by ``PYTEST_XDIST_WORKER_MEM_MB`` (default 1 GiB) so
+    a busy shared host doesn't OOM-kill the run — the failure #1490's CPU clamp
+    can't catch, since neither cpu.max nor memory.max is set on a shared host.
+
+    :returns: Memory-bounded worker count (>=1), or None when memory is unknown.
+    """
+    available = _available_memory_bytes()
+    if available is None:
+        return None
+    raw_budget = os.environ.get("PYTEST_XDIST_WORKER_MEM_MB")
+    try:
+        budget_mb = int(raw_budget) if raw_budget else _DEFAULT_WORKER_MEM_MB
+    except ValueError:
+        budget_mb = _DEFAULT_WORKER_MEM_MB
+    if budget_mb <= 0:
+        budget_mb = _DEFAULT_WORKER_MEM_MB
+    return max(1, available // (budget_mb * 1024 * 1024))
+
+
 def pytest_xdist_auto_num_workers(config: pytest.Config) -> int:  # noqa: ARG001
-    """Override pytest-xdist ``-n auto`` to respect the container's cgroup CPU quota.
+    """Override pytest-xdist ``-n auto`` to fit the host's CPU and memory headroom.
 
     Checks ``PYTEST_XDIST_AUTO_NUM_WORKERS`` first so the env-var escape hatch
     that xdist's built-in implementation honours is preserved even when this
-    hook wins the ``firstresult`` race.
+    hook wins the ``firstresult`` race. Otherwise returns ``min(cpu, memory)``
+    so neither resource is over-subscribed.
 
     :param config: The pytest config object (unused; required by the hook signature).
-    :returns: Worker count clamped to the container's real CPU allocation.
+    :returns: Worker count clamped to the host's real CPU and memory allocation.
     """
     env_override = os.environ.get("PYTEST_XDIST_AUTO_NUM_WORKERS")
     if env_override is not None:
         return max(1, int(env_override))
-    return _cgroup_aware_cpu_count()
+    cpu_workers = _cgroup_aware_cpu_count()
+    mem_workers = _memory_aware_worker_count()
+    return cpu_workers if mem_workers is None else min(cpu_workers, mem_workers)
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
