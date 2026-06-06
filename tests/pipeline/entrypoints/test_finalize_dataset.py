@@ -1329,7 +1329,9 @@ def test_finalize_swallows_artifact_log_failure_and_keeps_r2_artifacts(
     finalize. Injects the failure at ``build_dataset_artifact`` (called inside the
     ``try``) rather than spying ``log_artifact`` because the production wds path
     references the prefix dir — patching the builder is the smallest seam that
-    drives the ``except`` branch deterministically. State-based witness: the
+    drives the ``except`` branch deterministically. A ``called`` flag asserts the
+    builder actually ran, so a logger-type mismatch that skipped the artifact
+    path entirely could not pass the test vacuously. State-based witness: the
     return is exception-free and both ``stats.npz`` and the marker exist on the
     fake remote.
 
@@ -1346,8 +1348,10 @@ def test_finalize_swallows_artifact_log_failure_and_keeps_r2_artifacts(
     monkeypatch.setenv("WANDB_DATA_DIR", str(tmp_path / "wandb-data"))
     wandb.teardown()
 
+    builder_calls: list[str] = []
+
     def boom(spec: DatasetSpec) -> NoReturn:
-        del spec
+        builder_calls.append(spec.task_name)
         raise RuntimeError("simulated build_dataset_artifact failure")
 
     monkeypatch.setattr("synth_setter.cli.finalize_dataset.build_dataset_artifact", boom)
@@ -1362,12 +1366,15 @@ def test_finalize_swallows_artifact_log_failure_and_keeps_r2_artifacts(
 
     finalize_dataset.finalize(cfg)
 
+    assert builder_calls == [spec.task_name], (
+        f"build_dataset_artifact was not invoked (artifact path skipped?): {builder_calls}"
+    )
     assert _uri_to_local_path(fake_r2_remote, spec.r2.stats_uri()).is_file()
     assert _uri_to_local_path(fake_r2_remote, spec.r2.dataset_complete_marker_uri()).is_file()
     assert wandb.run is None, "finalize() left the wandb run open after swallowing the failure"
 
 
-def test_finalize_forces_wandb_resume_allow_when_group_present(
+def test_finalize_forces_wandb_resume_allow_when_wandb_cfg_present(
     tmp_path: Path,
     fake_r2_remote: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1375,12 +1382,13 @@ def test_finalize_forces_wandb_resume_allow_when_group_present(
 ) -> None:
     """``finalize()`` forces ``logger.wandb.resume="allow"`` before instantiating loggers.
 
-    Pins finalize_dataset.py:319-320: when a wandb group is present the run must
-    attach to the pinned generation run rather than mint a new one. Captures the
-    cfg ``instantiate_loggers`` actually receives (the cfg object is mutated
-    in-place, so the captured reference reflects the forced value) and stops the
-    body early via a ``finalize_from_spec`` raise — the resume mutation happens
-    *before* dispatch, so no R2 work is needed and the offline run never opens.
+    Pins finalize_dataset.py:319-320: when ``logger.wandb`` is present in the cfg
+    the run must attach to the pinned generation run rather than mint a new one.
+    Captures the cfg ``instantiate_loggers`` actually receives (the cfg object is
+    mutated in-place, so the captured reference reflects the forced value) and
+    stops the body early via a ``finalize_from_spec`` raise — the resume mutation
+    happens *before* dispatch, so no R2 work is needed and the offline run never
+    opens.
 
     :param tmp_path: Hosts the spec JSON and scratch work_dir.
     :param fake_r2_remote: Local-typed rclone remote (unused for I/O; the body
