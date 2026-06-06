@@ -1768,6 +1768,30 @@ MAKE_STUB
 }
 it "worktree-post-setup: quoted path with spaces parsed correctly via shlex" T_wt_post_setup_parse_quoted_path_with_spaces
 
+T_wt_post_setup_parse_end_of_options_marker() {
+  local out target make_log
+  reset_sandbox
+  target="$TEST_DIR/wt-eoo-$$"
+  mkdir -p "$target"
+  make_log="$TEST_DIR/make-eoo-$$.txt"
+  cat > "$STUBS/make" <<MAKE_STUB
+#!/usr/bin/env bash
+echo "CWD=\$(pwd)" >> "$make_log"
+MAKE_STUB
+  chmod +x "$STUBS/make"
+  # -- signals end-of-options; path token follows even if it starts with dashes.
+  out=$(cd "$SANDBOX" && \
+    printf '{"tool_name":"Bash","tool_input":{"command":"git worktree add -- %s"}}' "$target" | \
+    bash "$SANDBOX/agent/hooks/worktree-post-setup.sh" 2>&1; echo "EXIT:$?")
+  rm -f "$STUBS/make"
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected exit 0, got: $out"; return 1; }
+  grep -q "CWD=$target" "$make_log" 2>/dev/null || {
+    echo "-- marker: make ran in wrong dir (token after -- not used as path?); log: $(cat "$make_log" 2>/dev/null)"
+    return 1
+  }
+}
+it "worktree-post-setup: -- end-of-options marker — path after -- is used even when it starts with dashes" T_wt_post_setup_parse_end_of_options_marker
+
 # ===========================================================================
 # Run
 # ===========================================================================

@@ -40,7 +40,12 @@ flags_with_args = {"-b", "-B", "--orphan", "--reason"}
 path = None
 while i < len(tokens):
     tok = tokens[i]
-    if tok.startswith("-"):
+    if tok == "--":
+        # End-of-options: next token is the path even if it looks like a flag.
+        if i + 1 < len(tokens):
+            path = tokens[i + 1]
+        break
+    elif tok.startswith("-"):
         i += 2 if tok in flags_with_args else 1
     else:
         path = tok
