@@ -160,12 +160,14 @@ def compute_jtfs_distance(target: np.ndarray, pred: np.ndarray, J: int = 10, Q: 
 
 
 def compute_mfcc(target: np.ndarray, sample_rate: float = 44100.0) -> np.ndarray:
-    """Return MFCC features for ``target``, shape ``(C, T)``; output shape ``(20, frames)``.
+    """Return MFCC features for ``target``, output shape ``(20, frames)``.
 
-    :param target: Audio waveform; channels are averaged before feature extraction.
+    :param target: Audio waveform; shape ``(T,)`` or ``(C, T)`` — channels averaged to mono.
     :param sample_rate: Sample rate in Hz; governs window and hop lengths.
     :returns: MFCC matrix, shape ``(20, frames)``.
     """
+    if target.ndim > 1:
+        target = target.mean(axis=0)
     window_length = int(0.05 * sample_rate)
     hop_length = int(0.01 * sample_rate)
 
@@ -216,7 +218,7 @@ pesto_model = None
 @torch.no_grad()
 def get_pesto_activations(
     target: np.ndarray, pred: np.ndarray, sample_rate: float = 44100.0
-) -> np.ndarray:
+) -> tuple[np.ndarray, np.ndarray]:
     """Return PESTO F0 activations for ``target`` and ``pred``, both shape ``(C, T)``.
 
     Filters to frames where both signals exceed the 0.85 confidence threshold.
@@ -425,7 +427,7 @@ def _aggregate_metrics(audio_dirs: list[Path], work_dir: Path, num_workers: int)
 @click.command()
 @click.argument("audio_dir", type=str)
 @click.argument("output_dir", type=str, default="metrics")
-@click.option("--num_workers", "-w", type=int, default=8)
+@click.option("--num_workers", "-w", type=click.IntRange(min=1), default=8)
 @click.option(
     "--shuffle_seed",
     type=int,
@@ -473,6 +475,11 @@ def main(audio_dir: str, output_dir: str, num_workers: int, shuffle_seed: int) -
 
     # filter to sample_* to match shuffle_pred_audio._sample_dirs glob pattern (#489)
     probe_dirs = [d for d in audio_dirs if d.name.startswith("sample_")]
+    if shuffle_seed != 0 and len(probe_dirs) < 2:
+        raise ValueError(
+            f"shuffle_seed={shuffle_seed} was set but only {len(probe_dirs)} sample_* dir(s) "
+            "exist; the render-order probe requires at least 2."
+        )
     uniform = params_are_uniform(probe_dirs)
     if not uniform and shuffle_seed != 0:
         raise ValueError(

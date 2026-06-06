@@ -279,6 +279,15 @@ def test_compute_mfcc_is_deterministic() -> None:
     np.testing.assert_array_equal(compute_mfcc(audio), compute_mfcc(audio))
 
 
+def test_compute_mfcc_multichannel_input_returns_20_coefficients() -> None:
+    """``compute_mfcc`` accepts ``(C, T)`` input and still returns ``(20, frames)``."""
+    audio = _sine(seconds=0.5)  # shape (1, T)
+    mfcc = compute_mfcc(audio)
+    assert mfcc.shape[0] == 20
+    assert mfcc.shape[1] > 0
+    assert np.isfinite(mfcc).all()
+
+
 # ---------------------------------------------------------------------------
 # compute_wmfcc
 # ---------------------------------------------------------------------------
@@ -723,6 +732,42 @@ def test_main_nonuniform_params_explicit_seed_raises(tmp_path: Path) -> None:
 
     assert result.exit_code != 0
     assert isinstance(result.exception, ValueError)
+
+
+@pytest.mark.slow
+def test_main_explicit_seed_single_sample_dir_raises(tmp_path: Path) -> None:
+    """Explicit non-zero seed with only one sample_* dir → ``ValueError``.
+
+    With fewer than two dirs the probe cannot run; an explicit seed signals intent so it must raise
+    rather than silently skip.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    audio_root = tmp_path / "audio"
+    audio_root.mkdir()
+    metrics_dir = tmp_path / "metrics"
+    _make_uniform_sample_dir(audio_root, "0", _sine(seconds=0.2), _sine(seconds=0.2))
+
+    runner = CliRunner()
+    result = runner.invoke(
+        compute_audio_metrics_main,
+        [str(audio_root), str(metrics_dir), "-w", "1", "--shuffle_seed", "7"],
+    )
+    assert result.exit_code != 0
+    assert isinstance(result.exception, ValueError)
+
+
+def test_main_num_workers_zero_raises_usage_error(tmp_path: Path) -> None:
+    """``--num_workers 0`` is rejected at the CLI boundary before any IO.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    runner = CliRunner()
+    result = runner.invoke(
+        compute_audio_metrics_main,
+        [str(tmp_path / "audio"), str(tmp_path / "metrics"), "-w", "0"],
+    )
+    assert result.exit_code != 0
 
 
 @pytest.mark.slow
