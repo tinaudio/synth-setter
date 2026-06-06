@@ -17,6 +17,6 @@ wandb:
   settings:
     _target_: wandb.Settings
     code_dir: .
-    # fd-level capture, needed because ``auto`` picks ``wrap`` on non-TTY workers
-    # — ``wrap`` misses loguru's import-time stderr and subprocess output entirely.
-    console: redirect
+    # ``wrap`` not ``redirect``: redirect's local output.log is never uploaded by
+    # wandb 0.26.x, so the UI Logs tab is empty (#1465); wrap drops subprocess output.
+    console: wrap

@@ -40,7 +40,6 @@ if TYPE_CHECKING:
 
 __all__ = [
     "DatasetSpec",
-    "DatasetSrcConfig",
     "OutputFormat",
     "R2Location",
     "RenderConfig",
@@ -217,54 +216,6 @@ class ShardSpec(BaseModel):
         )
     )
     seed: int = Field(description="Per-shard RNG seed, derived as ``base_seed + shard_id``.")
-
-
-class DatasetSrcConfig(BaseModel):
-    """Source for a dataset-copy run, nested as ``DatasetSpec.datasetsrc``.
-
-    When set, each output shard decodes the same-named source shard's
-    ``param_array`` into fixed synth/note params and re-renders them instead of
-    sampling fresh. The source must be a complete hdf5 shard set sharing the
-    target's ``render.param_spec_name`` (same encoding width). Re-renders apply
-    the *target's* ``min_loudness`` to fixed (non-resampled) synth params, so a
-    copied patch landing below it raises — set a low ``min_loudness`` when the
-    target render settings differ from the source's (#724).
-
-    The source's ``input_spec.json`` must be synced beside its shards (it lives
-    at the dataset prefix root): ``generate`` loads it and runs
-    :meth:`DatasetSpec.validate_copy_source` before any render, so a source that
-    disagrees on a copy-relevant value fails at launch, not mid-render.
-
-    .. attribute :: model_config
-
-        Pydantic model config sentinel — strict/frozen/extra-forbid trust boundary.
-
-    .. attribute :: copy_dataset_root
-
-        Directory of source shards whose params are copied per output shard.
-    """
-
-    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
-
-    copy_dataset_root: str = Field(
-        description=(
-            "Directory holding the source shards (and their ``input_spec.json``) to "
-            "copy params from; each output shard reads ``<copy_dataset_root>/"
-            "<shard.filename>`` (a worker-local filesystem path — R2 sources must be "
-            "synced locally first)."
-        )
-    )
-
-    @model_validator(mode="after")
-    def _copy_dataset_root_must_not_be_blank(self) -> DatasetSrcConfig:
-        """Reject a blank ``copy_dataset_root`` so the per-shard source path is never empty.
-
-        :returns: ``self`` unchanged when ``copy_dataset_root`` is non-blank.
-        :raises ValueError: ``copy_dataset_root`` is empty or whitespace-only.
-        """
-        if not self.copy_dataset_root.strip():
-            raise ValueError("copy_dataset_root must not be blank")
-        return self
 
 
 class RenderConfig(BaseModel):
@@ -593,9 +544,9 @@ class DatasetSpec(BaseModel):
 
         Nested ``RenderConfig`` carrying every per-shard renderer input.
 
-    .. attribute :: datasetsrc
+    .. attribute :: copy_dataset_root
 
-        Optional ``DatasetSrcConfig`` copy source; ``None`` samples fresh params.
+        Optional dataset-copy source directory; ``None`` samples fresh params.
 
     .. attribute :: mask_degenerate_bins
 
@@ -662,12 +613,15 @@ class DatasetSpec(BaseModel):
         description="Nested ``RenderConfig`` carrying every per-shard renderer input."
     )
 
-    datasetsrc: DatasetSrcConfig | None = Field(
+    copy_dataset_root: str | None = Field(
         default=None,
         description=(
-            "Optional dataset-copy source; when set, each shard re-renders the params "
-            "of the same-named shard under ``datasetsrc.copy_dataset_root`` instead of "
-            "sampling fresh ones. ``None`` (the default) samples fresh params."
+            "Optional dataset-copy source directory: each output shard decodes the "
+            "same-named source shard's ``param_array`` and re-renders those fixed params "
+            "instead of sampling fresh (``None``, the default, samples fresh). A "
+            "worker-local path — R2 sources must be synced locally first. Re-renders "
+            "apply the *target's* ``min_loudness`` to the fixed params, so a copied "
+            "patch landing below it raises (#724)."
         ),
     )
 
@@ -737,11 +691,22 @@ class DatasetSpec(BaseModel):
         :raises TypeError: ``cfg`` is not mapping-shaped (e.g. a ``ListConfig``,
             which ``masked_copy`` rejects with ``ValueError``) or the masked cfg
             did not resolve to a mapping — both normalized to one stable type.
+        :raises ValueError: ``cfg`` carries a stale ``datasetsrc`` key; the mask
+            below would silently drop it (the model's ``_promote_legacy_datasetsrc``
+            shim never runs on the masked dict), so a migration error is raised.
         """
         # Lazy import: omegaconf is absent from the minimal-env CI install that
         # runs `validate_spec`, which imports this module but never calls this.
         from omegaconf import OmegaConf
 
+        # `datasetsrc` was flattened to `copy_dataset_root`. The mask keeps only
+        # model fields, so a stale Hydra override would vanish silently and
+        # disable copy with no signal; reject it with a migration pointer.
+        if "datasetsrc" in cfg:
+            raise ValueError(
+                "'datasetsrc' is no longer a config key; it was flattened to "
+                "'copy_dataset_root'. Use copy_dataset_root=<path>."
+            )
         spec_keys = [k for k in cfg if isinstance(k, str) and k in cls.model_fields]
         try:
             masked = OmegaConf.masked_copy(cfg, spec_keys)
@@ -790,6 +755,50 @@ class DatasetSpec(BaseModel):
         r2 = data["r2"]
         if isinstance(r2, dict) and "prefix" not in r2:
             data["r2"] = _fill_default_r2_prefix(data, r2)
+        return data
+
+    @model_validator(mode="before")
+    @classmethod
+    def _promote_legacy_datasetsrc(cls, data: Any) -> Any:
+        """Promote a legacy nested ``datasetsrc`` into the flat ``copy_dataset_root``.
+
+        Back-compat for ``input_spec.json`` files materialized before the
+        single-field ``datasetsrc`` wrapper was flattened: ``datasetsrc: null``
+        is dropped (the field defaults to ``None``) and
+        ``datasetsrc: {copy_dataset_root: X}`` becomes ``copy_dataset_root: X``.
+        A non-null legacy mapping is held to the removed ``DatasetSrcConfig``'s
+        contract — exactly the ``copy_dataset_root`` key, non-null — so a typo'd
+        or empty mapping raises instead of silently disabling copy (use
+        ``datasetsrc: null`` to disable).
+
+        :param data: Raw validator input (typically a dict; pass-through otherwise).
+        :returns: Same input when no ``datasetsrc`` key is present; otherwise a new
+            dict with the legacy key promoted and removed.
+        :raises ValueError: ``data`` carries both ``datasetsrc`` and
+            ``copy_dataset_root`` (ambiguous); ``datasetsrc`` is neither a mapping
+            nor ``null``; or the legacy mapping is not exactly a non-null
+            ``copy_dataset_root``.
+        """
+        if not isinstance(data, dict) or "datasetsrc" not in data:
+            return data
+        data = dict(data)
+        legacy = data.pop("datasetsrc")
+        if "copy_dataset_root" in data:
+            raise ValueError(
+                "DatasetSpec received both legacy 'datasetsrc' and 'copy_dataset_root'; "
+                "pass one shape, not both"
+            )
+        if isinstance(legacy, dict):
+            if set(legacy) != {"copy_dataset_root"} or legacy["copy_dataset_root"] is None:
+                raise ValueError(
+                    "legacy 'datasetsrc' mapping must hold exactly a non-null "
+                    "'copy_dataset_root'; use datasetsrc: null to disable copy"
+                )
+            data["copy_dataset_root"] = legacy["copy_dataset_root"]
+        elif legacy is not None:
+            raise ValueError(
+                f"legacy 'datasetsrc' must be a mapping or null, got {type(legacy).__name__}"
+            )
         return data
 
     @model_validator(mode="before")
@@ -922,7 +931,18 @@ class DatasetSpec(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _datasetsrc_requires_hdf5_output(self) -> DatasetSpec:
+    def _copy_dataset_root_must_not_be_blank(self) -> DatasetSpec:
+        """Reject a blank ``copy_dataset_root`` so the per-shard source path is never empty.
+
+        :returns: ``self`` when ``copy_dataset_root`` is unset or non-blank.
+        :raises ValueError: ``copy_dataset_root`` is empty or whitespace-only.
+        """
+        if self.copy_dataset_root is not None and not self.copy_dataset_root.strip():
+            raise ValueError("copy_dataset_root must not be blank")
+        return self
+
+    @model_validator(mode="after")
+    def _copy_dataset_root_requires_hdf5_output(self) -> DatasetSpec:
         """Reject a dataset-copy source paired with non-hdf5 output.
 
         The copy path reads each source shard as an HDF5 ``param_array`` of the
@@ -930,12 +950,12 @@ class DatasetSpec(BaseModel):
         source. Failing at spec construction surfaces the misconfig at launch
         rather than per-shard inside the renderer subprocess.
 
-        :returns: ``self`` when ``datasetsrc`` is unset or output is hdf5.
-        :raises ValueError: ``datasetsrc`` is set with ``output_format != "hdf5"``.
+        :returns: ``self`` when ``copy_dataset_root`` is unset or output is hdf5.
+        :raises ValueError: ``copy_dataset_root`` is set with ``output_format != "hdf5"``.
         """
-        if self.datasetsrc is not None and self.output_format != "hdf5":
+        if self.copy_dataset_root is not None and self.output_format != "hdf5":
             raise ValueError(
-                "datasetsrc (dataset copy) supports output_format='hdf5' only; got "
+                "copy_dataset_root (dataset copy) supports output_format='hdf5' only; got "
                 f"output_format={self.output_format!r}. The source is read as an HDF5 "
                 "param_array of the same shard filename."
             )

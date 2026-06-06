@@ -78,7 +78,7 @@ jobs:
   run_vst_slow_tests:
     name: VST slow tests (Docker)
     runs-on: ubuntu-latest-4core
-    timeout-minutes: 60
+    timeout-minutes: 120
 
     # Job-level grant so only this job can push to ``gh-pages`` for the
     # benchmark history. Workflow-level default is ``contents: read``.

@@ -65,6 +65,14 @@ class TrainConfig(StrictAllowExtraModel):
     .. attribute :: watch_gradients
 
         If truthy, attaches a gradient watcher to the logger.
+
+    .. attribute :: consumed_dataset_config_id
+
+        Dataset config_id whose ``data-`` artifact this run consumes for W&B lineage.
+
+    .. attribute :: consumed_artifact_alias
+
+        Alias appended to each consumed-artifact ref (default ``latest``).
     """
 
     task_name: NonBlankStr = Field(
@@ -119,5 +127,19 @@ class TrainConfig(StrictAllowExtraModel):
         description=(
             "If truthy, attaches a gradient watcher to the logger. ``None`` and "
             "``False`` behave the same — the watcher is not attached."
+        ),
+    )
+    consumed_dataset_config_id: NonBlankStr | None = Field(
+        default=None,
+        description=(
+            "Dataset config_id whose ``data-{id}`` W&B artifact this run consumes "
+            "for lineage (storage-provenance-spec §5). ``None`` records no edge."
+        ),
+    )
+    consumed_artifact_alias: NonBlankStr = Field(
+        default="latest",
+        description=(
+            "Alias appended to each consumed-artifact ref, e.g. ``data-{id}:{alias}``. "
+            "Defaults to ``latest``."
         ),
     )

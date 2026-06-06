@@ -266,7 +266,7 @@ class TestRun:
         copy_root = tmp_path / "source"
         copy_root.mkdir()
         spec = DatasetSpec(
-            **_base_spec_kwargs(tmp_path, datasetsrc={"copy_dataset_root": str(copy_root)})  # type: ignore[arg-type]
+            **_base_spec_kwargs(tmp_path, copy_dataset_root=str(copy_root))  # type: ignore[arg-type]
         )
 
         with pytest.raises(ValueError, match=INPUT_SPEC_FILENAME):
@@ -295,7 +295,7 @@ class TestRun:
         )
         (copy_root / INPUT_SPEC_FILENAME).write_text(source.model_dump_json())
         spec = DatasetSpec(
-            **_base_spec_kwargs(tmp_path, datasetsrc={"copy_dataset_root": str(copy_root)})  # type: ignore[arg-type]
+            **_base_spec_kwargs(tmp_path, copy_dataset_root=str(copy_root))  # type: ignore[arg-type]
         )
 
         with pytest.raises(ValueError, match="param_spec_name"):
@@ -1256,22 +1256,22 @@ class TestBuildGenerateArgs:
 
         assert args[1] == "src/synth_setter/data/vst/generate_vst_dataset.py"
 
-    def test_copy_dataset_root_absent_when_datasetsrc_unset(self, spec: DatasetSpec) -> None:
+    def test_copy_dataset_root_absent_when_unset(self, spec: DatasetSpec) -> None:
         """No ``--copy_dataset_root`` flag is emitted when the spec has no copy source.
 
-        :param spec: Single-shard spec fixture with no ``datasetsrc``.
+        :param spec: Single-shard spec fixture with no ``copy_dataset_root``.
         """
         args = build_generate_args(spec, spec.shards[0], Path("out"))
 
         assert "--copy_dataset_root" not in args
 
-    def test_copy_dataset_root_forwarded_when_datasetsrc_set(self, tmp_path: Path) -> None:
-        """``datasetsrc.copy_dataset_root`` is forwarded as a ``--copy_dataset_root`` flag.
+    def test_copy_dataset_root_forwarded_when_set(self, tmp_path: Path) -> None:
+        """``spec.copy_dataset_root`` is forwarded as a ``--copy_dataset_root`` flag.
 
         :param tmp_path: Pytest temp dir pinning the spec's plugin/output paths.
         """
         spec = DatasetSpec(
-            **_base_spec_kwargs(tmp_path, datasetsrc={"copy_dataset_root": "/data/source"})  # type: ignore[arg-type]
+            **_base_spec_kwargs(tmp_path, copy_dataset_root="/data/source")  # type: ignore[arg-type]
         )
 
         args = build_generate_args(spec, spec.shards[0], Path("out"))
@@ -2765,10 +2765,10 @@ def test_smoke_job_name_rejects_unsafe_task_name() -> None:
 class TestValidateCopySource:
     """``_validate_copy_source`` — the imperative shell around the preflight."""
 
-    def test_no_datasetsrc_is_a_noop(self, spec: DatasetSpec) -> None:
+    def test_no_copy_dataset_root_is_a_noop(self, spec: DatasetSpec) -> None:
         """A spec with no copy source skips the preflight entirely (no disk read).
 
-        :param spec: Single-shard spec fixture with ``datasetsrc`` unset.
+        :param spec: Single-shard spec fixture with ``copy_dataset_root`` unset.
         """
         from synth_setter.cli.generate_dataset import _validate_copy_source
 
@@ -2786,7 +2786,7 @@ class TestValidateCopySource:
         source = DatasetSpec(**_base_spec_kwargs(tmp_path))  # type: ignore[arg-type]
         (copy_root / INPUT_SPEC_FILENAME).write_text(source.model_dump_json())
         target = DatasetSpec(
-            **_base_spec_kwargs(tmp_path, datasetsrc={"copy_dataset_root": str(copy_root)})  # type: ignore[arg-type]
+            **_base_spec_kwargs(tmp_path, copy_dataset_root=str(copy_root))  # type: ignore[arg-type]
         )
 
         _validate_copy_source(target)  # no raise
@@ -2801,7 +2801,7 @@ class TestValidateCopySource:
         copy_root = tmp_path / "source"
         copy_root.mkdir()
         target = DatasetSpec(
-            **_base_spec_kwargs(tmp_path, datasetsrc={"copy_dataset_root": str(copy_root)})  # type: ignore[arg-type]
+            **_base_spec_kwargs(tmp_path, copy_dataset_root=str(copy_root))  # type: ignore[arg-type]
         )
 
         with pytest.raises(ValueError, match=INPUT_SPEC_FILENAME):
@@ -2827,7 +2827,7 @@ class TestValidateCopySource:
         )
         (copy_root / INPUT_SPEC_FILENAME).write_text(source.model_dump_json())
         target = DatasetSpec(
-            **_base_spec_kwargs(tmp_path, datasetsrc={"copy_dataset_root": str(copy_root)})  # type: ignore[arg-type]
+            **_base_spec_kwargs(tmp_path, copy_dataset_root=str(copy_root))  # type: ignore[arg-type]
         )
 
         with pytest.raises(ValueError, match="param_spec_name"):
