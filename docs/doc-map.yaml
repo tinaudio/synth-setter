@@ -81,7 +81,7 @@ docs:
       - pattern: "src/synth_setter/configs/finalize_dataset.yaml"
         covers: "Finalize @hydra.main entry config; required `dataset_spec_uri` loads the persisted DatasetSpec from R2 (file://, r2://, or bare path); overrides `hydra.run.dir` because `task_name`/`run_name` are not in this cfg"
       - pattern: "src/synth_setter/cli/finalize_dataset.py"
-        covers: "Finalize entrypoint: loads DatasetSpec from `cfg.dataset_spec_uri` via `load_spec_from_uri`, dispatches on `spec.output_format` (wds → `finalize_wds` streaming Welford / hdf5 → `finalize_hdf5` reshard + stats), writes `dataset.complete` marker last (R2 source-of-truth idempotency); calls assert_r2_prefix_matches before any R2 writes to catch prefix drift; logs the canonical `data-{config_id}` dataset W&B artifact (build_dataset_artifact) with s3:// R2 references to any configured WandbLogger"
+        covers: "Finalize entrypoint: loads the frozen DatasetSpec, dispatches on `spec.output_format` (wds → `finalize_wds`, hdf5 → `finalize_hdf5`), asserts the R2 prefix before any write, writes the `dataset.complete` marker last for idempotency, then logs the canonical `data-{config_id}` dataset W&B artifact with s3:// R2 references"
       - pattern: ".github/workflows/generate-dataset-shards.yaml"
         covers: "Reusable launcher fan-out across providers (skypilot-local kind, runpod, oci); per-provider artifact upload; emits a `spec_uri` workflow output (the materialized spec's canonical under-prefix `input_spec.json` URI, computed by the `synth-setter-spec-uri` console script — see `src/synth_setter/pipeline/ci/spec_uri.py`) consumed by validate-dataset-shards"
       - pattern: ".github/workflows/validate-dataset-shards.yaml"
