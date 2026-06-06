@@ -565,6 +565,19 @@ class TestObjectSize:
             with pytest.raises(subprocess.CalledProcessError):
                 r2_io.object_size("r2://bucket/key.h5")
 
+    def test_non_integer_stdout_raises_with_original_cause(self) -> None:
+        """Unparsable rclone stdout raises a contextual error chained to the ValueError.
+
+        Guards the generate failure path: ``int(out)`` on garbage stdout would
+        otherwise surface a bare ``invalid literal for int()`` with no probed
+        URI, losing the rclone-listing context. The re-raise must keep the
+        original ``ValueError`` as ``__cause__``.
+        """
+        with patch.object(r2_io.subprocess, "run", return_value=self._mock_run("not-a-number")):
+            with pytest.raises(RuntimeError, match="r2://bucket/key.h5") as excinfo:
+                r2_io.object_size("r2://bucket/key.h5")
+        assert isinstance(excinfo.value.__cause__, ValueError)
+
     def test_invokes_rclone_lsf_format_s(self) -> None:
         """Probe argv shape: rclone lsf --format=s <translated path>.
 

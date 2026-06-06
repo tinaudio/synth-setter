@@ -333,6 +333,9 @@ def object_size(r2_uri: str) -> int | None:
 
     A zero-size object exists and returns ``0``. Callers that want to treat zero-size as absent
     (e.g. defending against half-uploaded objects) test ``size and size > 0`` themselves.
+
+    :raises RuntimeError: stdout is non-empty but not an integer; chained to the
+        underlying ``ValueError`` so the probed URI survives the failure path.
     """
     args = [  # noqa: S607 — rclone resolved by image's PATH
         "rclone",
@@ -344,7 +347,16 @@ def object_size(r2_uri: str) -> int | None:
         args, check=True, capture_output=True, text=True
     )
     out = result.stdout.strip()
-    return int(out) if out else None
+    if not out:
+        return None
+    try:
+        return int(out)
+    except ValueError as exc:
+        # Chain the parse failure so the probed URI and rclone payload survive
+        # the generate failure path instead of a bare ``invalid literal``.
+        raise RuntimeError(
+            f"rclone lsf --format=s returned unparsable size {out!r} for {r2_uri}"
+        ) from exc
 
 
 def purge_prefix(bucket: str, prefix: str) -> None:
