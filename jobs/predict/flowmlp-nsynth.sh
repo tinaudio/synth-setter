@@ -18,10 +18,6 @@
 # -l h_vmem=20G
 # -pe smp 12
 
-source jobs/predict/get-ckpt-from-wandb.sh k9jdjpx8
-echo "Using wandb directory: $WANDB_DIR"
-echo "Using checkpoint: $CKPT_PATH"
-
 rm -rf ~/.triton/cache
 mamba activate perm
 module load gcc
@@ -34,5 +30,4 @@ python -m synth_setter.cli.eval \
     callbacks=eval_surge \
     mode=predict \
     datamodule.batch_size=1024 \
-    datamodule.num_workers=11 \
-    ckpt_path=$CKPT_PATH
+    datamodule.num_workers=11

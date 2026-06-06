@@ -15,3 +15,6 @@ run_name: vae
 
 callbacks:
   plot_proj_ii: null
+
+# Pinned model-{config_id} artifact resolved lazily by the ${wandb:...} resolver.
+ckpt_path: ${wandb:tinaudio/synth-setter/model-vae_simple:latest}

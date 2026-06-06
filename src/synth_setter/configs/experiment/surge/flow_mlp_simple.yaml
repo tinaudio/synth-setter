@@ -13,3 +13,6 @@ model:
 
 callbacks:
   plot_proj_ii: null
+
+# Pinned model-{config_id} artifact resolved lazily by the ${wandb:...} resolver.
+ckpt_path: ${wandb:tinaudio/synth-setter/model-flow_mlp_simple:latest}

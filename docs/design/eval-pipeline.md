@@ -348,12 +348,14 @@ experiment config pins a W&B artifact reference using resolver syntax:
 ckpt_path: ${wandb:tinaudio/synth-setter/model-flow_simple:latest}
 ```
 
-> **Not yet implemented.** The `wandb` resolver does not exist yet. `src/synth_setter/utils/utils.py`
-> currently only has `mul` and `div` resolvers. The implementation below is the proposed
-> design (Task 3.1, #128).
+> **Implemented.** The `wandb` resolver lives in `src/synth_setter/utils/utils.py`
+> (`_resolve_wandb_checkpoint`, registered by `register_resolvers()` alongside `mul`/`div`),
+> and the 18 `jobs/predict/*.sh` launchers now inherit `ckpt_path: ${wandb:...}` from their
+> surge experiment configs instead of sourcing `get-ckpt-from-wandb.sh` (Task 3.1, #128).
 
-The resolver will be added to `src/synth_setter/utils/utils.py` alongside existing `mul` and `div` resolvers
-(called via `register_resolvers()` at startup). Proposed implementation (Task 3.1, #128):
+The resolver sits in `src/synth_setter/utils/utils.py` alongside the existing `mul` and `div` resolvers
+(registered via `register_resolvers()` at startup). Reference sketch (the shipped version caches under a
+path-safe slug + hash and errors on a missing/ambiguous `.ckpt`):
 
 ```python
 def _wandb_resolver(artifact_ref: str) -> str:
@@ -940,11 +942,18 @@ ______________________________________________________________________
 
 **Files to modify:**
 
-- `src/synth_setter/utils/utils.py` — add `_wandb_resolver` to `register_resolvers()` (~15 lines)
+- `src/synth_setter/utils/utils.py` — add `_resolve_wandb_checkpoint` to `register_resolvers()`
+- `src/synth_setter/configs/experiment/surge/{ffn,flow,flow_mlp,vae}_{full,simple}.yaml` — pin
+  `ckpt_path: ${wandb:tinaudio/synth-setter/model-<config_id>:latest}` per variant
+- `jobs/predict/*.sh` (18 launchers) — drop `get-ckpt-from-wandb.sh`; inherit the config-pinned `ckpt_path`
 
 **Files to create:**
 
-- `tests/test_wandb_resolver.py` — mock W&B API, verify download + cache logic
+- `tests/test_wandb_resolver.py` — fake W&B API, verify download + cache logic and config-pinned resolution
+
+**Files to delete:**
+
+- `jobs/predict/get-ckpt-from-wandb.sh` — superseded by the `${wandb:...}` resolver
 
 **Key behaviors:**
 

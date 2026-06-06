@@ -14,3 +14,6 @@ run_name: ffn
 
 callbacks:
   plot_proj_ii: null
+
+# Pinned model-{config_id} artifact resolved lazily by the ${wandb:...} resolver.
+ckpt_path: ${wandb:tinaudio/synth-setter/model-ffn_simple:latest}

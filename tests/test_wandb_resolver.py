@@ -10,6 +10,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 from hydra import compose, initialize_config_module
@@ -299,6 +300,61 @@ def test_eval_ckpt_path_wandb_override_resolves_to_cached_checkpoint(
             )
             resolved = Path(cfg.ckpt_path)
 
+        assert resolved.name == "model.ckpt"
+        assert resolved.is_file()
+        assert workspace / ".cache" / "checkpoints" in resolved.parents
+        assert len(calls) == 1
+    finally:
+        GlobalHydra.instance().clear()
+
+
+# Surge predict experiments and the ``model-{config_id}`` artifact each pins, where
+# config_id is the experiment basename (see ``resolve_run_config_id``). Pins the
+# ckpt-wiring contract: a launcher composing ``experiment=surge/<name>`` inherits a
+# ``${wandb:tinaudio/synth-setter/model-<name>:latest}`` ckpt_path with no CLI override.
+_WIRED_PREDICT_EXPERIMENTS: tuple[str, ...] = (
+    "ffn_full",
+    "ffn_simple",
+    "flow_full",
+    "flow_simple",
+    "flow_mlp_full",
+    "flow_mlp_simple",
+    "vae_full",
+    "vae_simple",
+)
+
+
+@pytest.mark.parametrize("experiment", _WIRED_PREDICT_EXPERIMENTS)
+def test_surge_experiment_pins_wandb_model_artifact_ckpt(
+    experiment: str, workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each wired surge experiment resolves ``ckpt_path`` to its ``model-<id>`` artifact.
+
+    Composes ``experiment=surge/<name>`` with no ``ckpt_path`` CLI override, proving
+    the experiment config alone pins ``${wandb:tinaudio/synth-setter/model-<name>:latest}``
+    — the config-pinned replacement for ``get-ckpt-from-wandb.sh``. The fake artifact's
+    download dir name encodes the ref slug, so the assertion confirms the per-experiment
+    artifact id reached the resolver.
+
+    :param experiment: Surge experiment basename, also the ``model-<id>`` artifact id.
+    :param workspace: Temp ``$PROJECT_ROOT`` the cache lands under.
+    :param monkeypatch: Injects the fake ``wandb`` module into ``sys.modules``.
+    """
+    calls: list[str] = []
+    monkeypatch.setitem(sys.modules, "wandb", _fake_api(calls))
+    register_resolvers()
+
+    try:
+        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+            cfg = compose(
+                config_name="eval.yaml",
+                overrides=[f"experiment=surge/{experiment}", "trainer=cpu"],
+            )
+            raw_container = cast("dict[str, Any]", OmegaConf.to_container(cfg, resolve=False))
+            raw_ckpt = raw_container["ckpt_path"]
+            resolved = Path(cfg.ckpt_path)
+
+        assert raw_ckpt == f"${{wandb:tinaudio/synth-setter/model-{experiment}:latest}}"
         assert resolved.name == "model.ckpt"
         assert resolved.is_file()
         assert workspace / ".cache" / "checkpoints" in resolved.parents

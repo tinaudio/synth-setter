@@ -19,3 +19,6 @@ callbacks:
   log_per_param_mse:
     _target_: synth_setter.utils.callbacks.LogPerParamMSE
     param_spec: surge_xt
+
+# Pinned model-{config_id} artifact resolved lazily by the ${wandb:...} resolver.
+ckpt_path: ${wandb:tinaudio/synth-setter/model-flow_full:latest}
