@@ -746,3 +746,53 @@ def test_main_single_sample_dir_no_shuffled_csv(tmp_path: Path) -> None:
     )
     assert result.exit_code == 0, result.output
     assert not (metrics_dir / "aggregated_metrics_shuffled.csv").exists()
+
+
+@pytest.mark.slow
+def test_main_output_dir_inside_audio_dir_default_seed_skips_shuffle(tmp_path: Path) -> None:
+    """output_dir nested inside audio_dir with default seed → probe skipped, no shuffled CSV.
+
+    When output_dir (and therefore shuffled_audio) would sit inside the source tree,
+    ``shuffle_pred_audio`` would raise. With seed=0 (default, automatic probe) the CLI must
+    warn and skip rather than crash.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    audio_root = tmp_path / "audio"
+    audio_root.mkdir()
+    metrics_dir = audio_root / "metrics"
+    _make_uniform_sample_dir(audio_root, "0", _sine(seconds=0.2), _sine(seconds=0.2))
+    _make_uniform_sample_dir(audio_root, "1", _sine(seconds=0.2), _sine(seconds=0.2))
+
+    runner = CliRunner()
+    result = runner.invoke(
+        compute_audio_metrics_main,
+        [str(audio_root), str(metrics_dir), "-w", "1"],
+        catch_exceptions=False,
+    )
+    assert result.exit_code == 0, result.output
+    assert not (metrics_dir / "aggregated_metrics_shuffled.csv").exists()
+
+
+@pytest.mark.slow
+def test_main_output_dir_inside_audio_dir_explicit_seed_raises(tmp_path: Path) -> None:
+    """output_dir nested inside audio_dir with explicit non-zero seed → ``ValueError``.
+
+    The non-zero seed signals the probe was explicitly intended, so the nested layout is an
+    unrecoverable error rather than a silenced warning.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    audio_root = tmp_path / "audio"
+    audio_root.mkdir()
+    metrics_dir = audio_root / "metrics"
+    _make_uniform_sample_dir(audio_root, "0", _sine(seconds=0.2), _sine(seconds=0.2))
+    _make_uniform_sample_dir(audio_root, "1", _sine(seconds=0.2), _sine(seconds=0.2))
+
+    runner = CliRunner()
+    result = runner.invoke(
+        compute_audio_metrics_main,
+        [str(audio_root), str(metrics_dir), "-w", "1", "--shuffle_seed", "7"],
+    )
+    assert result.exit_code != 0
+    assert isinstance(result.exception, ValueError)

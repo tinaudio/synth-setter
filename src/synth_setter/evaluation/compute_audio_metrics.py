@@ -77,7 +77,8 @@ MEL_PARAMS = [
 def compute_mel_specs(y: np.ndarray, sample_rate: float = 44100.0) -> list[np.ndarray]:
     """Compute log-Mel spectrograms for each entry in ``MEL_PARAMS``.
 
-    :param y: Mono audio waveform, shape ``(T,)``.
+    :param y: Audio waveform, shape ``(C, T)``; multi-channel input is accepted by the
+        underlying mel transform.
     :param sample_rate: Sample rate in Hz.
     :returns: One dB-scaled mel spectrogram per ``MEL_PARAMS`` entry.
     """
@@ -125,8 +126,8 @@ scatter = None
 def compute_jtfs(y: np.ndarray, J: int = 10, Q: int = 12) -> np.ndarray:
     """Apply the joint time-frequency scattering transform to ``y``.
 
-    Caches the ``Scattering1D`` object module-wide keyed on the input shape;
-    reinitialised automatically when the shape changes.
+    Caches the ``Scattering1D`` object module-wide on the first call; the same instance
+    is reused for all subsequent calls regardless of shape changes.
 
     :param y: Audio waveform array.
     :param J: Log-scale resolution (number of octaves).
@@ -392,8 +393,8 @@ def compute_metrics(audio_dirs: list[Path], output_dir: Path) -> Path:
 def _aggregate_metrics(audio_dirs: list[Path], work_dir: Path, num_workers: int) -> pd.DataFrame:
     """Run the parallel per-sample metrics pass and return the concatenated DataFrame.
 
-    Intermediate per-worker CSVs are written to ``work_dir`` and cleaned up by the
-    caller when no longer needed.
+    Intermediate per-worker CSVs are written to ``work_dir`` and left there alongside
+    the aggregated output.
 
     :param audio_dirs: Sample dirs to score (each must contain ``target.wav`` + ``pred.wav``).
     :param work_dir: Directory for per-worker intermediate ``metrics-<pid>.csv`` files.
@@ -499,8 +500,27 @@ def _run_shuffle_probe(
     :param output_dir_path: Destination dir for ``aggregated_metrics_shuffled.csv``.
     :param shuffle_seed: Permutation seed forwarded to :func:`shuffle_pred_audio`.
     :param num_workers: Worker count forwarded to :func:`_aggregate_metrics`.
+    :raises ValueError: when ``shuffle_seed`` is non-zero and ``output_dir_path`` is nested
+        inside ``audio_dir_path``.
     """
     shuffled_view = output_dir_path / "shuffled_audio"
+    _resolved_audio = audio_dir_path.resolve()
+    _resolved_view = shuffled_view.resolve()
+    _nested = _resolved_audio in _resolved_view.parents or _resolved_view == _resolved_audio
+    if _nested:
+        if shuffle_seed != 0:
+            raise ValueError(
+                f"shuffle_seed={shuffle_seed} was set but output_dir ({output_dir_path}) is "
+                f"inside audio_dir ({audio_dir_path}); the render-order probe cannot build "
+                "a safe symlink view there. Move output_dir outside audio_dir."
+            )
+        logger.warning(
+            "Render-order probe skipped: output_dir ({o}) is inside audio_dir ({a}); "
+            "shuffled_audio would nest inside the source tree.",
+            o=output_dir_path,
+            a=audio_dir_path,
+        )
+        return
     permutation = shuffle_pred_audio(audio_dir_path, shuffled_view, shuffle_seed)
     if len(permutation) < 2:
         return
