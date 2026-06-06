@@ -683,7 +683,7 @@ def test_postprocessing_skips_wandb_when_no_run(
     assert result == _EXPECTED_AUDIO_METRICS
 
 
-_METRICS_CSV = "sample_id,mss,wmfcc,sot,rms\n0,0.1,0.2,0.3,0.4\n1,0.5,0.6,0.7,0.8\n"
+_METRICS_CSV = ",mss,wmfcc,sot,rms\n0,0.1,0.2,0.3,0.4\n1,0.5,0.6,0.7,0.8\n"
 
 
 def test_log_metrics_csv_to_wandb_logs_table_to_active_run(

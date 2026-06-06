@@ -104,6 +104,7 @@ def _log_metrics_csv_to_wandb(metrics_dir: Path) -> None:
         return
     try:
         df = pd.read_csv(csv_path, index_col=0)
+        df.index.name = "sample_id"
         wandb.run.log({"audio/per_sample_metrics": wandb.Table(dataframe=df.reset_index())})
     except Exception as exc:
         log.warning(f"wandb.run.log raised {type(exc).__name__}: {exc}; per-sample table skipped.")

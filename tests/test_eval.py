@@ -43,7 +43,7 @@ _FAKE_AGGREGATED_METRICS_CSV = (
 )
 # Per-sample metrics CSV the fake metrics subprocess writes alongside the aggregated
 # CSV; one row per sample, columns matching ``compute_audio_metrics`` output.
-_FAKE_METRICS_CSV = "sample_id,mss,wmfcc,sot,rms\n0,0.1,0.2,0.3,0.4\n1,0.5,0.6,0.7,0.8\n"
+_FAKE_METRICS_CSV = ",mss,wmfcc,sot,rms\n0,0.1,0.2,0.3,0.4\n1,0.5,0.6,0.7,0.8\n"
 
 
 @pytest.mark.requires_vst
