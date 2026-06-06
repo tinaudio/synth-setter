@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import re
+from concurrent.futures import Future
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, create_autospec
@@ -764,8 +765,50 @@ class TestWorkerSpecUriEnvConstant:
         assert WORKER_SPEC_URI_ENV == "WORKER_SPEC_URI"
 
 
+class _InlineExecutor:
+    """Synchronous stand-in for ``ThreadPoolExecutor`` that runs each task on the calling thread.
+
+    The launcher's per-rank fan-out targets a shared ``mock_sky`` MagicMock, whose
+    call recording (``call_args_list`` / ``call_count``) is not thread-safe; under
+    CPU contention concurrent ``submit``s race the record step and a rank goes
+    missing or duplicated. These tests assert env-wiring, not concurrency, so
+    running ranks inline makes mock recording deterministic.
+    """
+
+    def __init__(self, max_workers: int | None = None) -> None:
+        """Accept ``ThreadPoolExecutor``'s constructor signature; pool size is irrelevant inline.
+
+        :param max_workers: Ignored — tasks run on the calling thread.
+        """
+        del max_workers
+
+    def __enter__(self) -> _InlineExecutor:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        return None
+
+    def submit(self, fn: Any, /, *args: Any, **kwargs: Any) -> Future[Any]:
+        future: Future[Any] = Future()
+        try:
+            future.set_result(fn(*args, **kwargs))
+        except BaseException as exc:  # noqa: BLE001 — mirror Future's exception capture.
+            future.set_exception(exc)
+        return future
+
+
 class TestDispatchViaSkypilot:
     """``dispatch_via_skypilot`` rejects degenerate cfgs and threads per-rank fanout through."""
+
+    @pytest.fixture(autouse=True)
+    def _inline_executor(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Run the launcher's per-rank fan-out inline so mock recording is deterministic.
+
+        :param monkeypatch: Pytest fixture for attribute patching.
+        """
+        monkeypatch.setattr(
+            "synth_setter.pipeline.skypilot_launch.ThreadPoolExecutor", _InlineExecutor
+        )
 
     def test_missing_compute_template_raises(self) -> None:
         """``compute_template=None`` is the "don't dispatch" sentinel — calling here is a bug."""
