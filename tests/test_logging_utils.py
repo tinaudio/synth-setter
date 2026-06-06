@@ -6,6 +6,7 @@ See python-testing.md §Fakes.
 
 import os
 import subprocess
+from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import cast
 from unittest.mock import patch
@@ -306,6 +307,19 @@ class TestUseInputArtifacts:
         run = FakeWandbRun()
 
         use_input_artifacts([FakeWandbLogger(run)], [])
+
+        assert run.consumed == []
+
+    def test_no_wandb_logger_does_not_consume_refs_iterable(self) -> None:
+        """With no WandbLogger, ``refs`` is never iterated — the materialize is gated."""
+        run = FakeWandbRun()
+        non_wandb_logger = cast(Logger, SimpleNamespace(experiment=run))
+
+        def _exploding_refs() -> Iterator[tuple[str, str]]:
+            raise AssertionError("refs iterated despite no WandbLogger present")
+            yield ("unreachable", "x")  # pragma: no cover — marks this a generator
+
+        use_input_artifacts([non_wandb_logger], _exploding_refs())
 
         assert run.consumed == []
 

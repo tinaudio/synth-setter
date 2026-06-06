@@ -68,13 +68,18 @@ def use_input_artifacts(loggers: Iterable[Logger], refs: Iterable[tuple[str, str
     :param refs: ``(name, alias)`` pairs naming each consumed artifact, e.g.
         ``("data-diva-v1", "latest")``.
     """
+    # Probe before importing so a wandb-free install is a true no-op (mirrors
+    # ``instantiators.close_loggers``); the import is deferred for the same reason.
+    if not find_spec("wandb"):
+        return
     from lightning.pytorch.loggers.wandb import WandbLogger
 
+    wandb_loggers = [lg for lg in loggers if isinstance(lg, WandbLogger)]
+    if not wandb_loggers:
+        return
     # Materialize once so a generator ``refs`` is not exhausted by the first logger.
     ref_list = list(refs)
-    for lg in loggers:
-        if not isinstance(lg, WandbLogger):
-            continue
+    for lg in wandb_loggers:
         for name, alias in ref_list:
             try:
                 lg.experiment.use_artifact(f"{name}:{alias}")
