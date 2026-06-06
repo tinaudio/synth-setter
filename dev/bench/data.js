@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780705298990,
+  "lastUpdate": 1780705301382,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -10617,6 +10617,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.870015229,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9c16c71ddf39aafc94f1b4e53980938994f71f10",
+          "message": "internal-feat(data): preflight dataset-copy runs against the source spec (#1459)\n\nThe copy path matches source→target shards purely by filename, silently\nassuming the target run is configured to mirror the source's layout. A\nmismatched param_spec_name, samples_per_shard, split sizes, or shard count\nwould otherwise surface one render (or one re-run) at a time, or produce a\nfaithful-looking copy with a different train/val/test partition.\n\nAdd DatasetSpec.validate_copy_source, a pure comparison that asserts the\nsource reproduces the target on every copy-relevant value and aggregates all\nmismatches into one error. The generate() chokepoint loads the source's\ninput_spec.json (via load_spec_from_uri) and runs it before the first render,\nso a misconfigured copy — or an unsynced source spec — fails loudly at launch.\n\nRefs #1429",
+          "timestamp": "2026-06-05T19:14:17-04:00",
+          "tree_id": "649035b641260be2258f497b74a709cfac590a01",
+          "url": "https://github.com/tinaudio/synth-setter/commit/9c16c71ddf39aafc94f1b4e53980938994f71f10"
+        },
+        "date": 1780705300727,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 1.0760750770568848,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 1.6474746062606573,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.007291128858923912,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.0071149468421936035,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 0.9129051566123962,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 19.326063913999995,
             "unit": "seconds"
           }
         ]
