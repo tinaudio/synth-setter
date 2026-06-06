@@ -799,6 +799,39 @@ def test_log_metrics_csv_to_wandb_logs_table_to_active_run(
     assert isinstance(logged[0]["audio/per_sample_metrics"], wandb.Table)
 
 
+def test_log_metrics_csv_to_wandb_prepends_prefix_to_table_key(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A non-empty ``prefix`` namespaces the Table key so per-split runs stay distinct.
+
+    :param monkeypatch: Pins ``wandb.run`` to a spy so the log payload is observable.
+    :param tmp_path: Scratch metrics dir seeded with a minimal ``metrics.csv``.
+    """
+
+    (tmp_path / "metrics.csv").write_text(_METRICS_CSV)
+
+    logged: list[dict[str, object]] = []
+
+    class _FakeRun:
+        """Spy stand-in for ``wandb.run`` that records every ``log`` payload."""
+
+        def log(self, payload: dict[str, object]) -> None:
+            """Append payload to the captured log list.
+
+            :param payload: The wandb log payload to capture.
+            """
+            logged.append(payload)
+
+    monkeypatch.setattr(eval_mod.wandb, "run", _FakeRun())
+
+    _log_metrics_csv_to_wandb(tmp_path, prefix="train/")
+
+    assert len(logged) == 1
+    assert "train/audio/per_sample_metrics" in logged[0]
+    assert isinstance(logged[0]["train/audio/per_sample_metrics"], wandb.Table)
+
+
 def test_log_metrics_csv_to_wandb_noop_when_no_run(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
