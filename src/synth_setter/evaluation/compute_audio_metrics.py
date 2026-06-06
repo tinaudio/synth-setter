@@ -26,7 +26,7 @@ We compute the following metrics:
 import math
 import multiprocessing
 import os
-import shutil
+import tempfile
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
@@ -160,14 +160,13 @@ def compute_jtfs_distance(target: np.ndarray, pred: np.ndarray, J: int = 10, Q: 
 
 
 def compute_mfcc(target: np.ndarray, sample_rate: float = 44100.0) -> np.ndarray:
-    """Return MFCC features for ``target``, output shape ``(20, frames)``.
+    """Return MFCC features for ``target`` via librosa.
 
-    :param target: Audio waveform; shape ``(T,)`` or ``(C, T)`` — channels averaged to mono.
+    :param target: Audio waveform; shape ``(T,)`` or ``(C, T)`` — passed through to librosa
+        as-is (multi-channel produces ``(C, 20, frames)``).
     :param sample_rate: Sample rate in Hz; governs window and hop lengths.
-    :returns: MFCC matrix, shape ``(20, frames)``.
+    :returns: MFCC array; shape ``(20, frames)`` for 1-D input, ``(C, 20, frames)`` for 2-D.
     """
-    if target.ndim > 1:
-        target = target.mean(axis=0)
     window_length = int(0.05 * sample_rate)
     hop_length = int(0.01 * sample_rate)
 
@@ -543,15 +542,11 @@ def _run_shuffle_probe(
             v=shuffled_view,
         )
         return
-    shuffled_tmp = output_dir_path / "_shuffle_tmp"
-    shuffled_tmp.mkdir(exist_ok=True)
-    try:
-        shuffled_df = _aggregate_metrics(shuffled_dirs, shuffled_tmp, num_workers)
+    with tempfile.TemporaryDirectory(dir=output_dir_path) as _tmp:
+        shuffled_df = _aggregate_metrics(shuffled_dirs, Path(_tmp), num_workers)
         pd.DataFrame({"mean": shuffled_df.mean(axis=0), "std": shuffled_df.std(axis=0)}).to_csv(
             output_dir_path / "aggregated_metrics_shuffled.csv"
         )
-    finally:
-        shutil.rmtree(shuffled_tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":

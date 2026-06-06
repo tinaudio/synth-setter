@@ -279,12 +279,18 @@ def test_compute_mfcc_is_deterministic() -> None:
     np.testing.assert_array_equal(compute_mfcc(audio), compute_mfcc(audio))
 
 
-def test_compute_mfcc_multichannel_input_returns_20_coefficients() -> None:
-    """``compute_mfcc`` accepts ``(C, T)`` input and still returns ``(20, frames)``."""
+def test_compute_mfcc_multichannel_input_returns_channel_leading_shape() -> None:
+    """``compute_mfcc`` with ``(C, T)`` input returns ``(C, 20, frames)`` from librosa.
+
+    The caller (``compute_wmfcc``) reshapes this to ``(-1, frames)`` before DTW,
+    so channels are NOT averaged — they are passed through as-is.
+    """
     audio = _sine(seconds=0.5)  # shape (1, T)
     mfcc = compute_mfcc(audio)
-    assert mfcc.shape[0] == 20
-    assert mfcc.shape[1] > 0
+    # librosa returns (C, n_mfcc, frames) for (C, T) input
+    assert mfcc.shape[0] == 1  # C=1 preserved
+    assert mfcc.shape[1] == 20
+    assert mfcc.shape[2] > 0
     assert np.isfinite(mfcc).all()
 
 
