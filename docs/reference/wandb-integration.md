@@ -164,7 +164,7 @@ When `synth-setter-eval mode=predict evaluation.compute_metrics=true` runs and a
 
 `_log_metrics_csv_to_wandb` (`src/synth_setter/cli/eval.py`) is a no-op when `metrics.csv` is absent or `wandb.run` is unset; wandb errors are swallowed so a logging failure never aborts the run.
 
-The same dict is also merged into the dict returned by `evaluate()` alongside Lightning's `trainer.callback_metrics`. See [eval-pipeline.md §5.1](../design/eval-pipeline.md) for the surrounding subprocess chain.
+The aggregated scalar metrics dict is also merged into the dict returned by `evaluate()` alongside Lightning's `trainer.callback_metrics`; the `audio/per_sample_metrics` Table is W&B-only and is not included in that dict. See [eval-pipeline.md §5.1](../design/eval-pipeline.md) for the surrounding subprocess chain.
 
 ______________________________________________________________________
 
