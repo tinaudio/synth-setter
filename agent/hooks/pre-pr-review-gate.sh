@@ -7,7 +7,22 @@
 # -------
 # Block `gh pr create` unless the command carries `REVIEW_FULL=<path>` and that
 # path points at a sentinel review file whose name encodes a commit SHA that
-# is reachable from HEAD within `REVIEW_MAX_LAG` first-parent commits.
+# is reachable from the PR's branch tip within `REVIEW_MAX_LAG` first-parent
+# commits.
+#
+# WORKTREE AWARENESS
+# ------------------
+# The mandated workflow runs each branch in its own `git worktree`, but a
+# PreToolUse hook evaluates from the SESSION/PRIMARY checkout (always on the
+# default branch). So the ref the checks run against is derived from the
+# command's `--head <branch>` (also `-H` / `--head=`), NOT the primary `HEAD`:
+#   - ancestry + first-parent lag run against the branch tip (local
+#     `refs/heads/<branch>`, else `refs/remotes/origin/<branch>`);
+#   - a relative REVIEW_FULL path absent from cwd is resolved against that
+#     branch's worktree root (from `git worktree list --porcelain`).
+# Absent `--head`, behavior is unchanged (HEAD, cwd). If `--head` is given but
+# the branch/worktree can't be resolved, the strict HEAD/cwd behavior stands —
+# the gate never loosens.
 #
 # The sentinel format (basename) is::
 #
@@ -25,11 +40,12 @@
 #
 # CONTRACT — what the command line must carry
 #   REVIEW_FULL=<path>
-#     - <path> resolves to an existing file (relative to cwd) that is at least
-#       200 bytes (cheap stub-bypass guard — `touch` produces 0 bytes).
+#     - <path> resolves to an existing file (relative to cwd, or to the
+#       `--head` branch's worktree root) that is at least 200 bytes (cheap
+#       stub-bypass guard — `touch` produces 0 bytes).
 #     - The file's basename matches the sentinel pattern and encodes a SHA.
-#     - That SHA is an ancestor of HEAD AND is at most `REVIEW_MAX_LAG`
-#       first-parent commits behind HEAD (default 2; override via env). The
+#     - That SHA is an ancestor of the branch tip AND is at most `REVIEW_MAX_LAG`
+#       first-parent commits behind it (default 2; override via env). The
 #       `--first-parent` mode means merging `main` into the branch counts as
 #       one commit, not the hundreds it brings in.
 #     - The file lists no unresolved `[comment-hygiene:warn|block]` findings, unless
@@ -74,6 +90,76 @@ COMMAND=$(jq -r '.tool_input.command // empty' 2>/dev/null <<<"$INPUT" || true)
 # leading whitespace at line start so `  gh pr create` is still gated.
 if ! grep -qE '(^[[:space:]]*|[;|&`(][[:space:]]*)gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)' <<<"$COMMAND"; then
   exit 0
+fi
+
+# Extract the PR's head branch from `--head <b>` / `-H <b>` / `--head=<b>`.
+# shlex-tokenize so a value isn't split on spaces and the trailing
+# `# REVIEW_FULL=...` comment is dropped. Empty when the flag is absent.
+extract_head_branch() {
+  COMMAND="$1" python3 - <<'PY' 2>/dev/null || true
+import os
+import shlex
+
+try:
+    tokens = shlex.split(os.environ["COMMAND"], comments=True)
+except ValueError:
+    raise SystemExit(0)
+for i, tok in enumerate(tokens):
+    if tok in ("--head", "-H") and i + 1 < len(tokens):
+        print(tokens[i + 1])
+        break
+    if tok.startswith("--head="):
+        print(tok[len("--head=") :])
+        break
+PY
+}
+
+# Resolve a branch tip to a SHA: prefer the local ref, else origin's. Empty
+# (return 1) when neither exists — caller keeps the strict HEAD behavior.
+resolve_branch_tip() {
+  local branch="$1" sha
+  sha=$(git rev-parse --verify --quiet "refs/heads/${branch}" 2>/dev/null) \
+    || sha=$(git rev-parse --verify --quiet "refs/remotes/origin/${branch}" 2>/dev/null) \
+    || return 1
+  printf '%s\n' "$sha"
+}
+
+# Echo the worktree root checked out on `refs/heads/<branch>`, parsing the
+# porcelain records (`worktree <path>` ... `branch refs/heads/<name>`). Empty
+# (return 1) when no worktree holds the branch — caller keeps cwd resolution.
+# The porcelain is passed via env, not a pipe: the heredoc already owns the
+# python process's stdin, so a piped feed would be silently discarded.
+worktree_root_for_branch() {
+  local branch="$1" porcelain
+  porcelain=$(git worktree list --porcelain 2>/dev/null) || return 1
+  BRANCH="$branch" PORCELAIN="$porcelain" python3 - <<'PY' 2>/dev/null || return 1
+import os
+
+want = "refs/heads/" + os.environ["BRANCH"]
+path = None
+for line in os.environ["PORCELAIN"].splitlines():
+    if line.startswith("worktree "):
+        path = line[len("worktree ") :]
+    elif line == f"branch {want}" and path is not None:
+        print(path)
+        break
+PY
+}
+
+# Resolve the ref the ancestry/lag checks run against and the dir a relative
+# REVIEW_FULL path resolves against. With `--head`, derive both from the branch;
+# a branch/worktree that can't be resolved leaves the strict HEAD/cwd default,
+# so the gate never loosens.
+TARGET_BRANCH=$(extract_head_branch "$COMMAND")
+REVIEW_REF="HEAD"
+REVIEW_REF_LABEL="HEAD"
+WORKTREE_ROOT=""
+if [[ -n "$TARGET_BRANCH" ]]; then
+  if branch_tip=$(resolve_branch_tip "$TARGET_BRANCH"); then
+    REVIEW_REF="$branch_tip"
+    REVIEW_REF_LABEL="branch ${TARGET_BRANCH} (${branch_tip})"
+  fi
+  WORKTREE_ROOT=$(worktree_root_for_branch "$TARGET_BRANCH" || true)
 fi
 
 # shellcheck disable=SC2016  # intentional: no expansion wanted in the help block
@@ -207,6 +293,16 @@ REVIEW_PATH=$(grep -oE 'REVIEW_FULL=[^[:space:]#;|&`()<>"'"'"']+' <<<"$COMMAND" 
 if [[ -z "$REVIEW_PATH" ]]; then
   block "gh pr create is missing REVIEW_FULL=<path-to-review-file>"
 fi
+
+# A relative path absent from cwd is resolved against the `--head` branch's
+# worktree root, where /repo-review-full-no-comments wrote the sentinel. An
+# absolute path is honored as-is. Only rewrite when the worktree-rooted file
+# exists, so a genuinely-missing path still reports its original value.
+if [[ ! -f "$REVIEW_PATH" && "$REVIEW_PATH" != /* && -n "$WORKTREE_ROOT" \
+  && -f "${WORKTREE_ROOT}/${REVIEW_PATH}" ]]; then
+  REVIEW_PATH="${WORKTREE_ROOT}/${REVIEW_PATH}"
+fi
+
 if [[ ! -f "$REVIEW_PATH" ]]; then
   block "REVIEW_FULL path does not point at a file: $REVIEW_PATH"
 fi
@@ -246,19 +342,20 @@ else
 fi
 
 # Ancestry: a SHA on a sibling branch (or one rewritten by rebase/amend) is
-# rejected outright — the review covers a different line of history.
-if ! git merge-base --is-ancestor "$review_sha" HEAD 2>/dev/null; then
-  block "review SHA ${review_sha} is not an ancestor of HEAD (rebase/amend rewrote history? run /repo-review-full-no-comments again)"
+# rejected outright — the review covers a different line of history. The ref is
+# the `--head` branch tip when given, else HEAD (see WORKTREE AWARENESS).
+if ! git merge-base --is-ancestor "$review_sha" "$REVIEW_REF" 2>/dev/null; then
+  block "review SHA ${review_sha} is not an ancestor of ${REVIEW_REF_LABEL} (rebase/amend rewrote history? run /repo-review-full-no-comments again)"
 fi
 
 # First-parent lag — merging origin/main counts as one commit, not the
 # dozens it brings in.
-lag=$(git rev-list "${review_sha}..HEAD" --first-parent --count 2>/dev/null || echo "")
+lag=$(git rev-list "${review_sha}..${REVIEW_REF}" --first-parent --count 2>/dev/null || echo "")
 if [[ -z "$lag" ]]; then
-  block "could not compute first-parent lag between review SHA ${review_sha} and HEAD"
+  block "could not compute first-parent lag between review SHA ${review_sha} and ${REVIEW_REF_LABEL}"
 fi
 if [[ "$lag" -gt "$REVIEW_MAX_LAG" ]]; then
-  block "review is ${lag} first-parent commits behind HEAD (max ${REVIEW_MAX_LAG}; set REVIEW_MAX_LAG=N to widen)"
+  block "review is ${lag} first-parent commits behind ${REVIEW_REF_LABEL} (max ${REVIEW_MAX_LAG}; set REVIEW_MAX_LAG=N to widen)"
 fi
 
 # Reject any sentinel still listing findings. Match the bracketed
@@ -300,5 +397,5 @@ if [[ "$REVIEW_BLOCK_GATE" != "off" ]]; then
   fi
 fi
 
-log "review accepted: ${REVIEW_PATH} (sha=${review_sha}, lag=${lag}/${REVIEW_MAX_LAG}, size=${review_size}B)"
+log "review accepted: ${REVIEW_PATH} (sha=${review_sha}, ref=${REVIEW_REF_LABEL}, lag=${lag}/${REVIEW_MAX_LAG}, size=${review_size}B)"
 exit 0
