@@ -321,7 +321,7 @@ ACCEPTED_DIFFS: tuple[str, ...] = (
     # Optional R2-download URI added in #1338; absent in v0.0.0 — locality, not a model knob.
     "datamodule.download_dataset_root_uri",
     "evaluation",  # eval CLI predict-mode post-processing block; not a model knob
-    "training",  # opt-in model-artifact checkpoint-upload block (#1472); not a model knob
+    "training.upload_checkpoints_uri",  # opt-in model-artifact checkpoint-upload block (#1472); not a model knob
 )
 
 # Leaf-name keys stripped at every nesting depth. Use this list (vs. ACCEPTED_DIFFS)
