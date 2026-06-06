@@ -148,16 +148,19 @@ Written via `wandb.config.update(..., allow_val_change=True)`.
 
 When `synth-setter-eval mode=predict evaluation.compute_metrics=true` runs and a W&B run is active, `_log_audio_metrics_to_wandb` (`src/synth_setter/cli/eval.py`) forwards the values from `aggregated_metrics.csv` directly to `wandb.run.log`, so they land in the same run as `test/param_mse`:
 
-| Key                | What                                                        |
-| ------------------ | ----------------------------------------------------------- |
-| `audio/mss_mean`   | Multi-scale log-mel spectrogram distance, mean over samples |
-| `audio/mss_std`    | Same, standard deviation                                    |
-| `audio/wmfcc_mean` | DTW-aligned MFCC distance, mean                             |
-| `audio/wmfcc_std`  | Same, standard deviation                                    |
-| `audio/sot_mean`   | Spectral optimal-transport distance, mean                   |
-| `audio/sot_std`    | Same, standard deviation                                    |
-| `audio/rms_mean`   | RMS envelope cosine similarity, mean                        |
-| `audio/rms_std`    | Same, standard deviation                                    |
+| Key                        | What                                                                                                                        |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `audio/mss_mean`           | Multi-scale log-mel spectrogram distance, mean over samples                                                                 |
+| `audio/mss_std`            | Same, standard deviation                                                                                                    |
+| `audio/wmfcc_mean`         | DTW-aligned MFCC distance, mean                                                                                             |
+| `audio/wmfcc_std`          | Same, standard deviation                                                                                                    |
+| `audio/sot_mean`           | Spectral optimal-transport distance, mean                                                                                   |
+| `audio/sot_std`            | Same, standard deviation                                                                                                    |
+| `audio/rms_mean`           | RMS envelope cosine similarity, mean                                                                                        |
+| `audio/rms_std`            | Same, standard deviation                                                                                                    |
+| `audio/per_sample_metrics` | Per-sample metrics from `metrics.csv` as a `wandb.Table`; columns match `compute_audio_metrics` output (one row per sample) |
+
+`_log_metrics_csv_to_wandb` (`src/synth_setter/cli/eval.py`) is a no-op when `metrics.csv` is absent or `wandb.run` is unset; wandb errors are swallowed so a logging failure never aborts the run.
 
 The same dict is also merged into the dict returned by `evaluate()` alongside Lightning's `trainer.callback_metrics`. See [eval-pipeline.md §5.1](../design/eval-pipeline.md) for the surrounding subprocess chain.
 
@@ -175,11 +178,11 @@ ______________________________________________________________________
 
 ## 4. Entry Points
 
-| Entry point                                | W&B usage                                                                                                                                                                            | File                                       |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------ |
-| `src/synth_setter/cli/train.py`            | Full: logger init → hparams → provenance → train metrics → test metrics → teardown                                                                                                   | `src/synth_setter/cli/train.py`            |
-| `src/synth_setter/cli/eval.py`             | Full: logger init → hparams → provenance → test/val metrics (+ optional predictions) → predict-mode `audio/<metric>_{mean,std}` keys from `_log_audio_metrics_to_wandb` → teardown   | `src/synth_setter/cli/eval.py`             |
-| `src/synth_setter/cli/generate_dataset.py` | Dataset-generation: logger init pinned to `spec.run_id` → spec hparams → `<task_name>-input-spec` artifact → per-shard metrics → run summary → `finalize(status)` + `wandb.finish()` | `src/synth_setter/cli/generate_dataset.py` |
+| Entry point                                | W&B usage                                                                                                                                                                                                                                                 | File                                       |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
+| `src/synth_setter/cli/train.py`            | Full: logger init → hparams → provenance → train metrics → test metrics → teardown                                                                                                                                                                        | `src/synth_setter/cli/train.py`            |
+| `src/synth_setter/cli/eval.py`             | Full: logger init → hparams → provenance → test/val metrics (+ optional predictions) → predict-mode `audio/<metric>_{mean,std}` scalars from `_log_audio_metrics_to_wandb` + `audio/per_sample_metrics` Table from `_log_metrics_csv_to_wandb` → teardown | `src/synth_setter/cli/eval.py`             |
+| `src/synth_setter/cli/generate_dataset.py` | Dataset-generation: logger init pinned to `spec.run_id` → spec hparams → `<task_name>-input-spec` artifact → per-shard metrics → run summary → `finalize(status)` + `wandb.finish()`                                                                      | `src/synth_setter/cli/generate_dataset.py` |
 
 Both training and eval use `@task_wrapper` which ensures `wandb.finish()` runs even on exception.
 `generate_dataset` brackets `generate(...)` in its own `try/finally` that calls `_close_loggers` — see §5 for the metric / run-id contract.

@@ -253,7 +253,7 @@ When `cfg.mode == "predict"`, `cli/eval.py` invokes `_run_predict_postprocessing
 
 On Linux the render subprocess is prefixed with the headless wrapper materialised via `synth_setter.resources.vst_headless_wrapper()` so the VST3 plugin sees an Xvfb display before pedalboard imports it; the metrics subprocess is CPU-only and runs unwrapped. Both default-off so `mode: test` and `mode: validate` paths are unchanged.
 
-When `evaluation.compute_metrics` runs, the aggregated values from `aggregated_metrics.csv` are also surfaced to the active wandb run (as `audio/<name>_{mean,std}`) and merged into the dict returned by `evaluate()` alongside Lightning's `trainer.callback_metrics`, so the same wandb run that holds `test/param_mse` can carry the audio metrics too.
+When `evaluation.compute_metrics` runs, the aggregated values from `aggregated_metrics.csv` are also surfaced to the active wandb run (as `audio/<name>_{mean,std}` scalars) and `metrics.csv` is uploaded as `audio/per_sample_metrics` (a `wandb.Table`) and merged into the dict returned by `evaluate()` alongside Lightning's `trainer.callback_metrics`, so the same wandb run that holds `test/param_mse` can carry the audio metrics too.
 
 ### 5.2 Render
 
@@ -589,11 +589,11 @@ hands Lightning a resolved local path transparently.
 
 Each system handles what it's best at:
 
-| System                                 | What it stores                                                                                                                 | Why                                                       |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------- |
-| **W&B**                                | Training metrics, checkpoints (`log_model: "all"` — every saved checkpoint), eval summary metrics, artifact lineage            | UI for browsing/comparing, lineage graphs, model registry |
-| **R2**                                 | Datasets (generated shards, train/val/test splits), eval bulk artifacts (predictions, audio, spectrograms, per-sample metrics) | Too large for W&B, cheaper per GB, fast rclone egress     |
-| **Hydra config** (`config.yaml` in R2) | Full frozen config at eval time — every parameter, override, and version                                                       | Exact reproducibility without querying W&B                |
+| System                                 | What it stores                                                                                                                                                           | Why                                                       |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------- |
+| **W&B**                                | Training metrics, checkpoints (`log_model: "all"` — every saved checkpoint), eval summary metrics, per-sample eval Tables (`audio/per_sample_metrics`), artifact lineage | UI for browsing/comparing, lineage graphs, model registry |
+| **R2**                                 | Datasets (generated shards, train/val/test splits), eval bulk artifacts (predictions, audio, spectrograms, per-sample metrics CSV file)                                  | Too large for W&B, cheaper per GB, fast rclone egress     |
+| **Hydra config** (`config.yaml` in R2) | Full frozen config at eval time — every parameter, override, and version                                                                                                 | Exact reproducibility without querying W&B                |
 
 **Provenance is recorded in three places:**
 
