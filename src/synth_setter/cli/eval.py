@@ -13,7 +13,7 @@ import wandb
 from lightning import Callback, LightningDataModule, LightningModule, Trainer
 from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import _get_git_sha
@@ -118,11 +118,13 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
     always forwarded; the render-order probe (#489) runs automatically inside
     ``compute_audio_metrics`` when all sample dirs have identical params.
 
-    :param cfg: Reads ``cfg.evaluation`` (gates + ``num_workers`` + ``shuffle_seed``),
-        ``cfg.render`` (param spec, preset, optional plugin path), and
-        ``cfg.paths.output_dir`` (base for ``predictions/``, ``audio/``, ``metrics/``).
-    :returns: ``{"audio/<name>_<stat>": value}`` when ``compute_metrics`` ran;
-        empty dict otherwise. Always rank-zero — the caller gates DDP duplication.
+    :param cfg: Reads ``cfg.evaluation`` (gates + ``num_workers`` + ``shuffle_seed``
+        + optional ``metric_prefix``), ``cfg.render`` (param spec, preset, optional
+        plugin path), and ``cfg.paths.output_dir`` (base for ``predictions/``,
+        ``audio/``, ``metrics/``).
+    :returns: ``{"<metric_prefix>audio/<name>_<stat>": value}`` when ``compute_metrics``
+        ran (``metric_prefix`` empty by default); empty dict otherwise. Always
+        rank-zero — the caller gates DDP duplication.
     :raises ValueError: if ``evaluation.render_vst`` is enabled but ``cfg.render`` is
         unset, or the expected input directory for a stage is missing.
     :raises subprocess.CalledProcessError: propagated from a non-zero subprocess exit.
@@ -210,6 +212,11 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
             timeout=_SUBPROCESS_TIMEOUT_SECONDS,
         )
         audio_metrics = _load_audio_metrics(metrics_dir)
+        # Namespace every key (audio/* and shuffled_audio/*) per caller — e.g. one
+        # wandb run shared across splits — so passes don't overwrite each other.
+        prefix = cfg.evaluation.get("metric_prefix", "")
+        if prefix:
+            audio_metrics = {f"{prefix}{key}": value for key, value in audio_metrics.items()}
         _log_audio_metrics_to_wandb(audio_metrics)
         return audio_metrics
 
@@ -303,7 +310,7 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     if trainer.is_global_zero:
         _dump_metric_dict(metric_dict, Path(cfg.paths.output_dir))
     _maybe_upload_output_dir(cfg, trainer.is_global_zero)
-    upload_uri = cfg.evaluation.get("upload_output_dir_uri")
+    upload_uri = _upload_output_dir_uri(cfg)
     # _get_git_sha() shells out, so only invoke it on the path that actually logs
     # the artifact (global-zero with a configured R2 prefix).
     if trainer.is_global_zero and upload_uri:
@@ -427,6 +434,19 @@ def _log_eval_results_artifact(
             log.warning(f"_log_eval_results_artifact failed on {type(lg).__name__}: {exc}")
 
 
+def _upload_output_dir_uri(cfg: DictConfig) -> str | None:
+    """Resolve ``cfg.evaluation.upload_output_dir_uri``, tolerating an absent section.
+
+    The R2 mirror is opt-in, so a missing ``evaluation`` group or unset key means
+    "no upload" rather than a misconfiguration. ``OmegaConf.select`` returns
+    ``None`` for any missing path segment without raising, unlike attribute access.
+
+    :param cfg: Hydra-composed eval cfg.
+    :returns: The configured destination URI, or ``None`` when unset/absent.
+    """
+    return OmegaConf.select(cfg, "evaluation.upload_output_dir_uri")
+
+
 def _maybe_upload_output_dir(cfg: DictConfig, is_global_zero: bool) -> None:
     """Mirror the whole Hydra run dir to R2 when ``evaluation.upload_output_dir_uri`` is set.
 
@@ -451,7 +471,7 @@ def _maybe_upload_output_dir(cfg: DictConfig, is_global_zero: bool) -> None:
     """
     if not is_global_zero:
         return
-    dest_uri = cfg.evaluation.get("upload_output_dir_uri")
+    dest_uri = _upload_output_dir_uri(cfg)
     if not dest_uri:
         return
     if not r2_io.is_r2_uri(dest_uri):
