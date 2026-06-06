@@ -301,7 +301,11 @@ def generate(spec: DatasetSpec, work_dir: Path, loggers: list[Logger]) -> None: 
         # ``wandb.finish()`` in the ``finally`` — otherwise the wandb run
         # leaks un-closed on the helper's exception path.
         _log_hyperparams(loggers, spec)
-        log_wandb_provenance()
+        # Provenance mutates the process-global ``wandb.run``; only stamp it when
+        # a ``WandbLogger`` here owns the run, mirroring ``_close_loggers`` — else
+        # an empty-logger run would stamp a foreign run started elsewhere.
+        if any(isinstance(lg, WandbLogger) for lg in loggers):
+            log_wandb_provenance()
         _log_spec_artifact(loggers, spec)
         # Fail a misconfigured dataset-copy at launch, before the first render.
         _validate_copy_source(spec)

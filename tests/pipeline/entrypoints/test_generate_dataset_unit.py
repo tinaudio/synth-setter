@@ -1182,6 +1182,32 @@ class TestRun:
         assert captured["src"] == tmp_path / spec.shards[0].filename
         assert captured["existed_at_upload"] is True
 
+    def test_provenance_not_stamped_when_no_wandb_logger(
+        self,
+        patched_subprocess: MagicMock,  # noqa: ARG002
+        spec: DatasetSpec,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``log_wandb_provenance`` is skipped when ``loggers`` owns no ``WandbLogger``.
+
+        Provenance mutates the process-global ``wandb.run``; gating the call on a
+        locally-owned ``WandbLogger`` keeps an empty-logger run from stamping a
+        foreign in-process run, mirroring the ``_close_loggers`` ownership guard.
+
+        :param patched_subprocess: Fixture-activation only; the renderer
+            materializes the shard so the run reaches its summary.
+        :param spec: Fixture-provided single-shard ``DatasetSpec``.
+        :param tmp_path: Caller-supplied work_dir for ``generate()``.
+        :param monkeypatch: Installs the ``log_wandb_provenance`` spy.
+        """
+        provenance = MagicMock()
+        monkeypatch.setattr("synth_setter.cli.generate_dataset.log_wandb_provenance", provenance)
+
+        generate(spec, tmp_path, [])
+
+        provenance.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # build_generate_args — arg construction from spec + shard
