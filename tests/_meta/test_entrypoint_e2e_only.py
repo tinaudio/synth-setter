@@ -6,6 +6,10 @@ fixture. Tests that manage their own Hydra lifecycle (via ``initialize``,
 ``initialize_config_dir``, or ``initialize_config_module``) are config-layer tests
 and belong in ``tests/pipeline/configs/``.
 
+``test_finalize_dataset.py`` is included for the same reason: it synthesizes a
+``finalize()`` cfg in-process and drives ``finalize(cfg)`` / ``main()`` without a
+Hydra config-initializer.
+
 ``test_eval.py`` is excluded: it composes a cfg inline and immediately calls
 ``evaluate(cfg)``, which is e2e. Refs #1345.
 """
@@ -20,6 +24,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _ENTRYPOINT_ONLY_TEST_FILES: tuple[str, ...] = (
     "tests/test_generate_dataset.py",
     "tests/test_train.py",
+    "tests/test_finalize_dataset.py",
 )
 
 _BANNED_HYDRA_IMPORTS = frozenset(

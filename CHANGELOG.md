@@ -1,6 +1,215 @@
 # CHANGELOG
 
 
+## v8.26.1 (2026-06-06)
+
+### Bug Fixes
+
+- **review**: Scan gh stdout for self-review 422 in post_review fallback
+  ([#1535](https://github.com/tinaudio/synth-setter/pull/1535),
+  [`3467cad`](https://github.com/tinaudio/synth-setter/commit/3467cad32a995855af7dcab3a3fe7e5abe6a9670))
+
+gh api writes the JSON error body (carrying "Can not request changes on your own pull request") to
+  stdout, and only "HTTP 422" to stderr. submit_review scanned stderr only, so the self-review
+  COMMENT fallback never fired on a real self-review and the whole /repo-review-full post aborted
+  with exit 1. Scan both streams.
+
+Refs #1533
+
+### Internal-Feat
+
+- **eval**: Add wandb OmegaConf resolver for cached checkpoints
+  ([#1504](https://github.com/tinaudio/synth-setter/pull/1504),
+  [`f159cd0`](https://github.com/tinaudio/synth-setter/commit/f159cd0a6d6cb0631b83fbf22b26f974ed47a61c))
+
+* feat(eval): add ${wandb:...} OmegaConf resolver for cached checkpoints
+
+Resolve a W&B model artifact reference to a local checkpoint path via the public API, caching
+  downloads under $PROJECT_ROOT/.cache/checkpoints/ so re-resolving the same ref reuses the cache.
+  wandb is lazy-imported so the resolver never burdens utils import.
+
+* fix(eval): harden wandb resolver cache key and checkpoint selection
+
+Slug the cache key so a hostile ref (`..`, `:`) can never escape .cache/checkpoints, re-download
+  when the cached dir holds no .ckpt (partial download), and select model.ckpt deterministically —
+  erroring on an ambiguous multi-checkpoint artifact instead of silently picking one.
+
+* fix(eval): harden wandb resolver cache key and import guard
+
+Address Copilot review on the ${wandb:...} resolver: - _cache_key excludes '.' from the slug and
+  appends a sha256 suffix, so a hostile ref (.., .) cannot escape the cache root and refs that slug
+  alike (a/b vs a:b) no longer collide onto one cache dir. - guard with find_spec("wandb") and raise
+  a clear ModuleNotFoundError naming the ref, matching the repo's other W&B call sites, instead of a
+  bare import error mid-interpolation. - glob the cache once and mkdir(parents, exist_ok) before
+  download.
+
+Refs #128, #1467
+
+* test(eval): pin ${wandb:...} resolves when composed into ckpt_path
+
+Add a composition test that proves the ${wandb:...} resolver is registered when Hydra composes
+  eval.yaml and that it interpolates through the real ckpt_path key evaluate() consumes. The
+  existing unit tests bind the resolver to an ad-hoc OmegaConf key; this covers the composition seam
+  they do not.
+
+The test fakes the W&B public API via sys.modules (no network, no GPU, no real artifact) and asserts
+  the override ckpt_path=${wandb:...} resolves to the cached .ckpt under
+  $PROJECT_ROOT/.cache/checkpoints/.
+
+Refs #128
+
+* fix(eval): cap wandb cache-key slug length and reject duplicate model.ckpt
+
+Two edge cases in the ${wandb:...} resolver surfaced in review:
+
+- A very long artifact ref produced a cache-dir name exceeding the common 255-byte filename limit,
+  raising OSError on mkdir. Cap the readable slug at _MAX_SLUG_LEN; the sha256 suffix still
+  guarantees uniqueness. - _select_checkpoint silently returned the first model.ckpt when several
+  existed across nested dirs. Raise ValueError instead of guessing, matching the existing
+  ambiguous-non-preferred branch.
+
+* ci: re-trigger checks (flaky conda xdist HydraConfig-singleton leak)
+
+run_tests_conda flaked on test_pins_run_id_in_config_id_timestamp_convention (merged from main):
+  resolve_run_config_id reads the process-global HydraConfig singleton, so a sibling xdist test that
+  leaves an experiment choice populated makes the run-id miss the flow_simple pattern. Deterministic
+  locally and under xdist; unrelated to the wandb resolver in this PR.
+
+* test(eval): clear Hydra global state in finally for resolver compose test
+
+GlobalHydra.instance().clear() ran only on the success path; a failed assertion left Hydra
+  initialized and could leak a HydraConfig singleton into later xdist-sibling tests. Wrap the
+  compose/assert block in try/finally so cleanup always runs.
+
+* test(eval): stop workspace fixture leaking PROJECT_ROOT across tests
+
+The wandb-resolver `workspace` fixture set SYNTH_SETTER_WORKSPACE but left PROJECT_ROOT — which
+  operator_workspace() publishes via os.environ.setdefault during resolution — unregistered with
+  monkeypatch, so tmp_path leaked into later order-dependent tests (comment #3367767343).
+
+Pin PROJECT_ROOT through monkeypatch.setenv rather than the suggested delenv: delenv(raising=False)
+  is a no-op when PROJECT_ROOT is unset at setup (the first wandb test in a fresh xdist worker) and
+  so registers no teardown undo, leaving the value setdefault publishes later unprotected. setenv
+  always records an undo and pre-seeds a consistent value, so teardown restores it.
+
+* fix(eval): correct wandb resolver missing-dependency guidance
+
+The ${wandb:...} resolver's ModuleNotFoundError pointed users at a non-existent 'wandb' PEP 735
+  dependency group. wandb lives in the 'util' group (aggregated into 'runtime'/'dev'); name those
+  instead so the guidance is actionable. Tightened the test to pin the corrected group name (comment
+  #3367851988).
+
+### Testing
+
+- **finalize**: Dedupe shard helpers, split tests onto entrypoint rails
+  ([#1527](https://github.com/tinaudio/synth-setter/pull/1527),
+  [`676dea4`](https://github.com/tinaudio/synth-setter/commit/676dea4f6f81971ff237d30a8608ead9101c5c3d))
+
+* test(finalize): dedupe shard helpers, split tests onto entrypoint rails
+
+Extract the verbatim-duplicated _write_minimal_wds_shard and the finalize-specific wds/hdf5
+  DatasetSpec builders + shard seeders into a focused tests/helpers/finalize_shards.py, shared by
+  the entrypoint, branch-unit, and real-R2 lanes so a shard-layout change updates every caller at
+  once.
+
+Bring finalize onto the codified entrypoint rails the way generate_dataset is split: the
+  entrypoint-level finalize(cfg) / main() tests move to the canonical
+  tests/test_finalize_dataset.py, while the branch-level finalize_wds / finalize_hdf5 /
+  finalize_from_spec tests — which legitimately reference internals (reshard_dataset,
+  get_stats_hdf5, stream_stats_wds) — stay in the sibling
+  tests/pipeline/entrypoints/test_finalize_dataset_unit.py. Extend both tests/_meta guards to cover
+  the new canonical module; the branch/unit module is deliberately not added to the entrypoint-only
+  rail.
+
+Test-only; every existing finalize test is preserved (26 -> 10 + 16).
+
+Closes #1513
+
+* chore(ci): retrigger flaky finalize smoke workflow
+
+- **provenance**: Pin run-id resolution against leaked HydraConfig
+  ([#1529](https://github.com/tinaudio/synth-setter/pull/1529),
+  [`b414184`](https://github.com/tinaudio/synth-setter/commit/b414184f7fbb0053b5fdca742b491ecdab060de1))
+
+* test(provenance): guard run-id resolution against leaked HydraConfig
+
+The train and eval provenance run-id tests flaked under pytest-xdist: `resolve_run_config_id` reads
+  the process-global `HydraConfig` singleton, so a sibling test that left an `experiment` choice set
+  made the pinned run id resolve to the foreign experiment basename instead of `task_name`, tripping
+  `re.fullmatch(...) -> None` (`assert None`).
+
+The systemic fix — the autouse `_reset_hydra_config_singleton` fixture in `tests/conftest.py` —
+  already landed, but nothing pinned its contract. Add a deterministic regression test to each
+  provenance suite that pre-populates the singleton with a foreign experiment choice, clears it as
+  the autouse fixture does between tests, and asserts the run id falls back to
+  {task_name}-{timestamp}. The test fails (assert None) if the reset is removed.
+
+Fixes #1518 Fixes #1523
+
+* test(provenance): reword regression-test docstrings to match behavior
+
+Copilot flagged that the docstrings claimed the test guards the autouse fixture's between-test
+  clearing, but the test clears the HydraConfig singleton itself. Reword to describe the pinned
+  contract: after a leaked experiment choice is cleared, the run id falls back to
+  {task_name}-{timestamp}.
+
+- **skypilot**: Deflake TestDispatchViaSkypilot via inline executor
+  ([#1532](https://github.com/tinaudio/synth-setter/pull/1532),
+  [`4713cbf`](https://github.com/tinaudio/synth-setter/commit/4713cbf5bbbf194603776651bde263f86b246734))
+
+The launcher fans ranks out via ThreadPoolExecutor, calling into the shared mock_sky MagicMock from
+  multiple threads. unittest.mock call recording (call_args_list, call_count) is not thread-safe:
+  under CPU contention on busy ubuntu xdist shards two threads interleave the record step and a
+  rank's call is dropped or duplicated, so the count comes up short or a rank goes missing.
+
+Patch the launcher's module-level ThreadPoolExecutor with a synchronous inline executor via a
+  class-scoped autouse fixture, so the per-rank fan-out runs on the calling thread and mock
+  recording is deterministic. These are env-wiring unit tests, not concurrency tests, so removing
+  parallelism from the unit-under-test is legitimate and keeps every assertion's intent intact.
+
+Verified by stressing the affected tests 40x under full-core CPU contention (all pass) where the
+  parallel path previously dropped ranks.
+
+Fixes #1531
+
+- **testing**: Guard non-integer PYTEST_XDIST_AUTO_NUM_WORKERS override
+  ([#1530](https://github.com/tinaudio/synth-setter/pull/1530),
+  [`9e572d4`](https://github.com/tinaudio/synth-setter/commit/9e572d472224d6ecc21145bd040680ee29dc3654))
+
+A misconfigured non-integer PYTEST_XDIST_AUTO_NUM_WORKERS (or an empty value) raised ValueError in
+  the xdist auto-worker hook, aborting pytest collection before any test ran. Treat a
+  non-integer/empty pin as "no override" and fall through to the adaptive CPU/memory clamps —
+  mirroring the malformed-input handling already used for PYTEST_XDIST_WORKER_MEM_MB.
+
+Adds two regression tests (non-integer and empty-string) to the hook composition suite.
+
+Fixes #1528 Refs #1520
+
+- **testing**: Pin HydraConfig run-id resolution isolation under xdist
+  ([#1525](https://github.com/tinaudio/synth-setter/pull/1525),
+  [`dc513af`](https://github.com/tinaudio/synth-setter/commit/dc513af81543315b8e660bc9a3d11c96eeda4075))
+
+`resolve_run_config_id` reads `runtime.choices.experiment` from the process-global `HydraConfig`
+  singleton. `test_eval.py` composes surge experiments and clears only `GlobalHydra` in teardown,
+  which does not reset the stored `HydraConfig`; under pytest-xdist the stale
+  `experiment=surge/fake_oracle` leaked into the provenance test, resolving its expected
+  `config_id=flow_simple` to `fake_oracle` and flaking the run-id regex.
+
+The autouse `reset_hydra_config_singleton` fixture neutralizes the leak, and
+  `TestHydraConfigSingletonReset` already pins the reset primitive. This adds the missing end-to-end
+  resolution coverage:
+
+- `test_clearing_global_hydra_leaves_experiment_choice_on_the_singleton` pins the trap — clearing
+  `GlobalHydra` alone leaves the choice driving `resolve_run_config_id` (reads `fake_oracle`). -
+  `test_project_autouse_reset_neutralizes_a_leak_for_the_following_test` runs a `pytester`
+  sub-session that loads the real `tests/conftest.py` as a plugin and leaks-then-asserts in a fixed
+  order under `-p no:randomly`. The fallback is verified independently of the suite's
+  pytest-randomly shuffle, and because the session uses the production fixture (not a stand-in),
+  removing or breaking that fixture fails the check.
+
+Closes #1523
+
+
 ## v8.26.0 (2026-06-06)
 
 ### Continuous Integration

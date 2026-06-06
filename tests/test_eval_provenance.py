@@ -17,12 +17,27 @@ from collections.abc import Iterator
 from unittest.mock import MagicMock, patch
 
 import pytest
+from hydra.conf import HydraConf
+from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 
 from synth_setter.cli.eval import evaluate
 
 # ``make_wandb_run_id`` output: ``<config_id>-YYYYMMDDTHHMMSSsssZ``.
 _RUN_ID_PATTERN = r"{config_id}-\d{{8}}T\d{{9}}Z"
+
+
+def _leak_foreign_experiment_into_hydra_singleton() -> None:
+    """Populate the process-global ``HydraConfig`` with a foreign experiment choice.
+
+    Mimics a sibling test that composed an experiment and left the ``HydraConfig``
+    singleton set, so ``resolve_run_config_id`` would read
+    ``runtime.choices.experiment`` instead of falling back to ``task_name`` — the
+    leak that flaked the provenance run-id tests under xdist (#1518, #1523).
+    """
+    hydra_conf = OmegaConf.structured(HydraConf)
+    OmegaConf.update(hydra_conf, "runtime.choices.experiment", "surge/some_other_exp")
+    HydraConfig.instance().set_config(OmegaConf.create({"hydra": hydra_conf}))
 
 
 def _wandb_logger_cfg() -> DictConfig:
@@ -79,6 +94,28 @@ class TestEvalProvenanceWiring:
 
         :param stubbed_eval_entrypoint: Collaborator-stub fixture.
         """
+        cfg = _wandb_logger_cfg()
+
+        evaluate(cfg)
+
+        assert re.fullmatch(_RUN_ID_PATTERN.format(config_id="flow_simple"), cfg.logger.wandb.id)
+
+    def test_pins_run_id_to_task_name_after_leaked_experiment_is_reset(
+        self, stubbed_eval_entrypoint: MagicMock
+    ) -> None:
+        """Clearing a leaked ``HydraConfig`` restores the ``task_name`` run-id fallback.
+
+        Pins the contract that the autouse ``_reset_hydra_config_singleton`` fixture
+        (``tests/conftest.py``) relies on: after a foreign
+        ``runtime.choices.experiment`` is cleared from the process-global singleton,
+        the pinned run id resolves to ``{task_name}-{timestamp}`` rather than the
+        leaked experiment basename — the xdist flake fixed in #1518, #1523. The test
+        clears the singleton itself so it is deterministic regardless of ordering.
+
+        :param stubbed_eval_entrypoint: Collaborator-stub fixture.
+        """
+        _leak_foreign_experiment_into_hydra_singleton()
+        HydraConfig.instance().cfg = None
         cfg = _wandb_logger_cfg()
 
         evaluate(cfg)

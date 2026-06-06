@@ -10,10 +10,8 @@ regardless of pass/fail.
 
 from __future__ import annotations
 
-import io
 import os
 import subprocess
-import tarfile
 import tempfile
 import uuid
 from collections.abc import Iterator
@@ -26,23 +24,9 @@ import pytest
 from synth_setter.cli import finalize_dataset
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import DatasetSpec
+from tests.helpers.finalize_shards import write_minimal_wds_shard
 
 pytestmark = [pytest.mark.integration_r2, pytest.mark.r2, pytest.mark.slow]
-
-
-def _write_minimal_wds_shard(dest: Path) -> None:
-    """Write a tar at ``dest`` carrying one ``00000000.mel_spec.npy`` member.
-
-    :param dest: Filesystem path where the tar is written; parents must exist.
-    """
-    payload = np.arange(8, dtype=np.float32).reshape(4, 2)
-    buf = io.BytesIO()
-    np.save(buf, payload)
-    member_bytes = buf.getvalue()
-    with tarfile.open(dest, mode="w") as tar:
-        info = tarfile.TarInfo(name="00000000.mel_spec.npy")
-        info.size = len(member_bytes)
-        tar.addfile(info, io.BytesIO(member_bytes))
 
 
 def _unique_test_prefix_suffix() -> str:
@@ -104,7 +88,7 @@ def staged_wds_spec() -> Iterator[DatasetSpec]:
 
     with tempfile.TemporaryDirectory() as raw_local:
         local = Path(raw_local) / spec.shards[0].filename
-        _write_minimal_wds_shard(local)
+        write_minimal_wds_shard(local)
         r2_io.upload_to_uri(local, spec.r2.shard_uri(spec.shards[0]))
     try:
         yield spec

@@ -1017,15 +1017,19 @@ def pytest_xdist_auto_num_workers(config: pytest.Config) -> int:  # noqa: ARG001
 
     Checks ``PYTEST_XDIST_AUTO_NUM_WORKERS`` first so the env-var escape hatch
     that xdist's built-in implementation honours is preserved even when this
-    hook wins the ``firstresult`` race. Otherwise returns ``min(cpu, memory)``
-    so neither resource is over-subscribed.
+    hook wins the ``firstresult`` race. A non-integer or empty pin is ignored,
+    not fatal. Otherwise returns ``min(cpu, memory)`` so neither resource is
+    over-subscribed.
 
     :param config: The pytest config object (unused; required by the hook signature).
     :returns: Worker count clamped to the host's real CPU and memory allocation.
     """
     env_override = os.environ.get("PYTEST_XDIST_AUTO_NUM_WORKERS")
-    if env_override is not None:
-        return max(1, int(env_override))
+    if env_override:
+        try:
+            return max(1, int(env_override))
+        except ValueError:
+            pass  # non-integer pin -> ignore and fall through to the adaptive clamps
     cpu_workers = _cgroup_aware_cpu_count()
     mem_workers = _memory_aware_worker_count()
     return cpu_workers if mem_workers is None else min(cpu_workers, mem_workers)
