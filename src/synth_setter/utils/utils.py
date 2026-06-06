@@ -17,6 +17,10 @@ from synth_setter.utils import pylogger, rich_utils
 
 log = pylogger.RankedLogger(__name__, rank_zero_only=True)
 
+# Cap the readable cache-key slug so "<slug>-<sha256[:12]>" stays within the
+# common 255-byte filename limit; the hash suffix preserves uniqueness.
+_MAX_SLUG_LEN = 200
+
 
 def register_resolvers() -> None:
     # Avoid double-registration when modules are imported multiple times in tests
@@ -71,12 +75,14 @@ def _cache_key(ref: str) -> str:
     The readable slug excludes ``.`` so no ``ref`` can produce a ``.`` / ``..``
     path segment that escapes the cache root; a short ``sha256`` suffix keeps
     distinct refs that slug identically (e.g. ``a/b`` vs ``a:b``) from colliding
-    onto the same cache dir and returning the wrong checkpoint.
+    onto the same cache dir and returning the wrong checkpoint. The slug is
+    capped so the name stays under the common 255-byte filename limit; the hash
+    suffix preserves uniqueness across refs that share a truncated slug.
 
     :param ref: Artifact ref such as ``entity/project/model-x:alias``.
     :returns: ``<slug>-<sha256[:12]>``, safe as a single path component.
     """
-    slug = re.sub(r"[^A-Za-z0-9_-]", "_", ref)
+    slug = re.sub(r"[^A-Za-z0-9_-]", "_", ref)[:_MAX_SLUG_LEN]
     digest = hashlib.sha256(ref.encode()).hexdigest()[:12]
     return f"{slug}-{digest}"
 
@@ -86,14 +92,17 @@ def _select_checkpoint(ref: str, checkpoints: list[Path]) -> str:
 
     :param ref: Originating artifact ref, used only for error messages.
     :param checkpoints: ``.ckpt`` paths found in the downloaded artifact.
-    :returns: ``model.ckpt`` if present, else the sole checkpoint.
+    :returns: The sole ``model.ckpt`` if present, else the sole checkpoint.
     :raises FileNotFoundError: If ``checkpoints`` is empty.
-    :raises ValueError: If several non-``model.ckpt`` checkpoints make the
-        selection ambiguous.
+    :raises ValueError: If several ``model.ckpt`` files, or several
+        non-``model.ckpt`` checkpoints, make the selection ambiguous.
     """
     if not checkpoints:
         raise FileNotFoundError(f"W&B artifact {ref!r} contains no .ckpt")
     preferred = [p for p in checkpoints if p.name == "model.ckpt"]
+    if len(preferred) > 1:
+        paths = ", ".join(str(p) for p in preferred)
+        raise ValueError(f"W&B artifact {ref!r} has ambiguous model.ckpt files ({paths})")
     if preferred:
         return str(preferred[0])
     if len(checkpoints) > 1:

@@ -42,7 +42,9 @@ class _FakeArtifact:
         dest = Path(root)
         dest.mkdir(parents=True, exist_ok=True)
         for name in self._filenames:
-            (dest / name).write_bytes(b"weights")
+            target = dest / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b"weights")
         return root
 
 
@@ -201,6 +203,41 @@ def test_resolve_wandb_checkpoint_multiple_ckpts_raises(
 
     with pytest.raises(ValueError, match="ambiguous"):
         _resolve_wandb_checkpoint("model-x:latest")
+
+
+def test_resolve_wandb_checkpoint_multiple_model_ckpts_raises(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Several ``model.ckpt`` files across nested dirs error instead of guessing.
+
+    :param workspace: Temp ``$PROJECT_ROOT`` the cache lands under.
+    :param monkeypatch: Injects the fake ``wandb`` module into ``sys.modules``.
+    """
+    calls: list[str] = []
+    monkeypatch.setitem(
+        sys.modules, "wandb", _fake_api(calls, filenames=("a/model.ckpt", "b/model.ckpt"))
+    )
+
+    with pytest.raises(ValueError, match="ambiguous"):
+        _resolve_wandb_checkpoint("model-x:latest")
+
+
+def test_resolve_wandb_checkpoint_long_ref_cache_dir_within_name_limit(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A very long ref yields a cache-dir name within the 255-byte filesystem limit.
+
+    :param workspace: Temp ``$PROJECT_ROOT`` the cache lands under.
+    :param monkeypatch: Injects the fake ``wandb`` module into ``sys.modules``.
+    """
+    calls: list[str] = []
+    monkeypatch.setitem(sys.modules, "wandb", _fake_api(calls))
+
+    resolved = Path(_resolve_wandb_checkpoint("x" * 400 + ":latest"))
+
+    cache_dir = resolved.parent
+    assert len(cache_dir.name.encode()) <= 255
+    assert resolved.is_file()
 
 
 def test_resolve_wandb_checkpoint_partial_download_redownloads(
