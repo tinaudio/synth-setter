@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780705301382,
+  "lastUpdate": 1780767374147,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -6126,6 +6126,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.031188547611236572,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0c6b18dd9c694833fd91dfcae966fe2eccef78f2",
+          "message": "refactor(data): flatten datasetsrc into flat copy_dataset_root field (#1505)\n\n* refactor(data): flatten datasetsrc wrapper into a flat copy_dataset_root field\n\nThe dataset-copy source was a single-field wrapper model\n(``DatasetSrcConfig.copy_dataset_root``) nested under ``DatasetSpec.datasetsrc``,\ndefaulting to ``datasetsrc: null`` in ``dataset.yaml``. That null default is a\nHydra struct footgun: a dotted ``datasetsrc.copy_dataset_root=...`` override\nfails because OmegaConf cannot index into a null node, forcing the awkward\nmapping form ``datasetsrc='{copy_dataset_root: ...}'``.\n\nReplace the wrapper with a flat ``DatasetSpec.copy_dataset_root: str | None``\n(``copy_dataset_root: null`` in ``dataset.yaml``), so the override is simply\n``copy_dataset_root=<path>``. The blank-string and hdf5-only validators move\nonto ``DatasetSpec``; the rich copy-source rationale (#724 min_loudness note)\nmoves onto the field description.\n\nBack-compat: a ``mode=\"before\"`` shim (mirroring ``_normalize_r2_input``)\npromotes legacy ``datasetsrc: {copy_dataset_root: X}`` to the flat key and drops\n``datasetsrc: null``, so ``input_spec.json`` files already materialized to R2\nstill load (verified against an existing smoke-shard spec).\n\nRefs #1429\n\n* refactor(data): tighten copy_dataset_root docs and cover legacy shim edges\n\nAddress pre-PR review WARNs: trim the ``copy_dataset_root`` field description\nto its contract (the hdf5-only and param_spec_name constraints are owned by the\nvalidators and ``validate_copy_source``), and add tests for the back-compat\nshim's previously-uncovered branches — a non-mapping legacy ``datasetsrc`` is\nrejected, an empty legacy mapping disables copy, and a serialized legacy-shaped\nspec reloads through ``model_validate_json``.\n\nRefs #1429\n\n* docs(data): note legacy datasetsrc back-compat shim in the copy section\n\nRefs #1502\n\n* refactor(data): reject unexpected keys in legacy datasetsrc mapping\n\nPer review: the back-compat shim previously read only copy_dataset_root from a\nlegacy datasetsrc mapping, silently dropping any other key. Restore the\nsingle-key strictness the removed DatasetSrcConfig (extra=\"forbid\") enforced so\na typo'd legacy key fails loudly instead of silently disabling the copy path.\n\nRefs #1502\n\n* refactor(data): make legacy datasetsrc back-compat strict and loud\n\nAddress Copilot re-review: (1) from_hydra_cfg masks the composed cfg to model\nfields before the promotion shim runs, so a stale Hydra `datasetsrc` override\nwould silently vanish — reject it with a migration pointer to copy_dataset_root.\n(2) A non-null legacy datasetsrc mapping must hold exactly a non-null\ncopy_dataset_root (empty/null-inner now raises) so a typo can't quietly disable\ncopy; use `datasetsrc: null` to disable. Mirrors the removed DatasetSrcConfig's\nrequired-field contract on the back-compat path.\n\nRefs #1502",
+          "timestamp": "2026-06-06T12:29:16-04:00",
+          "tree_id": "2dfec11a0261d92b30748fe5efa0485928cb8355",
+          "url": "https://github.com/tinaudio/synth-setter/commit/0c6b18dd9c694833fd91dfcae966fe2eccef78f2"
+        },
+        "date": 1780767373245,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 4.3908209800720215,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.419892732426524,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.03068772703409195,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.036069631576538086,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.549569606781006,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 14.932454936916676,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.6402907371521,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 7.080757882073522,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.03593312203884125,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.06335997581481934,
             "unit": "1-cos"
           },
           {
