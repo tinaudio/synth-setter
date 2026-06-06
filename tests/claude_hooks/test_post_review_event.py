@@ -142,6 +142,44 @@ def test_submit_review_self_review_422_falls_back_to_comment(
     assert "Original review." in retried["body"]
 
 
+def test_submit_review_self_review_422_on_stdout_falls_back_to_comment(
+    helper: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A self-review 422 whose body lands on stdout still retries as COMMENT.
+
+    :param helper: The loaded ``post_review`` module.
+    :param monkeypatch: Pytest fixture for patching ``subprocess.run``.
+    """
+    err_422 = SimpleNamespace(
+        returncode=1,
+        stdout=json.dumps(
+            {
+                "message": "Unprocessable Entity",
+                "errors": ["Review Can not request changes on your own pull request"],
+            }
+        ),
+        stderr="gh: Unprocessable Entity (HTTP 422)",
+    )
+    ok = SimpleNamespace(
+        returncode=0,
+        stdout=json.dumps({"html_url": "https://example/r/4"}),
+        stderr="",
+    )
+    fake_run, calls = _fake_run_factory([err_422, ok])
+    monkeypatch.setattr(helper.subprocess, "run", fake_run)
+    monkeypatch.setattr(helper, "gh_executable", lambda: "/usr/bin/gh")
+
+    payload = {"body": "Original review.", "event": "REQUEST_CHANGES", "comments": []}
+    response = helper.submit_review("o/r", 7, payload, fallback_banner="⛔ BANNER")
+
+    assert response["html_url"] == "https://example/r/4"
+    assert len(calls) == 2
+    retried = json.loads(calls[1])
+    assert retried["event"] == "COMMENT"
+    assert retried["body"].startswith("⛔ BANNER")
+    assert "Original review." in retried["body"]
+
+
 def test_submit_review_self_approve_422_falls_back_to_comment(
     helper: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
