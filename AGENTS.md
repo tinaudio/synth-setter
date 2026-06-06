@@ -19,7 +19,10 @@ Architecture: [docs/architecture.md](docs/architecture.md).
   (`agent/hooks/session-start-cwd-banner.sh`) prints a primary-vs-worktree
   banner on startup/resume/clear/compact; a `PreToolUse` hook
   (`agent/hooks/worktree-guard.sh`) warns on Edit/Write inside the primary
-  checkout (`WORKTREE_GUARD_MODE`: `warn` default / `block` / `off`).
+  checkout (`WORKTREE_GUARD_MODE`: `warn` default / `block` / `off`); a
+  `PostToolUse` hook (`agent/hooks/worktree-post-setup.sh`) automatically
+  runs `make link-plugins && make link-thoughts` in every new worktree after
+  `git worktree add` (fail-safe, exits 0 on any error — see #1343).
 - **Each worktree gets its own `.venv`.** The spawn command runs `uv sync`;
   `~/.bashrc` (installed by `.devcontainer/post-create.sh`) then activates
   `./.venv` per directory, overriding the image's shared `/venv/main`. For
