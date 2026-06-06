@@ -246,10 +246,8 @@ mutmut: ## Run mutation testing
 train: ## Train the model
 	python src/train.py
 
-# Debug env vars — use with eval: eval $(make export-debug-envars)
-# CUDA_LAUNCH_BLOCKING serialises kernel launches so tracebacks point at
-# the offending kernel; the rest add C++ traces, DDP/NCCL verbosity, and
-# torch.compile diagnostics. All are expensive — set only while reproducing.
+# All vars are expensive — enable only while actively reproducing a crash.
+# CUDA_LAUNCH_BLOCKING serialises kernel launches so tracebacks name the offending kernel.
 export-debug-envars: ## Print CUDA/PyTorch debug export commands (eval $(make export-debug-envars))
 	@echo "export CUDA_LAUNCH_BLOCKING=1"
 	@echo "export TORCH_SHOW_CPP_STACKTRACES=1"
