@@ -1,6 +1,61 @@
 # CHANGELOG
 
 
+## v8.20.0 (2026-06-06)
+
+### Features
+
+- **generate_dataset**: Run inline oracle eval once per split
+  ([#1485](https://github.com/tinaudio/synth-setter/pull/1485),
+  [`21e2d67`](https://github.com/tinaudio/synth-setter/commit/21e2d67949af277cbaac5422bc967650ba015bdb))
+
+* feat(evaluation): run inline oracle eval once per split (train/val/test)
+
+Previously _run_oracle_eval_subprocess was called once, defaulting to test.h5 via the datamodule's
+  predict_file default. Train and val splits were never exercised by the inline round-trip check.
+
+Add a required predict_file keyword argument so the caller controls which HDF5 the predict
+  dataloader opens. In main(), loop over all three splits so each is evaluated independently; run
+  dirs land under oracle_eval/<split>/<run_id>/ to keep per-split metrics isolated.
+
+Update unit tests to assert 3 calls (one per split), each with the correct predict_file and run_dir
+  structure. Update the R2 integration test glob from oracle_eval/*/metrics/ to
+  oracle_eval/*/*/metrics/ and assert 3 metrics.json files instead of 1. Update the wandb e2e test
+  to probe the test-split dir oracle_eval/test/<run_id>/.
+
+Closes #1484
+
+* chore(comments): apply comment-hygiene fixes from pre-PR review
+
+- Trim :param predict_file: to drop caller-strategy prose (C3/C7). - Collapse inline loop comment to
+  "Run once per split." (C3). - Rephrase unit-test docstring to "once per split" (C3). - Fix stale
+  oracle_eval/<run_id>/ path in e2e docstring (C7/C12). - Hardcode split.h5 filenames in unit-test
+  assertion loop (tdd-impl). - Add train/val is_dir() assertions in e2e test (tdd-impl/ml-test).
+
+* chore(comments): second comment-hygiene pass from re-review
+
+- Delete "Run once per split." inline comment (restates the for-loop). - Fix docstring line-wrap in
+  test_main_oracle_eval_inline_true_invokes_subprocess. - Condense loop-count comment to "One
+  invocation per split." - Replace "Helper subprocesses" with "Calls … as a subprocess" (C8). -
+  Simplify oracle-eval metrics comment in integration test.
+
+* docs(evaluation): update wandb-integration.md for per-split oracle eval
+
+oracle_eval_inline now shells out once per split, not once total. Refs #1485
+
+* fix(evaluation): guard predict_file existence before oracle-eval subprocess
+
+Adds an explicit FileNotFoundError when predict_file does not exist, raised after the existing
+  dataset_root artifacts preflight so a missing split HDF5 at an arbitrary path produces a clear
+  error instead of a low-signal subprocess failure (Copilot comment #3366391335).
+
+Also adds a covering test and trims a misleading comment that cited the oracle_eval/<split>/<run_id>
+  path pattern in a unit test that uses a simplified run_dir with no split component (comment
+  #3366391356).
+
+Refs #1484
+
+
 ## v8.19.0 (2026-06-06)
 
 ### Build System
