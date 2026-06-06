@@ -378,8 +378,10 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
     if not r2_io.is_r2_reachable():
         pytest.skip("R2 not reachable (rclone not on PATH or `rclone lsd r2:` failed)")
 
-    prefix = (
-        f"test-runs/test_oracle_eval_inline_writes_bounded_audio_metrics/{uuid.uuid4().hex[:12]}/"
+    # Override prefix_root (not prefix) so finalize_from_spec's assert_r2_prefix_matches
+    # passes — the check validates prefix == make_r2_prefix(prefix_root, task_name, run_id).
+    prefix_root = (
+        f"test-runs/test_oracle_eval_inline_writes_bounded_audio_metrics/{uuid.uuid4().hex[:12]}"
     )
     run_dir = tmp_path / "hydra_run"
     worktree_src = Path(__file__).resolve().parents[1] / "src"
@@ -398,7 +400,7 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
                 "-m",
                 "synth_setter.cli.generate_dataset",
                 "experiment=generate_dataset/smoke-shard-with-oracle-eval",
-                f"+r2.prefix={prefix}",
+                f"r2.prefix_root={prefix_root}",
                 f"hydra.run.dir={run_dir}",
             ],
             env=env,
@@ -451,7 +453,7 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
                 metrics,
             )
     finally:
-        r2_io.purge_prefix(cfg_dataset.r2.bucket, prefix)
+        r2_io.purge_prefix(cfg_dataset.r2.bucket, f"{prefix_root}/")
 
 
 @pytest.mark.integration_r2
@@ -485,7 +487,9 @@ def test_oracle_eval_inline_writes_shuffled_audio_metrics_when_params_uniform(
     if not r2_io.is_r2_reachable():
         pytest.skip("R2 not reachable (rclone not on PATH or `rclone lsd r2:` failed)")
 
-    r2_prefix = f"test-runs/test_oracle_eval_shuffled_audio_metrics/{uuid.uuid4().hex[:12]}/"
+    # Override prefix_root (not prefix) so finalize_from_spec's assert_r2_prefix_matches
+    # passes — the check validates prefix == make_r2_prefix(prefix_root, task_name, run_id).
+    r2_prefix_root = f"test-runs/test_oracle_eval_shuffled_audio_metrics/{uuid.uuid4().hex[:12]}"
     run_dir = tmp_path / "hydra_run"
     worktree_src = Path(__file__).resolve().parents[1] / "src"
     env = {
@@ -501,7 +505,7 @@ def test_oracle_eval_inline_writes_shuffled_audio_metrics_when_params_uniform(
                 "-m",
                 "synth_setter.cli.generate_dataset",
                 "experiment=generate_dataset/smoke-shard-with-oracle-eval",
-                f"+r2.prefix={r2_prefix}",
+                f"r2.prefix_root={r2_prefix_root}",
                 f"hydra.run.dir={run_dir}",
                 # Uniform params within each shard so the auto-shuffle probe fires.
                 "render.param_sample_cadence=shard",
@@ -548,4 +552,4 @@ def test_oracle_eval_inline_writes_shuffled_audio_metrics_when_params_uniform(
                 assert metrics[f"{group}/sot_mean"] < bounds.sot_max, metrics
                 assert metrics[f"{group}/rms_mean"] > bounds.rms_min, metrics
     finally:
-        r2_io.purge_prefix(cfg_dataset.r2.bucket, r2_prefix)
+        r2_io.purge_prefix(cfg_dataset.r2.bucket, f"{r2_prefix_root}/")
