@@ -106,6 +106,7 @@ def _run_oracle_eval_subprocess(
     :raises FileNotFoundError: ``dataset_root`` is missing any finalized split
         or ``stats.npz`` — e.g. a resume where ``finalize_from_spec``
         short-circuited on an existing R2 marker without repopulating it.
+        Also raised when ``predict_file`` itself does not exist.
     """
     missing = [n for n in _ORACLE_EVAL_REQUIRED_ARTIFACTS if not (dataset_root / n).is_file()]
     if missing:
@@ -114,6 +115,11 @@ def _run_oracle_eval_subprocess(
             f"but {missing} are absent. finalize_from_spec short-circuits when R2 already "
             f"holds the dataset.complete marker, leaving output_dir unpopulated on a resume; "
             f"rerun with a fresh paths.output_dir."
+        )
+    if not predict_file.is_file():
+        raise FileNotFoundError(
+            f"predict_file {predict_file} not found; "
+            f"ensure the split HDF5 exists in {dataset_root} before shelling out."
         )
     argv = [
         sys.executable,

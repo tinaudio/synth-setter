@@ -1825,10 +1825,8 @@ class TestMainDispatchBranches:
         assert "-m" in called_argv
         assert "synth_setter.cli.eval" in called_argv
         assert "experiment=surge/fake_oracle" in called_argv
-        # Data dir and the eval's Hydra run dir are DISTINCT: the split virtual
-        # datasets are read in place beside their shards, while eval outputs
-        # (incl. metrics/metrics.json the workflow globs) land under the
-        # oracle_eval/<split>/<run_id> run dir.
+        # dataset_root and run_dir are distinct: split virtual datasets are
+        # read in place beside their shards; eval outputs land in run_dir.
         assert f"datamodule.dataset_root={dataset_root}" in called_argv
         assert f"hydra.run.dir={run_dir}" in called_argv
         assert dataset_root != run_dir
@@ -1889,6 +1887,44 @@ class TestMainDispatchBranches:
                 render=spec.render,
                 num_workers=0,
                 predict_file=tmp_path / "test.h5",
+            )
+
+        run_mock.assert_not_called()
+
+    def test_run_oracle_eval_subprocess_missing_predict_file_raises(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        spec: DatasetSpec,
+    ) -> None:
+        """Non-existent ``predict_file`` ⇒ ``FileNotFoundError`` before subprocess.
+
+        All required artifacts are present in ``dataset_root`` so the existing
+        preflight passes; the ``predict_file``-specific check then catches the
+        absent path before shelling out.
+
+        :param monkeypatch: Patches ``subprocess.run`` to assert it never fires.
+        :param tmp_path: Roots the dataset dir and a missing predict path.
+        :param spec: Source of a valid ``RenderConfig`` for the call signature.
+        """
+        import synth_setter.cli.generate_dataset as gd
+
+        run_mock = MagicMock()
+        monkeypatch.setattr(gd.subprocess, "run", run_mock)
+
+        dataset_root = tmp_path / "data"
+        dataset_root.mkdir()
+        for name in ("train.h5", "val.h5", "test.h5", "stats.npz"):
+            (dataset_root / name).touch()
+
+        with pytest.raises(FileNotFoundError, match=r"predict_file"):
+            gd._run_oracle_eval_subprocess(
+                dataset_root,
+                tmp_path / "oracle_eval" / "test" / "rid",
+                "rid",
+                render=spec.render,
+                num_workers=0,
+                predict_file=tmp_path / "nonexistent_split.h5",
             )
 
         run_mock.assert_not_called()
