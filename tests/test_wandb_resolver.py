@@ -277,21 +277,24 @@ def test_eval_ckpt_path_wandb_override_resolves_to_cached_checkpoint(
     monkeypatch.setitem(sys.modules, "wandb", _fake_api(calls))
     register_resolvers()
 
-    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
-        cfg = compose(
-            config_name="eval.yaml",
-            overrides=[
-                "datamodule=ksin",
-                "model=ffn",
-                "trainer=cpu",
-                "ckpt_path=${wandb:entity/project/model-x:latest}",
-            ],
-        )
-        resolved = Path(cfg.ckpt_path)
+    # finally clears the global Hydra state even if an assertion fails, so a
+    # leaked HydraConfig singleton can't flake later xdist-sibling tests.
+    try:
+        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+            cfg = compose(
+                config_name="eval.yaml",
+                overrides=[
+                    "datamodule=ksin",
+                    "model=ffn",
+                    "trainer=cpu",
+                    "ckpt_path=${wandb:entity/project/model-x:latest}",
+                ],
+            )
+            resolved = Path(cfg.ckpt_path)
 
-    assert resolved.name == "model.ckpt"
-    assert resolved.is_file()
-    assert workspace / ".cache" / "checkpoints" in resolved.parents
-    assert len(calls) == 1
-
-    GlobalHydra.instance().clear()
+        assert resolved.name == "model.ckpt"
+        assert resolved.is_file()
+        assert workspace / ".cache" / "checkpoints" in resolved.parents
+        assert len(calls) == 1
+    finally:
+        GlobalHydra.instance().clear()
