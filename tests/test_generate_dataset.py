@@ -195,6 +195,38 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     )
 
 
+def test_from_hydra_applies_extras_writing_tags_and_config_tree(
+    cfg_dataset: DictConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``from_hydra`` runs ``extras(cfg)`` before rendering, materializing its artifacts.
+
+    Drives the worker entrypoint end-to-end with ``generate`` stubbed so no VST/R2
+    is needed. ``dataset.yaml`` composes ``extras: default`` (``enforce_tags`` +
+    ``print_config`` true) and a non-empty ``tags``, so ``extras`` exports
+    ``tags.log`` and ``config_tree.log`` to ``cfg.paths.output_dir``. Asserting both
+    files exist and are non-empty verifies the entrypoint applied extras via its
+    observable side effects rather than mocking the call.
+
+    :param cfg_dataset: Composed dataset cfg; ``logger`` is nulled so stubbing
+        ``generate`` does not leave a wandb run to instantiate.
+    :param monkeypatch: Stubs ``generate`` to a no-op so only the ``extras`` side
+        effects are exercised.
+    """
+    with open_dict(cfg_dataset):
+        cfg_dataset.logger = None
+    output_dir = Path(cfg_dataset.paths.output_dir)
+
+    monkeypatch.setattr("synth_setter.cli.generate_dataset.generate", lambda *_a, **_k: None)
+
+    from_hydra(cfg_dataset)
+
+    for artifact in ("tags.log", "config_tree.log"):
+        path = output_dir / artifact
+        assert path.is_file(), f"extras did not write {artifact}"
+        assert path.stat().st_size > 0, f"{artifact} is empty"
+
+
 @pytest.mark.slow
 def test_main_skips_schema_invalid_cadence_cell_without_failing(
     tmp_path: Path,
@@ -379,28 +411,42 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
             f"--- STDERR (tail) ---\n{result.stderr[-2000:]}"
         )
 
-        metrics_files = list(run_dir.glob("oracle_eval/*/metrics/metrics.json"))
-        assert len(metrics_files) == 1, (
-            f"expected one oracle-eval metrics.json under {run_dir}/oracle_eval/; "
-            f"got {metrics_files}"
+        # One metrics.json per split: oracle_eval/<split>/<run_id>/.
+        metrics_files = list(run_dir.glob("oracle_eval/*/*/metrics/metrics.json"))
+        assert len(metrics_files) == 3, (
+            f"expected three oracle-eval metrics.json files (one per split) under "
+            f"{run_dir}/oracle_eval/; got {metrics_files}"
         )
-        metrics = json.loads(metrics_files[0].read_text())
-
-        for name in _ORACLE_AUDIO_METRICS:
-            for stat in ("mean", "std"):
-                key = f"audio/{name}_{stat}"
-                value = metrics.get(key)
-                assert isinstance(value, float) and math.isfinite(value), (
-                    f"{key} is not a finite float: {value!r} (metrics={metrics})"
-                )
-
-        # fake_oracle returns params verbatim, so the re-rendered audio matches
-        # the target up to Surge XT render jitter: mean distances stay under the
-        # canonical envelope and the rms cosine stays above its floor.
         bounds = ORACLE_AUDIO_METRIC_BOUNDS
-        assert metrics["audio/mss_mean"] < bounds.mss_max, metrics
-        assert metrics["audio/wmfcc_mean"] < bounds.wmfcc_max, metrics
-        assert metrics["audio/sot_mean"] < bounds.sot_max, metrics
-        assert metrics["audio/rms_mean"] > bounds.rms_min, metrics
+        for mf in metrics_files:
+            metrics = json.loads(mf.read_text())
+            for name in _ORACLE_AUDIO_METRICS:
+                for stat in ("mean", "std"):
+                    key = f"audio/{name}_{stat}"
+                    value = metrics.get(key)
+                    assert isinstance(value, float) and math.isfinite(value), (
+                        f"{key} is not a finite float: {value!r} (split={mf.parent.parent.parent.name}, "
+                        f"metrics={metrics})"
+                    )
+
+            # fake_oracle returns params verbatim, so the re-rendered audio matches
+            # the target up to Surge XT render jitter: mean distances stay under the
+            # canonical envelope and the rms cosine stays above its floor.
+            assert metrics["audio/mss_mean"] < bounds.mss_max, (
+                mf.parent.parent.parent.name,
+                metrics,
+            )
+            assert metrics["audio/wmfcc_mean"] < bounds.wmfcc_max, (
+                mf.parent.parent.parent.name,
+                metrics,
+            )
+            assert metrics["audio/sot_mean"] < bounds.sot_max, (
+                mf.parent.parent.parent.name,
+                metrics,
+            )
+            assert metrics["audio/rms_mean"] > bounds.rms_min, (
+                mf.parent.parent.parent.name,
+                metrics,
+            )
     finally:
         r2_io.purge_prefix(cfg_dataset.r2.bucket, prefix)

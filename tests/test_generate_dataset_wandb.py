@@ -11,6 +11,7 @@ from __future__ import annotations
 import glob
 import json
 import os
+import re
 from collections.abc import Callable
 from pathlib import Path
 
@@ -20,7 +21,7 @@ from lightning.pytorch.loggers.wandb import WandbLogger
 
 from synth_setter.cli.generate_dataset import generate
 from synth_setter.pipeline.schemas.spec import DatasetSpec
-from tests.helpers.wandb_offline import read_history_rows, read_run_binary
+from tests.helpers.wandb_offline import read_history_rows, read_run_binary, read_run_config
 
 _RUN_ID = "wandb-track-test-20260520T000000000Z"
 
@@ -207,3 +208,60 @@ def test_generate_logs_per_shard_and_summary_metrics_offline(
         assert key in summary, (key, summary)
     assert json.loads(summary["generation/samples"]) == 0, summary
     assert json.loads(summary["generation/samples_per_second"]) == 0.0, summary
+
+
+def test_generate_stamps_wandb_provenance_into_run_config_offline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    dataset_spec_factory: Callable[..., DatasetSpec],
+) -> None:
+    """``generate`` stamps ``github_sha``/``image_tag``/``command`` into the run config.
+
+    Parity with train.py/eval.py: provenance lands in ``wandb.config`` (not
+    history). ``image_tag`` is pinned via ``IMAGE_TAG`` and ``command``/argv via a
+    stubbed ``sys.argv`` so the stamped values — not just the keys — are asserted;
+    ``github_sha`` is a 40-char hex SHA or the ``"unknown"`` git-unavailable
+    sentinel. The run is still closed on return (``wandb.run is None``).
+
+    :param tmp_path: Per-test tmp dir; the offline run lands at
+        ``tmp_path/wandb/offline-run-*-<run_id>``.
+    :param monkeypatch: Used to pin a hermetic offline ``WANDB_*`` env, ``IMAGE_TAG``,
+        ``sys.argv``, and stub ``object_size`` + ``extract_renderer_version``.
+    :param dataset_spec_factory: Shared ``conftest`` ``DatasetSpec`` factory.
+    """
+    _offline_wandb_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("IMAGE_TAG", "test-image:abc123")
+    pinned_argv = ["synth-setter-generate-dataset", "experiment=smoke-shard"]
+    monkeypatch.setattr("sys.argv", pinned_argv)
+
+    spec = _build_spec(dataset_spec_factory)
+
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset.extract_renderer_version",
+        lambda _path: spec.render.renderer_version,
+    )
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda *_a, **_k: 1_024)
+
+    wandb_logger = WandbLogger(
+        offline=True,
+        save_dir=str(tmp_path),
+        id=spec.run_id,
+        project="wandb-track-test-project",
+    )
+
+    generate(spec, tmp_path, [wandb_logger])
+    assert wandb.run is None, "generate() did not close the wandb run on return"
+
+    binary_files = glob.glob(
+        str(tmp_path / "wandb" / f"offline-run-*-{spec.run_id}" / "run-*.wandb")
+    )
+    assert len(binary_files) == 1, f"expected exactly one .wandb binary, found {binary_files}"
+
+    config = read_run_config(
+        Path(binary_files[0]),
+        until=lambda c: {"github_sha", "image_tag", "command"} <= c.keys(),
+    )
+    assert json.loads(config["command"]) == " ".join(pinned_argv), config
+    assert json.loads(config["image_tag"]) == "test-image:abc123", config
+    sha = json.loads(config["github_sha"])
+    assert sha == "unknown" or re.fullmatch(r"[0-9a-f]{40}", sha), config

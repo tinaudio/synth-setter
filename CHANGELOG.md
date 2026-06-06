@@ -1,6 +1,166 @@
 # CHANGELOG
 
 
+## v8.20.0 (2026-06-06)
+
+### Features
+
+- **generate_dataset**: Run inline oracle eval once per split
+  ([#1485](https://github.com/tinaudio/synth-setter/pull/1485),
+  [`21e2d67`](https://github.com/tinaudio/synth-setter/commit/21e2d67949af277cbaac5422bc967650ba015bdb))
+
+* feat(evaluation): run inline oracle eval once per split (train/val/test)
+
+Previously _run_oracle_eval_subprocess was called once, defaulting to test.h5 via the datamodule's
+  predict_file default. Train and val splits were never exercised by the inline round-trip check.
+
+Add a required predict_file keyword argument so the caller controls which HDF5 the predict
+  dataloader opens. In main(), loop over all three splits so each is evaluated independently; run
+  dirs land under oracle_eval/<split>/<run_id>/ to keep per-split metrics isolated.
+
+Update unit tests to assert 3 calls (one per split), each with the correct predict_file and run_dir
+  structure. Update the R2 integration test glob from oracle_eval/*/metrics/ to
+  oracle_eval/*/*/metrics/ and assert 3 metrics.json files instead of 1. Update the wandb e2e test
+  to probe the test-split dir oracle_eval/test/<run_id>/.
+
+Closes #1484
+
+* chore(comments): apply comment-hygiene fixes from pre-PR review
+
+- Trim :param predict_file: to drop caller-strategy prose (C3/C7). - Collapse inline loop comment to
+  "Run once per split." (C3). - Rephrase unit-test docstring to "once per split" (C3). - Fix stale
+  oracle_eval/<run_id>/ path in e2e docstring (C7/C12). - Hardcode split.h5 filenames in unit-test
+  assertion loop (tdd-impl). - Add train/val is_dir() assertions in e2e test (tdd-impl/ml-test).
+
+* chore(comments): second comment-hygiene pass from re-review
+
+- Delete "Run once per split." inline comment (restates the for-loop). - Fix docstring line-wrap in
+  test_main_oracle_eval_inline_true_invokes_subprocess. - Condense loop-count comment to "One
+  invocation per split." - Replace "Helper subprocesses" with "Calls … as a subprocess" (C8). -
+  Simplify oracle-eval metrics comment in integration test.
+
+* docs(evaluation): update wandb-integration.md for per-split oracle eval
+
+oracle_eval_inline now shells out once per split, not once total. Refs #1485
+
+* fix(evaluation): guard predict_file existence before oracle-eval subprocess
+
+Adds an explicit FileNotFoundError when predict_file does not exist, raised after the existing
+  dataset_root artifacts preflight so a missing split HDF5 at an arbitrary path produces a clear
+  error instead of a low-signal subprocess failure (Copilot comment #3366391335).
+
+Also adds a covering test and trims a misleading comment that cited the oracle_eval/<split>/<run_id>
+  path pattern in a unit test that uses a simplified run_dir with no split component (comment
+  #3366391356).
+
+Refs #1484
+
+
+## v8.19.0 (2026-06-06)
+
+### Build System
+
+- **docker**: Set diagnostic and allocator env defaults
+  ([#1483](https://github.com/tinaudio/synth-setter/pull/1483),
+  [`cc61158`](https://github.com/tinaudio/synth-setter/commit/cc61158a638436f74440864c83e7e7d05e84a4a3))
+
+* feat(docker): add PYTHONFAULTHANDLER, HYDRA_FULL_ERROR, PYTORCH_CUDA_ALLOC_CONF env defaults
+
+Expands the permanent runtime ENV block in python-base with three diagnostic/performance defaults:
+
+- PYTHONFAULTHANDLER=1: dumps a Python traceback on segfaults/aborts, catching silent C/CUDA layer
+  failures that PyTorch's native layers otherwise swallow. - HYDRA_FULL_ERROR=1: surfaces the full
+  Python traceback instead of Hydra's trimmed one-liner, so crash context isn't lost. -
+  PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True: reduces CUDA allocator fragmentation under long
+  training runs.
+
+PYTHONUNBUFFERED=1 was already set; comment updated to better describe the real-time logging
+  motivation.
+
+* chore(docker): sort ENV vars alphabetically, note PYTORCH_CUDA_ALLOC_CONF cpu no-op
+
+### Features
+
+- **data-pipeline**: Generate_dataset extras + wandb provenance parity
+  ([#1481](https://github.com/tinaudio/synth-setter/pull/1481),
+  [`513940f`](https://github.com/tinaudio/synth-setter/commit/513940fe390a5ef20c41f03ef158ac205adacf04))
+
+* feat(data-pipeline): bring generate_dataset entrypoint to train/eval parity
+
+Apply the same entrypoint hygiene train.py and eval.py use:
+
+- Wire ``extras: default`` into ``dataset.yaml`` and call ``extras(cfg)`` at the top of both
+  ``@hydra.main`` entrypoints (``from_hydra``, ``main``). - Add a non-empty ``tags`` default so the
+  stock ``enforce_tags: True`` path runs as designed instead of prompting/raising. ``tags`` is
+  masked out of ``DatasetSpec`` by ``from_hydra_cfg`` (config-layer only, no schema change). - Stamp
+  ``log_wandb_provenance()`` (github_sha / image_tag / command) into the live wandb run inside
+  ``generate()``, covering both generate paths with one call where the run is shared. - Register
+  OmegaConf resolvers at import for defensive parity with train/eval.
+
+Tests cover the extras/tags composition, the from_hydra and main extras side effects, and the
+  provenance stamp via an offline wandb round-trip.
+
+Closes #1464
+
+* docs(wandb): note generate_dataset now stamps provenance
+
+The wandb-integration reference said log_wandb_provenance() ran on train/eval only and omitted the
+  provenance step from the generate_dataset run lifecycle. Both are stale after this PR wired
+  provenance into generate(); update them.
+
+Refs #1464
+
+* fix(data-pipeline): gate generate_dataset wandb provenance on an owned WandbLogger
+
+`generate()` called `log_wandb_provenance()` unconditionally. The helper mutates the process-global
+  `wandb.run` and is a no-op only when no run is active — so when `loggers` carries no `WandbLogger`
+  but another in-process caller had already started a run, provenance was stamped into that foreign
+  run. Gate the call on `any(isinstance(lg, WandbLogger) ...)`, mirroring the ownership guard
+  `_close_loggers()` already applies to `wandb.finish()` and matching train.py/eval.py, which call
+  provenance inside `if logger:`.
+
+Adds a unit test asserting provenance is not stamped on the empty-logger path; the offline
+  integration test still covers the WandbLogger-present case.
+
+Addresses Copilot review comment on PR #1481.
+
+### Internal-Feat
+
+- **dev**: Add export/unset-debug-envars make targets
+  ([#1482](https://github.com/tinaudio/synth-setter/pull/1482),
+  [`5b89ddc`](https://github.com/tinaudio/synth-setter/commit/5b89ddcb58ea8fef353fb8a57ccf8b8ace763ece))
+
+* internal-feat(dev): add export-debug-envars and unset-debug-envars make targets
+
+Adds two eval-able Make targets for toggling the standard CUDA/PyTorch debug variable set:
+
+eval $(make export-debug-envars) # enable eval $(make unset-debug-envars) # disable
+
+Variables covered: - CUDA_LAUNCH_BLOCKING=1 (sync kernel errors to the offending line) -
+  TORCH_SHOW_CPP_STACKTRACES=1 - TORCH_DISTRIBUTED_DEBUG=DETAIL / NCCL_DEBUG=INFO (DDP/NCCL issues)
+  - TORCH_LOGS=all / TORCHDYNAMO_VERBOSE=1 (torch.compile graph breaks)
+
+Also includes two incidental pre-commit fixes from make format: import-order reorder in
+  generate_dataset.py (ruff), and uv.lock sync to v8.18.4 (lock was stale after the [skip ci]
+  release commit).
+
+* internal-fix(dev): trim export-debug-envars comment block to 2 lines
+
+C5: 4-line block exceeded the comment-hygiene cap; the eval usage hint is already in the ##
+  help-text on the target line, and the var-category prose restated what the @echo lines show. Keep
+  only the constraint (expensive — crash-only) and the single non-obvious semantic
+  (CUDA_LAUNCH_BLOCKING serialises launches for readable tracebacks).
+
+* internal-fix(dev): add semicolons to debug-envars echo lines
+
+Without semicolons, eval $(make export-debug-envars) collapses newlines into spaces, producing
+  "export A=1 export B=2 ..." which relies on bash's implicit multi-arg handling. The semicolons
+  make each line a self-contained statement so the output is unambiguously valid in any POSIX shell
+  regardless of newline handling.
+
+Addresses Copilot review comments on PR #1482.
+
+
 ## v8.18.4 (2026-06-06)
 
 ### Automation

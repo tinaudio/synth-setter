@@ -1,4 +1,4 @@
-"""This file prepares config fixtures for other tests."""
+"""Config fixtures and collection-time skip hooks for the test suite."""
 
 import copy
 import os
@@ -55,6 +55,31 @@ _SURGE_SILENCE_PEAK_THRESHOLD = 1e-4
 _VST_SUBPROCESS_TIMEOUT_SECONDS = 600
 
 NUM_FIXTURE_SAMPLES = 5
+
+# Probed once at module import; _R2_AVAILABLE uses the env var (no network hit)
+# — AGENTS.md's `rclone lsd r2:` is for interactive verification, not the skip criterion.
+_VST_AVAILABLE = Path(_SURGE_FIXTURE_PLUGIN_PATH).exists()
+_R2_AVAILABLE = bool(os.environ.get("RCLONE_CONFIG_R2_ACCESS_KEY_ID"))
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Auto-skip requires_vst / integration_r2 tests when resources are absent.
+
+    :param items: mutated in-place to insert skip markers for missing resources.
+    """
+    skip_vst = pytest.mark.skip(
+        reason=f"Surge XT VST not found at {_SURGE_FIXTURE_PLUGIN_PATH!r} "
+        f"(set SYNTH_SETTER_PLUGIN_PATH or place plugin at that path)"
+    )
+    skip_r2 = pytest.mark.skip(
+        reason="R2 credentials absent (RCLONE_CONFIG_R2_ACCESS_KEY_ID not set); "
+        "run `rclone lsd r2:` to verify"
+    )
+    for item in items:
+        if "requires_vst" in item.keywords and not _VST_AVAILABLE:
+            item.add_marker(skip_vst)
+        if "integration_r2" in item.keywords and not _R2_AVAILABLE:
+            item.add_marker(skip_r2)
 
 
 # Bootstraps Xvfb + xsettingsd + dbus for VST3 plugin init; ships inside
