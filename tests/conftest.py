@@ -56,26 +56,17 @@ _VST_SUBPROCESS_TIMEOUT_SECONDS = 600
 
 NUM_FIXTURE_SAMPLES = 5
 
-# Probe results cached at collection time so pytest_collection_modifyitems
-# can skip unavailable-resource tests without re-probing per item.
+# Probed once at module import so pytest_collection_modifyitems doesn't re-probe per item.
+# _R2_AVAILABLE uses the env var (fast, no network); AGENTS.md's `rclone lsd r2:` is
+# the interactive verification command, not the skip criterion.
 _VST_AVAILABLE = Path(_SURGE_FIXTURE_PLUGIN_PATH).exists()
 _R2_AVAILABLE = bool(os.environ.get("RCLONE_CONFIG_R2_ACCESS_KEY_ID"))
 
 
-def pytest_configure(config: pytest.Config) -> None:
-    """Cache VST and R2 availability on the config object for the skip hook.
-
-    :param config: pytest config object; receives ``_vst_available`` and ``_r2_available`` attrs.
-    """
-    config._vst_available = _VST_AVAILABLE  # type: ignore[attr-defined]
-    config._r2_available = _R2_AVAILABLE  # type: ignore[attr-defined]
-
-
-def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     """Auto-skip requires_vst / integration_r2 tests when resources are absent.
 
-    :param config: pytest config carrying the pre-probed availability flags.
-    :param items: collected test items, mutated in-place.
+    :param items: mutated in-place to insert skip markers for missing resources.
     """
     skip_vst = pytest.mark.skip(
         reason=f"Surge XT VST not found at {_SURGE_FIXTURE_PLUGIN_PATH!r} "
@@ -86,9 +77,9 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         "run `rclone lsd r2:` to verify"
     )
     for item in items:
-        if "requires_vst" in item.keywords and not config._vst_available:  # type: ignore[attr-defined]
+        if "requires_vst" in item.keywords and not _VST_AVAILABLE:
             item.add_marker(skip_vst)
-        if "integration_r2" in item.keywords and not config._r2_available:  # type: ignore[attr-defined]
+        if "integration_r2" in item.keywords and not _R2_AVAILABLE:
             item.add_marker(skip_r2)
 
 
