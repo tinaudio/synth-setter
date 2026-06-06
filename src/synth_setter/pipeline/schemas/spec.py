@@ -616,15 +616,12 @@ class DatasetSpec(BaseModel):
     copy_dataset_root: str | None = Field(
         default=None,
         description=(
-            "Optional dataset-copy source directory: when set, each output shard "
-            "decodes the same-named source shard's ``param_array`` and re-renders "
-            "those fixed params instead of sampling fresh ones (``None``, the default, "
-            "samples fresh). Holds the source shards and their ``input_spec.json`` (a "
-            "worker-local path — R2 sources must be synced locally first); copy runs "
-            "require ``output_format='hdf5'`` and the source must share the target's "
-            "``render.param_spec_name``. Re-renders apply the *target's* ``min_loudness`` "
-            "to the fixed params, so a copied patch landing below it raises — set a low "
-            "``min_loudness`` when target render settings differ from the source's (#724)."
+            "Optional dataset-copy source directory: each output shard decodes the "
+            "same-named source shard's ``param_array`` and re-renders those fixed params "
+            "instead of sampling fresh (``None``, the default, samples fresh). A "
+            "worker-local path — R2 sources must be synced locally first. Re-renders "
+            "apply the *target's* ``min_loudness`` to the fixed params, so a copied "
+            "patch landing below it raises (#724)."
         ),
     )
 

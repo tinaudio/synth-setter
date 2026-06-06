@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -1167,6 +1168,31 @@ class TestCopyDatasetRoot:
                     copy_dataset_root="/data/b",
                 )
             )
+
+    def test_legacy_datasetsrc_non_mapping_is_rejected(self) -> None:
+        """A legacy ``datasetsrc`` that is neither a mapping nor null is rejected."""
+        with pytest.raises(ValidationError, match="must be a mapping or null"):
+            DatasetSpec(**_valid_spec_kwargs(datasetsrc="/data/source-dataset"))
+
+    def test_legacy_datasetsrc_empty_mapping_disables_copy(self) -> None:
+        """A legacy ``datasetsrc`` mapping without ``copy_dataset_root`` disables the copy path."""
+        spec = DatasetSpec(**_valid_spec_kwargs(datasetsrc={}))
+
+        assert spec.copy_dataset_root is None
+
+    def test_legacy_datasetsrc_json_loads_via_model_validate_json(self) -> None:
+        """A serialized legacy-shaped spec (nested ``datasetsrc``) loads through the shim.
+
+        Exercises the shim's stated purpose: ``input_spec.json`` files materialized
+        before the flatten are reloaded from JSON, not just constructed in-memory.
+        """
+        data = json.loads(DatasetSpec(**_valid_spec_kwargs()).model_dump_json())
+        data.pop("copy_dataset_root")
+        data["datasetsrc"] = {"copy_dataset_root": "/data/source-dataset"}
+
+        restored = DatasetSpec.model_validate_json(json.dumps(data))
+
+        assert restored.copy_dataset_root == "/data/source-dataset"
 
 
 class TestValidateCopySource:
