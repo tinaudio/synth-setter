@@ -117,11 +117,13 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
     always forwarded; the render-order probe (#489) runs automatically inside
     ``compute_audio_metrics`` when all sample dirs have identical params.
 
-    :param cfg: Reads ``cfg.evaluation`` (gates + ``num_workers`` + ``shuffle_seed``),
-        ``cfg.render`` (param spec, preset, optional plugin path), and
-        ``cfg.paths.output_dir`` (base for ``predictions/``, ``audio/``, ``metrics/``).
-    :returns: ``{"audio/<name>_<stat>": value}`` when ``compute_metrics`` ran;
-        empty dict otherwise. Always rank-zero — the caller gates DDP duplication.
+    :param cfg: Reads ``cfg.evaluation`` (gates + ``num_workers`` + ``shuffle_seed``
+        + optional ``metric_prefix``), ``cfg.render`` (param spec, preset, optional
+        plugin path), and ``cfg.paths.output_dir`` (base for ``predictions/``,
+        ``audio/``, ``metrics/``).
+    :returns: ``{"<metric_prefix>audio/<name>_<stat>": value}`` when ``compute_metrics``
+        ran (``metric_prefix`` empty by default); empty dict otherwise. Always
+        rank-zero — the caller gates DDP duplication.
     :raises ValueError: if ``evaluation.render_vst`` is enabled but ``cfg.render`` is
         unset, or the expected input directory for a stage is missing.
     :raises subprocess.CalledProcessError: propagated from a non-zero subprocess exit.
@@ -209,6 +211,11 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
             timeout=_SUBPROCESS_TIMEOUT_SECONDS,
         )
         audio_metrics = _load_audio_metrics(metrics_dir)
+        # Namespace every key (audio/* and shuffled_audio/*) per caller — e.g. one
+        # wandb run shared across splits — so passes don't overwrite each other.
+        prefix = cfg.evaluation.get("metric_prefix", "")
+        if prefix:
+            audio_metrics = {f"{prefix}{key}": value for key, value in audio_metrics.items()}
         _log_audio_metrics_to_wandb(audio_metrics)
         return audio_metrics
 

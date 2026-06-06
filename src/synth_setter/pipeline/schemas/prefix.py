@@ -65,9 +65,10 @@ def assert_r2_prefix_matches(
 ) -> None:
     """Assert a materialized R2 prefix matches the canonical value for the given IDs.
 
-    Call this at write time (e.g. in finalize) to catch prefix drift before any
-    R2 objects are written — a mismatch means the spec's config/run IDs diverge
-    from the prefix it carries.
+    A mismatch means the spec's config/run IDs diverge from the prefix it
+    carries. Callers decide whether that is fatal: finalize treats it as
+    advisory (logs and proceeds, since custom prefixes are legitimate), while
+    a strict caller may let the ``ValueError`` propagate.
 
     :param prefix: The materialized prefix to check (from ``R2Location.prefix``).
     :param dataset_config_id: The dataset config identifier (e.g. ``spec.task_name``).

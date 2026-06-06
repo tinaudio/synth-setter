@@ -59,7 +59,7 @@ synth-setter-finalize-dataset dataset_spec_uri=r2://…/input_spec.json
   → @hydra.main composes DictConfig from src/synth_setter/configs/finalize_dataset.yaml
     → load_spec_from_uri(cfg.dataset_spec_uri) → DatasetSpec (the frozen spec generate uploaded)
       → r2_io.object_size(spec.r2.dataset_complete_marker_uri()) probe (idempotency short-circuit)
-      → assert_r2_prefix_matches(spec.r2.prefix, spec.task_name, spec.run_id, spec.r2.prefix_root) (prefix-drift guard)
+      → assert_r2_prefix_matches(…) (advisory: warns on a non-canonical prefix, never aborts — custom prefixes like the oracle-eval e2e's test-runs/ are legitimate)
       → branch on spec.output_format:
           ├─ wds:  finalize_wds  — Welford-stream stats over train shards → upload stats.npz
           └─ hdf5: finalize_hdf5 — download every shard → reshard into {train,val,test}.h5 → stats.npz
