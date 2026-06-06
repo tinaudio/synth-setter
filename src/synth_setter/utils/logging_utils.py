@@ -53,6 +53,7 @@ def pin_wandb_run_id(cfg: DictConfig, run_id: str, job_type: str) -> None:
     OmegaConf.update(cfg, "logger.wandb.job_type", job_type)
 
 
+@rank_zero_only
 def use_input_artifacts(loggers: Iterable[Logger], refs: Iterable[tuple[str, str]]) -> None:
     """Record consumed-artifact edges on each ``WandbLogger`` for the lineage DAG.
 
@@ -62,7 +63,8 @@ def use_input_artifacts(loggers: Iterable[Logger], refs: Iterable[tuple[str, str
     empty ``refs`` are a no-op, so wandb-free runs need no special-casing. A
     wandb failure warns and is swallowed, mirroring
     ``finalize_dataset._log_dataset_artifact`` — a lineage edge must never abort
-    a run whose real work already succeeded.
+    a run whose real work already succeeded. Rank-zero-only so DDP/spawned runs
+    record each edge once on the rank that owns the live W&B run.
 
     :param loggers: Lightning loggers; only ``WandbLogger`` entries record edges.
     :param refs: ``(name, alias)`` pairs naming each consumed artifact, e.g.

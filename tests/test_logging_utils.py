@@ -14,6 +14,7 @@ from unittest.mock import patch
 import pytest
 from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
+from lightning_utilities.core.rank_zero import rank_zero_only
 from omegaconf import OmegaConf
 
 from synth_setter.utils.logging_utils import (
@@ -340,3 +341,15 @@ class TestUseInputArtifacts:
         use_input_artifacts([FakeWandbLogger(run)], [("data-diva-v1", "latest")])
 
         assert run.consumed == ["data-diva-v1:latest"]
+
+    def test_non_zero_rank_records_no_edge(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """On a non-zero DDP rank the helper is a no-op — only rank 0 records lineage.
+
+        :param monkeypatch: Sets ``rank_zero_only.rank`` to a non-zero rank.
+        """
+        run = FakeWandbRun()
+        monkeypatch.setattr(rank_zero_only, "rank", 1)
+
+        use_input_artifacts([FakeWandbLogger(run)], [("data-diva-v1", "latest")])
+
+        assert run.consumed == []

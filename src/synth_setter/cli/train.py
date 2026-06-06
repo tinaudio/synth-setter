@@ -103,10 +103,13 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
         log.info("Watching gradients!")
         watch_gradients(model, logger)
 
-    if cfg.get("train"):
-        # Record the dataset lineage edge before fit so the consuming run links to
-        # its input artifact in the W&B DAG (storage-provenance-spec §5).
+    # Record the dataset lineage edge before any consuming work so the run links to
+    # its input artifact in the W&B DAG (storage-provenance-spec §5). A test-only run
+    # (train: False, test: True) consumes the dataset too, so gate on either.
+    if cfg.get("train") or cfg.get("test"):
         use_input_artifacts(logger, _consumed_artifact_refs(cfg))
+
+    if cfg.get("train"):
         log.info("Starting training!")
         trainer.fit(
             model=model,
