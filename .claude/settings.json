@@ -133,7 +133,7 @@
       },
       {
         "matcher": "Bash",
-        "description": "Worktree post-setup: after `git worktree add`, automatically runs `make link-plugins && make link-thoughts` in the new worktree so the plugins/ symlink and thoughts/ symlink are present without a manual follow-up. Parses the worktree path from the captured command; exits 0 on any failure (fail-safe, never blocks). Closes #1343.",
+        "description": "Worktree post-setup: after `git worktree add`, automatically runs `make link-plugins && make link-thoughts` in the new worktree so the plugins/ symlink and thoughts/ symlink are present without a manual follow-up. Parses the worktree path from the captured command; exits 0 on any failure (fail-safe, never blocks).",
         "hooks": [
           {
             "type": "command",

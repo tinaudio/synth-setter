@@ -1,12 +1,6 @@
 #!/usr/bin/env bash
-# worktree-post-setup.sh — PostToolUse hook that auto-runs
-# `make link-plugins && make link-thoughts` whenever the agent calls
-# `git worktree add`. Parses the worktree path from the captured command,
-# then runs both targets from that directory so the new worktree is
-# immediately usable without a manual follow-up.
-#
-# Fail-safe: any parse/execution failure logs and exits 0 so the hook
-# never blocks after a completed worktree-add.
+# PostToolUse hook: runs make link-plugins && make link-thoughts in every
+# new worktree after `git worktree add`. Fail-safe: exits 0 on any error — see #1343.
 set -euo pipefail
 
 # shellcheck disable=SC2034  # read by log() in _lib.sh via ${HOOK_NAME:-unknown}
@@ -20,12 +14,13 @@ readonly SCRIPT_DIR
   source "${SCRIPT_DIR}/_lib.sh"
 }
 
-# Parse the worktree path from a `git worktree add [flags] <path> [<commit-ish>]`
-# command string. Flags consuming an extra token: -b, -B, --orphan, --reason.
-# Prints the path and returns 0, or returns 1 when no path is found.
+# Parse worktree path from `git worktree add [flags] <path> [<commit-ish>]`.
+# Prints the path and exits 0; exits 1 when no path is found.
 _parse_worktree_path() {
   WT_CMD="$1" python3 - <<'PYEOF'
-import os, sys, shlex
+import os
+import shlex
+import sys
 
 try:
     tokens = shlex.split(os.environ["WT_CMD"])
@@ -36,7 +31,8 @@ i = 0
 while i < len(tokens) and tokens[i] in ("git", "worktree", "add"):
     i += 1
 
-flags_with_args = {"-b", "-B", "--orphan", "--reason"}
+# --orphan is a boolean flag; only -b/-B/--reason consume the next token.
+flags_with_args = {"-b", "-B", "--reason"}
 path = None
 while i < len(tokens):
     tok = tokens[i]
@@ -58,11 +54,7 @@ main() {
   input=$(cat)
 
   # PostToolUse for Bash delivers tool_input.command in the JSON payload.
-  cmd=$(python3 -c "
-import json, sys
-d = json.loads(sys.stdin.read())
-print(d.get('tool_input', {}).get('command', ''))
-" <<< "$input" 2>/dev/null) || { log "could not parse tool_input.command; skipping"; exit 0; }
+  cmd=$(jq -r '.tool_input.command // empty' <<< "$input" 2>/dev/null) || { log "could not parse tool_input.command; skipping"; exit 0; }
 
   # The settings.json `if` matcher already scopes this to `git worktree add *`,
   # but re-validate for safety.
