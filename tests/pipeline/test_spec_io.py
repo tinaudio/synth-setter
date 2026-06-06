@@ -453,3 +453,25 @@ class TestLocalizedUri:
                     fetched = local
                     explode()
         assert not fetched.exists()
+
+
+class TestJoinUri:
+    """``spec_io.join_uri`` composes a root + child under one ``/`` separator."""
+
+    @pytest.mark.parametrize(
+        ("root", "expected"),
+        [
+            ("r2://bucket/run", "r2://bucket/run/input_spec.json"),
+            ("r2://bucket/run/", "r2://bucket/run/input_spec.json"),
+            ("file:///data/run", "file:///data/run/input_spec.json"),
+            ("/data/run/", "/data/run/input_spec.json"),
+            ("relative/run", "relative/run/input_spec.json"),
+        ],
+    )
+    def test_trailing_slash_is_normalized(self, root: str, expected: str) -> None:
+        """A present-or-absent trailing slash on the root yields the same join.
+
+        :param root: Root path/URI, with or without a trailing slash.
+        :param expected: The single-slash join of ``root`` and the child name.
+        """
+        assert spec_io.join_uri(root, "input_spec.json") == expected

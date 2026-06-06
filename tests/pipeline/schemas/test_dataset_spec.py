@@ -1356,6 +1356,21 @@ class TestValidateCopySource:
         with pytest.raises(ValueError, match="shard"):
             target.validate_copy_source(source)
 
+    def test_output_format_mismatch_is_named_directly(self) -> None:
+        """A differing ``output_format`` surfaces a direct, legible cause.
+
+        A ``wds`` source is caught indirectly by the ``.tar`` vs ``.h5`` filename
+        diff, but the message must also name ``output_format`` so the operator
+        sees the real cause rather than only the derived filename symptom.
+        """
+        target = DatasetSpec(**_valid_spec_kwargs(output_format="hdf5"))
+        source = DatasetSpec(**_valid_spec_kwargs(output_format="wds"))
+
+        with pytest.raises(ValueError) as excinfo:
+            target.validate_copy_source(source)
+
+        assert "output_format: source='wds' != target='hdf5'" in str(excinfo.value)
+
     def test_shard_filename_partial_overlap_names_the_extra_shard(self) -> None:
         """A source with extra shards is rejected, naming a shard absent from the target.
 
@@ -1386,6 +1401,8 @@ class TestValidateCopySource:
 
         message = str(excinfo.value)
         assert "param_spec_name" in message
+        assert "output_format" in message
         assert "shard filenames" in message
-        # Two distinct mismatches (param_spec_name + shard filenames), each its own bullet.
-        assert message.count("\n  - ") == 2
+        # Three distinct mismatches (param_spec_name + output_format + shard
+        # filenames), each its own bullet.
+        assert message.count("\n  - ") == 3

@@ -28,6 +28,7 @@ from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
+from pydantic import ValidationError
 
 from synth_setter.cli.finalize_dataset import finalize_from_spec
 from synth_setter.data.vst.core import extract_renderer_version
@@ -275,8 +276,9 @@ def _validate_copy_source(spec: DatasetSpec) -> None:
 
     :param spec: The target dataset spec about to be rendered.
     :raises ValueError: the copy root URI holds no ``input_spec.json``; the
-        source spec could not be fetched from the object store; or the source
-        spec mismatches ``spec`` on a copy-relevant value.
+        source spec could not be fetched from the object store; the source spec
+        JSON is malformed or stale; or the source spec mismatches ``spec`` on a
+        copy-relevant value.
     """
     if spec.copy_dataset_root_uri is None:
         return
@@ -295,6 +297,11 @@ def _validate_copy_source(spec: DatasetSpec) -> None:
             f"fetched: rclone command {exc.cmd!r} exited {exc.returncode}. This is an "
             "object-store access failure (auth/network/config), not a missing spec — check "
             "R2 credentials and connectivity."
+        ) from exc
+    except ValidationError as exc:
+        raise ValueError(
+            f"dataset-copy source spec under {spec.copy_dataset_root_uri!r} is malformed or "
+            "stale; re-materialize it from the source dataset's current spec."
         ) from exc
     spec.validate_copy_source(source)
     logger.info(f"dataset-copy source OK: {spec.copy_dataset_root_uri} matches the target spec")

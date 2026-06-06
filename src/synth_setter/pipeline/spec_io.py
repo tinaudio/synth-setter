@@ -36,6 +36,7 @@ from synth_setter.pipeline.schemas.spec import DatasetSpec
 
 __all__ = [
     "find_input_specs",
+    "join_uri",
     "load_spec_from_root",
     "load_spec_from_uri",
     "local_spec_path",
@@ -45,6 +46,23 @@ __all__ = [
     "write_spec_locally",
     "write_spec_to_path",
 ]
+
+
+def join_uri(root: str, name: str) -> str:
+    """Join ``name`` onto a root URI under a single ``/`` separator.
+
+    Shared joiner for the dataset-root layout (a child object sitting directly
+    under a run-prefix root): collapses a present-or-absent trailing slash on
+    ``root`` so every call site composes ``root`` + ``name`` identically,
+    whether ``root`` is a bare path, ``file://`` URI, or ``r2://`` URI.
+
+    :param root: Root path or URI; a trailing ``/`` is tolerated.
+    :param name: Child basename to append (e.g. a shard filename or
+        :data:`~synth_setter.pipeline.constants.INPUT_SPEC_FILENAME`).
+    :returns: ``root`` and ``name`` joined under exactly one ``/``.
+    """
+    return f"{root.rstrip('/')}/{name}"
+
 
 # Top-level local directory that mirrors the R2 ``prefix_root``. Hard-coded
 # per ``storage-provenance-spec.md`` §3a — the local mirror always sits under
@@ -139,8 +157,7 @@ def load_spec_from_root(dataset_root_uri: str) -> DatasetSpec:  # noqa: DOC502
         (propagated from :func:`read_spec_text`); also the base class of
         ``pydantic.ValidationError`` for malformed/stale spec JSON.
     """
-    spec_uri = f"{dataset_root_uri.rstrip('/')}/{INPUT_SPEC_FILENAME}"
-    return load_spec_from_uri(spec_uri)
+    return load_spec_from_uri(join_uri(dataset_root_uri, INPUT_SPEC_FILENAME))
 
 
 def local_spec_path(spec: DatasetSpec, output_dir: Path) -> Path:

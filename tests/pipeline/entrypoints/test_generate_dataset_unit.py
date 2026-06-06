@@ -28,6 +28,7 @@ the cfg-composition surface isolated from R2.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -2877,6 +2878,28 @@ class TestValidateCopySource:
                 _validate_copy_source(target)
         assert "exited 7" in str(excinfo.value)
         assert isinstance(excinfo.value.__cause__, subprocess.CalledProcessError)
+
+    def test_malformed_source_spec_raises_as_malformed(self, tmp_path: Path) -> None:
+        """A source ``input_spec.json`` that fails schema validation is named as malformed.
+
+        :param tmp_path: Pytest tmp dir holding a copy root with a corrupted spec.
+        """
+        from synth_setter.cli.generate_dataset import _validate_copy_source
+
+        copy_root = tmp_path / "source"
+        copy_root.mkdir()
+        source = DatasetSpec(**_base_spec_kwargs(tmp_path))  # type: ignore[arg-type]
+        # A complete spec whose strict-typed field is corrupted parses past the
+        # before-validators and then fails strict validation → ValidationError.
+        corrupt = json.loads(source.model_dump_json())
+        corrupt["base_seed"] = "not-an-int"
+        (copy_root / INPUT_SPEC_FILENAME).write_text(json.dumps(corrupt))
+        target = DatasetSpec(
+            **_base_spec_kwargs(tmp_path, copy_dataset_root_uri=str(copy_root))  # type: ignore[arg-type]
+        )
+
+        with pytest.raises(ValueError, match="malformed or stale"):
+            _validate_copy_source(target)
 
     def test_mismatched_source_spec_raises(self, tmp_path: Path) -> None:
         """A source spec with a different ``param_spec_name`` is rejected at preflight.

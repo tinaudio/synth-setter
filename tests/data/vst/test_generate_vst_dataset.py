@@ -1707,8 +1707,11 @@ def test_main_copy_dataset_root_uri_downloads_r2_source_shard(
     _write_param_array_shard(fixture_shard, np.stack(rows).astype(np.float32))
     expected_synth, expected_note = fixed_params_from_dataset(fixture_shard, spec)
 
+    rclone_args: dict[str, list[str]] = {}
+
     def _fake_check_call(args: list[str]) -> None:
         # rclone copyto <remote> <dest>; serve the fixture as the downloaded shard.
+        rclone_args["args"] = args
         shutil.copy(fixture_shard, args[-1])
 
     monkeypatch.setattr(r2_io.subprocess, "check_call", _fake_check_call)
@@ -1736,6 +1739,9 @@ def test_main_copy_dataset_root_uri_downloads_r2_source_shard(
 
     generate_vst_dataset.main()
 
+    # rclone must target the shard joined under the root (basename preserved); r2_io
+    # rewrites the r2:// URI to rclone's r2: remote syntax.
+    assert "r2:bucket/prefix/task/run/shard-000000.h5" in rclone_args["args"]
     assert captured["fixed_synth_params_list"] == expected_synth
     assert captured["fixed_note_params_list"] == expected_note
 

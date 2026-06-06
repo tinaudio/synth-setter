@@ -29,7 +29,7 @@ from synth_setter.pipeline.schemas.spec import (
     OutputFormat,
     RenderConfig,
 )
-from synth_setter.pipeline.spec_io import localized_uri
+from synth_setter.pipeline.spec_io import join_uri, localized_uri
 
 
 @dataclass
@@ -238,7 +238,7 @@ def create_datasets_and_get_start_idx(
 
 
 def fixed_params_from_dataset(
-    source_shard: Path | str,
+    source_shard: Path,
     param_spec: ParamSpec,
 ) -> tuple[list[dict[str, float]], list[NoteParams]]:
     """Decode an existing shard's ``param_array`` into fixed synth/note param lists.
@@ -357,7 +357,7 @@ def main() -> None:
             )
         # Same shard filename under the copy root URI names the source HDF5 shard;
         # localized_uri downloads it locally first when the root is an r2:// URI.
-        source_shard_uri = f"{args.copy_dataset_root_uri.rstrip('/')}/{Path(args.data_file).name}"
+        source_shard_uri = join_uri(args.copy_dataset_root_uri, Path(args.data_file).name)
         with localized_uri(source_shard_uri) as source_shard:
             fixed_synth_params_list, fixed_note_params_list = fixed_params_from_dataset(
                 source_shard, param_specs[render_cfg.param_spec_name]

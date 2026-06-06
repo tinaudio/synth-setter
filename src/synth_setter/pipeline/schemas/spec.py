@@ -999,9 +999,10 @@ class DatasetSpec(BaseModel):
         faithful only when the source agrees on every value fixing the per-shard
         contract: ``param_spec_name`` (encoding width), ``samples_per_shard``
         (rows per shard), ``train_val_test_sizes`` (total rows and the
-        train/val/test split layout), and the derived shard-filename set. Every
-        mismatch is aggregated so a misconfigured copy surfaces them all in one
-        launch instead of one render — or one re-run — at a time.
+        train/val/test split layout), ``output_format`` (the shard extension the
+        copy addresses), and the derived shard-filename set. Every mismatch is
+        aggregated so a misconfigured copy surfaces them all in one launch
+        instead of one render — or one re-run — at a time.
 
         :param source: Spec of the copy source, parsed from its ``input_spec.json``.
         :raises ValueError: ``source`` differs from ``self`` on any copy-relevant
@@ -1022,6 +1023,13 @@ class DatasetSpec(BaseModel):
             mismatches.append(
                 f"train_val_test_sizes: source={source.train_val_test_sizes} != "
                 f"target={self.train_val_test_sizes}"
+            )
+        if source.output_format != self.output_format:
+            # The copy addresses source shards by the target's filename; a format
+            # difference means a never-matching extension (e.g. .tar vs .h5).
+            mismatches.append(
+                f"output_format: source={source.output_format.value!r} != "
+                f"target={self.output_format.value!r} (copy reads same-named shards)"
             )
         source_filenames = tuple(shard.filename for shard in source.shards)
         target_filenames = tuple(shard.filename for shard in self.shards)
