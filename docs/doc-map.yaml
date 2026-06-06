@@ -323,7 +323,7 @@ docs:
     description: macOS VM dev-env path via Tart — prebuilt image or Packer build (§ B.3)
     sources:
       - pattern: "tart/**"
-        covers: "Packer template, packer variables (synth_setter_git_ref/torch_backend/python_version/vm_name), provisioner steps, brew packages, venv layout, VST3 path, smoke tests, .zshrc auto-activation, prebuilt image at registry-1.docker.io/tinaudio/synth-setter-macos, Docker Hub publishing workflow"
+        covers: "Packer template, packer variables (synth_setter_git_ref/torch_backend/python_version/vm_name), provisioner steps, brew packages, venv layout, VST3 path, smoke tests, .zshrc auto-activation, prebuilt image at registry-1.docker.io/tinaudio/synth-setter-macos, Docker Hub publishing workflow, local validate/build helper (build.sh)"
         scope: "tart"
 
   # ── Surge XT interactive guide ──────────────────────────────────
