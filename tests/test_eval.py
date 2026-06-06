@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 import torch
+import wandb
 from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
@@ -40,6 +41,9 @@ _COMPUTE_AUDIO_METRICS_FRAGMENT = "compute_audio_metrics"
 _FAKE_AGGREGATED_METRICS_CSV = (
     ",mean,std\nmss,0.5,0.1\nwmfcc,0.3,0.05\nsot,0.2,0.02\nrms,0.9,0.01\n"
 )
+# Per-sample metrics CSV the fake metrics subprocess writes alongside the aggregated
+# CSV; one row per sample, columns matching ``compute_audio_metrics`` output.
+_FAKE_METRICS_CSV = "sample_id,mss,wmfcc,sot,rms\n0,0.1,0.2,0.3,0.4\n1,0.5,0.6,0.7,0.8\n"
 
 
 @pytest.mark.requires_vst
@@ -330,6 +334,79 @@ def test_evaluate_predict_mode_merges_audio_metrics_into_metric_dict(
         for stat in ("mean", "std"):
             value = metric_dict[f"audio/{key}_{stat}"]
             assert isinstance(value, float) and math.isfinite(value)
+
+
+@pytest.mark.fake_vst
+def test_evaluate_predict_mode_logs_per_sample_metrics_table_to_wandb(
+    tmp_path: Path,
+    fake_surge_smoke_datasets: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``mode=predict`` with an active wandb run uploads ``metrics.csv`` as a wandb.Table.
+
+    Exercises the ``_log_metrics_csv_to_wandb`` call-through via the real
+    ``evaluate`` entrypoint: the fake metrics subprocess writes both
+    ``aggregated_metrics.csv`` and ``metrics.csv``; a spy on ``wandb.run.log``
+    verifies the per-sample Table arrives under ``audio/per_sample_metrics``.
+
+    :param tmp_path: Hydra ``output_dir``; the fake subprocess writes CSVs beneath it.
+    :param fake_surge_smoke_datasets: CPU-fast surge_4 dataset (no real VST).
+    :param monkeypatch: Stubs subprocesses, headless wrapper, and ``wandb.run``.
+    """
+    logged: list[dict[str, object]] = []
+
+    class _Spy:
+        """Stand-in for ``wandb.run`` that records ``log`` payloads; no-ops SDK lifecycle calls.
+
+        ``__getattr__`` absorbs wandb SDK cleanup methods (e.g. ``finish``,
+        ``summary``) that Lightning triggers after predict — they are irrelevant to
+        this test's contract.
+        """
+
+        def log(self, payload: dict[str, object]) -> None:
+            """Append payload to the capture list.
+
+            :param payload: The wandb log payload to record.
+            """
+            logged.append(payload)
+
+        def __getattr__(self, _name: str) -> object:
+            """Return a no-op callable for any wandb SDK method not explicitly defined.
+
+            :param _name: Attribute name; unused — any undeclared attribute gets a no-op.
+            :returns: A callable that accepts any arguments and returns ``None``.
+            """
+            return lambda *_args, **_kwargs: None
+
+    def _fake_run_with_metrics(args: list[str], **_kwargs: object) -> None:
+        is_render = any(_PREDICT_VST_AUDIO_FRAGMENT in a for a in args)
+        is_metrics = any(_COMPUTE_AUDIO_METRICS_FRAGMENT in a for a in args)
+        if not (is_render or is_metrics):
+            return
+        out_dir = Path(args[args.index("-m") + 3])
+        out_dir.mkdir(parents=True, exist_ok=True)
+        if is_metrics:
+            (out_dir / "aggregated_metrics.csv").write_text(_FAKE_AGGREGATED_METRICS_CSV)
+            (out_dir / "metrics.csv").write_text(_FAKE_METRICS_CSV)
+
+    cfg = _compose_fake_oracle_eval_cfg(tmp_path, fake_surge_smoke_datasets, mode="predict")
+    monkeypatch.setattr("synth_setter.cli.eval.subprocess.run", _fake_run_with_metrics)
+    monkeypatch.setattr("synth_setter.cli.eval.vst_headless_wrapper", lambda: object())
+    monkeypatch.setattr(
+        "synth_setter.cli.eval.as_file",
+        lambda _traversable: nullcontext(Path("/fake/headless-wrapper")),
+    )
+    monkeypatch.setattr(wandb, "run", _Spy())
+
+    HydraConfig().set_config(cfg)
+    try:
+        evaluate(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    table_payloads = [p for p in logged if "audio/per_sample_metrics" in p]
+    assert len(table_payloads) == 1
+    assert isinstance(table_payloads[0]["audio/per_sample_metrics"], wandb.Table)
 
 
 @pytest.mark.fake_vst
