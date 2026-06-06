@@ -51,7 +51,7 @@ def subdir_matches_pattern(sample_dir: Path) -> bool:
     """Return ``True`` if ``sample_dir`` contains ``pred.wav`` and ``target.wav``.
 
     :param sample_dir: Directory to inspect.
-    :returns: True when both audio files are present.
+    :returns: ``True`` when both audio files are present.
     """
     return (sample_dir / "target.wav").exists() and (sample_dir / "pred.wav").exists()
 
@@ -101,6 +101,12 @@ def compute_mel_specs(y: np.ndarray, sample_rate: float = 44100.0) -> list[np.nd
 
 
 def compute_mss(target: np.ndarray, pred: np.ndarray) -> float:
+    """Return mean multi-scale spectrogram distance between ``target`` and ``pred``.
+
+    :param target: Target audio, shape ``(C, T)``.
+    :param pred: Predicted audio, same shape as ``target``.
+    :returns: Mean absolute spectrogram difference averaged across mel scales.
+    """
     logger.info("Computing MSS...")
     target_specs = compute_mel_specs(target)
     pred_specs = compute_mel_specs(pred)
@@ -135,6 +141,14 @@ def compute_jtfs(y: np.ndarray, J: int = 10, Q: int = 12) -> np.ndarray:
 
 
 def compute_jtfs_distance(target: np.ndarray, pred: np.ndarray, J: int = 10, Q: int = 12) -> float:
+    """Return mean L1 JTFS distance between ``target`` and ``pred``.
+
+    :param target: Target audio, shape ``(C, T)``.
+    :param pred: Predicted audio, same shape as ``target``.
+    :param J: Log-scale resolution forwarded to :func:`compute_jtfs`.
+    :param Q: Quality factor forwarded to :func:`compute_jtfs`.
+    :returns: Mean absolute difference of scattering coefficients.
+    """
     logger.info("Computing JTFS...")
 
     target_jtfs = compute_jtfs(target, J, Q)
@@ -161,16 +175,22 @@ def compute_mfcc(target: np.ndarray, sample_rate: float = 44100.0) -> np.ndarray
 
 
 def _l1_distance(a: np.ndarray, b: np.ndarray) -> float:
-    """Return the mean L1 distance between arrays ``a`` and ``b``.
+    """Return mean absolute element-wise difference between ``a`` and ``b``.
 
     :param a: First array.
-    :param b: Second array, same shape as ``a``.
+    :param b: Second array; must be the same shape as ``a``.
     :returns: Scalar mean absolute difference.
     """
     return np.mean(np.abs(a - b))
 
 
 def compute_wmfcc(target: np.ndarray, pred: np.ndarray) -> float:
+    """Return DTW-normalised MFCC distance between ``target`` and ``pred``.
+
+    :param target: Target audio, shape ``(C, T)``.
+    :param pred: Predicted audio, same shape as ``target``.
+    :returns: DTW-normalised L1 distance between MFCC sequences.
+    """
     logger.info("Computing wMFCC...")
 
     target_mfcc = compute_mfcc(target)
@@ -207,12 +227,24 @@ def get_pesto_activations(
 
 
 def compute_f0(target: np.ndarray, pred: np.ndarray) -> float:
+    """Return mean absolute F0 error at high-confidence PESTO frames.
+
+    :param target: Target audio, shape ``(C, T)``.
+    :param pred: Predicted audio, same shape as ``target``.
+    :returns: Mean Hz error at frames where both signals exceed the 0.85 confidence threshold.
+    """
     logger.info("Computing f0...")
     target_f0, pred_f0 = get_pesto_activations(target, pred)
     return np.mean(np.abs(target_f0 - pred_f0))
 
 
 def get_stft(y: np.ndarray, sample_rate: float = 44100.0) -> np.ndarray:
+    """Return magnitude STFT of ``y``; output shape ``(frames, n_fft // 2 + 1)``.
+
+    :param y: Audio waveform, shape ``(C, T)``; channels are averaged before transform.
+    :param sample_rate: Sample rate in Hz; governs window and hop lengths.
+    :returns: Magnitude spectrogram, shape ``(frames, n_fft // 2 + 1)``.
+    """
     win_length = int(0.05 * sample_rate)
     hop_length = int(0.02 * sample_rate)
     stft = librosa.stft(
@@ -238,6 +270,12 @@ def batched_wasserstein_distance_np(
 
 
 def compute_sot(target: np.ndarray, pred: np.ndarray) -> float:
+    """Return mean Sliced Optimal Transport distance between spectrograms.
+
+    :param target: Target audio, shape ``(C, T)``.
+    :param pred: Predicted audio, same shape as ``target``.
+    :returns: Mean Wasserstein distance across frequency bins.
+    """
     logger.info("Computing SOT...")
     target_stft = get_stft(target)
     pred_stft = get_stft(pred)
@@ -411,8 +449,7 @@ def main(audio_dir: str, output_dir: str, num_workers: int, shuffle_seed: int) -
         output_dir_path / "aggregated_metrics.csv"
     )
 
-    # Render-order probe (#489): filter to sample_* dirs to match shuffle_pred_audio._sample_dirs
-    # (find_possible_subdirs uses glob("*"), _sample_dirs uses glob("sample_*")).
+    # filter to sample_* to match shuffle_pred_audio._sample_dirs glob pattern (#489)
     probe_dirs = [d for d in audio_dirs if d.name.startswith("sample_")]
     uniform = params_are_uniform(probe_dirs)
     if not uniform and shuffle_seed != 0:
@@ -429,15 +466,22 @@ def main(audio_dir: str, output_dir: str, num_workers: int, shuffle_seed: int) -
                 "Render-order probe: scoring permuted pred audio (seed={s})", s=shuffle_seed
             )
             shuffled_dirs = find_possible_subdirs(shuffled_view)
-            shuffled_tmp = output_dir_path / "_shuffle_tmp"
-            shuffled_tmp.mkdir(exist_ok=True)
-            try:
-                shuffled_df = _aggregate_metrics(shuffled_dirs, shuffled_tmp, num_workers)
-                pd.DataFrame(
-                    {"mean": shuffled_df.mean(axis=0), "std": shuffled_df.std(axis=0)}
-                ).to_csv(output_dir_path / "aggregated_metrics_shuffled.csv")
-            finally:
-                shutil.rmtree(shuffled_tmp, ignore_errors=True)
+            if not shuffled_dirs:
+                logger.warning(
+                    "Render-order probe: no valid sample dirs found in shuffled view {v}; "
+                    "skipping shuffled metrics",
+                    v=shuffled_view,
+                )
+            else:
+                shuffled_tmp = output_dir_path / "_shuffle_tmp"
+                shuffled_tmp.mkdir(exist_ok=True)
+                try:
+                    shuffled_df = _aggregate_metrics(shuffled_dirs, shuffled_tmp, num_workers)
+                    pd.DataFrame(
+                        {"mean": shuffled_df.mean(axis=0), "std": shuffled_df.std(axis=0)}
+                    ).to_csv(output_dir_path / "aggregated_metrics_shuffled.csv")
+                finally:
+                    shutil.rmtree(shuffled_tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":

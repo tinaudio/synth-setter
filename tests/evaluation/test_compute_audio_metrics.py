@@ -562,8 +562,6 @@ def test_compute_f0_different_inputs_is_finite() -> None:
     assert np.isfinite(dist)
 
 
-# main auto-shuffle render-order probe (#489)
-
 _UNIFORM_PARAMS_CSV = ",pred,target\ncutoff,0.5,0.5\nresonance,0.2,0.2\n"
 _NONUNIFORM_PARAMS_CSV = ",pred,target\ncutoff,0.9,0.9\n"
 

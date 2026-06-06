@@ -42,10 +42,6 @@ def _assert_uniform_params(sample_dirs: list[Path]) -> None:
 
     One writer (``predict_vst_audio.params_to_csv``) emits every CSV, so exact
     text comparison is safe (identical params produce byte-identical files).
-    Delegates the uniformity check to :func:`params_are_uniform`, then scans
-    once more to identify the specific offending dir for the error message.
-    ``_sample_dirs`` guarantees all dirs have ``params.csv``, so no
-    ``FileNotFoundError`` is expected in the second scan.
 
     :param sample_dirs: Dirs to compare against ``sample_dirs[0]``.
     :raises ValueError: when any ``params.csv`` differs, naming the offending dir.

@@ -559,7 +559,6 @@ def test_postprocessing_returns_shuffled_audio_metrics_when_subprocess_writes_sh
     assert "shuffled_audio/mss_mean" in result
     assert result["shuffled_audio/mss_mean"] == pytest.approx(0.6)
     assert result["shuffled_audio/mss_std"] == pytest.approx(0.12)
-    # Normal audio/* keys must still be present alongside shuffled ones.
     assert "audio/mss_mean" in result
     assert result["audio/mss_mean"] == pytest.approx(0.5)
 
