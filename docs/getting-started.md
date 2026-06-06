@@ -823,11 +823,10 @@ ssh admin@$(tart ip synth-setter-macos)           # password: admin
 > SSH key to `~admin/.ssh/authorized_keys` and disable `PasswordAuthentication`
 > in `/etc/ssh/sshd_config` before exposing port 22.
 
-The image ships with the repo cloned at `~/synth-setter`, a venv with the
-project's `dev` group installed (CPU torch wheels — Tart VMs have no
-GPU), Surge XT
-at `/Library/Audio/Plug-Ins/VST3/Surge XT.vst3`, and
-`source ~/synth-setter/.venv/bin/activate` appended to `~/.zshrc` so every
+The image ships with the repo cloned at `~/synth-setter`, a venv synced from
+`uv.lock` (MPS-capable torch wheels from PyPI via `[tool.uv.sources]`
+`sys_platform` markers), Surge XT at `/Library/Audio/Plug-Ins/VST3/Surge XT.vst3`,
+and `source ~/synth-setter/.venv/bin/activate` appended to `~/.zshrc` so every
 interactive shell has the venv active from login.
 
 Credentials for Claude Code, `gh`, R2, and W&B are **not** baked in — log in
@@ -835,15 +834,15 @@ on first boot.
 
 **Build the image yourself (advanced):**
 
-If you need a custom build (pinned repo ref, different torch backend, pinned
+If you need a custom build (pinned repo ref, pinned Codex CLI version, pinned
 base image, updated `uv`, updated Surge XT, etc.), the Packer template at
 [`tart/macos.pkr.hcl`](../tart/macos.pkr.hcl) builds the same image locally.
 See the bottom of the file for the full publishing workflow to Docker Hub.
 The template's `variable` blocks are the authoritative source for supported
 overrides. User-overridable packer vars: `synth_setter_git_ref` (default
-`main`), `torch_backend` (default `cpu`), `python_version` (default `3.10`),
-`vm_name` (default `synth-setter-macos`), `base_image_digest`, `uv_version`,
-and `surge_xt_version`.
+`main`), `python_version` (default `3.10`), `vm_name` (default
+`synth-setter-macos`), `codex_version` (default `latest`),
+`base_image_digest`, `uv_version`, and `surge_xt_version`.
 
 ```bash
 brew install cirruslabs/cli/tart packer
