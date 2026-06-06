@@ -1,8 +1,10 @@
 """Invariant: the canonical entrypoint test modules stay entrypoint-only.
 
-``test_train.py`` / ``test_eval.py`` / ``test_generate_dataset.py`` each compose
-one Hydra ``cfg`` and drive its in-process entrypoint; helper/unit tests for the
-entrypoint module's private functions belong in a sibling ``test_<name>_*.py``.
+``test_train.py`` / ``test_eval.py`` / ``test_generate_dataset.py`` /
+``test_finalize_dataset.py`` each drive their in-process entrypoint
+(``train`` / ``evaluate`` / ``from_hydra`` / ``finalize`` / ``main``);
+helper/unit tests for the entrypoint module's branch-level functions belong in a
+sibling ``test_<name>_*.py``.
 
 A reference to a private (``_``-prefixed) ``synth_setter.cli`` member is the tell
 one crept back in. This static AST check catches both the
@@ -22,6 +24,7 @@ _CANONICAL_ENTRYPOINT_TEST_FILES = (
     "tests/test_train.py",
     "tests/test_eval.py",
     "tests/test_generate_dataset.py",
+    "tests/test_finalize_dataset.py",
 )
 
 
