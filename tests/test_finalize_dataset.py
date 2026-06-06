@@ -3,8 +3,8 @@
 Covers tests that drive the in-process entrypoint surface — ``finalize(cfg)``
 and ``main()`` — against the ``fake_r2_remote`` fixture (a local-typed rclone
 remote rooted at ``tmp_path``; see ``tests/pipeline/conftest.py``). The spec is
-written to disk as JSON and the cfg carries a ``file://`` URI pointing at it,
-mirroring how production callers pass the R2 URI of ``input_spec.json``.
+written to disk as ``input_spec.json`` and the cfg carries a ``file://`` URI of
+its parent dir, mirroring how production callers pass the R2 dataset-root URI.
 
 Two helpers stay stubbed because the local rclone backend can't simulate them
 cleanly:
@@ -54,7 +54,7 @@ from tests.helpers.finalize_shards import (
     seed_train_shards,
     stub_get_stats_hdf5,
     uri_to_local_path,
-    write_spec_to_file,
+    write_spec_to_root,
 )
 from tests.helpers.wandb_offline import read_run_binary
 
@@ -96,7 +96,7 @@ def test_finalize_uploads_stats_then_marker_at_canonical_uris(
     seed_train_shards(fake_r2_remote, spec)
     output_dir = tmp_path / "hydra_output"
     output_dir.mkdir()
-    cfg = build_finalize_cfg(write_spec_to_file(spec, tmp_path), output_dir)
+    cfg = build_finalize_cfg(write_spec_to_root(spec, tmp_path), output_dir)
 
     real_upload = r2_io.upload
     upload_order: list[str] = []
@@ -135,7 +135,7 @@ def test_finalize_is_idempotent_when_marker_already_exists(
     spec = build_wds_smoke_spec(task_name="finalize-idempotent-wds")
     output_dir = tmp_path / "hydra_output"
     output_dir.mkdir()
-    cfg = build_finalize_cfg(write_spec_to_file(spec, tmp_path), output_dir)
+    cfg = build_finalize_cfg(write_spec_to_root(spec, tmp_path), output_dir)
 
     finalize_dataset.finalize(cfg)
 
@@ -168,7 +168,7 @@ def test_finalize_raises_on_unsupported_output_format(
         update={"output_format": "parquet"}
     )
     monkeypatch.setattr(
-        "synth_setter.cli.finalize_dataset.load_spec_from_uri", lambda _uri: bad_spec
+        "synth_setter.cli.finalize_dataset.load_spec_from_root", lambda _uri: bad_spec
     )
     monkeypatch.setattr(
         "synth_setter.pipeline.r2_io.download_to_path",
@@ -214,8 +214,8 @@ def test_finalize_dataset_main_resolves_hydra_logging_under_at_hydra_main(
     monkeypatch.setenv("WANDB_MODE", "disabled")
     monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
     spec = build_wds_smoke_spec(task_name="hydra-startup")
-    spec_uri = write_spec_to_file(spec, tmp_path)
-    monkeypatch.setattr("sys.argv", ["finalize_dataset", f"dataset_spec_uri={spec_uri}"])
+    dataset_root_uri = write_spec_to_root(spec, tmp_path)
+    monkeypatch.setattr("sys.argv", ["finalize_dataset", f"dataset_root_uri={dataset_root_uri}"])
 
     finalize_dataset.main()
 
@@ -262,7 +262,7 @@ def test_finalize_hdf5_marker_idempotency_short_circuits_before_download(
     spec = build_hdf5_smoke_spec(task_name="finalize-hdf5-marker-present")
     output_dir = tmp_path / "hydra_output"
     output_dir.mkdir()
-    cfg = build_finalize_cfg(write_spec_to_file(spec, tmp_path), output_dir)
+    cfg = build_finalize_cfg(write_spec_to_root(spec, tmp_path), output_dir)
 
     finalize_dataset.finalize(cfg)
 
@@ -302,7 +302,7 @@ def test_finalize_hdf5_branch_uploads_marker_last(
 
     output_dir = tmp_path / "hydra_output"
     output_dir.mkdir()
-    cfg = build_finalize_cfg(write_spec_to_file(spec, tmp_path), output_dir)
+    cfg = build_finalize_cfg(write_spec_to_root(spec, tmp_path), output_dir)
 
     finalize_dataset.finalize(cfg)
 
@@ -317,7 +317,7 @@ def test_finalize_hdf5_branch_uploads_marker_last(
 
 
 def _build_finalize_cfg_with_offline_wandb(
-    spec_uri: str, output_dir: Path, save_dir: Path
+    dataset_root_uri: str, output_dir: Path, save_dir: Path
 ) -> DictConfig:
     """Build a ``finalize()`` cfg carrying an offline ``WandbLogger`` group.
 
@@ -325,16 +325,16 @@ def _build_finalize_cfg_with_offline_wandb(
     pins ``offline=True`` and a tmp ``save_dir`` so ``finalize`` instantiates a
     real, hermetic wandb run rather than a no-op empty logger list.
 
-    :param spec_uri: URI passed through to ``load_spec_from_uri``.
+    :param dataset_root_uri: Run-prefix URI passed through to ``load_spec_from_root``.
     :param output_dir: Finalize's scratch ``work_dir`` (must exist).
     :param save_dir: Where the offline run's ``wandb/`` dir is written.
-    :returns: Mutable DictConfig with ``dataset_spec_uri``, ``paths``, ``logger``.
+    :returns: Mutable DictConfig with ``dataset_root_uri``, ``paths``, ``logger``.
     """
     return cast(
         DictConfig,
         OmegaConf.create(
             {
-                "dataset_spec_uri": spec_uri,
+                "dataset_root_uri": dataset_root_uri,
                 "paths": {"output_dir": str(output_dir)},
                 "logger": {
                     "wandb": {
@@ -383,7 +383,7 @@ def test_finalize_logs_dataset_artifact_to_offline_wandb_run(
     output_dir = tmp_path / "work"
     output_dir.mkdir()
     cfg = _build_finalize_cfg_with_offline_wandb(
-        write_spec_to_file(spec, tmp_path), output_dir, tmp_path
+        write_spec_to_root(spec, tmp_path), output_dir, tmp_path
     )
 
     finalize_dataset.finalize(cfg)
@@ -469,7 +469,7 @@ def test_finalize_closes_loggers_failed_when_finalize_from_spec_raises(
     output_dir = tmp_path / "work"
     output_dir.mkdir()
     cfg = _build_finalize_cfg_with_offline_wandb(
-        write_spec_to_file(spec, tmp_path), output_dir, tmp_path
+        write_spec_to_root(spec, tmp_path), output_dir, tmp_path
     )
 
     with pytest.raises(RuntimeError, match="simulated finalize_from_spec failure"):
@@ -527,7 +527,7 @@ def test_finalize_swallows_artifact_log_failure_and_keeps_r2_artifacts(
     output_dir = tmp_path / "work"
     output_dir.mkdir()
     cfg = _build_finalize_cfg_with_offline_wandb(
-        write_spec_to_file(spec, tmp_path), output_dir, tmp_path
+        write_spec_to_root(spec, tmp_path), output_dir, tmp_path
     )
 
     finalize_dataset.finalize(cfg)
@@ -584,7 +584,7 @@ def test_finalize_forces_wandb_resume_allow_when_wandb_cfg_present(
     output_dir = tmp_path / "work"
     output_dir.mkdir()
     cfg = _build_finalize_cfg_with_offline_wandb(
-        write_spec_to_file(spec, tmp_path), output_dir, tmp_path
+        write_spec_to_root(spec, tmp_path), output_dir, tmp_path
     )
 
     with pytest.raises(RuntimeError, match="halt after logger setup"):

@@ -179,6 +179,42 @@ class TestLoadSpecFromUri:
         assert loaded.task_name == spec.task_name
 
 
+class TestLoadSpecFromRoot:
+    """``load_spec_from_root`` resolves ``input_spec.json`` under a dataset-root URI."""
+
+    def test_trailing_slash_root_resolves_spec(self, spec: DatasetSpec, tmp_path: Path) -> None:
+        """A root URI ending in ``/`` resolves ``<root>input_spec.json``.
+
+        :param spec: Fixture-provided ``DatasetSpec``.
+        :param tmp_path: Pytest tmp dir hosting the run prefix.
+        """
+        from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME
+        from synth_setter.pipeline.spec_io import load_spec_from_root
+
+        (tmp_path / INPUT_SPEC_FILENAME).write_text(spec.model_dump_json())
+
+        loaded = load_spec_from_root(f"{tmp_path.as_uri()}/")
+
+        assert loaded.task_name == spec.task_name
+
+    def test_root_without_trailing_slash_resolves_spec(
+        self, spec: DatasetSpec, tmp_path: Path
+    ) -> None:
+        """A root URI lacking a trailing ``/`` still resolves ``input_spec.json``.
+
+        :param spec: Fixture-provided ``DatasetSpec``.
+        :param tmp_path: Pytest tmp dir hosting the run prefix.
+        """
+        from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME
+        from synth_setter.pipeline.spec_io import load_spec_from_root
+
+        (tmp_path / INPUT_SPEC_FILENAME).write_text(spec.model_dump_json())
+
+        loaded = load_spec_from_root(tmp_path.as_uri())
+
+        assert loaded.task_name == spec.task_name
+
+
 class TestRun:
     """Render → upload, per owned shard.
 

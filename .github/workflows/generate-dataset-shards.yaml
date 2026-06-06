@@ -172,6 +172,7 @@ jobs:
     timeout-minutes: 60
     outputs:
       spec_uri: ${{ steps.spec_uri.outputs.spec_uri }}
+      dataset_root_uri: ${{ steps.spec_uri.outputs.dataset_root_uri }}
       run_id: ${{ steps.spec_uri.outputs.run_id }}
     env:
       IMAGE_TAG: ${{ inputs.image_tag }}
@@ -679,9 +680,12 @@ jobs:
             echo "::error::could not parse run_id from spec_uri=${SPEC_URI}"
             exit 1
           fi
+          DATASET_ROOT_URI="${SPEC_URI%input_spec.json}"
           echo "spec_uri=${SPEC_URI}" >> "${GITHUB_OUTPUT}"
+          echo "dataset_root_uri=${DATASET_ROOT_URI}" >> "${GITHUB_OUTPUT}"
           echo "run_id=${RUN_ID}" >> "${GITHUB_OUTPUT}"
           echo "spec_uri: ${SPEC_URI}"
+          echo "dataset_root_uri: ${DATASET_ROOT_URI}"
           echo "run_id: ${RUN_ID}"
 
       # Always validate the freshly-uploaded shards against the
@@ -735,7 +739,7 @@ jobs:
     uses: ./.github/workflows/finalize-dataset.yaml
     with:
       provider: ${{ inputs.provider }}
-      dataset_spec_uri: ${{ needs.generate.outputs.spec_uri }}
+      dataset_root_uri: ${{ needs.generate.outputs.dataset_root_uri }}
       run_id: ${{ needs.generate.outputs.run_id }}
       env_ref: ${{ github.event.pull_request.head.sha || github.sha }}
     secrets: inherit

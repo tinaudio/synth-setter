@@ -208,34 +208,38 @@ def seed_shard_files(remote_root: Path, spec: DatasetSpec) -> None:
             )
 
 
-def write_spec_to_file(spec: DatasetSpec, tmp_path: Path) -> str:
-    """Persist ``spec`` as JSON under ``tmp_path`` and return its ``file://`` URI.
+def write_spec_to_root(spec: DatasetSpec, tmp_path: Path) -> str:
+    """Persist ``spec`` as ``input_spec.json`` and return its dataset-root ``file://`` URI.
 
     Mirrors generate-stage's ``upload_spec(spec)`` so ``finalize()``
-    re-hydrates the same ``DatasetSpec`` via ``load_spec_from_uri``.
+    re-hydrates the same ``DatasetSpec`` via ``load_spec_from_root`` — the
+    returned URI points at the directory holding ``input_spec.json``, not the
+    spec file itself.
 
     :param spec: Frozen ``DatasetSpec`` to serialize.
     :param tmp_path: Test-scoped tmp dir.
-    :returns: ``file://`` URI consumable by ``load_spec_from_uri``.
+    :returns: ``file://`` URI of the dataset-root dir, consumable by ``load_spec_from_root``.
     """
     spec_dir = tmp_path / "spec"
     spec_dir.mkdir(parents=True, exist_ok=True)
     spec_file = spec_dir / "input_spec.json"
     spec_file.write_text(spec.model_dump_json(indent=2), encoding="utf-8")
-    return spec_file.as_uri()
+    return spec_dir.as_uri()
 
 
-def build_finalize_cfg(spec_uri: str, output_dir: Path) -> DictConfig:
+def build_finalize_cfg(dataset_root_uri: str, output_dir: Path) -> DictConfig:
     """Synthesize a minimal ``finalize()`` cfg without invoking Hydra's @main.
 
-    :param spec_uri: URI passed through to ``load_spec_from_uri``.
+    :param dataset_root_uri: Run-prefix URI passed through to ``load_spec_from_root``.
     :param output_dir: Directory finalize uses as its scratch ``work_dir``.
         Must exist (``@hydra.main`` ordinarily creates it before ``main()`` runs).
     :returns: Mutable DictConfig with the two fields ``finalize()`` consumes.
     """
     return cast(
         DictConfig,
-        OmegaConf.create({"dataset_spec_uri": spec_uri, "paths": {"output_dir": str(output_dir)}}),
+        OmegaConf.create(
+            {"dataset_root_uri": dataset_root_uri, "paths": {"output_dir": str(output_dir)}}
+        ),
     )
 
 

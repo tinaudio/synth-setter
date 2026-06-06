@@ -34,6 +34,7 @@ from synth_setter.pipeline.schemas.spec import DatasetSpec
 
 __all__ = [
     "find_input_specs",
+    "load_spec_from_root",
     "load_spec_from_uri",
     "local_spec_path",
     "read_spec_text",
@@ -99,6 +100,26 @@ def load_spec_from_uri(spec_uri: str) -> DatasetSpec:  # noqa: DOC502
         ``pydantic.ValidationError`` for malformed/stale spec JSON.
     """
     return DatasetSpec.model_validate_json(read_spec_text(spec_uri))
+
+
+def load_spec_from_root(dataset_root_uri: str) -> DatasetSpec:  # noqa: DOC502
+    """Load the ``DatasetSpec`` from ``input_spec.json`` under a dataset-root URI.
+
+    The dataset root is the run prefix the generate stage wrote — the parent
+    directory of the spec (``<prefix_root>/<task_name>/<run_id>/``), not the
+    spec object itself. Joins the root with
+    :data:`~synth_setter.pipeline.constants.INPUT_SPEC_FILENAME` (tolerating a
+    present or absent trailing slash) and delegates to :func:`load_spec_from_uri`.
+
+    :param dataset_root_uri: Local path, ``file://`` URI, or ``r2://`` URI of
+        the directory containing ``input_spec.json``.
+    :returns: The parsed spec.
+    :raises ValueError: ``dataset_root_uri`` resolves to an unsupported scheme
+        (propagated from :func:`read_spec_text`); also the base class of
+        ``pydantic.ValidationError`` for malformed/stale spec JSON.
+    """
+    spec_uri = f"{dataset_root_uri.rstrip('/')}/{INPUT_SPEC_FILENAME}"
+    return load_spec_from_uri(spec_uri)
 
 
 def local_spec_path(spec: DatasetSpec, output_dir: Path) -> Path:
