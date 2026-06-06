@@ -211,8 +211,6 @@ def _validate_h5_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
     :param spec: Dataset spec the shard is expected to conform to.
     :returns: List of error strings (empty = valid).
     :rtype: list[str]
-    :raises TypeError: A required name resolves to a Group rather than a Dataset,
-        a structural corruption distinct from a recoverable shape mismatch.
     """
     try:
         f = h5py.File(shard_path, "r")
@@ -227,10 +225,11 @@ def _validate_h5_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
                 errors.append(f"missing dataset: {name!r}")
                 continue
             member = f[name]
+            # A Group at a dataset name is reported, not raised, so the CLI/finalize
+            # paths see a structured error like every other check here.
             if not isinstance(member, h5py.Dataset):
-                raise TypeError(
-                    f"shard member {name!r} is a {type(member).__name__}, not an h5py.Dataset"
-                )
+                errors.append(f"dataset {name!r} is a {type(member).__name__}, not a Dataset")
+                continue
             actual = member.shape
             expected = expected_shapes[name]
             if actual != expected:

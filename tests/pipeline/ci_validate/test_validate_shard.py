@@ -136,10 +136,10 @@ class TestValidateShard:
         assert len(errors) == 1
         assert "audio" in errors[0]
 
-    def test_group_member_raises_type_error_naming_member(
+    def test_group_member_returns_error_naming_member(
         self, real_spec: DatasetSpec, tmp_path: Path
     ) -> None:
-        """A required name backed by a Group (not a Dataset) raises a clear TypeError.
+        """A required name backed by a Group (not a Dataset) yields an error naming it.
 
         :param real_spec: Fixture-provided DatasetSpec with mocked runtime factories.
         :param tmp_path: Per-test tmpdir for the synthetic shard.
@@ -152,8 +152,10 @@ class TestValidateShard:
             # param_array is a Group, not a Dataset — the validator must reject it.
             f.create_group("param_array")
 
-        with pytest.raises(TypeError, match="param_array"):
-            validate_shard(shard_path, real_spec)
+        errors = validate_shard(shard_path, real_spec)
+
+        assert len(errors) == 1
+        assert "param_array" in errors[0]
 
     def test_not_hdf5_returns_error(self, real_spec: DatasetSpec, tmp_path: Path) -> None:
         """File that is not valid HDF5 returns an error."""
