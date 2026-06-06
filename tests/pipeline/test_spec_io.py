@@ -425,3 +425,31 @@ class TestLocalizedUri:
         with pytest.raises(ValueError, match="unsupported URI scheme 's3'"):
             with spec_io.localized_uri("s3://bucket/shard.h5"):
                 pass
+
+    def test_malformed_file_uri_is_rejected_with_value_error(self) -> None:
+        """A ``file://`` URI with a host component is rejected, not silently localized."""
+        with pytest.raises(ValueError, match="host must be empty or 'localhost'"):
+            with spec_io.localized_uri("file://host/shard.h5"):
+                pass
+
+    def test_r2_tempfile_is_removed_when_body_raises(self) -> None:
+        """An exception inside the context still removes the downloaded tempfile.
+
+        The cleanup contract must hold on the failure path (e.g. a bad shard decode), not just on a
+        clean exit — otherwise a failing render leaks a tempfile per shard.
+        """
+
+        def fake_check_call(args: list[str]) -> None:
+            Path(args[-1]).write_text("from-r2")
+
+        def explode() -> None:
+            raise RuntimeError("boom")
+
+        with patch(
+            "synth_setter.pipeline.r2_io.subprocess.check_call", side_effect=fake_check_call
+        ):
+            with pytest.raises(RuntimeError, match="boom"):
+                with spec_io.localized_uri("r2://bucket/shard.h5") as local:
+                    fetched = local
+                    explode()
+        assert not fetched.exists()

@@ -45,7 +45,7 @@ from synth_setter.pipeline.partitioning import (
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig, ShardSpec
 from synth_setter.pipeline.spec_io import (
-    load_spec_from_uri,
+    load_spec_from_root,
     upload_spec,
     write_spec_locally,
 )
@@ -267,21 +267,34 @@ def _validate_copy_source(spec: DatasetSpec) -> None:
     copy-relevant value fails once at launch rather than per-shard mid-render.
     The root URI may be a bare path, ``file://`` URI, or ``r2://`` URI.
 
+    A genuinely absent spec (``FileNotFoundError``) and an object-store access
+    failure (``CalledProcessError`` from the ``r2://`` rclone fetch — auth,
+    network, config) get distinct messages: conflating them would point the
+    operator at "sync the spec" when the real fault is credentials or
+    connectivity.
+
     :param spec: The target dataset spec about to be rendered.
-    :raises ValueError: the copy root URI holds no ``input_spec.json``, or the
-        source spec mismatches ``spec`` on a copy-relevant value.
+    :raises ValueError: the copy root URI holds no ``input_spec.json``; the
+        source spec could not be fetched from the object store; or the source
+        spec mismatches ``spec`` on a copy-relevant value.
     """
     if spec.copy_dataset_root_uri is None:
         return
-    source_spec_uri = f"{spec.copy_dataset_root_uri.rstrip('/')}/{INPUT_SPEC_FILENAME}"
     try:
-        source = load_spec_from_uri(source_spec_uri)
-    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+        source = load_spec_from_root(spec.copy_dataset_root_uri)
+    except FileNotFoundError as exc:
         raise ValueError(
             f"dataset-copy source has no {INPUT_SPEC_FILENAME} under "
             f"{spec.copy_dataset_root_uri!r}; sync the source dataset's spec alongside its "
             "shards (it lives beside the shards at the dataset prefix root) so the copy "
             "can be validated."
+        ) from exc
+    except subprocess.CalledProcessError as exc:
+        raise ValueError(
+            f"dataset-copy source spec under {spec.copy_dataset_root_uri!r} could not be "
+            f"fetched: rclone command {exc.cmd!r} exited {exc.returncode}. This is an "
+            "object-store access failure (auth/network/config), not a missing spec — check "
+            "R2 credentials and connectivity."
         ) from exc
     spec.validate_copy_source(source)
     logger.info(f"dataset-copy source OK: {spec.copy_dataset_root_uri} matches the target spec")

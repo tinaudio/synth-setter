@@ -228,12 +228,18 @@ def download_to_path(r2_uri: str, dest_path: Path) -> None:
 
     Uses `rclone copyto` (file→file) so the destination filename is preserved
     exactly — `rclone copy` would treat `dest_path` as a directory and write
-    the source basename inside it.
+    the source basename inside it. Reliability flags mirror the upload/dir
+    helpers so a transient blip on the per-shard copy-source fetch retries
+    instead of failing the render outright.
     """
     args = [  # noqa: S607 — rclone resolved by image's PATH
         "rclone",
         "copyto",
+        "-vv",
         "--checksum",
+        "--contimeout=30s",
+        "--timeout=300s",
+        "--retries=3",
         _to_rclone_path(r2_uri),
         str(dest_path),
     ]

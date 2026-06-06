@@ -29,6 +29,7 @@ the cfg-composition surface isolated from R2.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -2836,8 +2837,8 @@ class TestValidateCopySource:
 
         _validate_copy_source(target)  # no raise
 
-    def test_missing_source_spec_raises_with_path(self, tmp_path: Path) -> None:
-        """A copy root without an ``input_spec.json`` fails loudly, naming the file.
+    def test_missing_source_spec_raises_with_root_uri(self, tmp_path: Path) -> None:
+        """A copy root without an ``input_spec.json`` fails loudly, naming the root URI.
 
         :param tmp_path: Pytest tmp dir; the copy root is left without a spec.
         """
@@ -2849,8 +2850,33 @@ class TestValidateCopySource:
             **_base_spec_kwargs(tmp_path, copy_dataset_root_uri=str(copy_root))  # type: ignore[arg-type]
         )
 
-        with pytest.raises(ValueError, match=INPUT_SPEC_FILENAME):
+        with pytest.raises(ValueError, match=re.escape(str(copy_root))):
             _validate_copy_source(target)
+
+    def test_rclone_fetch_failure_raises_distinct_from_missing_spec(self, tmp_path: Path) -> None:
+        """A non-zero rclone exit on an ``r2://`` copy root surfaces as an access failure.
+
+        The ``CalledProcessError`` arm must not be folded into the "sync the
+        spec" message — an auth/network fault is not a missing object.
+
+        :param tmp_path: Pytest tmp dir (only the target spec needs a home).
+        """
+        from synth_setter.cli.generate_dataset import _validate_copy_source
+
+        target = DatasetSpec(
+            **_base_spec_kwargs(  # type: ignore[arg-type]
+                tmp_path, copy_dataset_root_uri="r2://bucket/source"
+            )
+        )
+
+        def fail_rclone(args: list[str]) -> None:
+            raise subprocess.CalledProcessError(7, args)
+
+        with patch("synth_setter.pipeline.r2_io.subprocess.check_call", side_effect=fail_rclone):
+            with pytest.raises(ValueError, match="object-store access failure") as excinfo:
+                _validate_copy_source(target)
+        assert "exited 7" in str(excinfo.value)
+        assert isinstance(excinfo.value.__cause__, subprocess.CalledProcessError)
 
     def test_mismatched_source_spec_raises(self, tmp_path: Path) -> None:
         """A source spec with a different ``param_spec_name`` is rejected at preflight.
