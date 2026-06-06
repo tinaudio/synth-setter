@@ -32,6 +32,7 @@ _PREDICT_VST_AUDIO_MODULE = "synth_setter.evaluation.predict_vst_audio"
 _COMPUTE_AUDIO_METRICS_MODULE = "synth_setter.evaluation.compute_audio_metrics"
 _SUBPROCESS_TIMEOUT_SECONDS = 600
 _AGGREGATED_METRICS_FILENAME = "aggregated_metrics.csv"
+_METRICS_FILENAME = "metrics.csv"
 _AGGREGATED_METRICS_STATS: tuple[str, ...] = ("mean", "std")
 
 # Resolve workspace at import so ``${oc.env:PROJECT_ROOT}`` in
@@ -84,6 +85,28 @@ def _log_audio_metrics_to_wandb(audio_metrics: dict[str, float]) -> None:
         wandb.run.log(audio_metrics)
     except Exception as exc:
         log.warning(f"wandb.run.log raised {type(exc).__name__}: {exc}; metrics still returned.")
+
+
+def _log_metrics_csv_to_wandb(metrics_dir: Path) -> None:
+    """Log per-sample ``metrics.csv`` to wandb as a Table; no-op when ``wandb.run`` is unset.
+
+    Silently skips when ``metrics.csv`` is absent so callers need no existence guard.
+    Swallows wandb errors so a logging failure never aborts the evaluation run.
+
+    :param metrics_dir: Directory produced by
+        :mod:`synth_setter.evaluation.compute_audio_metrics`; ``metrics.csv``
+        is read from it when present.
+    """
+    if wandb.run is None:
+        return
+    csv_path = metrics_dir / _METRICS_FILENAME
+    if not csv_path.is_file():
+        return
+    try:
+        df = pd.read_csv(csv_path, index_col=0)
+        wandb.run.log({"audio/per_sample_metrics": wandb.Table(dataframe=df.reset_index())})
+    except Exception as exc:
+        log.warning(f"wandb.run.log raised {type(exc).__name__}: {exc}; per-sample table skipped.")
 
 
 def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: DOC502,DOC503
@@ -195,6 +218,7 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
         )
         audio_metrics = _load_audio_metrics(metrics_dir)
         _log_audio_metrics_to_wandb(audio_metrics)
+        _log_metrics_csv_to_wandb(metrics_dir)
         return audio_metrics
 
     return {}

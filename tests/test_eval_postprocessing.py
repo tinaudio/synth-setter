@@ -19,6 +19,7 @@ from synth_setter.cli.eval import (
     _COMPUTE_AUDIO_METRICS_MODULE,
     _PREDICT_VST_AUDIO_MODULE,
     _log_audio_metrics_to_wandb,
+    _log_metrics_csv_to_wandb,
     _run_predict_postprocessing,
 )
 
@@ -678,3 +679,118 @@ def test_postprocessing_skips_wandb_when_no_run(
     result = _run_predict_postprocessing(cfg)
 
     assert result == _EXPECTED_AUDIO_METRICS
+
+
+# --- _log_metrics_csv_to_wandb unit tests ---
+
+_METRICS_CSV = "sample_id,mss,wmfcc,sot,rms\n0,0.1,0.2,0.3,0.4\n1,0.5,0.6,0.7,0.8\n"
+
+
+def test_log_metrics_csv_to_wandb_logs_table_to_active_run(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """With an active ``wandb.run`` and ``metrics.csv`` present, ``run.log`` receives a Table.
+
+    :param monkeypatch: Pins ``wandb.run`` to a spy so the log payload is observable.
+    :param tmp_path: Scratch metrics dir seeded with a minimal ``metrics.csv``.
+    """
+    import wandb
+
+    (tmp_path / "metrics.csv").write_text(_METRICS_CSV)
+
+    logged: list[dict[str, object]] = []
+
+    class _FakeRun:
+        """Spy stand-in for ``wandb.run`` that records every ``log`` payload."""
+
+        def log(self, payload: dict[str, object]) -> None:
+            """Append payload to the captured log list.
+
+            :param payload: The wandb log payload to capture.
+            """
+            logged.append(payload)
+
+    monkeypatch.setattr(eval_mod.wandb, "run", _FakeRun())
+
+    _log_metrics_csv_to_wandb(tmp_path)
+
+    assert len(logged) == 1
+    assert "audio/per_sample_metrics" in logged[0]
+    assert isinstance(logged[0]["audio/per_sample_metrics"], wandb.Table)
+
+
+def test_log_metrics_csv_to_wandb_noop_when_no_run(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """``wandb.run is None`` → function returns without calling ``wandb.run.log``.
+
+    :param monkeypatch: Pins ``wandb.run`` to ``None`` to exercise the early-exit branch.
+    :param tmp_path: Scratch metrics dir — ``metrics.csv`` is present but must not be read.
+    """
+    (tmp_path / "metrics.csv").write_text(_METRICS_CSV)
+    monkeypatch.setattr(eval_mod.wandb, "run", None)
+
+    # Should complete without raising even though wandb.run is None.
+    _log_metrics_csv_to_wandb(tmp_path)
+
+
+def test_log_metrics_csv_to_wandb_missing_file_is_silent(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Missing ``metrics.csv`` is silently skipped; ``run.log`` is never called.
+
+    :param monkeypatch: Pins ``wandb.run`` to a spy that would fail the test if called.
+    :param tmp_path: Empty scratch dir — no ``metrics.csv`` present.
+    """
+
+    class _NeverCalledRun:
+        """Sentinel stand-in for ``wandb.run`` that asserts it is never called."""
+
+        def log(self, _payload: object) -> None:
+            """Raise to fail the test if called — ``run.log`` must stay silent.
+
+            :param _payload: Unused; any call is a test failure.
+            :raises AssertionError: Always, to signal an unexpected ``run.log`` call.
+            """
+            raise AssertionError("run.log must not be called when metrics.csv is absent")
+
+    monkeypatch.setattr(eval_mod.wandb, "run", _NeverCalledRun())
+
+    _log_metrics_csv_to_wandb(tmp_path)
+
+
+def test_log_metrics_csv_to_wandb_log_exception_is_swallowed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An exception from ``wandb.run.log`` is swallowed and a warning is emitted.
+
+    :param monkeypatch: Pins ``wandb.run`` to a fake whose ``.log`` raises ``RuntimeError``.
+    :param tmp_path: Scratch metrics dir seeded with a minimal ``metrics.csv``.
+    :param caplog: Captures log output to verify the warning is emitted.
+    """
+    import logging
+
+    (tmp_path / "metrics.csv").write_text(_METRICS_CSV)
+
+    class _RaisingRun:
+        """Stand-in for ``wandb.run`` whose ``log`` always raises to simulate a backend failure."""
+
+        def log(self, _payload: object) -> None:
+            """Raise to simulate a failing wandb backend.
+
+            :param _payload: Unused; always raises.
+            :raises RuntimeError: Always, to simulate a wandb backend failure.
+            """
+            raise RuntimeError("wandb backend unavailable")
+
+    monkeypatch.setattr(eval_mod.wandb, "run", _RaisingRun())
+
+    with caplog.at_level(logging.WARNING):
+        _log_metrics_csv_to_wandb(tmp_path)
+
+    assert any("RuntimeError" in r.message for r in caplog.records)
