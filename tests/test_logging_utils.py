@@ -210,6 +210,42 @@ class TestResolveRunConfigId:
 
 
 # ---------------------------------------------------------------------------
+# HydraConfig singleton isolation — set_config leaks the experiment choice
+# ---------------------------------------------------------------------------
+
+
+class TestHydraConfigSingletonReset:
+    """A populated ``HydraConfig`` singleton must not leak into the next test.
+
+    Tests that call ``HydraConfig().set_config`` populate a process-global
+    singleton that ``GlobalHydra.instance().clear()`` does not touch; the leaked
+    ``runtime.choices.experiment`` then makes ``resolve_run_config_id`` return a
+    stale config_id for an unrelated, Hydra-context-free test.
+    """
+
+    def test_reset_clears_a_populated_singleton(self) -> None:
+        """``reset_hydra_config_singleton`` makes ``initialized()`` False again."""
+        from hydra import compose, initialize_config_module
+        from hydra.core.hydra_config import HydraConfig
+
+        from tests.conftest import reset_hydra_config_singleton
+
+        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+            cfg = compose(
+                config_name="train",
+                overrides=["experiment=surge/fake_oracle"],
+                return_hydra_config=True,
+            )
+        HydraConfig.instance().set_config(cfg)
+        assert HydraConfig.initialized()
+        assert HydraConfig.get().runtime.choices["experiment"] == "surge/fake_oracle"
+
+        reset_hydra_config_singleton()
+
+        assert not HydraConfig.initialized()
+
+
+# ---------------------------------------------------------------------------
 # pin_wandb_run_id — write run id + job_type before logger instantiation
 # ---------------------------------------------------------------------------
 

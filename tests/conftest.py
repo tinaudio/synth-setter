@@ -17,6 +17,7 @@ import pytest
 import torch
 from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
+from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, open_dict
 
 from synth_setter.data.vst import core, param_specs, preset_paths
@@ -187,6 +188,27 @@ def _write_smoke_stats_npz(train_h5: Path) -> None:
 # test in this suite already requires those dependencies, so there is no benefit to
 # isolating resolver registration into a lighter module.
 register_resolvers()
+
+
+def reset_hydra_config_singleton() -> None:
+    """Clear Hydra's ``HydraConfig`` singleton so its ``cfg`` reads as unset.
+
+    ``HydraConfig().set_config`` populates a process-global singleton that
+    ``GlobalHydra.instance().clear()`` leaves untouched; the stale
+    ``runtime.choices.experiment`` then leaks into a later, Hydra-context-free
+    test via :func:`synth_setter.utils.logging_utils.resolve_run_config_id`.
+    """
+    HydraConfig.instance().cfg = None
+
+
+@pytest.fixture(autouse=True)
+def _clear_hydra_config_singleton() -> Iterator[None]:
+    """Reset the ``HydraConfig`` singleton after every test.
+
+    :yields None: Control to the test, then clears the singleton on teardown.
+    """
+    yield
+    reset_hydra_config_singleton()
 
 
 @pytest.fixture(scope="package")
