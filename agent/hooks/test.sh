@@ -1792,6 +1792,31 @@ MAKE_STUB
 }
 it "worktree-post-setup: -- end-of-options marker — path after -- is used even when it starts with dashes" T_wt_post_setup_parse_end_of_options_marker
 
+T_wt_post_setup_parse_compound_command() {
+  local out target make_log
+  reset_sandbox
+  target="$TEST_DIR/wt-compound-$$"
+  mkdir -p "$target"
+  make_log="$TEST_DIR/make-compound-$$.txt"
+  cat > "$STUBS/make" <<MAKE_STUB
+#!/usr/bin/env bash
+echo "CWD=\$(pwd)" >> "$make_log"
+MAKE_STUB
+  chmod +x "$STUBS/make"
+  # Compound command: cd ... && git worktree add <path> — the parser must find
+  # the git-worktree-add subsequence rather than assuming it starts the tokens.
+  out=$(cd "$SANDBOX" && \
+    printf '{"tool_name":"Bash","tool_input":{"command":"cd /some/dir && git worktree add %s"}}' "$target" | \
+    bash "$SANDBOX/agent/hooks/worktree-post-setup.sh" 2>&1; echo "EXIT:$?")
+  rm -f "$STUBS/make"
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected exit 0, got: $out"; return 1; }
+  grep -q "CWD=$target" "$make_log" 2>/dev/null || {
+    echo "compound command: make ran in wrong dir or not called; log: $(cat "$make_log" 2>/dev/null)"
+    return 1
+  }
+}
+it "worktree-post-setup: compound command (cd && git worktree add) — path extracted correctly" T_wt_post_setup_parse_compound_command
+
 # ===========================================================================
 # Run
 # ===========================================================================

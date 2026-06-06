@@ -32,8 +32,13 @@ except Exception:
     sys.exit(1)
 
 i = 0
-while i < len(tokens) and tokens[i] in ("git", "worktree", "add"):
+while i < len(tokens) - 2:
+    if tokens[i] == "git" and tokens[i + 1] == "worktree" and tokens[i + 2] == "add":
+        i += 3
+        break
     i += 1
+else:
+    sys.exit(1)
 
 # --orphan takes <new-branch> in git 2.42+ (same positional role as -b).
 flags_with_args = {"-b", "-B", "--orphan", "--reason"}
@@ -65,12 +70,11 @@ main() {
   # PostToolUse for Bash delivers tool_input.command in the JSON payload.
   cmd=$(jq -r '.tool_input.command // empty' <<< "$input" 2>/dev/null) || { log "could not parse tool_input.command; skipping"; exit 0; }
 
-  # The settings.json `if` matcher already scopes this to `git worktree add *`,
-  # but re-validate for safety.
-  case "$cmd" in
-    *"git worktree add"*) ;;
-    *) exit 0 ;;
-  esac
+  # Boundary-aware check: matches invocations at start of command or after a
+  # separator (&&, ;, |, backtick) — avoids false positives from echo/quoted strings.
+  if ! echo "$cmd" | grep -qE '(^|[;|&`(][[:space:]]*)git[[:space:]]+worktree[[:space:]]+add([[:space:]]|$)'; then
+    exit 0
+  fi
 
   wt_path=$(_parse_worktree_path "$cmd" 2>/dev/null) || {
     log "could not parse worktree path from: $cmd"; exit 0
