@@ -268,10 +268,14 @@ When `oracle_eval_inline=true`, the local-run path shells out to
 `synth_setter.cli.eval` **once per split (train, val, test)** after `generate(...)` has closed its run.
 `_run_oracle_eval_subprocess` (`src/synth_setter/cli/generate_dataset.py`)
 re-opens the same run via `logger.wandb.id=<spec.run_id> +logger.wandb.resume=must`, runs `mode=predict` with `render=surge_simple` to
-re-render the predicted params, and deposits `audio/*` audio-similarity
-metrics onto the generate run — a `wandb sync` then merges both phases under
-one run id. The eval subprocess inherits `WANDB_MODE` from the launcher, so
-its offline/online posture follows the parent's.
+re-render the predicted params, and deposits audio-similarity metrics onto the
+generate run — a `wandb sync` then merges both phases under one run id. Because
+all three splits resume the **same** run, the metric keys are namespaced per
+split so they don't overwrite each other's run summary: `test` keeps the bare
+`audio/*` key, while `train`/`val` are logged under `train/audio/*` and
+`val/audio/*` (via `+evaluation.metric_prefix=<split>/`). The eval subprocess
+inherits `WANDB_MODE` from the launcher, so its offline/online posture follows
+the parent's.
 
 ______________________________________________________________________
 
