@@ -8,16 +8,12 @@ that no private ``synth_setter.cli`` helper is imported here.
 """
 
 import os
-import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
 import pytest
 import torch
-from hydra import compose, initialize_config_module
-from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, open_dict
 
@@ -208,47 +204,6 @@ def test_cfg_surge_xt_global_wires_param_spec(param_spec_name: str) -> None:
     )
     assert cfg.model.net.d_out == len(param_specs[param_spec_name])
     assert cfg.callbacks.log_per_param_mse.param_spec == param_spec_name
-
-
-@pytest.mark.parametrize("experiment", ["ffn_full", "flow_full", "vae_full", "flow_mlp_simple"])
-def test_train_surge_experiment_composes_null_ckpt_without_wandb_resolution(
-    experiment: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A surge training experiment composes ``ckpt_path=null`` and never invokes the W&B resolver.
-
-    Regression guard for the wandb_checkpoint overlay split (#128): the ``${wandb:...}`` pin
-    lives only in the predict-side ``surge/wandb_checkpoint/<id>`` overlay, never in the shared
-    ``surge/<id>`` experiment that ``train.yaml`` composes. Were it to leak back, ``train.py``'s
-    ``trainer.fit(ckpt_path=cfg.get("ckpt_path"))`` would resolve the artifact — needing a W&B
-    key — and silently resume training from the published model on every run. Fast and
-    key-free so regular CI catches the regression at PR time, not just the MPS smoke leg.
-
-    :param experiment: Surge experiment basename composed under ``train.yaml``.
-    :param monkeypatch: Injects a call-recording ``wandb`` stub so any stray resolution shows
-        up as a recorded call rather than a confusing import/key error.
-    """
-    calls: list[str] = []
-    artifact = SimpleNamespace(download=lambda root: calls.append(root))
-    fake_wandb = SimpleNamespace(
-        Api=lambda: SimpleNamespace(artifact=lambda ref: artifact),
-        __spec__=SimpleNamespace(),
-    )
-    monkeypatch.setitem(sys.modules, "wandb", fake_wandb)
-    register_resolvers()
-
-    try:
-        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
-            cfg = compose(
-                config_name="train.yaml",
-                overrides=[f"experiment=surge/{experiment}", "trainer=cpu"],
-            )
-            # train.py reads exactly cfg.get("ckpt_path"); it must stay None and fire no resolver.
-            ckpt_path = cfg.get("ckpt_path")
-    finally:
-        GlobalHydra.instance().clear()
-
-    assert ckpt_path is None
-    assert calls == []
 
 
 @pytest.mark.requires_vst

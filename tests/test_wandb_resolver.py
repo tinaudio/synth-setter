@@ -362,3 +362,38 @@ def test_surge_experiment_pins_wandb_model_artifact_ckpt(
         assert len(calls) == 1
     finally:
         GlobalHydra.instance().clear()
+
+
+@pytest.mark.parametrize("experiment", _WIRED_PREDICT_EXPERIMENTS)
+def test_train_surge_experiment_composes_null_ckpt_without_wandb_resolution(
+    experiment: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The shared surge experiment composes a null ckpt under train.yaml and never resolves W&B.
+
+    Regression guard for the wandb_checkpoint overlay split (#128): the ``${wandb:...}`` pin
+    lives only in the predict-side ``surge/wandb_checkpoint/<id>`` overlay, never in the shared
+    ``surge/<id>`` experiment that ``train.yaml`` composes. Were it to leak back, ``train.py``'s
+    ``trainer.fit(ckpt_path=cfg.get("ckpt_path"))`` would resolve the artifact (needing a W&B
+    key) and silently resume from the published model. Fast + key-free so regular CI catches the
+    regression at PR time, not just the MPS smoke leg.
+
+    :param experiment: Surge experiment basename composed under ``train.yaml``.
+    :param monkeypatch: Injects a call-recording fake ``wandb`` so a stray resolution is observable.
+    """
+    calls: list[str] = []
+    monkeypatch.setitem(sys.modules, "wandb", _fake_api(calls))
+    register_resolvers()
+
+    try:
+        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+            cfg = compose(
+                config_name="train.yaml",
+                overrides=[f"experiment=surge/{experiment}", "trainer=cpu"],
+            )
+            # train.py reads exactly cfg.get("ckpt_path"); it must stay None and fire no resolver.
+            ckpt_path = cfg.get("ckpt_path")
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert ckpt_path is None
+    assert calls == []
