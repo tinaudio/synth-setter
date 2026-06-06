@@ -94,9 +94,10 @@ class TestWarmupPlugin:
     ) -> None:
         """``warmup_plugin`` opens the editor once and signals close so the call unblocks.
 
-        Drives the real ``FakeVST3Plugin``, whose ``show_editor`` blocks on
-        ``close_event.wait()``. ``warmup_plugin`` returning at all proves it set
-        the event; the recorded event's ``is_set()`` pins that observable effect
+        Records the close event and waits on it with a bounded timeout, so a
+        regressed warmup that never sets the event fails fast instead of
+        deadlocking the suite. ``warmup_plugin`` returning proves it set the
+        event; the recorded event's ``is_set()`` pins that observable effect
         rather than merely asserting the method was invoked.
 
         :param monkeypatch: Shrinks ``_EDITOR_INIT_DELAY_SECONDS`` so the
@@ -108,8 +109,14 @@ class TestWarmupPlugin:
 
         class _RecordingPlugin(FakeVST3Plugin):
             def show_editor(self, close_event: threading.Event) -> None:
+                """Record the close event and wait on it with a bounded timeout.
+
+                :param close_event: Event ``warmup_plugin`` must set to unblock.
+                """
                 opened.append(close_event)
-                super().show_editor(close_event)
+                # Bounded wait: a warmup that never sets the event fails fast
+                # rather than hanging on FakeVST3Plugin's unbounded wait().
+                assert close_event.wait(timeout=5.0), "warmup_plugin did not set the close event"
 
         warmup_plugin(cast("VST3Plugin", _RecordingPlugin("plugins/Surge XT.vst3")))
 
@@ -238,16 +245,32 @@ class TestRunWithEditorHeldOpen:
         monkeypatch.setattr(core, "_EDITOR_JOIN_TIMEOUT_SECONDS", 1.0)
         fake_plugin = MagicMock()
 
-        # ``body_started`` releases ``show_editor`` the instant the worker is
-        # running, so the editor returns while the body is still mid-flight —
-        # the "slow finish" race — without a wall-clock sleep. The body then
-        # raises within the join window, exercising body-exception precedence
-        # over the leak path.
+        # Two-event handshake pins the ordering deterministically (no sleep):
+        # worker sets ``body_started`` → ``show_editor`` returns and sets
+        # ``editor_returned`` → only then does the body raise. The body thus
+        # reaches its terminal state strictly *after* ``show_editor`` returns,
+        # while the caller is in ``worker.join`` — the "slow finish" case that
+        # exercises body-exception precedence over the leak path.
         body_started = threading.Event()
-        fake_plugin.show_editor.side_effect = lambda event: body_started.wait(timeout=5.0)
+        editor_returned = threading.Event()
+
+        def show_editor(_event: threading.Event) -> None:
+            """Return once the worker has started, signalling the body to raise.
+
+            :param _event: Close event from the helper; unused by this stub.
+            """
+            body_started.wait(timeout=5.0)
+            editor_returned.set()
+
+        fake_plugin.show_editor.side_effect = show_editor
 
         def body() -> None:
+            """Raise only after ``show_editor`` has returned, mid-join.
+
+            :raises ValueError: Always, once the editor has been released.
+            """
             body_started.set()
+            editor_returned.wait(timeout=5.0)
             raise ValueError("body slow-failed")
 
         with pytest.raises(ValueError, match="body slow-failed"):
