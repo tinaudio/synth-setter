@@ -380,7 +380,7 @@ def compute_metrics(audio_dirs: list[Path], output_dir: Path) -> Path:
     for sample_dir in audio_dirs:
         metrics = compute_metrics_on_dir(sample_dir)
         rows.append(metrics)
-        idxs.append(sample_dir.name.rsplit("_", 1)[1])
+        idxs.append(sample_dir.name.rsplit("_", 1)[-1])
 
     pid = multiprocessing.current_process().pid
 
