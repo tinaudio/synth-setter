@@ -180,32 +180,41 @@ class TestLoadSpecFromUri:
 
 
 class TestLoadSpecFromRoot:
-    """``load_spec_from_root`` resolves ``input_spec.json`` under a dataset-root URI."""
+    """``load_spec_from_root`` joins ``input_spec.json`` under a dataset-root URI."""
 
-    def test_trailing_slash_root_resolves_spec(self, spec: DatasetSpec, tmp_path: Path) -> None:
-        """A root URI ending in ``/`` resolves ``<root>input_spec.json``.
-
-        :param spec: Fixture-provided ``DatasetSpec``.
-        :param tmp_path: Pytest tmp dir hosting the run prefix.
-        """
-        from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME
-        from synth_setter.pipeline.spec_io import load_spec_from_root
-
-        (tmp_path / INPUT_SPEC_FILENAME).write_text(spec.model_dump_json())
-
-        loaded = load_spec_from_root(f"{tmp_path.as_uri()}/")
-
-        assert loaded.task_name == spec.task_name
-
-    def test_root_without_trailing_slash_resolves_spec(
-        self, spec: DatasetSpec, tmp_path: Path
+    @pytest.mark.parametrize(
+        "root",
+        ["r2://bucket/data/task/run/", "r2://bucket/data/task/run"],
+        ids=["trailing_slash", "no_trailing_slash"],
+    )
+    def test_joins_spec_filename_onto_root_collapsing_trailing_slash(
+        self, root: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A root URI lacking a trailing ``/`` still resolves ``input_spec.json``.
+        """Both root forms resolve to exactly ``<root>/input_spec.json`` (no double slash).
+
+        Captures the URI handed to ``load_spec_from_uri`` so the assertion pins
+        the scheme-agnostic join — dropping the ``rstrip('/')`` would leak a
+        ``//`` into the trailing-slash case, which a ``file://`` round-trip would
+        silently normalize away.
+
+        :param root: Dataset-root URI with and without a trailing slash.
+        :param monkeypatch: Used to capture ``load_spec_from_uri``'s argument.
+        """
+        import synth_setter.pipeline.spec_io as spec_io
+
+        captured: list[str] = []
+        monkeypatch.setattr(spec_io, "load_spec_from_uri", lambda uri: captured.append(uri))
+
+        spec_io.load_spec_from_root(root)
+
+        assert captured == [f"r2://bucket/data/task/run/{INPUT_SPEC_FILENAME}"]
+
+    def test_round_trips_spec_through_local_root(self, spec: DatasetSpec, tmp_path: Path) -> None:
+        """A local dataset-root URI re-hydrates the spec written under it.
 
         :param spec: Fixture-provided ``DatasetSpec``.
         :param tmp_path: Pytest tmp dir hosting the run prefix.
         """
-        from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME
         from synth_setter.pipeline.spec_io import load_spec_from_root
 
         (tmp_path / INPUT_SPEC_FILENAME).write_text(spec.model_dump_json())
