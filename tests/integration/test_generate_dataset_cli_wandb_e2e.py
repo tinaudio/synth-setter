@@ -405,9 +405,8 @@ def test_oracle_eval_inline_resumes_generate_wandb_run(
     generate_run_dir = _find_offline_run_dir(hydra_run_dir)
     generate_run_id = generate_run_dir.name.split("-", 3)[-1]
 
-    # main() writes oracle_eval/<run_id>/ under cfg.paths.output_dir
-    # (= ${hydra:runtime.output_dir}), which the fixture pins to hydra_run_dir.
-    eval_output_dir = hydra_run_dir / "oracle_eval" / generate_run_id
+    # main() writes oracle_eval/<split>/<run_id>/ for each split; check the test split.
+    eval_output_dir = hydra_run_dir / "oracle_eval" / "test" / generate_run_id
     assert eval_output_dir.is_dir(), (
         f"expected eval output dir at {eval_output_dir}; "
         f"main()'s oracle_eval_inline branch did not run with the launcher's run_id"

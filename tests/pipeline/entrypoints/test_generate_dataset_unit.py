@@ -1702,11 +1702,12 @@ class TestMainDispatchBranches:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """oracle_eval_inline=true on the local-run branch shells out to synth-setter-eval.
+        """oracle_eval_inline=true fires the eval subprocess once per split.
 
-        Asserts the eval helper fires once reading the data **in place** from
-        ``cfg.paths.output_dir`` (no download), with its Hydra run dir isolated
-        under ``output_dir/oracle_eval/<run_id>/``.
+        Asserts the eval helper fires three times — once each for train, val,
+        and test — reading data **in place** from ``cfg.paths.output_dir`` (no
+        download), with each Hydra run dir isolated under
+        ``output_dir/oracle_eval/<split>/<run_id>/``.
 
         :param monkeypatch: Patches argv + the three module-level seams.
         """
@@ -1742,27 +1743,36 @@ class TestMainDispatchBranches:
 
         gd.main()
 
-        oracle_mock.assert_called_once()
-        dataset_root, run_dir, _run_id = oracle_mock.call_args[0]
-        assert isinstance(dataset_root, Path)
-        # The whole generation RenderConfig flows through (keyword-only) so the eval
-        # re-renders through the same spec; smoke-shard is surge_simple.
-        render_arg = oracle_mock.call_args.kwargs["render"]
-        assert render_arg.param_spec_name == "surge_simple"
-        # The eval inherits the generate run's datamodule worker count verbatim,
-        # so a Darwin override (num_workers=0) reaches the predict DataLoader.
-        assert oracle_mock.call_args.kwargs["num_workers"] == observed["num_workers"]
-        assert render_arg.preset_path == "presets/surge-simple.vstpreset"
-        # plugin_path is the TEST_PLUGIN_VST3 this test overrode at generation —
-        # proving a non-default plugin flows through to the eval re-render.
-        assert render_arg.plugin_path == str(TEST_PLUGIN_VST3)
-        # The eval reads in place from the Hydra output_dir where the shards and
-        # VDS splits already live — not a downloaded copy under oracle_eval/.
-        assert dataset_root == observed["output_dir"]
-        assert run_dir.parent.name == "oracle_eval", (
-            f"eval run dir should land under <output_dir>/oracle_eval/<run_id>/; got {run_dir!r}"
-        )
-        assert run_dir.parent.parent == dataset_root
+        # One invocation per split: train, val, test.
+        assert oracle_mock.call_count == 3
+        output_dir = observed["output_dir"]
+        assert isinstance(output_dir, Path)
+        splits = ("train", "val", "test")
+        for call, split in zip(oracle_mock.call_args_list, splits):
+            dataset_root, run_dir, _run_id = call[0]
+            # The whole generation RenderConfig flows through (keyword-only) so
+            # the eval re-renders through the same spec; smoke-shard is surge_simple.
+            render_arg = call.kwargs["render"]
+            assert render_arg.param_spec_name == "surge_simple"
+            # The eval inherits the generate run's datamodule worker count verbatim,
+            # so a Darwin override (num_workers=0) reaches the predict DataLoader.
+            assert call.kwargs["num_workers"] == observed["num_workers"]
+            assert render_arg.preset_path == "presets/surge-simple.vstpreset"
+            # plugin_path is the TEST_PLUGIN_VST3 this test overrode at generation —
+            # proving a non-default plugin flows through to the eval re-render.
+            assert render_arg.plugin_path == str(TEST_PLUGIN_VST3)
+            # The eval reads in place from the Hydra output_dir where the shards and
+            # VDS splits already live — not a downloaded copy under oracle_eval/.
+            assert dataset_root == output_dir
+            # predict_file targets this split's HDF5.
+            assert call.kwargs["predict_file"] == output_dir / f"{split}.h5"
+            # Run dir: oracle_eval/<split>/<run_id>
+            assert run_dir.parent.parent.name == "oracle_eval", (
+                f"eval run dir should land under "
+                f"<output_dir>/oracle_eval/<split>/<run_id>/; got {run_dir!r}"
+            )
+            assert run_dir.parent.name == split
+            assert run_dir.parent.parent.parent == dataset_root
 
     def test_run_oracle_eval_subprocess_builds_expected_argv(
         self,
@@ -1800,8 +1810,14 @@ class TestMainDispatchBranches:
                 "plugin_path": "plugins/Surge XT.vst3",
             }
         )
+        predict_file = dataset_root / "test.h5"
         gd._run_oracle_eval_subprocess(
-            dataset_root, run_dir, "some-run-id", render=render, num_workers=7
+            dataset_root,
+            run_dir,
+            "some-run-id",
+            render=render,
+            num_workers=7,
+            predict_file=predict_file,
         )
 
         run_mock.assert_called_once()
@@ -1812,7 +1828,7 @@ class TestMainDispatchBranches:
         # Data dir and the eval's Hydra run dir are DISTINCT: the split virtual
         # datasets are read in place beside their shards, while eval outputs
         # (incl. metrics/metrics.json the workflow globs) land under the
-        # oracle_eval/<run_id> run dir.
+        # oracle_eval/<split>/<run_id> run dir.
         assert f"datamodule.dataset_root={dataset_root}" in called_argv
         assert f"hydra.run.dir={run_dir}" in called_argv
         assert dataset_root != run_dir
@@ -1840,6 +1856,8 @@ class TestMainDispatchBranches:
         # Sentinel 7 (no config default) proves the value is forwarded, not hardcoded.
         assert "datamodule.num_workers=7" in called_argv
         assert "mode=predict" in called_argv
+        # predict_file routes the datamodule to this split's HDF5.
+        assert f"datamodule.predict_file={predict_file}" in called_argv
 
     def test_run_oracle_eval_subprocess_missing_local_artifacts_raises(
         self,
@@ -1866,10 +1884,11 @@ class TestMainDispatchBranches:
         with pytest.raises(FileNotFoundError, match=r"test\.h5"):
             gd._run_oracle_eval_subprocess(
                 tmp_path,
-                tmp_path / "oracle_eval" / "rid",
+                tmp_path / "oracle_eval" / "test" / "rid",
                 "rid",
                 render=spec.render,
                 num_workers=0,
+                predict_file=tmp_path / "test.h5",
             )
 
         run_mock.assert_not_called()

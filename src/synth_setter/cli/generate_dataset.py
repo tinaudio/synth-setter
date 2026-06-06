@@ -22,13 +22,13 @@ from pathlib import Path
 from typing import Any
 
 import hydra
+import wandb
 from hydra.core.hydra_config import HydraConfig
 from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 
-import wandb
 from synth_setter.cli.finalize_dataset import finalize_from_spec
 from synth_setter.data.vst.core import extract_renderer_version
 from synth_setter.pipeline import r2_io
@@ -75,8 +75,9 @@ def _run_oracle_eval_subprocess(
     *,
     render: RenderConfig,
     num_workers: int,
+    predict_file: Path,
 ) -> None:
-    """Run the fake-oracle eval over ``dataset_root`` to verify the param-array round-trip.
+    """Run the fake-oracle eval over one split of ``dataset_root``.
 
     ``check=True`` so a non-zero eval exit (or wall-clock timeout) propagates
     to the caller.
@@ -100,6 +101,9 @@ def _run_oracle_eval_subprocess(
         spawn-start-method platforms (Darwin) the caller must configure ``0``:
         workers pickle the dataset, but ``SurgeXTDataset`` holds an open h5py
         handle that cannot be pickled.
+    :param predict_file: HDF5 split file for the datamodule's predict dataloader
+        (e.g. ``dataset_root / "train.h5"``). Callers loop over all three splits
+        so each is evaluated independently.
     :raises FileNotFoundError: ``dataset_root`` is missing any finalized split
         or ``stats.npz`` — e.g. a resume where ``finalize_from_spec``
         short-circuited on an existing R2 marker without repopulating it.
@@ -144,6 +148,9 @@ def _run_oracle_eval_subprocess(
         # Forwarded from the generate run so the eval honours the same worker
         # count; pass 0 on Darwin where the open-h5py dataset can't be pickled.
         f"datamodule.num_workers={num_workers}",
+        # Override the datamodule's default predict_file (test.h5) so the caller
+        # can route each invocation to a specific split independently.
+        f"datamodule.predict_file={predict_file}",
         "mode=predict",
     ]
     logger.info(f"oracle_eval_inline subprocess: {argv}")
@@ -872,15 +879,17 @@ def main(cfg: DictConfig) -> None:
             # generate + finalize already wrote the shards, VDS splits, and
             # stats.npz into output_dir; the splits reference the shards by
             # basename, so read them in place — no R2 round-trip.
+            # Run once per split so train/val/test are each evaluated independently.
             output_dir = Path(cfg.paths.output_dir)
-            eval_run_dir = output_dir / "oracle_eval" / spec.run_id
-            _run_oracle_eval_subprocess(
-                output_dir,
-                eval_run_dir,
-                spec.run_id,
-                render=spec.render,
-                num_workers=cfg.datamodule.num_workers,
-            )
+            for split in ("train", "val", "test"):
+                _run_oracle_eval_subprocess(
+                    output_dir,
+                    output_dir / "oracle_eval" / split / spec.run_id,
+                    spec.run_id,
+                    render=spec.render,
+                    num_workers=cfg.datamodule.num_workers,
+                    predict_file=output_dir / f"{split}.h5",
+                )
         return
 
     if cfg.finalize_inline or cfg.oracle_eval_inline:
