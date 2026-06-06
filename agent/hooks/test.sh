@@ -32,6 +32,7 @@ cp agent/hooks/_lib.sh \
    agent/hooks/worktree-guard.sh \
    agent/hooks/session-start-cwd-banner.sh \
    agent/hooks/pr-readiness-stop.sh \
+   agent/hooks/worktree-post-setup.sh \
    "$SANDBOX/agent/hooks/"
 cp agent/_shared/review_sentinel.py "$SANDBOX/agent/_shared/"
 cd "$SANDBOX"
@@ -1627,6 +1628,145 @@ T_readiness_drains_large_stdin() {
   [[ "$exit_code" == "0" ]] || { echo "off-mode pipeline exit was $exit_code (likely SIGPIPE)"; return 1; }
 }
 it "pr-readiness-stop: off mode drains stdin before exiting (no SIGPIPE risk)" T_readiness_drains_large_stdin
+
+# ===========================================================================
+# worktree-post-setup
+# ===========================================================================
+
+T_wt_post_setup_runs_make_in_new_worktree() {
+  local out target make_log
+  reset_sandbox
+  target="$TEST_DIR/wt-target-$$"
+  mkdir -p "$target"
+  make_log="$TEST_DIR/make-calls-$$.txt"
+  # Stub make records cwd + args so we can assert link-plugins + link-thoughts ran.
+  cat > "$STUBS/make" <<MAKE_STUB
+#!/usr/bin/env bash
+echo "CWD=\$(pwd)" >> "$make_log"
+echo "ARGS=\$*" >> "$make_log"
+MAKE_STUB
+  chmod +x "$STUBS/make"
+  out=$(cd "$SANDBOX" && \
+    printf '{"tool_name":"Bash","tool_input":{"command":"git worktree add --detach %s"}}' "$target" | \
+    bash "$SANDBOX/agent/hooks/worktree-post-setup.sh" 2>&1; echo "EXIT:$?")
+  rm -f "$STUBS/make"
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || {
+    echo "expected exit 0, got: $out"; return 1
+  }
+  grep -q "CWD=$target" "$make_log" 2>/dev/null || {
+    echo "make not called in expected directory $target; log: $(cat "$make_log" 2>/dev/null)"; return 1
+  }
+  grep -q "ARGS=link-plugins" "$make_log" 2>/dev/null || {
+    echo "make link-plugins not called; log: $(cat "$make_log" 2>/dev/null)"; return 1
+  }
+  grep -q "ARGS=link-thoughts" "$make_log" 2>/dev/null || {
+    echo "make link-thoughts not called; log: $(cat "$make_log" 2>/dev/null)"; return 1
+  }
+}
+it "worktree-post-setup: valid path → make link-plugins + link-thoughts run in that directory" T_wt_post_setup_runs_make_in_new_worktree
+
+T_wt_post_setup_exits_0_on_missing_path() {
+  local out
+  reset_sandbox
+  out=$(cd "$SANDBOX" && \
+    echo '{"tool_name":"Bash","tool_input":{"command":"git worktree add --detach /tmp/absent-wt-path-99999"}}' | \
+    bash "$SANDBOX/agent/hooks/worktree-post-setup.sh" 2>&1; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || {
+    echo "expected exit 0 for missing path, got: $out"; return 1
+  }
+}
+it "worktree-post-setup: non-existent path → exits 0 (fail-safe)" T_wt_post_setup_exits_0_on_missing_path
+
+T_wt_post_setup_exits_0_on_malformed_json() {
+  local out
+  reset_sandbox
+  out=$(cd "$SANDBOX" && echo 'not-valid-json' | \
+    bash "$SANDBOX/agent/hooks/worktree-post-setup.sh" 2>&1; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || {
+    echo "expected exit 0 for malformed JSON, got: $out"; return 1
+  }
+}
+it "worktree-post-setup: malformed JSON → exits 0 (fail-safe)" T_wt_post_setup_exits_0_on_malformed_json
+
+T_wt_post_setup_exits_0_on_unrelated_command() {
+  local out
+  reset_sandbox
+  out=$(cd "$SANDBOX" && \
+    echo '{"tool_name":"Bash","tool_input":{"command":"ls -la"}}' | \
+    bash "$SANDBOX/agent/hooks/worktree-post-setup.sh" 2>&1; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || {
+    echo "expected exit 0 for unrelated command, got: $out"; return 1
+  }
+}
+it "worktree-post-setup: unrelated Bash command → exits 0 without running make" T_wt_post_setup_exits_0_on_unrelated_command
+
+T_wt_post_setup_parse_dash_b() {
+  local out target make_log
+  reset_sandbox
+  target="$TEST_DIR/wt-dash-b-$$"
+  mkdir -p "$target"
+  make_log="$TEST_DIR/make-dash-b-$$.txt"
+  cat > "$STUBS/make" <<MAKE_STUB
+#!/usr/bin/env bash
+echo "CWD=\$(pwd)" >> "$make_log"
+MAKE_STUB
+  chmod +x "$STUBS/make"
+  out=$(cd "$SANDBOX" && \
+    printf '{"tool_name":"Bash","tool_input":{"command":"git worktree add -b feat/foo %s"}}' "$target" | \
+    bash "$SANDBOX/agent/hooks/worktree-post-setup.sh" 2>&1; echo "EXIT:$?")
+  rm -f "$STUBS/make"
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected exit 0, got: $out"; return 1; }
+  grep -q "CWD=$target" "$make_log" 2>/dev/null || {
+    echo "-b flag: make ran in wrong dir; log: $(cat "$make_log" 2>/dev/null)"; return 1
+  }
+}
+it "worktree-post-setup: -b <branch> <path> — path after branch name is found" T_wt_post_setup_parse_dash_b
+
+T_wt_post_setup_parse_orphan_consumes_arg() {
+  local out target make_log
+  reset_sandbox
+  target="$TEST_DIR/wt-orphan-$$"
+  mkdir -p "$target"
+  make_log="$TEST_DIR/make-orphan-$$.txt"
+  cat > "$STUBS/make" <<MAKE_STUB
+#!/usr/bin/env bash
+echo "CWD=\$(pwd)" >> "$make_log"
+MAKE_STUB
+  chmod +x "$STUBS/make"
+  # --orphan takes <new-branch> in git 2.42+; path is the next token after the branch name
+  out=$(cd "$SANDBOX" && \
+    printf '{"tool_name":"Bash","tool_input":{"command":"git worktree add --orphan new-branch %s"}}' "$target" | \
+    bash "$SANDBOX/agent/hooks/worktree-post-setup.sh" 2>&1; echo "EXIT:$?")
+  rm -f "$STUBS/make"
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected exit 0, got: $out"; return 1; }
+  grep -q "CWD=$target" "$make_log" 2>/dev/null || {
+    echo "--orphan: make ran in wrong dir (branch name mis-parsed as path?); log: $(cat "$make_log" 2>/dev/null)"
+    return 1
+  }
+}
+it "worktree-post-setup: --orphan <branch> <path> — branch consumed, path found correctly" T_wt_post_setup_parse_orphan_consumes_arg
+
+T_wt_post_setup_parse_quoted_path_with_spaces() {
+  local out target make_log
+  reset_sandbox
+  target="$TEST_DIR/wt path with spaces $$"
+  mkdir -p "$target"
+  make_log="$TEST_DIR/make-spaces-$$.txt"
+  cat > "$STUBS/make" <<MAKE_STUB
+#!/usr/bin/env bash
+echo "CWD=\$(pwd)" >> "$make_log"
+MAKE_STUB
+  chmod +x "$STUBS/make"
+  out=$(cd "$SANDBOX" && \
+    python3 -c "import json,sys; sys.stdout.write(json.dumps({'tool_name':'Bash','tool_input':{'command':'git worktree add --detach \"$target\"'}}))" | \
+    bash "$SANDBOX/agent/hooks/worktree-post-setup.sh" 2>&1; echo "EXIT:$?")
+  rm -f "$STUBS/make"
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected exit 0, got: $out"; return 1; }
+  grep -qF "CWD=$target" "$make_log" 2>/dev/null || {
+    echo "quoted path with spaces: make ran in wrong dir; log: $(cat "$make_log" 2>/dev/null)"; return 1
+  }
+}
+it "worktree-post-setup: quoted path with spaces parsed correctly via shlex" T_wt_post_setup_parse_quoted_path_with_spaces
 
 # ===========================================================================
 # Run

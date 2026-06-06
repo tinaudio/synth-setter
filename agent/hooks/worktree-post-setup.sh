@@ -13,6 +13,10 @@ readonly SCRIPT_DIR
   # shellcheck disable=SC1091
   source "${SCRIPT_DIR}/_lib.sh"
 }
+# No-op fallback keeps fail-safe `|| { log ...; exit 0; }` branches safe
+# when _lib.sh is absent — without it, `command -v log` on macOS resolves
+# to /usr/bin/log and set -e would turn an undefined-function call fatal.
+declare -F log >/dev/null 2>&1 || log() { :; }
 
 # Parse worktree path from `git worktree add [flags] <path> [<commit-ish>]`.
 # Prints the path and exits 0; exits 1 when no path is found.
@@ -31,8 +35,8 @@ i = 0
 while i < len(tokens) and tokens[i] in ("git", "worktree", "add"):
     i += 1
 
-# --orphan is a boolean flag; only -b/-B/--reason consume the next token.
-flags_with_args = {"-b", "-B", "--reason"}
+# --orphan takes <new-branch> in git 2.42+ (same positional role as -b).
+flags_with_args = {"-b", "-B", "--orphan", "--reason"}
 path = None
 while i < len(tokens):
     tok = tokens[i]
