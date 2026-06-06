@@ -826,6 +826,52 @@ def dataset_spec_factory() -> Callable[..., DatasetSpec]:
     return factory
 
 
+def _cgroup_aware_cpu_count() -> int:
+    """Return the number of CPUs available to this process, honouring cgroup limits.
+
+    Reads ``sched_getaffinity`` (respects ``--cpuset-cpus``) and the cgroup CPU
+    quota (respects ``--cpus``), then takes the minimum so that dev-container
+    over-subscription doesn't cause pytest-xdist to spawn more workers than the
+    container's actual allocation — the root cause of "worker crashed" failures
+    when ``-n auto`` resolves to the host's full core count.
+
+    :returns: Usable CPU count, always at least 1.
+    """
+    if hasattr(os, "sched_getaffinity"):
+        affinity = len(os.sched_getaffinity(0))
+    else:
+        affinity = os.cpu_count() or 1
+
+    quota: float | None = None
+    try:  # cgroup v2
+        with open("/sys/fs/cgroup/cpu.max") as fh:
+            parts = fh.read().split()
+            if parts[0] != "max":
+                quota = int(parts[0]) / int(parts[1])
+    except OSError:
+        try:  # cgroup v1
+            with open("/sys/fs/cgroup/cpu/cpu.cfs_quota_us") as fh:
+                q = int(fh.read())
+            with open("/sys/fs/cgroup/cpu/cpu.cfs_period_us") as fh:
+                p = int(fh.read())
+            if q > 0:
+                quota = q / p
+        except OSError:
+            pass
+
+    cpus = affinity if quota is None else min(affinity, quota)
+    return max(1, int(cpus))
+
+
+def pytest_xdist_auto_num_workers(config: pytest.Config) -> int:  # noqa: ARG001
+    """Override pytest-xdist ``-n auto`` to respect the container's cgroup CPU quota.
+
+    :param config: The pytest config object (unused; required by the hook signature).
+    :returns: Worker count clamped to the container's real CPU allocation.
+    """
+    return _cgroup_aware_cpu_count()
+
+
 def pytest_addoption(parser: pytest.Parser) -> None:
     """Register custom CLI options for the test suite."""
     parser.addoption(
