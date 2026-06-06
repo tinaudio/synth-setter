@@ -1705,9 +1705,8 @@ class TestMainDispatchBranches:
         """oracle_eval_inline=true fires the eval subprocess once per split.
 
         Asserts the eval helper fires once per split, reading data **in place**
-        from ``cfg.paths.output_dir`` (no
-        download), with each Hydra run dir isolated under
-        ``output_dir/oracle_eval/<split>/<run_id>/``.
+        from ``cfg.paths.output_dir`` (no download), with each Hydra run dir
+        isolated under ``output_dir/oracle_eval/<split>/<run_id>/``.
 
         :param monkeypatch: Patches argv + the three module-level seams.
         """
@@ -1743,7 +1742,7 @@ class TestMainDispatchBranches:
 
         gd.main()
 
-        # One invocation per split: train, val, test.
+        # One invocation per split.
         assert oracle_mock.call_count == 3
         output_dir = observed["output_dir"]
         assert isinstance(output_dir, Path)
@@ -1781,7 +1780,7 @@ class TestMainDispatchBranches:
         tmp_path: Path,
         spec: DatasetSpec,
     ) -> None:
-        """Helper subprocesses ``synth_setter.cli.eval`` with the contract argv.
+        """Calls ``synth_setter.cli.eval`` as a subprocess and pins the contract argv.
 
         Pins the load-bearing overrides (``experiment=surge/fake_oracle``,
         ``datamodule.dataset_root``, ``ckpt_path=null``, ``mode=predict``), the

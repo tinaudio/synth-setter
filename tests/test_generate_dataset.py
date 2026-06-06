@@ -379,7 +379,7 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
             f"--- STDERR (tail) ---\n{result.stderr[-2000:]}"
         )
 
-        # One metrics.json per split (train/val/test): oracle_eval/<split>/<run_id>/.
+        # One metrics.json per split: oracle_eval/<split>/<run_id>/.
         metrics_files = list(run_dir.glob("oracle_eval/*/*/metrics/metrics.json"))
         assert len(metrics_files) == 3, (
             f"expected three oracle-eval metrics.json files (one per split) under "

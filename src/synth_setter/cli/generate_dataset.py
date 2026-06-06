@@ -878,7 +878,6 @@ def main(cfg: DictConfig) -> None:
             # generate + finalize already wrote the shards, VDS splits, and
             # stats.npz into output_dir; the splits reference the shards by
             # basename, so read them in place — no R2 round-trip.
-            # Run once per split.
             output_dir = Path(cfg.paths.output_dir)
             for split in ("train", "val", "test"):
                 _run_oracle_eval_subprocess(
