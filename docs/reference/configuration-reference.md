@@ -267,15 +267,14 @@ Gaps are configuration inputs that design docs specify or that standard practice
 
 ### 5.2 W&B / Artifact Lineage
 
-| Input                      | Type   | What's Needed                                                    | Reference                   |
-| -------------------------- | ------ | ---------------------------------------------------------------- | --------------------------- |
-| `logger.wandb.log_model`   | string | `"all"` — uploads every checkpoint immediately (crash-resilient) | training-pipeline.md §6.2   |
-| `logger.wandb.id`          | string | `{train_config_id}-{YYYYMMDDTHHMMSSsssZ}` instead of null/random | wandb-integration.md gap #8 |
-| `logger.wandb.job_type`    | string | `"training"` instead of empty                                    | storage-provenance-spec §7  |
-| `logger.wandb.resume`      | string | `"allow"` for W&B resume support                                 | training-pipeline.md §5.3   |
-| Model `run.log_artifact()` | code   | Lineage link for produced model artifact                         | storage-provenance-spec §5  |
+| Input                    | Type   | What's Needed                                                    | Reference                   |
+| ------------------------ | ------ | ---------------------------------------------------------------- | --------------------------- |
+| `logger.wandb.log_model` | string | `"all"` — uploads every checkpoint immediately (crash-resilient) | training-pipeline.md §6.2   |
+| `logger.wandb.id`        | string | `{train_config_id}-{YYYYMMDDTHHMMSSsssZ}` instead of null/random | wandb-integration.md gap #8 |
+| `logger.wandb.job_type`  | string | `"training"` instead of empty                                    | storage-provenance-spec §7  |
+| `logger.wandb.resume`    | string | `"allow"` for W&B resume support                                 | training-pipeline.md §5.3   |
 
-Dataset `run.use_artifact()` lineage is now wired via `use_input_artifacts()` (train/eval), activated by the opt-in `consumed_dataset_config_id` / `consumed_train_config_id` config keys (default `null` = no edge; alias from `consumed_artifact_alias`, default `latest`).
+Model `run.log_artifact()` lineage is wired via `_log_model_artifact()` (train), which logs the canonical `model-{config_id}` artifact. Dataset `run.use_artifact()` lineage is wired via `use_input_artifacts()` (train/eval), activated by the opt-in `consumed_dataset_config_id` / `consumed_train_config_id` config keys (default `null` = no edge; alias from `consumed_artifact_alias`, default `latest`).
 
 ### 5.3 Data Portability
 

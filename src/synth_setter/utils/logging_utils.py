@@ -140,6 +140,28 @@ def log_hyperparameters(object_dict: dict[str, Any]) -> None:
         logger.log_hyperparams(hparams)
 
 
+def resolve_git_sha() -> str:
+    """Return the current ``HEAD`` commit SHA, or ``"unknown"`` outside a git tree.
+
+    Shared by :func:`log_wandb_provenance` (writes ``github_sha`` to
+    ``wandb.config``) and the train CLI's model-artifact metadata so both record
+    the same provenance value, per storage-provenance-spec.md §6.
+
+    :returns: The 40-char ``HEAD`` SHA, or ``"unknown"`` when git is unavailable.
+    """
+    try:
+        return (
+            subprocess.check_output(
+                ["git", "rev-parse", "HEAD"],  # noqa: S603, S607
+                stderr=subprocess.DEVNULL,
+            )
+            .decode()
+            .strip()
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return "unknown"
+
+
 @rank_zero_only
 def log_wandb_provenance() -> None:
     """Log provenance metadata to wandb.config.
@@ -155,21 +177,9 @@ def log_wandb_provenance() -> None:
     if not wandb.run:
         return
 
-    try:
-        sha = (
-            subprocess.check_output(
-                ["git", "rev-parse", "HEAD"],  # noqa: S603, S607
-                stderr=subprocess.DEVNULL,
-            )
-            .decode()
-            .strip()
-        )
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        sha = "unknown"
-
     wandb.config.update(
         {
-            "github_sha": sha,
+            "github_sha": resolve_git_sha(),
             "image_tag": os.environ.get("IMAGE_TAG", "unknown"),
             "command": " ".join(sys.argv),
         },

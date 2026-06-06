@@ -193,10 +193,12 @@ register_resolvers()
 def reset_hydra_config_singleton() -> None:
     """Clear Hydra's ``HydraConfig`` singleton so its ``cfg`` reads as unset.
 
-    ``HydraConfig().set_config`` populates a process-global singleton that
-    ``GlobalHydra.instance().clear()`` leaves untouched; the stale
+    ``HydraConfig`` is a Hydra ``Singleton`` distinct from ``GlobalHydra``; tests
+    that call ``HydraConfig().set_config(...)`` populate a process-global
+    singleton that ``GlobalHydra.instance().clear()`` leaves untouched. The stale
     ``runtime.choices.experiment`` then leaks into a later, Hydra-context-free
-    test via :func:`synth_setter.utils.logging_utils.resolve_run_config_id`.
+    test via :func:`synth_setter.utils.logging_utils.resolve_run_config_id`,
+    which reads a stale experiment instead of falling back to ``task_name``.
     """
     HydraConfig.instance().cfg = None
 

@@ -53,3 +53,8 @@ seed: null
 # `data-{consumed_dataset_config_id}:{consumed_artifact_alias}` before fit; null is a no-op.
 consumed_dataset_config_id: null
 consumed_artifact_alias: latest
+
+training:
+  # Opt-in `r2://bucket/prefix` for the checkpoint location the model W&B
+  # artifact references; null logs a lineage-only artifact (R2 ckpt upload is #92).
+  upload_checkpoints_uri: null
