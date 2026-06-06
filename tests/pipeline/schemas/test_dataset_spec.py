@@ -1180,6 +1180,13 @@ class TestCopyDatasetRoot:
 
         assert spec.copy_dataset_root is None
 
+    def test_legacy_datasetsrc_mapping_with_unexpected_key_is_rejected(self) -> None:
+        """A legacy ``datasetsrc`` mapping keeps the old single-key strictness."""
+        with pytest.raises(ValidationError, match="unexpected keys"):
+            DatasetSpec(
+                **_valid_spec_kwargs(datasetsrc={"copy_dataset_root": "/data/src", "stray": 1})
+            )
+
     def test_legacy_datasetsrc_json_loads_via_model_validate_json(self) -> None:
         """A serialized legacy-shaped spec (nested ``datasetsrc``) loads through the shim.
 
