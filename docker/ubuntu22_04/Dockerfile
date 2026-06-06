@@ -261,9 +261,15 @@ RUN python3 --version && \
 COPY --from=ghcr.io/astral-sh/uv:0.11.2 /uv /uvx /usr/local/bin/
 ENV VIRTUAL_ENV=/venv/main
 # PYTHONDONTWRITEBYTECODE=1 — no .pyc files written in the image
-# PYTHONUNBUFFERED=1 — stdout/stderr stream immediately (important for logs)
+# PYTHONUNBUFFERED=1 — real-time stdout/stderr under Docker/SLURM log capture
+# PYTHONFAULTHANDLER=1 — C/CUDA segfault traceback (pairs with HYDRA_FULL_ERROR)
+# HYDRA_FULL_ERROR=1 — full Python traceback instead of Hydra's trimmed output
+# PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True — reduces allocator fragmentation
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PYTHONFAULTHANDLER=1 \
+    HYDRA_FULL_ERROR=1 \
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 RUN uv venv $VIRTUAL_ENV
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 RUN python --version && \
