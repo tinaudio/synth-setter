@@ -134,6 +134,7 @@ def test_load_audio_metrics_shuffled_values_are_python_floats(tmp_path: Path) ->
     metrics = _load_audio_metrics(tmp_path)
 
     shuffled = {k: v for k, v in metrics.items() if k.startswith("shuffled_audio/")}
+    assert shuffled
     assert all(type(v) is float for v in shuffled.values())
 
 

@@ -23,6 +23,7 @@ We compute the following metrics:
     (i.e. normalized dot prod).
 """
 
+import math
 import multiprocessing
 import os
 import shutil
@@ -46,12 +47,21 @@ from synth_setter.evaluation.shuffle_pred_audio import (
 )
 
 
-def subdir_matches_pattern(dir: Path) -> bool:
-    """Return ``True`` if ``dir`` contains ``pred.wav`` and ``target.wav``."""
-    return (dir / "target.wav").exists() and (dir / "pred.wav").exists()
+def subdir_matches_pattern(sample_dir: Path) -> bool:
+    """Return ``True`` if ``sample_dir`` contains ``pred.wav`` and ``target.wav``.
+
+    :param sample_dir: Directory to inspect.
+    :returns: True when both audio files are present.
+    """
+    return (sample_dir / "target.wav").exists() and (sample_dir / "pred.wav").exists()
 
 
 def find_possible_subdirs(audio_dir: Path) -> list[Path]:
+    """Return subdirs of ``audio_dir`` that contain both ``pred.wav`` and ``target.wav``.
+
+    :param audio_dir: Root directory whose immediate children are candidate sample dirs.
+    :returns: Matching subdirs (order is filesystem-dependent).
+    """
     all_subdirectories = [d for d in audio_dir.glob("*") if d.is_dir()]
     matching_dirs = [d for d in all_subdirectories if subdir_matches_pattern(d)]
     return matching_dirs
@@ -134,6 +144,16 @@ def compute_mfcc(target: np.ndarray, sample_rate: float = 44100.0) -> np.ndarray
     return mfcc
 
 
+def _l1_distance(a: np.ndarray, b: np.ndarray) -> float:
+    """Return the mean L1 distance between arrays ``a`` and ``b``.
+
+    :param a: First array.
+    :param b: Second array, same shape as ``a``.
+    :returns: Scalar mean absolute difference.
+    """
+    return np.mean(np.abs(a - b))
+
+
 def compute_wmfcc(target: np.ndarray, pred: np.ndarray) -> float:
     logger.info("Computing wMFCC...")
 
@@ -143,10 +163,7 @@ def compute_wmfcc(target: np.ndarray, pred: np.ndarray) -> float:
     target_mfcc = target_mfcc.reshape(-1, target_mfcc.shape[-1])
     pred_mfcc = pred_mfcc.reshape(-1, pred_mfcc.shape[-1])
 
-    def l1(a, b):
-        return np.mean(np.abs(a - b))
-
-    dist = dtw(target_mfcc.T, pred_mfcc.T, dist_method=l1, distance_only=True)
+    dist = dtw(target_mfcc.T, pred_mfcc.T, dist_method=_l1_distance, distance_only=True)
     return dist.normalizedDistance
 
 
@@ -216,10 +233,10 @@ def compute_sot(target: np.ndarray, pred: np.ndarray) -> float:
     return dists.mean()
 
 
-def compute_rms(target: np.ndarray, pred: np.ndarray) -> float:
+def compute_rms(target: np.ndarray, pred: np.ndarray, sample_rate: float = 44100.0) -> float:
     logger.info("Computing amp env...")
-    win_length = int(0.05 * 44100)
-    hop_length = int(0.025 * 44100)
+    win_length = int(0.05 * sample_rate)
+    hop_length = int(0.025 * sample_rate)
 
     target_rms = librosa.feature.rms(
         y=target.mean(axis=0), frame_length=win_length, hop_length=hop_length
@@ -249,14 +266,10 @@ def compute_rms(target: np.ndarray, pred: np.ndarray) -> float:
 
 
 def compute_metrics_on_dir(audio_dir: Path) -> dict[str, float]:
-    target_file = AudioFile(str(audio_dir / "target.wav"))
-    pred_file = AudioFile(str(audio_dir / "pred.wav"))
-
-    target = target_file.read(target_file.frames)
-    pred = pred_file.read(pred_file.frames)
-
-    target_file.close()
-    pred_file.close()
+    with AudioFile(str(audio_dir / "target.wav")) as target_file:
+        target = target_file.read(target_file.frames)
+    with AudioFile(str(audio_dir / "pred.wav")) as pred_file:
+        pred = pred_file.read(pred_file.frames)
 
     mss = compute_mss(target, pred)
     wmfcc = compute_wmfcc(target, pred)
@@ -269,10 +282,10 @@ def compute_metrics_on_dir(audio_dir: Path) -> dict[str, float]:
 def compute_metrics(audio_dirs: list[Path], output_dir: Path) -> Path:
     idxs = []
     rows = []
-    for dir in audio_dirs:
-        metrics = compute_metrics_on_dir(dir)
+    for sample_dir in audio_dirs:
+        metrics = compute_metrics_on_dir(sample_dir)
         rows.append(metrics)
-        idxs.append(dir.name.rsplit("_", 1)[1])
+        idxs.append(sample_dir.name.rsplit("_", 1)[1])
 
     pid = multiprocessing.current_process().pid
 
@@ -294,7 +307,7 @@ def _aggregate_metrics(audio_dirs: list[Path], work_dir: Path, num_workers: int)
     :param num_workers: ProcessPoolExecutor worker count.
     :returns: Concatenated per-sample metrics DataFrame.
     """
-    sublist_length = len(audio_dirs) // num_workers
+    sublist_length = math.ceil(len(audio_dirs) / num_workers) if audio_dirs else 1
     sublists = [
         audio_dirs[i * sublist_length : (i + 1) * sublist_length] for i in range(num_workers)
     ]
@@ -356,17 +369,17 @@ def main(audio_dir: str, output_dir: str, num_workers: int, shuffle_seed: int) -
         output_dir / "aggregated_metrics.csv"
     )
 
-    # Render-order probe (#489): auto-shuffle when params are uniform. params_are_uniform
-    # returns False on any missing params.csv, so when uniform=True every dir in
-    # audio_dirs has params.csv — shuffle_pred_audio._sample_dirs sees the same set.
-    uniform = params_are_uniform(audio_dirs)
+    # Render-order probe (#489): filter to sample_* dirs to match shuffle_pred_audio._sample_dirs
+    # (find_possible_subdirs uses glob("*"), _sample_dirs uses glob("sample_*")).
+    probe_dirs = [d for d in audio_dirs if d.name.startswith("sample_")]
+    uniform = params_are_uniform(probe_dirs)
     if not uniform and shuffle_seed != 0:
         raise ValueError(
             f"shuffle_seed={shuffle_seed} was set but params.csv files are not uniform across "
             "sample dirs — the render-order probe requires identical params. Either fix the "
             "dataset or omit --shuffle_seed to silently skip the probe."
         )
-    if uniform and len(audio_dirs) >= 2:
+    if uniform and len(probe_dirs) >= 2:
         shuffled_view = output_dir / "shuffled_audio"
         permutation = shuffle_pred_audio(audio_dir, shuffled_view, shuffle_seed)
         if len(permutation) >= 2:

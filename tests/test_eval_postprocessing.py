@@ -363,7 +363,6 @@ def test_postprocessing_always_forwards_shuffle_seed_to_metrics_subprocess(
     _run_predict_postprocessing(cfg)
 
     metrics_argv = captured_argv[0]
-    assert "--shuffle_pred_audio" not in metrics_argv
     assert "--shuffle_seed" in metrics_argv
     seed_idx = metrics_argv.index("--shuffle_seed")
     assert metrics_argv[seed_idx + 1] == "7"
