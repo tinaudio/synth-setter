@@ -115,6 +115,8 @@ def _run_oracle_eval_subprocess(
             f"holds the dataset.complete marker, leaving output_dir unpopulated on a resume; "
             f"rerun with a fresh paths.output_dir."
         )
+    if not predict_file.is_file():
+        raise FileNotFoundError(f"inline oracle-eval predict file not found: {predict_file}")
     argv = [
         sys.executable,
         "-m",

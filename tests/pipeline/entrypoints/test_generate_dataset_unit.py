@@ -1802,7 +1802,7 @@ class TestMainDispatchBranches:
         dataset_root.mkdir()
         for name in ("train.h5", "val.h5", "test.h5", "stats.npz"):
             (dataset_root / name).touch()
-        run_dir = tmp_path / "oracle_eval" / "some-run-id"
+        run_dir = tmp_path / "oracle_eval" / "train" / "some-run-id"
         render = spec.render.model_copy(
             update={
                 "param_spec_name": "surge_xt",
@@ -1889,6 +1889,43 @@ class TestMainDispatchBranches:
                 render=spec.render,
                 num_workers=0,
                 predict_file=tmp_path / "test.h5",
+            )
+
+        run_mock.assert_not_called()
+
+    def test_run_oracle_eval_subprocess_missing_predict_file_raises(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        spec: DatasetSpec,
+    ) -> None:
+        """Non-existent ``predict_file`` ⇒ ``FileNotFoundError`` before subprocess.
+
+        Guards callers that pass a custom predict path not covered by
+        ``_ORACLE_EVAL_REQUIRED_ARTIFACTS``.
+
+        :param monkeypatch: Patches ``subprocess.run`` to assert it never fires.
+        :param tmp_path: Root for the dataset_root with all required artifacts present.
+        :param spec: Source of a valid ``RenderConfig`` for the call signature.
+        """
+        import synth_setter.cli.generate_dataset as gd
+
+        run_mock = MagicMock()
+        monkeypatch.setattr(gd.subprocess, "run", run_mock)
+
+        dataset_root = tmp_path / "data"
+        dataset_root.mkdir()
+        for name in ("train.h5", "val.h5", "test.h5", "stats.npz"):
+            (dataset_root / name).touch()
+
+        with pytest.raises(FileNotFoundError, match=r"custom_split\.h5"):
+            gd._run_oracle_eval_subprocess(
+                dataset_root,
+                tmp_path / "oracle_eval" / "train" / "rid",
+                "rid",
+                render=spec.render,
+                num_workers=0,
+                predict_file=dataset_root / "custom_split.h5",
             )
 
         run_mock.assert_not_called()
