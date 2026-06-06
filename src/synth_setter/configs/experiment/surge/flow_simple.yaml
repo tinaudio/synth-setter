@@ -11,7 +11,6 @@ model:
 experiment_name: surge-simple-onehot
 run_name: flow
 
-# Predict launchers compose this experiment with no ckpt_path override; the
-# ${wandb:...} resolver lazily downloads model-{config_id} (config_id == this
-# experiment's basename) on first ckpt_path access. Replaces get-ckpt-from-wandb.sh.
+# Pinned model-{config_id} artifact (config_id == experiment basename) resolved
+# lazily by the ${wandb:...} resolver. Replaces get-ckpt-from-wandb.sh.
 ckpt_path: ${wandb:tinaudio/synth-setter/model-flow_simple:latest}
