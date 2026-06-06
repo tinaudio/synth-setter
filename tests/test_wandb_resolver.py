@@ -14,6 +14,7 @@ from types import SimpleNamespace
 import pytest
 from omegaconf import OmegaConf
 
+from synth_setter.utils import utils as utils_mod
 from synth_setter.utils.utils import _resolve_wandb_checkpoint, register_resolvers
 
 
@@ -52,7 +53,9 @@ def _fake_api(calls: list[str], filenames: tuple[str, ...] = ("model.ckpt",)) ->
     """
     artifact = _FakeArtifact(calls, filenames)
     api = SimpleNamespace(artifact=lambda ref: artifact)
-    return SimpleNamespace(Api=lambda: api)
+    # __spec__ must be present and non-None so the resolver's find_spec("wandb")
+    # guard treats this injected stub as an installed package.
+    return SimpleNamespace(Api=lambda: api, __spec__=SimpleNamespace())
 
 
 @pytest.fixture
@@ -131,6 +134,54 @@ def test_resolve_wandb_checkpoint_traversal_ref_stays_inside_cache(
 
     cache_root = (workspace / ".cache" / "checkpoints").resolve()
     assert cache_root in resolved.resolve().parents
+
+
+def test_resolve_wandb_checkpoint_dot_dot_ref_stays_inside_cache(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bare ``..`` ref resolves inside the cache root, never above it.
+
+    :param workspace: Temp ``$PROJECT_ROOT`` the cache lands under.
+    :param monkeypatch: Injects the fake ``wandb`` module into ``sys.modules``.
+    """
+    calls: list[str] = []
+    monkeypatch.setitem(sys.modules, "wandb", _fake_api(calls))
+
+    resolved = Path(_resolve_wandb_checkpoint(".."))
+
+    cache_root = (workspace / ".cache" / "checkpoints").resolve()
+    assert cache_root in resolved.resolve().parents
+
+
+def test_resolve_wandb_checkpoint_slug_colliding_refs_get_distinct_dirs(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Refs that slug identically (``a/b`` vs ``a:b``) cache to distinct dirs.
+
+    :param workspace: Temp ``$PROJECT_ROOT`` the cache lands under.
+    :param monkeypatch: Injects the fake ``wandb`` module into ``sys.modules``.
+    """
+    calls: list[str] = []
+    monkeypatch.setitem(sys.modules, "wandb", _fake_api(calls))
+
+    first = Path(_resolve_wandb_checkpoint("a/b:latest")).parent
+    second = Path(_resolve_wandb_checkpoint("a:b:latest")).parent
+
+    assert first != second
+
+
+def test_resolve_wandb_checkpoint_missing_wandb_raises_module_not_found(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A minimal install without ``wandb`` raises a clear ``ModuleNotFoundError``.
+
+    :param workspace: Temp ``$PROJECT_ROOT`` the cache lands under.
+    :param monkeypatch: Forces ``find_spec`` to report ``wandb`` absent.
+    """
+    monkeypatch.setattr(utils_mod, "find_spec", lambda name: None)
+
+    with pytest.raises(ModuleNotFoundError, match="wandb"):
+        _resolve_wandb_checkpoint("model-x:latest")
 
 
 def test_resolve_wandb_checkpoint_multiple_ckpts_raises(

@@ -1,5 +1,6 @@
 """General-purpose utilities: OmegaConf resolvers, task wrappers, and gradient watching."""
 
+import hashlib
 import re
 import warnings
 from collections.abc import Callable
@@ -33,26 +34,51 @@ def _resolve_wandb_checkpoint(ref: str) -> str:
     Downloads the artifact under ``$PROJECT_ROOT/.cache/checkpoints/<key>`` once
     and reuses it on later resolutions, so re-resolving the same ``ref`` never
     re-downloads — unless the cached dir holds no ``.ckpt`` (a partial download),
-    in which case it is refetched. The cache key is a slug of ``ref`` so a hostile
-    ref (``..``, ``:``) can never escape the cache root. ``wandb`` is imported
-    lazily so importing this module never requires it.
+    in which case it is refetched. The cache key (see :func:`_cache_key`) is a
+    path-safe slug plus a hash, so a hostile ref (``..``, ``:``) can never escape
+    the cache root and distinct refs never collide. ``wandb`` is imported lazily
+    so importing this module never requires it.
 
     :param ref: Artifact ref such as ``entity/project/model-x:alias`` or
         ``model-x:latest``.
     :returns: Absolute path to the checkpoint inside the downloaded artifact —
         ``model.ckpt`` if present, else the sole ``.ckpt`` (see
         :func:`_select_checkpoint` for the no-ckpt / ambiguous-ckpt errors).
+    :raises ModuleNotFoundError: If the optional ``wandb`` package is not installed.
     """
+    if not find_spec("wandb"):
+        raise ModuleNotFoundError(
+            f"Resolving ${{wandb:{ref}}} requires the optional 'wandb' package; "
+            "install it (e.g. the 'wandb' dependency group) to use this resolver."
+        )
     import wandb
 
     from synth_setter.workspace import operator_workspace
 
-    key = re.sub(r"[^A-Za-z0-9._-]", "_", ref)
-    cache_dir = operator_workspace() / ".cache" / "checkpoints" / key
+    cache_dir = operator_workspace() / ".cache" / "checkpoints" / _cache_key(ref)
+    checkpoints = sorted(cache_dir.glob("**/*.ckpt"))
     # A cached dir with no .ckpt is a partial download — refetch rather than trust it.
-    if not sorted(cache_dir.glob("**/*.ckpt")):
+    if not checkpoints:
+        cache_dir.mkdir(parents=True, exist_ok=True)
         wandb.Api().artifact(ref).download(root=str(cache_dir))
-    return _select_checkpoint(ref, sorted(cache_dir.glob("**/*.ckpt")))
+        checkpoints = sorted(cache_dir.glob("**/*.ckpt"))
+    return _select_checkpoint(ref, checkpoints)
+
+
+def _cache_key(ref: str) -> str:
+    """Build a collision-free, path-safe cache-dir name for a W&B artifact ref.
+
+    The readable slug excludes ``.`` so no ``ref`` can produce a ``.`` / ``..``
+    path segment that escapes the cache root; a short ``sha256`` suffix keeps
+    distinct refs that slug identically (e.g. ``a/b`` vs ``a:b``) from colliding
+    onto the same cache dir and returning the wrong checkpoint.
+
+    :param ref: Artifact ref such as ``entity/project/model-x:alias``.
+    :returns: ``<slug>-<sha256[:12]>``, safe as a single path component.
+    """
+    slug = re.sub(r"[^A-Za-z0-9_-]", "_", ref)
+    digest = hashlib.sha256(ref.encode()).hexdigest()[:12]
+    return f"{slug}-{digest}"
 
 
 def _select_checkpoint(ref: str, checkpoints: list[Path]) -> str:
