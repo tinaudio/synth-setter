@@ -1,0 +1,146 @@
+name: Tart macOS image — build & push
+
+# Builds the macOS dev VM image defined in `tart/macos.pkr.hcl`. On
+# `workflow_dispatch` the build is followed by `tart push` to the Docker Hub
+# registry that backs `tart clone tinaudio/synth-setter-macos:latest` (the
+# publishing flow documented at the bottom of macos.pkr.hcl). On PR the build
+# runs without the push so a contributor change to the Packer template is gated
+# the same way docker-build-validation.yml gates the Dockerfile.
+#
+# Runner: macos-latest has been Apple Silicon since November 2024; Tart needs
+# Apple's Virtualization.framework, which is macOS-only and requires ARM
+# hardware.
+#
+# Cost: a clean build pulls the ~10 GB cirruslabs base image, runs every
+# provisioner (brew installs, `uv sync --frozen`, Codex / Antigravity / Surge
+# XT installs, smoke tests), and produces a ~30 GB VM image. Expect ~45-60 min
+# wall-clock on macos-latest, which is why the path filter scopes the trigger
+# to changes that actually touch the template.
+
+on:
+  workflow_dispatch:
+    inputs:
+      synth_setter_git_ref:
+        description: "Git ref (branch/tag/SHA) to bake into the VM. Empty = the workflow's triggering SHA so the publish step pins to a known commit."
+        required: false
+        default: ""
+      push_latest:
+        description: "Also push the `:latest` moving tag in addition to the immutable dated tag. Leave off for one-off dated-only publishes."
+        required: false
+        type: boolean
+        default: true
+  pull_request:
+    branches: [main]
+    paths:
+      - "tart/macos.pkr.hcl"
+      - ".github/workflows/tart-image-build.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Tart VM image
+    runs-on: macos-latest
+    timeout-minutes: 90
+
+    env:
+      VM_NAME: synth-setter-macos
+      DH_IMAGE: tinaudio/synth-setter-macos
+      DH_REGISTRY: registry-1.docker.io
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      # Resolve the git ref baked into the VM. Defaults to the workflow's
+      # triggering commit SHA so dispatch publishes pin to a known commit
+      # (not a moving branch tip) without forcing the operator to paste it.
+      - name: Resolve synth-setter git ref
+        id: ref
+        env:
+          INPUT_REF: ${{ inputs.synth_setter_git_ref }}
+          DEFAULT_REF: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          if [ -n "$INPUT_REF" ]; then
+            echo "ref=$INPUT_REF" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=$DEFAULT_REF" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Using ref: $(grep '^ref=' "$GITHUB_OUTPUT" | tail -1)"
+
+      # Tart and Packer are not preinstalled on the macos-latest runner image.
+      # `cirruslabs/cli/tart` is the upstream tap; `hashicorp/tap/packer` is
+      # HashiCorp's official tap (homebrew core no longer ships Packer after
+      # the BSL relicense).
+      - name: Install Tart and Packer
+        run: |
+          set -euo pipefail
+          brew install cirruslabs/cli/tart
+          brew install hashicorp/tap/packer
+          tart --version
+          packer --version
+
+      - name: Show available disk
+        run: df -h /
+
+      - name: packer init (fetch tart plugin)
+        working-directory: tart
+        run: packer init macos.pkr.hcl
+
+      - name: packer validate
+        working-directory: tart
+        run: packer validate macos.pkr.hcl
+
+      # The build pulls the cirruslabs base image, runs every provisioner, and
+      # leaves a local VM named "$VM_NAME". On failure the provisioner output
+      # (brew/uv/pytest) is the diagnostic — packer streams it verbatim.
+      - name: packer build
+        working-directory: tart
+        env:
+          GIT_REF: ${{ steps.ref.outputs.ref }}
+        run: |
+          set -euo pipefail
+          packer build -var "synth_setter_git_ref=${GIT_REF}" macos.pkr.hcl
+
+      # `tart login` reads username then password from stdin when invoked
+      # non-interactively (no TTY). The push step inherits the resulting auth
+      # token. Gated on dispatch so a PR cannot use this job's secret access
+      # to redirect `:latest`.
+      - name: Log in to Docker Hub via tart
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          printf '%s\n%s\n' "$DOCKERHUB_USERNAME" "$DOCKERHUB_TOKEN" \
+            | tart login "$DH_REGISTRY"
+
+      # The dated tag is the immutable rollback point; `:latest` is the moving
+      # pointer that `tart clone tinaudio/synth-setter-macos:latest` resolves
+      # against. Both go in a single `tart push` so they share the upload
+      # (Tart deduplicates layers across tags pushed in the same invocation).
+      - name: tart push (dispatch only)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          PUSH_LATEST: ${{ inputs.push_latest }}
+        run: |
+          set -euo pipefail
+          date_tag=$(date -u +%Y-%m-%d)
+          targets=("$DH_REGISTRY/$DH_IMAGE:$date_tag")
+          if [ "$PUSH_LATEST" = "true" ]; then
+            targets+=("$DH_REGISTRY/$DH_IMAGE:latest")
+          fi
+          printf 'Pushing %s\n' "${targets[@]}"
+          tart push "$VM_NAME" "${targets[@]}"
+
+      # Delete the local VM so disk usage doesn't carry into post-job runner
+      # teardown (the macos-latest runner reports ~30 GB free at start, and a
+      # full Tart VM eats most of it).
+      - name: Delete local VM (free disk)
+        if: always()
+        run: tart delete "$VM_NAME" || true
