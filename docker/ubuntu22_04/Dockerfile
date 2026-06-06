@@ -260,15 +260,15 @@ RUN python3 --version && \
     python3 -c "import sys; exit(0) if sys.version_info[:2] == (3,10) else exit(1)"
 COPY --from=ghcr.io/astral-sh/uv:0.11.2 /uv /uvx /usr/local/bin/
 ENV VIRTUAL_ENV=/venv/main
-# PYTHONDONTWRITEBYTECODE=1 — no .pyc files written in the image
-# PYTHONUNBUFFERED=1 — real-time stdout/stderr under Docker/SLURM log capture
-# PYTHONFAULTHANDLER=1 — C/CUDA segfault traceback (pairs with HYDRA_FULL_ERROR)
 # HYDRA_FULL_ERROR=1 — full Python traceback instead of Hydra's trimmed output
-# PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True — reduces allocator fragmentation
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
+# PYTHONDONTWRITEBYTECODE=1 — no .pyc files written in the image
+# PYTHONFAULTHANDLER=1 — C/CUDA segfault traceback (pairs with HYDRA_FULL_ERROR)
+# PYTHONUNBUFFERED=1 — real-time stdout/stderr under Docker/SLURM log capture
+# PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True — reduces CUDA allocator fragmentation (no-op on CPU)
+ENV HYDRA_FULL_ERROR=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
     PYTHONFAULTHANDLER=1 \
-    HYDRA_FULL_ERROR=1 \
+    PYTHONUNBUFFERED=1 \
     PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 RUN uv venv $VIRTUAL_ENV
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
