@@ -289,6 +289,40 @@ def test_finalize_from_spec_uploads_stats_then_marker_at_canonical_uris(
     assert upload_order.index(stats_uri) < upload_order.index(marker_uri)
 
 
+def test_finalize_from_spec_drifted_prefix_raises_before_any_upload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001 — installs stubs only
+) -> None:
+    """A drifted ``r2.prefix`` raises ``ValueError`` before any R2 write or scratch dir.
+
+    Integration-level companion to ``test_prefix.py``'s unit coverage of
+    ``assert_r2_prefix_matches``: it pins the guard at the ``finalize_from_spec``
+    call site so a future reordering (e.g. moving the assertion after the
+    dispatch) trips here. The fail-fast ``upload`` stub turns a leaked write
+    into a test failure, proving the abort precedes the marker-last upload
+    sequence; the ``work_dir`` assertion proves it precedes ``work_dir.mkdir``.
+
+    :param tmp_path: Hosts the scratch ``work_dir`` path (asserted never created).
+    :param monkeypatch: Installs a fail-fast ``upload`` stub.
+    :param stub_finalize_setup: Installs the auth + marker-probe stubs so the
+        guard (not the marker check) is the failure surface.
+    """
+    spec = _build_wds_smoke_spec(task_name="finalize-drifted-prefix")
+    drifted_r2 = spec.r2.model_copy(update={"prefix": "data/wrong-cfg/wrong-run/"})
+    drifted_spec = spec.model_copy(update={"r2": drifted_r2})
+
+    def fail_fast_upload(src: str | Path, dst: str) -> NoReturn:
+        raise AssertionError(f"upload must not run on a drifted prefix (got {dst!r})")
+
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.upload", fail_fast_upload)
+    work_dir = tmp_path / "work"
+
+    with pytest.raises(ValueError, match="prefix mismatch"):
+        finalize_dataset.finalize_from_spec(drifted_spec, work_dir)
+    assert not work_dir.exists()
+
+
 def test_finalize_is_idempotent_when_marker_already_exists(
     tmp_path: Path,
     fake_r2_remote: Path,
