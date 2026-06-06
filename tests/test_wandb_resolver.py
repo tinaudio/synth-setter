@@ -12,6 +12,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from hydra import compose, initialize_config_module
+from hydra.core.global_hydra import GlobalHydra
 from omegaconf import OmegaConf
 
 from synth_setter.utils import utils as utils_mod
@@ -219,3 +221,40 @@ def test_resolve_wandb_checkpoint_partial_download_redownloads(
 
     assert resolved.is_file()
     assert len(calls) == 2
+
+
+def test_eval_ckpt_path_wandb_override_resolves_to_cached_checkpoint(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Composing eval.yaml with ``ckpt_path=${wandb:...}`` resolves to the cached ckpt.
+
+    Proves the resolver is registered when Hydra composes ``eval.yaml`` and that
+    ``${wandb:...}`` interpolates through the real ``ckpt_path`` key ``evaluate()``
+    consumes — the seam the unit tests, which bind the resolver to an ad-hoc key,
+    do not cover.
+
+    :param workspace: Temp ``$PROJECT_ROOT`` the cache lands under.
+    :param monkeypatch: Injects the fake ``wandb`` module into ``sys.modules``.
+    """
+    calls: list[str] = []
+    monkeypatch.setitem(sys.modules, "wandb", _fake_api(calls))
+    register_resolvers()
+
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="eval.yaml",
+            overrides=[
+                "datamodule=ksin",
+                "model=ffn",
+                "trainer=cpu",
+                "ckpt_path=${wandb:entity/project/model-x:latest}",
+            ],
+        )
+        resolved = Path(cfg.ckpt_path)
+
+    assert resolved.name == "model.ckpt"
+    assert resolved.is_file()
+    assert workspace / ".cache" / "checkpoints" in resolved.parents
+    assert len(calls) == 1
+
+    GlobalHydra.instance().clear()
