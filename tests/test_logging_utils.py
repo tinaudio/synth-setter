@@ -7,11 +7,15 @@ See python-testing.md §Fakes.
 import os
 import subprocess
 from collections.abc import Iterator
+from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 from unittest.mock import patch
 
 import pytest
+from hydra import compose, initialize_config_module
+from hydra.core.global_hydra import GlobalHydra
+from hydra.core.hydra_config import HydraConfig
 from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
 from lightning_utilities.core.rank_zero import rank_zero_only
@@ -23,6 +27,10 @@ from synth_setter.utils.logging_utils import (
     resolve_run_config_id,
     use_input_artifacts,
 )
+
+# Enables the ``pytester`` fixture used by the singleton-isolation regression test
+# to run a controlled, order-pinned sub-session independent of pytest-randomly.
+pytest_plugins = ["pytester"]
 
 # ---------------------------------------------------------------------------
 # Fake wandb module — captures config updates as inspectable state
@@ -225,8 +233,6 @@ class TestHydraConfigSingletonReset:
 
     def test_reset_clears_a_populated_singleton(self) -> None:
         """``reset_hydra_config_singleton`` makes ``initialized()`` False again."""
-        from hydra import compose, initialize_config_module
-        from hydra.core.hydra_config import HydraConfig
 
         from tests.conftest import reset_hydra_config_singleton
 
@@ -243,6 +249,80 @@ class TestHydraConfigSingletonReset:
         reset_hydra_config_singleton()
 
         assert not HydraConfig.initialized()
+
+    def test_clearing_global_hydra_leaves_experiment_choice_on_the_singleton(self) -> None:
+        """``GlobalHydra.clear()`` alone leaves the leaked choice driving ``resolve_run_config_id``.
+
+        Pins the trap that motivates the autouse reset: clearing ``GlobalHydra`` is
+        not enough, so the stale choice persists and ``resolve_run_config_id`` reads
+        it (``fake_oracle``) instead of falling back to ``task_name``.
+        """
+        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+            leaked = compose(
+                config_name="eval.yaml",
+                return_hydra_config=True,
+                overrides=["experiment=surge/fake_oracle"],
+            )
+        HydraConfig().set_config(leaked)
+        GlobalHydra.instance().clear()
+
+        assert HydraConfig.get().runtime.choices.get("experiment") == "surge/fake_oracle"
+        assert (
+            resolve_run_config_id(OmegaConf.create({"task_name": "flow_simple"})) == "fake_oracle"
+        )
+
+    def test_project_autouse_reset_neutralizes_a_leak_for_the_following_test(
+        self, pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The project's real autouse reset clears a leak so the next test falls back.
+
+        Runs a controlled two-test session (deterministic order, ``-p no:randomly``)
+        that loads the project's real ``tests/conftest.py`` as a plugin (``-p
+        tests.conftest``), so the production autouse reset — not a stand-in — is what
+        governs cleanup. The first test leaks ``surge/fake_oracle`` onto the
+        ``HydraConfig`` singleton; the second, composing no experiment, asserts
+        resolution falls back to ``flow_simple``. It passes only because the real
+        fixture cleared the leak between the two, so removing or breaking that
+        fixture fails this check. The subprocess pins the ordering independently of
+        this suite's ``pytest-randomly`` shuffle, so it cannot pass vacuously by
+        running the assert-test first (#1523).
+
+        :param pytester: Pytest fixture that runs the order-pinned sub-session.
+        :param monkeypatch: Puts the repo root on ``PYTHONPATH`` so the subprocess
+            can import ``tests.conftest`` as a plugin.
+        """
+        repo_root = Path(__file__).resolve().parent.parent
+        monkeypatch.setenv("PYTHONPATH", str(repo_root))
+        pytester.makepyfile("""
+            from hydra import compose, initialize_config_module
+            from hydra.core.global_hydra import GlobalHydra
+            from hydra.core.hydra_config import HydraConfig
+            from omegaconf import OmegaConf
+
+            from synth_setter.utils.logging_utils import resolve_run_config_id
+
+            def test_1_leak_stale_experiment():
+                with initialize_config_module(
+                    version_base="1.3", config_module="synth_setter.configs"
+                ):
+                    cfg = compose(
+                        config_name="eval.yaml",
+                        return_hydra_config=True,
+                        overrides=["experiment=surge/fake_oracle"],
+                    )
+                HydraConfig().set_config(cfg)
+                GlobalHydra.instance().clear()
+
+            def test_2_resolution_falls_back_to_task_name():
+                cfg = OmegaConf.create({"task_name": "flow_simple"})
+                assert resolve_run_config_id(cfg) == "flow_simple"
+        """)
+
+        result = pytester.runpytest_subprocess(
+            "-p", "tests.conftest", "-p", "no:randomly", "-p", "no:cacheprovider"
+        )
+
+        result.assert_outcomes(passed=2)
 
 
 # ---------------------------------------------------------------------------
