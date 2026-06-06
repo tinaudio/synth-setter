@@ -5,9 +5,11 @@ an ``integration_r2``-gated end-to-end render that drives ``from_hydra``
 against ``cfg_dataset`` and asserts every shard lands at the spec-derived R2
 URI in real Cloudflare R2; an ``integration_r2`` subprocess run of the
 ``smoke-shard-with-oracle-eval`` experiment that asserts the inline oracle
-eval's ``metrics.json`` holds bounded ``audio/*`` metrics; and a variant with
-``param_sample_cadence=shard`` that asserts ``shuffled_audio/*`` metrics also
-appear when all sample dirs share uniform ``params.csv`` (#489). The
+eval's per-split ``metrics.json`` holds bounded audio metrics under the bare
+``audio/*`` key for ``test`` and the namespaced ``<split>/audio/*`` key for
+``train``/``val``; and a variant with ``param_sample_cadence=shard`` that
+asserts the ``shuffled_audio/*`` group also appears (under the same per-split
+prefix) when all sample dirs share uniform ``params.csv`` (#489). The
 integration tests auto-skip when ``rclone`` / R2 creds are absent.
 
 Keep this module to tests that drive ``from_hydra`` or the real CLI subprocess.
@@ -424,34 +426,25 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
         bounds = ORACLE_AUDIO_METRIC_BOUNDS
         for mf in metrics_files:
             metrics = json.loads(mf.read_text())
+            # All splits resume one wandb run: test keeps the bare ``audio/*`` key
+            # while train/val are namespaced ``<split>/audio/*`` so none overwrites.
+            split = mf.parent.parent.parent.name
+            metric_prefix = "" if split == "test" else f"{split}/"
             for name in _ORACLE_AUDIO_METRICS:
                 for stat in ("mean", "std"):
-                    key = f"audio/{name}_{stat}"
+                    key = f"{metric_prefix}audio/{name}_{stat}"
                     value = metrics.get(key)
                     assert isinstance(value, float) and math.isfinite(value), (
-                        f"{key} is not a finite float: {value!r} (split={mf.parent.parent.parent.name}, "
-                        f"metrics={metrics})"
+                        f"{key} is not a finite float: {value!r} (split={split}, metrics={metrics})"
                     )
 
             # fake_oracle returns params verbatim, so the re-rendered audio matches
             # the target up to Surge XT render jitter: mean distances stay under the
             # canonical envelope and the rms cosine stays above its floor.
-            assert metrics["audio/mss_mean"] < bounds.mss_max, (
-                mf.parent.parent.parent.name,
-                metrics,
-            )
-            assert metrics["audio/wmfcc_mean"] < bounds.wmfcc_max, (
-                mf.parent.parent.parent.name,
-                metrics,
-            )
-            assert metrics["audio/sot_mean"] < bounds.sot_max, (
-                mf.parent.parent.parent.name,
-                metrics,
-            )
-            assert metrics["audio/rms_mean"] > bounds.rms_min, (
-                mf.parent.parent.parent.name,
-                metrics,
-            )
+            assert metrics[f"{metric_prefix}audio/mss_mean"] < bounds.mss_max, (split, metrics)
+            assert metrics[f"{metric_prefix}audio/wmfcc_mean"] < bounds.wmfcc_max, (split, metrics)
+            assert metrics[f"{metric_prefix}audio/sot_mean"] < bounds.sot_max, (split, metrics)
+            assert metrics[f"{metric_prefix}audio/rms_mean"] > bounds.rms_min, (split, metrics)
     finally:
         r2_io.purge_prefix(cfg_dataset.r2.bucket, f"{prefix_root}/")
 
@@ -522,34 +515,50 @@ def test_oracle_eval_inline_writes_shuffled_audio_metrics_when_params_uniform(
             f"--- STDERR (tail) ---\n{result.stderr[-2000:]}"
         )
 
-        # One metrics.json per split: oracle_eval/<split>/<run_id>/metrics/metrics.json.
+        # One metrics.json per split: oracle_eval/<split>/<run_id>/. Each split is
+        # a single 4-sample shard, so cadence=shard makes every split's params
+        # uniform and the shuffle probe fires for all three.
         metrics_files = list(run_dir.glob("oracle_eval/*/*/metrics/metrics.json"))
         assert len(metrics_files) == 3, (
-            f"expected three oracle-eval metrics.json under {run_dir}/oracle_eval/; "
-            f"got {metrics_files}"
+            f"expected three oracle-eval metrics.json files (one per split) under "
+            f"{run_dir}/oracle_eval/; got {metrics_files}"
         )
 
         bounds = ORACLE_AUDIO_METRIC_BOUNDS
-        for metrics_file in metrics_files:
-            metrics = json.loads(metrics_file.read_text())
-
-            # Both audio/ and shuffled_audio/ must be present for each metric split.
+        for mf in metrics_files:
+            metrics = json.loads(mf.read_text())
+            # test keeps bare keys; train/val are namespaced — the prefix applies
+            # to both the audio/ and shuffled_audio/ groups.
+            split = mf.parent.parent.parent.name
+            metric_prefix = "" if split == "test" else f"{split}/"
             for name in _ORACLE_AUDIO_METRICS:
                 for stat in ("mean", "std"):
                     for group in ("audio", "shuffled_audio"):
-                        key = f"{group}/{name}_{stat}"
+                        key = f"{metric_prefix}{group}/{name}_{stat}"
                         value = metrics.get(key)
                         assert isinstance(value, float) and math.isfinite(value), (
                             f"{key} is not a finite float: {value!r} "
-                            f"(split={metrics_file.parent.parent.name}, metrics={metrics})"
+                            f"(split={split}, metrics={metrics})"
                         )
 
-            # Uniform params → shuffled pred matches same target; means satisfy
+            # Uniform params → shuffled pred matches the same target; means satisfy
             # the same oracle envelope as the non-shuffled pass.
             for group in ("audio", "shuffled_audio"):
-                assert metrics[f"{group}/mss_mean"] < bounds.mss_max, metrics
-                assert metrics[f"{group}/wmfcc_mean"] < bounds.wmfcc_max, metrics
-                assert metrics[f"{group}/sot_mean"] < bounds.sot_max, metrics
-                assert metrics[f"{group}/rms_mean"] > bounds.rms_min, metrics
+                assert metrics[f"{metric_prefix}{group}/mss_mean"] < bounds.mss_max, (
+                    split,
+                    metrics,
+                )
+                assert metrics[f"{metric_prefix}{group}/wmfcc_mean"] < bounds.wmfcc_max, (
+                    split,
+                    metrics,
+                )
+                assert metrics[f"{metric_prefix}{group}/sot_mean"] < bounds.sot_max, (
+                    split,
+                    metrics,
+                )
+                assert metrics[f"{metric_prefix}{group}/rms_mean"] > bounds.rms_min, (
+                    split,
+                    metrics,
+                )
     finally:
         r2_io.purge_prefix(cfg_dataset.r2.bucket, f"{r2_prefix_root}/")

@@ -49,6 +49,7 @@ def _build_postprocess_cfg(
     rerender_target: bool = True,
     num_workers: int = 1,
     shuffle_seed: int = 0,
+    metric_prefix: str = "",
     render: dict[str, Any] | None = None,
 ) -> DictConfig:
     """Build a minimal cfg accepted by ``_run_predict_postprocessing``.
@@ -60,6 +61,8 @@ def _build_postprocess_cfg(
     :param rerender_target: Drives ``cfg.evaluation.rerender_target``.
     :param num_workers: Drives ``cfg.evaluation.num_workers``.
     :param shuffle_seed: Drives ``cfg.evaluation.shuffle_seed``.
+    :param metric_prefix: Drives ``cfg.evaluation.metric_prefix``; prepended to
+        every returned audio metric key.
     :param render: Drives ``cfg.render``; pass ``None`` to test the unset-render branch.
     :returns: Minimal :class:`DictConfig` shaped the way the helper reads it.
     """
@@ -72,6 +75,7 @@ def _build_postprocess_cfg(
                 "rerender_target": rerender_target,
                 "num_workers": num_workers,
                 "shuffle_seed": shuffle_seed,
+                "metric_prefix": metric_prefix,
             },
             "render": render,
         }
@@ -561,6 +565,50 @@ def test_postprocessing_returns_shuffled_audio_metrics_when_subprocess_writes_sh
     assert result["shuffled_audio/mss_std"] == pytest.approx(0.12)
     assert "audio/mss_mean" in result
     assert result["audio/mss_mean"] == pytest.approx(0.5)
+
+
+def test_postprocessing_prefixes_audio_metric_keys_when_metric_prefix_set(
+    monkeypatch: pytest.MonkeyPatch,
+    predictions_tree: Path,
+) -> None:
+    """``metric_prefix`` is prepended to every returned key so per-split runs stay distinct.
+
+    The inline oracle eval resumes one wandb run for all splits; without a
+    prefix the bare ``audio/<name>_<stat>`` summary key is overwritten by the
+    last split. A non-empty prefix namespaces every key (both ``audio/*`` and
+    ``shuffled_audio/*``), e.g. ``train/``.
+
+    :param monkeypatch: Replaces ``subprocess.run`` with a fake that writes both
+        aggregated CSVs before returning.
+    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created.
+    """
+    metrics_dir = predictions_tree / "metrics"
+
+    def _writes_both_csvs(args: list[str], **_kwargs: Any) -> None:
+        if _COMPUTE_AUDIO_METRICS_MODULE not in args:
+            return
+        metrics_dir.mkdir(parents=True, exist_ok=True)
+        (metrics_dir / "aggregated_metrics.csv").write_text(_AGGREGATED_METRICS_CSV)
+        (metrics_dir / "aggregated_metrics_shuffled.csv").write_text(
+            _AGGREGATED_METRICS_SHUFFLED_CSV
+        )
+
+    monkeypatch.setattr(eval_mod.subprocess, "run", _writes_both_csvs)
+    cfg = _build_postprocess_cfg(
+        predictions_tree,
+        render_vst=False,
+        compute_metrics=True,
+        metric_prefix="train/",
+    )
+
+    result = _run_predict_postprocessing(cfg)
+
+    # Both groups are namespaced — the prefix applies to every loaded key.
+    assert result["train/audio/mss_mean"] == pytest.approx(0.5)
+    assert result["train/shuffled_audio/mss_mean"] == pytest.approx(0.6)
+    # The bare keys must be gone: that is exactly the cross-split collision the prefix fixes.
+    assert "audio/mss_mean" not in result
+    assert "shuffled_audio/mss_mean" not in result
 
 
 def test_postprocessing_render_subprocess_nonzero_exit_raises(

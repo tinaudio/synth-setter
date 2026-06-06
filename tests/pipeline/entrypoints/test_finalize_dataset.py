@@ -29,6 +29,7 @@ import tarfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, NoReturn, cast
+from unittest.mock import MagicMock
 
 import h5py
 import numpy as np
@@ -291,6 +292,51 @@ def test_finalize_from_spec_uploads_stats_then_marker_at_canonical_uris(
     assert upload_order.count(marker_uri) == 1
     assert upload_order.index(marker_uri) == len(upload_order) - 1
     assert upload_order.index(stats_uri) < upload_order.index(marker_uri)
+
+
+def test_finalize_from_spec_non_canonical_prefix_warns_and_proceeds(
+    tmp_path: Path,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001 — installs stubs only
+) -> None:
+    """A custom (non-canonical) ``r2.prefix`` is finalized, not rejected.
+
+    Specs may set ``r2.prefix`` independently of ``task_name``/``run_id`` — e.g.
+    the oracle-eval e2e isolates its objects under ``test-runs/<test>/<uuid>/``.
+    finalize reads the same prefix generate wrote to, so the spec is
+    self-consistent; a prefix that diverges from ``make_r2_prefix`` is advisory
+    (logged), never fatal. Pins both halves: finalize emits the warning and
+    still lands its artifacts at the custom prefix.
+
+    :param tmp_path: Hosts the scratch ``work_dir``.
+    :param fake_r2_remote: Local-typed rclone remote; shards + outputs land here.
+    :param monkeypatch: Patches ``finalize_dataset.logger`` with a recording
+        mock (loguru output does not reach pytest ``caplog``).
+    :param stub_finalize_setup: Installs the auth + marker-probe stubs.
+    """
+    spec = _build_wds_smoke_spec(task_name="finalize-custom-prefix")
+    custom_r2 = spec.r2.model_copy(
+        update={"prefix": "test-runs/finalize-custom-prefix/abc123def456/"}
+    )
+    custom_spec = spec.model_copy(update={"r2": custom_r2})
+    _seed_train_shards(fake_r2_remote, custom_spec)
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+
+    recording_logger = MagicMock(wraps=finalize_dataset.logger)
+    monkeypatch.setattr(finalize_dataset, "logger", recording_logger)
+
+    finalize_dataset.finalize_from_spec(custom_spec, work_dir)
+
+    assert _uri_to_local_path(fake_r2_remote, custom_spec.r2.stats_uri()).is_file()
+    assert _uri_to_local_path(
+        fake_r2_remote, custom_spec.r2.dataset_complete_marker_uri()
+    ).is_file()
+    assert any(
+        "non-canonical r2 prefix" in str(call.args[0])
+        for call in recording_logger.warning.call_args_list
+    ), recording_logger.warning.call_args_list
 
 
 def test_finalize_is_idempotent_when_marker_already_exists(
@@ -1099,40 +1145,6 @@ def test_finalize_wds_unlinks_each_shard_after_folding(
     finalize_dataset.finalize_wds(spec, work_dir)
 
     assert concurrent_shards_seen == [1, 1]
-
-
-def test_finalize_from_spec_drifted_prefix_raises_before_any_upload(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001 — installs stubs only
-) -> None:
-    """A drifted ``r2.prefix`` raises ``ValueError`` before any R2 write or scratch dir.
-
-    Integration-level companion to ``test_prefix.py``'s unit coverage of
-    ``assert_r2_prefix_matches``: it pins the guard at the ``finalize_from_spec``
-    call site so a future reordering (e.g. moving the assertion past the
-    dispatch) trips here. The fail-fast ``upload`` stub turns a leaked write
-    into a test failure, proving the abort precedes the marker-last upload
-    sequence; the ``work_dir`` assertion proves it precedes ``work_dir.mkdir``.
-
-    :param tmp_path: Hosts the scratch ``work_dir`` path (asserted never created).
-    :param monkeypatch: Installs a fail-fast ``upload`` stub.
-    :param stub_finalize_setup: Installs the auth + marker-probe stubs so the
-        guard (not the marker check) is the failure surface.
-    """
-    spec = _build_wds_smoke_spec(task_name="finalize-drifted-prefix")
-    drifted_r2 = spec.r2.model_copy(update={"prefix": "data/wrong-cfg/wrong-run/"})
-    drifted_spec = spec.model_copy(update={"r2": drifted_r2})
-
-    def fail_fast_upload(src: str | Path, dst: str) -> NoReturn:
-        raise AssertionError(f"upload must not run on a drifted prefix (got {dst!r})")
-
-    monkeypatch.setattr("synth_setter.pipeline.r2_io.upload", fail_fast_upload)
-    work_dir = tmp_path / "work"
-
-    with pytest.raises(ValueError, match="prefix mismatch"):
-        finalize_dataset.finalize_from_spec(drifted_spec, work_dir)
-    assert not work_dir.exists()
 
 
 def _build_finalize_cfg_with_offline_wandb(
