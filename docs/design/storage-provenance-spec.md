@@ -116,13 +116,13 @@ ______________________________________________________________________
 
 ## 4. W&B Artifact Types
 
-| Type           | Name Pattern               | Logged By                         | Example name        |
-| -------------- | -------------------------- | --------------------------------- | ------------------- |
-| `dataset`      | `data-{dataset_config_id}` | `pipeline.cli finalize` (planned) | `data-diva-v1`      |
-| `model`        | `model-{train_config_id}`  | `src/synth_setter/cli/train.py`   | `model-flow-simple` |
-| `eval-results` | `eval-{eval_config_id}`    | eval script                       | `eval-nsynth-v1`    |
+| Type           | Name Pattern               | Logged By                                  | Example name        |
+| -------------- | -------------------------- | ------------------------------------------ | ------------------- |
+| `dataset`      | `data-{dataset_config_id}` | `src/synth_setter/cli/finalize_dataset.py` | `data-diva-v1`      |
+| `model`        | `model-{train_config_id}`  | `src/synth_setter/cli/train.py`            | `model-flow-simple` |
+| `eval-results` | `eval-{eval_config_id}`    | eval script                                | `eval-nsynth-v1`    |
 
-> **Note:** `pipeline.cli finalize` is the target CLI (Phase 5). In Docker, the finalize step runs as `MODE=finalize-shards` (scoped, validated on experiment branch — [#408](https://github.com/tinaudio/synth-setter/issues/408)). Current entrypoint: `pipeline.entrypoints.generate_dataset`.
+> **Note:** `finalize_dataset.py` logs the `dataset` artifact (`build_dataset_artifact` / `_log_dataset_artifact`), resuming the data-generation run pinned to `spec.run_id` so the artifact lands on the producer node of the lineage DAG. It composes a `WandbLogger` from `configs/finalize_dataset.yaml`'s `logger: wandb` default and degrades to a best-effort no-op without `WANDB_API_KEY`. In Docker the finalize step runs as `MODE=finalize-shards` (scoped, validated on experiment branch — [#408](https://github.com/tinaudio/synth-setter/issues/408)).
 
 - W&B auto-versions artifacts (`:v0`, `:v1`, `:v2`). Each new run of the same config produces the next version.
 - The `*_wandb_run_id` is stored in `artifact.metadata`, not the artifact name

@@ -169,24 +169,26 @@ ______________________________________________________________________
 
 ## 3. Artifacts
 
-| Artifact                 | Source                                                             | When                                                                                                |
-| ------------------------ | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
-| Model checkpoints        | `ModelCheckpoint` + `log_model: "all"`                             | Every 5000 steps (with `default_surge` callbacks) + best + last, all uploaded immediately           |
-| Source code              | `wandb.Settings(code_dir=".")`                                     | Run start                                                                                           |
-| `<task_name>-input-spec` | `_log_spec_artifact` in `src/synth_setter/cli/generate_dataset.py` | Dataset-generation run start; artifact type `dataset-spec`, payload = `DatasetSpec.model_dump_json` |
+| Artifact                 | Source                                                                                           | When                                                                                                                                            |
+| ------------------------ | ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Model checkpoints        | `ModelCheckpoint` + `log_model: "all"`                                                           | Every 5000 steps (with `default_surge` callbacks) + best + last, all uploaded immediately                                                       |
+| Source code              | `wandb.Settings(code_dir=".")`                                                                   | Run start                                                                                                                                       |
+| `<task_name>-input-spec` | `_log_spec_artifact` in `src/synth_setter/cli/generate_dataset.py`                               | Dataset-generation run start; artifact type `dataset-spec`, payload = `DatasetSpec.model_dump_json`                                             |
+| `data-{task_name}`       | `build_dataset_artifact` / `_log_dataset_artifact` in `src/synth_setter/cli/finalize_dataset.py` | Finalize, after the R2 outputs land; type `dataset`, `s3://` R2 references (`checksum=False`), metadata `shard_count` / `n_samples` / `git_sha` |
 
 ______________________________________________________________________
 
 ## 4. Entry Points
 
-| Entry point                                | W&B usage                                                                                                                                                                                         | File                                       |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
-| `src/synth_setter/cli/train.py`            | Full: logger init → hparams → provenance → train metrics → test metrics → teardown                                                                                                                | `src/synth_setter/cli/train.py`            |
-| `src/synth_setter/cli/eval.py`             | Full: logger init → hparams → provenance → test/val metrics (+ optional predictions) → predict-mode `audio/<metric>_{mean,std}` keys from `_log_audio_metrics_to_wandb` → teardown                | `src/synth_setter/cli/eval.py`             |
-| `src/synth_setter/cli/generate_dataset.py` | Dataset-generation: logger init pinned to `spec.run_id` → spec hparams → provenance → `<task_name>-input-spec` artifact → per-shard metrics → run summary → `finalize(status)` + `wandb.finish()` | `src/synth_setter/cli/generate_dataset.py` |
+| Entry point                                | W&B usage                                                                                                                                                                                                                                                                                          | File                                       |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
+| `src/synth_setter/cli/train.py`            | Full: logger init → hparams → provenance → train metrics → test metrics → teardown                                                                                                                                                                                                                 | `src/synth_setter/cli/train.py`            |
+| `src/synth_setter/cli/eval.py`             | Full: logger init → hparams → provenance → test/val metrics (+ optional predictions) → predict-mode `audio/<metric>_{mean,std}` keys from `_log_audio_metrics_to_wandb` → teardown                                                                                                                 | `src/synth_setter/cli/eval.py`             |
+| `src/synth_setter/cli/generate_dataset.py` | Dataset-generation: logger init pinned to `spec.run_id` → spec hparams → provenance → `<task_name>-input-spec` artifact → per-shard metrics → run summary → `finalize(status)` + `wandb.finish()`                                                                                                  | `src/synth_setter/cli/generate_dataset.py` |
+| `src/synth_setter/cli/finalize_dataset.py` | Dataset-finalize: resumes the data-generation run (`id=spec.run_id`, `job_type=data-generation`, `resume=allow`) → logs the `data-{config_id}` `dataset` artifact with `s3://` R2 references → `close_loggers`. Best-effort: a finalize without `WANDB_API_KEY` / logger group degrades to a no-op | `src/synth_setter/cli/finalize_dataset.py` |
 
 Both training and eval use `@task_wrapper` which ensures `wandb.finish()` runs even on exception.
-`generate_dataset` brackets `generate(...)` in its own `try/finally` that calls `_close_loggers` — see §5 for the metric / run-id contract.
+`generate_dataset` brackets `generate(...)` in its own `try/finally` that calls `close_loggers` (now in `synth_setter.utils.instantiators`, shared with finalize) — see §5 for the metric / run-id contract.
 
 ______________________________________________________________________
 
@@ -231,7 +233,7 @@ Emitted by `_log_summary` after the dispatcher returns. The dispatcher is fail-f
 is no partial-success path. Either every owned shard's contract is fulfilled (rendered or
 short-circuited by the R2-skip probe) and `finalize(status)` records `"success"`, or any
 shard's exception propagates up `generate()`'s `try/except`, `status` flips to `"failed"`,
-the summary is not emitted, and `_close_loggers` calls `finalize("failed")` + `wandb.finish()`
+the summary is not emitted, and `close_loggers` calls `finalize("failed")` + `wandb.finish()`
 in the `finally`.
 
 ### 5d. Linked issues
