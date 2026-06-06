@@ -53,7 +53,8 @@ def _resolve_wandb_checkpoint(ref: str) -> str:
     if not find_spec("wandb"):
         raise ModuleNotFoundError(
             f"Resolving ${{wandb:{ref}}} requires the optional 'wandb' package; "
-            "install it (e.g. the 'wandb' dependency group) to use this resolver."
+            "install the 'util' dependency group (aggregated into 'runtime'/'dev') "
+            "to use this resolver."
         )
     import wandb
 

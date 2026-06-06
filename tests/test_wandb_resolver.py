@@ -190,7 +190,8 @@ def test_resolve_wandb_checkpoint_missing_wandb_raises_module_not_found(
     """
     monkeypatch.setattr(utils_mod, "find_spec", lambda name: None)
 
-    with pytest.raises(ModuleNotFoundError, match="wandb"):
+    # Pin the guidance to the real PEP 735 group ('util'), not a non-existent 'wandb' group.
+    with pytest.raises(ModuleNotFoundError, match="util"):
         _resolve_wandb_checkpoint("model-x:latest")
 
 
