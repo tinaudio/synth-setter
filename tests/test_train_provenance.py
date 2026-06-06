@@ -1,7 +1,8 @@
 """Provenance-wiring tests for the ``synth-setter-train`` entrypoint.
 
-Pins the storage-provenance-spec.md §7-8 invariants at the ``train`` entrypoint
-seam: the run id is pinned in the ``{config_id}-{timestamp}`` convention with
+Pins the storage-provenance-spec.md run-id, job_type, and W&B-provenance
+invariants at the ``train`` entrypoint seam: the run id is pinned in the
+``{config_id}-{timestamp}`` convention with
 ``job_type=training``, and ``log_wandb_provenance`` is invoked once a logger
 exists. Heavy collaborators (datamodule / model / trainer instantiation,
 hyperparameter logging) are stubbed at their seams so the test isolates the
