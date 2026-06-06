@@ -229,8 +229,8 @@ def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -
     config field surfaces as a ``--<field>`` option automatically; adding a
     field on the model auto-extends the CLI invocation. The writer is dispatched
     on ``shard.filename``'s suffix inside the subprocess via
-    ``OutputFormat.from_extension``. When ``spec.datasetsrc`` is set, the copy
-    root is forwarded as ``--copy_dataset_root`` so the subprocess re-renders the
+    ``OutputFormat.from_extension``. When ``spec.copy_dataset_root`` is set, it
+    is forwarded as ``--copy_dataset_root`` so the subprocess re-renders the
     same-named source shard's params instead of sampling fresh ones.
     """
     output_path = output_dir / shard.filename
@@ -241,8 +241,8 @@ def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -
     ]
     for key, value in spec.render.model_dump().items():
         args.extend([f"--{key}", str(value)])
-    if spec.datasetsrc is not None:
-        args.extend(["--copy_dataset_root", spec.datasetsrc.copy_dataset_root])
+    if spec.copy_dataset_root is not None:
+        args.extend(["--copy_dataset_root", spec.copy_dataset_root])
 
     return args
 
@@ -250,7 +250,7 @@ def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -
 def _validate_copy_source(spec: DatasetSpec) -> None:
     """Preflight a dataset-copy run against the source's persisted spec.
 
-    No-op unless ``spec.datasetsrc`` is set. Otherwise loads the source's
+    No-op unless ``spec.copy_dataset_root`` is set. Otherwise loads the source's
     ``input_spec.json`` from ``<copy_dataset_root>/`` (the spec sits beside the
     shards at the dataset prefix root) and delegates to
     :meth:`DatasetSpec.validate_copy_source`, so a source that disagrees on any
@@ -260,9 +260,9 @@ def _validate_copy_source(spec: DatasetSpec) -> None:
     :raises ValueError: ``copy_dataset_root`` holds no ``input_spec.json``, or
         the source spec mismatches ``spec`` on a copy-relevant value.
     """
-    if spec.datasetsrc is None:
+    if spec.copy_dataset_root is None:
         return
-    source_spec_path = Path(spec.datasetsrc.copy_dataset_root) / INPUT_SPEC_FILENAME
+    source_spec_path = Path(spec.copy_dataset_root) / INPUT_SPEC_FILENAME
     if not source_spec_path.is_file():
         raise ValueError(
             f"dataset-copy source has no {INPUT_SPEC_FILENAME} at {source_spec_path}; "
