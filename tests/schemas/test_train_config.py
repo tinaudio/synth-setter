@@ -41,6 +41,10 @@ class TestTrainConfigAcceptsLiveCompose:
         assert model.seed is None or (isinstance(model.seed, int) and model.seed >= 0)
         assert model.optimized_metric is None or isinstance(model.optimized_metric, str)
         assert model.watch_gradients is None or isinstance(model.watch_gradients, bool)
+        assert model.consumed_dataset_config_id is None or isinstance(
+            model.consumed_dataset_config_id, str
+        )
+        assert isinstance(model.consumed_artifact_alias, str) and model.consumed_artifact_alias
 
 
 class TestTrainConfigRejectsBadInputs:
@@ -75,3 +79,13 @@ class TestTrainConfigRejectsBadInputs:
         """``optimized_metric`` is ``NonBlankStr | None`` — whitespace must not pass."""
         with pytest.raises(ValidationError, match="at least 1 character"):
             TrainConfig.model_validate({"task_name": "train", "optimized_metric": "   "})
+
+    def test_blank_consumed_dataset_config_id_rejected(self) -> None:
+        """``consumed_dataset_config_id`` is ``NonBlankStr | None`` — no whitespace id."""
+        with pytest.raises(ValidationError, match="at least 1 character"):
+            TrainConfig.model_validate({"task_name": "train", "consumed_dataset_config_id": "   "})
+
+    def test_blank_consumed_artifact_alias_rejected(self) -> None:
+        """``consumed_artifact_alias`` is ``NonBlankStr`` — an empty alias is invalid."""
+        with pytest.raises(ValidationError, match="at least 1 character"):
+            TrainConfig.model_validate({"task_name": "train", "consumed_artifact_alias": "   "})

@@ -47,3 +47,9 @@ ckpt_path: null
 
 # seed for random number generators in pytorch, numpy and python.random
 seed: null
+
+# Opt-in W&B lineage (storage-provenance-spec §5): the dataset config_id this run
+# trains on. When set + a WandbLogger is active, training consumes
+# `data-{consumed_dataset_config_id}:{consumed_artifact_alias}` before fit; null is a no-op.
+consumed_dataset_config_id: null
+consumed_artifact_alias: latest

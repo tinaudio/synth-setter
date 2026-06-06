@@ -22,6 +22,7 @@ from synth_setter.utils import (
     register_resolvers,
     resolve_run_config_id,
     task_wrapper,
+    use_input_artifacts,
     watch_gradients,
 )
 from synth_setter.workspace import operator_workspace
@@ -33,6 +34,25 @@ operator_workspace()
 register_resolvers()
 
 log = RankedLogger(__name__, rank_zero_only=True)
+
+
+def _consumed_artifact_refs(cfg: DictConfig) -> list[tuple[str, str]]:
+    """Build the consumed-artifact lineage edges for a training run (spec §5).
+
+    Training consumes the dataset it trains on. The edge is opt-in:
+    ``consumed_dataset_config_id`` is null by default and yields no edges, so a
+    run without the field set records no lineage and never calls
+    ``use_artifact``.
+
+    :param cfg: Hydra-composed cfg; reads ``consumed_dataset_config_id`` and
+        ``consumed_artifact_alias`` (default ``latest``).
+    :returns: ``[("data-{id}", alias)]`` when the dataset id is set, else ``[]``.
+    """
+    dataset_id = cfg.get("consumed_dataset_config_id")
+    if not dataset_id:
+        return []
+    alias = cfg.get("consumed_artifact_alias") or "latest"
+    return [(f"data-{dataset_id}", alias)]
 
 
 @task_wrapper
@@ -84,6 +104,9 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
         watch_gradients(model, logger)
 
     if cfg.get("train"):
+        # Record the dataset lineage edge before fit so the consuming run links to
+        # its input artifact in the W&B DAG (storage-provenance-spec §5).
+        use_input_artifacts(logger, _consumed_artifact_refs(cfg))
         log.info("Starting training!")
         trainer.fit(
             model=model,

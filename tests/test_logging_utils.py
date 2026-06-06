@@ -7,15 +7,19 @@ See python-testing.md §Fakes.
 import os
 import subprocess
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import patch
 
 import pytest
+from lightning.pytorch.loggers import Logger
+from lightning.pytorch.loggers.wandb import WandbLogger
 from omegaconf import OmegaConf
 
 from synth_setter.utils.logging_utils import (
     log_wandb_provenance,
     pin_wandb_run_id,
     resolve_run_config_id,
+    use_input_artifacts,
 )
 
 # ---------------------------------------------------------------------------
@@ -227,3 +231,98 @@ class TestPinWandbRunId:
         pin_wandb_run_id(cfg, "flow_simple", "training")
 
         assert "wandb" not in cfg.logger
+
+
+# ---------------------------------------------------------------------------
+# use_input_artifacts — consumed-artifact lineage edges (spec §5)
+# ---------------------------------------------------------------------------
+
+
+class FakeWandbRun:
+    """Fake wandb run recording every ``use_artifact`` call as inspectable state."""
+
+    def __init__(self, raises: bool = False) -> None:
+        """:param raises: When true, ``use_artifact`` raises after recording the call."""
+        self.consumed: list[str] = []
+        self._raises = raises
+
+    def use_artifact(self, name_alias: str) -> None:
+        """Record the requested ``name:alias`` (or raise to model a wandb outage).
+
+        :param name_alias: The ``{name}:{alias}`` lineage edge requested.
+        :raises RuntimeError: when the fake was built with ``raises=True``.
+        """
+        self.consumed.append(name_alias)
+        if self._raises:
+            raise RuntimeError("wandb down")
+
+
+class FakeWandbLogger(WandbLogger):
+    """A ``WandbLogger`` whose ``experiment`` is a fake run; bypasses ``wandb.init``."""
+
+    def __init__(self, run: FakeWandbRun) -> None:
+        """:param run: Fake run returned in place of the live wandb run."""
+        self._fake_run = run
+
+    @property
+    def experiment(self) -> FakeWandbRun:  # type: ignore[override]
+        """:returns: The injected fake run standing in for the live wandb run."""
+        return self._fake_run
+
+
+class TestUseInputArtifacts:
+    """Recording consumed-artifact edges on WandbLoggers for the lineage DAG."""
+
+    def test_wandb_logger_present_records_name_alias_edge(self) -> None:
+        """A set ref forwards ``name:alias`` to the run's ``use_artifact``."""
+        run = FakeWandbRun()
+
+        use_input_artifacts([FakeWandbLogger(run)], [("data-diva-v1", "latest")])
+
+        assert run.consumed == ["data-diva-v1:latest"]
+
+    def test_multiple_refs_record_one_edge_each(self) -> None:
+        """Eval consumes both model and dataset — one edge recorded per ref."""
+        run = FakeWandbRun()
+
+        use_input_artifacts(
+            [FakeWandbLogger(run)],
+            [("model-flow-simple", "best"), ("data-diva-v1", "latest")],
+        )
+
+        assert run.consumed == ["model-flow-simple:best", "data-diva-v1:latest"]
+
+    def test_non_wandb_logger_records_no_edge(self) -> None:
+        """A logger list without a WandbLogger is a silent no-op."""
+        run = FakeWandbRun()
+        non_wandb_logger = cast(Logger, SimpleNamespace(experiment=run))
+
+        use_input_artifacts([non_wandb_logger], [("data-diva-v1", "latest")])
+
+        assert run.consumed == []
+
+    def test_empty_refs_records_no_edge(self) -> None:
+        """No refs means no lineage edge, so use_artifact is never called."""
+        run = FakeWandbRun()
+
+        use_input_artifacts([FakeWandbLogger(run)], [])
+
+        assert run.consumed == []
+
+    def test_generator_refs_record_on_every_wandb_logger(self) -> None:
+        """A one-shot generator ``refs`` records on both loggers, not just the first."""
+        run_a, run_b = FakeWandbRun(), FakeWandbRun()
+        refs = (edge for edge in [("data-diva-v1", "latest")])
+
+        use_input_artifacts([FakeWandbLogger(run_a), FakeWandbLogger(run_b)], refs)
+
+        assert run_a.consumed == ["data-diva-v1:latest"]
+        assert run_b.consumed == ["data-diva-v1:latest"]
+
+    def test_use_artifact_failure_is_swallowed(self) -> None:
+        """A wandb failure is swallowed so a run is never aborted by lineage."""
+        run = FakeWandbRun(raises=True)
+
+        use_input_artifacts([FakeWandbLogger(run)], [("data-diva-v1", "latest")])
+
+        assert run.consumed == ["data-diva-v1:latest"]

@@ -28,6 +28,7 @@ from synth_setter.utils import (
     register_resolvers,
     resolve_run_config_id,
     task_wrapper,
+    use_input_artifacts,
 )
 from synth_setter.workspace import operator_workspace
 
@@ -214,6 +215,31 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
     return {}
 
 
+def _consumed_artifact_refs(cfg: DictConfig) -> list[tuple[str, str]]:
+    """Build the consumed-artifact lineage edges for an eval run (spec §5).
+
+    Eval consumes both the model it scores and the dataset it scores it on; the
+    model edge is recorded first to match the DAG's left-to-right read. Each
+    edge is opt-in: a null ``consumed_*_config_id`` is omitted, so an eval
+    without the fields set records no lineage and never calls ``use_artifact``.
+
+    :param cfg: Hydra-composed cfg; reads ``consumed_train_config_id``,
+        ``consumed_dataset_config_id``, and ``consumed_artifact_alias``
+        (default ``latest``).
+    :returns: ``(name, alias)`` edges for whichever ids are set, model before
+        dataset; ``[]`` when both are null.
+    """
+    alias = cfg.get("consumed_artifact_alias") or "latest"
+    refs: list[tuple[str, str]] = []
+    train_id = cfg.get("consumed_train_config_id")
+    if train_id:
+        refs.append((f"model-{train_id}", alias))
+    dataset_id = cfg.get("consumed_dataset_config_id")
+    if dataset_id:
+        refs.append((f"data-{dataset_id}", alias))
+    return refs
+
+
 @task_wrapper
 def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     """Evaluate the given checkpoint on a datamodule testset.
@@ -256,6 +282,10 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
         log.info("Logging hyperparameters!")
         log_hyperparameters(object_dict)
         log_wandb_provenance()
+
+    # Record the model + dataset lineage edges before evaluation so the run links
+    # to both inputs in the W&B DAG (storage-provenance-spec §5).
+    use_input_artifacts(logger, _consumed_artifact_refs(cfg))
 
     mode = cfg.get("mode", "test")
 

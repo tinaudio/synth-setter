@@ -32,3 +32,11 @@ evaluation:
 
 # passing checkpoint path is necessary for evaluation
 ckpt_path: ???
+
+# Opt-in W&B lineage (storage-provenance-spec §5): the train + dataset config_ids this
+# eval consumes. When set + a WandbLogger is active, eval consumes
+# `model-{consumed_train_config_id}` and `data-{consumed_dataset_config_id}` (each at
+# `consumed_artifact_alias`) before testing; each null ref is skipped.
+consumed_train_config_id: null
+consumed_dataset_config_id: null
+consumed_artifact_alias: latest
