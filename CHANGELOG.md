@@ -1,6 +1,183 @@
 # CHANGELOG
 
 
+## v8.22.0 (2026-06-06)
+
+### Features
+
+- **eval**: Auto-shuffle render-order probe when params are uniform
+  ([#1491](https://github.com/tinaudio/synth-setter/pull/1491),
+  [`9a3f219`](https://github.com/tinaudio/synth-setter/commit/9a3f2194bcc9bb86527f1bdde673d1efdaf9c404))
+
+* feat(eval): auto-shuffle render-order probe when params are uniform
+
+compute_audio_metrics now detects uniform params.csv across sample dirs automatically and, when
+  found, scores a second shuffled pred.wav view (#489), writing aggregated_metrics_shuffled.csv
+  alongside the normal aggregated_metrics.csv. eval._load_audio_metrics merges the shuffled CSV into
+  the returned dict under the shuffled_audio/ prefix.
+
+The --shuffle_pred_audio CLI flag is removed; --shuffle_seed (default 0) remains as an optional
+  override. A non-zero seed with non-uniform params raises ValueError so the misconfiguration is
+  visible rather than silently skipped.
+
+Also removes the now-dead evaluation.shuffle_pred_audio config field from eval.yaml and adds
+  params_are_uniform() to shuffle_pred_audio.py.
+
+* fix(eval): address pre-PR review BLOCKs for auto-shuffle metrics
+
+- compute_audio_metrics: add return-type annotations to compute_mel_specs, compute_jtfs, get_stft,
+  compute_metrics; add -> None + docstring to main() - compute_audio_metrics: replace print() with
+  logger.info() in main() - compute_audio_metrics: guard _aggregate_metrics against pd.concat([])
+  when metric_dfs is empty (num_workers > len(audio_dirs) edge case) - compute_audio_metrics:
+  clarify render-order probe comment to explain why params_are_uniform/find_possible_subdirs dir
+  sets agree when uniform=True - test_eval: rename e2e test and replace stale
+  shuffle_pred_audio=True with shuffle_seed=7 so the CalledProcessError contract is still exercised
+  - test_compute_audio_metrics: add @pytest.mark.slow to three CLI tests that use real wav I/O; fix
+  stale docstring on nonuniform-params test - test_eval_postprocessing: add behavior test for the
+  shuffled_audio/* key path through _run_predict_postprocessing (tdd-impl Gate 1)
+
+Refs #489
+
+* fix(evaluation): resolve all round-2 review BLOCKs for auto-shuffle metrics
+
+- compute_audio_metrics: add import math; rename `dir` param to `sample_dir`; add docstrings to
+  subdir_matches_pattern, find_possible_subdirs, _l1_distance; move nested l1 to module-level
+  _l1_distance; add sample_rate param to compute_rms; fix AudioFile resource leak with `with`
+  context managers; fix tail truncation in _aggregate_metrics using math.ceil; fix glob mismatch by
+  computing probe_dirs = [d if d.name.startswith("sample_")] before the uniformity check and >= 2
+  gate; update comment - shuffle_pred_audio: rewrite _assert_uniform_params to delegate to
+  params_are_uniform, eliminating DRY violation and aligning exception contracts - tests: add
+  `assert shuffled` guard before vacuous all() assertion; remove change-detector assert for removed
+  --shuffle_pred_audio flag
+
+* fix(evaluation): resolve all round-3 review BLOCKs for auto-shuffle metrics
+
+- compute_audio_metrics: add docstrings to compute_mel_specs, compute_jtfs, compute_rms,
+  compute_metrics_on_dir, compute_metrics; filter empty sublists in _aggregate_metrics when
+  num_workers > len(audio_dirs); add empty audio_dirs guard in main(); rename audio_dir/output_dir
+  locals to avoid str→Path rebind shadowing - tests/test_eval.py: add success-path test
+  test_evaluate_predict_mode_includes_shuffled_audio_metrics_when_subprocess_writes_shuffled_csv —
+  drives evaluate() end-to-end with fake subprocess writing both metric CSVs and asserts
+  shuffled_audio/* keys appear in the returned metric dict
+
+* chore(eval): fix comment-hygiene WARNs from pre-PR review
+
+- Add full docstrings to compute_mss, compute_jtfs_distance, compute_wmfcc, compute_f0, get_stft,
+  compute_sot (pydoclint requires :param:/:returns:) - Fix D205 wrapping in get_stft and compute_sot
+  one-liners - Trim implementation-narrative sentences from _assert_uniform_params docstring -
+  Condense two-line render-order probe comment to one - Remove decorative section-separator comment
+  in test_compute_audio_metrics - Remove restatement comment in test_eval_postprocessing
+
+* docs(eval): update docs for auto-shuffle probe (#489)
+
+- Remove stale shuffle_pred_audio config key from eval-pipeline.md and configuration-reference.md
+  (flag deleted in this PR) - Update shuffle_seed semantics: always-forwarded, non-zero implies
+  intent - Add shuffled_audio/* W&B keys to eval-pipeline.md and wandb-integration.md - Add
+  aggregated_metrics_shuffled.csv to metrics stage output table - Update doc-map.yaml covers for
+  compute_audio_metrics.py and shuffle_pred_audio.py (automatic probe, params_are_uniform public
+  API)
+
+* fix(evaluation): resolve round-4 review BLOCKs for auto-shuffle metrics
+
+- Extract _run_shuffle_probe from main() to fix 6-level nesting BLOCK - Wrap FileNotFoundError in
+  _assert_uniform_params to honour :raises ValueError: contract - Add docstrings to compute_mfcc,
+  get_pesto_activations, batched_wasserstein_distance_np - Correct eval.yaml shuffle_seed comment
+  (probe runs on uniform params regardless of seed value)
+
+* fix(eval): apply Copilot docstring + nested-layout guard fixes to PR #1491
+
+Corrects three docstring inaccuracies flagged by Copilot review: - compute_mel_specs: param y shape
+  was (T,) but callers pass (C, T); multi-channel input is accepted by the underlying mel transform
+  - compute_jtfs: removed false 'keyed on input shape; reinitialised automatically' claim; instance
+  is cached once and reused unconditionally - _aggregate_metrics: removed 'cleaned up by caller';
+  intermediates are left alongside the aggregated output in work_dir
+
+Adds nested-layout guard to _run_shuffle_probe: when output_dir is inside audio_dir (e.g.
+  audio/metrics), shuffled_audio would nest inside the source tree and cause shuffle_pred_audio to
+  raise. With seed=0 (default automatic probe) the CLI now warns and skips gracefully; with an
+  explicit non-zero seed it raises a directed ValueError. Two @pytest.mark.slow tests cover both
+  branches.
+
+* test(eval): add oracle-eval integration test asserting shuffled_audio metrics
+
+Adds test_oracle_eval_inline_writes_shuffled_audio_metrics_when_params_uniform to
+  test_generate_dataset.py; exercises the full generate → oracle-eval → metrics.json path with
+  param_sample_cadence=shard so the auto-shuffle probe (#489) fires and both audio/ and
+  shuffled_audio/ keys appear in metrics.json.
+
+* chore(sync): sync uv.lock to synth-setter 8.21.0
+
+pyproject.toml was bumped to 8.21.0 in the release commit (757a6ea5) but uv.lock was not updated
+  ([skip ci] skipped the uv-lock pre-commit hook). Regenerate to bring the lock in sync.
+
+* fix(eval): address Copilot round-2/3 findings on compute_audio_metrics
+
+- compute_mfcc: downmix (C,T) to mono before librosa.feature.mfcc; docstring previously claimed
+  channel-averaging but code passed raw multi-channel arrays - get_pesto_activations: fix return
+  annotation np.ndarray -> tuple[np.ndarray,np.ndarray] - main: raise ValueError when
+  shuffle_seed!=0 but fewer than 2 sample_* dirs exist (explicit seed implies intent; was previously
+  silently skipped) - --num_workers: use click.IntRange(min=1) to reject 0/negative at CLI boundary
+
+Tests: three new cases — multichannel mfcc shape, num_workers=0 rejection, explicit seed with single
+  sample dir raises.
+
+Closes #489 (partial)
+
+* fix(eval): cap _aggregate_metrics workers to len(audio_dirs)
+
+Avoids spawning idle ProcessPoolExecutor workers when num_workers exceeds the number of sample dirs;
+  effective_workers = min(num_workers, len(audio_dirs)). Addresses comment #3366628343 on PR #1491.
+
+* fix(eval): correct compute_mfcc handling — docstring fix not behavioral change
+
+The prior commit added a channel-averaging downmix to compute_mfcc, but that changes the behavior:
+  compute_wmfcc relies on the (C, 20, frames) output for its reshape(-1, frames) + DTW path. Revert
+  the downmix; fix only the docstring to say what the code actually does (passes (C,T) through to
+  librosa as-is).
+
+Also adds tempfile import (TemporaryDirectory replaces shutil.rmtree in _run_shuffle_probe) and
+  updates the multichannel test to assert the real (C, 20, frames) shape rather than the downmixed
+  (20, frames) shape.
+
+* fix(eval): guard compute_metrics row index against dirs without underscore
+
+rsplit("_", 1)[-1] is safe for any dir name; [1] raised IndexError when the name contained no
+  underscore. Addresses Copilot comment #3366682407 on PR #1491.
+
+### Testing
+
+- Cgroup-aware cpu count for pytest-xdist -n auto
+  ([#1492](https://github.com/tinaudio/synth-setter/pull/1492),
+  [`4ac24bc`](https://github.com/tinaudio/synth-setter/commit/4ac24bcf3d6127480cface5d5ee6c842716f4266))
+
+* fix(testing): cgroup-aware cpu count for pytest-xdist -n auto
+
+Inside a dev container, os.cpu_count() returns the host's total core count, causing -n auto to spawn
+  far more xdist workers than the container's CPU quota allows. The resulting over-subscription hits
+  the memory ceiling and the OOM-killer reaps a worker, surfacing as a "worker gwN crashed" failure.
+
+Add pytest_xdist_auto_num_workers to tests/conftest.py that reads both sched_getaffinity (respects
+  --cpuset-cpus) and the cgroup CPU quota (respects --cpus), then takes the minimum. On an
+  unconstrained host the hook returns the same value -n auto would, so CI is unaffected.
+
+Closes #1490
+
+Add pytest_xdist_auto_num_workers to tests/conftest.py that reads both sched_getaffinity (respects
+  --cpuset-cpus) and the cgroup CPU quota (respects --cpus), then takes the minimum. On an
+  unconstrained host the hook returns the same value -n auto would, so CI is unaffected. The env-var
+  escape hatch (PYTEST_XDIST_AUTO_NUM_WORKERS) is preserved.
+
+Add 10 unit tests in tests/test__conftest_cpu.py covering all branches: v2 quota, v2 max sentinel,
+  v1 quota, v1 unlimited (-1), no cgroup, quota > affinity, fractional quota floored to 1, empty v2
+  (no-limit), and invalid v2 token falling through to v1.
+
+* fix(testing): add raising=False to monkeypatch for macOS portability
+
+os.sched_getaffinity does not exist on macOS; monkeypatch.setattr raises AttributeError without
+  raising=False. Apply raising=False to all ten sched_getaffinity patches so the test file passes on
+  both Linux and macOS.
+
+
 ## v8.21.0 (2026-06-06)
 
 ### Automation
