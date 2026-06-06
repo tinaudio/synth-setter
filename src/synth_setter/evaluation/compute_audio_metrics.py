@@ -400,19 +400,22 @@ def _aggregate_metrics(audio_dirs: list[Path], work_dir: Path, num_workers: int)
 
     :param audio_dirs: Sample dirs to score (each must contain ``target.wav`` + ``pred.wav``).
     :param work_dir: Directory for per-worker intermediate ``metrics-<pid>.csv`` files.
-    :param num_workers: ProcessPoolExecutor worker count.
+    :param num_workers: ProcessPoolExecutor worker count; capped to ``len(audio_dirs)`` to
+        avoid spawning idle processes.
     :returns: Concatenated per-sample metrics DataFrame.
     """
-    sublist_length = math.ceil(len(audio_dirs) / num_workers) if audio_dirs else 1
+    effective_workers = min(num_workers, len(audio_dirs)) if audio_dirs else 1
+    sublist_length = math.ceil(len(audio_dirs) / effective_workers) if audio_dirs else 1
     sublists = [
         s
         for s in (
-            audio_dirs[i * sublist_length : (i + 1) * sublist_length] for i in range(num_workers)
+            audio_dirs[i * sublist_length : (i + 1) * sublist_length]
+            for i in range(effective_workers)
         )
         if s
     ]
     metric_dfs = []
-    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+    with ProcessPoolExecutor(max_workers=effective_workers) as executor:
         futures = [executor.submit(compute_metrics, sublist, work_dir) for sublist in sublists]
         for future in as_completed(futures):
             metric_file = future.result()
