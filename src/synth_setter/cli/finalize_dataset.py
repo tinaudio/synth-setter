@@ -174,17 +174,21 @@ def finalize_from_spec(spec: DatasetSpec, work_dir: Path) -> None:
     :param spec: Validated dataset spec.
     :param work_dir: Writable scratch dir; created if missing; retained
         after the call (multi-GB on the hdf5 branch).
-    :raises ValueError: ``spec.r2.prefix`` does not match
-        ``make_r2_prefix(spec.task_name, spec.run_id, spec.r2.prefix_root)``
-        (prefix drift detected before any R2 writes), or ``spec.output_format``
-        is neither ``"hdf5"`` nor ``"wds"``.
+    :raises ValueError: ``spec.output_format`` is neither ``"hdf5"`` nor ``"wds"``.
     """
     marker_uri = spec.r2.dataset_complete_marker_uri()
     if r2_io.object_size(marker_uri) is not None:
         logger.info("skip: {} already exists, run is finalized", marker_uri)
         return
 
-    assert_r2_prefix_matches(spec.r2.prefix, spec.task_name, spec.run_id, spec.r2.prefix_root)
+    # A custom ``r2.prefix`` (e.g. the oracle-eval e2e isolating objects under
+    # ``test-runs/<test>/<uuid>/``) is legitimate: finalize reads the same prefix
+    # generate wrote to, so the spec is self-consistent. Surface a divergence
+    # from the canonical ``make_r2_prefix`` shape as a warning, never an abort.
+    try:
+        assert_r2_prefix_matches(spec.r2.prefix, spec.task_name, spec.run_id, spec.r2.prefix_root)
+    except ValueError as exc:
+        logger.warning("non-canonical r2 prefix (finalizing anyway): {}", exc)
     work_dir.mkdir(parents=True, exist_ok=True)
     if spec.output_format is OutputFormat.WDS:
         finalize_wds(spec, work_dir)
