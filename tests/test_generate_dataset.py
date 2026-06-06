@@ -536,7 +536,8 @@ def test_oracle_eval_inline_writes_shuffled_audio_metrics_when_params_uniform(
                         key = f"{group}/{name}_{stat}"
                         value = metrics.get(key)
                         assert isinstance(value, float) and math.isfinite(value), (
-                            f"{key} is not a finite float: {value!r} (metrics={metrics})"
+                            f"{key} is not a finite float: {value!r} "
+                            f"(split={metrics_file.parent.parent.name}, metrics={metrics})"
                         )
 
             # Uniform params → shuffled pred matches same target; means satisfy
