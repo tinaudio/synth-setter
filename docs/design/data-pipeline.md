@@ -1425,7 +1425,7 @@ src/
       __init__.py
       spec.py           # DatasetSpec (unified config + runtime; built by its own from_hydra_cfg classmethod, called via spec_from_cfg in cli/generate_dataset.py), RenderConfig, ShardSpec; OutputFormat str-enum carrying format↔suffix dispatch (.extension property + .from_extension reverse lookup)
       shard_metadata.py # ShardMetadata — wds tar metadata.json sidecar (leaf module, no project imports)
-      prefix.py         # DatasetConfigId, DatasetRunId, R2Prefix helpers
+      prefix.py         # DatasetConfigId, DatasetRunId, R2Prefix, assert_r2_prefix_matches helpers
       image_config.py   # Docker image configuration
 
     ci/                 # CI validation scripts (implemented)
