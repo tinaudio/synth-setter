@@ -41,12 +41,6 @@ variable "synth_setter_git_ref" {
   description = "Git ref (branch, tag, or SHA) to check out for synth-setter. Prefer a SHA for reproducible builds."
 }
 
-variable "torch_backend" {
-  type        = string
-  default     = "cpu"
-  description = "Value passed to `uv pip install --torch-backend`. Tart VMs have no GPU, so keep `cpu`."
-}
-
 variable "python_version" {
   type        = string
   default     = "3.10"
@@ -56,7 +50,7 @@ variable "python_version" {
 variable "uv_version" {
   type        = string
   default     = "0.11.2"
-  description = "uv version installed via Astral's versioned installer (https://astral.sh/uv/<version>/install.sh). Keep in sync with docker/ubuntu22_04/Dockerfile (`ghcr.io/astral-sh/uv:<version>`) so Tart and Docker dev-base resolve identical wheels."
+  description = "uv version installed via Astral's versioned installer (https://astral.sh/uv/<version>/install.sh). Keep in sync with docker/ubuntu22_04/Dockerfile (`ghcr.io/astral-sh/uv:<version>`) so Tart and Docker dev-base resolve identical wheels via `uv sync --frozen`."
 }
 
 variable "vm_name" {
@@ -69,6 +63,12 @@ variable "surge_xt_version" {
   type        = string
   default     = "1.3.4"
   description = "Required Surge XT version. Asserted after `brew install --cask surge-xt` so the build fails loudly if Homebrew's cask has rolled past this — bump only after validating the new release against the pipeline."
+}
+
+variable "codex_version" {
+  type        = string
+  default     = "latest"
+  description = "OpenAI Codex CLI version installed via `npm install -g @openai/codex@<version>`. Matches the CODEX_VERSION arg in docker/ubuntu22_04/Dockerfile's devcontainer-tools stage."
 }
 
 source "tart-cli" "tart" {
@@ -90,23 +90,38 @@ build {
 
   # CLI + GUI tools. Parity with the CLI stack in the Docker
   # devcontainer-tools stage, adapted to macOS: surge-xt ships as a cask
-  # (.vst3 installed to /Library/Audio/Plug-Ins/VST3/Surge XT.vst3).
+  # (.vst3 installed to /Library/Audio/Plug-Ins/VST3/Surge XT.vst3); tmux
+  # + zellij mirror the multiplexers baked into devcontainer-tools; node
+  # provides the `npm` runtime used to install the Codex CLI below.
   provisioner "shell" {
     inline = [
       "touch ~/.zprofile && . ~/.zprofile",
       "brew --version",
       "brew update",
-      "brew install git gh jq rclone bats-core",
+      "brew install git gh jq rclone bats-core tmux zellij node",
       # Install uv from Astral's versioned installer rather than `brew install uv`.
       # Homebrew's uv formula is rolling, so it cannot reliably hold a specific
       # version; the Astral installer URL embeds the version and is reproducible.
       # Keep ${var.uv_version} in sync with docker/ubuntu22_04/Dockerfile so
-      # `uv pip install --torch-backend` resolves identically in Docker and Tart.
+      # `uv sync --frozen` resolves identical wheels in Docker and Tart.
       "curl -LsSf https://astral.sh/uv/${var.uv_version}/install.sh | sh",
       "grep -qxF 'export PATH=\"$HOME/.local/bin:$PATH\"' ~/.zprofile || printf '\\nexport PATH=\"$HOME/.local/bin:$PATH\"\\n' >> ~/.zprofile",
       ". ~/.zprofile",
       "test \"$(uv --version | awk '{print $2}')\" = \"${var.uv_version}\"",
       "brew install --cask claude-code",
+      # OpenAI Codex CLI (parity with devcontainer-tools' per-user npm install).
+      # macOS users own /opt/homebrew (Apple Silicon) so a system-wide
+      # `npm install -g` works without the per-user prefix the Docker image needs.
+      "npm install -g \"@openai/codex@${var.codex_version}\"",
+      "codex --version",
+      # Antigravity (Google) ships the standalone `agy` binary, not on npm; its
+      # installer fetches a SHA512-verified release into ~/.local/bin (upstream
+      # latest — no version flag). Fetched to a file, not piped to bash, so a curl
+      # failure is distinguishable from a script failure. Mirrors devcontainer-tools.
+      "curl -fsSL https://antigravity.google/cli/install.sh -o /tmp/agy-install.sh",
+      "bash /tmp/agy-install.sh",
+      "rm /tmp/agy-install.sh",
+      "agy --version",
       "brew install --cask surge-xt",
       # Hard-fail if Homebrew's cask resolves to a Surge XT version we haven't
       # qualified against the pipeline. `brew list --cask --versions` prints
@@ -125,14 +140,16 @@ build {
   }
 
   # Clone the repo, use venv with all runtime deps (parity with Docker dev-base
-  # stage).
+  # stage). On macOS we resolve torch from PyPI's MPS-capable wheel — no backend
+  # extra on Apple Silicon (the sys_platform marker in [tool.uv.sources] would
+  # not match anyway). Mirrors test-mps.yml's `uv sync --frozen` invocation.
   provisioner "shell" {
     inline = [
       "touch ~/.zprofile && . ~/.zprofile",
       "git clone https://github.com/tinaudio/synth-setter.git ~/synth-setter",
       "cd ~/synth-setter && git checkout ${var.synth_setter_git_ref}",
       "cd ~/synth-setter && uv venv --python ${var.python_version}",
-      "cd ~/synth-setter && uv pip install --torch-backend ${var.torch_backend} -e \".[torch,dev]\"",
+      "cd ~/synth-setter && uv sync --frozen",
       # Mirror the Docker dev-base convention: symlink the cask-installed
       # VST3 bundle to the repo-relative `plugins/Surge XT.vst3` path that
       # configs, CLI `--plugin_path` defaults, and tests all assume. See
@@ -143,6 +160,14 @@ build {
       # into .venv/bin (pre-commit, pyright, pytest, ruff, etc.) are on PATH
       # from login without a manual `source .venv/bin/activate`.
       "touch ~/.zshrc && (grep -qxF 'source ~/synth-setter/.venv/bin/activate' ~/.zshrc || printf '\\nsource ~/synth-setter/.venv/bin/activate\\n' >> ~/.zshrc)",
+      # Diagnostic + wandb env defaults — parity with the ENV block in
+      # docker/ubuntu22_04/Dockerfile's python-base / devcontainer-tools.
+      # PYTORCH_CUDA_ALLOC_CONF is omitted: macOS uses MPS, not CUDA.
+      "grep -qxF 'export HYDRA_FULL_ERROR=1' ~/.zprofile || printf '\\nexport HYDRA_FULL_ERROR=1\\n' >> ~/.zprofile",
+      "grep -qxF 'export PYTHONDONTWRITEBYTECODE=1' ~/.zprofile || printf 'export PYTHONDONTWRITEBYTECODE=1\\n' >> ~/.zprofile",
+      "grep -qxF 'export PYTHONFAULTHANDLER=1' ~/.zprofile || printf 'export PYTHONFAULTHANDLER=1\\n' >> ~/.zprofile",
+      "grep -qxF 'export PYTHONUNBUFFERED=1' ~/.zprofile || printf 'export PYTHONUNBUFFERED=1\\n' >> ~/.zprofile",
+      "grep -qxF 'export WANDB_DATA_DIR=\"$HOME/.cache/wandb\"' ~/.zprofile || printf 'export WANDB_DATA_DIR=\"$HOME/.cache/wandb\"\\n' >> ~/.zprofile",
     ]
   }
 
@@ -151,7 +176,7 @@ build {
   provisioner "shell" {
     inline = [
       "touch ~/.zprofile && . ~/.zprofile",
-      "cd ~/synth-setter && .venv/bin/python -X faulthandler -c \"from src.data.vst.core import load_plugin; load_plugin('plugins/Surge XT.vst3')\"",
+      "cd ~/synth-setter && .venv/bin/python -X faulthandler -c \"from synth_setter.data.vst.core import load_plugin; load_plugin('plugins/Surge XT.vst3')\"",
       "cd ~/synth-setter && .venv/bin/pytest -k 'not slow' -v",
     ]
   }
