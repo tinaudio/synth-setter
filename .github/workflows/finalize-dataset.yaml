@@ -110,10 +110,14 @@ jobs:
       - name: Install project deps (uv sync --frozen, CPU torch)
         run: uv sync --frozen --extra cpu --no-default-groups --group dev
 
+      # WANDB_API_KEY (inherited secret) lets finalize resume the data-generation
+      # run and log the canonical dataset artifact; absent, finalize degrades to
+      # a best-effort no-op rather than failing.
       - name: Run synth-setter-finalize-dataset
         env:
           DATASET_SPEC_URI: ${{ inputs.dataset_spec_uri }}
           PROJECT_ROOT: ${{ github.workspace }}
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
         run: |
           set -euo pipefail
           uv run synth-setter-finalize-dataset \

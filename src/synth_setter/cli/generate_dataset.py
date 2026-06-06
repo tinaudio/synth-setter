@@ -51,7 +51,7 @@ from synth_setter.pipeline.spec_io import (
 )
 from synth_setter.resources import as_file, vst_headless_wrapper
 from synth_setter.utils import extras, log_wandb_provenance, pin_wandb_run_id, register_resolvers
-from synth_setter.utils.instantiators import instantiate_loggers
+from synth_setter.utils.instantiators import close_loggers, instantiate_loggers
 from synth_setter.workspace import operator_workspace
 
 # Side effect only: publish ``PROJECT_ROOT`` so ``${oc.env:PROJECT_ROOT}``
@@ -314,7 +314,7 @@ def generate(spec: DatasetSpec, work_dir: Path, loggers: list[Logger]) -> None: 
         # leaks un-closed on the helper's exception path.
         _log_hyperparams(loggers, spec)
         # Provenance mutates the process-global ``wandb.run``; only stamp it when
-        # a ``WandbLogger`` here owns the run, mirroring ``_close_loggers`` — else
+        # a ``WandbLogger`` here owns the run, mirroring ``close_loggers`` — else
         # an empty-logger run would stamp a foreign run started elsewhere.
         if any(isinstance(lg, WandbLogger) for lg in loggers):
             log_wandb_provenance()
@@ -371,7 +371,7 @@ def generate(spec: DatasetSpec, work_dir: Path, loggers: list[Logger]) -> None: 
         status = "failed"
         raise
     finally:
-        _close_loggers(loggers, status)
+        close_loggers(loggers, status)
 
 
 def _log_hyperparams(loggers: list[Logger], spec: DatasetSpec) -> None:
@@ -480,34 +480,6 @@ def _log_summary(
             lg.log_metrics(payload)
         except Exception as exc:  # noqa: BLE001 — third-party logger failures must not abort the run
             logger.warning(f"log_metrics(summary) failed on {type(lg).__name__}: {exc}")
-
-
-def _close_loggers(loggers: list[Logger], status: str) -> None:
-    """Finalize each logger and flush any live wandb run.
-
-    ``WandbLogger.finalize`` records status but does not close the run;
-    ``wandb.finish()`` is what flushes the offline ``.wandb`` binary
-    (matches the pattern in ``synth_setter.utils.utils``).
-
-    :param loggers: Lightning loggers — finalize is invoked on each.
-    :param status: ``"success"`` or ``"failed"``; forwarded verbatim to the
-        loggers' ``finalize`` contract.
-    """
-    for lg in loggers:
-        try:
-            lg.finalize(status)
-        except Exception as exc:  # noqa: BLE001 — finalize errors must not mask the original raise
-            logger.warning(f"logger finalize failed on {type(lg).__name__}: {exc}")
-    # Only close the wandb run if a ``WandbLogger`` is in ``loggers`` — i.e. we
-    # opened it. Otherwise a stale ``wandb.run`` started elsewhere in the
-    # process (e.g. another library, a sibling test) would be silently
-    # finished here.
-    have_wandb_logger = any(isinstance(lg, WandbLogger) for lg in loggers)
-    if have_wandb_logger and wandb.run is not None:
-        try:
-            wandb.finish()
-        except Exception as exc:  # noqa: BLE001 — finish errors must not mask the original raise
-            logger.warning(f"wandb.finish() failed: {exc}")
 
 
 def _dispatch_shards_serial(

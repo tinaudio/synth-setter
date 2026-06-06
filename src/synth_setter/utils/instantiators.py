@@ -1,5 +1,7 @@
 """Hydra helpers that turn callback and logger config groups into instantiated objects."""
 
+from importlib.util import find_spec
+
 import hydra
 from lightning import Callback
 from lightning.pytorch.loggers import Logger
@@ -58,3 +60,32 @@ def instantiate_loggers(logger_cfg: DictConfig) -> list[Logger]:
             logger.append(hydra.utils.instantiate(lg_conf))
 
     return logger
+
+
+def close_loggers(loggers: list[Logger], status: str) -> None:
+    """Finalize each logger and flush any live wandb run.
+
+    ``WandbLogger.finalize`` records status but does not close the run;
+    ``wandb.finish()`` is what flushes the offline ``.wandb`` binary. The run
+    is closed only when a ``WandbLogger`` is in ``loggers`` — i.e. this process
+    opened it — so a stale ``wandb.run`` started elsewhere is left untouched.
+
+    :param loggers: Lightning loggers; ``finalize`` is invoked on each.
+    :param status: ``"success"`` or ``"failed"``; forwarded verbatim to each
+        logger's ``finalize`` contract.
+    """
+    for lg in loggers:
+        try:
+            lg.finalize(status)
+        except Exception as exc:  # noqa: BLE001 — finalize errors must not mask the original raise
+            log.warning(f"logger finalize failed on {type(lg).__name__}: {exc}")
+    if not find_spec("wandb"):
+        return
+    import wandb
+    from lightning.pytorch.loggers.wandb import WandbLogger
+
+    if any(isinstance(lg, WandbLogger) for lg in loggers) and wandb.run is not None:
+        try:
+            wandb.finish()
+        except Exception as exc:  # noqa: BLE001 — finish errors must not mask the original raise
+            log.warning(f"wandb.finish() failed: {exc}")
