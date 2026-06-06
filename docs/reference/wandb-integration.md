@@ -261,7 +261,7 @@ Each trial subprocess opens its own wandb run with `id = spec.run_id`; the
 ### 5f. Inline oracle eval (`oracle_eval_inline=true`)
 
 When `oracle_eval_inline=true`, the local-run path shells out to
-`synth_setter.cli.eval` after `generate(...)` has closed its run.
+`synth_setter.cli.eval` **once per split (train, val, test)** after `generate(...)` has closed its run.
 `_run_oracle_eval_subprocess` (`src/synth_setter/cli/generate_dataset.py`)
 re-opens the same run via `logger.wandb.id=<spec.run_id> +logger.wandb.resume=must`, runs `mode=predict` with `render=surge_simple` to
 re-render the predicted params, and deposits `audio/*` audio-similarity

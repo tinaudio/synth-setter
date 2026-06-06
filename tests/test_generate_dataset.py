@@ -411,28 +411,42 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
             f"--- STDERR (tail) ---\n{result.stderr[-2000:]}"
         )
 
-        metrics_files = list(run_dir.glob("oracle_eval/*/metrics/metrics.json"))
-        assert len(metrics_files) == 1, (
-            f"expected one oracle-eval metrics.json under {run_dir}/oracle_eval/; "
-            f"got {metrics_files}"
+        # One metrics.json per split: oracle_eval/<split>/<run_id>/.
+        metrics_files = list(run_dir.glob("oracle_eval/*/*/metrics/metrics.json"))
+        assert len(metrics_files) == 3, (
+            f"expected three oracle-eval metrics.json files (one per split) under "
+            f"{run_dir}/oracle_eval/; got {metrics_files}"
         )
-        metrics = json.loads(metrics_files[0].read_text())
-
-        for name in _ORACLE_AUDIO_METRICS:
-            for stat in ("mean", "std"):
-                key = f"audio/{name}_{stat}"
-                value = metrics.get(key)
-                assert isinstance(value, float) and math.isfinite(value), (
-                    f"{key} is not a finite float: {value!r} (metrics={metrics})"
-                )
-
-        # fake_oracle returns params verbatim, so the re-rendered audio matches
-        # the target up to Surge XT render jitter: mean distances stay under the
-        # canonical envelope and the rms cosine stays above its floor.
         bounds = ORACLE_AUDIO_METRIC_BOUNDS
-        assert metrics["audio/mss_mean"] < bounds.mss_max, metrics
-        assert metrics["audio/wmfcc_mean"] < bounds.wmfcc_max, metrics
-        assert metrics["audio/sot_mean"] < bounds.sot_max, metrics
-        assert metrics["audio/rms_mean"] > bounds.rms_min, metrics
+        for mf in metrics_files:
+            metrics = json.loads(mf.read_text())
+            for name in _ORACLE_AUDIO_METRICS:
+                for stat in ("mean", "std"):
+                    key = f"audio/{name}_{stat}"
+                    value = metrics.get(key)
+                    assert isinstance(value, float) and math.isfinite(value), (
+                        f"{key} is not a finite float: {value!r} (split={mf.parent.parent.parent.name}, "
+                        f"metrics={metrics})"
+                    )
+
+            # fake_oracle returns params verbatim, so the re-rendered audio matches
+            # the target up to Surge XT render jitter: mean distances stay under the
+            # canonical envelope and the rms cosine stays above its floor.
+            assert metrics["audio/mss_mean"] < bounds.mss_max, (
+                mf.parent.parent.parent.name,
+                metrics,
+            )
+            assert metrics["audio/wmfcc_mean"] < bounds.wmfcc_max, (
+                mf.parent.parent.parent.name,
+                metrics,
+            )
+            assert metrics["audio/sot_mean"] < bounds.sot_max, (
+                mf.parent.parent.parent.name,
+                metrics,
+            )
+            assert metrics["audio/rms_mean"] > bounds.rms_min, (
+                mf.parent.parent.parent.name,
+                metrics,
+            )
     finally:
         r2_io.purge_prefix(cfg_dataset.r2.bucket, prefix)

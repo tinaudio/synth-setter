@@ -376,9 +376,9 @@ def test_oracle_eval_inline_resumes_generate_wandb_run(
     One CLI invocation with ``oracle_eval_inline=true`` +
     ``finalize_inline=true`` under ``WANDB_MODE=offline``. After the CLI
     exits, the launcher's hydra dir holds generate's
-    ``offline-run-*-<run_id>``, and its ``oracle_eval/<run_id>/`` subdir
-    holds the eval's; the two ``<run_id>`` slugs must match (the eval
-    child resumed the same wandb run). Generate's dir must carry shard +
+    ``offline-run-*-<run_id>``, and its ``oracle_eval/<split>/<run_id>/``
+    subdir holds the eval's; the two ``<run_id>`` slugs must match (the
+    eval child resumed the same wandb run). Generate's dir must carry shard +
     summary history rows; eval's dir must carry at least one ``audio/*``
     row from the predict-mode oracle eval's audio metrics.
 
@@ -405,9 +405,13 @@ def test_oracle_eval_inline_resumes_generate_wandb_run(
     generate_run_dir = _find_offline_run_dir(hydra_run_dir)
     generate_run_id = generate_run_dir.name.split("-", 3)[-1]
 
-    # main() writes oracle_eval/<run_id>/ under cfg.paths.output_dir
-    # (= ${hydra:runtime.output_dir}), which the fixture pins to hydra_run_dir.
-    eval_output_dir = hydra_run_dir / "oracle_eval" / generate_run_id
+    # main() writes oracle_eval/<split>/<run_id>/ for each split.
+    for _split in ("train", "val"):
+        assert (hydra_run_dir / "oracle_eval" / _split / generate_run_id).is_dir(), (
+            f"expected eval output dir for {_split!r} split; "
+            f"oracle_eval_inline subprocess call may have been silently dropped"
+        )
+    eval_output_dir = hydra_run_dir / "oracle_eval" / "test" / generate_run_id
     assert eval_output_dir.is_dir(), (
         f"expected eval output dir at {eval_output_dir}; "
         f"main()'s oracle_eval_inline branch did not run with the launcher's run_id"
