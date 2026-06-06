@@ -202,7 +202,6 @@ repos:
             jobs/predict/flowmlp-full\.sh|
             jobs/predict/flowmlp-nsynth\.sh|
             jobs/predict/flowmlp-simple\.sh|
-            jobs/predict/get-ckpt-from-wandb\.sh|
             jobs/predict/vae-fsd50k\.sh|
             jobs/predict/vae-full\.sh|
             jobs/predict/vae-nsynth\.sh|

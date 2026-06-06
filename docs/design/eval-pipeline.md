@@ -73,20 +73,28 @@ Separately, the data pipeline (#74) already uses R2 as the source of truth for g
 
 ### Local development (target state)
 
-The experiment config pins everything needed to reproduce an eval — model, data, and checkpoint:
+The shared experiment config pins model and data; a predict-only `wandb_checkpoint` overlay adds
+the checkpoint, so training composes the experiment without ever resolving a W&B artifact:
 
 ```yaml
-# src/synth_setter/configs/experiment/surge/flow_simple.yaml (proposed)
+# src/synth_setter/configs/experiment/surge/flow_simple.yaml
 defaults:
   - override /datamodule: surge_simple
   - override /model: surge_flow
   - override /callbacks: eval_surge
 
 experiment_name: flow_simple
-ckpt_path: ${wandb:tinaudio/synth-setter/model-flow_simple:latest}
 model:
   test_cfg_strength: 2.0
   test_sample_steps: 100
+```
+
+```yaml
+# src/synth_setter/configs/experiment/surge/wandb_checkpoint/flow_simple.yaml
+defaults:
+  - /experiment/surge/flow_simple
+  - _self_
+ckpt_path: ${wandb:tinaudio/synth-setter/model-flow_simple:latest}
 ```
 
 ```bash
@@ -96,7 +104,7 @@ cp .env.example .env
 # Secrets are documented in storage-provenance-spec.md §9.
 
 # 2. Run full eval — predict → render → metrics in one command
-make eval EXPERIMENT=surge/flow_simple
+make eval EXPERIMENT=surge/wandb_checkpoint/flow_simple
 # → Checkpoint auto-downloaded from W&B via ${wandb:...} resolver (cached after)
 # → Predictions, audio, and metrics written to
 #   logs/eval/flow_simple/flow_simple-20260315T091500250Z/surge_simple/surge_simple-20260320T160000750Z/
@@ -252,7 +260,7 @@ When `cfg.mode == "predict"`, `cli/eval.py` invokes `_run_predict_postprocessing
 
 On Linux the render subprocess is prefixed with the headless wrapper materialised via `synth_setter.resources.vst_headless_wrapper()` so the VST3 plugin sees an Xvfb display before pedalboard imports it; the metrics subprocess is CPU-only and runs unwrapped. Both default-off so `mode: test` and `mode: validate` paths are unchanged.
 
-When `evaluation.compute_metrics` runs, the aggregated values from `aggregated_metrics.csv` are also surfaced to the active wandb run (as `audio/<name>_{mean,std}`) and, when the auto-shuffle probe ran, `shuffled_audio/<name>_{mean,std}` from `aggregated_metrics_shuffled.csv` — and merged into the dict returned by `evaluate()` alongside Lightning's `trainer.callback_metrics`, so the same wandb run that holds `test/param_mse` can carry the audio metrics too.
+When `evaluation.compute_metrics` runs, the aggregated values from `aggregated_metrics.csv` are surfaced to the active wandb run (as `audio/<name>_{mean,std}` scalars) and, when the auto-shuffle probe ran, `shuffled_audio/<name>_{mean,std}` from `aggregated_metrics_shuffled.csv` — and merged into the dict returned by `evaluate()` alongside Lightning's `trainer.callback_metrics`. Separately, `metrics.csv` is uploaded as `audio/per_sample_metrics` (a `wandb.Table`) — logged to W&B only, not included in the returned dict — so the same wandb run that holds `test/param_mse` can carry the aggregated, shuffled, and per-sample audio metrics too.
 
 ### 5.2 Render
 
@@ -340,20 +348,27 @@ Checkpoints are stored in **W&B artifacts**, not R2. This is a deliberate decisi
 **Upload** (training): `log_model: "all"` in `src/synth_setter/configs/logger/wandb.yaml` uploads every
 checkpoint saved by `ModelCheckpoint` as a W&B artifact immediately. Zero new code — already configured.
 
-**Download** (eval): Checkpoints are resolved lazily via a custom OmegaConf resolver. The
-experiment config pins a W&B artifact reference using resolver syntax:
+**Download** (eval): Checkpoints are resolved lazily via a custom OmegaConf resolver. A
+predict-only overlay pins a W&B artifact reference using resolver syntax — kept separate from
+the shared `surge/<id>` experiment so `train.yaml` never composes (and never resolves) it:
 
 ```yaml
-# src/synth_setter/configs/experiment/surge/flow_simple.yaml
+# src/synth_setter/configs/experiment/surge/wandb_checkpoint/flow_simple.yaml
+defaults:
+  - /experiment/surge/flow_simple
+  - _self_
 ckpt_path: ${wandb:tinaudio/synth-setter/model-flow_simple:latest}
 ```
 
-> **Not yet implemented.** The `wandb` resolver does not exist yet. `src/synth_setter/utils/utils.py`
-> currently only has `mul` and `div` resolvers. The implementation below is the proposed
-> design (Task 3.1, #128).
+> **Implemented.** The `wandb` resolver lives in `src/synth_setter/utils/utils.py`
+> (`_resolve_wandb_checkpoint`, registered by `register_resolvers()` alongside `mul`/`div`),
+> and the 18 `jobs/predict/*.sh` launchers now compose `experiment=surge/wandb_checkpoint/<id>`
+> (`ckpt_path: ${wandb:...}` over the shared experiment) plus `mode=predict`, instead of
+> sourcing `get-ckpt-from-wandb.sh` (Task 3.1, #128).
 
-The resolver will be added to `src/synth_setter/utils/utils.py` alongside existing `mul` and `div` resolvers
-(called via `register_resolvers()` at startup). Proposed implementation (Task 3.1, #128):
+The resolver sits in `src/synth_setter/utils/utils.py` alongside the existing `mul` and `div` resolvers
+(registered via `register_resolvers()` at startup). Reference sketch (the shipped version caches under a
+path-safe slug + hash and errors on a missing/ambiguous `.ckpt`):
 
 ```python
 def _wandb_resolver(artifact_ref: str) -> str:
@@ -528,11 +543,11 @@ source jobs/predict/get-ckpt-from-wandb.sh x118ylu9   # always this run ID
 
 Three resolution patterns, each appropriate for a different use case:
 
-| Pattern                | Where specified                                              | Use case                                                               | Example                                                              |
-| ---------------------- | ------------------------------------------------------------ | ---------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| CLI arg                | Command line                                                 | Ad-hoc eval of a new/local checkpoint                                  | `python -m synth_setter.cli.eval ckpt_path=./my-ckpt.ckpt`           |
-| Experiment config      | `src/synth_setter/configs/experiment/surge/flow_simple.yaml` | Reproducible eval of a known model — checkpoint pinned as W&B artifact | `ckpt_path: ${wandb:tinaudio/synth-setter/model-flow_simple:latest}` |
-| `null` (training only) | `src/synth_setter/configs/train.yaml`                        | Start training fresh                                                   | Already works                                                        |
+| Pattern                    | Where specified                                                               | Use case                                                               | Example                                                              |
+| -------------------------- | ----------------------------------------------------------------------------- | ---------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| CLI arg                    | Command line                                                                  | Ad-hoc eval of a new/local checkpoint                                  | `python -m synth_setter.cli.eval ckpt_path=./my-ckpt.ckpt`           |
+| `wandb_checkpoint` overlay | `src/synth_setter/configs/experiment/surge/wandb_checkpoint/flow_simple.yaml` | Reproducible eval of a known model — checkpoint pinned as W&B artifact | `ckpt_path: ${wandb:tinaudio/synth-setter/model-flow_simple:latest}` |
+| `null` (training only)     | `src/synth_setter/configs/train.yaml`                                         | Start training fresh                                                   | Already works                                                        |
 
 **Resolution order** (Hydra's standard override precedence):
 
@@ -588,11 +603,11 @@ hands Lightning a resolved local path transparently.
 
 Each system handles what it's best at:
 
-| System                                 | What it stores                                                                                                                 | Why                                                       |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------- |
-| **W&B**                                | Training metrics, checkpoints (`log_model: "all"` — every saved checkpoint), eval summary metrics, artifact lineage            | UI for browsing/comparing, lineage graphs, model registry |
-| **R2**                                 | Datasets (generated shards, train/val/test splits), eval bulk artifacts (predictions, audio, spectrograms, per-sample metrics) | Too large for W&B, cheaper per GB, fast rclone egress     |
-| **Hydra config** (`config.yaml` in R2) | Full frozen config at eval time — every parameter, override, and version                                                       | Exact reproducibility without querying W&B                |
+| System                                 | What it stores                                                                                                                                                           | Why                                                       |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------- |
+| **W&B**                                | Training metrics, checkpoints (`log_model: "all"` — every saved checkpoint), eval summary metrics, per-sample eval Tables (`audio/per_sample_metrics`), artifact lineage | UI for browsing/comparing, lineage graphs, model registry |
+| **R2**                                 | Datasets (generated shards, train/val/test splits), eval bulk artifacts (predictions, audio, spectrograms, per-sample metrics CSV file)                                  | Too large for W&B, cheaper per GB, fast rclone egress     |
+| **Hydra config** (`config.yaml` in R2) | Full frozen config at eval time — every parameter, override, and version                                                                                                 | Exact reproducibility without querying W&B                |
 
 **Provenance is recorded in three places:**
 
@@ -624,25 +639,25 @@ This section consolidates every configuration and environment behavior change in
 
 #### Proposed behavior (to-be)
 
-| Concern                      | Proposed mechanism                                                                                                                                                       | Where defined                                                                 | Portable? | Change from current                              |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------- | --------- | ------------------------------------------------ |
-| **Dataset path**             | `dataset_root: ${paths.data_dir}/surge_simple/surge_simple-20260312T143022500Z` (paths convention + run ID)                                                              | `src/synth_setter/configs/datamodule/surge_simple.yaml`                       | Yes       | Hardcoded → paths convention + run ID            |
-| **Dataset path override**    | CLI: `datamodule.dataset_root=/cluster/path/surge_simple-20260312T143022500Z/`                                                                                           | Command line                                                                  | Yes       | Implicit → explicit                              |
-| **Checkpoint resolution**    | `ckpt_path: ???` (base), pinned in experiment configs                                                                                                                    | `src/synth_setter/configs/eval.yaml` + `src/synth_setter/configs/experiment/` | Yes       | Shell script → Hydra config                      |
-| **Checkpoint: ad-hoc**       | CLI: `ckpt_path=./local/best.ckpt`                                                                                                                                       | Command line                                                                  | No        | Same as today but without shell wrapper          |
-| **Checkpoint: reproducible** | `ckpt_path: ${wandb:tinaudio/synth-setter/model-flow_simple:latest}` in experiment config                                                                                | `src/synth_setter/configs/experiment/surge/flow_simple.yaml`                  | Yes       | **New** — portable, pinned                       |
-| **R2 dataset access**        | `datamodule.download_dataset_root_uri=r2://intermediate-data/...` triggers no-clobber download in `prepare_data()`                                                       | CLI or experiment config (config default `null`)                              | Yes       | Already shipped — explicit opt-in                |
-| **Checkpoint download**      | `${wandb:...}` OmegaConf resolver → lazy W&B artifact download to `$PROJECT_ROOT/.cache/checkpoints/`                                                                    | `src/synth_setter/utils/utils.py` (`register_resolvers()`)                    | Yes       | **New** — replaces `get-ckpt-from-wandb.sh`      |
-| **Checkpoint upload**        | W&B `log_model: "all"` — uploads every checkpoint immediately                                                                                                            | `src/synth_setter/configs/logger/wandb.yaml`                                  | Yes       | Already configured — no change needed            |
-| **Credentials**              | `.env` for R2 + W&B secrets only                                                                                                                                         | `.env` / `.env.example`                                                       | Yes       | **New** — secrets only, no paths                 |
-| **Display handling**         | Auto-detect: macOS native / Linux Xvfb / Docker baked                                                                                                                    | `renderscript.sh`                                                             | Yes       | Linux-only → cross-platform                      |
-| **Log directory**            | `${paths.root_dir}/logs/` (unchanged)                                                                                                                                    | `src/synth_setter/configs/paths/default.yaml`                                 | Yes       | No change                                        |
-| **Predict output**           | `${paths.output_dir}/predictions` (unchanged)                                                                                                                            | `src/synth_setter/configs/callbacks/prediction_writer.yaml`                   | Yes       | No change                                        |
-| **W&B entity**               | `entity: ${oc.env:WANDB_ENTITY,tinaudio}`, `project: ${oc.env:WANDB_PROJECT,synth-setter}`                                                                               | `src/synth_setter/configs/logger/wandb.yaml`                                  | Yes       | Hardcoded → configurable                         |
-| **SGE scripts**              | Deprecated — left as-is, not maintained                                                                                                                                  | `jobs/predict/*.sh`                                                           | No        | Active → deprecated                              |
-| **R2 eval artifact upload**  | `make upload-eval` → `r2:intermediate-data/eval/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/{eval_config_id}/{eval_wandb_run_id}/` | `Makefile`                                                                    | Yes       | **New** — 6-segment path encodes full provenance |
-| **W&B eval lineage**         | `use_artifact()` connects dataset → model → eval; R2 reference artifact for bulk files                                                                                   | `src/synth_setter/evaluation/compute_audio_metrics.py`                        | Yes       | **New** — programmatic provenance chain          |
-| **Eval CLI**                 | `make predict`, `make render`, `make metrics`                                                                                                                            | `Makefile`                                                                    | Yes       | **New** — discoverable, consistent               |
+| Concern                      | Proposed mechanism                                                                                                                                                       | Where defined                                                                                        | Portable? | Change from current                              |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- | --------- | ------------------------------------------------ |
+| **Dataset path**             | `dataset_root: ${paths.data_dir}/surge_simple/surge_simple-20260312T143022500Z` (paths convention + run ID)                                                              | `src/synth_setter/configs/datamodule/surge_simple.yaml`                                              | Yes       | Hardcoded → paths convention + run ID            |
+| **Dataset path override**    | CLI: `datamodule.dataset_root=/cluster/path/surge_simple-20260312T143022500Z/`                                                                                           | Command line                                                                                         | Yes       | Implicit → explicit                              |
+| **Checkpoint resolution**    | `ckpt_path: ???` (base), pinned in predict-only `surge/wandb_checkpoint/<id>` overlays                                                                                   | `src/synth_setter/configs/eval.yaml` + `src/synth_setter/configs/experiment/surge/wandb_checkpoint/` | Yes       | Shell script → Hydra config                      |
+| **Checkpoint: ad-hoc**       | CLI: `ckpt_path=./local/best.ckpt`                                                                                                                                       | Command line                                                                                         | No        | Same as today but without shell wrapper          |
+| **Checkpoint: reproducible** | `ckpt_path: ${wandb:tinaudio/synth-setter/model-flow_simple:latest}` in `wandb_checkpoint` overlay                                                                       | `src/synth_setter/configs/experiment/surge/wandb_checkpoint/flow_simple.yaml`                        | Yes       | **New** — portable, pinned                       |
+| **R2 dataset access**        | `datamodule.download_dataset_root_uri=r2://intermediate-data/...` triggers no-clobber download in `prepare_data()`                                                       | CLI or experiment config (config default `null`)                                                     | Yes       | Already shipped — explicit opt-in                |
+| **Checkpoint download**      | `${wandb:...}` OmegaConf resolver → lazy W&B artifact download to `$PROJECT_ROOT/.cache/checkpoints/`                                                                    | `src/synth_setter/utils/utils.py` (`register_resolvers()`)                                           | Yes       | **New** — replaces `get-ckpt-from-wandb.sh`      |
+| **Checkpoint upload**        | W&B `log_model: "all"` — uploads every checkpoint immediately                                                                                                            | `src/synth_setter/configs/logger/wandb.yaml`                                                         | Yes       | Already configured — no change needed            |
+| **Credentials**              | `.env` for R2 + W&B secrets only                                                                                                                                         | `.env` / `.env.example`                                                                              | Yes       | **New** — secrets only, no paths                 |
+| **Display handling**         | Auto-detect: macOS native / Linux Xvfb / Docker baked                                                                                                                    | `renderscript.sh`                                                                                    | Yes       | Linux-only → cross-platform                      |
+| **Log directory**            | `${paths.root_dir}/logs/` (unchanged)                                                                                                                                    | `src/synth_setter/configs/paths/default.yaml`                                                        | Yes       | No change                                        |
+| **Predict output**           | `${paths.output_dir}/predictions` (unchanged)                                                                                                                            | `src/synth_setter/configs/callbacks/prediction_writer.yaml`                                          | Yes       | No change                                        |
+| **W&B entity**               | `entity: ${oc.env:WANDB_ENTITY,tinaudio}`, `project: ${oc.env:WANDB_PROJECT,synth-setter}`                                                                               | `src/synth_setter/configs/logger/wandb.yaml`                                                         | Yes       | Hardcoded → configurable                         |
+| **SGE scripts**              | Deprecated — left as-is, not maintained                                                                                                                                  | `jobs/predict/*.sh`                                                                                  | No        | Active → deprecated                              |
+| **R2 eval artifact upload**  | `make upload-eval` → `r2:intermediate-data/eval/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/{eval_config_id}/{eval_wandb_run_id}/` | `Makefile`                                                                                           | Yes       | **New** — 6-segment path encodes full provenance |
+| **W&B eval lineage**         | `use_artifact()` connects dataset → model → eval; R2 reference artifact for bulk files                                                                                   | `src/synth_setter/evaluation/compute_audio_metrics.py`                                               | Yes       | **New** — programmatic provenance chain          |
+| **Eval CLI**                 | `make predict`, `make render`, `make metrics`                                                                                                                            | `Makefile`                                                                                           | Yes       | **New** — discoverable, consistent               |
 
 Cloud evaluation runs as `MODE=eval` (planned — [#410](https://github.com/tinaudio/synth-setter/issues/410)). Env var contract follows the same pattern as `MODE=train`: download checkpoint + dataset from R2, run `src/synth_setter/cli/eval.py`, upload results. No implementation exists on any branch.
 
@@ -940,11 +955,21 @@ ______________________________________________________________________
 
 **Files to modify:**
 
-- `src/synth_setter/utils/utils.py` — add `_wandb_resolver` to `register_resolvers()` (~15 lines)
+- `src/synth_setter/utils/utils.py` — add `_resolve_wandb_checkpoint` to `register_resolvers()`
+- `jobs/predict/*.sh` (18 launchers) — drop `get-ckpt-from-wandb.sh`; compose
+  `experiment=surge/wandb_checkpoint/<config_id>` plus `mode=predict`
 
 **Files to create:**
 
-- `tests/test_wandb_resolver.py` — mock W&B API, verify download + cache logic
+- `src/synth_setter/configs/experiment/surge/wandb_checkpoint/{ffn,flow,flow_mlp,vae}_{full,simple}.yaml`
+  — predict-only overlays pinning `ckpt_path: ${wandb:tinaudio/synth-setter/model-<config_id>:latest}`
+  over the shared `surge/<config_id>` experiment, kept off the train path
+- `tests/test_wandb_resolver.py` — fake W&B API, verify download + cache logic and overlay-pinned resolution
+- `tests/helpers/wandb_artifacts.py` — publish a smoke checkpoint to `tinaudio/synth-setter-citest` for the live round-trip tests
+
+**Files to delete:**
+
+- `jobs/predict/get-ckpt-from-wandb.sh` — superseded by the `${wandb:...}` resolver
 
 **Key behaviors:**
 

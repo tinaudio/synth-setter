@@ -1,6 +1,496 @@
 # CHANGELOG
 
 
+## v8.29.0 (2026-06-06)
+
+### Features
+
+- **eval**: Log per-sample metrics.csv to wandb as Table
+  ([#1488](https://github.com/tinaudio/synth-setter/pull/1488),
+  [`652d77c`](https://github.com/tinaudio/synth-setter/commit/652d77ca97b81509a5f7d4e1dbea3c4d281cbb5c))
+
+* feat(eval): log per-sample metrics.csv to wandb as Table
+
+Add _log_metrics_csv_to_wandb that reads metrics.csv written by compute_audio_metrics and uploads it
+  as a wandb.Table under audio/per_sample_metrics; called in _run_predict_postprocessing immediately
+  after the existing scalar-metrics log.
+
+* test(eval): add e2e coverage for metrics-csv Table wiring through evaluate()
+
+Assert that mode=predict with an active wandb.run uploads metrics.csv as a wandb.Table under
+  audio/per_sample_metrics, exercising the call path through _run_predict_postprocessing →
+  _log_metrics_csv_to_wandb.
+
+Refs #1473
+
+* style(eval): hoist imports and remove stale section separator
+
+Move module-level wandb and logging imports out of test function bodies into the module-level import
+  block; drop the decorative section-separator comment and a no-value inline comment.
+
+* docs(eval): update wandb-integration and eval-pipeline docs for per-sample metrics Table
+
+Add `audio/per_sample_metrics` wandb.Table row to §2i, note no-op behaviour, update §4 entry points
+  description, extend §5.1 paragraph, and correct §7.4 storage split to show per-sample metrics land
+  in both R2 (CSV file) and W&B (Table).
+
+* fix(eval): normalise metrics.csv index name and fixture format
+
+- Name the unnamed index column "sample_id" before reset_index() so the wandb Table always carries a
+  human-readable column header instead of "Unnamed: 0" or "index" (Copilot comment #3366533630) -
+  Update _FAKE_METRICS_CSV in test_eval.py and _METRICS_CSV in test_eval_postprocessing.py to use
+  the real on-disk format written by compute_audio_metrics (leading-comma unnamed index, not
+  "sample_id" header) so schema regressions are caught (#3366533642, #3366533646)
+
+* docs(eval): clarify metrics.csv Table is W&B-only, not in evaluate() return dict
+
+The previous wording implied the wandb.Table from metrics.csv was merged into evaluate()'s returned
+  metric_dict alongside the aggregated scalars. Only the aggregated scalars
+  (audio/<name>_{mean,std}) enter the return dict; the per-sample Table is logged to W&B only.
+
+Addresses Copilot comment #3366548786.
+
+* docs(eval): clarify wandb-integration §2i — Table is W&B-only, not in return dict
+
+Fixes ambiguous "The same dict is also merged" sentence that implied the per-sample Table is
+  included in evaluate()'s return value. Only the aggregated scalar metrics dict is merged;
+  audio/per_sample_metrics is W&B-only.
+
+* fix(eval): honor metric_prefix for per-sample metrics Table
+
+The merge with main brought in evaluation.metric_prefix (added for the shuffled-audio metrics). The
+  per-sample metrics Table introduced by this PR logged under a fixed audio/per_sample_metrics key,
+  so two splits sharing one wandb run would overwrite each other's Table. Thread the computed prefix
+  through _log_metrics_csv_to_wandb to match the scalar metrics. Also remove a stray merge-conflict
+  marker left in the rendered wandb-integration docs.
+
+* fix(eval): make per-sample table log-failure warning accurate
+
+The except block wraps pd.read_csv / wandb.Table / run.log, but the warning blamed wandb.run.log
+  specifically, so a CSV-parse failure would point logs at the wrong source. Use a generic message
+  naming the operation, not one call within it.
+
+* test(eval): stub wandb.finish in per-sample table e2e test
+
+task_wrapper's teardown calls module-level wandb.finish() whenever wandb.run is truthy, and this
+  test sets wandb.run to a spy — so the real wandb.finish() ran during the test. Patch it to a no-op
+  so only the spy run's log payload is exercised, removing the side-effect/flakiness risk.
+
+
+## v8.28.0 (2026-06-06)
+
+### Features
+
+- **finalize**: Take dataset_root_uri instead of spec uri
+  ([#1543](https://github.com/tinaudio/synth-setter/pull/1543),
+  [`f4a2051`](https://github.com/tinaudio/synth-setter/commit/f4a205176903471cadeb8c0f79de5c150d58a31f))
+
+* feat(finalize): take dataset_root_uri instead of spec uri
+
+finalize_dataset now accepts the dataset run-prefix directory rather than the full URI of
+  input_spec.json. A new spec_io.load_spec_from_root joins input_spec.json under the root
+  (tolerating a present/absent trailing slash) and delegates to load_spec_from_uri, so callers pass
+  the prefix the generate stage wrote (data/<task>/<run>/) and finalize discovers the spec itself.
+
+The reusable finalize-dataset.yaml workflow renames its input to dataset_root_uri;
+  generate-dataset-shards.yaml derives the root from the materialized spec_uri and forwards it.
+  Naming mirrors the existing datamodule download_dataset_root_uri convention.
+
+* test(finalize): pin load_spec_from_root filename join via captured uri
+
+The trailing-slash round-trip test only exercised a file:// root, where the double slash a missing
+  rstrip would leak gets normalized away — so the rstrip was a mutation survivor. Replace with a
+  parametrized test that captures the URI handed to load_spec_from_uri and asserts the exact
+  <root>/input_spec.json join for both slash forms over an r2:// root, where // is not collapsed.
+  Keep one local round-trip case for the read path.
+
+* docs(data-pipeline): tighten finalize doc-map covers entry
+
+Drop filler ("the", "on R2") and collapse the parenthetical rationale so the dataset_root_uri clause
+  reads terser, per comment-hygiene C12.
+
+* docs(data-pipeline): list load_spec_from_root in spec_io doc-map entry
+
+The spec_io covers entry enumerates the public readers but omitted the new load_spec_from_root — the
+  very helper the finalize entrypoint now uses. Add it so the doc-map stays in sync with __all__.
+
+
+## v8.27.0 (2026-06-06)
+
+### Build System
+
+- **tart**: Local helper to validate/build the macOS VM template
+  ([#1540](https://github.com/tinaudio/synth-setter/pull/1540),
+  [`fa10b90`](https://github.com/tinaudio/synth-setter/commit/fa10b903dcb2584ce966bb02741d7b70efdf815b))
+
+* build(tart): add local helper to validate/build the macOS VM template
+
+tart/build.sh reproduces the gates in .github/workflows/tart-image-build.yml on a contributor's
+  machine: packer fmt -check + init + validate by default, and the full packer build (pinned to the
+  current HEAD, throwaway VM name) behind --build, so template regressions surface before pushing.
+
+Closes #1539
+
+* docs(tart): surface tart/build.sh in getting-started and doc-map
+
+The § B.3 "Build the image yourself" walkthrough listed the raw packer commands the helper now wraps
+  but never mentioned the helper; add a short pointer, and list build.sh in the tart/** doc-map
+  covers string.
+
+Refs #1539
+
+* build(tart): fail fast on non-Apple-Silicon host / missing tart
+
+--build drives Tart's Virtualization.framework, which only runs on Apple Silicon macOS and needs the
+  tart CLI. Guard both with actionable messages instead of leaving Packer/Tart to emit a cryptic
+  downstream error.
+
+Addresses Copilot review feedback on PR #1540. Refs #1539
+
+* build(tart): reject extra arguments after the first
+
+Argument parsing only inspected $1, so an unknown flag after a valid one (e.g. `--build --nope`) was
+  silently ignored. Reject any invocation with more than one argument so misuse errors with exit 2.
+
+* build(tart): harden --build preflights and packer hint
+
+Address Copilot's second-round review on PR #1540: - Detect Apple Silicon via `sysctl
+  hw.optional.arm64` so --build still works under Rosetta (where `uname -m` misreports x86_64). -
+  Fail with an actionable message when git HEAD can't be resolved (non-repo / git absent) instead of
+  letting `set -e` abort on a raw git error. - Point the missing-packer hint at the official install
+  docs (the validate path is host-agnostic), keeping the Homebrew command as an example.
+
+### Continuous Integration
+
+- Make pre-PR review gate worktree-aware
+  ([#1538](https://github.com/tinaudio/synth-setter/pull/1538),
+  [`9831fda`](https://github.com/tinaudio/synth-setter/commit/9831fda66dd546c256b2ef2fbe1daac56e0a6cc0))
+
+The pre-PR review gate runs as a PreToolUse hook from the primary checkout, always on the default
+  branch, so for the mandated worktree workflow it was unsatisfiable: it resolved the REVIEW_FULL
+  path against the primary cwd (the sentinel lives in the worktree) and ran the ancestry and
+  first-parent lag checks against the primary HEAD (=main, not the branch tip), so it always
+  blocked.
+
+Derive the evaluated ref and base dir from the command's --head branch: ancestry/lag run against the
+  branch tip (local refs/heads/<b>, else refs/remotes/origin/<b>), and a relative REVIEW_FULL path
+  absent from cwd resolves against that branch's worktree root. Every existing safety check is
+  preserved unchanged; only the ref/dir each evaluates against moved. Fail-safe: an unresolvable
+  --head keeps the strict HEAD/cwd behavior, and absent --head the legacy path is unchanged.
+
+Fixes #1536
+
+### Features
+
+- **eval**: Pin wandb checkpoint refs in predict configs
+  ([#1534](https://github.com/tinaudio/synth-setter/pull/1534),
+  [`f851141`](https://github.com/tinaudio/synth-setter/commit/f851141d986af33c9110d863a37852af72eaf518))
+
+* feat(eval): pin wandb checkpoint refs in predict configs
+
+Wire ckpt_path: ${wandb:tinaudio/synth-setter/model-<config_id>:latest} into the eight surge predict
+  experiment configs (config_id == experiment basename, per resolve_run_config_id), retiring the
+  shell-based checkpoint fetch in favour of the ${wandb:...} OmegaConf resolver landed in #1504.
+
+- Pin ckpt_path on ffn/flow/flow_mlp/vae × full/simple experiment configs. - Migrate all 18
+  jobs/predict/*.sh launchers off get-ckpt-from-wandb.sh; they now inherit the config-pinned
+  ckpt_path (datamodule variants reuse the same model artifact). - Delete
+  jobs/predict/get-ckpt-from-wandb.sh and its shellcheck exclude. - Add a parametrized test proving
+  each wired experiment resolves ckpt_path to its model-<id> artifact with a faked wandb (no
+  network). - Update the predict baseline-compare test: the live scripts inherit ${wandb:...}, so
+  force both sides to a local ckpt via EXTRA_HYDRA_OVERRIDE (else --resolve would hit W&B) and
+  accept the post-v0.0.0 consumed_* lineage keys; treat ckpt_path as volatile in the test-mps
+  config-shape guard. - Refresh docs/design/eval-pipeline.md (resolver + wiring now implemented) and
+  doc-map.yaml.
+
+Refs #128
+
+* chore(eval): tighten ckpt-wiring comments per comment-hygiene
+
+Trim the flow_simple ckpt_path comment to two lines and drop nested parens from the doc-map
+  resolver/launcher entries.
+
+* fix(eval): isolate wandb ckpt pin in predict-only overlay
+
+Pinning `ckpt_path: ${wandb:...}` directly in the shared `surge/<id>` experiment made train.yaml
+  inherit it: `train.py` reads `cfg.get("ckpt_path")` into `trainer.fit`, so `train
+  experiment=surge/ffn_full` eagerly resolved the W&B artifact (needing an API key, absent on the
+  MPS runner) and would silently resume from the published model. This reds
+  `test_train_surge_xt[mps-surge/ffn_full]` and is the code-health/synth-setter/tdd/ml-test block on
+  #1534.
+
+Move the pin into predict-only `experiment/surge/wandb_checkpoint/<id>` overlays that compose the
+  shared experiment and add only `ckpt_path`; `mode=predict` stays in the launcher call. Train
+  composes `surge/<id>` (no ckpt, no resolution); predict launchers compose
+  `surge/wandb_checkpoint/<id>`. Leaf configs include the base via the absolute
+  `/experiment/surge/base` so the overlay can nest them.
+
+Tests: - fast `test_train_surge_experiment_composes_null_ckpt_without_wandb_resolution` guard
+  (regular CI) — train base pins no ckpt and fires no resolver. - live W&B round-trips (MPS/GPU,
+  gated on WANDB_API_KEY): eval predict downloads a real artifact and runs inference; train resumes
+  from a `${wandb:...}` ckpt. Helper publishes a smoke checkpoint to a dedicated
+  `synth-setter-citest` project under the key's own entity, never the production model registry. -
+  repoint the resolver composition test at the wandb_checkpoint overlay.
+
+Wire WANDB_API_KEY into the MPS and GPU test workflows; docs/doc-map updated.
+
+* test(eval): move train-path wandb guard out of the entrypoint module
+
+The fast `test_train_surge_experiment_composes_null_ckpt_without_wandb_resolution` guard composed
+  `train.yaml` via `initialize_config_module`, which the entrypoint invariant
+  `tests/_meta/test_entrypoint_e2e_only.py` forbids in `test_train.py` (config-composition tests
+  belong outside the canonical entrypoint modules). That reddened the ubuntu/conda/macos jobs.
+
+Relocate the guard to `tests/test_wandb_resolver.py` (a config-layer test module, not an entrypoint)
+  where the same `compose`/`_fake_api` machinery already lives, and parametrize it over all 8 wired
+  surge experiments. `test_train.py` keeps only the live resume round-trip (fixture-driven, no
+  config-initializer import).
+
+* ci(test): re-trigger MPS run after WANDB_API_KEY secret rotation
+
+The prior MPS run read the malformed `WANDB_API_KEY` (job started before the secret was re-added),
+  failing the two live wandb_checkpoint round-trip tests with `AuthenticationError: invalid`. This
+  empty commit starts a fresh `pull_request` run that picks up the corrected secret. No source
+  change.
+
+* fix(test): pin short wandb host for live round-trip on long-hostname CI
+
+`wandb.init()` records the machine hostname and W&B rejects a run whose host exceeds 64 chars:
+  `CommError: invalid parameters: 64 limit exceeded for Host`. The self-hosted MPS/GPU runners have
+  hostnames well over 64 chars, so the live `wandb_checkpoint` round-trip tests failed at init there
+  while passing locally (short hostname). Pin `wandb.Settings(host="synth-setter-ci")` in
+  `publish_checkpoint_artifact` so the recorded host is bounded regardless of runner.
+
+### Testing
+
+- Accept lineage + wandb console keys in baseline diff
+  ([#1544](https://github.com/tinaudio/synth-setter/pull/1544),
+  [`ef2b3bc`](https://github.com/tinaudio/synth-setter/commit/ef2b3bcc1747176452f78c6e855519c426799bf0))
+
+The cpu-slow suite went red on every predict/kosc/surge baseline-config comparison: recent merges
+  added top-level keys to the live train/eval configs absent from the frozen v0.0.0 baseline.
+
+Extend ACCEPTED_DIFFS with the W&B artifact-lineage keys (consumed_train_config_id,
+  consumed_dataset_config_id, consumed_artifact_alias; #1508/#1509), the opt-in training block
+  (#1472, replacing the now-subsumed training.upload_checkpoints_uri entry which strips to an empty
+  dict), and logger.wandb.settings.console (#1506) — each an audit-able non-model-knob divergence.
+
+Add a TestStripDottedKeys unit class pinning the top-level-vs-nested path handling and the
+  asymmetric no-op-when-absent contract in make test-fast, matching the existing TestStripLeafKeys /
+  TestRenameDataGroupToDatamodule coverage pattern.
+
+Refs #1541
+
+
+## v8.26.1 (2026-06-06)
+
+### Bug Fixes
+
+- **review**: Scan gh stdout for self-review 422 in post_review fallback
+  ([#1535](https://github.com/tinaudio/synth-setter/pull/1535),
+  [`3467cad`](https://github.com/tinaudio/synth-setter/commit/3467cad32a995855af7dcab3a3fe7e5abe6a9670))
+
+gh api writes the JSON error body (carrying "Can not request changes on your own pull request") to
+  stdout, and only "HTTP 422" to stderr. submit_review scanned stderr only, so the self-review
+  COMMENT fallback never fired on a real self-review and the whole /repo-review-full post aborted
+  with exit 1. Scan both streams.
+
+Refs #1533
+
+### Internal-Feat
+
+- **eval**: Add wandb OmegaConf resolver for cached checkpoints
+  ([#1504](https://github.com/tinaudio/synth-setter/pull/1504),
+  [`f159cd0`](https://github.com/tinaudio/synth-setter/commit/f159cd0a6d6cb0631b83fbf22b26f974ed47a61c))
+
+* feat(eval): add ${wandb:...} OmegaConf resolver for cached checkpoints
+
+Resolve a W&B model artifact reference to a local checkpoint path via the public API, caching
+  downloads under $PROJECT_ROOT/.cache/checkpoints/ so re-resolving the same ref reuses the cache.
+  wandb is lazy-imported so the resolver never burdens utils import.
+
+* fix(eval): harden wandb resolver cache key and checkpoint selection
+
+Slug the cache key so a hostile ref (`..`, `:`) can never escape .cache/checkpoints, re-download
+  when the cached dir holds no .ckpt (partial download), and select model.ckpt deterministically —
+  erroring on an ambiguous multi-checkpoint artifact instead of silently picking one.
+
+* fix(eval): harden wandb resolver cache key and import guard
+
+Address Copilot review on the ${wandb:...} resolver: - _cache_key excludes '.' from the slug and
+  appends a sha256 suffix, so a hostile ref (.., .) cannot escape the cache root and refs that slug
+  alike (a/b vs a:b) no longer collide onto one cache dir. - guard with find_spec("wandb") and raise
+  a clear ModuleNotFoundError naming the ref, matching the repo's other W&B call sites, instead of a
+  bare import error mid-interpolation. - glob the cache once and mkdir(parents, exist_ok) before
+  download.
+
+Refs #128, #1467
+
+* test(eval): pin ${wandb:...} resolves when composed into ckpt_path
+
+Add a composition test that proves the ${wandb:...} resolver is registered when Hydra composes
+  eval.yaml and that it interpolates through the real ckpt_path key evaluate() consumes. The
+  existing unit tests bind the resolver to an ad-hoc OmegaConf key; this covers the composition seam
+  they do not.
+
+The test fakes the W&B public API via sys.modules (no network, no GPU, no real artifact) and asserts
+  the override ckpt_path=${wandb:...} resolves to the cached .ckpt under
+  $PROJECT_ROOT/.cache/checkpoints/.
+
+Refs #128
+
+* fix(eval): cap wandb cache-key slug length and reject duplicate model.ckpt
+
+Two edge cases in the ${wandb:...} resolver surfaced in review:
+
+- A very long artifact ref produced a cache-dir name exceeding the common 255-byte filename limit,
+  raising OSError on mkdir. Cap the readable slug at _MAX_SLUG_LEN; the sha256 suffix still
+  guarantees uniqueness. - _select_checkpoint silently returned the first model.ckpt when several
+  existed across nested dirs. Raise ValueError instead of guessing, matching the existing
+  ambiguous-non-preferred branch.
+
+* ci: re-trigger checks (flaky conda xdist HydraConfig-singleton leak)
+
+run_tests_conda flaked on test_pins_run_id_in_config_id_timestamp_convention (merged from main):
+  resolve_run_config_id reads the process-global HydraConfig singleton, so a sibling xdist test that
+  leaves an experiment choice populated makes the run-id miss the flow_simple pattern. Deterministic
+  locally and under xdist; unrelated to the wandb resolver in this PR.
+
+* test(eval): clear Hydra global state in finally for resolver compose test
+
+GlobalHydra.instance().clear() ran only on the success path; a failed assertion left Hydra
+  initialized and could leak a HydraConfig singleton into later xdist-sibling tests. Wrap the
+  compose/assert block in try/finally so cleanup always runs.
+
+* test(eval): stop workspace fixture leaking PROJECT_ROOT across tests
+
+The wandb-resolver `workspace` fixture set SYNTH_SETTER_WORKSPACE but left PROJECT_ROOT — which
+  operator_workspace() publishes via os.environ.setdefault during resolution — unregistered with
+  monkeypatch, so tmp_path leaked into later order-dependent tests (comment #3367767343).
+
+Pin PROJECT_ROOT through monkeypatch.setenv rather than the suggested delenv: delenv(raising=False)
+  is a no-op when PROJECT_ROOT is unset at setup (the first wandb test in a fresh xdist worker) and
+  so registers no teardown undo, leaving the value setdefault publishes later unprotected. setenv
+  always records an undo and pre-seeds a consistent value, so teardown restores it.
+
+* fix(eval): correct wandb resolver missing-dependency guidance
+
+The ${wandb:...} resolver's ModuleNotFoundError pointed users at a non-existent 'wandb' PEP 735
+  dependency group. wandb lives in the 'util' group (aggregated into 'runtime'/'dev'); name those
+  instead so the guidance is actionable. Tightened the test to pin the corrected group name (comment
+  #3367851988).
+
+### Testing
+
+- **finalize**: Dedupe shard helpers, split tests onto entrypoint rails
+  ([#1527](https://github.com/tinaudio/synth-setter/pull/1527),
+  [`676dea4`](https://github.com/tinaudio/synth-setter/commit/676dea4f6f81971ff237d30a8608ead9101c5c3d))
+
+* test(finalize): dedupe shard helpers, split tests onto entrypoint rails
+
+Extract the verbatim-duplicated _write_minimal_wds_shard and the finalize-specific wds/hdf5
+  DatasetSpec builders + shard seeders into a focused tests/helpers/finalize_shards.py, shared by
+  the entrypoint, branch-unit, and real-R2 lanes so a shard-layout change updates every caller at
+  once.
+
+Bring finalize onto the codified entrypoint rails the way generate_dataset is split: the
+  entrypoint-level finalize(cfg) / main() tests move to the canonical
+  tests/test_finalize_dataset.py, while the branch-level finalize_wds / finalize_hdf5 /
+  finalize_from_spec tests — which legitimately reference internals (reshard_dataset,
+  get_stats_hdf5, stream_stats_wds) — stay in the sibling
+  tests/pipeline/entrypoints/test_finalize_dataset_unit.py. Extend both tests/_meta guards to cover
+  the new canonical module; the branch/unit module is deliberately not added to the entrypoint-only
+  rail.
+
+Test-only; every existing finalize test is preserved (26 -> 10 + 16).
+
+Closes #1513
+
+* chore(ci): retrigger flaky finalize smoke workflow
+
+- **provenance**: Pin run-id resolution against leaked HydraConfig
+  ([#1529](https://github.com/tinaudio/synth-setter/pull/1529),
+  [`b414184`](https://github.com/tinaudio/synth-setter/commit/b414184f7fbb0053b5fdca742b491ecdab060de1))
+
+* test(provenance): guard run-id resolution against leaked HydraConfig
+
+The train and eval provenance run-id tests flaked under pytest-xdist: `resolve_run_config_id` reads
+  the process-global `HydraConfig` singleton, so a sibling test that left an `experiment` choice set
+  made the pinned run id resolve to the foreign experiment basename instead of `task_name`, tripping
+  `re.fullmatch(...) -> None` (`assert None`).
+
+The systemic fix — the autouse `_reset_hydra_config_singleton` fixture in `tests/conftest.py` —
+  already landed, but nothing pinned its contract. Add a deterministic regression test to each
+  provenance suite that pre-populates the singleton with a foreign experiment choice, clears it as
+  the autouse fixture does between tests, and asserts the run id falls back to
+  {task_name}-{timestamp}. The test fails (assert None) if the reset is removed.
+
+Fixes #1518 Fixes #1523
+
+* test(provenance): reword regression-test docstrings to match behavior
+
+Copilot flagged that the docstrings claimed the test guards the autouse fixture's between-test
+  clearing, but the test clears the HydraConfig singleton itself. Reword to describe the pinned
+  contract: after a leaked experiment choice is cleared, the run id falls back to
+  {task_name}-{timestamp}.
+
+- **skypilot**: Deflake TestDispatchViaSkypilot via inline executor
+  ([#1532](https://github.com/tinaudio/synth-setter/pull/1532),
+  [`4713cbf`](https://github.com/tinaudio/synth-setter/commit/4713cbf5bbbf194603776651bde263f86b246734))
+
+The launcher fans ranks out via ThreadPoolExecutor, calling into the shared mock_sky MagicMock from
+  multiple threads. unittest.mock call recording (call_args_list, call_count) is not thread-safe:
+  under CPU contention on busy ubuntu xdist shards two threads interleave the record step and a
+  rank's call is dropped or duplicated, so the count comes up short or a rank goes missing.
+
+Patch the launcher's module-level ThreadPoolExecutor with a synchronous inline executor via a
+  class-scoped autouse fixture, so the per-rank fan-out runs on the calling thread and mock
+  recording is deterministic. These are env-wiring unit tests, not concurrency tests, so removing
+  parallelism from the unit-under-test is legitimate and keeps every assertion's intent intact.
+
+Verified by stressing the affected tests 40x under full-core CPU contention (all pass) where the
+  parallel path previously dropped ranks.
+
+Fixes #1531
+
+- **testing**: Guard non-integer PYTEST_XDIST_AUTO_NUM_WORKERS override
+  ([#1530](https://github.com/tinaudio/synth-setter/pull/1530),
+  [`9e572d4`](https://github.com/tinaudio/synth-setter/commit/9e572d472224d6ecc21145bd040680ee29dc3654))
+
+A misconfigured non-integer PYTEST_XDIST_AUTO_NUM_WORKERS (or an empty value) raised ValueError in
+  the xdist auto-worker hook, aborting pytest collection before any test ran. Treat a
+  non-integer/empty pin as "no override" and fall through to the adaptive CPU/memory clamps —
+  mirroring the malformed-input handling already used for PYTEST_XDIST_WORKER_MEM_MB.
+
+Adds two regression tests (non-integer and empty-string) to the hook composition suite.
+
+Fixes #1528 Refs #1520
+
+- **testing**: Pin HydraConfig run-id resolution isolation under xdist
+  ([#1525](https://github.com/tinaudio/synth-setter/pull/1525),
+  [`dc513af`](https://github.com/tinaudio/synth-setter/commit/dc513af81543315b8e660bc9a3d11c96eeda4075))
+
+`resolve_run_config_id` reads `runtime.choices.experiment` from the process-global `HydraConfig`
+  singleton. `test_eval.py` composes surge experiments and clears only `GlobalHydra` in teardown,
+  which does not reset the stored `HydraConfig`; under pytest-xdist the stale
+  `experiment=surge/fake_oracle` leaked into the provenance test, resolving its expected
+  `config_id=flow_simple` to `fake_oracle` and flaking the run-id regex.
+
+The autouse `reset_hydra_config_singleton` fixture neutralizes the leak, and
+  `TestHydraConfigSingletonReset` already pins the reset primitive. This adds the missing end-to-end
+  resolution coverage:
+
+- `test_clearing_global_hydra_leaves_experiment_choice_on_the_singleton` pins the trap — clearing
+  `GlobalHydra` alone leaves the choice driving `resolve_run_config_id` (reads `fake_oracle`). -
+  `test_project_autouse_reset_neutralizes_a_leak_for_the_following_test` runs a `pytester`
+  sub-session that loads the real `tests/conftest.py` as a plugin and leaks-then-asserts in a fixed
+  order under `-p no:randomly`. The fallback is verified independently of the suite's
+  pytest-randomly shuffle, and because the session uses the production fixture (not a stand-in),
+  removing or breaking that fixture fails the check.
+
+Closes #1523
+
+
 ## v8.26.0 (2026-06-06)
 
 ### Continuous Integration

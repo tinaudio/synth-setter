@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 import torch
+import wandb
 from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
@@ -25,8 +26,10 @@ from omegaconf import DictConfig, open_dict
 from synth_setter.cli.eval import evaluate
 from synth_setter.cli.train import train
 from synth_setter.data.vst import param_specs, preset_paths
+from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
 from tests.helpers.run_if import RunIf
+from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
 
 # Public worker module names the predict-postprocessing subprocesses run; matched
 # as argv substrings so the fake ``subprocess.run`` can route render vs metrics
@@ -40,6 +43,9 @@ _COMPUTE_AUDIO_METRICS_FRAGMENT = "compute_audio_metrics"
 _FAKE_AGGREGATED_METRICS_CSV = (
     ",mean,std\nmss,0.5,0.1\nwmfcc,0.3,0.05\nsot,0.2,0.02\nrms,0.9,0.01\n"
 )
+# Per-sample metrics CSV the fake metrics subprocess writes alongside the aggregated
+# CSV; one row per sample, columns matching ``compute_audio_metrics`` output.
+_FAKE_METRICS_CSV = ",mss,wmfcc,sot,rms\n0,0.1,0.2,0.3,0.4\n1,0.5,0.6,0.7,0.8\n"
 
 
 @pytest.mark.requires_vst
@@ -331,6 +337,82 @@ def test_evaluate_predict_mode_merges_audio_metrics_into_metric_dict(
 
 
 @pytest.mark.fake_vst
+def test_evaluate_predict_mode_logs_per_sample_metrics_table_to_wandb(
+    tmp_path: Path,
+    fake_surge_smoke_datasets: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``mode=predict`` with an active wandb run uploads ``metrics.csv`` as a wandb.Table.
+
+    Exercises the ``_log_metrics_csv_to_wandb`` call-through via the real
+    ``evaluate`` entrypoint: the fake metrics subprocess writes both
+    ``aggregated_metrics.csv`` and ``metrics.csv``; a spy on ``wandb.run.log``
+    verifies the per-sample Table arrives under ``audio/per_sample_metrics``.
+
+    :param tmp_path: Hydra ``output_dir``; the fake subprocess writes CSVs beneath it.
+    :param fake_surge_smoke_datasets: CPU-fast surge_4 dataset (no real VST).
+    :param monkeypatch: Stubs subprocesses, headless wrapper, and ``wandb.run``.
+    """
+    logged: list[dict[str, object]] = []
+
+    class _Spy:
+        """Stand-in for ``wandb.run`` that records ``log`` payloads; no-ops SDK lifecycle calls.
+
+        ``__getattr__`` absorbs wandb SDK cleanup methods (e.g. ``finish``,
+        ``summary``) that Lightning triggers after predict — they are irrelevant to
+        this test's contract.
+        """
+
+        def log(self, payload: dict[str, object]) -> None:
+            """Append payload to the capture list.
+
+            :param payload: The wandb log payload to record.
+            """
+            logged.append(payload)
+
+        def __getattr__(self, _name: str) -> object:
+            """Return a no-op callable for any wandb SDK method not explicitly defined.
+
+            :param _name: Attribute name; unused — any undeclared attribute gets a no-op.
+            :returns: A callable that accepts any arguments and returns ``None``.
+            """
+            return lambda *_args, **_kwargs: None
+
+    def _fake_run_with_metrics(args: list[str], **_kwargs: object) -> None:
+        is_render = any(_PREDICT_VST_AUDIO_FRAGMENT in a for a in args)
+        is_metrics = any(_COMPUTE_AUDIO_METRICS_FRAGMENT in a for a in args)
+        if not (is_render or is_metrics):
+            return
+        out_dir = Path(args[args.index("-m") + 3])
+        out_dir.mkdir(parents=True, exist_ok=True)
+        if is_metrics:
+            (out_dir / "aggregated_metrics.csv").write_text(_FAKE_AGGREGATED_METRICS_CSV)
+            (out_dir / "metrics.csv").write_text(_FAKE_METRICS_CSV)
+
+    cfg = _compose_fake_oracle_eval_cfg(tmp_path, fake_surge_smoke_datasets, mode="predict")
+    monkeypatch.setattr("synth_setter.cli.eval.subprocess.run", _fake_run_with_metrics)
+    monkeypatch.setattr("synth_setter.cli.eval.vst_headless_wrapper", lambda: object())
+    monkeypatch.setattr(
+        "synth_setter.cli.eval.as_file",
+        lambda _traversable: nullcontext(Path("/fake/headless-wrapper")),
+    )
+    monkeypatch.setattr(wandb, "run", _Spy())
+    # task_wrapper's teardown calls module-level wandb.finish() while wandb.run is
+    # truthy (utils.py); stub it so the spy run is the only wandb surface exercised.
+    monkeypatch.setattr(wandb, "finish", lambda *_args, **_kwargs: None)
+
+    HydraConfig().set_config(cfg)
+    try:
+        evaluate(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    table_payloads = [p for p in logged if "audio/per_sample_metrics" in p]
+    assert len(table_payloads) == 1
+    assert isinstance(table_payloads[0]["audio/per_sample_metrics"], wandb.Table)
+
+
+@pytest.mark.fake_vst
 def test_evaluate_validate_mode_legacy_val_spelling_runs_oracle(
     tmp_path: Path,
     fake_surge_smoke_datasets: Path,
@@ -461,3 +543,60 @@ def test_eval_render_group_exposes_postprocessing_keys(render_group: str) -> Non
         assert cfg.render.plugin_path
     finally:
         GlobalHydra.instance().clear()
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+@pytest.mark.skipif(
+    not os.environ.get("WANDB_API_KEY"),
+    reason="real W&B round-trip needs WANDB_API_KEY (injected on trusted CI only)",
+)
+@pytest.mark.parametrize("experiment_name", ["surge/ffn_full"], indirect=True)
+def test_evaluate_loads_wandb_resolved_checkpoint_and_runs_inference(
+    tmp_path: Path,
+    cfg_surge_xt: DictConfig,
+    cfg_surge_xt_eval: DictConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    experiment_name: str,
+) -> None:
+    """Predict eval resolves ckpt_path via ``${wandb:...}`` from the live registry, loads it, and runs inference.
+
+    The full wandb_checkpoint contract end to end: train a real checkpoint, publish it to
+    ``tinaudio/synth-setter-citest``, then pin ``ckpt_path: ${wandb:...}`` (no CLI path, the form
+    the ``surge/wandb_checkpoint/<id>`` overlay produces) and run ``evaluate()`` in predict mode.
+    The resolver downloads the artifact, Lightning loads the weights, and predict-mode inference
+    writes finite per-sample predictions — the contract a fake-stub test cannot prove.
+
+    :param tmp_path: Shared output dir; also the workspace root the resolver caches under.
+    :param cfg_surge_xt: Surge XT smoke training config — one step produces the checkpoint.
+    :param cfg_surge_xt_eval: Matching predict-mode eval config; its ckpt_path is repinned here.
+    :param monkeypatch: Pins ``SYNTH_SETTER_WORKSPACE`` so the download cache stays under tmp_path.
+    :param experiment_name: Pinned to ``surge/ffn_full`` — the artifact id need only round-trip.
+    """
+    HydraConfig().set_config(cfg_surge_xt)
+    train(cfg_surge_xt)
+    ckpt = Path(cfg_surge_xt_eval.ckpt_path)
+    assert ckpt.is_file(), "train step did not write the checkpoint"
+
+    ref = publish_checkpoint_artifact(ckpt, "model-citest-ffn_full-eval", tmp_path / "wandb")
+
+    # Contain the resolver's download cache under tmp_path so each run fetches fresh (a warm
+    # self-hosted runner must not reuse a stale cached ckpt for the same :latest ref).
+    monkeypatch.setenv("SYNTH_SETTER_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
+    operator_workspace.cache_clear()
+    register_resolvers()
+    with open_dict(cfg_surge_xt_eval):
+        cfg_surge_xt_eval.ckpt_path = "${wandb:" + ref + "}"
+
+    HydraConfig().set_config(cfg_surge_xt_eval)
+    evaluate(cfg_surge_xt_eval)
+
+    assert (tmp_path / ".cache" / "checkpoints").is_dir(), "resolver did not download the artifact"
+    predictions_dir = tmp_path / "predictions"
+    assert predictions_dir.is_dir()
+    preds = sorted(predictions_dir.glob("pred-*.pt"))
+    assert preds, "predict mode wrote no predictions"
+    for pred_file in preds:
+        tensor = torch.load(pred_file, weights_only=True)
+        assert torch.isfinite(tensor).all(), f"{pred_file.name} contains NaN/Inf"

@@ -84,7 +84,7 @@ def test_finalize_from_spec_uploads_stats_then_marker_at_canonical_uris(
 
     Mirrors ``test_finalize_uploads_stats_then_marker_at_canonical_uris`` but
     calls the in-memory entry point directly — no ``cfg`` synthesis, no
-    ``load_spec_from_uri`` round-trip — so the inline path
+    ``load_spec_from_root`` round-trip — so the inline path
     (``generate_dataset.main`` will reuse) is pinned independently of the
     URI-driven entry point.
 

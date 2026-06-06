@@ -20,12 +20,15 @@ from omegaconf import DictConfig, open_dict
 from synth_setter.cli.eval import evaluate
 from synth_setter.cli.train import train
 from synth_setter.data.vst import param_specs
+from synth_setter.utils.utils import register_resolvers
+from synth_setter.workspace import operator_workspace
 from tests.conftest import (
     NUM_FIXTURE_SAMPLES,
     _build_surge_xt_smoke_cfg,
 )
 from tests.evaluation._oracle_helpers import ORACLE_AUDIO_METRIC_BOUNDS
 from tests.helpers.run_if import RunIf
+from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
 
 # Experiments cycled through the Surge XT VST smoke tests below. Single source of truth so
 # the parametrize lists on the two ``test_train_*_surge_xt`` tests cannot drift apart.
@@ -363,3 +366,57 @@ def test_train_eval_surge_xt(
         assert per_sample["rms"].min() > bounds.rms_min, (
             f"oracle rms too low: {per_sample['rms'].tolist()}"
         )
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+@pytest.mark.skipif(
+    not os.environ.get("WANDB_API_KEY"),
+    reason="real W&B round-trip needs WANDB_API_KEY (injected on trusted CI only)",
+)
+@pytest.mark.parametrize("experiment_name", ["surge/ffn_full"], indirect=True)
+def test_train_resumes_from_wandb_resolved_checkpoint(
+    tmp_path: Path,
+    cfg_surge_xt: DictConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    experiment_name: str,
+) -> None:
+    """Training resumes from a ``ckpt_path`` pinned as ``${wandb:...}``, downloaded from the live registry.
+
+    Exercises the exact train-side seam the wandb_checkpoint split protects: ``train.py`` reads
+    ``cfg.get("ckpt_path")`` into ``trainer.fit(ckpt_path=...)``. A first one-step run produces a
+    real Lightning checkpoint, published to ``tinaudio/synth-setter-citest``; a second run pins
+    that artifact via ``${wandb:...}`` and must download + resume it, advancing ``global_step``.
+    Proves the resolver works through the real W&B API on the train entrypoint, not just a fake.
+
+    :param tmp_path: Shared output dir; also the workspace root the resolver caches under.
+    :param cfg_surge_xt: Surge XT smoke-test training config (one step on the fixture dataset).
+    :param monkeypatch: Pins ``SYNTH_SETTER_WORKSPACE`` so the download cache stays under tmp_path.
+    :param experiment_name: Pinned to ``surge/ffn_full`` — the artifact id need only round-trip.
+    """
+    HydraConfig().set_config(cfg_surge_xt)
+    _, first = train(cfg_surge_xt)
+    step_after_first = first["trainer"].global_step
+    ckpt = tmp_path / "checkpoints" / "last.ckpt"
+    assert ckpt.is_file(), "first train step did not write last.ckpt"
+
+    ref = publish_checkpoint_artifact(ckpt, "model-citest-ffn_full-resume", tmp_path / "wandb")
+
+    # Contain the resolver's download cache under tmp_path so each run fetches fresh (a warm
+    # self-hosted runner must not reuse a stale cached ckpt for the same :latest ref).
+    monkeypatch.setenv("SYNTH_SETTER_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
+    operator_workspace.cache_clear()
+    register_resolvers()
+    with open_dict(cfg_surge_xt):
+        cfg_surge_xt.ckpt_path = "${wandb:" + ref + "}"
+        cfg_surge_xt.trainer.max_steps = step_after_first + 1
+
+    HydraConfig().set_config(cfg_surge_xt)
+    _, second = train(cfg_surge_xt)
+    step_after_resume = second["trainer"].global_step
+
+    assert (tmp_path / ".cache" / "checkpoints").is_dir(), "resolver did not download the artifact"
+    assert step_after_resume > step_after_first, (
+        f"resume did not advance training: before={step_after_first}, after={step_after_resume}"
+    )

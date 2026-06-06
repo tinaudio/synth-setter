@@ -390,16 +390,16 @@ def cfg_finalize_global() -> DictConfig:
     ``job_logging`` interpolations finalize relies on are present in the tree
     (the entrypoint overrides ``hydra.run.dir`` because the shared group
     references ``${run_name}``, which this cfg does not surface). Supplies the
-    required ``dataset_spec_uri`` so every ``???`` field is populated.
+    required ``dataset_root_uri`` so every ``???`` field is populated.
 
     :return: A DictConfig composed from ``configs/finalize_dataset.yaml`` with
-        ``dataset_spec_uri`` set and ``paths.root_dir`` pinned to the workspace.
+        ``dataset_root_uri`` set and ``paths.root_dir`` pinned to the workspace.
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="finalize_dataset",
             return_hydra_config=True,
-            overrides=["dataset_spec_uri=r2://bucket/spec.json"],
+            overrides=["dataset_root_uri=r2://bucket/run/"],
         )
         with open_dict(cfg):
             cfg.paths.root_dir = str(operator_workspace())

@@ -4,10 +4,11 @@ name: Finalize Dataset
 # already-generated run prefix on R2. Callers (cron via
 # `generate-dataset-shards.yaml`, PR-presubmit via
 # `test-dataset-finalization.yml`) pass the canonical R2 URI of the
-# generate-stage `input_spec.json` through the `dataset_spec_uri` input.
+# generate-stage run prefix (`data/<task_name>/<run_id>/`) through the
+# `dataset_root_uri` input.
 #
-# `synth-setter-finalize-dataset` loads the frozen `DatasetSpec` from that
-# URI, derives the same R2 prefix it carries (`data/<task_name>/<run_id>/`),
+# `synth-setter-finalize-dataset` loads the frozen `DatasetSpec` from
+# `input_spec.json` under that prefix, derives the same R2 prefix it carries,
 # downloads the shards, builds the split / stats artifacts, and writes
 # `dataset.complete` last (so a re-run against a finalized prefix is a no-op).
 # Bare-runner install — no docker, no SkyPilot path. The `provider` input is
@@ -25,8 +26,8 @@ on:
         description: "Provider tag for log/artifact naming (skypilot-local, runpod, oci, or pr-presubmit). Body is provider-agnostic."
         required: true
         type: string
-      dataset_spec_uri:
-        description: "Canonical r2:// URI of the generate-stage `input_spec.json`. The CLI loads the spec from here and derives the same r2.prefix generate used."
+      dataset_root_uri:
+        description: "Canonical r2:// URI of the generate-stage run prefix (`.../<task_name>/<run_id>/`). The CLI loads `input_spec.json` from under it and derives the same r2.prefix generate used."
         required: true
         type: string
       output_format:
@@ -49,8 +50,8 @@ on:
         required: false
         type: string
         default: pr-presubmit
-      dataset_spec_uri:
-        description: "r2:// URI of the spec JSON (e.g. `r2://intermediate-data/data/smoke-shard/<run_id>/input_spec.json`)"
+      dataset_root_uri:
+        description: "r2:// URI of the run prefix (e.g. `r2://intermediate-data/data/smoke-shard/<run_id>/`)"
         required: true
         type: string
       output_format:
@@ -115,13 +116,13 @@ jobs:
       # a best-effort no-op rather than failing.
       - name: Run synth-setter-finalize-dataset
         env:
-          DATASET_SPEC_URI: ${{ inputs.dataset_spec_uri }}
+          DATASET_ROOT_URI: ${{ inputs.dataset_root_uri }}
           PROJECT_ROOT: ${{ github.workspace }}
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
         run: |
           set -euo pipefail
           uv run synth-setter-finalize-dataset \
-            "dataset_spec_uri=${DATASET_SPEC_URI}" \
+            "dataset_root_uri=${DATASET_ROOT_URI}" \
             2>&1 | tee finalize.log
 
       # `run_id` discriminator — matrix callers invoke this reusable multiple

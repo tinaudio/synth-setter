@@ -1,7 +1,8 @@
 """``synth-setter-finalize-dataset`` entrypoint: post-generate finalize stage.
 
-Loads the frozen ``DatasetSpec`` from ``cfg.dataset_spec_uri`` (an R2 URI
-produced by the upstream generate stage's ``upload_spec``) and dispatches
+Loads the frozen ``DatasetSpec`` from ``input_spec.json`` under
+``cfg.dataset_root_uri`` (the R2 run prefix the upstream generate stage's
+``upload_spec`` wrote to) and dispatches
 on ``spec.output_format``. Both branches upload their derived artifact(s)
 and then write the ``dataset.complete`` marker last per
 ``pipeline/CLAUDE.md``. The wds branch streams train shards through
@@ -32,7 +33,7 @@ from synth_setter.pipeline.data.reshard import reshard_dataset
 from synth_setter.pipeline.data.stats import get_stats_hdf5, stream_stats_wds
 from synth_setter.pipeline.schemas.prefix import assert_r2_prefix_matches
 from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat
-from synth_setter.pipeline.spec_io import load_spec_from_uri, write_spec_to_path
+from synth_setter.pipeline.spec_io import load_spec_from_root, write_spec_to_path
 from synth_setter.utils import pin_wandb_run_id
 from synth_setter.utils.instantiators import close_loggers, instantiate_loggers
 from synth_setter.workspace import operator_workspace
@@ -292,9 +293,10 @@ def _log_dataset_artifact(loggers: list[Logger], spec: DatasetSpec) -> None:
 
 
 def finalize(cfg: DictConfig) -> None:  # noqa: DOC503
-    """Finalize the R2 prefix for ``cfg.dataset_spec_uri``; idempotent on ``dataset.complete``.
+    """Finalize the R2 prefix at ``cfg.dataset_root_uri``; idempotent on ``dataset.complete``.
 
-    Loads R2 creds and the spec from ``cfg.dataset_spec_uri``, delegates to
+    Loads R2 creds and the spec from ``input_spec.json`` under
+    ``cfg.dataset_root_uri``, delegates to
     :func:`finalize_from_spec` for the marker-probe → dispatch → marker-upload
     body, then logs the canonical ``dataset`` artifact to any configured
     ``WandbLogger`` (resuming the data-generation run pinned to ``spec.run_id``
@@ -305,8 +307,8 @@ def finalize(cfg: DictConfig) -> None:  # noqa: DOC503
     failure the loggers are still closed (status ``"failed"``) before the
     exception re-raises.
 
-    :param cfg: Composed cfg with ``dataset_spec_uri`` (URI accepted by
-        :func:`~synth_setter.pipeline.spec_io.load_spec_from_uri`),
+    :param cfg: Composed cfg with ``dataset_root_uri`` (the run-prefix dir
+        accepted by :func:`~synth_setter.pipeline.spec_io.load_spec_from_root`),
         ``paths.output_dir`` (writable scratch dir; created if missing;
         retained after the call, multi-GB on the hdf5 branch), and an optional
         ``logger`` group instantiated for W&B artifact logging.
@@ -314,7 +316,7 @@ def finalize(cfg: DictConfig) -> None:  # noqa: DOC503
         ``spec.r2.prefix`` or an unsupported ``spec.output_format``.
     """
     r2_io.ensure_r2_env_loaded()
-    spec = load_spec_from_uri(cfg.dataset_spec_uri)
+    spec = load_spec_from_root(cfg.dataset_root_uri)
     pin_wandb_run_id(cfg, spec.run_id, "data-generation")
     if OmegaConf.select(cfg, "logger.wandb") is not None:
         OmegaConf.update(cfg, "logger.wandb.resume", "allow", force_add=True)

@@ -56,8 +56,8 @@ EXPECTED_SURGE_TASKS = 8
 
 # Predict scripts under ``jobs/predict/``. These are single-shot (no SGE_TASK_ID
 # fan-out); each script invokes ``python -m synth_setter.cli.eval`` once with a
-# fixed set of Hydra overrides. ``get-ckpt-from-wandb.sh`` is intentionally
-# excluded — it's a helper sourced by the others, not a standalone entrypoint.
+# fixed set of Hydra overrides and inherits ``ckpt_path: ${wandb:...}`` from its
+# experiment config (the v0.0.0 baseline instead sourced ``get-ckpt-from-wandb.sh``).
 PREDICT_SCRIPTS: tuple[str, ...] = (
     "jobs/predict/ffn-fsd50k.sh",
     "jobs/predict/ffn-full.sh",
@@ -232,12 +232,16 @@ def shim_factory(
             role = ROLE_LABELS.get(idx, f"out{idx}")
             out_yaml = keep_dir / f"{safe_node}__{role}.yaml"
         shim = shim_dir / "python"
+        # EXTRA_HYDRA_OVERRIDE (when set) is appended before --cfg job --resolve so
+        # callers can force a key the script under test leaves to a network-resolving
+        # interpolation — e.g. ++ckpt_path=<local> to keep the predict scripts'
+        # config-pinned ${wandb:...} ckpt_path from hitting W&B under --resolve.
         shim.write_text(
             textwrap.dedent(
                 f"""\
                 #!/usr/bin/env bash
                 printf 'python args: %s\\n' "$*"
-                "{real_python}" "$@" --cfg job --resolve > "{out_yaml}"
+                "{real_python}" "$@" ${{EXTRA_HYDRA_OVERRIDE:-}} --cfg job --resolve > "{out_yaml}"
                 """
             )
         )
@@ -314,6 +318,7 @@ ACCEPTED_DIFFS: tuple[str, ...] = (
     "logger.wandb.entity",  # env-derived (${oc.env:WANDB_ENTITY,null})
     "logger.wandb.log_model",  # changed `true` → "all" (artifact upload policy, not training)
     "logger.wandb.project",  # env-derived (${oc.env:WANDB_PROJECT,synth-setter})
+    "logger.wandb.settings.console",  # `wrap` added in #1506; console capture, no model impact
     # Cleared to `???` (mandatory override) in #809 — dataset locality, not a model knob.
     "datamodule.dataset_root",
     "datamodule.predict_file",
@@ -321,7 +326,14 @@ ACCEPTED_DIFFS: tuple[str, ...] = (
     # Optional R2-download URI added in #1338; absent in v0.0.0 — locality, not a model knob.
     "datamodule.download_dataset_root_uri",
     "evaluation",  # eval CLI predict-mode post-processing block; not a model knob
-    "training.upload_checkpoints_uri",  # opt-in model-artifact checkpoint-upload block (#1472); not a model knob
+    # Opt-in W&B artifact-lineage block (#1508/#1509); absent in v0.0.0 — provenance,
+    # not a model knob. `training`'s sole member is upload_checkpoints_uri (#1472), so
+    # the whole block is stripped; re-narrow to a dotted path if it ever gains a model knob.
+    "training",
+    # Opt-in W&B lineage refs added in #1509; absent in v0.0.0 — provenance, not a model knob.
+    "consumed_train_config_id",
+    "consumed_dataset_config_id",
+    "consumed_artifact_alias",
 )
 
 # Leaf-name keys stripped at every nesting depth. Use this list (vs. ACCEPTED_DIFFS)
@@ -396,6 +408,38 @@ def _normalize_for_compare(cfg: dict) -> dict:
     renamed = _rename_data_group_to_datamodule(cfg)
     stripped = _strip_dotted_keys(renamed, INVOCATION_PATH_KEYS + ACCEPTED_DIFFS)
     return _strip_leaf_keys(stripped, ACCEPTED_DIFF_LEAVES)
+
+
+# Unit tests for _strip_dotted_keys. The end-to-end resolved-config tests exercise
+# this indirectly, but they're slow (~10min); a focused unit test pins the
+# top-level-vs-nested path handling and the asymmetric no-op-when-absent contract.
+class TestStripDottedKeys:
+    """Unit tests for the ``_strip_dotted_keys`` config-pruning helper."""
+
+    def test_removes_top_level_single_segment_key(self) -> None:
+        """A dot-free path pops the key off the root (the ``training`` / ``consumed_*`` case)."""
+        result = _strip_dotted_keys({"training": {"a": 1}, "keep": 2}, ("training",))
+        assert result == {"keep": 2}
+
+    def test_removes_nested_key_at_dotted_path(self) -> None:
+        cfg = {"logger": {"wandb": {"settings": {"console": "wrap", "code_dir": "."}}}}
+        result = _strip_dotted_keys(cfg, ("logger.wandb.settings.console",))
+        assert result == {"logger": {"wandb": {"settings": {"code_dir": "."}}}}
+
+    def test_absent_path_is_no_op(self) -> None:
+        """The asymmetric contract: a key absent on this side leaves the config untouched."""
+        cfg = {"keep": 1}
+        assert _strip_dotted_keys(cfg, ("consumed_artifact_alias",)) == {"keep": 1}
+
+    def test_path_through_non_dict_is_no_op(self) -> None:
+        """A path whose intermediate segment isn't a dict is skipped, not an error."""
+        cfg = {"training": None}
+        assert _strip_dotted_keys(cfg, ("training.upload_checkpoints_uri",)) == {"training": None}
+
+    def test_does_not_mutate_input(self) -> None:
+        cfg = {"training": {"a": 1}, "logger": {"wandb": {"x": 2}}}
+        _ = _strip_dotted_keys(cfg, ("training", "logger.wandb.x"))
+        assert cfg == {"training": {"a": 1}, "logger": {"wandb": {"x": 2}}}
 
 
 # Unit tests for _strip_leaf_keys. The end-to-end resolved-config tests exercise
@@ -487,8 +531,9 @@ def _resolve_pair(
     """Run baseline and current scripts under shims and return loaded YAMLs.
 
     ``extra_env`` is merged on top of the default ``SGE_TASK_ID`` env so callers
-    can inject script-specific variables (e.g. ``CKPT_PATH`` for predict scripts
-    that source ``get-ckpt-from-wandb.sh``).
+    can inject script-specific variables (e.g. ``CKPT_PATH`` for the v0.0.0
+    baseline predict scripts, or ``EXTRA_HYDRA_OVERRIDE`` to force a key both
+    sides under ``--cfg job --resolve``).
     """
     assert (baseline_path / baseline_script_rel).is_file(), (
         f"missing: {baseline_path / baseline_script_rel}"
@@ -716,13 +761,14 @@ def test_predict_configs_are_equal(
 ) -> None:
     """Resolved predict-script Hydra config at ``baseline_ref`` must match the live tree.
 
-    The predict scripts source ``jobs/predict/get-ckpt-from-wandb.sh``, which
-    runs ``find logs/train ...`` and exits 1 if no checkpoint is located. We
-    pre-set ``CKPT_PATH`` to a real (empty) file so the sourced script's final
-    ``[ -f $CKPT_PATH ]`` guard passes without any real wandb resolution. The
-    path appears verbatim in the resolved Hydra config (``ckpt_path=$CKPT_PATH``),
-    so it must match between baseline and current — using a single per-test
-    sandbox file ensures that.
+    The two sides pin ``ckpt_path`` differently: the v0.0.0 baseline scripts source
+    ``get-ckpt-from-wandb.sh`` and pass ``ckpt_path=$CKPT_PATH`` (``CKPT_PATH`` is
+    pre-set to a real empty file so that helper's ``[ -f $CKPT_PATH ]`` guard passes),
+    while the live scripts inherit ``ckpt_path: ${wandb:...}`` from the experiment
+    config. ``EXTRA_HYDRA_OVERRIDE=++ckpt_path=<fake>`` forces both sides to the same
+    literal before ``--cfg job --resolve`` — without it, the live ``${wandb:...}``
+    would hit W&B under ``--resolve`` — so ``ckpt_path`` matches and the rest of the
+    resolved config is what the comparison actually pins.
     """
     baseline_path = worktree_for_ref(case.baseline_ref)
     fake_ckpt = tmp_path / "fake.ckpt"
@@ -734,7 +780,10 @@ def test_predict_configs_are_equal(
         case.current_script_rel,
         case.task_id,
         shim_factory,
-        extra_env={"CKPT_PATH": str(fake_ckpt)},
+        extra_env={
+            "CKPT_PATH": str(fake_ckpt),
+            "EXTRA_HYDRA_OVERRIDE": f"++ckpt_path={fake_ckpt}",
+        },
     )
     _assert_resolved_configs_equal(baseline_cfg, current_cfg)
 

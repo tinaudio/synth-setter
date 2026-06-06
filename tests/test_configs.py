@@ -98,9 +98,11 @@ class TestWandbConfigResolvesFromEnv:
 # Volatile cfg branches that legitimately differ between the fixture builder and the YAML
 # compose: ``paths`` is filesystem-anchored via ``operator_workspace()``, ``hydra`` carries
 # the per-invocation runtime metadata, ``task_name`` is interpolated from the entry-point
-# script name (test runner vs. ``train.py``), and ``render`` is an eval-only group (null
-# here, selected per-run in predict mode) outside the train cfg shape this contract pins.
-_VOLATILE_TOP_KEYS = ("paths", "hydra", "task_name", "render")
+# script name (test runner vs. ``train.py``), ``render`` is an eval-only group (null here,
+# selected per-run in predict mode), and ``ckpt_path`` is an eval/deploy concern — the
+# real surge experiment pins a ${wandb:...} ref while its test-mps smoke sibling trains
+# from scratch (null) — none of which is part of the train cfg shape this contract pins.
+_VOLATILE_TOP_KEYS = ("paths", "hydra", "task_name", "render", "ckpt_path")
 
 
 def _strip_volatile(cfg_dict: dict[Any, Any]) -> dict[Any, Any]:

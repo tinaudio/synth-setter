@@ -79,7 +79,7 @@ docs:
       - pattern: "src/synth_setter/cli/generate_dataset.py"
         covers: "Dataset generation entrypoint: sequential or (when `render.parallel=True`) thread-pool-parallel multi-shard dispatch with R2 skip-existing probe (worker-side resumability MVP, #750) and per-shard `render.max_retries` retry loop around the renderer subprocess; @hydra.main CLI (`python -m synth_setter.cli.generate_dataset experiment=<id>`) composed from src/synth_setter/configs/dataset.yaml"
       - pattern: "src/synth_setter/configs/finalize_dataset.yaml"
-        covers: "Finalize @hydra.main entry config; required `dataset_spec_uri` loads the persisted DatasetSpec from R2 (file://, r2://, or bare path); overrides `hydra.run.dir` because `task_name`/`run_name` are not in this cfg; composes the `logger: wandb` group so finalize logs the dataset artifact (best-effort no-op without `WANDB_API_KEY`)"
+        covers: "Finalize @hydra.main entry config; required `dataset_root_uri` (run prefix) loads the persisted DatasetSpec from `input_spec.json` under it (file://, r2://, or bare path); overrides `hydra.run.dir` (task_name/run_name absent here); composes `logger: wandb` for best-effort dataset-artifact logging"
       - pattern: "src/synth_setter/cli/finalize_dataset.py"
         covers: "Finalize entrypoint: loads the frozen DatasetSpec, dispatches on `spec.output_format` (wds → `finalize_wds`, hdf5 → `finalize_hdf5`), warns (never aborts) on a non-canonical R2 prefix, writes the `dataset.complete` marker last for idempotency, then logs the canonical `data-{config_id}` dataset W&B artifact with s3:// R2 references"
       - pattern: ".github/workflows/generate-dataset-shards.yaml"
@@ -93,7 +93,7 @@ docs:
       - pattern: "src/synth_setter/pipeline/r2_io.py"
         covers: "rclone-backed R2 helpers — URI handling, download, upload, size probe; single rclone call site shared by CI validators and the worker entrypoint's skip-existing probe"
       - pattern: "src/synth_setter/pipeline/spec_io.py"
-        covers: "`input_spec.json` read/write/upload/discover helpers (`load_spec_from_uri`, `local_spec_path`, `write_spec_locally`, `upload_spec`, `find_input_specs`) — sole call site for writing the operator-side local mirror at `<cfg.paths.output_dir>/data/<task_name>/<run_id>/metadata/input_spec.json` (runner anchors at the Hydra per-run dir, same value `generate()` uses for shard scratch) and the R2 copy at `spec.r2.input_spec_uri()`; called from `cli/generate_dataset.py`'s `main()`. `load_spec_from_uri` is the thin wrapper around `read_spec_text` + `DatasetSpec.model_validate_json` used by `pipeline/data/reshard.py` so the reshard CLI parses specs without dragging Hydra into its import graph. `find_input_specs` glob-discovers already-materialized specs under a local `data/` root and is added for future use by `cli/generate_dataset.py`; not yet wired."
+        covers: "`input_spec.json` read/write/upload/discover helpers (`load_spec_from_uri`, `load_spec_from_root`, `local_spec_path`, `write_spec_locally`, `upload_spec`, `find_input_specs`) — sole call site for writing the operator-side local mirror at `<cfg.paths.output_dir>/data/<task_name>/<run_id>/metadata/input_spec.json` (runner anchors at the Hydra per-run dir, same value `generate()` uses for shard scratch) and the R2 copy at `spec.r2.input_spec_uri()`; called from `cli/generate_dataset.py`'s `main()`. `load_spec_from_uri` is the thin wrapper around `read_spec_text` + `DatasetSpec.model_validate_json` used by `pipeline/data/reshard.py` so the reshard CLI parses specs without dragging Hydra into its import graph. `load_spec_from_root` joins `INPUT_SPEC_FILENAME` onto a run-prefix URI and delegates to `load_spec_from_uri`; it is the reader the finalize entrypoint (`cli/finalize_dataset.py`) uses. `find_input_specs` glob-discovers already-materialized specs under a local `data/` root and is added for future use by `cli/generate_dataset.py`; not yet wired."
       - pattern: "src/synth_setter/configs/render/**"
         covers: "Render-group selected by experiment overrides (e.g. `override /render: surge_xt`); surge_xt.yaml is the base config (plugin path, preset, sample-rate, cadence, batch-size defaults surfaced for Hydra struct-mode overrides); surge_simple.yaml inherits from it"
       - pattern: "src/synth_setter/pipeline/constants.py"
@@ -205,6 +205,12 @@ docs:
         covers: "Cross-platform rendering script, Xvfb auto-detection"
       - pattern: "src/synth_setter/configs/eval.yaml"
         covers: "Evaluation config entry point, Hydra defaults, evaluation: gates, render: composition entry"
+      - pattern: "src/synth_setter/utils/utils.py"
+        covers: "`${wandb:...}` OmegaConf resolver `_resolve_wandb_checkpoint` — lazily downloads a `model-{config_id}` artifact to `$PROJECT_ROOT/.cache/checkpoints/` and returns the local ckpt path"
+      - pattern: "src/synth_setter/configs/experiment/surge/wandb_checkpoint/*.yaml"
+        covers: "Predict-only overlays pinning `ckpt_path: ${wandb:tinaudio/synth-setter/model-<config_id>:latest}` over the shared `surge/<id>` experiment; kept off the train path so training never resolves the artifact. Replaces get-ckpt-from-wandb.sh"
+      - pattern: "jobs/predict/*.sh"
+        covers: "Per-variant predict launchers — compose `experiment=surge/wandb_checkpoint/<x>` (config-pinned `${wandb:...}` ckpt_path) plus `mode=predict`"
       - pattern: "src/synth_setter/configs/render/**"
         covers: "Render-group composed by eval.yaml defaults; supplies param_spec_name, preset_path, optional plugin_path consumed by _run_predict_postprocessing in cli/eval.py"
       - pattern: "src/synth_setter/configs/callbacks/eval_surge.yaml"
@@ -263,7 +269,7 @@ docs:
       - pattern: "src/synth_setter/configs/dataset.yaml"
         covers: "Datagen Hydra entry point, defaults list"
       - pattern: "src/synth_setter/configs/finalize_dataset.yaml"
-        covers: "Finalize Hydra entry point, single required `dataset_spec_uri`, `paths`/`hydra` defaults"
+        covers: "Finalize Hydra entry point, single required `dataset_root_uri`, `paths`/`hydra` defaults"
       - pattern: "src/synth_setter/configs/train.yaml"
         covers: "Training entry point, Hydra defaults"
       - pattern: "src/synth_setter/configs/eval.yaml"
@@ -323,7 +329,7 @@ docs:
     description: macOS VM dev-env path via Tart — prebuilt image or Packer build (§ B.3)
     sources:
       - pattern: "tart/**"
-        covers: "Packer template, packer variables (synth_setter_git_ref/python_version/uv_version/vm_name/surge_xt_version/codex_version/base_image_digest), provisioner steps, brew packages (git/gh/jq/rclone/bats-core/tmux/zellij/node), Codex CLI + Antigravity (agy) installs, venv layout via `uv sync --frozen` (MPS-capable torch from PyPI), VST3 path, smoke tests, .zshrc auto-activation, ~/.zprofile env defaults (HYDRA_FULL_ERROR/PYTHONDONTWRITEBYTECODE/PYTHONFAULTHANDLER/PYTHONUNBUFFERED/WANDB_DATA_DIR), prebuilt image at registry-1.docker.io/tinaudio/synth-setter-macos, Docker Hub publishing workflow"
+        covers: "Packer template, packer variables (synth_setter_git_ref/python_version/uv_version/vm_name/surge_xt_version/codex_version/base_image_digest), provisioner steps, brew packages (git/gh/jq/rclone/bats-core/tmux/zellij/node), Codex CLI + Antigravity (agy) installs, venv layout via `uv sync --frozen` (MPS-capable torch from PyPI), VST3 path, smoke tests, .zshrc auto-activation, ~/.zprofile env defaults (HYDRA_FULL_ERROR/PYTHONDONTWRITEBYTECODE/PYTHONFAULTHANDLER/PYTHONUNBUFFERED/WANDB_DATA_DIR), prebuilt image at registry-1.docker.io/tinaudio/synth-setter-macos, Docker Hub publishing workflow, local validate/build helper (build.sh)"
         scope: "tart"
 
   # ── Surge XT interactive guide ──────────────────────────────────

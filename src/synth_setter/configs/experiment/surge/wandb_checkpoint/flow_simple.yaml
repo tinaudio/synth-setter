@@ -1,0 +1,10 @@
+# @package _global_
+
+# Pins the published model-<id> W&B artifact as ckpt_path. Kept out of the shared surge/<id>
+# config so train.yaml never resumes from (or eagerly resolves) the artifact; eval/predict
+# launchers compose this overlay to source the checkpoint.
+defaults:
+  - /experiment/surge/flow_simple
+  - _self_
+
+ckpt_path: ${wandb:tinaudio/synth-setter/model-flow_simple:latest}

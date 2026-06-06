@@ -18,19 +18,14 @@
 # -l h_vmem=20G
 # -pe smp 12
 
-source jobs/predict/get-ckpt-from-wandb.sh egw6pzcz
-echo "Using wandb directory: $WANDB_DIR"
-echo "Using checkpoint: $CKPT_PATH"
-
 rm -rf ~/.triton/cache
 mamba activate perm
 module load gcc
 python -m synth_setter.cli.eval \
-    experiment=surge/vae_simple \
+    experiment=surge/wandb_checkpoint/vae_simple \
     paths.log_dir=/data/EECS-C4DM-Fazekas/benhayes/surge-preds/vae_simple/ \
     datamodule=surge_simple \
     callbacks=eval_surge \
     mode=predict \
     datamodule.batch_size=1024 \
-    datamodule.num_workers=11 \
-    ckpt_path=$CKPT_PATH
+    datamodule.num_workers=11

@@ -55,9 +55,9 @@ Reference: `data-pipeline.md` §14.5
 ### 2.2 Data Finalization
 
 ```
-synth-setter-finalize-dataset dataset_spec_uri=r2://…/input_spec.json
+synth-setter-finalize-dataset dataset_root_uri=r2://…/<task_name>/<run_id>/
   → @hydra.main composes DictConfig from src/synth_setter/configs/finalize_dataset.yaml
-    → load_spec_from_uri(cfg.dataset_spec_uri) → DatasetSpec (the frozen spec generate uploaded)
+    → load_spec_from_root(cfg.dataset_root_uri) → DatasetSpec (joins input_spec.json under the root; the frozen spec generate uploaded)
       → r2_io.object_size(spec.r2.dataset_complete_marker_uri()) probe (idempotency short-circuit)
       → assert_r2_prefix_matches(…) (advisory: warns on a non-canonical prefix, never aborts — custom prefixes like the oracle-eval e2e's test-runs/ are legitimate)
       → branch on spec.output_format:
@@ -66,7 +66,7 @@ synth-setter-finalize-dataset dataset_spec_uri=r2://…/input_spec.json
       → upload dataset.complete marker LAST (R2 source-of-truth resumability invariant)
 ```
 
-- Single required input: `dataset_spec_uri`. URI scheme dispatched by `load_spec_from_uri` (`file://`, `r2://`, or bare path)
+- Single required input: `dataset_root_uri` (the run prefix `.../<task_name>/<run_id>/`). `load_spec_from_root` joins `input_spec.json` under it; the URI scheme is dispatched by `load_spec_from_uri` (`file://`, `r2://`, or bare path)
 - `cfg.paths.output_dir` (Hydra's per-run dir under `${paths.log_dir}/finalize_dataset/<timestamp>`) is the scratch work_dir for both branches
 - Idempotency: a re-run against a prefix that already has `dataset.complete` exits cleanly without downloads or uploads. R2 is the source of truth (see `pipeline/CLAUDE.md`)
 - Marker-last invariant: `dataset.complete` is uploaded strictly after every artifact a downstream consumer expects, so an interrupted run never leaves a marker without its splits / stats

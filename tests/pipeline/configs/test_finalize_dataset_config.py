@@ -5,7 +5,7 @@ config-layer tests, but the finalize suite builds every spec by hand via
 ``OmegaConf.create`` and never composes ``finalize_dataset.yaml`` — so a break
 in its ``defaults`` / ``paths`` / ``logger`` composition passes the whole
 finalize suite and only fails in production. These bare-compose tests pin the
-load-bearing fields ``finalize()`` reads: ``dataset_spec_uri``,
+load-bearing fields ``finalize()`` reads: ``dataset_root_uri``,
 ``paths.output_dir``, the ``logger: wandb`` group, and the ``hydra`` run.dir /
 job_logging interpolations.
 
@@ -24,9 +24,9 @@ from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 from omegaconf import DictConfig, OmegaConf
 
-# A finalize cfg needs only ``dataset_spec_uri`` (the sole ``???`` field).  The
+# A finalize cfg needs only ``dataset_root_uri`` (the sole ``???`` field).  The
 # value's scheme is never dereferenced at the config layer.
-_SPEC_URI = "r2://bucket/run/input_spec.json"
+_DATASET_ROOT_URI = "r2://bucket/run/"
 
 
 def _raw(node: DictConfig) -> dict[str, Any]:
@@ -39,7 +39,7 @@ def _raw(node: DictConfig) -> dict[str, Any]:
 
 
 def _compose_finalize() -> DictConfig:
-    """Compose ``finalize_dataset.yaml`` with the required ``dataset_spec_uri``.
+    """Compose ``finalize_dataset.yaml`` with the required ``dataset_root_uri``.
 
     Uses ``return_hydra_config=True`` so the ``hydra.*`` sub-tree (carrying the
     run.dir / job_logging interpolations finalize relies on) is present in the
@@ -51,20 +51,20 @@ def _compose_finalize() -> DictConfig:
         return compose(
             config_name="finalize_dataset",
             return_hydra_config=True,
-            overrides=[f"dataset_spec_uri={_SPEC_URI}"],
+            overrides=[f"dataset_root_uri={_DATASET_ROOT_URI}"],
         )
 
 
-def test_finalize_config_surfaces_dataset_spec_uri_override() -> None:
-    """The composed cfg carries the ``dataset_spec_uri`` override finalize loads the spec from.
+def test_finalize_config_surfaces_dataset_root_uri_override() -> None:
+    """The composed cfg carries the ``dataset_root_uri`` override finalize loads the spec from.
 
-    ``finalize()`` reads ``cfg.dataset_spec_uri`` (a ``???`` field) and passes it
-    to ``load_spec_from_uri``; a passing compose proves the field is surfaced and
+    ``finalize()`` reads ``cfg.dataset_root_uri`` (a ``???`` field) and passes it
+    to ``load_spec_from_root``; a passing compose proves the field is surfaced and
     the override lands.
     """
     cfg = _compose_finalize()
     try:
-        assert cfg.dataset_spec_uri == _SPEC_URI
+        assert cfg.dataset_root_uri == _DATASET_ROOT_URI
     finally:
         GlobalHydra.instance().clear()
 

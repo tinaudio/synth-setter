@@ -5,7 +5,9 @@ defaults:
   - logger: wandb
   - _self_
 
-dataset_spec_uri: ???
+# Run-prefix dir containing `input_spec.json`; finalize joins the filename and
+# loads the spec from there (see `spec_io.load_spec_from_root`).
+dataset_root_uri: ???
 
 # Logger group resumes the data-generation run (id pinned to spec.run_id,
 # resume=allow forced in `finalize`) so the canonical `data-{config_id}`

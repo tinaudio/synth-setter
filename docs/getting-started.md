@@ -851,3 +851,14 @@ brew install cirruslabs/cli/tart packer
 packer init tart/macos.pkr.hcl
 packer build -var "synth_setter_git_ref=$(git rev-parse HEAD)" tart/macos.pkr.hcl
 ```
+
+Or use the [`tart/build.sh`](../tart/build.sh) helper, which runs the same
+`fmt -check`/`init`/`validate` gates CI runs and, with `--build`, the full build
+into a throwaway `synth-setter-macos-build` VM (pinned to the current HEAD):
+
+```bash
+tart/build.sh            # fast presubmit: packer fmt -check, init, validate
+tart/build.sh --build    # full build (~30 min, Apple Silicon host)
+```
+
+Override the baked git ref or VM name with `SYNTH_SETTER_GIT_REF` / `VM_NAME`.
