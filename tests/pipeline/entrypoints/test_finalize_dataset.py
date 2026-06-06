@@ -21,7 +21,9 @@ them cleanly:
 
 from __future__ import annotations
 
+import glob
 import io
+import os
 import shutil
 import tarfile
 from collections.abc import Callable
@@ -31,6 +33,7 @@ from typing import Any, NoReturn, cast
 import h5py
 import numpy as np
 import pytest
+import wandb
 from omegaconf import DictConfig, OmegaConf
 
 from synth_setter.cli import finalize_dataset
@@ -45,6 +48,7 @@ from synth_setter.data.vst.shapes import (
 )
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import DatasetSpec
+from tests.helpers.wandb_offline import read_run_binary
 
 
 def _write_minimal_wds_shard(dest: Path) -> None:
@@ -1091,3 +1095,131 @@ def test_finalize_wds_unlinks_each_shard_after_folding(
     finalize_dataset.finalize_wds(spec, work_dir)
 
     assert concurrent_shards_seen == [1, 1]
+
+
+def test_finalize_from_spec_drifted_prefix_raises_before_any_upload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001 — installs stubs only
+) -> None:
+    """A drifted ``r2.prefix`` raises ``ValueError`` before any R2 write or scratch dir.
+
+    Integration-level companion to ``test_prefix.py``'s unit coverage of
+    ``assert_r2_prefix_matches``: it pins the guard at the ``finalize_from_spec``
+    call site so a future reordering (e.g. moving the assertion past the
+    dispatch) trips here. The fail-fast ``upload`` stub turns a leaked write
+    into a test failure, proving the abort precedes the marker-last upload
+    sequence; the ``work_dir`` assertion proves it precedes ``work_dir.mkdir``.
+
+    :param tmp_path: Hosts the scratch ``work_dir`` path (asserted never created).
+    :param monkeypatch: Installs a fail-fast ``upload`` stub.
+    :param stub_finalize_setup: Installs the auth + marker-probe stubs so the
+        guard (not the marker check) is the failure surface.
+    """
+    spec = _build_wds_smoke_spec(task_name="finalize-drifted-prefix")
+    drifted_r2 = spec.r2.model_copy(update={"prefix": "data/wrong-cfg/wrong-run/"})
+    drifted_spec = spec.model_copy(update={"r2": drifted_r2})
+
+    def fail_fast_upload(src: str | Path, dst: str) -> NoReturn:
+        raise AssertionError(f"upload must not run on a drifted prefix (got {dst!r})")
+
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.upload", fail_fast_upload)
+    work_dir = tmp_path / "work"
+
+    with pytest.raises(ValueError, match="prefix mismatch"):
+        finalize_dataset.finalize_from_spec(drifted_spec, work_dir)
+    assert not work_dir.exists()
+
+
+def _build_finalize_cfg_with_offline_wandb(
+    spec_uri: str, output_dir: Path, save_dir: Path
+) -> DictConfig:
+    """Build a ``finalize()`` cfg carrying an offline ``WandbLogger`` group.
+
+    Mirrors the production logger composition (``_target_`` + project) but
+    pins ``offline=True`` and a tmp ``save_dir`` so ``finalize`` instantiates a
+    real, hermetic wandb run rather than a no-op empty logger list.
+
+    :param spec_uri: URI passed through to ``load_spec_from_uri``.
+    :param output_dir: Finalize's scratch ``work_dir`` (must exist).
+    :param save_dir: Where the offline run's ``wandb/`` dir is written.
+    :returns: Mutable DictConfig with ``dataset_spec_uri``, ``paths``, ``logger``.
+    """
+    return cast(
+        DictConfig,
+        OmegaConf.create(
+            {
+                "dataset_spec_uri": spec_uri,
+                "paths": {"output_dir": str(output_dir)},
+                "logger": {
+                    "wandb": {
+                        "_target_": "lightning.pytorch.loggers.wandb.WandbLogger",
+                        "offline": True,
+                        "save_dir": str(save_dir),
+                        "id": None,
+                        "job_type": "",
+                        "project": "finalize-wandb-test-project",
+                    }
+                },
+            }
+        ),
+    )
+
+
+def test_finalize_logs_dataset_artifact_to_offline_wandb_run(
+    tmp_path: Path,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001 — installs stubs only
+) -> None:
+    """``finalize(cfg)`` end-to-end logs a ``data-{id}`` ``dataset`` artifact with an R2 ref.
+
+    Drives the real entrypoint against the local-typed remote (real rclone for
+    the stats + marker writes) and a real ``WandbLogger(offline=True)``, then
+    decodes the offline ``run-*.wandb`` binary to confirm the canonical dataset
+    artifact landed — the producer node of the lineage DAG (#1471). No wandb
+    internals are mocked; the artifact name, type, and ``s3://`` reference are
+    read back from the bytes the live client wrote.
+
+    :param tmp_path: Hosts the spec JSON, scratch work_dir, and offline run dir.
+    :param fake_r2_remote: Local-typed rclone remote; seeded train shards land
+        here so the wds stats pass has real tars to stream.
+    :param monkeypatch: Pins a hermetic offline ``WANDB_*`` env.
+    :param stub_finalize_setup: Installs the auth + marker-probe stubs.
+    """
+    for key in [k for k in os.environ if k.startswith("WANDB_")]:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("WANDB_MODE", "offline")
+    monkeypatch.setenv("WANDB_DATA_DIR", str(tmp_path / "wandb-data"))
+    wandb.teardown()
+
+    spec = _build_wds_smoke_spec(task_name="finalize-artifact-e2e")
+    _seed_train_shards(fake_r2_remote, spec)
+    output_dir = tmp_path / "work"
+    output_dir.mkdir()
+    cfg = _build_finalize_cfg_with_offline_wandb(
+        _write_spec_to_file(spec, tmp_path), output_dir, tmp_path
+    )
+
+    finalize_dataset.finalize(cfg)
+    assert wandb.run is None, "finalize() did not close the wandb run on return"
+
+    offline_dirs = list((tmp_path / "wandb").glob(f"offline-run-*-{spec.run_id}"))
+    assert len(offline_dirs) == 1, (
+        f"expected one offline-run dir for {spec.run_id}, found {offline_dirs}"
+    )
+    binary_files = glob.glob(str(offline_dirs[0] / "run-*.wandb"))
+    assert len(binary_files) == 1, (
+        f"expected one .wandb binary in {offline_dirs[0]}, found {binary_files}"
+    )
+
+    artifact_name = f"data-{spec.task_name}"
+    payload = read_run_binary(
+        Path(binary_files[0]),
+        until=lambda data: artifact_name.encode() in data and b"s3://" in data,
+    )
+    assert artifact_name.encode() in payload, (
+        f"dataset artifact {artifact_name!r} not recorded in offline run binary"
+    )
+    assert b"dataset" in payload, "artifact type 'dataset' not recorded"
+    assert b"s3://" in payload, "no s3:// R2 reference recorded on the artifact"

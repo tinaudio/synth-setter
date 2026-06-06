@@ -16,8 +16,11 @@ from pathlib import Path
 
 import hydra
 import numpy as np
+import wandb
+from lightning.pytorch.loggers import Logger
+from lightning.pytorch.loggers.wandb import WandbLogger
 from loguru import logger
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.constants import (
@@ -30,6 +33,8 @@ from synth_setter.pipeline.data.stats import get_stats_hdf5, stream_stats_wds
 from synth_setter.pipeline.schemas.prefix import assert_r2_prefix_matches
 from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat
 from synth_setter.pipeline.spec_io import load_spec_from_uri, write_spec_to_path
+from synth_setter.utils import pin_wandb_run_id
+from synth_setter.utils.instantiators import close_loggers, instantiate_loggers
 from synth_setter.workspace import operator_workspace
 
 # Resolve workspace at import so ``${oc.env:PROJECT_ROOT}`` in
@@ -194,21 +199,131 @@ def finalize_from_spec(spec: DatasetSpec, work_dir: Path) -> None:
     logger.info("wrote dataset.complete to {}", marker_uri)
 
 
-def finalize(cfg: DictConfig) -> None:
+def _r2_to_s3_uri(r2_uri: str) -> str:
+    """Rewrite an ``r2://`` URI to the ``s3://`` scheme W&B references record.
+
+    R2 exposes an S3-compatible API; only the scheme differs, so the
+    bucket/key path is preserved verbatim. ``storage-provenance-spec.md`` §4
+    logs dataset references as ``s3://``.
+
+    :param r2_uri: An ``r2://<bucket>/<key>`` URI (e.g. from ``R2Location``).
+    :returns: The same location as ``s3://<bucket>/<key>``.
+    :raises ValueError: ``r2_uri`` does not start with the ``r2://`` scheme.
+    """
+    scheme = "r2://"
+    if not r2_uri.startswith(scheme):
+        raise ValueError(f"expected an r2:// URI, got {r2_uri!r}")
+    return f"s3://{r2_uri[len(scheme) :]}"
+
+
+def _finalized_reference_uris(spec: DatasetSpec) -> list[str]:
+    """Return the R2 URIs of the objects finalize materialized for this run.
+
+    hdf5 reshards into per-split ``.h5`` files, so each non-empty split plus
+    ``stats.npz`` is referenced. wds leaves shards in place under the run
+    prefix, so the prefix dir (carrying the tars) plus ``stats.npz`` is
+    referenced. Empty splits contribute nothing — finalize prunes them.
+
+    :param spec: Validated dataset spec.
+    :returns: Canonical ``r2://`` URIs, splits/prefix first then ``stats.npz``.
+    """
+    if spec.output_format is OutputFormat.HDF5:
+        split_uris = [
+            spec.r2.split_h5_uri(split)
+            for split, (lo, hi) in spec.split_shard_ranges.items()
+            if lo < hi
+        ]
+        return [*split_uris, spec.r2.stats_uri()]
+    return [spec.r2.uri(spec.r2.prefix), spec.r2.stats_uri()]
+
+
+def build_dataset_artifact(spec: DatasetSpec) -> wandb.Artifact:
+    """Build the canonical ``dataset`` W&B artifact for a finalized run.
+
+    Names the artifact ``data-{spec.task_name}`` (type ``dataset``) per
+    ``storage-provenance-spec.md`` §4, references the finalized R2 objects as
+    ``s3://`` URIs (split ``.h5`` files or the shard prefix, plus
+    ``stats.npz``), and records ``shard_count`` / ``n_samples`` / ``git_sha``
+    in ``artifact.metadata`` per §6. References use ``checksum=False`` because
+    R2's custom S3 endpoint is not reachable by W&B's default reference
+    handler — the URIs record lineage, not a content hash.
+
+    :param spec: Validated dataset spec; its R2 location and split sizes
+        determine the references and metadata.
+    :returns: An unlogged ``wandb.Artifact`` ready for ``log_artifact``.
+    """
+    artifact = wandb.Artifact(
+        name=f"data-{spec.task_name}",
+        type="dataset",
+        metadata={
+            "shard_count": spec.num_shards,
+            "n_samples": sum(spec.train_val_test_sizes),
+            "git_sha": spec.git_sha,
+        },
+    )
+    for r2_uri in _finalized_reference_uris(spec):
+        artifact.add_reference(_r2_to_s3_uri(r2_uri), checksum=False)
+    return artifact
+
+
+def _log_dataset_artifact(loggers: list[Logger], spec: DatasetSpec) -> None:
+    """Log the canonical ``dataset`` artifact to each ``WandbLogger`` in ``loggers``.
+
+    Mirrors ``generate_dataset._log_spec_artifact``: a wandb failure warns and
+    is swallowed so artifact logging never aborts a completed finalize — the
+    R2 outputs and ``dataset.complete`` marker are already written.
+    Non-``WandbLogger`` entries (and an empty list) are a no-op, which is the
+    path every wandb-free caller (e.g. the existing finalize tests) takes.
+
+    :param loggers: Lightning loggers; only ``WandbLogger`` entries log.
+    :param spec: Validated dataset spec forwarded to :func:`build_dataset_artifact`.
+    """
+    for lg in loggers:
+        if not isinstance(lg, WandbLogger):
+            continue
+        try:
+            lg.experiment.log_artifact(build_dataset_artifact(spec))
+        except Exception as exc:  # noqa: BLE001 — wandb artifact failure must not abort finalize
+            logger.warning(f"_log_dataset_artifact failed on {type(lg).__name__}: {exc}")
+
+
+def finalize(cfg: DictConfig) -> None:  # noqa: DOC503
     """Finalize the R2 prefix for ``cfg.dataset_spec_uri``; idempotent on ``dataset.complete``.
 
-    Loads R2 creds and the spec from ``cfg.dataset_spec_uri``, then delegates
-    to :func:`finalize_from_spec` for the marker-probe → dispatch → marker-upload
-    body.
+    Loads R2 creds and the spec from ``cfg.dataset_spec_uri``, delegates to
+    :func:`finalize_from_spec` for the marker-probe → dispatch → marker-upload
+    body, then logs the canonical ``dataset`` artifact to any configured
+    ``WandbLogger`` (resuming the data-generation run pinned to ``spec.run_id``
+    so the artifact lands on the producer node of the lineage DAG). The wandb
+    run id is pinned and ``resume=allow`` is forced so finalize attaches to the
+    generation run rather than minting a new one; both are no-ops when
+    ``cfg`` carries no ``logger`` group (the wandb-free default). On any
+    failure the loggers are still closed (status ``"failed"``) before the
+    exception re-raises.
 
     :param cfg: Composed cfg with ``dataset_spec_uri`` (URI accepted by
-        :func:`~synth_setter.pipeline.spec_io.load_spec_from_uri`) and
+        :func:`~synth_setter.pipeline.spec_io.load_spec_from_uri`),
         ``paths.output_dir`` (writable scratch dir; created if missing;
-        retained after the call, multi-GB on the hdf5 branch).
+        retained after the call, multi-GB on the hdf5 branch), and an optional
+        ``logger`` group instantiated for W&B artifact logging.
+    :raises ValueError: Propagated from :func:`finalize_from_spec` — a drifted
+        ``spec.r2.prefix`` or an unsupported ``spec.output_format``.
     """
     r2_io.ensure_r2_env_loaded()
     spec = load_spec_from_uri(cfg.dataset_spec_uri)
-    finalize_from_spec(spec, Path(cfg.paths.output_dir))
+    pin_wandb_run_id(cfg, spec.run_id, "data-generation")
+    if OmegaConf.select(cfg, "logger.wandb") is not None:
+        OmegaConf.update(cfg, "logger.wandb.resume", "allow", force_add=True)
+    loggers = instantiate_loggers(cfg.get("logger"))
+    status = "success"
+    try:
+        finalize_from_spec(spec, Path(cfg.paths.output_dir))
+        _log_dataset_artifact(loggers, spec)
+    except BaseException:
+        status = "failed"
+        raise
+    finally:
+        close_loggers(loggers, status)
 
 
 @hydra.main(
