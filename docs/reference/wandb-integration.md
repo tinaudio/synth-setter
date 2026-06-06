@@ -124,8 +124,10 @@ Source: `src/synth_setter/utils/utils.py:137-148`, called from `src/synth_setter
 
 ### 2g. Provenance metadata (logged once at run start)
 
-`log_wandb_provenance()` (`src/synth_setter/utils/logging_utils.py:64-98`) is called in both
-`src/synth_setter/cli/train.py:89` and `src/synth_setter/cli/eval.py:82`, after `log_hyperparameters()`.
+`log_wandb_provenance()` (`src/synth_setter/utils/logging_utils.py:64-98`) is called on all three
+entrypoints: `src/synth_setter/cli/train.py` and `src/synth_setter/cli/eval.py` after
+`log_hyperparameters()`, and `src/synth_setter/cli/generate_dataset.py` inside `generate()` right
+after `_log_hyperparams()` (covering both the local `main` and worker `from_hydra` paths).
 
 | Key          | Source               | Example                                                 |
 | ------------ | -------------------- | ------------------------------------------------------- |
@@ -175,11 +177,11 @@ ______________________________________________________________________
 
 ## 4. Entry Points
 
-| Entry point                                | W&B usage                                                                                                                                                                            | File                                       |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------ |
-| `src/synth_setter/cli/train.py`            | Full: logger init → hparams → provenance → train metrics → test metrics → teardown                                                                                                   | `src/synth_setter/cli/train.py`            |
-| `src/synth_setter/cli/eval.py`             | Full: logger init → hparams → provenance → test/val metrics (+ optional predictions) → predict-mode `audio/<metric>_{mean,std}` keys from `_log_audio_metrics_to_wandb` → teardown   | `src/synth_setter/cli/eval.py`             |
-| `src/synth_setter/cli/generate_dataset.py` | Dataset-generation: logger init pinned to `spec.run_id` → spec hparams → `<task_name>-input-spec` artifact → per-shard metrics → run summary → `finalize(status)` + `wandb.finish()` | `src/synth_setter/cli/generate_dataset.py` |
+| Entry point                                | W&B usage                                                                                                                                                                                         | File                                       |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
+| `src/synth_setter/cli/train.py`            | Full: logger init → hparams → provenance → train metrics → test metrics → teardown                                                                                                                | `src/synth_setter/cli/train.py`            |
+| `src/synth_setter/cli/eval.py`             | Full: logger init → hparams → provenance → test/val metrics (+ optional predictions) → predict-mode `audio/<metric>_{mean,std}` keys from `_log_audio_metrics_to_wandb` → teardown                | `src/synth_setter/cli/eval.py`             |
+| `src/synth_setter/cli/generate_dataset.py` | Dataset-generation: logger init pinned to `spec.run_id` → spec hparams → provenance → `<task_name>-input-spec` artifact → per-shard metrics → run summary → `finalize(status)` + `wandb.finish()` | `src/synth_setter/cli/generate_dataset.py` |
 
 Both training and eval use `@task_wrapper` which ensures `wandb.finish()` runs even on exception.
 `generate_dataset` brackets `generate(...)` in its own `try/finally` that calls `_close_loggers` — see §5 for the metric / run-id contract.
