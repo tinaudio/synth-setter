@@ -162,34 +162,32 @@ def get_stats_hdf5(filename: str, mask_degenerate: bool = False) -> None:
     dataset_name = "mel_spec"
     num_workers = 4
 
-    print("Starting client...")
+    logger.info("Starting Dask client (n_workers=%d)", num_workers)
     with Client(n_workers=num_workers, threads_per_worker=8) as client:
         # ``da.from_array`` reads lazily; the h5py.File must stay open through
         # the final ``.compute()`` so workers can pull chunks on demand.
         with h5py.File(filename, "r") as h5_file:
-            print("Creating dask array...")
+            logger.info("Creating Dask array from dataset %r", dataset_name)
             darray = da.from_array(h5_file[dataset_name], chunks="auto")
 
-            print("Computing mean and std...")
+            logger.info("Building mean/std reduction tasks")
             mean_task = darray.mean(axis=0)
             std_task = darray.std(axis=0)
 
-            print("Persisting tasks...")
+            logger.info("Persisting reduction tasks")
             futures = [mean_task.persist(), std_task.persist()]
 
-            print("Displaying progress...")
+            logger.info("Displaying compute progress")
             progress(futures)
 
-            print("Gathering results...")
+            logger.info("Gathering results")
             mean_val, std_val = client.gather(futures)
-
-            print("Mean:", mean_val)
-            print("std:", std_val)
 
             mean = mean_val.compute()
             std = std_val.compute()
+            logger.info("Computed mean and std (shapes %s, %s)", mean.shape, std.shape)
 
-    print("Saving to file...")
+    logger.info("Saving stats to file")
     out_file = SurgeXTDataset.get_stats_file_path(filename)
     if mask_degenerate:
         std = _fix_degenerate_bins(std)
