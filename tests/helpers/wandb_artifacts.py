@@ -32,10 +32,15 @@ def publish_checkpoint_artifact(ckpt_path: Path, artifact_name: str, run_dir: Pa
     """
     import wandb
 
+    # Pin a short host: W&B rejects a run whose machine hostname exceeds 64 chars
+    # ("CommError: 64 limit exceeded for Host"), and self-hosted CI runners (e.g. the
+    # MPS box) have hostnames well over that. None (the default) would record
+    # socket.gethostname(), which is what trips the limit.
     run = wandb.init(
         project=CITEST_PROJECT,
         job_type="ckpt-roundtrip-smoke",
         dir=str(run_dir),
+        settings=wandb.Settings(host="synth-setter-ci"),
     )
     try:
         artifact = wandb.Artifact(name=artifact_name, type="model")
