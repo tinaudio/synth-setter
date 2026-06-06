@@ -1,0 +1,35 @@
+program: src/synth_setter/cli/generate_dataset.py
+# Pinned in YAML — wandb sweep CLI does not support OmegaConf resolvers and ignores
+# WANDB_ENTITY / WANDB_PROJECT at sweep-creation time (those only steer wandb.init in each trial).
+entity: tinaudio
+project: synth-setter
+# Reuse-depth junk probe for #489: param_sample_cadence=shard + plugin_reload_cadence=once reuse one
+# cached plugin instance across one identical patch, exposing the every-other-render junk (mss~21, #706).
+command:
+  - ${interpreter}
+  - ${program}
+  - experiment=generate_dataset/smoke-shard-with-oracle-eval
+  - render.param_spec_name=surge_xt
+  - render.preset_path=presets/surge-base.vstpreset
+  - render.param_sample_cadence=shard
+  - render.plugin_reload_cadence=once
+  - render.gui_toggle_cadence=never
+  # 80 is a multiple of every swept reuse depth, so each split is a whole number of shards.
+  - train_val_test_sizes=[80,80,80]
+  - ${args_no_hyphens}
+name: generate_dataset_reuse_depth_surge_xt
+method: grid
+# grid ignores `metric` at scheduling time; the field stays for dashboard legibility on runs that do
+# log it. The science is the junk tail (mss_max / %mss>3); mss_mean is just the W&B handle.
+metric:
+  goal: minimize
+  name: audio/mss_mean
+# samples_per_shard is the reuse depth (renders sharing one instance + one patch); the shuffle probe
+# auto-fires, attributing junk per depth. Junk appears past ~12 reuses — see #706.
+parameters:
+  render.samples_per_shard:
+    values:
+      - 4
+      - 20
+      - 40
+      - 80
