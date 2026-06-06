@@ -180,11 +180,11 @@ _to_rclone_path = to_rclone_path
 
 
 def to_s3_uri(r2_uri: str) -> str:
-    """Rewrite an ``r2://`` URI to the ``s3://`` scheme W&B references record.
+    """Rewrite an `r2://bucket/key` URI to the `s3://` scheme W&B references record.
 
     R2 exposes an S3-compatible API; only the scheme differs, so the
     bucket/key path is preserved verbatim. ``storage-provenance-spec.md`` §4
-    logs lineage references as ``s3://``.
+    logs artifact references as ``s3://``.
 
     :param r2_uri: Canonical ``r2://bucket/key`` URI string.
     :returns: The same location as ``s3://bucket/key``.

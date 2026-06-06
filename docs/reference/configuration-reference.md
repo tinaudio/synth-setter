@@ -275,7 +275,6 @@ Gaps are configuration inputs that design docs specify or that standard practice
 | `logger.wandb.job_type`      | string | `"training"` instead of empty                                    | storage-provenance-spec §7  |
 | `logger.wandb.resume`        | string | `"allow"` for W&B resume support                                 | training-pipeline.md §5.3   |
 | Dataset `run.use_artifact()` | code   | Lineage link to consumed dataset artifact                        | storage-provenance-spec §5  |
-| Model `run.log_artifact()`   | code   | Lineage link for produced model artifact                         | storage-provenance-spec §5  |
 
 ### 5.3 Data Portability
 

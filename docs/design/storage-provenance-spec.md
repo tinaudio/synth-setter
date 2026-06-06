@@ -124,6 +124,8 @@ ______________________________________________________________________
 
 > **Note:** `finalize_dataset.py` logs the `dataset` artifact (`build_dataset_artifact` / `_log_dataset_artifact`), resuming the data-generation run pinned to `spec.run_id` so the artifact lands on the producer node of the lineage DAG. It composes a `WandbLogger` from `configs/finalize_dataset.yaml`'s `logger: wandb` default and degrades to a best-effort no-op without `WANDB_API_KEY`. In Docker the finalize step runs as `MODE=finalize-shards` (scoped, validated on experiment branch — [#408](https://github.com/tinaudio/synth-setter/issues/408)).
 
+> **Note:** `train.py` logs the `model` artifact (`build_model_artifact` / `_log_model_artifact`) at train end, superseding reliance on Lightning's implicitly-named `log_model: "all"` artifact. The `s3://` checkpoint reference is opt-in via `training.upload_checkpoints_uri` (an `r2://` prefix or null); the null default logs a lineage-only artifact because R2 checkpoint upload is not implemented yet ([#92](https://github.com/tinaudio/synth-setter/issues/92)). Logging is best-effort and a no-op without a `WandbLogger`.
+
 - W&B auto-versions artifacts (`:v0`, `:v1`, `:v2`). Each new run of the same config produces the next version.
 - The `*_wandb_run_id` is stored in `artifact.metadata`, not the artifact name
 
