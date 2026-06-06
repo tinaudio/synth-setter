@@ -5,6 +5,7 @@ validation errors. ``subprocess.run`` is monkeypatched so no real VST plugin
 or Python subprocess is launched.
 """
 
+import logging
 import subprocess
 import sys
 from contextlib import contextmanager
@@ -12,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import wandb
 from omegaconf import DictConfig, OmegaConf
 
 from synth_setter.cli import eval as eval_mod
@@ -681,8 +683,6 @@ def test_postprocessing_skips_wandb_when_no_run(
     assert result == _EXPECTED_AUDIO_METRICS
 
 
-# --- _log_metrics_csv_to_wandb unit tests ---
-
 _METRICS_CSV = "sample_id,mss,wmfcc,sot,rms\n0,0.1,0.2,0.3,0.4\n1,0.5,0.6,0.7,0.8\n"
 
 
@@ -695,7 +695,6 @@ def test_log_metrics_csv_to_wandb_logs_table_to_active_run(
     :param monkeypatch: Pins ``wandb.run`` to a spy so the log payload is observable.
     :param tmp_path: Scratch metrics dir seeded with a minimal ``metrics.csv``.
     """
-    import wandb
 
     (tmp_path / "metrics.csv").write_text(_METRICS_CSV)
 
@@ -732,7 +731,6 @@ def test_log_metrics_csv_to_wandb_noop_when_no_run(
     (tmp_path / "metrics.csv").write_text(_METRICS_CSV)
     monkeypatch.setattr(eval_mod.wandb, "run", None)
 
-    # Should complete without raising even though wandb.run is None.
     _log_metrics_csv_to_wandb(tmp_path)
 
 
@@ -773,7 +771,6 @@ def test_log_metrics_csv_to_wandb_log_exception_is_swallowed(
     :param tmp_path: Scratch metrics dir seeded with a minimal ``metrics.csv``.
     :param caplog: Captures log output to verify the warning is emitted.
     """
-    import logging
 
     (tmp_path / "metrics.csv").write_text(_METRICS_CSV)
 
