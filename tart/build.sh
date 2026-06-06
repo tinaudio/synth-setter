@@ -38,6 +38,14 @@ err() {
 }
 
 main() {
+  # The script takes at most one argument; reject extras so unknown flags
+  # after a valid one (e.g. `--build --nope`) error rather than being ignored.
+  if [[ $# -gt 1 ]]; then
+    err "too many arguments — expected at most one"
+    usage >&2
+    return 2
+  fi
+
   local do_build="false"
   case "${1:-}" in
     --build) do_build="true" ;;
