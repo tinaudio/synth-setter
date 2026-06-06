@@ -1182,6 +1182,32 @@ class TestRun:
         assert captured["src"] == tmp_path / spec.shards[0].filename
         assert captured["existed_at_upload"] is True
 
+    def test_provenance_not_stamped_when_no_wandb_logger(
+        self,
+        patched_subprocess: MagicMock,  # noqa: ARG002
+        spec: DatasetSpec,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``log_wandb_provenance`` is skipped when ``loggers`` owns no ``WandbLogger``.
+
+        Provenance mutates the process-global ``wandb.run``; gating the call on a
+        locally-owned ``WandbLogger`` keeps an empty-logger run from stamping a
+        foreign in-process run, mirroring the ``_close_loggers`` ownership guard.
+
+        :param patched_subprocess: Fixture-activation only; the renderer
+            materializes the shard so the run reaches its summary.
+        :param spec: Fixture-provided single-shard ``DatasetSpec``.
+        :param tmp_path: Caller-supplied work_dir for ``generate()``.
+        :param monkeypatch: Installs the ``log_wandb_provenance`` spy.
+        """
+        provenance = MagicMock()
+        monkeypatch.setattr("synth_setter.cli.generate_dataset.log_wandb_provenance", provenance)
+
+        generate(spec, tmp_path, [])
+
+        provenance.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # build_generate_args — arg construction from spec + shard
@@ -1483,6 +1509,44 @@ class TestMainDispatchBranches:
         assert isinstance(spec, DatasetSpec)
         assert spec.render.plugin_path == str(TEST_PLUGIN_VST3)
 
+    def test_local_run_applies_extras_writing_tags_and_config_tree(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``main()`` runs ``extras(cfg)`` before generating, materializing its artifacts.
+
+        ``dataset.yaml`` composes ``extras: default`` (``enforce_tags`` +
+        ``print_config`` true) and a non-empty ``tags``, so ``extras(cfg)``
+        exports ``tags.log`` and ``config_tree.log`` to ``cfg.paths.output_dir``.
+        Asserting those files exist verifies the entrypoint applied extras via
+        its observable side effects rather than mocking the call.
+
+        :param monkeypatch: Pytest fixture used to patch argv + ``generate``.
+        """
+        import synth_setter.cli.generate_dataset as gd
+
+        argv = [
+            "synth-setter-generate-dataset",
+            "experiment=generate_dataset/smoke-shard",
+            f"render.plugin_path={TEST_PLUGIN_VST3}",
+        ]
+        monkeypatch.setattr("sys.argv", argv)
+
+        recorded: dict[str, Path] = {}
+
+        def _fake_run(_spec: object, work_dir: Path, _loggers: object) -> None:
+            recorded["work_dir"] = work_dir
+
+        monkeypatch.setattr(gd, "generate", _fake_run)
+
+        gd.main()
+
+        output_dir = recorded["work_dir"]
+        for artifact in ("tags.log", "config_tree.log"):
+            path = output_dir / artifact
+            assert path.is_file(), f"extras did not write {artifact}"
+            assert path.stat().st_size > 0, f"{artifact} is empty"
+
     def test_compute_template_set_calls_dispatch_via_skypilot(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -1702,11 +1766,11 @@ class TestMainDispatchBranches:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """oracle_eval_inline=true on the local-run branch shells out to synth-setter-eval.
+        """oracle_eval_inline=true fires the eval subprocess once per split.
 
-        Asserts the eval helper fires once reading the data **in place** from
-        ``cfg.paths.output_dir`` (no download), with its Hydra run dir isolated
-        under ``output_dir/oracle_eval/<run_id>/``.
+        Asserts the eval helper fires once per split, reading data **in place**
+        from ``cfg.paths.output_dir`` (no download), with each Hydra run dir
+        isolated under ``output_dir/oracle_eval/<split>/<run_id>/``.
 
         :param monkeypatch: Patches argv + the three module-level seams.
         """
@@ -1742,27 +1806,37 @@ class TestMainDispatchBranches:
 
         gd.main()
 
-        oracle_mock.assert_called_once()
-        dataset_root, run_dir, _run_id = oracle_mock.call_args[0]
-        assert isinstance(dataset_root, Path)
-        # The whole generation RenderConfig flows through (keyword-only) so the eval
-        # re-renders through the same spec; smoke-shard is surge_simple.
-        render_arg = oracle_mock.call_args.kwargs["render"]
-        assert render_arg.param_spec_name == "surge_simple"
-        # The eval inherits the generate run's datamodule worker count verbatim,
-        # so a Darwin override (num_workers=0) reaches the predict DataLoader.
-        assert oracle_mock.call_args.kwargs["num_workers"] == observed["num_workers"]
-        assert render_arg.preset_path == "presets/surge-simple.vstpreset"
-        # plugin_path is the TEST_PLUGIN_VST3 this test overrode at generation —
-        # proving a non-default plugin flows through to the eval re-render.
-        assert render_arg.plugin_path == str(TEST_PLUGIN_VST3)
-        # The eval reads in place from the Hydra output_dir where the shards and
-        # VDS splits already live — not a downloaded copy under oracle_eval/.
-        assert dataset_root == observed["output_dir"]
-        assert run_dir.parent.name == "oracle_eval", (
-            f"eval run dir should land under <output_dir>/oracle_eval/<run_id>/; got {run_dir!r}"
-        )
-        assert run_dir.parent.parent == dataset_root
+        # One invocation per split.
+        assert oracle_mock.call_count == 3
+        output_dir = observed["output_dir"]
+        assert isinstance(output_dir, Path)
+        splits = ("train", "val", "test")
+        split_h5s = ("train.h5", "val.h5", "test.h5")
+        for call, split, split_h5 in zip(oracle_mock.call_args_list, splits, split_h5s):
+            dataset_root, run_dir, _run_id = call[0]
+            # The whole generation RenderConfig flows through (keyword-only) so
+            # the eval re-renders through the same spec; smoke-shard is surge_simple.
+            render_arg = call.kwargs["render"]
+            assert render_arg.param_spec_name == "surge_simple"
+            # The eval inherits the generate run's datamodule worker count verbatim,
+            # so a Darwin override (num_workers=0) reaches the predict DataLoader.
+            assert call.kwargs["num_workers"] == observed["num_workers"]
+            assert render_arg.preset_path == "presets/surge-simple.vstpreset"
+            # plugin_path is the TEST_PLUGIN_VST3 this test overrode at generation —
+            # proving a non-default plugin flows through to the eval re-render.
+            assert render_arg.plugin_path == str(TEST_PLUGIN_VST3)
+            # The eval reads in place from the Hydra output_dir where the shards and
+            # VDS splits already live — not a downloaded copy under oracle_eval/.
+            assert dataset_root == output_dir
+            # predict_file targets this split's HDF5.
+            assert call.kwargs["predict_file"] == output_dir / split_h5
+            # Run dir: oracle_eval/<split>/<run_id>
+            assert run_dir.parent.parent.name == "oracle_eval", (
+                f"eval run dir should land under "
+                f"<output_dir>/oracle_eval/<split>/<run_id>/; got {run_dir!r}"
+            )
+            assert run_dir.parent.name == split
+            assert run_dir.parent.parent.parent == dataset_root
 
     def test_run_oracle_eval_subprocess_builds_expected_argv(
         self,
@@ -1770,7 +1844,7 @@ class TestMainDispatchBranches:
         tmp_path: Path,
         spec: DatasetSpec,
     ) -> None:
-        """Helper subprocesses ``synth_setter.cli.eval`` with the contract argv.
+        """Calls ``synth_setter.cli.eval`` as a subprocess and pins the contract argv.
 
         Pins the load-bearing overrides (``experiment=surge/fake_oracle``,
         ``datamodule.dataset_root``, ``ckpt_path=null``, ``mode=predict``), the
@@ -1800,8 +1874,14 @@ class TestMainDispatchBranches:
                 "plugin_path": "plugins/Surge XT.vst3",
             }
         )
+        predict_file = dataset_root / "test.h5"
         gd._run_oracle_eval_subprocess(
-            dataset_root, run_dir, "some-run-id", render=render, num_workers=7
+            dataset_root,
+            run_dir,
+            "some-run-id",
+            render=render,
+            num_workers=7,
+            predict_file=predict_file,
         )
 
         run_mock.assert_called_once()
@@ -1809,10 +1889,8 @@ class TestMainDispatchBranches:
         assert "-m" in called_argv
         assert "synth_setter.cli.eval" in called_argv
         assert "experiment=surge/fake_oracle" in called_argv
-        # Data dir and the eval's Hydra run dir are DISTINCT: the split virtual
-        # datasets are read in place beside their shards, while eval outputs
-        # (incl. metrics/metrics.json the workflow globs) land under the
-        # oracle_eval/<run_id> run dir.
+        # dataset_root and run_dir are distinct: split virtual datasets are
+        # read in place beside their shards; eval outputs land in run_dir.
         assert f"datamodule.dataset_root={dataset_root}" in called_argv
         assert f"hydra.run.dir={run_dir}" in called_argv
         assert dataset_root != run_dir
@@ -1840,6 +1918,8 @@ class TestMainDispatchBranches:
         # Sentinel 7 (no config default) proves the value is forwarded, not hardcoded.
         assert "datamodule.num_workers=7" in called_argv
         assert "mode=predict" in called_argv
+        # predict_file routes the datamodule to this split's HDF5.
+        assert f"datamodule.predict_file={predict_file}" in called_argv
 
     def test_run_oracle_eval_subprocess_missing_local_artifacts_raises(
         self,
@@ -1866,10 +1946,49 @@ class TestMainDispatchBranches:
         with pytest.raises(FileNotFoundError, match=r"test\.h5"):
             gd._run_oracle_eval_subprocess(
                 tmp_path,
-                tmp_path / "oracle_eval" / "rid",
+                tmp_path / "oracle_eval" / "test" / "rid",
                 "rid",
                 render=spec.render,
                 num_workers=0,
+                predict_file=tmp_path / "test.h5",
+            )
+
+        run_mock.assert_not_called()
+
+    def test_run_oracle_eval_subprocess_missing_predict_file_raises(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        spec: DatasetSpec,
+    ) -> None:
+        """Non-existent ``predict_file`` ⇒ ``FileNotFoundError`` before subprocess.
+
+        All required artifacts are present in ``dataset_root`` so the existing
+        preflight passes; the ``predict_file``-specific check then catches the
+        absent path before shelling out.
+
+        :param monkeypatch: Patches ``subprocess.run`` to assert it never fires.
+        :param tmp_path: Roots the dataset dir and a missing predict path.
+        :param spec: Source of a valid ``RenderConfig`` for the call signature.
+        """
+        import synth_setter.cli.generate_dataset as gd
+
+        run_mock = MagicMock()
+        monkeypatch.setattr(gd.subprocess, "run", run_mock)
+
+        dataset_root = tmp_path / "data"
+        dataset_root.mkdir()
+        for name in ("train.h5", "val.h5", "test.h5", "stats.npz"):
+            (dataset_root / name).touch()
+
+        with pytest.raises(FileNotFoundError, match=r"predict_file"):
+            gd._run_oracle_eval_subprocess(
+                dataset_root,
+                tmp_path / "oracle_eval" / "test" / "rid",
+                "rid",
+                render=spec.render,
+                num_workers=0,
+                predict_file=tmp_path / "nonexistent_split.h5",
             )
 
         run_mock.assert_not_called()

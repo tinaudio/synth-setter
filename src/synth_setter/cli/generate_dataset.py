@@ -50,12 +50,17 @@ from synth_setter.pipeline.spec_io import (
     write_spec_locally,
 )
 from synth_setter.resources import as_file, vst_headless_wrapper
+from synth_setter.utils import extras, log_wandb_provenance, register_resolvers
 from synth_setter.utils.instantiators import instantiate_loggers
 from synth_setter.workspace import operator_workspace
 
 # Side effect only: publish ``PROJECT_ROOT`` so ``${oc.env:PROJECT_ROOT}``
 # in ``configs/paths/default.yaml`` resolves under @hydra.main compose.
 operator_workspace()
+
+# Defensive parity with train.py/eval.py. The dataset compose path uses no
+# ``${mul:}``/``${div:}`` resolvers today, so this is parity-only, not required.
+register_resolvers()
 
 # Worker-side checkout path — baked WORKDIR of the dev-snapshot image, not the
 # launcher's workspace (which may not exist on the worker filesystem).
@@ -75,8 +80,9 @@ def _run_oracle_eval_subprocess(
     *,
     render: RenderConfig,
     num_workers: int,
+    predict_file: Path,
 ) -> None:
-    """Run the fake-oracle eval over ``dataset_root`` to verify the param-array round-trip.
+    """Run the fake-oracle eval over one split of ``dataset_root``.
 
     ``check=True`` so a non-zero eval exit (or wall-clock timeout) propagates
     to the caller.
@@ -100,9 +106,12 @@ def _run_oracle_eval_subprocess(
         spawn-start-method platforms (Darwin) the caller must configure ``0``:
         workers pickle the dataset, but ``SurgeXTDataset`` holds an open h5py
         handle that cannot be pickled.
+    :param predict_file: HDF5 split file for the datamodule's predict dataloader
+        (e.g. ``dataset_root / "train.h5"``).
     :raises FileNotFoundError: ``dataset_root`` is missing any finalized split
         or ``stats.npz`` — e.g. a resume where ``finalize_from_spec``
         short-circuited on an existing R2 marker without repopulating it.
+        Also raised when ``predict_file`` itself does not exist.
     """
     missing = [n for n in _ORACLE_EVAL_REQUIRED_ARTIFACTS if not (dataset_root / n).is_file()]
     if missing:
@@ -111,6 +120,11 @@ def _run_oracle_eval_subprocess(
             f"but {missing} are absent. finalize_from_spec short-circuits when R2 already "
             f"holds the dataset.complete marker, leaving output_dir unpopulated on a resume; "
             f"rerun with a fresh paths.output_dir."
+        )
+    if not predict_file.is_file():
+        raise FileNotFoundError(
+            f"predict_file {predict_file} not found; "
+            f"ensure the split HDF5 exists in {dataset_root} before shelling out."
         )
     argv = [
         sys.executable,
@@ -144,6 +158,9 @@ def _run_oracle_eval_subprocess(
         # Forwarded from the generate run so the eval honours the same worker
         # count; pass 0 on Darwin where the open-h5py dataset can't be pickled.
         f"datamodule.num_workers={num_workers}",
+        # Override the datamodule's default predict_file (test.h5) so the caller
+        # can route each invocation to a specific split independently.
+        f"datamodule.predict_file={predict_file}",
         "mode=predict",
     ]
     logger.info(f"oracle_eval_inline subprocess: {argv}")
@@ -296,6 +313,11 @@ def generate(spec: DatasetSpec, work_dir: Path, loggers: list[Logger]) -> None: 
         # ``wandb.finish()`` in the ``finally`` — otherwise the wandb run
         # leaks un-closed on the helper's exception path.
         _log_hyperparams(loggers, spec)
+        # Provenance mutates the process-global ``wandb.run``; only stamp it when
+        # a ``WandbLogger`` here owns the run, mirroring ``_close_loggers`` — else
+        # an empty-logger run would stamp a foreign run started elsewhere.
+        if any(isinstance(lg, WandbLogger) for lg in loggers):
+            log_wandb_provenance()
         _log_spec_artifact(loggers, spec)
         # Fail a misconfigured dataset-copy at launch, before the first render.
         _validate_copy_source(spec)
@@ -793,6 +815,7 @@ def from_hydra(cfg: DictConfig) -> None:
     :param cfg: Composed Hydra dataset cfg supplied by ``@hydra.main`` from
         the worker's argv overrides.
     """
+    extras(cfg)
     spec = spec_from_cfg(cfg)
     loggers = _loggers_pinned_to_spec(cfg, spec)
     generate(spec, Path(cfg.paths.output_dir), loggers)
@@ -817,6 +840,7 @@ def main(cfg: DictConfig) -> None:
         a zero-size train / val / test split (the eval datamodule opens
         all three split files unconditionally).
     """
+    extras(cfg)
     render_cfg = cfg.get("render")
     skip_reason = None if render_cfg is None else _unsupported_cadence_reason(render_cfg)
     if skip_reason is not None:
@@ -873,14 +897,15 @@ def main(cfg: DictConfig) -> None:
             # stats.npz into output_dir; the splits reference the shards by
             # basename, so read them in place — no R2 round-trip.
             output_dir = Path(cfg.paths.output_dir)
-            eval_run_dir = output_dir / "oracle_eval" / spec.run_id
-            _run_oracle_eval_subprocess(
-                output_dir,
-                eval_run_dir,
-                spec.run_id,
-                render=spec.render,
-                num_workers=cfg.datamodule.num_workers,
-            )
+            for split in ("train", "val", "test"):
+                _run_oracle_eval_subprocess(
+                    output_dir,
+                    output_dir / "oracle_eval" / split / spec.run_id,
+                    spec.run_id,
+                    render=spec.render,
+                    num_workers=cfg.datamodule.num_workers,
+                    predict_file=output_dir / f"{split}.h5",
+                )
         return
 
     if cfg.finalize_inline or cfg.oracle_eval_inline:

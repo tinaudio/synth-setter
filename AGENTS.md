@@ -216,6 +216,23 @@ python3 -c "import torch; print('cuda:', torch.cuda.is_available(), 'count:', to
 Only skip if BOTH report no usable GPU. If they disagree, document it as an
 environment/setup mismatch — not "no GPU available".
 
+## VST and R2 verification
+
+This devcontainer ships `SYNTH_SETTER_PLUGIN_PATH` (Surge XT VST) and
+`RCLONE_CONFIG_R2_*` (Cloudflare R2 credentials). Before labelling a
+`@pytest.mark.requires_vst` or `@pytest.mark.integration_r2` test as
+unrunnable, probe:
+
+```bash
+ls "${SYNTH_SETTER_PLUGIN_PATH:-plugins/Surge XT.vst3}"
+rclone lsd r2:
+```
+
+Both succeed in this devcontainer. **Run — do not skip — these tests.**
+`make test-vst-cpu` covers `requires_vst`; `uv run pytest -m "integration_r2" -v`
+covers R2 e2e. In PR verification tables, list actual pass/fail results rather
+than "SKIP: requires VST / R2".
+
 ## Commands
 
 ```bash

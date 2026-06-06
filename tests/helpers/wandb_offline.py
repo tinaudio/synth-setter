@@ -147,3 +147,53 @@ def _scan_history_rows(wandb_binary: Path) -> list[dict[str, str]]:
         return rows
     finally:
         ds.close()
+
+
+def read_run_config(
+    wandb_binary: Path,
+    *,
+    until: Callable[[dict[str, str]], bool] | None = None,
+    timeout_s: float = _FLUSH_TIMEOUT_S,
+) -> dict[str, str]:
+    """Merge every ``wandb.config`` update in a wandb offline ``run-*.wandb`` binary, last-wins.
+
+    Config records are surfaced separately from history; use this to assert on
+    provenance keys (``github_sha``, ``image_tag``, ``command``) that land in
+    config, not history.
+
+    :param wandb_binary: The offline ``run-*.wandb`` file to decode.
+    :param until: Re-scan until this predicate over the merged config holds; when
+        ``None``, scan exactly once. See ``_poll_until`` for the flush-race and
+        on-timeout semantics.
+    :param timeout_s: Polling upper bound; unused when ``until`` is ``None``.
+    :returns: Merged config; values are JSON-encoded strings as the datastore stores them.
+    """
+    return _poll_until(lambda: _scan_run_config(wandb_binary), until, timeout_s)
+
+
+def _scan_run_config(wandb_binary: Path) -> dict[str, str]:
+    """Single-pass decode of the datastore binary's config records, merged.
+
+    :param wandb_binary: Path to the offline ``run-*.wandb`` file.
+    :returns: Merged config mapping over every config update in this scan.
+    """
+    ds = wandb_datastore.DataStore()
+    ds.open_for_scan(str(wandb_binary))
+    # ``open_for_scan`` opens a file handle; close it each pass so the polling
+    # loop in ``read_run_config`` can't leak one handle per re-scan.
+    try:
+        config: dict[str, str] = {}
+        while True:
+            data = ds.scan_data()
+            if data is None:
+                break
+            rec = wandb_pb.Record()  # pyright: ignore[reportAttributeAccessIssue]
+            rec.ParseFromString(data)
+            if not rec.HasField("config"):
+                continue
+            for item in rec.config.update:
+                key = item.key if item.key else "/".join(item.nested_key)
+                config[key] = item.value_json
+        return config
+    finally:
+        ds.close()
