@@ -1704,8 +1704,8 @@ class TestMainDispatchBranches:
     ) -> None:
         """oracle_eval_inline=true fires the eval subprocess once per split.
 
-        Asserts the eval helper fires three times — once each for train, val,
-        and test — reading data **in place** from ``cfg.paths.output_dir`` (no
+        Asserts the eval helper fires once per split, reading data **in place**
+        from ``cfg.paths.output_dir`` (no
         download), with each Hydra run dir isolated under
         ``output_dir/oracle_eval/<split>/<run_id>/``.
 
@@ -1748,7 +1748,8 @@ class TestMainDispatchBranches:
         output_dir = observed["output_dir"]
         assert isinstance(output_dir, Path)
         splits = ("train", "val", "test")
-        for call, split in zip(oracle_mock.call_args_list, splits):
+        split_h5s = ("train.h5", "val.h5", "test.h5")
+        for call, split, split_h5 in zip(oracle_mock.call_args_list, splits, split_h5s):
             dataset_root, run_dir, _run_id = call[0]
             # The whole generation RenderConfig flows through (keyword-only) so
             # the eval re-renders through the same spec; smoke-shard is surge_simple.
@@ -1765,7 +1766,7 @@ class TestMainDispatchBranches:
             # VDS splits already live — not a downloaded copy under oracle_eval/.
             assert dataset_root == output_dir
             # predict_file targets this split's HDF5.
-            assert call.kwargs["predict_file"] == output_dir / f"{split}.h5"
+            assert call.kwargs["predict_file"] == output_dir / split_h5
             # Run dir: oracle_eval/<split>/<run_id>
             assert run_dir.parent.parent.name == "oracle_eval", (
                 f"eval run dir should land under "

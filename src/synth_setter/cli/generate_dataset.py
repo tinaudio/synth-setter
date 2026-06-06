@@ -102,8 +102,7 @@ def _run_oracle_eval_subprocess(
         workers pickle the dataset, but ``SurgeXTDataset`` holds an open h5py
         handle that cannot be pickled.
     :param predict_file: HDF5 split file for the datamodule's predict dataloader
-        (e.g. ``dataset_root / "train.h5"``). Callers loop over all three splits
-        so each is evaluated independently.
+        (e.g. ``dataset_root / "train.h5"``).
     :raises FileNotFoundError: ``dataset_root`` is missing any finalized split
         or ``stats.npz`` — e.g. a resume where ``finalize_from_spec``
         short-circuited on an existing R2 marker without repopulating it.
@@ -879,7 +878,7 @@ def main(cfg: DictConfig) -> None:
             # generate + finalize already wrote the shards, VDS splits, and
             # stats.npz into output_dir; the splits reference the shards by
             # basename, so read them in place — no R2 round-trip.
-            # Run once per split so train/val/test are each evaluated independently.
+            # Run once per split.
             output_dir = Path(cfg.paths.output_dir)
             for split in ("train", "val", "test"):
                 _run_oracle_eval_subprocess(
