@@ -1,17 +1,54 @@
-"""Hyperparameter logging helpers and wandb-config provenance writer."""
+"""Hyperparameter logging helpers, run-id conventions, and wandb-config provenance writer."""
 
 import os
 import subprocess
 import sys
 from importlib.util import find_spec
+from pathlib import PurePosixPath
 from typing import Any
 
+from hydra.core.hydra_config import HydraConfig
 from lightning_utilities.core.rank_zero import rank_zero_only
-from omegaconf import OmegaConf
+from omegaconf import DictConfig, OmegaConf
 
 from synth_setter.utils import pylogger
 
 log = pylogger.RankedLogger(__name__, rank_zero_only=True)
+
+
+def resolve_run_config_id(cfg: DictConfig) -> str:
+    """Resolve the run config_id from the chosen Hydra experiment, else ``task_name``.
+
+    The experiment choice (e.g. ``surge/flow_simple``) is the train/eval analog of
+    the dataset config stem; its basename becomes the config_id. Falls back to
+    ``cfg.task_name`` when no experiment is selected or there is no Hydra context.
+
+    :param cfg: Hydra-composed cfg carrying ``task_name``.
+    :returns: The experiment basename, or ``cfg.task_name`` as a fallback.
+    """
+    try:
+        experiment = HydraConfig.get().runtime.choices.get("experiment")
+    except ValueError:
+        experiment = None
+    if experiment in (None, "null"):
+        return cfg.task_name
+    return PurePosixPath(experiment).name
+
+
+def pin_wandb_run_id(cfg: DictConfig, run_id: str, job_type: str) -> None:
+    """Pin the W&B run id and ``job_type`` onto ``cfg`` before logger instantiation.
+
+    No-op when the cfg has no ``logger.wandb`` group (e.g. ``logger=tensorboard``
+    or ``logger=null``), so ``OmegaConf.update`` never raises on the missing key.
+
+    :param cfg: Hydra-composed cfg; ``logger.wandb.{id,job_type}`` are updated in place.
+    :param run_id: The W&B run id to pin (see :func:`synth_setter.run_id.make_wandb_run_id`).
+    :param job_type: W&B ``job_type`` (``training`` / ``evaluation`` / ``data-generation``).
+    """
+    if OmegaConf.select(cfg, "logger.wandb") is None:
+        return
+    OmegaConf.update(cfg, "logger.wandb.id", run_id)
+    OmegaConf.update(cfg, "logger.wandb.job_type", job_type)
 
 
 @rank_zero_only

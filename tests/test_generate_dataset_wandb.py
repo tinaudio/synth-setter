@@ -63,6 +63,31 @@ def _offline_wandb_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("WANDB_DATA_DIR", str(tmp_path / "wandb-data"))
 
 
+class TestLoggersPinnedToSpec:
+    """``_loggers_pinned_to_spec`` writes the run identity onto the wandb logger cfg."""
+
+    def test_pins_run_id_and_data_generation_job_type(
+        self, dataset_spec_factory: Callable[..., DatasetSpec]
+    ) -> None:
+        """A wandb logger cfg inherits ``spec.run_id`` and ``job_type=data-generation``.
+
+        :param dataset_spec_factory: Shared ``conftest`` ``DatasetSpec`` factory.
+        """
+        from omegaconf import OmegaConf
+
+        from synth_setter.cli.generate_dataset import _loggers_pinned_to_spec
+
+        spec = _build_spec(dataset_spec_factory)
+        # No ``_target_`` so ``instantiate_loggers`` skips construction and the test
+        # isolates the cfg pinning rather than building a real WandbLogger.
+        cfg = OmegaConf.create({"logger": {"wandb": {"id": None, "job_type": ""}}})
+
+        _loggers_pinned_to_spec(cfg, spec)
+
+        assert cfg.logger.wandb.id == spec.run_id
+        assert cfg.logger.wandb.job_type == "data-generation"
+
+
 @pytest.fixture(autouse=True)
 def _reset_wandb_session_state() -> None:
     """Tear down any cached wandb session so each test's ``offline=True`` takes effect."""

@@ -16,6 +16,7 @@ from omegaconf import DictConfig
 
 from synth_setter.pipeline import r2_io
 from synth_setter.resources import as_file, vst_headless_wrapper
+from synth_setter.run_id import make_wandb_run_id
 from synth_setter.utils import (
     RankedLogger,
     extras,
@@ -23,7 +24,9 @@ from synth_setter.utils import (
     instantiate_loggers,
     log_hyperparameters,
     log_wandb_provenance,
+    pin_wandb_run_id,
     register_resolvers,
+    resolve_run_config_id,
     task_wrapper,
 )
 from synth_setter.workspace import operator_workspace
@@ -223,6 +226,7 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     callbacks: list[Callback] = instantiate_callbacks(cfg.get("callbacks"))
 
     log.info("Instantiating loggers...")
+    pin_wandb_run_id(cfg, make_wandb_run_id(resolve_run_config_id(cfg)), "evaluation")
     logger: list[Logger] = instantiate_loggers(cfg.get("logger"))
 
     log.info(f"Instantiating trainer <{cfg.trainer._target_}>")

@@ -10,8 +10,13 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from omegaconf import OmegaConf
 
-from synth_setter.utils.logging_utils import log_wandb_provenance
+from synth_setter.utils.logging_utils import (
+    log_wandb_provenance,
+    pin_wandb_run_id,
+    resolve_run_config_id,
+)
 
 # ---------------------------------------------------------------------------
 # Fake wandb module — captures config updates as inspectable state
@@ -145,3 +150,80 @@ class TestLogWandbProvenanceGuards:
             log_wandb_provenance()
 
         assert fake.config.data == {}
+
+
+# ---------------------------------------------------------------------------
+# resolve_run_config_id — Hydra experiment choice, fallback task_name
+# ---------------------------------------------------------------------------
+
+
+class TestResolveRunConfigId:
+    """config_id resolution for training/eval runs."""
+
+    def test_experiment_choice_basename_wins(self) -> None:
+        """A grouped experiment choice resolves to its basename, not task_name."""
+        cfg = OmegaConf.create({"task_name": "train"})
+        fake_hydra_cfg = SimpleNamespace(
+            runtime=SimpleNamespace(choices={"experiment": "surge/flow_simple"})
+        )
+
+        with patch(
+            "synth_setter.utils.logging_utils.HydraConfig.get", return_value=fake_hydra_cfg
+        ):
+            assert resolve_run_config_id(cfg) == "flow_simple"
+
+    def test_falls_back_to_task_name_when_experiment_absent(self) -> None:
+        """A missing experiment choice resolves to task_name."""
+        cfg = OmegaConf.create({"task_name": "train"})
+        fake_hydra_cfg = SimpleNamespace(runtime=SimpleNamespace(choices={"experiment": None}))
+
+        with patch(
+            "synth_setter.utils.logging_utils.HydraConfig.get", return_value=fake_hydra_cfg
+        ):
+            assert resolve_run_config_id(cfg) == "train"
+
+    def test_falls_back_to_task_name_when_experiment_is_null_string(self) -> None:
+        """The literal ``"null"`` choice (Hydra's null default) resolves to task_name."""
+        cfg = OmegaConf.create({"task_name": "train"})
+        fake_hydra_cfg = SimpleNamespace(runtime=SimpleNamespace(choices={"experiment": "null"}))
+
+        with patch(
+            "synth_setter.utils.logging_utils.HydraConfig.get", return_value=fake_hydra_cfg
+        ):
+            assert resolve_run_config_id(cfg) == "train"
+
+    def test_falls_back_to_task_name_without_hydra_context(self) -> None:
+        """Outside a @hydra.main run (no HydraConfig), task_name is used."""
+        cfg = OmegaConf.create({"task_name": "eval"})
+
+        with patch(
+            "synth_setter.utils.logging_utils.HydraConfig.get",
+            side_effect=ValueError("HydraConfig was not set"),
+        ):
+            assert resolve_run_config_id(cfg) == "eval"
+
+
+# ---------------------------------------------------------------------------
+# pin_wandb_run_id — write run id + job_type before logger instantiation
+# ---------------------------------------------------------------------------
+
+
+class TestPinWandbRunId:
+    """Pinning the deterministic run id and job_type into the wandb logger cfg."""
+
+    def test_sets_run_id_and_job_type(self) -> None:
+        """A wandb logger cfg gets the given run id and job_type verbatim."""
+        cfg = OmegaConf.create({"logger": {"wandb": {"id": None, "job_type": ""}}})
+
+        pin_wandb_run_id(cfg, "flow_simple-20260313T100000000Z", "training")
+
+        assert cfg.logger.wandb.id == "flow_simple-20260313T100000000Z"
+        assert cfg.logger.wandb.job_type == "training"
+
+    def test_noop_when_wandb_logger_absent(self) -> None:
+        """A non-wandb logger group is left untouched (no KeyError)."""
+        cfg = OmegaConf.create({"logger": {"tensorboard": {"save_dir": "logs"}}})
+
+        pin_wandb_run_id(cfg, "flow_simple", "training")
+
+        assert "wandb" not in cfg.logger

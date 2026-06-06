@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import NewType
 
+from synth_setter.run_id import make_wandb_run_id
+
 DatasetConfigId = NewType("DatasetConfigId", str)
 DatasetRunId = NewType("DatasetRunId", str)
 R2Prefix = NewType("R2Prefix", str)
@@ -24,23 +26,14 @@ def make_dataset_wandb_run_id(
     dataset_config_id: DatasetConfigId | str,
     timestamp: datetime | None = None,
 ) -> DatasetRunId:
-    """Build a unique run ID from a config ID and a UTC timestamp.
+    """Build a dataset run ID via the shared ``{config_id}-{timestamp}`` convention.
 
     :param dataset_config_id: The dataset config identifier (e.g. filename stem).
     :param timestamp: Optional UTC datetime; defaults to now.
     :returns: A string like ``<config_id>-<YYYYMMDD>T<HHMMSSsss>Z`` where ``sss`` is
         a zero-padded 3-digit millisecond field.
     """
-    if timestamp is None:
-        timestamp = _utc_now()
-    if timestamp.tzinfo is None:
-        raise ValueError("timestamp must be timezone-aware (got naive datetime)")
-    offset = timestamp.utcoffset()
-    if offset is None or offset.total_seconds() != 0:
-        raise ValueError("timestamp must be UTC")
-    millis = timestamp.microsecond // 1000
-    formatted = timestamp.strftime("%Y%m%dT%H%M%S") + f"{millis:03d}Z"
-    return DatasetRunId(f"{dataset_config_id}-{formatted}")
+    return DatasetRunId(make_wandb_run_id(dataset_config_id, timestamp or _utc_now()))
 
 
 def make_r2_prefix(

@@ -50,7 +50,7 @@ from synth_setter.pipeline.spec_io import (
     write_spec_locally,
 )
 from synth_setter.resources import as_file, vst_headless_wrapper
-from synth_setter.utils import extras, log_wandb_provenance, register_resolvers
+from synth_setter.utils import extras, log_wandb_provenance, pin_wandb_run_id, register_resolvers
 from synth_setter.utils.instantiators import instantiate_loggers
 from synth_setter.workspace import operator_workspace
 
@@ -789,10 +789,8 @@ def _loggers_pinned_to_spec(cfg: DictConfig, spec: DatasetSpec) -> list[Logger]:
         dataset.
     :returns: Loggers list — empty when ``cfg.logger`` is omitted/null.
     """
-    # Guard against non-wandb logger groups (e.g. ``logger=tensorboard``) where
-    # ``logger.wandb`` is absent and ``OmegaConf.update`` would raise.
-    if OmegaConf.select(cfg, "logger.wandb") is not None:
-        OmegaConf.update(cfg, "logger.wandb.id", spec.run_id)
+    # spec.run_id (not a fresh stamp) keeps the wandb run in lockstep with the R2 prefix.
+    pin_wandb_run_id(cfg, spec.run_id, "data-generation")
     return instantiate_loggers(cfg.get("logger"))
 
 
