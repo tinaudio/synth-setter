@@ -209,7 +209,7 @@ link-thoughts: ## Symlink this worktree's thoughts/ to the primary checkout's ce
 		rm -f "$$here/thoughts"; \
 	fi; \
 	if [ -d "$$here/thoughts" ]; then \
-		list="$$(mktemp)"; \
+		list="$$(mktemp "$${TMPDIR:-/tmp}/link-thoughts.XXXXXXXXXX")"; \
 		find "$$here/thoughts" -type f > "$$list" || { rm -f "$$list"; exit 1; }; \
 		while IFS= read -r f; do \
 			rel="$${f#"$$here/thoughts/"}"; \
