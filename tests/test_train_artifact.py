@@ -22,7 +22,6 @@ from typing import Any, NoReturn, cast
 
 import pytest
 import wandb
-from hydra.core.hydra_config import HydraConfig
 from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
 from omegaconf import DictConfig, OmegaConf, open_dict
@@ -204,7 +203,6 @@ def test_train_logs_model_artifact_to_offline_wandb_run(
     monkeypatch.setenv("WANDB_DATA_DIR", str(tmp_path / "wandb-data"))
     wandb.teardown()
 
-    HydraConfig().set_config(cfg_train)
     with open_dict(cfg_train):
         cfg_train.trainer.fast_dev_run = True
         cfg_train.training.upload_checkpoints_uri = upload_checkpoints_uri
