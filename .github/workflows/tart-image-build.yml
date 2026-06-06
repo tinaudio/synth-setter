@@ -1,21 +1,30 @@
-name: Tart macOS image — build & push
+name: Tart macOS image — validate & publish
 
-# Builds the macOS dev VM image defined in `tart/macos.pkr.hcl`. On
-# `workflow_dispatch` the build is followed by `tart push` to the Docker Hub
-# registry that backs `tart clone tinaudio/synth-setter-macos:latest` (the
-# publishing flow documented at the bottom of macos.pkr.hcl). On PR the build
-# runs without the push so a contributor change to the Packer template is gated
-# the same way docker-build-validation.yml gates the Dockerfile.
+# Two-job workflow for the macOS dev VM image defined in `tart/macos.pkr.hcl`.
 #
-# Runner: macos-latest has been Apple Silicon since November 2024; Tart needs
-# Apple's Virtualization.framework, which is macOS-only and requires ARM
-# hardware.
+# 1. `validate` (always): runs `packer fmt -check && packer init && packer
+#    validate` on the macos-latest GHA runner. Catches HCL syntax / variable
+#    / plugin-resolution regressions in seconds. This is the PR-presubmit gate.
 #
-# Cost: a clean build pulls the ~10 GB cirruslabs base image, runs every
-# provisioner (brew installs, `uv sync --frozen`, Codex / Antigravity / Surge
-# XT installs, smoke tests), and produces a ~30 GB VM image. Expect ~45-60 min
-# wall-clock on macos-latest, which is why the path filter scopes the trigger
-# to changes that actually touch the template.
+# 2. `build_and_push` (workflow_dispatch only): runs the full `packer build`
+#    + `tart push` to Docker Hub. Tart requires Apple's Virtualization.framework
+#    with hardware virtualization; GHA's standard `macos-latest` runners are
+#    themselves nested Apple VMs and refuse to expose virt, producing
+#    `Error: Invalid virtual machine configuration. Virtualization is not
+#    available` on a `packer build` attempt (verified on PR #1537's first run).
+#    The build job pins to `macos-15-xlarge`, GitHub's larger-runner tier that
+#    documents nested-virtualization support — only the org's larger-runner
+#    plan can dispatch the publish path. Validate stays free for every PR.
+#
+# Triggers:
+# - `pull_request` (paths filter on `tart/macos.pkr.hcl` and this workflow):
+#   runs `validate` only. Build is implicitly gated off because the larger-
+#   runner cost shouldn't be spent on a draft PR review.
+# - `workflow_dispatch`: runs both `validate` (cheap precondition) and
+#   `build_and_push`. Inputs let the operator override the baked git ref and
+#   skip the `:latest` push for one-off dated publishes.
+# - `push` to main with template changes: runs `validate` so a merge can't
+#   land a broken template the dispatch path will trip on later.
 
 on:
   workflow_dispatch:
@@ -34,14 +43,61 @@ on:
     paths:
       - "tart/macos.pkr.hcl"
       - ".github/workflows/tart-image-build.yml"
+  push:
+    branches: [main]
+    paths:
+      - "tart/macos.pkr.hcl"
+      - ".github/workflows/tart-image-build.yml"
 
 permissions:
   contents: read
 
 jobs:
-  build:
-    name: Build Tart VM image
+  validate:
+    name: Validate Packer template
     runs-on: macos-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Install Packer
+        run: |
+          set -euo pipefail
+          brew install hashicorp/tap/packer
+          packer --version
+
+      - name: packer fmt -check
+        working-directory: tart
+        run: packer fmt -check macos.pkr.hcl
+
+      # PACKER_GITHUB_API_TOKEN lifts the 60/hr anonymous rate limit shared
+      # across the runner pool's IP so packer can resolve the tart plugin's
+      # tag list. The job's default GITHUB_TOKEN suffices (public read).
+      - name: packer init
+        working-directory: tart
+        env:
+          PACKER_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: packer init macos.pkr.hcl
+
+      - name: packer validate
+        working-directory: tart
+        run: packer validate macos.pkr.hcl
+
+  build_and_push:
+    name: Build VM and push to Docker Hub
+    if: github.event_name == 'workflow_dispatch'
+    needs: validate
+    # macos-15-xlarge is GitHub's larger-runner tier that supports nested
+    # virtualization (verified by GitHub's 2025 nested-virt announcement);
+    # the standard macos-* runners cannot host Tart's Virtualization.framework
+    # call. If the org's larger-runner plan does not include this label the
+    # job will queue indefinitely — switch to `cirruslabs/runner` or a
+    # self-hosted Apple Silicon runner in that case.
+    runs-on: macos-15-xlarge
     timeout-minutes: 90
 
     env:
@@ -72,10 +128,6 @@ jobs:
           fi
           echo "Using ref: $(grep '^ref=' "$GITHUB_OUTPUT" | tail -1)"
 
-      # Tart and Packer are not preinstalled on the macos-latest runner image.
-      # `cirruslabs/cli/tart` is the upstream tap; `hashicorp/tap/packer` is
-      # HashiCorp's official tap (homebrew core no longer ships Packer after
-      # the BSL relicense).
       - name: Install Tart and Packer
         run: |
           set -euo pipefail
@@ -87,19 +139,11 @@ jobs:
       - name: Show available disk
         run: df -h /
 
-      # PACKER_GITHUB_API_TOKEN lifts the anonymous-rate-limit (60/hr per IP
-      # shared across the runner pool) so packer's plugin-getter can query
-      # github.com/cirruslabs/packer-plugin-tart's tag list. The job's default
-      # GITHUB_TOKEN is enough — only public-repo read is needed.
-      - name: packer init (fetch tart plugin)
+      - name: packer init
         working-directory: tart
         env:
           PACKER_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: packer init macos.pkr.hcl
-
-      - name: packer validate
-        working-directory: tart
-        run: packer validate macos.pkr.hcl
 
       # The build pulls the cirruslabs base image, runs every provisioner, and
       # leaves a local VM named "$VM_NAME". On failure the provisioner output
@@ -113,11 +157,8 @@ jobs:
           packer build -var "synth_setter_git_ref=${GIT_REF}" macos.pkr.hcl
 
       # `tart login` reads username then password from stdin when invoked
-      # non-interactively (no TTY). The push step inherits the resulting auth
-      # token. Gated on dispatch so a PR cannot use this job's secret access
-      # to redirect `:latest`.
+      # non-interactively. The subsequent `tart push` inherits the auth token.
       - name: Log in to Docker Hub via tart
-        if: github.event_name == 'workflow_dispatch'
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -127,11 +168,10 @@ jobs:
             | tart login "$DH_REGISTRY"
 
       # The dated tag is the immutable rollback point; `:latest` is the moving
-      # pointer that `tart clone tinaudio/synth-setter-macos:latest` resolves
+      # pointer `tart clone tinaudio/synth-setter-macos:latest` resolves
       # against. Both go in a single `tart push` so they share the upload
       # (Tart deduplicates layers across tags pushed in the same invocation).
-      - name: tart push (dispatch only)
-        if: github.event_name == 'workflow_dispatch'
+      - name: tart push
         env:
           PUSH_LATEST: ${{ inputs.push_latest }}
         run: |
@@ -144,9 +184,7 @@ jobs:
           printf 'Pushing %s\n' "${targets[@]}"
           tart push "$VM_NAME" "${targets[@]}"
 
-      # Delete the local VM so disk usage doesn't carry into post-job runner
-      # teardown (the macos-latest runner reports ~30 GB free at start, and a
-      # full Tart VM eats most of it).
-      - name: Delete local VM (free disk)
+      # Free disk so the runner ends in a clean state.
+      - name: Delete local VM
         if: always()
         run: tart delete "$VM_NAME" || true
