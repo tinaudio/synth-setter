@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "synth-setter"
-version = "8.23.2"
+version = "8.25.0"
 description = "Studying the effect of permutation symmetry on audio synthesiser parameter inference."
 authors = [{name = "Khaled Tinubu"}, {name = "tinaudio"}]
 readme = "README.md"
@@ -79,6 +79,8 @@ synth-setter-spec-uri = "synth_setter.pipeline.ci.spec_uri:main"
 # (#1139); pip never installs them and uv pip only with `--group`, so a plain
 # `pip install -e .` keeps lite CI light. `runtime` aggregates every sub-group;
 # `dev` (the default group) includes it.
+
+
 
 
 
@@ -398,8 +400,10 @@ ignore-init-method = true
 ignore-module = true
 ignore-nested-functions = true
 
+# wrap-summaries = 0 (not 99): a wrapped summary's 2nd line trips ruff D205, which
+# no tool auto-fixes. Pinned by tests/infra/test_docstring_tooling_consistency.py.
 [tool.docformatter]
-wrap-summaries = 99
+wrap-summaries = 0
 wrap-descriptions = 99
 style = "sphinx"
 black = true

@@ -382,6 +382,50 @@ def cfg_dataset(cfg_dataset_global: DictConfig, tmp_path: Path) -> Iterator[Dict
     GlobalHydra.instance().clear()
 
 
+@pytest.fixture(scope="package")
+def cfg_finalize_global() -> DictConfig:
+    """Build a default Hydra DictConfig for ``finalize_dataset``.
+
+    Composes with ``return_hydra_config=True`` so the ``hydra.run.dir`` /
+    ``job_logging`` interpolations finalize relies on are present in the tree
+    (the entrypoint overrides ``hydra.run.dir`` because the shared group
+    references ``${run_name}``, which this cfg does not surface). Supplies the
+    required ``dataset_spec_uri`` so every ``???`` field is populated.
+
+    :return: A DictConfig composed from ``configs/finalize_dataset.yaml`` with
+        ``dataset_spec_uri`` set and ``paths.root_dir`` pinned to the workspace.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="finalize_dataset",
+            return_hydra_config=True,
+            overrides=["dataset_spec_uri=r2://bucket/spec.json"],
+        )
+        with open_dict(cfg):
+            cfg.paths.root_dir = str(operator_workspace())
+    return cfg
+
+
+@pytest.fixture(scope="function")
+def cfg_finalize(cfg_finalize_global: DictConfig, tmp_path: Path) -> Iterator[DictConfig]:
+    """Build on top of ``cfg_finalize_global()`` and redirect paths into ``tmp_path``.
+
+    :param cfg_finalize_global: The package-scoped finalize DictConfig to copy.
+    :param tmp_path: The per-test temporary path used as output/log root.
+
+    :yields DictConfig: ``paths.{output_dir,log_dir}`` pinned to ``tmp_path``;
+        teardown clears Hydra's global singleton.
+    """
+    cfg = cfg_finalize_global.copy()
+    with open_dict(cfg):
+        cfg.paths.output_dir = str(tmp_path)
+        cfg.paths.log_dir = str(tmp_path)
+
+    yield cfg
+
+    GlobalHydra.instance().clear()
+
+
 @pytest.fixture(
     params=[
         pytest.param("cpu", id="cpu"),

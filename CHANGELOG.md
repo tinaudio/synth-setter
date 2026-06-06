@@ -1,6 +1,241 @@
 # CHANGELOG
 
 
+## v8.25.0 (2026-06-06)
+
+### Chores
+
+- **lint**: Disable docformatter summary wrap (ruff D205 deadlock)
+  ([#1516](https://github.com/tinaudio/synth-setter/pull/1516),
+  [`c00c127`](https://github.com/tinaudio/synth-setter/commit/c00c1277a0838e8dc16c7cb6b1611f4664c28f7d))
+
+* chore(lint): stop docformatter wrapping summaries to end D205 deadlock
+
+docformatter's wrap-summaries=99 reflows an over-99-column summary onto a second physical line.
+  ruff's D205 then reads that continuation as a description with no blank line before it and raises
+  an error that no tool can auto-fix (not even --unsafe-fixes), and that docformatter will not undo
+  — a hard deadlock surfacing only on the *next* hook run after docformatter rewrites the file. The
+  CHANGELOG shows this recurring as manual reflow workarounds (e.g. the #1270 CI failure:
+  "docformatter wanted the two-line summary joined onto the 100-col second line").
+
+Set wrap-summaries=0 so summaries stay on one physical line, the shape D205 and pydoclint's parser
+  assume. Descriptions still wrap at 99 — they sit after the blank line, so D205 does not apply.
+
+Add a config-invariant test pinning "D205 selected => wrap-summaries == 0" so the conflicting
+  combination cannot be reintroduced.
+
+* test(lint): harden D205 detection to ruff prefix semantics
+
+The invariant test matched the literal "D205" in select, so a refactor to a prefix selector
+  ("D"/"D2") or extend-select would silently stop guarding the docformatter↔D205 deadlock (Copilot
+  review on #1516).
+
+Resolve D205 via ruff's prefix + specificity rules (longest matching prefix wins, select wins ties,
+  "ALL" matches everything), merging extend-select / extend-ignore. Add parametrized cases covering
+  exact code, family prefix, select-all, and ignore-override resolution.
+
+### Features
+
+- **evaluation**: Log eval-{config_id} W&B artifact with R2 references
+  ([#1507](https://github.com/tinaudio/synth-setter/pull/1507),
+  [`106cd22`](https://github.com/tinaudio/synth-setter/commit/106cd22d672a301b6efacceb6b439a025e0af06e))
+
+* feat(evaluation): log eval-{config_id} W&B artifact with R2 references
+
+Log an eval-results artifact (name eval-{config_id}, type eval-results) from the eval entrypoint
+  after the output dir is mirrored to R2, mirroring finalize_dataset's dataset-artifact pattern. The
+  artifact add_references the R2 output prefix as an s3:// URI and records the scalar summary
+  metrics plus git_sha in metadata, anchoring the lineage-DAG tail per storage-provenance-spec
+  sections 4-6. Best-effort: a wandb failure warns and is swallowed so artifact logging never aborts
+  a completed eval; no-op without a WandbLogger, a null upload URI, or off the global-zero rank.
+
+Adds a shared r2_io.to_s3_uri helper rather than duplicating finalize's private rewrite, and reuses
+  spec._get_git_sha for the commit SHA.
+
+Closes #1473 Refs #1467, #1470, #93
+
+* docs(wandb): document eval-results artifact in wandb-integration tables
+
+The new eval-{config_id} eval-results artifact this PR logs was missing from §3 (Artifacts) and the
+  §4 eval.py entry-points row; add it symmetrically with the data-{config_id} rows. Surfaced by the
+  PR's doc-drift advisory.
+
+Refs #1467
+
+* fix(evaluation): log eval-results artifact before task_wrapper closes wandb
+
+Copilot review: evaluate() is @task_wrapper, whose finally calls wandb.finish() on return, so
+  logging the eval-results artifact from main() afterward attached to a closed run. Move the metrics
+  dump + R2 mirror + artifact logging into the tail of evaluate(), before the run is finished, and
+  only shell out for git_sha on the path that actually logs (global-zero with a configured upload
+  URI).
+
+Refs #1473, #1467
+
+* fix(evaluation): gate metrics dump on global-zero and export to_s3_uri
+
+Address Copilot review on PR #1507:
+
+- eval.py: gate _dump_metric_dict on trainer.is_global_zero so DDP ranks sharing one output_dir do
+  not race-write metrics.json, matching the existing global-zero gate on the upload + artifact log
+  (comment 3366953500). - r2_io.py: add to_s3_uri to __all__ so the public helper is exported
+  alongside to_rclone_path (comment 3366953515).
+
+Refs #1473
+
+* test(provenance): add offline-wandb e2e for eval-results artifact wiring
+
+The eval-results artifact tests were all unit-level: a real wandb.Artifact plus a
+  MagicMock(spec=WandbLogger). Nothing drove the real evaluate() entrypoint with a live WandbLogger,
+  so the load-bearing "log the artifact while the run is still open" ordering inside evaluate()
+  (before @task_wrapper closes the run) could silently regress to a no-op with every test still
+  green.
+
+Add an offline-wandb e2e that drives evaluate(cfg) against a WandbLogger(offline=True) and a
+  local-backed r2:// upload prefix, then decodes the offline run-*.wandb binary to assert the
+  eval-{config_id} artifact, its eval-results type, the s3:// reference, and the git_sha +
+  test/param_mse metadata actually landed on the live run. Verified it fails when the in-evaluate
+  artifact log is removed.
+
+* Potential fix for pull request finding
+
+Co-authored-by: Copilot Autofix powered by AI <175728472+Copilot@users.noreply.github.com>
+
+* style(docs): align eval-results row in wandb-integration artifact table
+
+mdformat re-aligned the table after the eval-{config_id} row was added; CI mdformat hook on PR #1507
+  flagged the one-space drift.
+
+---------
+
+### Testing
+
+- **finalize**: Cover finalize() orchestration error and resume paths
+  ([#1515](https://github.com/tinaudio/synth-setter/pull/1515),
+  [`f697a56`](https://github.com/tinaudio/synth-setter/commit/f697a56125e467489b4fd47ebe1f5c31f75ac8f2))
+
+* test(finalize): cover finalize() orchestration error and wandb-resume paths
+
+Add four tests to the finalize entrypoint suite, pinning the outer finalize(cfg) orchestration
+  branches that the branch-level finalize_wds/finalize_hdf5 tests leave uncovered:
+
+- finalize() closes loggers with status="failed" when finalize_from_spec raises (the try/finally
+  re-raise + cleanup contract), asserted via a real offline WandbLogger and wandb.run is None after.
+  - _log_dataset_artifact swallows a wandb artifact-build failure and finalize still returns with
+  stats.npz + dataset.complete intact on the fake remote. - resume="allow" is forced onto
+  logger.wandb when a wandb group is present, captured off the cfg instantiate_loggers receives. - A
+  contract guard that the stubbed get_stats_hdf5 / stream_stats_wds signatures match the real ones
+  via inspect.signature, so stub drift can't mask a production break.
+
+Refs #1511
+
+* test(finalize): assert close_loggers status via spy in failed-path test
+
+The wandb.run-is-None state witness alone did not pin the failed-close contract: a finally that
+  skips close_loggers entirely still leaves wandb.run None via teardown, and it cannot tell
+  status="success" from "failed". Wrap close_loggers with a spy that delegates to the real helper
+  and assert it is called exactly once with "failed". Mutation-verified: dropping the finally close
+  and dropping status="failed" both now fail the test.
+
+* test(finalize): address Copilot review on orchestration tests
+
+- Assert build_dataset_artifact is invoked in the swallow test so a skipped artifact path can't pass
+  it vacuously. - Rename the resume test to ..._when_wandb_cfg_present and reword its docstring: the
+  branch is gated on logger.wandb existing, not a wandb group field.
+
+The close_loggers status spy Copilot asked for was already added in the prior commit.
+
+- **finalize**: Exercise the real finalize_dataset.yaml Hydra config layer
+  ([#1517](https://github.com/tinaudio/synth-setter/pull/1517),
+  [`e6a0adf`](https://github.com/tinaudio/synth-setter/commit/e6a0adf3b7a3540b09e48e62e2a188dd760a53d7))
+
+The finalize suite built every spec by hand via OmegaConf.create and never composed
+  finalize_dataset.yaml, so a break in its defaults/paths/logger composition passed the whole suite
+  and only failed in production. Peer entrypoints (eval, generate_dataset) already have config-layer
+  coverage.
+
+Add a cfg_finalize fixture (function-scoped, tmp_path-pinned) mirroring cfg_dataset, and a
+  tests/pipeline/configs/test_finalize_dataset_config.py that composes finalize_dataset.yaml and
+  pins the load-bearing fields finalize() reads: dataset_spec_uri override, paths.output_dir, the
+  wandb logger group, and the hydra run.dir / job_logging interpolations.
+
+Closes #1512
+
+
+## v8.24.0 (2026-06-06)
+
+### Documentation
+
+- **agents**: Add import-ordering rule to avoid F401 autofix churn
+  ([#1519](https://github.com/tinaudio/synth-setter/pull/1519),
+  [`50b536a`](https://github.com/tinaudio/synth-setter/commit/50b536a6898adeeadcb3d7f796f9f48f790d1516))
+
+Agents repeatedly lose a cycle when an import is added in one edit and `make format` runs before the
+  using code lands: ruff's F401 autofix deletes the momentarily-unused import, forcing a re-add.
+  Document the fix (import with first use, or imports last) in AGENTS.md and mirror it into
+  CLAUDE.md's Python block.
+
+### Features
+
+- **training**: Log model-{config_id} W&B artifact with R2 reference
+  ([#1508](https://github.com/tinaudio/synth-setter/pull/1508),
+  [`a9b894e`](https://github.com/tinaudio/synth-setter/commit/a9b894eb746caaedf9705613dee8cbfff070d1b1))
+
+* chore(deps): sync uv.lock version to 8.23.0
+
+The 8.23.0 [skip ci] release commit bumped pyproject.toml but not uv.lock, leaving the lock's
+  synth-setter version at 8.22.0. Regenerate so CI's lock-check passes on branches cut from this
+  main.
+
+* feat(training): log explicit model-{config_id} W&B artifact with R2 reference
+
+train.py now logs a canonical model-{train_config_id} artifact (type model) to any configured
+  WandbLogger at train end, superseding reliance on Lightning's implicitly-named log_model:"all"
+  artifact (storage-provenance-spec §4-6). build_model_artifact records git_sha in artifact.metadata
+  and, when the new opt-in training.upload_checkpoints_uri (r2:// prefix or null) is set, adds an
+  s3:// reference to it (checksum=False, since R2's custom endpoint is not reachable by W&B's
+  reference handler). The null default logs a lineage-only artifact with no reference because R2
+  checkpoint upload is not implemented yet (#92). The opt-in URI mirrors eval's
+  evaluation.upload_output_dir_uri.
+
+_log_model_artifact is best-effort (warn-and-swallow) and a no-op without a WandbLogger, so
+  wandb-free callers are unchanged. Adds a shared r2_io.to_s3_uri helper and extracts
+  logging_utils.resolve_git_sha so train and provenance share one git-sha source.
+
+Closes #1472 Refs #1467, #1470, #146, #254
+
+* test(training): accept new training config block in baseline comparison
+
+train.yaml gained an opt-in training.upload_checkpoints_uri block, which the v0.0.0 baseline lacks.
+  Add training to ACCEPTED_DIFFS (mirroring evaluation) so the resolved-config equality test treats
+  the new block as a benign, non-model-knob divergence rather than drift.
+
+Refs #1472
+
+* fix(training): gate model-artifact logging to global-zero rank
+
+Copilot review: guard _log_model_artifact behind trainer.is_global_zero so DDP/FSDP ranks don't race
+  duplicate model artifact versions. Also drop the now-resolved 'Model run.log_artifact()' row from
+  configuration-reference §5.2 (this PR implements it); the dataset use_artifact row stays a gap
+  until #1474.
+
+Refs #1472, #1467
+
+* test(provenance): add offline-wandb e2e for model artifact wiring
+
+Drive the real train(cfg) entrypoint with a real WandbLogger(offline=True) and decode the
+  run-*.wandb binary to assert the model-{config_id} artifact (type model, git_sha metadata, opt-in
+  s3:// reference) actually lands. The existing unit tests feed a logger list to _log_model_artifact
+  directly and the cfg-level train tests pin a null logger, so dropping or mis-gating the
+  train()-end call passed every prior test; this closes that gap.
+
+* Potential fix for pull request finding
+
+Co-authored-by: Copilot Autofix powered by AI <175728472+Copilot@users.noreply.github.com>
+
+---------
+
+
 ## v8.23.2 (2026-06-06)
 
 ### Bug Fixes
