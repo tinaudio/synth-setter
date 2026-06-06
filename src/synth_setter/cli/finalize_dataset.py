@@ -27,6 +27,7 @@ from synth_setter.pipeline.constants import (
 )
 from synth_setter.pipeline.data.reshard import reshard_dataset
 from synth_setter.pipeline.data.stats import get_stats_hdf5, stream_stats_wds
+from synth_setter.pipeline.schemas.prefix import assert_r2_prefix_matches
 from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat
 from synth_setter.pipeline.spec_io import load_spec_from_uri, write_spec_to_path
 from synth_setter.workspace import operator_workspace
@@ -175,6 +176,7 @@ def finalize_from_spec(spec: DatasetSpec, work_dir: Path) -> None:
         logger.info("skip: {} already exists, run is finalized", marker_uri)
         return
 
+    assert_r2_prefix_matches(spec.r2.prefix, spec.task_name, spec.run_id, spec.r2.prefix_root)
     work_dir.mkdir(parents=True, exist_ok=True)
     if spec.output_format is OutputFormat.WDS:
         finalize_wds(spec, work_dir)
