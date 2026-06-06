@@ -298,7 +298,10 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     # Persist + publish results here, not after evaluate() returns: @task_wrapper's
     # finally closes the W&B run on return, so the eval-results artifact has to be
     # logged while the run is still open or it would attach to nothing.
-    _dump_metric_dict(metric_dict, Path(cfg.paths.output_dir))
+    # All ranks share one output_dir, so gate the dump on global-zero (as with the
+    # upload + artifact log below) to avoid concurrent writers corrupting metrics.json.
+    if trainer.is_global_zero:
+        _dump_metric_dict(metric_dict, Path(cfg.paths.output_dir))
     _maybe_upload_output_dir(cfg, trainer.is_global_zero)
     upload_uri = cfg.evaluation.get("upload_output_dir_uri")
     # _get_git_sha() shells out, so only invoke it on the path that actually logs

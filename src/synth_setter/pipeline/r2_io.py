@@ -33,6 +33,7 @@ __all__ = [
     "purge_prefix",
     "shard_uri",
     "to_rclone_path",
+    "to_s3_uri",
     "upload",
     "upload_dir",
     "upload_to_uri",
