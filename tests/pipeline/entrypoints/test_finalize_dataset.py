@@ -1265,15 +1265,17 @@ def test_finalize_closes_loggers_failed_when_finalize_from_spec_raises(
     the body's exception must re-raise *and* the loggers must be closed with
     ``status="failed"`` so the data-generation run is not left dangling. A real
     offline ``WandbLogger`` is instantiated (via the offline-wandb cfg builder)
-    so the close path runs ``wandb.finish()`` for real; ``wandb.run is None``
-    afterward is the state-based witness that the run was closed. The failure is
-    injected at ``finalize_from_spec`` rather than at ``close_loggers`` because
-    the cleanup itself is what we assert ran — wrapping ``close_loggers`` would
-    only confirm a call, not that the live run was actually finished.
+    so the close path runs ``wandb.finish()`` for real. ``close_loggers`` is
+    wrapped with a spy that still delegates to the real helper: the spy captures
+    the forwarded ``status`` (the state-based ``wandb.run is None`` witness alone
+    can't distinguish ``"success"`` from ``"failed"``, nor a ``finally`` that
+    skips the close entirely, because wandb teardown can null the run by other
+    means). The failure is injected at ``finalize_from_spec`` so the ``except``
+    sets ``status="failed"`` before re-raising.
 
     :param tmp_path: Hosts the spec JSON, scratch work_dir, and offline run dir.
-    :param monkeypatch: Pins a hermetic offline ``WANDB_*`` env and raises from
-        ``finalize_from_spec``.
+    :param monkeypatch: Pins a hermetic offline ``WANDB_*`` env, raises from
+        ``finalize_from_spec``, and wraps ``close_loggers`` with the status spy.
     :param stub_finalize_setup: Installs the auth + marker-probe stubs.
     """
     for key in [k for k in os.environ if k.startswith("WANDB_")]:
@@ -1288,6 +1290,15 @@ def test_finalize_closes_loggers_failed_when_finalize_from_spec_raises(
 
     monkeypatch.setattr("synth_setter.cli.finalize_dataset.finalize_from_spec", boom)
 
+    real_close = finalize_dataset.close_loggers
+    close_statuses: list[str] = []
+
+    def spy_close(loggers: list[object], status: str) -> None:
+        close_statuses.append(status)
+        real_close(loggers, status)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("synth_setter.cli.finalize_dataset.close_loggers", spy_close)
+
     spec = _build_wds_smoke_spec(task_name="finalize-failed-close")
     output_dir = tmp_path / "work"
     output_dir.mkdir()
@@ -1298,6 +1309,9 @@ def test_finalize_closes_loggers_failed_when_finalize_from_spec_raises(
     with pytest.raises(RuntimeError, match="simulated finalize_from_spec failure"):
         finalize_dataset.finalize(cfg)
 
+    assert close_statuses == ["failed"], (
+        f"finalize() must close loggers exactly once as failed, got {close_statuses}"
+    )
     assert wandb.run is None, "finalize() left the wandb run open after a failed body"
 
 
