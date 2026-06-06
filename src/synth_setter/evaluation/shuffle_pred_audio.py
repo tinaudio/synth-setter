@@ -75,6 +75,30 @@ def _draw_non_identity_permutation(n: int, seed: int) -> list[int]:
     return permutation
 
 
+def params_are_uniform(sample_dirs: list[Path]) -> bool:
+    """Return True when all ``params.csv`` files are byte-identical, or fewer than two dirs exist.
+
+    Missing ``params.csv`` in any dir returns False — signals a non-oracle dataset where
+    shuffle is not meaningful.
+
+    :param sample_dirs: Candidate dirs to compare (typically from ``find_possible_subdirs``).
+    :returns: True when uniformity holds or the list is too short to compare.
+    """
+    if len(sample_dirs) < 2:
+        return True
+    try:
+        reference = (sample_dirs[0] / _PARAMS_FILENAME).read_text()
+    except FileNotFoundError:
+        return False
+    for sample_dir in sample_dirs[1:]:
+        try:
+            if (sample_dir / _PARAMS_FILENAME).read_text() != reference:
+                return False
+        except FileNotFoundError:
+            return False
+    return True
+
+
 def shuffle_pred_audio(audio_dir: Path, dest_dir: Path, seed: int) -> list[int]:
     """Build ``dest_dir`` as a symlinked view of ``audio_dir`` with ``pred.wav`` permuted.
 

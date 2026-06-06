@@ -24,10 +24,8 @@ evaluation:
   compute_metrics: false
   rerender_target: true
   num_workers: 1
-  # Opt-in render-order probe (#489): forwarded to compute_audio_metrics, which
-  # scores a symlink view permuting pred.wav across sample dirs (gated on uniform
-  # params). No effect unless compute_metrics is also true.
-  shuffle_pred_audio: false
+  # Render-order probe (#489): seed for the auto-shuffle pass in compute_audio_metrics.
+  # Non-zero implies shuffle is intended; raises if params are non-uniform.
   shuffle_seed: 0
   # Opt-in: an `r2://bucket/prefix` mirror of the whole run dir, copied after eval.
   upload_output_dir_uri: null

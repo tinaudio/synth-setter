@@ -88,6 +88,55 @@ def test_load_audio_metrics_missing_csv_raises(tmp_path: Path) -> None:
         _load_audio_metrics(tmp_path)
 
 
+def test_load_audio_metrics_includes_shuffled_prefix_when_shuffled_csv_present(
+    tmp_path: Path,
+) -> None:
+    """``aggregated_metrics_shuffled.csv`` present → keys prefixed ``shuffled_audio/`` merged in.
+
+    :param tmp_path: Scratch metrics dir seeded with both CSVs.
+    """
+    (tmp_path / "aggregated_metrics.csv").write_text(_AGGREGATED_METRICS_CSV)
+    (tmp_path / "aggregated_metrics_shuffled.csv").write_text(
+        ",mean,std\nmss,1.0,0.2\nwmfcc,0.6,0.1\nsot,0.4,0.04\nrms,0.8,0.02\n"
+    )
+
+    metrics = _load_audio_metrics(tmp_path)
+
+    assert "shuffled_audio/mss_mean" in metrics
+    assert metrics["shuffled_audio/mss_mean"] == pytest.approx(1.0)
+    assert "shuffled_audio/mss_std" in metrics
+    assert metrics["shuffled_audio/mss_std"] == pytest.approx(0.2)
+    assert "audio/mss_mean" in metrics
+
+
+def test_load_audio_metrics_skips_shuffled_prefix_when_no_shuffled_csv(tmp_path: Path) -> None:
+    """No ``aggregated_metrics_shuffled.csv`` → no ``shuffled_audio/`` keys in result.
+
+    :param tmp_path: Scratch metrics dir with only the normal CSV.
+    """
+    (tmp_path / "aggregated_metrics.csv").write_text(_AGGREGATED_METRICS_CSV)
+
+    metrics = _load_audio_metrics(tmp_path)
+
+    assert not any(k.startswith("shuffled_audio/") for k in metrics)
+
+
+def test_load_audio_metrics_shuffled_values_are_python_floats(tmp_path: Path) -> None:
+    """Shuffled metric values are plain ``float`` — consistent with the normal path.
+
+    :param tmp_path: Scratch metrics dir seeded with both CSVs.
+    """
+    (tmp_path / "aggregated_metrics.csv").write_text(_AGGREGATED_METRICS_CSV)
+    (tmp_path / "aggregated_metrics_shuffled.csv").write_text(
+        ",mean,std\nmss,1.0,0.2\nwmfcc,0.6,0.1\nsot,0.4,0.04\nrms,0.8,0.02\n"
+    )
+
+    metrics = _load_audio_metrics(tmp_path)
+
+    shuffled = {k: v for k, v in metrics.items() if k.startswith("shuffled_audio/")}
+    assert all(type(v) is float for v in shuffled.values())
+
+
 def test_load_audio_metrics_missing_stat_column_raises(tmp_path: Path) -> None:
     """A CSV lacking a required stat column surfaces a directed ValueError naming the gap.
 

@@ -25,6 +25,7 @@ We compute the following metrics:
 
 import multiprocessing
 import os
+import shutil
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
@@ -39,7 +40,10 @@ from kymatio.numpy import Scattering1D
 from loguru import logger
 from pedalboard.io import AudioFile
 
-from synth_setter.evaluation.shuffle_pred_audio import shuffle_pred_audio
+from synth_setter.evaluation.shuffle_pred_audio import (
+    params_are_uniform,
+    shuffle_pred_audio,
+)
 
 
 def subdir_matches_pattern(dir: Path) -> bool:
@@ -279,82 +283,90 @@ def compute_metrics(audio_dirs: list[Path], output_dir: Path):
     return metric_file
 
 
+def _aggregate_metrics(audio_dirs: list[Path], work_dir: Path, num_workers: int) -> pd.DataFrame:
+    """Run the parallel per-sample metrics pass and return the concatenated DataFrame.
+
+    Intermediate per-worker CSVs are written to ``work_dir`` and left there so the
+    caller can write ``metrics.csv`` from them if desired.
+
+    :param audio_dirs: Sample dirs to score (each must contain ``target.wav`` + ``pred.wav``).
+    :param work_dir: Directory for per-worker intermediate ``metrics-<pid>.csv`` files.
+    :param num_workers: ProcessPoolExecutor worker count.
+    :returns: Concatenated per-sample metrics DataFrame.
+    """
+    sublist_length = len(audio_dirs) // num_workers
+    sublists = [
+        audio_dirs[i * sublist_length : (i + 1) * sublist_length] for i in range(num_workers)
+    ]
+    metric_dfs = []
+    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+        futures = [executor.submit(compute_metrics, sublist, work_dir) for sublist in sublists]
+        for future in as_completed(futures):
+            metric_file = future.result()
+            metric_df = pd.read_csv(metric_file)
+            metric_df.set_index(metric_df.columns[0], inplace=True)
+            metric_dfs.append(metric_df)
+    return pd.concat(metric_dfs)
+
+
 @click.command()
 @click.argument("audio_dir", type=str)
 @click.argument("output_dir", type=str, default="metrics")
 @click.option("--num_workers", "-w", type=int, default=8)
 @click.option(
-    "--shuffle_pred_audio",
-    "shuffle",
-    is_flag=True,
-    default=False,
-    help="Score against a symlink view that permutes pred.wav across sample dirs (#489).",
+    "--shuffle_seed",
+    type=int,
+    default=0,
+    help="Seed for the render-order probe permutation. Non-zero implies shuffle is intended.",
 )
-@click.option("--shuffle_seed", type=int, default=0, help="Seed for --shuffle_pred_audio.")
-def main(audio_dir: str, output_dir: str, num_workers: int, shuffle: bool, shuffle_seed: int):
-    # 1. make a list of all subdirectories that match the expected structure
-    # 2. divide list up into sublists per worker
-    # 3. send each list to a worker and begin processing. each worker dumps metrics to
-    # its own file.
-    # 4. when a worker returns, take its csv file and append it to the master list
-    # 5. when all workers are done, compute the mean of each metric across the master
-    # list
+def main(audio_dir: str, output_dir: str, num_workers: int, shuffle_seed: int):
     audio_dir = Path(audio_dir)
-
     os.makedirs(output_dir, exist_ok=True)
     output_dir = Path(output_dir)
 
-    if shuffle:
-        shuffled_dir = output_dir / "shuffled_audio"
-        permutation = shuffle_pred_audio(audio_dir, shuffled_dir, shuffle_seed)
-        if len(permutation) >= 2:
-            logger.info(
-                "Scoring shuffled pred audio: permuted {n} sample dirs (seed={s}) into {d}",
-                n=len(permutation),
-                s=shuffle_seed,
-                d=shuffled_dir,
-            )
-            audio_dir = shuffled_dir
-        else:
-            logger.info("Shuffle skipped: <2 sample dirs; scoring the original audio dir")
-
     audio_dirs = find_possible_subdirs(audio_dir)
 
-    sublist_length = len(audio_dirs) // num_workers
-    sublists = [
-        audio_dirs[i * sublist_length : (i + 1) * sublist_length] for i in range(num_workers)
-    ]
-
-    metric_dfs = []
-    with ProcessPoolExecutor(max_workers=num_workers) as executor:
-        futures = [executor.submit(compute_metrics, sublist, output_dir) for sublist in sublists]
-
-        for future in as_completed(futures):
-            metric_file = future.result()
-            metric_df = pd.read_csv(metric_file)
-            # set index to first column
-            metric_df.set_index(metric_df.columns[0], inplace=True)
-            metric_dfs.append(metric_df)
-
-    df = pd.concat(metric_dfs)
+    df = _aggregate_metrics(audio_dirs, output_dir, num_workers)
     df.to_csv(output_dir / "metrics.csv")
 
     columnwise_means = df.mean(axis=0)
     columnwise_stds = df.std(axis=0)
     print("Means...")
     print(columnwise_means)
-
     print("Stds...")
     print(columnwise_stds)
 
-    # make new DF of aggregated metrics, with mean and std columns
-    df = pd.DataFrame(
-        {
-            "mean": columnwise_means,
-            "std": columnwise_stds,
-        }
+    pd.DataFrame({"mean": columnwise_means, "std": columnwise_stds}).to_csv(
+        output_dir / "aggregated_metrics.csv"
     )
-    df.to_csv(output_dir / "aggregated_metrics.csv")
+
+    # Render-order probe (#489): auto-shuffle when all sample dirs have identical params.
+    # A non-zero shuffle_seed signals explicit intent; raise if params are non-uniform so
+    # the misconfiguration is visible rather than silently skipped.
+    uniform = params_are_uniform(audio_dirs)
+    if not uniform and shuffle_seed != 0:
+        raise ValueError(
+            f"shuffle_seed={shuffle_seed} was set but params.csv files are not uniform across "
+            "sample dirs — the render-order probe requires identical params. Either fix the "
+            "dataset or omit --shuffle_seed to silently skip the probe."
+        )
+    if uniform and len(audio_dirs) >= 2:
+        shuffled_view = output_dir / "shuffled_audio"
+        permutation = shuffle_pred_audio(audio_dir, shuffled_view, shuffle_seed)
+        if len(permutation) >= 2:
+            logger.info(
+                "Render-order probe: scoring permuted pred audio (seed={s})", s=shuffle_seed
+            )
+            shuffled_dirs = find_possible_subdirs(shuffled_view)
+            shuffled_tmp = output_dir / "_shuffle_tmp"
+            shuffled_tmp.mkdir(exist_ok=True)
+            try:
+                shuffled_df = _aggregate_metrics(shuffled_dirs, shuffled_tmp, num_workers)
+                pd.DataFrame(
+                    {"mean": shuffled_df.mean(axis=0), "std": shuffled_df.std(axis=0)}
+                ).to_csv(output_dir / "aggregated_metrics_shuffled.csv")
+            finally:
+                shutil.rmtree(shuffled_tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":

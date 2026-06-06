@@ -35,6 +35,7 @@ _PREDICT_VST_AUDIO_MODULE = "synth_setter.evaluation.predict_vst_audio"
 _COMPUTE_AUDIO_METRICS_MODULE = "synth_setter.evaluation.compute_audio_metrics"
 _SUBPROCESS_TIMEOUT_SECONDS = 600
 _AGGREGATED_METRICS_FILENAME = "aggregated_metrics.csv"
+_AGGREGATED_METRICS_SHUFFLED_FILENAME = "aggregated_metrics_shuffled.csv"
 _AGGREGATED_METRICS_STATS: tuple[str, ...] = ("mean", "std")
 
 # Resolve workspace at import so ``${oc.env:PROJECT_ROOT}`` in
@@ -69,11 +70,28 @@ def _load_audio_metrics(metrics_dir: Path) -> dict[str, float]:
         raise ValueError(
             f"{csv_path} missing required stat columns {missing}; got {list(df.columns)}."
         )
-    return {
+    result: dict[str, float] = {
         f"audio/{metric}_{stat}": float(df.at[metric, stat])
         for metric in df.index
         for stat in _AGGREGATED_METRICS_STATS
     }
+    shuffled_path = metrics_dir / _AGGREGATED_METRICS_SHUFFLED_FILENAME
+    if shuffled_path.is_file():
+        shuffled_df = pd.read_csv(shuffled_path, index_col=0)
+        missing_s = [s for s in _AGGREGATED_METRICS_STATS if s not in shuffled_df.columns]
+        if missing_s:
+            raise ValueError(
+                f"{shuffled_path} missing required stat columns {missing_s}; "
+                f"got {list(shuffled_df.columns)}."
+            )
+        result.update(
+            {
+                f"shuffled_audio/{metric}_{stat}": float(shuffled_df.at[metric, stat])
+                for metric in shuffled_df.index
+                for stat in _AGGREGATED_METRICS_STATS
+            }
+        )
+    return result
 
 
 def _log_audio_metrics_to_wandb(audio_metrics: dict[str, float]) -> None:
@@ -94,16 +112,13 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
 
     The VST render subprocess is prefixed with the headless wrapper on Linux so
     the VST3 plugin gets an Xvfb display before pedalboard imports it; the
-    metrics subprocess is CPU-only and needs no wrapper. When
-    ``evaluation.shuffle_pred_audio`` is set, ``--shuffle_pred_audio`` /
-    ``--shuffle_seed`` are forwarded to the metrics subprocess, which scores a
-    symlink view permuting pred.wav across sample dirs (#489) — no effect unless
-    ``compute_metrics`` is also enabled.
+    metrics subprocess is CPU-only and needs no wrapper. ``--shuffle_seed`` is
+    always forwarded; the render-order probe (#489) runs automatically inside
+    ``compute_audio_metrics`` when all sample dirs have identical params.
 
-    :param cfg: Reads ``cfg.evaluation`` (gates + ``num_workers`` +
-        ``shuffle_pred_audio`` / ``shuffle_seed``), ``cfg.render`` (param spec,
-        preset, optional plugin path), and ``cfg.paths.output_dir`` (base for
-        ``predictions/``, ``audio/``, ``metrics/``).
+    :param cfg: Reads ``cfg.evaluation`` (gates + ``num_workers`` + ``shuffle_seed``),
+        ``cfg.render`` (param spec, preset, optional plugin path), and
+        ``cfg.paths.output_dir`` (base for ``predictions/``, ``audio/``, ``metrics/``).
     :returns: ``{"audio/<name>_<stat>": value}`` when ``compute_metrics`` ran;
         empty dict otherwise. Always rank-zero — the caller gates DDP duplication.
     :raises ValueError: if ``evaluation.render_vst`` is enabled but ``cfg.render`` is
@@ -181,15 +196,11 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
             _COMPUTE_AUDIO_METRICS_MODULE,
             str(audio_dir),
             str(metrics_dir),
+            "--shuffle_seed",
+            str(cfg.evaluation.get("shuffle_seed", 0)),
             "-w",
             str(cfg.evaluation.num_workers),
         ]
-        if cfg.evaluation.get("shuffle_pred_audio"):
-            args += [
-                "--shuffle_pred_audio",
-                "--shuffle_seed",
-                str(cfg.evaluation.get("shuffle_seed", 0)),
-            ]
         log.info(f"Computing audio metrics: {args}")
         subprocess.run(  # noqa: S603
             args,
