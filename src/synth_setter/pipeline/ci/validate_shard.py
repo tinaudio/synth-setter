@@ -29,7 +29,6 @@ import re
 import sys
 import tarfile
 from pathlib import Path
-from typing import cast
 
 import click
 import h5py
@@ -212,6 +211,8 @@ def _validate_h5_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
     :param spec: Dataset spec the shard is expected to conform to.
     :returns: List of error strings (empty = valid).
     :rtype: list[str]
+    :raises TypeError: A required name resolves to a Group rather than a Dataset,
+        a structural corruption distinct from a recoverable shape mismatch.
     """
     try:
         f = h5py.File(shard_path, "r")
@@ -225,7 +226,12 @@ def _validate_h5_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
             if name not in f:
                 errors.append(f"missing dataset: {name!r}")
                 continue
-            actual = cast(h5py.Dataset, f[name]).shape
+            member = f[name]
+            if not isinstance(member, h5py.Dataset):
+                raise TypeError(
+                    f"shard member {name!r} is a {type(member).__name__}, not an h5py.Dataset"
+                )
+            actual = member.shape
             expected = expected_shapes[name]
             if actual != expected:
                 errors.append(f"dataset {name!r} has shape {actual}, expected {expected}")

@@ -24,6 +24,7 @@ exercising every code branch in ``__getitem__`` and ``_index_dataset``.
 from __future__ import annotations
 
 import contextlib
+import gc
 import random
 import shutil
 from collections.abc import Iterator
@@ -640,6 +641,38 @@ class TestSurgeXTDatasetH5Mode:
         )
         item = dataset[0]
         assert set(item.keys()) == set(_ALL_TENSOR_KEYS)
+
+
+class TestSurgeXTDatasetHandleLifecycle:
+    """The opened HDF5 handle is released even when ``teardown`` never runs."""
+
+    def test_finalizer_closes_handle_when_only_reference_dropped(self, single_h5: Path) -> None:
+        """Dropping the last reference closes the handle via the weakref finalizer.
+
+        :param single_h5: Fixture-provided single-shard HDF5 path.
+        """
+        dataset = SurgeXTDataset(single_h5, batch_size=2, ot=False)
+        handle = dataset.dataset_file
+        assert handle  # h5py.File is truthy while open
+
+        del dataset
+        gc.collect()
+
+        assert not handle  # finalizer ran on collection, leaving the handle closed
+
+    def test_close_is_idempotent_across_repeated_calls(self, single_h5: Path) -> None:
+        """Closing twice is safe: a second close on an already-closed handle is a no-op.
+
+        :param single_h5: Fixture-provided single-shard HDF5 path.
+        """
+        dataset = SurgeXTDataset(single_h5, batch_size=2, ot=False)
+        handle = dataset.dataset_file
+        assert handle is not None  # real (non-fake) mode always opens a file
+
+        handle.close()
+        handle.close()
+
+        assert not handle
 
 
 # --------------------------------------------------------------------------- #
