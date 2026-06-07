@@ -1,0 +1,27 @@
+program: src/synth_setter/cli/generate_dataset.py
+# Pinned in YAML — wandb sweep CLI does not support OmegaConf resolvers and ignores
+# WANDB_ENTITY / WANDB_PROJECT at sweep-creation time (those only steer wandb.init in each trial).
+entity: tinaudio
+project: synth-setter
+# Paired plugin_reload_cadence probe for #489: copy_dataset_root_uri replays the fixed surge_xt
+# reference patches, so once-vs-render is paired per patch (needs the copy base + reference, PR #1551).
+command:
+  - ${interpreter}
+  - ${program}
+  - experiment=generate_dataset/copy-paired-surge-xt
+  - copy_dataset_root_uri=r2://intermediate-data/data/ref-surge-xt-489/paired-ref-v1
+  - ${args_no_hyphens}
+name: generate_dataset_copy_paired_reload_surge_xt
+method: grid
+# grid ignores `metric` at scheduling time; the field stays for dashboard
+# legibility on runs that do log it. mss_mean is the oracle-eval audio loss.
+metric:
+  goal: minimize
+  name: audio/mss_mean
+# Both arms replay the same patches, so a paired test (Wilcoxon on per-patch deltas) answers whether
+# the prior unpaired cadence null was real or just underpowered by the patch confound.
+parameters:
+  render.plugin_reload_cadence:
+    values:
+      - once
+      - render
