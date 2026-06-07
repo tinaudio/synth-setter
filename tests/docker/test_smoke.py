@@ -11,20 +11,13 @@ To run all smoke tests manually inside a container:
         pytest tests/docker/test_smoke.py -m "docker_smoke and requires_vst" -v
 """
 
-import os
-from pathlib import Path
-
 import pytest
 
-PLUGIN_PATH = os.environ.get("SYNTH_SETTER_PLUGIN_PATH") or "plugins/Surge XT.vst3"
+from tests._vst import PLUGIN_PATH
 
 skip_no_pedalboard = pytest.mark.skipif(
     not __import__("importlib").util.find_spec("pedalboard"),
     reason="pedalboard not installed (run inside Docker image)",
-)
-skip_no_vst = pytest.mark.skipif(
-    not Path(PLUGIN_PATH).exists(),
-    reason=f"VST plugin not found at {PLUGIN_PATH} (run inside Docker image)",
 )
 
 
@@ -39,7 +32,6 @@ def test_pedalboard_importable():
 
 @pytest.mark.docker_smoke
 @pytest.mark.requires_vst
-@skip_no_vst
 def test_surge_xt_loads():
     """Verify Surge XT VST3 plugin loads and exposes parameters."""
     from pedalboard import VST3Plugin

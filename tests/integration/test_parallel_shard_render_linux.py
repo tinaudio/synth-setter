@@ -38,6 +38,7 @@ from synth_setter.cli.generate_dataset import generate
 from synth_setter.data.vst.core import extract_renderer_version
 from synth_setter.data.vst.shapes import AUDIO_FIELD
 from synth_setter.pipeline.schemas.spec import DatasetSpec
+from tests._vst import PLUGIN_PATH
 
 pytestmark = [
     pytest.mark.slow,
@@ -45,7 +46,6 @@ pytestmark = [
     pytest.mark.skipif(sys.platform != "linux", reason="X11 wrapper is Linux-only"),
 ]
 
-PLUGIN_PATH = os.environ.get("SYNTH_SETTER_PLUGIN_PATH") or "plugins/Surge XT.vst3"
 PRESET_PATH = "presets/surge-base.vstpreset"
 
 _NUM_SHARDS = 4
@@ -62,10 +62,6 @@ _CADENCE_CELLS = [
 ]
 
 
-@pytest.mark.skipif(
-    not Path(PLUGIN_PATH).exists(),
-    reason=f"VST plugin not found at {PLUGIN_PATH}",
-)
 @pytest.mark.parametrize(
     ("gui_toggle_cadence", "plugin_reload_cadence"),
     _CADENCE_CELLS,

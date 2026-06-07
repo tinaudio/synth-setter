@@ -4,8 +4,9 @@ name: CPU Slow Tests
 # `test-vst-slow.yml`, which runs the Surge XT suite inside the project's
 # Docker dev image; this workflow no longer installs Surge XT or the headless
 # X11 stack. The pytest marker filter excludes `gpu`, `mps`, and `requires_vst`
-# so any leftover VST-marked tests are skipped at collection time rather than
-# relying on the runtime `skip_no_vst` decorator.
+# so any leftover VST-marked tests are deselected here; absent that filter, the
+# `pytest_collection_modifyitems` hook in `tests/conftest.py` still auto-skips
+# them when no plugin is present.
 # Triggered post-merge on main (and via manual dispatch).
 on:
   workflow_dispatch:

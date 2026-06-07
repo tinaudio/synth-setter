@@ -27,27 +27,16 @@ from synth_setter.data.vst.writers import make_hdf5_dataset
 
 _ = hdf5plugin  # keep type checkers from flagging the side-effect import
 
-# ``_PLUGIN_PATH`` is imported with the helpers so the ``skip_no_vst`` mark
-# tracks the same path that ``_render_cfg`` embeds in the produced
-# ``RenderConfig`` — a local copy could drift if the canonical default ever
-# changed.
 from tests.data.vst.test_generate_vst_dataset import (  # noqa: E402  pinned canonical patch
     _HARDCODED_NOTE_PARAMS,
     _HARDCODED_SYNTH_PARAMS,
-    _PLUGIN_PATH,
     _render_cfg,
 )
 from tests.helpers.logger_assertions import assert_no_logger_exceptions  # noqa: E402
 
-skip_no_vst = pytest.mark.skipif(
-    not Path(_PLUGIN_PATH).exists(),
-    reason=f"VST plugin not found at {_PLUGIN_PATH}",
-)
-
 
 @pytest.mark.slow
 @pytest.mark.requires_vst
-@skip_no_vst
 def test_always_on_renders_small_shard_end_to_end(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

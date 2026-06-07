@@ -20,6 +20,8 @@ _ = hdf5plugin  # keep type checkers from flagging the side-effect import
 import numpy as np
 import pytest
 
+from tests._vst import PLUGIN_PATH
+
 from synth_setter.data.vst import param_specs
 from synth_setter.data.vst.core import load_plugin, load_preset, render_params
 from synth_setter.data.vst.generate_vst_dataset import fixed_params_from_dataset
@@ -36,7 +38,6 @@ from synth_setter.pipeline.schemas.spec import RenderConfig
 
 log = logging.getLogger(__name__)
 
-_PLUGIN_PATH = os.environ.get("SYNTH_SETTER_PLUGIN_PATH") or "plugins/Surge XT.vst3"
 _PRESET_PATH = "presets/surge-base.vstpreset"
 _NUM_SAMPLES = 5
 _SAMPLE_RATE = 44100.0
@@ -79,7 +80,7 @@ def _render_cfg(
     :return: ``RenderConfig`` populated with the module's test defaults.
     """
     return RenderConfig(
-        plugin_path=_PLUGIN_PATH,
+        plugin_path=PLUGIN_PATH,
         preset_path=_PRESET_PATH,
         param_spec_name=_SPEC_NAME,
         renderer_version=_RENDERER_VERSION,
@@ -123,10 +124,6 @@ _AUDIO_PEAK_SILENCE_FLOOR = 1e-4
 #   - `_SURGE_MEL_SHAPE` in `tests/conftest.py` — mirror, keep in sync.
 _PER_SAMPLE_MEL_SHAPE = (2, 128, 401)
 
-skip_no_vst = pytest.mark.skipif(
-    not Path(_PLUGIN_PATH).exists(),
-    reason=f"VST plugin not found at {_PLUGIN_PATH}",
-)
 
 # Known-good loudness-passing patch captured from a prior random-sampled run
 # (sample 4 of a 5-sample candidates dataset for the surge_xt spec). Used by
@@ -752,7 +749,6 @@ def _assert_round_trip_matches(
 
 @pytest.mark.slow
 @pytest.mark.requires_vst
-@skip_no_vst
 def test_datasets_from_hardcoded_params_are_identical(
     tmp_path: Path,
 ) -> None:
@@ -834,7 +830,6 @@ def test_datasets_from_hardcoded_params_are_identical(
 
 @pytest.mark.slow
 @pytest.mark.requires_vst
-@skip_no_vst
 def test_datasets_from_sampled_params_are_identical(tmp_path: Path) -> None:
     """make_hdf5_dataset reproduces a previous dataset row-for-row when params are replayed.
 
@@ -940,7 +935,6 @@ def test_datasets_from_sampled_params_are_identical(tmp_path: Path) -> None:
 
 @pytest.mark.slow
 @pytest.mark.requires_vst
-@skip_no_vst
 def test_make_dataset(tmp_path: Path) -> None:
     """make_hdf5_dataset with the natural random source writes a valid h5."""
     out = tmp_path / "random.h5"
@@ -959,7 +953,6 @@ def test_make_dataset(tmp_path: Path) -> None:
 
 @pytest.mark.slow
 @pytest.mark.requires_vst
-@skip_no_vst
 def test_show_editor_warmup_does_not_change_rendered_audio() -> None:
     """``show_editor`` warm-up in ``load_plugin`` does not change rendered audio.
 
@@ -985,7 +978,7 @@ def test_show_editor_warmup_does_not_change_rendered_audio() -> None:
     def _render_n(n: int) -> list[np.ndarray]:
         return [
             render_params(
-                _PLUGIN_PATH,
+                PLUGIN_PATH,
                 _HARDCODED_SYNTH_PARAMS,
                 pitch,
                 _VELOCITY,
@@ -1016,7 +1009,6 @@ def test_show_editor_warmup_does_not_change_rendered_audio() -> None:
 
 @pytest.mark.slow
 @pytest.mark.requires_vst
-@skip_no_vst
 def test_reload_per_render_matches_cached_plugin() -> None:
     """Cached-plugin renders match reload-per-render renders within audio thresholds.
 
@@ -1031,7 +1023,7 @@ def test_reload_per_render_matches_cached_plugin() -> None:
     def _render_n_reload() -> list[np.ndarray]:
         return [
             render_params(
-                _PLUGIN_PATH,
+                PLUGIN_PATH,
                 _HARDCODED_SYNTH_PARAMS,
                 pitch,
                 _VELOCITY,
@@ -1045,11 +1037,11 @@ def test_reload_per_render_matches_cached_plugin() -> None:
         ]
 
     def _render_n_cached() -> list[np.ndarray]:
-        plugin = load_plugin(_PLUGIN_PATH)
+        plugin = load_plugin(PLUGIN_PATH)
         load_preset(plugin, _PRESET_PATH)
         return [
             render_params(
-                _PLUGIN_PATH,
+                PLUGIN_PATH,
                 _HARDCODED_SYNTH_PARAMS,
                 pitch,
                 _VELOCITY,
@@ -1144,7 +1136,7 @@ def test_generate_sample_raises_when_fixed_synth_params_renders_silent(
 
     with pytest.raises(ValueError, match="fixed_synth_params render produced loudness"):
         generate_vst_dataset.generate_sample(
-            plugin_path=_PLUGIN_PATH,
+            plugin_path=PLUGIN_PATH,
             velocity=_VELOCITY,
             signal_duration_seconds=_DURATION,
             sample_rate=_SAMPLE_RATE,
@@ -1168,7 +1160,7 @@ def test_generate_sample_raises_when_both_fixed_renders_silent(
 
     with pytest.raises(ValueError, match="fixed_synth_params render produced loudness"):
         generate_vst_dataset.generate_sample(
-            plugin_path=_PLUGIN_PATH,
+            plugin_path=PLUGIN_PATH,
             velocity=_VELOCITY,
             signal_duration_seconds=_DURATION,
             sample_rate=_SAMPLE_RATE,
@@ -1210,7 +1202,7 @@ def test_generate_sample_retries_when_only_fixed_note_params(
     monkeypatch.setattr(spec, "sample", lambda: next(sample_returns))
 
     sample = generate_vst_dataset.generate_sample(
-        plugin_path=_PLUGIN_PATH,
+        plugin_path=PLUGIN_PATH,
         velocity=_VELOCITY,
         signal_duration_seconds=_DURATION,
         sample_rate=_SAMPLE_RATE,
@@ -1287,7 +1279,7 @@ def test_generate_sample_warmups_once_regardless_of_retries(
     warmup_mock = _install_fake_render_params(monkeypatch, spec, num_retries=num_retries)
 
     generate_vst_dataset.generate_sample(
-        plugin_path=_PLUGIN_PATH,
+        plugin_path=PLUGIN_PATH,
         velocity=_VELOCITY,
         signal_duration_seconds=_DURATION,
         sample_rate=_SAMPLE_RATE,
@@ -1321,7 +1313,7 @@ def test_generate_sample_with_warmup_false_never_warms_across_retries(
     warmup_mock = _install_fake_render_params(monkeypatch, spec, num_retries=num_retries)
 
     generate_vst_dataset.generate_sample(
-        plugin_path=_PLUGIN_PATH,
+        plugin_path=PLUGIN_PATH,
         velocity=_VELOCITY,
         signal_duration_seconds=_DURATION,
         sample_rate=_SAMPLE_RATE,
@@ -1354,7 +1346,7 @@ def test_generate_sample_with_warmup_true_no_retries_warms_exactly_once(
     warmup_mock = _install_fake_render_params(monkeypatch, spec, num_retries=0)
 
     generate_vst_dataset.generate_sample(
-        plugin_path=_PLUGIN_PATH,
+        plugin_path=PLUGIN_PATH,
         velocity=_VELOCITY,
         signal_duration_seconds=_DURATION,
         sample_rate=_SAMPLE_RATE,
@@ -1371,7 +1363,6 @@ def test_generate_sample_with_warmup_true_no_retries_warms_exactly_once(
 
 @pytest.mark.slow
 @pytest.mark.requires_vst
-@skip_no_vst
 def test_make_dataset_uses_fixed_params_lists_when_provided(
     tmp_path: Path,
 ) -> None:
@@ -1851,7 +1842,6 @@ def test_make_hdf5_resume_indexes_fixed_params_by_absolute_row(
 
 @pytest.mark.slow
 @pytest.mark.requires_vst
-@skip_no_vst
 def test_copy_dataset_reproduces_source_param_array(tmp_path: Path) -> None:
     """A copy run re-renders a source dataset's params, reproducing its param_array.
 

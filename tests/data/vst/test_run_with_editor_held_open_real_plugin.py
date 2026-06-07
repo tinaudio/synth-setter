@@ -19,19 +19,15 @@ from pathlib import Path
 
 import pytest
 
+from tests._vst import PLUGIN_PATH
+
 from synth_setter.data.vst import core
 
-_PLUGIN_PATH = os.environ.get("SYNTH_SETTER_PLUGIN_PATH") or "plugins/Surge XT.vst3"
 
-skip_no_vst = pytest.mark.skipif(
-    not Path(_PLUGIN_PATH).exists(),
-    reason=f"VST plugin not found at {_PLUGIN_PATH}",
-)
 
 
 @pytest.mark.slow
 @pytest.mark.requires_vst
-@skip_no_vst
 def test_run_with_editor_held_open_completes_cleanly_on_real_plugin() -> None:
     """``run_with_editor_held_open(real_plugin, body)`` returns without raising.
 
@@ -45,7 +41,7 @@ def test_run_with_editor_held_open_completes_cleanly_on_real_plugin() -> None:
     assertion focused on the threading contract so a failure cannot be
     confused with a render/writer regression.
     """
-    plugin = core.load_plugin(_PLUGIN_PATH)
+    plugin = core.load_plugin(PLUGIN_PATH)
 
     result = core.run_with_editor_held_open(plugin, lambda: None)
 

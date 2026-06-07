@@ -26,6 +26,7 @@ from synth_setter.resources import vst_headless_wrapper
 from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
 from tests._baseline_worktree import worktree_for_ref  # noqa: F401 — pytest fixture re-export
+from tests._vst import PLUGIN_PATH, VST_AVAILABLE
 from tests.data.vst._fake_plugin import FakeVST3Plugin
 from tests.pipeline.conftest import fake_r2_remote  # noqa: F401 — pytest fixture re-export
 
@@ -39,7 +40,6 @@ _SURGE_FIXTURE_DURATION_SECONDS = 4.0
 _SURGE_FIXTURE_VELOCITY = 100
 _SURGE_FIXTURE_MIN_LOUDNESS = -55.0
 _SURGE_FIXTURE_RENDERER_VERSION = "1.3.4"
-_SURGE_FIXTURE_PLUGIN_PATH = os.environ.get("SYNTH_SETTER_PLUGIN_PATH", "plugins/Surge XT.vst3")
 _SURGE_AUDIO_SAMPLES_PER_CLIP = int(_SURGE_FIXTURE_SAMPLE_RATE * _SURGE_FIXTURE_DURATION_SECONDS)
 _SURGE_AUDIO_CHANNELS = _SURGE_FIXTURE_CHANNELS
 _SURGE_MEL_SHAPE = (2, 128, 401)
@@ -57,9 +57,8 @@ _VST_SUBPROCESS_TIMEOUT_SECONDS = 600
 
 NUM_FIXTURE_SAMPLES = 5
 
-# Probed once at module import; _R2_AVAILABLE uses the env var (no network hit)
-# — AGENTS.md's `rclone lsd r2:` is for interactive verification, not the skip criterion.
-_VST_AVAILABLE = Path(_SURGE_FIXTURE_PLUGIN_PATH).exists()
+# Probed from the env var, no network hit — AGENTS.md's `rclone lsd r2:` is for
+# interactive verification, not the skip criterion. VST presence lives in tests._vst.
 _R2_AVAILABLE = bool(os.environ.get("RCLONE_CONFIG_R2_ACCESS_KEY_ID"))
 
 
@@ -69,7 +68,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     :param items: mutated in-place to insert skip markers for missing resources.
     """
     skip_vst = pytest.mark.skip(
-        reason=f"Surge XT VST not found at {_SURGE_FIXTURE_PLUGIN_PATH!r} "
+        reason=f"Surge XT VST not found at {PLUGIN_PATH!r} "
         f"(set SYNTH_SETTER_PLUGIN_PATH or place plugin at that path)"
     )
     skip_r2 = pytest.mark.skip(
@@ -77,7 +76,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         "run `rclone lsd r2:` to verify"
     )
     for item in items:
-        if "requires_vst" in item.keywords and not _VST_AVAILABLE:
+        if "requires_vst" in item.keywords and not VST_AVAILABLE:
             item.add_marker(skip_vst)
         if "integration_r2" in item.keywords and not _R2_AVAILABLE:
             item.add_marker(skip_r2)
@@ -630,7 +629,7 @@ def surge_xt_smoke_datasets(tmp_path: Path, param_spec_name: str) -> Path:
         sys.executable,
         "src/synth_setter/data/vst/generate_vst_dataset.py",
         str(smoke_dataset_dir / "train.h5"),
-        f"--plugin_path={_SURGE_FIXTURE_PLUGIN_PATH}",
+        f"--plugin_path={PLUGIN_PATH}",
         f"--preset_path={preset_paths[param_spec_name]}",
         f"--param_spec_name={param_spec_name}",
         f"--renderer_version={_SURGE_FIXTURE_RENDERER_VERSION}",
@@ -714,7 +713,7 @@ def fake_surge_smoke_datasets(
     train_h5 = smoke_dataset_dir / "train.h5"
 
     render_cfg = RenderConfig(
-        plugin_path=_SURGE_FIXTURE_PLUGIN_PATH,
+        plugin_path=PLUGIN_PATH,
         preset_path=str(preset_paths[param_spec_name]),
         param_spec_name=param_spec_name,
         renderer_version=_SURGE_FIXTURE_RENDERER_VERSION,
@@ -800,7 +799,7 @@ def cfg_surge_xt_eval(
         cfg.render = {
             "param_spec_name": param_spec_name,
             "preset_path": preset_paths[param_spec_name],
-            "plugin_path": _SURGE_FIXTURE_PLUGIN_PATH,
+            "plugin_path": PLUGIN_PATH,
         }
 
     yield cfg

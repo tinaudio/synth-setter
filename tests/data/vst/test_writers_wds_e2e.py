@@ -25,24 +25,15 @@ from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 
 _ = hdf5plugin  # keep type checkers from flagging the side-effect import
 
-# Hardcoded loudness-passing patch, h5↔h5 phase-robust comparison helpers, and
-# the canonical ``_PLUGIN_PATH`` are reused verbatim from
-# ``test_generate_vst_dataset.py`` so this module's h5↔wds parity check uses
-# the same thresholds the h5↔h5 round-trip tests already pin, and the
-# ``skip_no_vst`` mark below tracks the same plugin path that ``_render_cfg``
-# embeds in the produced ``RenderConfig``.
+# Hardcoded loudness-passing patch and h5↔h5 phase-robust comparison helpers are
+# reused verbatim from ``test_generate_vst_dataset.py`` so this module's h5↔wds
+# parity check uses the same thresholds the h5↔h5 round-trip tests already pin.
 from tests.data.vst.test_generate_vst_dataset import (  # noqa: E402  pinned canonical patch
     _HARDCODED_NOTE_PARAMS,
     _HARDCODED_SYNTH_PARAMS,
     _MEL_MEAN_ABS_MAX,
-    _PLUGIN_PATH,
     _assert_audio_metrics_within_thresholds,
     _render_cfg,
-)
-
-skip_no_vst = pytest.mark.skipif(
-    not Path(_PLUGIN_PATH).exists(),
-    reason=f"VST plugin not found at {_PLUGIN_PATH}",
 )
 
 
@@ -74,7 +65,6 @@ def _load_npy_bytes(raw: bytes) -> np.ndarray:
 
 @pytest.mark.slow
 @pytest.mark.requires_vst
-@skip_no_vst
 def test_make_wds_dataset_writes_per_batch_npy_members(tmp_path: Path) -> None:
     """A 4-sample shard with batch_size=2 emits two batches of three npy members plus metadata.
 
@@ -109,7 +99,6 @@ def test_make_wds_dataset_writes_per_batch_npy_members(tmp_path: Path) -> None:
 
 @pytest.mark.slow
 @pytest.mark.requires_vst
-@skip_no_vst
 def test_make_wds_dataset_metadata_json_is_strict_shard_metadata(tmp_path: Path) -> None:
     """The shard's ``metadata.json`` member parses as a strict ``ShardMetadata`` matching the cfg.
 
@@ -137,7 +126,6 @@ def test_make_wds_dataset_metadata_json_is_strict_shard_metadata(tmp_path: Path)
 
 @pytest.mark.slow
 @pytest.mark.requires_vst
-@skip_no_vst
 def test_make_wds_dataset_audio_is_float16(tmp_path: Path) -> None:
     """Audio members are ``float16`` so they match the h5 path's storage precision.
 
@@ -164,7 +152,6 @@ def test_make_wds_dataset_audio_is_float16(tmp_path: Path) -> None:
 
 @pytest.mark.slow
 @pytest.mark.requires_vst
-@skip_no_vst
 def test_h5_and_wds_outputs_are_equivalent(tmp_path: Path) -> None:
     """Same params written through both writers produce equivalent on-disk arrays.
 
@@ -283,7 +270,6 @@ def test_h5_and_wds_outputs_are_equivalent(tmp_path: Path) -> None:
 
 @pytest.mark.slow
 @pytest.mark.requires_vst
-@skip_no_vst
 def test_make_wds_dataset_metadata_json_strict_rejects_extra(tmp_path: Path) -> None:
     """The metadata.json member round-trips through strict ``ShardMetadata`` validation.
 

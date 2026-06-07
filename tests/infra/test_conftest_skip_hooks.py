@@ -36,9 +36,9 @@ class _FakeItem:
 def test_requires_vst_item_skipped_when_vst_absent(monkeypatch: pytest.MonkeyPatch) -> None:
     """requires_vst item gets a skip marker with a path-specific reason when VST is absent.
 
-    :param monkeypatch: rebinds ``_VST_AVAILABLE`` on ``conftest_module``.
+    :param monkeypatch: rebinds ``VST_AVAILABLE`` on ``conftest_module``.
     """
-    monkeypatch.setattr(conftest_module, "_VST_AVAILABLE", False)
+    monkeypatch.setattr(conftest_module, "VST_AVAILABLE", False)
     item = _FakeItem({"requires_vst": pytest.mark.requires_vst})
     conftest_module.pytest_collection_modifyitems(items=cast(list[pytest.Item], [item]))
     assert len(item.added_markers) == 1
@@ -62,9 +62,9 @@ def test_integration_r2_item_skipped_when_r2_absent(monkeypatch: pytest.MonkeyPa
 def test_requires_vst_item_not_skipped_when_vst_present(monkeypatch: pytest.MonkeyPatch) -> None:
     """requires_vst item receives no skip marker when VST is present.
 
-    :param monkeypatch: rebinds ``_VST_AVAILABLE`` on ``conftest_module``.
+    :param monkeypatch: rebinds ``VST_AVAILABLE`` on ``conftest_module``.
     """
-    monkeypatch.setattr(conftest_module, "_VST_AVAILABLE", True)
+    monkeypatch.setattr(conftest_module, "VST_AVAILABLE", True)
     item = _FakeItem({"requires_vst": pytest.mark.requires_vst})
     conftest_module.pytest_collection_modifyitems(items=cast(list[pytest.Item], [item]))
     assert item.added_markers == []
@@ -86,9 +86,9 @@ def test_integration_r2_item_not_skipped_when_r2_present(monkeypatch: pytest.Mon
 def test_unmarked_item_receives_no_skip_markers(monkeypatch: pytest.MonkeyPatch) -> None:
     """An item with no VST/R2 markers is untouched regardless of resource availability.
 
-    :param monkeypatch: rebinds both ``_VST_AVAILABLE`` and ``_R2_AVAILABLE`` to False.
+    :param monkeypatch: rebinds both ``VST_AVAILABLE`` and ``_R2_AVAILABLE`` to False.
     """
-    monkeypatch.setattr(conftest_module, "_VST_AVAILABLE", False)
+    monkeypatch.setattr(conftest_module, "VST_AVAILABLE", False)
     monkeypatch.setattr(conftest_module, "_R2_AVAILABLE", False)
     item = _FakeItem({"slow": pytest.mark.slow})
     conftest_module.pytest_collection_modifyitems(items=cast(list[pytest.Item], [item]))
