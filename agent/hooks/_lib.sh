@@ -84,6 +84,7 @@ has_skill() {
       "${home}/.codex/skills/${name}/SKILL.md"
       "${home}"/.claude/plugins/*/skills/"${name}"/SKILL.md
       "${home}"/.codex/plugins/*/skills/"${name}"/SKILL.md
+      "${home}"/.codex/plugins/*/codex/synth-setter-skills/"${name}"/SKILL.md
     )
   fi
   if [[ -n "${_REPO_ROOT_FOR_HOOKS:-}" ]]; then
