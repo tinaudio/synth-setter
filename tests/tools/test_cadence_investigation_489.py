@@ -2,10 +2,10 @@
 
 These pin the pure plan-building behavior — the derived copy-source URI, the
 experiment set, the wandb sweep-config shape, per-cell override expansion, and
-the source/copy match-set consistency that replaces the old hardcoded
-``copy_dataset_root_uri``. The real generate -> copy -> oracle round trip is
-covered end-to-end (real plugin + real R2) in
-``tests/integration/test_cadence_investigation_489_e2e.py``.
+the source/copy match-set consistency that keeps the derived
+``copy_dataset_root_uri`` aligned across producer and consumer. The real
+generate -> copy -> oracle round trip is covered end-to-end (real plugin + real
+R2) in ``tests/integration/test_cadence_investigation_489_e2e.py``.
 """
 
 from __future__ import annotations
@@ -18,8 +18,8 @@ from synth_setter.tools import cadence_investigation_489 as inv
 def test_reference_copy_uri_default_prefix_root_matches_canonical_run_root() -> None:
     """The derived copy-source URI equals the canonical reference run root.
 
-    This is the exact string the three paired-copy sweeps previously hardcoded, so deriving it
-    (instead of hardcoding) cannot move where copies read from.
+    Deriving the URI from the reference run identity pins exactly where the paired-copy probes read
+    from.
     """
     assert inv.reference_copy_uri() == "r2://intermediate-data/data/ref-surge-xt-489/paired-ref-v1"
 
@@ -232,3 +232,16 @@ def test_build_experiments_rejects_indivisible_reuse_depths() -> None:
     bad = inv.Scale(sizes=(8, 8, 8), samples_per_shard=2, reuse_depths=(3, 8))
     with pytest.raises(ValueError, match="must all divide"):
         inv.build_experiments(bad)
+
+
+def test_count_below_one_raises_value_error() -> None:
+    """A ``--count`` below 1 fails fast instead of silently running no cells."""
+    with pytest.raises(ValueError, match="count must be >= 1"):
+        inv.run_investigation(
+            scale=inv.SMOKE,
+            launcher="local",
+            prefix_root="data",
+            only=["copy_reload"],
+            dry_run=True,
+            count=0,
+        )

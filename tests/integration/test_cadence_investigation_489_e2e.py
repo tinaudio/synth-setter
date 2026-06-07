@@ -9,8 +9,7 @@ the generate subprocess (so a non-zero exit fails the test).
 
 Asserts on real R2 state: the source shard exists, the copy probe's output shard
 exists, and the copy shard's ``param_array`` equals the source's — proving the
-derived URI was piped through and the source patches were replayed verbatim,
-which is the whole point of folding the six sweep files into one script.
+derived URI was piped through and the source patches were replayed verbatim.
 
 Gated on ``requires_vst`` (real plugin) and ``integration_r2`` (real R2); both
 auto-skip via ``conftest`` when the resources are absent. The unique prefix is
@@ -29,6 +28,7 @@ import pytest
 
 from synth_setter.data.vst.shapes import PARAM_ARRAY_FIELD
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.schemas.prefix import make_r2_prefix
 from synth_setter.pipeline.spec_io import join_uri
 from synth_setter.tools import cadence_investigation_489 as inv
 
@@ -75,6 +75,8 @@ def test_smoke_investigation_local_replays_source_params_into_copy_probe(
     monkeypatch.setenv("WANDB_MODE", "offline")
     monkeypatch.setenv("PYTHONPATH", f"{worktree_src}:{os.environ.get('PYTHONPATH', '')}")
 
+    copy_probe = next(e for e in inv.build_experiments(inv.SMOKE) if e.name == "copy_repro")
+
     try:
         inv.main(
             [
@@ -85,7 +87,7 @@ def test_smoke_investigation_local_replays_source_params_into_copy_probe(
                 "--prefix-root",
                 prefix_root,
                 "--only",
-                "copy_repro",
+                copy_probe.name,
                 "--count",
                 "1",
             ]
@@ -95,8 +97,10 @@ def test_smoke_investigation_local_replays_source_params_into_copy_probe(
         source_shard = join_uri(source_root, _FIRST_SHARD)
         assert r2_io.object_size(source_shard) is not None, f"source shard absent: {source_shard}"
 
-        copy_root = f"r2://{inv.BUCKET}/{prefix_root}/copy-paired-repro-surge-xt/paired-repro-t1"
-        copy_shard = join_uri(copy_root, _FIRST_SHARD)
+        # --count 1 runs the first grid cell, so the run_id is the grid's first value.
+        first_run_id = str(copy_probe.grid["run_id"][0])
+        copy_prefix = make_r2_prefix(copy_probe.task_name, first_run_id, prefix_root=prefix_root)
+        copy_shard = join_uri(f"r2://{inv.BUCKET}/{copy_prefix.rstrip('/')}", _FIRST_SHARD)
         assert r2_io.object_size(copy_shard) is not None, f"copy shard absent: {copy_shard}"
 
         assert np.array_equal(_param_array(source_shard), _param_array(copy_shard)), (

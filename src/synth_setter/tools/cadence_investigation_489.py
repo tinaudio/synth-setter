@@ -1,11 +1,11 @@
 """One-command orchestrator for the #489 surge_xt cadence investigation.
 
-Replaces the per-experiment sweep YAMLs with a single script that (1) generates
-the fixed surge_xt copy-source dataset, (2) derives its R2 run-root URI, and
-(3) drives the five experiments — two within-run probes (render-order shuffle,
-reuse-depth junk) and three paired-copy probes (reload cadence, gui cadence,
-reproducibility floor) — feeding the derived URI to the copy probes so nothing
-hardcodes where copies read from.
+Runs the whole investigation from one script: (1) generates the fixed surge_xt
+copy-source dataset, (2) derives its R2 run-root URI, and (3) drives the five
+experiments — two within-run probes (render-order shuffle, reuse-depth junk) and
+three paired-copy probes (reload cadence, gui cadence, reproducibility floor) —
+feeding the derived URI to the copy probes so nothing hardcodes where copies
+read from.
 
 One :class:`Scale` feeds both the source generation and the copy probes, so the
 copy-preflight match set (``param_spec_name`` / ``samples_per_shard`` /
@@ -35,7 +35,10 @@ from synth_setter.pipeline.schemas.prefix import DEFAULT_R2_PREFIX_ROOT, make_r2
 ENTITY = "tinaudio"
 PROJECT = "synth-setter"
 BUCKET = "intermediate-data"
+# wandb's ``program:`` field is a repo-relative path (the agent runs it from the
+# repo root); the local launcher uses the import path so it does not depend on cwd.
 PROGRAM = "src/synth_setter/cli/generate_dataset.py"
+_GENERATE_MODULE = "synth_setter.cli.generate_dataset"
 
 PARAM_SPEC = "surge_xt"
 PRESET = "presets/surge-base.vstpreset"
@@ -152,6 +155,9 @@ def reference_overrides(scale: Scale, prefix_root: str = DEFAULT_R2_PREFIX_ROOT)
         f"render.preset_path={PRESET}",
         _sizes_override(scale.sizes),
         f"render.samples_per_shard={scale.samples_per_shard}",
+        # The source only donates params for copy replay, so audio quality is
+        # irrelevant; accept any non-silent render rather than fail the quiet floor.
+        f"render.min_loudness={COPY_MIN_LOUDNESS}",
     ]
 
 
@@ -326,7 +332,8 @@ def _run_generate(overrides: list[str]) -> None:
 
     :param overrides: Hydra override tokens for the generate run.
     """
-    argv = [sys.executable, PROGRAM, *overrides]
+    # ``-m`` resolves the entrypoint by import, so the launcher works from any cwd.
+    argv = [sys.executable, "-m", _GENERATE_MODULE, *overrides]
     # Child inherits the ambient env (R2 creds, WANDB_MODE, PYTHONPATH).
     subprocess.run(argv, check=True)  # noqa: S603 — argv built from validated literals
 
@@ -417,8 +424,11 @@ def run_investigation(
     :param only: Experiment names to run; ``None`` runs all five.
     :param dry_run: When true, print the plan and execute nothing.
     :param count: Per-experiment cell cap (``None`` runs every grid cell).
-    :raises ValueError: ``only`` names an unknown experiment.
+    :raises ValueError: ``only`` names an unknown experiment, or ``count`` is set
+        below 1 (a cap that would silently run no cells).
     """
+    if count is not None and count < 1:
+        raise ValueError(f"count must be >= 1 when set, got {count}")
     experiments = build_experiments(scale)
     by_name = {e.name: e for e in experiments}
     if only is not None:
