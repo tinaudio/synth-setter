@@ -9,9 +9,7 @@ load_preset().
 Regression for: https://github.com/tinaudio/synth-setter/issues/225
 """
 
-import os
 import sys
-from pathlib import Path
 
 import pytest
 

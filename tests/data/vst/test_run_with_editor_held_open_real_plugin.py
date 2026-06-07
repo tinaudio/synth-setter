@@ -14,16 +14,10 @@ workflow.
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
-
 import pytest
 
-from tests._vst import PLUGIN_PATH
-
 from synth_setter.data.vst import core
-
-
+from tests._vst import PLUGIN_PATH
 
 
 @pytest.mark.slow

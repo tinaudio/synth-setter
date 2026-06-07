@@ -13,16 +13,14 @@ Pattern compared:
        workaround order, kept on Linux)
 """
 
-import os
 import sys
 from pathlib import Path
 
 import pytest
-
-from tests._vst import PLUGIN_PATH
 from pedalboard import VST3Plugin
 
 from synth_setter.data.vst.core import warmup_plugin
+from tests._vst import PLUGIN_PATH
 
 _PRESET_DIR = Path("presets")
 _SAMPLE_RATE = 44100.0
