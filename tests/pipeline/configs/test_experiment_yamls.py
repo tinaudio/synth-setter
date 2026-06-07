@@ -99,6 +99,12 @@ def test_reference_surge_xt_paired_pins_deterministic_uri_fields() -> None:
     assert spec.render.samples_per_shard == 20
     assert spec.train_val_test_sizes == (40, 40, 40)
 
+    # Pin the full R2 location the copy sweeps hard-code, not just task_name/run_id: bucket +
+    # prefix_root (from configs/r2/default.yaml) also form the URI, so an r2 config change can't
+    # silently move the dataset out from under the pinned copy_dataset_root_uri.
+    assert spec.r2.bucket == "intermediate-data"
+    assert spec.r2.prefix == "data/ref-surge-xt-489/paired-ref-v1/"
+
 
 def test_copy_base_matches_reference_for_copy_preflight() -> None:
     """The copy base passes ``validate_copy_source`` against the reference — the real preflight.
