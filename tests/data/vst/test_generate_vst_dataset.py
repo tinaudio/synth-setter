@@ -1692,7 +1692,7 @@ def test_main_copy_dataset_root_uri_downloads_r2_source_shard(
     Drives the real ``rclone`` binary through ``fake_r2_remote`` (local-backed
     ``r2:``) so actual argv/flag construction is exercised; asserts the worker
     resolves the ``r2://`` root to a local shard and feeds its decoded params to
-    the writer.
+    writer.
 
     :param tmp_path: Pytest temp dir holding the output path.
     :param monkeypatch: Patches ``sys.argv`` and the writer.
