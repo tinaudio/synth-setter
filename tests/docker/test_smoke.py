@@ -32,6 +32,7 @@ def test_pedalboard_importable():
 
 @pytest.mark.docker_smoke
 @pytest.mark.requires_vst
+@skip_no_pedalboard
 def test_surge_xt_loads():
     """Verify Surge XT VST3 plugin loads and exposes parameters."""
     from pedalboard import VST3Plugin

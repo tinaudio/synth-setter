@@ -8,12 +8,14 @@ to restore the real-environment values for the rest of the session.
 from __future__ import annotations
 
 import importlib
+import os
 from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
 
 import pytest
 
+_ENV_VAR = "SYNTH_SETTER_PLUGIN_PATH"
 _DEFAULT_PATH = "plugins/Surge XT.vst3"
 
 
@@ -21,14 +23,27 @@ _DEFAULT_PATH = "plugins/Surge XT.vst3"
 def reload_vst(request: pytest.FixtureRequest) -> Callable[[], ModuleType]:
     """Reload ``tests._vst`` on demand, restoring real-env values at teardown.
 
-    :param request: registers the teardown reload that restores real-env constants.
+    The finalizer restores ``SYNTH_SETTER_PLUGIN_PATH`` itself (not via
+    ``monkeypatch``, whose teardown may run after this one) before the final
+    reload, so the module is left resolved against the real environment
+    regardless of fixture-finalization order.
+
+    :param request: registers the teardown that restores env + reloads the module.
     :returns: a callable that reloads and returns the freshly imported module.
     """
+    original = os.environ.get(_ENV_VAR)
 
     def _reload() -> ModuleType:
         return importlib.reload(importlib.import_module("tests._vst"))
 
-    request.addfinalizer(lambda: importlib.reload(importlib.import_module("tests._vst")))
+    def _restore() -> None:
+        if original is None:
+            os.environ.pop(_ENV_VAR, None)
+        else:
+            os.environ[_ENV_VAR] = original
+        _reload()
+
+    request.addfinalizer(_restore)
     return _reload
 
 
