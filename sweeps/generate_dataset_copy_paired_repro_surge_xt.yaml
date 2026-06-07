@@ -1,0 +1,28 @@
+program: src/synth_setter/cli/generate_dataset.py
+# Pinned in YAML — wandb sweep CLI does not support OmegaConf resolvers and ignores
+# WANDB_ENTITY / WANDB_PROJECT at sweep-creation time (those only steer wandb.init in each trial).
+entity: tinaudio
+project: synth-setter
+# Phase-init reproducibility floor for #489: re-render the fixed surge_xt reference patches three
+# times under one config, so run-to-run spread isolates the phase-init noise floor (needs PR #1551).
+command:
+  - ${interpreter}
+  - ${program}
+  - experiment=generate_dataset/copy-paired-surge-xt
+  - copy_dataset_root_uri=r2://intermediate-data/data/ref-surge-xt-489/paired-ref-v1
+  - ${args_no_hyphens}
+name: generate_dataset_copy_paired_repro_surge_xt
+method: grid
+# grid ignores `metric` at scheduling time; the field stays for dashboard
+# legibility on runs that do log it. mss_mean is the oracle-eval audio loss.
+metric:
+  goal: minimize
+  name: audio/mss_mean
+# Three identical replays of the same patches; run_id is the only knob (distinct W&B run + R2 prefix
+# per trial). The cross-trial spread of each patch's metrics is the phase-init nondeterminism floor.
+parameters:
+  run_id:
+    values:
+      - paired-repro-t1
+      - paired-repro-t2
+      - paired-repro-t3
