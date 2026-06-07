@@ -93,11 +93,11 @@ def test_smoke_investigation_local_replays_source_params_into_copy_probe(
 
         source_root = inv.reference_copy_uri(prefix_root=prefix_root)
         source_shard = join_uri(source_root, _FIRST_SHARD)
-        assert r2_io.object_size(source_shard), f"source shard absent: {source_shard}"
+        assert r2_io.object_size(source_shard) is not None, f"source shard absent: {source_shard}"
 
         copy_root = f"r2://{inv.BUCKET}/{prefix_root}/copy-paired-repro-surge-xt/paired-repro-t1"
         copy_shard = join_uri(copy_root, _FIRST_SHARD)
-        assert r2_io.object_size(copy_shard), f"copy shard absent: {copy_shard}"
+        assert r2_io.object_size(copy_shard) is not None, f"copy shard absent: {copy_shard}"
 
         assert np.array_equal(_param_array(source_shard), _param_array(copy_shard)), (
             "copy probe did not replay the source params verbatim — the derived "

@@ -90,7 +90,7 @@ def test_expand_cells_is_the_grid_product_with_fixed_overrides_in_every_cell() -
 
     cells = inv.expand_cells(copy_gui, copy_uri=uri)
 
-    # grid is gui_toggle_cadence over three values -> three cells.
+    # copy_gui sweeps gui_toggle_cadence, so the grid product is one cell per value.
     assert len(cells) == 3
     gui_values = sorted(
         tok.split("=", 1)[1]
@@ -193,3 +193,42 @@ def test_local_count_caps_cells_run_per_experiment(monkeypatch: pytest.MonkeyPat
     # copy_reload grids two reload cadences, but --count 1 runs one cell; the
     # source generation is the other invocation.
     assert len(runs) == 2
+
+
+def test_within_run_only_selection_skips_source_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Selecting only within-run probes skips the (costly) copy-source generation.
+
+    :param monkeypatch: Records generate invocations so the absence of a source-generation run is
+        observable without spawning subprocesses.
+    """
+    runs: list[list[str]] = []
+    monkeypatch.setattr(inv, "_run_generate", lambda overrides: runs.append(overrides))
+
+    inv.main(["--launcher", "local", "--scale", "smoke", "--only", "reuse_depth"])
+
+    # reuse_depth grids two depths and needs no copy source, so only its two
+    # cells run — no run carries the reference run_id that source generation does.
+    assert len(runs) == 2
+    assert not any("run_id=paired-ref-v1" in cell for cell in runs)
+
+
+def test_unknown_only_experiment_raises_value_error() -> None:
+    """An unrecognized ``--only`` name fails fast with the valid choices listed."""
+    with pytest.raises(ValueError, match="unknown experiment"):
+        inv.run_investigation(
+            scale=inv.SMOKE,
+            launcher="local",
+            prefix_root="data",
+            only=["does_not_exist"],
+            dry_run=True,
+            count=None,
+        )
+
+
+def test_build_experiments_rejects_indivisible_reuse_depths() -> None:
+    """A reuse depth that does not divide the largest depth is rejected."""
+    bad = inv.Scale(sizes=(8, 8, 8), samples_per_shard=2, reuse_depths=(3, 8))
+    with pytest.raises(ValueError, match="must all divide"):
+        inv.build_experiments(bad)

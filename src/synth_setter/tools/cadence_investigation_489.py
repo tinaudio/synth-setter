@@ -76,8 +76,8 @@ class Scale:
     reuse_depths: tuple[int, ...]
 
 
-# Full #489 run: 2 shards/split at the reference, reuse depths spanning the
-# junk onset (~12 reuses, #706); 80 is a multiple of every depth.
+# Full #489 run: reuse depths span the junk onset (~12 reuses, #706); 80 is a
+# multiple of every depth so each cell splits into whole shards.
 FULL = Scale(sizes=(40, 40, 40), samples_per_shard=20, reuse_depths=(4, 20, 40, 80))
 # Smallest run that still exercises generate -> copy -> oracle for tests.
 SMOKE = Scale(sizes=(2, 2, 2), samples_per_shard=2, reuse_depths=(1, 2))
@@ -111,7 +111,7 @@ class Experiment:
     name: str
     task_name: str
     fixed_overrides: tuple[str, ...]
-    grid: dict[str, list[object]]
+    grid: dict[str, list[str | int]]
     needs_copy_source: bool = False
 
 
@@ -127,10 +127,10 @@ def reference_copy_uri(prefix_root: str = DEFAULT_R2_PREFIX_ROOT) -> str:
 
 
 def _sizes_override(sizes: tuple[int, int, int]) -> str:
-    """Return the ``train_val_test_sizes`` Hydra override token for ``sizes``.
+    """Build the Hydra override that pins the per-split sample counts.
 
-    :param sizes: Train/val/test split sizes.
-    :returns: The ``train_val_test_sizes=[...]`` override token.
+    :param sizes: Sample counts in ``(train, val, test)`` order.
+    :returns: A ``train_val_test_sizes=[...]`` token for the generate_dataset CLI.
     """
     return f"train_val_test_sizes=[{','.join(str(n) for n in sizes)}]"
 
@@ -176,10 +176,17 @@ def build_experiments(scale: Scale) -> list[Experiment]:
 
     :param scale: Size knobs threaded into split sizes and the reuse-depth grid.
     :returns: Ordered experiments — two within-run probes then three copy probes.
+    :raises ValueError: A reuse depth does not divide the largest depth, so a reuse-depth cell
+        would not split into whole shards.
     """
-    # Reuse depth is the swept samples_per_shard; sizes must be a multiple of
-    # the largest depth so every cell splits into whole shards.
+    # Reuse depth is the swept samples_per_shard; split sizes are the largest
+    # depth, so every depth must divide it for cells to split into whole shards.
     reuse_size = max(scale.reuse_depths)
+    if any(reuse_size % depth for depth in scale.reuse_depths):
+        raise ValueError(
+            f"reuse_depths {scale.reuse_depths} must all divide max {reuse_size} "
+            "so each reuse-depth cell splits into whole shards"
+        )
     return [
         Experiment(
             name="shuffle_probe",
@@ -320,6 +327,7 @@ def _run_generate(overrides: list[str]) -> None:
     :param overrides: Hydra override tokens for the generate run.
     """
     argv = [sys.executable, PROGRAM, *overrides]
+    # Child inherits the ambient env (R2 creds, WANDB_MODE, PYTHONPATH).
     subprocess.run(argv, check=True)  # noqa: S603 — argv built from validated literals
 
 
@@ -419,7 +427,12 @@ def run_investigation(
             raise ValueError(f"unknown experiment(s): {unknown}; choose from {list(by_name)}")
         experiments = [by_name[name] for name in only]
 
-    copy_uri = generate_reference_dataset(scale, prefix_root, dry_run=dry_run)
+    # The copy source is only read by copy probes; skip its (real, costly)
+    # generation when the selection is within-run probes alone.
+    if any(experiment.needs_copy_source for experiment in experiments):
+        copy_uri = generate_reference_dataset(scale, prefix_root, dry_run=dry_run)
+    else:
+        copy_uri = reference_copy_uri(prefix_root=prefix_root)
     for experiment in experiments:
         if launcher == "local":
             _launch_local(experiment, copy_uri, prefix_root, dry_run=dry_run, count=count)
@@ -430,8 +443,8 @@ def run_investigation(
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     """Parse the orchestrator CLI arguments.
 
-    :param argv: Argument list (defaults to ``sys.argv[1:]``).
-    :returns: Parsed namespace.
+    :param argv: Argument vector; ``None`` falls back to ``sys.argv[1:]``.
+    :returns: Flags for ``run_investigation`` — launcher, scale, only, prefix_root, count, dry_run.
     """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -479,7 +492,7 @@ def main(argv: list[str] | None = None) -> None:
         scale=SMOKE if args.scale == "smoke" else FULL,
         launcher=args.launcher,
         prefix_root=args.prefix_root,
-        only=args.only.split(",") if args.only else None,
+        only=[name.strip() for name in args.only.split(",")] if args.only else None,
         dry_run=args.dry_run,
         count=args.count,
     )
