@@ -252,11 +252,11 @@ def test_hook_lib_finds_codex_marketplace_skill_path(tmp_path: Path) -> None:
     skill_dir.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text("---\nname: simplify\n---\n")
 
-    command = f"cd {_REPO_ROOT}; source agent/hooks/_lib.sh; HOME={tmp_path} has_skill simplify"
-
     result = subprocess.run(  # noqa: S603
-        ["bash", "-c", command],  # noqa: S607 - bash is required for sourcing hooks
+        ["bash", "-c", "source agent/hooks/_lib.sh; has_skill simplify"],  # noqa: S607 - bash is required for sourcing hooks
         capture_output=True,
+        cwd=_REPO_ROOT,
+        env={**os.environ, "HOME": str(tmp_path)},
         text=True,
         check=False,
     )
