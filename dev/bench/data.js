@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780792560039,
+  "lastUpdate": 1780792562344,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -10903,6 +10903,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 23.527777740399994,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f17385333363c70f623179d140415c1efa8f3c5d",
+          "message": "feat(data-pipeline): copy_dataset_root_uri accepts file:// and r2:// (#1548)\n\n* feat(data-pipeline): copy_dataset_root_uri accepts file:// and r2://\n\nRename the dataset-copy source field `copy_dataset_root` to\n`copy_dataset_root_uri` and widen it from a worker-local directory to a\nroot URI (bare path, `file://`, or `r2://`). An `r2://` source shard is\ndownloaded to a tempfile per shard at copy time, so the source no longer\nhas to be synced locally before a copy run. This is the generate-side\nsibling of the finalize change in #1542 (run-prefix URIs end to end).\n\nThe launch-time preflight (`_validate_copy_source`) now loads the\nsource `input_spec.json` through `load_spec_from_uri`, so an `r2://`\nsource spec is validated without a local sync.\n\nBack-compat: the `mode=\"before\"` shim promotes both pre-rename shapes to\n`copy_dataset_root_uri` — the flat `copy_dataset_root` and the older\nnested `datasetsrc: {copy_dataset_root: …}` — and `from_hydra_cfg`\nrejects either stale Hydra key with a migration pointer.\n\n* internal-fix(data-pipeline): surface rclone failures distinctly in copy preflight\n\nAddress review feedback on PR #1548.\n\n- generate_dataset._validate_copy_source: split the source-spec load except\n  into a FileNotFoundError arm (genuinely-missing spec -> \"sync the spec\") and\n  a subprocess.CalledProcessError arm (r2:// rclone fetch failure -> names the\n  failing command + exit code, points at auth/network/config). Conflating them\n  misdirected operators on an object-store access fault (Copilot; code-health;\n  ml-pipeline). Reuse spec_io.load_spec_from_root for the root->input_spec.json\n  join instead of re-implementing it (code-health DRY).\n- r2_io.download_to_path: add -vv/--contimeout=30s/--timeout=300s/--retries=3 to\n  match the sibling upload/dir helpers, so the per-shard r2:// copy-source fetch\n  on the renderer hot path retries a transient blip instead of failing the\n  render outright (synth-setter; ml-test).\n\nTests:\n- TestValidateCopySource: rename _raises_with_path -> _raises_with_root_uri and\n  assert on the root URI; add an r2:// case stubbing rclone to exit non-zero,\n  asserting the distinct object-store-access ValueError and chained cause.\n- TestDownloadToPath: pin the rclone reliability-flag set (argv assertion).\n- TestLocalizedUri: assert the r2 tempfile is removed when the with-body raises,\n  and that a malformed file:// host is rejected with ValueError.\n\nDeferred (justified inline): migrating the r2 tests to the fake_r2_remote\nfixture, and an existence check inside localized_uri for bare/file:// paths.\n\n* internal-fix(data-pipeline): dedupe URI join, name output_format/malformed-spec mismatches\n\nBuilds on the preflight error-handling split in 6f49f70e:\n\n- Extract `spec_io.join_uri(root, name)` to centralize trailing-slash\n  normalization; route `load_spec_from_root` and the per-shard copy-source\n  fetch (`generate_vst_dataset`) through it so both compose root + basename\n  identically (4 reviewers flagged the duplicated `rstrip('/')` idiom).\n- `_validate_copy_source` adds a `ValidationError` arm so a malformed/stale\n  source `input_spec.json` reports clearly instead of leaking a raw pydantic\n  error (ml-pipeline).\n- `validate_copy_source` names an `output_format` mismatch directly rather than\n  only surfacing the derived `.tar` vs `.h5` shard-filename diff (ml-pipeline).\n- Tighten `fixed_params_from_dataset(source_shard)` to `Path` — the only caller\n  is `localized_uri`, which always yields a `Path` (python-style).\n\nTests: `join_uri` trailing-slash normalization, a malformed-spec preflight\narm, a direct output_format mismatch, and an assertion that the r2 download\ntargets the joined URI.",
+          "timestamp": "2026-06-06T19:57:19-04:00",
+          "tree_id": "7b646cfdb7a38eef747649d778b4aa43a86ae15b",
+          "url": "https://github.com/tinaudio/synth-setter/commit/f17385333363c70f623179d140415c1efa8f3c5d"
+        },
+        "date": 1780792561705,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 3.948101043701172,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 4.323093742132187,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.027329860255122185,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.06685853004455566,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 2.5574636459350586,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 19.2271338517,
             "unit": "seconds"
           }
         ]
