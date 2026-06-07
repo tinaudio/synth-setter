@@ -1,7 +1,8 @@
-"""Offline structural assertions for the operator-facing ``sweeps/*.yaml``.
+"""Offline structural assertions for the operator-facing sweeps covered below.
 
-Pins each sweep YAML's ``command:`` shape and parameter grid so the
-contract that ``wandb agent`` executes (subprocess launch via
+Each test pins one ``sweeps/*.yaml`` file's ``command:`` shape and
+parameter grid (this is a curated set, not every file under ``sweeps/``)
+so the contract that ``wandb agent`` executes (subprocess launch via
 ``${interpreter} ${program} ... ${args_no_hyphens}``) cannot drift
 silently. Complements any live-backend sweep e2e by catching shape
 breakage without touching the W&B API.
