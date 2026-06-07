@@ -39,8 +39,7 @@ pytestmark = [
     pytest.mark.slow,
 ]
 
-# The smoke copy-source partitions into one shard per split; shard 0 is the
-# first train shard, present under both the source and every copy run root.
+# shard-000000 is the first train shard, present under both the source and copy run roots.
 _FIRST_SHARD = "shard-000000.h5"
 
 

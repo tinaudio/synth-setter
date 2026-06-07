@@ -35,8 +35,7 @@ from synth_setter.pipeline.schemas.prefix import DEFAULT_R2_PREFIX_ROOT, make_r2
 ENTITY = "tinaudio"
 PROJECT = "synth-setter"
 BUCKET = "intermediate-data"
-# wandb's ``program:`` field is a repo-relative path (the agent runs it from the
-# repo root); the local launcher uses the import path so it does not depend on cwd.
+# wandb's ``program:`` field is repo-relative; the local launcher imports by module path.
 PROGRAM = "src/synth_setter/cli/generate_dataset.py"
 _GENERATE_MODULE = "synth_setter.cli.generate_dataset"
 
@@ -84,8 +83,7 @@ class Scale:
     reuse_depths: tuple[int, ...]
 
 
-# Full #489 run: reuse depths span the junk onset (~12 reuses, #706); 80 is a
-# multiple of every depth so each cell splits into whole shards.
+# Full #489 run: reuse depths straddle the junk onset (~12 reuses, #706).
 FULL = Scale(sizes=(40, 40, 40), samples_per_shard=20, reuse_depths=(4, 20, 40, 80))
 # Smallest run that still exercises generate -> copy -> oracle for tests.
 SMOKE = Scale(sizes=(2, 2, 2), samples_per_shard=2, reuse_depths=(1, 2))
