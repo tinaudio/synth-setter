@@ -1,0 +1,19 @@
+# @package _global_
+
+# Reference surge_xt patches for the #489 paired-copy sweeps. Fixed task_name + run_id give a stable
+# copy_dataset_root_uri; param_spec_name / samples_per_shard / train_val_test_sizes are the
+# copy-preflight match set the sweeps must echo exactly (see #489).
+defaults:
+  - /experiment/generate_dataset/smoke-shard@_global_
+  - _self_
+
+task_name: ref-surge-xt-489
+run_id: paired-ref-v1
+
+# 2 shards per split (size / samples_per_shard).
+train_val_test_sizes: [40, 40, 40]
+
+render:
+  param_spec_name: surge_xt
+  preset_path: presets/surge-base.vstpreset
+  samples_per_shard: 20

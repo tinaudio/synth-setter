@@ -41,6 +41,8 @@ DATASET_EXPERIMENTS: dict[str, str] = {
     "generate_dataset/surge-simple-480k-10k": "surge-simple-480k-10k",
     "generate_dataset/smoke-shard-with-finalize": "smoke-shard",
     "generate_dataset/smoke-shard-with-oracle-eval": "smoke-shard",
+    "generate_dataset/reference-surge-xt-paired": "ref-surge-xt-489",
+    "generate_dataset/copy-paired-surge-xt": "copy-paired-surge-xt",
 }
 
 
@@ -81,3 +83,32 @@ def test_experiment_yaml_json_round_trips(experiment: str) -> None:
     spec = _compose_dataset_spec(experiment)
     restored = DatasetSpec.model_validate_json(spec.model_dump_json())
     assert restored == spec
+
+
+def test_reference_surge_xt_paired_pins_deterministic_uri_fields() -> None:
+    """The paired-copy reference pins the fixed task_name + run_id that make its URI stable.
+
+    The #489 copy sweeps pin that URI; drift on task_name/run_id moves the dataset out from under
+    them. param_spec_name / samples_per_shard / train_val_test_sizes are the copy-preflight match
+    set, checked end-to-end by ``test_copy_base_matches_reference_for_copy_preflight``.
+    """
+    spec = _compose_dataset_spec("generate_dataset/reference-surge-xt-paired")
+    assert spec.task_name == "ref-surge-xt-489"
+    assert spec.run_id == "paired-ref-v1"
+    assert spec.render.param_spec_name == "surge_xt"
+    assert spec.render.samples_per_shard == 20
+    assert spec.train_val_test_sizes == (40, 40, 40)
+
+
+def test_copy_base_matches_reference_for_copy_preflight() -> None:
+    """The copy base passes ``validate_copy_source`` against the reference — the real preflight.
+
+    A paired copy replays the reference's patches only if this check accepts the pair, so drift on
+    the match set (param_spec_name / samples_per_shard / train_val_test_sizes / output_format) in
+    either config raises here exactly as it would abort a real copy run. Also pins the gate-off
+    sentinel so a tidy-up back to the inherited default can't silently re-arm the loudness gate.
+    """
+    reference = _compose_dataset_spec("generate_dataset/reference-surge-xt-paired")
+    copy = _compose_dataset_spec("generate_dataset/copy-paired-surge-xt")
+    copy.validate_copy_source(reference)  # raises ValueError on any match-set mismatch
+    assert copy.render.min_loudness == -1000.0

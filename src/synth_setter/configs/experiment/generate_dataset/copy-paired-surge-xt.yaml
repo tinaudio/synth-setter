@@ -1,0 +1,20 @@
+# @package _global_
+
+# Shared base for the #489 paired-copy sweeps: pins the copy-preflight match set to
+# reference-surge-xt-paired.yaml so a copy replays its exact patches. Each sweep adds
+# copy_dataset_root_uri and grids one render knob (see #489).
+defaults:
+  - /experiment/generate_dataset/smoke-shard-with-oracle-eval@_global_
+  - _self_
+
+task_name: copy-paired-surge-xt
+
+train_val_test_sizes: [40, 40, 40]
+
+render:
+  param_spec_name: surge_xt
+  preset_path: presets/surge-base.vstpreset
+  samples_per_shard: 20
+  # Gate off: copy can't resample a sub-floor re-render, it raises (#724); -1000.0 lets junk/quiet
+  # renders reach the oracle to be measured. Only true silence (-inf) trips this floor.
+  min_loudness: -1000.0
