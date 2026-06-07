@@ -51,6 +51,11 @@ REFERENCE_RUN_ID = "paired-ref-v1"
 # renders reach the oracle while only true silence (-inf) trips the floor.
 COPY_MIN_LOUDNESS = -1000.0
 
+# Fresh-param experiments occasionally sample a silent (-inf) patch, which is
+# skipped regardless of the floor; retries resample past it. Copy probes replay
+# vetted params and can't resample, so they keep the generate default of 0.
+MAX_RETRIES = 10
+
 _GENERATE_EXPERIMENT = "generate_dataset/smoke-shard-with-oracle-eval"
 # Source needs raw param shards only (copy reads same-named shards at the run
 # root), so it skips the with-oracle-eval finalize/eval the probes run.
@@ -158,6 +163,7 @@ def reference_overrides(scale: Scale, prefix_root: str = DEFAULT_R2_PREFIX_ROOT)
         # The source only donates params for copy replay, so audio quality is
         # irrelevant; accept any non-silent render rather than fail the quiet floor.
         f"render.min_loudness={COPY_MIN_LOUDNESS}",
+        f"render.max_retries={MAX_RETRIES}",
     ]
 
 
@@ -204,6 +210,7 @@ def build_experiments(scale: Scale) -> list[Experiment]:
                 "render.param_sample_cadence=shard",
                 _sizes_override(scale.sizes),
                 f"render.samples_per_shard={scale.samples_per_shard}",
+                f"render.max_retries={MAX_RETRIES}",
             ),
             grid={
                 "render.plugin_reload_cadence": ["once", "render"],
@@ -221,6 +228,7 @@ def build_experiments(scale: Scale) -> list[Experiment]:
                 "render.plugin_reload_cadence=once",
                 "render.gui_toggle_cadence=never",
                 _sizes_override((reuse_size, reuse_size, reuse_size)),
+                f"render.max_retries={MAX_RETRIES}",
             ),
             grid={"render.samples_per_shard": list(scale.reuse_depths)},
         ),
