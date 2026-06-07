@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780839044637,
+  "lastUpdate": 1780839046552,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -11046,6 +11046,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 19.2271338517,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6a5b68dadc9b54e991f27fdb0c765f4b02185909",
+          "message": "refactor(testing): centralize Surge XT plugin path in tests/_vst.py (#1552)\n\n* refactor(tests): centralize VST plugin path in tests/_vst.py\n\nThe Surge XT plugin path and its presence flag were re-derived in ~10 test\nmodules, with two inconsistent default-resolution idioms (`get(x, default)`\nvs `get(x) or default`) and a cross-test-module import of a private constant.\n\n- Add `tests/_vst.py` as the single source of truth: `PLUGIN_PATH`\n  (normalized `... or \"plugins/Surge XT.vst3\"`, so an empty override also\n  falls back) and `VST_AVAILABLE`.\n- Point `conftest.py` and every VST test module at the shared constants;\n  drop the redundant per-file `skip_no_vst` skipif marks — the\n  `pytest_collection_modifyitems` hook already auto-skips every\n  `requires_vst` test when the plugin is absent.\n- Update the `cpu-slow.yml` comment that named the removed decorator.\n\nNo behavior change: requires_vst tests still run when the plugin is present\nand skip with the conftest reason when it is not.\n\n* refactor(tests): drop imports orphaned by the skipif removal\n\n`import os` (and `pathlib.Path` in two files) were only consumed by the\nper-file `skip_no_vst` marks removed in the previous commit. Surfaced by the\npre-PR review fan-out; pinned ruff tolerates them but they are dead.\n\n* refactor(tests): make reload_vst teardown order-independent; guard smoke test\n\nAddress Copilot review on #1552:\n\n- reload_vst now captures and restores SYNTH_SETTER_PLUGIN_PATH itself before\n  the teardown reload, instead of relying on monkeypatch — whose finalizer may\n  run after this fixture's (LIFO), which would leave tests._vst resolved\n  against the test's overridden env.\n- Guard test_surge_xt_loads with @skip_no_pedalboard so it skips (like\n  test_pedalboard_importable) rather than ImportError-ing when pedalboard is\n  absent but the plugin path exists.",
+          "timestamp": "2026-06-07T08:54:44-04:00",
+          "tree_id": "3c1547c30b0f273e334a4c9e4339478764bc50fb",
+          "url": "https://github.com/tinaudio/synth-setter/commit/6a5b68dadc9b54e991f27fdb0c765f4b02185909"
+        },
+        "date": 1780839046181,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 3.0268306732177734,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 3.728812158219516,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.03422202169895172,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.054610610008239746,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 1.7686234712600708,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 16.3215335298,
             "unit": "seconds"
           }
         ]
