@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -419,6 +420,28 @@ class TestLocalizedUri:
                 assert local.read_text() == "from-r2"
                 fetched = local
         assert not fetched.exists()
+
+    def test_missing_bare_local_path_raises_filenotfound_naming_uri(self, tmp_path: Path) -> None:
+        """A non-existent bare path fails up front, naming the URI, not later at the reader.
+
+        :param tmp_path: Pytest tmp dir; the target is intentionally never created.
+        """
+        missing = tmp_path / "absent.h5"
+
+        with pytest.raises(FileNotFoundError, match=re.escape(f"no file at '{missing}'")):
+            with spec_io.localized_uri(str(missing)):
+                pass
+
+    def test_missing_file_uri_raises_filenotfound_naming_uri(self, tmp_path: Path) -> None:
+        """A non-existent ``file://`` URI fails up front, naming the URI.
+
+        :param tmp_path: Pytest tmp dir; the target is intentionally never created.
+        """
+        missing = tmp_path / "absent.h5"
+
+        with pytest.raises(FileNotFoundError, match=re.escape(missing.as_uri())):
+            with spec_io.localized_uri(missing.as_uri()):
+                pass
 
     def test_unsupported_scheme_is_rejected_with_value_error(self) -> None:
         """An unsupported scheme (e.g. ``s3://``) raises a clear ``ValueError``."""

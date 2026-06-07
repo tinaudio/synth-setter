@@ -3,7 +3,7 @@
 import json
 import logging
 import os
-import shutil
+import subprocess
 import sys
 import time
 from collections.abc import Iterator
@@ -1685,36 +1685,31 @@ def test_main_copy_dataset_root_uri_feeds_decoded_params_to_writer(
 
 
 def test_main_copy_dataset_root_uri_downloads_r2_source_shard(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_r2_remote: Path
 ) -> None:
     """An ``r2://`` copy root URI downloads the same-named shard before decoding it.
 
-    The rclone subprocess is stubbed to copy the local fixture into the tempfile
-    ``localized_uri`` requests, so the assertion is that the worker resolves an
-    ``r2://`` root to a local shard and feeds its decoded params to the writer.
+    Drives the real ``rclone`` binary through ``fake_r2_remote`` (local-backed
+    ``r2:``) so actual argv/flag construction is exercised; asserts the worker
+    resolves the ``r2://`` root to a local shard and feeds its decoded params to
+    the writer.
 
-    :param tmp_path: Pytest temp dir holding the source fixture and output path.
-    :param monkeypatch: Patches ``sys.argv``, the writer, and rclone.
+    :param tmp_path: Pytest temp dir holding the output path.
+    :param monkeypatch: Patches ``sys.argv`` and the writer.
+    :param fake_r2_remote: Local-backed ``r2:`` remote root (``<root>/<bucket>/<key>``).
     """
     from synth_setter.data.vst import generate_vst_dataset, writers
-    from synth_setter.pipeline import r2_io
 
     spec = param_specs[_SPEC_NAME]
     num_rows = 3
     rows = [spec.encode(*spec.sample()) for _ in range(num_rows)]
-    fixture_shard = tmp_path / "fixture" / "shard-000000.h5"
-    fixture_shard.parent.mkdir()
-    _write_param_array_shard(fixture_shard, np.stack(rows).astype(np.float32))
-    expected_synth, expected_note = fixed_params_from_dataset(fixture_shard, spec)
-
-    rclone_args: dict[str, list[str]] = {}
-
-    def _fake_check_call(args: list[str]) -> None:
-        # rclone copyto <remote> <dest>; serve the fixture as the downloaded shard.
-        rclone_args["args"] = args
-        shutil.copy(fixture_shard, args[-1])
-
-    monkeypatch.setattr(r2_io.subprocess, "check_call", _fake_check_call)
+    # Materialize the source shard where rclone resolves r2://<bucket>/<key>; the
+    # local path and the URI must encode the same key, so derive one from the other.
+    copy_root_uri = "r2://bucket/prefix/task/run"
+    source_shard = fake_r2_remote / copy_root_uri.removeprefix("r2://") / "shard-000000.h5"
+    source_shard.parent.mkdir(parents=True)
+    _write_param_array_shard(source_shard, np.stack(rows).astype(np.float32))
+    expected_synth, expected_note = fixed_params_from_dataset(source_shard, spec)
 
     captured: dict[str, object] = {}
 
@@ -1730,20 +1725,53 @@ def test_main_copy_dataset_root_uri_downloads_r2_source_shard(
 
     monkeypatch.setattr(writers, "make_hdf5_dataset", _fake_make_hdf5_dataset)
 
-    out = tmp_path / "shard-000000.h5"
+    out = tmp_path / "out" / "shard-000000.h5"
     argv = ["generate_vst_dataset", str(out)]
     for key, value in _render_cfg(num_rows).model_dump().items():
         argv += [f"--{key}", str(value)]
-    argv += ["--copy_dataset_root_uri", "r2://bucket/prefix/task/run"]
+    argv += ["--copy_dataset_root_uri", copy_root_uri]
     monkeypatch.setattr(sys, "argv", argv)
 
     generate_vst_dataset.main()
 
-    # rclone must target the shard joined under the root (basename preserved); r2_io
-    # rewrites the r2:// URI to rclone's r2: remote syntax.
-    assert "r2:bucket/prefix/task/run/shard-000000.h5" in rclone_args["args"]
     assert captured["fixed_synth_params_list"] == expected_synth
     assert captured["fixed_note_params_list"] == expected_note
+
+
+def test_main_copy_dataset_root_uri_propagates_r2_fetch_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-zero rclone exit fetching the ``r2://`` source shard surfaces out of main().
+
+    The per-shard fetch sits on the renderer hot path; a transient object-store
+    failure must propagate (fail-fast) rather than be swallowed into a silent
+    re-render with no copied params.
+
+    :param tmp_path: Pytest temp dir for the would-be output path.
+    :param monkeypatch: Patches ``sys.argv`` and rclone.
+    """
+    from synth_setter.data.vst import generate_vst_dataset, writers
+    from synth_setter.pipeline import r2_io
+
+    def _fail_rclone(args: list[str]) -> NoReturn:
+        raise subprocess.CalledProcessError(7, args)
+
+    monkeypatch.setattr(r2_io.subprocess, "check_call", _fail_rclone)
+
+    def _writer_must_not_run(*_args: object, **_kwargs: object) -> NoReturn:
+        raise AssertionError("writer ran despite a failed copy-source fetch")
+
+    monkeypatch.setattr(writers, "make_hdf5_dataset", _writer_must_not_run)
+
+    out = tmp_path / "shard-000000.h5"
+    argv = ["generate_vst_dataset", str(out)]
+    for key, value in _render_cfg(2).model_dump().items():
+        argv += [f"--{key}", str(value)]
+    argv += ["--copy_dataset_root_uri", "r2://bucket/prefix/task/run"]
+    monkeypatch.setattr(sys, "argv", argv)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        generate_vst_dataset.main()
 
 
 def test_main_copy_dataset_root_uri_rejects_wds_output(

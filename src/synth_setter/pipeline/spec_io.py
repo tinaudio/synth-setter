@@ -90,13 +90,20 @@ def localized_uri(uri: str) -> Iterator[Path]:  # noqa: DOC502
 
     :param uri: Local filesystem path, ``file://`` URI, or ``r2://`` URI.
     :yields Path: A local path readable for the duration of the context.
+    :raises FileNotFoundError: a bare or ``file://`` ``uri`` resolves to a path
+        that does not exist (the ``r2://`` branch already fails in the fetch).
     :raises ValueError: ``uri`` carries a scheme other than ``file://`` or
         ``r2://``, or is a malformed ``file://`` URI (propagated from
         :func:`~synth_setter.pipeline.file_uri.file_uri_to_path`).
     """
     scheme = urlparse(uri).scheme
     if scheme in _LOCAL_FILESYSTEM_SCHEMES:
-        yield file_uri_to_path(uri) if scheme == "file" else Path(uri)
+        local = file_uri_to_path(uri) if scheme == "file" else Path(uri)
+        # Fail here, naming the URI, rather than deeper in an opaque h5py /
+        # read_text error that has lost which source went missing.
+        if not local.exists():
+            raise FileNotFoundError(f"no file at {uri!r} (resolved to {local})")
+        yield local
     elif scheme in _REMOTE_OBJECT_SCHEMES:
         with downloaded_to_tempfile(uri) as fetched:
             yield fetched
