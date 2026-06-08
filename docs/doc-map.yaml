@@ -246,6 +246,8 @@ docs:
       - pattern: "src/synth_setter/configs/logger/many_loggers.yaml"
         covers: "Default logger compose — referenced in §4c for enable/disable workflow"
         scope: "wandb-config"
+      - pattern: ".claude/settings.json"
+        covers: "Claude Code harness config — enabledPlugins + extraKnownMarketplaces (tinaudio-skills, openai-codex), documented in §4f"
 
   # ── GitHub taxonomy ─────────────────────────────────────────────
   - doc: docs/design/github-taxonomy.md

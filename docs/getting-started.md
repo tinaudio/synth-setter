@@ -407,6 +407,32 @@ If you are exercising the OCI target:
    sky check oci
    ```
 
+### 4f. Codex plugin (Optional -- Codex reviews and task delegation)
+
+The [`openai/codex-plugin-cc`](https://github.com/openai/codex-plugin-cc)
+plugin is enabled by default in `.claude/settings.json`, so Claude Code
+installs it on first launch. It adds review and delegation commands --
+`/codex:review`, `/codex:adversarial-review`, `/codex:rescue`,
+`/codex:status`/`result`, and `/codex:cancel` -- that run code reviews or hand
+tasks to Codex without leaving Claude Code. **You do not need it for local
+development, training, or the data pipeline.**
+
+> **Data egress.** Running any `/codex:*` command sends the relevant code and
+> context to OpenAI through the Codex CLI, exactly as invoking `codex` directly
+> would. Do not use it on code you cannot share with OpenAI.
+
+To use it:
+
+1. Ensure the `@openai/codex` CLI is on PATH (already shipped in the
+   devcontainer -- see [docker.md](reference/docker.md)) and that you have a
+   ChatGPT subscription or an `OPENAI_API_KEY`. `OPENAI_API_KEY` is a secret:
+   keep it in your `.env` alongside the other credentials (section 2e) and
+   never commit it.
+
+2. Run `/codex:setup` once to verify the CLI, authenticate, and (optionally)
+   enable the pre-response review gate. Run `/reload-plugins` first if the
+   commands do not appear.
+
 ______________________________________________________________________
 
 ## 5. Hydra Configuration System
