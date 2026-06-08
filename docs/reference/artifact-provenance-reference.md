@@ -96,7 +96,7 @@ ______________________________________________________________________
 The `${wandb:<ref>}` OmegaConf resolver (`utils/utils.py`, registered in `register_resolvers`) turns a model-artifact ref into a local checkpoint path. To resume, point `ckpt_path` at a `${wandb:…}` interpolation — the bare `wandb:…` form is passed through literally and never resolved:
 
 ```yaml
-ckpt_path: ${wandb:model-flow-simple:best}
+ckpt_path: ${wandb:model-flow-simple:latest}
 ```
 
 It downloads the artifact once under `$PROJECT_ROOT/.cache/checkpoints/<key>` and reuses it on later resolutions; a cache dir holding no `.ckpt` is treated as a partial download and refetched. The cache key (`_cache_key`) is a path-safe slug plus a hash, so a hostile ref (`..`, `:`) cannot escape the cache root and distinct refs never collide. `wandb` is imported lazily — importing the module never requires it.
