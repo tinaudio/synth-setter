@@ -15,6 +15,7 @@ from typing import cast
 from unittest import mock
 
 import h5py
+import hdf5plugin  # noqa: F401  # side-effect import: registers Blosc2 so h5py can read the clap field
 import numpy as np
 import pytest
 

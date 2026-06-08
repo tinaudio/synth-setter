@@ -337,7 +337,7 @@ class TestSurgeXTDatasetFakeMode:
         assert _unwrap(item["noise"]).shape == _unwrap(item["params"]).shape
 
     def test_fake_mode_returns_full_key_set(self) -> None:
-        """The returned dict always exposes all five keys (some may be ``None``)."""
+        """The returned dict always exposes all six keys (some may be ``None``)."""
         dataset = SurgeXTDataset("ignored", batch_size=2, fake=True)
         item = dataset[0]
         assert set(item.keys()) == set(_ALL_TENSOR_KEYS)
@@ -739,7 +739,7 @@ class TestSurgeXTDatasetH5Mode:
         assert torch.equal(_unwrap(item["m2l"])[:, 0, 0], param_ids)
 
     def test_returned_dict_always_exposes_full_key_set(self, single_h5: Path) -> None:
-        """Every ``__getitem__`` return dict exposes the same five-key contract.
+        """Every ``__getitem__`` return dict exposes the same six-key contract.
 
         :param single_h5: Fixture-provided single-shard HDF5 path.
         """

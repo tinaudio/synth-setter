@@ -22,6 +22,7 @@ from typing import Any, cast
 
 import click
 import h5py
+import hdf5plugin
 import numpy as np
 import structlog
 
@@ -109,7 +110,14 @@ def add_clap_embeddings(
                     raise ValueError(
                         f"CLAP encoder produced width {width}, expected {expected_dim}"
                     )
-                out_ds = f.create_dataset(field, shape=(num_rows, width), dtype=np.float32)
+                # Blosc2 to match the core datasets' on-disk compression. Blosc2 is
+                # hdf5plugin's documented public API but absent from its stub __all__.
+                out_ds = f.create_dataset(
+                    field,
+                    shape=(num_rows, width),
+                    dtype=np.float32,
+                    compression=hdf5plugin.Blosc2(),  # pyright: ignore[reportPrivateImportUsage]
+                )
             out_ds[start:end] = embeddings
         if out_ds is not None:
             out_ds.attrs[COMPLETE_ATTR] = True
