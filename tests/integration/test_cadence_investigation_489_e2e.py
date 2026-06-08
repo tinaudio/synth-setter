@@ -123,16 +123,20 @@ def test_smoke_investigation_local_replays_source_params_into_copy_probe(
 
 
 def _shard_count(prefix_uri: str) -> int:
-    """Count ``.h5`` shard objects under an R2 prefix via ``rclone``.
+    """Count ``shard-*.h5`` shard objects under an R2 prefix via ``rclone``.
+
+    Filtered to ``shard-*.h5`` so finalize's split files (``train.h5`` /
+    ``val.h5`` / ``test.h5``, also ``.h5`` under the same prefix) are excluded
+    and the count reflects shard uploads alone.
 
     :param prefix_uri: ``r2://`` prefix to list recursively.
-    :returns: The number of ``.h5`` objects found under the prefix.
+    :returns: The number of ``shard-*.h5`` objects found under the prefix.
     """
     rclone_path = prefix_uri.replace("r2://", "r2:", 1)
     # check=True so an auth/network failure raises instead of being misreported
     # as zero shards (empty stdout) by the callers' count assertions.
     result = subprocess.run(  # noqa: S603 — args are test-controlled literals
-        ["rclone", "lsf", "-R", "--include", "*.h5", rclone_path],  # noqa: S607
+        ["rclone", "lsf", "-R", "--include", "shard-*.h5", rclone_path],  # noqa: S607
         capture_output=True,
         text=True,
         check=True,
