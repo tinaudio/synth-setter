@@ -1,6 +1,142 @@
 # CHANGELOG
 
 
+## v8.31.0 (2026-06-08)
+
+### Automation
+
+- Warn on unmaterialized .claude symlinks
+  ([#1563](https://github.com/tinaudio/synth-setter/pull/1563),
+  [`4126d20`](https://github.com/tinaudio/synth-setter/commit/4126d2000b657ed0a7a42e13043d5d535de46229))
+
+* internal-fix(ci-automation): warn at SessionStart when .claude symlinks don't materialize
+
+PR #1558 made agent/ the source of truth by replacing the .claude/{hooks,skills} shim directories
+  with directory symlinks. Current Claude Code follows those symlinks, so discovery works on the
+  Linux/macOS targets — no functional regression. But a checkout that doesn't materialize symlinks
+  (core.symlinks=false, Windows, zip export) leaves them as plain files, and Claude then silently
+  discovers zero project review skills with no diagnostic; the old shim files degraded gracefully
+  here.
+
+Add a fail-closed guard to the SessionStart banner: warn loudly (never block, exit 0) when
+  .claude/skills or .claude/hooks exist but did not resolve to a directory, printing the exact
+  core.symlinks remediation. agent/ stays canonical and Codex marketplace discovery is untouched.
+  Cover the broken (plain-file) and healthy (resolved symlink-to-dir) cases in agent/hooks/test.sh.
+
+Refs #1558. Part of #219.
+
+* docs(ci-automation): note the banner's symlink-materialization warning in AGENTS.md
+
+Advertise the new SessionStart behavior so a user on a checkout that didn't materialize the .claude
+  symlinks knows the banner is the source of the warning.
+
+* internal-fix(ci-automation): also warn on a dangling .claude symlink
+
+-e is false for a broken symlink, so a .claude/{skills,hooks} link whose target is missing slipped
+  past the [[ -e && ! -d ]] guard even though discovery is still broken. Add -L so the guard fires
+  on any entry that exists as a path but doesn't resolve to a directory (plain file or dangling
+  link). Cover the dangling case in agent/hooks/test.sh.
+
+Addresses Copilot review feedback on #1563. Refs #1558. Part of #219.
+
+- Wire Codex agent skill discovery ([#1558](https://github.com/tinaudio/synth-setter/pull/1558),
+  [`d8db9aa`](https://github.com/tinaudio/synth-setter/commit/d8db9aaef798e37655c02fe8fc78f724ee60a505))
+
+* internal-fix(ci-automation): wire Codex agent skill discovery
+
+* internal-fix(ci-automation): clean Codex skill path test env
+
+### Chores
+
+- **data-pipeline**: Harden copy-source localization + r2 copy tests
+  ([#1554](https://github.com/tinaudio/synth-setter/pull/1554),
+  [`09f8cff`](https://github.com/tinaudio/synth-setter/commit/09f8cffbbc2e95e5f020ee59672038a54eb541ca))
+
+* chore(data-pipeline): harden copy-source localization + r2 copy tests
+
+Closes deferred review WARNs from #1548 that were not already handled in that PR's own follow-up
+  commits.
+
+- spec_io.localized_uri: bare / file:// paths now fail up front with a FileNotFoundError naming the
+  URI, instead of surfacing deep in an opaque h5py / read_text error that has lost which copy source
+  went missing. The FileNotFoundError type is preserved, so _validate_copy_source still maps a
+  missing source spec to its "sync the source spec" message. -
+  test_main_copy_dataset_root_uri_downloads_r2_source_shard: drive the real rclone binary through
+  the fake_r2_remote fixture rather than stubbing subprocess.check_call, so the test exercises
+  actual argv/flag construction and no longer couples to args[-1] positional ordering. - Add
+  test_main_copy_dataset_root_uri_propagates_r2_fetch_failure: a non-zero rclone exit on the
+  per-shard r2:// fetch must propagate (fail-fast) out of main() rather than be swallowed
+  mid-render.
+
+uv.lock: reconcile the editable synth-setter version to 8.30.0 (main's release [skip ci] bumped
+  pyproject but not the lock).
+
+Refs #1549 Refs #1548
+
+* Update test_generate_vst_dataset.py
+
+### Features
+
+- **eval**: One-command #489 cadence-investigation orchestrator
+  ([#1559](https://github.com/tinaudio/synth-setter/pull/1559),
+  [`cf7fb6a`](https://github.com/tinaudio/synth-setter/commit/cf7fb6aa04172f57cf12bf49915801dfca91db0c))
+
+### Internal-Feat
+
+- **ci-automation**: Enable OpenAI Codex plugin for Claude Code
+  ([#1562](https://github.com/tinaudio/synth-setter/pull/1562),
+  [`e965162`](https://github.com/tinaudio/synth-setter/commit/e96516235cbd409d086119810bf44da8064aa63e))
+
+Enable openai/codex-plugin-cc (marketplace openai-codex, plugin codex) by default in
+  .claude/settings.json so every contributor's Claude Code session exposes the /codex:* commands
+  (review, adversarial-review, rescue, status/result, cancel) for delegating reviews and tasks to
+  Codex. Mirrors the existing tinaudio-skills marketplace wiring.
+
+Document setup, the OpenAI auth / codex-CLI prerequisites, the data-egress note, and OPENAI_API_KEY
+  secret handling in docs/getting-started.md section 4f, and register .claude/settings.json as a
+  doc-map source for that section.
+
+Refs #1561
+
+### Refactoring
+
+- **testing**: Centralize Surge XT plugin path in tests/_vst.py
+  ([#1552](https://github.com/tinaudio/synth-setter/pull/1552),
+  [`6a5b68d`](https://github.com/tinaudio/synth-setter/commit/6a5b68dadc9b54e991f27fdb0c765f4b02185909))
+
+* refactor(tests): centralize VST plugin path in tests/_vst.py
+
+The Surge XT plugin path and its presence flag were re-derived in ~10 test modules, with two
+  inconsistent default-resolution idioms (`get(x, default)` vs `get(x) or default`) and a
+  cross-test-module import of a private constant.
+
+- Add `tests/_vst.py` as the single source of truth: `PLUGIN_PATH` (normalized `... or
+  "plugins/Surge XT.vst3"`, so an empty override also falls back) and `VST_AVAILABLE`. - Point
+  `conftest.py` and every VST test module at the shared constants; drop the redundant per-file
+  `skip_no_vst` skipif marks — the `pytest_collection_modifyitems` hook already auto-skips every
+  `requires_vst` test when the plugin is absent. - Update the `cpu-slow.yml` comment that named the
+  removed decorator.
+
+No behavior change: requires_vst tests still run when the plugin is present and skip with the
+  conftest reason when it is not.
+
+* refactor(tests): drop imports orphaned by the skipif removal
+
+`import os` (and `pathlib.Path` in two files) were only consumed by the per-file `skip_no_vst` marks
+  removed in the previous commit. Surfaced by the pre-PR review fan-out; pinned ruff tolerates them
+  but they are dead.
+
+* refactor(tests): make reload_vst teardown order-independent; guard smoke test
+
+Address Copilot review on #1552:
+
+- reload_vst now captures and restores SYNTH_SETTER_PLUGIN_PATH itself before the teardown reload,
+  instead of relying on monkeypatch — whose finalizer may run after this fixture's (LIFO), which
+  would leave tests._vst resolved against the test's overridden env. - Guard test_surge_xt_loads
+  with @skip_no_pedalboard so it skips (like test_pedalboard_importable) rather than ImportError-ing
+  when pedalboard is absent but the plugin path exists.
+
+
 ## v8.30.0 (2026-06-06)
 
 ### Build System
