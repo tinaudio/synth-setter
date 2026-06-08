@@ -160,6 +160,13 @@ metrics = [
   "POT",
   "einops",
 ]
+# Optional, GPU-only embedding backends. Heavy (pulls a second transformers /
+# torchlibrosa stack) and gated behind a checkpoint download, so kept out of
+# `runtime`; `add_clap` imports laion_clap lazily. Install with
+# `uv sync --group embeddings` on the box that runs the embedder.
+embeddings = [
+  "laion-clap",
+]
 util = [
   "click<8.2",
   "structlog",
