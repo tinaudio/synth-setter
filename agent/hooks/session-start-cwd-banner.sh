@@ -59,6 +59,20 @@ main() {
     # shellcheck disable=SC2016  # backticks are literal markdown-style hint to the agent, not command substitution
     printf '  worktrees: %s active (run `git worktree list` for paths)\n' "$worktree_count"
   fi
+
+  # .claude/{skills,hooks} are committed as symlinks into the canonical agent/
+  # tree; an unmaterialized symlink (core.symlinks=false, Windows, zip export)
+  # is a plain file, so Claude discovers zero project skills. `-d` follows
+  # symlinks: a resolved link passes, only a plain/dangling file warns. Advisory.
+  local repo_top asset asset_path
+  repo_top=$(git rev-parse --show-toplevel 2>/dev/null || true)
+  [[ -n "$repo_top" ]] || return 0
+  for asset in skills hooks; do
+    asset_path="$repo_top/.claude/$asset"
+    [[ -e "$asset_path" && ! -d "$asset_path" ]] || continue
+    printf '\n  WARNING: .claude/%s did not materialize as a directory — Claude skill/hook discovery is BROKEN.\n' "$asset"
+    printf "    Fix: git -C '%s' config core.symlinks true && git -C '%s' checkout -- .claude\n" "$repo_top" "$repo_top"
+  done
 }
 
 main "$@"

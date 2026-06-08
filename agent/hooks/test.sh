@@ -1440,6 +1440,43 @@ T_session_start_banner_remediation_path_is_absolute_from_subdir() {
 }
 it "session-start-banner: remediation path anchored to primary_root (works from any subdir)" T_session_start_banner_remediation_path_is_absolute_from_subdir
 
+T_session_start_banner_warns_when_claude_skills_symlink_unmaterialized() {
+  # A checkout that didn't materialize symlinks (core.symlinks=false, Windows,
+  # zip export) turns .claude/skills into a plain text file holding the link
+  # target, so Claude discovers zero project skills. The banner must surface it.
+  local out
+  mkdir -p "$SANDBOX/.claude"
+  printf '../agent/skills' > "$SANDBOX/.claude/skills"
+  out=$(bash agent/hooks/session-start-cwd-banner.sh </dev/null 2>&1; echo "EXIT:$?")
+  rm -rf "$SANDBOX/.claude"
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "guard must never block (expected EXIT:0); got: $out"; return 1; }
+  [[ "$out" == *".claude/skills"* && "$out" == *"did not materialize"* ]] || {
+    echo "banner should warn that .claude/skills did not materialize; got: $out"
+    return 1
+  }
+  [[ "$out" == *"core.symlinks"* ]] || {
+    echo "warning should include the core.symlinks remediation; got: $out"
+    return 1
+  }
+}
+it "session-start-banner: .claude/skills is a plain file (symlink unmaterialized) → loud warning + core.symlinks fix, exit 0" T_session_start_banner_warns_when_claude_skills_symlink_unmaterialized
+
+T_session_start_banner_silent_when_claude_assets_materialized() {
+  # A symlink that resolves to a directory is healthy: no materialization warning.
+  local out
+  mkdir -p "$SANDBOX/.claude" "$SANDBOX/agent/skills"
+  ln -sfn ../agent/skills "$SANDBOX/.claude/skills"
+  ln -sfn ../agent/hooks "$SANDBOX/.claude/hooks"
+  out=$(bash agent/hooks/session-start-cwd-banner.sh </dev/null 2>&1; echo "EXIT:$?")
+  rm -rf "$SANDBOX/.claude" "$SANDBOX/agent/skills"
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0, got: $out"; return 1; }
+  [[ "$out" != *"did not materialize"* ]] || {
+    echo "a symlink that resolves to a directory must not warn; got: $out"
+    return 1
+  }
+}
+it "session-start-banner: .claude/{skills,hooks} resolve to directories → no materialization warning" T_session_start_banner_silent_when_claude_assets_materialized
+
 # ===========================================================================
 # pr-readiness-stop.sh — Stop-hook gate enforcement + no-op contexts
 # ===========================================================================
