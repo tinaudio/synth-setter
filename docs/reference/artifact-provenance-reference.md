@@ -71,6 +71,8 @@ eval dataset artifact ─────────┴→ [evaluation run] ←─�
                                   [promote workflow] → GitHub Release
 ```
 
+The data-generation, training, and evaluation edges are landed; the `[promote workflow] → GitHub Release` tail is the spec's target shape — that workflow is not implemented yet ([#1566](https://github.com/tinaudio/synth-setter/issues/1566)).
+
 **Producing an output** — the `_log_*_artifact` helpers iterate the loggers and log on each `WandbLogger`:
 
 ```python
