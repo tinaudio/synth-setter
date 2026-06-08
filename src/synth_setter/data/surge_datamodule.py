@@ -151,8 +151,10 @@ class SurgeXTDataset(torch.utils.data.Dataset):
         param_array = torch.from_numpy(param_array).to(dtype=torch.float32)
         noise = torch.randn_like(param_array)
         if self.ot:
-            noise, param_array, mel_spec, audio = _hungarian_match(
-                noise, param_array, mel_spec, audio
+            # Every conditioning modality must ride the same OT permutation as
+            # params, else embeddings misalign from their parameter rows.
+            noise, param_array, mel_spec, audio, m2l, clap = _hungarian_match(
+                noise, param_array, mel_spec, audio, m2l, clap
             )
 
         return dict(

@@ -602,8 +602,12 @@ class TestSurgeXTDatasetH5Mode:
             _ = dataset[0]
         mock_match.assert_not_called()
 
-    def test_ot_true_calls_hungarian_match_with_all_four_tensors(self, single_h5: Path) -> None:
-        """``ot=True`` routes through ``_hungarian_match(noise, params, mel_spec, audio)``.
+    def test_ot_true_calls_hungarian_match_with_all_six_tensors(self, single_h5: Path) -> None:
+        """``ot=True`` routes every conditioning modality through ``_hungarian_match``.
+
+        All of ``mel_spec``/``audio``/``m2l``/``clap`` must ride the same OT
+        permutation as ``params`` to stay row-aligned, so each is threaded
+        positionally after ``(noise, params)``.
 
         :param single_h5: Fixture-provided single-shard HDF5 path.
         """
@@ -617,15 +621,17 @@ class TestSurgeXTDatasetH5Mode:
                 ot=True,
                 use_saved_mean_and_variance=False,
                 read_audio=True,
+                read_m2l=True,
+                read_clap=True,
             )
             _ = dataset[0]
         mock_match.assert_called_once()
         positional = mock_match.call_args.args
-        assert len(positional) == 4
-        # Positional contract: (noise, params, mel_spec, audio). Pin each slot's
-        # shape so a regression that swaps positions is caught — bare arity does
-        # not distinguish `(noise, params, audio, mel_spec)` from the correct order.
-        noise, params, mel_spec, audio = positional
+        assert len(positional) == 6
+        # Positional contract: (noise, params, mel_spec, audio, m2l, clap). Pin
+        # each slot's shape so a regression that swaps positions is caught —
+        # bare arity does not distinguish a reordering from the correct order.
+        noise, params, mel_spec, audio, m2l, clap = positional
         assert isinstance(noise, torch.Tensor) and noise.shape == (2, _NUM_PARAMS)
         assert isinstance(params, torch.Tensor) and params.shape == (2, _NUM_PARAMS)
         assert isinstance(mel_spec, torch.Tensor) and mel_spec.shape == (
@@ -639,6 +645,8 @@ class TestSurgeXTDatasetH5Mode:
             _AUDIO_CHANNELS,
             _AUDIO_SAMPLES,
         )
+        assert isinstance(m2l, torch.Tensor) and m2l.shape == (2, _M2L_DIM_1, _M2L_DIM_2)
+        assert isinstance(clap, torch.Tensor) and clap.shape == (2, _CLAP_DIM)
 
     def test_ot_with_disabled_modalities_passes_none_through(self, single_h5: Path) -> None:
         """``_hungarian_match`` still receives ``None`` placeholders when modalities are off.
@@ -657,16 +665,78 @@ class TestSurgeXTDatasetH5Mode:
                 read_audio=False,
                 read_mel=False,
                 read_m2l=False,
+                read_clap=False,
             )
             item = dataset[0]
         mock_match.assert_called_once()
         positional = mock_match.call_args.args
-        # Positional contract: noise, params, mel_spec, audio — the trailing
-        # two are None when their read flags are off.
+        # Positional contract: noise, params, mel_spec, audio, m2l, clap — the
+        # trailing four are None when their read flags are off.
         assert positional[2] is None
         assert positional[3] is None
+        assert positional[4] is None
+        assert positional[5] is None
         assert item["mel_spec"] is None
         assert item["audio"] is None
+        assert item["m2l"] is None
+        assert item["clap"] is None
+
+    def test_ot_keeps_clap_and_m2l_aligned_with_permuted_params(self, tmp_path: Path) -> None:
+        """OT permutes ``clap``/``m2l`` with ``params`` so conditioning stays row-aligned.
+
+        Writes a shard where row ``i`` carries the same fingerprint ``i`` in
+        ``param_array``, ``clap``, and ``music2latent``. With ``rescale_params``
+        off, ``params`` rows are returned verbatim, so for every output row the
+        ``clap``/``m2l`` fingerprint must equal the ``params`` fingerprint —
+        which only holds if all three rode the identical ``_hungarian_match``
+        permutation. The seed forces a non-identity permutation.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        num_rows = 8
+        h5_path = tmp_path / "train.h5"
+        row_ids = np.arange(num_rows, dtype=np.float32)
+        with h5py.File(h5_path, "w") as f:
+            f.create_dataset(
+                "audio",
+                data=np.zeros((num_rows, _AUDIO_CHANNELS, _AUDIO_SAMPLES), dtype=np.float32),
+            )
+            f.create_dataset(
+                "mel_spec",
+                data=np.zeros(
+                    (num_rows, _MEL_CHANNELS, _MEL_N_MELS, _MEL_N_FRAMES), dtype=np.float32
+                ),
+            )
+            # Same per-row fingerprint across all three so misalignment is detectable.
+            f.create_dataset(
+                "music2latent",
+                data=np.broadcast_to(
+                    row_ids[:, None, None], (num_rows, _M2L_DIM_1, _M2L_DIM_2)
+                ).copy(),
+            )
+            f.create_dataset(
+                "clap", data=np.broadcast_to(row_ids[:, None], (num_rows, _CLAP_DIM)).copy()
+            )
+            f.create_dataset(
+                "param_array",
+                data=np.broadcast_to(row_ids[:, None], (num_rows, _NUM_PARAMS)).copy(),
+            )
+        dataset = SurgeXTDataset(
+            h5_path,
+            batch_size=num_rows,
+            ot=True,
+            use_saved_mean_and_variance=False,
+            rescale_params=False,
+            read_m2l=True,
+            read_clap=True,
+        )
+        torch.manual_seed(0)
+        item = dataset[0]
+        param_ids = _unwrap(item["params"])[:, 0]
+        # A real permutation must have occurred, else the test can't detect misalignment.
+        assert not torch.equal(param_ids, torch.from_numpy(row_ids))
+        assert torch.equal(_unwrap(item["clap"])[:, 0], param_ids)
+        assert torch.equal(_unwrap(item["m2l"])[:, 0, 0], param_ids)
 
     def test_returned_dict_always_exposes_full_key_set(self, single_h5: Path) -> None:
         """Every ``__getitem__`` return dict exposes the same five-key contract.
