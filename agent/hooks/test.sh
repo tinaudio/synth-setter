@@ -1840,6 +1840,61 @@ MAKE_STUB
 it "worktree-post-setup: echo with quoted 'git worktree add' — boundary guard rejects, make not called" T_wt_post_setup_quoted_substring_not_matched
 
 # ===========================================================================
+# _lib.sh has_skill — cross-harness skill discovery (#1561)
+# ===========================================================================
+# `has_skill` resolves a skill across both the Claude and Codex install
+# layouts so the same hooks work under either harness. Each test points HOME
+# at a throwaway tree and runs has_skill in a subshell sourcing _lib.sh; the
+# sandbox carries no `agent/skills/`, so only the HOME-rooted globs can match.
+
+has_skill_in_home() {
+  # Usage: has_skill_in_home <fake-home> <skill-name>
+  # Runs has_skill with HOME overridden; returns its exit code.
+  HOME="$1" bash -c 'source agent/hooks/_lib.sh; has_skill "$1"' _ "$2"
+}
+
+T_has_skill_codex_plugin_manifest_layout() {
+  local home dir
+  home="$TEST_DIR/skill-codex-mp"
+  dir="$home/.codex/plugins/tinaudio-synth-setter-skills/codex/synth-setter-skills/simplify"
+  mkdir -p "$dir"
+  printf -- '---\nname: simplify\n---\n' > "$dir/SKILL.md"
+  has_skill_in_home "$home" simplify || { echo "Codex plugin-manifest skill not resolved"; return 1; }
+}
+it "has_skill: resolves a skill installed via the Codex plugin manifest" T_has_skill_codex_plugin_manifest_layout
+
+T_has_skill_codex_skills_layout() {
+  local home dir
+  home="$TEST_DIR/skill-codex-flat"
+  dir="$home/.codex/skills/simplify"
+  mkdir -p "$dir"
+  printf -- '---\nname: simplify\n---\n' > "$dir/SKILL.md"
+  has_skill_in_home "$home" simplify || { echo "Codex ~/.codex/skills skill not resolved"; return 1; }
+}
+it "has_skill: resolves a skill under ~/.codex/skills/<name>/SKILL.md" T_has_skill_codex_skills_layout
+
+T_has_skill_claude_marketplace_layout() {
+  local home dir
+  home="$TEST_DIR/skill-claude-mp"
+  dir="$home/.claude/plugins/tinaudio-synth-setter-skills/skills/simplify"
+  mkdir -p "$dir"
+  printf -- '---\nname: simplify\n---\n' > "$dir/SKILL.md"
+  has_skill_in_home "$home" simplify || { echo "Claude marketplace skill not resolved"; return 1; }
+}
+it "has_skill: resolves a skill installed via the Claude plugin marketplace" T_has_skill_claude_marketplace_layout
+
+T_has_skill_absent_returns_nonzero() {
+  local home
+  home="$TEST_DIR/skill-empty-home"
+  mkdir -p "$home"
+  # Empty HOME and a sandbox without agent/skills/ — nothing can match.
+  if has_skill_in_home "$home" definitely-not-a-real-skill; then
+    echo "has_skill must return non-zero for an uninstalled skill"; return 1
+  fi
+}
+it "has_skill: unknown skill with no install present → non-zero" T_has_skill_absent_returns_nonzero
+
+# ===========================================================================
 # Run
 # ===========================================================================
 run_tests

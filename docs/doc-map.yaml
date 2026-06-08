@@ -324,6 +324,29 @@ docs:
       - pattern: ".github/workflows/test-local-launcher-roundtrip.yml"
         covers: "Fast PR-tier (~8-10 min) lane for `tests/integration/`: invokes the `synth-setter-generate-dataset` CLI entrypoint (`cli.generate_dataset.main()`, which then calls `generate()` internally) end-to-end against real R2 with the VST renderer subprocess stubbed; no kind, no sky.launch, no dev-snapshot image pull. Gated on same-repo PRs (forks skipped). Unique per-run R2 prefix + best-effort rclone purge teardown. PR #1170; tracks #1164."
 
+  # ── Agent harness parity (Claude + Codex) ───────────────────────
+  - doc: docs/reference/agent-harness-parity.md
+    description: Claude/Codex hook-enforcement divergence, per-hook CI backstops, skill-discovery parity
+    sources:
+      - pattern: "agent/hooks/_lib.sh"
+        covers: "has_skill discovery globs for the Claude marketplace and Codex plugin-manifest layouts"
+      - pattern: "agent/hooks/worktree-guard.sh"
+        covers: "WORKTREE_GUARD_MODE block/warn/off tiering (local-safety, no CI backstop)"
+      - pattern: "agent/hooks/no-baseline-additions.sh"
+        covers: "Pydoclint-baseline-row block; CI runs pydoclint but does not gate on baseline-row growth"
+      - pattern: "agent/hooks/git-commit-trailer-check.sh"
+        covers: "Co-Authored-By / attribution-trailer block; no dedicated CI gate, PR-title gitlint is the residual"
+      - pattern: "agent/hooks/no-yaml-run-comments.sh"
+        covers: "YAML run/setup block-scalar comment block; CI backstop via test-act.yaml + test_workflows_under_act.py"
+      - pattern: "agent/hooks/pre-pr-review-gate.sh"
+        covers: "Pre-PR review-sentinel gate; CI backstop via test.yml + code-quality-pr.yaml + pr-metadata-gate.yaml"
+      - pattern: "agent/hooks/pr-readiness-stop.sh"
+        covers: "Stop-gate on red CI / non-mergeable; CI backstop via branch protection + required checks"
+      - pattern: "tests/claude_hooks/test_skill_discovery_parity.py"
+        covers: "Parity assertion that every agent/skills/* resolves via both the Claude and Codex globs"
+      - pattern: "tests/infra/test_agent_hooks_suite.py"
+        covers: "Runs the full agent/hooks/test.sh bash suite in CI under a simulated Codex skill layout"
+
   # ── macOS VM provisioning (Tart) ────────────────────────────────
   - doc: docs/getting-started.md
     description: macOS VM dev-env path via Tart — prebuilt image or Packer build (§ B.3)

@@ -9,6 +9,23 @@ Python 3.10+, PyTorch Lightning, Hydra, distributed data pipeline on
 SkyPilot-managed compute (RunPod + OCI), stored in Cloudflare R2.
 Architecture: [docs/architecture.md](docs/architecture.md).
 
+## Harnesses (Claude + Codex)
+
+This file is the canonical contract for both Claude Code and the Codex CLI. The
+shared assets live under `agent/` (`hooks/`, `skills/`); `.claude/{hooks,skills}`
+symlink to them, and Codex discovers the same skills through its plugin manifest
+(`~/.codex/plugins/<marketplace>/codex/synth-setter-skills/<name>/SKILL.md`, or
+`~/.codex/skills/<name>/SKILL.md`). `agent/hooks/_lib.sh`'s `has_skill` resolves
+either layout; `tests/claude_hooks/test_skill_discovery_parity.py` keeps them
+symmetric.
+
+The one real divergence is hook enforcement. Claude's `PreToolUse` / `Stop`
+hooks can **block** an action (exit 2); Codex only observes after the fact, so
+under Codex a blocking hook runs in observe mode and the **server-side CI gate
+is the real control**. Each blocking hook's CI backstop is audited in
+[docs/reference/agent-harness-parity.md](docs/reference/agent-harness-parity.md) —
+read it before relying on a client-side block under Codex.
+
 ## Always
 
 - **Always work in an isolated git worktree.** Branch switching and stash
