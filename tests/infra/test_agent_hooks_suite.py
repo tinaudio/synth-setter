@@ -9,6 +9,7 @@ install so the run reflects a Codex-shaped environment rather than only the Clau
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -70,6 +71,11 @@ def test_agent_hooks_bash_suite_passes_under_codex_skill_layout(tmp_path: Path) 
     )
 
     assert result.returncode == 0, f"hook suite failed:\n{result.stdout}\n{result.stderr}"
-    # Secondary guard against a suite that exits 0 while skipping every case;
-    # coupled to test.sh's summary line, so update both together if it changes.
-    assert "FAIL: 0" in result.stdout, result.stdout
+    # Parse the summary counts rather than substring-matching "FAIL: 0": a suite
+    # that registered zero cases also prints "FAIL: 0" and exits 0, so require a
+    # positive PASS count too. Coupled to test.sh's summary lines.
+    passed = re.search(r"^PASS: (\d+)$", result.stdout, re.MULTILINE)
+    failed = re.search(r"^FAIL: (\d+)$", result.stdout, re.MULTILINE)
+    assert passed and failed, f"summary lines not found in:\n{result.stdout}"
+    assert int(failed.group(1)) == 0, result.stdout
+    assert int(passed.group(1)) > 0, f"suite registered no cases:\n{result.stdout}"
