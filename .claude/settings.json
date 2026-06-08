@@ -1,9 +1,15 @@
 {
   "permissions": { "defaultMode": "auto" },
-  "enabledPlugins": { "tinaudio-synth-setter-skills@tinaudio-skills": true },
+  "enabledPlugins": {
+    "tinaudio-synth-setter-skills@tinaudio-skills": true,
+    "codex@openai-codex": true
+  },
   "extraKnownMarketplaces": {
     "tinaudio-skills": {
       "source": { "source": "github", "repo": "tinaudio/skills" }
+    },
+    "openai-codex": {
+      "source": { "source": "github", "repo": "openai/codex-plugin-cc" }
     }
   },
   "hooks": {
