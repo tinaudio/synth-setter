@@ -25,7 +25,7 @@ ______________________________________________________________________
 | `model`        | `model-{train_config_id}`  | `build_model_artifact` (`train.py`)              | checkpoint prefix (opt-in, see §3)       |
 | `eval-results` | `eval-{eval_config_id}`    | `build_eval_results_artifact` (`eval.py`)        | output-dir prefix                        |
 
-The `{*_config_id}` is the config filename stem, resolved via `resolve_run_config_id(cfg)` for train/eval and `spec.task_name` for datasets. The `{*_wandb_run_id}` lives in `artifact.metadata`, never in the artifact name — W&B auto-versions (`:v0`, `:v1`, …) so re-running the same config yields the next version.
+The `{*_config_id}` is the config filename stem, resolved via `resolve_run_config_id(cfg)` for train/eval and `spec.task_name` for datasets. The artifact name carries the config id, not the `{*_wandb_run_id}`; W&B auto-versions (`:v0`, `:v1`, …) so re-running the same config yields the next version, and the producing run — whose id is pinned via `pin_wandb_run_id` — is what W&B links the artifact to for lineage. (The builders below do **not** copy the run id into `artifact.metadata`; spec §4 reserves that, but it is not yet wired.)
 
 ______________________________________________________________________
 
@@ -91,7 +91,7 @@ ______________________________________________________________________
 
 ## 5. Resolving an Artifact to a Checkpoint
 
-The `${wandb:<ref>}` OmegaConf resolver (`utils/utils.py`, registered in `register_resolvers`) turns a model-artifact ref into a local checkpoint path — used for `ckpt_path=wandb:model-flow-simple:best` resume:
+The `${wandb:<ref>}` OmegaConf resolver (`utils/utils.py`, registered in `register_resolvers`) turns a model-artifact ref into a local checkpoint path. To resume, point `ckpt_path` at a `${wandb:…}` interpolation — the bare `wandb:…` form is passed through literally and never resolved:
 
 ```yaml
 ckpt_path: ${wandb:model-flow-simple:best}
