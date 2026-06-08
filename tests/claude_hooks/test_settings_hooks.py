@@ -26,6 +26,17 @@ def _load_settings() -> dict[str, Any]:
     return json.loads(_SETTINGS_PATH.read_text())
 
 
+def test_claude_agent_assets_are_symlinked_to_agent_source() -> None:
+    """The shared ``agent/`` tree is the source of truth for hooks and review skills."""
+    expected = {
+        _REPO_ROOT / ".claude" / "hooks": _REPO_ROOT / "agent" / "hooks",
+        _REPO_ROOT / ".claude" / "skills": _REPO_ROOT / "agent" / "skills",
+    }
+    for link_path, target_path in expected.items():
+        assert link_path.is_symlink()
+        assert link_path.resolve() == target_path.resolve()
+
+
 def _matcher_entries() -> list[dict[str, Any]]:
     """Return every matcher-entry across all hook events in source order.
 
@@ -222,6 +233,35 @@ def test_named_handlers_use_shared_agent_hook_paths(
     """
     handler = _find_handler(description_substring)
     assert handler.get("command") == expected_command
+
+
+def test_hook_lib_finds_codex_marketplace_skill_path(tmp_path: Path) -> None:
+    """Headless hook helpers find skills installed through the Codex plugin manifest.
+
+    :param tmp_path: Fake home directory containing a Codex plugin checkout.
+    """
+    skill_dir = (
+        tmp_path
+        / ".codex"
+        / "plugins"
+        / "tinaudio-synth-setter-skills"
+        / "codex"
+        / "synth-setter-skills"
+        / "simplify"
+    )
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("---\nname: simplify\n---\n")
+
+    result = subprocess.run(  # noqa: S603
+        ["bash", "-c", "source agent/hooks/_lib.sh; has_skill simplify"],  # noqa: S607 - bash is required for sourcing hooks
+        capture_output=True,
+        cwd=_REPO_ROOT,
+        env={**os.environ, "HOME": str(tmp_path)},
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_credential_guard_uses_tool_input_file_path_not_embedded_text() -> None:
