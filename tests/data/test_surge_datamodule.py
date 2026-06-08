@@ -561,8 +561,8 @@ class TestSurgeXTDatasetH5Mode:
             _ = dataset[0]
         mock_match.assert_not_called()
 
-    def test_ot_true_calls_hungarian_match_with_all_four_tensors(self, single_h5: Path) -> None:
-        """``ot=True`` routes through ``_hungarian_match(noise, params, mel_spec, audio)``.
+    def test_ot_true_calls_hungarian_match_with_all_side_tensors(self, single_h5: Path) -> None:
+        """``ot=True`` routes through ``_hungarian_match(noise, params, mel_spec, audio, m2l)``.
 
         :param single_h5: Fixture-provided single-shard HDF5 path.
         """
@@ -576,15 +576,16 @@ class TestSurgeXTDatasetH5Mode:
                 ot=True,
                 use_saved_mean_and_variance=False,
                 read_audio=True,
+                read_m2l=True,
             )
             _ = dataset[0]
         mock_match.assert_called_once()
         positional = mock_match.call_args.args
-        assert len(positional) == 4
-        # Positional contract: (noise, params, mel_spec, audio). Pin each slot's
-        # shape so a regression that swaps positions is caught — bare arity does
-        # not distinguish `(noise, params, audio, mel_spec)` from the correct order.
-        noise, params, mel_spec, audio = positional
+        assert len(positional) == 5
+        # Positional contract: (noise, params, mel_spec, audio, m2l). Pin each
+        # slot's shape so a regression that swaps positions is caught — bare arity
+        # does not distinguish a reordered follower list from the correct order.
+        noise, params, mel_spec, audio, m2l = positional
         assert isinstance(noise, torch.Tensor) and noise.shape == (2, _NUM_PARAMS)
         assert isinstance(params, torch.Tensor) and params.shape == (2, _NUM_PARAMS)
         assert isinstance(mel_spec, torch.Tensor) and mel_spec.shape == (
@@ -598,6 +599,7 @@ class TestSurgeXTDatasetH5Mode:
             _AUDIO_CHANNELS,
             _AUDIO_SAMPLES,
         )
+        assert isinstance(m2l, torch.Tensor) and m2l.shape == (2, _M2L_DIM_1, _M2L_DIM_2)
 
     def test_ot_with_disabled_modalities_passes_none_through(self, single_h5: Path) -> None:
         """``_hungarian_match`` still receives ``None`` placeholders when modalities are off.
@@ -620,12 +622,46 @@ class TestSurgeXTDatasetH5Mode:
             item = dataset[0]
         mock_match.assert_called_once()
         positional = mock_match.call_args.args
-        # Positional contract: noise, params, mel_spec, audio — the trailing
-        # two are None when their read flags are off.
+        # Positional contract: noise, params, mel_spec, audio, m2l — the trailing
+        # three are None when their read flags are off.
         assert positional[2] is None
         assert positional[3] is None
+        assert positional[4] is None
         assert item["mel_spec"] is None
         assert item["audio"] is None
+        assert item["m2l"] is None
+
+    def test_ot_true_aligns_m2l_to_permuted_params(self, single_h5: Path) -> None:
+        """With ``ot=True`` the returned ``m2l`` follows the same permutation as ``params``.
+
+        Patches ``_hungarian_match`` to reverse every row in lockstep, so the
+        returned ``m2l`` must equal the pre-permutation ``m2l`` flipped. A
+        regression that leaves ``m2l`` un-permuted returns it in original order
+        and fails this check.
+
+        :param single_h5: Fixture-provided single-shard HDF5 path.
+        """
+        captured: dict[str, torch.Tensor] = {}
+
+        def reverse_match(noise: torch.Tensor, params: torch.Tensor, *followers: object):
+            # Follower order is (mel_spec, audio, m2l); record m2l pre-permutation.
+            captured["m2l_in"] = followers[2]  # type: ignore[assignment]
+            flip = lambda t: t.flip(0) if t is not None else None  # noqa: E731
+            return (flip(noise), flip(params), *(flip(f) for f in followers))
+
+        with patch(
+            "synth_setter.data.surge_datamodule._hungarian_match",
+            side_effect=reverse_match,
+        ):
+            dataset = SurgeXTDataset(
+                single_h5,
+                batch_size=2,
+                ot=True,
+                use_saved_mean_and_variance=False,
+                read_m2l=True,
+            )
+            item = dataset[0]
+        assert torch.equal(_unwrap(item["m2l"]), captured["m2l_in"].flip(0))
 
     def test_returned_dict_always_exposes_full_key_set(self, single_h5: Path) -> None:
         """Every ``__getitem__`` return dict exposes the same five-key contract.
