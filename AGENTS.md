@@ -14,10 +14,11 @@ Architecture: [docs/architecture.md](docs/architecture.md).
 This file is the canonical contract for both Claude Code and the Codex CLI. The
 shared assets live under `agent/` (`hooks/`, `skills/`); `.claude/{hooks,skills}`
 symlink to them, and Codex discovers the same skills through its plugin manifest
-(`~/.codex/plugins/<marketplace>/codex/synth-setter-skills/<name>/SKILL.md`, or
-`~/.codex/skills/<name>/SKILL.md`). `agent/hooks/_lib.sh`'s `has_skill` resolves
-either layout; `tests/claude_hooks/test_skill_discovery_parity.py` keeps them
-symmetric.
+(`~/.codex/plugins/<marketplace>/codex/synth-setter-skills/<name>/SKILL.md` or
+`~/.codex/plugins/<marketplace>/skills/<name>/SKILL.md`) or the flat
+`~/.codex/skills/<name>/SKILL.md`. `agent/hooks/_lib.sh`'s `has_skill` resolves
+any of these layouts; `tests/claude_hooks/test_skill_discovery_parity.py` keeps
+them symmetric.
 
 The one real divergence is hook enforcement. Claude's `PreToolUse` / `Stop`
 hooks can **block** an action (exit 2); Codex only observes after the fact, so
