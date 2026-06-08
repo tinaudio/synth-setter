@@ -65,8 +65,8 @@ def test_build_sweep_config_for_copy_experiment_pins_program_and_injects_uri() -
     cfg = inv.build_sweep_config(copy_reload, copy_uri=uri)
 
     assert cfg["program"] == "src/synth_setter/cli/generate_dataset.py"
-    assert cfg["entity"] == "tinaudio"
-    assert cfg["project"] == "synth-setter"
+    assert cfg["entity"] == inv.ENTITY
+    assert cfg["project"] == inv.PROJECT
     assert cfg["method"] == "grid"
     assert cfg["command"][:2] == ["${interpreter}", "${program}"]
     assert cfg["command"][-1] == "${args_no_hyphens}"

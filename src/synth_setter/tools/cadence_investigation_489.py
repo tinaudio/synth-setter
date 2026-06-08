@@ -27,12 +27,14 @@ import sys
 from dataclasses import dataclass
 from typing import Any
 
-import wandb
 from loguru import logger
 
+import wandb
 from synth_setter.pipeline.schemas.prefix import DEFAULT_R2_PREFIX_ROOT, make_r2_prefix
 
-ENTITY = "tinaudio"
+# Temporary: the ``tinaudio`` W&B entity does not exist yet (sweep creation 404s),
+# so runs target this working entity until #1560 stands up ``tinaudio``.
+ENTITY = "khaledtinubu-n-a"
 PROJECT = "synth-setter"
 BUCKET = "intermediate-data"
 # wandb's ``program:`` field is repo-relative; the local launcher imports by module path.
