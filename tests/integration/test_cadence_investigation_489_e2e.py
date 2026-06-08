@@ -118,11 +118,13 @@ def _shard_count(prefix_uri: str) -> int:
     :returns: The number of ``.h5`` objects found under the prefix.
     """
     rclone_path = prefix_uri.replace("r2://", "r2:", 1)
+    # check=True so an auth/network failure raises instead of being misreported
+    # as zero shards (empty stdout) by the callers' `>= 1` assertions.
     result = subprocess.run(  # noqa: S603 — args are test-controlled literals
         ["rclone", "lsf", "-R", "--include", "*.h5", rclone_path],  # noqa: S607
         capture_output=True,
         text=True,
-        check=False,
+        check=True,
     )
     return len([line for line in result.stdout.splitlines() if line.strip()])
 
