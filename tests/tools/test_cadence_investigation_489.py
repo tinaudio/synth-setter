@@ -176,6 +176,34 @@ def test_dry_run_executes_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     inv.main(["--dry-run", "--scale", "smoke", "--launcher", "wandb"])
 
 
+def test_wandb_launch_disables_agent_flapping(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The agent runs with flapping disabled so wandb 0.26.1 cannot read its unset ``START_TIME``.
+
+    wandb 0.26.1's ``Agent.is_flapping`` references ``wandb.START_TIME``, which only
+    ``wandb.old.core`` sets, so a plain ``wandb.agent`` call crashes with
+    ``AttributeError`` unless flapping is disabled first.
+
+    :param monkeypatch: Stubs ``wandb.sweep``/``wandb.agent`` and clears the
+        flapping env var so the launcher's own setting is observed.
+    """
+    import os
+
+    import wandb.env
+
+    monkeypatch.delenv(wandb.env.AGENT_DISABLE_FLAPPING, raising=False)
+    monkeypatch.setattr(inv.wandb, "sweep", lambda *a, **k: "sweep-id")
+    seen: dict[str, str | None] = {}
+    monkeypatch.setattr(
+        inv.wandb,
+        "agent",
+        lambda *a, **k: seen.update(flapping=os.environ.get(wandb.env.AGENT_DISABLE_FLAPPING)),
+    )
+
+    inv.main(["--launcher", "wandb", "--scale", "smoke", "--only", "shuffle_probe"])
+
+    assert seen["flapping"] == "true"
+
+
 def test_local_count_caps_cells_run_per_experiment(monkeypatch: pytest.MonkeyPatch) -> None:
     """``--count`` caps how many cells each local experiment runs.
 

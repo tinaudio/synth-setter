@@ -22,12 +22,14 @@ from __future__ import annotations
 
 import argparse
 import itertools
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
 from typing import Any
 
 import wandb
+import wandb.env
 from loguru import logger
 
 from synth_setter.pipeline.schemas.prefix import DEFAULT_R2_PREFIX_ROOT, make_r2_prefix
@@ -412,6 +414,10 @@ def _launch_wandb(
         return
     sweep_id = wandb.sweep(config, entity=ENTITY, project=PROJECT)
     logger.info(f"created sweep {experiment.name} -> {ENTITY}/{PROJECT}/{sweep_id}")
+    # wandb 0.26.1's Agent.is_flapping reads wandb.START_TIME, which only the legacy
+    # wandb.old.core sets, so the agent crashes with AttributeError unless flapping
+    # is disabled; the grid is already bounded by count, so flapping adds no value.
+    os.environ.setdefault(wandb.env.AGENT_DISABLE_FLAPPING, "true")
     wandb.agent(sweep_id, entity=ENTITY, project=PROJECT, count=count)
 
 
