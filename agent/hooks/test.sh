@@ -1461,6 +1461,23 @@ T_session_start_banner_warns_when_claude_skills_symlink_unmaterialized() {
 }
 it "session-start-banner: .claude/skills is a plain file (symlink unmaterialized) → loud warning + core.symlinks fix, exit 0" T_session_start_banner_warns_when_claude_skills_symlink_unmaterialized
 
+T_session_start_banner_warns_on_dangling_claude_symlink() {
+  # A symlink whose target is missing resolves nowhere and -e is false for it,
+  # so the guard must also probe -L to catch the broken link (discovery is
+  # still broken).
+  local out
+  mkdir -p "$SANDBOX/.claude"
+  ln -sfn ../agent/does-not-exist "$SANDBOX/.claude/skills"
+  out=$(bash agent/hooks/session-start-cwd-banner.sh </dev/null 2>&1; echo "EXIT:$?")
+  rm -rf "$SANDBOX/.claude"
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "guard must never block (expected EXIT:0); got: $out"; return 1; }
+  [[ "$out" == *"did not materialize"* ]] || {
+    echo "banner should warn on a dangling .claude/skills symlink; got: $out"
+    return 1
+  }
+}
+it "session-start-banner: .claude/skills is a dangling symlink → warning, exit 0" T_session_start_banner_warns_on_dangling_claude_symlink
+
 T_session_start_banner_silent_when_claude_assets_materialized() {
   # A symlink that resolves to a directory is healthy: no materialization warning.
   local out
