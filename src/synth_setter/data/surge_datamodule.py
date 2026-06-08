@@ -10,6 +10,7 @@ import torch
 from lightning import LightningDataModule
 
 from synth_setter.data.ot import _hungarian_match
+from synth_setter.data.vst.shapes import CLAP_EMBEDDING_DIM
 from synth_setter.pipeline import r2_io
 
 
@@ -25,6 +26,7 @@ class SurgeXTDataset(torch.utils.data.Dataset):
         read_audio: bool = False,
         read_mel: bool = True,
         read_m2l: bool = False,
+        read_clap: bool = False,
         use_saved_mean_and_variance: bool = True,
         rescale_params: bool = True,
         fake: bool = False,
@@ -36,6 +38,7 @@ class SurgeXTDataset(torch.utils.data.Dataset):
         self.read_audio = read_audio
         self.read_mel = read_mel
         self.read_m2l = read_m2l
+        self.read_clap = read_clap
 
         self.rescale_params = rescale_params
 
@@ -81,6 +84,7 @@ class SurgeXTDataset(torch.utils.data.Dataset):
         audio = torch.randn(self.batch_size, 2, 44100 * 4) if self.read_audio else None
         mel_spec = torch.randn(self.batch_size, 2, 128, 401) if self.read_mel else None
         m2l = torch.randn(self.batch_size, 128, 42) if self.read_m2l else None
+        clap = torch.randn(self.batch_size, CLAP_EMBEDDING_DIM) if self.read_clap else None
         param_array = torch.rand(self.batch_size, 189)
 
         if self.rescale_params:
@@ -91,6 +95,7 @@ class SurgeXTDataset(torch.utils.data.Dataset):
         return dict(
             mel_spec=mel_spec,
             m2l=m2l,
+            clap=clap,
             params=param_array,
             noise=noise,
             audio=audio,
@@ -134,6 +139,12 @@ class SurgeXTDataset(torch.utils.data.Dataset):
         else:
             m2l = None
 
+        if self.read_clap:
+            clap = self._index_dataset(self.dataset_file["clap"], idx)
+            clap = torch.from_numpy(clap).to(dtype=torch.float32)
+        else:
+            clap = None
+
         param_array = self._index_dataset(self.dataset_file["param_array"], idx)
         if self.rescale_params:
             param_array = param_array * 2 - 1
@@ -147,6 +158,7 @@ class SurgeXTDataset(torch.utils.data.Dataset):
         return dict(
             mel_spec=mel_spec.contiguous() if mel_spec is not None else None,
             m2l=m2l.contiguous() if m2l is not None else None,
+            clap=clap.contiguous() if clap is not None else None,
             params=param_array.contiguous(),
             noise=noise.contiguous(),
             audio=audio.contiguous() if audio is not None else None,
@@ -243,7 +255,7 @@ class SurgeDataModule(LightningDataModule):
         fake: bool = False,
         repeat_first_batch: bool = False,
         predict_file: str | None = None,
-        conditioning: Literal["mel", "m2l"] = "mel",
+        conditioning: Literal["mel", "m2l", "clap"] = "mel",
         pin_memory: bool = True,
     ):
         super().__init__()
@@ -284,6 +296,7 @@ class SurgeDataModule(LightningDataModule):
             repeat_first_batch=self.repeat_first_batch,
             read_mel=self.conditioning == "mel",
             read_m2l=self.conditioning == "m2l",
+            read_clap=self.conditioning == "clap",
         )
         self.val_dataset = SurgeXTDataset(
             self.dataset_root / "val.h5",
@@ -294,6 +307,7 @@ class SurgeDataModule(LightningDataModule):
             repeat_first_batch=self.repeat_first_batch,
             read_mel=self.conditioning == "mel",
             read_m2l=self.conditioning == "m2l",
+            read_clap=self.conditioning == "clap",
         )
         self.test_dataset = SurgeXTDataset(
             self.dataset_root / "test.h5",
@@ -304,6 +318,7 @@ class SurgeDataModule(LightningDataModule):
             repeat_first_batch=self.repeat_first_batch,
             read_mel=self.conditioning == "mel",
             read_m2l=self.conditioning == "m2l",
+            read_clap=self.conditioning == "clap",
         )
         self.predict_dataset = SurgeXTDataset(
             self.predict_file,
@@ -314,6 +329,7 @@ class SurgeDataModule(LightningDataModule):
             fake=self.fake,
             read_mel=self.conditioning == "mel",
             read_m2l=self.conditioning == "m2l",
+            read_clap=self.conditioning == "clap",
         )
 
     def train_dataloader(self):

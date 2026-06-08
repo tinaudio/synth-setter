@@ -51,9 +51,10 @@ _MEL_N_MELS = 4
 _MEL_N_FRAMES = 5
 _M2L_DIM_1 = 6
 _M2L_DIM_2 = 7
+_CLAP_DIM = 8
 _NUM_PARAMS = 11
 
-_ALL_TENSOR_KEYS = ("audio", "mel_spec", "m2l", "params", "noise")
+_ALL_TENSOR_KEYS = ("audio", "mel_spec", "m2l", "clap", "params", "noise")
 
 
 @pytest.fixture()
@@ -157,6 +158,10 @@ def _write_h5_shard(
         f.create_dataset(
             "music2latent",
             data=rng.standard_normal((num_rows, _M2L_DIM_1, _M2L_DIM_2)).astype(np.float32),
+        )
+        f.create_dataset(
+            "clap",
+            data=rng.standard_normal((num_rows, _CLAP_DIM)).astype(np.float32),
         )
         # params in [0, 1) so the rescale_params=True branch lands in [-1, 1).
         f.create_dataset(
@@ -272,6 +277,16 @@ class TestSurgeXTDatasetFakeMode:
         """``read_m2l=True`` populates the ``m2l`` slot with the documented shape."""
         dataset = SurgeXTDataset("ignored", batch_size=2, fake=True, read_m2l=True)
         assert _unwrap(dataset[0]["m2l"]).shape == (2, 128, 42)
+
+    def test_fake_mode_read_clap_returns_clap_tensor(self) -> None:
+        """``read_clap=True`` populates the ``clap`` slot with the 512-d CLAP shape."""
+        dataset = SurgeXTDataset("ignored", batch_size=2, fake=True, read_clap=True)
+        assert _unwrap(dataset[0]["clap"]).shape == (2, 512)
+
+    def test_fake_mode_read_clap_false_returns_none_clap(self) -> None:
+        """``read_clap=False`` (default) drops the ``clap`` slot to ``None``."""
+        dataset = SurgeXTDataset("ignored", batch_size=2, fake=True)
+        assert dataset[0]["clap"] is None
 
     def test_fake_mode_read_mel_false_returns_none_mel(self) -> None:
         """``read_mel=False`` drops the ``mel_spec`` slot to ``None``."""
@@ -407,6 +422,7 @@ class TestSurgeXTDatasetH5Mode:
             read_audio=True,
             read_mel=True,
             read_m2l=True,
+            read_clap=True,
         )
         item = dataset[0]
         for key in _ALL_TENSOR_KEYS:
@@ -425,6 +441,7 @@ class TestSurgeXTDatasetH5Mode:
             read_audio=True,
             read_mel=True,
             read_m2l=True,
+            read_clap=True,
         )
         item = dataset[0]
         for key in _ALL_TENSOR_KEYS:
@@ -463,6 +480,30 @@ class TestSurgeXTDatasetH5Mode:
             read_m2l=True,
         )
         assert _unwrap(dataset[0]["m2l"]).shape == (2, _M2L_DIM_1, _M2L_DIM_2)
+
+    def test_read_clap_true_returns_clap_tensor(self, single_h5: Path) -> None:
+        """``read_clap=True`` reads the ``clap`` dataset under the ``clap`` key.
+
+        :param single_h5: Fixture-provided single-shard HDF5 path.
+        """
+        dataset = SurgeXTDataset(
+            single_h5,
+            batch_size=2,
+            ot=False,
+            use_saved_mean_and_variance=False,
+            read_clap=True,
+        )
+        assert _unwrap(dataset[0]["clap"]).shape == (2, _CLAP_DIM)
+
+    def test_read_clap_false_returns_none_clap(self, single_h5: Path) -> None:
+        """``read_clap=False`` (default) leaves the ``clap`` slot at ``None``.
+
+        :param single_h5: Fixture-provided single-shard HDF5 path.
+        """
+        dataset = SurgeXTDataset(
+            single_h5, batch_size=2, ot=False, use_saved_mean_and_variance=False
+        )
+        assert dataset[0]["clap"] is None
 
     def test_rescale_params_centers_to_minus_one_to_one(self, single_h5: Path) -> None:
         """``rescale_params=True`` applies ``p * 2 - 1`` element-wise before tensor conversion.
@@ -951,6 +992,19 @@ class TestSurgeDataModule:
             assert module.predict_dataset is not None
             assert module.predict_dataset.read_mel is False
             assert module.predict_dataset.read_m2l is True
+
+    def test_conditioning_clap_routes_to_clap_reads(self, dataset_root: Path) -> None:
+        """``conditioning='clap'`` flips the read flags to the CLAP channel on every split.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        with _set_up_module(
+            dataset_root=dataset_root, batch_size=2, ot=False, conditioning="clap"
+        ) as module:
+            for split in (module.train_dataset, module.val_dataset, module.test_dataset):
+                assert split.read_mel is False
+                assert split.read_m2l is False
+                assert split.read_clap is True
 
     def test_train_dataloader_uses_shifted_batch_sampler(self, dataset_root: Path) -> None:
         """``train_dataloader`` wires the ``ShiftedBatchSampler`` (not the global random one).
