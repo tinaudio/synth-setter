@@ -130,7 +130,7 @@ def _shard_count(prefix_uri: str) -> int:
     """
     rclone_path = prefix_uri.replace("r2://", "r2:", 1)
     # check=True so an auth/network failure raises instead of being misreported
-    # as zero shards (empty stdout) by the callers' `>= 1` assertions.
+    # as zero shards (empty stdout) by the callers' count assertions.
     result = subprocess.run(  # noqa: S603 — args are test-controlled literals
         ["rclone", "lsf", "-R", "--include", "*.h5", rclone_path],  # noqa: S607
         capture_output=True,
@@ -138,6 +138,28 @@ def _shard_count(prefix_uri: str) -> int:
         check=True,
     )
     return len([line for line in result.stdout.splitlines() if line.strip()])
+
+
+def _expected_shards(experiment: inv.Experiment) -> int:
+    """Return the shard count every schema-valid cell of ``experiment`` should upload.
+
+    The ``gui_toggle_cadence=always_on`` cell is valid only with
+    ``plugin_reload_cadence=once``; the other always_on cell is a logged no-op that
+    uploads nothing, so it is excluded from the expected total.
+
+    :param experiment: Experiment whose cells are summed.
+    :returns: ``sum(train_val_test_sizes) // samples_per_shard`` over the valid cells.
+    """
+    total = 0
+    for cell in inv.expand_cells(experiment, copy_uri="r2://x/y", prefix_root="x"):
+        overrides = dict(tok.split("=", 1) for tok in cell if "=" in tok)
+        gui = overrides.get("render.gui_toggle_cadence")
+        reload_cadence = overrides.get("render.plugin_reload_cadence")
+        if gui == "always_on" and reload_cadence != "once":
+            continue
+        sizes = [int(n) for n in overrides["train_val_test_sizes"].strip("[]").split(",")]
+        total += sum(sizes) // int(overrides["render.samples_per_shard"])
+    return total
 
 
 # integration_r2/r2/requires_vst/slow come from the module-level pytestmark;
@@ -182,11 +204,16 @@ def test_full_smoke_investigation_wandb_online_runs_every_experiment(
         source_shard = join_uri(source_root, _FIRST_SHARD)
         assert r2_io.object_size(source_shard) is not None, f"source shard absent: {source_shard}"
 
-        # Every experiment's agent ran and uploaded at least one shard.
+        # Strict: every schema-valid cell of every experiment uploaded its shards.
+        # A swallowed agent failure (e.g. a render or always_on editor crash) leaves
+        # the count short, so a missing cell fails the test rather than passing on a
+        # partial run.
         for exp in experiments:
             task_prefix = f"r2://{inv.BUCKET}/{prefix_root}/{exp.task_name}"
-            assert _shard_count(task_prefix) >= 1, (
-                f"{exp.name} produced no shards under {task_prefix}"
+            expected = _expected_shards(exp)
+            assert _shard_count(task_prefix) == expected, (
+                f"{exp.name}: expected {expected} shards under {task_prefix}, "
+                "some cell did not produce its shards"
             )
 
         # The repro copy probe replayed the source params verbatim (URI piped through).
