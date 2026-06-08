@@ -17,7 +17,8 @@ Architecture: [docs/architecture.md](docs/architecture.md).
   The primary checkout is read-only — `git log`, exploration, `rclone ls`.
   Never edit files there. A `SessionStart` hook
   (`agent/hooks/session-start-cwd-banner.sh`) prints a primary-vs-worktree
-  banner on startup/resume/clear/compact; a `PreToolUse` hook
+  banner on startup/resume/clear/compact (and warns when `.claude/{skills,hooks}`
+  symlinks didn't materialize, e.g. `core.symlinks=false`); a `PreToolUse` hook
   (`agent/hooks/worktree-guard.sh`) warns on Edit/Write inside the primary
   checkout (`WORKTREE_GUARD_MODE`: `warn` default / `block` / `off`); a
   `PostToolUse` hook (`agent/hooks/worktree-post-setup.sh`) automatically
