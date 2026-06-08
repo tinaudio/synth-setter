@@ -245,3 +245,27 @@ def test_count_below_one_raises_value_error() -> None:
             dry_run=True,
             count=0,
         )
+
+
+def test_unknown_launcher_raises_value_error() -> None:
+    """A launcher other than wandb/local fails fast instead of defaulting to wandb."""
+    with pytest.raises(ValueError, match="launcher must be"):
+        inv.run_investigation(
+            scale=inv.SMOKE,
+            launcher="remote",
+            prefix_root="data",
+            only=["copy_reload"],
+            dry_run=True,
+            count=None,
+        )
+
+
+def test_only_drops_empty_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Trailing/blank ``--only`` tokens are filtered, not surfaced as unknown names.
+
+    :param monkeypatch: Stubs generate so the run plans without spawning subprocesses.
+    """
+    monkeypatch.setattr(inv, "_run_generate", lambda overrides: None)
+
+    # Without filtering, the trailing comma would yield an "" token and raise.
+    inv.main(["--launcher", "local", "--scale", "smoke", "--only", "reuse_depth,"])

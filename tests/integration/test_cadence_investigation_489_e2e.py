@@ -44,6 +44,17 @@ pytestmark = [
 _FIRST_SHARD = "shard-000000.h5"
 
 
+def _prepend_pythonpath(entry: Path) -> str:
+    """Prepend ``entry`` to the inherited ``PYTHONPATH``.
+
+    :param entry: Directory to place first on the path.
+    :returns: ``PYTHONPATH`` value, joined with ``os.pathsep`` only when an existing
+        value is present so an empty inherited var never adds a CWD-equivalent entry.
+    """
+    existing = os.environ.get("PYTHONPATH", "")
+    return f"{entry}{os.pathsep}{existing}" if existing else str(entry)
+
+
 def _param_array(shard_uri: str) -> np.ndarray:
     """Download an R2 HDF5 shard and return its ``param_array`` dataset.
 
@@ -73,7 +84,7 @@ def test_smoke_investigation_local_replays_source_params_into_copy_probe(
     )
     worktree_src = Path(__file__).resolve().parents[2] / "src"
     monkeypatch.setenv("WANDB_MODE", "offline")
-    monkeypatch.setenv("PYTHONPATH", f"{worktree_src}:{os.environ.get('PYTHONPATH', '')}")
+    monkeypatch.setenv("PYTHONPATH", _prepend_pythonpath(worktree_src))
 
     copy_probe = next(e for e in inv.build_experiments(inv.SMOKE) if e.name == "copy_repro")
 
@@ -129,10 +140,8 @@ def _shard_count(prefix_uri: str) -> int:
     return len([line for line in result.stdout.splitlines() if line.strip()])
 
 
-@pytest.mark.integration_r2
-@pytest.mark.r2
-@pytest.mark.requires_vst
-@pytest.mark.slow
+# integration_r2/r2/requires_vst/slow come from the module-level pytestmark;
+# only `network` is extra to this online-sweep test.
 @pytest.mark.network
 def test_full_smoke_investigation_wandb_online_runs_every_experiment(
     monkeypatch: pytest.MonkeyPatch,
@@ -159,7 +168,7 @@ def test_full_smoke_investigation_wandb_online_runs_every_experiment(
 
     prefix_root = f"test-runs/test_full_smoke_investigation_wandb/{uuid.uuid4().hex[:12]}"
     worktree_src = Path(__file__).resolve().parents[2] / "src"
-    monkeypatch.setenv("PYTHONPATH", f"{worktree_src}:{os.environ.get('PYTHONPATH', '')}")
+    monkeypatch.setenv("PYTHONPATH", _prepend_pythonpath(worktree_src))
     monkeypatch.delenv("WANDB_MODE", raising=False)
     monkeypatch.setattr(inv, "ENTITY", os.environ.get("WANDB_ENTITY", inv.ENTITY))
     monkeypatch.setattr(inv, "PROJECT", os.environ.get("WANDB_PROJECT", inv.PROJECT))

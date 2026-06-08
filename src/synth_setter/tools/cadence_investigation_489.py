@@ -432,9 +432,12 @@ def run_investigation(
     :param only: Experiment names to run; ``None`` runs all five.
     :param dry_run: When true, print the plan and execute nothing.
     :param count: Per-experiment cell cap (``None`` runs every grid cell).
-    :raises ValueError: ``only`` names an unknown experiment, or ``count`` is set
-        below 1 (a cap that would silently run no cells).
+    :raises ValueError: ``launcher`` is not ``"wandb"``/``"local"``, ``only`` names
+        an unknown experiment, or ``count`` is set below 1 (a cap that would silently
+        run no cells).
     """
+    if launcher not in ("wandb", "local"):
+        raise ValueError(f"launcher must be 'wandb' or 'local', got {launcher!r}")
     if count is not None and count < 1:
         raise ValueError(f"count must be >= 1 when set, got {count}")
     experiments = build_experiments(scale)
@@ -510,7 +513,9 @@ def main(argv: list[str] | None = None) -> None:
         scale=SMOKE if args.scale == "smoke" else FULL,
         launcher=args.launcher,
         prefix_root=args.prefix_root,
-        only=[name.strip() for name in args.only.split(",")] if args.only else None,
+        only=[name for name in (n.strip() for n in args.only.split(",")) if name]
+        if args.only
+        else None,
         dry_run=args.dry_run,
         count=args.count,
     )
