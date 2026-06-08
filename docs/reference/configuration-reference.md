@@ -267,14 +267,14 @@ Gaps are configuration inputs that design docs specify or that standard practice
 
 ### 5.2 W&B / Artifact Lineage
 
-| Input                    | Type   | What's Needed                                                    | Reference                   |
-| ------------------------ | ------ | ---------------------------------------------------------------- | --------------------------- |
-| `logger.wandb.log_model` | string | `"all"` — uploads every checkpoint immediately (crash-resilient) | training-pipeline.md §6.2   |
-| `logger.wandb.id`        | string | `{train_config_id}-{YYYYMMDDTHHMMSSsssZ}` instead of null/random | wandb-integration.md gap #8 |
-| `logger.wandb.job_type`  | string | `"training"` instead of empty                                    | storage-provenance-spec §7  |
-| `logger.wandb.resume`    | string | `"allow"` for W&B resume support                                 | training-pipeline.md §5.3   |
+| Input                    | Type   | What's Needed                                                                          | Reference                   |
+| ------------------------ | ------ | -------------------------------------------------------------------------------------- | --------------------------- |
+| `logger.wandb.log_model` | bool   | `False` — no checkpoint files to W&B; best ckpt goes to R2, referenced by the artifact | training-pipeline.md §6.2   |
+| `logger.wandb.id`        | string | `{train_config_id}-{YYYYMMDDTHHMMSSsssZ}` instead of null/random                       | wandb-integration.md gap #8 |
+| `logger.wandb.job_type`  | string | `"training"` instead of empty                                                          | storage-provenance-spec §7  |
+| `logger.wandb.resume`    | string | `"allow"` for W&B resume support                                                       | training-pipeline.md §5.3   |
 
-Model `run.log_artifact()` lineage is wired via `_log_model_artifact()` (train), which logs the canonical `model-{config_id}` artifact. Dataset `run.use_artifact()` lineage is wired via `use_input_artifacts()` (train/eval), activated by the opt-in `consumed_dataset_config_id` / `consumed_train_config_id` config keys (default `null` = no edge; alias from `consumed_artifact_alias`, default `latest`).
+Model `run.log_artifact()` lineage is wired via `_log_model_artifact()` (train), which logs the canonical `model-{config_id}` artifact. At train end the best checkpoint is uploaded to R2 (`_upload_best_checkpoint`) at `r2://{r2.bucket}/checkpoints/{config_id}/model.ckpt` and the artifact references it as an `s3://` URI; `training.upload_checkpoints_uri` optionally overrides the target (default `null` = auto-derive). Dataset `run.use_artifact()` lineage is wired via `use_input_artifacts()` (train/eval), activated by the opt-in `consumed_dataset_config_id` / `consumed_train_config_id` config keys (default `null` = no edge; alias from `consumed_artifact_alias`, default `latest`).
 
 ### 5.3 Data Portability
 
@@ -310,15 +310,15 @@ Model `run.log_artifact()` lineage is wired via `_log_model_artifact()` (train),
 
 ### 5.6 Other
 
-| Input                        | Type       | What's Needed                                                               | Reference                          |
-| ---------------------------- | ---------- | --------------------------------------------------------------------------- | ---------------------------------- |
-| Training Docker image        | Dockerfile | Separate from data pipeline image (needs CUDA+torch, not VST+rclone)        | training-pipeline.md §7.4          |
-| Training R2 paths            | code       | Dataset R2 path, training R2 path, frozen config upload                     | storage-provenance-spec §3b        |
-| `RUNPOD_API_KEY`             | env var    | RunPod launcher needs API access                                            | storage-provenance-spec §9         |
-| `AWS_ENDPOINT_URL`           | env var    | Required for W&B to resolve R2 artifact references                          | storage-provenance-spec §11        |
-| `torch.compile` backend/mode | string     | Currently just a bool toggle — no backend, mode, fullgraph, dynamic options | Lightning/PyTorch option           |
-| `PYTHONHASHSEED`             | env var    | Fixed hash seed for reproducibility                                         | standard ML practice               |
-| `CUBLAS_WORKSPACE_CONFIG`    | env var    | `:4096:8` for deterministic cuBLAS                                          | required when `deterministic=True` |
+| Input                        | Type       | What's Needed                                                                                                                                            | Reference                          |
+| ---------------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| Training Docker image        | Dockerfile | Separate from data pipeline image (needs CUDA+torch, not VST+rclone)                                                                                     | training-pipeline.md §7.4          |
+| Training R2 paths            | code       | Dataset R2 path, training R2 path, frozen config upload                                                                                                  | storage-provenance-spec §3b        |
+| `RUNPOD_API_KEY`             | env var    | RunPod launcher needs API access                                                                                                                         | storage-provenance-spec §9         |
+| `AWS_ENDPOINT_URL`           | env var    | Not needed for model checkpoints — the `${wandb:...}` resolver rclone-downloads from R2; only relevant if W&B natively resolves other `s3://` references | storage-provenance-spec §11        |
+| `torch.compile` backend/mode | string     | Currently just a bool toggle — no backend, mode, fullgraph, dynamic options                                                                              | Lightning/PyTorch option           |
+| `PYTHONHASHSEED`             | env var    | Fixed hash seed for reproducibility                                                                                                                      | standard ML practice               |
+| `CUBLAS_WORKSPACE_CONFIG`    | env var    | `:4096:8` for deterministic cuBLAS                                                                                                                       | required when `deterministic=True` |
 
 ______________________________________________________________________
 

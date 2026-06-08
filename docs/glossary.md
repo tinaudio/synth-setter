@@ -70,13 +70,13 @@ Project terminology for synth-setter. Grouped by domain.
 
 ## Infrastructure & Tools
 
-| Term                       | Definition                                                                                                                                                                |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **R2**                     | [Cloudflare R2](https://developers.cloudflare.com/r2/), S3-compatible object storage with free egress. Used for shard storage, pipeline coordination, and eval artifacts. |
-| **RunPod**                 | [RunPod](https://www.runpod.io/), cloud compute marketplace for on-demand GPU/CPU instances. Used for data generation workers and training.                               |
-| **W&B (Weights & Biases)** | [Weights & Biases](https://wandb.ai/), experiment tracking platform. Used for pipeline metrics, dataset artifact registry, checkpoint durability, and lineage tracking.   |
-| **Hydra**                  | [Hydra](https://hydra.cc/), configuration framework for Python. Composes YAML configs with CLI overrides. All training, eval, and dataset configs use Hydra.              |
-| **OmegaConf**              | Hydra's underlying config library. Supports interpolation (`${...}`) and environment variable resolvers (`${oc.env:VAR}`).                                                |
-| **Lightning**              | [PyTorch Lightning](https://lightning.ai/), training framework. Handles training loops, checkpointing, logging, and multi-GPU support.                                    |
-| **rclone**                 | CLI tool for syncing files to cloud storage. All R2 transfers use `--checksum` (project rule).                                                                            |
-| **structlog**              | Structured logging library used in pipeline code. JSON-rendered, append-only debug log streams.                                                                           |
+| Term                       | Definition                                                                                                                                                                                                        |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **R2**                     | [Cloudflare R2](https://developers.cloudflare.com/r2/), S3-compatible object storage with free egress. Used for shard storage, pipeline coordination, and eval artifacts.                                         |
+| **RunPod**                 | [RunPod](https://www.runpod.io/), cloud compute marketplace for on-demand GPU/CPU instances. Used for data generation workers and training.                                                                       |
+| **W&B (Weights & Biases)** | [Weights & Biases](https://wandb.ai/), experiment tracking platform. Used for pipeline metrics, dataset/model artifact registry, and lineage tracking (model checkpoints live in R2, referenced by the artifact). |
+| **Hydra**                  | [Hydra](https://hydra.cc/), configuration framework for Python. Composes YAML configs with CLI overrides. All training, eval, and dataset configs use Hydra.                                                      |
+| **OmegaConf**              | Hydra's underlying config library. Supports interpolation (`${...}`) and environment variable resolvers (`${oc.env:VAR}`).                                                                                        |
+| **Lightning**              | [PyTorch Lightning](https://lightning.ai/), training framework. Handles training loops, checkpointing, logging, and multi-GPU support.                                                                            |
+| **rclone**                 | CLI tool for syncing files to cloud storage. All R2 transfers use `--checksum` (project rule).                                                                                                                    |
+| **structlog**              | Structured logging library used in pipeline code. JSON-rendered, append-only debug log streams.                                                                                                                   |

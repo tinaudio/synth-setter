@@ -1,5 +1,6 @@
 """Hydra entrypoint for training and (optionally) test-set evaluation of a Lightning model."""
 
+from pathlib import Path
 from typing import Any
 
 import hydra
@@ -59,21 +60,76 @@ def _consumed_artifact_refs(cfg: DictConfig) -> list[tuple[str, str]]:
     return [(f"data-{dataset_id}", alias)]
 
 
-def build_model_artifact(cfg: DictConfig) -> wandb.Artifact:
+def _derive_checkpoint_uri(cfg: DictConfig) -> str:
+    """Return the ``r2://`` URI the best checkpoint uploads to.
+
+    Honors ``training.upload_checkpoints_uri`` verbatim when set; otherwise
+    derives ``r2://{r2.bucket}/checkpoints/{config_id}/model.ckpt``, where
+    ``config_id`` is :func:`~synth_setter.utils.resolve_run_config_id`. The fixed
+    ``model.ckpt`` basename lets the ``${wandb:...}`` resolver select the
+    checkpoint unambiguously.
+
+    :param cfg: Hydra-composed train cfg; reads ``r2.bucket`` and the optional
+        ``training.upload_checkpoints_uri`` override.
+    :returns: The canonical ``r2://`` checkpoint URI for this run.
+    """
+    override = OmegaConf.select(cfg, "training.upload_checkpoints_uri")
+    if override:
+        return str(override)
+    return f"r2://{cfg.r2.bucket}/checkpoints/{resolve_run_config_id(cfg)}/model.ckpt"
+
+
+def _upload_best_checkpoint(cfg: DictConfig, best_model_path: str) -> str | None:
+    """Upload the best checkpoint to its derived ``r2://`` URI; return that URI or ``None``.
+
+    Best-effort and degrades to ``None`` (a lineage-only model artifact) when no
+    checkpoint was written (``best_model_path`` empty — e.g. ``fast_dev_run``),
+    when R2 is unavailable (local CPU / CI — missing creds or failed auth), or
+    when the upload itself fails — so a completed run is never aborted by
+    checkpoint persistence. :func:`r2_io.ensure_r2_env_loaded` populates the
+    structural ``RCLONE_CONFIG_R2_*`` defaults (so a runtime wiring only the
+    secret keys still resolves the ``r2:`` remote) and auth-pings before the
+    upload; ``upload_to_uri`` renames the source to the URI's ``model.ckpt`` basename.
+
+    :param cfg: Train cfg forwarded to :func:`_derive_checkpoint_uri`.
+    :param best_model_path: ``trainer.checkpoint_callback.best_model_path``;
+        empty when no checkpoint exists.
+    :returns: The ``r2://`` URI the checkpoint landed at, or ``None`` when no
+        upload happened.
+    """
+    if not best_model_path:
+        log.warning("No best checkpoint to upload; logging lineage-only model artifact.")
+        return None
+    try:
+        r2_io.ensure_r2_env_loaded()
+    except Exception as exc:  # noqa: BLE001 — R2 unavailable must not abort a completed run
+        log.info(f"R2 unavailable; logging lineage-only model artifact (no upload): {exc}")
+        return None
+    uri = _derive_checkpoint_uri(cfg)
+    try:
+        r2_io.upload_to_uri(Path(best_model_path), uri)
+    except Exception as exc:  # noqa: BLE001 — upload failure must not abort a completed run
+        log.warning(f"Checkpoint upload to {uri} failed; logging lineage-only artifact: {exc}")
+        return None
+    return uri
+
+
+def build_model_artifact(cfg: DictConfig, ckpt_uri: str | None = None) -> wandb.Artifact:
     """Build the canonical ``model`` W&B artifact for a training run.
 
     Names the artifact ``model-{config_id}`` (type ``model``) per
     storage-provenance-spec.md §4, where ``config_id`` is
     :func:`~synth_setter.utils.resolve_run_config_id`, and records ``git_sha``
-    in ``artifact.metadata`` per §6. When ``cfg.training.upload_checkpoints_uri``
-    is set, the configured ``r2://`` checkpoint prefix is referenced as an
-    ``s3://`` URI (``checksum=False`` — R2's custom endpoint is not reachable by
-    W&B's reference handler, so the URI records lineage, not a content hash). The
-    null default logs a lineage-only artifact with no reference, since R2
-    checkpoint upload is not implemented yet (#92).
+    in ``artifact.metadata`` per §6. When ``ckpt_uri`` is given (the upload
+    succeeded), that ``r2://`` location is referenced as an ``s3://`` URI
+    (``checksum=False`` — R2's custom endpoint is not reachable by W&B's
+    reference handler, so the URI records lineage, not a content hash). With no
+    ``ckpt_uri`` the artifact is lineage-only, so a reference never points at a
+    checkpoint that was not uploaded.
 
-    :param cfg: Hydra-composed train cfg; ``task_name``/experiment determine the
-        name and the optional ``training.upload_checkpoints_uri`` the reference.
+    :param cfg: Hydra-composed train cfg; ``task_name``/experiment determine the name.
+    :param ckpt_uri: The ``r2://`` URI the checkpoint was uploaded to, or ``None``
+        for a lineage-only artifact.
     :returns: An unlogged ``wandb.Artifact`` ready for ``log_artifact``.
     """
     artifact = wandb.Artifact(
@@ -81,13 +137,25 @@ def build_model_artifact(cfg: DictConfig) -> wandb.Artifact:
         type="model",
         metadata={"git_sha": resolve_git_sha()},
     )
-    ckpt_uri = OmegaConf.select(cfg, "training.upload_checkpoints_uri")
     if ckpt_uri:
         artifact.add_reference(r2_io.to_s3_uri(ckpt_uri), checksum=False)
     return artifact
 
 
-def _log_model_artifact(loggers: list[Logger], cfg: DictConfig) -> None:
+def _has_wandb_logger(loggers: list[Logger]) -> bool:
+    """Return whether any logger is a ``WandbLogger``.
+
+    Gates the train-end checkpoint upload + artifact logging: with no
+    ``WandbLogger`` there is no run to reference the checkpoint, so the upload is
+    skipped rather than pushing bytes to R2 no artifact points at.
+
+    :param loggers: Instantiated Lightning loggers.
+    :returns: ``True`` if at least one entry is a ``WandbLogger``.
+    """
+    return any(isinstance(lg, WandbLogger) for lg in loggers)
+
+
+def _log_model_artifact(loggers: list[Logger], cfg: DictConfig, ckpt_uri: str | None) -> None:
     """Log the canonical ``model`` artifact to each ``WandbLogger`` in ``loggers``.
 
     A wandb failure warns and is swallowed so artifact logging never aborts a
@@ -96,12 +164,14 @@ def _log_model_artifact(loggers: list[Logger], cfg: DictConfig) -> None:
 
     :param loggers: Lightning loggers; only ``WandbLogger`` entries log.
     :param cfg: Train cfg forwarded to :func:`build_model_artifact`.
+    :param ckpt_uri: The uploaded checkpoint URI to reference, or ``None`` for
+        a lineage-only artifact.
     """
     for lg in loggers:
         if not isinstance(lg, WandbLogger):
             continue
         try:
-            lg.experiment.log_artifact(build_model_artifact(cfg))
+            lg.experiment.log_artifact(build_model_artifact(cfg, ckpt_uri))
         except Exception as exc:  # noqa: BLE001 — wandb artifact failure must not abort training
             log.warning(f"_log_model_artifact failed on {type(lg).__name__}: {exc}")
 
@@ -187,11 +257,13 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
 
     test_metrics = trainer.callback_metrics
 
-    # Log the canonical model-{config_id} artifact once train/test are done so the
-    # best checkpoint exists; global-zero only so DDP ranks don't race duplicate
-    # versions, and a no-op when no WandbLogger is configured.
-    if trainer.is_global_zero:
-        _log_model_artifact(logger, cfg)
+    # After train/test so the best checkpoint exists; gated on a WandbLogger (no run ⇒
+    # nothing references the upload) and global-zero (so DDP ranks don't race duplicate
+    # artifact versions). Degrades to lineage-only when R2 is unreachable or no ckpt exists.
+    if trainer.is_global_zero and _has_wandb_logger(logger):
+        best_model_path = getattr(trainer.checkpoint_callback, "best_model_path", "") or ""
+        ckpt_uri = _upload_best_checkpoint(cfg, best_model_path)
+        _log_model_artifact(logger, cfg, ckpt_uri)
 
     # merge train and test metrics
     metric_dict = {**train_metrics, **test_metrics}

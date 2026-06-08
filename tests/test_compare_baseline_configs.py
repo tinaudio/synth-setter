@@ -316,7 +316,7 @@ INVOCATION_PATH_KEYS: tuple[str, ...] = (
 ACCEPTED_DIFFS: tuple[str, ...] = (
     "logger.tensorboard",  # added post-v0.0.0; observability only, no model impact
     "logger.wandb.entity",  # env-derived (${oc.env:WANDB_ENTITY,null})
-    "logger.wandb.log_model",  # changed `true` → "all" (artifact upload policy, not training)
+    "logger.wandb.log_model",  # changed `true` → False (artifact upload policy, not training)
     "logger.wandb.project",  # env-derived (${oc.env:WANDB_PROJECT,synth-setter})
     "logger.wandb.settings.console",  # `wrap` added in #1506; console capture, no model impact
     # Cleared to `???` (mandatory override) in #809 — dataset locality, not a model knob.
@@ -326,6 +326,7 @@ ACCEPTED_DIFFS: tuple[str, ...] = (
     # Optional R2-download URI added in #1338; absent in v0.0.0 — locality, not a model knob.
     "datamodule.download_dataset_root_uri",
     "evaluation",  # eval CLI predict-mode post-processing block; not a model knob
+    "r2",  # checkpoint-artifact bucket/prefix added to train.yaml; storage locality, not a model knob
     # Opt-in W&B artifact-lineage block (#1508/#1509); absent in v0.0.0 — provenance,
     # not a model knob. `training`'s sole member is upload_checkpoints_uri (#1472), so
     # the whole block is stripped; re-narrow to a dotted path if it ever gains a model knob.

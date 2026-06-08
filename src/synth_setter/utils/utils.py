@@ -2,6 +2,7 @@
 
 import hashlib
 import re
+import shutil
 import warnings
 from collections.abc import Callable
 from importlib.util import find_spec
@@ -65,9 +66,58 @@ def _resolve_wandb_checkpoint(ref: str) -> str:
     # A cached dir with no .ckpt is a partial download — refetch rather than trust it.
     if not checkpoints:
         cache_dir.mkdir(parents=True, exist_ok=True)
-        wandb.Api().artifact(ref).download(root=str(cache_dir))
+        _download_artifact_to_cache(wandb.Api().artifact(ref), cache_dir)
         checkpoints = sorted(cache_dir.glob("**/*.ckpt"))
     return _select_checkpoint(ref, checkpoints)
+
+
+def _download_artifact_to_cache(artifact: Any, cache_dir: Path) -> None:
+    """Materialize a model artifact's checkpoint(s) into ``cache_dir``.
+
+    A reference-only artifact records the checkpoint as ``s3://`` manifest
+    entries; W&B's native ``download`` cannot reach R2's custom endpoint, so each
+    reference is rewritten to ``r2://`` and rclone-pulled instead. An artifact
+    with no ``s3://`` references (a legacy file-upload artifact) falls back to the
+    native ``download``. ``r2_io`` is imported lazily so the module stays cheap to
+    import for callers that never resolve a reference.
+
+    :param artifact: A ``wandb`` artifact exposing ``manifest.entries`` and ``download``.
+    :param cache_dir: Destination cache directory for the resolved checkpoint(s).
+    :raises ValueError: A reference's basename is unsafe (``.``/``..``/empty),
+        which would escape ``cache_dir``.
+    :raises RuntimeError: The ``rclone`` binary needed to fetch an R2 reference
+        is not on ``PATH``.
+    """
+    from synth_setter.pipeline import r2_io
+
+    refs = [
+        entry.ref
+        for entry in artifact.manifest.entries.values()
+        if getattr(entry, "ref", None) and entry.ref.startswith("s3://")
+    ]
+    if not refs:
+        artifact.download(root=str(cache_dir))
+        return
+    # Reference artifacts rclone-pull from R2. Check rclone up front so a missing
+    # binary surfaces an actionable message instead of a bare FileNotFoundError
+    # from deep inside ensure_r2_env_loaded's auth ping.
+    if shutil.which("rclone") is None:
+        raise RuntimeError(
+            "Resolving an R2 reference checkpoint requires the 'rclone' binary on PATH."
+        )
+    # Populate the structural RCLONE_CONFIG_R2_* defaults (so an env wiring only the
+    # secret keys resolves the r2: remote) and fail loud here if creds are absent —
+    # a checkpoint that can't be fetched must error at resolve time, not yield an
+    # empty cache.
+    r2_io.ensure_r2_env_loaded()
+    for s3_ref in refs:
+        r2_uri = r2_io.from_s3_uri(s3_ref)
+        name = Path(r2_uri).name
+        if name in ("", ".", ".."):
+            raise ValueError(
+                f"W&B reference {s3_ref!r} has an unsafe checkpoint basename {name!r}"
+            )
+        r2_io.download_to_path(r2_uri, cache_dir / name)
 
 
 def _cache_key(ref: str) -> str:

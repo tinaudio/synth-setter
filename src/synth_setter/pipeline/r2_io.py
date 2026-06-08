@@ -27,6 +27,7 @@ __all__ = [
     "download_to_path",
     "downloaded_to_tempfile",
     "ensure_r2_env_loaded",
+    "from_s3_uri",
     "is_r2_reachable",
     "is_r2_uri",
     "object_size",
@@ -193,6 +194,22 @@ def to_s3_uri(r2_uri: str) -> str:
     if not is_r2_uri(r2_uri):
         raise ValueError(f"not an r2:// URI: {r2_uri!r}")
     return "s3://" + r2_uri[len(R2_URI_SCHEME) :]
+
+
+def from_s3_uri(s3_uri: str) -> str:
+    """Rewrite an `s3://bucket/key` URI back to canonical `r2://bucket/key`.
+
+    Inverse of :func:`to_s3_uri`: R2 exposes an S3-compatible API, so only the
+    scheme differs. Used to recover the rclone-reachable ``r2://`` location from
+    the ``s3://`` reference W&B records on a model artifact.
+
+    :param s3_uri: ``s3://bucket/key`` URI string.
+    :returns: The same location as ``r2://bucket/key``.
+    :raises ValueError: ``s3_uri`` is not an ``s3://`` URI.
+    """
+    if not s3_uri.startswith("s3://"):
+        raise ValueError(f"not an s3:// URI: {s3_uri!r}")
+    return R2_URI_SCHEME + s3_uri[len("s3://") :]
 
 
 def download_dir_no_overwrite(r2_uri: str, dest_path: Path) -> None:

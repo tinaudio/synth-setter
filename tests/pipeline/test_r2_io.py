@@ -77,6 +77,24 @@ class TestToS3Uri:
             r2_io.to_s3_uri("s3://bucket/already-s3.ckpt")
 
 
+class TestFromS3Uri:
+    """Tests for from_s3_uri — s3:// → r2:// rewrite that inverts to_s3_uri."""
+
+    def test_rewrites_s3_scheme_to_r2(self) -> None:
+        """`s3://bucket/key` becomes `r2://bucket/key`, preserving the path verbatim."""
+        assert r2_io.from_s3_uri("s3://bucket/key.ckpt") == "r2://bucket/key.ckpt"
+
+    def test_round_trips_with_to_s3_uri(self) -> None:
+        """from_s3_uri inverts to_s3_uri so a reference URI survives the round trip."""
+        r2_uri = "r2://intermediate-data/checkpoints/flow-simple/model.ckpt"
+        assert r2_io.from_s3_uri(r2_io.to_s3_uri(r2_uri)) == r2_uri
+
+    def test_rejects_non_s3_scheme(self) -> None:
+        """A non-s3:// URI raises ValueError rather than silently passing through."""
+        with pytest.raises(ValueError, match="s3://"):
+            r2_io.from_s3_uri("r2://bucket/not-s3.ckpt")
+
+
 class TestDownloadToPath:
     """Tests for download_to_path — file→file copy."""
 

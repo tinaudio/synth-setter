@@ -184,7 +184,7 @@ docs:
       - pattern: "src/synth_setter/configs/experiment/**"
         covers: "Experiment overrides, hyperparameter combinations, ablation configs"
       - pattern: "src/synth_setter/configs/logger/wandb.yaml"
-        covers: "W&B entity, project, log_model for checkpoint durability"
+        covers: "W&B entity, project, log_model (False — best ckpt to R2, not W&B)"
       - pattern: "docker/**"
         covers: "Training Docker image, GPU support, environment portability"
         scope: "training"

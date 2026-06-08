@@ -91,7 +91,7 @@ train/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_
 └── config.yaml               # Frozen experiment config
 ```
 
-- Set `log_model="all"` in the W&B Lightning Logger to persist every saved checkpoint immediately as a W&B artifact (crash-resilient).
+- The W&B Lightning Logger sets `log_model: False`, so no checkpoint files are uploaded to W&B (5 GB total storage budget). At train end `train.py` uploads only the best checkpoint to R2 and the `model` artifact references it (§4); intermediate checkpoints are not persisted to the cloud.
 
 ### 3c. Evaluation
 
@@ -124,7 +124,9 @@ ______________________________________________________________________
 
 > **Note:** `finalize_dataset.py` logs the `dataset` artifact (`build_dataset_artifact` / `_log_dataset_artifact`), resuming the data-generation run pinned to `spec.run_id` so the artifact lands on the producer node of the lineage DAG. It composes a `WandbLogger` from `configs/finalize_dataset.yaml`'s `logger: wandb` default and degrades to a best-effort no-op without `WANDB_API_KEY`. In Docker the finalize step runs as `MODE=finalize-shards` (scoped, validated on experiment branch — [#408](https://github.com/tinaudio/synth-setter/issues/408)).
 
-> **Note:** `train.py` logs the `model` artifact (`build_model_artifact` / `_log_model_artifact`) at train end, superseding reliance on Lightning's implicitly-named `log_model: "all"` artifact. The `s3://` checkpoint reference is opt-in via `training.upload_checkpoints_uri` (an `r2://` prefix or null); the null default logs a lineage-only artifact because R2 checkpoint upload is not implemented yet ([#92](https://github.com/tinaudio/synth-setter/issues/92)). Logging is best-effort and a no-op without a `WandbLogger`.
+> **Note:** `train.py` logs the `model` artifact (`build_model_artifact` / `_log_model_artifact`) at train end. On global-zero it first uploads the best checkpoint to R2 (`_upload_best_checkpoint`) at the auto-derived location `r2://{r2.bucket}/checkpoints/{config_id}/model.ckpt` (`_derive_checkpoint_uri`; bucket defaults to `intermediate-data`), then references that object as an `s3://` URI (`checksum=False`) — so W&B stores only a ~0-byte reference, not the file ([#92](https://github.com/tinaudio/synth-setter/issues/92) is implemented by this). `training.upload_checkpoints_uri` is an optional override of the target (null = auto-derive). The artifact degrades to lineage-only (no reference) when R2 is unreachable (local CPU / CI) or no checkpoint was written (e.g. `fast_dev_run`); training is never aborted by checkpoint persistence. Logging is best-effort and a no-op without a `WandbLogger`.
+>
+> **Known limitation (mutable per-`config_id` storage):** the R2 object lives at a per-`config_id` path and is overwritten each run, so an older artifact version (`:vN` for N < latest) resolves to the *current* object. Reference-only model storage is mutable per `config_id`. (If per-version immutability is ever needed, the run id would be folded into the path — deferred, YAGNI.)
 
 - W&B auto-versions artifacts (`:v0`, `:v1`, `:v2`). Each new run of the same config produces the next version.
 - The `*_wandb_run_id` is stored in `artifact.metadata`, not the artifact name
@@ -276,7 +278,7 @@ ______________________________________________________________________
 ## 11. Artifact → Storage Mapping
 
 - W&B artifacts reference R2 objects via `artifact.add_reference("s3://intermediate-data/...")` (R2 is S3-compatible)
-- Requires `AWS_ENDPOINT_URL` (or `WANDB_S3_ENDPOINT_URL`) set to the R2 endpoint in any environment that calls `add_reference` or downloads reference artifacts. Without this, W&B will attempt to resolve against AWS S3.
+- The `${wandb:...}` resolver reads a model artifact's `s3://` manifest reference, rewrites it to `r2://`, and rclone-downloads the checkpoint from R2 (`_resolve_wandb_checkpoint` / `_download_artifact_to_cache`). W&B's native `artifact.download()` cannot reach R2's custom S3 endpoint, so no `AWS_ENDPOINT_URL` / `WANDB_S3_ENDPOINT_URL` is required for model-checkpoint references. (Legacy file-upload artifacts with no `s3://` reference fall back to native `download()`.)
 - Artifacts do not duplicate large data files — they contain metadata, manifests, and statistics
 - Bulk data lives in R2; W&B provides the index and lineage graph
 

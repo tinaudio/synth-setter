@@ -59,9 +59,10 @@ original parameters.
    Design: [data-pipeline.md](design/data-pipeline.md)
 
 4. **Train** -- A single long-running job trains a model (flow matching,
-   feed-forward, or FlowVAE) on the generated dataset. Checkpoints are durably
-   stored in W&B via `log_model: "all"`. Hydra composes experiment configs from
-   datamodule, model, trainer, and callback configs.
+   feed-forward, or FlowVAE) on the generated dataset. At train end the best
+   checkpoint is uploaded to R2 and referenced by the `model-{config_id}` W&B
+   artifact (`log_model: False`, so no checkpoint files go to W&B). Hydra composes
+   experiment configs from datamodule, model, trainer, and callback configs.
    Design: [training-pipeline.md](design/training-pipeline.md)
 
 5. **Evaluate** -- Three stages: **predict** (model inference on test data),
@@ -133,9 +134,9 @@ worker independently renders its assigned shards and uploads to R2. One worker
 crashing does not affect others. See
 [data-pipeline.md](design/data-pipeline.md) section 7.7.
 
-**W&B for checkpoint durability.** Training checkpoints are uploaded to W&B
-immediately via `log_model: "all"`, surviving pod death without a custom
-persistence layer. See
+**R2 for checkpoint durability.** `log_model: False` keeps checkpoint files out
+of W&B (5 GB total budget); at train end the best checkpoint is uploaded to R2
+and the `model-{config_id}` W&B artifact references it as an `s3://` URI. See
 [training-pipeline.md](design/training-pipeline.md) section 6.
 
 **Storage conventions are shared.** All pipelines (data, training, eval) follow
