@@ -101,13 +101,15 @@ It downloads the artifact once under `$PROJECT_ROOT/.cache/checkpoints/<key>` an
 
 ______________________________________________________________________
 
-## 6. Aliases (spec §4)
+## 6. Aliases
 
-| Alias         | Set by           | When                                  |
-| ------------- | ---------------- | ------------------------------------- |
-| `:latest`     | W&B (automatic)  | every `log_artifact` call             |
-| `:best`       | training script  | when the val metric improves          |
-| `:production` | promote workflow | when a model is promoted to a Release |
+`:latest` is the only alias the landed code applies — W&B sets it automatically on every `log_artifact` call. Spec §4 reserves two more, neither yet wired:
+
+| Alias         | Set by           | When                                  | Status                                                                                                     |
+| ------------- | ---------------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `:latest`     | W&B (automatic)  | every `log_artifact` call             | landed                                                                                                     |
+| `:best`       | training script  | when the val metric improves          | planned — `_log_model_artifact` logs with no `aliases=[…]`                                                 |
+| `:production` | promote workflow | when a model is promoted to a Release | planned — promote workflow not implemented ([#1566](https://github.com/tinaudio/synth-setter/issues/1566)) |
 
 ______________________________________________________________________
 
