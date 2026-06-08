@@ -90,6 +90,8 @@ docs:
         covers: "Nightly + workflow_dispatch running generate-dataset with `++render.parallel=true` against real Surge XT + real R2, then validating spec + shards via `pipeline.ci.{validate_spec,validate_shard}`. Per-run unique `task_name` scopes the ephemeral R2 prefix to `data/<task_name>/<run_id>/` (preserves the `data/` invariant); always-on rclone purge on cleanup. Fills the CI gap left by the slow + requires_vst Linux Xvfb integration test."
       - pattern: "src/synth_setter/pipeline/ci/**"
         covers: "CI validation scripts, spec materialization, shard validation, and spec-URI extraction (`spec_uri.py` / `synth-setter-spec-uri`)"
+      - pattern: "src/synth_setter/pipeline/data/add_clap.py"
+        covers: "add-embeddings stage: idempotent CLI (`python -m synth_setter.pipeline.data.add_clap DATA_DIR`) writing 512-d LAION-CLAP audio embeddings into existing shards — a `clap` HDF5 dataset or a `<key>.clap.npy` webdataset member (tar rewritten in place via temp-file + atomic os.replace). Audio is downmixed to mono and resampled to 48 kHz before encoding; `laion_clap` is imported lazily behind the `ClapEmbedder` Protocol and lives in the optional `embeddings` dependency-group."
       - pattern: "src/synth_setter/pipeline/r2_io.py"
         covers: "rclone-backed R2 helpers — URI handling, download, upload, size probe; single rclone call site shared by CI validators and the worker entrypoint's skip-existing probe"
       - pattern: "src/synth_setter/pipeline/spec_io.py"

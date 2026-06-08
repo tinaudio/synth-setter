@@ -1151,12 +1151,13 @@ The following are of interest for next steps but are out of scope for this docum
 
 Additional stages could follow the same contract (§5) without modifying existing stages:
 
-| Stage              | Input        | Output                 | Compute |
-| ------------------ | ------------ | ---------------------- | ------- |
-| **augment-reverb** | raw shards   | augmented shards       | CPU     |
-| **add-captions**   | audio shards | shards + text column   | GPU     |
-| **add-embeddings** | audio shards | shards + latent column | GPU     |
-| **render-presets** | preset bank  | audio shards           | CPU     |
+| Stage              | Input        | Output               | Compute |
+| ------------------ | ------------ | -------------------- | ------- |
+| **augment-reverb** | raw shards   | augmented shards     | CPU     |
+| **add-captions**   | audio shards | shards + text column | GPU     |
+| **render-presets** | preset bank  | audio shards         | CPU     |
+
+The **add-embeddings** stage (audio shards → shards + embedding column, GPU) is implemented in `src/synth_setter/pipeline/data/add_clap.py` (LAION-CLAP, #1571): an idempotent CLI that writes a 512-d embedding into each shard — a `clap` HDF5 dataset, or a `<key>.clap.npy` webdataset member. `laion_clap` is imported lazily and lives in the optional `embeddings` dependency-group, outside `runtime`.
 
 Stage order would remain static and explicit — user runs commands in sequence. If the number of stages grows to 4-6 and manual commands become unwieldy, adopt Prefect rather than building a homegrown orchestrator.
 
