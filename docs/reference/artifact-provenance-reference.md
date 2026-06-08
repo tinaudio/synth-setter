@@ -45,7 +45,7 @@ ______________________________________________________________________
 
 ## 3. Metadata Convention (spec §6)
 
-`artifact.metadata` holds properties of the artifact itself — never run hyperparameters (those go in `wandb.config`) or final metrics (`wandb.summary`).
+`artifact.metadata` holds properties of the artifact itself, never run hyperparameters (those go in `wandb.config`). Final metrics live in `wandb.summary`; the one exception is `eval-results`, which also copies a small **scalar summary** of its metrics into `artifact.metadata` (via `_eval_summary_metrics`) so a result set can be filtered without opening each run.
 
 | Artifact       | Metadata keys                                                |
 | -------------- | ------------------------------------------------------------ |
