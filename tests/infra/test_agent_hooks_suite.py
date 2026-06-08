@@ -12,13 +12,22 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-pytestmark = pytest.mark.infra
+# The hooks target the Linux devcontainer/CI environment. The bash suite has
+# known macOS-only gaps (no GNU `timeout`/`gtimeout`; `/var`->`/private/var`
+# canonicalization breaks the primary-root-from-subdir checks), so gate the
+# wrapper to Linux — the ubuntu CI cells still exercise all cases. Making the
+# suite itself macOS-clean is separate from this #1561 parity work.
+pytestmark = [
+    pytest.mark.infra,
+    pytest.mark.skipif(sys.platform != "linux", reason="agent/hooks/test.sh is Linux-targeted"),
+]
 
 # The suite spins up sandbox git repos and headless-agent stubs; give it room
 # without letting a hung child wedge the parent CI job indefinitely.
