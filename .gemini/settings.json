@@ -1,0 +1,182 @@
+{
+  "permissions": {
+    "defaultMode": "auto"
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "description": "Worktree-status banner: prints cwd, current branch, and whether the agent is sitting in the primary checkout (which AGENTS.md marks read-only). Fires on every session start, resume, /clear, and /compact so post-compaction agents see the same context.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash agent/hooks/session-start-cwd-banner.sh"
+          }
+        ]
+      }
+    ],
+    "BeforeTool": [
+      {
+        "matcher": "replace_file_content|multi_replace_file_content|write_to_file",
+        "description": "Credential protection: blocks edits to .env, .pem, and .key files. Goal: prevent secrets from being modified or leaked into commits.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash agent/hooks/edit-write.sh credential-protect"
+          }
+        ]
+      },
+      {
+        "matcher": "replace_file_content|multi_replace_file_content|write_to_file",
+        "description": "Worktree guard: on Edit/Write inside the primary checkout, prints a WARNING with the exact `git worktree add` command.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash agent/hooks/worktree-guard.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "replace_file_content|multi_replace_file_content|write_to_file",
+        "description": "No-baseline-additions: on Edit/Write of .pydoclint-baseline.txt, blocks the call if the post-edit line count exceeds the current count.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash agent/hooks/no-baseline-additions.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "replace_file_content|multi_replace_file_content|write_to_file",
+        "description": "No-yaml-run-comments: on Edit/Write of .github/workflows/*.{yml,yaml} or configs/compute/*.{yml,yaml}, blocks the call if the post-edit content has any `#`-comment line inside a `run: |` / `setup: |` block scalar.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash agent/hooks/no-yaml-run-comments.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "run_command",
+        "description": "Branch safety: echoes the current branch name before any git commit.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash agent/hooks/branch-safety.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "run_command",
+        "description": "Git-commit-trailer-check: blocks `git commit` (and other forms) that carry --no-verify / -n, a Co-Authored-By trailer, or an agent-attribution footer.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash agent/hooks/git-commit-trailer-check.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "run_command",
+        "description": "Pre-PR review gate: blocks gh pr create unless REVIEW_FULL=<path> points at a sentinel review file.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash agent/hooks/pre-pr-review-gate.sh"
+          }
+        ]
+      }
+    ],
+    "AfterAgent": [
+      {
+        "description": "PR-readiness gate: on Stop, if there's an open PR for the current branch whose readiness gates don't hold, blocks the turn from ending (exit 2).",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash agent/hooks/pr-readiness-stop.sh"
+          }
+        ]
+      }
+    ],
+    "AfterTool": [
+      {
+        "matcher": "replace_file_content|multi_replace_file_content|write_to_file",
+        "description": "Auto-format on every Edit/Write: ruff (Python), mdformat (Markdown), prettier (YAML).",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash agent/hooks/edit-write.sh format"
+          }
+        ]
+      },
+      {
+        "matcher": "replace_file_content|multi_replace_file_content|write_to_file",
+        "description": "Auto-test: runs the matching pytest file when src/, scripts/, or tests/ Python files are edited.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash agent/hooks/edit-write.sh test"
+          }
+        ]
+      },
+      {
+        "matcher": "run_command",
+        "description": "Worktree post-setup: after `git worktree add`, automatically runs `make link-plugins && make link-thoughts` in the new worktree.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash agent/hooks/worktree-post-setup.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "run_command",
+        "description": "Taxonomy verification: validates GitHub metadata after gh issue create, gh pr create, and addSubIssue mutations.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash agent/hooks/verify-gh-taxonomy.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "run_command",
+        "description": "PR checkbox trigger: detects gh pr create commands and prompts the agent to invoke the /pr-checkbox skill.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.command // \"\"' | grep -q 'gh pr create' && echo '{\"hookSpecificOutput\":{\"hookEventName\":\"AfterTool\",\"additionalContext\":\"A PR was just created. You MUST now invoke the /pr:checkbox command to add verification checkboxes to this PR.\"}}' || true"
+          }
+        ]
+      },
+      {
+        "description": "Doc-drift advisory review: on gh pr create, runs a headless agent session invoking the doc-drift skill.",
+        "matcher": "run_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash agent/hooks/doc-drift.sh"
+          }
+        ]
+      },
+      {
+        "description": "PR review resolver: on git push (excluding main/master), resolves the branch's PR up front.",
+        "matcher": "run_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash agent/hooks/pr-review-resolver.sh"
+          }
+        ]
+      }
+    ]
+  },
+  "mcpServers": {
+    "wandb": {
+      "type": "http",
+      "url": "https://mcp.withwandb.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${WANDB_API_KEY}"
+      }
+    }
+  }
+}

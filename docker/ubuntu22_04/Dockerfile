@@ -504,11 +504,13 @@ ENV WANDB_DATA_DIR="/home/${USERNAME}/.cache/wandb"
 # is baked in as root); a per-user prefix sends it to a writable one. $HOME is
 # unset after USER, so export it per-RUN (not ENV — that leaks to root sessions).
 ARG CODEX_VERSION=latest
+ARG GEMINI_CLI_VERSION=latest
 RUN export HOME="/home/${USERNAME}" \
  && npm config set prefix "/home/${USERNAME}/.npm-global" \
- && npm install -g "@openai/codex@${CODEX_VERSION}" \
+ && npm install -g "@openai/codex@${CODEX_VERSION}" "@google/gemini-cli@${GEMINI_CLI_VERSION}" \
  && npm cache clean --force \
- && codex --version
+ && codex --version \
+ && gemini --version
 
 # Antigravity (Google) ships the standalone `agy` binary, not on npm; its
 # installer fetches a SHA512-verified release into ~/.local/bin (upstream

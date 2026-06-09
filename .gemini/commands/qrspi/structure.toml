@@ -1,0 +1,6 @@
+description = "QRSPI S — vertical-slice implementation outline (header-file style)"
+prompt = '''
+Invoke the `tinaudio-synth-setter-skills:qrspi-structure` skill via the Skill
+tool, passing `{{args}}` through unchanged. That skill carries the canonical
+QRSPI S implementation; this file is a short-name alias.
+'''

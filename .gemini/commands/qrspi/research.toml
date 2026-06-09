@@ -1,0 +1,6 @@
+description = "QRSPI R — document the codebase ticket-blind, answering only the Q-stage questions"
+prompt = '''
+Invoke the `tinaudio-synth-setter-skills:qrspi-research` skill via the Skill
+tool, passing `{{args}}` through unchanged. That skill carries the canonical
+QRSPI R implementation; this file is a short-name alias.
+'''

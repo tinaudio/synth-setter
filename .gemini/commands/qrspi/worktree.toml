@@ -1,0 +1,6 @@
+description = "QRSPI W — delegate to wave-orchestration for branch/worktree assignment from a P doc"
+prompt = '''
+Invoke the `tinaudio-synth-setter-skills:qrspi-worktree` skill via the Skill
+tool, passing `{{args}}` through unchanged. That skill carries the canonical
+QRSPI W implementation; this file is a short-name alias.
+'''

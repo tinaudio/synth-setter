@@ -1,0 +1,6 @@
+description = "QRSPI Q — turn a ticket into factual questions about the existing codebase"
+prompt = '''
+Invoke the `tinaudio-synth-setter-skills:qrspi-questions` skill via the Skill
+tool, passing `{{args}}` through unchanged. That skill carries the canonical
+QRSPI Q implementation; this file is a short-name alias.
+'''

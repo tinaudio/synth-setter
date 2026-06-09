@@ -1,0 +1,6 @@
+description = "QRSPI I — autonomously implement P-doc phases via implement_plan + tdd + code-health"
+prompt = '''
+Invoke the `tinaudio-synth-setter-skills:qrspi-implement` skill via the Skill
+tool, passing `{{args}}` through unchanged. That skill carries the canonical
+QRSPI I implementation; this file is a short-name alias.
+'''
