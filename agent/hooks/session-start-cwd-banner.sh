@@ -60,18 +60,19 @@ main() {
     printf '  worktrees: %s active (run `git worktree list` for paths)\n' "$worktree_count"
   fi
 
-  # .claude/{skills,hooks} are committed as symlinks into the canonical agent/
-  # tree; an unmaterialized (core.symlinks=false, Windows, zip) or dangling link
-  # means Claude discovers zero project skills. Warn on any entry that isn't a
-  # resolved dir: -d follows symlinks, -L catches a broken link that -e misses.
-  local repo_top asset asset_path
+  # Tool discovery paths are committed as symlinks into the canonical agent/
+  # tree; unmaterialized or dangling links mean project assets disappear.
+  local repo_top asset_path
   repo_top=$(git rev-parse --show-toplevel 2>/dev/null || true)
   [[ -n "$repo_top" ]] || return 0
-  for asset in skills hooks; do
-    asset_path="$repo_top/.claude/$asset"
+  for asset_path in \
+    "$repo_top/.agents/skills" \
+    "$repo_top/.claude/hooks" \
+    "$repo_top/.claude/skills"
+  do
     [[ ( -e "$asset_path" || -L "$asset_path" ) && ! -d "$asset_path" ]] || continue
-    printf '\n  WARNING: .claude/%s did not materialize as a directory — Claude skill/hook discovery is BROKEN.\n' "$asset"
-    printf "    Fix: git -C '%s' config core.symlinks true && git -C '%s' checkout -- .claude\n" "$repo_top" "$repo_top"
+    printf '\n  WARNING: %s did not materialize as a directory — agent asset discovery is BROKEN.\n' "${asset_path#"$repo_top/"}"
+    printf "    Fix: git -C '%s' config core.symlinks true && git -C '%s' checkout -- .agents .claude\n" "$repo_top" "$repo_top"
   done
 }
 

@@ -1461,6 +1461,26 @@ T_session_start_banner_warns_when_claude_skills_symlink_unmaterialized() {
 }
 it "session-start-banner: .claude/skills is a plain file (symlink unmaterialized) → loud warning + core.symlinks fix, exit 0" T_session_start_banner_warns_when_claude_skills_symlink_unmaterialized
 
+T_session_start_banner_warns_when_codex_skills_symlink_unmaterialized() {
+  # Codex discovers repo-local skills through .agents/skills, which is also a
+  # symlink into the shared agent tree. Surface broken materialization there.
+  local out
+  mkdir -p "$SANDBOX/.agents"
+  printf '../agent/skills' > "$SANDBOX/.agents/skills"
+  out=$(bash agent/hooks/session-start-cwd-banner.sh </dev/null 2>&1; echo "EXIT:$?")
+  rm -rf "$SANDBOX/.agents"
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "guard must never block (expected EXIT:0); got: $out"; return 1; }
+  [[ "$out" == *".agents/skills"* && "$out" == *"did not materialize"* ]] || {
+    echo "banner should warn that .agents/skills did not materialize; got: $out"
+    return 1
+  }
+  [[ "$out" == *"core.symlinks"* ]] || {
+    echo "warning should include the core.symlinks remediation; got: $out"
+    return 1
+  }
+}
+it "session-start-banner: .agents/skills is a plain file (symlink unmaterialized) → loud warning + core.symlinks fix, exit 0" T_session_start_banner_warns_when_codex_skills_symlink_unmaterialized
+
 T_session_start_banner_warns_on_dangling_claude_symlink() {
   # A symlink whose target is missing resolves nowhere and -e is false for it,
   # so the guard must also probe -L to catch the broken link (discovery is
