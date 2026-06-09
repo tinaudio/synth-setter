@@ -7,7 +7,7 @@ main() {
   # stdin is JSON payload containing tool input command
   local input cmd branch
   input=$(cat)
-  cmd=$(jq -r '.tool_input.command // empty' <<<"$input" 2>/dev/null)
+  cmd=$(jq -r '.tool_input.command // empty' <<<"$input" 2>/dev/null || true)
 
   # Only run for git commit commands
   if [[ "$cmd" =~ git[[:space:]]+commit ]]; then

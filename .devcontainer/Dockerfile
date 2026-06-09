@@ -10,9 +10,3 @@ FROM tinaudio/synth-setter:devcontainer-tools
 #   RUN apt-get update && apt-get install -y <package> \
 #     && rm -rf /var/lib/apt/lists/*
 #   USER dev
-
-USER dev
-ARG GEMINI_CLI_VERSION=latest
-RUN export HOME="/home/dev" \
- && npm install -g "@google/gemini-cli@${GEMINI_CLI_VERSION}" \
- && gemini --version

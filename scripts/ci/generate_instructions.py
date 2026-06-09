@@ -322,19 +322,34 @@ def format_via_pre_commit(content: str, filename: str, project_root: Path) -> st
     :param project_root: Path to the repository root.
     :returns: Formatted markdown string.
     """
+    try:
+        import pre_commit  # noqa: F401
+
+        has_pre_commit = True
+    except ImportError:
+        has_pre_commit = False
+
+    if not has_pre_commit:
+        return content
+
     temp_path = project_root / f"{filename}.tmp.md"
     temp_path.write_text(content, encoding="utf-8")
 
     try:
-        subprocess.run(  # noqa: S603
+        result = subprocess.run(  # noqa: S603
             [sys.executable, "-m", "pre_commit", "run", "mdformat", "--files", str(temp_path)],
             cwd=str(project_root),
             capture_output=True,
             check=False,
         )
+        if result.returncode not in (0, 1):
+            sys.stderr.write(
+                f"Error: pre-commit failed with exit code {result.returncode}!\n"
+                f"Stdout: {result.stdout.decode('utf-8', errors='ignore')}\n"
+                f"Stderr: {result.stderr.decode('utf-8', errors='ignore')}\n"
+            )
+            sys.exit(result.returncode)
         formatted = temp_path.read_text(encoding="utf-8")
-    except Exception:
-        formatted = content
     finally:
         if temp_path.exists():
             temp_path.unlink()
@@ -465,6 +480,16 @@ def main() -> int:
                 )
                 drift = True
 
+        # Check for unexpected extra files under .gemini/commands/
+        commands_dir = project_root / ".gemini" / "commands"
+        if commands_dir.exists():
+            for existing_path in sorted(commands_dir.rglob("*.toml")):
+                if existing_path.is_file() and existing_path not in projected_commands:
+                    sys.stderr.write(
+                        f"Unexpected extra file found: {existing_path.relative_to(project_root)}\n"
+                    )
+                    drift = True
+
         if drift:
             return 1
         sys.stdout.write("All instruction and command files are in sync.\n")
@@ -480,6 +505,16 @@ def main() -> int:
     gemini_settings_path.parent.mkdir(parents=True, exist_ok=True)
     gemini_settings_path.write_text(generated_settings, encoding="utf-8")
     sys.stdout.write(f"Updated {gemini_settings_path}\n")
+
+    # Clean up stale projected commands
+    commands_dir = project_root / ".gemini" / "commands"
+    if commands_dir.exists():
+        for existing_path in sorted(commands_dir.rglob("*.toml")):
+            if existing_path.is_file() and existing_path not in projected_commands:
+                existing_path.unlink()
+                sys.stdout.write(
+                    f"Removed stale command {existing_path.relative_to(project_root)}\n"
+                )
 
     # Write projected TOML command files
     for dest_path, content in projected_commands.items():
