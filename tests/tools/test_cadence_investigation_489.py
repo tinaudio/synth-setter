@@ -159,6 +159,27 @@ def test_build_sweep_config_threads_prefix_root_into_command() -> None:
     assert "r2.prefix_root=test-runs/x" in cfg["command"]
 
 
+def test_scales_maps_names_to_size_presets() -> None:
+    """``SCALES`` exposes the named dataset sizes the CLI ``--scale`` flag accepts."""
+    assert inv.SCALES == {"full": inv.FULL, "smoke": inv.SMOKE}
+
+
+def test_main_maps_scale_name_to_preset(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``--scale`` selects the matching :class:`Scale` preset for the run.
+
+    :param monkeypatch: Replaces ``run_investigation`` with a recorder so the
+        resolved scale is observed without launching any real run.
+    """
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(inv, "run_investigation", lambda **kwargs: captured.update(kwargs))
+
+    inv.main(["--scale", "full"])
+    assert captured["scale"] is inv.FULL
+
+    inv.main(["--scale", "smoke"])
+    assert captured["scale"] is inv.SMOKE
+
+
 def test_dry_run_executes_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     """``--dry-run`` plans only: no generate subprocess, no wandb calls.
 

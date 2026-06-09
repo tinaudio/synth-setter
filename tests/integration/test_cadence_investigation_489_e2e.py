@@ -43,6 +43,22 @@ pytestmark = [
 # shard-000000 is the first train shard, present under both the source and copy run roots.
 _FIRST_SHARD = "shard-000000.h5"
 
+# Dataset size for the online sweep, set by the cadence workflow's ``cadence_scale``
+# input; defaults to ``smoke`` so a bare PR self-validation stays cheap.
+_CADENCE_SCALE_ENV = "CADENCE_SCALE"
+
+
+def _selected_scale_name() -> str:
+    """Return the cadence dataset-size name from the environment.
+
+    :returns: ``CADENCE_SCALE`` if set, else ``"smoke"``.
+    :raises ValueError: The env value is not a known scale name.
+    """
+    name = os.environ.get(_CADENCE_SCALE_ENV, "smoke")
+    if name not in inv.SCALES:
+        raise ValueError(f"{_CADENCE_SCALE_ENV}={name!r} is not one of {sorted(inv.SCALES)}")
+    return name
+
 
 def _prepend_pythonpath(entry: Path) -> str:
     """Prepend ``entry`` to the inherited ``PYTHONPATH``.
@@ -169,10 +185,14 @@ def _expected_shards(experiment: inv.Experiment) -> int:
 # integration_r2/r2/requires_vst/slow come from the module-level pytestmark;
 # only `network` is extra to this online-sweep test.
 @pytest.mark.network
-def test_full_smoke_investigation_wandb_online_runs_every_experiment(
+def test_full_investigation_wandb_online_runs_every_experiment_at_configured_scale(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Run the full investigation at smoke size via a real wandb-online sweep + agent.
+    """Run the full investigation via a real wandb-online sweep + agent at the env scale.
+
+    The dataset size is ``CADENCE_SCALE`` (default ``smoke``), so the cadence
+    workflow's ``cadence_scale`` input drives both the source generation and the
+    copy probes through one :class:`~inv.Scale`.
 
     All five experiments and every grid cell run; the test asserts on real R2 state.
 
@@ -192,17 +212,18 @@ def test_full_smoke_investigation_wandb_online_runs_every_experiment(
     if not os.environ.get("WANDB_API_KEY"):
         pytest.skip("WANDB_API_KEY required for the online wandb run")
 
-    prefix_root = f"test-runs/test_full_smoke_investigation_wandb/{uuid.uuid4().hex[:12]}"
+    prefix_root = f"test-runs/test_full_investigation_wandb/{uuid.uuid4().hex[:12]}"
     worktree_src = Path(__file__).resolve().parents[2] / "src"
     monkeypatch.setenv("PYTHONPATH", _prepend_pythonpath(worktree_src))
     monkeypatch.delenv("WANDB_MODE", raising=False)
     monkeypatch.setattr(inv, "ENTITY", os.environ.get("WANDB_ENTITY", inv.ENTITY))
     monkeypatch.setattr(inv, "PROJECT", os.environ.get("WANDB_PROJECT", inv.PROJECT))
 
-    experiments = inv.build_experiments(inv.SMOKE)
+    scale_name = _selected_scale_name()
+    experiments = inv.build_experiments(inv.SCALES[scale_name])
 
     try:
-        inv.main(["--launcher", "wandb", "--scale", "smoke", "--prefix-root", prefix_root])
+        inv.main(["--launcher", "wandb", "--scale", scale_name, "--prefix-root", prefix_root])
 
         source_root = inv.reference_copy_uri(prefix_root=prefix_root)
         source_shard = join_uri(source_root, _FIRST_SHARD)
