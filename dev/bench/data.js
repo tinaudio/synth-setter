@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781018420929,
+  "lastUpdate": 1781018423782,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -11332,6 +11332,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 16.30416822089999,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f2bbbd3e317da16d83b5f6401e47b675b901c930",
+          "message": "ci: fix #489 cadence job plugin path and gate it on workflow-file PRs (#1575)\n\nThe #489 cadence investigation job bind-mounts the workspace over\n/home/build/synth-setter, which shadows the Surge symlink the dev image\nbakes at plugins/Surge XT.vst3. The generate_dataset subprocess uses that\nrelative render.plugin_path default, so the job died with\n\"FileNotFoundError: Plugin path does not exist: plugins/Surge XT.vst3\".\nRestore the symlink inside the container with ensure_plugin_symlinks.sh,\nmatching generate-dataset-shards.yaml and generate-and-finalize-dataset.yaml.\n\nAlso run the cadence job on a pull request that edits this workflow file (a\ntj-actions/changed-files gate), so the costly real-W&B job is validated\npre-merge without a manual dispatch and without firing on every VST-path PR.\n\nRefs #489",
+          "timestamp": "2026-06-09T10:42:52-04:00",
+          "tree_id": "9f17a5a823489eefa150c65a394cb16e996e9c45",
+          "url": "https://github.com/tinaudio/synth-setter/commit/f2bbbd3e317da16d83b5f6401e47b675b901c930"
+        },
+        "date": 1781018423465,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 2.372128486633301,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 2.941062859389931,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.010502460412681103,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.007947802543640137,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 1.5665266513824463,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.944407286399997,
             "unit": "seconds"
           }
         ]
