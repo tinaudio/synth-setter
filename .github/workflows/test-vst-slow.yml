@@ -32,11 +32,9 @@ on:
         type: boolean
         default: false
       run_cadence_sweep:
-        # Opt-in: runs the #489 cadence investigation (real W&B sweeps +
-        # render compute + R2 round-trips) instead of the VST suite. Off by
-        # default because each run creates persistent sweeps in the W&B UI and
-        # spends real compute; it only fires on explicit dispatch, never on
-        # push/PR. Mutually exclusive with the VST suite job below.
+        # Opt-in dispatch for the #489 cadence investigation (real W&B sweeps +
+        # render compute + R2) in place of the VST suite. Off by default — each
+        # run leaves persistent sweeps in the W&B UI. See the job's if: below.
         description: "Run the #489 cadence investigation (real W&B sweep) instead of the VST suite"
         type: boolean
         default: false
@@ -238,13 +236,39 @@ jobs:
           fail-on-alert: false
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-  # Operator-dispatched #489 cadence investigation. Runs the real
-  # wandb-online e2e (creates W&B sweeps + spends render compute + R2
-  # round-trips), so it is gated on the ``run_cadence_sweep`` dispatch input
-  # and never runs on push/PR. Mutually exclusive with the VST suite above.
+  # Flags whether a PR edits this workflow so the cadence job below can
+  # self-validate pre-merge without firing the costly sweep on every PR.
+  detect_changes:
+    name: Detect cadence-workflow edits
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    outputs:
+      cadence_workflow_changed: ${{ steps.changed.outputs.any_changed }}
+    steps:
+      # fetch-depth: 0 so tj-actions/changed-files can diff against the PR base.
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Detect changes to this workflow
+        id: changed
+        uses: tj-actions/changed-files@v45
+        with:
+          files: .github/workflows/test-vst-slow.yml
+
+  # #489 cadence investigation: real wandb-online e2e (W&B sweeps + render
+  # compute + R2). The if: below gates it to dispatch opt-in or a PR editing
+  # this workflow (validated pre-merge); mutually exclusive with the VST suite.
   run_cadence_investigation:
     name: "#489 cadence investigation (real W&B sweep)"
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_cadence_sweep == true }}
+    # ``!cancelled()`` lets this run when ``detect_changes`` is skipped (dispatch).
+    needs: detect_changes
+    if: >-
+      ${{ !cancelled() && (
+        (github.event_name == 'workflow_dispatch' && inputs.run_cadence_sweep == true) ||
+        (github.event_name == 'pull_request' && needs.detect_changes.outputs.cadence_workflow_changed == 'true')
+      ) }}
     runs-on: ubuntu-latest-4core
     timeout-minutes: 120
 
@@ -280,6 +304,9 @@ jobs:
         # WANDB_PROJECT redirect the sweeps off the script's personal-pin
         # default onto the shared entity. The headless wrapper supplies the X
         # display the Surge XT renderer needs, same as the VST suite above.
+        # ensure_plugin_symlinks.sh restores the Surge symlink the bind-mount
+        # shadows so the subprocess's relative render.plugin_path resolves,
+        # same as generate-dataset-shards.yaml.
         env:
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
           WANDB_ENTITY: ${{ secrets.WANDB_ENTITY }}
@@ -302,6 +329,7 @@ jobs:
               set -euo pipefail
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
+              bash docker/ubuntu22_04/ensure_plugin_symlinks.sh
               src/synth_setter/scripts/run-linux-vst-headless.sh \
                 pytest -vv -s \
                   tests/integration/test_cadence_investigation_489_e2e.py
