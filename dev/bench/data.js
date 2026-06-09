@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781018423782,
+  "lastUpdate": 1781036838278,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -6546,6 +6546,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.03845494985580444,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "80698fd7d89eba88f7296452b54624193c3879c5",
+          "message": "ci: split #489 cadence job into its own workflow with configurable size (#1580)\n\n* ci: split #489 cadence job into its own workflow with configurable size\n\nThe #489 cadence investigation lived as two jobs (detect_changes +\nrun_cadence_investigation) inside test-vst-slow.yml, sharing that file's\ndispatch and forcing a tj-actions/changed-files gate plus a mutual-exclusion\nif: on the VST suite. Move it to a dedicated cadence-investigation-489.yml\nwhose own pull_request: paths: filter (the workflow file, the orchestrator\ntool, and the e2e test) gates the costly self-validation natively, dropping\ndetect_changes, the changed-files action, and the !cancelled()/needs plumbing.\nThe VST suite in test-vst-slow.yml now always runs.\n\nMake the sweep dataset size configurable: a cadence_scale choice input\n(smoke|full, default smoke) flows in as CADENCE_SCALE, which the e2e test\nresolves through the new tools.cadence_investigation_489.SCALES map to pick\nthe matching Scale for both source generation and the copy probes. A bare PR\nself-validation defaults to smoke so it stays cheap.\n\nRefs #489\n\n* ci: skip cadence self-validation on fork PRs\n\nFork PRs can't read the RCLONE_CONFIG_R2_* / WANDB_* secrets the cadence\nrun needs, and setup-r2's inputs are required: true, so the job would fail\nin setup rather than skip. Gate it with the same same-repo fork guard\ncpu-slow.yml and test-local-launcher-roundtrip.yml already use.\n\nRefs #489",
+          "timestamp": "2026-06-09T15:50:32-04:00",
+          "tree_id": "34904582da64d93b7c28a2c87779cc4380425483",
+          "url": "https://github.com/tinaudio/synth-setter/commit/80698fd7d89eba88f7296452b54624193c3879c5"
+        },
+        "date": 1781036836516,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.8426902294158936,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 5.994360052123666,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.028545184060931206,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.03452199697494507,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.4912467002868652,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 16.451393120249957,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.098644733428955,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.73352707271697,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.03039897233247757,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.04151028394699097,
             "unit": "1-cos"
           },
           {
