@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781036838278,
+  "lastUpdate": 1781036840735,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -11475,6 +11475,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.944407286399997,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "80698fd7d89eba88f7296452b54624193c3879c5",
+          "message": "ci: split #489 cadence job into its own workflow with configurable size (#1580)\n\n* ci: split #489 cadence job into its own workflow with configurable size\n\nThe #489 cadence investigation lived as two jobs (detect_changes +\nrun_cadence_investigation) inside test-vst-slow.yml, sharing that file's\ndispatch and forcing a tj-actions/changed-files gate plus a mutual-exclusion\nif: on the VST suite. Move it to a dedicated cadence-investigation-489.yml\nwhose own pull_request: paths: filter (the workflow file, the orchestrator\ntool, and the e2e test) gates the costly self-validation natively, dropping\ndetect_changes, the changed-files action, and the !cancelled()/needs plumbing.\nThe VST suite in test-vst-slow.yml now always runs.\n\nMake the sweep dataset size configurable: a cadence_scale choice input\n(smoke|full, default smoke) flows in as CADENCE_SCALE, which the e2e test\nresolves through the new tools.cadence_investigation_489.SCALES map to pick\nthe matching Scale for both source generation and the copy probes. A bare PR\nself-validation defaults to smoke so it stays cheap.\n\nRefs #489\n\n* ci: skip cadence self-validation on fork PRs\n\nFork PRs can't read the RCLONE_CONFIG_R2_* / WANDB_* secrets the cadence\nrun needs, and setup-r2's inputs are required: true, so the job would fail\nin setup rather than skip. Gate it with the same same-repo fork guard\ncpu-slow.yml and test-local-launcher-roundtrip.yml already use.\n\nRefs #489",
+          "timestamp": "2026-06-09T15:50:32-04:00",
+          "tree_id": "34904582da64d93b7c28a2c87779cc4380425483",
+          "url": "https://github.com/tinaudio/synth-setter/commit/80698fd7d89eba88f7296452b54624193c3879c5"
+        },
+        "date": 1781036840121,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 1.669197678565979,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 1.7929601089656353,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.007495820056647062,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.0032123923301696777,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 1.0671838521957397,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 16.235365546399954,
             "unit": "seconds"
           }
         ]
