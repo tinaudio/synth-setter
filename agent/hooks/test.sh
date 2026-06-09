@@ -1919,7 +1919,7 @@ it "worktree-post-setup: echo with quoted 'git worktree add' — boundary guard 
 # `has_skill` resolves a skill across both the Claude and Codex install
 # layouts so the same hooks work under either harness. Each test points HOME
 # at a throwaway tree and runs has_skill in a subshell sourcing _lib.sh; the
-# sandbox carries no `agent/skills/`, so only the HOME-rooted globs can match.
+# sandbox carries no `agent/skills/`, so only explicit setup can match.
 
 has_skill_in_home() {
   # Usage: has_skill_in_home <fake-home> <skill-name>
@@ -1936,6 +1936,27 @@ T_has_skill_codex_plugin_manifest_layout() {
   has_skill_in_home "$home" simplify || { echo "Codex plugin-manifest skill not resolved"; return 1; }
 }
 it "has_skill: resolves a skill installed via the Codex plugin manifest" T_has_skill_codex_plugin_manifest_layout
+
+T_has_skill_codex_repo_agents_layout() {
+  local dir
+  dir="$SANDBOX/.agents/skills/simplify"
+  mkdir -p "$dir"
+  printf -- '---\nname: simplify\n---\n' > "$dir/SKILL.md"
+  (cd "$SANDBOX" && has_skill_in_home "$TEST_DIR/skill-empty-home" simplify) || {
+    echo "Codex repo .agents/skills skill not resolved"; return 1
+  }
+}
+it "has_skill: resolves a repo skill under .agents/skills/<name>/SKILL.md" T_has_skill_codex_repo_agents_layout
+
+T_has_skill_codex_user_agents_layout() {
+  local home dir
+  home="$TEST_DIR/skill-codex-user-agents"
+  dir="$home/.agents/skills/simplify"
+  mkdir -p "$dir"
+  printf -- '---\nname: simplify\n---\n' > "$dir/SKILL.md"
+  has_skill_in_home "$home" simplify || { echo "Codex ~/.agents/skills skill not resolved"; return 1; }
+}
+it "has_skill: resolves a user skill under ~/.agents/skills/<name>/SKILL.md" T_has_skill_codex_user_agents_layout
 
 T_has_skill_codex_skills_layout() {
   local home dir

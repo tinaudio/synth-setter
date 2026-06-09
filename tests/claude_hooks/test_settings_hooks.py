@@ -265,6 +265,41 @@ def test_hook_lib_finds_codex_marketplace_skill_path(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
 
 
+@pytest.mark.parametrize(
+    "skill_path",
+    [
+        Path(".agents/skills/simplify"),
+        Path(".codex/skills/simplify"),
+        Path(".codex/plugins/tinaudio-synth-setter-skills/skills/simplify"),
+        Path(".codex/plugins/tinaudio-synth-setter-skills/codex/synth-setter-skills/simplify"),
+    ],
+)
+def test_hook_lib_finds_codex_skill_layouts(tmp_path: Path, skill_path: Path) -> None:
+    """Headless hook helpers find skills across Codex repo, user, and plugin layouts.
+
+    :param tmp_path: Fake home directory or repository containing a Codex skill.
+    :param skill_path: Skill directory path relative to the fake root.
+    """
+    skill_dir = tmp_path / skill_path
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("---\nname: simplify\n---\n")
+
+    result = subprocess.run(  # noqa: S603
+        [  # noqa: S607 - bash is required for sourcing hooks
+            "bash",
+            "-c",
+            f"source {_REPO_ROOT / 'agent' / 'hooks' / '_lib.sh'}; has_skill simplify",
+        ],
+        capture_output=True,
+        cwd=tmp_path,
+        env={**os.environ, "HOME": str(tmp_path)},
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_credential_guard_uses_tool_input_file_path_not_embedded_text() -> None:
     """Credential guard keys off ``.tool_input.file_path`` only.
 

@@ -76,10 +76,12 @@ has_skill() {
   local name="$1" home="${HOME:-}" p
   local paths=(
     "agent/skills/${name}/SKILL.md"
+    ".agents/skills/${name}/SKILL.md"
     ".claude/skills/${name}/SKILL.md"
   )
   if [[ -n "$home" ]]; then
     paths+=(
+      "${home}/.agents/skills/${name}/SKILL.md"
       "${home}/.claude/skills/${name}/SKILL.md"
       "${home}/.codex/skills/${name}/SKILL.md"
       "${home}"/.claude/plugins/*/skills/"${name}"/SKILL.md
@@ -90,6 +92,7 @@ has_skill() {
   if [[ -n "${_REPO_ROOT_FOR_HOOKS:-}" ]]; then
     paths+=(
       "${_REPO_ROOT_FOR_HOOKS}/agent/skills/${name}/SKILL.md"
+      "${_REPO_ROOT_FOR_HOOKS}/.agents/skills/${name}/SKILL.md"
       "${_REPO_ROOT_FOR_HOOKS}/.claude/skills/${name}/SKILL.md"
     )
   fi
