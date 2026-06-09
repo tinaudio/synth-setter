@@ -41,9 +41,9 @@ jobs:
 
     env:
       IMAGE: tinaudio/synth-setter:${{ inputs.image_tag || 'dev-snapshot' }}
-      # No dispatch input on pull_request, so this resolves to 2 (the smoke size)
-      # and a bare PR self-validation stays cheap.
-      CADENCE_SIZE: ${{ inputs.cadence_size || 2 }}
+      # github.event.inputs keeps a dispatched value a string, so an explicit 0
+      # fails fast rather than masking to 2; absent on pull_request it falls back to 2.
+      CADENCE_SIZE: ${{ github.event.inputs.cadence_size || 2 }}
 
     steps:
       - name: Checkout

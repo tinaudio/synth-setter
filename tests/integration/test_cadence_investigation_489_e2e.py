@@ -194,7 +194,7 @@ def _expected_shards(experiment: inv.Experiment) -> int:
 def test_full_investigation_wandb_online_runs_every_experiment_at_configured_scale(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Run the full investigation via a real wandb-online sweep + agent at the env scale.
+    """Run the full investigation via a real wandb-online sweep + agent at the env-set size.
 
     The dataset size is ``CADENCE_SIZE`` (default 2), so the cadence workflow's
     ``cadence_size`` input drives both the source generation and the copy probes
