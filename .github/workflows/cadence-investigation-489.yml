@@ -36,6 +36,9 @@ permissions:
 jobs:
   run_cadence_investigation:
     name: "#489 cadence investigation (real W&B sweep)"
+    # Fork PRs can't read the R2/W&B secrets the run needs, so skip them rather
+    # than fail in setup-r2's required inputs; dispatch and same-repo PRs run.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest-4core
     timeout-minutes: 120
 
