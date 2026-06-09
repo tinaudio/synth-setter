@@ -43,21 +43,25 @@ pytestmark = [
 # shard-000000 is the first train shard, present under both the source and copy run roots.
 _FIRST_SHARD = "shard-000000.h5"
 
-# Dataset size for the online sweep, set by the cadence workflow's ``cadence_scale``
-# input; defaults to ``smoke`` so a bare PR self-validation stays cheap.
-_CADENCE_SCALE_ENV = "CADENCE_SCALE"
+# Dataset size N for the online sweep, set by the cadence workflow's ``cadence_size``
+# input; defaults to 2 (the smoke size) so a bare PR self-validation stays cheap.
+_CADENCE_SIZE_ENV = "CADENCE_SIZE"
 
 
-def _selected_scale_name() -> str:
-    """Return the cadence dataset-size name from the environment.
+def _selected_size() -> int:
+    """Return the cadence dataset size ``N`` from the environment.
 
-    :returns: ``CADENCE_SCALE`` if set, else ``"smoke"``.
-    :raises ValueError: The env value is not a known scale name.
+    :returns: ``CADENCE_SIZE`` as an int if set, else 2.
+    :raises ValueError: The env value is not an integer or is below 1.
     """
-    name = os.environ.get(_CADENCE_SCALE_ENV, "smoke")
-    if name not in inv.SCALES:
-        raise ValueError(f"{_CADENCE_SCALE_ENV}={name!r} is not one of {sorted(inv.SCALES)}")
-    return name
+    raw = os.environ.get(_CADENCE_SIZE_ENV, "2")
+    try:
+        size = int(raw)
+    except ValueError:
+        raise ValueError(f"{_CADENCE_SIZE_ENV}={raw!r} is not an integer") from None
+    if size < 1:
+        raise ValueError(f"{_CADENCE_SIZE_ENV}={raw!r} must be >= 1")
+    return size
 
 
 def _prepend_pythonpath(entry: Path) -> str:
@@ -102,15 +106,17 @@ def test_smoke_investigation_local_replays_source_params_into_copy_probe(
     monkeypatch.setenv("WANDB_MODE", "offline")
     monkeypatch.setenv("PYTHONPATH", _prepend_pythonpath(worktree_src))
 
-    copy_probe = next(e for e in inv.build_experiments(inv.SMOKE) if e.name == "copy_repro")
+    copy_probe = next(
+        e for e in inv.build_experiments(inv.Scale.from_size(2)) if e.name == "copy_repro"
+    )
 
     try:
         inv.main(
             [
                 "--launcher",
                 "local",
-                "--scale",
-                "smoke",
+                "--size",
+                "2",
                 "--prefix-root",
                 prefix_root,
                 "--only",
@@ -190,9 +196,9 @@ def test_full_investigation_wandb_online_runs_every_experiment_at_configured_sca
 ) -> None:
     """Run the full investigation via a real wandb-online sweep + agent at the env scale.
 
-    The dataset size is ``CADENCE_SCALE`` (default ``smoke``), so the cadence
-    workflow's ``cadence_scale`` input drives both the source generation and the
-    copy probes through one :class:`~inv.Scale`.
+    The dataset size is ``CADENCE_SIZE`` (default 2), so the cadence workflow's
+    ``cadence_size`` input drives both the source generation and the copy probes
+    through one :class:`~inv.Scale`.
 
     All five experiments and every grid cell run; the test asserts on real R2 state.
 
@@ -219,11 +225,11 @@ def test_full_investigation_wandb_online_runs_every_experiment_at_configured_sca
     monkeypatch.setattr(inv, "ENTITY", os.environ.get("WANDB_ENTITY", inv.ENTITY))
     monkeypatch.setattr(inv, "PROJECT", os.environ.get("WANDB_PROJECT", inv.PROJECT))
 
-    scale_name = _selected_scale_name()
-    experiments = inv.build_experiments(inv.SCALES[scale_name])
+    size = _selected_size()
+    experiments = inv.build_experiments(inv.Scale.from_size(size))
 
     try:
-        inv.main(["--launcher", "wandb", "--scale", scale_name, "--prefix-root", prefix_root])
+        inv.main(["--launcher", "wandb", "--size", str(size), "--prefix-root", prefix_root])
 
         source_root = inv.reference_copy_uri(prefix_root=prefix_root)
         source_shard = join_uri(source_root, _FIRST_SHARD)
