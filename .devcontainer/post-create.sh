@@ -54,6 +54,17 @@ cd "$dir"
 # before later git config calls and pre-commit install.
 git config --global --add safe.directory "$(pwd)"
 
+# Correct workspace ownership before the first .git write below. A root-owned
+# host checkout bind-mounts in with every file root-owned, so `dev` can't write
+# .git, run `pre-commit install`, or commit. Guard on the top-level owner so an
+# already-correct rebuild skips the recursive walk (post-create time budget),
+# via the NOPASSWD sudo from common-utils. Capture the owner first so a stat
+# failure aborts under `set -e` rather than falling through to the chown.
+workspace_owner="$(stat -c %u "$dir")"
+if [ "$workspace_owner" != "$(id -u)" ]; then
+  sudo chown -R "$(id -u):$(id -g)" "$dir"
+fi
+
 if [ -n "${RESTRICTED_AGENT_GIT_PAT:-}" ]; then
   # Strip surrounding double or single quotes if present
   # (Docker's --env-file doesn't strip them like shell `source` does)
