@@ -62,6 +62,9 @@ test-vst-cpu: ## VST tests only (slow included; gpu/mps excluded). Linux: bootst
 test-infra: ## Devcontainer + GHA invariant tests — stdlib-only, no torch/Hydra.
 	pytest tests/infra/ --confcutdir=tests/infra
 
+codex-doctor: ## Check Codex CLI, repo skill projection, and tinaudio skill plugin discovery.
+	scripts/dev/codex-doctor.sh
+
 # Single source of truth for the marker expressions CI runs (see #1353): the
 # workflows call these instead of re-spelling pytest, so the filters can't drift.
 
