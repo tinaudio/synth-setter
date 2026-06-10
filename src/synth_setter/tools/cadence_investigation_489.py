@@ -86,14 +86,25 @@ class Scale:
     samples_per_shard: int
     reuse_depths: tuple[int, ...]
 
+    @classmethod
+    def from_size(cls, size: int) -> Scale:
+        """Build a cubic scale from one dataset-size int.
 
-# Full #489 run: reuse depths straddle the junk onset (~12 reuses, #706).
-FULL = Scale(sizes=(40, 40, 40), samples_per_shard=20, reuse_depths=(4, 20, 40, 80))
-# Smallest run that still exercises generate -> copy -> oracle for tests.
-SMOKE = Scale(sizes=(2, 2, 2), samples_per_shard=2, reuse_depths=(1, 2))
-# Named dataset sizes selectable via the CLI ``--scale`` flag (and the cadence
-# workflow's ``cadence_scale`` input, which the e2e test reads from the env).
-SCALES: dict[str, Scale] = {"full": FULL, "smoke": SMOKE}
+        :param size: Per-split sample count ``N``; yields ``sizes=(N, N, N)`` with
+            one shard per split (``samples_per_shard=N``) and a no-reuse/full-reuse
+            depth sweep ``(1, N)`` (deduped to ``(1,)`` at ``N == 1``).
+        :returns: The scale feeding source generation and the copy probes in lockstep.
+        :raises ValueError: ``size`` is below 1, so no split would hold a sample.
+        """
+        if size < 1:
+            raise ValueError(f"dataset size must be >= 1, got {size}")
+        reuse_depths = tuple(dict.fromkeys((1, size)))
+        return cls(sizes=(size, size, size), samples_per_shard=size, reuse_depths=reuse_depths)
+
+
+# CLI default dataset size: the full #489 run (40 samples per split). The cadence
+# workflow's ``cadence_size`` input overrides it (and defaults smaller) per run.
+DEFAULT_SIZE = 40
 
 
 @dataclass(frozen=True)
@@ -474,7 +485,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     """Parse the orchestrator CLI arguments.
 
     :param argv: Argument vector; ``None`` falls back to ``sys.argv[1:]``.
-    :returns: Flags for ``run_investigation`` — launcher, scale, only, prefix_root, count, dry_run.
+    :returns: Flags for ``run_investigation`` — launcher, size, only, prefix_root, count, dry_run.
     """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -484,10 +495,10 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="wandb sweeps + agents (default) or a single-box subprocess loop",
     )
     parser.add_argument(
-        "--scale",
-        choices=tuple(SCALES),
-        default="full",
-        help="full #489 sizes (default) or a tiny end-to-end smoke run",
+        "--size",
+        type=int,
+        default=DEFAULT_SIZE,
+        help=f"dataset size N -> [N,N,N] splits (default: {DEFAULT_SIZE}, the full #489 run)",
     )
     parser.add_argument(
         "--only",
@@ -519,7 +530,7 @@ def main(argv: list[str] | None = None) -> None:
     """
     args = _parse_args(argv)
     run_investigation(
-        scale=SCALES[args.scale],
+        scale=Scale.from_size(args.size),
         launcher=args.launcher,
         prefix_root=args.prefix_root,
         only=[name for name in (n.strip() for n in args.only.split(",")) if name]

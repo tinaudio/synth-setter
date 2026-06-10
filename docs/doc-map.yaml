@@ -229,7 +229,7 @@ docs:
     description: Onboarding — local dev, Codespaces, and dev container flows
     sources:
       - pattern: "Makefile"
-        covers: "Local dev targets — install (uv + .venv + deps + pre-commit), install-surge-xt (download + md5 verify + extract Surge XT VST3), link-plugins (mirror primary's plugins/ into a worktree), link-thoughts (symlink a worktree's thoughts/ to the primary's central copy; no-op in primary), SURGE_XT_VERSION + related vars"
+        covers: "Local dev targets — install (uv + .venv + deps + pre-commit), install-surge-xt (download + md5 verify + extract Surge XT VST3), link-plugins (mirror primary's plugins/ into a worktree), link-thoughts (symlink a worktree's thoughts/ to the primary's central copy; no-op in primary), link-skills (project the installed skills marketplace into ~/.agents/skills for Gemini/Antigravity discovery), SURGE_XT_VERSION + related vars"
         scope: "local-dev"
       - pattern: ".devcontainer/cpu/devcontainer.json"
         covers: "CPU dev container config — remoteUser, mounts (bash-history named volume + per-user zellij-cache named volumes for dev and root + plugins/ anonymous overlay), --env-file .env, initializeCommand, postCreateCommand, VS Code terminal profile defaulting to zellij (tmux still selectable)"
@@ -242,7 +242,7 @@ docs:
       - pattern: ".devcontainer/initialize.sh"
         covers: "Host-side initializeCommand — refuses pointer-file `.git` (worktree/submodule/--separate-git-dir), ensures .env exists"
       - pattern: ".devcontainer/post-create.sh"
-        covers: "First-run setup — git safety, pre-commit install, root-to-dev privilege drop, bind-mount ownership fix (guarded recursive chown before .git writes), install ~/.tmux.conf for both root and dev users"
+        covers: "First-run setup — git safety, pre-commit install, root-to-dev privilege drop, install ~/.tmux.conf for both root and dev users, best-effort skill projection into ~/.agents/skills via scripts/dev/link-skills.sh (#1561)"
       - pattern: "src/synth_setter/configs/logger/many_loggers.yaml"
         covers: "Default logger compose — referenced in §4c for enable/disable workflow"
         scope: "wandb-config"
@@ -332,6 +332,8 @@ docs:
     sources:
       - pattern: "agent/hooks/_lib.sh"
         covers: "has_skill discovery globs for the Claude marketplace and Codex plugin-manifest layouts"
+      - pattern: "scripts/dev/link-skills.sh"
+        covers: "Projects the installed tinaudio/skills marketplace into ~/.agents/skills so Agent-Skills-standard CLIs (Gemini, Antigravity) discover the full pack; wired via make link-skills + post-create.sh"
       - pattern: "agent/hooks/worktree-guard.sh"
         covers: "WORKTREE_GUARD_MODE block/warn/off tiering (local-safety, no CI backstop)"
       - pattern: "agent/hooks/no-baseline-additions.sh"

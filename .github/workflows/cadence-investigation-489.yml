@@ -13,13 +13,10 @@ on:
         description: "Docker image tag (e.g. dev-snapshot, dev-snapshot-<sha>)"
         required: false
         default: "dev-snapshot"
-      cadence_scale:
-        description: "Dataset size for the cadence sweep"
-        type: choice
-        options:
-          - smoke
-          - full
-        default: smoke
+      cadence_size:
+        description: "Dataset size N for the cadence sweep (5 -> [5,5,5] splits)"
+        type: number
+        default: 2
   pull_request:
     paths:
       - ".github/workflows/cadence-investigation-489.yml"
@@ -44,9 +41,9 @@ jobs:
 
     env:
       IMAGE: tinaudio/synth-setter:${{ inputs.image_tag || 'dev-snapshot' }}
-      # No dispatch input on pull_request, so this resolves to smoke and a bare
-      # PR self-validation stays cheap.
-      CADENCE_SCALE: ${{ inputs.cadence_scale || 'smoke' }}
+      # github.event.inputs keeps a dispatched value a string, so an explicit 0
+      # fails fast rather than masking to 2; absent on pull_request it falls back to 2.
+      CADENCE_SIZE: ${{ github.event.inputs.cadence_size || 2 }}
 
     steps:
       - name: Checkout
@@ -71,7 +68,7 @@ jobs:
         # The wandb-online e2e self-skips without WANDB_API_KEY or reachable R2;
         # the three W&B vars plus five RCLONE_CONFIG_R2_* (set above) are forwarded.
         # WANDB_ENTITY / WANDB_PROJECT redirect sweeps off the script's personal-pin
-        # default; CADENCE_SCALE picks the dataset size. The headless wrapper
+        # default; CADENCE_SIZE picks the dataset size N. The headless wrapper
         # supplies the X display Surge XT needs, and ensure_plugin_symlinks.sh
         # restores the Surge symlink the bind-mount shadows so the subprocess's
         # relative render.plugin_path resolves — same as generate-dataset-shards.yaml.
@@ -84,7 +81,7 @@ jobs:
             -v "${{ github.workspace }}:/home/build/synth-setter" \
             -e HYDRA_FULL_ERROR=1 \
             -e "SYNTH_SETTER_PLUGIN_PATH=/usr/lib/vst3/Surge XT.vst3" \
-            -e CADENCE_SCALE \
+            -e CADENCE_SIZE \
             -e WANDB_API_KEY \
             -e WANDB_ENTITY \
             -e WANDB_PROJECT \

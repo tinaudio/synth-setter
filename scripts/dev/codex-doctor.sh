@@ -56,6 +56,8 @@ main() {
     printf 'If tinaudio plugin skills are missing, install/enable the plugin, then start a new Codex thread:\n'
     printf '  codex plugin marketplace add tinaudio/skills\n'
     printf '  /plugins -> tinaudio Skills -> tinaudio-synth-setter-skills\n'
+    printf 'Repo-local skills (e.g. pr-readiness) come from the repo skill projection, not the plugin.\n'
+  fi
 
   if [[ "$failures" -gt 0 ]]; then
     printf '\nCodex setup has %s issue(s).\n' "$failures"

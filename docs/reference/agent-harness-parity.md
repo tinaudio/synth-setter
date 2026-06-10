@@ -40,12 +40,15 @@ tracked follow-up work, not part of this parity layer (YAGNI until a Codex user 
 
 ## Skill discovery parity
 
-`agent/hooks/_lib.sh`'s `has_skill` resolves a skill across both harness install layouts:
+`agent/hooks/_lib.sh`'s `has_skill` resolves a skill across each supported install layout:
 
 - Claude marketplace: `~/.claude/plugins/<marketplace>/skills/<name>/SKILL.md`
 - Codex plugin manifest: `~/.codex/plugins/<marketplace>/codex/synth-setter-skills/<name>/SKILL.md`
   or `~/.codex/plugins/<marketplace>/skills/<name>/SKILL.md`, and the flat
   `~/.codex/skills/<name>/SKILL.md`
+- Agent-Skills standard (Gemini / Antigravity): `.agents/skills/<name>/SKILL.md` (repo-relative)
+  and `~/.agents/skills/<name>/SKILL.md` — the user-level alias populated by
+  `scripts/dev/link-skills.sh` (`make link-skills`)
 
 `tests/claude_hooks/test_skill_discovery_parity.py` asserts every shipped `agent/skills/<name>`
 resolves through *both* globs, so the two stay symmetric as skills are added. The full bash hook

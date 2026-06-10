@@ -14,6 +14,9 @@ import pytest
 
 from synth_setter.tools import cadence_investigation_489 as inv
 
+# Smallest end-to-end scale (one shard per split), reused across the plan tests.
+SMOKE = inv.Scale.from_size(2)
+
 
 def test_reference_copy_uri_default_prefix_root_matches_canonical_run_root() -> None:
     """The derived copy-source URI equals the canonical reference run root.
@@ -34,7 +37,7 @@ def test_reference_copy_uri_custom_prefix_root_is_isolated_under_that_root() -> 
 
 def test_build_experiments_returns_two_within_run_and_three_copy_probes() -> None:
     """The investigation is exactly five experiments; three replay the copy source."""
-    experiments = inv.build_experiments(inv.SMOKE)
+    experiments = inv.build_experiments(SMOKE)
 
     names = [e.name for e in experiments]
     assert names == [
@@ -53,13 +56,13 @@ def test_build_experiments_returns_two_within_run_and_three_copy_probes() -> Non
 
 def test_reuse_depth_grid_tracks_scale_reuse_depths() -> None:
     """Reuse depth is the swept knob, so its grid is the scale's reuse depths."""
-    reuse = next(e for e in inv.build_experiments(inv.SMOKE) if e.name == "reuse_depth")
+    reuse = next(e for e in inv.build_experiments(SMOKE) if e.name == "reuse_depth")
     assert reuse.grid == {"render.samples_per_shard": [1, 2]}
 
 
 def test_build_sweep_config_for_copy_experiment_pins_program_and_injects_uri() -> None:
     """A copy sweep's command pins the program, injects the URI, and ends with args."""
-    copy_reload = next(e for e in inv.build_experiments(inv.SMOKE) if e.name == "copy_reload")
+    copy_reload = next(e for e in inv.build_experiments(SMOKE) if e.name == "copy_reload")
     uri = "r2://intermediate-data/test-runs/x/ref-surge-xt-489/paired-ref-v1"
 
     cfg = inv.build_sweep_config(copy_reload, copy_uri=uri)
@@ -76,7 +79,7 @@ def test_build_sweep_config_for_copy_experiment_pins_program_and_injects_uri() -
 
 def test_build_sweep_config_for_within_run_experiment_omits_copy_uri() -> None:
     """A within-run sweep never carries a copy URI in its command."""
-    shuffle = next(e for e in inv.build_experiments(inv.SMOKE) if e.name == "shuffle_probe")
+    shuffle = next(e for e in inv.build_experiments(SMOKE) if e.name == "shuffle_probe")
 
     cfg = inv.build_sweep_config(shuffle, copy_uri=inv.reference_copy_uri())
 
@@ -85,7 +88,7 @@ def test_build_sweep_config_for_within_run_experiment_omits_copy_uri() -> None:
 
 def test_expand_cells_is_the_grid_product_with_fixed_overrides_in_every_cell() -> None:
     """Each cell is the fixed overrides plus one value per gridded knob."""
-    copy_gui = next(e for e in inv.build_experiments(inv.SMOKE) if e.name == "copy_gui")
+    copy_gui = next(e for e in inv.build_experiments(SMOKE) if e.name == "copy_gui")
     uri = inv.reference_copy_uri(prefix_root="test-runs/x")
 
     cells = inv.expand_cells(copy_gui, copy_uri=uri)
@@ -111,7 +114,7 @@ def test_source_and_copy_experiments_agree_on_the_copy_preflight_match_set() -> 
     misalign shard filenames or the param encoding. One Scale feeds both sides, so they cannot
     drift — this asserts that invariant.
     """
-    scale = inv.SMOKE
+    scale = SMOKE
     source = set(inv.reference_overrides(scale, prefix_root="data"))
     match_keys = (
         "render.param_spec_name",
@@ -137,7 +140,7 @@ def test_source_and_copy_experiments_agree_on_the_copy_preflight_match_set() -> 
 
 def test_expand_cells_threads_prefix_root_into_every_cell() -> None:
     """A custom prefix_root lands in every cell so the whole run stays isolated."""
-    copy_gui = next(e for e in inv.build_experiments(inv.SMOKE) if e.name == "copy_gui")
+    copy_gui = next(e for e in inv.build_experiments(SMOKE) if e.name == "copy_gui")
 
     cells = inv.expand_cells(
         copy_gui,
@@ -150,7 +153,7 @@ def test_expand_cells_threads_prefix_root_into_every_cell() -> None:
 
 def test_build_sweep_config_threads_prefix_root_into_command() -> None:
     """A custom prefix_root reaches the wandb sweep command too."""
-    copy_reload = next(e for e in inv.build_experiments(inv.SMOKE) if e.name == "copy_reload")
+    copy_reload = next(e for e in inv.build_experiments(SMOKE) if e.name == "copy_reload")
 
     cfg = inv.build_sweep_config(
         copy_reload, copy_uri=inv.reference_copy_uri(), prefix_root="test-runs/x"
@@ -159,13 +162,28 @@ def test_build_sweep_config_threads_prefix_root_into_command() -> None:
     assert "r2.prefix_root=test-runs/x" in cfg["command"]
 
 
-def test_scales_maps_names_to_size_presets() -> None:
-    """``SCALES`` exposes the named dataset sizes the CLI ``--scale`` flag accepts."""
-    assert inv.SCALES == {"full": inv.FULL, "smoke": inv.SMOKE}
+def test_from_size_builds_cubic_scale_with_endpoint_reuse_depths() -> None:
+    """``from_size(N)`` yields ``(N,N,N)`` splits, one shard/split, depths ``(1,N)``."""
+    assert inv.Scale.from_size(5) == inv.Scale(
+        sizes=(5, 5, 5), samples_per_shard=5, reuse_depths=(1, 5)
+    )
 
 
-def test_main_maps_scale_name_to_preset(monkeypatch: pytest.MonkeyPatch) -> None:
-    """``--scale`` selects the matching :class:`Scale` preset for the run.
+def test_from_size_one_dedupes_reuse_depths() -> None:
+    """At ``N == 1`` the no-reuse and full-reuse endpoints collapse to one depth."""
+    assert inv.Scale.from_size(1) == inv.Scale(
+        sizes=(1, 1, 1), samples_per_shard=1, reuse_depths=(1,)
+    )
+
+
+def test_from_size_below_one_raises_value_error() -> None:
+    """A size below 1 fails fast: no split could hold a sample."""
+    with pytest.raises(ValueError, match="dataset size must be >= 1"):
+        inv.Scale.from_size(0)
+
+
+def test_main_maps_size_to_scale(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``--size N`` resolves to ``Scale.from_size(N)`` for the run.
 
     :param monkeypatch: Replaces ``run_investigation`` with a recorder so the
         resolved scale is observed without launching any real run.
@@ -173,11 +191,15 @@ def test_main_maps_scale_name_to_preset(monkeypatch: pytest.MonkeyPatch) -> None
     captured: dict[str, object] = {}
     monkeypatch.setattr(inv, "run_investigation", lambda **kwargs: captured.update(kwargs))
 
-    inv.main(["--scale", "full"])
-    assert captured["scale"] is inv.FULL
+    inv.main(["--size", "5"])
+    assert captured["scale"] == inv.Scale.from_size(5)
 
-    inv.main(["--scale", "smoke"])
-    assert captured["scale"] is inv.SMOKE
+    inv.main(["--size", "2"])
+    assert captured["scale"] == SMOKE
+
+    # No --size resolves to the CLI default (the full #489 run).
+    inv.main([])
+    assert captured["scale"] == inv.Scale.from_size(inv.DEFAULT_SIZE)
 
 
 def test_dry_run_executes_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -194,7 +216,7 @@ def test_dry_run_executes_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(inv.wandb, "sweep", _boom)
     monkeypatch.setattr(inv.wandb, "agent", _boom)
 
-    inv.main(["--dry-run", "--scale", "smoke", "--launcher", "wandb"])
+    inv.main(["--dry-run", "--size", "2", "--launcher", "wandb"])
 
 
 def test_wandb_launch_disables_agent_flapping(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -220,7 +242,7 @@ def test_wandb_launch_disables_agent_flapping(monkeypatch: pytest.MonkeyPatch) -
         lambda *a, **k: seen.update(flapping=os.environ.get(wandb.env.AGENT_DISABLE_FLAPPING)),
     )
 
-    inv.main(["--launcher", "wandb", "--scale", "smoke", "--only", "shuffle_probe"])
+    inv.main(["--launcher", "wandb", "--size", "2", "--only", "shuffle_probe"])
 
     assert seen["flapping"] == "true"
 
@@ -237,7 +259,7 @@ def test_local_count_caps_cells_run_per_experiment(monkeypatch: pytest.MonkeyPat
     runs: list[list[str]] = []
     monkeypatch.setattr(inv, "_run_generate", lambda overrides: runs.append(overrides))
 
-    inv.main(["--launcher", "local", "--scale", "smoke", "--only", "copy_reload", "--count", "1"])
+    inv.main(["--launcher", "local", "--size", "2", "--only", "copy_reload", "--count", "1"])
 
     # copy_reload grids two reload cadences, but --count 1 runs one cell; the
     # source generation is the other invocation.
@@ -255,7 +277,7 @@ def test_within_run_only_selection_skips_source_generation(
     runs: list[list[str]] = []
     monkeypatch.setattr(inv, "_run_generate", lambda overrides: runs.append(overrides))
 
-    inv.main(["--launcher", "local", "--scale", "smoke", "--only", "reuse_depth"])
+    inv.main(["--launcher", "local", "--size", "2", "--only", "reuse_depth"])
 
     # reuse_depth grids two depths and needs no copy source, so only its two
     # cells run — no run carries the reference run_id that source generation does.
@@ -267,7 +289,7 @@ def test_unknown_only_experiment_raises_value_error() -> None:
     """An unrecognized ``--only`` name fails fast with the valid choices listed."""
     with pytest.raises(ValueError, match="unknown experiment"):
         inv.run_investigation(
-            scale=inv.SMOKE,
+            scale=SMOKE,
             launcher="local",
             prefix_root="data",
             only=["does_not_exist"],
@@ -287,7 +309,7 @@ def test_count_below_one_raises_value_error() -> None:
     """A ``--count`` below 1 fails fast instead of silently running no cells."""
     with pytest.raises(ValueError, match="count must be >= 1"):
         inv.run_investigation(
-            scale=inv.SMOKE,
+            scale=SMOKE,
             launcher="local",
             prefix_root="data",
             only=["copy_reload"],
@@ -300,7 +322,7 @@ def test_unknown_launcher_raises_value_error() -> None:
     """A launcher other than wandb/local fails fast instead of defaulting to wandb."""
     with pytest.raises(ValueError, match="launcher must be"):
         inv.run_investigation(
-            scale=inv.SMOKE,
+            scale=SMOKE,
             launcher="remote",
             prefix_root="data",
             only=["copy_reload"],
@@ -317,4 +339,4 @@ def test_only_drops_empty_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(inv, "_run_generate", lambda overrides: None)
 
     # Without filtering, the trailing comma would yield an "" token and raise.
-    inv.main(["--launcher", "local", "--scale", "smoke", "--only", "reuse_depth,"])
+    inv.main(["--launcher", "local", "--size", "2", "--only", "reuse_depth,"])
