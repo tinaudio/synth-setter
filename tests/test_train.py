@@ -14,8 +14,6 @@ import numpy as np
 import pandas as pd
 import pytest
 import torch
-from hydra import compose, initialize_config_module
-from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, open_dict
 
@@ -27,6 +25,7 @@ from synth_setter.workspace import operator_workspace
 from tests.conftest import (
     NUM_FIXTURE_SAMPLES,
     _build_surge_xt_smoke_cfg,
+    build_fake_train_cfg,
 )
 from tests.evaluation._oracle_helpers import ORACLE_AUDIO_METRIC_BOUNDS
 from tests.helpers.run_if import RunIf
@@ -221,33 +220,10 @@ def test_train_fake_mode_nondefault_spec_sizes_batches_from_registry(tmp_path: P
     :param tmp_path: Pinned as Hydra ``output_dir`` / ``log_dir``; no dataset is read.
     """
     expected_width = len(param_specs["surge_simple"])
-    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
-        cfg = compose(
-            config_name="train.yaml",
-            return_hydra_config=True,
-            overrides=["experiment=surge/fake_oracle", "trainer=cpu"],
-        )
-    with open_dict(cfg):
-        cfg.paths.root_dir = str(operator_workspace())
-        cfg.paths.output_dir = str(tmp_path)
-        cfg.paths.log_dir = str(tmp_path)
-        cfg.datamodule.fake = True
-        cfg.datamodule.param_spec_name = "surge_simple"
-        cfg.datamodule.batch_size = 2
-        cfg.datamodule.num_workers = 0
-        cfg.datamodule.use_saved_mean_and_variance = False
-        cfg.trainer.max_steps = 1
-        cfg.trainer.limit_val_batches = 0
-        cfg.logger = None
-        # log_per_param_mse keys its spec off ${render.param_spec_name}; pin it
-        # concretely — this train path composes no render group.
-        cfg.callbacks.log_per_param_mse.param_spec = "surge_simple"
+    cfg = build_fake_train_cfg(tmp_path, param_spec_name="surge_simple")
 
     HydraConfig().set_config(cfg)
-    try:
-        _, object_dict = train(cfg)
-    finally:
-        GlobalHydra.instance().clear()
+    _, object_dict = train(cfg)
 
     trainer = object_dict["trainer"]
     assert trainer.global_step >= 1, f"trainer did not advance: global_step={trainer.global_step}"

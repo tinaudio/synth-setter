@@ -577,6 +577,45 @@ def _build_surge_xt_smoke_cfg(
     return cfg
 
 
+def build_fake_train_cfg(output_dir: Path, param_spec_name: str) -> DictConfig:
+    """Compose a one-step CPU fake-mode train cfg wired to ``param_spec_name``.
+
+    Drives ``datamodule.fake=true`` so no dataset is read; the fake batch width comes
+    from ``param_specs[param_spec_name]``. Pinned to the width-agnostic
+    ``surge/fake_oracle`` experiment so any registry width trains cleanly. Lives here
+    (not inline in ``tests/test_train.py``) because that module is an entrypoint-only
+    test file barred from importing Hydra config-initializers (see
+    ``tests/_meta/test_entrypoint_e2e_only.py``).
+
+    :param output_dir: Pinned as Hydra ``output_dir`` / ``log_dir``; no dataset is read.
+    :param param_spec_name: Key into :data:`synth_setter.data.vst.param_specs` driving
+        the fake param width and the per-param-MSE callback's spec.
+    :returns: Resolved one-step fake-mode train DictConfig.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            return_hydra_config=True,
+            overrides=["experiment=surge/fake_oracle", "trainer=cpu"],
+        )
+        with open_dict(cfg):
+            cfg.paths.root_dir = str(operator_workspace())
+            cfg.paths.output_dir = str(output_dir)
+            cfg.paths.log_dir = str(output_dir)
+            cfg.datamodule.fake = True
+            cfg.datamodule.param_spec_name = param_spec_name
+            cfg.datamodule.batch_size = 2
+            cfg.datamodule.num_workers = 0
+            cfg.datamodule.use_saved_mean_and_variance = False
+            cfg.trainer.max_steps = 1
+            cfg.trainer.limit_val_batches = 0
+            cfg.logger = None
+            # log_per_param_mse keys its spec off ${render.param_spec_name}; pin it
+            # concretely — this train path composes no render group.
+            cfg.callbacks.log_per_param_mse.param_spec = param_spec_name
+    return cfg
+
+
 @pytest.fixture(scope="function")
 def cfg_surge_xt_global(
     accelerator: str, param_spec_name: str, experiment_name: str
