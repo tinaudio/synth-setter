@@ -132,8 +132,8 @@ def _check_call_streamed(args: Sequence[str], *, timeout: float | None = None) -
         finally:
             if timer is not None:
                 timer.cancel()
-            # Reap the group on any abrupt exit (KeyboardInterrupt, write failure)
-            # so a pipe-holding tree is never orphaned; ``__exit__`` then waits.
+            # Kill the group if the direct child is still alive on an abrupt exit
+            # (KeyboardInterrupt, write failure); ``__exit__`` then reaps it.
             if proc.poll() is None:
                 _kill_group()
     # A timer kill surfaces as a signal exit (negative returncode); a child that

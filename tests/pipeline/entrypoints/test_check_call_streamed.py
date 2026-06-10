@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -83,8 +84,10 @@ class TestCheckCallStreamed:
             "print('BEFORE_HANG', flush=True); import time; time.sleep(60)",
         ]
 
+        # 2s leaves the child interpreter startup margin on loaded CI runners;
+        # a kill before the print would fail the BEFORE_HANG assertion below.
         with pytest.raises(subprocess.TimeoutExpired):
-            _check_call_streamed(argv, timeout=0.5)
+            _check_call_streamed(argv, timeout=2.0)
 
         assert "BEFORE_HANG" in capsys.readouterr().err
 
@@ -121,8 +124,9 @@ class TestCheckCallStreamed:
         """A pipe-holding grandchild can't hang the call past the timeout.
 
         Direct child exits 0; the process-group kill reaps the grandchild so the read loop
-        unblocks. The guarded regression is the hang, not the return value — a regression would
-        trip the harness's own wall-clock timeout.
+        unblocks. The elapsed bound turns a kill regression (which would otherwise stall until the
+        grandchild's 60s sleep ends, then pass) into a failure; no pytest-level timeout exists to
+        catch the stall.
         """
         argv = [
             sys.executable,
@@ -134,7 +138,13 @@ class TestCheckCallStreamed:
             "    sys.exit(0)\n",  # direct child exits at once
         ]
 
-        assert _check_call_streamed(argv, timeout=1.0) is None
+        start = time.monotonic()
+        # 3s gives the child startup margin to fork-and-exit before the kill.
+        result = _check_call_streamed(argv, timeout=3.0)
+        elapsed = time.monotonic() - start
+
+        assert result is None
+        assert elapsed < 30, f"group kill did not unblock the read loop ({elapsed:.1f}s)"
 
     def test_non_utf8_child_output_does_not_crash(
         self, capsys: pytest.CaptureFixture[str]
