@@ -436,7 +436,13 @@ def _launch_wandb(
     try:
         wandb.agent(sweep_id, entity=ENTITY, project=PROJECT, count=count)
     finally:
-        _finish_sweep(sweep_id)
+        # Best-effort cleanup: a finalize failure (network error, or a backend
+        # race moving the sweep terminal between the read and write) must not
+        # mask the agent's outcome — its exception, or its success.
+        try:
+            _finish_sweep(sweep_id)
+        except Exception as exc:  # noqa: BLE001 — cleanup must not mask the agent outcome
+            logger.warning(f"could not finalize sweep {ENTITY}/{PROJECT}/{sweep_id}: {exc}")
 
 
 def _finish_sweep(sweep_id: str) -> None:

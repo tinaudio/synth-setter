@@ -346,6 +346,56 @@ def test_wandb_launch_backend_finalized_sweep_skips_state_write(
     assert fake.state == "FINISHED"
 
 
+class _FinalizeBoomApi:
+    """Sweep-state API whose read fails, so finalization raises (network/race)."""
+
+    def get_sweep_state(
+        self, sweep: str, entity: str | None = None, project: str | None = None
+    ) -> str:
+        raise RuntimeError("finalize boom")
+
+    def set_sweep_state(
+        self, sweep: str, state: str, entity: str | None = None, project: str | None = None
+    ) -> None:
+        raise AssertionError("set_sweep_state must not be reached when the read fails")
+
+
+def test_wandb_launch_finalize_error_does_not_mask_agent_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A finalization failure after a clean agent run is swallowed, not raised.
+
+    Finalization is best-effort cleanup in a ``finally``; letting it raise would
+    turn a successful run into a failure.
+
+    :param monkeypatch: Stubs sweep/agent and makes the finalize read raise.
+    """
+    monkeypatch.setattr(inv.wandb, "sweep", lambda *a, **k: "sweep-id")
+    monkeypatch.setattr(inv.wandb, "agent", lambda *a, **k: None)
+    monkeypatch.setattr(inv, "InternalApi", lambda: _FinalizeBoomApi())
+
+    inv.main(["--launcher", "wandb", "--size", "2", "--only", "shuffle_probe"])
+
+
+def test_wandb_launch_finalize_error_does_not_mask_agent_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the agent raises, a finalize failure must not replace that exception.
+
+    :param monkeypatch: Stubs sweep, makes the agent raise, and makes the finalize read raise too.
+    """
+    monkeypatch.setattr(inv.wandb, "sweep", lambda *a, **k: "sweep-id")
+    monkeypatch.setattr(inv, "InternalApi", lambda: _FinalizeBoomApi())
+
+    def _agent_dies(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("agent crashed")
+
+    monkeypatch.setattr(inv.wandb, "agent", _agent_dies)
+
+    with pytest.raises(RuntimeError, match="agent crashed"):
+        inv.main(["--launcher", "wandb", "--size", "2", "--only", "shuffle_probe"])
+
+
 def test_local_count_caps_cells_run_per_experiment(monkeypatch: pytest.MonkeyPatch) -> None:
     """``--count`` caps how many cells each local experiment runs.
 
