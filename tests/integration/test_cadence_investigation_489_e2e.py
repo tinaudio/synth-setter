@@ -26,6 +26,7 @@ from pathlib import Path
 import h5py
 import numpy as np
 import pytest
+import wandb
 
 from synth_setter.data.vst.shapes import PARAM_ARRAY_FIELD
 from synth_setter.pipeline import r2_io
@@ -228,8 +229,31 @@ def test_full_investigation_wandb_online_runs_every_experiment_at_configured_sca
     size = _selected_size()
     experiments = inv.build_experiments(inv.Scale.from_size(size))
 
+    # Record every sweep the orchestrator creates so their final backend
+    # states can be asserted after the run.
+    created_sweeps: list[str] = []
+    real_sweep = inv.wandb.sweep
+
+    def _recording_sweep(config: dict[str, object], *, entity: str, project: str) -> str:
+        sweep_id = real_sweep(config, entity=entity, project=project)
+        created_sweeps.append(sweep_id)
+        return sweep_id
+
+    monkeypatch.setattr(inv.wandb, "sweep", _recording_sweep)
+
     try:
         inv.main(["--launcher", "wandb", "--size", str(size), "--prefix-root", prefix_root])
+
+        # The orchestrator must close its sweeps: one left RUNNING after its
+        # only agent exits dangles in the W&B UI forever.
+        assert len(created_sweeps) == len(experiments)
+        api = wandb.Api(timeout=60)
+        for sweep_id in created_sweeps:
+            sweep = api.sweep(f"{inv.ENTITY}/{inv.PROJECT}/{sweep_id}")
+            assert sweep.state == "FINISHED", (
+                f"sweep {sweep_id} ended {sweep.state}, not FINISHED — the "
+                "launcher did not finalize it after its agent stopped"
+            )
 
         source_root = inv.reference_copy_uri(prefix_root=prefix_root)
         source_shard = join_uri(source_root, _FIRST_SHARD)

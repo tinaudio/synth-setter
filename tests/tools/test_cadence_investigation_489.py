@@ -235,6 +235,7 @@ def test_wandb_launch_disables_agent_flapping(monkeypatch: pytest.MonkeyPatch) -
 
     monkeypatch.delenv(wandb.env.AGENT_DISABLE_FLAPPING, raising=False)
     monkeypatch.setattr(inv.wandb, "sweep", lambda *a, **k: "sweep-id")
+    monkeypatch.setattr(inv, "InternalApi", lambda: _FakeSweepStateApi())
     seen: dict[str, str | None] = {}
     monkeypatch.setattr(
         inv.wandb,
@@ -245,6 +246,104 @@ def test_wandb_launch_disables_agent_flapping(monkeypatch: pytest.MonkeyPatch) -
     inv.main(["--launcher", "wandb", "--size", "2", "--only", "shuffle_probe"])
 
     assert seen["flapping"] == "true"
+
+
+class _FakeSweepStateApi:
+    """In-memory stand-in for the internal wandb API's sweep-state calls.
+
+    Mirrors the real ``set_sweep_state`` guard: writing to a sweep that is no
+    longer RUNNING/PENDING/PAUSED raises, so these tests catch an
+    implementation that writes unconditionally.
+    """
+
+    def __init__(self, state: str = "RUNNING") -> None:
+        """Start the fake sweep in ``state``.
+
+        :param state: Backend sweep state the fake reports until written to.
+        """
+        self.state = state
+
+    def get_sweep_state(
+        self, sweep: str, entity: str | None = None, project: str | None = None
+    ) -> str:
+        return self.state
+
+    def set_sweep_state(
+        self, sweep: str, state: str, entity: str | None = None, project: str | None = None
+    ) -> None:
+        if self.state not in ("RUNNING", "PENDING", "PAUSED"):
+            raise RuntimeError(f"Sweep already {self.state.lower()}.")
+        self.state = state
+
+
+def _stub_wandb_launch(monkeypatch: pytest.MonkeyPatch, fake_api: _FakeSweepStateApi) -> None:
+    """Stub sweep creation and the agent, and route state calls to ``fake_api``.
+
+    :param monkeypatch: Applies the stubs for the calling test.
+    :param fake_api: Receives every sweep-state read/write the launcher makes.
+    """
+    monkeypatch.setattr(inv.wandb, "sweep", lambda *a, **k: "sweep-id")
+    monkeypatch.setattr(inv.wandb, "agent", lambda *a, **k: None)
+    monkeypatch.setattr(inv, "InternalApi", lambda: fake_api)
+
+
+def test_wandb_launch_agent_completion_marks_sweep_finished(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """After the agent returns, the still-RUNNING sweep is marked FINISHED.
+
+    The backend finalizes a sweep only when an agent heartbeat polls past grid exhaustion, which
+    the legacy agent skips on count caps and failure shutdowns, so the orchestrator must close its
+    own sweep.
+
+    :param monkeypatch: Stubs sweep/agent and routes state calls to the fake API.
+    """
+    fake = _FakeSweepStateApi(state="RUNNING")
+    _stub_wandb_launch(monkeypatch, fake)
+
+    inv.main(["--launcher", "wandb", "--size", "2", "--only", "shuffle_probe"])
+
+    assert fake.state == "FINISHED"
+
+
+def test_wandb_launch_agent_failure_still_marks_sweep_finished(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An agent that raises still leaves its sweep FINISHED, then propagates.
+
+    :param monkeypatch: Stubs sweep creation, makes the agent raise, and routes state calls to the
+        fake API.
+    """
+    fake = _FakeSweepStateApi(state="RUNNING")
+    _stub_wandb_launch(monkeypatch, fake)
+
+    def _agent_dies(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("agent crashed")
+
+    monkeypatch.setattr(inv.wandb, "agent", _agent_dies)
+
+    with pytest.raises(RuntimeError, match="agent crashed"):
+        inv.main(["--launcher", "wandb", "--size", "2", "--only", "shuffle_probe"])
+
+    assert fake.state == "FINISHED"
+
+
+def test_wandb_launch_backend_finalized_sweep_skips_state_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A sweep the backend already finalized is left untouched (no failing write).
+
+    The fake raises on any write to a terminal-state sweep, exactly like the real API, so this
+    passes only when the launcher checks before writing.
+
+    :param monkeypatch: Stubs sweep/agent and routes state calls to the fake API.
+    """
+    fake = _FakeSweepStateApi(state="FINISHED")
+    _stub_wandb_launch(monkeypatch, fake)
+
+    inv.main(["--launcher", "wandb", "--size", "2", "--only", "shuffle_probe"])
+
+    assert fake.state == "FINISHED"
 
 
 def test_local_count_caps_cells_run_per_experiment(monkeypatch: pytest.MonkeyPatch) -> None:

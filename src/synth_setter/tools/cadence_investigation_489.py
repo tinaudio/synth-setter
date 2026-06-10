@@ -31,6 +31,7 @@ from typing import Any
 import wandb
 import wandb.env
 from loguru import logger
+from wandb.apis.internal import Api as InternalApi
 
 from synth_setter.pipeline.schemas.prefix import DEFAULT_R2_PREFIX_ROOT, make_r2_prefix
 
@@ -432,7 +433,28 @@ def _launch_wandb(
     # wandb.old.core sets, so the agent crashes with AttributeError unless flapping
     # is disabled; the grid is already bounded by count, so flapping adds no value.
     os.environ.setdefault(wandb.env.AGENT_DISABLE_FLAPPING, "true")
-    wandb.agent(sweep_id, entity=ENTITY, project=PROJECT, count=count)
+    try:
+        wandb.agent(sweep_id, entity=ENTITY, project=PROJECT, count=count)
+    finally:
+        _finish_sweep(sweep_id)
+
+
+def _finish_sweep(sweep_id: str) -> None:
+    """Mark a sweep FINISHED unless the backend already moved it off an active state.
+
+    The legacy agent exits without the heartbeat that finalizes a sweep (count
+    caps, failure shutdowns), leaving it RUNNING forever; this orchestrator runs
+    the sweep's only agent, so once that agent stops it closes the sweep.
+
+    :param sweep_id: Sweep to finalize within ``ENTITY``/``PROJECT``.
+    """
+    api = InternalApi()
+    state = api.get_sweep_state(sweep=sweep_id, entity=ENTITY, project=PROJECT)
+    # Writing to an already-terminal sweep raises in the wandb API, so skip it.
+    if state not in ("RUNNING", "PENDING", "PAUSED"):
+        return
+    api.set_sweep_state(sweep=sweep_id, state="FINISHED", entity=ENTITY, project=PROJECT)
+    logger.info(f"marked sweep {ENTITY}/{PROJECT}/{sweep_id} {state} -> FINISHED")
 
 
 def run_investigation(
