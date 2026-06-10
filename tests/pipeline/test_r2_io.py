@@ -60,6 +60,38 @@ class TestToRclonePath:
             r2_io._to_rclone_path("local-spec.json")
 
 
+class TestRcloneArgv:
+    """Tests for _rclone_argv — the centralized reliability-flag builder."""
+
+    def test_default_timeout_emits_full_reliability_flag_set(self) -> None:
+        """The default builder pins the verb, reliability flags, then operands in order."""
+        assert r2_io._rclone_argv("copyto", "r2:bucket/key", "dest/file") == [
+            "rclone",
+            "copyto",
+            "-vv",
+            "--checksum",
+            "--contimeout=30s",
+            "--timeout=300s",
+            "--retries=3",
+            "r2:bucket/key",
+            "dest/file",
+        ]
+
+    def test_custom_timeout_widens_only_the_io_timeout(self) -> None:
+        """A non-default timeout (the dir-upload 3h) lands on ``--timeout`` alone."""
+        assert r2_io._rclone_argv("copy", "src/dir", "r2:bucket/p", timeout="3h") == [
+            "rclone",
+            "copy",
+            "-vv",
+            "--checksum",
+            "--contimeout=30s",
+            "--timeout=3h",
+            "--retries=3",
+            "src/dir",
+            "r2:bucket/p",
+        ]
+
+
 class TestToS3Uri:
     """Tests for to_s3_uri — r2:// → s3:// scheme rewrite for W&B references."""
 

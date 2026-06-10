@@ -203,28 +203,17 @@ def _unsupported_cadence_reason(render_cfg: DictConfig) -> str | None:
 
 
 def _rclone_copy(src: str, dest: str) -> None:
-    """Upload a file to R2 via rclone with checksum verification.
+    """Upload a file to R2 via ``rclone copy`` with the shared reliability flags.
 
-    Connection-level timeouts and retries are rclone's job, not ours:
-      --contimeout=30s   bound the TCP connect phase
-      --timeout=300s     bound any single HTTP request (PUT, list, etc.)
-      --retries=3        retry the whole copy on transient failure
-      -vv                emit per-request debug log so a failure leaves
-                         actionable evidence in the worker stdout
-    A non-zero rclone exit raises CalledProcessError and the run fails — we
-    do not silently accept partial uploads behind a Python wall-clock.
+    Connect/IO timeouts and retries come from :func:`r2_io._rclone_argv`, so a
+    transient blip retries instead of leaving a partial upload behind a Python
+    wall-clock. A non-zero rclone exit raises ``CalledProcessError`` and the run
+    fails.
+
+    :param src: Local source path passed to rclone verbatim.
+    :param dest: R2 destination passed to rclone verbatim.
     """
-    args = [  # noqa: S607 — rclone resolved by the image's PATH
-        "rclone",
-        "copy",
-        "-vv",
-        "--checksum",
-        "--contimeout=30s",
-        "--timeout=300s",
-        "--retries=3",
-        src,
-        dest,
-    ]
+    args = r2_io._rclone_argv("copy", src, dest)
     subprocess.check_call(args)  # noqa: S603 — args from validated spec
     # Distinct sentinel so we can grep CI logs for "rclone returned" and tell
     # at a glance whether the rclone subprocess actually exited (vs. hanging
