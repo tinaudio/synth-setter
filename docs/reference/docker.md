@@ -115,10 +115,11 @@ The `devcontainer-tools` stage is a sibling of `dev-snapshot` — both stages
 build `FROM dev-base`, the shared parent that holds Surge XT, the venv, and
 the synth-setter source. `devcontainer-tools` adds interactive CLI tooling
 (see the stage's `apt-get install` list and the GitHub CLI install block),
-Node.js + `@anthropic-ai/claude-code` installed system-wide, the OpenAI
-`@openai/codex` CLI installed for the `dev` user via a per-user npm prefix
-(`~/.npm-global`, on PATH) so later `npm install -g` runs avoid EACCES on the
-root-owned global tree, the Google Antigravity (`agy`) CLI installed by its
+Node.js installed system-wide, the `@anthropic-ai/claude-code` and
+`@openai/codex` CLIs installed for the `dev` user via a per-user npm prefix
+(`~/.npm-global`, on PATH) so later `npm install -g` runs — including
+claude-code's in-app self-update — avoid EACCES on the root-owned global tree
+and are not shadowed by a system-wide copy, the Google Antigravity (`agy`) CLI installed by its
 upstream `install.sh` into `~/.local/bin` (also on PATH), the zellij
 terminal multiplexer (pinned upstream musl binary, SHA256-verified, in
 `/usr/local/bin`), a non-root

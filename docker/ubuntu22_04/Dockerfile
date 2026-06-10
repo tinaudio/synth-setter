@@ -438,16 +438,16 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
       > /etc/apt/sources.list.d/github-cli.list \
   && apt-get update && apt-get install -y --no-install-recommends gh
 
-# --- Node.js + Claude Code CLI (system-wide) ---
-ARG CLAUDE_CODE_VERSION=latest
+# --- Node.js (system-wide) ---
+# CLI agents (claude-code, codex) install per-user below: a root-owned /usr/local/bin
+# copy would shadow dev's auto-updated ~/.npm-global copy in PATH, pinning the version.
 COPY --from=node:20-bullseye-slim /usr/local/bin/node /usr/local/bin/node
 COPY --from=node:20-bullseye-slim /usr/local/lib/node_modules /usr/local/lib/node_modules
 
 RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
  && ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
  && node --version \
- && npm --version \
- && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+ && npm --version
 
 # Zellij terminal multiplexer (https://github.com/zellij-org/zellij) — not in
 # the Ubuntu 22.04 apt repos, so install the upstream static musl binary,
@@ -500,14 +500,18 @@ ENV PATH="$PATH:/home/${USERNAME}/.npm-global/bin:/home/${USERNAME}/.local/bin"
 # the devcontainer (see #1423); stage under .cache, which wandb creates on demand.
 ENV WANDB_DATA_DIR="/home/${USERNAME}/.cache/wandb"
 
-# dev's `npm install -g` would EACCES on the root-owned global tree (claude-code
-# is baked in as root); a per-user prefix sends it to a writable one. $HOME is
-# unset after USER, so export it per-RUN (not ENV — that leaks to root sessions).
+# dev's `npm install -g` would EACCES on the root-owned global tree (/usr/local);
+# a per-user prefix sends it to a writable one, so the in-app updater can replace
+# claude-code in place. $HOME is unset after USER, so export it per-RUN (not ENV —
+# that leaks to root sessions).
+ARG CLAUDE_CODE_VERSION=latest
 ARG CODEX_VERSION=latest
 RUN export HOME="/home/${USERNAME}" \
  && npm config set prefix "/home/${USERNAME}/.npm-global" \
+ && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
  && npm install -g "@openai/codex@${CODEX_VERSION}" \
  && npm cache clean --force \
+ && claude --version \
  && codex --version
 
 # Antigravity (Google) ships the standalone `agy` binary, not on npm; its
