@@ -91,6 +91,9 @@ class Scale:
 FULL = Scale(sizes=(40, 40, 40), samples_per_shard=20, reuse_depths=(4, 20, 40, 80))
 # Smallest run that still exercises generate -> copy -> oracle for tests.
 SMOKE = Scale(sizes=(2, 2, 2), samples_per_shard=2, reuse_depths=(1, 2))
+# Named dataset sizes selectable via the CLI ``--scale`` flag (and the cadence
+# workflow's ``cadence_scale`` input, which the e2e test reads from the env).
+SCALES: dict[str, Scale] = {"full": FULL, "smoke": SMOKE}
 
 
 @dataclass(frozen=True)
@@ -482,7 +485,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--scale",
-        choices=("full", "smoke"),
+        choices=tuple(SCALES),
         default="full",
         help="full #489 sizes (default) or a tiny end-to-end smoke run",
     )
@@ -516,7 +519,7 @@ def main(argv: list[str] | None = None) -> None:
     """
     args = _parse_args(argv)
     run_investigation(
-        scale=SMOKE if args.scale == "smoke" else FULL,
+        scale=SCALES[args.scale],
         launcher=args.launcher,
         prefix_root=args.prefix_root,
         only=[name for name in (n.strip() for n in args.only.split(",")) if name]
