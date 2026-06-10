@@ -75,7 +75,8 @@ def _rclone_argv(verb: str, *operands: str, timeout: str = "300s") -> list[str]:
     the 300s single-file default.
 
     :param verb: rclone subcommand (``copy`` / ``copyto``).
-    :param *operands: Source/destination args appended verbatim after the flags.
+    :param \\*operands: Per-call args (extra flags like ``--immutable`` plus the
+        source/destination paths) appended verbatim after the shared flags.
     :param timeout: Value for ``--timeout`` (IO idle timeout).
     :returns: The full ``["rclone", verb, ...flags, *operands]`` argv list.
     """
