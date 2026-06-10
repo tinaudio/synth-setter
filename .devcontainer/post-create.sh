@@ -110,4 +110,8 @@ unset __ss_root
 EOF
 fi
 
+# Project skills into ~/.agents/skills for Gemini/Antigravity discovery;
+# best-effort (`|| true` keeps a fresh box without the plugin from failing). See #1561.
+"$dir/scripts/dev/link-skills.sh" || true
+
 echo "Dev container ready. Run 'make test-fast' to verify."
