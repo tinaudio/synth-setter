@@ -87,7 +87,7 @@ def _check_call_streamed(args: Sequence[str], *, timeout: float | None = None) -
     ``PYTHONUNBUFFERED=1`` keeps Python children line-buffered on the pipe so a
     hang still leaves its last lines visible (the #735 diagnosis property).
 
-    :param args: argv list, exactly as ``subprocess.check_call`` takes it.
+    :param args: Child argv, run unquoted with no shell, so callers pre-validate it.
     :param timeout: Wall-clock seconds before the child's process group is
         killed; ``None`` means no limit.
     :raises subprocess.CalledProcessError: Child exited non-zero.
@@ -97,7 +97,6 @@ def _check_call_streamed(args: Sequence[str], *, timeout: float | None = None) -
         args,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        text=True,
         encoding="utf-8",
         errors="replace",
         env={**os.environ, "PYTHONUNBUFFERED": "1"},
@@ -155,8 +154,8 @@ def _run_oracle_eval_subprocess(
 ) -> None:
     """Run the fake-oracle eval over one split of ``dataset_root``.
 
-    ``check=True`` so a non-zero eval exit (or wall-clock timeout) propagates
-    to the caller.
+    ``_check_call_streamed`` raises on a non-zero eval exit or wall-clock
+    timeout, so either propagates to the caller.
 
     :param dataset_root: Dir holding the finalized HDF5 splits, their source
         shards, and ``stats.npz``. The splits are virtual datasets that

@@ -606,11 +606,11 @@ class TestRun:
         :param spec: Fixture-provided ``DatasetSpec``.
         :param tmp_path: Caller-supplied work_dir for ``generate()``.
         """
-        # Renderer-only side effect: return 0 without writing the shard file,
+        # Renderer-only side effect: succeed without writing the shard file,
         # so the ``shard_path.is_file()`` guard raises before any rclone call.
         with patch(
             "synth_setter.cli.generate_dataset._check_call_streamed",
-            return_value=0,
+            return_value=None,
         ):
             with pytest.raises(RuntimeError, match="did not write expected shard file"):
                 generate(spec, tmp_path, [])
@@ -1918,8 +1918,8 @@ class TestMainDispatchBranches:
         """
         import synth_setter.cli.generate_dataset as gd
 
-        run_mock = MagicMock()
-        monkeypatch.setattr(gd, "_check_call_streamed", run_mock)
+        streamed_call_mock = MagicMock()
+        monkeypatch.setattr(gd, "_check_call_streamed", streamed_call_mock)
 
         dataset_root = tmp_path / "data"
         dataset_root.mkdir()
@@ -1943,8 +1943,11 @@ class TestMainDispatchBranches:
             predict_file=predict_file,
         )
 
-        run_mock.assert_called_once()
-        called_argv = run_mock.call_args[0][0]
+        streamed_call_mock.assert_called_once()
+        # The timeout bound is the helper's only guard against an unbounded
+        # eval hang (#735); pin it so a dropped kwarg fails loudly.
+        assert streamed_call_mock.call_args.kwargs["timeout"] == gd._ORACLE_EVAL_TIMEOUT_SECONDS
+        called_argv = streamed_call_mock.call_args[0][0]
         assert "-m" in called_argv
         assert "synth_setter.cli.eval" in called_argv
         assert "experiment=surge/fake_oracle" in called_argv
@@ -2001,8 +2004,8 @@ class TestMainDispatchBranches:
         """
         import synth_setter.cli.generate_dataset as gd
 
-        run_mock = MagicMock()
-        monkeypatch.setattr(gd, "_check_call_streamed", run_mock)
+        streamed_call_mock = MagicMock()
+        monkeypatch.setattr(gd, "_check_call_streamed", streamed_call_mock)
 
         dataset_root = tmp_path / "data"
         dataset_root.mkdir()
@@ -2019,7 +2022,7 @@ class TestMainDispatchBranches:
             metric_prefix="train/",
         )
 
-        called_argv = run_mock.call_args[0][0]
+        called_argv = streamed_call_mock.call_args[0][0]
         # ``+`` appends the key: it is absent from eval.yaml's evaluation group.
         assert "+evaluation.metric_prefix=train/" in called_argv
 
@@ -2042,8 +2045,8 @@ class TestMainDispatchBranches:
         """
         import synth_setter.cli.generate_dataset as gd
 
-        run_mock = MagicMock()
-        monkeypatch.setattr(gd, "_check_call_streamed", run_mock)
+        streamed_call_mock = MagicMock()
+        monkeypatch.setattr(gd, "_check_call_streamed", streamed_call_mock)
 
         with pytest.raises(FileNotFoundError, match=r"test\.h5"):
             gd._run_oracle_eval_subprocess(
@@ -2055,7 +2058,7 @@ class TestMainDispatchBranches:
                 predict_file=tmp_path / "test.h5",
             )
 
-        run_mock.assert_not_called()
+        streamed_call_mock.assert_not_called()
 
     def test_run_oracle_eval_subprocess_missing_predict_file_raises(
         self,
@@ -2075,8 +2078,8 @@ class TestMainDispatchBranches:
         """
         import synth_setter.cli.generate_dataset as gd
 
-        run_mock = MagicMock()
-        monkeypatch.setattr(gd, "_check_call_streamed", run_mock)
+        streamed_call_mock = MagicMock()
+        monkeypatch.setattr(gd, "_check_call_streamed", streamed_call_mock)
 
         dataset_root = tmp_path / "data"
         dataset_root.mkdir()
@@ -2093,7 +2096,7 @@ class TestMainDispatchBranches:
                 predict_file=tmp_path / "nonexistent_split.h5",
             )
 
-        run_mock.assert_not_called()
+        streamed_call_mock.assert_not_called()
 
     def test_main_oracle_eval_inline_default_false_skips(
         self,

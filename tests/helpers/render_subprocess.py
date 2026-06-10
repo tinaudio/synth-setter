@@ -5,8 +5,7 @@ The state-based generate-entrypoint tests in
 ``synth_setter.cli.generate_dataset._check_call_streamed`` seam that the
 renderer *and* the rclone shard upload both go through; this module is the one
 dispatch contract those ~11 call sites share instead of each re-deriving it
-(see #1354). The seam moved off ``subprocess.check_call`` when render/eval/rclone
-output started teeing through the parent's ``sys.stderr`` for wandb (#1465).
+(see #1354).
 """
 
 from __future__ import annotations
@@ -16,9 +15,8 @@ from pathlib import Path
 
 from tests.helpers.subprocess_args import find_script_index
 
-# Captured at import — before any test patches ``_check_call_streamed`` — so the
-# rclone passthrough reaches the real binary instead of recursing through the
-# patch the production code shares with the renderer.
+# Real binary for the rclone passthrough; tests patch ``_check_call_streamed``,
+# never this symbol.
 REAL_CHECK_CALL = subprocess.check_call
 
 

@@ -8,6 +8,7 @@ on the streamed output via ``capsys``; no part of the SUT is mocked.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 
@@ -66,21 +67,62 @@ class TestCheckCallStreamed:
 
         assert "BEFORE_CRASH" in capsys.readouterr().err
 
-    def test_timeout_kills_child_and_raises_timeoutexpired(self) -> None:
-        """A child outliving ``timeout`` is killed and ``TimeoutExpired`` raised."""
-        argv = [sys.executable, "-c", "import time; time.sleep(60)"]
+    def test_timeout_kills_child_and_raises_timeoutexpired(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A child outliving ``timeout`` is killed; pre-hang output was streamed.
+
+        The pre-hang assertion pins the #735 diagnosis property: a hung child's
+        last lines must already be on the parent's stderr when it is killed.
+
+        :param capsys: Captures the parent-process ``sys.stderr`` writes.
+        """
+        argv = [
+            sys.executable,
+            "-c",
+            "print('BEFORE_HANG', flush=True); import time; time.sleep(60)",
+        ]
 
         with pytest.raises(subprocess.TimeoutExpired):
             _check_call_streamed(argv, timeout=0.5)
 
-    def test_timeout_reaps_pipe_holding_grandchild_without_hanging(self) -> None:
-        """A grandchild inheriting the pipe can't hang the call past the timeout.
+        assert "BEFORE_HANG" in capsys.readouterr().err
 
-        The direct child exits 0 but forks a grandchild that holds the merged stdout pipe open for
-        60s. Reading to EOF would block far past the timeout; the process-group kill reaps the
-        grandchild so the read loop unblocks and the call returns promptly. The direct child
-        succeeded, so this is a clean return — the regression guarded here is the *hang*, which
-        would trip the test harness's own wall-clock timeout instead.
+    def test_zero_exit_under_timeout_returns_none(self) -> None:
+        """A child finishing well inside ``timeout`` returns cleanly (timer cancelled)."""
+        assert _check_call_streamed([sys.executable, "-c", "pass"], timeout=30) is None
+
+    def test_child_env_keeps_parent_vars_and_sets_unbuffered(
+        self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The child sees the parent env plus ``PYTHONUNBUFFERED=1``.
+
+        Callers depend on inherited env (``PATH``, ``WANDB_*`` for rclone/eval
+        children) and on the unbuffered pin for live hang diagnosis (#735).
+
+        :param capsys: Captures the parent-process ``sys.stderr`` writes.
+        :param monkeypatch: Sets a sentinel var in the parent env.
+        """
+        monkeypatch.setenv("STREAMED_TEST_VAR", "carried")
+
+        _check_call_streamed(
+            [
+                sys.executable,
+                "-c",
+                "import os; print(os.environ['PYTHONUNBUFFERED'], "
+                "os.environ['STREAMED_TEST_VAR'])",
+            ]
+        )
+
+        assert "1 carried" in capsys.readouterr().err
+
+    @pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork (POSIX)")
+    def test_timeout_reaps_pipe_holding_grandchild_without_hanging(self) -> None:
+        """A pipe-holding grandchild can't hang the call past the timeout.
+
+        Direct child exits 0; the process-group kill reaps the grandchild so the read loop
+        unblocks. The guarded regression is the hang, not the return value — a regression would
+        trip the harness's own wall-clock timeout.
         """
         argv = [
             sys.executable,
