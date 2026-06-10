@@ -1,6 +1,6 @@
 # Docker Reference
 
-> **Last verified:** 2026-06-02
+> **Last verified:** 2026-06-10
 
 How to build, run, and debug Docker images for the synth-setter training
 pipeline. Intended for developers working locally or in CI environments.
@@ -117,9 +117,9 @@ the synth-setter source. `devcontainer-tools` adds interactive CLI tooling
 (see the stage's `apt-get install` list and the GitHub CLI install block),
 Node.js installed system-wide, the `@anthropic-ai/claude-code` and
 `@openai/codex` CLIs installed for the `dev` user via a per-user npm prefix
-(`~/.npm-global`, on PATH) so later `npm install -g` runs — including
-claude-code's in-app self-update — avoid EACCES on the root-owned global tree
-and are not shadowed by a system-wide copy, the Google Antigravity (`agy`) CLI installed by its
+(`~/.npm-global`, on PATH) — so later `npm install -g` runs, including
+claude-code's in-app self-update, avoid EACCES on the root-owned tree and aren't
+shadowed by a system-wide copy; the Google Antigravity (`agy`) CLI installed by its
 upstream `install.sh` into `~/.local/bin` (also on PATH), the zellij
 terminal multiplexer (pinned upstream musl binary, SHA256-verified, in
 `/usr/local/bin`), a non-root
