@@ -100,14 +100,16 @@ def _check_call_streamed(args: Sequence[str], *, timeout: float | None = None) -
         encoding="utf-8",
         errors="replace",
         env={**os.environ, "PYTHONUNBUFFERED": "1"},
-        # New session → the child leads its own process group, so the kill paths
-        # below reap grandchildren (e.g. the headless-VST wrapper tree) that would
-        # otherwise hold the pipe open and block the read loop past the timeout.
+        # Child leads its own process group so the kill paths reap grandchildren
+        # (e.g. the headless-VST wrapper tree) holding the pipe open past the timeout.
         start_new_session=True,
     ) as proc:
         timed_out = threading.Event()
 
         def _kill_group() -> None:
+            if proc.returncode is not None:
+                # Already reaped — killpg here could hit a recycled pgid.
+                return
             try:
                 os.killpg(proc.pid, signal.SIGKILL)
             except ProcessLookupError:
