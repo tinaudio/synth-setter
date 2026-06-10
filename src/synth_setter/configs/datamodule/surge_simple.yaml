@@ -1,4 +1,5 @@
 defaults:
   - vst
+  - _self_
 
 param_spec_name: surge_simple

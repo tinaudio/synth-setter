@@ -1,4 +1,5 @@
 defaults:
   - vst
+  - _self_
 
 repeat_first_batch: true

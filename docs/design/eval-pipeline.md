@@ -315,13 +315,15 @@ Four metrics are computed for each (predicted, target) audio pair:
 When `datamodule.download_dataset_root_uri` is explicitly provided (via CLI override or experiment config), `VSTDataModule.prepare_data()` no-clobber-copies the dataset into `datamodule.dataset_root` before the data loaders are created.
 
 ```yaml
-# src/synth_setter/configs/datamodule/surge_simple.yaml — download URI opt-in, no env vars for paths
+# src/synth_setter/configs/datamodule/vst.yaml — base config; download URI opt-in, no env vars for paths
 _target_: synth_setter.data.surge_datamodule.VSTDataModule
 dataset_root: ${paths.output_dir}/data
 download_dataset_root_uri: null  # null → local-only; opt in explicitly
 batch_size: 128
 num_workers: 11
 ```
+
+`surge_simple.yaml` is a thin overlay (`defaults: [vst, _self_]`) that only overrides `param_spec_name`; it inherits the keys above from `vst.yaml`.
 
 To use R2, pass it explicitly:
 
