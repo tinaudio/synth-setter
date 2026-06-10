@@ -88,10 +88,12 @@ def _check_call_streamed(args: Sequence[str], *, timeout: float | None = None) -
     hang still leaves its last lines visible (the #735 diagnosis property).
 
     :param args: Child argv, run unquoted with no shell, so callers pre-validate it.
-    :param timeout: Wall-clock seconds before the child's process group is
-        killed; ``None`` means no limit.
+    :param timeout: Hard wall-clock bound in seconds; once it elapses the
+        child's process group is killed and the call raises regardless of the
+        direct child's own exit. ``None`` means no limit.
     :raises subprocess.CalledProcessError: Child exited non-zero.
-    :raises subprocess.TimeoutExpired: Child outlived ``timeout`` and was killed.
+    :raises subprocess.TimeoutExpired: ``timeout`` elapsed before the read loop
+        drained, so the process group was killed.
     """
     with subprocess.Popen(  # noqa: S603 — argv built from validated specs by callers
         args,
@@ -136,9 +138,10 @@ def _check_call_streamed(args: Sequence[str], *, timeout: float | None = None) -
             # (KeyboardInterrupt, write failure); ``__exit__`` then reaps it.
             if proc.poll() is None:
                 _kill_group()
-    # A timer kill surfaces as a signal exit (negative returncode); a child that
-    # beat the timer to a natural exit keeps its truthful exception type.
-    if timeout is not None and timed_out.is_set() and returncode < 0:
+    # Any timer fire means the wall-clock budget was exceeded — surface it as a
+    # timeout even when the direct child already exited 0 but a pipe-holding
+    # grandchild kept the read loop blocked until the group kill.
+    if timeout is not None and timed_out.is_set():
         raise subprocess.TimeoutExpired(args, timeout)
     if returncode != 0:
         raise subprocess.CalledProcessError(returncode, args)

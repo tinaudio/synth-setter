@@ -120,13 +120,14 @@ class TestCheckCallStreamed:
         assert "1 carried" in capsys.readouterr().err
 
     @pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork (POSIX)")
-    def test_timeout_reaps_pipe_holding_grandchild_without_hanging(self) -> None:
-        """A pipe-holding grandchild can't hang the call past the timeout.
+    def test_timeout_reaps_pipe_holding_grandchild_and_raises(self) -> None:
+        """A pipe-holding grandchild raises ``TimeoutExpired``, not a hang.
 
         Direct child exits 0; the process-group kill reaps the grandchild so the read loop
-        unblocks. The elapsed bound turns a kill regression (which would otherwise stall until the
-        grandchild's 60s sleep ends, then pass) into a failure; no pytest-level timeout exists to
-        catch the stall.
+        unblocks. The timer firing means the wall-clock budget was exceeded, so the call surfaces a
+        timeout rather than masking it as success. The elapsed bound turns a kill regression (which
+        would otherwise stall until the grandchild's 60s sleep ends) into a failure; no pytest-
+        level timeout exists to catch the stall.
         """
         argv = [
             sys.executable,
@@ -140,10 +141,10 @@ class TestCheckCallStreamed:
 
         start = time.monotonic()
         # 3s gives the child startup margin to fork-and-exit before the kill.
-        result = _check_call_streamed(argv, timeout=3.0)
+        with pytest.raises(subprocess.TimeoutExpired):
+            _check_call_streamed(argv, timeout=3.0)
         elapsed = time.monotonic() - start
 
-        assert result is None
         assert elapsed < 30, f"group kill did not unblock the read loop ({elapsed:.1f}s)"
 
     def test_non_utf8_child_output_does_not_crash(
