@@ -62,7 +62,7 @@ def test_resolve_preset_path_none_falls_back_to_registry() -> None:
 
 def test_resolve_preset_path_unknown_spec_raises_key_error() -> None:
     """A ``None`` path with an unregistered spec raises ``KeyError``."""
-    with pytest.raises(KeyError):
+    with pytest.raises(KeyError, match="does_not_exist"):
         resolve_preset_path(None, "does_not_exist")
 
 

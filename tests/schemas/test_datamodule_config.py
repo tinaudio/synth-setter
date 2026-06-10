@@ -66,7 +66,7 @@ class TestSurgeDatamoduleOverlays:
         assert subtree["_target_"].endswith("VSTDataModule")
 
     def test_surge_simple_overlays_param_spec_name_surge_simple(self) -> None:
-        """``surge_simple`` overrides ``param_spec_name`` to ``surge_simple`` over the ``vst`` base."""
+        """``surge_simple`` overrides ``param_spec_name`` over the ``vst`` base."""
         subtree = compose_subtree("datamodule", "surge_simple")
         assert subtree["param_spec_name"] == "surge_simple"
         assert subtree["_target_"].endswith("VSTDataModule")

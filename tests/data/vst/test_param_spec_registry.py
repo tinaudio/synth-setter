@@ -48,7 +48,7 @@ def test_default_plugin_path_falls_back_to_bundle_when_env_empty(
 
 
 def test_param_spec_widths_match_known_values() -> None:
-    """Hardcoded width tripwires guard the three shipped specs against silent drift."""
+    """Hardcoded width tripwires guard the shipped specs against silent drift."""
     assert len(param_specs["surge_xt"]) == 300
     assert len(param_specs["surge_simple"]) == 92
     assert len(param_specs["surge_4"]) == 7

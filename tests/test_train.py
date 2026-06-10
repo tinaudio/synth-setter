@@ -239,9 +239,8 @@ def test_train_fake_mode_nondefault_spec_sizes_batches_from_registry(tmp_path: P
         cfg.trainer.max_steps = 1
         cfg.trainer.limit_val_batches = 0
         cfg.logger = None
-        # The fake_oracle callback keys its per-param spec off the render group
-        # (${render.param_spec_name}); pin it concretely since this train path
-        # composes no render group.
+        # log_per_param_mse keys its spec off ${render.param_spec_name}; pin it
+        # concretely — this train path composes no render group.
         cfg.callbacks.log_per_param_mse.param_spec = "surge_simple"
 
     HydraConfig().set_config(cfg)
