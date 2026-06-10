@@ -29,9 +29,10 @@ agent you launch that agent and relay its result.
 2. Spawn exactly **one** `general-purpose` agent. Its prompt is the entire
    "## Orchestrator agent brief" section below, with `<N>` substituted (or the
    "resolve the target yourself" instruction when no number was passed).
-3. The agent returns the **full rendered Markdown report** plus the sentinel
-   path it wrote. Print the report to the user verbatim (it is the human
-   deliverable) and note the sentinel path. Do not re-run the pipeline.
+3. The agent returns the **full rendered Markdown report** ending in a final
+   `Sentinel: <path>` line. Print exactly what the orchestrator returned,
+   verbatim — that trailing line already surfaces the sentinel path, so do not
+   append any narration of your own. Do not re-run the pipeline.
 
 Spawn only this one orchestrator. It launches its own parallel per-skill review
 sub-agents; you never launch those directly.
@@ -49,7 +50,10 @@ sub-agents; you never launch those directly.
 > hand.
 >
 > **PR mode.** Use this when an explicit `<N>` was passed, or when
-> `gh pr view --json number` resolves a PR for the current branch:
+> `gh pr view --json number` resolves a PR for the current branch. If no `<N>`
+> was passed, first resolve it from the current branch
+> (`N=$(gh pr view --json number -q .number)`) and use that value wherever `<N>`
+> appears below — never run the command with the literal `<N>` placeholder:
 >
 > ```bash
 > gh pr view <N> --repo "$(gh repo view --json nameWithOwner -q .nameWithOwner)" \
