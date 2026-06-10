@@ -179,7 +179,7 @@ ______________________________________________________________________
 | ----------------- | ------------- | --------------------------------- |
 | `data-generation` | Data pipeline | `pipeline.cli finalize` (planned) |
 | `training`        | Training      | `src/synth_setter/cli/train.py`   |
-| `evaluation`      | Evaluation    | eval script                       |
+| `evaluation`      | Evaluation    | `src/synth_setter/cli/eval.py`    |
 
 > **Note:** `pipeline.cli finalize` is the target CLI (Phase 5). In Docker, the finalize step runs as `MODE=finalize-shards` (scoped, validated on experiment branch — [#408](https://github.com/tinaudio/synth-setter/issues/408)). Current entrypoint: `pipeline.entrypoints.generate_dataset`.
 
@@ -196,12 +196,12 @@ ______________________________________________________________________
 | CPU Slow Tests  | `cpu-slow.yml`                 | push (main), dispatch                | `ubuntu-latest-4core`           | —                   | —                                                                |
 | Data Generation | `generate-dataset-shards.yaml` | `workflow_call`, `workflow_dispatch` | `ubuntu-latest`                 | R2, RunPod, OCI     | see `workflow_call.inputs` in `generate-dataset-shards.yaml`     |
 | Data Validation | `validate-dataset-shards.yaml` | `workflow_call`, `workflow_dispatch` | `ubuntu-latest`                 | R2                  | `image_tag`, `spec_uri`                                          |
-| Training        | TBD                            | `workflow_dispatch`                  | TBD                             | R2, W&B, RunPod     | experiment, overrides                                            |
-| Evaluation      | TBD                            | `workflow_dispatch`                  | TBD                             | R2, W&B             | `train_wandb_run_id`, `eval_config_id`                           |
+| Training        | `train.yml`                    | `workflow_dispatch`                  | `gpu-x64`                       | R2, W&B             | `experiment`, `hydra_overrides`                                  |
+| Evaluation      | `eval.yml`                     | `workflow_dispatch`                  | `gpu-x64`                       | R2, W&B             | `experiment`, `ckpt_path`, `hydra_overrides`                     |
 | Model Promotion | `promote.yml` (planned)        | `workflow_dispatch`                  | `ubuntu-latest`                 | W&B, `GITHUB_TOKEN` | `train_wandb_run_id`, `eval_wandb_run_id`, `registry`, `dry_run` |
 
 - All workflows that create W&B runs must export `GITHUB_SHA` into the run environment.
-- Evaluation requires `train_wandb_run_id` (to find the model artifact) and `eval_config_id` (which dataset to evaluate on).
+- Evaluation requires `ckpt_path` (the checkpoint to restore — a local path, or a W&B model artifact via the `${wandb:…}` OmegaConf resolver, e.g. `ckpt_path='${wandb:tinaudio/synth-setter/model-<train_config_id>:latest}'`, as the `experiment/surge/wandb_checkpoint/*` overlays do) and `experiment` (which selects the eval dataset).
 - Promotion requires both `train_wandb_run_id` and `eval_wandb_run_id`. It pulls the model artifact from the training run and eval metrics from the eval run.
 
 **GitHub Release body schema** (produced by promote workflow):
@@ -252,7 +252,7 @@ ______________________________________________________________________
 | ------------------------------------ | ----------------------------------- | ----------------------- |
 | `WANDB_API_KEY`                      | data-gen, training, eval, promotion | wandb.ai/settings       |
 | `GITHUB_TOKEN`                       | promotion                           | Automatic in GHA        |
-| `RUNPOD_API_KEY`                     | data-gen, training                  | runpod.io               |
+| `RUNPOD_API_KEY`                     | data-gen                            | runpod.io               |
 | `RCLONE_CONFIG_R2_ACCESS_KEY_ID`     | data-gen, training, eval            | Cloudflare R2 dashboard |
 | `RCLONE_CONFIG_R2_SECRET_ACCESS_KEY` | data-gen, training, eval            | Cloudflare R2 dashboard |
 | `RCLONE_CONFIG_R2_ENDPOINT`          | data-gen, training, eval            | Cloudflare R2 dashboard |

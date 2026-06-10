@@ -1,0 +1,120 @@
+name: Evaluate
+
+# Manually-dispatched evaluation: runs synth-setter-eval on gpu-x64 in the
+# dev-snapshot image (cu128 + Surge XT VST3 parity). storage-provenance-spec.md §8.
+on:
+  workflow_dispatch:
+    inputs:
+      experiment:
+        description: "Experiment YAML stem under configs/experiment/ (e.g. surge/ffn_simple)"
+        required: true
+        type: string
+      ckpt_path:
+        description: "Checkpoint to evaluate: a local path, or a W&B model artifact via interpolation, e.g. ${wandb:tinaudio/synth-setter/model-<train_config_id>:latest}"
+        required: true
+        type: string
+      hydra_overrides:
+        description: "Extra whitespace-separated Hydra overrides (e.g. mode=test evaluation.compute_metrics=true)"
+        required: false
+        type: string
+        default: ""
+      image_tag:
+        description: "Docker image tag (e.g. dev-snapshot, dev-snapshot-<sha>)"
+        required: false
+        type: string
+        default: dev-snapshot
+      env_ref:
+        description: "Git ref / SHA to check out (mounted over the image's baked checkout)"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  evaluate:
+    name: Run synth-setter-eval (experiment=${{ inputs.experiment }})
+    runs-on: gpu-x64
+    timeout-minutes: 120
+    env:
+      IMAGE: tinaudio/synth-setter:${{ inputs.image_tag || 'dev-snapshot' }}
+      HYDRA_FULL_ERROR: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.env_ref != '' && inputs.env_ref || github.sha }}
+
+      # rclone runs inside the container; the runner env only needs the
+      # RCLONE_CONFIG_R2_* values the docker run -e lines forward.
+      - name: Set up R2
+        uses: ./.github/actions/setup-r2
+        with:
+          access-key-id: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+          endpoint: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+
+      - name: Pull image
+        run: docker pull "$IMAGE"
+
+      # Fail fast with a clear error if the runner exposes no CUDA GPU before the
+      # eval run — mirrors test-gpu.yml.
+      - name: Smoke-test GPU visibility inside container
+        run: |
+          docker run --rm --gpus all \
+            "$IMAGE" \
+            bash -c '
+              set -euo pipefail
+              nvidia-smi --query-gpu=name,memory.free --format=csv,noheader
+              python -c "import torch; assert torch.cuda.is_available(), \"CUDA not available in container\"; print(\"cuda:\", torch.cuda.is_available(), \"count:\", torch.cuda.device_count())"
+            '
+
+      # ensure_plugin_symlinks.sh restores the bind-mount-shadowed Surge symlink for
+      # VST render; inputs go via step env so a stray token can't break out.
+      - name: Run synth-setter-eval
+        env:
+          EXPERIMENT: ${{ inputs.experiment }}
+          CKPT_PATH: ${{ inputs.ckpt_path }}
+          HYDRA_OVERRIDES_EXTRA: ${{ inputs.hydra_overrides }}
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+        run: |
+          set -euo pipefail
+          CHECKOUT_SHA="$(git -C "${GITHUB_WORKSPACE}" rev-parse HEAD)"
+          docker run --rm --gpus all \
+            -v "${{ github.workspace }}:/home/build/synth-setter" \
+            -e RCLONE_CONFIG_R2_TYPE \
+            -e RCLONE_CONFIG_R2_PROVIDER \
+            -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
+            -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
+            -e RCLONE_CONFIG_R2_ENDPOINT \
+            -e WANDB_API_KEY \
+            -e GITHUB_SHA="${CHECKOUT_SHA}" \
+            -e EXPERIMENT \
+            -e CKPT_PATH \
+            -e HYDRA_OVERRIDES_EXTRA \
+            -e HYDRA_FULL_ERROR \
+            "$IMAGE" \
+            bash -c '
+              set -euo pipefail
+              cd /home/build/synth-setter
+              git config --global --add safe.directory /home/build/synth-setter
+              bash docker/ubuntu22_04/ensure_plugin_symlinks.sh
+              read -ra extra <<< "${HYDRA_OVERRIDES_EXTRA}"
+              src/synth_setter/scripts/run-linux-vst-headless.sh \
+                synth-setter-eval \
+                  "experiment=${EXPERIMENT}" \
+                  "ckpt_path=${CKPT_PATH}" \
+                  "${extra[@]}" \
+                  "hydra.run.dir=/home/build/synth-setter/eval-run" \
+              2>&1 | tee eval.log
+            '
+
+      - name: Upload log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-log
+          path: eval.log
+          if-no-files-found: warn
+          retention-days: 7
