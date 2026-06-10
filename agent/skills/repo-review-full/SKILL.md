@@ -20,8 +20,10 @@ fan out the reviews, aggregate findings, or call `post_review.py` yourself.
 1. Capture the PR argument: if the command was invoked with an explicit `<N>`,
    keep it; otherwise the orchestrator resolves the PR from the current branch.
 2. Spawn exactly **one** `general-purpose` agent. Its prompt is the entire
-   "## Orchestrator agent brief" section below, with `<N>` substituted (or the
-   "resolve from the current branch" instruction when no number was passed).
+   "## Orchestrator agent brief" section below. Only substitute when an explicit
+   `<N>` was passed — replace `<N>` with that number; otherwise pass the brief
+   verbatim (it already tells the orchestrator to resolve the PR from the
+   current branch). Do not otherwise edit the brief.
 3. Relay the agent's returned `html_url` and one-line summary to the user
    verbatim. Do not re-run or second-guess the pipeline.
 
@@ -40,7 +42,11 @@ sub-agents; you never launch those directly.
 > fan-out, finding aggregation, and findings-JSON construction. When it says
 > "the calling skill," that is `repo-review-full`:
 >
-> - PR number: `<N>` (or resolve via `gh pr view --json number`).
+> - PR number: `<N>`. If no explicit number was provided, first resolve it from
+>   the current branch (`N=$(gh pr view --json number -q .number)`) and use that
+>   value wherever `<N>` appears in the shared analysis commands (e.g.
+>   `gh pr view <N> ...`) — never run a command with the literal `<N>`
+>   placeholder.
 > - Use `repo-review-full` as the calling-skill name in any
 >   `[<calling-skill>:block]` prefixes inside the `## PR health` bullets.
 > - Write the findings JSON to `/tmp/repo-review-full-findings.json`.

@@ -27,8 +27,10 @@ agent you launch that agent and relay its result.
    `<N>`, keep it; otherwise the orchestrator resolves PR-or-local-branch mode
    itself.
 2. Spawn exactly **one** `general-purpose` agent. Its prompt is the entire
-   "## Orchestrator agent brief" section below, with `<N>` substituted (or the
-   "resolve the target yourself" instruction when no number was passed).
+   "## Orchestrator agent brief" section below. Only substitute when an explicit
+   `<N>` was passed — replace `<N>` with that number; otherwise pass the brief
+   verbatim (Step 1 of the brief already resolves PR-or-local-branch mode). Do
+   not otherwise edit the brief.
 3. The agent returns the **full rendered Markdown report** ending in a final
    `Sentinel: <path>` line. Print exactly what the orchestrator returned,
    verbatim — that trailing line already surfaces the sentinel path, so do not
