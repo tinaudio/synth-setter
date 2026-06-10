@@ -16,7 +16,7 @@ import torch
 
 from synth_setter.models.surge_fake_oracle_module import (
     FakeOracleNet,
-    SurgeFakeOracleModule,
+    VSTFakeOracleModule,
 )
 
 
@@ -55,8 +55,8 @@ ORACLE_AUDIO_METRIC_BOUNDS = OracleAudioMetricBounds(
 )
 
 
-def build_oracle_module(num_params: int) -> SurgeFakeOracleModule:
-    """Construct a :class:`SurgeFakeOracleModule` matching the surge/fake_oracle config.
+def build_oracle_module(num_params: int) -> VSTFakeOracleModule:
+    """Construct a :class:`VSTFakeOracleModule` matching the surge/fake_oracle config.
 
     No optimizer step is taken — only ``predict_step`` / eval steps are
     exercised — but the constructor still requires an optimizer factory.
@@ -66,4 +66,4 @@ def build_oracle_module(num_params: int) -> SurgeFakeOracleModule:
     """
     net = FakeOracleNet(d_out=num_params)
     optimizer = partial(torch.optim.Adam, lr=1e-4)
-    return SurgeFakeOracleModule(net=net, optimizer=optimizer, scheduler=None)
+    return VSTFakeOracleModule(net=net, optimizer=optimizer, scheduler=None)

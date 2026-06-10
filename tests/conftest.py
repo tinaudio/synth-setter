@@ -541,7 +541,7 @@ def _build_surge_xt_smoke_cfg(
                 cfg.trainer.precision = "16-mixed"
 
             # batch_size=1 is forced: ShiftedBatchSampler (used in the
-            # SurgeDataModule's train_dataloader) drops one batch per epoch,
+            # VSTDataModule's train_dataloader) drops one batch per epoch,
             # so any batch_size > dataset_size // 2 leaves the dataloader empty
             # and Lightning aborts with "Trainer.fit stopped: No training batches."
             cfg.datamodule.batch_size = 1

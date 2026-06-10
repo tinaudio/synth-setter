@@ -10,10 +10,11 @@ import torch
 from lightning import LightningDataModule
 
 from synth_setter.data.ot import _hungarian_match
+from synth_setter.data.vst.param_spec_registry import param_specs
 from synth_setter.pipeline import r2_io
 
 
-class SurgeXTDataset(torch.utils.data.Dataset):
+class VSTDataset(torch.utils.data.Dataset):
     mean: np.ndarray | None = None
     std: np.ndarray | None = None
 
@@ -29,6 +30,7 @@ class SurgeXTDataset(torch.utils.data.Dataset):
         rescale_params: bool = True,
         fake: bool = False,
         repeat_first_batch: bool = False,
+        num_params: int | None = None,
     ):
         self.batch_size = batch_size
         self.ot = ot
@@ -41,6 +43,8 @@ class SurgeXTDataset(torch.utils.data.Dataset):
 
         self.fake = fake
         if fake:
+            # Fake-mode param width; None falls back to the surge_xt spec.
+            self.num_params = num_params if num_params is not None else len(param_specs["surge_xt"])
             self.dataset_file = None
             return
 
@@ -54,7 +58,7 @@ class SurgeXTDataset(torch.utils.data.Dataset):
     def _load_dataset_statistics(self, dataset_file: str | Path):
         # for /path/to/train.h5 we would expect to find /path/to/stats.npz
         # if not, we throw an error
-        stats_file = SurgeXTDataset.get_stats_file_path(dataset_file)
+        stats_file = VSTDataset.get_stats_file_path(dataset_file)
         if not stats_file.exists():
             raise FileNotFoundError(
                 f"Could not find statistics file {stats_file}. \n"
@@ -81,7 +85,7 @@ class SurgeXTDataset(torch.utils.data.Dataset):
         audio = torch.randn(self.batch_size, 2, 44100 * 4) if self.read_audio else None
         mel_spec = torch.randn(self.batch_size, 2, 128, 401) if self.read_mel else None
         m2l = torch.randn(self.batch_size, 128, 42) if self.read_m2l else None
-        param_array = torch.rand(self.batch_size, 189)
+        param_array = torch.rand(self.batch_size, self.num_params)
 
         if self.rescale_params:
             param_array = param_array * 2 - 1
@@ -231,7 +235,7 @@ class ShiftedBatchSampler(torch.utils.data.BatchSampler):
             yield (i * self.batch_size + offset, (i + 1) * self.batch_size + offset)
 
 
-class SurgeDataModule(LightningDataModule):
+class VSTDataModule(LightningDataModule):
     def __init__(
         self,
         dataset_root: str | Path,
@@ -245,6 +249,7 @@ class SurgeDataModule(LightningDataModule):
         predict_file: str | None = None,
         conditioning: Literal["mel", "m2l"] = "mel",
         pin_memory: bool = True,
+        param_spec_name: str = "surge_xt",
     ):
         super().__init__()
 
@@ -261,6 +266,7 @@ class SurgeDataModule(LightningDataModule):
         )
         self.conditioning = conditioning
         self.pin_memory = pin_memory
+        self.param_spec_name = param_spec_name
 
     def prepare_data(self) -> None:
         """Hydrate ``dataset_root`` from R2 when a download URI is configured.
@@ -275,7 +281,9 @@ class SurgeDataModule(LightningDataModule):
         r2_io.download_dir_no_overwrite(self.download_dataset_root_uri, self.dataset_root)
 
     def setup(self, stage: str | None = None):
-        self.train_dataset = SurgeXTDataset(
+        # KeyError here fails fast on an unregistered param_spec_name.
+        num_params = len(param_specs[self.param_spec_name])
+        self.train_dataset = VSTDataset(
             self.dataset_root / "train.h5",
             batch_size=self.batch_size,
             ot=self.ot,
@@ -284,8 +292,9 @@ class SurgeDataModule(LightningDataModule):
             repeat_first_batch=self.repeat_first_batch,
             read_mel=self.conditioning == "mel",
             read_m2l=self.conditioning == "m2l",
+            num_params=num_params,
         )
-        self.val_dataset = SurgeXTDataset(
+        self.val_dataset = VSTDataset(
             self.dataset_root / "val.h5",
             batch_size=self.batch_size,
             ot=False,
@@ -294,8 +303,9 @@ class SurgeDataModule(LightningDataModule):
             repeat_first_batch=self.repeat_first_batch,
             read_mel=self.conditioning == "mel",
             read_m2l=self.conditioning == "m2l",
+            num_params=num_params,
         )
-        self.test_dataset = SurgeXTDataset(
+        self.test_dataset = VSTDataset(
             self.dataset_root / "test.h5",
             batch_size=self.batch_size,
             ot=False,
@@ -304,8 +314,9 @@ class SurgeDataModule(LightningDataModule):
             repeat_first_batch=self.repeat_first_batch,
             read_mel=self.conditioning == "mel",
             read_m2l=self.conditioning == "m2l",
+            num_params=num_params,
         )
-        self.predict_dataset = SurgeXTDataset(
+        self.predict_dataset = VSTDataset(
             self.predict_file,
             batch_size=self.batch_size,
             ot=False,
@@ -314,6 +325,7 @@ class SurgeDataModule(LightningDataModule):
             fake=self.fake,
             read_mel=self.conditioning == "mel",
             read_m2l=self.conditioning == "m2l",
+            num_params=num_params,
         )
 
     def train_dataloader(self):
@@ -367,3 +379,9 @@ class SurgeDataModule(LightningDataModule):
         ):
             if dataset.dataset_file is not None:
                 dataset.dataset_file.close()
+
+
+# Deprecated aliases: archived W&B run configs and external job scripts resolve the
+# old ``_target_`` paths, so Hydra must keep finding these names.
+SurgeXTDataset = VSTDataset
+SurgeDataModule = VSTDataModule

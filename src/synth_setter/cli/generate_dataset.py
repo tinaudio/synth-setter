@@ -106,7 +106,7 @@ def _run_oracle_eval_subprocess(
     :param num_workers: Predict DataLoader worker count, forwarded verbatim from
         the generate run's ``datamodule`` config — no platform guard. On
         spawn-start-method platforms (Darwin) the caller must configure ``0``:
-        workers pickle the dataset, but ``SurgeXTDataset`` holds an open h5py
+        workers pickle the dataset, but ``VSTDataset`` holds an open h5py
         handle that cannot be pickled.
     :param predict_file: HDF5 split file for the datamodule's predict dataloader
         (e.g. ``dataset_root / "train.h5"``).
@@ -158,7 +158,7 @@ def _run_oracle_eval_subprocess(
         # override suffices; resume is absent there and needs +append.
         f"logger.wandb.id={run_id}",
         "+logger.wandb.resume=must",
-        # SurgeXTDataset floors len to samples // batch_size; the 128 default
+        # VSTDataset floors len to samples // batch_size; the 128 default
         # would yield zero batches on the smoke-sized test split (4 samples),
         # so predict_step never runs and no audio/* metric is logged — see #1331.
         "datamodule.batch_size=1",
@@ -874,7 +874,7 @@ def main(cfg: DictConfig) -> None:
             raise ValueError(
                 "oracle_eval_inline=true requires all of "
                 f"train_val_test_sizes > 0; got {tuple(spec.train_val_test_sizes)}. "
-                "SurgeDataModule opens train.h5 / val.h5 / test.h5 unconditionally."
+                "VSTDataModule opens train.h5 / val.h5 / test.h5 unconditionally."
             )
 
     spec_path = write_spec_locally(spec, Path(cfg.paths.output_dir))

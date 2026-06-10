@@ -15,6 +15,7 @@ from tqdm import tqdm, trange
 from synth_setter.data.vst import param_specs
 from synth_setter.data.vst.core import render_params
 from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
+from synth_setter.data.vst.param_spec_registry import default_plugin_path, preset_paths
 
 
 def make_spectrogram(audio: np.ndarray, sample_rate: float) -> np.ndarray:
@@ -98,11 +99,25 @@ def params_to_csv(
     df.to_csv(save_path)
 
 
+def resolve_preset_path(preset_path: str | None, param_spec: str) -> str:
+    """Resolve the preset path, falling back to the registry default for ``param_spec``.
+
+    A ``None`` ``preset_path`` with an unregistered ``param_spec`` propagates the
+    ``KeyError`` from the registry lookup.
+
+    :param preset_path: Explicit preset path, or ``None`` to use the registry default.
+    :param param_spec: Registry key naming the param spec whose default preset to use.
+    :returns: ``preset_path`` when given, else ``preset_paths[param_spec]``.
+    :rtype: str
+    """
+    return preset_paths[param_spec] if preset_path is None else preset_path
+
+
 @click.command()
 @click.argument("pred_dir", type=str)
 @click.argument("output_dir", type=str)
-@click.option("--plugin_path", "-p", type=str, default="plugins/Surge XT.vst3")
-@click.option("--preset_path", "-r", type=str, default="presets/surge-base.vstpreset")
+@click.option("--plugin_path", "-p", type=str, default=default_plugin_path)
+@click.option("--preset_path", "-r", type=str, default=None)
 @click.option("--sample_rate", "-s", type=float, default=44100.0)
 @click.option("--channels", "-c", type=int, default=2)
 @click.option("--velocity", "-v", type=int, default=100)
@@ -114,8 +129,8 @@ def params_to_csv(
 def main(
     pred_dir: str,
     output_dir: str,
-    plugin_path: str = "plugins/Surge XT.vst3",
-    preset_path: str = "presets/surge-base.vstpreset",
+    plugin_path: str | None = None,
+    preset_path: str | None = None,
     sample_rate: float = 44100.0,
     channels: int = 2,
     velocity: int = 100,
@@ -125,6 +140,8 @@ def main(
     no_params: bool = False,
     skip_spectrogram: bool = False,
 ):
+    plugin_path = plugin_path if plugin_path is not None else default_plugin_path()
+    preset_path = resolve_preset_path(preset_path, param_spec)
     spec = param_specs[param_spec]
     os.makedirs(output_dir, exist_ok=True)
 

@@ -13,7 +13,7 @@ import numpy as np
 from dask.distributed import Client, progress
 
 from synth_setter.data.audio_datamodule import AudioFolderDataset
-from synth_setter.data.surge_datamodule import SurgeXTDataset
+from synth_setter.data.surge_datamodule import VSTDataset
 from synth_setter.data.vst.shapes import MEL_SPEC_FIELD
 
 logger = logging.getLogger(__name__)
@@ -188,7 +188,7 @@ def get_stats_hdf5(filename: str, mask_degenerate: bool = False) -> None:
             logger.info("Computed mean and std (shapes %s, %s)", mean.shape, std.shape)
 
     logger.info("Saving stats to file")
-    out_file = SurgeXTDataset.get_stats_file_path(filename)
+    out_file = VSTDataset.get_stats_file_path(filename)
     if mask_degenerate:
         std = _fix_degenerate_bins(std)
     else:

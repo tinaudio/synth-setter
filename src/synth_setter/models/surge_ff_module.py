@@ -7,7 +7,7 @@ from lightning import LightningModule
 from lightning.pytorch.utilities import grad_norm
 
 
-class SurgeFeedForwardModule(LightningModule):
+class VSTFeedForwardModule(LightningModule):
     """Feed-forward LightningModule that regresses Surge XT parameters from audio features."""
 
     def __init__(
@@ -18,6 +18,15 @@ class SurgeFeedForwardModule(LightningModule):
         compile: bool = False,
         warmup_steps: int = 0,
     ):
+        """Wire the regression net and persist the optimizer/scheduler hyperparameters.
+
+        :param net: Feature extractor mapping ``mel_spec`` to predicted parameters.
+        :param optimizer: ``functools.partial``-style optimizer factory (Hydra
+            ``_partial_: true``); invoked in :meth:`configure_optimizers`.
+        :param scheduler: ``functools.partial``-style scheduler factory or ``None``.
+        :param compile: Whether to ``torch.compile`` the net in :meth:`setup`.
+        :param warmup_steps: If positive, wrap the scheduler with a linear warmup.
+        """
         super().__init__()
 
         self.save_hyperparameters(logger=False)
@@ -126,4 +135,9 @@ class SurgeFeedForwardModule(LightningModule):
 
 
 if __name__ == "__main__":
-    _ = SurgeFlowMatchingModule(None, None, None, None)
+    _ = VSTFlowMatchingModule(None, None, None, None)
+
+
+# Deprecated alias: archived W&B run configs and external job scripts resolve the
+# old ``_target_`` path.
+SurgeFeedForwardModule = VSTFeedForwardModule

@@ -2220,7 +2220,7 @@ class TestMainDispatchBranches:
     ) -> None:
         """Fail-fast guard: ``oracle_eval_inline=true`` rejects ``[N, 0, 0]``-style sizes.
 
-        ``SurgeDataModule.setup()`` opens train/val/test ``.h5`` unconditionally
+        ``VSTDataModule.setup()`` opens train/val/test ``.h5`` unconditionally
         regardless of stage, so any zero-size split would FileNotFoundError
         deep inside Lightning. The launcher catches the misconfig up front.
 
@@ -2360,7 +2360,7 @@ class TestInlineOracleEvalVdsInPlaceRead:
     The finalized ``{split}.h5`` files are HDF5 virtual datasets referencing
     their source shards by basename, so ``mode=predict`` reads the audio dataset
     as fill-value zeros unless the shards sit beside the split. These tests drive
-    the real predict read path (:class:`SurgeXTDataset` with ``read_audio=True``)
+    the real predict read path (:class:`VSTDataset` with ``read_audio=True``)
     to pin that the read resolves to real bytes only when co-located.
     """
 
@@ -2375,10 +2375,10 @@ class TestInlineOracleEvalVdsInPlaceRead:
 
         :param tmp_path: Holds the co-located shard, VDS split, and stats.
         """
-        from synth_setter.data.surge_datamodule import SurgeXTDataset
+        from synth_setter.data.surge_datamodule import VSTDataset
 
         audio = _write_vds_split_with_shard(tmp_path)
-        dataset = SurgeXTDataset(
+        dataset = VSTDataset(
             tmp_path / "test.h5",
             batch_size=1,
             ot=False,
@@ -2408,7 +2408,7 @@ class TestInlineOracleEvalVdsInPlaceRead:
 
         :param tmp_path: Roots the populated source dir and the split-only copy.
         """
-        from synth_setter.data.surge_datamodule import SurgeXTDataset
+        from synth_setter.data.surge_datamodule import VSTDataset
 
         source_dir = tmp_path / "source"
         source_dir.mkdir()
@@ -2419,7 +2419,7 @@ class TestInlineOracleEvalVdsInPlaceRead:
         shutil.copy(source_dir / "test.h5", split_only / "test.h5")
         shutil.copy(source_dir / STATS_NPZ_FILENAME, split_only / STATS_NPZ_FILENAME)
 
-        dataset = SurgeXTDataset(
+        dataset = VSTDataset(
             split_only / "test.h5",
             batch_size=1,
             ot=False,

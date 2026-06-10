@@ -1,6 +1,6 @@
 """Pydantic schema for the YAMLs under ``configs/datamodule/``.
 
-Datamodule kwargs vary per module (``SurgeDataModule`` is path-driven,
+Datamodule kwargs vary per module (``VSTDataModule`` is path-driven,
 ``KSinDataModule`` is synthetic) and pass through via ``extra="allow"``.
 """
 

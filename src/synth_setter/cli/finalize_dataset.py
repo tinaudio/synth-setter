@@ -113,7 +113,7 @@ def finalize_hdf5(spec: DatasetSpec, work_dir: Path) -> None:
     reshard — re-creating the operator-side ``data/`` hierarchy under it
     would force the reshard adapter to learn that layout for no benefit.
     ``get_stats_hdf5`` then writes ``work_dir / "stats.npz"`` (path derived
-    via ``SurgeXTDataset.get_stats_file_path(train.h5)``); the post-call
+    via ``VSTDataset.get_stats_file_path(train.h5)``); the post-call
     existence guard pins that contract so a future drift in the derivation
     surfaces here rather than as a missing upload source. Structural
     validation (per ``pipeline/CLAUDE.md``) is delegated to the h5py opens
@@ -147,7 +147,7 @@ def finalize_hdf5(spec: DatasetSpec, work_dir: Path) -> None:
     if not stats_npz.is_file():
         raise FileNotFoundError(
             f"get_stats_hdf5 did not write {stats_npz}; check "
-            f"SurgeXTDataset.get_stats_file_path derivation."
+            f"VSTDataset.get_stats_file_path derivation."
         )
     # Reshard prunes empty splits — only upload the ones it actually wrote.
     # Iterate ``split_shard_ranges`` (Split-typed keys) so split_h5_uri's

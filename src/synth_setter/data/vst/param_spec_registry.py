@@ -10,6 +10,8 @@ is the canonical pedalboard-free entrypoint for interpreter-only contexts
 
 from __future__ import annotations
 
+import os
+
 from synth_setter.data.vst.param_spec import ParamSpec
 from synth_setter.data.vst.surge_xt_param_spec import (
     SURGE_4_PARAM_SPEC,
@@ -28,3 +30,15 @@ preset_paths: dict[str, str] = {
     "surge_simple": "presets/surge-simple.vstpreset",
     "surge_4": "presets/surge-mini.vstpreset",
 }
+
+
+def default_plugin_path() -> str:
+    """Resolve the default VST3 plugin path, honoring the env override.
+
+    ``or`` (not a ``get`` default) so an empty override also falls back to the bundle.
+
+    :returns: ``SYNTH_SETTER_PLUGIN_PATH`` when set and non-empty, else the
+        in-repo Surge XT bundle path.
+    :rtype: str
+    """
+    return os.environ.get("SYNTH_SETTER_PLUGIN_PATH") or "plugins/Surge XT.vst3"

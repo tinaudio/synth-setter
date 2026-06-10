@@ -24,11 +24,13 @@ from click.testing import CliRunner, Result  # noqa: E402
 
 from synth_setter.data.vst import param_specs  # noqa: E402
 from synth_setter.data.vst.param_spec import NoteParams  # noqa: E402
+from synth_setter.data.vst.param_spec_registry import preset_paths  # noqa: E402
 from synth_setter.evaluation import predict_vst_audio  # noqa: E402
 from synth_setter.evaluation.predict_vst_audio import (  # noqa: E402
     main,
     make_spectrogram,
     params_to_csv,
+    resolve_preset_path,
     write_spectrograms,
 )
 from tests.helpers.audio_utils import noise as _noise  # noqa: E402
@@ -43,6 +45,25 @@ _SAMPLES = 1024
 
 def _sine(channels: int, samples: int, *, freq: float, sr: float) -> np.ndarray:
     return sine(freq=freq, channels=channels, sr=sr, samples=samples)
+
+
+# ---------- resolve_preset_path ----------
+
+
+def test_resolve_preset_path_explicit_path_wins() -> None:
+    """An explicit preset path is returned verbatim, ignoring the registry."""
+    assert resolve_preset_path("/custom/my.vstpreset", "surge_xt") == "/custom/my.vstpreset"
+
+
+def test_resolve_preset_path_none_falls_back_to_registry() -> None:
+    """``None`` resolves to the registry's preset for the given spec."""
+    assert resolve_preset_path(None, "surge_simple") == preset_paths["surge_simple"]
+
+
+def test_resolve_preset_path_unknown_spec_raises_key_error() -> None:
+    """A ``None`` path with an unregistered spec raises ``KeyError``."""
+    with pytest.raises(KeyError):
+        resolve_preset_path(None, "does_not_exist")
 
 
 # ---------- make_spectrogram ----------
