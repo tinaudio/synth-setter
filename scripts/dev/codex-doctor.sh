@@ -4,6 +4,9 @@ set -euo pipefail
 main() {
   local repo_root failures=0 missing_skills=0 skill
   repo_root=$(git rev-parse --show-toplevel)
+  # has_skill probes repo-relative paths (agent/skills, .agents/skills), so run
+  # the checks from the repo root regardless of where the doctor was invoked.
+  cd "$repo_root"
 
   # shellcheck source=agent/hooks/_lib.sh
   # shellcheck disable=SC1091

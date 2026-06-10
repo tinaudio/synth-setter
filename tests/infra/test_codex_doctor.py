@@ -55,7 +55,7 @@ def _run_doctor(tmp_path: Path) -> subprocess.CompletedProcess[str]:
     env = {
         **os.environ,
         "HOME": str(home),
-        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
     }
     return subprocess.run(  # noqa: S603
         ["bash", str(DOCTOR)],  # noqa: S607 - bash is required for shell doctor coverage
