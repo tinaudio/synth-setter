@@ -13,9 +13,10 @@ copy-preflight match set (``param_spec_name`` / ``samples_per_shard`` /
 
 On the wandb launcher every selected sweep is created before any agent runs, then
 agents run concurrently as ``wandb agent`` subprocesses under a ``--max-parallel``
-cap — so all sweeps land in the UI even if an agent stalls, and one stalled agent
-never blocks the others. The orchestrator stays alive supervising the pool; run it
-under ``tmux``/``nohup`` so a disconnect does not orphan in-flight agents.
+cap — so all sweeps land in the UI even if an agent stalls, and a stalled agent ties
+up only one slot while the remaining sweeps still run. The orchestrator stays alive
+supervising the pool until every agent returns; run it under ``tmux``/``nohup`` so a
+disconnect does not orphan in-flight agents.
 
 Run the whole investigation::
 
@@ -445,10 +446,8 @@ def _create_sweep(
 def _run_agent(sweep_id: str, *, count: int | None) -> None:
     """Run a ``wandb agent`` for one sweep to completion as a subprocess (fail-fast).
 
-    Running each agent as its own process lets the supervisor cap concurrency and
-    keeps one stalled agent from blocking the others — unlike the in-process
-    ``wandb.agent`` loop, which served sweeps strictly one at a time. A non-zero
-    exit raises ``subprocess.CalledProcessError`` (``check=True``).
+    A separate process per agent lets the supervisor cap concurrency across sweeps.
+    A non-zero exit raises ``subprocess.CalledProcessError`` (``check=True``).
 
     :param sweep_id: Sweep the agent pulls grid cells from.
     :param count: Agent run cap forwarded to ``--count`` (``None`` runs every cell).
@@ -461,7 +460,8 @@ def _run_agent(sweep_id: str, *, count: int | None) -> None:
     # wandb.old.core sets, so the agent crashes with AttributeError unless flapping
     # is disabled; the grid is already bounded by count, so flapping adds no value.
     env = {**os.environ, wandb.env.AGENT_DISABLE_FLAPPING: "true"}
-    subprocess.run(argv, check=True, env=env)  # noqa: S603 — argv built from validated literals
+    # Safe despite S603: list argv runs no shell; tokens are our literals plus the wandb sweep id.
+    subprocess.run(argv, check=True, env=env)  # noqa: S603
 
 
 def _supervise_agents(
@@ -517,7 +517,7 @@ def run_investigation(
 
     On the wandb launcher every selected sweep is created up front, then agents
     run concurrently under a ``max_parallel`` cap — so all sweeps appear in the
-    UI regardless of agent fate, and no stalled agent blocks the rest.
+    UI regardless of agent fate, and a stalled agent ties up only one slot.
 
     :param scale: Size knobs shared by the source and copy probes.
     :param launcher: ``"wandb"`` (sweeps + supervised agents) or ``"local"`` (subprocess loop).

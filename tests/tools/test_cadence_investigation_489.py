@@ -10,6 +10,8 @@ R2) in ``tests/integration/test_cadence_investigation_489_e2e.py``.
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 
 from synth_setter.tools import cadence_investigation_489 as inv
@@ -254,8 +256,7 @@ def test_all_wandb_sweeps_created_before_any_agent_runs(
 ) -> None:
     """Every selected sweep is created up front, before any agent is dispatched.
 
-    Sequential create-then-block left only the first sweep visible when an agent stalled; creating
-    all sweeps first guarantees they appear regardless of agent fate.
+    Creating all sweeps before dispatch guarantees they appear in the UI regardless of agent fate.
 
     :param monkeypatch: Stubs sweep creation and the per-agent runner to record the global order of
         create vs. run events.
@@ -271,10 +272,14 @@ def test_all_wandb_sweeps_created_before_any_agent_runs(
 
 
 def test_max_parallel_caps_concurrent_agents() -> None:
-    """The supervised pool never runs more than ``max_parallel`` agents at once."""
-    import threading
-    import time
+    """The supervised pool runs exactly ``max_parallel`` agents at once, never more.
 
+    A ``Barrier(max_parallel)`` makes the overlap deterministic — agents release in
+    full pairs, so the observed peak is exactly the cap with no timing race. Four
+    tasks at cap 2 split into two clean pairs (no lone task to deadlock the barrier).
+    """
+    max_parallel = 2
+    barrier = threading.Barrier(max_parallel)
     lock = threading.Lock()
     live = 0
     peak = 0
@@ -284,27 +289,52 @@ def test_max_parallel_caps_concurrent_agents() -> None:
         with lock:
             live += 1
             peak = max(peak, live)
-        time.sleep(0.02)
+        barrier.wait()  # hold the slot until its partner is also live
         with lock:
             live -= 1
 
     completed = inv._supervise_agents(
-        ["s0", "s1", "s2", "s3", "s4"], count=None, max_parallel=2, run_agent=_fake_agent
+        ["s0", "s1", "s2", "s3"], count=None, max_parallel=max_parallel, run_agent=_fake_agent
     )
 
-    assert peak <= 2
-    assert sorted(completed) == ["s0", "s1", "s2", "s3", "s4"]
+    assert peak == max_parallel
+    assert sorted(completed) == ["s0", "s1", "s2", "s3"]
 
 
-def test_supervise_agents_raises_when_an_agent_fails() -> None:
-    """A non-zero agent exit surfaces as a raised error naming the failed sweep."""
+def test_supervise_agents_attempts_every_sweep_then_raises_all_failures() -> None:
+    """Failures are collected across all agents; the passing one still runs."""
+    ran: list[str] = []
+    ran_lock = threading.Lock()
 
     def _fake_agent(sweep_id: str, *, count: int | None) -> None:
-        if sweep_id == "s1":
-            raise RuntimeError("agent crashed")
+        with ran_lock:
+            ran.append(sweep_id)
+        if sweep_id in ("s1", "s2"):
+            raise RuntimeError(f"agent {sweep_id} crashed")
 
-    with pytest.raises(RuntimeError, match="s1"):
-        inv._supervise_agents(["s0", "s1"], count=None, max_parallel=2, run_agent=_fake_agent)
+    with pytest.raises(RuntimeError, match="2 sweep agent") as excinfo:
+        inv._supervise_agents(
+            ["s0", "s1", "s2"], count=None, max_parallel=3, run_agent=_fake_agent
+        )
+
+    message = str(excinfo.value)
+    assert "s1" in message and "s2" in message
+    assert "s0" in ran  # the passing agent was attempted, not skipped
+
+
+def test_run_agent_forwards_count_to_cli(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``count`` becomes ``--count N`` in the agent argv; it is omitted when ``None``.
+
+    :param monkeypatch: Captures the argv passed to ``subprocess.run``.
+    """
+    calls: list[list[str]] = []
+    monkeypatch.setattr(inv.subprocess, "run", lambda argv, **k: calls.append(argv))
+
+    inv._run_agent("sw1", count=5)
+    inv._run_agent("sw2", count=None)
+
+    assert calls[0][calls[0].index("--count") + 1] == "5"
+    assert "--count" not in calls[1]
 
 
 def test_copy_source_generated_before_copy_agents(monkeypatch: pytest.MonkeyPatch) -> None:
