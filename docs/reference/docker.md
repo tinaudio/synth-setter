@@ -119,8 +119,8 @@ Node.js installed system-wide, the `@anthropic-ai/claude-code` and
 `@openai/codex` CLIs installed for the `dev` user via a per-user npm prefix
 (`~/.npm-global`, on PATH) — so later `npm install -g` runs, including
 claude-code's in-app self-update, avoid EACCES on the root-owned tree and aren't
-shadowed by a system-wide copy; the Google Antigravity (`agy`) CLI installed by its
-upstream `install.sh` into `~/.local/bin` (also on PATH), the zellij
+shadowed by a system-wide copy. It also adds the Google Antigravity (`agy`) CLI
+installed by its upstream `install.sh` into `~/.local/bin` (also on PATH), the zellij
 terminal multiplexer (pinned upstream musl binary, SHA256-verified, in
 `/usr/local/bin`), a non-root
 `dev` user, chowns the baked uv venv at `/venv/main` to `dev` so
