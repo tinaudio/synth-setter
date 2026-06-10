@@ -18,6 +18,20 @@ from synth_setter.tools import cadence_investigation_489 as inv
 SMOKE = inv.Scale.from_size(2)
 
 
+@pytest.fixture(autouse=True)
+def _no_agent_flapping_env_leak(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stop the wandb launcher's flapping-flag env mutation from leaking between tests.
+
+    ``_launch_wandb`` sets ``AGENT_DISABLE_FLAPPING`` directly via
+    ``os.environ.setdefault``; recording the flag through ``monkeypatch`` here
+    makes teardown restore the original env, so a wandb-launch test cannot change
+    a later test's behavior.
+
+    :param monkeypatch: Records the flag's pre-test state for teardown to restore.
+    """
+    monkeypatch.delenv(inv.wandb.env.AGENT_DISABLE_FLAPPING, raising=False)
+
+
 def test_reference_copy_uri_default_prefix_root_matches_canonical_run_root() -> None:
     """The derived copy-source URI equals the canonical reference run root.
 
