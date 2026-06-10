@@ -63,7 +63,10 @@ def publish_checkpoint_artifact(
         artifact.wait()
         yield f"{entity}/{CITEST_PROJECT}/{unique_name}:latest"
     finally:
-        run.finish()
+        # Teardown is best-effort: a finish() comm error must neither fail the test nor
+        # skip deletion, so suppress it and always reach the artifact/run cleanup.
+        with contextlib.suppress(Exception):
+            run.finish()
         _delete_citest_artifact_and_run(entity, unique_name, run_id)
 
 

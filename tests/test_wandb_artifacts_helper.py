@@ -130,3 +130,26 @@ def test_publish_checkpoint_artifact_swallows_cleanup_failure(
     # delete must not short-circuit the rest of teardown.
     fake.init.return_value.finish.assert_called_once()
     fake.Api.return_value.run.return_value.delete.assert_called_once()
+
+
+def test_publish_checkpoint_artifact_finish_failure_does_not_skip_deletion(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A ``run.finish()`` error is swallowed and still reaches the artifact and run deletion.
+
+    :param monkeypatch: Installs the fake ``wandb`` SDK in ``sys.modules``.
+    :param tmp_path: Holds the dummy checkpoint and the run dir.
+    """
+    fake = _install_fake_wandb(monkeypatch)
+    fake.init.return_value.finish.side_effect = RuntimeError("wandb comm error")
+    from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
+
+    ckpt = tmp_path / "model.ckpt"
+    ckpt.write_text("weights")
+
+    # A finish() failure must neither propagate out of the context nor skip cleanup.
+    with publish_checkpoint_artifact(ckpt, "model-citest-ffn_full", tmp_path) as ref:
+        assert ref
+
+    fake.Api.return_value.artifact.return_value.delete.assert_called_once()
+    fake.Api.return_value.run.return_value.delete.assert_called_once()
