@@ -288,8 +288,16 @@ def test_hook_lib_finds_codex_skill_layouts(tmp_path: Path, skill_path: Path) ->
         [  # noqa: S607 - bash is required for sourcing hooks
             "bash",
             "-c",
-            f"source {_REPO_ROOT / 'agent' / 'hooks' / '_lib.sh'}; has_skill simplify",
+            'source "$1"; has_skill simplify',
+            "_",
+            str(_REPO_ROOT / "agent" / "hooks" / "_lib.sh"),
         ],
+        capture_output=True,
+        cwd=tmp_path,
+        env={**os.environ, "HOME": str(tmp_path)},
+        text=True,
+        check=False,
+    )
         capture_output=True,
         cwd=tmp_path,
         env={**os.environ, "HOME": str(tmp_path)},

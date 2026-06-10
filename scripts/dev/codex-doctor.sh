@@ -52,10 +52,10 @@ main() {
 
   if [[ "$missing_skills" -gt 0 ]]; then
     failures=$((failures + 1))
-    printf '\nInstall or enable the tinaudio skill plugin, then start a new Codex thread:\n'
+    printf '\nOne or more required skills are missing.\n'
+    printf 'If tinaudio plugin skills are missing, install/enable the plugin, then start a new Codex thread:\n'
     printf '  codex plugin marketplace add tinaudio/skills\n'
     printf '  /plugins -> tinaudio Skills -> tinaudio-synth-setter-skills\n'
-  fi
 
   if [[ "$failures" -gt 0 ]]; then
     printf '\nCodex setup has %s issue(s).\n' "$failures"
