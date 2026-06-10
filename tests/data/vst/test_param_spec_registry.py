@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from synth_setter.data.vst.param_spec_registry import default_plugin_path
+from synth_setter.data.vst.param_spec_registry import (
+    default_plugin_path,
+    param_specs,
+    preset_paths,
+)
 
 _ENV_VAR = "SYNTH_SETTER_PLUGIN_PATH"
 _BUNDLED_PATH = "plugins/Surge XT.vst3"
@@ -41,3 +45,15 @@ def test_default_plugin_path_falls_back_to_bundle_when_env_empty(
     """
     monkeypatch.setenv(_ENV_VAR, "")
     assert default_plugin_path() == _BUNDLED_PATH
+
+
+def test_param_spec_widths_match_known_values() -> None:
+    """Hardcoded width tripwires guard the three shipped specs against silent drift."""
+    assert len(param_specs["surge_xt"]) == 300
+    assert len(param_specs["surge_simple"]) == 92
+    assert len(param_specs["surge_4"]) == 7
+
+
+def test_every_param_spec_has_a_preset_path() -> None:
+    """``param_specs`` and ``preset_paths`` cover the same keys — no spec lacks a preset."""
+    assert set(param_specs) == set(preset_paths)

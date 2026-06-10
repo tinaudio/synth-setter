@@ -13,6 +13,10 @@ from synth_setter.data.ot import _hungarian_match
 from synth_setter.data.vst.param_spec_registry import param_specs
 from synth_setter.pipeline import r2_io
 
+# Registry key whose spec width sizes fake-mode batches and seeds the
+# datamodule default when no ``param_spec_name`` is configured.
+_DEFAULT_PARAM_SPEC_NAME = "surge_xt"
+
 
 class VSTDataset(torch.utils.data.Dataset):
     mean: np.ndarray | None = None
@@ -42,9 +46,11 @@ class VSTDataset(torch.utils.data.Dataset):
         self.rescale_params = rescale_params
 
         self.fake = fake
+        # Fake-mode width only; real mode reads the width from the shard's param_array.
+        self.num_params = (
+            num_params if num_params is not None else len(param_specs[_DEFAULT_PARAM_SPEC_NAME])
+        )
         if fake:
-            # Fake-mode param width; None falls back to the surge_xt spec.
-            self.num_params = num_params if num_params is not None else len(param_specs["surge_xt"])
             self.dataset_file = None
             return
 
@@ -249,7 +255,7 @@ class VSTDataModule(LightningDataModule):
         predict_file: str | None = None,
         conditioning: Literal["mel", "m2l"] = "mel",
         pin_memory: bool = True,
-        param_spec_name: str = "surge_xt",
+        param_spec_name: str = _DEFAULT_PARAM_SPEC_NAME,
     ):
         super().__init__()
 

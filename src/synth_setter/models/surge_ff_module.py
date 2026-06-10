@@ -134,10 +134,10 @@ class VSTFeedForwardModule(LightningModule):
         return {"optimizer": optimizer}
 
 
-if __name__ == "__main__":
-    _ = VSTFlowMatchingModule(None, None, None, None)
-
-
 # Deprecated alias: archived W&B run configs and external job scripts resolve the
 # old ``_target_`` path.
 SurgeFeedForwardModule = VSTFeedForwardModule
+
+
+if __name__ == "__main__":
+    _ = VSTFeedForwardModule(None, None, None, None)

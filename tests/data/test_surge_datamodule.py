@@ -226,7 +226,7 @@ def single_h5(tmp_path: Path) -> Path:
 
 
 # --------------------------------------------------------------------------- #
-# VSTDataset — fake mode                                                  #
+# VSTDataset — fake mode                                                      #
 # --------------------------------------------------------------------------- #
 
 
@@ -344,7 +344,7 @@ class TestVSTDatasetFakeMode:
 
 
 # --------------------------------------------------------------------------- #
-# VSTDataset — real HDF5 mode                                             #
+# VSTDataset — real HDF5 mode                                                 #
 # --------------------------------------------------------------------------- #
 
 
@@ -817,7 +817,7 @@ class TestShiftedBatchSampler:
 
 
 # --------------------------------------------------------------------------- #
-# VSTDataModule                                                                #
+# VSTDataModule                                                               #
 # --------------------------------------------------------------------------- #
 
 
@@ -1131,13 +1131,8 @@ class TestVSTDataModule:
             use_saved_mean_and_variance=False,
             param_spec_name="does_not_exist",
         )
-        with pytest.raises(KeyError):
+        with pytest.raises(KeyError, match="does_not_exist"):
             module.setup()
-
-
-# --------------------------------------------------------------------------- #
-# Back-compat aliases                                                          #
-# --------------------------------------------------------------------------- #
 
 
 class TestBackCompatAliases:

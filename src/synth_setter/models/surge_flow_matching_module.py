@@ -320,10 +320,10 @@ class VSTFlowMatchingModule(LightningModule):
         return {"optimizer": optimizer}
 
 
-if __name__ == "__main__":
-    _ = VSTFlowMatchingModule(None, None, None, None)
-
-
 # Deprecated alias: archived W&B run configs and external job scripts resolve the
 # old ``_target_`` path.
 SurgeFlowMatchingModule = VSTFlowMatchingModule
+
+
+if __name__ == "__main__":
+    _ = VSTFlowMatchingModule(None, None, None, None)

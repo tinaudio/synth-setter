@@ -33,12 +33,10 @@ preset_paths: dict[str, str] = {
 
 
 def default_plugin_path() -> str:
-    """Resolve the default VST3 plugin path, honoring the env override.
+    """Return ``$SYNTH_SETTER_PLUGIN_PATH`` when set and non-empty, else the in-repo Surge XT bundle.
 
     ``or`` (not a ``get`` default) so an empty override also falls back to the bundle.
 
-    :returns: ``SYNTH_SETTER_PLUGIN_PATH`` when set and non-empty, else the
-        in-repo Surge XT bundle path.
-    :rtype: str
+    :returns: Resolved VST3 plugin path.
     """
     return os.environ.get("SYNTH_SETTER_PLUGIN_PATH") or "plugins/Surge XT.vst3"

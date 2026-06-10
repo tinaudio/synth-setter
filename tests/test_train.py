@@ -14,6 +14,8 @@ import numpy as np
 import pandas as pd
 import pytest
 import torch
+from hydra import compose, initialize_config_module
+from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, open_dict
 
@@ -204,6 +206,56 @@ def test_cfg_surge_xt_global_wires_param_spec(param_spec_name: str) -> None:
     )
     assert cfg.model.net.d_out == len(param_specs[param_spec_name])
     assert cfg.callbacks.log_per_param_mse.param_spec == param_spec_name
+
+
+def test_train_fake_mode_nondefault_spec_sizes_batches_from_registry(tmp_path: Path) -> None:
+    """Fake-mode train through the entrypoint sizes batches from a non-default ``param_spec_name``.
+
+    Drives the real ``train(cfg)`` entrypoint with ``datamodule.fake=true`` and the
+    non-default ``surge_simple`` spec: no dataset on disk, so the run exercises the
+    registry-derived fake width end-to-end. The width-agnostic ``surge/fake_oracle``
+    experiment (oracle returns ``batch["params"]``) tolerates the 92-wide batches, and
+    the datamodule the entrypoint built carries that registry-derived width.
+
+    :param tmp_path: Pinned as Hydra ``output_dir`` / ``log_dir``; no dataset is read.
+    """
+    expected_width = len(param_specs["surge_simple"])
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            return_hydra_config=True,
+            overrides=["experiment=surge/fake_oracle", "trainer=cpu"],
+        )
+    with open_dict(cfg):
+        cfg.paths.root_dir = str(operator_workspace())
+        cfg.paths.output_dir = str(tmp_path)
+        cfg.paths.log_dir = str(tmp_path)
+        cfg.datamodule.fake = True
+        cfg.datamodule.param_spec_name = "surge_simple"
+        cfg.datamodule.batch_size = 2
+        cfg.datamodule.num_workers = 0
+        cfg.datamodule.use_saved_mean_and_variance = False
+        cfg.trainer.max_steps = 1
+        cfg.trainer.limit_val_batches = 0
+        cfg.logger = None
+        # The fake_oracle callback keys its per-param spec off the render group
+        # (${render.param_spec_name}); pin it concretely since this train path
+        # composes no render group.
+        cfg.callbacks.log_per_param_mse.param_spec = "surge_simple"
+
+    HydraConfig().set_config(cfg)
+    try:
+        _, object_dict = train(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    trainer = object_dict["trainer"]
+    assert trainer.global_step >= 1, f"trainer did not advance: global_step={trainer.global_step}"
+
+    datamodule = object_dict["datamodule"]
+    assert datamodule.train_dataset.num_params == expected_width
+    sample = datamodule.train_dataset[0]
+    assert sample["params"].shape == (2, expected_width)
 
 
 @pytest.mark.requires_vst

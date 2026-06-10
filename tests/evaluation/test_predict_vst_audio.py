@@ -24,7 +24,10 @@ from click.testing import CliRunner, Result  # noqa: E402
 
 from synth_setter.data.vst import param_specs  # noqa: E402
 from synth_setter.data.vst.param_spec import NoteParams  # noqa: E402
-from synth_setter.data.vst.param_spec_registry import preset_paths  # noqa: E402
+from synth_setter.data.vst.param_spec_registry import (  # noqa: E402
+    default_plugin_path,
+    preset_paths,
+)
 from synth_setter.evaluation import predict_vst_audio  # noqa: E402
 from synth_setter.evaluation.predict_vst_audio import (  # noqa: E402
     main,
@@ -47,17 +50,14 @@ def _sine(channels: int, samples: int, *, freq: float, sr: float) -> np.ndarray:
     return sine(freq=freq, channels=channels, sr=sr, samples=samples)
 
 
-# ---------- resolve_preset_path ----------
-
-
 def test_resolve_preset_path_explicit_path_wins() -> None:
     """An explicit preset path is returned verbatim, ignoring the registry."""
     assert resolve_preset_path("/custom/my.vstpreset", "surge_xt") == "/custom/my.vstpreset"
 
 
 def test_resolve_preset_path_none_falls_back_to_registry() -> None:
-    """``None`` resolves to the registry's preset for the given spec."""
-    assert resolve_preset_path(None, "surge_simple") == preset_paths["surge_simple"]
+    """``None`` resolves to the registry's hardcoded preset for the given spec."""
+    assert resolve_preset_path(None, "surge_simple") == "presets/surge-simple.vstpreset"
 
 
 def test_resolve_preset_path_unknown_spec_raises_key_error() -> None:
@@ -340,10 +340,10 @@ def test_main_rerender_target_renders_pred_and_target_per_sample(
     :param out_dir: Parametrized ``out_dir`` value under test.
     :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
     """
-    calls: list[object] = []
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
 
-    def _counting_render(*args: object, **_kwargs: object) -> np.ndarray:
-        calls.append(args)
+    def _counting_render(*args: object, **kwargs: object) -> np.ndarray:
+        calls.append((args, kwargs))
         return _fake_render()
 
     monkeypatch.setattr(predict_vst_audio, "render_params", _counting_render)
@@ -356,6 +356,11 @@ def test_main_rerender_target_renders_pred_and_target_per_sample(
     assert result.exit_code == 0, result.output
     # One render for pred + one for the re-synthesised target, per sample.
     assert len(calls) == batch_size * 2
+    # The CLI passes no --plugin_path / --preset_path, so both must resolve from
+    # the registry: plugin_path from the click default, preset_path from the spec.
+    for args, kwargs in calls:
+        assert args[0] == default_plugin_path()
+        assert kwargs["preset_path"] == preset_paths[_PARAM_SPEC_NAME]
     for j in range(batch_size):
         df = pd.read_csv(out_dir / f"sample_{j}" / "params.csv", index_col=0)
         assert bool(df["pred"].notna().all())

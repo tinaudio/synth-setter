@@ -100,15 +100,13 @@ def params_to_csv(
 
 
 def resolve_preset_path(preset_path: str | None, param_spec: str) -> str:
-    """Resolve the preset path, falling back to the registry default for ``param_spec``.
+    """Return ``preset_path`` when given, else the registry's default preset for ``param_spec``.
 
-    A ``None`` ``preset_path`` with an unregistered ``param_spec`` propagates the
-    ``KeyError`` from the registry lookup.
+    ``None`` with an unregistered ``param_spec`` propagates the registry ``KeyError``.
 
-    :param preset_path: Explicit preset path, or ``None`` to use the registry default.
-    :param param_spec: Registry key naming the param spec whose default preset to use.
-    :returns: ``preset_path`` when given, else ``preset_paths[param_spec]``.
-    :rtype: str
+    :param preset_path: Explicit preset path; ``None`` selects the registry default.
+    :param param_spec: Registry key naming the spec whose default preset to use.
+    :returns: Resolved preset path.
     """
     return preset_paths[param_spec] if preset_path is None else preset_path
 
@@ -129,7 +127,7 @@ def resolve_preset_path(preset_path: str | None, param_spec: str) -> str:
 def main(
     pred_dir: str,
     output_dir: str,
-    plugin_path: str | None = None,
+    plugin_path: str,
     preset_path: str | None = None,
     sample_rate: float = 44100.0,
     channels: int = 2,
@@ -140,7 +138,6 @@ def main(
     no_params: bool = False,
     skip_spectrogram: bool = False,
 ):
-    plugin_path = plugin_path if plugin_path is not None else default_plugin_path()
     preset_path = resolve_preset_path(preset_path, param_spec)
     spec = param_specs[param_spec]
     os.makedirs(output_dir, exist_ok=True)

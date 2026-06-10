@@ -441,6 +441,33 @@ def test_evaluate_validate_mode_legacy_val_spelling_runs_oracle(
 
 
 @pytest.mark.fake_vst
+def test_evaluate_unregistered_param_spec_name_raises_key_error_at_setup(
+    tmp_path: Path,
+    fake_surge_smoke_datasets: Path,
+) -> None:
+    """An unregistered ``datamodule.param_spec_name`` fails fast through ``evaluate``.
+
+    ``VSTDataModule.setup`` does a ``param_specs[param_spec_name]`` lookup to derive the
+    fake/real param width; an unknown spec must surface as a ``KeyError`` at the
+    ``evaluate`` entrypoint rather than a later opaque shape mismatch. Pins that the new
+    registry-lookup contract is wired through the real eval entrypoint.
+
+    :param tmp_path: Pinned as Hydra ``output_dir`` / ``log_dir``.
+    :param fake_surge_smoke_datasets: CPU-fast surge_4 dataset (no real VST).
+    """
+    cfg = _compose_fake_oracle_eval_cfg(tmp_path, fake_surge_smoke_datasets, mode="validate")
+    with open_dict(cfg):
+        cfg.datamodule.param_spec_name = "does_not_exist"
+
+    HydraConfig().set_config(cfg)
+    try:
+        with pytest.raises(KeyError, match="does_not_exist"):
+            evaluate(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+
+@pytest.mark.fake_vst
 def test_evaluate_unknown_mode_returns_only_callback_metrics(
     tmp_path: Path,
     fake_surge_smoke_datasets: Path,
