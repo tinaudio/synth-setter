@@ -700,24 +700,42 @@ class TestRun:
         patched_subprocess.assert_not_called()
         assert not (fake_r2_remote / spec.r2.bucket / spec.r2.prefix).exists()
 
-    def test_rank_0_of_2_renders_only_first_half_of_shards(
+    @pytest.mark.parametrize(
+        ("rank", "world", "expected_indices"),
+        [
+            pytest.param(0, 2, [0, 1], id="rank0-of-2-renders-first-half"),
+            pytest.param(1, 2, [2], id="rank1-of-2-renders-remainder"),
+            pytest.param(3, 4, [], id="excess-worker-renders-none"),
+        ],
+    )
+    def test_worker_renders_only_its_partition_of_shards(
         self,
         patched_subprocess: MagicMock,
         fake_r2_remote: Path,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
+        rank: int,
+        world: int,
+        expected_indices: list[int],
     ) -> None:
-        """Worker 0 of a 2-node partition with 3 shards renders shards 0 and 1 only.
+        """A worker renders (and uploads) exactly its contiguous slice of the 3 shards.
+
+        Covers in-range ranks that own a non-empty slice and an excess rank
+        (``world`` > num_shards) whose empty range renders nothing and makes no
+        rclone calls.
 
         :param patched_subprocess: Subprocess dispatcher used to introspect
-            renderer argv.
+            renderer argv; never invoked when ``expected_indices`` is empty.
         :param fake_r2_remote: Local-typed R2 remote — asserted to contain only
-            shards 0 and 1.
+            the worker's shards.
         :param tmp_path: Pytest tmp dir used by ``_multi_shard_spec``.
         :param monkeypatch: Used to set the rank/world env vars.
+        :param rank: This worker's ``SYNTH_SETTER_WORKER_RANK``.
+        :param world: Partition size ``SYNTH_SETTER_NUM_WORKERS``.
+        :param expected_indices: Shard indices the worker should render and upload.
         """
-        monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
-        monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "2")
+        monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", str(rank))
+        monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", str(world))
         spec = _multi_shard_spec(tmp_path, n=3)
 
         generate(spec, tmp_path, [])
@@ -726,69 +744,18 @@ class TestRun:
             Path(args[find_script_index(args) + 1]).name
             for args in _renderer_argv_lists(patched_subprocess)
         ]
-        assert rendered_filenames == [spec.shards[0].filename, spec.shards[1].filename]
+        assert rendered_filenames == [spec.shards[i].filename for i in expected_indices]
         bucket_prefix = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
-        assert (bucket_prefix / spec.shards[0].filename).is_file()
-        assert (bucket_prefix / spec.shards[1].filename).is_file()
-        assert not (bucket_prefix / spec.shards[2].filename).exists()
-
-    def test_rank_1_of_2_renders_only_remaining_shard(
-        self,
-        patched_subprocess: MagicMock,
-        fake_r2_remote: Path,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Worker 1 of a 2-node partition with 3 shards renders shard 2 only.
-
-        :param patched_subprocess: Subprocess dispatcher used to introspect
-            renderer argv.
-        :param fake_r2_remote: Local-typed R2 remote — asserted to contain only
-            shard 2.
-        :param tmp_path: Pytest tmp dir used by ``_multi_shard_spec``.
-        :param monkeypatch: Used to set the rank/world env vars.
-        """
-        monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "1")
-        monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "2")
-        spec = _multi_shard_spec(tmp_path, n=3)
-
-        generate(spec, tmp_path, [])
-
-        rendered_filenames = [
-            Path(args[find_script_index(args) + 1]).name
-            for args in _renderer_argv_lists(patched_subprocess)
-        ]
-        assert rendered_filenames == [spec.shards[2].filename]
-        bucket_prefix = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
-        assert not (bucket_prefix / spec.shards[0].filename).exists()
-        assert not (bucket_prefix / spec.shards[1].filename).exists()
-        assert (bucket_prefix / spec.shards[2].filename).is_file()
-
-    def test_excess_worker_renders_no_shards(
-        self,
-        patched_subprocess: MagicMock,
-        fake_r2_remote: Path,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """When world > num_shards, the excess workers exit cleanly without rendering.
-
-        A 4-node partition over 3 shards leaves worker 3 with an empty range — it renders zero
-        shards and makes no rclone calls.
-
-        :param patched_subprocess: Subprocess dispatcher; asserted never invoked.
-        :param fake_r2_remote: Local-typed R2 remote — asserted empty.
-        :param tmp_path: Pytest tmp dir used by ``_multi_shard_spec``.
-        :param monkeypatch: Pytest fixture used to set partition env vars.
-        """
-        monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "3")
-        monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "4")
-        spec = _multi_shard_spec(tmp_path, n=3)
-
-        generate(spec, tmp_path, [])
-
-        patched_subprocess.assert_not_called()
-        assert not (fake_r2_remote / spec.r2.bucket / spec.r2.prefix).exists()
+        if not expected_indices:
+            patched_subprocess.assert_not_called()
+            assert not bucket_prefix.exists()
+            return
+        for index, shard in enumerate(spec.shards):
+            uploaded = bucket_prefix / shard.filename
+            if index in expected_indices:
+                assert uploaded.is_file()
+            else:
+                assert not uploaded.exists()
 
     # Skip-existing-shards — see #750.
 
@@ -817,49 +784,35 @@ class TestRun:
         patched_subprocess.assert_not_called()
         assert not (fake_r2_remote / spec.r2.bucket / spec.r2.prefix).exists()
 
-    def test_run_renders_when_object_absent(
-        self,
-        patched_subprocess: MagicMock,
-        fake_r2_remote: Path,
-        spec: DatasetSpec,
-        tmp_path: Path,
-    ) -> None:
-        """Object absent (None) → render proceeds as before.
-
-        Relies on the autouse ``_default_shard_absent_in_r2`` fixture's default of None.
-
-        :param patched_subprocess: Subprocess dispatcher; renderer is asserted
-            to fire exactly once.
-        :param fake_r2_remote: Local-typed R2 remote — shard should land here.
-        :param spec: Fixture-provided ``DatasetSpec``.
-        :param tmp_path: Caller-supplied work_dir for ``generate()``.
-        """
-        generate(spec, tmp_path, [])
-
-        renderer_calls = _renderer_argv_lists(patched_subprocess)
-        assert len(renderer_calls) == 1
-        assert (
-            fake_r2_remote / spec.r2.bucket / spec.r2.prefix / spec.shards[0].filename
-        ).is_file()
-
-    def test_run_renders_when_object_zero_size(
+    @pytest.mark.parametrize(
+        "probe_size",
+        [pytest.param(None, id="object-absent"), pytest.param(0, id="object-zero-size")],
+    )
+    def test_run_renders_when_object_treated_as_absent(
         self,
         patched_subprocess: MagicMock,
         fake_r2_remote: Path,
         spec: DatasetSpec,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
+        probe_size: int | None,
     ) -> None:
-        """Zero-byte object is treated as absent — defensive against half-uploaded objects.
+        """Missing (None) and zero-byte probes both treat the shard as absent and render it.
+
+        A zero-byte object is treated as absent defensively against half-uploaded objects.
 
         :param patched_subprocess: Subprocess dispatcher; renderer is asserted
             to fire exactly once.
         :param fake_r2_remote: Local-typed R2 remote — shard should land here.
         :param spec: Fixture-provided ``DatasetSpec``.
-        :param monkeypatch: Used to override the probe to report 0 bytes.
+        :param monkeypatch: Used to set the probe's reported object size.
         :param tmp_path: Caller-supplied work_dir for ``generate()``.
+        :param probe_size: ``object_size`` return value standing in for the
+            R2 probe — ``None`` (absent) or ``0`` (zero-byte).
         """
-        monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda *_a, **_k: 0)
+        monkeypatch.setattr(
+            "synth_setter.pipeline.r2_io.object_size", lambda *_a, **_k: probe_size
+        )
 
         generate(spec, tmp_path, [])
 
