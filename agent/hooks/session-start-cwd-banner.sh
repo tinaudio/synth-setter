@@ -72,7 +72,7 @@ main() {
   do
     [[ ( -e "$asset_path" || -L "$asset_path" ) && ! -d "$asset_path" ]] || continue
     printf '\n  WARNING: %s did not materialize as a directory — agent asset discovery is BROKEN.\n' "${asset_path#"$repo_top/"}"
-    printf "    Fix: git -C '%s' config core.symlinks true && git -C '%s' checkout -- .agents .claude\n" "$repo_top" "$repo_top"
+    printf "    Fix: git -C '%s' config core.symlinks true && git -C '%s' checkout -- '%s'\n" "$repo_top" "$repo_top" "${asset_path#"$repo_top/"}"
   done
 }
 
