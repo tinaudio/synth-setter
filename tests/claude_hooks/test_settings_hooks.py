@@ -26,9 +26,10 @@ def _load_settings() -> dict[str, Any]:
     return json.loads(_SETTINGS_PATH.read_text())
 
 
-def test_claude_agent_assets_are_symlinked_to_agent_source() -> None:
-    """The shared ``agent/`` tree is the source of truth for hooks and review skills."""
+def test_agent_assets_are_symlinked_to_agent_source() -> None:
+    """The shared ``agent/`` tree is the source of truth for tool-discovered assets."""
     expected = {
+        _REPO_ROOT / ".agents" / "skills": _REPO_ROOT / "agent" / "skills",
         _REPO_ROOT / ".claude" / "hooks": _REPO_ROOT / "agent" / "hooks",
         _REPO_ROOT / ".claude" / "skills": _REPO_ROOT / "agent" / "skills",
     }
