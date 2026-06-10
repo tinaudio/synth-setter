@@ -93,4 +93,8 @@ def test_codex_doctor_missing_plugin_skills_prints_install_command(
 
     assert result.returncode == 1
     assert "codex plugin marketplace add tinaudio/skills" in result.stdout
-    assert "Install or enable the tinaudio skill plugin" in result.stdout
+    assert "If tinaudio plugin skills are missing" in result.stdout
+    assert (
+        "Repo-local skills (e.g. pr-readiness) come from the repo skill projection"
+        in result.stdout
+    )
