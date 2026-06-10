@@ -66,6 +66,32 @@ _R2_STRUCTURAL_DEFAULTS: dict[str, str] = {
 _UPLOAD_DIR_TIMEOUT = "3h"
 
 
+def _rclone_argv(verb: str, *operands: str, timeout: str = "300s") -> list[str]:
+    """Build an rclone argv with the shared reliability-flag block, then operands.
+
+    Centralizes ``-vv --checksum --contimeout=30s --timeout=<timeout> --retries=3``
+    so every transfer helper retries transient blips identically. ``--timeout`` is
+    the IO idle timeout, not a wall-clock cap; only directory uploads widen it past
+    the 300s single-file default.
+
+    :param verb: rclone subcommand (``copy`` / ``copyto``).
+    :param \\*operands: Per-call args (extra flags like ``--immutable`` plus the
+        source/destination paths) appended verbatim after the shared flags.
+    :param timeout: Value for ``--timeout`` (IO idle timeout).
+    :returns: The full ``["rclone", verb, ...flags, *operands]`` argv list.
+    """
+    return [
+        "rclone",
+        verb,
+        "-vv",
+        "--checksum",
+        "--contimeout=30s",
+        f"--timeout={timeout}",
+        "--retries=3",
+        *operands,
+    ]
+
+
 def ensure_r2_env_loaded(env_file: Path | None = None) -> None:
     """Load ``RCLONE_CONFIG_R2_*`` from ``env_file`` into ``os.environ``; validate.
 
@@ -225,18 +251,7 @@ def download_dir_no_overwrite(r2_uri: str, dest_path: Path) -> None:
     :param r2_uri: ``r2://`` directory prefix; every object beneath it is copied.
     :param dest_path: Local destination directory, created by rclone if absent.
     """
-    args = [  # noqa: S607 — rclone resolved by image's PATH
-        "rclone",
-        "copy",
-        "-vv",
-        "--immutable",
-        "--checksum",
-        "--contimeout=30s",
-        "--timeout=300s",
-        "--retries=3",
-        _to_rclone_path(r2_uri),
-        str(dest_path),
-    ]
+    args = _rclone_argv("copy", "--immutable", _to_rclone_path(r2_uri), str(dest_path))
     subprocess.check_call(args)  # noqa: S603 — args from validated URI
 
 
@@ -249,17 +264,7 @@ def download_to_path(r2_uri: str, dest_path: Path) -> None:
     helpers so a transient blip on the per-shard copy-source fetch retries
     instead of failing the render outright.
     """
-    args = [  # noqa: S607 — rclone resolved by image's PATH
-        "rclone",
-        "copyto",
-        "-vv",
-        "--checksum",
-        "--contimeout=30s",
-        "--timeout=300s",
-        "--retries=3",
-        _to_rclone_path(r2_uri),
-        str(dest_path),
-    ]
+    args = _rclone_argv("copyto", _to_rclone_path(r2_uri), str(dest_path))
     subprocess.check_call(args)  # noqa: S603 — args from validated URI
 
 
@@ -271,17 +276,7 @@ def upload_to_uri(local_path: Path, r2_uri: str) -> None:
     and the per-request timeout, retries the whole copy on transient failure, and emits per-request
     debug logs so a CI failure leaves actionable evidence in stdout.
     """
-    args = [  # noqa: S607 — rclone resolved by image's PATH
-        "rclone",
-        "copyto",
-        "-vv",
-        "--checksum",
-        "--contimeout=30s",
-        "--timeout=300s",
-        "--retries=3",
-        str(local_path),
-        _to_rclone_path(r2_uri),
-    ]
+    args = _rclone_argv("copyto", str(local_path), _to_rclone_path(r2_uri))
     subprocess.check_call(args)  # noqa: S603 — args from validated URI
 
 
@@ -301,17 +296,9 @@ def upload_dir(local_dir: Path, r2_uri: str) -> None:
         ``r2_uri`` (the directory itself is not nested under its own name).
     :param r2_uri: ``r2://`` destination prefix; created implicitly by rclone.
     """
-    args = [  # noqa: S607 — rclone resolved by image's PATH
-        "rclone",
-        "copy",
-        "-vv",
-        "--checksum",
-        "--contimeout=30s",
-        f"--timeout={_UPLOAD_DIR_TIMEOUT}",
-        "--retries=3",
-        str(local_dir),
-        _to_rclone_path(r2_uri),
-    ]
+    args = _rclone_argv(
+        "copy", str(local_dir), _to_rclone_path(r2_uri), timeout=_UPLOAD_DIR_TIMEOUT
+    )
     subprocess.check_call(args)  # noqa: S603 — args from validated URI
 
 
@@ -337,17 +324,7 @@ def upload(source: str | Path, destination_uri: str) -> None:
             f"so the source-type dispatch is unambiguous."
         )
     if isinstance(source, str) and is_r2_uri(source):
-        args = [  # noqa: S607 — rclone resolved by image's PATH
-            "rclone",
-            "copyto",
-            "-vv",
-            "--checksum",
-            "--contimeout=30s",
-            "--timeout=300s",
-            "--retries=3",
-            _to_rclone_path(source),
-            _to_rclone_path(destination_uri),
-        ]
+        args = _rclone_argv("copyto", _to_rclone_path(source), _to_rclone_path(destination_uri))
         subprocess.check_call(args)  # noqa: S603 — args from validated URIs
         return
     upload_to_uri(Path(source), destination_uri)
