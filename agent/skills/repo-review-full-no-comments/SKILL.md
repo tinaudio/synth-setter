@@ -89,8 +89,11 @@ sub-agents; you never launch those directly.
 > - `mergeable`, `mergeStateStatus`, `statusCheckRollup`: **not available** —
 >   Step 2 handles this.
 >
-> If there are zero changed files between `base_sha` and `head_sha`, stop and
-> return `PASS — no diff vs ${base_ref}`.
+> If there are zero changed files between `base_sha` and `head_sha`, skip Steps
+> 2–6 and go straight to Step 7's **PASS short form**: write the sentinel file
+> and return the rendered PASS report ending in `Sentinel: <path>` (note
+> `PASS — no diff vs ${base_ref}` in the report body). Do not early-return a
+> bare string — the pre-PR gate needs the sentinel on disk.
 >
 > ### Step 2: Inspect PR health
 >
