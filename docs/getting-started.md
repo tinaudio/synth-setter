@@ -736,8 +736,13 @@ credentials are required.
    optionally authenticates with `RESTRICTED_AGENT_GIT_PAT`, and installs
    pre-commit hooks. If invoked as root (Codespaces default, or opt-in
    `DEVCONTAINER_USER=root` locally), it drops to the `dev` user first so
-   workspace mutations under `.git/` land with dev ownership. Then the
-   terminal is ready.
+   workspace mutations under `.git/` land with dev ownership. On a
+   root-owned host bind mount (the local-devcontainer case, where the
+   privilege drop alone can't fix files that arrive pre-owned by root), it
+   also recursively chowns the workspace to the running user — guarded by a
+   `stat`-based ownership check — before any `.git` write, so
+   `pre-commit install` and commits don't fail with permission denied. Then
+   the terminal is ready.
 4. Default terminal profile is configured in `.devcontainer/*/devcontainer.json`.
 
 **Verify:**
