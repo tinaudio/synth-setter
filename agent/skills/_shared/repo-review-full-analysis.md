@@ -1,9 +1,11 @@
 # repo-review-full analysis steps
 
 Shared analysis pipeline for `repo-review-full` and `repo-review-full-no-comments`.
-Both skills run the same Steps 1–6 below; only the final delivery step (post inline
+`repo-review-full` runs all of Steps 1–6 below. `repo-review-full-no-comments`
+owns its own Steps 1–2 (so it can also review a local branch with no PR open) and
+delegates only Steps 3–6 here. The final delivery step (Step 7 — post inline
 comments vs. print the report to the user) differs and lives in each skill's
-orchestrator brief (Step 7 in the calling skill's SKILL.md).
+orchestrator brief.
 
 "You" below is the **orchestrator agent** the calling skill spawned to run this
 whole pipeline — not the main agent, which only launches you and relays your
