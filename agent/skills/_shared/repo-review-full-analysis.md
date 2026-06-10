@@ -3,10 +3,14 @@
 Shared analysis pipeline for `repo-review-full` and `repo-review-full-no-comments`.
 Both skills run the same Steps 1–6 below; only the final delivery step (post inline
 comments vs. print the report to the user) differs and lives in each skill's
-SKILL.md.
+orchestrator brief (Step 7 in the calling skill's SKILL.md).
 
-You MUST complete every step below in order, then return to the calling skill's
-SKILL.md for the final delivery step.
+"You" below is the **orchestrator agent** the calling skill spawned to run this
+whole pipeline — not the main agent, which only launches you and relays your
+result.
+
+You MUST complete every step below in order, then return to your orchestrator
+brief's Step 7 for the final delivery step.
 
 ## Step 1: Resolve the PR
 
@@ -69,7 +73,9 @@ Always run `code-health` and `synth-setter-project-standards`. Other skills opt 
 
 ## Step 4: Launch parallel review agents
 
-Launch one `general-purpose` Agent per selected skill. **All agents in a single message** so they run concurrently (an agent supports this — one message with N tool calls = N parallel agents).
+Launch one `general-purpose` Agent per selected skill. **All agents in a single message** so they run concurrently (one message with N tool calls = N parallel agents). You are an orchestrator agent yourself, so these review agents are your sub-agents.
+
+If your harness does not let a sub-agent spawn its own sub-agents, fall back to running each selected skill sequentially in your own context — invoke each `tinaudio-synth-setter-skills:<skill-name>` via the Skill tool one at a time and collect its findings. Parallel fan-out is preferred; the sequential fallback preserves correctness when nesting is unavailable.
 
 Each agent's prompt MUST include:
 
@@ -181,11 +187,11 @@ cat > /tmp/<calling-skill>-findings.json <<'JSON'
 JSON
 ```
 
-Return to the calling skill's SKILL.md for the final delivery step.
+Return to your orchestrator brief's Step 7 for the final delivery step.
 
 ## Notes
 
 - Collapsing WARNs into a single advisory section (instead of one inline thread each) is intentional signal-preservation: posting every finding as its own thread trains reviewers to ignore the whole list, which buries the rare BLOCK that actually gates the merge.
 - This pipeline depends on the `tinaudio-synth-setter-skills` plugin being enabled. If a sub-skill invocation fails, surface the error — don't silently skip. Falling back to `repo-review` (MVP) is the user's call, not the skill's.
-- Each parallel agent is a *general-purpose* sub-agent that itself invokes a plugin skill via the Skill tool. The two-level structure is intentional: the parallel fan-out is the orchestrator's contribution; each plugin skill's authoritative checklist is the source of truth for its domain.
+- The structure is three-level and intentional: the main agent spawns one orchestrator agent (you), which fans out one *general-purpose* review sub-agent per skill; each review sub-agent invokes its plugin skill via the Skill tool. The orchestration is your contribution; each plugin skill's authoritative checklist is the source of truth for its domain.
 - For the concrete invocation pattern (parallel Agent tool calls in a single message, expected per-agent prompt shape), see the example trace recorded in PR #777's review history — that's the workflow this pipeline packages.
