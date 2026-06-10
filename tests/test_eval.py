@@ -29,7 +29,7 @@ from synth_setter.data.vst import param_specs, preset_paths
 from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
 from tests.helpers.run_if import RunIf
-from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
+from tests.helpers.wandb_artifacts import published_checkpoint_artifact
 
 # Public worker module names the predict-postprocessing subprocesses run; matched
 # as argv substrings so the fake ``subprocess.run`` can route render vs metrics
@@ -578,25 +578,28 @@ def test_evaluate_loads_wandb_resolved_checkpoint_and_runs_inference(
     ckpt = Path(cfg_surge_xt_eval.ckpt_path)
     assert ckpt.is_file(), "train step did not write the checkpoint"
 
-    ref = publish_checkpoint_artifact(ckpt, "model-citest-ffn_full-eval", tmp_path / "wandb")
+    with published_checkpoint_artifact(
+        ckpt, "model-citest-ffn_full-eval", tmp_path / "wandb"
+    ) as ref:
+        # Contain the resolver's download cache under tmp_path so each run fetches fresh (a warm
+        # self-hosted runner must not reuse a stale cached ckpt for the same :latest ref).
+        monkeypatch.setenv("SYNTH_SETTER_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
+        operator_workspace.cache_clear()
+        register_resolvers()
+        with open_dict(cfg_surge_xt_eval):
+            cfg_surge_xt_eval.ckpt_path = "${wandb:" + ref + "}"
 
-    # Contain the resolver's download cache under tmp_path so each run fetches fresh (a warm
-    # self-hosted runner must not reuse a stale cached ckpt for the same :latest ref).
-    monkeypatch.setenv("SYNTH_SETTER_WORKSPACE", str(tmp_path))
-    monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
-    operator_workspace.cache_clear()
-    register_resolvers()
-    with open_dict(cfg_surge_xt_eval):
-        cfg_surge_xt_eval.ckpt_path = "${wandb:" + ref + "}"
+        HydraConfig().set_config(cfg_surge_xt_eval)
+        evaluate(cfg_surge_xt_eval)
 
-    HydraConfig().set_config(cfg_surge_xt_eval)
-    evaluate(cfg_surge_xt_eval)
-
-    assert (tmp_path / ".cache" / "checkpoints").is_dir(), "resolver did not download the artifact"
-    predictions_dir = tmp_path / "predictions"
-    assert predictions_dir.is_dir()
-    preds = sorted(predictions_dir.glob("pred-*.pt"))
-    assert preds, "predict mode wrote no predictions"
-    for pred_file in preds:
-        tensor = torch.load(pred_file, weights_only=True)
-        assert torch.isfinite(tensor).all(), f"{pred_file.name} contains NaN/Inf"
+        assert (tmp_path / ".cache" / "checkpoints").is_dir(), (
+            "resolver did not download the artifact"
+        )
+        predictions_dir = tmp_path / "predictions"
+        assert predictions_dir.is_dir()
+        preds = sorted(predictions_dir.glob("pred-*.pt"))
+        assert preds, "predict mode wrote no predictions"
+        for pred_file in preds:
+            tensor = torch.load(pred_file, weights_only=True)
+            assert torch.isfinite(tensor).all(), f"{pred_file.name} contains NaN/Inf"

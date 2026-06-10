@@ -28,7 +28,7 @@ from tests.conftest import (
 )
 from tests.evaluation._oracle_helpers import ORACLE_AUDIO_METRIC_BOUNDS
 from tests.helpers.run_if import RunIf
-from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
+from tests.helpers.wandb_artifacts import published_checkpoint_artifact
 
 # Experiments cycled through the Surge XT VST smoke tests below. Single source of truth so
 # the parametrize lists on the two ``test_train_*_surge_xt`` tests cannot drift apart.
@@ -400,23 +400,26 @@ def test_train_resumes_from_wandb_resolved_checkpoint(
     ckpt = tmp_path / "checkpoints" / "last.ckpt"
     assert ckpt.is_file(), "first train step did not write last.ckpt"
 
-    ref = publish_checkpoint_artifact(ckpt, "model-citest-ffn_full-resume", tmp_path / "wandb")
+    with published_checkpoint_artifact(
+        ckpt, "model-citest-ffn_full-resume", tmp_path / "wandb"
+    ) as ref:
+        # Contain the resolver's download cache under tmp_path so each run fetches fresh (a warm
+        # self-hosted runner must not reuse a stale cached ckpt for the same :latest ref).
+        monkeypatch.setenv("SYNTH_SETTER_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
+        operator_workspace.cache_clear()
+        register_resolvers()
+        with open_dict(cfg_surge_xt):
+            cfg_surge_xt.ckpt_path = "${wandb:" + ref + "}"
+            cfg_surge_xt.trainer.max_steps = step_after_first + 1
 
-    # Contain the resolver's download cache under tmp_path so each run fetches fresh (a warm
-    # self-hosted runner must not reuse a stale cached ckpt for the same :latest ref).
-    monkeypatch.setenv("SYNTH_SETTER_WORKSPACE", str(tmp_path))
-    monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
-    operator_workspace.cache_clear()
-    register_resolvers()
-    with open_dict(cfg_surge_xt):
-        cfg_surge_xt.ckpt_path = "${wandb:" + ref + "}"
-        cfg_surge_xt.trainer.max_steps = step_after_first + 1
+        HydraConfig().set_config(cfg_surge_xt)
+        _, second = train(cfg_surge_xt)
+        step_after_resume = second["trainer"].global_step
 
-    HydraConfig().set_config(cfg_surge_xt)
-    _, second = train(cfg_surge_xt)
-    step_after_resume = second["trainer"].global_step
-
-    assert (tmp_path / ".cache" / "checkpoints").is_dir(), "resolver did not download the artifact"
-    assert step_after_resume > step_after_first, (
-        f"resume did not advance training: before={step_after_first}, after={step_after_resume}"
-    )
+        assert (tmp_path / ".cache" / "checkpoints").is_dir(), (
+            "resolver did not download the artifact"
+        )
+        assert step_after_resume > step_after_first, (
+            f"resume did not advance training: before={step_after_first}, after={step_after_resume}"
+        )

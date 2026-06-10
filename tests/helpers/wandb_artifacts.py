@@ -9,7 +9,12 @@ the live download path. To keep these test writes out of the production model re
 
 from __future__ import annotations
 
+import contextlib
+import logging
+from collections.abc import Iterator
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # Dedicated test project so round-trip uploads never touch the production model registry.
 # The entity is the key's default (read back from the run), so this works under whatever
@@ -17,18 +22,39 @@ from pathlib import Path
 CITEST_PROJECT = "synth-setter-citest"
 
 
-def publish_checkpoint_artifact(ckpt_path: Path, artifact_name: str, run_dir: Path) -> str:
-    """Upload ``ckpt_path`` as ``model.ckpt`` in a W&B model artifact, returning its resolver ref.
+def _run_scoped_name(artifact_name: str, run_id: str) -> str:
+    """Suffix a collection name with the run id so each run owns its own collection.
+
+    A fixed shared name can wedge: deleting its versions leaves the collection in W&B's
+    ``PENDING_DELETION`` state, which rejects new manifests (HTTP 400) until async GC
+    finalizes, and concurrent runs race on its ``:latest`` alias. A run-scoped name avoids
+    both — a brand-new collection per run, never colliding with a half-deleted one.
+
+    :param artifact_name: Base name, e.g. ``model-citest-ffn_full-resume``.
+    :param run_id: The W&B run id, unique per run.
+    :returns: ``<artifact_name>-<run_id>``.
+    """
+    return f"{artifact_name}-{run_id}"
+
+
+@contextlib.contextmanager
+def published_checkpoint_artifact(
+    ckpt_path: Path, artifact_name: str, run_dir: Path
+) -> Iterator[str]:
+    """Publish ``ckpt_path`` as ``model.ckpt`` in a W&B model artifact, yielding its resolver ref.
 
     Logs to :data:`CITEST_PROJECT` under the key's default entity (never the production
-    registry) and blocks on ``artifact.wait()`` so the artifact is committed before the
-    caller resolves it. Requires a live ``WANDB_API_KEY`` in the environment — callers gate on it.
+    registry) under a run-scoped name (see :func:`_run_scoped_name`), and blocks on
+    ``artifact.wait()`` so the artifact is committed before the body resolves it. On exit
+    the published version is deleted best-effort to keep the scratch project bounded.
+    Requires a live ``WANDB_API_KEY`` in the environment — callers gate on it.
 
     :param ckpt_path: Local Lightning checkpoint embedded into the artifact as ``model.ckpt``.
-    :param artifact_name: Artifact name, e.g. ``model-citest-ffn_full``.
+    :param artifact_name: Base artifact name, e.g. ``model-citest-ffn_full``.
     :param run_dir: Directory for the wandb run's local files, kept off the repo tree.
-    :returns: The ``entity/project/name:latest`` ref the resolver consumes — wrap in
+    :yields: The ``entity/project/name:latest`` ref the resolver consumes — wrap in
         ``${wandb:<ref>}`` to pin it as a ``ckpt_path``.
+    :ytype: str
     """
     import wandb
 
@@ -42,13 +68,33 @@ def publish_checkpoint_artifact(ckpt_path: Path, artifact_name: str, run_dir: Pa
         dir=str(run_dir),
         settings=wandb.Settings(host="synth-setter-ci"),
     )
+    name = _run_scoped_name(artifact_name, run.id)
+    # Read the entity back from the run so the ref matches whatever account the key owns.
+    ref = f"{run.entity}/{CITEST_PROJECT}/{name}:latest"
     try:
-        artifact = wandb.Artifact(name=artifact_name, type="model")
+        artifact = wandb.Artifact(name=name, type="model")
         artifact.add_file(str(ckpt_path), name="model.ckpt")
         run.log_artifact(artifact)
         artifact.wait()
-        # Read the entity back from the run so the ref matches whatever account the key owns.
-        ref = f"{run.entity}/{CITEST_PROJECT}/{artifact_name}:latest"
     finally:
         run.finish()
-    return ref
+    try:
+        yield ref
+    finally:
+        _delete_artifact_best_effort(ref)
+
+
+def _delete_artifact_best_effort(ref: str) -> None:
+    """Delete the published artifact version, never raising — cleanup must not fail the test.
+
+    Passes ``delete_aliases=True`` because the version carries the ``:latest`` alias, which
+    W&B otherwise refuses to delete. Any failure is logged and swallowed.
+
+    :param ref: The ``entity/project/name:latest`` ref to delete.
+    """
+    import wandb
+
+    try:
+        wandb.Api().artifact(ref).delete(delete_aliases=True)
+    except Exception:  # noqa: BLE001 - best-effort scratch cleanup, never fail the test
+        logger.warning("failed to delete citest artifact %s", ref, exc_info=True)
