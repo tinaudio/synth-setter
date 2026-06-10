@@ -400,21 +400,23 @@ def test_train_resumes_from_wandb_resolved_checkpoint(
     ckpt = tmp_path / "checkpoints" / "last.ckpt"
     assert ckpt.is_file(), "first train step did not write last.ckpt"
 
-    ref = publish_checkpoint_artifact(ckpt, "model-citest-ffn_full-resume", tmp_path / "wandb")
+    # Body runs inside the ``with`` so the resolver downloads before the artifact/run teardown.
+    with publish_checkpoint_artifact(
+        ckpt, "model-citest-ffn_full-resume", tmp_path / "wandb"
+    ) as ref:
+        # Contain the resolver's download cache under tmp_path so each run fetches fresh (a warm
+        # self-hosted runner must not reuse a stale cached ckpt for the same :latest ref).
+        monkeypatch.setenv("SYNTH_SETTER_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
+        operator_workspace.cache_clear()
+        register_resolvers()
+        with open_dict(cfg_surge_xt):
+            cfg_surge_xt.ckpt_path = "${wandb:" + ref + "}"
+            cfg_surge_xt.trainer.max_steps = step_after_first + 1
 
-    # Contain the resolver's download cache under tmp_path so each run fetches fresh (a warm
-    # self-hosted runner must not reuse a stale cached ckpt for the same :latest ref).
-    monkeypatch.setenv("SYNTH_SETTER_WORKSPACE", str(tmp_path))
-    monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
-    operator_workspace.cache_clear()
-    register_resolvers()
-    with open_dict(cfg_surge_xt):
-        cfg_surge_xt.ckpt_path = "${wandb:" + ref + "}"
-        cfg_surge_xt.trainer.max_steps = step_after_first + 1
-
-    HydraConfig().set_config(cfg_surge_xt)
-    _, second = train(cfg_surge_xt)
-    step_after_resume = second["trainer"].global_step
+        HydraConfig().set_config(cfg_surge_xt)
+        _, second = train(cfg_surge_xt)
+        step_after_resume = second["trainer"].global_step
 
     assert (tmp_path / ".cache" / "checkpoints").is_dir(), "resolver did not download the artifact"
     assert step_after_resume > step_after_first, (

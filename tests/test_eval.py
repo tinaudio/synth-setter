@@ -578,19 +578,21 @@ def test_evaluate_loads_wandb_resolved_checkpoint_and_runs_inference(
     ckpt = Path(cfg_surge_xt_eval.ckpt_path)
     assert ckpt.is_file(), "train step did not write the checkpoint"
 
-    ref = publish_checkpoint_artifact(ckpt, "model-citest-ffn_full-eval", tmp_path / "wandb")
+    # Body runs inside the ``with`` so the resolver downloads before the artifact/run teardown.
+    with publish_checkpoint_artifact(
+        ckpt, "model-citest-ffn_full-eval", tmp_path / "wandb"
+    ) as ref:
+        # Contain the resolver's download cache under tmp_path so each run fetches fresh (a warm
+        # self-hosted runner must not reuse a stale cached ckpt for the same :latest ref).
+        monkeypatch.setenv("SYNTH_SETTER_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
+        operator_workspace.cache_clear()
+        register_resolvers()
+        with open_dict(cfg_surge_xt_eval):
+            cfg_surge_xt_eval.ckpt_path = "${wandb:" + ref + "}"
 
-    # Contain the resolver's download cache under tmp_path so each run fetches fresh (a warm
-    # self-hosted runner must not reuse a stale cached ckpt for the same :latest ref).
-    monkeypatch.setenv("SYNTH_SETTER_WORKSPACE", str(tmp_path))
-    monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
-    operator_workspace.cache_clear()
-    register_resolvers()
-    with open_dict(cfg_surge_xt_eval):
-        cfg_surge_xt_eval.ckpt_path = "${wandb:" + ref + "}"
-
-    HydraConfig().set_config(cfg_surge_xt_eval)
-    evaluate(cfg_surge_xt_eval)
+        HydraConfig().set_config(cfg_surge_xt_eval)
+        evaluate(cfg_surge_xt_eval)
 
     assert (tmp_path / ".cache" / "checkpoints").is_dir(), "resolver did not download the artifact"
     predictions_dir = tmp_path / "predictions"
