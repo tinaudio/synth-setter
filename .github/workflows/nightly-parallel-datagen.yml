@@ -208,7 +208,7 @@ jobs:
           echo "r2 prefix (for cleanup): ${R2_PREFIX}"
 
       # Validate the spec + every shard against R2 using the same CI helpers
-      # invoked by ``validate-dataset-shards.yaml``. Runs inside the same
+      # invoked by ``validate-dataset-shards.yml``. Runs inside the same
       # ``dev-snapshot`` image so ``h5py`` is available without a host install.
       - name: Validate spec + every shard via R2
         env:

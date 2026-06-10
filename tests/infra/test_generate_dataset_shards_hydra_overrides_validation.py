@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 from workflow_fixtures import load_workflow
 
-WORKFLOW_FILENAME = "generate-dataset-shards.yaml"
+WORKFLOW_FILENAME = "generate-dataset-shards.yml"
 VALIDATION_STEP_NAME = "Validate hydra_overrides"
 EXPECTED_CHARACTER_CLASS = "[A-Za-z0-9._=,/-]"
 EXPECTED_REGEX_LITERAL = "^[A-Za-z0-9._=,/-]*( [A-Za-z0-9._=,/-]+)*$"
@@ -30,7 +30,7 @@ DOCKER_STEP_ID = "gen_docker"
 
 @pytest.fixture(scope="module")
 def workflow(project_root: Path) -> dict:
-    """Return `generate-dataset-shards.yaml` parsed once per module.
+    """Return `generate-dataset-shards.yml` parsed once per module.
 
     :param project_root: Repo root provided by the `tests/infra/conftest.py` fixture.
     :returns: The parsed workflow document.
@@ -56,7 +56,7 @@ def test_validation_step_exists(generate_steps: list[dict]) -> None:
     """
     names = [step.get("name", "") for step in generate_steps]
     assert VALIDATION_STEP_NAME in names, (
-        f"`generate-dataset-shards.yaml` is missing the {VALIDATION_STEP_NAME!r} step — "
+        f"`generate-dataset-shards.yml` is missing the {VALIDATION_STEP_NAME!r} step — "
         f"without it, the runpod/oci docker row's unquoted "
         f"`$HYDRA_OVERRIDES_EXTRA` expansion allows shell injection. "
         f"Found steps: {names!r}"
@@ -259,7 +259,7 @@ def test_workflow_bash_validation_accepts_safe_inputs(value: str) -> None:
 def _workflow_validation_rejects(value: str) -> bool:
     """Run the workflow's bash validation against `value` and return True iff it rejects.
 
-    Mirrors the exact construct in ``.github/workflows/generate-dataset-shards.yaml``:
+    Mirrors the exact construct in ``.github/workflows/generate-dataset-shards.yml``:
     an explicit ``$'\\n'`` / ``$'\\r'`` guard followed by a whole-input
     ``[[ "$INPUT" =~ $REGEX ]]`` match. Using ``bash -c`` (rather than a Python
     regex) means a future regression in the workflow body — e.g. reverting to

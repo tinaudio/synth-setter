@@ -16,7 +16,7 @@ import pytest
 
 REPRESENTATIVE_WORKFLOWS = (
     "test.yml",
-    "code-quality-pr.yaml",
+    "code-quality-pr.yml",
     "stale.yml",
 )
 

@@ -203,7 +203,7 @@ def test_launcher_roundtrip_with_stubbed_renderer(
     assert spec_errors == [], f"spec validation failed: {spec_errors}"
 
     # And validate every shard by downloading each from R2 — this is the same
-    # function .github/workflows/validate-dataset-shards.yaml runs.
+    # function .github/workflows/validate-dataset-shards.yml runs.
     shard_errors = validate_all_shards_from_r2(expected_spec)
     assert shard_errors == [], f"shard validation failed: {shard_errors}"
 

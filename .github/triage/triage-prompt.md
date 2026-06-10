@@ -205,7 +205,7 @@ in-repo design doc `docs/design/github-taxonomy.md`. Required metadata:
 
 - **Issue type**: `Bug` (failures) or `Task` (auth/setup work).
 - **Domain label**: `ci-automation` (or the domain the failing workflow lives
-  in — e.g. `data-pipeline` for `generate-dataset-shards.yaml`).
+  in — e.g. `data-pipeline` for `generate-dataset-shards.yml`).
 - **Milestone**: matches the domain label per `docs/design/github-taxonomy.md`
   (e.g. `ci-automation v1.0.0`).
 - **Sub-issue of**: an open **Phase** under the matching Epic. Task/Bug/Feature

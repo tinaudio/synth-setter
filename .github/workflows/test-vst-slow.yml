@@ -4,7 +4,7 @@ name: VST Slow Tests
 # Runs the slow VST audio-similarity tests in
 # ``tests/data/vst/test_generate_vst_dataset.py`` inside the
 # ``tinaudio/synth-setter:dev-snapshot`` Docker image so the headless X11
-# stack the renderer needs is the same one used by ``generate-dataset-shards.yaml``
+# stack the renderer needs is the same one used by ``generate-dataset-shards.yml``
 # (proven working in CI). Bare ``ubuntu-latest`` runners hit "Timeout
 # waiting for Xvfb to start" intermittently — see the failing run at
 # https://github.com/tinaudio/synth-setter/actions/runs/25026506440 — which

@@ -1,7 +1,7 @@
 name: Test OCI Image Bake
 
-# PR-triggered gate for changes to oci-image-bake.yaml / its source
-# template. Calls oci-image-bake.yaml via workflow_call on the PR's
+# PR-triggered gate for changes to oci-image-bake.yml / its source
+# template. Calls oci-image-bake.yml via workflow_call on the PR's
 # commit (so changes are exercised before merge), then verifies the
 # bake's image_ocid output is non-empty and cleans the PR-scoped image
 # up so PR pushes don't accumulate billable boot-image artifacts.
@@ -10,7 +10,7 @@ name: Test OCI Image Bake
 # endpoint resolves the workflow's filename against the repo's default
 # branch. For a new workflow being added in this PR the file isn't on
 # the default branch yet, so dispatch 404s. workflow_call resolves
-# `uses: ./.github/workflows/oci-image-bake.yaml` on the PR branch's
+# `uses: ./.github/workflows/oci-image-bake.yml` on the PR branch's
 # commit and works in that scenario.
 #
 # Cost: each gate run does a real bake — billable OCI VM time (~30–90
@@ -27,7 +27,7 @@ name: Test OCI Image Bake
 on:
   pull_request:
     paths:
-      - .github/workflows/oci-image-bake.yaml
+      - .github/workflows/oci-image-bake.yml
       - .github/workflows/test-oci-image-bake.yml
       - src/synth_setter/configs/compute/oci-cpu-template.yaml
 
@@ -41,7 +41,7 @@ permissions:
 jobs:
   bake:
     if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
-    uses: ./.github/workflows/oci-image-bake.yaml
+    uses: ./.github/workflows/oci-image-bake.yml
     with:
       image_display_name: synth-setter-pr${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
     secrets: inherit
