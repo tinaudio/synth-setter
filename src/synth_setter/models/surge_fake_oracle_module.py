@@ -55,7 +55,7 @@ class VSTFakeOracleModule(LightningModule):
         net: nn.Module,
         optimizer: Callable[..., torch.optim.Optimizer],
         scheduler: Callable[..., torch.optim.lr_scheduler.LRScheduler] | None = None,
-        compile: bool = False,  # noqa: A002 — name preserved for VSTFeedForwardModule config-swap parity
+        compile: bool = False,  # noqa: A002 — config-swap parity with VSTFeedForwardModule
         warmup_steps: int = 0,
     ):
         """Mirror :class:`VSTFeedForwardModule`'s signature so configs swap cleanly.

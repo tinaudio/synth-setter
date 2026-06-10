@@ -33,7 +33,7 @@ preset_paths: dict[str, str] = {
 
 
 def default_plugin_path() -> str:
-    """Return ``$SYNTH_SETTER_PLUGIN_PATH`` when set and non-empty, else the in-repo Surge XT bundle.
+    """Return ``$SYNTH_SETTER_PLUGIN_PATH`` if set and non-empty, else the bundled Surge XT path.
 
     ``or`` (not a ``get`` default) so an empty override also falls back to the bundle.
 

@@ -440,22 +440,21 @@ def test_evaluate_validate_mode_legacy_val_spelling_runs_oracle(
     assert param_mse.item() == 0.0
 
 
-@pytest.mark.fake_vst
 def test_evaluate_unregistered_param_spec_name_raises_key_error_at_setup(
     tmp_path: Path,
-    fake_surge_smoke_datasets: Path,
 ) -> None:
     """An unregistered ``datamodule.param_spec_name`` fails fast through ``evaluate``.
 
     ``VSTDataModule.setup`` does a ``param_specs[param_spec_name]`` lookup to derive the
     fake/real param width; an unknown spec must surface as a ``KeyError`` at the
-    ``evaluate`` entrypoint rather than a later opaque shape mismatch. Pins that the new
-    registry-lookup contract is wired through the real eval entrypoint.
+    ``evaluate`` entrypoint rather than a later opaque shape mismatch. Pins that the
+    registry-lookup contract is wired through the real eval entrypoint. The lookup
+    precedes any dataset open, so no dataset (and no fake plugin) is materialized.
 
-    :param tmp_path: Pinned as Hydra ``output_dir`` / ``log_dir``.
-    :param fake_surge_smoke_datasets: CPU-fast surge_4 dataset (no real VST).
+    :param tmp_path: Pinned as Hydra ``output_dir`` / ``log_dir``; the dataset root
+        points at a nonexistent subdirectory that is never read.
     """
-    cfg = _compose_fake_oracle_eval_cfg(tmp_path, fake_surge_smoke_datasets, mode="validate")
+    cfg = _compose_fake_oracle_eval_cfg(tmp_path, tmp_path / "missing-datasets", mode="validate")
     with open_dict(cfg):
         cfg.datamodule.param_spec_name = "does_not_exist"
 

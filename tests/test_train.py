@@ -208,14 +208,15 @@ def test_cfg_surge_xt_global_wires_param_spec(param_spec_name: str) -> None:
     assert cfg.callbacks.log_per_param_mse.param_spec == param_spec_name
 
 
+@pytest.mark.slow
 def test_train_fake_mode_nondefault_spec_sizes_batches_from_registry(tmp_path: Path) -> None:
     """Fake-mode train through the entrypoint sizes batches from a non-default ``param_spec_name``.
 
     Drives the real ``train(cfg)`` entrypoint with ``datamodule.fake=true`` and the
     non-default ``surge_simple`` spec: no dataset on disk, so the run exercises the
     registry-derived fake width end-to-end. The width-agnostic ``surge/fake_oracle``
-    experiment (oracle returns ``batch["params"]``) tolerates the 92-wide batches, and
-    the datamodule the entrypoint built carries that registry-derived width.
+    experiment (oracle returns ``batch["params"]``) tolerates the registry-width batches,
+    and the datamodule the entrypoint built carries that registry-derived width.
 
     :param tmp_path: Pinned as Hydra ``output_dir`` / ``log_dir``; no dataset is read.
     """
