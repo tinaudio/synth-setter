@@ -298,12 +298,6 @@ def test_hook_lib_finds_codex_skill_layouts(tmp_path: Path, skill_path: Path) ->
         text=True,
         check=False,
     )
-        capture_output=True,
-        cwd=tmp_path,
-        env={**os.environ, "HOME": str(tmp_path)},
-        text=True,
-        check=False,
-    )
 
     assert result.returncode == 0, result.stderr
 
