@@ -527,14 +527,15 @@ def run_investigation(
     :param count: Per-experiment cell cap (``None`` runs every grid cell).
     :param max_parallel: Maximum wandb agents running at once (ignored by ``local``).
     :raises ValueError: ``launcher`` is not ``"wandb"``/``"local"``, ``only`` names
-        an unknown experiment, ``count`` is set below 1, or ``max_parallel`` is below 1
-        (caps that would silently run nothing).
+        an unknown experiment, ``count`` is set below 1, or the wandb launcher gets a
+        ``max_parallel`` below 1 (caps that would silently run nothing).
     """
     if launcher not in ("wandb", "local"):
         raise ValueError(f"launcher must be 'wandb' or 'local', got {launcher!r}")
     if count is not None and count < 1:
         raise ValueError(f"count must be >= 1 when set, got {count}")
-    if max_parallel < 1:
+    # max_parallel only governs the wandb agent pool; the local launcher ignores it.
+    if launcher == "wandb" and max_parallel < 1:
         raise ValueError(f"max_parallel must be >= 1, got {max_parallel}")
     experiments = build_experiments(scale)
     by_name = {e.name: e for e in experiments}

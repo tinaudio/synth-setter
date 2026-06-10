@@ -356,7 +356,7 @@ def test_copy_source_generated_before_copy_agents(monkeypatch: pytest.MonkeyPatc
 
 
 def test_max_parallel_below_one_raises_value_error() -> None:
-    """A ``--max-parallel`` below 1 fails fast instead of running no agents."""
+    """A ``--max-parallel`` below 1 fails fast on the wandb launcher (it would run no agents)."""
     with pytest.raises(ValueError, match="max_parallel must be >= 1"):
         inv.run_investigation(
             scale=SMOKE,
@@ -367,6 +367,24 @@ def test_max_parallel_below_one_raises_value_error() -> None:
             count=None,
             max_parallel=0,
         )
+
+
+def test_local_launcher_ignores_max_parallel_below_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The local launcher does not use ``max_parallel``, so a sub-1 value is not rejected.
+
+    :param monkeypatch: Stubs generate so the plan runs without spawning subprocesses.
+    """
+    monkeypatch.setattr(inv, "_run_generate", lambda overrides: None)
+
+    inv.run_investigation(
+        scale=SMOKE,
+        launcher="local",
+        prefix_root="data",
+        only=["reuse_depth"],
+        dry_run=False,
+        count=None,
+        max_parallel=0,
+    )
 
 
 def test_main_passes_max_parallel_to_run_investigation(monkeypatch: pytest.MonkeyPatch) -> None:
