@@ -46,7 +46,8 @@ def published_checkpoint_artifact(
     Logs to :data:`CITEST_PROJECT` under the key's default entity (never the production
     registry) under a run-scoped name (see :func:`_run_scoped_name`), and blocks on
     ``artifact.wait()`` so the artifact is committed before the body resolves it. On exit
-    the published version is deleted best-effort to keep the scratch project bounded.
+    the published version is deleted best-effort so its checkpoint bytes do not accumulate
+    in the scratch project (an empty collection shell is left behind, which stores nothing).
     Requires a live ``WANDB_API_KEY`` in the environment — callers gate on it.
 
     :param ckpt_path: Local Lightning checkpoint embedded into the artifact as ``model.ckpt``.
