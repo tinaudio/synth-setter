@@ -20,5 +20,11 @@ wandb:
     _target_: wandb.Settings
     code_dir: .
     # ``wrap`` not ``redirect``: redirect's local output.log is never uploaded by
-    # wandb 0.26.x, so the UI Logs tab is empty (#1465); wrap drops subprocess output.
+    # wandb 0.26.x, so the UI Logs tab is empty (#1465). wrap captures only this
+    # process's writes, so generate_dataset tees its render/eval/rclone subprocess
+    # output back through ``sys.stderr`` (``_check_call_streamed``) to reach it.
     console: wrap
+    # generate → finalize → oracle-eval resume one run id; without multipart each
+    # resumed session's output.log overwrites the prior server-side, dropping the
+    # generate session's log. Multipart keeps one ``logs/output_*.log`` per session.
+    console_multipart: true

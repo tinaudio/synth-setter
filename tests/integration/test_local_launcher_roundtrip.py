@@ -187,7 +187,7 @@ def test_launcher_roundtrip_with_stubbed_renderer(
 
     side_effect = stub_renderer(expected_spec)
     with patch(
-        "synth_setter.cli.generate_dataset.subprocess.check_call",
+        "synth_setter.cli.generate_dataset._check_call_streamed",
         side_effect=side_effect,
     ):
         gd.main()
@@ -221,7 +221,7 @@ def test_launcher_roundtrip_with_stubbed_renderer(
         side_effect(args)
 
     with patch(
-        "synth_setter.cli.generate_dataset.subprocess.check_call",
+        "synth_setter.cli.generate_dataset._check_call_streamed",
         side_effect=_no_renderer_side_effect,
     ):
         gd.main()
@@ -239,7 +239,7 @@ def test_subprocess_writes_spec_under_hydra_output_dir(
     Complements ``test_launcher_roundtrip_with_stubbed_renderer`` (which
     runs ``gd.main()`` in-process) by exercising the real CLI binary
     across a process boundary, which an in-process ``patch`` of
-    ``subprocess.check_call`` cannot reach. ``hydra.run.dir`` is pinned to
+    ``_check_call_streamed`` cannot reach. ``hydra.run.dir`` is pinned to
     a known location under ``tmp_path`` so the spec-mirror file path is
     deterministic; the negative assertion catches a silent re-introduction
     of the operator-workspace anchor. The render subprocess crashes here

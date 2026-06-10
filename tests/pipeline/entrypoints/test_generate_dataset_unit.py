@@ -15,7 +15,7 @@ The entrypoint's public surface:
 
 ``TestRun`` tests share a ``patched_subprocess`` fixture that pulls in
 ``fake_r2_remote`` (see ``tests/pipeline/conftest.py``) and patches
-``subprocess.check_call`` with the ``_materialize_or_passthrough_rclone``
+``_check_call_streamed`` with the ``_materialize_or_passthrough_rclone``
 dispatcher: renderer calls write the expected empty shard file (mirroring the
 contract of ``generate_vst_dataset.py``); rclone calls fall through to the
 real binary against the local-typed remote. Orchestration assertions
@@ -76,14 +76,14 @@ TEST_PLUGIN_VERSION = "1.0.0-test"
 
 
 def _renderer_argv_lists(mock: MagicMock) -> list[list[str]]:
-    """Return argv lists from non-rclone calls recorded by a patched ``check_call``.
+    """Return argv lists from non-rclone calls recorded by a patched ``_check_call_streamed``.
 
     The dispatcher routes both renderer and rclone invocations through one
-    ``subprocess.check_call`` mock, so tests that want to introspect just the
+    ``_check_call_streamed`` mock, so tests that want to introspect just the
     renderer args (script path, flag set, headless wrapper) filter the
     interleaved call list through this helper.
 
-    :param mock: A patched ``subprocess.check_call`` mock.
+    :param mock: A patched ``_check_call_streamed`` mock.
     :returns: argv lists from invocations whose first element is not ``"rclone"``.
     """
     return [
@@ -257,7 +257,7 @@ class TestRun:
 
     @pytest.fixture()
     def patched_subprocess(self, fake_r2_remote: Path) -> Iterator[MagicMock]:  # noqa: ARG002
-        """Patch ``subprocess.check_call`` with the renderer/rclone dispatcher.
+        """Patch ``_check_call_streamed`` with the renderer/rclone dispatcher.
 
         Pulls in ``fake_r2_remote`` (consumed by the rclone passthrough — see
         ``_materialize_or_passthrough_rclone``) so rclone copies land on the
@@ -269,10 +269,10 @@ class TestRun:
 
         :param fake_r2_remote: Local-typed R2 remote root (fixture-activation
             only — referenced via the ARG002 noqa).
-        :yields MagicMock: Patched ``subprocess.check_call`` mock.
+        :yields MagicMock: Patched ``_check_call_streamed`` mock.
         """
         with patch(
-            "synth_setter.cli.generate_dataset.subprocess.check_call",
+            "synth_setter.cli.generate_dataset._check_call_streamed",
             side_effect=_materialize_or_passthrough_rclone,
         ) as mock_check_call:
             yield mock_check_call
@@ -283,7 +283,7 @@ class TestRun:
         spec: DatasetSpec,
         tmp_path: Path,
     ) -> None:
-        """subprocess.check_call invokes generate_vst_dataset.py with spec-derived args.
+        """The render seam invokes generate_vst_dataset.py with spec-derived args.
 
         :param patched_subprocess: Subprocess dispatcher used to introspect the
             single renderer call's argv.
@@ -391,14 +391,14 @@ class TestRun:
         State-based: no mock on ``_rclone_copy`` — the real ``rclone copy`` runs
         against the fake-local R2 remote rooted at ``fake_r2_remote``, and the
         test asserts on the materialized object on disk. The renderer subprocess
-        ``check_call`` is patched via the shared ``patched_subprocess`` fixture
+        ``_check_call_streamed`` is patched via the shared ``patched_subprocess`` fixture
         so we don't actually shell out to the VST generator; the dispatcher's
         renderer branch writes the same empty HDF5 file that the renderer would.
 
         :param spec: Fixture-provided ``DatasetSpec``.
         :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
         :param patched_subprocess: Fixture-activation only (handles the
-            ``subprocess.check_call`` patch).
+            ``_check_call_streamed`` patch).
         :param tmp_path: Caller-supplied work_dir for ``generate()``.
         """
         generate(spec, tmp_path, [])
@@ -501,15 +501,16 @@ class TestRun:
         spec = _multi_shard_spec(tmp_path, n=3)
         events: list[str] = []
 
-        def _record_dispatcher(args: list[str]) -> int:
+        def _record_dispatcher(args: list[str]) -> None:
             if args and args[0] == "rclone":
                 events.append("rclone")
-                return _REAL_CHECK_CALL(args)
+                _REAL_CHECK_CALL(args)
+                return
             events.append("renderer")
-            return _materialize_shard(args)
+            _materialize_shard(args)
 
         with patch(
-            "synth_setter.cli.generate_dataset.subprocess.check_call",
+            "synth_setter.cli.generate_dataset._check_call_streamed",
             side_effect=_record_dispatcher,
         ):
             generate(spec, tmp_path, [])
@@ -540,7 +541,7 @@ class TestRun:
         spec = _multi_shard_spec(tmp_path, n=3)
 
         with patch(
-            "synth_setter.cli.generate_dataset.subprocess.check_call",
+            "synth_setter.cli.generate_dataset._check_call_streamed",
             side_effect=_materialize_or_passthrough_rclone,
         ):
             generate(spec, tmp_path, [])
@@ -565,17 +566,18 @@ class TestRun:
         spec = _multi_shard_spec(tmp_path, n=3)
         renderer_call_count = 0
 
-        def _side_effect(args: list[str]) -> int:
+        def _side_effect(args: list[str]) -> None:
             nonlocal renderer_call_count
             if args and args[0] == "rclone":
-                return _REAL_CHECK_CALL(args)
+                _REAL_CHECK_CALL(args)
+                return
             renderer_call_count += 1
             if renderer_call_count == 2:
                 raise subprocess.CalledProcessError(1, "generate_vst_dataset.py")
-            return _materialize_shard(args)
+            _materialize_shard(args)
 
         with patch(
-            "synth_setter.cli.generate_dataset.subprocess.check_call",
+            "synth_setter.cli.generate_dataset._check_call_streamed",
             side_effect=_side_effect,
         ):
             with pytest.raises(subprocess.CalledProcessError):
@@ -607,7 +609,7 @@ class TestRun:
         # Renderer-only side effect: return 0 without writing the shard file,
         # so the ``shard_path.is_file()`` guard raises before any rclone call.
         with patch(
-            "synth_setter.cli.generate_dataset.subprocess.check_call",
+            "synth_setter.cli.generate_dataset._check_call_streamed",
             return_value=0,
         ):
             with pytest.raises(RuntimeError, match="did not write expected shard file"):
@@ -1042,17 +1044,18 @@ class TestRun:
         spec = DatasetSpec(**kwargs)  # type: ignore[arg-type]
         renderer_calls = 0
 
-        def _flaky_dispatcher(args: list[str]) -> int:
+        def _flaky_dispatcher(args: list[str]) -> None:
             nonlocal renderer_calls
             if args and args[0] == "rclone":
-                return _REAL_CHECK_CALL(args)
+                _REAL_CHECK_CALL(args)
+                return
             renderer_calls += 1
             if renderer_calls == 1:
                 raise subprocess.CalledProcessError(1, "generate_vst_dataset.py")
-            return _materialize_shard(args)
+            _materialize_shard(args)
 
         with patch(
-            "synth_setter.cli.generate_dataset.subprocess.check_call",
+            "synth_setter.cli.generate_dataset._check_call_streamed",
             side_effect=_flaky_dispatcher,
         ):
             generate(spec, tmp_path, [])
@@ -1089,18 +1092,19 @@ class TestRun:
         lock = threading.Lock()
         two_threads_seen = threading.Event()
 
-        def _thread_recording_dispatcher(args: list[str]) -> int:
+        def _thread_recording_dispatcher(args: list[str]) -> None:
             if args and args[0] == "rclone":
-                return _REAL_CHECK_CALL(args)
+                _REAL_CHECK_CALL(args)
+                return
             with lock:
                 thread_ids.add(threading.get_ident())
                 if len(thread_ids) >= 2:
                     two_threads_seen.set()
             two_threads_seen.wait(timeout=5.0)
-            return _materialize_shard(args)
+            _materialize_shard(args)
 
         with patch(
-            "synth_setter.cli.generate_dataset.subprocess.check_call",
+            "synth_setter.cli.generate_dataset._check_call_streamed",
             side_effect=_thread_recording_dispatcher,
         ):
             generate(spec, tmp_path, [])
@@ -1136,19 +1140,20 @@ class TestRun:
         renderer_call_count = 0
         lock = threading.Lock()
 
-        def _one_failing(args: list[str]) -> int:
+        def _one_failing(args: list[str]) -> None:
             nonlocal renderer_call_count
             if args and args[0] == "rclone":
-                return _REAL_CHECK_CALL(args)
+                _REAL_CHECK_CALL(args)
+                return
             with lock:
                 renderer_call_count += 1
                 this_attempt = renderer_call_count
             if this_attempt == 1:
                 raise subprocess.CalledProcessError(1, "generate_vst_dataset.py")
-            return _materialize_shard(args)
+            _materialize_shard(args)
 
         with patch(
-            "synth_setter.cli.generate_dataset.subprocess.check_call",
+            "synth_setter.cli.generate_dataset._check_call_streamed",
             side_effect=_one_failing,
         ):
             with pytest.raises(subprocess.CalledProcessError):
@@ -1178,15 +1183,16 @@ class TestRun:
         spec = DatasetSpec(**kwargs)  # type: ignore[arg-type]
         renderer_calls = 0
 
-        def _always_fails(args: list[str]) -> int:
+        def _always_fails(args: list[str]) -> None:
             nonlocal renderer_calls
             if args and args[0] == "rclone":
-                return _REAL_CHECK_CALL(args)
+                _REAL_CHECK_CALL(args)
+                return
             renderer_calls += 1
             raise subprocess.CalledProcessError(1, "generate_vst_dataset.py")
 
         with patch(
-            "synth_setter.cli.generate_dataset.subprocess.check_call",
+            "synth_setter.cli.generate_dataset._check_call_streamed",
             side_effect=_always_fails,
         ):
             with pytest.raises(subprocess.CalledProcessError):
@@ -1906,14 +1912,14 @@ class TestMainDispatchBranches:
         ``RenderConfig`` so the eval re-renders identically (here a surge_xt spec).
         Runs the helper directly so cfg-resolution noise can't mask an argv drift.
 
-        :param monkeypatch: Patches the module's ``subprocess.run``.
+        :param monkeypatch: Patches the module's ``_check_call_streamed``.
         :param tmp_path: Roots the distinct dataset-root and eval run dirs.
         :param spec: Source of a valid ``RenderConfig`` to derive the eval render from.
         """
         import synth_setter.cli.generate_dataset as gd
 
         run_mock = MagicMock()
-        monkeypatch.setattr(gd.subprocess, "run", run_mock)
+        monkeypatch.setattr(gd, "_check_call_streamed", run_mock)
 
         dataset_root = tmp_path / "data"
         dataset_root.mkdir()
@@ -1989,14 +1995,14 @@ class TestMainDispatchBranches:
         eval subprocess, which prepends it to every ``audio/*`` key so the
         per-split passes don't overwrite each other on the shared wandb run.
 
-        :param monkeypatch: Patches the module's ``subprocess.run``.
+        :param monkeypatch: Patches the module's ``_check_call_streamed``.
         :param tmp_path: Roots the dataset-root and eval run dirs.
         :param spec: Source of a valid ``RenderConfig``.
         """
         import synth_setter.cli.generate_dataset as gd
 
         run_mock = MagicMock()
-        monkeypatch.setattr(gd.subprocess, "run", run_mock)
+        monkeypatch.setattr(gd, "_check_call_streamed", run_mock)
 
         dataset_root = tmp_path / "data"
         dataset_root.mkdir()
@@ -2030,14 +2036,14 @@ class TestMainDispatchBranches:
         on a resume; the preflight turns the downstream low-signal HDF5 read
         error into an actionable one before shelling out.
 
-        :param monkeypatch: Patches ``subprocess.run`` to assert it never fires.
+        :param monkeypatch: Patches ``_check_call_streamed`` to assert it never fires.
         :param tmp_path: Empty stand-in for an unpopulated ``output_dir``.
         :param spec: Source of a valid ``RenderConfig`` for the call signature.
         """
         import synth_setter.cli.generate_dataset as gd
 
         run_mock = MagicMock()
-        monkeypatch.setattr(gd.subprocess, "run", run_mock)
+        monkeypatch.setattr(gd, "_check_call_streamed", run_mock)
 
         with pytest.raises(FileNotFoundError, match=r"test\.h5"):
             gd._run_oracle_eval_subprocess(
@@ -2063,14 +2069,14 @@ class TestMainDispatchBranches:
         preflight passes; the ``predict_file``-specific check then catches the
         absent path before shelling out.
 
-        :param monkeypatch: Patches ``subprocess.run`` to assert it never fires.
+        :param monkeypatch: Patches ``_check_call_streamed`` to assert it never fires.
         :param tmp_path: Roots the dataset dir and a missing predict path.
         :param spec: Source of a valid ``RenderConfig`` for the call signature.
         """
         import synth_setter.cli.generate_dataset as gd
 
         run_mock = MagicMock()
-        monkeypatch.setattr(gd.subprocess, "run", run_mock)
+        monkeypatch.setattr(gd, "_check_call_streamed", run_mock)
 
         dataset_root = tmp_path / "data"
         dataset_root.mkdir()
