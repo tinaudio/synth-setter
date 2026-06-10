@@ -56,12 +56,16 @@ git config --global --add safe.directory "$(pwd)"
 
 # Correct workspace ownership before the first .git write below. A root-owned
 # host checkout bind-mounts in with every file root-owned, so `dev` can't write
-# .git, run `pre-commit install`, or commit. Guard on the top-level owner so an
-# already-correct rebuild skips the recursive walk (post-create time budget),
-# via the NOPASSWD sudo from common-utils. Capture the owner first so a stat
-# failure aborts under `set -e` rather than falling through to the chown.
+# .git, run `pre-commit install`, or commit. Guard on both the workspace root
+# and `.git` so a mixed-ownership tree (e.g. `.git` left root-owned by an
+# earlier DEVCONTAINER_USER=root session) still self-heals — `.git` is the
+# dir the failing writes target. The recursive chown is skipped only when both
+# are already correct (post-create time budget), via the NOPASSWD sudo from
+# common-utils. `.git` is a real dir here (initialize.sh refuses pointer-file
+# `.git`). Capture owners first so a stat failure aborts under `set -e`.
 workspace_owner="$(stat -c %u "$dir")"
-if [ "$workspace_owner" != "$(id -u)" ]; then
+gitdir_owner="$(stat -c %u "$dir/.git")"
+if [ "$workspace_owner" != "$(id -u)" ] || [ "$gitdir_owner" != "$(id -u)" ]; then
   sudo chown -R "$(id -u):$(id -g)" "$dir"
 fi
 

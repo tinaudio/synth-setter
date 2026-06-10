@@ -101,3 +101,27 @@ def test_post_create_ownership_fix_is_guarded_for_idempotency(
         "the chown must be guarded by an ownership check (stat -c %u) so it "
         "only runs when the workspace is not already owned by the dev user."
     )
+
+
+@pytest.mark.infra
+def test_post_create_ownership_guard_also_checks_git_dir(
+    post_create_script: Path,
+) -> None:
+    """The guard checks `.git` ownership, not just the workspace root.
+
+    A mixed-ownership tree — workspace root already `dev`-owned but `.git`
+    left root-owned by an earlier `DEVCONTAINER_USER=root` session — would
+    otherwise skip the chown, and the later `git config --local` /
+    `pre-commit install` writes would still fail. `.git` is the dir those
+    writes target, so it must be part of the guard.
+
+    :param post_create_script: Path to `.devcontainer/post-create.sh`.
+    """
+    text = post_create_script.read_text()
+    chown_idx = _line_index(text, r"\bchown\s+-R\b")
+    assert chown_idx != -1, "no chown found in post-create.sh"
+    preceding = "\n".join(text.splitlines()[:chown_idx])
+    assert re.search(r"""stat\s+-c\s+%u\s+["']?\$dir/\.git\b""", preceding), (
+        "the guard must also stat `$dir/.git` so a mixed-ownership tree "
+        "(root-owned .git under a dev-owned workspace root) still self-heals."
+    )
