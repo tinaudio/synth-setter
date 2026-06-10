@@ -7,17 +7,38 @@ datamodule/model/trainer is built — the behaviour wired into ``cli/train.py``.
 
 from __future__ import annotations
 
+import os
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from hydra.core.global_hydra import GlobalHydra
 from pydantic import ValidationError
 
 from synth_setter.cli.train import main as train_main
 
 
+@pytest.fixture
+def restore_hydra_and_cwd() -> Iterator[None]:
+    """Restore the cwd and clear Hydra's singleton after a ``@hydra.main`` call.
+
+    ``@hydra.main`` startup can ``chdir`` and initialize ``GlobalHydra`` even
+    when the body raises, so this teardown runs unconditionally to keep the
+    failure from leaking into sibling tests.
+    """
+    original_cwd = Path.cwd()
+    try:
+        yield
+    finally:
+        os.chdir(original_cwd)
+        if GlobalHydra.instance().is_initialized():
+            GlobalHydra.instance().clear()
+
+
 def test_train_main_rejects_negative_seed_before_training(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    restore_hydra_and_cwd: None,
 ) -> None:
     """``train.main()`` fails fast on ``seed=-1`` (rejected by Lightning at runtime).
 
@@ -26,6 +47,7 @@ def test_train_main_rejects_negative_seed_before_training(
 
     :param tmp_path: Hosts ``PROJECT_ROOT`` so no real workspace is touched.
     :param monkeypatch: Points ``PROJECT_ROOT`` + ``sys.argv`` at the test args.
+    :param restore_hydra_and_cwd: Resets cwd + Hydra's singleton on teardown.
     """
     monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
     # ``run_name`` is interpolated into Hydra's ``run.dir`` template, so it must

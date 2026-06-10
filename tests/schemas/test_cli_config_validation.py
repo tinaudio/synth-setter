@@ -158,3 +158,10 @@ class TestValidationRejectsMalformedConfigs:
         cfg["model"]["optimizer"]["lr"] = 0
         with pytest.raises(ValidationError):
             validate_composed_config(cfg, include_train_config=True)
+
+    def test_missing_required_group_raises_actionable_error(self) -> None:
+        """A composed config missing a required group raises a named ValueError, not KeyError."""
+        cfg = _compose("train.yaml", ["datamodule=ksin", "model=ffn", "trainer=cpu"])
+        del cfg["trainer"]
+        with pytest.raises(ValueError, match="missing the required 'trainer' group"):
+            validate_composed_config(cfg, include_train_config=True)

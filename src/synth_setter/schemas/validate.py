@@ -24,6 +24,26 @@ from synth_setter.schemas.trainer_config import TrainerConfig
 __all__ = ["validate_composed_config"]
 
 
+def _require_group(container: dict[str, Any], group: str) -> Any:
+    """Return ``container[group]``, raising an actionable error when it is absent.
+
+    Every train/eval entrypoint pins ``paths``/``trainer``/``model``/``extras``
+    in its defaults, so a missing group is a misconfiguration the boundary
+    should name rather than surface as a bare ``KeyError``.
+
+    :param container: The composed config as a plain dict.
+    :param group: Name of the required composition group.
+    :returns: The subtree at ``group``.
+    :raises ValueError: when ``group`` is missing.
+    """
+    if group not in container:
+        raise ValueError(
+            f"composed config is missing the required '{group}' group; "
+            "a train/eval entrypoint pins it in its defaults."
+        )
+    return container[group]
+
+
 def validate_composed_config(
     cfg: DictConfig | dict[str, Any], *, include_train_config: bool
 ) -> None:
@@ -32,7 +52,8 @@ def validate_composed_config(
     Converts a ``DictConfig`` with ``resolve=False`` so interpolations stay
     opaque strings (the schemas accept them) and ``model_validate``s each
     subtree the entrypoint composes, propagating ``pydantic.ValidationError``
-    when any subtree is malformed. ``callbacks`` and ``logger`` compose to
+    when any subtree is malformed and ``ValueError`` (via :func:`_require_group`)
+    when a required group is absent. ``callbacks`` and ``logger`` compose to
     ``None`` for the ``none``/``null`` variants, so they are validated only
     when truthy.
 
@@ -51,10 +72,10 @@ def validate_composed_config(
     if include_train_config:
         TrainConfig.model_validate(container)
 
-    PathsConfig.model_validate(container["paths"])
-    TrainerConfig.model_validate(container["trainer"])
-    ModelConfig.model_validate(container["model"])
-    ExtrasConfig.model_validate(container["extras"])
+    PathsConfig.model_validate(_require_group(container, "paths"))
+    TrainerConfig.model_validate(_require_group(container, "trainer"))
+    ModelConfig.model_validate(_require_group(container, "model"))
+    ExtrasConfig.model_validate(_require_group(container, "extras"))
 
     callbacks = container.get("callbacks")
     if callbacks:

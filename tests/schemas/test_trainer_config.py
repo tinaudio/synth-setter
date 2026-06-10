@@ -70,6 +70,11 @@ class TestTrainerConfigCommonFields:
         parsed = TrainerConfig.model_validate({**_VALID_TRAINER, "val_check_interval": 1.0})
         assert parsed.val_check_interval == 1.0
 
+    def test_fractional_val_check_interval_above_one_rejected(self) -> None:
+        """A float ``val_check_interval > 1`` is invalid (Lightning raises at runtime)."""
+        with pytest.raises(ValidationError):
+            TrainerConfig.model_validate({**_VALID_TRAINER, "val_check_interval": 2.0})
+
 
 _VALID_TRAINER = {
     "_target_": "lightning.pytorch.trainer.Trainer",

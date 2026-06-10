@@ -7,6 +7,8 @@ shipped variants set; other ``Trainer`` kwargs pass through via
 
 from __future__ import annotations
 
+from typing import Annotated
+
 from pydantic import (
     Field,
     PositiveFloat,
@@ -17,6 +19,10 @@ from pydantic import (
 from synth_setter.schemas._types import NonBlankStr, StrictAllowExtraModel
 
 __all__ = ["TrainerConfig"]
+
+# Lightning reads ``val_check_interval`` as a step count (int) or a fraction of
+# the training epoch (float in ``(0, 1]``); a float ``> 1`` raises at runtime.
+EpochFraction = Annotated[float, Field(gt=0, le=1)]
 
 
 class TrainerConfig(StrictAllowExtraModel):
@@ -92,12 +98,12 @@ class TrainerConfig(StrictAllowExtraModel):
             "Logging cadence (steps) for training metrics; passed straight to ``Trainer``."
         ),
     )
-    val_check_interval: PositiveInt | PositiveFloat = Field(
+    val_check_interval: PositiveInt | EpochFraction = Field(
         description=(
             "Cadence of validation runs; passed straight to ``Trainer``. An int "
-            "is a step count, a float in ``(0, 1]`` a fraction of the training "
-            "epoch — Lightning accepts both, so the shipped smoke configs' "
-            "``1.0`` (once per epoch) is valid alongside step-count variants."
+            "is a step count; a float in ``(0, 1]`` a fraction of the training "
+            "epoch (Lightning raises on a float ``> 1``). The shipped smoke "
+            "configs' ``1.0`` (once per epoch) is valid alongside step counts."
         ),
     )
     gradient_clip_val: PositiveFloat = Field(
