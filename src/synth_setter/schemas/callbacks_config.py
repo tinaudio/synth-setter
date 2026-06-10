@@ -1,10 +1,12 @@
 """Pydantic schemas for the YAMLs under ``configs/callbacks/``.
 
 After Hydra composes, ``cfg.callbacks`` is a flat ``name → instance`` dict.
-The schema requires every value to carry ``_target_``; the runtime helper
-``synth_setter.utils.instantiate_callbacks`` is more lenient and skips
-non-``_target_`` entries, but that path is reserved for raw DictConfigs that
-bypass schema validation.
+An entry is ``None`` when an experiment disables a base callback
+(``early_stopping: null``), and may carry no ``_target_`` when an experiment
+partially overrides one (``model_checkpoint: {monitor: val/lsd}`` merged onto a
+callbacks group that never defined a target). ``instantiate_callbacks`` skips
+both, so the schema only constrains ``_target_`` *when present*: a typo'd
+non-string target is still caught, while a disabled or partial entry passes.
 """
 
 from __future__ import annotations
@@ -21,23 +23,26 @@ class CallbackInstance(StrictAllowExtraModel):
 
     .. attribute :: target_
 
-        Fully-qualified callback class path.
+        Fully-qualified callback class path, or ``None`` for a partial override.
     """
 
-    target_: NonBlankStr = Field(
+    target_: NonBlankStr | None = Field(
+        default=None,
         alias="_target_",
         description=(
-            "Fully-qualified callback class path. Each entry of "
-            "``cfg.callbacks`` is passed to ``hydra.utils.instantiate``."
+            "Fully-qualified callback class path; ``hydra.utils.instantiate`` "
+            "builds the entry only when set. ``None`` (a partial override that "
+            "never landed on a base target) is skipped at instantiation time."
         ),
     )
 
 
-class CallbacksConfig(RootModel[dict[NonBlankStr, CallbackInstance]]):
-    """Shape of ``cfg.callbacks`` — a ``name → CallbackInstance`` mapping.
+class CallbacksConfig(RootModel[dict[NonBlankStr, CallbackInstance | None]]):
+    """Shape of ``cfg.callbacks`` — a ``name → CallbackInstance | None`` mapping.
 
-    ``configs/callbacks/none.yaml`` resolves to ``None``, not ``{}``, and is
-    handled by ``instantiate_callbacks`` short-circuiting on a falsy config.
+    ``configs/callbacks/none.yaml`` resolves the whole group to ``None`` (handled
+    by the caller short-circuiting on a falsy config); a ``None`` *value* here is
+    a single callback an experiment disabled via ``<name>: null``.
 
     .. attribute :: model_config
 

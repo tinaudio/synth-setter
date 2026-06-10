@@ -73,13 +73,23 @@ _VALID_CALLBACK = {
 }
 
 
+class TestCallbacksConfigAcceptsDisabledAndPartialEntries:
+    """Composed callbacks legitimately omit ``_target_`` or disable an entry."""
+
+    def test_partial_override_without_target_accepted(self) -> None:
+        """A partial override (no ``_target_``) is skipped at instantiation, not rejected."""
+        parsed = CallbacksConfig.model_validate({"model_checkpoint": {"monitor": "val/lsd"}})
+        entry = parsed.root["model_checkpoint"]
+        assert entry is not None and entry.target_ is None
+
+    def test_disabled_entry_none_accepted(self) -> None:
+        """An ``<name>: null`` disabled callback validates as a ``None`` value."""
+        parsed = CallbacksConfig.model_validate({"early_stopping": None})
+        assert parsed.root["early_stopping"] is None
+
+
 class TestCallbacksConfigRejectsBadInputs:
     """Validators must catch obvious mistakes on the typed fields."""
-
-    def test_missing_target_in_instance_rejected(self) -> None:
-        """Each callback instance must carry ``_target_``; reject if absent."""
-        with pytest.raises(ValidationError):
-            CallbacksConfig.model_validate({"model_checkpoint": {"dirpath": "/tmp"}})  # noqa: S108
 
     def test_blank_target_rejected(self) -> None:
         """A blank ``_target_`` would crash ``hydra.utils.instantiate`` mid-fit."""

@@ -6,7 +6,12 @@ any field are rejected by ``NonBlankStr``.
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pytest
+from hydra import compose, initialize_config_module
+from hydra.core.hydra_config import HydraConfig
+from omegaconf import OmegaConf
 from pydantic import ValidationError
 
 from synth_setter.schemas.paths_config import PathsConfig
@@ -26,6 +31,41 @@ class TestPathsConfigAcceptsDefault:
         assert parsed.log_dir
         assert parsed.output_dir
         assert parsed.work_dir
+
+
+class TestPathsConfigResolvedInterpolation:
+    """A real resolved ``PROJECT_ROOT`` must round-trip through ``NonBlankStr``."""
+
+    def test_paths_resolved_with_env_var(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``${oc.env:PROJECT_ROOT}`` resolves to a real path and validates as non-blank.
+
+        :param monkeypatch: Pytest fixture used to set ``PROJECT_ROOT``.
+        """
+        monkeypatch.setenv("PROJECT_ROOT", "/tmp/x")  # noqa: S108
+        # output_dir / work_dir overridden because ``${hydra:runtime.*}`` is
+        # only populated at fit time, not at compose time.
+        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+            cfg = compose(
+                config_name="train.yaml",
+                return_hydra_config=True,
+                overrides=[
+                    "datamodule=ksin",
+                    "model=ffn",
+                    "trainer=cpu",
+                    "paths.output_dir=/tmp/x/out",  # noqa: S108
+                    "paths.work_dir=/tmp/x",  # noqa: S108
+                ],
+            )
+            HydraConfig.instance().set_config(cfg)
+            resolved_paths = cast(
+                "dict[str, Any]", OmegaConf.to_container(cfg.paths, resolve=True)
+            )
+        parsed = PathsConfig.model_validate(resolved_paths)
+        assert parsed.root_dir == "/tmp/x"  # noqa: S108
+        assert parsed.data_dir.startswith("/tmp/x")  # noqa: S108
 
 
 _VALID_PATHS = {

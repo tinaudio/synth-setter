@@ -14,6 +14,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from synth_setter.pipeline import r2_io
 from synth_setter.run_id import make_wandb_run_id
+from synth_setter.schemas.validate import validate_composed_config
 from synth_setter.utils import (
     RankedLogger,
     extras,
@@ -278,6 +279,10 @@ def main(cfg: DictConfig) -> float | None:
     :param cfg: DictConfig configuration composed by Hydra.
     :return: Optional[float] with optimized metric value.
     """
+    # Fail fast on a malformed composition (blank task_name, negative seed/lr,
+    # non-positive trainer cadence, bad float32 precision) before any work.
+    validate_composed_config(cfg, include_train_config=True)
+
     # apply extra utilities
     # (e.g. ask for tags if none are provided in cfg, print cfg tree, etc.)
     extras(cfg)

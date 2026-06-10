@@ -68,13 +68,23 @@ _VALID_LOGGER = {
 }
 
 
+class TestLoggerConfigAcceptsDisabledAndPartialEntries:
+    """Composed loggers legitimately omit ``_target_`` or disable an entry."""
+
+    def test_partial_override_without_target_accepted(self) -> None:
+        """A partial override (no ``_target_``) is skipped at instantiation, not rejected."""
+        parsed = LoggerConfig.model_validate({"wandb": {"group": "exp"}})
+        entry = parsed.root["wandb"]
+        assert entry is not None and entry.target_ is None
+
+    def test_disabled_entry_none_accepted(self) -> None:
+        """An ``<name>: null`` disabled logger validates as a ``None`` value."""
+        parsed = LoggerConfig.model_validate({"wandb": None})
+        assert parsed.root["wandb"] is None
+
+
 class TestLoggerConfigRejectsBadInputs:
     """Validators must catch obvious mistakes on the typed fields."""
-
-    def test_missing_target_in_instance_rejected(self) -> None:
-        """Each logger instance must carry ``_target_``; reject if absent."""
-        with pytest.raises(ValidationError):
-            LoggerConfig.model_validate({"csv": {"save_dir": "/tmp/csv"}})  # noqa: S108
 
     def test_blank_target_rejected(self) -> None:
         """A blank ``_target_`` would crash ``hydra.utils.instantiate`` mid-fit."""

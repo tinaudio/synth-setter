@@ -19,6 +19,7 @@ from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import _get_git_sha
 from synth_setter.resources import as_file, vst_headless_wrapper
 from synth_setter.run_id import make_wandb_run_id
+from synth_setter.schemas.validate import validate_composed_config
 from synth_setter.utils import (
     RankedLogger,
     extras,
@@ -551,6 +552,10 @@ def main(cfg: DictConfig) -> None:
 
     :param cfg: DictConfig configuration composed by Hydra.
     """
+    # Validate the subtrees eval composes (no training-only TrainConfig fields)
+    # so a malformed paths/trainer/model/extras override fails fast.
+    validate_composed_config(cfg, include_train_config=False)
+
     # apply extra utilities
     # (e.g. ask for tags if none are provided in cfg, print cfg tree, etc.)
     extras(cfg)

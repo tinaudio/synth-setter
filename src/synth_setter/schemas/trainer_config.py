@@ -92,8 +92,13 @@ class TrainerConfig(StrictAllowExtraModel):
             "Logging cadence (steps) for training metrics; passed straight to ``Trainer``."
         ),
     )
-    val_check_interval: PositiveInt = Field(
-        description="Cadence of validation runs; passed straight to ``Trainer``.",
+    val_check_interval: PositiveInt | PositiveFloat = Field(
+        description=(
+            "Cadence of validation runs; passed straight to ``Trainer``. An int "
+            "is a step count, a float in ``(0, 1]`` a fraction of the training "
+            "epoch — Lightning accepts both, so the shipped smoke configs' "
+            "``1.0`` (once per epoch) is valid alongside step-count variants."
+        ),
     )
     gradient_clip_val: PositiveFloat = Field(
         description="Maximum gradient L2 norm before clipping; passed straight to ``Trainer``.",

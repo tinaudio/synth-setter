@@ -1,8 +1,9 @@
 """Pydantic schema for the top-level ``configs/train.yaml``.
 
-Documentation-first: validated by ``tests/schemas/test_train_config.py``
-against the live composed DictConfig; ``cli/train.py`` continues to consume
-the raw ``DictConfig`` rather than calling ``model_validate``.
+``cli/train.py`` validates the composed config against this model at the
+config-load boundary (via
+:func:`~synth_setter.schemas.validate.validate_composed_config`) before
+training starts, then consumes the raw ``DictConfig`` as before.
 """
 
 from __future__ import annotations

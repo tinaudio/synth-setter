@@ -65,6 +65,11 @@ class TestTrainerConfigCommonFields:
         assert parsed.accelerator == "mps"
         assert parsed.deterministic is False
 
+    def test_fractional_val_check_interval_accepted(self) -> None:
+        """A float ``val_check_interval`` (fraction of epoch) is valid alongside int steps."""
+        parsed = TrainerConfig.model_validate({**_VALID_TRAINER, "val_check_interval": 1.0})
+        assert parsed.val_check_interval == 1.0
+
 
 _VALID_TRAINER = {
     "_target_": "lightning.pytorch.trainer.Trainer",
