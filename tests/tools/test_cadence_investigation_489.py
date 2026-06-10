@@ -203,7 +203,7 @@ def test_main_maps_size_to_scale(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_dry_run_executes_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
-    """``--dry-run`` plans only: no generate subprocess, no wandb calls.
+    """``--dry-run`` plans only: no generate subprocess, no sweep creation.
 
     :param monkeypatch: Replaces the subprocess and wandb entry points with a
         sentinel that fails if dry-run ever calls them.
@@ -214,37 +214,145 @@ def test_dry_run_executes_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(inv.subprocess, "run", _boom)
     monkeypatch.setattr(inv.wandb, "sweep", _boom)
-    monkeypatch.setattr(inv.wandb, "agent", _boom)
 
     inv.main(["--dry-run", "--size", "2", "--launcher", "wandb"])
 
 
-def test_wandb_launch_disables_agent_flapping(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The agent runs with flapping disabled so wandb 0.26.1 cannot read its unset ``START_TIME``.
+def test_wandb_agents_run_detached_with_flapping_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each sweep's agent runs as a ``wandb agent`` subprocess with flapping disabled.
 
     wandb 0.26.1's ``Agent.is_flapping`` references ``wandb.START_TIME``, which only
-    ``wandb.old.core`` sets, so a plain ``wandb.agent`` call crashes with
-    ``AttributeError`` unless flapping is disabled first.
+    ``wandb.old.core`` sets, so the agent crashes with ``AttributeError`` unless
+    ``WANDB_AGENT_DISABLE_FLAPPING`` is exported into the agent's environment.
 
-    :param monkeypatch: Stubs ``wandb.sweep``/``wandb.agent`` and clears the
-        flapping env var so the launcher's own setting is observed.
+    :param monkeypatch: Stubs ``wandb.sweep`` and captures the ``subprocess.run``
+        argv and environment the supervised agent is launched with.
     """
-    import os
-
     import wandb.env
 
-    monkeypatch.delenv(wandb.env.AGENT_DISABLE_FLAPPING, raising=False)
-    monkeypatch.setattr(inv.wandb, "sweep", lambda *a, **k: "sweep-id")
-    seen: dict[str, str | None] = {}
-    monkeypatch.setattr(
-        inv.wandb,
-        "agent",
-        lambda *a, **k: seen.update(flapping=os.environ.get(wandb.env.AGENT_DISABLE_FLAPPING)),
-    )
+    monkeypatch.setattr(inv.wandb, "sweep", lambda *a, **k: "abc123")
+    argv: list[str] = []
+    env: dict[str, str] = {}
+
+    def _record(call_argv: list[str], **kwargs: object) -> None:
+        argv[:] = call_argv
+        env.update(kwargs["env"])  # type: ignore[arg-type]
+
+    monkeypatch.setattr(inv.subprocess, "run", _record)
 
     inv.main(["--launcher", "wandb", "--size", "2", "--only", "shuffle_probe"])
 
-    assert seen["flapping"] == "true"
+    assert argv[:2] == ["wandb", "agent"]
+    assert argv[-1] == f"{inv.ENTITY}/{inv.PROJECT}/abc123"
+    assert env[wandb.env.AGENT_DISABLE_FLAPPING] == "true"
+
+
+def test_all_wandb_sweeps_created_before_any_agent_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every selected sweep is created up front, before any agent is dispatched.
+
+    Sequential create-then-block left only the first sweep visible when an agent stalled; creating
+    all sweeps first guarantees they appear regardless of agent fate.
+
+    :param monkeypatch: Stubs sweep creation and the per-agent runner to record the global order of
+        create vs. run events.
+    """
+    events: list[str] = []
+    ids = iter(("s0", "s1"))
+    monkeypatch.setattr(inv.wandb, "sweep", lambda *a, **k: events.append("create") or next(ids))
+    monkeypatch.setattr(inv, "_run_agent", lambda sweep_id, **k: events.append("run"))
+
+    inv.main(["--launcher", "wandb", "--size", "2", "--only", "shuffle_probe,reuse_depth"])
+
+    assert events == ["create", "create", "run", "run"]
+
+
+def test_max_parallel_caps_concurrent_agents() -> None:
+    """The supervised pool never runs more than ``max_parallel`` agents at once."""
+    import threading
+    import time
+
+    lock = threading.Lock()
+    live = 0
+    peak = 0
+
+    def _fake_agent(sweep_id: str, *, count: int | None) -> None:
+        nonlocal live, peak
+        with lock:
+            live += 1
+            peak = max(peak, live)
+        time.sleep(0.02)
+        with lock:
+            live -= 1
+
+    completed = inv._supervise_agents(
+        ["s0", "s1", "s2", "s3", "s4"], count=None, max_parallel=2, run_agent=_fake_agent
+    )
+
+    assert peak <= 2
+    assert sorted(completed) == ["s0", "s1", "s2", "s3", "s4"]
+
+
+def test_supervise_agents_raises_when_an_agent_fails() -> None:
+    """A non-zero agent exit surfaces as a raised error naming the failed sweep."""
+
+    def _fake_agent(sweep_id: str, *, count: int | None) -> None:
+        if sweep_id == "s1":
+            raise RuntimeError("agent crashed")
+
+    with pytest.raises(RuntimeError, match="s1"):
+        inv._supervise_agents(["s0", "s1"], count=None, max_parallel=2, run_agent=_fake_agent)
+
+
+def test_copy_source_generated_before_copy_agents(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The copy-source dataset is generated before any copy-probe agent runs.
+
+    :param monkeypatch: Stubs generate, sweep creation, and the per-agent runner to record the
+        order of generate vs. agent events without side effects.
+    """
+    events: list[str] = []
+    monkeypatch.setattr(inv, "_run_generate", lambda overrides: events.append("generate"))
+    monkeypatch.setattr(inv.wandb, "sweep", lambda *a, **k: "sweep-id")
+    monkeypatch.setattr(inv, "_run_agent", lambda sweep_id, **k: events.append("agent"))
+
+    inv.main(["--launcher", "wandb", "--size", "2", "--only", "copy_reload"])
+
+    assert events[0] == "generate"
+    assert "agent" in events
+    assert events.index("generate") < events.index("agent")
+
+
+def test_max_parallel_below_one_raises_value_error() -> None:
+    """A ``--max-parallel`` below 1 fails fast instead of running no agents."""
+    with pytest.raises(ValueError, match="max_parallel must be >= 1"):
+        inv.run_investigation(
+            scale=SMOKE,
+            launcher="wandb",
+            prefix_root="data",
+            only=["shuffle_probe"],
+            dry_run=True,
+            count=None,
+            max_parallel=0,
+        )
+
+
+def test_main_passes_max_parallel_to_run_investigation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``--max-parallel`` reaches ``run_investigation``; absent, it defaults.
+
+    :param monkeypatch: Replaces ``run_investigation`` with a recorder so the
+        resolved cap is observed without launching any real run.
+    """
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(inv, "run_investigation", lambda **kwargs: captured.update(kwargs))
+
+    inv.main(["--max-parallel", "4"])
+    assert captured["max_parallel"] == 4
+
+    inv.main([])
+    assert captured["max_parallel"] == inv.DEFAULT_MAX_PARALLEL
 
 
 def test_local_count_caps_cells_run_per_experiment(monkeypatch: pytest.MonkeyPatch) -> None:

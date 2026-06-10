@@ -11,6 +11,12 @@ One :class:`Scale` feeds both the source generation and the copy probes, so the
 copy-preflight match set (``param_spec_name`` / ``samples_per_shard`` /
 ``train_val_test_sizes``) cannot drift between producer and consumer.
 
+On the wandb launcher every selected sweep is created before any agent runs, then
+agents run concurrently as ``wandb agent`` subprocesses under a ``--max-parallel``
+cap — so all sweeps land in the UI even if an agent stalls, and one stalled agent
+never blocks the others. The orchestrator stays alive supervising the pool; run it
+under ``tmux``/``nohup`` so a disconnect does not orphan in-flight agents.
+
 Run the whole investigation::
 
     python -m synth_setter.tools.cadence_investigation_489               # wandb sweeps + agents
@@ -25,6 +31,8 @@ import itertools
 import os
 import subprocess
 import sys
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any
 
@@ -105,6 +113,10 @@ class Scale:
 # CLI default dataset size: the full #489 run (40 samples per split). The cadence
 # workflow's ``cadence_size`` input overrides it (and defaults smaller) per run.
 DEFAULT_SIZE = 40
+
+# Concurrent agents default low: each renders VST audio through one shared Xvfb
+# display, so over-subscribing the box contends on CPU and the display.
+DEFAULT_MAX_PARALLEL = 2
 
 
 @dataclass(frozen=True)
@@ -406,33 +418,89 @@ def _launch_local(
         _run_generate(cell)
 
 
-def _launch_wandb(
+def _create_sweep(
     experiment: Experiment,
     copy_uri: str,
     prefix_root: str,
     *,
     dry_run: bool,
-    count: int | None,
-) -> None:
-    """Create one wandb sweep for the experiment and run an agent over it.
+) -> str | None:
+    """Create the wandb sweep for one experiment and return its id.
 
     :param experiment: Experiment whose grid drives the sweep.
     :param copy_uri: Copy-source URI injected into copy probes.
     :param prefix_root: R2 prefix root every cell writes under.
     :param dry_run: When true, log the sweep config and create nothing.
-    :param count: Agent run cap (``None`` runs every grid cell).
+    :returns: The created sweep id, or ``None`` under ``dry_run``.
     """
     config = build_sweep_config(experiment, copy_uri, prefix_root)
     if dry_run:
         logger.info(f"[dry-run] wandb sweep {experiment.name}: {config}")
-        return
+        return None
     sweep_id = wandb.sweep(config, entity=ENTITY, project=PROJECT)
     logger.info(f"created sweep {experiment.name} -> {ENTITY}/{PROJECT}/{sweep_id}")
+    return sweep_id
+
+
+def _run_agent(sweep_id: str, *, count: int | None) -> None:
+    """Run a ``wandb agent`` for one sweep to completion as a subprocess (fail-fast).
+
+    Running each agent as its own process lets the supervisor cap concurrency and
+    keeps one stalled agent from blocking the others — unlike the in-process
+    ``wandb.agent`` loop, which served sweeps strictly one at a time. A non-zero
+    exit raises ``subprocess.CalledProcessError`` (``check=True``).
+
+    :param sweep_id: Sweep the agent pulls grid cells from.
+    :param count: Agent run cap forwarded to ``--count`` (``None`` runs every cell).
+    """
+    argv = ["wandb", "agent"]
+    if count is not None:
+        argv += ["--count", str(count)]
+    argv.append(f"{ENTITY}/{PROJECT}/{sweep_id}")
     # wandb 0.26.1's Agent.is_flapping reads wandb.START_TIME, which only the legacy
     # wandb.old.core sets, so the agent crashes with AttributeError unless flapping
     # is disabled; the grid is already bounded by count, so flapping adds no value.
-    os.environ.setdefault(wandb.env.AGENT_DISABLE_FLAPPING, "true")
-    wandb.agent(sweep_id, entity=ENTITY, project=PROJECT, count=count)
+    env = {**os.environ, wandb.env.AGENT_DISABLE_FLAPPING: "true"}
+    subprocess.run(argv, check=True, env=env)  # noqa: S603 — argv built from validated literals
+
+
+def _supervise_agents(
+    sweep_ids: list[str],
+    *,
+    count: int | None,
+    max_parallel: int,
+    run_agent: Callable[..., None] | None = None,
+) -> list[str]:
+    """Run an agent per sweep concurrently, capping concurrency at ``max_parallel``.
+
+    A stalled agent occupies one pool slot only, so the remaining sweeps keep
+    draining; failures are collected across all agents and raised once every
+    sweep has been attempted.
+
+    :param sweep_ids: Sweeps to run agents for.
+    :param count: Per-agent run cap forwarded to each agent.
+    :param max_parallel: Maximum agents running at once.
+    :param run_agent: Per-agent runner; defaults to :func:`_run_agent` and is
+        injectable so tests avoid real subprocesses.
+    :returns: The sweep ids whose agents exited cleanly.
+    :raises RuntimeError: when one or more agents fail, naming the failed sweeps.
+    """
+    run_agent = run_agent or _run_agent
+    completed: list[str] = []
+    failures: dict[str, str] = {}
+    with ThreadPoolExecutor(max_workers=max_parallel) as pool:
+        futures = {pool.submit(run_agent, sid, count=count): sid for sid in sweep_ids}
+        for future in as_completed(futures):
+            sweep_id = futures[future]
+            try:
+                future.result()
+                completed.append(sweep_id)
+            except Exception as exc:  # noqa: BLE001 — record every failure, raise once below
+                failures[sweep_id] = f"{type(exc).__name__}: {exc}"
+                logger.warning(f"agent for sweep {sweep_id} failed: {failures[sweep_id]}")
+    if failures:
+        raise RuntimeError(f"{len(failures)} sweep agent(s) failed: {failures}")
+    return completed
 
 
 def run_investigation(
@@ -443,23 +511,31 @@ def run_investigation(
     only: list[str] | None,
     dry_run: bool,
     count: int | None,
+    max_parallel: int = DEFAULT_MAX_PARALLEL,
 ) -> None:
     """Generate the copy source, then dispatch each selected experiment.
 
+    On the wandb launcher every selected sweep is created up front, then agents
+    run concurrently under a ``max_parallel`` cap — so all sweeps appear in the
+    UI regardless of agent fate, and no stalled agent blocks the rest.
+
     :param scale: Size knobs shared by the source and copy probes.
-    :param launcher: ``"wandb"`` (sweeps + agents) or ``"local"`` (subprocess loop).
+    :param launcher: ``"wandb"`` (sweeps + supervised agents) or ``"local"`` (subprocess loop).
     :param prefix_root: R2 prefix root for the source run and copy URI.
     :param only: Experiment names to run; ``None`` runs all five.
     :param dry_run: When true, print the plan and execute nothing.
     :param count: Per-experiment cell cap (``None`` runs every grid cell).
+    :param max_parallel: Maximum wandb agents running at once (ignored by ``local``).
     :raises ValueError: ``launcher`` is not ``"wandb"``/``"local"``, ``only`` names
-        an unknown experiment, or ``count`` is set below 1 (a cap that would silently
-        run no cells).
+        an unknown experiment, ``count`` is set below 1, or ``max_parallel`` is below 1
+        (caps that would silently run nothing).
     """
     if launcher not in ("wandb", "local"):
         raise ValueError(f"launcher must be 'wandb' or 'local', got {launcher!r}")
     if count is not None and count < 1:
         raise ValueError(f"count must be >= 1 when set, got {count}")
+    if max_parallel < 1:
+        raise ValueError(f"max_parallel must be >= 1, got {max_parallel}")
     experiments = build_experiments(scale)
     by_name = {e.name: e for e in experiments}
     if only is not None:
@@ -469,16 +545,25 @@ def run_investigation(
         experiments = [by_name[name] for name in only]
 
     # The copy source is only read by copy probes; skip its (real, costly)
-    # generation when the selection is within-run probes alone.
+    # generation when the selection is within-run probes alone. It must finish
+    # before any copy-probe agent runs, so it stays sequential ahead of dispatch.
     if any(experiment.needs_copy_source for experiment in experiments):
         copy_uri = generate_reference_dataset(scale, prefix_root, dry_run=dry_run)
     else:
         copy_uri = reference_copy_uri(prefix_root=prefix_root)
-    for experiment in experiments:
-        if launcher == "local":
+
+    if launcher == "local":
+        for experiment in experiments:
             _launch_local(experiment, copy_uri, prefix_root, dry_run=dry_run, count=count)
-        else:
-            _launch_wandb(experiment, copy_uri, prefix_root, dry_run=dry_run, count=count)
+        return
+
+    sweep_ids: list[str] = []
+    for experiment in experiments:
+        sweep_id = _create_sweep(experiment, copy_uri, prefix_root, dry_run=dry_run)
+        if sweep_id is not None:
+            sweep_ids.append(sweep_id)
+    if sweep_ids:
+        _supervise_agents(sweep_ids, count=count, max_parallel=max_parallel)
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -516,6 +601,15 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="per-experiment cell cap (wandb agent run cap; default: all cells)",
     )
     parser.add_argument(
+        "--max-parallel",
+        type=int,
+        default=DEFAULT_MAX_PARALLEL,
+        help=(
+            f"max wandb agents running at once (default: {DEFAULT_MAX_PARALLEL}); "
+            "agents share one Xvfb display, so raise with care"
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="print the plan and execute nothing",
@@ -538,6 +632,7 @@ def main(argv: list[str] | None = None) -> None:
         else None,
         dry_run=args.dry_run,
         count=args.count,
+        max_parallel=args.max_parallel,
     )
 
 
