@@ -137,7 +137,3 @@ class VSTFeedForwardModule(LightningModule):
 # Deprecated alias: archived W&B run configs and external job scripts resolve the
 # old ``_target_`` path.
 SurgeFeedForwardModule = VSTFeedForwardModule
-
-
-if __name__ == "__main__":
-    _ = VSTFeedForwardModule(None, None, None, None)

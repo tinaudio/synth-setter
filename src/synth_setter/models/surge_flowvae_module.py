@@ -169,7 +169,3 @@ class VSTFlowVAEModule(LightningModule):
 # Deprecated alias: archived W&B run configs and external job scripts resolve the
 # old ``_target_`` path.
 SurgeFlowVAEModule = VSTFlowVAEModule
-
-
-if __name__ == "__main__":
-    pass
