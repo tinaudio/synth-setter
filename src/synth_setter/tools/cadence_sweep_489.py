@@ -289,6 +289,9 @@ def run(n: int) -> None:
 
     :param n: Per-split sample count shared by the sources and the copy probes.
     """
+    # Build (and validate ``n`` via) the sweep configs first, so an invalid size fails fast
+    # before the two expensive source-generation subprocesses run.
+    sweep_configs = sweeps(n)
     copy_src_overrides = [
         f"experiment={_SOURCE_EXPERIMENT}",
         f"r2.prefix_root={PREFIX_ROOT}",
@@ -311,7 +314,7 @@ def run(n: int) -> None:
     _run_generate(xt_overrides)
     logger.info(f"generating copy source -> {surge_simple_reference_copy_uri()}")
     _run_generate(simple_overrides)
-    sweep_ids = [wandb.sweep(config, entity=ENTITY, project=PROJECT) for config in sweeps(n)]
+    sweep_ids = [wandb.sweep(config, entity=ENTITY, project=PROJECT) for config in sweep_configs]
     for sweep_id in sweep_ids:
         logger.info(f"running agent for {ENTITY}/{PROJECT}/{sweep_id}")
         _run_agent(sweep_id)

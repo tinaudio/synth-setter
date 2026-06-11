@@ -72,3 +72,23 @@ def test_swept_args_macro_is_last_so_grid_values_win_over_fixed_pins() -> None:
     """
     for config in sweep.sweeps(2):
         assert config["command"][-1] == "${args_no_hyphens}"
+
+
+def test_run_rejects_size_below_one_before_generating_any_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``run`` validates ``n`` up front, before launching any ``generate_dataset`` subprocess.
+
+    The ``n >= 1`` guard lives in ``sweeps``; ``run`` must reach it before the expensive source
+    generation, so an invalid size fails fast instead of burning two subprocess runs.
+
+    :param monkeypatch: Replaces ``_run_generate`` with a recorder so the test can assert no
+        source generation was attempted.
+    """
+    generated: list[list[str]] = []
+    monkeypatch.setattr(sweep, "_run_generate", lambda overrides: generated.append(overrides))
+
+    with pytest.raises(ValueError, match="must be >= 1"):
+        sweep.run(0)
+
+    assert generated == []
