@@ -108,7 +108,10 @@ async def check_call_streamed_async(
         carries the bytes captured before death.
     :raises subprocess.TimeoutExpired: The child itself overran ``timeout`` —
         never raised for post-exit pipe loitering.
+    :raises ValueError: ``cmd`` is empty.
     """
+    if not cmd:
+        raise ValueError("cmd must be a non-empty argv sequence")
     child_env = {**(os.environ if env is None else env), "PYTHONUNBUFFERED": "1"}
     proc = await asyncio.create_subprocess_exec(
         *cmd,
@@ -208,8 +211,12 @@ async def check_call_streamed_async(
     finally:
         # Sweep right after the wait so the pgid-recycle window stays
         # microseconds; surviving members keep the pgid reserved, so it's safe.
+        # The sweep precedes the await so an external cancel can't skip it.
         pump_task.cancel()
         _signal_group(pgid, signal.SIGTERM)
+        # Finalize the pump so persistent-loop callers see no pending-task
+        # noise; return_exceptions keeps its CancelledError out of our frame.
+        await asyncio.gather(pump_task, return_exceptions=True)
 
     output = b"".join(captured)
     if timed_out_after is not None:

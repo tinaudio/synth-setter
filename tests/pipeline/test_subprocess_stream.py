@@ -167,6 +167,11 @@ class TestExitSemantics:
         assert excinfo.value.cmd == argv
         assert b"BEFORE_CRASH" in excinfo.value.output
 
+    def test_empty_cmd_raises_value_error(self) -> None:
+        """An empty argv fails fast instead of confusing create_subprocess_exec."""
+        with pytest.raises(ValueError, match="non-empty argv"):
+            _streamed([])
+
     def test_signal_death_raises_with_negative_returncode(self, leak_marker: str) -> None:
         """A child killed by SIGKILL reports ``returncode == -9``.
 
