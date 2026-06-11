@@ -353,10 +353,9 @@ def _validate_lance_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
     except ValueError as exc:
         errors.append(str(exc))
 
-    if reader.num_rows() != spec.render.samples_per_shard:
-        errors.append(
-            f"file has {reader.num_rows()} rows, expected {spec.render.samples_per_shard}"
-        )
+    num_rows = reader.num_rows()
+    if num_rows != spec.render.samples_per_shard:
+        errors.append(f"file has {num_rows} rows, expected {spec.render.samples_per_shard}")
 
     expected_shapes = _expected_dataset_shapes(spec)
     for name in DATASET_FIELD_NAMES:

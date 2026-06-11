@@ -249,6 +249,7 @@ def seed_train_shards(fake_r2_remote: Path, spec: DatasetSpec) -> list[Path]:
     :param fake_r2_remote: Root of the local-typed remote.
     :param spec: Dataset spec whose ``shards`` and ``r2`` provide the layout.
     :returns: The seeded local shard paths, in train-range order.
+    :raises ValueError: ``spec.output_format`` has no minimal-shard writer here.
     """
     train_lo, train_hi = spec.split_shard_ranges["train"]
     seeded: list[Path] = []
@@ -256,8 +257,10 @@ def seed_train_shards(fake_r2_remote: Path, spec: DatasetSpec) -> list[Path]:
         path = uri_to_local_path(fake_r2_remote, spec.r2.shard_uri(shard))
         if spec.output_format == "lance":
             write_minimal_lance_shard(path, spec)
-        else:
+        elif spec.output_format == "wds":
             write_minimal_wds_shard(path)
+        else:
+            raise ValueError(f"no minimal shard writer for output_format {spec.output_format!r}")
         seeded.append(path)
     return seeded
 
