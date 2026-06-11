@@ -147,6 +147,59 @@ class TestCheckCallStreamed:
 
         assert elapsed < 30, f"group kill did not unblock the read loop ({elapsed:.1f}s)"
 
+    def test_timeout_sigterms_group_so_child_can_clean_up_before_kill(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The timeout kill sends SIGTERM first so a child cleanup handler runs.
+
+        The headless-VST wrapper reaps its Xvfb/dbus tree and removes the X
+        socket from a ``trap cleanup`` that only fires on SIGTERM (not SIGKILL);
+        a bare SIGKILL would orphan that tree and leak the socket. A child that
+        traps SIGTERM, emits a sentinel, and exits stands in for that wrapper.
+
+        :param capsys: Captures the parent-process ``sys.stderr`` writes.
+        """
+        argv = [
+            sys.executable,
+            "-c",
+            "import signal, sys, time\n"
+            "def _bye(*_):\n"
+            "    print('GRACEFUL_CLEANUP', flush=True)\n"
+            "    sys.exit(0)\n"
+            "signal.signal(signal.SIGTERM, _bye)\n"
+            "print('READY', flush=True)\n"
+            "time.sleep(60)\n",
+        ]
+
+        with pytest.raises(subprocess.TimeoutExpired):
+            _check_call_streamed(argv, timeout=2.0)
+
+        assert "GRACEFUL_CLEANUP" in capsys.readouterr().err
+
+    def test_timeout_sigkills_group_that_ignores_sigterm(self) -> None:
+        """A SIGTERM-ignoring child is still hard-killed within the grace bound.
+
+        The escalation is what keeps the timeout real: without the SIGKILL
+        fallback a child that ignores SIGTERM would block the read loop until
+        its own 60s sleep ends. The elapsed bound turns a missing fallback into
+        a failure rather than a 60s stall.
+        """
+        argv = [
+            sys.executable,
+            "-c",
+            "import signal, time\n"
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            "print('IGNORING_SIGTERM', flush=True)\n"
+            "time.sleep(60)\n",
+        ]
+
+        start = time.monotonic()
+        with pytest.raises(subprocess.TimeoutExpired):
+            _check_call_streamed(argv, timeout=2.0)
+        elapsed = time.monotonic() - start
+
+        assert elapsed < 30, f"SIGKILL fallback did not unblock the read loop ({elapsed:.1f}s)"
+
     def test_non_utf8_child_output_does_not_crash(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:

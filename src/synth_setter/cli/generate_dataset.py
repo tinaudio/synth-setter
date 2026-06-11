@@ -74,6 +74,11 @@ _WORKER_REPO_ROOT = "/home/build/synth-setter"
 # Smoke-shard-sized; longer eval runs belong on the dispatch path, not inline.
 _ORACLE_EVAL_TIMEOUT_SECONDS = 600
 
+# Grace between the group SIGTERM and the SIGKILL fallback: long enough for the
+# headless-VST wrapper's ``trap cleanup`` to reap its Xvfb/dbus tree and remove
+# the X socket, short enough to keep the timeout's tail bounded.
+_GROUP_KILL_GRACE_SECONDS = 5.0
+
 # Finalized artifacts the eval datamodule opens; all must sit in dataset_root.
 _ORACLE_EVAL_REQUIRED_ARTIFACTS = ("train.h5", "val.h5", "test.h5", STATS_NPZ_FILENAME)
 
@@ -89,11 +94,11 @@ def _check_call_streamed(args: Sequence[str], *, timeout: float | None = None) -
 
     :param args: Child argv, run unquoted with no shell, so callers pre-validate it.
     :param timeout: Hard wall-clock bound in seconds; once it elapses the
-        child's process group is killed and the call raises regardless of the
-        direct child's own exit. ``None`` means no limit.
+        child's process group is terminated and the call raises regardless of
+        the direct child's own exit. ``None`` means no limit.
     :raises subprocess.CalledProcessError: Child exited non-zero.
     :raises subprocess.TimeoutExpired: ``timeout`` elapsed before the read loop
-        drained, so the process group was killed.
+        drained, so the process group was terminated.
     """
     with subprocess.Popen(  # noqa: S603 — argv built from validated specs by callers
         args,
@@ -108,19 +113,36 @@ def _check_call_streamed(args: Sequence[str], *, timeout: float | None = None) -
     ) as proc:
         timed_out = threading.Event()
 
-        def _kill_group() -> None:
+        def _terminate_group() -> None:
+            """SIGTERM the child's group, escalating to SIGKILL after a grace period.
+
+            SIGTERM lets the headless-VST wrapper's ``trap cleanup`` run — reaping
+            its Xvfb/dbus/openbox tree and removing the X socket; a bare SIGKILL
+            orphans that tree and leaks the socket, corrupting the shared display
+            for later renders. SIGKILL is the fallback for a group that ignores
+            SIGTERM, so a wedged child still cannot outlive the kill.
+            """
             if proc.returncode is not None:
                 # Already reaped — killpg here could hit a recycled pgid.
                 return
             try:
-                os.killpg(proc.pid, signal.SIGKILL)
+                os.killpg(proc.pid, signal.SIGTERM)
             except ProcessLookupError:
                 # Group already gone — nothing left to reap.
+                return
+            deadline = time.monotonic() + _GROUP_KILL_GRACE_SECONDS
+            while time.monotonic() < deadline:
+                if proc.poll() is not None:
+                    return
+                time.sleep(0.1)
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
                 pass
 
         def _kill_on_timeout() -> None:
             timed_out.set()
-            _kill_group()
+            _terminate_group()
 
         timer = threading.Timer(timeout, _kill_on_timeout) if timeout is not None else None
         if timer is not None:
@@ -134,10 +156,10 @@ def _check_call_streamed(args: Sequence[str], *, timeout: float | None = None) -
         finally:
             if timer is not None:
                 timer.cancel()
-            # Kill the group if the direct child is still alive on an abrupt exit
-            # (KeyboardInterrupt, write failure); ``__exit__`` then reaps it.
+            # Terminate the group if the direct child is still alive on an abrupt
+            # exit (KeyboardInterrupt, write failure); ``__exit__`` then reaps it.
             if proc.poll() is None:
-                _kill_group()
+                _terminate_group()
     # Any timer fire means the wall-clock budget was exceeded — surface it as a
     # timeout even when the direct child already exited 0 but a pipe-holding
     # grandchild kept the read loop blocked until the group kill.
