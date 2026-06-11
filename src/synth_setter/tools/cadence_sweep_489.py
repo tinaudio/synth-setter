@@ -29,10 +29,10 @@ import sys
 import uuid
 from typing import Any
 
+import wandb
 import wandb.env
 from loguru import logger
 
-import wandb
 from synth_setter.data.vst import preset_paths
 from synth_setter.pipeline.schemas.prefix import DEFAULT_R2_PREFIX_ROOT, make_r2_prefix
 

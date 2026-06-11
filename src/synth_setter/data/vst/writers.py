@@ -1,9 +1,9 @@
-"""Per-shard dataset writers — HDF5 (resumable) and webdataset tar (new).
+"""Per-shard dataset writers — HDF5, WebDataset tar, and Lance file.
 
-Consist of two entrypoints dispatched by the renderer CLI on the output file's suffix:
+Consist of entrypoints dispatched by the renderer CLI on the output file's suffix:
 ``make_hdf5_dataset`` keeps the resumable HDF5 path (signature takes a path and
-opens the file internally), and ``make_wds_dataset`` is the new tar-shard
-writer using ``webdataset.TarWriter``.
+opens the file internally), ``make_wds_dataset`` writes tar shards using
+``webdataset.TarWriter``, and ``make_lance_dataset`` writes a single Lance file.
 """
 
 from __future__ import annotations
@@ -28,7 +28,12 @@ from synth_setter.data.vst.generate_vst_dataset import (
     generate_sample,
 )
 from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
-from synth_setter.data.vst.shapes import DATASET_FIELD_NAMES
+from synth_setter.data.vst.shapes import (
+    DATASET_FIELD_NAMES,
+    audio_dataset_shape,
+    mel_dataset_shape,
+    param_array_dataset_shape,
+)
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from synth_setter.pipeline.schemas.spec import RenderConfig
 
@@ -135,6 +140,21 @@ def save_wds_samples(
     )
 
     logger.info(f"{len(samples)} wds samples written!")
+
+
+def _sample_batch_arrays(samples: list[VSTDataSample]) -> dict[str, np.ndarray]:
+    """Stack rendered samples into writer-field arrays.
+
+    :param samples: Rendered samples in row order.
+    :returns: Mapping keyed by ``DATASET_FIELD_NAMES``.
+    :rtype: dict[str, np.ndarray]
+    """
+    audio_name, mel_name, param_name = DATASET_FIELD_NAMES
+    return {
+        audio_name: np.stack([s.audio.T for s in samples], axis=0).astype(np.float16),
+        mel_name: np.stack([s.mel_spec for s in samples], axis=0),
+        param_name: np.stack([s.param_array for s in samples], axis=0),
+    }
 
 
 def _validate_fixed_params_lengths(
@@ -410,6 +430,7 @@ def make_wds_dataset(
     param_spec = param_specs[render_cfg.param_spec_name]
     meta = _shard_metadata_from_render(render_cfg)
     start_idx = 0
+
     _validate_fixed_params_lengths(
         num_samples=render_cfg.samples_per_shard,
         fixed_synth_params_list=fixed_synth_params_list,
@@ -433,3 +454,75 @@ def make_wds_dataset(
         )
 
         sink.write({"__key__": "metadata", "json": meta.model_dump()})
+
+
+def make_lance_dataset(
+    lance_file: Path | str,
+    render_cfg: RenderConfig,
+    *,
+    fixed_synth_params_list: list[dict[str, float]] | None = None,
+    fixed_note_params_list: list[NoteParams] | None = None,
+) -> None:
+    """Render ``render_cfg.samples_per_shard`` samples to a single Lance file.
+
+    Not resumable: the file is overwritten by ``LanceFileWriter`` on each run.
+    Audio is stored as ``float16``; ``mel_spec`` and ``param_array`` stay
+    ``float32``. The shard metadata is embedded in Arrow schema metadata so
+    validation and finalize recover the same sidecar payload as HDF5/WDS.
+
+    :param lance_file: Destination ``.lance`` file.
+    :param render_cfg: Per-shard renderer config from the dataset spec.
+    :param fixed_synth_params_list: Optional pre-set synth params, one dict per
+        shard row. Must have length ``samples_per_shard``.
+    :param fixed_note_params_list: Optional pre-set note params; same full-shard
+        contract as ``fixed_synth_params_list``.
+    """
+    param_spec = param_specs[render_cfg.param_spec_name]
+    meta = _shard_metadata_from_render(render_cfg)
+    start_idx = 0
+    from lance.file import LanceFileWriter
+    from synth_setter.pipeline.data.lance_shard import lance_schema, record_batch_from_arrays
+
+    _validate_fixed_params_lengths(
+        num_samples=render_cfg.samples_per_shard,
+        fixed_synth_params_list=fixed_synth_params_list,
+        fixed_note_params_list=fixed_note_params_list,
+    )
+    schema = lance_schema(
+        {
+            DATASET_FIELD_NAMES[0]: audio_dataset_shape(
+                render_cfg.samples_per_shard,
+                render_cfg.channels,
+                render_cfg.sample_rate,
+                render_cfg.signal_duration_seconds,
+            ),
+            DATASET_FIELD_NAMES[1]: mel_dataset_shape(
+                render_cfg.samples_per_shard,
+                render_cfg.channels,
+                render_cfg.sample_rate,
+                render_cfg.signal_duration_seconds,
+            ),
+            DATASET_FIELD_NAMES[2]: param_array_dataset_shape(
+                render_cfg.samples_per_shard,
+                len(param_spec),
+            ),
+        },
+        meta,
+    )
+
+    writer = LanceFileWriter(str(lance_file), schema)
+
+    def _flush(batch: list[VSTDataSample], _batch_start: int) -> None:
+        writer.write_batch(record_batch_from_arrays(_sample_batch_arrays(batch), schema))
+
+    try:
+        _render_in_batches(
+            render_cfg=render_cfg,
+            param_spec=param_spec,
+            start_idx=start_idx,
+            fixed_synth_params_list=fixed_synth_params_list,
+            fixed_note_params_list=fixed_note_params_list,
+            flush_batch=_flush,
+        )
+    finally:
+        writer.close()

@@ -182,6 +182,27 @@ def test_main_dispatches_tar_suffix_to_make_wds_dataset(tmp_path: Path) -> None:
     assert wds_args[0] == str(data_file)
 
 
+def test_main_dispatches_lance_suffix_to_make_lance_dataset(tmp_path: Path) -> None:
+    """``data_file=foo.lance`` routes to ``make_lance_dataset``.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    data_file = tmp_path / "shard-000000.lance"
+
+    with (
+        patch("synth_setter.data.vst.writers.make_hdf5_dataset") as mock_h5,
+        patch("synth_setter.data.vst.writers.make_wds_dataset") as mock_wds,
+        patch("synth_setter.data.vst.writers.make_lance_dataset") as mock_lance,
+    ):
+        _run_main_with_argv(_cli_argv(str(data_file)))
+
+    mock_lance.assert_called_once()
+    mock_h5.assert_not_called()
+    mock_wds.assert_not_called()
+    lance_args, _lance_kwargs = mock_lance.call_args
+    assert lance_args[0] == str(data_file)
+
+
 def test_main_rejects_unknown_suffix(tmp_path: Path) -> None:
     """``data_file=foo.bin`` raises ``SystemExit`` rather than silently picking a writer.
 

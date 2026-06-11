@@ -180,6 +180,16 @@ class TestR2LocationLayoutHelpers:
         loc = R2Location(bucket="intermediate-data", prefix="data/run/")
         assert loc.split_h5_uri(split) == f"r2://intermediate-data/data/run/{split}.h5"
 
+    @pytest.mark.parametrize("split", ["train", "val", "test"])
+    def test_split_lance_uri(self, split: Split) -> None:
+        """``split_lance_uri(<split>)`` returns ``<prefix><split>.lance`` for each split.
+
+        :param split: Split name under test.
+        """
+        loc = R2Location(bucket="intermediate-data", prefix="data/run/")
+
+        assert loc.split_lance_uri(split) == f"r2://intermediate-data/data/run/{split}.lance"
+
     def test_split_wds_brace_uri_zero_pads_six_digits_and_inclusive_hi(self) -> None:
         """``split_wds_brace_uri`` returns the wds brace pattern for the half-open range."""
         loc = R2Location(bucket="intermediate-data", prefix="data/run/")

@@ -31,7 +31,7 @@ on:
         required: true
         type: string
       output_format:
-        description: "Dataset output format (`hdf5` or `wds`); informational, drives only artifact naming. The CLI re-reads the format from the loaded `DatasetSpec`."
+        description: "Dataset output format (`hdf5`, `wds`, or `lance`); informational, drives only artifact naming. The CLI re-reads the format from the loaded `DatasetSpec`."
         required: false
         type: string
         default: ""
@@ -62,6 +62,7 @@ on:
         options:
           - hdf5
           - wds
+          - lance
       run_id:
         description: "Generate stage's run_id; used only for log/artifact naming"
         required: true

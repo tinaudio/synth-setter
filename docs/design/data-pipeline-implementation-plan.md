@@ -744,7 +744,11 @@ ______________________________________________________________________
   - `hdf5`: virtual HDF5 datasets (`train.h5`, `val.h5`, `test.h5`) — implements fresh
     resharding using `VirtualLayout`/`VirtualSource` pattern, reading actual shard dimensions
     from HDF5 metadata. Does NOT call `reshard_data.py` (it hardcodes 10k shard size).
-  - `wds`: WebDataset tar archives (`train-{shard}.tar`, etc.) via `Sample` dataclass
+  - `wds`: WebDataset tar shards stay in place; finalize streams train-shard `mel_spec`
+    arrays into `stats.npz`.
+  - `lance`: single-file Lance shards (`shard-000000.lance`) are combined into
+    non-empty split files (`train.lance`, `val.lance`, `test.lance`), and finalize streams
+    train-shard `mel_spec` tensors into `stats.npz`.
 - Dataset card includes `output_format`, `worker_architectures` (logs warning if
   heterogeneous), content hashes, shard manifest
 - Upload finalized outputs to R2 storage
@@ -757,7 +761,7 @@ ______________________________________________________________________
 
 **Unit tests:** Promotes, rejects missing/corrupt, idempotent, stale marker recovery,
 lexicographic shard selection with multiple attempts, `.promoted` markers written,
-`dataset.complete` content verified, card contents, both output formats, `--dry-run`,
+`dataset.complete` content verified, card contents, all output formats, `--dry-run`,
 mock-W&B test verifying all 7 metrics logged
 
 **Reference tests:**

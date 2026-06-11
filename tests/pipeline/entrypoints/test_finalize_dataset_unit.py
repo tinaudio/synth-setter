@@ -33,6 +33,7 @@ from synth_setter.pipeline.data.stats import get_stats_hdf5 as real_get_stats_hd
 from synth_setter.pipeline.data.stats import stream_stats_wds as real_stream_stats_wds
 from tests.helpers.finalize_shards import (
     build_hdf5_smoke_spec,
+    build_lance_smoke_spec,
     build_wds_smoke_spec,
     copy_shard_for_download,
     install_finalize_setup_stubs,
@@ -40,6 +41,7 @@ from tests.helpers.finalize_shards import (
     seed_train_shards,
     stub_get_stats_hdf5,
     uri_to_local_path,
+    write_minimal_lance_shard,
     write_minimal_wds_shard,
 )
 
@@ -530,6 +532,53 @@ def test_finalize_wds_downloads_every_train_shard_uri(
     expected_uris = [spec.r2.shard_uri(shard) for shard in spec.shards[train_lo:train_hi]]
     assert downloaded_uris == expected_uris
     assert uri_to_local_path(fake_r2_remote, spec.r2.stats_uri()).is_file()
+
+
+def test_finalize_lance_writes_split_files_stats_and_marker_last(
+    fake_r2_remote: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001
+) -> None:
+    """``finalize_from_spec`` handles Lance splits and uploads the marker last.
+
+    :param fake_r2_remote: Local-typed rclone remote where train shards are seeded.
+    :param tmp_path: Pytest tmp dir; hosts finalize scratch files.
+    :param monkeypatch: Pytest fixture used to spy on upload order.
+    :param stub_finalize_setup: Fixture-activation only.
+    """
+    spec = build_lance_smoke_spec(
+        task_name="finalize-lance-marker-last",
+        train_val_test_sizes=(4, 4, 0),
+    )
+    seed_train_shards(fake_r2_remote, spec)
+    for shard in spec.shards[1:2]:
+        write_minimal_lance_shard(
+            uri_to_local_path(fake_r2_remote, spec.r2.shard_uri(shard)), spec
+        )
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+
+    real_upload = r2_io.upload
+    upload_order: list[str] = []
+
+    def spy_upload(src: str | Path, dst: str) -> None:
+        upload_order.append(dst)
+        real_upload(src, dst)
+
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.upload", spy_upload)
+
+    finalize_dataset.finalize_from_spec(spec, work_dir)
+
+    assert uri_to_local_path(fake_r2_remote, spec.r2.split_lance_uri("train")).is_file()
+    assert uri_to_local_path(fake_r2_remote, spec.r2.split_lance_uri("val")).is_file()
+    assert not uri_to_local_path(fake_r2_remote, spec.r2.split_lance_uri("test")).exists()
+    assert uri_to_local_path(fake_r2_remote, spec.r2.stats_uri()).is_file()
+    assert uri_to_local_path(fake_r2_remote, spec.r2.dataset_complete_marker_uri()).is_file()
+    assert upload_order[-1] == spec.r2.dataset_complete_marker_uri()
+    assert upload_order.index(spec.r2.stats_uri()) < upload_order.index(
+        spec.r2.dataset_complete_marker_uri()
+    )
 
 
 def test_finalize_wds_raises_on_empty_train_split(fake_r2_remote: Path, tmp_path: Path) -> None:

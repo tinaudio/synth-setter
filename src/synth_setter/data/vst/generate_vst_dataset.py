@@ -316,9 +316,9 @@ def main() -> None:
     """Entry point — parse CLI args into a ``RenderConfig`` and render one shard.
 
     The writer is dispatched on ``data_file``'s suffix via
-    ``OutputFormat.from_extension`` (``.h5`` → HDF5, ``.tar`` → wds). An unknown
-    suffix raises ``SystemExit`` rather than silently producing a half-written
-    file in the wrong format.
+    ``OutputFormat.from_extension`` (``.h5`` → HDF5, ``.tar`` → wds,
+    ``.lance`` → Lance). An unknown suffix raises ``SystemExit`` rather than
+    silently producing a half-written file in the wrong format.
 
     When ``--copy_dataset_root_uri`` is set, the params of the same-named source
     shard under that root URI are decoded into fixed synth/note lists and
@@ -326,7 +326,7 @@ def main() -> None:
     path, ``file://`` URI, or ``r2://`` URI (an ``r2://`` shard is downloaded to
     a tempfile for the decode). The source is read as an HDF5 ``param_array``, so
     copy is supported for hdf5 output only (a ``.tar`` output has no same-named
-    HDF5 source); a wds output with ``--copy_dataset_root_uri`` raises
+    HDF5 source); a non-hdf5 output with ``--copy_dataset_root_uri`` raises
     ``SystemExit``.
     """
     # Import lazily so that the writer module's webdataset dep only loads when
@@ -334,7 +334,11 @@ def main() -> None:
     # module to reach VSTDataSample / generate_sample. (h5py is already a
     # module-level import here, so it is not what the lazy load avoids.)
     from synth_setter.data.vst.param_spec_registry import param_specs
-    from synth_setter.data.vst.writers import make_hdf5_dataset, make_wds_dataset
+    from synth_setter.data.vst.writers import (
+        make_hdf5_dataset,
+        make_lance_dataset,
+        make_wds_dataset,
+    )
 
     args = CliApp.run(_GenerateCliArgs)
     render_cfg = RenderConfig(**args.model_dump(exclude={"data_file", "copy_dataset_root_uri"}))
@@ -370,8 +374,15 @@ def main() -> None:
             fixed_synth_params_list=fixed_synth_params_list,
             fixed_note_params_list=fixed_note_params_list,
         )
-    else:  # fmt is OutputFormat.WDS, validated above
+    elif fmt is OutputFormat.WDS:
         make_wds_dataset(
+            args.data_file,
+            render_cfg,
+            fixed_synth_params_list=fixed_synth_params_list,
+            fixed_note_params_list=fixed_note_params_list,
+        )
+    else:
+        make_lance_dataset(
             args.data_file,
             render_cfg,
             fixed_synth_params_list=fixed_synth_params_list,

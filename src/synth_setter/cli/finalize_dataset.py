@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
+from typing import TYPE_CHECKING, TypeAlias
 
 import hydra
 import numpy as np
@@ -37,6 +38,14 @@ from synth_setter.pipeline.spec_io import load_spec_from_root, write_spec_to_pat
 from synth_setter.utils import pin_wandb_run_id
 from synth_setter.utils.instantiators import close_loggers, instantiate_loggers
 from synth_setter.workspace import operator_workspace
+
+if TYPE_CHECKING:
+    import pyarrow as pa
+
+    LanceBatchIterator: TypeAlias = Iterator[pa.RecordBatch]
+    LanceSplitBatches: TypeAlias = tuple[pa.Schema, LanceBatchIterator]
+else:
+    LanceSplitBatches: TypeAlias = tuple[object, Iterator[object]]
 
 # Resolve workspace at import so ``${oc.env:PROJECT_ROOT}`` in
 # ``configs/paths/default.yaml`` interpolates under any install layout.
@@ -162,6 +171,65 @@ def finalize_hdf5(spec: DatasetSpec, work_dir: Path) -> None:
     logger.info("uploaded stats to {}", spec.r2.stats_uri())
 
 
+def _lance_split_batches(shard_paths: list[Path]) -> LanceSplitBatches:
+    """Return the schema and batch iterator for a finalized Lance split.
+
+    :param shard_paths: Non-empty list of local shard files in split order.
+    :returns: ``(schema, batches)`` for :func:`write_lance_file`.
+    :rtype: LanceSplitBatches
+    """
+    from lance.file import LanceFileReader
+
+    first_reader = LanceFileReader(str(shard_paths[0]))
+    schema = first_reader.metadata().schema
+
+    def _batches() -> LanceBatchIterator:
+        for shard_path in shard_paths:
+            reader = LanceFileReader(str(shard_path))
+            yield from reader.read_all().to_batches()
+
+    return schema, _batches()
+
+
+def finalize_lance(spec: DatasetSpec, work_dir: Path) -> None:
+    """Download Lance shards, write split Lance files, compute stats, and upload artifacts.
+
+    :param spec: Validated dataset spec (``output_format == "lance"``).
+    :param work_dir: Scratch directory for downloaded shards and finalized outputs.
+    :raises ValueError: The train split is empty.
+    """
+    from synth_setter.pipeline.data.lance_shard import write_lance_file
+    from synth_setter.pipeline.data.stats import stream_stats_lance
+
+    train_lo, train_hi = spec.split_shard_ranges["train"]
+    if train_lo >= train_hi:
+        raise ValueError(
+            f"train split is empty (split_shard_ranges['train']="
+            f"{spec.split_shard_ranges['train']!r}); cannot compute stats "
+            f"without at least one train shard."
+        )
+    for shard in spec.shards:
+        r2_io.download_to_path(spec.r2.shard_uri(shard), work_dir / shard.filename)
+
+    train_paths = [work_dir / shard.filename for shard in spec.shards[train_lo:train_hi]]
+    mean, std = stream_stats_lance(train_paths, mask_degenerate=spec.mask_degenerate_bins)
+    stats_npz = work_dir / STATS_NPZ_FILENAME
+    np.savez(stats_npz, mean=mean, std=std)
+
+    for split, (lo, hi) in spec.split_shard_ranges.items():
+        if lo >= hi:
+            continue
+        split_path = work_dir / f"{split}.lance"
+        shard_paths = [work_dir / shard.filename for shard in spec.shards[lo:hi]]
+        schema, batches = _lance_split_batches(shard_paths)
+        write_lance_file(split_path, schema, batches)
+        split_uri = spec.r2.split_lance_uri(split)
+        r2_io.upload(split_path, split_uri)
+        logger.info("uploaded {} to {}", split_path.name, split_uri)
+    r2_io.upload(stats_npz, spec.r2.stats_uri())
+    logger.info("uploaded stats to {}", spec.r2.stats_uri())
+
+
 def finalize_from_spec(spec: DatasetSpec, work_dir: Path) -> None:
     """Finalize a dataset given an in-memory spec; idempotent on ``dataset.complete``.
 
@@ -175,7 +243,7 @@ def finalize_from_spec(spec: DatasetSpec, work_dir: Path) -> None:
     :param spec: Validated dataset spec.
     :param work_dir: Writable scratch dir; created if missing; retained
         after the call (multi-GB on the hdf5 branch).
-    :raises ValueError: ``spec.output_format`` is neither ``"hdf5"`` nor ``"wds"``.
+    :raises ValueError: ``spec.output_format`` is not a supported finalized format.
     """
     marker_uri = spec.r2.dataset_complete_marker_uri()
     if r2_io.object_size(marker_uri) is not None:
@@ -195,6 +263,8 @@ def finalize_from_spec(spec: DatasetSpec, work_dir: Path) -> None:
         finalize_wds(spec, work_dir)
     elif spec.output_format is OutputFormat.HDF5:
         finalize_hdf5(spec, work_dir)
+    elif spec.output_format is OutputFormat.LANCE:
+        finalize_lance(spec, work_dir)
     else:
         raise ValueError(f"unsupported output_format: {spec.output_format!r}")
 
@@ -235,6 +305,13 @@ def _finalized_reference_uris(spec: DatasetSpec) -> list[str]:
     if spec.output_format is OutputFormat.HDF5:
         split_uris = [
             spec.r2.split_h5_uri(split)
+            for split, (lo, hi) in spec.split_shard_ranges.items()
+            if lo < hi
+        ]
+        return [*split_uris, spec.r2.stats_uri()]
+    if spec.output_format is OutputFormat.LANCE:
+        split_uris = [
+            spec.r2.split_lance_uri(split)
             for split, (lo, hi) in spec.split_shard_ranges.items()
             if lo < hi
         ]
