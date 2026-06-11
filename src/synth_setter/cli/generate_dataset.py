@@ -11,11 +11,15 @@ Two console-script surfaces:
 
 from __future__ import annotations
 
+import os
 import shlex
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+from collections.abc import Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextlib import ExitStack
 from pathlib import Path
@@ -74,6 +78,75 @@ _ORACLE_EVAL_TIMEOUT_SECONDS = 600
 _ORACLE_EVAL_REQUIRED_ARTIFACTS = ("train.h5", "val.h5", "test.h5", STATS_NPZ_FILENAME)
 
 
+def _check_call_streamed(args: Sequence[str], *, timeout: float | None = None) -> None:
+    """Run ``args``, teeing the child's merged stdout+stderr through ``sys.stderr``.
+
+    wandb ``console=wrap`` captures only Python-level writes in this process, so
+    child output must be re-written through the parent's ``sys.stderr`` to reach
+    the run's server-side Logs tab (#1465); inherited fds would bypass it.
+    ``PYTHONUNBUFFERED=1`` keeps Python children line-buffered on the pipe so a
+    hang still leaves its last lines visible (the #735 diagnosis property).
+
+    :param args: Child argv, run unquoted with no shell, so callers pre-validate it.
+    :param timeout: Hard wall-clock bound in seconds; once it elapses the
+        child's process group is killed and the call raises regardless of the
+        direct child's own exit. ``None`` means no limit.
+    :raises subprocess.CalledProcessError: Child exited non-zero.
+    :raises subprocess.TimeoutExpired: ``timeout`` elapsed before the read loop
+        drained, so the process group was killed.
+    """
+    with subprocess.Popen(  # noqa: S603 — argv built from validated specs by callers
+        args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        encoding="utf-8",
+        errors="replace",
+        env={**os.environ, "PYTHONUNBUFFERED": "1"},
+        # Child leads its own process group so the kill paths reap grandchildren
+        # (e.g. the headless-VST wrapper tree) holding the pipe open past the timeout.
+        start_new_session=True,
+    ) as proc:
+        timed_out = threading.Event()
+
+        def _kill_group() -> None:
+            if proc.returncode is not None:
+                # Already reaped — killpg here could hit a recycled pgid.
+                return
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                # Group already gone — nothing left to reap.
+                pass
+
+        def _kill_on_timeout() -> None:
+            timed_out.set()
+            _kill_group()
+
+        timer = threading.Timer(timeout, _kill_on_timeout) if timeout is not None else None
+        if timer is not None:
+            timer.start()
+        try:
+            assert proc.stdout is not None  # noqa: S101 — guaranteed by stdout=PIPE
+            for line in proc.stdout:
+                # Resolved at write time so wandb's wrapped stream sees every line.
+                sys.stderr.write(line)
+            returncode = proc.wait()
+        finally:
+            if timer is not None:
+                timer.cancel()
+            # Kill the group if the direct child is still alive on an abrupt exit
+            # (KeyboardInterrupt, write failure); ``__exit__`` then reaps it.
+            if proc.poll() is None:
+                _kill_group()
+    # Any timer fire means the wall-clock budget was exceeded — surface it as a
+    # timeout even when the direct child already exited 0 but a pipe-holding
+    # grandchild kept the read loop blocked until the group kill.
+    if timeout is not None and timed_out.is_set():
+        raise subprocess.TimeoutExpired(args, timeout)
+    if returncode != 0:
+        raise subprocess.CalledProcessError(returncode, args)
+
+
 def _run_oracle_eval_subprocess(
     dataset_root: Path,
     run_dir: Path,
@@ -86,8 +159,8 @@ def _run_oracle_eval_subprocess(
 ) -> None:
     """Run the fake-oracle eval over one split of ``dataset_root``.
 
-    ``check=True`` so a non-zero eval exit (or wall-clock timeout) propagates
-    to the caller.
+    ``_check_call_streamed`` raises on a non-zero eval exit or wall-clock
+    timeout, so either propagates to the caller.
 
     :param dataset_root: Dir holding the finalized HDF5 splits, their source
         shards, and ``stats.npz``. The splits are virtual datasets that
@@ -175,7 +248,7 @@ def _run_oracle_eval_subprocess(
     if metric_prefix:
         argv.append(f"+evaluation.metric_prefix={metric_prefix}")
     logger.info(f"oracle_eval_inline subprocess: {argv}")
-    subprocess.run(argv, check=True, timeout=_ORACLE_EVAL_TIMEOUT_SECONDS)  # noqa: S603
+    _check_call_streamed(argv, timeout=_ORACLE_EVAL_TIMEOUT_SECONDS)
 
 
 def _unsupported_cadence_reason(render_cfg: DictConfig) -> str | None:
@@ -214,11 +287,11 @@ def _rclone_copy(src: str, dest: str) -> None:
     :param dest: R2 destination passed to rclone verbatim.
     """
     args = r2_io._rclone_argv("copy", src, dest)
-    subprocess.check_call(args)  # noqa: S603 — args from validated spec
+    _check_call_streamed(args)
     # Distinct sentinel so we can grep CI logs for "rclone returned" and tell
     # at a glance whether the rclone subprocess actually exited (vs. hanging
-    # post-upload — see #735). If the upload itself failed, check_call already
-    # raised before we got here.
+    # post-upload — see #735). If the upload itself failed, _check_call_streamed
+    # already raised before we got here.
     logger.info(f"rclone returned cleanly: {src} -> {dest}")
 
 
@@ -672,7 +745,7 @@ def _render_and_upload_shard(
         max_attempts = spec.render.max_retries + 1
         for attempt in range(max_attempts):
             try:
-                subprocess.check_call(args)  # noqa: S603 — args built from validated spec
+                _check_call_streamed(args)
                 break
             except subprocess.CalledProcessError:
                 if attempt + 1 == max_attempts:
