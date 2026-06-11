@@ -37,10 +37,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any
 
+import wandb
 import wandb.env
 from loguru import logger
 
-import wandb
 from synth_setter.pipeline.schemas.prefix import DEFAULT_R2_PREFIX_ROOT, make_r2_prefix
 
 # Temporary: the ``tinaudio`` W&B entity does not exist yet (sweep creation 404s),

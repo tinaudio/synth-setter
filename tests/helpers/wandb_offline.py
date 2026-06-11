@@ -20,7 +20,6 @@ from pathlib import Path
 from typing import TypeVar
 
 import pytest
-
 import wandb
 
 _T = TypeVar("_T")

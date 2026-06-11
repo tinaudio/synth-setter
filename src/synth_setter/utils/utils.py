@@ -58,6 +58,7 @@ def _resolve_wandb_checkpoint(ref: str) -> str:
             "to use this resolver."
         )
     import wandb
+
     from synth_setter.workspace import operator_workspace
 
     cache_dir = operator_workspace() / ".cache" / "checkpoints" / _cache_key(ref)

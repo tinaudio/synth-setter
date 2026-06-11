@@ -17,12 +17,12 @@ from pathlib import Path
 
 import hydra
 import numpy as np
+import wandb
 from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 
-import wandb
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.constants import (
     DATASET_COMPLETE_FILENAME,

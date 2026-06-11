@@ -81,9 +81,8 @@ def close_loggers(loggers: list[Logger], status: str) -> None:
             log.warning(f"logger finalize failed on {type(lg).__name__}: {exc}")
     if not find_spec("wandb"):
         return
-    from lightning.pytorch.loggers.wandb import WandbLogger
-
     import wandb
+    from lightning.pytorch.loggers.wandb import WandbLogger
 
     if any(isinstance(lg, WandbLogger) for lg in loggers) and wandb.run is not None:
         try:

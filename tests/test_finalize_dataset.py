@@ -38,9 +38,9 @@ from pathlib import Path
 from typing import NoReturn, cast
 
 import pytest
+import wandb
 from omegaconf import DictConfig, OmegaConf
 
-import wandb
 from synth_setter.cli import finalize_dataset
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import DatasetSpec
