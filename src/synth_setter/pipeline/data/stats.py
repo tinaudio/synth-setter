@@ -339,6 +339,53 @@ def stream_stats_wds(
     return finalize(existing, mask_degenerate=mask_degenerate)
 
 
+def _fold_lance_shard_into_welford(
+    existing: tuple[int, Any, Any], shard_path: Path
+) -> tuple[int, Any, Any]:
+    """Fold every Lance ``mel_spec`` row from one shard into Welford state.
+
+    :param existing: Welford state ``(count, mean, M2)`` before this shard.
+    :param shard_path: Filesystem path to one ``shard-*.lance`` file.
+    :returns: Updated Welford state after every readable mel row was folded.
+    :rtype: tuple[int, Any, Any]
+    :raises ValueError: The shard carried no readable ``mel_spec`` rows.
+    """
+    from synth_setter.pipeline.data.lance_shard import iter_lance_column_rows
+
+    shard_rows = 0
+    for row in iter_lance_column_rows(shard_path, MEL_SPEC_FIELD):
+        existing = update(existing, row)
+        shard_rows += 1
+    if shard_rows == 0:
+        raise ValueError(
+            f"shard {shard_path.name} contained no readable {MEL_SPEC_FIELD!r} rows; "
+            "aborting so partial stats are never written silently"
+        )
+    return existing
+
+
+def stream_stats_lance(
+    shard_paths: Iterable[Path], mask_degenerate: bool = False
+) -> tuple[np.ndarray, np.ndarray]:
+    """Stream Welford mean/std across an iterable of ``shard-*.lance`` paths.
+
+    :param shard_paths: Iterable yielding Lance shard paths in fold order.
+    :param mask_degenerate: See :func:`get_stats_wds`.
+    :returns: ``(mean, std)`` arrays as produced by :func:`finalize`.
+    :rtype: tuple[np.ndarray, np.ndarray]
+    :raises FileNotFoundError: ``shard_paths`` yielded zero paths.
+    """
+    existing: tuple[int, Any, Any] = (0, 0, 0)
+    folded_any = False
+    for shard_path in shard_paths:
+        logger.info(f"Processing {shard_path.name}...")
+        existing = _fold_lance_shard_into_welford(existing, shard_path)
+        folded_any = True
+    if not folded_any:
+        raise FileNotFoundError("stream_stats_lance received no shard paths")
+    return finalize(existing, mask_degenerate=mask_degenerate)
+
+
 def get_stats_wds(directory: str | Path, mask_degenerate: bool = False) -> None:
     """Compute mel-spec mean/std across all ``shard-*.tar`` in ``directory`` and write sibling
     ``stats.npz``.

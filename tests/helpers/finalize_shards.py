@@ -31,6 +31,7 @@ from synth_setter.data.vst.shapes import (
     mel_dataset_shape,
     param_array_dataset_shape,
 )
+from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 
 
@@ -90,6 +91,44 @@ def build_wds_smoke_spec(
     return DatasetSpec(**kwargs)  # type: ignore[arg-type]
 
 
+def build_lance_smoke_spec(
+    task_name: str = "finalize-lance-unit",
+    train_val_test_sizes: tuple[int, int, int] = (4, 0, 0),
+    mask_degenerate_bins: bool = False,
+) -> DatasetSpec:
+    """Construct a lance ``DatasetSpec`` directly (no Hydra compose).
+
+    :param task_name: Unique task name so each test gets a distinct r2.prefix.
+    :param train_val_test_sizes: Three-tuple of sample counts; default is one
+        4-sample shard.
+    :param mask_degenerate_bins: Threaded onto the spec for stats-fold tests.
+    :returns: A frozen lance ``DatasetSpec`` whose shards are deterministic.
+    """
+    kwargs: dict[str, Any] = {
+        "task_name": task_name,
+        "output_format": "lance",
+        "train_val_test_sizes": list(train_val_test_sizes),
+        "base_seed": 42,
+        "mask_degenerate_bins": mask_degenerate_bins,
+        "r2": {"bucket": "intermediate-data"},
+        "render": {
+            "plugin_path": "/fake/Plugin.vst3",
+            "preset_path": "presets/surge-base.vstpreset",
+            "param_spec_name": "surge_simple",
+            "renderer_version": "1.0.0-test",
+            "sample_rate": 100,
+            "channels": 2,
+            "velocity": 100,
+            "signal_duration_seconds": 1.0,
+            "min_loudness": -55.0,
+            "samples_per_render_batch": 4,
+            "samples_per_shard": 4,
+            "gui_toggle_cadence": "never",
+        },
+    }
+    return DatasetSpec(**kwargs)  # type: ignore[arg-type]
+
+
 def build_hdf5_smoke_spec(
     task_name: str = "finalize-hdf5-unit",
     train_val_test_sizes: tuple[int, int, int] = (8, 4, 4),
@@ -131,6 +170,57 @@ def build_hdf5_smoke_spec(
     return DatasetSpec(**kwargs)  # type: ignore[arg-type]
 
 
+def write_minimal_lance_shard(dest: Path, spec: DatasetSpec) -> None:
+    """Write a structurally valid Lance shard for ``spec`` at ``dest``.
+
+    :param dest: Filesystem path where the Lance file is written.
+    :param spec: Lance spec whose render shape/dtypes define the shard contract.
+    """
+    from synth_setter.pipeline.data.lance_shard import (
+        lance_schema,
+        record_batch_from_arrays,
+        write_lance_file,
+    )
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    render = spec.render
+    shapes = {
+        AUDIO_FIELD: audio_dataset_shape(
+            render.samples_per_shard,
+            render.channels,
+            render.sample_rate,
+            render.signal_duration_seconds,
+        ),
+        MEL_SPEC_FIELD: mel_dataset_shape(
+            render.samples_per_shard,
+            render.channels,
+            render.sample_rate,
+            render.signal_duration_seconds,
+        ),
+        PARAM_ARRAY_FIELD: param_array_dataset_shape(render.samples_per_shard, spec.num_params),
+    }
+    metadata = ShardMetadata(
+        velocity=render.velocity,
+        signal_duration_seconds=render.signal_duration_seconds,
+        sample_rate=render.sample_rate,
+        channels=render.channels,
+        min_loudness=render.min_loudness,
+    )
+    schema = lance_schema(shapes, metadata)
+    arrays = {
+        AUDIO_FIELD: np.zeros(shapes[AUDIO_FIELD], dtype=DATASET_FIELD_DTYPES[AUDIO_FIELD]),
+        MEL_SPEC_FIELD: np.arange(
+            np.prod(shapes[MEL_SPEC_FIELD]),
+            dtype=DATASET_FIELD_DTYPES[MEL_SPEC_FIELD],
+        ).reshape(shapes[MEL_SPEC_FIELD]),
+        PARAM_ARRAY_FIELD: np.zeros(
+            shapes[PARAM_ARRAY_FIELD],
+            dtype=DATASET_FIELD_DTYPES[PARAM_ARRAY_FIELD],
+        ),
+    }
+    write_lance_file(dest, schema, [record_batch_from_arrays(arrays, schema)])
+
+
 def uri_to_local_path(fake_r2_remote: Path, r2_uri: str) -> Path:
     """Map an ``r2://bucket/key`` URI to its path under the local-typed remote.
 
@@ -159,12 +249,18 @@ def seed_train_shards(fake_r2_remote: Path, spec: DatasetSpec) -> list[Path]:
     :param fake_r2_remote: Root of the local-typed remote.
     :param spec: Dataset spec whose ``shards`` and ``r2`` provide the layout.
     :returns: The seeded local shard paths, in train-range order.
+    :raises ValueError: ``spec.output_format`` has no minimal-shard writer here.
     """
     train_lo, train_hi = spec.split_shard_ranges["train"]
     seeded: list[Path] = []
     for shard in spec.shards[train_lo:train_hi]:
         path = uri_to_local_path(fake_r2_remote, spec.r2.shard_uri(shard))
-        write_minimal_wds_shard(path)
+        if spec.output_format == "lance":
+            write_minimal_lance_shard(path, spec)
+        elif spec.output_format == "wds":
+            write_minimal_wds_shard(path)
+        else:
+            raise ValueError(f"no minimal shard writer for output_format {spec.output_format!r}")
         seeded.append(path)
     return seeded
 

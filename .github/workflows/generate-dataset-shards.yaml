@@ -268,12 +268,20 @@ jobs:
       # largest unused subtree under it (~5 GB) and this row never runs it, so
       # purge only that subdir: the parent dir stays present for kind-action, and
       # Python (resolved from the cache by the later setup-python step) is left
-      # intact. `df -h /` is best-effort diagnostics — see the kind-load step.
-      - name: Purge unused CodeQL tool-cache for kind headroom (skypilot-local row)
+      # intact. miniconda / swift / julia / global node modules (~7 GB combined)
+      # are likewise unused by this row; `kind load` needs the worker image on
+      # disk twice (docker store + kind-node containerd), which has hit ENOSPC
+      # with only ~30 GB free. `df -h /` is best-effort diagnostics — see the
+      # kind-load step.
+      - name: Purge unused toolchains for kind headroom (skypilot-local row)
         if: ${{ inputs.provider == 'skypilot-local' }}
         run: |
           set -euo pipefail
-          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo rm -rf /opt/hostedtoolcache/CodeQL \
+            /usr/share/miniconda \
+            /usr/share/swift \
+            /usr/local/julia* \
+            /usr/local/lib/node_modules
           df -h / || true
 
       # A2 (#1164): pull the worker image in the background so the kind binary
@@ -692,11 +700,15 @@ jobs:
       # `check_shard_contracts` contract before this workflow returns.
       # `validate_all_shards_from_r2(spec)` (in
       # src/synth_setter/pipeline/ci/validate_shard.py) iterates `spec.shards`
-      # and pulls each HDF5 from R2 for the structural + shape + value +
+      # and pulls each shard from R2 for the structural + shape + value +
       # row-count checks. Runs inside the dev-snapshot image (already pulled
       # above for runpod/oci, locally loaded into kind for skypilot-local) so
-      # h5py / numpy are available without a host-side install. Re-pulling
-      # the image when only kind has it is a no-op against the docker cache.
+      # heavy deps need no host-side install. Re-pulling the image when only
+      # kind has it is a no-op against the docker cache. The image bakes deps
+      # from main, so `uv pip install --group data` first picks up data-group
+      # additions the PR introduces — same image-bake-lag workaround as
+      # scripts/sync_worker_checkout.sh; the mounted PR checkout sits at the
+      # image WORKDIR, so uv reads the PR's pyproject into /venv/main.
       - name: Validate all shards from R2
         env:
           SPEC_URI: ${{ steps.spec_uri.outputs.spec_uri }}
@@ -711,7 +723,7 @@ jobs:
             -e RCLONE_CONFIG_R2_ENDPOINT \
             -e SPEC_URI \
             "${IMAGE}" \
-            python3 -m synth_setter.pipeline.ci.validate_shard "$SPEC_URI"
+            bash -c 'uv pip install --group data && python3 -m synth_setter.pipeline.ci.validate_shard "$SPEC_URI"'
 
       # Pull the canonical spec into the debug artifact alongside generate.log
       # / sky_logs so operators don't have to chase R2 to inspect the run.

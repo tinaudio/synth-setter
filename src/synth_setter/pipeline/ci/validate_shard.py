@@ -178,9 +178,9 @@ def validate_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
     """Validate one shard against a DatasetSpec, dispatching by filename suffix.
 
     Suffix dispatch via ``OutputFormat.from_extension``: ``.h5`` -> HDF5 path,
-    ``.tar`` -> tar/wds path. Any other suffix is rejected with an error
-    naming the registered set so a typo or wrong-format file does not
-    surface as a misleading "not valid HDF5".
+    ``.tar`` -> tar/wds path, ``.lance`` -> Lance path. Any other suffix is
+    rejected with an error naming the registered set so a typo or
+    wrong-format file does not surface as a misleading "not valid HDF5".
 
     :param shard_path: Local filesystem path to the shard to validate.
     :param spec: Dataset spec the shard is expected to conform to.
@@ -195,6 +195,8 @@ def validate_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
         return _validate_h5_shard(shard_path, spec)
     if fmt is OutputFormat.WDS:
         return _validate_tar_shard(shard_path, spec)
+    if fmt is OutputFormat.LANCE:
+        return _validate_lance_shard(shard_path, spec)
     return [
         f"unsupported shard suffix {shard_path.suffix!r} "
         f"(expected one of: {sorted(f.extension for f in OutputFormat)})"
@@ -323,6 +325,76 @@ def _validate_tar_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
         errors.extend(_check_per_batch_invariants(rows_by_batch))
         errors.extend(_check_row_totals(rows_by_batch, spec.render.samples_per_shard))
 
+    return errors
+
+
+def _validate_lance_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
+    """Validate a Lance single-file shard's schema, metadata, and row count.
+
+    :param shard_path: Local filesystem path to the Lance shard.
+    :param spec: Dataset spec the shard is expected to conform to.
+    :returns: List of error strings (empty = valid).
+    :rtype: list[str]
+    """
+    from lance.file import LanceFileReader
+
+    from synth_setter.pipeline.data.lance_shard import read_shard_metadata
+
+    try:
+        reader = LanceFileReader(str(shard_path))
+        metadata = reader.metadata()
+    except (OSError, ValueError, RuntimeError) as exc:
+        return [f"file is not a valid Lance file: {shard_path}: {exc}"]
+
+    errors: list[str] = []
+    schema = metadata.schema
+    try:
+        read_shard_metadata(schema)
+    except ValueError as exc:
+        errors.append(str(exc))
+
+    num_rows = reader.num_rows()
+    if num_rows != spec.render.samples_per_shard:
+        errors.append(f"file has {num_rows} rows, expected {spec.render.samples_per_shard}")
+
+    expected_shapes = _expected_dataset_shapes(spec)
+    for name in DATASET_FIELD_NAMES:
+        field = schema.field(name) if name in schema.names else None
+        if field is None:
+            errors.append(f"missing column: {name!r}")
+            continue
+        errors.extend(_validate_lance_field(name, field, expected_shapes[name]))
+    return errors
+
+
+def _validate_lance_field(name: str, field: object, expected_shape: tuple[int, ...]) -> list[str]:
+    """Validate one Lance fixed-shape tensor field against the writer contract.
+
+    :param name: Column name being checked.
+    :param field: Arrow schema field read from the Lance file.
+    :param expected_shape: Full expected shape including leading row axis.
+    :returns: List of error strings for this field.
+    :rtype: list[str]
+    """
+    import pyarrow as pa
+
+    if not isinstance(field, pa.Field):
+        return [f"column {name!r} schema entry is not an Arrow field: {field!r}"]
+    arrow_field = cast(pa.Field, field)
+    errors: list[str] = []
+    field_type = arrow_field.type
+    if not isinstance(field_type, pa.FixedShapeTensorType):
+        return [f"column {name!r} has type {field_type}, expected fixed-shape tensor"]
+    expected_inner = expected_shape[1:]
+    if tuple(field_type.shape) != expected_inner:
+        errors.append(
+            f"column {name!r} has inner shape {tuple(field_type.shape)}, expected {expected_inner}"
+        )
+    expected_dtype = pa.from_numpy_dtype(DATASET_FIELD_DTYPES[name])
+    if field_type.value_type != expected_dtype:
+        errors.append(
+            f"column {name!r} has value type {field_type.value_type}, expected {expected_dtype}"
+        )
     return errors
 
 

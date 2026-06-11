@@ -17,6 +17,11 @@ def test_output_format_extension_wds_is_tar() -> None:
     assert OutputFormat.WDS.extension == ".tar"
 
 
+def test_output_format_extension_lance_is_lance() -> None:
+    """``LANCE`` shards carry the ``.lance`` suffix."""
+    assert OutputFormat.LANCE.extension == ".lance"
+
+
 def test_from_extension_h5_returns_hdf5() -> None:
     """``.h5`` reverse-maps to the HDF5 format."""
     assert OutputFormat.from_extension(".h5") is OutputFormat.HDF5
@@ -25,6 +30,11 @@ def test_from_extension_h5_returns_hdf5() -> None:
 def test_from_extension_tar_returns_wds() -> None:
     """``.tar`` reverse-maps to the WDS format."""
     assert OutputFormat.from_extension(".tar") is OutputFormat.WDS
+
+
+def test_from_extension_lance_returns_lance() -> None:
+    """``.lance`` reverse-maps to the Lance format."""
+    assert OutputFormat.from_extension(".lance") is OutputFormat.LANCE
 
 
 def test_from_extension_unknown_suffix_returns_none() -> None:
@@ -48,3 +58,4 @@ def test_value_is_the_lowercase_token() -> None:
     """Enum values are the on-disk / JSON tokens used at the Hydra / R2 boundary."""
     assert OutputFormat.HDF5 == "hdf5"
     assert OutputFormat.WDS == "wds"
+    assert OutputFormat.LANCE == "lance"

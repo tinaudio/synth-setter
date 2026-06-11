@@ -72,10 +72,15 @@ class OutputFormat(str, Enum):
     .. attribute :: WDS
 
         WebDataset container; shards are written as ``.tar`` archives.
+
+    .. attribute :: LANCE
+
+        Lance file container; shards are written as single ``.lance`` files.
     """
 
     HDF5 = "hdf5"
     WDS = "wds"
+    LANCE = "lance"
 
     @property
     def extension(self) -> str:
@@ -97,6 +102,7 @@ class OutputFormat(str, Enum):
 _OUTPUT_FORMAT_EXTENSIONS: dict[OutputFormat, str] = {
     OutputFormat.HDF5: ".h5",
     OutputFormat.WDS: ".tar",
+    OutputFormat.LANCE: ".lance",
 }
 
 # Reverse map for suffix dispatch, derived from the forward map. The import

@@ -9,12 +9,13 @@ name: Test Dataset Finalization
 # Matrix:
 #   * { output_format: hdf5, config_path: generate_dataset/smoke-shard }
 #   * { output_format: wds,  config_path: generate_dataset/smoke-shard-wds }
+#   * { output_format: lance, config_path: generate_dataset/smoke-shard-lance }
 #
 # Each row calls `generate-dataset-shards.yaml` (which itself chains
 # `finalize-dataset.yaml`), then a follow-up `verify-artifacts` job runs
 # `rclone ls` against the same prefix and pins:
-#   * `dataset.complete` + `stats.npz` for both formats.
-#   * `train.h5` for the hdf5 row (the smoke configs use
+#   * `dataset.complete` + `stats.npz` for all formats.
+#   * `train.h5` for hdf5 and `train.lance` for lance (the smoke configs use
 #     `train_val_test_sizes=[12, 0, 0]`; val/test are pruned).
 #
 # Required secrets (forwarded through `secrets: inherit`):
@@ -59,6 +60,9 @@ jobs:
           - output_format: wds
             config_path: generate_dataset/smoke-shard-wds
             task_name: smoke-shard-wds
+          - output_format: lance
+            config_path: generate_dataset/smoke-shard-lance
+            task_name: smoke-shard-lance
     uses: ./.github/workflows/generate-dataset-shards.yaml
     with:
       provider: skypilot-local
@@ -87,6 +91,9 @@ jobs:
           - output_format: wds
             config_path: generate_dataset/smoke-shard-wds
             task_name: smoke-shard-wds
+          - output_format: lance
+            config_path: generate_dataset/smoke-shard-lance
+            task_name: smoke-shard-lance
     env:
       HYDRA_FULL_ERROR: "1"
       OUTPUT_FORMAT: ${{ matrix.output_format }}
@@ -164,7 +171,8 @@ jobs:
           echo "r2_bucket: ${R2_BUCKET}"
 
       # Operator ask on PR #1202: list the run prefix and assert finalize
-      # wrote `dataset.complete`, `stats.npz`, and `train.h5` (hdf5 only;
+      # wrote `dataset.complete`, `stats.npz`, and split files for formats
+      # that finalize materializes (`train.h5` for hdf5, `train.lance` for lance;
       # val.h5 / test.h5 are pruned because the smoke configs ship
       # train-only `train_val_test_sizes=[12, 0, 0]`).
       - name: rclone ls run prefix and pin required artifacts
@@ -177,8 +185,10 @@ jobs:
           echo "checking ${PREFIX}"
           rclone ls "${PREFIX}" --max-depth 1 | tee artifacts.txt
           required="dataset.complete stats.npz"
-          if [ "${OUTPUT_FORMAT}" = "hdf5" ]; then
+          if [[ "${OUTPUT_FORMAT}" == "hdf5" ]]; then
             required="${required} train.h5"
+          elif [[ "${OUTPUT_FORMAT}" == "lance" ]]; then
+            required="${required} train.lance"
           fi
           missing=""
           for f in $required; do
@@ -186,7 +196,7 @@ jobs:
               missing="${missing} ${f}"
             fi
           done
-          if [ -n "${missing}" ]; then
+          if [[ -n "${missing}" ]]; then
             echo "::error::missing finalize artifacts at ${PREFIX}:${missing}"
             exit 1
           fi
@@ -201,9 +211,11 @@ jobs:
       # [tool.uv.sources] keys torch routing on) is active, so torch resolves
       # from PyPI — runs on the CPU runner, as before.
       - name: Install project deps for oracle helper
+        if: ${{ matrix.output_format != 'lance' }}
         run: uv pip install --system --group dev -e .
 
       - name: Run finalize-artifact oracle helper
+        if: ${{ matrix.output_format != 'lance' }}
         env:
           R2_BUCKET: ${{ steps.bucket.outputs.r2_bucket }}
           FINALIZE_RUN_PREFIX: r2:${{ steps.bucket.outputs.r2_bucket }}/data/${{ matrix.task_name }}/${{ steps.run_id.outputs.run_id }}/
