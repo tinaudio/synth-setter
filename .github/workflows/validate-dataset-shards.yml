@@ -2,7 +2,7 @@ name: Validate Dataset Shards
 
 # Reusable workflow that validates a generated dataset's spec + shards by
 # pulling everything from R2. Consumes the `spec_uri` output emitted by
-# `generate-dataset-shards.yaml` (or any caller that uploaded a spec to a
+# `generate-dataset-shards.yml` (or any caller that uploaded a spec to a
 # known r2:// URI). All rclone copies live inside `synth_setter.pipeline.ci.validate_*` —
 # the workflow no longer downloads files itself.
 #
@@ -24,7 +24,7 @@ on:
         required: true
         type: string
       spec_uri:
-        description: "r2:// URI of the materialized spec to validate (output of generate-dataset-shards.yaml)."
+        description: "r2:// URI of the materialized spec to validate (output of generate-dataset-shards.yml)."
         required: true
         type: string
   workflow_dispatch:
@@ -65,7 +65,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: pip-validate-spec-${{ runner.os }}-${{ hashFiles('.github/workflows/validate-dataset-shards.yaml') }}
+          key: pip-validate-spec-${{ runner.os }}-${{ hashFiles('.github/workflows/validate-dataset-shards.yml') }}
           restore-keys: |
             pip-validate-spec-${{ runner.os }}-
 

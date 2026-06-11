@@ -40,7 +40,7 @@ the medium images (~2.3 GB) cover everything except a handful of
 GitHub-only tools. The [Custom runner image](#custom-runner-image-for-gh-using-workflows)
 section below shows how to layer `gh` on top, which is the only common gap.
 
-The [`test-act.yaml`](../../.github/workflows/test-act.yaml) workflow guards
+The [`test-act.yml`](../../.github/workflows/test-act.yml) workflow guards
 this setup: any PR that touches `.actrc`, the runner Dockerfile, or the
 test-act workflow itself runs `act -l`, an `act -n` dry-run, and a real
 `act` run of `test-dataset-generation.yml` with `--input provider=local`
@@ -113,14 +113,14 @@ assignment-on-command-line form:
 
 ```bash
 # WRONG — $TOKEN expands to empty in the parent shell, so act gets -s GITHUB_TOKEN=
-TOKEN="$(gh auth token)" act pull_request -W .github/workflows/pr-metadata-gate.yaml -s "GITHUB_TOKEN=$TOKEN"
+TOKEN="$(gh auth token)" act pull_request -W .github/workflows/pr-metadata-gate.yml -s "GITHUB_TOKEN=$TOKEN"
 
 # OK — assign first, then reference
 TOKEN="$(gh auth token)"
-act pull_request -W .github/workflows/pr-metadata-gate.yaml -s "GITHUB_TOKEN=$TOKEN"
+act pull_request -W .github/workflows/pr-metadata-gate.yml -s "GITHUB_TOKEN=$TOKEN"
 
 # OK — substitute inline so the value is captured before act sees the flag
-act pull_request -W .github/workflows/pr-metadata-gate.yaml -s "GITHUB_TOKEN=$(gh auth token)"
+act pull_request -W .github/workflows/pr-metadata-gate.yml -s "GITHUB_TOKEN=$(gh auth token)"
 ```
 
 If `secrets.GITHUB_TOKEN` ends up empty inside the workflow, `gh: To use GitHub CLI in a GitHub Actions workflow, set the GH_TOKEN environment variable` fires from any step that calls `gh`. Check your shell invocation
@@ -153,7 +153,7 @@ Two ways out:
 
    ```bash
    cd /path/to/synth-setter           # canonical clone, not a worktree
-   act pull_request --bind -W .github/workflows/code-quality-pr.yaml \
+   act pull_request --bind -W .github/workflows/code-quality-pr.yml \
      --eventpath /tmp/pr-event.json --secret-file /tmp/act.secrets
    ```
 
@@ -191,7 +191,7 @@ cat > /tmp/pr-event.json <<EOF
 EOF
 
 act pull_request --bind --eventpath /tmp/pr-event.json \
-  --secret-file /tmp/act.secrets -W .github/workflows/code-quality-pr.yaml
+  --secret-file /tmp/act.secrets -W .github/workflows/code-quality-pr.yml
 ```
 
 For workflows that hit `gh api` against a *real* PR (e.g., `pr-metadata-gate`),
@@ -215,7 +215,7 @@ Then reference it for workflows that need `gh`:
 
 ```bash
 act pull_request --bind \
-  -W .github/workflows/pr-metadata-gate.yaml \
+  -W .github/workflows/pr-metadata-gate.yml \
   --eventpath /tmp/pr-event.json \
   --secret-file /tmp/act.secrets \
   -P ubuntu-latest=act-runner-gh:latest \
@@ -231,7 +231,7 @@ backend, fall back to the classic builder: `DOCKER_BUILDKIT=0 docker build ...`.
 
 ## Examples
 
-### `code-quality-pr.yaml`
+### `code-quality-pr.yml`
 
 Pre-commit on changed files. Heavy with action installs but reusable thanks to
 `actions/cache`:
@@ -239,7 +239,7 @@ Pre-commit on changed files. Heavy with action installs but reusable thanks to
 ```bash
 cd /path/to/synth-setter
 act pull_request --bind \
-  -W .github/workflows/code-quality-pr.yaml \
+  -W .github/workflows/code-quality-pr.yml \
   --eventpath /tmp/pr-event.json \
   --secret-file /tmp/act.secrets
 ```
@@ -248,14 +248,14 @@ act pull_request --bind \
 worktree) — otherwise the `.git` resolution problem above bites and the
 "changed files" list comes back empty.
 
-### `pr-metadata-gate.yaml`
+### `pr-metadata-gate.yml`
 
 Needs `gh` + `GITHUB_TOKEN` + a live PR number. Use the custom image and a
 `pull_request` event whose `pull_request.number` is real:
 
 ```bash
 act pull_request --bind \
-  -W .github/workflows/pr-metadata-gate.yaml \
+  -W .github/workflows/pr-metadata-gate.yml \
   --eventpath /tmp/pr-event.json \
   --secret-file /tmp/act.secrets \
   -P ubuntu-latest=act-runner-gh:latest \
@@ -290,16 +290,16 @@ act <event> -W .github/workflows/<file> -n
 
 ## Known limitations
 
-| Limitation                                                                                                                                                                        | Workaround                                                                                                                                                                      |
-| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `runs-on: macos-*` (used by `test.yml` `run_tests_macos` and `test-mps.yml`). `act` has no macOS images.                                                                          | Skip locally; rely on CI for the Apple-Silicon paths. Or remap to Linux: `-P macos-latest=-self-hosted` (jobs that compile against macOS-only deps will fail at the next step). |
-| `runs-on: gpu-x64` (used by `test-gpu.yml`). `act` can't reproduce the self-hosted GPU runner — no CUDA, no driver, no Docker GPU passthrough by default.                         | Skip locally; rely on CI. If you need to exercise the workflow shape (steps, env), remap to Linux: `-P gpu-x64=catthehacker/ubuntu:act-latest` (GPU-dependent steps will fail). |
-| `workflow_call` reusable workflows (`generate-dataset-shards.yaml`, `validate-dataset-shards.yaml`, `spec-materialization.yml`). `act` does not trigger `workflow_call` directly. | Run the *caller* (e.g., `test-spec-materialization.yml`) so the reusable is invoked through the normal job graph.                                                               |
-| `gh` missing from default image.                                                                                                                                                  | Use the [`act-runner-gh`](#custom-runner-image-for-gh-using-workflows) image.                                                                                                   |
-| Worktree `.git` is a gitfile, not a directory.                                                                                                                                    | Run from the canonical clone, or bind-mount the gitdir target via `--container-options`.                                                                                        |
-| Stale `act` containers from a previous Ctrl-C accumulate and can deadlock new runs.                                                                                               | `docker ps -aq --filter "name=^act-" \| xargs -r docker rm -f`                                                                                                                  |
-| Heavy first-run image pull (`act-latest` ≈ 2.3 GB; `forcePull=true` is the default).                                                                                              | After the first run, pass `--pull=false` to skip re-pulls.                                                                                                                      |
-| `act` redacts substrings of any loaded secret in log output (`/home/build` → `/home/build/***` if `build` appears in a secret).                                                   | Cosmetic only — execution is unaffected. To make logs readable, narrow the secrets file to just what the workflow uses.                                                         |
+| Limitation                                                                                                                                                                      | Workaround                                                                                                                                                                      |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `runs-on: macos-*` (used by `test.yml` `run_tests_macos` and `test-mps.yml`). `act` has no macOS images.                                                                        | Skip locally; rely on CI for the Apple-Silicon paths. Or remap to Linux: `-P macos-latest=-self-hosted` (jobs that compile against macOS-only deps will fail at the next step). |
+| `runs-on: gpu-x64` (used by `test-gpu.yml`). `act` can't reproduce the self-hosted GPU runner — no CUDA, no driver, no Docker GPU passthrough by default.                       | Skip locally; rely on CI. If you need to exercise the workflow shape (steps, env), remap to Linux: `-P gpu-x64=catthehacker/ubuntu:act-latest` (GPU-dependent steps will fail). |
+| `workflow_call` reusable workflows (`generate-dataset-shards.yml`, `validate-dataset-shards.yml`, `spec-materialization.yml`). `act` does not trigger `workflow_call` directly. | Run the *caller* (e.g., `test-spec-materialization.yml`) so the reusable is invoked through the normal job graph.                                                               |
+| `gh` missing from default image.                                                                                                                                                | Use the [`act-runner-gh`](#custom-runner-image-for-gh-using-workflows) image.                                                                                                   |
+| Worktree `.git` is a gitfile, not a directory.                                                                                                                                  | Run from the canonical clone, or bind-mount the gitdir target via `--container-options`.                                                                                        |
+| Stale `act` containers from a previous Ctrl-C accumulate and can deadlock new runs.                                                                                             | `docker ps -aq --filter "name=^act-" \| xargs -r docker rm -f`                                                                                                                  |
+| Heavy first-run image pull (`act-latest` ≈ 2.3 GB; `forcePull=true` is the default).                                                                                            | After the first run, pass `--pull=false` to skip re-pulls.                                                                                                                      |
+| `act` redacts substrings of any loaded secret in log output (`/home/build` → `/home/build/***` if `build` appears in a secret).                                                 | Cosmetic only — execution is unaffected. To make logs readable, narrow the secrets file to just what the workflow uses.                                                         |
 
 ## Where to look when something breaks
 

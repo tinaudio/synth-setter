@@ -23,8 +23,8 @@ on:
     paths:
       - "scripts/ci/job_queue.py"
       - "tests/scripts/ci/test_job_queue.py"
-      - ".github/workflows/job-queue.yaml"
-      - ".github/workflows/job-queue-validate.yaml"
+      - ".github/workflows/job-queue.yml"
+      - ".github/workflows/job-queue-validate.yml"
 
 permissions:
   contents: read

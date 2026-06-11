@@ -60,7 +60,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 12
     # Fork PRs can't see repo secrets; the rclone auth ping would fail and
-    # burn runner minutes. Same gating pattern as r2-auth-probe.yaml.
+    # burn runner minutes. Same gating pattern as r2-auth-probe.yml.
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository }}
     env:
       HYDRA_FULL_ERROR: "1"

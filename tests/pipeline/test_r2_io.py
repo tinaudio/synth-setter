@@ -909,7 +909,7 @@ class TestEnsureR2EnvLoaded:
         rclone's env-override convention (`RCLONE_CONFIG_<remote>_<key>`) needs a complete
         remote definition — without ``TYPE`` and ``PROVIDER`` it reports
         ``didn't find section in config file``. Callers that set only the three secrets
-        (the failing matrix step in ``generate-dataset-shards.yaml``) hit this. The function
+        (the failing matrix step in ``generate-dataset-shards.yml``) hit this. The function
         defaults the structural keys in-process so the auth ping sees a usable remote.
 
         :param monkeypatch: Pytest fixture used to populate secrets.

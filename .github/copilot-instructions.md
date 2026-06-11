@@ -16,7 +16,7 @@ architecture. A few rules that PRs most often violate:
 
 - Run `make format` before committing.
 - Every PR body must link a taxonomy-compliant issue via `Refs #N` /
-  `Fixes #N` / `Closes #N` / `Part of #N`. The `pr-metadata-gate.yaml` CI
+  `Fixes #N` / `Closes #N` / `Part of #N`. The `pr-metadata-gate.yml` CI
   check enforces this; see `CLAUDE.md` for the authoritative list and the
   semantics of each keyword.
 - PR titles and commit messages must follow conventional commits — gitlint

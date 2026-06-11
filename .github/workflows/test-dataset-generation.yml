@@ -1,15 +1,15 @@
 name: Test Dataset Generation
 
 # Smoke test for the data-pipeline. Execution modes share the same
-# `validate-dataset-shards.yaml` downstream:
+# `validate-dataset-shards.yml` downstream:
 #
-#   * `skypilot-local` — invokes `generate-dataset-shards.yaml` with
+#   * `skypilot-local` — invokes `generate-dataset-shards.yml` with
 #     `local: true, num_workers: '1'` to provision a kind cluster on the
 #     runner, load dev-snapshot into kind, and launch against
 #     `src/synth_setter/configs/compute/local-template.yaml`. Hourly schedule default —
 #     exercises the same launcher / cred-bootstrap path as the cloud providers,
 #     closing the #806 unification gap. No billable capacity.
-#   * `runpod` / `oci` — invoke `generate-dataset-shards.yaml` against the
+#   * `runpod` / `oci` — invoke `generate-dataset-shards.yml` against the
 #     matching cloud template. Run weekly via the `0 7 * * 0` cron and on
 #     demand via `workflow_dispatch`. See
 #     docs/design/skypilot-compute-integration.md.
@@ -349,7 +349,7 @@ jobs:
       matrix:
         provider: ${{ fromJSON(needs.setup.outputs.providers) }}
         output_format: ${{ fromJSON(needs.setup.outputs.output_formats) }}
-    uses: ./.github/workflows/generate-dataset-shards.yaml
+    uses: ./.github/workflows/generate-dataset-shards.yml
     with:
       provider: ${{ matrix.provider }}
       dataset_config: >-
@@ -388,7 +388,7 @@ jobs:
       matrix:
         provider: ${{ fromJSON(needs.setup.outputs.providers) }}
         output_format: ${{ fromJSON(needs.setup.outputs.output_formats) }}
-    uses: ./.github/workflows/validate-dataset-shards.yaml
+    uses: ./.github/workflows/validate-dataset-shards.yml
     with:
       image_tag: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
       spec_uri: ${{ fromJSON(needs.setup.outputs.spec_uris)[format('{0}-{1}', matrix.provider, matrix.output_format)] }}

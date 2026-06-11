@@ -1176,20 +1176,20 @@ T_taxonomy_strip_markdown_issue_links_drops_code_span_refs() {
 it "verify-gh-taxonomy: strip_markdown_issue_links removes #N refs inside backticked code spans (PR #1171 regression)" T_taxonomy_strip_markdown_issue_links_drops_code_span_refs
 
 T_taxonomy_workflow_inlines_same_sanitize_regex_as_hook() {
-  # Drift guard: the bash hook and pr-metadata-gate.yaml each carry their own
+  # Drift guard: the bash hook and pr-metadata-gate.yml each carry their own
   # copy of the sanitization sed pipeline. Pin the workflow to have the exact
   # expression once per job; a unilateral edit to either side fails here.
-  local workflow="$REPO_ROOT/.github/workflows/pr-metadata-gate.yaml"
+  local workflow="$REPO_ROOT/.github/workflows/pr-metadata-gate.yml"
   local expected count
   expected="sed -E -e 's/\`[^\`]*\`//g' -e 's/\\[#[0-9]+\\]\\([^)]*\\)//g'"
   count=$(grep -cF "$expected" "$workflow") || count=0
   [[ "$count" -eq 2 ]] || {
-    echo "expected pr-metadata-gate.yaml to contain the sanitize sed pipeline exactly 2x (once per job), found ${count}."
+    echo "expected pr-metadata-gate.yml to contain the sanitize sed pipeline exactly 2x (once per job), found ${count}."
     echo "If you intentionally changed the workflow regex, mirror the change in strip_markdown_issue_links() in verify-gh-taxonomy.sh and update this test."
     return 1
   }
 }
-it "verify-gh-taxonomy: pr-metadata-gate.yaml inlines the same sanitize sed pipeline (drift guard)" T_taxonomy_workflow_inlines_same_sanitize_regex_as_hook
+it "verify-gh-taxonomy: pr-metadata-gate.yml inlines the same sanitize sed pipeline (drift guard)" T_taxonomy_workflow_inlines_same_sanitize_regex_as_hook
 
 T_taxonomy_check_ci_minimum_joins_with_comma_space() {
   # Unit test for the comma-space join in check_ci_minimum + check_project_fields.

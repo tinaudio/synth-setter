@@ -3,7 +3,7 @@
 `make mutmut` runs [mutmut](https://github.com/boxed/mutmut) v3 against the
 modules listed under `[tool.mutmut].paths_to_mutate` in `pyproject.toml`.
 This is the authoritative entry point — the CI workflow
-`.github/workflows/mutmut.yaml` runs it on Linux (`workflow_dispatch` + weekly
+`.github/workflows/mutmut.yml` runs it on Linux (`workflow_dispatch` + weekly
 cron).
 
 ## Requires Python 3.11+

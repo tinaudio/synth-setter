@@ -76,7 +76,7 @@ strip_markdown_issue_links() {
   #   2. `[#N](url)` markdown links — GitHub's "Copy link" UI on a Copilot
   #      review comment yields `[#3269588963](.../discussion_r3269588963)`.
   # Bare `#N` references outside code spans survive.
-  # Same regexes are inlined in .github/workflows/pr-metadata-gate.yaml;
+  # Same regexes are inlined in .github/workflows/pr-metadata-gate.yml;
   # keep them in sync. Regressions: PR #1163 failing run 26126477593 (case
   # 2), PR #1171 failing run 26127785920 (case 1).
   # NOTE: agent/hooks/test.sh slices this function with awk anchored on

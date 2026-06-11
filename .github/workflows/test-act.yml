@@ -13,10 +13,10 @@ on:
     paths:
       - ".actrc"
       - "docs/operations/act-runner.Dockerfile"
-      - ".github/workflows/test-act.yaml"
+      - ".github/workflows/test-act.yml"
       - ".github/workflows/test-dataset-generation.yml"
-      - ".github/workflows/generate-dataset-shards.yaml"
-      - ".github/workflows/validate-dataset-shards.yaml"
+      - ".github/workflows/generate-dataset-shards.yml"
+      - ".github/workflows/validate-dataset-shards.yml"
   workflow_dispatch:
 
 permissions:
@@ -61,10 +61,10 @@ jobs:
         run: act -l
 
       # `act -n` (dry-run) resolves action references in addition to parsing,
-      # catching broken `uses:` pins that `-l` would miss. pr-metadata-gate.yaml
+      # catching broken `uses:` pins that `-l` would miss. pr-metadata-gate.yml
       # is a stable, short workflow that exercises the common shape.
-      - name: Dry-run pr-metadata-gate.yaml
-        run: act pull_request -W .github/workflows/pr-metadata-gate.yaml -n
+      - name: Dry-run pr-metadata-gate.yml
+        run: act pull_request -W .github/workflows/pr-metadata-gate.yml -n
 
       # The runbook's custom-image recipe is what users follow when a workflow
       # shells out to `gh`. Build it from scratch every time (no cache) so a
@@ -84,7 +84,7 @@ jobs:
       - name: Dry-run with custom runner image
         run: |
           act pull_request \
-            -W .github/workflows/pr-metadata-gate.yaml \
+            -W .github/workflows/pr-metadata-gate.yml \
             -P ubuntu-latest=act-runner-gh:latest \
             --pull=false -n
 
@@ -98,8 +98,8 @@ jobs:
         run: |
           set -euo pipefail
           act pull_request -W .github/workflows/test-dataset-generation.yml -j setup -n
-          act workflow_dispatch -W .github/workflows/generate-dataset-shards.yaml -n
-          act workflow_dispatch -W .github/workflows/validate-dataset-shards.yaml -n
+          act workflow_dispatch -W .github/workflows/generate-dataset-shards.yml -n
+          act workflow_dispatch -W .github/workflows/validate-dataset-shards.yml -n
 
       # The historical real-run step that exercised the inline `generate-local`
       # job against a kind cluster via act was retired alongside that job in

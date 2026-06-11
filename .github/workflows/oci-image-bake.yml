@@ -373,7 +373,7 @@ jobs:
             --compartment-id "${OCI_COMPARTMENT_OCID}" \
             --instance-id "${INSTANCE_OCID}" \
             --display-name "${DISPLAY_NAME}" \
-            --freeform-tags "{\"created-by\":\"oci-image-bake.yaml\",\"github-run-id\":\"${GITHUB_RUN_ID}\",\"github-sha\":\"${GITHUB_SHA}\"}" \
+            --freeform-tags "{\"created-by\":\"oci-image-bake.yml\",\"github-run-id\":\"${GITHUB_RUN_ID}\",\"github-sha\":\"${GITHUB_SHA}\"}" \
             --wait-for-state AVAILABLE \
             --max-wait-seconds "${TIMEOUT_SECONDS}")"
           echo "${RESULT}" | python -m json.tool

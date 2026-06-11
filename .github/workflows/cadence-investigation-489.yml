@@ -71,7 +71,7 @@ jobs:
         # default; CADENCE_SIZE picks the dataset size N. The headless wrapper
         # supplies the X display Surge XT needs, and ensure_plugin_symlinks.sh
         # restores the Surge symlink the bind-mount shadows so the subprocess's
-        # relative render.plugin_path resolves — same as generate-dataset-shards.yaml.
+        # relative render.plugin_path resolves — same as generate-dataset-shards.yml.
         env:
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
           WANDB_ENTITY: ${{ secrets.WANDB_ENTITY }}

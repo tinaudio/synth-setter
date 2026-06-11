@@ -10,8 +10,8 @@ name: Test Dataset Finalization
 #   * { output_format: hdf5, config_path: generate_dataset/smoke-shard }
 #   * { output_format: wds,  config_path: generate_dataset/smoke-shard-wds }
 #
-# Each row calls `generate-dataset-shards.yaml` (which itself chains
-# `finalize-dataset.yaml`), then a follow-up `verify-artifacts` job runs
+# Each row calls `generate-dataset-shards.yml` (which itself chains
+# `finalize-dataset.yml`), then a follow-up `verify-artifacts` job runs
 # `rclone ls` against the same prefix and pins:
 #   * `dataset.complete` + `stats.npz` for both formats.
 #   * `train.h5` for the hdf5 row (the smoke configs use
@@ -32,8 +32,8 @@ on:
       - "src/synth_setter/pipeline/schemas/r2_location.py"
       - "src/synth_setter/pipeline/schemas/spec.py"
       - "src/synth_setter/pipeline/skypilot_launch.py"
-      - ".github/workflows/finalize-dataset.yaml"
-      - ".github/workflows/generate-dataset-shards.yaml"
+      - ".github/workflows/finalize-dataset.yml"
+      - ".github/workflows/generate-dataset-shards.yml"
       - ".github/workflows/test-dataset-finalization.yml"
       - "tests/integration/test_finalize_dataset_r2.py"
       - "tests/integration/test_finalize_artifact_oracle.py"
@@ -59,7 +59,7 @@ jobs:
           - output_format: wds
             config_path: generate_dataset/smoke-shard-wds
             task_name: smoke-shard-wds
-    uses: ./.github/workflows/generate-dataset-shards.yaml
+    uses: ./.github/workflows/generate-dataset-shards.yml
     with:
       provider: skypilot-local
       dataset_config: ${{ matrix.config_path }}

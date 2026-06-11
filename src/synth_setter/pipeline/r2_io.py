@@ -52,7 +52,7 @@ _SECRET_R2_ENV_KEYS: tuple[str, ...] = (
 # remote definition. Without them `rclone lsd r2:` reports
 # "didn't find section in config file" even when the three secrets above are
 # populated. Defaulted here (not required from callers) so steps that wire only
-# the secrets — e.g. the skypilot-local matrix in `generate-dataset-shards.yaml`
+# the secrets — e.g. the skypilot-local matrix in `generate-dataset-shards.yml`
 # — still get a working `r2:` remote. setdefault preserves caller overrides.
 _R2_STRUCTURAL_DEFAULTS: dict[str, str] = {
     "RCLONE_CONFIG_R2_TYPE": "s3",

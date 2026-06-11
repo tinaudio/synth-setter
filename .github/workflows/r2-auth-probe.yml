@@ -10,13 +10,13 @@ name: R2 Auth Probe
 # on `workflow_dispatch` for manual probes.
 #
 # Required secrets (same set as `test-dataset-generation.yml` /
-# `validate-dataset-shards.yaml`):
+# `validate-dataset-shards.yml`):
 #   RCLONE_CONFIG_R2_ACCESS_KEY_ID, RCLONE_CONFIG_R2_SECRET_ACCESS_KEY,
 #   RCLONE_CONFIG_R2_ENDPOINT.
 #
 # The probe deliberately does NOT set RCLONE_CONFIG_R2_TYPE or
 # RCLONE_CONFIG_R2_PROVIDER — that mirrors the env shape the failing
-# `generate-dataset-shards.yaml` skypilot-local step passes to
+# `generate-dataset-shards.yml` skypilot-local step passes to
 # `synth-setter-generate-dataset`, which is where the
 # `didn't find section in config file` error originates. Without the
 # type/provider fragments, rclone's env-override convention cannot assemble
@@ -29,7 +29,7 @@ on:
     paths:
       - "src/synth_setter/pipeline/r2_io.py"
       - "src/synth_setter/pipeline/constants.py"
-      - ".github/workflows/r2-auth-probe.yaml"
+      - ".github/workflows/r2-auth-probe.yml"
 
 permissions:
   contents: read
