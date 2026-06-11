@@ -15,24 +15,27 @@ Run it::
     python -m synth_setter.tools.cadence_sweep_489 --size 5
 
 Every sweep is created before any agent runs, so they all appear in the W&B UI
-even if an agent later stalls; agents then run one at a time because they share
-one Xvfb display and would otherwise contend on it. Run under tmux/nohup so a
-disconnect does not orphan an in-flight agent.
+even if an agent later stalls; agents then run one at a time (the loop is
+sequential) so concurrent host renders do not oversubscribe CPU/RAM — each cell's
+render already gets its own ephemeral Xvfb from the headless wrapper, so they do
+not share a display. Run under tmux/nohup so a disconnect does not orphan an
+in-flight agent.
 """
 
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import subprocess
 import sys
 import uuid
 from typing import Any
 
+import wandb
 import wandb.env
 from loguru import logger
 
-import wandb
 from synth_setter.data.vst import preset_paths
 from synth_setter.pipeline.schemas.prefix import DEFAULT_R2_PREFIX_ROOT, make_r2_prefix
 
@@ -267,18 +270,30 @@ def _run_generate(overrides: list[str]) -> None:
     subprocess.run(argv, check=True)  # noqa: S603 — argv built from validated literals
 
 
-def _run_agent(sweep_id: str) -> None:
-    """Run a ``wandb agent`` for one sweep to completion as a subprocess (fail-fast).
+def _grid_cell_count(config: dict[str, Any]) -> int:
+    """Return the grid size: the product of each swept parameter's value count.
+
+    :param config: A ``_sweep`` config whose ``parameters`` map each swept key to its ``values``.
+    :returns: The number of grid cells the sweep enumerates.
+    """
+    return math.prod(len(param["values"]) for param in config["parameters"].values())
+
+
+def _run_agent(sweep_id: str, count: int) -> None:
+    """Run a ``wandb agent`` for one sweep, bounded to ``count`` runs, as a subprocess (fail-fast).
 
     A non-zero exit raises ``subprocess.CalledProcessError`` (``check=True``).
 
     :param sweep_id: Sweep the agent pulls grid cells from.
+    :param count: Run cap (the grid size); the agent exits once it is reached.
     """
     # wandb 0.26.1's Agent.is_flapping reads wandb.START_TIME, which only the legacy
     # wandb.old.core sets, so the agent crashes with AttributeError unless flapping is
     # disabled; the grid is bounded, so flapping adds no value anyway.
     env = {**os.environ, wandb.env.AGENT_DISABLE_FLAPPING: "true"}
-    argv = ["wandb", "agent", f"{ENTITY}/{PROJECT}/{sweep_id}"]
+    # --count bounds the agent to the grid size: unbounded, wandb keeps the agent alive after the
+    # grid is exhausted and re-dispatches an already-finished run, wedging the sequential loop (#489).
+    argv = ["wandb", "agent", "--count", str(count), f"{ENTITY}/{PROJECT}/{sweep_id}"]
     subprocess.run(argv, check=True, env=env)  # noqa: S603 — fixed argv plus our sweep id
 
 
@@ -286,8 +301,8 @@ def run(n: int) -> None:
     """Generate the surge_xt and surge_simple copy sources, then create and drive every #489 sweep.
 
     The sources are generated first because the copy probes read them; then every sweep is created
-    before any agent runs so they all land in the W&B UI; agents run one at a time to avoid
-    contending on the shared Xvfb display.
+    before any agent runs so they all land in the W&B UI; agents run one at a time (sequential
+    loop), each bounded by its grid size so it exits when the grid is exhausted.
 
     :param n: Per-split sample count shared by the sources and the copy probes.
     """
@@ -317,9 +332,10 @@ def run(n: int) -> None:
     logger.info(f"generating copy source -> {surge_simple_reference_copy_uri()}")
     _run_generate(simple_overrides)
     sweep_ids = [wandb.sweep(config, entity=ENTITY, project=PROJECT) for config in sweep_configs]
-    for sweep_id in sweep_ids:
-        logger.info(f"running agent for {ENTITY}/{PROJECT}/{sweep_id}")
-        _run_agent(sweep_id)
+    for config, sweep_id in zip(sweep_configs, sweep_ids, strict=True):
+        count = _grid_cell_count(config)
+        logger.info(f"running agent for {ENTITY}/{PROJECT}/{sweep_id} ({count} cells)")
+        _run_agent(sweep_id, count)
 
 
 def main(argv: list[str] | None = None) -> None:
