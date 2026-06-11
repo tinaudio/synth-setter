@@ -33,6 +33,8 @@ import pytest
 from structlog.testing import capture_logs
 
 from synth_setter.pipeline.subprocess_stream import (
+    _CAPTURE_MAX_BYTES,
+    _READ_CHUNK_BYTES,
     check_call_streamed,
     check_call_streamed_async,
 )
@@ -188,13 +190,15 @@ class TestExitSemantics:
 class TestPipeDrain:
     """Problem 1/2: concurrent drain and unbuffered child output."""
 
-    def test_large_interleaved_output_no_deadlock_all_bytes_captured(
+    def test_large_interleaved_output_no_deadlock_capture_is_bounded_tail(
         self, leak_marker: str
     ) -> None:
-        """~2MB interleaved across both streams completes promptly and fully.
+        """~2MB interleaved across both streams completes promptly; capture keeps the tail.
 
         Well past the ~64KB pipe buffer: any refactor that stops draining concurrently with the
         exit wait turns this into a hang, and the elapsed bound converts that hang into a failure.
+        The retained copy is byte-exact but bounded to the trailing window, so a noisy hours-long
+        child cannot grow worker memory without bound.
 
         :param leak_marker: argv stamp from the autouse sweep fixture.
         """
@@ -204,12 +208,14 @@ class TestPipeDrain:
             "    sys.stdout.write('o' * 1024 + '\\n')\n"
             "    sys.stderr.write('e' * 1024 + '\\n')\n"
         )
+        full_output = (b"o" * 1024 + b"\n" + b"e" * 1024 + b"\n") * 1000
 
         start = time.monotonic()
         out = _streamed(_child(script, leak_marker))
         elapsed = time.monotonic() - start
 
-        assert len(out) == 2 * 1000 * 1025
+        assert _CAPTURE_MAX_BYTES - _READ_CHUNK_BYTES < len(out) <= _CAPTURE_MAX_BYTES
+        assert out == full_output[-len(out) :]
         assert elapsed < _PROMPT_SECONDS, f"drain stalled ({elapsed:.1f}s)"
 
     def test_unflushed_pre_hang_output_visible_on_timeout(self, leak_marker: str) -> None:

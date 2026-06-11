@@ -2,7 +2,7 @@
 
 Runs a child with merged stdout+stderr, teeing its output in real time
 through the parent's ``sys.stderr`` — the only channel wandb
-``console=wrap`` captures (#1465) — while keeping a captured copy. The
+``console=wrap`` captures (#1465) — while keeping a bounded tail copy. The
 defining design choice: completion is keyed on child *exit*, never pipe
 EOF. Grandchildren that inherit the merged pipe and outlive the child
 (the headless-VST X11 daemon tree, #1634) therefore cannot stall
@@ -21,6 +21,7 @@ import os
 import signal
 import subprocess
 import sys
+from collections import deque
 from collections.abc import Mapping, Sequence
 from typing import cast
 
@@ -39,6 +40,11 @@ _TERM_TO_KILL_GRACE_SECONDS = 5.0
 _POST_EXIT_DRAIN_SECONDS = 2.0
 
 _READ_CHUNK_BYTES = 8192
+
+# Bound on the retained copy of child output (the return value and error
+# ``output``); the tee still forwards the full stream, so wandb logs stay
+# complete while a noisy hours-long child can't grow worker memory unbounded.
+_CAPTURE_MAX_BYTES = 1 << 20
 
 # Exit-detection poll cadence, seconds. Negligible against children that run
 # seconds to hours; bounds added exit-detection latency to one tick.
@@ -77,7 +83,8 @@ def check_call_streamed(
     :param cmd: Child argv, run unquoted with no shell, so callers pre-validate it.
     :param timeout: Per-call-site policy bound in seconds; ``None`` means no limit.
     :param env: Child environment; ``None`` inherits the parent's.
-    :returns: The child's captured merged stdout+stderr bytes.
+    :returns: The trailing ``_CAPTURE_MAX_BYTES`` window of the child's merged
+        stdout+stderr bytes.
     """
     return asyncio.run(check_call_streamed_async(cmd, timeout=timeout, env=env))
 
@@ -103,9 +110,10 @@ async def check_call_streamed_async(
     :param env: Child environment; ``None`` inherits the parent's. Either way
         ``PYTHONUNBUFFERED=1`` is pinned so a hung child's last lines are
         already visible (the #735 diagnosis property).
-    :returns: The child's captured merged stdout+stderr bytes.
+    :returns: The trailing ``_CAPTURE_MAX_BYTES`` window of the child's merged
+        stdout+stderr bytes; the tee forwards the full stream regardless.
     :raises subprocess.CalledProcessError: Child exited non-zero; ``output``
-        carries the bytes captured before death.
+        carries the bounded tail captured before death.
     :raises subprocess.TimeoutExpired: The child itself overran ``timeout`` —
         never raised for post-exit pipe loitering.
     :raises ValueError: ``cmd`` is empty.
@@ -123,7 +131,8 @@ async def check_call_streamed_async(
     # start_new_session makes the child its own group leader, so pid IS pgid —
     # a getpgid syscall would race the watcher reaping a fast exit.
     pgid = proc.pid
-    captured: list[bytes] = []
+    captured: deque[bytes] = deque()
+    captured_bytes = 0
     decoder = codecs.getincrementaldecoder("utf-8")("replace")
     tee_broken = False
 
@@ -154,11 +163,15 @@ async def check_call_streamed_async(
         :raises RuntimeError: The child has no stdout pipe — unreachable with
             ``stdout=PIPE``.
         """
+        nonlocal captured_bytes
         stdout = proc.stdout
         if stdout is None:  # pragma: no cover — unreachable with stdout=PIPE
             raise RuntimeError("child spawned without a stdout pipe")
         while chunk := await stdout.read(_READ_CHUNK_BYTES):
             captured.append(chunk)
+            captured_bytes += len(chunk)
+            while captured_bytes > _CAPTURE_MAX_BYTES:
+                captured_bytes -= len(captured.popleft())
             _tee(decoder.decode(chunk))
         # EOF: flush a trailing incomplete multibyte sequence into the tee.
         _tee(decoder.decode(b"", final=True))
