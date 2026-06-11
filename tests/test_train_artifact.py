@@ -25,11 +25,11 @@ from pathlib import Path
 from typing import Any, NoReturn, cast
 
 import pytest
-import wandb
 from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
 from omegaconf import DictConfig, OmegaConf, open_dict
 
+import wandb
 from synth_setter.cli.train import (
     _derive_checkpoint_uri,
     _log_model_artifact,

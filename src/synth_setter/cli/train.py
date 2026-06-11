@@ -6,12 +6,12 @@ from typing import Any
 import hydra
 import lightning as L
 import torch
-import wandb
 from lightning import Callback, LightningDataModule, LightningModule, Trainer
 from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
 from omegaconf import DictConfig, OmegaConf
 
+import wandb
 from synth_setter.pipeline import r2_io
 from synth_setter.run_id import make_wandb_run_id
 from synth_setter.utils import (

@@ -16,9 +16,9 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-import wandb
 from lightning.pytorch.loggers.wandb import WandbLogger
 
+import wandb
 from synth_setter.cli.generate_dataset import generate
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from tests.helpers.wandb_offline import read_history_rows, read_run_binary, read_run_config

@@ -22,7 +22,6 @@ from pathlib import Path
 from typing import Any
 
 import hydra
-import wandb
 from hydra.core.hydra_config import HydraConfig
 from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
@@ -30,6 +29,7 @@ from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 from pydantic import ValidationError
 
+import wandb
 from synth_setter.cli.finalize_dataset import finalize_from_spec
 from synth_setter.data.vst.core import extract_renderer_version
 from synth_setter.pipeline import r2_io

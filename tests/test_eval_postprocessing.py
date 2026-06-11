@@ -13,9 +13,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import wandb
 from omegaconf import DictConfig, OmegaConf
 
+import wandb
 from synth_setter.cli import eval as eval_mod
 from synth_setter.cli.eval import (
     _COMPUTE_AUDIO_METRICS_MODULE,

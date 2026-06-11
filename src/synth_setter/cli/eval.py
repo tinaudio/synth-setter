@@ -9,12 +9,12 @@ from typing import Any
 
 import hydra
 import pandas as pd
-import wandb
 from lightning import Callback, LightningDataModule, LightningModule, Trainer
 from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
 from omegaconf import DictConfig, OmegaConf
 
+import wandb
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import _get_git_sha
 from synth_setter.resources import as_file, vst_headless_wrapper
