@@ -154,7 +154,10 @@ def sweeps(n: int) -> list[dict[str, Any]]:
 
     :param n: Per-split sample count shared with the source generation.
     :returns: ``wandb.sweep``-ready config dicts, in run order.
+    :raises ValueError: ``n`` is below 1, so no split would hold a sample.
     """
+    if n < 1:
+        raise ValueError(f"dataset size must be >= 1, got {n}")
     splits = f"train_val_test_sizes=[{n},{n},{n}]"
     copy_match = (
         f"experiment={_PROBE_EXPERIMENT}",

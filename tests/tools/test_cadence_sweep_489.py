@@ -60,6 +60,12 @@ def test_source_overrides_below_one_raises_value_error() -> None:
         inv.source_overrides(0)
 
 
+def test_sweeps_below_one_raises_value_error() -> None:
+    """``sweeps`` fails fast on a sub-1 size too, so direct callers can't build invalid configs."""
+    with pytest.raises(ValueError, match="dataset size must be >= 1"):
+        inv.sweeps(0)
+
+
 def test_source_skips_oracle_eval_while_probes_run_it() -> None:
     """The source uses the no-eval experiment; every probe runs the with-oracle-eval one."""
     assert inv._SOURCE_EXPERIMENT != inv._PROBE_EXPERIMENT
