@@ -29,6 +29,8 @@ on:
     paths:
       - "src/synth_setter/cli/finalize_dataset.py"
       - "src/synth_setter/cli/generate_dataset.py"
+      - "src/synth_setter/data/vst/writers.py"
+      - "src/synth_setter/pipeline/data/lance_shard.py"
       - "src/synth_setter/pipeline/data/reshard.py"
       - "src/synth_setter/pipeline/schemas/r2_location.py"
       - "src/synth_setter/pipeline/schemas/spec.py"
