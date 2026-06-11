@@ -2,7 +2,7 @@
 
 These pin the pure plan-building behavior — the derived copy-source URI, the five
 sweep configs, the source overrides, and the source/copy match-set consistency
-that keeps the derived ``copy_dataset_root_uri`` aligned across producer and
+that keeps shard filenames and the param encoding aligned across producer and
 consumer — plus the create-before-run ordering of :func:`run`.
 """
 
