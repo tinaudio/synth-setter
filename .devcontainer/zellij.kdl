@@ -1,0 +1,13 @@
+// Installed to ~/.config/zellij/config.kdl by .devcontainer/post-create.sh;
+// zellij auto-loads it when the VS Code terminal profile launches zellij.
+
+// Silence the first-run popups: the usage-tip overlay and the post-upgrade
+// release-notes screen that otherwise greet every fresh container.
+show_startup_tips false
+show_release_notes false
+
+// Reattach every terminal to one shared session instead of spawning a fresh
+// one — a plain `zellij` (the VS Code profile) connects to "main" if it exists,
+// so a second terminal mirrors the first.
+session_name "main"
+attach_to_session true
