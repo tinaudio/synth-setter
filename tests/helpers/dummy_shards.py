@@ -11,7 +11,6 @@ shard layout updates both at once.
 from __future__ import annotations
 
 import io
-import subprocess
 import tarfile
 from collections.abc import Callable
 from pathlib import Path
@@ -30,11 +29,12 @@ from synth_setter.data.vst.shapes import (
 )
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat
+from synth_setter.pipeline.subprocess_stream import check_call_streamed
 from tests.helpers.subprocess_args import find_script_index
 
-# Captured at import so the rclone-passthrough side effect calls the real
-# subprocess.check_call without recursing through any patch on that symbol.
-_REAL_CHECK_CALL = subprocess.check_call
+# rclone passthrough: bound from the pipeline module, so it bypasses the patched
+# cli seam (no recursion) yet runs the real streamed runner on the real binary.
+_REAL_CHECK_CALL = check_call_streamed
 
 
 def write_dummy_h5_shard(output_path: Path, spec: DatasetSpec) -> None:
@@ -130,7 +130,7 @@ def stub_renderer(spec: DatasetSpec) -> Callable[[list[str]], None]:
 
     def _side_effect(args: list[str]) -> None:
         if args and args[0] == "rclone":
-            _REAL_CHECK_CALL(args)  # noqa: S603 — passthrough to real rclone
+            _REAL_CHECK_CALL(args)
             return
         script_idx = find_script_index(args)
         output_file = Path(args[script_idx + 1])

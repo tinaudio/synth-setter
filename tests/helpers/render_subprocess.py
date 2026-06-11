@@ -15,9 +15,8 @@ from pathlib import Path
 from synth_setter.pipeline.subprocess_stream import check_call_streamed
 from tests.helpers.subprocess_args import find_script_index
 
-# rclone passthrough: bound straight from the pipeline module so it bypasses
-# the patched cli seam without recursing, while still exercising the real
-# streamed runner against the real rclone binary.
+# rclone passthrough: bound from the pipeline module, so it bypasses the patched
+# cli seam (no recursion) yet runs the real streamed runner on the real binary.
 REAL_CHECK_CALL = check_call_streamed
 
 

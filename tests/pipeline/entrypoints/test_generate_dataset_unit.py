@@ -1898,8 +1898,8 @@ class TestMainDispatchBranches:
 
         streamed_call_mock.assert_called_once()
         # The timeout bound is the helper's only guard against an unbounded
-        # eval hang (#735); pin it so a dropped kwarg fails loudly.
-        assert streamed_call_mock.call_args.kwargs["timeout"] == gd._ORACLE_EVAL_TIMEOUT_SECONDS
+        # eval hang (#735); the hardcoded value catches a wrong constant too.
+        assert streamed_call_mock.call_args.kwargs["timeout"] == 600
         called_argv = streamed_call_mock.call_args[0][0]
         assert "-m" in called_argv
         assert "synth_setter.cli.eval" in called_argv

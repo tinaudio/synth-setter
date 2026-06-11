@@ -17,23 +17,25 @@ from __future__ import annotations
 
 import asyncio
 import codecs
-import contextlib
 import os
 import signal
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
+from typing import cast
+
+import structlog
 
 __all__ = ["check_call_streamed", "check_call_streamed_async"]
 
+_LOG = structlog.get_logger(__name__)
+
 # SIGTERM -> SIGKILL escalation grace, seconds. TERM first so children's EXIT
-# traps run (the headless-VST wrapper reaps its X11 tree, #1634); KILL keeps
-# the timeout real for a wedged child.
+# traps run (the VST wrapper reaps its X11 tree, #1634); KILL keeps timeouts real.
 _TERM_TO_KILL_GRACE_SECONDS = 5.0
 
-# Post-exit bound on draining output still buffered in the pipe, seconds. A
-# surviving pipe-holder writes under this grace, then the reader is abandoned
-# — the alternative is keying completion on EOF, the #1617 hang/misreport.
+# Post-exit bound (seconds) on draining buffered pipe output before the reader
+# is abandoned — the alternative, keying on EOF, was the #1617 hang/misreport.
 _POST_EXIT_DRAIN_SECONDS = 2.0
 
 _READ_CHUNK_BYTES = 8192
@@ -68,10 +70,11 @@ async def check_call_streamed_async(
 ) -> bytes:
     """Run ``cmd``, teeing merged stdout+stderr through the wandb-wrapped stream.
 
-    The child leads its own session/process group; on return (any path) the
-    group receives a SIGTERM sweep so in-group descendants outliving the
-    child are reaped. ``setsid()``/double-forked escapees survive — accepted
-    gap until a Linux cgroup scope lands.
+    The child leads its own session/process group; on return (any path,
+    including cancellation, where no KILL escalation follows) the group
+    receives a SIGTERM sweep so in-group descendants outliving the child are
+    reaped. ``setsid()``/double-forked escapees survive — accepted gap until
+    a Linux cgroup scope lands.
 
     :param cmd: Child argv, run unquoted with no shell, so callers pre-validate it.
     :param timeout: Per-call-site policy bound in seconds on the child's own
@@ -94,41 +97,56 @@ async def check_call_streamed_async(
         start_new_session=True,
         env=child_env,
     )
-    # start_new_session makes the child its own session/group leader, so its
-    # pid IS the pgid (POSIX) — no getpgid syscall, which would race the child
-    # watcher reaping a fast-exiting child and raise ProcessLookupError.
+    # start_new_session makes the child its own group leader, so pid IS pgid —
+    # a getpgid syscall would race the watcher reaping a fast exit.
     pgid = proc.pid
     captured: list[bytes] = []
     decoder = codecs.getincrementaldecoder("utf-8")("replace")
+    tee_broken = False
+
+    def _tee(text: str) -> None:
+        # A broken wrapped stream must not kill the pump (exit codes are the
+        # contract, and a dead pump would re-open the #735 full-pipe hang).
+        nonlocal tee_broken
+        if tee_broken or not text:
+            return
+        try:
+            sys.stderr.write(text)
+        except Exception:  # noqa: BLE001 — degrade to capture-only forwarding
+            tee_broken = True
 
     async def _pump() -> None:
-        # console=wrap patches ``write`` in place on the parent's *text*
-        # stream; the tee must go through it — ``sys.stderr.buffer`` would
-        # slip underneath the patch and re-empty the run's Logs tab (#1465).
-        # Chunked reads (not readline) so a line longer than the
-        # StreamReader limit can't raise mid-pump.
+        # console=wrap patches ``write`` in place on the parent's *text* stream;
+        # ``sys.stderr.buffer`` would slip under the patch, emptying the Logs tab (#1465).
+        # Chunked reads (not readline): a long line can't overrun the StreamReader limit.
         stdout = proc.stdout
         if stdout is None:  # pragma: no cover — unreachable with stdout=PIPE
             raise RuntimeError("child spawned without a stdout pipe")
         while chunk := await stdout.read(_READ_CHUNK_BYTES):
             captured.append(chunk)
-            sys.stderr.write(decoder.decode(chunk))
+            _tee(decoder.decode(chunk))
         # EOF: flush a trailing incomplete multibyte sequence into the tee.
-        sys.stderr.write(decoder.decode(b"", final=True))
+        _tee(decoder.decode(b"", final=True))
 
     pump_task = asyncio.create_task(_pump())
-    timed_out = False
+    timed_out_after: float | None = None
     try:
         try:
             returncode = await asyncio.wait_for(proc.wait(), timeout=timeout)
         except asyncio.TimeoutError:
-            timed_out = True
+            # wait_for(timeout=None) cannot time out, so timeout is a float here.
+            timed_out_after = cast(float, timeout)
             _signal_group(pgid, signal.SIGTERM)
             try:
                 returncode = await asyncio.wait_for(
                     proc.wait(), timeout=_TERM_TO_KILL_GRACE_SECONDS
                 )
             except asyncio.TimeoutError:
+                _LOG.warning(
+                    "subprocess_term_to_kill_escalation",
+                    cmd=cmd[0],
+                    grace_seconds=_TERM_TO_KILL_GRACE_SECONDS,
+                )
                 _signal_group(pgid, signal.SIGKILL)
                 returncode = await proc.wait()
 
@@ -136,19 +154,24 @@ async def check_call_streamed_async(
             await asyncio.wait_for(pump_task, timeout=_POST_EXIT_DRAIN_SECONDS)
         except asyncio.TimeoutError:
             # A pipe-holding survivor must not stall completion; abandon the tail.
+            _LOG.warning(
+                "subprocess_output_drain_abandoned",
+                cmd=cmd[0],
+                drain_seconds=_POST_EXIT_DRAIN_SECONDS,
+            )
             pump_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await pump_task
+            # return_exceptions swallows the pump's CancelledError without
+            # masking an external cancellation of this coroutine.
+            await asyncio.gather(pump_task, return_exceptions=True)
     finally:
-        # Runs immediately after the wait (or on an abrupt cancel, e.g.
-        # KeyboardInterrupt) so the pgid-recycle window stays microseconds; if
-        # group members survive, POSIX reserves the pgid and this is safe.
+        # Sweep right after the wait so the pgid-recycle window stays
+        # microseconds; surviving members keep the pgid reserved, so it's safe.
         pump_task.cancel()
         _signal_group(pgid, signal.SIGTERM)
 
     output = b"".join(captured)
-    if timed_out:
-        raise subprocess.TimeoutExpired(list(cmd), timeout or 0.0, output=output)
+    if timed_out_after is not None:
+        raise subprocess.TimeoutExpired(list(cmd), timed_out_after, output=output)
     if returncode != 0:
         raise subprocess.CalledProcessError(returncode, list(cmd), output=output)
     return output

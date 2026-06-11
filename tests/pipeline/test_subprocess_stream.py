@@ -95,8 +95,9 @@ def _wait_for_file(path: Path, deadline_seconds: float = 5.0) -> str:
     """
     deadline = time.monotonic() + deadline_seconds
     while time.monotonic() < deadline:
-        if path.is_file() and path.read_text():
-            return path.read_text()
+        content = path.read_text() if path.is_file() else ""
+        if content:
+            return content
         time.sleep(0.05)
     raise AssertionError(f"child never wrote {path}")
 
@@ -293,6 +294,27 @@ class TestWrapTee:
         assert "TO_STDERR" in joined
         assert b"TO_STDOUT" in out
 
+    def test_tee_write_failure_degrades_to_capture_only(self, leak_marker: str) -> None:
+        """A raising wrapped stream must not fail the call or stop the drain.
+
+        If the tee killed the pump, the pipe would fill and re-open the #735 hang class; exit codes
+        and capture are the contract, the tee is best-effort.
+
+        :param leak_marker: argv stamp from the autouse sweep fixture.
+        """
+        orig = sys.stderr.write
+
+        def _raising_write(s: str) -> int:
+            raise OSError("wrapped stream torn down")
+
+        sys.stderr.write = _raising_write  # type: ignore[method-assign]
+        try:
+            out = _streamed(_child("print('STILL_CAPTURED')", leak_marker))
+        finally:
+            sys.stderr.write = orig  # type: ignore[method-assign]
+
+        assert b"STILL_CAPTURED" in out
+
     def test_non_utf8_output_replaced_in_tee_and_raw_in_capture(
         self, capsys: pytest.CaptureFixture[str], leak_marker: str
     ) -> None:
@@ -364,8 +386,8 @@ class TestExitKeyedLiveness:
     def test_long_runner_without_timeout_not_cut_short(self, leak_marker: str) -> None:
         """Exit-keying is not impatience: a slow child runs to completion.
 
-        The post-exit drain grace must never apply to a live child; all six
-        lines emitted over ~3s must come back.
+        The post-exit drain grace must never apply to a live child; every
+        line the slow child emits must come back.
 
         :param leak_marker: argv stamp from the autouse sweep fixture.
         """
@@ -384,6 +406,7 @@ class TestExitKeyedLiveness:
 class TestTimeoutEscalation:
     """Policy timeouts: SIGTERM first (#1634), SIGKILL only for the wedged."""
 
+    @pytest.mark.slow
     def test_timeout_sigterms_child_cleanup_runs_before_kill(self, leak_marker: str) -> None:
         """The child's SIGTERM handler runs and its output is still drained.
 
@@ -538,6 +561,7 @@ class TestPostExitSweep:
             time.sleep(0.05)
         assert not _pid_alive(grandchild_pid), "post-exit sweep missed the in-group grandchild"
 
+    @pytest.mark.slow
     @pytest.mark.xfail(
         reason="known 4b escape gap: a setsid() grandchild leaves the killable "
         "group; flips when a Linux cgroup scope lands",
@@ -597,6 +621,38 @@ class TestSyncFacade:
             check_call_streamed(_child("import sys; sys.exit(5)", leak_marker))
 
         assert excinfo.value.returncode == 5
+
+    def test_sync_facade_forwards_env_to_child(self, leak_marker: str) -> None:
+        """The facade threads ``env=`` through to the child.
+
+        :param leak_marker: argv stamp from the autouse sweep fixture.
+        """
+        out = check_call_streamed(
+            _child("import os; print(os.environ['STREAMED_TEST_VAR'])", leak_marker),
+            env={"STREAMED_TEST_VAR": "via-facade"},
+        )
+
+        assert b"via-facade" in out
+
+    def test_sync_facade_concurrent_worker_threads_capture_independently(
+        self, leak_marker: str
+    ) -> None:
+        """Concurrent facade calls (production's shard-thread shape) don't cross streams.
+
+        Each call runs its own event loop and child watcher; every call must return its own child's
+        complete output.
+
+        :param leak_marker: argv stamp from the autouse sweep fixture.
+        """
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            futures = [
+                pool.submit(check_call_streamed, _child(f"print('THREAD_{i}' * 3)", leak_marker))
+                for i in range(3)
+            ]
+            outputs = [f.result(timeout=_BACKSTOP_SECONDS) for f in futures]
+
+        for i, out in enumerate(outputs):
+            assert f"THREAD_{i}".encode() * 3 in out
 
     def test_sync_facade_timeout_raises_timeout_expired(self, leak_marker: str) -> None:
         """``TimeoutExpired`` crosses ``asyncio.run`` intact.
