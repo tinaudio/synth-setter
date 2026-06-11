@@ -268,12 +268,20 @@ jobs:
       # largest unused subtree under it (~5 GB) and this row never runs it, so
       # purge only that subdir: the parent dir stays present for kind-action, and
       # Python (resolved from the cache by the later setup-python step) is left
-      # intact. `df -h /` is best-effort diagnostics — see the kind-load step.
-      - name: Purge unused CodeQL tool-cache for kind headroom (skypilot-local row)
+      # intact. miniconda / swift / julia / global node modules (~7 GB combined)
+      # are likewise unused by this row; `kind load` needs the worker image on
+      # disk twice (docker store + kind-node containerd), which has hit ENOSPC
+      # with only ~30 GB free. `df -h /` is best-effort diagnostics — see the
+      # kind-load step.
+      - name: Purge unused toolchains for kind headroom (skypilot-local row)
         if: ${{ inputs.provider == 'skypilot-local' }}
         run: |
           set -euo pipefail
-          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo rm -rf /opt/hostedtoolcache/CodeQL \
+            /usr/share/miniconda \
+            /usr/share/swift \
+            /usr/local/julia* \
+            /usr/local/lib/node_modules
           df -h / || true
 
       # A2 (#1164): pull the worker image in the background so the kind binary
