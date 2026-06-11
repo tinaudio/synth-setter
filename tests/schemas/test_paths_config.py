@@ -59,10 +59,15 @@ class TestPathsConfigResolvedInterpolation:
                     "paths.work_dir=/tmp/x",  # noqa: S108
                 ],
             )
-            HydraConfig.instance().set_config(cfg)
-            resolved_paths = cast(
-                "dict[str, Any]", OmegaConf.to_container(cfg.paths, resolve=True)
-            )
+            # set_config populates Hydra's process-global singleton; reset its
+            # cfg in finally so resolved hydra.runtime.* can't leak into later tests.
+            try:
+                HydraConfig.instance().set_config(cfg)
+                resolved_paths = cast(
+                    "dict[str, Any]", OmegaConf.to_container(cfg.paths, resolve=True)
+                )
+            finally:
+                HydraConfig.instance().cfg = None
         parsed = PathsConfig.model_validate(resolved_paths)
         assert parsed.root_dir == "/tmp/x"  # noqa: S108
         assert parsed.data_dir.startswith("/tmp/x")  # noqa: S108
