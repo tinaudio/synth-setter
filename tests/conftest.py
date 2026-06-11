@@ -28,7 +28,6 @@ from synth_setter.workspace import operator_workspace
 from tests._baseline_worktree import worktree_for_ref  # noqa: F401 — pytest fixture re-export
 from tests._vst import PLUGIN_PATH, VST_AVAILABLE
 from tests.data.vst._fake_plugin import FakeVST3Plugin
-from tests.helpers.lance_fixtures import write_lance_shard
 from tests.pipeline.conftest import fake_r2_remote  # noqa: F401 — pytest fixture re-export
 
 # Per-clip dimensions for the smoke fixture's HDF5 output. ``RenderConfig`` in
@@ -1127,6 +1126,11 @@ def _write_lance_smoke_split(path: Path, num_rows: int, *, seed: int) -> None:
     :param num_rows: Rows in every column.
     :param seed: RNG seed so splits get distinguishable values.
     """
+    # Local import: pulls in pyarrow, which the Docker VST CI images don't
+    # install (no `data` dependency group) — module scope would break their
+    # conftest collection.
+    from tests.helpers.lance_fixtures import write_lance_shard
+
     rng = np.random.default_rng(seed)
     write_lance_shard(
         path,
