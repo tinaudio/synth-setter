@@ -18,33 +18,40 @@ from pathlib import Path
 
 import pytest
 
+_FUNC_NAME = "configure_agent_autonomy"
+
+
+def _extract_function(script_text: str) -> str:
+    """Return the `configure_agent_autonomy` definition (def-line through its column-0 `}`).
+
+    Sliced in Python — not `sed` — so the bounds match identically on GNU and
+    BSD userlands. The terminator is the bare top-level call line (`{_FUNC_NAME}`
+    alone), which no heredoc-body line matches, so the whole function is captured.
+
+    :param script_text: Full source of `.devcontainer/post-create.sh`.
+    :returns: The function definition, ready to source.
+    """
+    lines = script_text.splitlines()
+    start = lines.index(f"{_FUNC_NAME}() {{")
+    call = lines.index(_FUNC_NAME, start + 1)
+    return "\n".join(lines[start:call])
+
 
 def _run_configure_agent_autonomy(script: Path, home: Path, *, times: int) -> None:
     """Source `configure_agent_autonomy` from `script` and run it `times` times under HOME=`home`.
 
-    The function's definition plus its top-level call is extracted and sourced —
-    not the whole script, which execs and mutates the workspace — so only its
-    `$HOME`-scoped writes happen. Sourcing runs it once; `times` adds the rest to
-    exercise idempotency.
+    Only the function definition is sourced — not the whole script, which execs
+    and mutates the workspace — so just its `$HOME`-scoped writes happen. Calling
+    it `times` times exercises idempotency.
 
     :param script: Path to `.devcontainer/post-create.sh`.
     :param home: Directory to use as `$HOME` for the run.
-    :param times: Total number of `configure_agent_autonomy` invocations.
+    :param times: Number of `configure_agent_autonomy` invocations.
     """
-    # Range ends on the bare top-level call line, which (unlike `^}`) no heredoc
-    # body line matches, so the function extracts whole.
-    extract = f"sed -n '/^configure_agent_autonomy() {{/,/^configure_agent_autonomy$/p' {script}"
-    extra_calls = "; ".join(["configure_agent_autonomy"] * (times - 1))
-    # Fail loudly if the range stops matching the script, rather than letting a
-    # missing function surface as a confusing "command not found".
-    snippet = (
-        f"source <({extract})"
-        "; declare -f configure_agent_autonomy >/dev/null"
-        " || { echo 'extraction failed: function not defined' >&2; exit 3; }"
-        f"{'; ' + extra_calls if extra_calls else ''}"
-    )
+    definition = _extract_function(script.read_text())
+    calls = "\n".join([_FUNC_NAME] * times)
     subprocess.run(  # noqa: S603 — fixed argv, no shell injection (paths are test-controlled)
-        ["bash", "-c", snippet],  # noqa: S607 — bash on PATH
+        ["bash", "-c", f"{definition}\n{calls}"],  # noqa: S607 — bash on PATH
         env={"HOME": str(home), "PATH": os.environ["PATH"]},
         capture_output=True,
         text=True,
