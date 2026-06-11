@@ -296,11 +296,13 @@ docs:
     description: Test layout, fixtures, markers, and the cpu/mps/gpu CI lane split
     sources:
       - pattern: "tests/conftest.py"
-        covers: "Hydra cfg_train/cfg_eval/cfg_dataset/cfg_surge_xt fixtures, accelerator parametrize, param_spec_name parametrize, experiment_name parametrize, _build_surge_xt_smoke_cfg, surge_xt_smoke_datasets, _validate_surge_dataset, shared constants (NUM_FIXTURE_SAMPLES, VST_HEADLESS_WRAPPER, _VST_SUBPROCESS_TIMEOUT_SECONDS)"
+        covers: "Hydra cfg_train/cfg_train_lance/cfg_eval/cfg_dataset/cfg_surge_xt fixtures, accelerator parametrize, param_spec_name parametrize, experiment_name parametrize, _build_surge_xt_smoke_cfg, surge_xt_smoke_datasets, _validate_surge_dataset, Lance smoke helpers (_write_lance_smoke_split, _LANCE_SMOKE_*), shared constants (NUM_FIXTURE_SAMPLES, VST_HEADLESS_WRAPPER, _VST_SUBPROCESS_TIMEOUT_SECONDS)"
       - pattern: "tests/test_train.py"
         covers: "E2E Hydra train / resume / Surge XT smoke + train→eval round-trip"
       - pattern: "tests/test_eval.py"
         covers: "Train→eval round-trip reference implementation"
+      - pattern: "tests/helpers/lance_fixtures.py"
+        covers: "Shared write_lance_shard writer backing the Lance datamodule fixtures"
       - pattern: "tests/helpers/run_if.py"
         covers: "RunIf decorator (min_gpus, etc.)"
       - pattern: ".github/workflows/test.yml"

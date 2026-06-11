@@ -28,6 +28,7 @@ from synth_setter.workspace import operator_workspace
 from tests._baseline_worktree import worktree_for_ref  # noqa: F401 — pytest fixture re-export
 from tests._vst import PLUGIN_PATH, VST_AVAILABLE
 from tests.data.vst._fake_plugin import FakeVST3Plugin
+from tests.helpers.lance_fixtures import write_lance_shard
 from tests.pipeline.conftest import fake_r2_remote  # noqa: F401 — pytest fixture re-export
 
 # Per-clip dimensions for the smoke fixture's HDF5 output. ``RenderConfig`` in
@@ -1108,3 +1109,90 @@ def pytest_addoption(parser: pytest.Parser) -> None:
             "instead of pytest's tmp_path so the files survive between runs."
         ),
     )
+
+
+# Lance datamodule smoke fixtures.
+
+# surge_ffn's AST net hard-codes the production mel shape and channel count, so the
+# Lance smoke fixture must carry production-shaped mel rows; everything else is tiny.
+_LANCE_SMOKE_MEL_SHAPE = (2, 128, 401)
+_LANCE_SMOKE_NUM_PARAMS = 16
+_LANCE_SMOKE_ROWS = 4
+
+
+def _write_lance_smoke_split(path: Path, num_rows: int, *, seed: int) -> None:
+    """Write one surge-shaped ``.lance`` split readable by ``LanceVSTDataModule``.
+
+    :param path: Output ``.lance`` shard file.
+    :param num_rows: Rows in every column.
+    :param seed: RNG seed so splits get distinguishable values.
+    """
+    rng = np.random.default_rng(seed)
+    write_lance_shard(
+        path,
+        {
+            # float16 mirrors the pipeline's on-disk audio dtype (DATASET_FIELD_DTYPES).
+            "audio": rng.standard_normal((num_rows, 2, 64)).astype(np.float16),
+            "mel_spec": rng.standard_normal((num_rows, *_LANCE_SMOKE_MEL_SHAPE)).astype(
+                np.float32
+            ),
+            "param_array": rng.random((num_rows, _LANCE_SMOKE_NUM_PARAMS)).astype(np.float32),
+        },
+    )
+
+
+@pytest.fixture
+def cfg_train_lance(tmp_path: Path) -> Iterator[DictConfig]:
+    """Compose a ``datamodule=surge_lance`` training cfg over a generated Lance dataset.
+
+    Writes tiny ``train/val/test.lance`` splits + ``stats.npz`` under
+    ``tmp_path``, then composes the real ``train.yaml`` with
+    ``datamodule=surge_lance`` — the same Hydra path a user takes — shrinking
+    the AST net to a 1-layer toy so a ``fast_dev_run`` step stays CPU-cheap.
+
+    :param tmp_path: Per-test tmpdir holding the dataset and output/log dirs.
+    :yields: Resolved DictConfig ready for ``train(cfg)``.
+    :ytype: DictConfig
+    """
+    dataset_root = tmp_path / "lance-data"
+    dataset_root.mkdir()
+    for seed, split in enumerate(("train", "val", "test")):
+        _write_lance_smoke_split(dataset_root / f"{split}.lance", _LANCE_SMOKE_ROWS, seed=seed)
+    np.savez(
+        dataset_root / "stats.npz",
+        mean=np.zeros(_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
+        std=np.ones(_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
+    )
+
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            return_hydra_config=True,
+            overrides=["datamodule=surge_lance", "model=surge_ffn", "trainer=cpu"],
+        )
+        with open_dict(cfg):
+            cfg.paths.root_dir = str(operator_workspace())
+            cfg.paths.output_dir = str(tmp_path)
+            cfg.paths.log_dir = str(tmp_path)
+            cfg.logger = None
+            # lr_monitor requires an attached logger, which this smoke cfg disables.
+            if "lr_monitor" in cfg.callbacks:
+                del cfg.callbacks.lr_monitor
+            cfg.trainer.fast_dev_run = True
+            # Not a loop bound under fast_dev_run — surge_ffn's scheduler resolves
+            # ${trainer.max_steps}, which trainer/cpu.yaml leaves undefined.
+            cfg.trainer.max_steps = 1
+            cfg.datamodule.dataset_root = str(dataset_root)
+            cfg.datamodule.batch_size = 1
+            cfg.datamodule.ot = False
+            cfg.datamodule.num_workers = 0
+            cfg.datamodule.pin_memory = False
+            cfg.model.compile = False
+            cfg.model.net.d_model = 32
+            cfg.model.net.n_heads = 2
+            cfg.model.net.n_layers = 1
+            cfg.model.net.d_out = _LANCE_SMOKE_NUM_PARAMS
+
+    yield cfg
+
+    GlobalHydra.instance().clear()
