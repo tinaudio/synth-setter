@@ -56,6 +56,29 @@ class TestDataModuleConfigAcceptsEveryConfig:
         assert parsed.target_.endswith("KSinDataModule")
 
 
+class TestSurgeDatamoduleOverlays:
+    """The thin surge instances overlay ``vst`` and target ``VSTDataModule``."""
+
+    def test_surge_mini_overlays_param_spec_name_surge_4(self) -> None:
+        """``surge_mini`` overrides ``param_spec_name`` to ``surge_4`` over the ``vst`` base."""
+        subtree = compose_subtree("datamodule", "surge_mini")
+        assert subtree["param_spec_name"] == "surge_4"
+        assert subtree["_target_"].endswith("VSTDataModule")
+
+    def test_surge_simple_overlays_param_spec_name_surge_simple(self) -> None:
+        """``surge_simple`` overrides ``param_spec_name`` over the ``vst`` base."""
+        subtree = compose_subtree("datamodule", "surge_simple")
+        assert subtree["param_spec_name"] == "surge_simple"
+        assert subtree["_target_"].endswith("VSTDataModule")
+
+    def test_surge_debug_sets_repeat_first_batch_and_keeps_default_spec(self) -> None:
+        """``surge_debug`` flips ``repeat_first_batch`` and keeps the ``vst`` default spec."""
+        subtree = compose_subtree("datamodule", "surge_debug")
+        assert subtree["repeat_first_batch"] is True
+        assert subtree["param_spec_name"] == "surge_xt"
+        assert subtree["_target_"].endswith("VSTDataModule")
+
+
 class TestPathsConfigResolvedInterpolation:
     """A real resolved ``PROJECT_ROOT`` must round-trip through ``NonBlankStr``."""
 

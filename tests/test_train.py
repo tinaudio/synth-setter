@@ -25,6 +25,7 @@ from synth_setter.workspace import operator_workspace
 from tests.conftest import (
     NUM_FIXTURE_SAMPLES,
     _build_surge_xt_smoke_cfg,
+    build_fake_train_cfg,
 )
 from tests.evaluation._oracle_helpers import ORACLE_AUDIO_METRIC_BOUNDS
 from tests.helpers.run_if import RunIf
@@ -204,6 +205,33 @@ def test_cfg_surge_xt_global_wires_param_spec(param_spec_name: str) -> None:
     )
     assert cfg.model.net.d_out == len(param_specs[param_spec_name])
     assert cfg.callbacks.log_per_param_mse.param_spec == param_spec_name
+
+
+@pytest.mark.slow
+def test_train_fake_mode_nondefault_spec_sizes_batches_from_registry(tmp_path: Path) -> None:
+    """Fake-mode train through the entrypoint sizes batches from a non-default ``param_spec_name``.
+
+    Drives the real ``train(cfg)`` entrypoint with ``datamodule.fake=true`` and the
+    non-default ``surge_simple`` spec: no dataset on disk, so the run exercises the
+    registry-derived fake width end-to-end. The width-agnostic ``surge/fake_oracle``
+    experiment (oracle returns ``batch["params"]``) tolerates the registry-width batches,
+    and the datamodule the entrypoint built carries that registry-derived width.
+
+    :param tmp_path: Pinned as Hydra ``output_dir`` / ``log_dir``; no dataset is read.
+    """
+    expected_width = len(param_specs["surge_simple"])
+    cfg = build_fake_train_cfg(tmp_path, param_spec_name="surge_simple")
+
+    HydraConfig().set_config(cfg)
+    _, object_dict = train(cfg)
+
+    trainer = object_dict["trainer"]
+    assert trainer.global_step >= 1, f"trainer did not advance: global_step={trainer.global_step}"
+
+    datamodule = object_dict["datamodule"]
+    assert datamodule.train_dataset.num_params == expected_width
+    sample = datamodule.train_dataset[0]
+    assert sample["params"].shape == (2, expected_width)
 
 
 @pytest.mark.requires_vst

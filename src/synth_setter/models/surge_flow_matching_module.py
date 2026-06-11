@@ -39,7 +39,7 @@ def rk4_with_cfg(
     return x + (dt / 6) * (k1 + 2 * k2 + 2 * k3 + k4)
 
 
-class SurgeFlowMatchingModule(LightningModule):
+class VSTFlowMatchingModule(LightningModule):
     """Flow-matching LightningModule for Surge XT parameter prediction (CFG + RK4 sampling)."""
 
     def __init__(
@@ -59,6 +59,24 @@ class SurgeFlowMatchingModule(LightningModule):
         compile: bool = False,
         num_params: int = 90,
     ):
+        """Wire the encoder/vector-field and persist the flow-matching hyperparameters.
+
+        :param encoder: Conditioning encoder over ``mel_spec`` / ``m2l``.
+        :param vector_field: Network predicting the flow velocity field.
+        :param optimizer: ``functools.partial``-style optimizer factory (Hydra
+            ``_partial_: true``); invoked in :meth:`configure_optimizers`.
+        :param scheduler: ``functools.partial``-style scheduler factory or ``None``.
+        :param conditioning: Which batch key conditions the field (``"mel"`` or ``"m2l"``).
+        :param warmup_steps: If positive, wrap the scheduler with a linear warmup.
+        :param cfg_dropout_rate: Probability of dropping conditioning during training (CFG).
+        :param rectified_sigma_min: Minimum noise scale for the rectified probability path.
+        :param validation_sample_steps: RK4 integration steps used at validation.
+        :param validation_cfg_strength: Classifier-free-guidance strength at validation.
+        :param test_sample_steps: RK4 integration steps used at test.
+        :param test_cfg_strength: Classifier-free-guidance strength at test.
+        :param compile: Whether to ``torch.compile`` the net in :meth:`setup`.
+        :param num_params: Parameter-vector width the field operates on.
+        """
         super().__init__()
 
         self.save_hyperparameters(logger=False)
@@ -302,5 +320,6 @@ class SurgeFlowMatchingModule(LightningModule):
         return {"optimizer": optimizer}
 
 
-if __name__ == "__main__":
-    _ = SurgeFlowMatchingModule(None, None, None, None)
+# Deprecated alias: archived W&B run configs and external job scripts resolve the
+# old ``_target_`` path.
+SurgeFlowMatchingModule = VSTFlowMatchingModule

@@ -16,7 +16,7 @@ from synth_setter.models.components.transformer import (
     LearntProjection,
 )
 from synth_setter.models.ksin_flow_matching_module import KSinFlowMatchingModule
-from synth_setter.models.surge_flow_matching_module import SurgeFlowMatchingModule
+from synth_setter.models.surge_flow_matching_module import VSTFlowMatchingModule
 
 
 def _log_figure(trainer: Trainer, key: str, fig: Figure) -> None:
@@ -295,7 +295,7 @@ class PlotLearntProjection(Callback):
     def _do_plotting(self, trainer, pl_module):
         if not (
             isinstance(pl_module, KSinFlowMatchingModule)
-            or isinstance(pl_module, SurgeFlowMatchingModule)
+            or isinstance(pl_module, VSTFlowMatchingModule)
         ):
             return
 

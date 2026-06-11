@@ -1,7 +1,7 @@
 """Oracle Lightning module: returns ``batch["params"]`` as its prediction.
 
 This is a drop-in replacement for
-:class:`synth_setter.models.surge_ff_module.SurgeFeedForwardModule` that
+:class:`synth_setter.models.surge_ff_module.VSTFeedForwardModule` that
 short-circuits the model and returns the ground-truth parameters as predictions.
 """
 
@@ -47,7 +47,7 @@ class FakeOracleNet(nn.Module):
         return self.dummy
 
 
-class SurgeFakeOracleModule(LightningModule):
+class VSTFakeOracleModule(LightningModule):
     """LightningModule whose predictions are an oracle copy of ``batch["params"]``."""
 
     def __init__(
@@ -55,10 +55,10 @@ class SurgeFakeOracleModule(LightningModule):
         net: nn.Module,
         optimizer: Callable[..., torch.optim.Optimizer],
         scheduler: Callable[..., torch.optim.lr_scheduler.LRScheduler] | None = None,
-        compile: bool = False,  # noqa: A002 — name preserved for SurgeFeedForwardModule config-swap parity
+        compile: bool = False,  # noqa: A002 — config-swap parity with VSTFeedForwardModule
         warmup_steps: int = 0,
     ):
-        """Mirror :class:`SurgeFeedForwardModule`'s signature so configs swap cleanly.
+        """Mirror :class:`VSTFeedForwardModule`'s signature so configs swap cleanly.
 
         :param net: Stand-in feature extractor; only its parameters matter (for the
             optimizer). The oracle does not consume its forward output as a prediction.
@@ -85,7 +85,7 @@ class SurgeFakeOracleModule(LightningModule):
 
         :param batch: Dict with at least ``params`` and ``mel_spec``.
 
-        :return: 4-tuple matching :meth:`SurgeFeedForwardModule.model_step`.
+        :return: 4-tuple matching :meth:`VSTFeedForwardModule.model_step`.
         :rtype: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
         """
         target_params = batch["params"]
@@ -171,7 +171,7 @@ class SurgeFakeOracleModule(LightningModule):
     def configure_optimizers(self) -> dict[str, Any]:
         """Instantiate the optimizer and (optional) warmup/scheduler chain.
 
-        Mirrors :meth:`SurgeFeedForwardModule.configure_optimizers` so the same
+        Mirrors :meth:`VSTFeedForwardModule.configure_optimizers` so the same
         Hydra ``optimizer`` and ``scheduler`` partial blocks instantiate without
         modification.
 
@@ -211,3 +211,8 @@ class SurgeFakeOracleModule(LightningModule):
                 },
             }
         return {"optimizer": optimizer}
+
+
+# Deprecated alias: archived W&B run configs and external job scripts resolve the
+# old ``_target_`` path.
+SurgeFakeOracleModule = VSTFakeOracleModule

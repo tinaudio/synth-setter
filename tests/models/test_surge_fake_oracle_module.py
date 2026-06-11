@@ -1,7 +1,7 @@
 """Behavioral tests for :mod:`synth_setter.models.surge_fake_oracle_module`.
 
 The fake-oracle module is a drop-in replacement for
-:class:`synth_setter.models.surge_ff_module.SurgeFeedForwardModule` that returns
+:class:`synth_setter.models.surge_ff_module.VSTFeedForwardModule` that returns
 ``batch["params"]`` as its prediction. The tests pin the oracle contract
 (perfect inversion, zero loss, grad-capable) and the four Lightning step
 shapes that downstream callbacks depend on (``PredictionWriter`` unpacks
@@ -21,7 +21,7 @@ import torch
 
 from synth_setter.models.surge_fake_oracle_module import (
     FakeOracleNet,
-    SurgeFakeOracleModule,
+    VSTFakeOracleModule,
 )
 
 _NUM_PARAMS = 8
@@ -56,15 +56,15 @@ def _make_batch(batch_size: int, *, mel_seed: int = 0) -> dict[str, torch.Tensor
     return {"params": params, "mel_spec": mel_spec, "audio": audio}
 
 
-def _make_module() -> SurgeFakeOracleModule:
-    """Build a fresh :class:`SurgeFakeOracleModule` with a partial Adam optimizer.
+def _make_module() -> VSTFakeOracleModule:
+    """Build a fresh :class:`VSTFakeOracleModule` with a partial Adam optimizer.
 
     :return: Module ready for direct step-method calls (no Trainer attached).
-    :rtype: SurgeFakeOracleModule
+    :rtype: VSTFakeOracleModule
     """
     net = FakeOracleNet(d_out=_NUM_PARAMS)
     optimizer = partial(torch.optim.Adam, lr=1e-4)
-    return SurgeFakeOracleModule(net=net, optimizer=optimizer, scheduler=None)
+    return VSTFakeOracleModule(net=net, optimizer=optimizer, scheduler=None)
 
 
 @pytest.mark.parametrize("batch_size", [1, 4])

@@ -47,15 +47,15 @@ Topline goal: Run the full evaluation pipeline — predict, render, metrics — 
 
 This pipeline works end-to-end today but is tightly coupled to a university HPC cluster:
 
-| Coupling                   | Where                                                                                                                                                                            | Impact                                                                                                         |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| Hydra-output-dir data path | `src/synth_setter/configs/datamodule/surge*.yaml` set `dataset_root: ${paths.output_dir}/data` and `predict_file: null` (SurgeDataModule resolves null → `dataset_root/test.h5`) | Defaults land under the per-run Hydra dir; `${paths.data_dir}/{config_id}/{run_id}` convention not yet adopted |
-| SGE directives             | `jobs/predict/*.sh` → `#$ -l gpu=1`                                                                                                                                              | 19 near-identical scripts, one per model variant                                                               |
-| Module system              | `module load gcc`, `module load hdf5-parallel`                                                                                                                                   | Not available outside HPC                                                                                      |
-| Conda env                  | `mamba activate perm`                                                                                                                                                            | Specific to cluster user's env                                                                                 |
-| Apptainer container        | `apptainer exec --nv ...`                                                                                                                                                        | Not available on Mac/Linux dev machines                                                                        |
-| Checkpoint retrieval       | `scripts/get-ckpt-from-wandb.sh` (W&B download)                                                                                                                                  | Fragile, no R2 option                                                                                          |
-| Data locality              | Datasets assumed at fixed cluster paths                                                                                                                                          | Opt-in R2 download exists (`download_dataset_root_uri`); no default remote source                              |
+| Coupling                   | Where                                                                                                                                                                          | Impact                                                                                                         |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| Hydra-output-dir data path | `src/synth_setter/configs/datamodule/surge*.yaml` set `dataset_root: ${paths.output_dir}/data` and `predict_file: null` (VSTDataModule resolves null → `dataset_root/test.h5`) | Defaults land under the per-run Hydra dir; `${paths.data_dir}/{config_id}/{run_id}` convention not yet adopted |
+| SGE directives             | `jobs/predict/*.sh` → `#$ -l gpu=1`                                                                                                                                            | 19 near-identical scripts, one per model variant                                                               |
+| Module system              | `module load gcc`, `module load hdf5-parallel`                                                                                                                                 | Not available outside HPC                                                                                      |
+| Conda env                  | `mamba activate perm`                                                                                                                                                          | Specific to cluster user's env                                                                                 |
+| Apptainer container        | `apptainer exec --nv ...`                                                                                                                                                      | Not available on Mac/Linux dev machines                                                                        |
+| Checkpoint retrieval       | `scripts/get-ckpt-from-wandb.sh` (W&B download)                                                                                                                                | Fragile, no R2 option                                                                                          |
+| Data locality              | Datasets assumed at fixed cluster paths                                                                                                                                        | Opt-in R2 download exists (`download_dataset_root_uri`); no default remote source                              |
 
 Separately, the data pipeline (#74) already uses R2 as the source of truth for generated datasets. Extending R2 to the eval workflow — auto-downloading datasets and uploading eval artifacts — and using W&B for checkpoint storage closes the loop so the full workflow (generate → train → eval) can run from any machine with an internet connection.
 
@@ -242,7 +242,7 @@ The predict stage loads a trained model checkpoint via PyTorch Lightning's `Trai
 **Key behaviors:**
 
 - Dataset path resolved from `datamodule.dataset_root` (default: `${paths.output_dir}/data`, CLI/experiment override for fixed datasets)
-- If `datamodule.download_dataset_root_uri` is explicitly set, `SurgeDataModule.prepare_data()` no-clobber-copies the dataset from R2 before loading
+- If `datamodule.download_dataset_root_uri` is explicitly set, `VSTDataModule.prepare_data()` no-clobber-copies the dataset from R2 before loading
 - Checkpoint path supports `${wandb:...}` resolver — auto-downloads from W&B artifacts to local cache
 - Output directory: `${paths.output_dir}/predictions` (see `src/synth_setter/configs/callbacks/prediction_writer.yaml`)
 
@@ -279,8 +279,8 @@ The render stage loads each predicted parameter tensor, decodes it using the `Pa
 - `renderscript.sh` wraps `predict_vst_audio.py` with display server management
 - On macOS: uses native display, no wrapper needed — `make render` calls the Python script directly
 - On headless Linux: launches Xvfb, sets `DISPLAY`, runs script, kills Xvfb
-- Plugin path default: `plugins/Surge XT.vst3` (overridable via `--plugin_path`)
-- Preset path default: `presets/surge-base.vstpreset` (overridable via `--preset_path`)
+- Plugin path default: `$SYNTH_SETTER_PLUGIN_PATH` when set and non-empty, else `plugins/Surge XT.vst3` (overridable via `--plugin_path`)
+- Preset path default: the registry preset for the selected spec, `preset_paths[param_spec]` — `presets/surge-base.vstpreset` for the default `surge_xt` (overridable via `--preset_path`)
 - Parameters are denormalized from `[-1, 1]` → `[0, 1]` before decoding
 
 ### 5.3 Metrics
@@ -312,16 +312,18 @@ Four metrics are computed for each (predicted, target) audio pair:
 
 ### 6.1 Dataset Download
 
-When `datamodule.download_dataset_root_uri` is explicitly provided (via CLI override or experiment config), `SurgeDataModule.prepare_data()` no-clobber-copies the dataset into `datamodule.dataset_root` before the data loaders are created.
+When `datamodule.download_dataset_root_uri` is explicitly provided (via CLI override or experiment config), `VSTDataModule.prepare_data()` no-clobber-copies the dataset into `datamodule.dataset_root` before the data loaders are created.
 
 ```yaml
-# src/synth_setter/configs/datamodule/surge_simple.yaml — download URI opt-in, no env vars for paths
-_target_: synth_setter.data.surge_datamodule.SurgeDataModule
+# src/synth_setter/configs/datamodule/vst.yaml — base config; download URI opt-in, no env vars for paths
+_target_: synth_setter.data.surge_datamodule.VSTDataModule
 dataset_root: ${paths.output_dir}/data
 download_dataset_root_uri: null  # null → local-only; opt in explicitly
 batch_size: 128
 num_workers: 11
 ```
+
+`surge_simple.yaml` is a thin overlay (`defaults: [vst, _self_]`) that only overrides `param_spec_name`; it inherits the keys above from `vst.yaml`.
 
 To use R2, pass it explicitly:
 
@@ -794,7 +796,7 @@ main ──●──────────────●───────
 | 1.3  | Rendering                | Xvfb auto-launch in renderscript.sh                  | Add macOS `$OSTYPE` conditional                  | ~5    |
 | 1.4  | Metrics                  | All 4 metrics working, portable                      | Add Makefile target                              | ~5    |
 | 2.1  | rclone wrapper           | —                                                    | New utility `src/synth_setter/pipeline/r2_io.py` | ~40   |
-| 2.2  | `prepare_data()` R2 sync | —                                                    | Override in SurgeDataModule                      | ~15   |
+| 2.2  | `prepare_data()` R2 sync | —                                                    | Override in VSTDataModule                        | ~15   |
 | 3.1  | W&B resolver             | `register_resolvers()` exists                        | Add wandb resolver (~15 lines)                   | ~15   |
 | —    | Makefile targets         | help, test, format, train                            | Add predict, render, metrics, etc.               | ~40   |
 | —    | Tests                    | conftest.py fixtures exist                           | New test files + fixtures                        | ~400  |

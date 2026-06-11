@@ -904,7 +904,7 @@ def test_get_stats_hdf5_writes_sibling_stats_npz_with_mean_std_keys(
 
     ``finalize_hdf5`` asserts ``stats_npz.is_file()`` after the call, but
     every test of finalize stubs ``get_stats_hdf5``. Pin the real
-    output-path derivation (``SurgeXTDataset.get_stats_file_path``) and
+    output-path derivation (``VSTDataset.get_stats_file_path``) and
     the on-disk schema (``mean`` + ``std`` keyed arrays in the input
     dtype) directly against the real function.
 

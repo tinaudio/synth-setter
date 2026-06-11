@@ -14,12 +14,12 @@ Project terminology for synth-setter. Grouped by domain.
 
 ## Model Architecture
 
-| Term                   | Definition                                                                                                                                                                                                              |
-| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Flow matching**      | A generative modeling technique used for parameter prediction. Learns a vector field that transports noise to the target parameter distribution. Implemented in `SurgeFlowMatchingModule` and `KSinFlowMatchingModule`. |
-| **Optimal transport**  | A mathematical framework for comparing probability distributions. Used in flow matching training and in the SOT evaluation metric.                                                                                      |
-| **FlowVAE**            | A variational autoencoder variant combined with flow-based generation. Implemented in `FlowVAE` / `SurgeFlowVAEModule`.                                                                                                 |
-| **Feed-forward model** | A direct regression model for parameter prediction (no iterative sampling). Implemented in `SurgeFeedForwardModule` and `KSinFeedForwardModule`.                                                                        |
+| Term                   | Definition                                                                                                                                                                                                            |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Flow matching**      | A generative modeling technique used for parameter prediction. Learns a vector field that transports noise to the target parameter distribution. Implemented in `VSTFlowMatchingModule` and `KSinFlowMatchingModule`. |
+| **Optimal transport**  | A mathematical framework for comparing probability distributions. Used in flow matching training and in the SOT evaluation metric.                                                                                    |
+| **FlowVAE**            | A variational autoencoder variant combined with flow-based generation. Implemented in `FlowVAE` / `VSTFlowVAEModule`.                                                                                                 |
+| **Feed-forward model** | A direct regression model for parameter prediction (no iterative sampling). Implemented in `VSTFeedForwardModule` and `KSinFeedForwardModule`.                                                                        |
 
 ## Audio & Synthesis
 
