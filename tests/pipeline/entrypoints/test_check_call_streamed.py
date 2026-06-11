@@ -198,7 +198,9 @@ class TestCheckCallStreamed:
             _check_call_streamed(argv, timeout=2.0)
         elapsed = time.monotonic() - start
 
-        assert elapsed < 30, f"SIGKILL fallback did not unblock the read loop ({elapsed:.1f}s)"
+        # Worst case is timeout(2) + grace(5) + kill ≈ 7s; 15s catches a grace
+        # regression without risking flakiness on a loaded runner.
+        assert elapsed < 15, f"SIGKILL fallback did not unblock the read loop ({elapsed:.1f}s)"
 
     def test_non_utf8_child_output_does_not_crash(
         self, capsys: pytest.CaptureFixture[str]
