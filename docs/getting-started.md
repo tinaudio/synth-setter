@@ -741,8 +741,12 @@ credentials are required.
    privilege drop alone can't fix files that arrive pre-owned by root), it
    also recursively chowns the workspace to the running user — guarded by a
    `stat`-based ownership check — before any `.git` write, so
-   `pre-commit install` and commits don't fail with permission denied. Then
-   the terminal is ready.
+   `pre-commit install` and commits don't fail with permission denied. It also
+   makes the bundled coding agents non-interactive by default — the container
+   is the sandbox — by seeding `~/.codex/config.toml`
+   (`approval_policy = "never"`, `sandbox_mode = "danger-full-access"`, written
+   only when absent so a mounted config wins) and a `~/.bashrc` `agy` wrapper
+   that injects `--dangerously-skip-permissions`. Then the terminal is ready.
 4. Default terminal profile is configured in `.devcontainer/*/devcontainer.json`.
 
 **Verify:**
