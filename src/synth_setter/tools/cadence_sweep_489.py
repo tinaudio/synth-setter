@@ -26,12 +26,13 @@ import argparse
 import os
 import subprocess
 import sys
+import uuid
 from typing import Any
 
-import wandb
 import wandb.env
 from loguru import logger
 
+import wandb
 from synth_setter.data.vst import preset_paths
 from synth_setter.pipeline.schemas.prefix import DEFAULT_R2_PREFIX_ROOT, make_r2_prefix
 
@@ -52,11 +53,12 @@ SURGE_SIMPLE = "surge_simple"
 SURGE_XT_PRESET = preset_paths[SURGE_XT]
 SURGE_SIMPLE_PRESET = preset_paths[SURGE_SIMPLE]
 
+UUID_SIFFIX = f"-{uuid.uuid4().hex[:4]}"
 # Fixed reference run identity -> stable copy-source URI the copy probes replay.
 SURGE_XT_REFERENCE_TASK = "ref-surge-xt-489"
-SURGE_XT_REFERENCE_RUN_ID = "paired-surge-xt-ref-v1"
+SURGE_XT_REFERENCE_RUN_ID = "paired-surge-xt-ref-v1" + UUID_SIFFIX
 SURGE_SIMPLE_REFERENCE_TASK = "ref-surge-simple-489"
-SURGE_SIMPLE_REFERENCE_RUN_ID = "paired-surge-simple-ref-v1"
+SURGE_SIMPLE_REFERENCE_RUN_ID = "paired-surge-simple-ref-v1" + UUID_SIFFIX
 
 # The probes run the with-oracle-eval finalize/eval; the source donates raw param
 # shards only (copy reads same-named shards at the run root), so it skips the eval.
