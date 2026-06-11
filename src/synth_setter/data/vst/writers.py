@@ -28,12 +28,7 @@ from synth_setter.data.vst.generate_vst_dataset import (
     generate_sample,
 )
 from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
-from synth_setter.data.vst.shapes import (
-    DATASET_FIELD_NAMES,
-    audio_dataset_shape,
-    mel_dataset_shape,
-    param_array_dataset_shape,
-)
+from synth_setter.data.vst.shapes import DATASET_FIELD_NAMES, dataset_field_shapes
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from synth_setter.pipeline.schemas.spec import RenderConfig
 
@@ -481,6 +476,7 @@ def make_lance_dataset(
     meta = _shard_metadata_from_render(render_cfg)
     start_idx = 0
     from lance.file import LanceFileWriter
+
     from synth_setter.pipeline.data.lance_shard import lance_schema, record_batch_from_arrays
 
     _validate_fixed_params_lengths(
@@ -488,27 +484,7 @@ def make_lance_dataset(
         fixed_synth_params_list=fixed_synth_params_list,
         fixed_note_params_list=fixed_note_params_list,
     )
-    schema = lance_schema(
-        {
-            DATASET_FIELD_NAMES[0]: audio_dataset_shape(
-                render_cfg.samples_per_shard,
-                render_cfg.channels,
-                render_cfg.sample_rate,
-                render_cfg.signal_duration_seconds,
-            ),
-            DATASET_FIELD_NAMES[1]: mel_dataset_shape(
-                render_cfg.samples_per_shard,
-                render_cfg.channels,
-                render_cfg.sample_rate,
-                render_cfg.signal_duration_seconds,
-            ),
-            DATASET_FIELD_NAMES[2]: param_array_dataset_shape(
-                render_cfg.samples_per_shard,
-                len(param_spec),
-            ),
-        },
-        meta,
-    )
+    schema = lance_schema(dataset_field_shapes(render_cfg, len(param_spec)), meta)
 
     writer = LanceFileWriter(str(lance_file), schema)
 

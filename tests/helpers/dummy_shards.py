@@ -20,16 +20,16 @@ import numpy as np
 
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
+    DATASET_FIELD_DTYPES,
     DATASET_FIELD_NAMES,
     MEL_SPEC_FIELD,
     PARAM_ARRAY_FIELD,
-    audio_dataset_shape,
-    mel_dataset_shape,
-    param_array_dataset_shape,
+    dataset_field_shapes,
 )
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat
 from synth_setter.pipeline.subprocess_stream import check_call_streamed
+from tests.helpers.finalize_shards import write_minimal_lance_shard
 from tests.helpers.subprocess_args import find_script_index
 
 # rclone passthrough: bound from the pipeline module, so it bypasses the patched
@@ -48,19 +48,10 @@ def write_dummy_h5_shard(output_path: Path, spec: DatasetSpec) -> None:
     :param spec: Dataset spec whose ``render`` config and ``num_params`` drive the
         per-field array shapes.
     """
-    render = spec.render
-    n = render.samples_per_shard
-    audio_shape = audio_dataset_shape(
-        n, render.channels, render.sample_rate, render.signal_duration_seconds
-    )
-    mel_shape = mel_dataset_shape(
-        n, render.channels, render.sample_rate, render.signal_duration_seconds
-    )
-    param_shape = param_array_dataset_shape(n, spec.num_params)
+    shapes = dataset_field_shapes(spec.render, spec.num_params)
     with h5py.File(output_path, "w") as f:
-        f.create_dataset(AUDIO_FIELD, data=np.zeros(audio_shape, dtype=np.float16))
-        f.create_dataset(MEL_SPEC_FIELD, data=np.zeros(mel_shape, dtype=np.float32))
-        f.create_dataset(PARAM_ARRAY_FIELD, data=np.zeros(param_shape, dtype=np.float32))
+        for field, shape in shapes.items():
+            f.create_dataset(field, data=np.zeros(shape, dtype=DATASET_FIELD_DTYPES[field]))
 
 
 def write_dummy_tar_shard(output_path: Path, spec: DatasetSpec) -> None:
@@ -76,18 +67,10 @@ def write_dummy_tar_shard(output_path: Path, spec: DatasetSpec) -> None:
     :raises ValueError: If a field name is not in ``DATASET_FIELD_NAMES``.
     """
     render = spec.render
-    n = render.samples_per_shard
-    audio = np.zeros(
-        audio_dataset_shape(
-            n, render.channels, render.sample_rate, render.signal_duration_seconds
-        ),
-        dtype=np.float16,
-    )
-    mel = np.zeros(
-        mel_dataset_shape(n, render.channels, render.sample_rate, render.signal_duration_seconds),
-        dtype=np.float32,
-    )
-    params = np.zeros(param_array_dataset_shape(n, spec.num_params), dtype=np.float32)
+    shapes = dataset_field_shapes(render, spec.num_params)
+    audio = np.zeros(shapes[AUDIO_FIELD], dtype=DATASET_FIELD_DTYPES[AUDIO_FIELD])
+    mel = np.zeros(shapes[MEL_SPEC_FIELD], dtype=DATASET_FIELD_DTYPES[MEL_SPEC_FIELD])
+    params = np.zeros(shapes[PARAM_ARRAY_FIELD], dtype=DATASET_FIELD_DTYPES[PARAM_ARRAY_FIELD])
     metadata = ShardMetadata(
         velocity=render.velocity,
         signal_duration_seconds=render.signal_duration_seconds,
@@ -119,7 +102,8 @@ def stub_renderer(spec: DatasetSpec) -> Callable[[list[str]], None]:
     """Return a ``_check_call_streamed`` side effect that writes dummy shards.
 
     Dispatches on the renderer output path's suffix via ``OutputFormat.from_extension``,
-    so the same factory backs both hdf5 and wds runs. ``rclone`` invocations fall
+    so the same factory backs hdf5, wds, and lance runs (the lance writer is
+    shared with the finalize lanes). ``rclone`` invocations fall
     through to the real binary so the R2 upload, the skip-existing probe, and any
     purge hit the configured remote (real R2, or a local-backed fake remote).
 
@@ -140,6 +124,8 @@ def stub_renderer(spec: DatasetSpec) -> Callable[[list[str]], None]:
             write_dummy_h5_shard(output_file, spec)
         elif fmt is OutputFormat.WDS:
             write_dummy_tar_shard(output_file, spec)
+        elif fmt is OutputFormat.LANCE:
+            write_minimal_lance_shard(output_file, spec)
         else:
             raise AssertionError(
                 f"stubbed renderer cannot write output with suffix {output_file.suffix!r}"

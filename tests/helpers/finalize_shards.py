@@ -27,12 +27,10 @@ from synth_setter.data.vst.shapes import (
     DATASET_FIELD_DTYPES,
     MEL_SPEC_FIELD,
     PARAM_ARRAY_FIELD,
-    audio_dataset_shape,
-    mel_dataset_shape,
-    param_array_dataset_shape,
+    dataset_field_shapes,
 )
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
-from synth_setter.pipeline.schemas.spec import DatasetSpec
+from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 
 
 def write_minimal_wds_shard(dest: Path) -> None:
@@ -95,6 +93,7 @@ def build_lance_smoke_spec(
     task_name: str = "finalize-lance-unit",
     train_val_test_sizes: tuple[int, int, int] = (4, 0, 0),
     mask_degenerate_bins: bool = False,
+    render: RenderConfig | None = None,
 ) -> DatasetSpec:
     """Construct a lance ``DatasetSpec`` directly (no Hydra compose).
 
@@ -102,6 +101,8 @@ def build_lance_smoke_spec(
     :param train_val_test_sizes: Three-tuple of sample counts; default is one
         4-sample shard.
     :param mask_degenerate_bins: Threaded onto the spec for stats-fold tests.
+    :param render: Optional render config replacing the smoke default — used by
+        e2e tests that must wrap the exact config a writer rendered with.
     :returns: A frozen lance ``DatasetSpec`` whose shards are deterministic.
     """
     kwargs: dict[str, Any] = {
@@ -111,7 +112,9 @@ def build_lance_smoke_spec(
         "base_seed": 42,
         "mask_degenerate_bins": mask_degenerate_bins,
         "r2": {"bucket": "intermediate-data"},
-        "render": {
+        "render": render
+        if render is not None
+        else {
             "plugin_path": "/fake/Plugin.vst3",
             "preset_path": "presets/surge-base.vstpreset",
             "param_spec_name": "surge_simple",
@@ -184,21 +187,7 @@ def write_minimal_lance_shard(dest: Path, spec: DatasetSpec) -> None:
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     render = spec.render
-    shapes = {
-        AUDIO_FIELD: audio_dataset_shape(
-            render.samples_per_shard,
-            render.channels,
-            render.sample_rate,
-            render.signal_duration_seconds,
-        ),
-        MEL_SPEC_FIELD: mel_dataset_shape(
-            render.samples_per_shard,
-            render.channels,
-            render.sample_rate,
-            render.signal_duration_seconds,
-        ),
-        PARAM_ARRAY_FIELD: param_array_dataset_shape(render.samples_per_shard, spec.num_params),
-    }
+    shapes = dataset_field_shapes(render, spec.num_params)
     metadata = ShardMetadata(
         velocity=render.velocity,
         signal_duration_seconds=render.signal_duration_seconds,
@@ -275,33 +264,11 @@ def seed_shard_files(remote_root: Path, spec: DatasetSpec) -> None:
     :param spec: Spec whose ``shards`` define the filenames to seed.
     """
     remote_root.mkdir(parents=True, exist_ok=True)
-    render = spec.render
-    audio_shape = audio_dataset_shape(
-        render.samples_per_shard,
-        render.channels,
-        render.sample_rate,
-        render.signal_duration_seconds,
-    )
-    mel_shape = mel_dataset_shape(
-        render.samples_per_shard,
-        render.channels,
-        render.sample_rate,
-        render.signal_duration_seconds,
-    )
-    param_shape = param_array_dataset_shape(render.samples_per_shard, spec.num_params)
+    shapes = dataset_field_shapes(spec.render, spec.num_params)
     for shard in spec.shards:
         with h5py.File(remote_root / shard.filename, "w") as f:
-            f.create_dataset(
-                AUDIO_FIELD, shape=audio_shape, dtype=DATASET_FIELD_DTYPES[AUDIO_FIELD]
-            )
-            f.create_dataset(
-                MEL_SPEC_FIELD, shape=mel_shape, dtype=DATASET_FIELD_DTYPES[MEL_SPEC_FIELD]
-            )
-            f.create_dataset(
-                PARAM_ARRAY_FIELD,
-                shape=param_shape,
-                dtype=DATASET_FIELD_DTYPES[PARAM_ARRAY_FIELD],
-            )
+            for field, shape in shapes.items():
+                f.create_dataset(field, shape=shape, dtype=DATASET_FIELD_DTYPES[field])
 
 
 def write_spec_to_root(spec: DatasetSpec, tmp_path: Path) -> str:
