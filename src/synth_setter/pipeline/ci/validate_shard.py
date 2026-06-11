@@ -178,9 +178,9 @@ def validate_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
     """Validate one shard against a DatasetSpec, dispatching by filename suffix.
 
     Suffix dispatch via ``OutputFormat.from_extension``: ``.h5`` -> HDF5 path,
-    ``.tar`` -> tar/wds path. Any other suffix is rejected with an error
-    naming the registered set so a typo or wrong-format file does not
-    surface as a misleading "not valid HDF5".
+    ``.tar`` -> tar/wds path, ``.lance`` -> Lance path. Any other suffix is
+    rejected with an error naming the registered set so a typo or
+    wrong-format file does not surface as a misleading "not valid HDF5".
 
     :param shard_path: Local filesystem path to the shard to validate.
     :param spec: Dataset spec the shard is expected to conform to.

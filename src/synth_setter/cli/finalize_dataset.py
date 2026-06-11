@@ -3,11 +3,14 @@
 Loads the frozen ``DatasetSpec`` from ``input_spec.json`` under
 ``cfg.dataset_root_uri`` (the R2 run prefix the upstream generate stage's
 ``upload_spec`` wrote to) and dispatches
-on ``spec.output_format``. Both branches upload their derived artifact(s)
-and then write the ``dataset.complete`` marker last per
+on ``spec.output_format``. Every branch uploads its derived artifact(s)
+and then writes the ``dataset.complete`` marker last per
 ``pipeline/CLAUDE.md``. The wds branch streams train shards through
 Welford row-by-row; the hdf5 branch downloads every shard, reshards into
-``{train,val,test}.h5``, and computes ``stats.npz`` over the train split.
+``{train,val,test}.h5``, and computes ``stats.npz`` over the train split;
+the lance branch downloads every shard, streams train shards through
+Welford for ``stats.npz``, and concatenates each split's shards into
+``{train,val,test}.lance``.
 """
 
 from __future__ import annotations
