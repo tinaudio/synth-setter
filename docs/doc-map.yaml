@@ -59,6 +59,8 @@ docs:
         covers: "Checkpoint resolution from W&B, evaluation logging"
       - pattern: "src/synth_setter/cli/generate_dataset.py"
         covers: "WandbLogger lifecycle for dataset generation: spec → hyperparams + dataset-spec artifact, per-shard + summary history rows, run id pinned to spec.run_id, inline oracle eval resuming the run to append per-split-namespaced audio rows (test bare audio/*; train/val under <split>/audio/* via +evaluation.metric_prefix)"
+      - pattern: "src/synth_setter/pipeline/subprocess_stream.py"
+        covers: "`check_call_streamed` — exit-keyed streamed subprocess runner that tees render/rclone/eval child output through the `console=wrap`-captured `sys.stderr`"
       - pattern: "src/synth_setter/configs/dataset.yaml"
         covers: "Default `logger: wandb` for dataset generation; entity/project sourced from logger/wandb.yaml"
       - pattern: "sweeps/**"
