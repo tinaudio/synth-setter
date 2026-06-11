@@ -1,9 +1,9 @@
 """One-command runner for the #489 surge_xt cadence investigation.
 
-Generates the fixed surge_xt copy-source dataset, then creates five W&B grid
-sweeps and runs an agent for each: two within-run probes (render-order shuffle,
-reuse-depth) and three paired-copy probes (reload cadence, gui cadence,
-reproducibility) that replay the source via its derived run-root URI.
+Generates the fixed surge_xt and surge_simple copy-source datasets, then creates
+the W&B grid sweeps and runs an agent for each. Copy and shuffle probes replay
+the source via its derived run-root URI; the controls omit the copy URI and
+regenerate fresh. ``sweeps()`` is authoritative on the matrix; see #489.
 
 The dataset size N is the only input; it feeds both the source and the copy
 probes so their copy-preflight match set (param spec, samples-per-shard, split
@@ -14,7 +14,7 @@ Run it::
     python -m synth_setter.tools.cadence_sweep_489            # the full #489 run
     python -m synth_setter.tools.cadence_sweep_489 --size 5
 
-Every sweep is created before any agent runs, so all five appear in the W&B UI
+Every sweep is created before any agent runs, so they all appear in the W&B UI
 even if an agent later stalls; agents then run one at a time because they share
 one Xvfb display and would otherwise contend on it. Run under tmux/nohup so a
 disconnect does not orphan an in-flight agent.
@@ -28,10 +28,10 @@ import subprocess
 import sys
 from typing import Any
 
+import wandb
 import wandb.env
 from loguru import logger
 
-import wandb
 from synth_setter.data.vst import preset_paths
 from synth_setter.pipeline.schemas.prefix import DEFAULT_R2_PREFIX_ROOT, make_r2_prefix
 
@@ -118,7 +118,7 @@ def _sweep(
         "program": PROGRAM,
         "entity": ENTITY,
         "project": PROJECT,
-        "name": f"generate_dataset_{name}_surge_xt",
+        "name": f"generate_dataset_{name}",
         "method": "grid",
         # grid ignores metric at scheduling time; kept for dashboard legibility.
         "metric": {"goal": "minimize", "name": "audio/mss_mean"},
@@ -128,9 +128,10 @@ def _sweep(
 
 
 def sweeps(n: int) -> list[dict[str, Any]]:
-    """Return the five #489 W&B grid sweep configs at dataset size ``n``.
+    """Return the #489 W&B grid sweep configs at dataset size ``n``.
 
-    The derived ``copy_dataset_root_uri`` so every cell replays the source verbatim.
+    The copy and shuffle probes pin the derived ``copy_dataset_root_uri`` so their cells replay the
+    source verbatim; the control sweeps omit it and regenerate fresh.
 
     :param n: Per-split sample count shared with the source generation.
     :returns: ``wandb.sweep``-ready config dicts, in run order.
@@ -226,7 +227,6 @@ def sweeps(n: int) -> list[dict[str, Any]]:
                 samples_per_shard,
                 simple_spec,
                 simple_preset,
-                simple_copy_uri,
             ),
             grid={
                 "render.plugin_reload_cadence": ["once", "render"],
@@ -279,13 +279,13 @@ def _run_agent(sweep_id: str) -> None:
 
 
 def run(n: int) -> None:
-    """Generate the copy source, then create and drive all five #489 sweeps.
+    """Generate the surge_xt and surge_simple copy sources, then create and drive every #489 sweep.
 
-    The source is generated first because the copy probes read it; then every sweep is created
-    before any agent runs so all five land in the W&B UI; agents run one at a time to avoid
+    The sources are generated first because the copy probes read them; then every sweep is created
+    before any agent runs so they all land in the W&B UI; agents run one at a time to avoid
     contending on the shared Xvfb display.
 
-    :param n: Per-split sample count shared by the source and the copy probes;
+    :param n: Per-split sample count shared by the sources and the copy probes.
     """
     copy_src_overrides = [
         f"experiment={_SOURCE_EXPERIMENT}",
