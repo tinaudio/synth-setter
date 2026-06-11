@@ -130,7 +130,11 @@ terminal multiplexer (pinned upstream musl binary, SHA256-verified, in
 history survives container rebuilds. The VS Code terminal defaults to the
 `zellij` profile (tmux stays selectable, with the generic defaults in
 `.devcontainer/tmux.conf` — mouse mode, true color, key bindings — but no
-session persistence); the `synth-setter-zellij-cache` and
+session persistence). `post-create.sh` installs `.devcontainer/zellij.kdl` to
+`~/.config/zellij/config.kdl` for both users; it silences the startup-tip and
+release-notes popups and reattaches every terminal to one shared `main` session
+(`session_name` + `attach_to_session true`), so a second VS Code terminal
+mirrors the first. The `synth-setter-zellij-cache` and
 `synth-setter-zellij-cache-root` named volumes at `/home/dev/.cache/zellij`
 and `/root/.cache/zellij` persist zellij's serialized (resurrectable) sessions
 across rebuilds for the same two users. The same devcontainer configs also

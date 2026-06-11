@@ -8,12 +8,16 @@
 # configuration, or sourced manually inside the container shell.
 set -euo pipefail
 
-# Install ~/.tmux.conf for the current user (the VS Code terminal profile in
-# each .devcontainer/*/devcontainer.json launches tmux, which auto-discovers
-# this file). Done before the root→dev exec below so the root variant's
-# /root/.tmux.conf is populated for terminals that open as root.
+# Install ~/.tmux.conf for the current user (the selectable tmux terminal
+# profile in each .devcontainer/*/devcontainer.json auto-discovers this file).
+# Done before the root→dev exec below so the root variant's /root/.tmux.conf
+# is populated for terminals that open as root.
 _devc_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 install -m 0644 "$_devc_dir/tmux.conf" "$HOME/.tmux.conf"
+
+# Install the zellij config (default VS Code terminal profile) like tmux.conf
+# above — silences startup popups, shares one session; pre-exec so root is covered.
+install -D -m 0644 "$_devc_dir/zellij.kdl" "$HOME/.config/zellij/config.kdl"
 
 # Drop to `dev` when invoked as root so workspace mutations (git config
 # --local, pre-commit install → .git/hooks/*) don't land root-owned in the
