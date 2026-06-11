@@ -416,6 +416,50 @@ class TestExitKeyedLiveness:
         assert all(f"TICK_{i}".encode() in out for i in range(6))
 
 
+class TestLoopTeardownHygiene:
+    """The abandoned-drain path must not leak GC-time loop noise."""
+
+    def test_abandoned_drain_emits_no_event_loop_closed_noise(
+        self, tmp_path: Path, leak_marker: str
+    ) -> None:
+        """A pipe-holder run leaves no 'Event loop is closed' traceback at exit.
+
+        An unclosed subprocess transport is GC'd after ``asyncio.run`` closes
+        the loop and prints an 'Exception ignored ... Event loop is closed'
+        traceback to stderr — straight into the W&B-captured logs this runner
+        exists to keep clean. Run in a fresh interpreter because the noise
+        only appears at interpreter-exit GC.
+
+        :param tmp_path: Scratch dir for the driver script.
+        :param leak_marker: argv stamp from the autouse sweep fixture.
+        """
+        src_dir = str(Path("src").resolve())
+        driver = tmp_path / "driver.py"
+        driver.write_text(
+            f"import sys\n"
+            f"sys.path.insert(0, {src_dir!r})\n"
+            "from synth_setter.pipeline.subprocess_stream import check_call_streamed\n"
+            'CHILD = """\n'
+            "import os, sys, time\n"
+            "if os.fork() == 0:\n"
+            "    time.sleep(60); os._exit(0)\n"
+            'print("CHILD_DONE", flush=True)\n'
+            '"""\n'
+            f"out = check_call_streamed([sys.executable, '-c', CHILD, {leak_marker!r}])\n"
+            "assert b'CHILD_DONE' in out\n"
+        )
+
+        result = subprocess.run(  # noqa: S603
+            [sys.executable, str(driver), leak_marker],
+            capture_output=True,
+            text=True,
+            timeout=_BACKSTOP_SECONDS,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert "Event loop is closed" not in result.stderr, result.stderr
+
+
 class TestTimeoutEscalation:
     """Policy timeouts: SIGTERM first (#1634), SIGKILL only for the wedged."""
 

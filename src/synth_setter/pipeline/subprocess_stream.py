@@ -163,6 +163,12 @@ async def check_call_streamed_async(
             # return_exceptions swallows the pump's CancelledError without
             # masking an external cancellation of this coroutine.
             await asyncio.gather(pump_task, return_exceptions=True)
+            # Close the subprocess transport while the loop is still open;
+            # left to GC it closes after asyncio.run() ends the loop, spraying
+            # "Exception ignored ... Event loop is closed" into the tee'd logs.
+            transport = getattr(proc, "_transport", None)
+            if transport is not None:
+                transport.close()
 
         if tee_broken:
             # Logged here, where a sink failure can no longer kill the pump.

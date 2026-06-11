@@ -50,7 +50,7 @@ docs:
     description: W&B logging, auth, metrics, and artifact reference
     sources:
       - pattern: "src/synth_setter/configs/logger/wandb.yaml"
-        covers: "Entity, project, log_model setting, offline mode"
+        covers: "Entity, project, log_model setting, offline mode, console capture (`wrap` + `console_multipart`)"
       - pattern: "src/synth_setter/configs/logger/many_loggers.yaml"
         covers: "Default logger compose — which loggers are enabled out of the box"
       - pattern: "src/synth_setter/cli/train.py"
