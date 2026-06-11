@@ -17,7 +17,7 @@ def find_script_index(args: list[str]) -> int:
     on Linux versus ``[python, script, output, ...]`` elsewhere — so callers
     locate the script by name rather than fixed index.
 
-    :param args: argv list passed to a patched ``subprocess.check_call``.
+    :param args: argv list passed to a patched ``_check_call_streamed``.
     :returns: Index of the entry that ends with ``generate_vst_dataset.py``.
     :raises AssertionError: No entry in ``args`` ends with the script name.
     """

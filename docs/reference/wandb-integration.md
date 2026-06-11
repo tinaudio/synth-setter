@@ -1,6 +1,6 @@
 # W&B Integration Reference
 
-> **Code version**: `1970388` (2026-04-25, `feat/wandb-default-logger`)
+> **Code version**: `b389c72` (2026-06-11, `fix/1604-exit-keyed-subprocess-streaming`)
 > **PyTorch**: see `pyproject.toml` (`[dependency-groups].torch`) · **Lightning**: see `pyproject.toml` (`[dependency-groups].torch`)
 > **Tracking**: #252, #263
 
@@ -21,16 +21,18 @@ ______________________________________________________________________
 
 ## 1. Initialization
 
-| Concern           | How it works                                                                                                                                                                          | File                                                            |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| W&B run creation  | `WandbLogger` instantiated by Hydra — included in the default `many_loggers` compose (W&B + CSV + TB)                                                                                 | `src/synth_setter/configs/logger/wandb.yaml`                    |
-| Entity / project  | Env-var driven: `entity: ${oc.env:WANDB_ENTITY,null}`, `project: "${oc.env:WANDB_PROJECT,synth-setter}"`                                                                              | `src/synth_setter/configs/logger/wandb.yaml:10,15`              |
-| Default compose   | `many_loggers` composes `csv + tensorboard + wandb` (W&B enabled by default)                                                                                                          | `src/synth_setter/configs/logger/many_loggers.yaml`             |
-| Run ID            | `null` (W&B auto-generates)                                                                                                                                                           | `src/synth_setter/configs/logger/wandb.yaml:8`                  |
-| Checkpoint upload | `log_model: False` — no checkpoint files to W&B; the best ckpt is uploaded to R2 at train end and referenced by the `model-{config_id}` artifact                                      | `src/synth_setter/configs/logger/wandb.yaml:13`                 |
-| Code saving       | `wandb.Settings(code_dir=".")`                                                                                                                                                        | `src/synth_setter/configs/logger/wandb.yaml` § `wandb.settings` |
-| Console capture   | `wandb.Settings(console="wrap")` — `redirect` captures into a local `output.log` that wandb 0.26.x never uploads (empty UI Logs tab); `wrap` is the only mode that reaches the server | `src/synth_setter/configs/logger/wandb.yaml` § `wandb.settings` |
-| Run teardown      | `wandb.finish()` in `task_wrapper` finally block                                                                                                                                      | `src/synth_setter/utils/utils.py` § `task_wrapper`              |
+| Concern           | How it works                                                                                                                                                                                                                                                                                      | File                                                              |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| W&B run creation  | `WandbLogger` instantiated by Hydra — included in the default `many_loggers` compose (W&B + CSV + TB)                                                                                                                                                                                             | `src/synth_setter/configs/logger/wandb.yaml`                      |
+| Entity / project  | Env-var driven: `entity: ${oc.env:WANDB_ENTITY,null}`, `project: "${oc.env:WANDB_PROJECT,synth-setter}"`                                                                                                                                                                                          | `src/synth_setter/configs/logger/wandb.yaml` § `entity`/`project` |
+| Default compose   | `many_loggers` composes `csv + tensorboard + wandb` (W&B enabled by default)                                                                                                                                                                                                                      | `src/synth_setter/configs/logger/many_loggers.yaml`               |
+| Run ID            | `null` (W&B auto-generates)                                                                                                                                                                                                                                                                       | `src/synth_setter/configs/logger/wandb.yaml` § `id`               |
+| Checkpoint upload | `log_model: False` — no checkpoint files to W&B; the best ckpt is uploaded to R2 at train end and referenced by the `model-{config_id}` artifact                                                                                                                                                  | `src/synth_setter/configs/logger/wandb.yaml` § `log_model`        |
+| Code saving       | `wandb.Settings(code_dir=".")`                                                                                                                                                                                                                                                                    | `src/synth_setter/configs/logger/wandb.yaml` § `wandb.settings`   |
+| Console capture   | `wandb.Settings(console="wrap", console_multipart=True)` — `redirect` captures into a local `output.log` that wandb 0.26.x never uploads (#1465); `wrap` reaches the server but sees only this process's Python-level writes. Subprocess tee + multipart semantics: see the note below this table | `src/synth_setter/configs/logger/wandb.yaml` § `wandb.settings`   |
+| Run teardown      | `wandb.finish()` in `task_wrapper` finally block                                                                                                                                                                                                                                                  | `src/synth_setter/utils/utils.py` § `task_wrapper`                |
+
+**Subprocess console capture.** `generate_dataset` tees the children it spawns — the renderer, the per-shard rclone upload, and the inline oracle eval — through `sys.stderr` via `check_call_streamed` (`src/synth_setter/pipeline/subprocess_stream.py`, exit-keyed so a pipe-holding descendant can't stall it). Other rclone call sites (spec upload, `finalize_from_spec`'s `r2_io` transfers) still write to the inherited fd and bypass capture. `console_multipart=True` gives each resumed session (generate → finalize → oracle eval) its own `logs/output_*.log` instead of overwriting one `output.log`.
 
 **No direct `wandb.init()` calls exist in runtime code.** One `wandb.config.update()` call exists: `log_wandb_provenance()` in `src/synth_setter/utils/logging_utils.py:91` writes provenance metadata (see [2g](#2g-provenance-metadata-logged-once-at-run-start)).
 
@@ -280,7 +282,9 @@ split so they don't overwrite each other's run summary: `test` keeps the bare
 every metric key, so the `shuffled_audio/*` keys (§2) become `train/shuffled_audio/*`
 etc. too. The eval subprocess
 inherits `WANDB_MODE` from the launcher, so its offline/online posture follows
-the parent's.
+the parent's. Console logs survive the split-by-split resumes via
+`console_multipart=True`: each session uploads its own `logs/output_*.log`
+rather than overwriting a single server-side `output.log`.
 
 ______________________________________________________________________
 

@@ -64,6 +64,16 @@ def tmux_conf(devcontainer_dir: Path) -> Path:
 
 
 @pytest.fixture(scope="session")
+def zellij_config(devcontainer_dir: Path) -> Path:
+    """Path to the zellij config that post-create.sh installs into the container.
+
+    :param devcontainer_dir: Directory holding the per-flavor devcontainer configs.
+    :returns: The `zellij.kdl` source file under that directory.
+    """
+    return devcontainer_dir / "zellij.kdl"
+
+
+@pytest.fixture(scope="session")
 def initialize_script(devcontainer_dir: Path) -> Path:
     """Absolute path to `.devcontainer/initialize.sh`."""
     return devcontainer_dir / "initialize.sh"

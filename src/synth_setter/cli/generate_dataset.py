@@ -50,6 +50,10 @@ from synth_setter.pipeline.spec_io import (
     upload_spec,
     write_spec_locally,
 )
+
+# Imported under the module-local name tests already patch as the render /
+# rclone / eval subprocess seam (see tests/helpers/render_subprocess.py).
+from synth_setter.pipeline.subprocess_stream import check_call_streamed as _check_call_streamed
 from synth_setter.resources import as_file, vst_headless_wrapper
 from synth_setter.utils import extras, log_wandb_provenance, pin_wandb_run_id, register_resolvers
 from synth_setter.utils.instantiators import close_loggers, instantiate_loggers
@@ -86,8 +90,8 @@ def _run_oracle_eval_subprocess(
 ) -> None:
     """Run the fake-oracle eval over one split of ``dataset_root``.
 
-    ``check=True`` so a non-zero eval exit (or wall-clock timeout) propagates
-    to the caller.
+    ``_check_call_streamed`` raises on a non-zero eval exit or wall-clock
+    timeout, so either propagates to the caller.
 
     :param dataset_root: Dir holding the finalized HDF5 splits, their source
         shards, and ``stats.npz``. The splits are virtual datasets that
@@ -175,7 +179,7 @@ def _run_oracle_eval_subprocess(
     if metric_prefix:
         argv.append(f"+evaluation.metric_prefix={metric_prefix}")
     logger.info(f"oracle_eval_inline subprocess: {argv}")
-    subprocess.run(argv, check=True, timeout=_ORACLE_EVAL_TIMEOUT_SECONDS)  # noqa: S603
+    _check_call_streamed(argv, timeout=_ORACLE_EVAL_TIMEOUT_SECONDS)
 
 
 def _unsupported_cadence_reason(render_cfg: DictConfig) -> str | None:
@@ -214,11 +218,11 @@ def _rclone_copy(src: str, dest: str) -> None:
     :param dest: R2 destination passed to rclone verbatim.
     """
     args = r2_io._rclone_argv("copy", src, dest)
-    subprocess.check_call(args)  # noqa: S603 — args from validated spec
+    _check_call_streamed(args)
     # Distinct sentinel so we can grep CI logs for "rclone returned" and tell
     # at a glance whether the rclone subprocess actually exited (vs. hanging
-    # post-upload — see #735). If the upload itself failed, check_call already
-    # raised before we got here.
+    # post-upload — see #735). If the upload itself failed, _check_call_streamed
+    # already raised before we got here.
     logger.info(f"rclone returned cleanly: {src} -> {dest}")
 
 
@@ -672,7 +676,7 @@ def _render_and_upload_shard(
         max_attempts = spec.render.max_retries + 1
         for attempt in range(max_attempts):
             try:
-                subprocess.check_call(args)  # noqa: S603 — args built from validated spec
+                _check_call_streamed(args)
                 break
             except subprocess.CalledProcessError:
                 if attempt + 1 == max_attempts:
