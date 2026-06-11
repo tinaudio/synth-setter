@@ -163,6 +163,10 @@ async def check_call_streamed_async(
             # return_exceptions swallows the pump's CancelledError without
             # masking an external cancellation of this coroutine.
             await asyncio.gather(pump_task, return_exceptions=True)
+
+        if tee_broken:
+            # Logged here, where a sink failure can no longer kill the pump.
+            _LOG.warning("subprocess_tee_degraded", cmd=cmd[0])
     finally:
         # Sweep right after the wait so the pgid-recycle window stays
         # microseconds; surviving members keep the pgid reserved, so it's safe.

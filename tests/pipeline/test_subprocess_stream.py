@@ -9,6 +9,10 @@ and ``os.fork`` real grandchildren; no part of the SUT is mocked. Every
 liveness claim carries an elapsed-time bound so a hang regression fails
 fast instead of passing slowly, and an outer ``asyncio.wait_for`` backstop
 turns a true wedge into a test failure rather than a stalled CI job.
+
+Class docstrings cite a problem taxonomy: 1 pipe-buffer deadlock, 2 child
+buffering on a non-tty, 3 tee through the wrap-patched stream, 4a EOF-keyed
+hang, 4b descendant leak.
 """
 
 from __future__ import annotations
@@ -26,6 +30,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
+from structlog.testing import capture_logs
 
 from synth_setter.pipeline.subprocess_stream import (
     check_call_streamed,
@@ -217,6 +222,8 @@ class TestPipeDrain:
             _streamed(argv, timeout=_POLICY_TIMEOUT_SECONDS)
 
         assert b"BEFORE_HANG" in excinfo.value.output
+        assert excinfo.value.timeout == _POLICY_TIMEOUT_SECONDS
+        assert excinfo.value.cmd == argv
 
     def test_env_none_inherits_parent_and_pins_unbuffered(
         self, leak_marker: str, monkeypatch: pytest.MonkeyPatch
@@ -304,7 +311,7 @@ class TestWrapTee:
         """
         orig = sys.stderr.write
 
-        def _raising_write(s: str) -> int:
+        def _raising_write(_s: str) -> int:
             raise OSError("wrapped stream torn down")
 
         sys.stderr.write = _raising_write  # type: ignore[method-assign]
@@ -361,11 +368,14 @@ class TestExitKeyedLiveness:
         script = _PIPE_HOLDING_GRANDCHILD.format(child_exit="")
 
         start = time.monotonic()
-        out = _streamed(_child(script, leak_marker))
+        with capture_logs() as logs:
+            out = _streamed(_child(script, leak_marker))
         elapsed = time.monotonic() - start
 
         assert b"CHILD_DONE" in out
         assert elapsed < _PROMPT_SECONDS, f"exit-keyed wait stalled on EOF ({elapsed:.1f}s)"
+        # The abandoned drain must leave an operator breadcrumb.
+        assert any(e["event"] == "subprocess_output_drain_abandoned" for e in logs)
 
     def test_pipe_holding_grandchild_nonzero_exit_truthful_error(self, leak_marker: str) -> None:
         """Exit codes survive daemon loitering in the failure direction too.
@@ -449,12 +459,14 @@ class TestTimeoutEscalation:
         )
 
         start = time.monotonic()
-        with pytest.raises(subprocess.TimeoutExpired):
+        with capture_logs() as logs, pytest.raises(subprocess.TimeoutExpired):
             _streamed(_child(script, leak_marker), timeout=_POLICY_TIMEOUT_SECONDS)
         elapsed = time.monotonic() - start
 
         # _POLICY_TIMEOUT_SECONDS + _TERM_TO_KILL_GRACE_SECONDS + CI margin.
         assert elapsed < 12.0, f"SIGKILL escalation overran ({elapsed:.1f}s)"
+        # The KILL escalation must leave an operator breadcrumb.
+        assert any(e["event"] == "subprocess_term_to_kill_escalation" for e in logs)
 
     @pytest.mark.slow
     def test_timeout_sigterm_ignoring_pipe_holding_grandchild_raises_within_bound(
