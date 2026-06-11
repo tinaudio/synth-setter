@@ -1,4 +1,4 @@
-"""One-command runner for the #489 surge_xt cadence investigation.
+"""One-command runner for the #489 cadence investigation.
 
 Generates the fixed surge_xt and surge_simple copy-source datasets, then creates
 the W&B grid sweeps and runs an agent for each. Copy and shuffle probes replay
