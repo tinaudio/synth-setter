@@ -1,9 +1,9 @@
-"""One-command runner for the #489 surge_xt cadence investigation.
+"""One-command runner for the #489 cadence investigation.
 
-Generates the fixed surge_xt copy-source dataset, then creates five W&B grid
-sweeps and runs an agent for each: two within-run probes (render-order shuffle,
-reuse-depth) and three paired-copy probes (reload cadence, gui cadence,
-reproducibility) that replay the source via its derived run-root URI.
+Generates the fixed surge_xt and surge_simple copy-source datasets, then creates
+the W&B grid sweeps and runs an agent for each. Copy and shuffle probes replay
+the source via its derived run-root URI; the controls omit the copy URI and
+regenerate fresh. ``sweeps()`` is authoritative on the matrix; see #489.
 
 The dataset size N is the only input; it feeds both the source and the copy
 probes so their copy-preflight match set (param spec, samples-per-shard, split
@@ -14,7 +14,7 @@ Run it::
     python -m synth_setter.tools.cadence_sweep_489            # the full #489 run
     python -m synth_setter.tools.cadence_sweep_489 --size 5
 
-Every sweep is created before any agent runs, so all five appear in the W&B UI
+Every sweep is created before any agent runs, so they all appear in the W&B UI
 even if an agent later stalls; agents then run one at a time because they share
 one Xvfb display and would otherwise contend on it. Run under tmux/nohup so a
 disconnect does not orphan an in-flight agent.
@@ -26,6 +26,7 @@ import argparse
 import os
 import subprocess
 import sys
+import uuid
 from typing import Any
 
 import wandb.env
@@ -52,11 +53,12 @@ SURGE_SIMPLE = "surge_simple"
 SURGE_XT_PRESET = preset_paths[SURGE_XT]
 SURGE_SIMPLE_PRESET = preset_paths[SURGE_SIMPLE]
 
+UUID_SIFFIX = f"-{uuid.uuid4().hex[:4]}"
 # Fixed reference run identity -> stable copy-source URI the copy probes replay.
 SURGE_XT_REFERENCE_TASK = "ref-surge-xt-489"
-SURGE_XT_REFERENCE_RUN_ID = "paired-surge-xt-ref-v1"
+SURGE_XT_REFERENCE_RUN_ID = "paired-surge-xt-ref-v1" + UUID_SIFFIX
 SURGE_SIMPLE_REFERENCE_TASK = "ref-surge-simple-489"
-SURGE_SIMPLE_REFERENCE_RUN_ID = "paired-surge-simple-ref-v1"
+SURGE_SIMPLE_REFERENCE_RUN_ID = "paired-surge-simple-ref-v1" + UUID_SIFFIX
 
 # The probes run the with-oracle-eval finalize/eval; the source donates raw param
 # shards only (copy reads same-named shards at the run root), so it skips the eval.
@@ -105,20 +107,22 @@ def _sweep(
     :param grid: Maps each swept Hydra key to its values; their product is the cells.
     :returns: A ``wandb.sweep``-ready config dict.
     """
+    # ``${args_no_hyphens}`` (the swept grid cell) goes last: Hydra applies later overrides last,
+    # so a fixed pin must never follow a swept key it would otherwise shadow.
     command = [
         "${interpreter}",
         "${program}",
-        "${args_no_hyphens}",
         f"task_name={name}",
         f"r2.prefix_root={PREFIX_ROOT}",
         f"experiment={_PROBE_EXPERIMENT}",
         *fixed,
+        "${args_no_hyphens}",
     ]
     return {
         "program": PROGRAM,
         "entity": ENTITY,
         "project": PROJECT,
-        "name": f"generate_dataset_{name}_surge_xt",
+        "name": f"generate_dataset_{name}",
         "method": "grid",
         # grid ignores metric at scheduling time; kept for dashboard legibility.
         "metric": {"goal": "minimize", "name": "audio/mss_mean"},
@@ -128,9 +132,10 @@ def _sweep(
 
 
 def sweeps(n: int) -> list[dict[str, Any]]:
-    """Return the five #489 W&B grid sweep configs at dataset size ``n``.
+    """Return the #489 W&B grid sweep configs at dataset size ``n``.
 
-    The derived ``copy_dataset_root_uri`` so every cell replays the source verbatim.
+    The copy and shuffle probes pin the derived ``copy_dataset_root_uri`` so their cells replay the
+    source verbatim; the control sweeps omit it and regenerate fresh.
 
     :param n: Per-split sample count shared with the source generation.
     :returns: ``wandb.sweep``-ready config dicts, in run order.
@@ -226,7 +231,6 @@ def sweeps(n: int) -> list[dict[str, Any]]:
                 samples_per_shard,
                 simple_spec,
                 simple_preset,
-                simple_copy_uri,
             ),
             grid={
                 "render.plugin_reload_cadence": ["once", "render"],
@@ -279,14 +283,17 @@ def _run_agent(sweep_id: str) -> None:
 
 
 def run(n: int) -> None:
-    """Generate the copy source, then create and drive all five #489 sweeps.
+    """Generate the surge_xt and surge_simple copy sources, then create and drive every #489 sweep.
 
-    The source is generated first because the copy probes read it; then every sweep is created
-    before any agent runs so all five land in the W&B UI; agents run one at a time to avoid
+    The sources are generated first because the copy probes read them; then every sweep is created
+    before any agent runs so they all land in the W&B UI; agents run one at a time to avoid
     contending on the shared Xvfb display.
 
-    :param n: Per-split sample count shared by the source and the copy probes;
+    :param n: Per-split sample count shared by the sources and the copy probes.
     """
+    # Build (and validate ``n`` via) the sweep configs first, so an invalid size fails fast
+    # before the two expensive source-generation subprocesses run.
+    sweep_configs = sweeps(n)
     copy_src_overrides = [
         f"experiment={_SOURCE_EXPERIMENT}",
         f"r2.prefix_root={PREFIX_ROOT}",
@@ -309,7 +316,7 @@ def run(n: int) -> None:
     _run_generate(xt_overrides)
     logger.info(f"generating copy source -> {surge_simple_reference_copy_uri()}")
     _run_generate(simple_overrides)
-    sweep_ids = [wandb.sweep(config, entity=ENTITY, project=PROJECT) for config in sweeps(n)]
+    sweep_ids = [wandb.sweep(config, entity=ENTITY, project=PROJECT) for config in sweep_configs]
     for sweep_id in sweep_ids:
         logger.info(f"running agent for {ENTITY}/{PROJECT}/{sweep_id}")
         _run_agent(sweep_id)
