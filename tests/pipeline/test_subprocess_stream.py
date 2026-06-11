@@ -360,6 +360,7 @@ class TestExitKeyedLiveness:
         assert excinfo.value.returncode == 3
         assert elapsed < _PROMPT_SECONDS, f"exit-keyed wait stalled on EOF ({elapsed:.1f}s)"
 
+    @pytest.mark.slow
     def test_long_runner_without_timeout_not_cut_short(self, leak_marker: str) -> None:
         """Exit-keying is not impatience: a slow child runs to completion.
 
@@ -403,12 +404,15 @@ class TestTimeoutEscalation:
 
         start = time.monotonic()
         with pytest.raises(subprocess.TimeoutExpired) as excinfo:
-            _streamed(_child(script, leak_marker), timeout=_POLICY_TIMEOUT_SECONDS)
+            # Wider than _POLICY_TIMEOUT_SECONDS: the TERM must not beat the
+            # handler installation on a saturated -n auto runner.
+            _streamed(_child(script, leak_marker), timeout=3.0)
         elapsed = time.monotonic() - start
 
         assert b"CLEANUP_RAN" in excinfo.value.output
         assert elapsed < _PROMPT_SECONDS, f"TERM path overran ({elapsed:.1f}s)"
 
+    @pytest.mark.slow
     def test_timeout_sigterm_ignoring_child_escalates_to_sigkill(self, leak_marker: str) -> None:
         """A TERM-ignoring child is SIGKILLed after the escalation grace.
 
@@ -426,10 +430,11 @@ class TestTimeoutEscalation:
             _streamed(_child(script, leak_marker), timeout=_POLICY_TIMEOUT_SECONDS)
         elapsed = time.monotonic() - start
 
-        # timeout (2s) + grace (5s) + CI margin.
+        # _POLICY_TIMEOUT_SECONDS + _TERM_TO_KILL_GRACE_SECONDS + CI margin.
         assert elapsed < 12.0, f"SIGKILL escalation overran ({elapsed:.1f}s)"
 
-    def test_timeout_with_sigterm_ignoring_pipe_holding_grandchild(
+    @pytest.mark.slow
+    def test_timeout_sigterm_ignoring_pipe_holding_grandchild_raises_within_bound(
         self, tmp_path: Path, leak_marker: str
     ) -> None:
         """9760b71's regression shape: escalation is gated on exit, not drain.
@@ -448,7 +453,8 @@ class TestTimeoutEscalation:
             "import os, signal, time\n"
             "if os.fork() == 0:\n"
             "    signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
-            f"    open({str(pidfile)!r}, 'w').write(str(os.getpid()))\n"
+            f"    with open({str(pidfile)!r}, 'w') as f:\n"
+            "        f.write(str(os.getpid()))\n"
             "    time.sleep(60)\n"
             "    os._exit(0)\n"
             "time.sleep(60)\n"
@@ -466,6 +472,7 @@ class TestTimeoutEscalation:
                 with contextlib.suppress(ProcessLookupError, ValueError):
                     os.kill(int(pidfile.read_text()), signal.SIGKILL)
 
+    @pytest.mark.slow
     def test_timeout_group_kill_stops_ingroup_grandchild_heartbeat(
         self, tmp_path: Path, leak_marker: str
     ) -> None:
@@ -482,7 +489,8 @@ class TestTimeoutEscalation:
             "import os, time\n"
             "if os.fork() == 0:\n"
             "    while True:\n"
-            f"        open({str(heartbeat)!r}, 'a').write('x')\n"
+            f"        with open({str(heartbeat)!r}, 'a') as f:\n"
+            "            f.write('x')\n"
             "        time.sleep(0.2)\n"
             "time.sleep(60)\n"
         )
@@ -516,7 +524,8 @@ class TestPostExitSweep:
         script = (
             "import os, time\n"
             "if os.fork() == 0:\n"
-            f"    open({str(pidfile)!r}, 'w').write(str(os.getpid()))\n"
+            f"    with open({str(pidfile)!r}, 'w') as f:\n"
+            "        f.write(str(os.getpid()))\n"
             "    time.sleep(60)\n"
             "    os._exit(0)\n"
         )
@@ -531,7 +540,8 @@ class TestPostExitSweep:
 
     @pytest.mark.xfail(
         reason="known 4b escape gap: a setsid() grandchild leaves the killable "
-        "group; flips when a Linux cgroup scope lands"
+        "group; flips when a Linux cgroup scope lands",
+        strict=True,
     )
     def test_escaped_setsid_grandchild_is_reaped(self, tmp_path: Path, leak_marker: str) -> None:
         """A grandchild that escapes the group via ``setsid()`` should die too.
@@ -547,7 +557,8 @@ class TestPostExitSweep:
             "import os, time\n"
             "if os.fork() == 0:\n"
             "    os.setsid()\n"
-            f"    open({str(pidfile)!r}, 'w').write(str(os.getpid()))\n"
+            f"    with open({str(pidfile)!r}, 'w') as f:\n"
+            "        f.write(str(os.getpid()))\n"
             "    time.sleep(60)\n"
             "    os._exit(0)\n"
         )
@@ -568,16 +579,38 @@ class TestPostExitSweep:
 class TestSyncFacade:
     """The blocking wrapper production call sites use."""
 
-    def test_sync_facade_returns_output_and_raises_like_async(self, leak_marker: str) -> None:
-        """The facade mirrors the async contract: capture and raise semantics.
+    def test_sync_facade_clean_exit_returns_output(self, leak_marker: str) -> None:
+        """The facade returns the captured bytes like the async runner.
 
         :param leak_marker: argv stamp from the autouse sweep fixture.
         """
         out = check_call_streamed(_child("print('VIA_FACADE')", leak_marker))
+
         assert b"VIA_FACADE" in out
 
-        with pytest.raises(subprocess.CalledProcessError):
+    def test_sync_facade_nonzero_exit_raises_called_process_error(self, leak_marker: str) -> None:
+        """The facade propagates the async runner's failure contract.
+
+        :param leak_marker: argv stamp from the autouse sweep fixture.
+        """
+        with pytest.raises(subprocess.CalledProcessError) as excinfo:
             check_call_streamed(_child("import sys; sys.exit(5)", leak_marker))
+
+        assert excinfo.value.returncode == 5
+
+    def test_sync_facade_timeout_raises_timeout_expired(self, leak_marker: str) -> None:
+        """``TimeoutExpired`` crosses ``asyncio.run`` intact.
+
+        The oracle-eval call site relies on exactly this surface: a blocking
+        call that raises ``subprocess.TimeoutExpired`` on its 600s policy bound.
+
+        :param leak_marker: argv stamp from the autouse sweep fixture.
+        """
+        with pytest.raises(subprocess.TimeoutExpired):
+            check_call_streamed(
+                _child("import time; time.sleep(30)", leak_marker),
+                timeout=_POLICY_TIMEOUT_SECONDS,
+            )
 
     def test_sync_facade_runs_from_worker_thread(self, leak_marker: str) -> None:
         """The facade works off the main thread.

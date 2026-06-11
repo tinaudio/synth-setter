@@ -4,20 +4,21 @@ The state-based generate-entrypoint tests in
 ``tests/pipeline/entrypoints/test_generate_dataset_unit.py`` patch the single
 ``synth_setter.cli.generate_dataset._check_call_streamed`` seam that the
 renderer *and* the rclone shard upload both go through; this module is the one
-dispatch contract those ~11 call sites share instead of each re-deriving it
+dispatch contract those call sites share instead of each re-deriving it
 (see #1354).
 """
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
+from synth_setter.pipeline.subprocess_stream import check_call_streamed
 from tests.helpers.subprocess_args import find_script_index
 
-# Real binary for the rclone passthrough; tests patch ``_check_call_streamed``,
-# never this symbol.
-REAL_CHECK_CALL = subprocess.check_call
+# rclone passthrough: bound straight from the pipeline module so it bypasses
+# the patched cli seam without recursing, while still exercising the real
+# streamed runner against the real rclone binary.
+REAL_CHECK_CALL = check_call_streamed
 
 
 def materialize_shard(args: list[str]) -> None:
@@ -47,6 +48,6 @@ def materialize_or_passthrough_rclone(args: list[str]) -> None:
     :param args: argv list passed to the patched ``_check_call_streamed``.
     """
     if args and args[0] == "rclone":
-        REAL_CHECK_CALL(args)  # noqa: S603 — test-only passthrough
+        REAL_CHECK_CALL(args)
         return
     materialize_shard(args)

@@ -8,6 +8,9 @@ EOF. Grandchildren that inherit the merged pipe and outlive the child
 (the headless-VST X11 daemon tree, #1634) therefore cannot stall
 completion or falsify exit codes; wall-clock ``timeout`` stays a pure
 per-call-site policy bound around the exit wait. Linux/macOS only.
+
+The tee assumes the wrapped ``sys.stderr`` write returns promptly (wandb
+buffers in-process); concurrent callers interleave at chunk granularity.
 """
 
 from __future__ import annotations
@@ -91,9 +94,10 @@ async def check_call_streamed_async(
         start_new_session=True,
         env=child_env,
     )
-    # Saved before the leader is reaped: getpgid on a reaped pid raises even
-    # while grandchildren still populate the group.
-    pgid = os.getpgid(proc.pid)
+    # start_new_session makes the child its own session/group leader, so its
+    # pid IS the pgid (POSIX) — no getpgid syscall, which would race the child
+    # watcher reaping a fast-exiting child and raise ProcessLookupError.
+    pgid = proc.pid
     captured: list[bytes] = []
     decoder = codecs.getincrementaldecoder("utf-8")("replace")
 
@@ -103,10 +107,14 @@ async def check_call_streamed_async(
         # slip underneath the patch and re-empty the run's Logs tab (#1465).
         # Chunked reads (not readline) so a line longer than the
         # StreamReader limit can't raise mid-pump.
-        assert proc.stdout is not None  # noqa: S101 — guaranteed by stdout=PIPE
-        while chunk := await proc.stdout.read(_READ_CHUNK_BYTES):
+        stdout = proc.stdout
+        if stdout is None:  # pragma: no cover — unreachable with stdout=PIPE
+            raise RuntimeError("child spawned without a stdout pipe")
+        while chunk := await stdout.read(_READ_CHUNK_BYTES):
             captured.append(chunk)
             sys.stderr.write(decoder.decode(chunk))
+        # EOF: flush a trailing incomplete multibyte sequence into the tee.
+        sys.stderr.write(decoder.decode(b"", final=True))
 
     pump_task = asyncio.create_task(_pump())
     timed_out = False
