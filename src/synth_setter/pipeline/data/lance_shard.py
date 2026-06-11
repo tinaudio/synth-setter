@@ -56,7 +56,7 @@ def tensor_array(values: np.ndarray, dtype: np.dtype, inner_shape: tuple[int, ..
         rows = rows.reshape((1, *inner_shape))
     if rows.shape[1:] != inner_shape:
         raise ValueError(f"tensor rows have inner shape {rows.shape[1:]}, expected {inner_shape}")
-    return pa.FixedShapeTensorArray.from_numpy_ndarray(rows)
+    return pa.FixedShapeTensorArray.from_numpy_ndarray(np.ascontiguousarray(rows))
 
 
 def record_batch_from_arrays(

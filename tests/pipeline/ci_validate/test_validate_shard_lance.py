@@ -25,6 +25,53 @@ def test_validate_lance_shard_accepts_valid_file(tmp_path: Path) -> None:
     assert validate_shard(shard, spec) == []
 
 
+def test_lance_record_batch_preserves_transposed_tensor_shape(tmp_path: Path) -> None:
+    """Non-contiguous rendered tensors keep the schema's declared shape.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    spec = build_lance_smoke_spec()
+    render = spec.render
+    shapes = {
+        "audio": (1, render.channels, int(render.sample_rate * render.signal_duration_seconds)),
+        "mel_spec": (1, render.channels, 128, 101),
+        "param_array": (1, spec.num_params),
+    }
+    import numpy as np
+    from lance.file import LanceFileReader
+
+    from synth_setter.pipeline.data.lance_shard import tensor_chunk_to_numpy
+    from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
+
+    schema = lance_schema(
+        shapes,
+        ShardMetadata(
+            velocity=render.velocity,
+            signal_duration_seconds=render.signal_duration_seconds,
+            sample_rate=render.sample_rate,
+            channels=render.channels,
+            min_loudness=render.min_loudness,
+        ),
+    )
+    arrays = {
+        "audio": np.zeros(shapes["audio"], dtype=np.float16),
+        "mel_spec": np.zeros((1, 128, render.channels, 101), dtype=np.float32).transpose(
+            0, 2, 1, 3
+        ),
+        "param_array": np.zeros(shapes["param_array"], dtype=np.float32),
+    }
+    shard = tmp_path / spec.shards[0].filename
+
+    write_lance_file(shard, schema, [record_batch_from_arrays(arrays, schema)])
+
+    reader = LanceFileReader(str(shard), columns=["mel_spec"])
+    field = reader.metadata().schema.field("mel_spec")
+    assert tuple(field.type.shape) == shapes["mel_spec"][1:]
+    batch = next(reader.read_all().to_batches())
+    decoded = tensor_chunk_to_numpy(batch.column(0), shapes["mel_spec"][1:])
+    assert decoded.shape == shapes["mel_spec"]
+
+
 def test_validate_lance_shard_rejects_bad_suffix_payload(tmp_path: Path) -> None:
     """Garbage bytes under a ``.lance`` suffix report a Lance-open error.
 
