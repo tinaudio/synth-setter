@@ -17,7 +17,7 @@ import pytest
 
 from synth_setter.data.vst import writers
 from synth_setter.data.vst.generate_vst_dataset import VSTDataSample
-from synth_setter.data.vst.param_spec import ParamSpec
+from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
 from synth_setter.data.vst.writers import _render_in_batches, _shard_metadata_from_render
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from synth_setter.pipeline.schemas.spec import RenderConfig
@@ -362,29 +362,52 @@ def test_render_in_batches_sample_cadence_draws_fresh_params_every_render(
         assert call_kwargs["fixed_note_params"] is None
 
 
-def test_render_in_batches_shard_cadence_rejects_caller_fixed_params(
+def test_render_in_batches_shard_cadence_seeds_single_patch_from_caller_row_zero(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Shard cadence plus caller-supplied fixed lists is contradictory and raises.
+    """Shard-cadence copy seeds the shard's single patch from source row 0, then reuses it.
 
     :param monkeypatch: Pytest fixture used to patch module-level callables.
     """
+    n = 3
     render_cfg = _smoke_render_cfg(
-        samples_per_shard=2,
-        samples_per_render_batch=2,
+        samples_per_shard=n,
+        samples_per_render_batch=n,
         param_sample_cadence="shard",
     )
-    _stub_render_dependencies(monkeypatch, load_plugin_calls=[], load_preset_calls=[])
+    returned: list[MagicMock] = []
+    captured: list[dict[str, object]] = []
 
-    with pytest.raises(ValueError, match="param_sample_cadence"):
-        _render_in_batches(
-            render_cfg=render_cfg,
-            param_spec=MagicMock(name="param_spec"),
-            start_idx=0,
-            fixed_synth_params_list=[{"a": 0.5}, {"a": 0.5}],
-            fixed_note_params_list=None,
-            flush_batch=lambda _batch, _start: None,
-        )
+    def _fake_generate_sample(_plugin_path: str, **kwargs: object) -> MagicMock:
+        captured.append(dict(kwargs))
+        sample = MagicMock(name=f"sample_{len(returned)}")
+        returned.append(sample)
+        return sample
+
+    monkeypatch.setattr(writers, "generate_sample", _fake_generate_sample)
+
+    synth_rows = [{"a": 0.1}, {"a": 0.2}, {"a": 0.3}]
+    note_rows: list[NoteParams] = [
+        {"pitch": 60 + i, "note_start_and_end": (0.0, 1.0)} for i in range(n)
+    ]
+    _render_in_batches(
+        render_cfg=render_cfg,
+        param_spec=MagicMock(name="param_spec"),
+        start_idx=0,
+        fixed_synth_params_list=synth_rows,
+        fixed_note_params_list=note_rows,
+        flush_batch=lambda _batch, _start: None,
+    )
+
+    assert len(captured) == n
+    # Sample 0 is seeded from the copy source's first row...
+    assert captured[0]["fixed_synth_params"] == synth_rows[0]
+    assert captured[0]["fixed_note_params"] is note_rows[0]
+    # ...and every later render reuses sample 0's patch, ignoring source rows 1..N.
+    first = returned[0]
+    for call_kwargs in captured[1:]:
+        assert call_kwargs["fixed_synth_params"] is first.synth_params
+        assert call_kwargs["fixed_note_params"] is first.note_params
 
 
 def test_make_hdf5_dataset_shard_cadence_rerenders_partial_shard_from_row_zero(
