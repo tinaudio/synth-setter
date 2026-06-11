@@ -360,7 +360,7 @@ jobs:
 
       # Idempotent on cache hit; the `kubernetes` extra of skypilot lives in
       # [project.dependencies], so `--extra cpu` + the default dev group covers
-      # skypilot-local. `--extra data` supplies pylance for host-side Lance
+      # skypilot-local. `--group data` supplies pylance for host-side Lance
       # shard validation. UV_PROJECT_ENVIRONMENT pins uv to the cached venv.
       - name: Install launcher deps (skypilot-local row)
         if: ${{ inputs.provider == 'skypilot-local' }}
@@ -368,7 +368,7 @@ jobs:
           UV_PROJECT_ENVIRONMENT: ${{ github.workspace }}/.venv-launcher
         run: |
           set -euo pipefail
-          uv sync --frozen --extra cpu --extra data --no-default-groups --group dev
+          uv sync --frozen --extra cpu --no-default-groups --group dev --group data
           echo "${UV_PROJECT_ENVIRONMENT}/bin" >> "${GITHUB_PATH}"
 
       - name: sky local up (skypilot-local row)
