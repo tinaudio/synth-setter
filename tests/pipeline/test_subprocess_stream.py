@@ -316,11 +316,14 @@ class TestWrapTee:
 
         sys.stderr.write = _raising_write  # type: ignore[method-assign]
         try:
-            out = _streamed(_child("print('STILL_CAPTURED')", leak_marker))
+            with capture_logs() as logs:
+                out = _streamed(_child("print('STILL_CAPTURED')", leak_marker))
         finally:
             sys.stderr.write = orig  # type: ignore[method-assign]
 
         assert b"STILL_CAPTURED" in out
+        # The degradation must leave an operator breadcrumb, exactly once.
+        assert [e["event"] for e in logs].count("subprocess_tee_degraded") == 1
 
     def test_non_utf8_output_replaced_in_tee_and_raw_in_capture(
         self, capsys: pytest.CaptureFixture[str], leak_marker: str
