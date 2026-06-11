@@ -32,6 +32,7 @@ from pathlib import Path
 import pytest
 from structlog.testing import capture_logs
 
+from synth_setter.pipeline import subprocess_stream
 from synth_setter.pipeline.subprocess_stream import (
     _CAPTURE_MAX_BYTES,
     _READ_CHUNK_BYTES,
@@ -444,7 +445,8 @@ class TestLoopTeardownHygiene:
         :param tmp_path: Scratch dir for the driver script.
         :param leak_marker: argv stamp from the autouse sweep fixture.
         """
-        src_dir = str(Path("src").resolve())
+        # Derived from the imported module so the test is CWD-independent.
+        src_dir = str(Path(subprocess_stream.__file__).resolve().parents[2])
         driver = tmp_path / "driver.py"
         driver.write_text(
             f"import sys\n"
