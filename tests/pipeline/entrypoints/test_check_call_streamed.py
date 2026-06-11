@@ -202,6 +202,33 @@ class TestCheckCallStreamed:
         # regression without risking flakiness on a loaded runner.
         assert elapsed < 15, f"SIGKILL fallback did not unblock the read loop ({elapsed:.1f}s)"
 
+    @pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork (POSIX)")
+    def test_timeout_sigkills_pipe_holding_grandchild_that_ignores_sigterm(self) -> None:
+        """A SIGTERM-ignoring grandchild holding the pipe is still SIGKILLed within the bound.
+
+        The direct child (group leader) exits at once; a forked grandchild ignores SIGTERM and
+        keeps the inherited pipe open. Only the group SIGKILL fallback unblocks the read loop —
+        gating escalation on the leader's exit alone would hang until the grandchild's own 60s
+        sleep ends.
+        """
+        argv = [
+            sys.executable,
+            "-c",
+            "import os, signal, time, sys\n"
+            "if os.fork() == 0:\n"
+            "    signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            "    time.sleep(60)\n"  # grandchild ignores SIGTERM, keeps the pipe open
+            "else:\n"
+            "    sys.exit(0)\n",  # leader exits at once
+        ]
+
+        start = time.monotonic()
+        with pytest.raises(subprocess.TimeoutExpired):
+            _check_call_streamed(argv, timeout=2.0)
+        elapsed = time.monotonic() - start
+
+        assert elapsed < 20, f"group SIGKILL did not unblock the read loop ({elapsed:.1f}s)"
+
     def test_non_utf8_child_output_does_not_crash(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:

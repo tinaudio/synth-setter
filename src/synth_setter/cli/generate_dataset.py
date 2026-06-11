@@ -127,11 +127,18 @@ def _check_call_streamed(args: Sequence[str], *, timeout: float | None = None) -
             except ProcessLookupError:
                 # Group already gone — nothing left to reap.
                 return
+            # Escalate to SIGKILL unless the read-loop thread reaps the leader
+            # first, which happens only once the pipe drains — i.e. no group
+            # member (e.g. a SIGTERM-ignoring grandchild) is left holding it.
+            # Read ``returncode`` rather than calling ``proc.poll()``: poll would
+            # reap the leader here and free its pgid for reuse before the SIGKILL.
             deadline = time.monotonic() + _GROUP_KILL_GRACE_SECONDS
             while time.monotonic() < deadline:
-                if proc.poll() is not None:
+                if proc.returncode is not None:
                     return
                 time.sleep(0.1)
+            if proc.returncode is not None:
+                return
             try:
                 os.killpg(proc.pid, signal.SIGKILL)
             except ProcessLookupError:
