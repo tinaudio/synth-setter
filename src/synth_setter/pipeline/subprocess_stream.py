@@ -40,6 +40,26 @@ _POST_EXIT_DRAIN_SECONDS = 2.0
 
 _READ_CHUNK_BYTES = 8192
 
+# Exit-detection poll cadence, seconds. Negligible against children that run
+# seconds to hours; bounds added exit-detection latency to one tick.
+_EXIT_POLL_SECONDS = 0.05
+
+
+async def _wait_exit(proc: asyncio.subprocess.Process) -> int:
+    """Wait for child exit keyed on the reaped returncode, never pipe EOF.
+
+    ``Process.wait()`` is EOF-coupled on Python 3.11+ (its exit waiters are
+    woken only once every pipe disconnects), so a pipe-holding grandchild
+    delays it past child exit. The watcher sets ``returncode`` the moment the
+    child is reaped, so poll that instead.
+
+    :param proc: The spawned child.
+    :returns: The child's exit status.
+    """
+    while proc.returncode is None:
+        await asyncio.sleep(_EXIT_POLL_SECONDS)
+    return proc.returncode
+
 
 def check_call_streamed(
     cmd: Sequence[str],
@@ -105,8 +125,13 @@ async def check_call_streamed_async(
     tee_broken = False
 
     def _tee(text: str) -> None:
-        # A broken wrapped stream must not kill the pump (exit codes are the
-        # contract, and a dead pump would re-open the #735 full-pipe hang).
+        """Best-effort forward to the wrapped stream; capture is the contract.
+
+        A broken wrapped stream must not kill the pump (exit codes are the
+        contract, and a dead pump would re-open the #735 full-pipe hang).
+
+        :param text: Decoded chunk to forward through ``sys.stderr``.
+        """
         nonlocal tee_broken
         if tee_broken or not text:
             return
@@ -116,9 +141,16 @@ async def check_call_streamed_async(
             tee_broken = True
 
     async def _pump() -> None:
-        # console=wrap patches ``write`` in place on the parent's *text* stream;
-        # ``sys.stderr.buffer`` would slip under the patch, emptying the Logs tab (#1465).
-        # Chunked reads (not readline): a long line can't overrun the StreamReader limit.
+        """Drain the merged pipe into ``captured`` and the wrap-patched tee.
+
+        console=wrap patches ``write`` in place on the parent's *text* stream;
+        ``sys.stderr.buffer`` would slip under the patch, emptying the Logs
+        tab (#1465). Chunked reads (not readline): a long line can't overrun
+        the StreamReader limit.
+
+        :raises RuntimeError: The child has no stdout pipe — unreachable with
+            ``stdout=PIPE``.
+        """
         stdout = proc.stdout
         if stdout is None:  # pragma: no cover — unreachable with stdout=PIPE
             raise RuntimeError("child spawned without a stdout pipe")
@@ -132,14 +164,14 @@ async def check_call_streamed_async(
     timed_out_after: float | None = None
     try:
         try:
-            returncode = await asyncio.wait_for(proc.wait(), timeout=timeout)
+            returncode = await asyncio.wait_for(_wait_exit(proc), timeout=timeout)
         except asyncio.TimeoutError:
             # wait_for(timeout=None) cannot time out, so timeout is a float here.
             timed_out_after = cast(float, timeout)
             _signal_group(pgid, signal.SIGTERM)
             try:
                 returncode = await asyncio.wait_for(
-                    proc.wait(), timeout=_TERM_TO_KILL_GRACE_SECONDS
+                    _wait_exit(proc), timeout=_TERM_TO_KILL_GRACE_SECONDS
                 )
             except asyncio.TimeoutError:
                 _LOG.warning(
@@ -148,7 +180,7 @@ async def check_call_streamed_async(
                     grace_seconds=_TERM_TO_KILL_GRACE_SECONDS,
                 )
                 _signal_group(pgid, signal.SIGKILL)
-                returncode = await proc.wait()
+                returncode = await _wait_exit(proc)
 
         try:
             await asyncio.wait_for(pump_task, timeout=_POST_EXIT_DRAIN_SECONDS)
