@@ -325,6 +325,9 @@ ACCEPTED_DIFFS: tuple[str, ...] = (
     "datamodule.stats_file",
     # Optional R2-download URI added in #1338; absent in v0.0.0 — locality, not a model knob.
     "datamodule.download_dataset_root_uri",
+    # Param-spec selection key added in #1602; absent in v0.0.0 — selects the spec,
+    # doesn't size the model (d_out/num_params are pinned separately).
+    "datamodule.param_spec_name",
     "evaluation",  # eval CLI predict-mode post-processing block; not a model knob
     "r2",  # checkpoint-artifact bucket/prefix added to train.yaml; storage locality, not a model knob
     # Opt-in W&B artifact-lineage block (#1508/#1509); absent in v0.0.0 — provenance,
