@@ -28,10 +28,11 @@ import subprocess
 import sys
 from typing import Any
 
-import wandb
 import wandb.env
 from loguru import logger
 
+import wandb
+from synth_setter.data.vst import preset_paths
 from synth_setter.pipeline.schemas.prefix import DEFAULT_R2_PREFIX_ROOT, make_r2_prefix
 
 # Temporary personal pin: the ``tinaudio`` W&B entity does not exist yet (sweep
@@ -46,18 +47,16 @@ PREFIX_ROOT = DEFAULT_R2_PREFIX_ROOT
 PROGRAM = "src/synth_setter/cli/generate_dataset.py"
 _GENERATE_MODULE = "synth_setter.cli.generate_dataset"
 
-PARAM_SPEC = "surge_xt"
-PRESET = "presets/surge-base.vstpreset"
+SURGE_XT = "surge_xt"
+SURGE_SIMPLE = "surge_simple"
+SURGE_XT_PRESET = preset_paths[SURGE_XT]
+SURGE_SIMPLE_PRESET = preset_paths[SURGE_SIMPLE]
 
 # Fixed reference run identity -> stable copy-source URI the copy probes replay.
-REFERENCE_TASK = "ref-surge-xt-489"
-REFERENCE_RUN_ID = "paired-ref-v1"
-
-# Copy can't resample a sub-floor re-render (#724); -1000 dB lets junk/quiet
-# renders reach the oracle while only true silence (-inf) trips the floor.
-COPY_MIN_LOUDNESS = -1000.0
-# Fresh-param probes occasionally sample a silent (-inf) patch; retries resample past it.
-MAX_RETRIES = 10
+SURGE_XT_REFERENCE_TASK = "ref-surge-xt-489"
+SURGE_XT_REFERENCE_RUN_ID = "paired-surge-xt-ref-v1"
+SURGE_SIMPLE_REFERENCE_TASK = "ref-surge-simple-489"
+SURGE_SIMPLE_REFERENCE_RUN_ID = "paired-surge-simple-ref-v1"
 
 # The probes run the with-oracle-eval finalize/eval; the source donates raw param
 # shards only (copy reads same-named shards at the run root), so it skips the eval.
@@ -68,46 +67,33 @@ _SOURCE_EXPERIMENT = "generate_dataset/smoke-shard"
 DEFAULT_SIZE = 40
 
 
-def reference_copy_uri() -> str:
+def surge_xt_reference_copy_uri() -> str:
     """Return the R2 run-root URI of the copy-source dataset under the current ``PREFIX_ROOT``.
 
     :returns: ``r2://<bucket>/<prefix_root>/<task>/<run>`` with no trailing slash.
     """
-    prefix = make_r2_prefix(REFERENCE_TASK, REFERENCE_RUN_ID, prefix_root=PREFIX_ROOT)
+    prefix = make_r2_prefix(
+        SURGE_XT_REFERENCE_TASK, SURGE_XT_REFERENCE_RUN_ID, prefix_root=PREFIX_ROOT
+    )
     return f"r2://{BUCKET}/{prefix.rstrip('/')}"
 
 
-def source_overrides(n: int) -> list[str]:
-    """Return the ``generate_dataset`` overrides that build the copy source at size ``n``.
+def surge_simple_reference_copy_uri() -> str:
+    """Return the R2 run-root URI of the copy-source dataset under the current ``PREFIX_ROOT``.
 
-    :param n: Per-split sample count; sets ``[n,n,n]`` splits at one shard each.
-    :returns: Hydra override tokens for the source generation run.
-    :raises ValueError: ``n`` is below 1, so no split would hold a sample.
+    :returns: ``r2://<bucket>/<prefix_root>/<task>/<run>`` with no trailing slash.
     """
-    if n < 1:
-        raise ValueError(f"dataset size must be >= 1, got {n}")
-    return [
-        f"experiment={_SOURCE_EXPERIMENT}",
-        f"task_name={REFERENCE_TASK}",
-        f"run_id={REFERENCE_RUN_ID}",
-        f"r2.prefix_root={PREFIX_ROOT}",
-        f"render.param_spec_name={PARAM_SPEC}",
-        f"render.preset_path={PRESET}",
-        f"train_val_test_sizes=[{n},{n},{n}]",
-        f"render.samples_per_shard={n}",
-        # The source only donates params for replay, so accept any non-silent render.
-        f"render.min_loudness={COPY_MIN_LOUDNESS}",
-        f"render.max_retries={MAX_RETRIES}",
-    ]
+    prefix = make_r2_prefix(
+        SURGE_SIMPLE_REFERENCE_TASK, SURGE_SIMPLE_REFERENCE_RUN_ID, prefix_root=PREFIX_ROOT
+    )
+    return f"r2://{BUCKET}/{prefix.rstrip('/')}"
 
 
 def _sweep(
     name: str,
-    task_name: str,
     *,
     fixed: tuple[str, ...],
     grid: dict[str, list[Any]],
-    copy_uri: str | None = None,
 ) -> dict[str, Any]:
     """Assemble one ``wandb.sweep``-ready grid config from its fixed pins and swept grid.
 
@@ -115,22 +101,19 @@ def _sweep(
     ``WANDB_ENTITY`` / ``WANDB_PROJECT`` at sweep-creation time.
 
     :param name: Stable experiment label, embedded in the sweep name.
-    :param task_name: Distinct ``task_name`` giving the run its own R2 prefix / W&B run.
     :param fixed: Hydra overrides shared by every grid cell.
     :param grid: Maps each swept Hydra key to its values; their product is the cells.
-    :param copy_uri: When set, appended as ``copy_dataset_root_uri`` so cells replay the source.
     :returns: A ``wandb.sweep``-ready config dict.
     """
     command = [
         "${interpreter}",
         "${program}",
-        f"task_name={task_name}",
+        "${args_no_hyphens}",
+        f"task_name={name}",
         f"r2.prefix_root={PREFIX_ROOT}",
+        f"experiment={_PROBE_EXPERIMENT}",
         *fixed,
     ]
-    if copy_uri is not None:
-        command.append(f"copy_dataset_root_uri={copy_uri}")
-    command.append("${args_no_hyphens}")
     return {
         "program": PROGRAM,
         "entity": ENTITY,
@@ -147,10 +130,7 @@ def _sweep(
 def sweeps(n: int) -> list[dict[str, Any]]:
     """Return the five #489 W&B grid sweep configs at dataset size ``n``.
 
-    Two within-run probes then three paired-copy probes; the copy probes carry the
-    derived ``copy_dataset_root_uri`` so every cell replays the source verbatim. The
-    copy match set (param spec / preset / split sizes / samples-per-shard) is shared
-    with :func:`source_overrides` so shard filenames and the param encoding align.
+    The derived ``copy_dataset_root_uri`` so every cell replays the source verbatim.
 
     :param n: Per-split sample count shared with the source generation.
     :returns: ``wandb.sweep``-ready config dicts, in run order.
@@ -159,27 +139,24 @@ def sweeps(n: int) -> list[dict[str, Any]]:
     if n < 1:
         raise ValueError(f"dataset size must be >= 1, got {n}")
     splits = f"train_val_test_sizes=[{n},{n},{n}]"
-    copy_match = (
-        f"experiment={_PROBE_EXPERIMENT}",
-        f"render.param_spec_name={PARAM_SPEC}",
-        f"render.preset_path={PRESET}",
-        splits,
-        f"render.samples_per_shard={n}",
-        f"render.min_loudness={COPY_MIN_LOUDNESS}",
-    )
-    copy_uri = reference_copy_uri()
+    samples_per_shard = f"render.samples_per_shard={n}"
+    xt_spec = f"render.param_spec_name={SURGE_XT}"
+    xt_preset = f"render.preset_path={SURGE_XT_PRESET}"
+    simple_spec = f"render.param_spec_name={SURGE_SIMPLE}"
+    simple_preset = f"render.preset_path={SURGE_SIMPLE_PRESET}"
+    xt_copy_uri = f"copy_dataset_root_uri={surge_xt_reference_copy_uri()}"
+    simple_copy_uri = f"copy_dataset_root_uri={surge_simple_reference_copy_uri()}"
+
     return [
         _sweep(
-            "shuffle_probe",
-            "shuffle-probe-surge-xt",
+            "shuffle_cadence_probe_surge_xt",
             fixed=(
-                f"experiment={_PROBE_EXPERIMENT}",
-                f"render.param_spec_name={PARAM_SPEC}",
-                f"render.preset_path={PRESET}",
                 "render.param_sample_cadence=shard",
                 splits,
-                f"render.samples_per_shard={n}",
-                f"render.max_retries={MAX_RETRIES}",
+                samples_per_shard,
+                xt_spec,
+                xt_preset,
+                xt_copy_uri,
             ),
             grid={
                 "render.plugin_reload_cadence": ["once", "render"],
@@ -187,43 +164,88 @@ def sweeps(n: int) -> list[dict[str, Any]]:
             },
         ),
         _sweep(
-            "reuse_depth",
-            "reuse-depth-surge-xt",
+            "cadence_probe_surge_xt",
             fixed=(
-                f"experiment={_PROBE_EXPERIMENT}",
-                f"render.param_spec_name={PARAM_SPEC}",
-                f"render.preset_path={PRESET}",
-                "render.param_sample_cadence=shard",
-                "render.plugin_reload_cadence=once",
-                "render.gui_toggle_cadence=never",
                 splits,
-                f"render.max_retries={MAX_RETRIES}",
+                samples_per_shard,
+                xt_spec,
+                xt_preset,
+                xt_copy_uri,
             ),
-            # Reuse depth is the swept samples_per_shard: 1 (no reuse) and n (full
-            # reuse), which collapse to a single cell at n == 1. Both divide n, so
-            # every cell splits the [n,n,n] sizes into whole shards.
-            grid={"render.samples_per_shard": sorted({1, n})},
+            grid={
+                "render.plugin_reload_cadence": ["once", "render"],
+                "render.gui_toggle_cadence": ["never", "once", "render", "always_on"],
+            },
         ),
         _sweep(
-            "copy_reload",
-            "copy-paired-reload-surge-xt",
-            fixed=copy_match,
-            grid={"render.plugin_reload_cadence": ["once", "render"]},
-            copy_uri=copy_uri,
+            "control_cadence_probe_surge_xt",
+            fixed=(
+                splits,
+                samples_per_shard,
+                xt_spec,
+                xt_preset,
+            ),
+            grid={
+                "render.plugin_reload_cadence": ["once", "render"],
+                "render.gui_toggle_cadence": ["never", "once", "render", "always_on"],
+            },
         ),
         _sweep(
-            "copy_gui",
-            "copy-paired-gui-surge-xt",
-            fixed=copy_match,
-            grid={"render.gui_toggle_cadence": ["never", "once", "render"]},
-            copy_uri=copy_uri,
+            "shuffle_cadence_probe_surge_simple",
+            fixed=(
+                "render.param_sample_cadence=shard",
+                splits,
+                samples_per_shard,
+                simple_spec,
+                simple_preset,
+                simple_copy_uri,
+            ),
+            grid={
+                "render.plugin_reload_cadence": ["once", "render"],
+                "render.gui_toggle_cadence": ["never", "once", "render", "always_on"],
+            },
         ),
         _sweep(
-            "copy_repro",
-            "copy-paired-repro-surge-xt",
-            fixed=copy_match,
-            grid={"run_id": ["paired-repro-t1", "paired-repro-t2", "paired-repro-t3"]},
-            copy_uri=copy_uri,
+            "cadence_probe_surge_simple",
+            fixed=(
+                splits,
+                samples_per_shard,
+                simple_spec,
+                simple_preset,
+                simple_copy_uri,
+            ),
+            grid={
+                "render.plugin_reload_cadence": ["once", "render"],
+                "render.gui_toggle_cadence": ["never", "once", "render", "always_on"],
+            },
+        ),
+        _sweep(
+            "control_cadence_probe_surge_simple",
+            fixed=(
+                splits,
+                samples_per_shard,
+                simple_spec,
+                simple_preset,
+                simple_copy_uri,
+            ),
+            grid={
+                "render.plugin_reload_cadence": ["once", "render"],
+                "render.gui_toggle_cadence": ["never", "once", "render", "always_on"],
+            },
+        ),
+        _sweep(
+            "cadence_probe_surge_simple_xt_preset",
+            fixed=(
+                splits,
+                samples_per_shard,
+                simple_spec,
+                xt_preset,
+                simple_copy_uri,
+            ),
+            grid={
+                "render.plugin_reload_cadence": ["once", "render"],
+                "render.gui_toggle_cadence": ["never", "once", "render", "always_on"],
+            },
         ),
     ]
 
@@ -259,15 +281,34 @@ def _run_agent(sweep_id: str) -> None:
 def run(n: int) -> None:
     """Generate the copy source, then create and drive all five #489 sweeps.
 
-    The source is generated first because the copy probes read it; then every sweep
-    is created before any agent runs so all five land in the W&B UI; agents run one
-    at a time to avoid contending on the shared Xvfb display.
+    The source is generated first because the copy probes read it; then every sweep is created
+    before any agent runs so all five land in the W&B UI; agents run one at a time to avoid
+    contending on the shared Xvfb display.
 
     :param n: Per-split sample count shared by the source and the copy probes;
-        :func:`source_overrides` rejects a value below 1.
     """
-    logger.info(f"generating copy source -> {reference_copy_uri()}")
-    _run_generate(source_overrides(n))
+    copy_src_overrides = [
+        f"experiment={_SOURCE_EXPERIMENT}",
+        f"r2.prefix_root={PREFIX_ROOT}",
+        f"train_val_test_sizes=[{n},{n},{n}]",
+        f"render.samples_per_shard={n}",
+    ]
+    xt_overrides = copy_src_overrides + [
+        f"task_name={SURGE_XT_REFERENCE_TASK}",
+        f"run_id={SURGE_XT_REFERENCE_RUN_ID}",
+        f"render.param_spec_name={SURGE_XT}",
+        f"render.preset_path={SURGE_XT_PRESET}",
+    ]
+    simple_overrides = copy_src_overrides + [
+        f"task_name={SURGE_SIMPLE_REFERENCE_TASK}",
+        f"run_id={SURGE_SIMPLE_REFERENCE_RUN_ID}",
+        f"render.param_spec_name={SURGE_SIMPLE}",
+        f"render.preset_path={SURGE_SIMPLE_PRESET}",
+    ]
+    logger.info(f"generating copy source -> {surge_xt_reference_copy_uri()}")
+    _run_generate(xt_overrides)
+    logger.info(f"generating copy source -> {surge_simple_reference_copy_uri()}")
+    _run_generate(simple_overrides)
     sweep_ids = [wandb.sweep(config, entity=ENTITY, project=PROJECT) for config in sweeps(n)]
     for sweep_id in sweep_ids:
         logger.info(f"running agent for {ENTITY}/{PROJECT}/{sweep_id}")
