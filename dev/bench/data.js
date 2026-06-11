@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781220561171,
+  "lastUpdate": 1781220563859,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -11618,6 +11618,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 16.235365546399954,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "66bea5eb6b8a0e6b40f911d0615144b3a2477c15",
+          "message": "internal-feat(data-pipeline): add Lance shard output backend (#1642)\n\n* internal-feat(data-pipeline): add Lance shard output backend\n\n* internal-fix(data-pipeline): make Lance tensor rows contiguous before encoding\n\npyarrow records a permutation on the fixed_shape_tensor extension type\nwhen from_numpy_ndarray receives a transposed view, and that permuted\ntype cannot cast to the schema's declared shape. Copy rows to\nC-contiguous layout first and pin the behavior with a regression test\nexercising a transposed mel_spec batch.\n\nRefs #1600\n\n* internal-fix(data-pipeline): address PR #1642 review feedback\n\n- validate_shard.py: read Lance reader.num_rows() once instead of twice\n  in the row-count check.\n- tests/helpers/finalize_shards.py: seed_train_shards now branches\n  explicitly on wds vs lance and raises ValueError for any other\n  output_format instead of silently writing a tar shard.\n\nRefs #1600\n\n* internal-fix(ci): install data extra in launcher venv for Lance validation\n\nHost-side validate_shard lazily imports lance for .lance shards, but the\nlauncher venv only synced the cpu extra, so the lance smoke leg failed\nwith ModuleNotFoundError after the worker finished. hdf5/wds were\nunaffected because h5py is a core dep and tar validation is stdlib.\n\nRefs #1600\n\n* docs(data-pipeline): document lance as a third output format\n\nAddress Copilot round-2 review on PR #1642:\n\n- finalize_dataset.py: module docstring now describes all three finalize\n  branches, including what the lance branch produces\n- validate_shard.py: validate_shard docstring lists the .lance suffix\n  dispatch alongside .h5 and .tar\n- docs/design/data-pipeline.md: retitle 7.10 to cover Lance, add the\n  lance format rationale bullet, note lance is non-resumable, generalize\n  the dataset-copy rejection wording, and update the Data Format\n  Abstraction note now that the third format exists\n\n* internal-fix(ci): select data dependency group with --group, not --extra\n\nuv defines data under [dependency-groups], so --extra data fails sync\nwith 'Extra data is not defined' and broke all three smoke legs.\n\nRefs #1600\n\n* internal-fix(ci): sync data group into image venv before shard validation\n\nThe validate step runs inside the dev-snapshot image, whose deps are\nbaked from main, so a PR adding a data-group dependency (pylance) hits\nModuleNotFoundError during .lance validation. Install the data group\nfrom the mounted PR checkout first — the same image-bake-lag workaround\nscripts/sync_worker_checkout.sh uses for workers. Also drop the\nprevious launcher-venv --group data flag: dev already includes data\ntransitively, and the launcher env was never the failing one.\n\nRefs #1600\n\n* internal-fix(ci): purge more unused toolchains before kind image load\n\nkind load needs the 16 GB worker image on disk twice (docker store +\nkind-node containerd) and has hit ENOSPC three times today with ~30 GB\nfree. Dropping miniconda, swift, julia, and global node modules — all\nunused by the skypilot-local row — frees roughly 7 GB more headroom.\n\nRefs #1600",
+          "timestamp": "2026-06-11T18:42:01-04:00",
+          "tree_id": "39778b3ff0286ae78cd3675aa645aadf16455d77",
+          "url": "https://github.com/tinaudio/synth-setter/commit/66bea5eb6b8a0e6b40f911d0615144b3a2477c15"
+        },
+        "date": 1781220563124,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 2.2531721591949463,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 2.899634910300374,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.010765353217720985,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.023298263549804688,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 1.098966121673584,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 17.539016231100003,
             "unit": "seconds"
           }
         ]
