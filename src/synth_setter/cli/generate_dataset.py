@@ -74,9 +74,8 @@ _WORKER_REPO_ROOT = "/home/build/synth-setter"
 # Smoke-shard-sized; longer eval runs belong on the dispatch path, not inline.
 _ORACLE_EVAL_TIMEOUT_SECONDS = 600
 
-# Grace between the group SIGTERM and the SIGKILL fallback: long enough for the
-# headless-VST wrapper's ``trap cleanup`` to reap its Xvfb/dbus tree and remove
-# the X socket, short enough to keep the timeout's tail bounded.
+# SIGTERM→SIGKILL grace: lets the headless-VST wrapper's ``trap cleanup`` reap
+# its Xvfb/dbus tree and drop the X socket before the hard kill.
 _GROUP_KILL_GRACE_SECONDS = 5.0
 
 # Finalized artifacts the eval datamodule opens; all must sit in dataset_root.
@@ -116,11 +115,9 @@ def _check_call_streamed(args: Sequence[str], *, timeout: float | None = None) -
         def _terminate_group() -> None:
             """SIGTERM the child's group, escalating to SIGKILL after a grace period.
 
-            SIGTERM lets the headless-VST wrapper's ``trap cleanup`` run — reaping
-            its Xvfb/dbus/openbox tree and removing the X socket; a bare SIGKILL
-            orphans that tree and leaks the socket, corrupting the shared display
-            for later renders. SIGKILL is the fallback for a group that ignores
-            SIGTERM, so a wedged child still cannot outlive the kill.
+            A bare SIGKILL bypasses the headless-VST wrapper's ``trap cleanup``,
+            orphaning its Xvfb/dbus tree and leaking the X socket; SIGTERM lets
+            that trap run. SIGKILL is the fallback for a group that ignores it.
             """
             if proc.returncode is not None:
                 # Already reaped — killpg here could hit a recycled pgid.
