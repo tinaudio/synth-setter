@@ -19,6 +19,36 @@ install -m 0644 "$_devc_dir/tmux.conf" "$HOME/.tmux.conf"
 # above — silences startup popups, shares one session; pre-exec so root is covered.
 install -D -m 0644 "$_devc_dir/zellij.kdl" "$HOME/.config/zellij/config.kdl"
 
+# Make the bundled coding agents non-interactive by default. Seeded before the
+# root→dev exec so it covers whichever $HOME is current, like ~/.tmux.conf above.
+configure_agent_autonomy() {
+  # Codex reads ~/.codex/config.toml on every invocation. Seed full-auto
+  # defaults only when absent so a user- or mount-provided config still wins.
+  local codex_config="$HOME/.codex/config.toml"
+  if [[ ! -f "$codex_config" ]]; then
+    mkdir -p "$(dirname "$codex_config")"
+    cat >"$codex_config" <<'EOF'
+# Full-auto defaults for the devcontainer (the container is the sandbox):
+# never pause for approval and allow unsandboxed command execution.
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+EOF
+  fi
+
+  # agy has no persisted skip-permissions setting, so wrap it — a function (not
+  # alias) so sourced shells inherit it and `command agy` still bypasses it.
+  if ! grep -qsF 'agy()' "$HOME/.bashrc"; then
+    cat >>"$HOME/.bashrc" <<'EOF'
+
+# agy full-auto — auto-approve all Antigravity tool permissions by default.
+agy() {
+  command agy --dangerously-skip-permissions "$@"
+}
+EOF
+  fi
+}
+configure_agent_autonomy
+
 # Drop to `dev` when invoked as root so workspace mutations (git config
 # --local, pre-commit install → .git/hooks/*) don't land root-owned in the
 # bind-mounted workspace. Both opt-in DEVCONTAINER_USER=root sessions and
