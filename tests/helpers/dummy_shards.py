@@ -116,7 +116,7 @@ def write_dummy_tar_shard(output_path: Path, spec: DatasetSpec) -> None:
 
 
 def stub_renderer(spec: DatasetSpec) -> Callable[[list[str]], None]:
-    """Return a ``_check_call_streamed`` side effect that writes dummy shards.
+    """Return a ``subprocess.check_call`` side effect that writes dummy shards.
 
     Dispatches on the renderer output path's suffix via ``OutputFormat.from_extension``,
     so the same factory backs both hdf5 and wds runs. ``rclone`` invocations fall
@@ -125,7 +125,7 @@ def stub_renderer(spec: DatasetSpec) -> Callable[[list[str]], None]:
 
     :param spec: Dataset spec the launcher will materialize; threaded into the
         dummy-shard writers so shapes match the validator's expectations.
-    :returns: A callable matching ``_check_call_streamed``'s side-effect contract.
+    :returns: A callable matching ``subprocess.check_call``'s side-effect contract.
     """
 
     def _side_effect(args: list[str]) -> None:

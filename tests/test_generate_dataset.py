@@ -171,7 +171,7 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
 
     render_shard = stub_renderer(spec)
     with patch(
-        "synth_setter.cli.generate_dataset._check_call_streamed",
+        "synth_setter.cli.generate_dataset.subprocess.check_call",
         side_effect=render_shard,
     ):
         from_hydra(cfg_dataset)
@@ -189,7 +189,7 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
         render_shard(args)
 
     with patch(
-        "synth_setter.cli.generate_dataset._check_call_streamed",
+        "synth_setter.cli.generate_dataset.subprocess.check_call",
         side_effect=_count_renderer,
     ):
         from_hydra(cfg_dataset)
