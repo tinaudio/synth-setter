@@ -62,3 +62,13 @@ def test_simple_control_omits_the_copy_uri_so_it_regenerates_fresh() -> None:
 
     assert not any("copy_dataset_root_uri=" in t for t in control["command"])
     assert any("copy_dataset_root_uri=" in t for t in copy_probe["command"])
+
+
+def test_swept_args_macro_is_last_so_grid_values_win_over_fixed_pins() -> None:
+    """``${args_no_hyphens}`` must be the final command token in every sweep.
+
+    Hydra applies later overrides last, so the swept grid macro has to follow the fixed pins;
+    placing it earlier would let a fixed pin silently shadow an overlapping swept key.
+    """
+    for config in sweep.sweeps(2):
+        assert config["command"][-1] == "${args_no_hyphens}"

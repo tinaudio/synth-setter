@@ -105,14 +105,16 @@ def _sweep(
     :param grid: Maps each swept Hydra key to its values; their product is the cells.
     :returns: A ``wandb.sweep``-ready config dict.
     """
+    # ``${args_no_hyphens}`` (the swept grid cell) goes last: Hydra applies later overrides last,
+    # so a fixed pin must never follow a swept key it would otherwise shadow.
     command = [
         "${interpreter}",
         "${program}",
-        "${args_no_hyphens}",
         f"task_name={name}",
         f"r2.prefix_root={PREFIX_ROOT}",
         f"experiment={_PROBE_EXPERIMENT}",
         *fixed,
+        "${args_no_hyphens}",
     ]
     return {
         "program": PROGRAM,
