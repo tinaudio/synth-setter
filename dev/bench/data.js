@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781240590474,
+  "lastUpdate": 1781275756508,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -6966,6 +6966,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.04547131061553955,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "46c0b92ce07d1d350a56715b6b1a8ad6f4011b74",
+          "message": "internal-feat(evaluation): log render-order probe permutation as a wandb metric (#1672)\n\n* feat(evaluation): log render-order probe permutation as a wandb metric\n\nThe inline oracle eval's render-order probe (#489) draws a dest_idx->src_idx\npermutation to re-score pred audio against a shuffled render order, but\ndiscarded it after use — only the aggregate shuffled metrics reached wandb,\nwith no record of which permutation produced them.\n\nPersist the drawn permutation to shuffle_permutation.csv (columns dest_idx,\nsrc_idx) alongside aggregated_metrics_shuffled.csv, and log it as a\nshuffle/permutation wandb Table from the eval predict-postprocessing path,\nnamespaced by the existing per-split metric_prefix. The probe runs inline for\nthe surge/fake_oracle eval, so the mapping now surfaces on the generate run.\n\nRefs #1669, #489\n\n* test(evaluation): harden shuffle-permutation wandb table assertions\n\nStrengthen the row/column checks on the shuffle/permutation wandb Table at\nthe integration layer (eval predict-postprocessing and the evaluate()\nentrypoint) to match the unit-level coverage, and add the missing\nshuffle_permutation.csv absence assertion to the nested-output-dir\nprobe-skip test so every skip path pins both probe outputs.\n\nRefs #1669\n\n* docs(evaluation): document shuffle/permutation wandb table and CSV\n\nThe render-order probe now writes shuffle_permutation.csv and logs a\nshuffle/permutation wandb Table. Update the eval-pipeline and\nwandb-integration references and the compute_audio_metrics doc-map entry,\nwhich enumerate the probe's outputs and logged wandb keys exhaustively.\n\nRefs #1669",
+          "timestamp": "2026-06-12T10:11:48-04:00",
+          "tree_id": "cf49edcb5d4e3361d0dca4ef8e6a1aa9522ce057",
+          "url": "https://github.com/tinaudio/synth-setter/commit/46c0b92ce07d1d350a56715b6b1a8ad6f4011b74"
+        },
+        "date": 1781275755511,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.386988639831543,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 5.846743235941976,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.01958969421684742,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.015708565711975098,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.0704755783081055,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 15.180674631166672,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.286669731140137,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.362921345140785,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.029808850958943367,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.028925955295562744,
             "unit": "1-cos"
           },
           {
