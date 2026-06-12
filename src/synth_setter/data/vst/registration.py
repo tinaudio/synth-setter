@@ -202,11 +202,17 @@ def checkout_relative_path(plugin_path: str, root: Path) -> str:
     :param root: Checkout root.
     :returns: Checkout-relative POSIX path, or the resolved absolute path.
     """
-    resolved = Path(plugin_path).resolve()
-    try:
-        return resolved.relative_to(root.resolve()).as_posix()
-    except ValueError:
-        return str(resolved)
+    given = Path(plugin_path)
+    # Absolutize without dereferencing the final component: the plugins/
+    # convention symlinks into the system VST3 dir outside the checkout, so
+    # Path.resolve would escape the tree and force a host-specific path.
+    absolute = given if given.is_absolute() else Path.cwd() / given
+    for base in (root, root.resolve()):
+        try:
+            return absolute.relative_to(base).as_posix()
+        except ValueError:
+            continue
+    return str(absolute.resolve())
 
 
 def render_config_yaml(spec_name: str, *, plugin_path: str, renderer_version: str) -> str:

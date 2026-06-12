@@ -176,6 +176,43 @@ def test_checkout_relative_path_outside_checkout_is_absolute(tmp_path: Path) -> 
     assert checkout_relative_path(str(outside), checkout) == str(outside.resolve())
 
 
+def test_checkout_relative_path_through_plugins_symlink_stays_relative(tmp_path: Path) -> None:
+    """An in-checkout ``plugins/`` symlink to a system path records relative.
+
+    ``make link-plugins`` symlinks ``plugins/<name>.vst3`` at the system VST3
+    dir outside the checkout, so dereferencing the symlink escapes the tree.
+    The recorded path must stay checkout-relative regardless.
+
+    :param tmp_path: Holds the disjoint checkout and system plugin dirs.
+    """
+    checkout = tmp_path / "checkout"
+    (checkout / "plugins").mkdir(parents=True)
+    system_plugin = tmp_path / "system" / "Dexed.vst3"
+    system_plugin.mkdir(parents=True)
+    link = checkout / "plugins" / "Dexed.vst3"
+    link.symlink_to(system_plugin)
+
+    assert checkout_relative_path(str(link), checkout) == "plugins/Dexed.vst3"
+
+
+def test_checkout_relative_path_relative_input_resolves_against_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A relative plugin path (the CLI's own form) records checkout-relative.
+
+    The CLI passes ``--plugin-path plugins/<name>.vst3`` verbatim from a cwd at
+    the checkout root, so the bare relative path must resolve against the cwd.
+
+    :param tmp_path: Stands in for the checkout root.
+    :param monkeypatch: Chdirs into the checkout for the relative-path read.
+    """
+    (tmp_path / "plugins").mkdir()
+    (tmp_path / "plugins" / "Dexed.vst3").mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    assert checkout_relative_path("plugins/Dexed.vst3", tmp_path) == "plugins/Dexed.vst3"
+
+
 def test_registration_paths_lay_out_the_repo_convention(tmp_path: Path) -> None:
     """Destinations follow the spec-module / preset / csv / render-config convention.
 
