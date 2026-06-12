@@ -25,6 +25,7 @@ from synth_setter.data.vst.shapes import AUDIO_FIELD, MEL_SPEC_FIELD, PARAM_ARRA
 from synth_setter.data.vst.writers import make_hdf5_dataset, make_lance_dataset, make_wds_dataset
 from synth_setter.pipeline.ci.validate_shard import validate_shard
 from synth_setter.pipeline.data.lance_shard import iter_lance_column_rows, read_shard_metadata
+from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 
 _ = hdf5plugin  # keep type checkers from flagging the side-effect import
@@ -206,7 +207,7 @@ def test_make_lance_dataset_writes_validator_passing_shard_under_fake_plugin(
     Drives ``make_lance_dataset`` end-to-end (batch loop, per-batch flush via
     ``samples_per_render_batch=2``, schema construction, writer close) and
     checks the produced file through the production validator — schema,
-    dtypes, inner shapes, row count — plus a field-level ``ShardMetadata``
+    dtypes, inner shapes, row count — plus a whole-model ``ShardMetadata``
     round-trip against the render config.
 
     :param tmp_path: Destination directory for the Lance shard under test.
@@ -227,11 +228,15 @@ def test_make_lance_dataset_writes_validator_passing_shard_under_fake_plugin(
 
     assert validate_shard(out, spec) == []
     meta = read_shard_metadata(LanceFileReader(str(out)).metadata().schema)
-    assert meta.velocity == render_cfg.velocity
-    assert meta.signal_duration_seconds == render_cfg.signal_duration_seconds
-    assert meta.sample_rate == render_cfg.sample_rate
-    assert meta.channels == render_cfg.channels
-    assert meta.min_loudness == render_cfg.min_loudness
+    # Whole-model equality: a new ShardMetadata field fails construction here,
+    # forcing this round-trip pin to cover it.
+    assert meta == ShardMetadata(
+        velocity=render_cfg.velocity,
+        signal_duration_seconds=render_cfg.signal_duration_seconds,
+        sample_rate=render_cfg.sample_rate,
+        channels=render_cfg.channels,
+        min_loudness=render_cfg.min_loudness,
+    )
 
 
 @pytest.mark.fake_vst
@@ -251,7 +256,7 @@ def test_make_lance_dataset_arrays_match_h5_writer_under_fake_plugin(
         renders run without a real VST3 or X11.
     """
     num_samples = 4
-    render_cfg = _fake_render_cfg(num_samples=num_samples)
+    render_cfg = _fake_render_cfg(num_samples=num_samples, samples_per_render_batch=2)
     fixed_synth = [_HARDCODED_SYNTH_PARAMS] * num_samples
     fixed_note = [_HARDCODED_NOTE_PARAMS] * num_samples
     lance_out = tmp_path / "shard-000000.lance"
@@ -296,12 +301,24 @@ def test_make_lance_dataset_rerun_overwrites_rather_than_appends(
     """
     num_samples = 4
     render_cfg = _fake_render_cfg(num_samples=num_samples, samples_per_render_batch=2)
+    fixed_synth = [_HARDCODED_SYNTH_PARAMS] * num_samples
+    fixed_note = [_HARDCODED_NOTE_PARAMS] * num_samples
     out = tmp_path / "shard-000000.lance"
 
-    make_lance_dataset(lance_file=out, render_cfg=render_cfg)
+    make_lance_dataset(
+        lance_file=out,
+        render_cfg=render_cfg,
+        fixed_synth_params_list=fixed_synth,
+        fixed_note_params_list=fixed_note,
+    )
     assert LanceFileReader(str(out)).num_rows() == num_samples
 
-    make_lance_dataset(lance_file=out, render_cfg=render_cfg)
+    make_lance_dataset(
+        lance_file=out,
+        render_cfg=render_cfg,
+        fixed_synth_params_list=fixed_synth,
+        fixed_note_params_list=fixed_note,
+    )
     assert LanceFileReader(str(out)).num_rows() == num_samples, (
         "lance re-run appended instead of overwriting the shard"
     )

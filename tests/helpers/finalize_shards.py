@@ -89,6 +89,24 @@ def build_wds_smoke_spec(
     return DatasetSpec(**kwargs)  # type: ignore[arg-type]
 
 
+# Default render for the lance smoke spec; sample_rate=100 keeps the mel front
+# end at its minimum hop so shards stay tiny.
+_LANCE_SMOKE_RENDER: dict[str, Any] = {
+    "plugin_path": "/fake/Plugin.vst3",
+    "preset_path": "presets/surge-base.vstpreset",
+    "param_spec_name": "surge_simple",
+    "renderer_version": "1.0.0-test",
+    "sample_rate": 100,
+    "channels": 2,
+    "velocity": 100,
+    "signal_duration_seconds": 1.0,
+    "min_loudness": -55.0,
+    "samples_per_render_batch": 4,
+    "samples_per_shard": 4,
+    "gui_toggle_cadence": "never",
+}
+
+
 def build_lance_smoke_spec(
     task_name: str = "finalize-lance-unit",
     train_val_test_sizes: tuple[int, int, int] = (4, 0, 0),
@@ -112,22 +130,7 @@ def build_lance_smoke_spec(
         "base_seed": 42,
         "mask_degenerate_bins": mask_degenerate_bins,
         "r2": {"bucket": "intermediate-data"},
-        "render": render
-        if render is not None
-        else {
-            "plugin_path": "/fake/Plugin.vst3",
-            "preset_path": "presets/surge-base.vstpreset",
-            "param_spec_name": "surge_simple",
-            "renderer_version": "1.0.0-test",
-            "sample_rate": 100,
-            "channels": 2,
-            "velocity": 100,
-            "signal_duration_seconds": 1.0,
-            "min_loudness": -55.0,
-            "samples_per_render_batch": 4,
-            "samples_per_shard": 4,
-            "gui_toggle_cadence": "never",
-        },
+        "render": render if render is not None else dict(_LANCE_SMOKE_RENDER),
     }
     return DatasetSpec(**kwargs)  # type: ignore[arg-type]
 

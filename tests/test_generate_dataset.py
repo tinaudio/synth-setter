@@ -118,7 +118,10 @@ def test_cfg_dataset_copy_dataset_root_uri_with_wds_output_is_rejected(
 
 
 @pytest.mark.fake_vst
-@pytest.mark.parametrize(("output_format", "shard_suffix"), [("hdf5", ".h5"), ("lance", ".lance")])
+@pytest.mark.parametrize(
+    ("output_format", "shard_suffix"),
+    [("hdf5", ".h5"), ("wds", ".tar"), ("lance", ".lance")],
+)
 def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     output_format: str,
     shard_suffix: str,
@@ -133,8 +136,9 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     validation-shaped shard) and ``r2:`` is a local-filesystem rclone remote via
     ``fake_r2_remote``, so the partition → render → ``rclone copy`` upload →
     skip-existing probe loop (#750) runs with no real plugin and no real R2.
-    Parametrized over ``output_format`` so the lance config surface (P31) runs
-    the same loop with ``.lance`` shard names. Asserts (1) ``smoke-shard``
+    Parametrized over ``output_format`` so every format's config surface
+    (lance per #1600) runs the same loop with its own shard suffix.
+    Asserts (1) ``smoke-shard``
     partitions into one shard per split, (2) every shard lands under its
     spec-derived R2 URI with the format's suffix, and (3) a second
     ``from_hydra`` pass renders nothing because the probe finds all shards

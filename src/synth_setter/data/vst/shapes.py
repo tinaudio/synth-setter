@@ -1,13 +1,10 @@
-"""Shape and mel-front-end primitives shared by writer and validator.
+"""Shape and mel-front-end primitives shared by the writers and the validator.
 
-Hosts the per-row array names (``DATASET_FIELD_NAMES``), the per-field
-on-disk dtypes (``DATASET_FIELD_DTYPES``), the mel-spectrogram constants the
-writer's ``make_spectrogram`` uses, the audio / mel-spec / param-array
-dataset-shape calculators, and the per-field aggregate
-(``dataset_field_shapes``). Kept as a thin sibling module so that the shard
-validator and the wds writer can import these primitives without pulling in
-the rest of ``generate_vst_dataset.py``'s import surface (h5py, pedalboard,
-the VST renderer).
+Hosts the per-row array names, on-disk dtypes, mel-spectrogram constants, and
+dataset-shape calculators. Kept as a thin sibling module so that the shard
+validator and the writers can import these primitives without pulling in the
+rest of ``generate_vst_dataset.py``'s import surface (h5py, pedalboard, the
+VST renderer).
 """
 
 from __future__ import annotations
@@ -150,8 +147,7 @@ def param_array_dataset_shape(num_samples: int, num_params: int) -> tuple[int, i
 def dataset_field_shapes(render: RenderConfig, num_params: int) -> dict[str, tuple[int, ...]]:
     """Full per-field shapes (leading row axis included) the writers emit for one shard.
 
-    Single source of the field→shape contract shared by the Lance writer, the
-    shard validator, and the test-side shard seeders — keyed by
+    Single source of the field→shape contract — keyed by
     ``DATASET_FIELD_NAMES`` with ``N = render.samples_per_shard``.
 
     :param render: Per-shard renderer config supplying row count, channels,

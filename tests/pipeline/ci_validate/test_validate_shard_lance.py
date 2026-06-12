@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 from lance.file import LanceFileReader
 
-from synth_setter.data.vst.shapes import dataset_field_shapes
+from synth_setter.data.vst.shapes import DATASET_FIELD_DTYPES, dataset_field_shapes
 from synth_setter.pipeline.ci.validate_shard import validate_shard
 from synth_setter.pipeline.data.lance_shard import (
     lance_schema,
@@ -104,7 +104,7 @@ def test_validate_lance_shard_reports_row_count_mismatch(tmp_path: Path) -> None
     """
     spec = build_lance_smoke_spec()
     render = spec.render
-    # A one-row shard disagrees with the spec's samples_per_shard=4.
+    # A one-row shard disagrees with the spec's samples_per_shard.
     shapes = _one_row_shapes(spec)
     schema = lance_schema(
         shapes,
@@ -126,4 +126,42 @@ def test_validate_lance_shard_reports_row_count_mismatch(tmp_path: Path) -> None
 
     errors = validate_shard(shard, spec)
 
-    assert any("expected 4" in error for error in errors)
+    row_count_error = f"file has 1 rows, expected {spec.render.samples_per_shard}"
+    assert any(row_count_error in error for error in errors)
+
+
+def test_validate_lance_shard_reports_inner_shape_mismatch(tmp_path: Path) -> None:
+    """A Lance shard whose mel column has a wrong inner shape names both shapes.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    spec = build_lance_smoke_spec()
+    render = spec.render
+    shapes = dataset_field_shapes(render, spec.num_params)
+    n, channels, n_mels, n_frames = shapes["mel_spec"]
+    shapes["mel_spec"] = (n, channels, n_mels + 1, n_frames)
+    schema = lance_schema(
+        shapes,
+        ShardMetadata(
+            velocity=render.velocity,
+            signal_duration_seconds=render.signal_duration_seconds,
+            sample_rate=render.sample_rate,
+            channels=render.channels,
+            min_loudness=render.min_loudness,
+        ),
+    )
+    arrays = {
+        field: np.zeros(shape, dtype=DATASET_FIELD_DTYPES[field])
+        for field, shape in shapes.items()
+    }
+    shard = tmp_path / spec.shards[0].filename
+    write_lance_file(shard, schema, [record_batch_from_arrays(arrays, schema)])
+
+    errors = validate_shard(shard, spec)
+
+    expected_inner = (channels, n_mels, n_frames)
+    actual_inner = (channels, n_mels + 1, n_frames)
+    assert any(
+        f"column 'mel_spec' has inner shape {actual_inner}, expected {expected_inner}" in error
+        for error in errors
+    )

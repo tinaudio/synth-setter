@@ -5,7 +5,8 @@ and the fast fake-R2 orchestrator test (``tests/test_generate_dataset.py``) driv
 ``cli.generate_dataset`` with the Surge VST3 subprocess replaced by a deterministic
 stub that writes a validation-passing shard of the right shape. Centralizing the
 writers + stub here keeps the two lanes from drifting: a change to the writer's
-shard layout updates both at once.
+shard layout updates both at once. The lance writer is imported from
+``tests.helpers.finalize_shards``, which owns it for the finalize lanes.
 """
 
 from __future__ import annotations

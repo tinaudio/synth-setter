@@ -472,12 +472,13 @@ def make_lance_dataset(
     :param fixed_note_params_list: Optional pre-set note params; same full-shard
         contract as ``fixed_synth_params_list``.
     """
-    param_spec = param_specs[render_cfg.param_spec_name]
-    meta = _shard_metadata_from_render(render_cfg)
-    start_idx = 0
     from lance.file import LanceFileWriter
 
     from synth_setter.pipeline.data.lance_shard import lance_schema, record_batch_from_arrays
+
+    param_spec = param_specs[render_cfg.param_spec_name]
+    meta = _shard_metadata_from_render(render_cfg)
+    start_idx = 0
 
     _validate_fixed_params_lengths(
         num_samples=render_cfg.samples_per_shard,
