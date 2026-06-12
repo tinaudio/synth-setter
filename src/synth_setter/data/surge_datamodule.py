@@ -1,5 +1,5 @@
 import random
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Literal
 
@@ -8,6 +8,7 @@ import hdf5plugin  # noqa: F401  # side-effect import: registers HDF5 blosc filt
 import numpy as np
 import torch
 from lightning import LightningDataModule
+from torch.utils.data import DataLoader
 
 from synth_setter.data.ot import _hungarian_match
 from synth_setter.data.vst.param_spec_registry import param_specs
@@ -18,7 +19,20 @@ from synth_setter.pipeline import r2_io
 _DEFAULT_PARAM_SPEC_NAME = "surge_xt"
 
 
-class VSTDataset(torch.utils.data.Dataset):
+# DOC601/DOC603: pydoclint cannot see sphinx ``:ivar:`` class-attribute docs (the
+# underlying docstring_parser drops them from its attribute list), so a documented
+# class with class-level annotations is unavoidably flagged; mean/std are described in
+# the class docstring body instead.
+class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
+    """Batch-indexed dataset over an HDF5 shard of VST renders.
+
+    Each ``__getitem__`` returns a whole batch (the dataloader uses ``batch_size=None``)
+    of conditioning features, target params, and noise (Hungarian-matched to params when
+    ``ot`` is set). Fake mode synthesises
+    random tensors of the configured width without opening any file. ``mean`` and ``std``
+    hold the optional saved mel statistics applied during reads (``None`` when unloaded).
+    """
+
     mean: np.ndarray | None = None
     std: np.ndarray | None = None
 
@@ -35,7 +49,21 @@ class VSTDataset(torch.utils.data.Dataset):
         fake: bool = False,
         repeat_first_batch: bool = False,
         num_params: int | None = None,
-    ):
+    ) -> None:
+        """Open the shard and configure which features each batch reads.
+
+        :param dataset_file: Path to the HDF5 shard; ignored when ``fake`` is set.
+        :param batch_size: Number of samples returned per ``__getitem__``.
+        :param ot: Whether to optimal-transport match noise to params per batch.
+        :param read_audio: Whether to read the raw audio tensor.
+        :param read_mel: Whether to read the mel-spectrogram conditioning tensor.
+        :param read_m2l: Whether to read the music2latent conditioning tensor.
+        :param use_saved_mean_and_variance: Whether to load and apply saved mel stats.
+        :param rescale_params: Whether to rescale params from ``[0, 1]`` to ``[-1, 1]``.
+        :param fake: Whether to synthesise random batches instead of reading the shard.
+        :param repeat_first_batch: Whether every index returns the first batch.
+        :param num_params: Param width for fake mode; defaults to the registry spec width.
+        """
         self.batch_size = batch_size
         self.ot = ot
 
@@ -61,7 +89,12 @@ class VSTDataset(torch.utils.data.Dataset):
         if use_saved_mean_and_variance:
             self._load_dataset_statistics(dataset_file)
 
-    def _load_dataset_statistics(self, dataset_file: str | Path):
+    def _load_dataset_statistics(self, dataset_file: str | Path) -> None:
+        """Load the mel mean and std saved alongside the shard.
+
+        :param dataset_file: Shard path used to locate the sibling ``stats.npz``.
+        :raises FileNotFoundError: If the expected ``stats.npz`` is missing.
+        """
         # for /path/to/train.h5 we would expect to find /path/to/stats.npz
         # if not, we throw an error
         stats_file = VSTDataset.get_stats_file_path(dataset_file)
@@ -77,17 +110,30 @@ class VSTDataset(torch.utils.data.Dataset):
 
     @staticmethod
     def get_stats_file_path(dataset_file: str | Path) -> Path:
+        """Return the ``stats.npz`` path that sits beside the shard.
+
+        :param dataset_file: Shard path whose parent directory holds the stats file.
+        :returns: Path to the sibling ``stats.npz``.
+        """
         dataset_file = Path(dataset_file)
         data_dir = dataset_file.parent
         return data_dir / "stats.npz"
 
-    def __len__(self):
+    def __len__(self) -> int:
+        """Return the number of batches in the shard (or a fixed count in fake mode).
+
+        :returns: Batch count for the dataset.
+        """
         if self.fake:
             return 10000
 
         return self.dataset_file["audio"].shape[0] // self.batch_size
 
-    def _get_fake_item(self):
+    def _get_fake_item(self) -> dict[str, torch.Tensor | None]:
+        """Synthesise one random batch matching the configured feature flags.
+
+        :returns: Mapping of feature names to random tensors (or ``None`` when unread).
+        """
         audio = torch.randn(self.batch_size, 2, 44100 * 4) if self.read_audio else None
         mel_spec = torch.randn(self.batch_size, 2, 128, 401) if self.read_mel else None
         m2l = torch.randn(self.batch_size, 128, 42) if self.read_m2l else None
@@ -106,7 +152,13 @@ class VSTDataset(torch.utils.data.Dataset):
             audio=audio,
         )
 
-    def _index_dataset(self, ds: h5py.Dataset, idx: int | Sequence[int]):
+    def _index_dataset(self, ds: h5py.Dataset, idx: int | Sequence[int]) -> np.ndarray:
+        """Slice one batch out of an HDF5 dataset for the given index.
+
+        :param ds: HDF5 dataset to slice.
+        :param idx: Batch index, or a ``(start, stop)`` pair, or a sequence of rows.
+        :returns: The selected batch as a NumPy array.
+        """
         if self.repeat_first_batch:
             return ds[: self.batch_size]
         if isinstance(idx, int):
@@ -120,7 +172,12 @@ class VSTDataset(torch.utils.data.Dataset):
 
         return ds[idx]
 
-    def __getitem__(self, idx: int | Sequence[int]):
+    def __getitem__(self, idx: int | Sequence[int]) -> dict[str, torch.Tensor | None]:
+        """Read one batch of features, params, and matched noise at ``idx``.
+
+        :param idx: Batch index, or a ``(start, stop)`` pair, or a sequence of rows.
+        :returns: Mapping of feature names to tensors (or ``None`` when unread).
+        """
         if self.fake:
             return self._get_fake_item()
 
@@ -164,27 +221,36 @@ class VSTDataset(torch.utils.data.Dataset):
 
 
 class WithinChunkShuffledSampler(torch.utils.data.Sampler):
-    """When we have a hdf5 dataset on disk with layout:
-        shard1.h5
-        shard2.h5
-        ...
-        shardN.h5
-    and each shard is 10,000 samples long, we want to sample items within each block of
-    10,000 rather than randomly sampling across the entire dataset, to reduce the
-    number of concurrent file handles that h5py has to deal with.
-    This is not always exactly possible, but we can minimize the number of inter-shard
-    reads to only the boundaries.
+    """Shuffle batches within fixed-size groups to limit concurrent HDF5 file handles.
+
+    The dataset is stored as equal-length shards on disk. Sampling within each group of
+    ``batches_per_group`` keeps reads local to a shard rather than spanning the whole
+    dataset, so h5py only crosses shard boundaries at group edges.
     """
 
-    def __init__(self, batch_size: int, num_batches: int, batches_per_group: int):
+    def __init__(self, batch_size: int, num_batches: int, batches_per_group: int) -> None:
+        """Configure the batch geometry the sampler shuffles within.
+
+        :param batch_size: Number of samples per batch.
+        :param num_batches: Total number of batches across the dataset.
+        :param batches_per_group: Number of batches shuffled together as one group.
+        """
         self.batch_size = batch_size
         self.num_batches = num_batches
         self.batches_per_group = batches_per_group
 
-    def __len__(self):
+    def __len__(self) -> int:
+        """Return the total number of batches.
+
+        :returns: Batch count for the sampler.
+        """
         return self.num_batches
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[list[int]]:
+        """Yield shuffled batches of row indices, sorted within each batch.
+
+        :yields list[int]: A batch of row indices as a sorted list.
+        """
         num_groups = self.num_batches // self.batches_per_group
         samples_per_group = self.batches_per_group * self.batch_size
         group_sizes = [samples_per_group] * num_groups
@@ -210,14 +276,29 @@ class WithinChunkShuffledSampler(torch.utils.data.Sampler):
 
 
 class ShuffledSampler(torch.utils.data.Sampler):
-    def __init__(self, batch_size: int, num_batches: int):
+    """Sample batches of randomly permuted row indices across the whole dataset."""
+
+    def __init__(self, batch_size: int, num_batches: int) -> None:
+        """Configure the batch geometry the sampler permutes over.
+
+        :param batch_size: Number of samples per batch.
+        :param num_batches: Total number of batches across the dataset.
+        """
         self.batch_size = batch_size
         self.num_batches = num_batches
 
-    def __len__(self):
+    def __len__(self) -> int:
+        """Return the total number of batches.
+
+        :returns: Batch count for the sampler.
+        """
         return self.num_batches
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[np.ndarray]:
+        """Yield shuffled batches of row indices, sorted within each batch.
+
+        :yields np.ndarray: A batch of row indices as a sorted array.
+        """
         samples = np.random.permutation(self.num_batches * self.batch_size)
 
         for i in range(self.num_batches):
@@ -227,14 +308,30 @@ class ShuffledSampler(torch.utils.data.Sampler):
 
 
 class ShiftedBatchSampler(torch.utils.data.BatchSampler):
-    def __init__(self, batch_size: int, num_batches: int):
+    """Sample contiguous batches shifted by a random per-epoch offset."""
+
+    def __init__(self, batch_size: int, num_batches: int) -> None:
+        """Configure the batch geometry the sampler shifts and permutes.
+
+        :param batch_size: Number of samples per batch.
+        :param num_batches: Total number of batches across the dataset.
+        """
         self.batch_size = batch_size
         self.num_batches = num_batches
 
-    def __len__(self):
+    def __len__(self) -> int:
+        """Return the number of batches, minus one to leave room for the shift.
+
+        :returns: Batch count available after the offset shift.
+        """
         return self.num_batches - 1
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[tuple[int, int]]:
+        """Yield ``(start, stop)`` batch bounds shifted by a random offset.
+
+        :yield: A ``(start, stop)`` index pair for one batch.
+        :ytype: tuple[int, int]
+        """
         offset = random.randint(0, self.batch_size - 1)
         perm = np.random.permutation(self.num_batches - 1)
         for i in perm:
@@ -242,6 +339,12 @@ class ShiftedBatchSampler(torch.utils.data.BatchSampler):
 
 
 class VSTDataModule(LightningDataModule):
+    """Lightning datamodule wiring VST shards into train/val/test/predict dataloaders.
+
+    Optionally hydrates ``dataset_root`` from R2 in ``prepare_data``, builds a
+    :class:`VSTDataset` per split in ``setup``, and closes open shards in ``teardown``.
+    """
+
     def __init__(
         self,
         dataset_root: str | Path,
@@ -256,7 +359,23 @@ class VSTDataModule(LightningDataModule):
         conditioning: Literal["mel", "m2l"] = "mel",
         pin_memory: bool = True,
         param_spec_name: str = _DEFAULT_PARAM_SPEC_NAME,
-    ):
+    ) -> None:
+        """Store dataloader and dataset configuration for later ``setup``.
+
+        :param dataset_root: Local directory holding the per-split ``.h5`` shards.
+        :param download_dataset_root_uri: R2 URI to hydrate ``dataset_root`` from, or
+            ``None`` to use the local directory as-is.
+        :param use_saved_mean_and_variance: Whether to load and apply saved mel stats.
+        :param batch_size: Number of samples per batch.
+        :param ot: Whether to optimal-transport match noise to params per batch.
+        :param num_workers: Number of dataloader worker processes.
+        :param fake: Whether datasets synthesise random batches instead of reading shards.
+        :param repeat_first_batch: Whether every index returns the first batch.
+        :param predict_file: Shard used for prediction; defaults to ``test.h5``.
+        :param conditioning: Conditioning feature, either ``"mel"`` or ``"m2l"``.
+        :param pin_memory: Whether dataloaders pin memory for faster host-to-device copies.
+        :param param_spec_name: Registry key selecting the param spec width.
+        """
         super().__init__()
 
         self.dataset_root = Path(dataset_root)
@@ -286,7 +405,12 @@ class VSTDataModule(LightningDataModule):
         r2_io.ensure_r2_env_loaded()
         r2_io.download_dir_no_overwrite(self.download_dataset_root_uri, self.dataset_root)
 
-    def setup(self, stage: str | None = None):
+    def setup(self, stage: str | None = None) -> None:
+        """Build a :class:`VSTDataset` for each split.
+
+        :param stage: Lightning stage hint (``fit``/``validate``/``test``/``predict``);
+            unused because every split dataset is constructed eagerly.
+        """
         # KeyError here fails fast on an unregistered param_spec_name.
         num_params = len(param_specs[self.param_spec_name])
         self.train_dataset = VSTDataset(
@@ -334,7 +458,11 @@ class VSTDataModule(LightningDataModule):
             num_params=num_params,
         )
 
-    def train_dataloader(self):
+    def train_dataloader(self) -> DataLoader:
+        """Return the training dataloader using the shifted-batch sampler.
+
+        :returns: Dataloader over the training dataset.
+        """
         return torch.utils.data.DataLoader(
             self.train_dataset,
             batch_size=None,
@@ -348,7 +476,11 @@ class VSTDataModule(LightningDataModule):
             # shuffle=True,
         )
 
-    def val_dataloader(self):
+    def val_dataloader(self) -> DataLoader:
+        """Return the validation dataloader.
+
+        :returns: Dataloader over the validation dataset.
+        """
         return torch.utils.data.DataLoader(
             self.val_dataset,
             batch_size=None,
@@ -357,7 +489,11 @@ class VSTDataModule(LightningDataModule):
             pin_memory=self.pin_memory,
         )
 
-    def test_dataloader(self):
+    def test_dataloader(self) -> DataLoader:
+        """Return the test dataloader.
+
+        :returns: Dataloader over the test dataset.
+        """
         return torch.utils.data.DataLoader(
             self.test_dataset,
             batch_size=None,
@@ -366,7 +502,11 @@ class VSTDataModule(LightningDataModule):
             pin_memory=self.pin_memory,
         )
 
-    def predict_dataloader(self):
+    def predict_dataloader(self) -> DataLoader:
+        """Return the prediction dataloader.
+
+        :returns: Dataloader over the prediction dataset.
+        """
         return torch.utils.data.DataLoader(
             self.predict_dataset,
             batch_size=None,
@@ -375,7 +515,11 @@ class VSTDataModule(LightningDataModule):
             pin_memory=self.pin_memory,
         )
 
-    def teardown(self, stage: str | None = None):
+    def teardown(self, stage: str | None = None) -> None:
+        """Close every open HDF5 shard handle.
+
+        :param stage: Lightning stage hint; unused because all splits are closed together.
+        """
         # fake mode leaves dataset_file None (no h5 opened), so guard each close.
         for dataset in (
             self.train_dataset,

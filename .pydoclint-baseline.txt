@@ -44,10 +44,6 @@ src/synth_setter/data/ksin_datamodule.py
     DOC101: Method `KSinDataModule.__init__`: Docstring contains fewer arguments than in function signature.
     DOC103: Method `KSinDataModule.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [batch_size: int, break_symmetry: bool, k: int, num_workers: int, ot: bool, pin_memory: bool, shift_test_distribution: bool, signal_length: int, sort_frequencies: bool, train_val_test_seeds: Tuple[int, int, int], train_val_test_sizes: Tuple[int, int, int]].
 --------------------
-src/synth_setter/data/surge_datamodule.py
-    DOC101: Method `WithinChunkShuffledSampler.__init__`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `WithinChunkShuffledSampler.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [batch_size: int, batches_per_group: int, num_batches: int].
---------------------
 src/synth_setter/data/vst/core.py
     DOC101: Function `extract_renderer_version`: Docstring contains fewer arguments than in function signature.
     DOC103: Function `extract_renderer_version`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [plugin_path: Path].
