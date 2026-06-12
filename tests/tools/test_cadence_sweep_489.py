@@ -64,6 +64,24 @@ def test_simple_control_omits_the_copy_uri_so_it_regenerates_fresh() -> None:
     assert any("copy_dataset_root_uri=" in t for t in copy_probe["command"])
 
 
+def test_simple_xt_preset_probe_sets_a_lower_loudness_floor() -> None:
+    """Probe 7 pins a sub-default ``render.min_loudness`` so its quiet cross-render clears it (#489)."""
+    probe = _config_by_label(sweep.sweeps(2), "cadence_probe_surge_simple_xt_preset")
+    floor_tokens = [t for t in probe["command"] if t.startswith("render.min_loudness=")]
+    assert floor_tokens == ["render.min_loudness=-60.0"]
+
+
+def test_no_other_sweep_pins_a_min_loudness_floor() -> None:
+    """Only probe 7 lowers the loudness floor; every other probe keeps the project default (#489)."""
+    others = [
+        config["name"]
+        for config in sweep.sweeps(2)
+        if config["name"] != "generate_dataset_cadence_probe_surge_simple_xt_preset"
+        and any(t.startswith("render.min_loudness=") for t in config["command"])
+    ]
+    assert others == []
+
+
 def test_swept_args_macro_is_last_so_grid_values_win_over_fixed_pins() -> None:
     """``${args_no_hyphens}`` must be the final command token in every sweep.
 
