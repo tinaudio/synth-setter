@@ -225,8 +225,7 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
 # built against glibc 2.38 (Ubuntu 24.04 runners) cannot load (#1649).
 # License: these third-party binaries ship in the published GHCR image —
 # review upstream license/redistribution terms before adding or bumping an
-# asset (Dexed: GPL-3.0; Vital: GPL-3.0 source but binary/content terms are
-# Vital Audio's own — see vital.audio; Six Sines: MIT; Cardinal: GPL-3.0+).
+# asset (Dexed: GPL-3.0; Six Sines: MIT).
 # ==========================================
 FROM ${BASE_IMAGE} AS vst3-synths-fetch
 SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
