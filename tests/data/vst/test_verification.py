@@ -9,10 +9,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from synth_setter.data.vst.registration import registration_paths
 from synth_setter.data.vst.verification import (
     VerificationReport,
     check_classifier_against_plugin,
     check_spec_text,
+    registered_artifacts,
 )
 
 from tests.data.vst._introspect_fakes import IntrospectFakeParameter, IntrospectFakePlugin
@@ -202,3 +204,21 @@ def test_markdown_report_carries_verdict_findings_and_artifacts(tmp_path: Path) 
     assert "## BLOCK (1)" in text
     assert "## WARN (1)" in text
     assert "## PASS (1)" in text
+
+
+def test_registered_artifacts_cover_every_file_register_writes(tmp_path: Path) -> None:
+    """The artifact list feeding the pre-commit gate and report includes all five outputs.
+
+    :param tmp_path: Stands in for the checkout root.
+    """
+    paths = registration_paths(tmp_path, "fake_synth")
+
+    artifacts = registered_artifacts(paths)
+
+    assert artifacts == [
+        paths.spec_module,
+        paths.preset,
+        paths.csv,
+        paths.render_config,
+        paths.registry,
+    ]

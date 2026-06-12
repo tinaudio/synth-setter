@@ -468,3 +468,20 @@ def test_cli_load_timeout_option_fails_the_run(
 
     assert result.exit_code != 0
     assert "did not finish loading" in result.output
+
+
+def test_plugin_load_timeout_is_not_overshot_by_the_heartbeat_interval() -> None:
+    """The timeout binds even when a heartbeat interval would reach past it."""
+
+    def never_returns(_path: str, _name: str | None = None) -> IntrospectFakePlugin:
+        time.sleep(5.0)
+        return IntrospectFakePlugin({})
+
+    started = time.monotonic()
+    with pytest.raises(click.UsageError):
+        _load_plugin_loudly(
+            "fake.vst3", None, never_returns, timeout_seconds=0.3, heartbeat_seconds=0.25
+        )
+
+    # Two 0.25s joins would take 0.5s; remaining-aware joins stop at ~0.3s.
+    assert time.monotonic() - started < 0.45

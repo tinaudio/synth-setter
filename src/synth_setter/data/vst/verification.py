@@ -32,7 +32,7 @@ from synth_setter.data.vst.introspect import (
     MAX_NUMERIC_CATEGORY_VALUES,
     MAX_STR_CATEGORY_VALUES,
 )
-from synth_setter.data.vst.registration import registration_paths
+from synth_setter.data.vst.registration import RegistrationPaths, registration_paths
 
 if TYPE_CHECKING:
     from synth_setter.data.vst.introspect import IntrospectablePlugin
@@ -123,6 +123,19 @@ class VerificationReport:
         return "\n".join(lines)
 
 
+def registered_artifacts(paths: RegistrationPaths) -> list[Path]:
+    """List every file ``--register`` writes, in report order.
+
+    Single source for the pre-commit gate's scope and the report's artifact
+    header — the gate must cover the registry and baseline preset too, or
+    ``--verify`` misses commit-time failures on them.
+
+    :param paths: The registered checkout destinations.
+    :returns: All five artifact paths.
+    """
+    return [paths.spec_module, paths.preset, paths.csv, paths.render_config, paths.registry]
+
+
 def verify_registration(
     root: Path, spec_name: str, plugin: IntrospectablePlugin
 ) -> VerificationReport:
@@ -135,7 +148,7 @@ def verify_registration(
     """
     paths = registration_paths(root, spec_name)
     report = VerificationReport(spec_name)
-    _check_precommit(root, [paths.spec_module, paths.render_config, paths.csv], report)
+    _check_precommit(root, registered_artifacts(paths), report)
     check_spec_text(paths.spec_module, report)
     _check_runtime(root, spec_name, report)
     check_classifier_against_plugin(plugin, paths.spec_module, report)

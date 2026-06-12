@@ -37,7 +37,7 @@ from synth_setter.data.vst.registration import (
     registry_with_spec,
     render_config_yaml,
 )
-from synth_setter.data.vst.verification import verify_registration
+from synth_setter.data.vst.verification import registered_artifacts, verify_registration
 
 _PluginT = TypeVar("_PluginT")
 
@@ -388,7 +388,10 @@ def _load_plugin_loudly(
     started = time.monotonic()
     thread.start()
     while True:
-        thread.join(min(heartbeat_seconds, timeout_seconds))
+        # Join on the remaining budget so a heartbeat interval cannot block
+        # past the declared timeout.
+        remaining = timeout_seconds - (time.monotonic() - started)
+        thread.join(min(heartbeat_seconds, max(remaining, 0.0)))
         if not thread.is_alive():
             break
         elapsed = time.monotonic() - started
@@ -421,11 +424,11 @@ def _run_verification(
     :param spec_name: Registry key of the registered synth.
     :param plugin: The still-loaded plugin, for the classifier audit.
     """
-    paths = target.paths
     report = verify_registration(target.root, spec_name, plugin)
     report_path = target.root / f"verify-{spec_name}.md"
-    artifacts = [paths.spec_module, paths.preset, paths.csv, paths.render_config, paths.registry]
-    report_path.write_text(report.to_markdown(artifacts), encoding="utf-8")
+    report_path.write_text(
+        report.to_markdown(registered_artifacts(target.paths)), encoding="utf-8"
+    )
     click.echo(f"Verify      : {report.verdict()} ({report_path})")
     if report.blocks:
         click.get_current_context().exit(1)
