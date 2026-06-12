@@ -280,12 +280,13 @@ class TestStaticFieldsAndYamlMerge:
         assert result.torch_backend == "cu128"
         assert result.image_config_id == "experimental-ubuntu24"
 
-    def test_dev_snapshot_and_experimental_share_dockerfile_but_differ_only_by_base(self) -> None:
-        """The two real configs pin one Dockerfile + identical build inputs, differing only by base.
+    def test_dev_snapshot_and_experimental_share_dockerfile_but_differ_by_base_image(self) -> None:
+        """The two real configs pin one Dockerfile + identical build inputs, differing by base image.
 
         This is the invariant the experimental-ubuntu24 image relies on: one base-OS-agnostic
         Dockerfile, same build inputs, distinct base image per OS. Catches a copy-paste that leaves
-        the Noble tag pointed at the Jammy digest (or a build input drifting in one file only).
+        the Noble tag pointed at the Jammy digest (or a build input drifting in one file only). The
+        filename-derived ``image_config_id`` necessarily differs too and is not asserted here.
         """
         image_dir = configs_dir() / "image"
         dev = load_image_config(
