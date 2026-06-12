@@ -15,9 +15,9 @@ import pytest
 
 _SOURCE_BUILD_TIMEOUT_SECONDS = 5400  # CMake + Surge XT compiled from scratch; ~1h.
 _SMOKE_RUN_TIMEOUT_SECONDS = 600  # matches tests/_vst.py VST_SUBPROCESS_TIMEOUT_SECONDS.
-_DEV_SNAPSHOT_TAG = (
-    "synth-setter:dev-snapshot"  # must match the make docker-build-dev-snapshot tag.
-)
+# Pinned into the make call so the run tag is deterministic regardless of a developer's DOCKER_IMAGE.
+_DOCKER_IMAGE = "synth-setter"
+_DEV_SNAPSHOT_TAG = f"{_DOCKER_IMAGE}:dev-snapshot"
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]  # tests/docker/ -> tests/ -> repo root.
 
@@ -25,9 +25,9 @@ _skip_unless_opt_in = pytest.mark.skipif(
     not os.environ.get("SYNTH_SETTER_RUN_SOURCE_BUILD"),
     reason="set SYNTH_SETTER_RUN_SOURCE_BUILD to run this ~1h source build",
 )
-_skip_without_docker = pytest.mark.skipif(
-    shutil.which("docker") is None or shutil.which("make") is None,
-    reason="source build needs docker + make on PATH",
+_skip_without_build_tools = pytest.mark.skipif(
+    any(shutil.which(tool) is None for tool in ("docker", "make", "git")),
+    reason="source build needs docker, make, and git on PATH",
 )
 
 
@@ -66,7 +66,7 @@ def _run_or_fail(
 @pytest.mark.slow
 @pytest.mark.network
 @_skip_unless_opt_in
-@_skip_without_docker
+@_skip_without_build_tools
 def test_dev_snapshot_built_from_source_loads_surge_xt() -> None:
     """The source-built image must load the Surge XT it compiled, not merely import the package.
 
@@ -77,8 +77,16 @@ def test_dev_snapshot_built_from_source_loads_surge_xt() -> None:
         ["git", "rev-parse", "HEAD"], label="git rev-parse", timeout=30, capture=True
     ).stdout.strip()
 
+    # --load puts the image in the local daemon (buildx skips that by default) so docker run sees it.
     _run_or_fail(
-        ["make", "docker-build-dev-snapshot", f"GIT_REF={git_ref}", "DOCKER_BUILD_MODE=source"],
+        [
+            "make",
+            "docker-build-dev-snapshot",
+            f"GIT_REF={git_ref}",
+            "DOCKER_BUILD_MODE=source",
+            f"DOCKER_IMAGE={_DOCKER_IMAGE}",
+            "DOCKER_BUILD_FLAGS=--load",
+        ],
         label="BUILD_MODE=source build",
         timeout=_SOURCE_BUILD_TIMEOUT_SECONDS,
         capture=False,
