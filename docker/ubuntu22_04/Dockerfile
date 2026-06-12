@@ -141,13 +141,14 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
               libxcb-cursor0 \
               rpm
 
-# webkit2gtk for JUCE's WebBrowserComponent: Noble ships the 4.1 ABI, Jammy the
-# 4.0 ABI under different package names. Install whichever the base OS provides.
+# webkit2gtk for JUCE's WebBrowserComponent: Jammy ships both the 4.0 and 4.1
+# ABIs, Noble only 4.1 — try 4.0 first so Jammy keeps compiling against the
+# same ABI as before this fallback existed; only Noble takes the 4.1 branch.
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
     apt-get update && \
-    ( apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev \
-      || apt-get install -y --no-install-recommends libwebkit2gtk-4.0-dev )
+    ( apt-get install -y --no-install-recommends libwebkit2gtk-4.0-dev \
+      || apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev )
 
 # Finally, pick gcc12
 RUN update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 12
