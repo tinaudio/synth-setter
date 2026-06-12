@@ -210,10 +210,12 @@ def _render_in_batches(
     :param render_cfg: Per-shard renderer config from the dataset spec.
     :param param_spec: Resolved parameter spec for the render.
     :param start_idx: First absolute row index this run renders (non-zero on resume).
-    :param fixed_synth_params_list: Pre-set synth params (or ``None``), indexed by absolute row;
-        under shard cadence only row 0 seeds the shard's single patch (rows 1..N required but unused).
+    :param fixed_synth_params_list: Pre-set synth params (or ``None``), indexed by absolute row.
+        Under shard cadence the shard's single patch is seeded from row ``start_idx`` and reused;
+        callers pin ``start_idx=0`` for shard cadence (``make_hdf5_dataset`` resets a partial-shard
+        resume to row 0), so that seed is row 0 and the remaining rows go unused.
     :param fixed_note_params_list: Pre-set note params (or ``None``), indexed by absolute row;
-        shares the synth list's shard-cadence row-0 seed-and-reuse behavior.
+        shares the synth list's shard-cadence seed-from-``start_idx``-and-reuse behavior.
     :param flush_batch: Called with ``(batch, batch_start_idx)`` to persist each batch.
     :raises RuntimeError: ``gui_toggle_cadence="always_on"`` reaches the
         renderer without ``plugin_reload_cadence="once"`` (validator regression).
