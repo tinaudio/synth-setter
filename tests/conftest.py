@@ -1003,6 +1003,29 @@ def _meminfo_available_bytes() -> int | None:
     return None
 
 
+def _swap_in_use_bytes() -> int | None:
+    """Read swap currently in use from ``/proc/meminfo`` (``SwapTotal - SwapFree``).
+
+    :returns: Bytes of swap in use, or None if either field is unreadable.
+    """
+    total: int | None = None
+    free: int | None = None
+    try:
+        with open("/proc/meminfo") as fh:
+            for line in fh:
+                if line.startswith("SwapTotal:"):
+                    total = int(line.split()[1]) * 1024  # field is in kibibytes
+                elif line.startswith("SwapFree:"):
+                    free = int(line.split()[1]) * 1024
+                if total is not None and free is not None:
+                    break
+    except (OSError, ValueError, IndexError):
+        return None
+    if total is None or free is None:
+        return None
+    return max(0, total - free)
+
+
 def _cgroup_memory_limit_bytes() -> int | None:
     """Read the cgroup memory limit in bytes, honouring v2 then v1.
 
@@ -1027,18 +1050,19 @@ def _cgroup_memory_limit_bytes() -> int | None:
 
 
 def _available_memory_bytes() -> int | None:
-    """Return usable memory as ``min(host MemAvailable, cgroup limit)``.
+    """Return usable memory as ``min(swap-adjusted host MemAvailable, cgroup limit)``.
 
-    On a shared host the cgroup limit is usually unset, so host MemAvailable is the real ceiling;
-    in a memory-capped container the cgroup limit wins.
+    MemAvailable counts reclaimable cache as free, so it overstates headroom on a swapping host;
+    used swap is debited from the host term before the min, a no-op when nothing is swapped.
 
     :returns: The tighter of the two figures in bytes, or None if neither is known.
     """
-    candidates = [
-        value
-        for value in (_meminfo_available_bytes(), _cgroup_memory_limit_bytes())
-        if value is not None
-    ]
+    host = _meminfo_available_bytes()
+    if host is not None:
+        swap_used = _swap_in_use_bytes()
+        if swap_used is not None:
+            host = max(0, host - swap_used)
+    candidates = [value for value in (host, _cgroup_memory_limit_bytes()) if value is not None]
     return min(candidates) if candidates else None
 
 
