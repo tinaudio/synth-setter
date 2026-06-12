@@ -89,9 +89,8 @@ def build_wds_smoke_spec(
     return DatasetSpec(**kwargs)  # type: ignore[arg-type]
 
 
-# Default render for the lance smoke spec; sample_rate=100 keeps the mel front
-# end at its minimum hop so shards stay tiny.
-_LANCE_SMOKE_RENDER: dict[str, Any] = {
+# sample_rate=100 keeps the mel front end at its minimum hop so shards stay tiny.
+_LANCE_SMOKE_RENDER: dict[str, str | int | float] = {
     "plugin_path": "/fake/Plugin.vst3",
     "preset_path": "presets/surge-base.vstpreset",
     "param_spec_name": "surge_simple",

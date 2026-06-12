@@ -312,6 +312,7 @@ def test_make_lance_dataset_rerun_overwrites_rather_than_appends(
         fixed_note_params_list=fixed_note,
     )
     assert LanceFileReader(str(out)).num_rows() == num_samples
+    first_run_params = np.stack(list(iter_lance_column_rows(out, PARAM_ARRAY_FIELD)), axis=0)
 
     make_lance_dataset(
         lance_file=out,
@@ -322,6 +323,8 @@ def test_make_lance_dataset_rerun_overwrites_rather_than_appends(
     assert LanceFileReader(str(out)).num_rows() == num_samples, (
         "lance re-run appended instead of overwriting the shard"
     )
+    rerun_params = np.stack(list(iter_lance_column_rows(out, PARAM_ARRAY_FIELD)), axis=0)
+    np.testing.assert_array_equal(rerun_params, first_run_params)
 
 
 @pytest.mark.fake_vst

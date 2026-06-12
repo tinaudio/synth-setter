@@ -103,10 +103,9 @@ def stub_renderer(spec: DatasetSpec) -> Callable[[list[str]], None]:
     """Return a ``_check_call_streamed`` side effect that writes dummy shards.
 
     Dispatches on the renderer output path's suffix via ``OutputFormat.from_extension``,
-    so the same factory backs hdf5, wds, and lance runs (the lance writer is
-    shared with the finalize lanes). ``rclone`` invocations fall
-    through to the real binary so the R2 upload, the skip-existing probe, and any
-    purge hit the configured remote (real R2, or a local-backed fake remote).
+    so the same factory backs hdf5, wds, and lance runs. ``rclone`` invocations
+    fall through to the real binary so the R2 upload, the skip-existing probe, and
+    any purge hit the configured remote (real R2, or a local-backed fake remote).
 
     :param spec: Dataset spec the launcher will materialize; threaded into the
         dummy-shard writers so shapes match the validator's expectations.

@@ -109,7 +109,7 @@ def test_param_array_dataset_shape_matches_legacy_inline_calc() -> None:
 
 
 def test_dataset_field_shapes_maps_every_field_to_full_writer_shape() -> None:
-    """``dataset_field_shapes`` returns the three per-field shapes the writers emit."""
+    """``dataset_field_shapes`` returns the full writer-emitted shape for every dataset field."""
     render = RenderConfig(
         plugin_path="/fake/Plugin.vst3",
         preset_path="presets/fake.vstpreset",

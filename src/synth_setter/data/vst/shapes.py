@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
+    # Type-only on purpose: a runtime import would risk a cycle (spec.py lazily
+    # imports the param-spec registry from data.vst).
     from synth_setter.pipeline.schemas.spec import RenderConfig
 
 AUDIO_FIELD: str = "audio"
@@ -79,7 +81,7 @@ def mel_n_fft(sample_rate: float) -> int:
 
 
 def mel_n_frames(sample_rate: float, signal_duration_seconds: float) -> int:
-    """Number of mel-time frames librosa produces (``center=True`` default).
+    """Return the number of mel-time frames librosa produces (``center=True`` default).
 
     Mirrors librosa's ``1 + audio_length // hop_length`` calculation.
 

@@ -137,12 +137,11 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     ``fake_r2_remote``, so the partition → render → ``rclone copy`` upload →
     skip-existing probe loop (#750) runs with no real plugin and no real R2.
     Parametrized over ``output_format`` so every format's config surface
-    (lance per #1600) runs the same loop with its own shard suffix.
-    Asserts (1) ``smoke-shard``
-    partitions into one shard per split, (2) every shard lands under its
-    spec-derived R2 URI with the format's suffix, and (3) a second
-    ``from_hydra`` pass renders nothing because the probe finds all shards
-    already present.
+    (lance per #1600) runs the same loop with its own shard suffix. Asserts
+    (1) ``smoke-shard`` partitions into one shard per split, (2) every shard
+    lands under its spec-derived R2 URI with the format's suffix, and (3) a
+    second ``from_hydra`` pass renders nothing because the probe finds all
+    shards already present.
 
     :param output_format: Dataset output format the run is pinned to.
     :param shard_suffix: File suffix the format's shards must carry.

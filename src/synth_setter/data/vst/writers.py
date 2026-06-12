@@ -472,6 +472,7 @@ def make_lance_dataset(
     :param fixed_note_params_list: Optional pre-set note params; same full-shard
         contract as ``fixed_synth_params_list``.
     """
+    # Function-local so the h5/wds writer paths never pay the pylance import.
     from lance.file import LanceFileWriter
 
     from synth_setter.pipeline.data.lance_shard import lance_schema, record_batch_from_arrays
