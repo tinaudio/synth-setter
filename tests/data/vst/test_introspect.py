@@ -279,6 +279,18 @@ def test_rendered_module_header_names_plugin_tool_and_provenance() -> None:
     assert isinstance(exec_module(source)["MY_SYNTH_PARAM_SPEC"], ParamSpec)
 
 
+def test_rendered_module_documents_its_codespell_exemption() -> None:
+    """The header explains the codespell exemption and links the tracking issue.
+
+    Generated specs embed verbatim host labels (load-bearing onehot keys) and are whole-file
+    excluded from codespell; the module self-documents why and points at the follow-up issue.
+    """
+    source = render_param_spec_module("my_synth", plugin_name="Odin 2", params=[], skipped=[])
+
+    assert "codespell" in source
+    assert "#1674" in source
+
+
 def test_rendered_module_rejects_undraftable_parameter_type() -> None:
     """Rendering a parameter type the draft never produces raises ``TypeError``."""
     foreign = DiscreteLiteralParameter(name="pitch", min=0, max=1)

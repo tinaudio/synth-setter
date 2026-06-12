@@ -68,6 +68,8 @@ Invoke in order: `/tdd-implementation` (drive it test-first) → `/code-health` 
 <important if="a lint, pydoclint, or pyright check fails on a file your change touches">
 
 `.pydoclint-baseline.txt` (#938), `pyproject.toml`'s `[tool.ruff.lint.per-file-ignores]` / `[tool.ruff].extend-exclude`, `.pre-commit-config.yaml` per-hook `exclude:` regexes, and `pyrightconfig.json`'s `"exclude"` are **append-frozen**. The only allowed edit is a **removal** via `/lint-cleanup` (one file per PR, `chore(lint):` prefix); `[tool.pydoclint].exclude` is infra-only (#1044) and must not be edited at all. Fix the underlying lint — never register a file as exempt. A `PreToolUse` hook (`agent/hooks/no-baseline-additions.sh`) blocks new baseline rows.
+
+Documented exception: `src/synth_setter/data/vst/*_param_spec.py` are codespell-excluded — they embed verbatim host parameter labels (load-bearing onehot keys that can't be spell-corrected); `synth-setter-introspect-plugin` self-documents each module, and scoping to per-line `# codespell:ignore` (codespell ≥2.3.0) is tracked in #1674.
 </important>
 
 <important if="you are editing GitHub Actions workflows (.github/workflows/*.yml) or SkyPilot compute configs (src/synth_setter/configs/compute/*.yaml)">

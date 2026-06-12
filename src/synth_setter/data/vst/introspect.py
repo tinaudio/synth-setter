@@ -238,6 +238,14 @@ def _render_header(plugin_name: str, provenance: str | None, registered: bool) -
         "don't shape the sound, and weight categorical values.",
         registration_note,
         '"""',
+        "",
+        # Emitted into the draft: host labels are load-bearing onehot keys that
+        # can't be spell-corrected, so the module is codespell-excluded (#1674).
+        *_comment_lines(
+            "codespell-exempt: categorical values are verbatim host labels, not prose "
+            "— excluded in .pre-commit-config.yaml. See #1674.",
+            indent="",
+        ),
     ]
     if provenance is not None:
         lines.extend(["", *_comment_lines(f"Source: {provenance}", indent="")])
