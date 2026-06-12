@@ -678,11 +678,11 @@ def main(launch_config: Path) -> None:
     resolved against the working directory, so run from the repo root.
 
     :param launch_config: Path to a launch-config YAML (see ``load_launch_config``).
-    :raises click.ClickException: the config fails to load or validate.
+    :raises click.ClickException: the config fails to parse, load, or validate.
     """
     try:
         sky_cfg = load_launch_config(launch_config)
-    except ValueError as exc:
+    except (ValueError, yaml.YAMLError) as exc:
         raise click.ClickException(str(exc)) from exc
     dispatch_via_skypilot(sky_cfg)
 

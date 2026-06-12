@@ -1472,9 +1472,27 @@ class TestSkypilotLaunchCli:
         assert result.exit_code != 0
         assert "must be a YAML mapping" in result.output
 
+    def test_unparseable_yaml_exits_nonzero_with_clean_error(self, tmp_path: Path) -> None:
+        """Invalid YAML syntax maps to a clean CLI error, not a raw traceback.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        path = tmp_path / "launch.yaml"
+        path.write_text("cmd: [unclosed\n", encoding="utf-8")
+
+        result = CliRunner().invoke(main, [str(path)])
+
+        assert result.exit_code != 0
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+        assert "Error" in result.output
+
 
 class TestCheckedInLaunchConfigs:
-    """Every shipped ``configs/launch/*.yaml`` must dispatch cleanly as-is."""
+    """Every shipped ``configs/launch/*.yaml`` must load, validate, and compose with its template.
+
+    Dispatch itself (cloud submission) is out of scope here — it needs provider creds and is
+    covered against a mocked SDK in ``TestSkypilotLaunchCli`` / ``TestDispatchViaSkypilot``.
+    """
 
     _LAUNCH_DIR = Path(str(configs_dir() / "launch"))
     _REPO_ROOT = Path(str(configs_dir())).parents[2]
