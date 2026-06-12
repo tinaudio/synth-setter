@@ -6,6 +6,10 @@ is the canonical pedalboard-free entrypoint for interpreter-only contexts
 (the SkyPilot launcher, spec construction in ``synth_setter.pipeline.schemas.spec``);
 ``synth_setter.data.vst`` re-exports the same names for backward compat, but importing
 ``synth_setter.data.vst.core`` directly is what pulls pedalboard.
+
+``synth-setter-introspect-plugin --register`` inserts entries here by line anchor
+(``synth_setter.data.vst.registration.registry_with_spec``): keep the import block
+contiguous and each dict's ``<name>: … = {`` / ``}`` lines intact when editing by hand.
 """
 
 from __future__ import annotations

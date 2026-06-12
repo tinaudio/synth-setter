@@ -7,6 +7,24 @@ import random
 import numpy as np
 import pytest
 
+from tests.data.vst._introspect_fakes import IntrospectFakeParameter, IntrospectFakePlugin
+
+
+@pytest.fixture
+def fake_plugin() -> IntrospectFakePlugin:
+    """Build a two-parameter fake plugin standing in for the loaded VST3.
+
+    :returns: Fake with one continuous and one categorical parameter.
+    """
+    return IntrospectFakePlugin(
+        {
+            "cutoff": IntrospectFakeParameter(float, [0.0, 0.5, 1.0]),
+            "filter_type": IntrospectFakeParameter(str, ["LP", "HP"], raw_values=[0.0, 1.0]),
+        },
+        preset_data=b"VST3\x01\x00fake-state",
+        name="Fake Synth",
+    )
+
 
 @pytest.fixture
 def seeded_rng(request: pytest.FixtureRequest) -> None:

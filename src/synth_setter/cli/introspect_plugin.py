@@ -1,13 +1,16 @@
 """``synth-setter-introspect-plugin`` — scaffold a draft ``ParamSpec`` from any VST3.
 
 Loads the plugin via pedalboard, optionally applies a starting preset, then
-writes an editable draft spec module plus a captured baseline ``.vstpreset``
-— the two artifacts a new synth needs before it can be registered in
-``synth_setter.data.vst.param_spec_registry`` (issue #1596).
+writes an editable draft spec module plus a captured baseline ``.vstpreset``.
+By default the artifacts land as loose files; ``--register`` instead wires
+them into a synth-setter checkout — spec module, preset, render config, and
+``param_spec_registry`` entries — so committing the result makes the synth
+renderable via ``generate_dataset`` (issue #1596).
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
@@ -22,6 +25,38 @@ from synth_setter.data.vst.introspect import (
     render_param_table_csv,
 )
 from synth_setter.data.vst.param_spec_registry import default_plugin_path
+from synth_setter.data.vst.registration import (
+    RegistrationPaths,
+    checkout_relative_path,
+    find_repo_root,
+    is_checkout_root,
+    registration_paths,
+    registry_with_spec,
+    render_config_yaml,
+)
+
+
+@dataclass(frozen=True)
+class _RegisterTarget:
+    """Checkout wiring computed before the (slow) plugin load.
+
+    .. attribute :: root
+
+       Checkout root the artifacts land in.
+
+    .. attribute :: paths
+
+       Destination of every artifact under ``root``.
+
+    .. attribute :: registry_source
+
+       The registry source with the spec already registered, written last so
+       a failure on any earlier artifact leaves the registry untouched.
+    """
+
+    root: Path
+    paths: RegistrationPaths
+    registry_source: str
 
 
 @click.command()
@@ -66,6 +101,21 @@ from synth_setter.data.vst.param_spec_registry import default_plugin_path
     help="Where to write the per-parameter CSV triage table.",
 )
 @click.option(
+    "--register",
+    is_flag=True,
+    default=False,
+    help=(
+        "Wire the outputs into a synth-setter checkout: spec module, preset, CSV, and "
+        "render config at their conventional paths, plus param_spec_registry entries."
+    ),
+)
+@click.option(
+    "--repo-root",
+    type=click.Path(exists=True, file_okay=False),
+    default=None,
+    help="Checkout root for --register; auto-detected from the cwd when omitted.",
+)
+@click.option(
     "--force",
     is_flag=True,
     default=False,
@@ -78,6 +128,8 @@ def main(
     out_spec: str | None,
     out_preset: str | None,
     out_csv: str | None,
+    register: bool,
+    repo_root: str | None,
     force: bool,
 ) -> None:
     """Draft a ParamSpec module + baseline preset + CSV table from a VST3 plugin.
@@ -88,20 +140,33 @@ def main(
     :param out_spec: Draft module destination; defaults from ``spec_name``.
     :param out_preset: Captured preset destination; defaults from ``spec_name``.
     :param out_csv: Per-parameter CSV table destination; defaults from ``spec_name``.
+    :param register: Wire the outputs into a synth-setter checkout instead of
+        loose files, registering the spec for ``generate_dataset``.
+    :param repo_root: Checkout root for ``--register``; auto-detected when omitted.
     :param force: Allow overwriting existing output files.
     :raises click.BadParameter: ``spec_name`` is not a valid Python identifier.
-    :raises click.UsageError: An output file exists and ``--force`` was not given.
+    :raises click.UsageError: An output file exists and ``--force`` was not
+        given; ``--register`` was combined with ``--out-*``; no checkout was
+        found; or ``spec_name`` conflicts with an existing registry entry.
     """
     if not spec_name.isidentifier():
         raise click.BadParameter(
             f"{spec_name!r} is not a Python identifier", param_hint="--spec-name"
         )
-    spec_dest = Path(out_spec or f"{spec_name}_param_spec.py")
-    preset_dest = Path(out_preset or f"{spec_name}-base.vstpreset")
-    csv_dest = Path(out_csv or f"{spec_name}_params.csv")
+    if register:
+        target = _resolve_register_target(spec_name, repo_root, out_spec, out_preset, out_csv)
+        paths = target.paths
+        spec_dest, preset_dest, csv_dest = paths.spec_module, paths.preset, paths.csv
+        guarded = (spec_dest, preset_dest, csv_dest, paths.render_config)
+    else:
+        target = None
+        spec_dest = Path(out_spec or f"{spec_name}_param_spec.py")
+        preset_dest = Path(out_preset or f"{spec_name}-base.vstpreset")
+        csv_dest = Path(out_csv or f"{spec_name}_params.csv")
+        guarded = (spec_dest, preset_dest, csv_dest)
     # Fail before the (slow) plugin load: re-running with the same spec-name
     # must not clobber a hand-tuned spec.
-    for dest in (spec_dest, preset_dest, csv_dest):
+    for dest in guarded:
         if dest.exists() and not force:
             raise click.UsageError(f"{dest} already exists; pass --force to overwrite")
 
@@ -113,12 +178,14 @@ def main(
     plugin = cast(IntrospectablePlugin, vst_plugin)
 
     drafted, skipped = draft_synth_params(plugin)
+    version = _plugin_version(plugin_path)
     source = render_param_spec_module(
         spec_name,
         plugin_name=plugin.name,
         params=drafted,
         skipped=skipped,
-        provenance=_provenance(plugin_path, preset_path),
+        provenance=(f"plugin: {plugin_path} (version {version}), preset: {preset_path or 'none'}"),
+        registered=register,
     )
     # Capture runs before the spec write: under --force a failed capture must
     # leave the existing hand-tuned spec untouched.
@@ -133,27 +200,114 @@ def main(
     click.echo(f"Spec module : {spec_dest}")
     click.echo(f"Baseline    : {preset_dest}")
     click.echo(f"Param table : {csv_dest}")
+    if target is not None:
+        _write_register_wiring(target, spec_name, plugin_path, version)
+    else:
+        click.echo(
+            "Next: hand-tune the spec, then register it under "
+            f"{spec_name!r} in synth_setter.data.vst.param_spec_registry "
+            "(or re-run with --register)."
+        )
+
+
+def _resolve_register_target(
+    spec_name: str,
+    repo_root: str | None,
+    out_spec: str | None,
+    out_preset: str | None,
+    out_csv: str | None,
+) -> _RegisterTarget:
+    """Validate the register-mode invocation and pre-compute the checkout wiring.
+
+    Runs before the plugin load so a conflicting ``spec_name`` or a missing
+    checkout fails fast.
+
+    :param spec_name: Registry key for the synth.
+    :param repo_root: Operator-supplied checkout root, if any.
+    :param out_spec: Must be unset — ``--register`` owns the layout.
+    :param out_preset: Must be unset — ``--register`` owns the layout.
+    :param out_csv: Must be unset — ``--register`` owns the layout.
+    :returns: The resolved checkout wiring.
+    :raises click.UsageError: ``--out-*`` was supplied, no checkout was found,
+        or the registry rejects ``spec_name``.
+    """
+    if out_spec or out_preset or out_csv:
+        raise click.UsageError(
+            "--register writes to the checkout's conventional paths; "
+            "drop --out-spec/--out-preset/--out-csv."
+        )
+    if repo_root is not None:
+        root = Path(repo_root)
+        if not is_checkout_root(root):
+            raise click.UsageError(
+                f"{root} is not a synth-setter checkout "
+                "(src/synth_setter/data/vst/param_spec_registry.py not found)."
+            )
+    else:
+        found = find_repo_root(Path.cwd())
+        if found is None:
+            raise click.UsageError(
+                "not inside a synth-setter checkout; pass --repo-root <checkout>."
+            )
+        root = found
+    paths = registration_paths(root, spec_name)
+    try:
+        updated = registry_with_spec(paths.registry.read_text(encoding="utf-8"), spec_name)
+    except ValueError as exc:
+        raise click.UsageError(str(exc)) from exc
+    return _RegisterTarget(root=root, paths=paths, registry_source=updated)
+
+
+def _write_register_wiring(
+    target: _RegisterTarget, spec_name: str, plugin_path: str, version: str
+) -> None:
+    """Write the render config + registry entries and echo the run instructions.
+
+    :param target: Pre-computed checkout wiring.
+    :param spec_name: Registry key for the synth.
+    :param plugin_path: Plugin path as given on the CLI; recorded relative to the checkout when it
+        sits inside it.
+    :param version: Plugin version pinned in the render config.
+    """
+    recorded_path = checkout_relative_path(plugin_path, target.root)
+    render_config = target.paths.render_config
+    render_config.parent.mkdir(parents=True, exist_ok=True)
+    render_config.write_text(
+        render_config_yaml(spec_name, plugin_path=recorded_path, renderer_version=version),
+        encoding="utf-8",
+    )
+    target.paths.registry.write_text(target.registry_source, encoding="utf-8")
+    click.echo(f"Render cfg  : {render_config}")
+    click.echo(f"Registered  : {spec_name!r} in {target.paths.registry}")
+    if version == "unknown":
+        click.echo(
+            f"WARNING: renderer_version is 'unknown' — edit {render_config} to pin the "
+            "real plugin version before generating; generate_dataset cross-checks it "
+            "against the loaded plugin."
+        )
     click.echo(
-        "Next: hand-tune the spec, then register it under "
-        f"{spec_name!r} in synth_setter.data.vst.param_spec_registry."
+        "Next: hand-tune the spec, run `make format`, commit, then render with:\n"
+        f"  synth-setter-generate-dataset experiment=generate_dataset/smoke-shard "
+        f"render={spec_name}"
     )
 
 
-def _provenance(plugin_path: str, preset_path: str | None) -> str:
-    """Build the one-line source description recorded in the emitted module.
+def _plugin_version(plugin_path: str) -> str:
+    """Extract the plugin bundle's version, degrading to ``"unknown"``.
+
+    The version is informational in the provenance line but load-bearing in
+    the render config (``generate`` cross-checks it); the fallback keeps the
+    draft flowing on the helper's documented failure modes (missing/odd bundle
+    metadata, scan failure) and is echoed so the operator can pin it by hand.
 
     :param plugin_path: Path of the introspected ``.vst3`` bundle.
-    :param preset_path: Starting preset applied before drafting, if any.
-    :returns: ``plugin: <path> (version <v>), preset: <path or none>``.
+    :returns: The extracted version string, or ``"unknown"``.
     """
-    # The version is informational; degrade to "unknown" on the helper's
-    # documented failure modes (missing/odd bundle metadata, scan failure).
     try:
-        version = extract_renderer_version(Path(plugin_path))
+        return extract_renderer_version(Path(plugin_path))
     except (OSError, ValueError, KeyError, RuntimeError, ImportError) as exc:
         click.echo(f"note: could not extract plugin version: {exc}")
-        version = "unknown"
-    return f"plugin: {plugin_path} (version {version}), preset: {preset_path or 'none'}"
+        return "unknown"
 
 
 if __name__ == "__main__":

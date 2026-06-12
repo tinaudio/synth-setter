@@ -8,10 +8,10 @@ downstream of the boundary (drafting, emission, file writes) runs for real.
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass
 import csv
 import io
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeAlias
 
@@ -50,22 +50,6 @@ class CliRun:
 
 
 InvokeCli: TypeAlias = Callable[..., CliRun]
-
-
-@pytest.fixture
-def fake_plugin() -> IntrospectFakePlugin:
-    """Build a two-parameter fake plugin standing in for the loaded VST3.
-
-    :returns: Fake with one continuous and one categorical parameter.
-    """
-    return IntrospectFakePlugin(
-        {
-            "cutoff": IntrospectFakeParameter(float, [0.0, 0.5, 1.0]),
-            "filter_type": IntrospectFakeParameter(str, ["LP", "HP"], raw_values=[0.0, 1.0]),
-        },
-        preset_data=b"VST3\x01\x00fake-state",
-        name="Fake Synth",
-    )
 
 
 @pytest.fixture

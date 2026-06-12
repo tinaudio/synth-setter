@@ -43,6 +43,8 @@ def test_introspect_cli_surge_xt_emits_usable_spec_and_vstpreset(tmp_path: Path)
             str(spec_path),
             "--out-preset",
             str(preset_path),
+            "--out-csv",
+            str(tmp_path / "draft_params.csv"),
         ],
         catch_exceptions=False,
     )
