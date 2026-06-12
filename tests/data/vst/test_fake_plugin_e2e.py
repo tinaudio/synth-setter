@@ -18,11 +18,15 @@ import h5py
 import hdf5plugin  # noqa: F401  side-effect: registers Blosc2 filter for h5py reads
 import numpy as np
 import pytest
+from lance.file import LanceFileReader
 
 from synth_setter.data.vst import core
-from synth_setter.data.vst.shapes import AUDIO_FIELD
-from synth_setter.data.vst.writers import make_hdf5_dataset, make_wds_dataset
-from synth_setter.pipeline.schemas.spec import RenderConfig
+from synth_setter.data.vst.shapes import AUDIO_FIELD, MEL_SPEC_FIELD, PARAM_ARRAY_FIELD
+from synth_setter.data.vst.writers import make_hdf5_dataset, make_lance_dataset, make_wds_dataset
+from synth_setter.pipeline.ci.validate_shard import validate_shard
+from synth_setter.pipeline.data.lance_shard import iter_lance_column_rows, read_shard_metadata
+from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
+from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 
 _ = hdf5plugin  # keep type checkers from flagging the side-effect import
 
@@ -32,6 +36,7 @@ from tests.data.vst.test_generate_vst_dataset import (  # noqa: E402  pinned can
     _HARDCODED_SYNTH_PARAMS,
     _render_cfg,
 )
+from tests.helpers.finalize_shards import build_lance_smoke_spec  # noqa: E402
 from tests.helpers.logger_assertions import assert_no_logger_exceptions  # noqa: E402
 
 _PLUGIN_PATH = "plugins/fake.vst3"  # never touched on disk — load_plugin is patched
@@ -61,6 +66,22 @@ def _fake_render_cfg(**overrides: object) -> RenderConfig:
     if cadence is not None:
         update["param_sample_cadence"] = cadence
     return cfg.model_copy(update=update)
+
+
+def _lance_spec_for(render_cfg: RenderConfig) -> DatasetSpec:
+    """Build a one-shard lance ``DatasetSpec`` around ``render_cfg``.
+
+    Gives ``validate_shard`` a spec whose render config matches what the
+    writer under test actually rendered.
+
+    :param render_cfg: The fake-plugin render config driving the writer.
+    :returns: A frozen lance ``DatasetSpec`` with a single train shard.
+    """
+    return build_lance_smoke_spec(
+        task_name="fake-plugin-lance-e2e",
+        train_val_test_sizes=(render_cfg.samples_per_shard, 0, 0),
+        render=render_cfg,
+    )
 
 
 def _count_wds_audio_rows(tar_path: Path) -> int:
@@ -174,6 +195,137 @@ def test_make_hdf5_dataset_shard_cadence_writes_one_identical_patch_per_shard(
     assert np.array_equal(params, np.broadcast_to(params[0], params.shape)), (
         "shard-cadence shard has non-identical param rows"
     )
+
+
+@pytest.mark.fake_vst
+def test_make_lance_dataset_writes_validator_passing_shard_under_fake_plugin(
+    tmp_path: Path,
+    install_fake_plugin: FakeVST3Plugin,
+) -> None:
+    """The real Lance writer produces a shard ``validate_shard`` accepts.
+
+    Drives ``make_lance_dataset`` end-to-end (batch loop, per-batch flushes via
+    a ``samples_per_render_batch`` below ``num_samples``, schema construction,
+    writer close) and
+    checks the produced file through the production validator — schema,
+    dtypes, inner shapes, row count — plus a whole-model ``ShardMetadata``
+    round-trip against the render config.
+
+    :param tmp_path: Destination directory for the Lance shard under test.
+    :param install_fake_plugin: Swaps the plugin loader for the fake so the
+        render runs without a real VST3 or X11.
+    """
+    num_samples = 4
+    render_cfg = _fake_render_cfg(num_samples=num_samples, samples_per_render_batch=2)
+    spec = _lance_spec_for(render_cfg)
+    out = tmp_path / spec.shards[0].filename
+
+    make_lance_dataset(
+        lance_file=out,
+        render_cfg=render_cfg,
+        fixed_synth_params_list=[_HARDCODED_SYNTH_PARAMS] * num_samples,
+        fixed_note_params_list=[_HARDCODED_NOTE_PARAMS] * num_samples,
+    )
+
+    assert validate_shard(out, spec) == []
+    meta = read_shard_metadata(LanceFileReader(str(out)).metadata().schema)
+    # Whole-model equality: a new ShardMetadata field fails construction here,
+    # forcing this round-trip pin to cover it.
+    assert meta == ShardMetadata(
+        velocity=render_cfg.velocity,
+        signal_duration_seconds=render_cfg.signal_duration_seconds,
+        sample_rate=render_cfg.sample_rate,
+        channels=render_cfg.channels,
+        min_loudness=render_cfg.min_loudness,
+    )
+
+
+@pytest.mark.fake_vst
+def test_make_lance_dataset_arrays_match_h5_writer_under_fake_plugin(
+    tmp_path: Path,
+    install_fake_plugin: FakeVST3Plugin,
+) -> None:
+    """Same fixed params through the Lance and h5 writers yield equal on-disk arrays.
+
+    The lance counterpart of the h5↔wds parity pin: the fake plugin renders
+    deterministically (fixed sine, no phase jitter), so all three fields —
+    including the ``s.audio.T`` transpose + ``float16`` cast in
+    ``_sample_batch_arrays`` — must be byte-equal across writers.
+
+    :param tmp_path: Destination directory for both shards under test.
+    :param install_fake_plugin: Swaps the plugin loader for the fake so both
+        renders run without a real VST3 or X11.
+    """
+    num_samples = 4
+    render_cfg = _fake_render_cfg(num_samples=num_samples, samples_per_render_batch=2)
+    fixed_synth = [_HARDCODED_SYNTH_PARAMS] * num_samples
+    fixed_note = [_HARDCODED_NOTE_PARAMS] * num_samples
+    lance_out = tmp_path / "shard-000000.lance"
+    h5_out = tmp_path / "shard-000000.h5"
+
+    make_lance_dataset(
+        lance_file=lance_out,
+        render_cfg=render_cfg,
+        fixed_synth_params_list=fixed_synth,
+        fixed_note_params_list=fixed_note,
+    )
+    make_hdf5_dataset(
+        hdf5_file=h5_out,
+        render_cfg=render_cfg,
+        fixed_synth_params_list=fixed_synth,
+        fixed_note_params_list=fixed_note,
+    )
+
+    with h5py.File(h5_out, "r") as f:
+        for field in (AUDIO_FIELD, MEL_SPEC_FIELD, PARAM_ARRAY_FIELD):
+            h5_ds = f[field]
+            assert isinstance(h5_ds, h5py.Dataset)
+            lance_arr = np.stack(list(iter_lance_column_rows(lance_out, field)), axis=0)
+            assert lance_arr.dtype == h5_ds.dtype
+            np.testing.assert_array_equal(lance_arr, h5_ds[...], err_msg=field)
+
+
+@pytest.mark.fake_vst
+def test_make_lance_dataset_rerun_overwrites_rather_than_appends(
+    tmp_path: Path,
+    install_fake_plugin: FakeVST3Plugin,
+) -> None:
+    """Re-running the Lance writer on an existing path overwrites it (non-resumable).
+
+    ``make_lance_dataset`` pins ``start_idx=0`` and reopens the path with
+    ``LanceFileWriter``, so a second pass yields exactly ``samples_per_shard``
+    rows, not double — the lance counterpart of the wds pin below.
+
+    :param tmp_path: Destination directory for the Lance shard under test.
+    :param install_fake_plugin: Swaps the plugin loader for the fake so the
+        render runs without a real VST3 or X11.
+    """
+    num_samples = 4
+    render_cfg = _fake_render_cfg(num_samples=num_samples, samples_per_render_batch=2)
+    fixed_synth = [_HARDCODED_SYNTH_PARAMS] * num_samples
+    fixed_note = [_HARDCODED_NOTE_PARAMS] * num_samples
+    out = tmp_path / "shard-000000.lance"
+
+    make_lance_dataset(
+        lance_file=out,
+        render_cfg=render_cfg,
+        fixed_synth_params_list=fixed_synth,
+        fixed_note_params_list=fixed_note,
+    )
+    assert LanceFileReader(str(out)).num_rows() == num_samples
+    first_run_params = np.stack(list(iter_lance_column_rows(out, PARAM_ARRAY_FIELD)), axis=0)
+
+    make_lance_dataset(
+        lance_file=out,
+        render_cfg=render_cfg,
+        fixed_synth_params_list=fixed_synth,
+        fixed_note_params_list=fixed_note,
+    )
+    assert LanceFileReader(str(out)).num_rows() == num_samples, (
+        "lance re-run appended instead of overwriting the shard"
+    )
+    rerun_params = np.stack(list(iter_lance_column_rows(out, PARAM_ARRAY_FIELD)), axis=0)
+    np.testing.assert_array_equal(rerun_params, first_run_params)
 
 
 @pytest.mark.fake_vst

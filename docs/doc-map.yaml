@@ -109,7 +109,9 @@ docs:
       - pattern: "src/synth_setter/data/vst/writers.py"
         covers: "make_hdf5_dataset + make_wds_dataset + make_lance_dataset entrypoints; per-batch sample-save helpers; ShardMetadata sidecar wiring; CLI suffix dispatch via OutputFormat.from_extension."
       - pattern: "src/synth_setter/data/vst/shapes.py"
-        covers: "Shared shape primitives consumed by writers + (planned) shard validator — DATASET_FIELD_NAMES, mel-front-end constants, audio_dataset_shape / mel_dataset_shape / param_array_dataset_shape."
+        covers: "Shared shape primitives consumed by the writers, the shard validator, and the test shard seeders — DATASET_FIELD_NAMES / DATASET_FIELD_DTYPES, mel-front-end constants, per-field shape helpers, and dataset_field_shapes (the single field→shape contract)."
+      - pattern: "src/synth_setter/pipeline/data/lance_shard.py"
+        covers: "Lance single-file shard codec — lance_schema / tensor_array / record_batch_from_arrays / write_lance_file on the encode side, read_shard_metadata / tensor_chunk_to_numpy / iter_lance_column_rows on the decode side; shared by the Lance writer, validator, and finalize."
 
   # ── SkyPilot compute integration design doc ─────────────────────
   - doc: docs/design/skypilot-compute-integration.md
