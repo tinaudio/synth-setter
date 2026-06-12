@@ -182,7 +182,7 @@ def smoke_shard_metadata(render: RenderConfig) -> ShardMetadata:
     tests build the sidecar payload one way.
 
     :param render: Render config supplying the sidecar field values.
-    :returns: Strict ``ShardMetadata`` with the five render-derived fields filled.
+    :returns: Strict ``ShardMetadata`` with every render-derived field filled.
     """
     return ShardMetadata(
         velocity=render.velocity,

@@ -12,6 +12,7 @@ from lance.file import LanceFileReader
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
     DATASET_FIELD_DTYPES,
+    DATASET_FIELD_NAMES,
     MEL_SPEC_FIELD,
     PARAM_ARRAY_FIELD,
     dataset_field_shapes,
@@ -148,6 +149,54 @@ def test_validate_lance_shard_reports_inner_shape_mismatch(tmp_path: Path) -> No
         in error
         for error in errors
     )
+
+
+def test_validate_lance_shard_reports_value_dtype_mismatch(tmp_path: Path) -> None:
+    """A Lance shard whose audio column is float32 reports the dtype contract.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    spec = build_lance_smoke_spec()
+    shapes = dataset_field_shapes(spec.render, spec.num_params)
+    schema = lance_schema(shapes, smoke_shard_metadata(spec.render))
+    float32_audio = pa.field(
+        AUDIO_FIELD,
+        pa.fixed_shape_tensor(pa.float32(), shapes[AUDIO_FIELD][1:]),
+        nullable=False,
+    )
+    schema = schema.set(schema.get_field_index(AUDIO_FIELD), float32_audio)
+    dtypes = {**DATASET_FIELD_DTYPES, AUDIO_FIELD: np.dtype("float32")}
+    columns = [
+        tensor_array(
+            np.zeros(shapes[field], dtype=dtypes[field]), dtypes[field], shapes[field][1:]
+        )
+        for field in DATASET_FIELD_NAMES
+    ]
+    shard = tmp_path / spec.shards[0].filename
+    write_lance_file(shard, schema, [pa.record_batch(columns, schema=schema)])
+
+    errors = validate_shard(shard, spec)
+
+    assert any(
+        f"column {AUDIO_FIELD!r} has value type float, expected halffloat" in error
+        for error in errors
+    )
+
+
+def test_validate_lance_shard_reports_missing_schema_metadata(tmp_path: Path) -> None:
+    """A Lance shard without embedded ``ShardMetadata`` reports the missing key.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    spec = build_lance_smoke_spec()
+    shapes = dataset_field_shapes(spec.render, spec.num_params)
+    schema = lance_schema(shapes, smoke_shard_metadata(spec.render)).remove_metadata()
+    shard = tmp_path / spec.shards[0].filename
+    write_lance_file(shard, schema, [record_batch_from_arrays(_zero_arrays(shapes), schema)])
+
+    errors = validate_shard(shard, spec)
+
+    assert any("missing schema metadata key" in error for error in errors)
 
 
 def test_validate_lance_shard_reports_missing_column(tmp_path: Path) -> None:

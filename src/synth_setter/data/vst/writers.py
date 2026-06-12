@@ -306,13 +306,13 @@ def _render_in_batches(
 def _shard_metadata_from_render(render_cfg: RenderConfig) -> ShardMetadata:
     """Project a ``RenderConfig`` onto the per-shard sidecar metadata fields.
 
-    Single source of truth for the five render-derived attrs the HDF5
+    Single source of truth for the render-derived attrs the HDF5
     ``audio.attrs`` sidecar, the wds ``metadata.json`` tar member, and the
     Lance schema metadata expose. Keeping projection here means the writers
     can never drift.
 
     :param render_cfg: Per-shard renderer config from the dataset spec.
-    :returns: Strict ``ShardMetadata`` with the five render-derived fields filled.
+    :returns: Strict ``ShardMetadata`` with every render-derived field filled.
     :rtype: ShardMetadata
     """
     return ShardMetadata(
