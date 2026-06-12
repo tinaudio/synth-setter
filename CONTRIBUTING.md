@@ -157,7 +157,7 @@ Tests use `pytest` with strict markers. The registered markers are:
 | `@pytest.mark.slow`         | Long-running tests                                                                 |
 | `@pytest.mark.gpu`          | Requires a GPU                                                                     |
 | `@pytest.mark.mps`          | Requires Apple MPS (Metal); use for any test that exercises an MPS-incompatible op |
-| `@pytest.mark.requires_vst` | Requires Surge XT VST plugin binary                                                |
+| `@pytest.mark.requires_vst` | Requires a VST plugin binary — see the marker registration in `pyproject.toml`     |
 | `@pytest.mark.r2`           | Requires R2/rclone access                                                          |
 | `@pytest.mark.hypothesis`   | Property-based tests (Hypothesis)                                                  |
 | `@pytest.mark.pipeline`     | Pipeline integration tests                                                         |

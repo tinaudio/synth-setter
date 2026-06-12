@@ -26,7 +26,7 @@ from synth_setter.resources import vst_headless_wrapper
 from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
 from tests._baseline_worktree import worktree_for_ref  # noqa: F401 — pytest fixture re-export
-from tests._vst import PLUGIN_PATH, VST_AVAILABLE
+from tests._vst import PLUGIN_PATH, VST_AVAILABLE, VST_SUBPROCESS_TIMEOUT_SECONDS
 from tests.data.vst._fake_plugin import FakeVST3Plugin
 from tests.pipeline.conftest import fake_r2_remote  # noqa: F401 — pytest fixture re-export
 
@@ -46,14 +46,6 @@ _SURGE_MEL_SHAPE = (2, 128, 401)
 # ~-80 dBFS — same threshold used by `test_train_eval_surge_xt` to catch
 # silent renders that would later poison metric computation.
 _SURGE_SILENCE_PEAK_THRESHOLD = 1e-4
-
-# Hard ceiling for VST subprocess calls (dataset generation, audio rendering).
-# Picked at 10 minutes: comfortably above the observed runtime on the slowest
-# CI runner (macOS with brew-installed cask), well below the workflow timeout
-# so a hung VST surfaces as a clear test failure instead of a job kill. Eager
-# constant on purpose — both call sites pass it directly to `subprocess.run`,
-# no per-call tuning, no stack-distant default.
-_VST_SUBPROCESS_TIMEOUT_SECONDS = 600
 
 NUM_FIXTURE_SAMPLES = 5
 
@@ -161,11 +153,11 @@ def _write_smoke_stats_npz(train_h5: Path) -> None:
     ]
     try:
         result = subprocess.run(  # noqa: S603
-            stats_args, text=True, check=False, timeout=_VST_SUBPROCESS_TIMEOUT_SECONDS
+            stats_args, text=True, check=False, timeout=VST_SUBPROCESS_TIMEOUT_SECONDS
         )
     except subprocess.TimeoutExpired:
         pytest.fail(
-            f"get_dataset_stats timed out after {_VST_SUBPROCESS_TIMEOUT_SECONDS}s\n"
+            f"get_dataset_stats timed out after {VST_SUBPROCESS_TIMEOUT_SECONDS}s\n"
             f"command: {stats_args}\n"
             f"(child stdout/stderr printed above; rerun with `pytest -s` if captured)",
             pytrace=False,
@@ -679,11 +671,11 @@ def _render_smoke_train_h5_subprocess(train_h5: Path, param_spec_name: str) -> N
             generate_dataset_args,
             text=True,
             check=False,
-            timeout=_VST_SUBPROCESS_TIMEOUT_SECONDS,
+            timeout=VST_SUBPROCESS_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired:
         pytest.fail(
-            f"generate_vst_dataset timed out after {_VST_SUBPROCESS_TIMEOUT_SECONDS}s\n"
+            f"generate_vst_dataset timed out after {VST_SUBPROCESS_TIMEOUT_SECONDS}s\n"
             f"command: {generate_dataset_args}\n"
             f"(child stdout/stderr printed above; rerun with `pytest -s` if captured)",
             pytrace=False,

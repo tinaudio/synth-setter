@@ -303,7 +303,7 @@ markers = [
   "hypothesis: property-based tests (hypothesis)",
   "pipeline: pipeline integration tests",
   "benchmark: performance benchmarks",
-  "requires_vst: requires a VST plugin binary (Surge XT) — skipped unless plugin is present",
+  "requires_vst: requires a VST plugin binary — auto-skip keys on Surge XT presence; baked-in extra synth tests add per-bundle skips",
   "fake_vst: end-to-end tests that swap a duck-typed FakeVST3Plugin in place of a real VST",
   "r2: tests requiring R2/rclone access",
   "integration_r2: end-to-end launcher→R2 integration tests (auto-skipped without R2 creds; run in their own GHA workflow)",
