@@ -5,9 +5,8 @@ ARG BUILD_MODE=source
 ARG SURGE_GIT_REF=f7b97c682ade0b87da85ca5968b63d5c7c98e68d
 # Default to main branch
 ARG SYNTH_PERMUTATIONS_GIT_REF=main
-# ubuntu:22.04 digest retrieved via:
-#      docker pull ubuntu:22.04
-#      docker inspect ubuntu:22.04 --format='{{index .RepoDigests 0}}'
+# Base-OS-agnostic: Jammy (dev-snapshot default) or Noble (experimental-ubuntu24.yaml).
+# Refresh digest: docker inspect ubuntu:<tag> --format='{{index .RepoDigests 0}}'
 ARG BASE_IMAGE=ubuntu@sha256:3ba65aa20f86a0fad9df2b2c259c613df006b2e6d0bfcc8a146afb8c525a9751
 # TODO(ktinubu): Rename to something more useful and distrinct from BASE_IMAGE
 # TODO(ktinubu): Check for unset TARGETARCH or TARGETPLATFORM. Fallback to amd, linux/amd but add tag to container
@@ -122,8 +121,6 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
               libxkbcommon-x11-dev \
               xcb \
               libgtk-3-dev \
-              libwebkit2gtk-4.0 \
-              libwebkit2gtk-4.0-dev \
               libcurl4-openssl-dev \
               alsa \
               alsa-tools \
@@ -143,6 +140,15 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
               libxcb-cursor-dev \
               libxcb-cursor0 \
               rpm
+
+# webkit2gtk for JUCE's WebBrowserComponent: Jammy ships both the 4.0 and 4.1
+# ABIs, Noble only 4.1 — try 4.0 first so Jammy keeps compiling against the
+# same ABI as before this fallback existed; only Noble takes the 4.1 branch.
+RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
+    apt-get update && \
+    ( apt-get install -y --no-install-recommends libwebkit2gtk-4.0-dev \
+      || apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev )
 
 # Finally, pick gcc12
 RUN update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 12
@@ -299,13 +305,12 @@ RUN ls /usr/lib/vst3/ && test -n "$(ls -A /usr/lib/vst3/Surge\ XT.vst3 2>/dev/nu
 # so container callers don't have to pass `-e SYNTH_SETTER_PLUGIN_PATH=...`.
 ENV SYNTH_SETTER_PLUGIN_PATH="/usr/lib/vst3/Surge XT.vst3"
 
-# Install Python and create venv
+# System Python for tooling that shells out to python3/pip3 (e.g. SkyPilot).
+# Jammy ships 3.10, Noble 3.12; the venv below pins 3.10, so it doesn't gate the build.
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-dev
-RUN python3 --version && \
-    python3 -c "import sys; exit(0) if sys.version_info[:2] == (3,10) else exit(1)"
 COPY --from=ghcr.io/astral-sh/uv:0.11.2 /uv /uvx /usr/local/bin/
 ENV VIRTUAL_ENV=/venv/main
 # HYDRA_FULL_ERROR=1 — full Python traceback instead of Hydra's trimmed output
@@ -318,7 +323,9 @@ ENV HYDRA_FULL_ERROR=1 \
     PYTHONFAULTHANDLER=1 \
     PYTHONUNBUFFERED=1 \
     PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-RUN uv venv $VIRTUAL_ENV
+# Pin the venv to CPython 3.10 so uv.lock (resolved for 3.10) stays valid on both bases:
+# uv reuses Jammy's system 3.10 and downloads a managed standalone 3.10 on Noble.
+RUN uv venv --python 3.10 "$VIRTUAL_ENV"
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 RUN python --version && \
     python -c "import sys; assert sys.version_info[:2] == (3, 10), sys.version"
@@ -361,7 +368,7 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
       dbus-x11 \
       xsettingsd \
       libgl1-mesa-dri \
-      libgl1-mesa-glx \
+      libglx-mesa0 \
       mesa-utils \
       openbox \
       x11-utils \
@@ -512,10 +519,8 @@ RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
  && node --version \
  && npm --version
 
-# Zellij terminal multiplexer (https://github.com/zellij-org/zellij) — not in
-# the Ubuntu 22.04 apt repos, so install the upstream static musl binary,
-# verified against a pinned per-arch SHA256 (run `sha256sum` on the release
-# tarballs to refresh these when bumping ZELLIJ_VERSION).
+# Zellij (https://github.com/zellij-org/zellij) — not in Ubuntu apt repos; install the
+# upstream static musl binary, verified against a pinned per-arch SHA256 (refresh on bump).
 ARG TARGETARCH
 ARG ZELLIJ_VERSION=v0.44.3
 ARG ZELLIJ_SHA256_X86_64=0f7c346788627f506c0a28296517768633cff24fc822a739f8264b640ecad751

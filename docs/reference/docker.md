@@ -193,6 +193,24 @@ stored in the YAML. The schema is tested in
 [test_image_config.py](../../tests/pipeline/schemas/test_image_config.py) — covers
 validation, defaults, and drift detection against the real YAML.
 
+#### Base OS variants
+
+Two configs share the single base-OS-agnostic `docker/ubuntu22_04/Dockerfile`
+(the directory name is retained to avoid a repo-wide rename); only the base
+image differs:
+
+| Config                       | Base OS              | Published tags                                                          |
+| ---------------------------- | -------------------- | ----------------------------------------------------------------------- |
+| `dev-snapshot.yaml`          | Ubuntu 22.04 (Jammy) | `dev-snapshot`, `latest`, `dev-snapshot-<branch>`, `dev-snapshot-<sha>` |
+| `experimental-ubuntu24.yaml` | Ubuntu 24.04 (Noble) | `experimental-ubuntu24`, `experimental-ubuntu24-<sha>`                  |
+
+Both images pin the venv to CPython 3.10 (uv reuses Jammy's system 3.10 and
+downloads a managed standalone 3.10 on Noble), so `uv.lock` stays valid on
+either base. The Noble image is **experimental** and published on demand only:
+trigger the `Docker Image Build and Push` workflow via `workflow_dispatch` with
+`build_experimental_ubuntu24=true`. Every PR touching Docker paths still
+validates both via the `docker-validate` matrix.
+
 ______________________________________________________________________
 
 ## 3. Running Containers
@@ -333,14 +351,16 @@ If the YAML violates the schema, the workflow fails before any build starts.
 
 ### Tags
 
-| Tag                                              | Mutable? | Purpose                                                                          |
-| ------------------------------------------------ | -------- | -------------------------------------------------------------------------------- |
-| `tinaudio/synth-setter:latest`                   | Yes      | Convenience pointer to the most recent default-branch build                      |
-| `tinaudio/synth-setter:dev-snapshot`             | Yes      | Latest dev-snapshot from main (gated like `latest`)                              |
-| `tinaudio/synth-setter:dev-snapshot-<branch>`    | Yes      | Per-branch floating tag for feature-branch dispatches (slug = branch, `/` → `-`) |
-| `tinaudio/synth-setter:dev-snapshot-<sha>`       | No       | Immutable, used for smoke tests                                                  |
-| `tinaudio/synth-setter:devcontainer-tools`       | Yes      | Latest devcontainer-tools (consumed by `.devcontainer/`)                         |
-| `tinaudio/synth-setter:devcontainer-tools-<sha>` | No       | Immutable, pinnable from `.devcontainer/Dockerfile`                              |
+| Tag                                                 | Mutable? | Purpose                                                                                              |
+| --------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------- |
+| `tinaudio/synth-setter:latest`                      | Yes      | Convenience pointer to the most recent default-branch build                                          |
+| `tinaudio/synth-setter:dev-snapshot`                | Yes      | Latest dev-snapshot from main (gated like `latest`)                                                  |
+| `tinaudio/synth-setter:dev-snapshot-<branch>`       | Yes      | Per-branch floating tag for feature-branch dispatches (slug = branch, `/` → `-`)                     |
+| `tinaudio/synth-setter:dev-snapshot-<sha>`          | No       | Immutable, used for smoke tests                                                                      |
+| `tinaudio/synth-setter:experimental-ubuntu24`       | Yes      | Latest on-demand experimental Ubuntu 24.04 (Noble) build (see [Base OS variants](#base-os-variants)) |
+| `tinaudio/synth-setter:experimental-ubuntu24-<sha>` | No       | Immutable, used for the experimental image's smoke tests                                             |
+| `tinaudio/synth-setter:devcontainer-tools`          | Yes      | Latest devcontainer-tools (consumed by `.devcontainer/`)                                             |
+| `tinaudio/synth-setter:devcontainer-tools-<sha>`    | No       | Immutable, pinnable from `.devcontainer/Dockerfile`                                                  |
 
 Every tag above is also published to `ghcr.io/tinaudio/synth-setter:<same-tag>`
 as a Docker Hub pull mirror.
@@ -348,7 +368,10 @@ as a Docker Hub pull mirror.
 Both `latest` and `dev-snapshot` are gated to runs that represent the main
 branch — push-to-main runs, dispatches with `git_ref` in `{main, refs/heads/main, refs/remotes/origin/main}`, and dispatches with a 40-char SHA that resolves
 to the current `origin/main` HEAD (so a deliberate "rebuild main at this
-exact commit" still advances the floating tags). Feature-branch dispatches
+exact commit" still advances the floating tags). An empty `git_ref` (the
+default) falls back to the ref the workflow was dispatched on, so
+`gh workflow run --ref <branch>` builds `<branch>` without repeating it as
+an input. Feature-branch dispatches
 publish to `dev-snapshot-<branch>` instead of overwriting `dev-snapshot`.
 This matters because other workflows (`test-skypilot-debug`,
 `test-dataset-generation`) consume `dev-snapshot` by default — diverting
