@@ -187,11 +187,12 @@ def test_ffn_smoke_experiment_wires_surge_xt_fixture_source() -> None:
     """``experiment=surge/ffn_smoke`` bakes in the R2 surge_xt fixture and smoke caps.
 
     Pins the contract that lets the experiment run end-to-end with no pre-staged
-    local data: the opt-in R2 download URI, the batch size and single-process loading
-    the 20-sample train split forces, the 10-step cap with the surge-default 1M
-    ``min_steps`` floor dropped, the surge_xt spec wiring (datamodule param spec +
-    LogPerParamMSE callback) and output width inherited from ``ffn_full``, and the
-    disabled ``compile`` that keeps the fit + test setup from double-compiling.
+    local data: the opt-in R2 download URI; the batch size and single-process
+    loading that the 20-sample train split forces; the 10-step cap with the
+    surge-default 1M ``min_steps`` floor dropped; the surge_xt spec wiring
+    (datamodule param spec + LogPerParamMSE callback) and the output width
+    inherited from ``ffn_full``; and the disabled ``compile`` that keeps the
+    fit + test setup from double-compiling.
     """
     GlobalHydra.instance().clear()
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
