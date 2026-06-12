@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 
 import numpy as np
@@ -23,24 +24,12 @@ from synth_setter.pipeline.data.lance_shard import (
     tensor_chunk_to_numpy,
     write_lance_file,
 )
-from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
-from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
-from tests.helpers.finalize_shards import build_lance_smoke_spec, write_minimal_lance_shard
-
-
-def _smoke_metadata(render: RenderConfig) -> ShardMetadata:
-    """Project ``render`` onto the ``ShardMetadata`` fields the writer embeds.
-
-    :param render: Render config supplying the sidecar field values.
-    :returns: Metadata payload for ``lance_schema``.
-    """
-    return ShardMetadata(
-        velocity=render.velocity,
-        signal_duration_seconds=render.signal_duration_seconds,
-        sample_rate=render.sample_rate,
-        channels=render.channels,
-        min_loudness=render.min_loudness,
-    )
+from synth_setter.pipeline.schemas.spec import DatasetSpec
+from tests.helpers.finalize_shards import (
+    build_lance_smoke_spec,
+    smoke_shard_metadata,
+    write_minimal_lance_shard,
+)
 
 
 def _one_row_shapes(spec: DatasetSpec) -> dict[str, tuple[int, ...]]:
@@ -55,7 +44,7 @@ def _one_row_shapes(spec: DatasetSpec) -> dict[str, tuple[int, ...]]:
     }
 
 
-def _zero_arrays(shapes: dict[str, tuple[int, ...]]) -> dict[str, np.ndarray]:
+def _zero_arrays(shapes: Mapping[str, tuple[int, ...]]) -> dict[str, np.ndarray]:
     """Build all-zero per-field arrays with the writer's on-disk dtypes.
 
     :param shapes: Full per-field shapes including the leading row axis.
@@ -86,7 +75,7 @@ def test_lance_record_batch_preserves_transposed_tensor_shape(tmp_path: Path) ->
     """
     spec = build_lance_smoke_spec()
     shapes = _one_row_shapes(spec)
-    schema = lance_schema(shapes, _smoke_metadata(spec.render))
+    schema = lance_schema(shapes, smoke_shard_metadata(spec.render))
     n, channels, n_mels, n_frames = shapes[MEL_SPEC_FIELD]
     arrays = _zero_arrays(shapes)
     arrays[MEL_SPEC_FIELD] = np.zeros((n, n_mels, channels, n_frames), dtype=np.float32).transpose(
@@ -127,7 +116,7 @@ def test_validate_lance_shard_reports_row_count_mismatch(tmp_path: Path) -> None
     spec = build_lance_smoke_spec()
     # A one-row shard disagrees with the spec's samples_per_shard.
     shapes = _one_row_shapes(spec)
-    schema = lance_schema(shapes, _smoke_metadata(spec.render))
+    schema = lance_schema(shapes, smoke_shard_metadata(spec.render))
     shard = tmp_path / spec.shards[0].filename
     write_lance_file(shard, schema, [record_batch_from_arrays(_zero_arrays(shapes), schema)])
 
@@ -146,7 +135,7 @@ def test_validate_lance_shard_reports_inner_shape_mismatch(tmp_path: Path) -> No
     expected_shapes = dataset_field_shapes(spec.render, spec.num_params)
     n, channels, n_mels, n_frames = expected_shapes[MEL_SPEC_FIELD]
     shapes = {**expected_shapes, MEL_SPEC_FIELD: (n, channels, n_mels + 1, n_frames)}
-    schema = lance_schema(shapes, _smoke_metadata(spec.render))
+    schema = lance_schema(shapes, smoke_shard_metadata(spec.render))
     shard = tmp_path / spec.shards[0].filename
     write_lance_file(shard, schema, [record_batch_from_arrays(_zero_arrays(shapes), schema)])
 
@@ -168,7 +157,7 @@ def test_validate_lance_shard_reports_missing_column(tmp_path: Path) -> None:
     """
     spec = build_lance_smoke_spec()
     shapes = dataset_field_shapes(spec.render, spec.num_params)
-    full_schema = lance_schema(shapes, _smoke_metadata(spec.render))
+    full_schema = lance_schema(shapes, smoke_shard_metadata(spec.render))
     schema = full_schema.remove(full_schema.get_field_index(PARAM_ARRAY_FIELD))
     columns = [
         tensor_array(

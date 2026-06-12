@@ -148,7 +148,7 @@ def check_shard_contracts(
 
 
 def _expected_dataset_shapes(spec: DatasetSpec) -> dict[str, tuple[int, ...]]:
-    """Spec-level adapter for :func:`dataset_field_shapes` (the shape contract's home).
+    """Adapt ``spec`` to :func:`dataset_field_shapes`, the shape contract's home.
 
     :param spec: Dataset spec whose ``render`` config and ``num_params`` parameterize
         the per-field shapes the writer would emit for one shard.

@@ -175,6 +175,24 @@ def build_hdf5_smoke_spec(
     return DatasetSpec(**kwargs)  # type: ignore[arg-type]
 
 
+def smoke_shard_metadata(render: RenderConfig) -> ShardMetadata:
+    """Project ``render`` onto the ``ShardMetadata`` fields the writers embed.
+
+    Test-side twin of the writers' projection so shard seeders and validator
+    tests build the sidecar payload one way.
+
+    :param render: Render config supplying the sidecar field values.
+    :returns: Strict ``ShardMetadata`` with the five render-derived fields filled.
+    """
+    return ShardMetadata(
+        velocity=render.velocity,
+        signal_duration_seconds=render.signal_duration_seconds,
+        sample_rate=render.sample_rate,
+        channels=render.channels,
+        min_loudness=render.min_loudness,
+    )
+
+
 def write_minimal_lance_shard(dest: Path, spec: DatasetSpec) -> None:
     """Write a structurally valid Lance shard for ``spec`` at ``dest``.
 
@@ -190,14 +208,7 @@ def write_minimal_lance_shard(dest: Path, spec: DatasetSpec) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     render = spec.render
     shapes = dataset_field_shapes(render, spec.num_params)
-    metadata = ShardMetadata(
-        velocity=render.velocity,
-        signal_duration_seconds=render.signal_duration_seconds,
-        sample_rate=render.sample_rate,
-        channels=render.channels,
-        min_loudness=render.min_loudness,
-    )
-    schema = lance_schema(shapes, metadata)
+    schema = lance_schema(shapes, smoke_shard_metadata(render))
     arrays = {
         AUDIO_FIELD: np.zeros(shapes[AUDIO_FIELD], dtype=DATASET_FIELD_DTYPES[AUDIO_FIELD]),
         MEL_SPEC_FIELD: np.arange(

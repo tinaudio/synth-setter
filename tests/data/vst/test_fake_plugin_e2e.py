@@ -204,8 +204,9 @@ def test_make_lance_dataset_writes_validator_passing_shard_under_fake_plugin(
 ) -> None:
     """The real Lance writer produces a shard ``validate_shard`` accepts.
 
-    Drives ``make_lance_dataset`` end-to-end (batch loop, per-batch flush via
-    ``samples_per_render_batch=2``, schema construction, writer close) and
+    Drives ``make_lance_dataset`` end-to-end (batch loop, per-batch flushes via
+    a ``samples_per_render_batch`` below ``num_samples``, schema construction,
+    writer close) and
     checks the produced file through the production validator — schema,
     dtypes, inner shapes, row count — plus a whole-model ``ShardMetadata``
     round-trip against the render config.

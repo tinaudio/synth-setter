@@ -35,8 +35,8 @@ _FIELD_SHAPES: dict[str, tuple[int, ...]] = {
     PARAM_ARRAY_FIELD: (2, 7),
 }
 
-# Carried opaquely by the codec — its values intentionally don't derive
-# _FIELD_SHAPES, which the schema takes directly.
+# Opaque payload to the codec — its values needn't match _FIELD_SHAPES, which
+# the schema takes directly.
 _METADATA = ShardMetadata(
     velocity=100,
     signal_duration_seconds=1.0,

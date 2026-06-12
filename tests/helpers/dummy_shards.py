@@ -27,10 +27,9 @@ from synth_setter.data.vst.shapes import (
     PARAM_ARRAY_FIELD,
     dataset_field_shapes,
 )
-from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat
 from synth_setter.pipeline.subprocess_stream import check_call_streamed
-from tests.helpers.finalize_shards import write_minimal_lance_shard
+from tests.helpers.finalize_shards import smoke_shard_metadata, write_minimal_lance_shard
 from tests.helpers.subprocess_args import find_script_index
 
 # rclone passthrough: bound from the pipeline module, so it bypasses the patched
@@ -72,13 +71,7 @@ def write_dummy_tar_shard(output_path: Path, spec: DatasetSpec) -> None:
     audio = np.zeros(shapes[AUDIO_FIELD], dtype=DATASET_FIELD_DTYPES[AUDIO_FIELD])
     mel = np.zeros(shapes[MEL_SPEC_FIELD], dtype=DATASET_FIELD_DTYPES[MEL_SPEC_FIELD])
     params = np.zeros(shapes[PARAM_ARRAY_FIELD], dtype=DATASET_FIELD_DTYPES[PARAM_ARRAY_FIELD])
-    metadata = ShardMetadata(
-        velocity=render.velocity,
-        signal_duration_seconds=render.signal_duration_seconds,
-        sample_rate=render.sample_rate,
-        channels=render.channels,
-        min_loudness=render.min_loudness,
-    )
+    metadata = smoke_shard_metadata(render)
     with tarfile.open(output_path, mode="w") as tar:
         for field_name, arr in (
             (AUDIO_FIELD, audio),

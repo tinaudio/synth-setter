@@ -306,9 +306,10 @@ def _render_in_batches(
 def _shard_metadata_from_render(render_cfg: RenderConfig) -> ShardMetadata:
     """Project a ``RenderConfig`` onto the per-shard sidecar metadata fields.
 
-    Single source of truth for the five render-derived attrs that both the
-    HDF5 ``audio.attrs`` sidecar and the wds ``metadata.json`` tar member
-    expose. Keeping projection here means the two writers can never drift.
+    Single source of truth for the five render-derived attrs the HDF5
+    ``audio.attrs`` sidecar, the wds ``metadata.json`` tar member, and the
+    Lance schema metadata expose. Keeping projection here means the writers
+    can never drift.
 
     :param render_cfg: Per-shard renderer config from the dataset spec.
     :returns: Strict ``ShardMetadata`` with the five render-derived fields filled.
@@ -472,7 +473,7 @@ def make_lance_dataset(
     :param fixed_note_params_list: Optional pre-set note params; same full-shard
         contract as ``fixed_synth_params_list``.
     """
-    # Function-local so the h5/wds writer paths never pay the pylance import.
+    # Function-local so the h5/wds writer paths never pay the `lance` import cost.
     from lance.file import LanceFileWriter
 
     from synth_setter.pipeline.data.lance_shard import lance_schema, record_batch_from_arrays

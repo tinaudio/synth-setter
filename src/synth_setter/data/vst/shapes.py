@@ -147,7 +147,7 @@ def param_array_dataset_shape(num_samples: int, num_params: int) -> tuple[int, i
 
 
 def dataset_field_shapes(render: RenderConfig, num_params: int) -> dict[str, tuple[int, ...]]:
-    """Full per-field shapes (leading row axis included) the writers emit for one shard.
+    """Return the full per-field shapes (leading row axis included) the writers emit per shard.
 
     Single source of the field→shape contract — keyed by
     ``DATASET_FIELD_NAMES`` with ``N = render.samples_per_shard``.
