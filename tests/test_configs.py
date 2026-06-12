@@ -181,3 +181,27 @@ def test_test_mps_yaml_matches_cfg_surge_xt_global(experiment: str, test_mps_yam
         f"{test_mps_yaml}.yaml drifted from "
         f"cfg_surge_xt_global(mps, surge_4, {experiment!r}):\n" + "\n".join(diffs)
     )
+
+
+def test_ffn_smoke_experiment_wires_surge_xt_fixture_source() -> None:
+    """``experiment=surge/ffn_smoke`` bakes in the R2 surge_xt fixture and smoke caps.
+
+    Pins the contract that lets the experiment run with no pre-staged local data:
+    the opt-in R2 download URI, the batch size the 20-sample train split forces, the
+    10-step cap, and the surge_xt output width inherited from ``ffn_full``.
+    """
+    GlobalHydra.instance().clear()
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            return_hydra_config=False,
+            overrides=["experiment=surge/ffn_smoke"],
+        )
+    GlobalHydra.instance().clear()
+
+    assert cfg.datamodule.download_dataset_root_uri == (
+        "r2://intermediate-data/fixtures/smoke-shard-surge-xt-v1/"
+    )
+    assert cfg.datamodule.batch_size == 4
+    assert cfg.trainer.max_steps == 10
+    assert cfg.model.net.d_out == 300
