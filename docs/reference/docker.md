@@ -193,6 +193,24 @@ stored in the YAML. The schema is tested in
 [test_image_config.py](../../tests/pipeline/schemas/test_image_config.py) — covers
 validation, defaults, and drift detection against the real YAML.
 
+#### Base OS variants
+
+Two configs share the single base-OS-agnostic `docker/ubuntu22_04/Dockerfile`
+(the directory name is retained to avoid a repo-wide rename); only the base
+image differs:
+
+| Config                       | Base OS              | Published tags                                         |
+| ---------------------------- | -------------------- | ------------------------------------------------------ |
+| `dev-snapshot.yaml`          | Ubuntu 22.04 (Jammy) | `dev-snapshot`, `latest`, `dev-snapshot-<sha>`         |
+| `experimental-ubuntu24.yaml` | Ubuntu 24.04 (Noble) | `experimental-ubuntu24`, `experimental-ubuntu24-<sha>` |
+
+Both images pin the venv to CPython 3.10 (uv reuses Jammy's system 3.10 and
+downloads a managed standalone 3.10 on Noble), so `uv.lock` stays valid on
+either base. The Noble image is **experimental** and published on demand only:
+trigger the `Docker Image Build and Push` workflow via `workflow_dispatch` with
+`build_experimental_ubuntu24=true`. Every PR touching Docker paths still
+validates both via the `docker-validate` matrix.
+
 ______________________________________________________________________
 
 ## 3. Running Containers

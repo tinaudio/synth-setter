@@ -1,0 +1,10 @@
+# Experimental Ubuntu 24.04 (Noble) image — see docs/reference/docker.md § Base OS variants.
+# Same Dockerfile/build inputs as dev-snapshot; runtime inputs (github_sha, issue_number) come from the caller.
+dockerfile: docker/ubuntu22_04/Dockerfile
+image: tinaudio/synth-setter
+# Noble digest; refresh via: docker inspect ubuntu:24.04 --format='{{index .RepoDigests 0}}'
+base_image: "ubuntu@sha256:786a8b558f7be160c6c8c4a54f9a57274f3b4fb1491cf65146521ae77ff1dc54"
+base_image_tag: ubuntu24_04
+build_mode: prebuilt
+target_platform: linux/amd64
+torch_backend: "cu128"

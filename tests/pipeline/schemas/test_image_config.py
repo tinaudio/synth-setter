@@ -258,3 +258,54 @@ class TestStaticFieldsAndYamlMerge:
         assert result.target_platform == "linux/amd64"
         assert result.torch_backend == "cu128"
         assert result.image_config_id == "dev-snapshot"
+
+    def test_static_field_values_match_experimental_ubuntu24_yaml(self) -> None:
+        """Real experimental-ubuntu24.yaml fields match expected defaults (catches drift).
+
+        Shares the dev-snapshot Dockerfile and build inputs; only the Noble base image and the
+        ubuntu24_04 tag differ.
+        """
+        config_path = Path(str(configs_dir() / "image" / "experimental-ubuntu24.yaml"))
+
+        result = load_image_config(config_path, github_sha=VALID_SHA, issue_number=VALID_ISSUE)
+
+        assert result.dockerfile == "docker/ubuntu22_04/Dockerfile"
+        assert result.image == "tinaudio/synth-setter"
+        assert result.base_image == (
+            "ubuntu@sha256:786a8b558f7be160c6c8c4a54f9a57274f3b4fb1491cf65146521ae77ff1dc54"
+        )
+        assert result.base_image_tag == "ubuntu24_04"
+        assert result.build_mode == "prebuilt"
+        assert result.target_platform == "linux/amd64"
+        assert result.torch_backend == "cu128"
+        assert result.image_config_id == "experimental-ubuntu24"
+
+    def test_dev_snapshot_and_experimental_share_dockerfile_but_differ_only_by_base(self) -> None:
+        """The two real configs pin one Dockerfile + identical build inputs, differing only by base.
+
+        This is the invariant the experimental-ubuntu24 image relies on: one base-OS-agnostic
+        Dockerfile, same build inputs, distinct base image per OS. Catches a copy-paste that leaves
+        the Noble tag pointed at the Jammy digest (or a build input drifting in one file only).
+        """
+        image_dir = configs_dir() / "image"
+        dev = load_image_config(
+            Path(str(image_dir / "dev-snapshot.yaml")),
+            github_sha=VALID_SHA,
+            issue_number=VALID_ISSUE,
+        )
+        noble = load_image_config(
+            Path(str(image_dir / "experimental-ubuntu24.yaml")),
+            github_sha=VALID_SHA,
+            issue_number=VALID_ISSUE,
+        )
+
+        # Shared: one Dockerfile and identical build inputs.
+        assert dev.dockerfile == noble.dockerfile
+        assert dev.image == noble.image
+        assert dev.build_mode == noble.build_mode
+        assert dev.target_platform == noble.target_platform
+        assert dev.torch_backend == noble.torch_backend
+
+        # Distinct: each base image and its tag identify a different OS.
+        assert dev.base_image != noble.base_image
+        assert dev.base_image_tag != noble.base_image_tag

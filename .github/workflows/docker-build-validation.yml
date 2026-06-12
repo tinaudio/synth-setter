@@ -30,6 +30,10 @@ on:
         description: "GitHub issue number for config metadata."
         required: false
         default: "311"
+      build_experimental_ubuntu24:
+        description: "Build and push the experimental Ubuntu 24.04 (Noble) image under the experimental-ubuntu24 tag instead of the dev-snapshot image."
+        required: false
+        default: "false"
   push:
     branches: [main]
   pull_request:
@@ -50,12 +54,18 @@ jobs:
   # malicious PR shell step cannot use the job's GITHUB_TOKEN to push to
   # GHCR — the elevated `packages: write` lives on docker-push instead.
   docker-validate:
-    name: Validate Docker image build
+    name: Validate Docker image build (${{ matrix.config }})
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest-4core
     timeout-minutes: 60
     permissions:
       contents: read
+    # Prove both base images still compose. fail-fast: false so a Noble-only
+    # break is reported without masking the dev-snapshot (Jammy) result.
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [dev-snapshot, experimental-ubuntu24]
 
     steps:
       - uses: actions/checkout@v6
@@ -93,7 +103,7 @@ jobs:
         id: config
         run: |
           python -m synth_setter.pipeline.ci.load_image_config \
-            --config src/synth_setter/configs/image/dev-snapshot.yaml \
+            --config src/synth_setter/configs/image/${{ matrix.config }}.yaml \
             --github-sha '${{ steps.source.outputs.sha }}' \
             --issue-number '${{ github.event.pull_request.number }}'
 
@@ -121,7 +131,10 @@ jobs:
           # validation has no Docker Hub login.
           cache-from: type=registry,ref=tinaudio/synth-setter:buildcache
 
+      # devcontainer-tools ships only from the dev-snapshot (Jammy) image, so skip
+      # it on the experimental leg (which publishes only the dev-snapshot target).
       - name: Build devcontainer-tools image (validation only — no push)
+        if: matrix.config == 'dev-snapshot'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -142,7 +155,9 @@ jobs:
   # gated by `if:` so PR runs never enter this job and never see the token.
   docker-push:
     name: Build and push Docker image
-    if: github.event_name != 'pull_request'
+    # Skip on an experimental-only dispatch so it doesn't also rebuild dev-snapshot.
+    # Both push (input '') and a default dispatch ('false') satisfy != 'true'.
+    if: github.event_name != 'pull_request' && github.event.inputs.build_experimental_ubuntu24 != 'true'
     runs-on: ubuntu-latest-4core
     timeout-minutes: 60
     permissions:
@@ -386,6 +401,125 @@ jobs:
       - name: Smoke test — VSTs load under headless X11
         env:
           SMOKE_IMAGE: ${{ steps.config.outputs.image }}:dev-snapshot-${{ steps.source.outputs.sha }}
+        run: |
+          docker run --rm \
+            "$SMOKE_IMAGE" \
+            src/synth_setter/scripts/run-linux-vst-headless.sh \
+              pytest tests/docker/test_smoke.py -m "docker_smoke and requires_vst" -v
+
+  # On-demand experimental Noble image; never touches dev-snapshot/latest.
+  # See docs/reference/docker.md § Base OS variants for trigger + tag scheme.
+  docker-push-experimental-ubuntu24:
+    name: Build and push experimental Ubuntu 24.04 image
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.build_experimental_ubuntu24 == 'true'
+    runs-on: ubuntu-latest-4core
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.git_ref || github.sha }}
+
+      - name: Resolve checked-out commit SHA
+        id: source
+        run: |
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install synth_setter (uv sync --frozen, CPU torch)
+        run: uv sync --frozen --extra cpu --no-default-groups --group dev
+
+      - name: Load image config
+        id: config
+        run: |
+          uv run python -m synth_setter.pipeline.ci.load_image_config \
+            --config src/synth_setter/configs/image/experimental-ubuntu24.yaml \
+            --github-sha '${{ steps.source.outputs.sha }}' \
+            --issue-number '${{ github.event.inputs.issue_number || 311 }}'
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Verify Docker Hub push access
+        env:
+          DH_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          DH_IMAGE: ${{ steps.config.outputs.image }}
+        run: |
+          TOKEN=$(curl -sf \
+            "https://auth.docker.io/token?service=registry.docker.io&scope=repository:${DH_IMAGE}:pull,push" \
+            -u "${DH_USER}:${DH_TOKEN}" \
+            | jq -r '.token // empty')
+          if [ -z "$TOKEN" ]; then
+            echo "::error::Docker Hub token lacks push scope for ${DH_IMAGE}. Regenerate with Read & Write permissions."
+            exit 1
+          fi
+          echo "Docker Hub push access verified."
+
+      - name: Build and push experimental image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ steps.config.outputs.dockerfile }}
+          target: dev-snapshot
+          platforms: ${{ steps.config.outputs.target_platform }}
+          push: true
+          load: true
+          # Floating + immutable tags on both registries; no dev-snapshot/latest.
+          tags: |
+            ${{ steps.config.outputs.image }}:experimental-ubuntu24
+            ${{ steps.config.outputs.image }}:experimental-ubuntu24-${{ steps.source.outputs.sha }}
+            ghcr.io/tinaudio/synth-setter:experimental-ubuntu24
+            ghcr.io/tinaudio/synth-setter:experimental-ubuntu24-${{ steps.source.outputs.sha }}
+          build-args: |
+            BUILD_MODE=${{ steps.config.outputs.build_mode }}
+            BASE_IMAGE=${{ steps.config.outputs.base_image }}
+            TORCH_BACKEND=${{ steps.config.outputs.torch_backend }}
+            SYNTH_PERMUTATIONS_GIT_REF=${{ steps.source.outputs.sha }}
+          # No BuildKit secrets: the repo is public (no GIT_PAT needed) and
+          # R2/W&B credentials flow in at runtime, not build time.
+          secrets: ""
+          # Shares the dev-snapshot buildcache for read; does not write to it so
+          # the Noble layers never displace the stable image's cache entries.
+          cache-from: type=registry,ref=tinaudio/synth-setter:buildcache
+          cache-to: ""
+
+      - name: Smoke test — container starts and Python imports work
+        env:
+          SMOKE_IMAGE: ${{ steps.config.outputs.image }}:experimental-ubuntu24-${{ steps.source.outputs.sha }}
+        run: |
+          docker run --rm \
+            "$SMOKE_IMAGE" \
+            pytest tests/docker/test_smoke.py::test_pedalboard_importable -v
+
+      - name: Smoke test — VSTs load under headless X11
+        env:
+          SMOKE_IMAGE: ${{ steps.config.outputs.image }}:experimental-ubuntu24-${{ steps.source.outputs.sha }}
         run: |
           docker run --rm \
             "$SMOKE_IMAGE" \
