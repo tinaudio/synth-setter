@@ -45,7 +45,7 @@ docs:
       - pattern: "src/synth_setter/scripts/run-linux-vst-headless.sh"
         covers: "Headless X11 bootstrap, Xvfb setup, LIBGL_ALWAYS_SOFTWARE"
       - pattern: ".github/workflows/docker-build-validation.yml"
-        covers: "CI steps, required secrets, tag scheme, smoke test flow, devcontainer-tools publish, GHCR mirror tags (ghcr.io/tinaudio/synth-setter), packages: write permission"
+        covers: "CI steps, required secrets, tag scheme, smoke test flow, devcontainer-tools publish, GHCR mirror tags (ghcr.io/tinaudio/synth-setter), packages: write permission, dev-snapshot/experimental-ubuntu24 validation matrix, on-demand experimental Noble push job and experimental-ubuntu24[-<sha>] tag scheme"
 
   # ── W&B integration reference ───────────────────────────────────
   - doc: docs/reference/wandb-integration.md
