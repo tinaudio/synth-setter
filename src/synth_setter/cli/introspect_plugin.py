@@ -34,6 +34,7 @@ from synth_setter.data.vst.registration import (
     registry_with_spec,
     render_config_yaml,
 )
+from synth_setter.data.vst.verification import verify_registration
 
 
 @dataclass(frozen=True)
@@ -126,6 +127,16 @@ class _RegisterTarget:
     default=False,
     help="Overwrite existing output files (off by default to protect hand-tuned specs).",
 )
+@click.option(
+    "--verify",
+    is_flag=True,
+    default=False,
+    help=(
+        "After --register, run the post-draft verification battery (pre-commit gates, "
+        "registry import + sample, Hydra compose, classifier audit), write "
+        "verify-<spec-name>.md at the checkout root, and exit non-zero on any BLOCK."
+    ),
+)
 def main(
     plugin_path: str,
     plugin_name: str | None,
@@ -137,6 +148,7 @@ def main(
     register: bool,
     repo_root: str | None,
     force: bool,
+    verify: bool,
 ) -> None:
     """Draft a ParamSpec module + baseline preset + CSV table from a VST3 plugin.
 
@@ -152,15 +164,21 @@ def main(
         loose files, registering the spec for ``generate_dataset``.
     :param repo_root: Checkout root for ``--register``; auto-detected when omitted.
     :param force: Allow overwriting existing output files.
+    :param verify: Run the post-draft verification battery after ``--register``.
     :raises click.BadParameter: ``spec_name`` is not a valid Python identifier.
     :raises click.UsageError: An output file exists and ``--force`` was not
-        given; ``--register`` was combined with ``--out-*``; no checkout was
-        found; ``spec_name`` conflicts with an existing registry entry; or the
-        plugin failed to load (e.g. a multi-class bundle needing ``--plugin-name``).
+        given; ``--register`` was combined with ``--out-*``; ``--verify`` was
+        given without ``--register``; no checkout was found; ``spec_name``
+        conflicts with an existing registry entry; or the plugin failed to
+        load (e.g. a multi-class bundle needing ``--plugin-name``).
     """
     if not spec_name.isidentifier():
         raise click.BadParameter(
             f"{spec_name!r} is not a Python identifier", param_hint="--spec-name"
+        )
+    if verify and not register:
+        raise click.UsageError(
+            "--verify checks the registered checkout wiring; combine it with --register."
         )
     if register:
         target = _resolve_register_target(spec_name, repo_root, out_spec, out_preset, out_csv)
@@ -217,6 +235,8 @@ def main(
     click.echo(f"Param table : {csv_dest}")
     if target is not None:
         _write_register_wiring(target, spec_name, plugin_path, version)
+        if verify:
+            _run_verification(target, spec_name, plugin)
     else:
         click.echo(
             "Next: hand-tune the spec, then register it under "
@@ -306,6 +326,25 @@ def _write_register_wiring(
         f"  synth-setter-generate-dataset experiment=generate_dataset/smoke-shard "
         f"render={spec_name}"
     )
+
+
+def _run_verification(
+    target: _RegisterTarget, spec_name: str, plugin: IntrospectablePlugin
+) -> None:
+    """Run the post-draft battery, write the findings report, and gate the exit code.
+
+    :param target: The registered checkout wiring.
+    :param spec_name: Registry key of the registered synth.
+    :param plugin: The still-loaded plugin, for the classifier audit.
+    """
+    paths = target.paths
+    report = verify_registration(target.root, spec_name, plugin)
+    report_path = target.root / f"verify-{spec_name}.md"
+    artifacts = [paths.spec_module, paths.preset, paths.csv, paths.render_config, paths.registry]
+    report_path.write_text(report.to_markdown(artifacts), encoding="utf-8")
+    click.echo(f"Verify      : {report.verdict()} ({report_path})")
+    if report.blocks:
+        click.get_current_context().exit(1)
 
 
 def _plugin_version(plugin_path: str) -> str:

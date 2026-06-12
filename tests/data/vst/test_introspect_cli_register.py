@@ -25,6 +25,7 @@ from omegaconf import OmegaConf
 
 import synth_setter
 from synth_setter.cli.introspect_plugin import main
+from synth_setter.data.vst.verification import VerificationReport
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from tests.data.vst._introspect_fakes import (
     IntrospectFakeParameter,
@@ -343,7 +344,9 @@ def test_register_capture_failure_leaves_registry_and_render_config_unwritten(
             """
 
     plugin = _CaptureFailsPlugin({"cutoff": IntrospectFakeParameter(float, [0.0, 1.0])})
-    monkeypatch.setattr("synth_setter.cli.introspect_plugin.load_plugin", lambda _path, _name=None: plugin)
+    monkeypatch.setattr(
+        "synth_setter.cli.introspect_plugin.load_plugin", lambda _path, _name=None: plugin
+    )
     registry_before = (checkout / "src/synth_setter/data/vst/param_spec_registry.py").read_text()
 
     result = CliRunner().invoke(
@@ -364,6 +367,71 @@ def test_register_capture_failure_leaves_registry_and_render_config_unwritten(
     registry_after = (checkout / "src/synth_setter/data/vst/param_spec_registry.py").read_text()
     assert registry_after == registry_before
     assert not (checkout / "src/synth_setter/configs/render/fake_synth.yaml").exists()
+
+
+def test_verify_without_register_is_an_error(tmp_path: Path) -> None:
+    """``--verify`` outside register mode fails fast — the battery needs the checkout wiring.
+
+    :param tmp_path: Holds a dummy plugin path so the option check fires first.
+    """
+    bundle = tmp_path / "fake.vst3"
+    bundle.touch()
+
+    result = CliRunner().invoke(
+        main,
+        ["--plugin-path", str(bundle), "--spec-name", "fake_synth", "--verify"],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code != 0
+    assert "--register" in result.output
+
+
+def test_verify_writes_report_and_echoes_verdict(
+    checkout: Path, fake_plugin: IntrospectFakePlugin, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``--verify`` writes ``verify-<spec>.md`` at the checkout root and echoes the verdict.
+
+    :param checkout: Skeleton checkout fixture.
+    :param fake_plugin: Patches the plugin-load boundary.
+    :param monkeypatch: Stubs the battery — its checks are covered in
+        ``test_verification.py`` and the full-copy e2e below.
+    """
+    report = VerificationReport("fake_synth")
+    report.warn("renderer_version is 'unknown' — pin it by hand")
+    monkeypatch.setattr(
+        "synth_setter.cli.introspect_plugin.verify_registration",
+        lambda *_args, **_kwargs: report,
+    )
+
+    result = _register(checkout, "--verify")
+
+    assert result.exit_code == 0, result.output
+    report_path = checkout / "verify-fake_synth.md"
+    assert "COMMITTABLE with WARN findings" in report_path.read_text()
+    assert "COMMITTABLE with WARN findings" in result.output
+
+
+def test_verify_block_findings_exit_nonzero(
+    checkout: Path, fake_plugin: IntrospectFakePlugin, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A BLOCK finding makes the CLI exit non-zero, with the report still written.
+
+    :param checkout: Skeleton checkout fixture.
+    :param fake_plugin: Patches the plugin-load boundary.
+    :param monkeypatch: Stubs the battery with a blocking report.
+    """
+    report = VerificationReport("fake_synth")
+    report.block("spec module is 828 KB (> 500 KB check-added-large-files limit)")
+    monkeypatch.setattr(
+        "synth_setter.cli.introspect_plugin.verify_registration",
+        lambda *_args, **_kwargs: report,
+    )
+
+    result = _register(checkout, "--verify")
+
+    assert result.exit_code == 1
+    assert "BLOCKED" in (checkout / "verify-fake_synth.md").read_text()
 
 
 def test_register_end_to_end_wires_a_runnable_synth_into_a_full_checkout_copy(
@@ -392,8 +460,17 @@ def test_register_end_to_end_wires_a_runnable_synth_into_a_full_checkout_copy(
     bundle.mkdir(parents=True)
     (bundle / "moduleinfo.json").write_text('{"Version": "9.9.9"}')
 
-    result = _register(root)
+    result = _register(root, "--verify")
     assert result.exit_code == 0, result.output
+
+    # The real --verify battery ran against the copy: the report lands at the
+    # root and the runtime checks (subprocess registry import + Hydra compose)
+    # passed — no BLOCK section, so the verdict is CLEAN or COMMITTABLE.
+    verify_report = (root / "verify-fake_synth.md").read_text()
+    assert "# Introspection verification — `fake_synth`" in verify_report
+    assert "## BLOCK" not in verify_report
+    assert "registry import + sample() OK" in verify_report
+    assert "Hydra render=fake_synth composes into a valid RenderConfig" in verify_report
 
     probe = textwrap.dedent(
         """
