@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781237524609,
+  "lastUpdate": 1781240587955,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -6882,6 +6882,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.020580053329467773,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f7f46d1365fe11e97085c3d9f32291067da27256",
+          "message": "build(docker): bake Dexed, OB-Xf, Six Sines VST3s into the image (#1651)\n\n* build(docker): bake Dexed, Vital, Six Sines and Cardinal VST3s into ubuntu22_04 image\n\nAdd a vst3-synths-fetch stage that downloads SHA256-pinned prebuilt Linux\nVST3 bundles (Dexed 0.9.8, Vital 1.5.5, Six Sines 1.1.0, Cardinal 26.02),\ncopies them into /usr/lib/vst3, validates each loads under headless X11,\nand symlinks them into plugins/ alongside Surge XT. Per-synth docker smoke\ntests run each load in an isolated subprocess because sequential in-process\nloads crash order-dependently; the CI smoke step now selects VST tests by\nmarker so new synths are covered automatically.\n\nOB-Xd and Ultramaster KR-106 are excluded: every published Linux binary\nrequires glibc 2.38, which the Ubuntu 22.04 base (glibc 2.35) cannot load,\nand OB-Xd no longer publishes buildable modern source. Dexed is pinned to\n0.9.8 for the same reason. All four installs are amd64-only since upstream\nships x86_64 binaries; non-amd64 builds skip fetch, validation and symlinks.\n\nRefs #1649\n\n* build(docker): address pre-PR review findings for baked-in VST3 synths\n\nSingle-source the per-synth load check in load_vst3_check.py (used by both\nthe Dockerfile validation loop and the docker smoke test, replacing two\ninline scripts and a fragile stdout parse with an exit-code contract); hoist\nthe VST subprocess timeout to tests/_vst.py; mirror conftest's TimeoutExpired\nhandling and uncaptured-output pattern (#695); drop the duplicate plugins/\nmkdir; move ParameterSet under TYPE_CHECKING; bump docker job timeouts for\nthe added downloads and validations; update the requires_vst marker doc.\n\nRefs #1649\n\n* build(docker): harden load_vst3_check contract and CI coverage\n\nAdd argv usage guard and host-side unit tests pinning load_vst3_check's\nargv normalization and zero-parameter failure exit; invoke it via -m with\n-X faulthandler in the smoke test (drops the cwd-relative path and matches\nthe Dockerfile's native-traceback setup); make the synth roster a tuple;\nadd the script and the headless wrapper to docker-build-validation's PR\npaths filter so changes to either re-validate the image; reword the\njob-timeout comments per comment-hygiene.\n\nRefs #1649\n\n* build(docker): converge review follow-ups on the VST3 synth check\n\nMake load_vst3_check.main take an injected argv (tests no longer patch\nsys.argv) and pin its exit codes, module-execution path, and success-path\nstdout in the unit suite with a per-test recorder reset; harden the\nDockerfile validation loop with explicit && / || exit 1 chaining and pin\nthe \"bundle|plugin_name\" entry format; anchor the in-process multi-load\ncrash rationale to #1649 in both comment sites; make the CI timeout\ncomments count-free so they survive roster changes.\n\nRefs #1649\n\n* build(docker): align module-execution test docstring with its assertions\n\nRefs #1649\n\n* docs(docker): document baked-in VST3 synths and load_vst3_check\n\nSync docs with the vst3-synths-fetch stage: dev-snapshot image contents in\ndocker.md and getting-started.md, doc-map entries for tests/_vst.py and\nload_vst3_check.py, smoke-test marker columns in testing.md, the broadened\nrequires_vst marker row in CONTRIBUTING.md, and the synth_setter.scripts\nrow in scripts/README.md.\n\nRefs #1649\n\n* test(testing): materialize headless wrapper via as_file in smoke test\n\nresources.py documents str(Traversable) as install-layout dependent;\nas_file is the contract for subprocess callers.\n\nRefs #1649\n\n* docs(docker): note third-party VST3 license terms in fetch stage\n\nCopilot review on PR #1651 asked for an explicit license/redistribution\nnote on the vst3-synths-fetch stage, since the staged binaries ship in\nthe GHCR-published image. Records each synth's upstream license and the\nreview obligation when adding or bumping an asset.\n\nRefs #1649\n\n* build(docker): drop Vital and Cardinal from the baked-in VST3 synths\n\nRequested roster trim: keep Dexed 0.9.8 and Six Sines 1.1.0 only. Removes\nthe Vital/Cardinal fetch blocks, validation-loop entries, smoke-test\nparams, and doc mentions, and reverts the CI job timeouts to 60 minutes —\nwithout Cardinal the fetch stage downloads ~27 MB instead of ~1.2 GB.\n\nRefs #1649\n\n* docs(docker): trim license note to the remaining synth roster\n\nRefs #1649\n\n* build(docker): bake OB-Xf VST3 into the ubuntu22_04 image\n\nOB-Xf (surge-synthesizer/OB-Xf, GPL-3.0) is the Surge Synth Team\ncontinuation of OB-Xd and, unlike OB-Xd's glibc-2.38-only binaries, ships\nUbuntu 22.04-compatible Linux builds. Pin v1.0.3, validate the load at\nbuild time, and cover it in the smoke roster (param_count=103 verified\nheadlessly in the devcontainer).\n\nRefs #1649",
+          "timestamp": "2026-06-12T00:21:42-04:00",
+          "tree_id": "25c2ad372a67d96fce1bce5069358f72407389ce",
+          "url": "https://github.com/tinaudio/synth-setter/commit/f7f46d1365fe11e97085c3d9f32291067da27256"
+        },
+        "date": 1781240587318,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 4.3287787437438965,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.042158059328795,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.035450223833322525,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.04547131061553955,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.3278284072875977,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 15.34626788133331,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.573231220245361,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.65042351892218,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.035450223833322525,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.04547131061553955,
             "unit": "1-cos"
           },
           {
