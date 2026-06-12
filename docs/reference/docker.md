@@ -366,7 +366,10 @@ as a Docker Hub pull mirror.
 Both `latest` and `dev-snapshot` are gated to runs that represent the main
 branch — push-to-main runs, dispatches with `git_ref` in `{main, refs/heads/main, refs/remotes/origin/main}`, and dispatches with a 40-char SHA that resolves
 to the current `origin/main` HEAD (so a deliberate "rebuild main at this
-exact commit" still advances the floating tags). Feature-branch dispatches
+exact commit" still advances the floating tags). An empty `git_ref` (the
+default) falls back to the ref the workflow was dispatched on, so
+`gh workflow run --ref <branch>` builds `<branch>` without repeating it as
+an input. Feature-branch dispatches
 publish to `dev-snapshot-<branch>` instead of overwriting `dev-snapshot`.
 This matters because other workflows (`test-skypilot-debug`,
 `test-dataset-generation`) consume `dev-snapshot` by default — diverting

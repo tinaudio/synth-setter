@@ -11,9 +11,12 @@ name: Docker Image Build and Push
 #   the GITHUB_TOKEN to push to GHCR; see #1266 review).
 #
 # git_ref resolution:
-# The git_ref input accepts any ref form (branch, tag, or full SHA). After
-# checkout, `git rev-parse HEAD` resolves it to a 40-char lowercase commit
-# SHA (steps.source.outputs.sha), which is what gets baked into the image
+# The git_ref input accepts any ref form (branch, tag, or full SHA); left
+# empty, the build targets the ref the workflow was dispatched on (github.sha),
+# so `gh workflow run --ref <branch>` builds <branch> without repeating it as
+# an input. After checkout, `git rev-parse HEAD` resolves the target to a
+# 40-char lowercase commit SHA (steps.source.outputs.sha), which is what
+# gets baked into the image
 # via the SYNTH_PERMUTATIONS_GIT_REF build-arg. The build ALWAYS pins to
 # the resolved commit SHA — the original input form is discarded.
 # The resolved SHA is validated as 40-char lowercase hex by load_image_config
@@ -23,9 +26,9 @@ on:
   workflow_dispatch:
     inputs:
       git_ref:
-        description: "Git ref to build (branch, tag, or full SHA). Resolved to a 40-char commit SHA via `git rev-parse HEAD` after checkout; the build pins to the resolved commit."
+        description: "Git ref to build (branch, tag, or full SHA); empty builds the ref the workflow was dispatched on. Resolved to a 40-char commit SHA via `git rev-parse HEAD` after checkout; the build pins to the resolved commit."
         required: false
-        default: "main"
+        default: ""
       issue_number:
         description: "GitHub issue number for config metadata."
         required: false
@@ -167,10 +170,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          # dispatch: use input; push: triggering SHA. `github.sha` pins push
-          # runs to the commit that fired the workflow so back-to-back merges
-          # don't cause one run to build a later main commit (and skip the
-          # immutable dev-snapshot-<sha> tag for the triggering one).
+          # dispatch: use input, or the dispatched ref's SHA when empty; push:
+          # triggering SHA. `github.sha` pins push runs to the commit that
+          # fired the workflow so back-to-back merges don't cause one run to
+          # build a later main commit (and skip the immutable
+          # dev-snapshot-<sha> tag for the triggering one).
           ref: ${{ github.event.inputs.git_ref || github.sha }}
 
       # Emits three outputs:
@@ -209,7 +213,10 @@ jobs:
         id: source
         env:
           EVENT_NAME: ${{ github.event_name }}
-          DISPATCH_REF: ${{ github.event.inputs.git_ref }}
+          # Empty git_ref falls back to the dispatched ref's name so a bare
+          # dispatch from main still advances the floating tags and a bare
+          # branch dispatch still earns its dev-snapshot-<branch> slug.
+          DISPATCH_REF: ${{ github.event.inputs.git_ref || github.ref_name }}
         run: |
           resolved_sha=$(git rev-parse HEAD)
           echo "sha=${resolved_sha}" >> "$GITHUB_OUTPUT"
@@ -421,6 +428,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          # Dispatch-only job: the git_ref input, or the dispatched ref's
+          # pinned SHA when the input is empty.
           ref: ${{ github.event.inputs.git_ref || github.sha }}
 
       - name: Resolve checked-out commit SHA
