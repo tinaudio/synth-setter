@@ -306,7 +306,7 @@ class VSTDataModule(LightningDataModule):
         num_workers: int = 0,
         fake: bool = False,
         repeat_first_batch: bool = False,
-        predict_file: str | None = None,
+        predict_file: str | Path | None = None,
         conditioning: Literal["mel", "m2l"] = "mel",
         pin_memory: bool = True,
         param_spec_name: str = _DEFAULT_PARAM_SPEC_NAME,
@@ -322,7 +322,7 @@ class VSTDataModule(LightningDataModule):
         self.fake = fake
         self.repeat_first_batch = repeat_first_batch
         self.predict_file = (
-            predict_file
+            Path(predict_file)
             if predict_file is not None
             else self.dataset_root / f"test{self.shard_suffix}"
         )

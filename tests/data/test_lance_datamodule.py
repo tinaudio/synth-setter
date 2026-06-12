@@ -300,7 +300,7 @@ class TestLanceShardFile:
         """
         dataset_dir = tmp_path / "old-format.lance"
         dataset_dir.mkdir()
-        with pytest.raises(ValueError, match="old-format"):
+        with pytest.raises(ValueError, match="directory"):
             LanceShardFile(dataset_dir)
 
     def test_column_step_slice_reads_strided_rows(self, tmp_path: Path) -> None:

@@ -80,10 +80,17 @@ class LanceShardFile:
         """Open the ``.lance`` shard file read-only.
 
         :param path: Path to the ``.lance`` shard file.
-        :raises ValueError: If ``path`` is not an existing file — a stable
-            contract independent of which exception ``LanceFileReader`` raises.
+        :raises ValueError: If ``path`` is missing or is a directory (the Lance
+            *dataset* layout, not the single-file shard format the pipeline
+            writes) — a stable contract independent of which exception
+            ``LanceFileReader`` raises.
         """
         self._path = str(path)
+        if Path(path).is_dir():
+            raise ValueError(
+                f"expected a single-file Lance shard, got a directory "
+                f"(legacy Lance dataset layout?): {self._path}"
+            )
         if not Path(path).is_file():
             raise ValueError(f"Lance shard file was not found: {self._path}")
         metadata = LanceFileReader(self._path).metadata()
