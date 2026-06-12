@@ -10,15 +10,17 @@ from __future__ import annotations
 
 import csv
 import io
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeAlias
 
+import click
 import pytest
 from click.testing import CliRunner
 
-from synth_setter.cli.introspect_plugin import main
+from synth_setter.cli.introspect_plugin import _load_plugin_loudly, main
 from synth_setter.data.vst.param_spec import ParamSpec
 from tests.data.vst._introspect_fakes import (
     IntrospectFakeParameter,
@@ -380,3 +382,89 @@ def test_cli_multi_class_bundle_reports_available_names_without_traceback(
     assert result.exit_code == 2
     assert "Six Sines, Seven Outs" in result.output
     assert "Traceback" not in result.output
+
+
+def test_slow_plugin_load_echoes_elapsed_heartbeat(
+    fake_plugin: IntrospectFakePlugin, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A load outlasting the heartbeat interval reports elapsed time to stderr.
+
+    :param fake_plugin: Returned by the slow fake loader.
+    :param capsys: Captures the heartbeat lines click writes to stderr.
+    """
+
+    def slow_load(_path: str, _name: str | None = None) -> IntrospectFakePlugin:
+        time.sleep(0.3)
+        return fake_plugin
+
+    plugin = _load_plugin_loudly(
+        "fake.vst3", None, slow_load, timeout_seconds=5.0, heartbeat_seconds=0.05
+    )
+
+    assert plugin is fake_plugin
+    assert "still loading fake.vst3" in capsys.readouterr().err
+
+
+def test_plugin_load_timeout_fails_loudly_with_elapsed_time() -> None:
+    """A load exceeding the timeout raises a usage error naming the remedy flags."""
+
+    def never_returns(_path: str, _name: str | None = None) -> IntrospectFakePlugin:
+        time.sleep(5.0)
+        return IntrospectFakePlugin({})
+
+    with pytest.raises(click.UsageError, match="--load-timeout"):
+        _load_plugin_loudly(
+            "fake.vst3", None, never_returns, timeout_seconds=0.1, heartbeat_seconds=0.02
+        )
+
+
+def test_plugin_load_value_error_surfaces_as_usage_error() -> None:
+    """The loader's multi-class ValueError surfaces as a clean usage error, not a traceback."""
+
+    def multi_class(_path: str, _name: str | None = None) -> IntrospectFakePlugin:
+        raise ValueError("contains 2 plugins")
+
+    with pytest.raises(click.UsageError, match="contains 2 plugins"):
+        _load_plugin_loudly(
+            "fake.vst3", None, multi_class, timeout_seconds=5.0, heartbeat_seconds=0.05
+        )
+
+
+def test_plugin_load_unexpected_error_chains_into_runtime_error() -> None:
+    """A non-ValueError load failure raises a RuntimeError chained to the original."""
+
+    def crashes(_path: str, _name: str | None = None) -> IntrospectFakePlugin:
+        raise OSError("dlopen failed")
+
+    with pytest.raises(RuntimeError, match="dlopen failed") as excinfo:
+        _load_plugin_loudly(
+            "fake.vst3", None, crashes, timeout_seconds=5.0, heartbeat_seconds=0.05
+        )
+    assert isinstance(excinfo.value.__cause__, OSError)
+
+
+def test_cli_load_timeout_option_fails_the_run(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``--load-timeout`` bounds the load and the failure names the flag.
+
+    :param monkeypatch: Patches the load boundary with a slow loader.
+    :param tmp_path: Isolated cwd holding a dummy plugin path.
+    """
+
+    def slow_load(_path: str, _name: str | None = None) -> IntrospectFakePlugin:
+        time.sleep(2.0)
+        return IntrospectFakePlugin({})
+
+    monkeypatch.setattr("synth_setter.cli.introspect_plugin.load_plugin", slow_load)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "fake.vst3").touch()
+
+    result = CliRunner().invoke(
+        main,
+        ["--plugin-path", "fake.vst3", "--spec-name", "fake_synth", "--load-timeout", "0.1"],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code != 0
+    assert "did not finish loading" in result.output

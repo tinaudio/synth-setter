@@ -10,9 +10,12 @@ renderable via ``generate_dataset`` (issue #1596).
 
 from __future__ import annotations
 
+import threading
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import Any, TypeVar, cast
 
 import click
 
@@ -35,6 +38,12 @@ from synth_setter.data.vst.registration import (
     render_config_yaml,
 )
 from synth_setter.data.vst.verification import verify_registration
+
+_PluginT = TypeVar("_PluginT")
+
+# Native VST3 init can block for minutes (Six Sines ~120 s); heartbeats at
+# this cadence keep a slow load distinguishable from a hang.
+_LOAD_HEARTBEAT_SECONDS = 30.0
 
 
 @dataclass(frozen=True)
@@ -137,6 +146,17 @@ class _RegisterTarget:
         "verify-<spec-name>.md at the checkout root, and exit non-zero on any BLOCK."
     ),
 )
+@click.option(
+    "--load-timeout",
+    type=float,
+    default=600.0,
+    show_default=True,
+    help=(
+        "Seconds to wait for plugin initialization before failing loudly. Multi-minute "
+        "loads are normal for some synths; run GUI-heavy plugins under "
+        "src/synth_setter/scripts/run-linux-vst-headless.sh."
+    ),
+)
 def main(
     plugin_path: str,
     plugin_name: str | None,
@@ -149,6 +169,7 @@ def main(
     repo_root: str | None,
     force: bool,
     verify: bool,
+    load_timeout: float,
 ) -> None:
     """Draft a ParamSpec module + baseline preset + CSV table from a VST3 plugin.
 
@@ -165,12 +186,14 @@ def main(
     :param repo_root: Checkout root for ``--register``; auto-detected when omitted.
     :param force: Allow overwriting existing output files.
     :param verify: Run the post-draft verification battery after ``--register``.
+    :param load_timeout: Seconds to wait for plugin initialization.
     :raises click.BadParameter: ``spec_name`` is not a valid Python identifier.
     :raises click.UsageError: An output file exists and ``--force`` was not
         given; ``--register`` was combined with ``--out-*``; ``--verify`` was
         given without ``--register``; no checkout was found; ``spec_name``
         conflicts with an existing registry entry; or the plugin failed to
-        load (e.g. a multi-class bundle needing ``--plugin-name``).
+        load (a multi-class bundle needing ``--plugin-name``, or initialization
+        outlasting ``--load-timeout``).
     """
     if not spec_name.isidentifier():
         raise click.BadParameter(
@@ -197,13 +220,9 @@ def main(
         if dest.exists() and not force:
             raise click.UsageError(f"{dest} already exists; pass --force to overwrite")
 
-    # pedalboard raises ValueError listing the factory classes when a bundle
-    # exposes more than one and --plugin-name is absent; surface it as a clean
-    # usage error rather than an uncaught traceback.
-    try:
-        vst_plugin = load_plugin(plugin_path, plugin_name)
-    except ValueError as exc:
-        raise click.UsageError(str(exc)) from exc
+    vst_plugin = _load_plugin_loudly(
+        plugin_path, plugin_name, load_plugin, timeout_seconds=load_timeout
+    )
     if preset_path is not None:
         load_preset(vst_plugin, preset_path)
     # Cast: pedalboard's plugin surface is dynamic, so VST3Plugin's stubs don't
@@ -326,6 +345,71 @@ def _write_register_wiring(
         f"  synth-setter-generate-dataset experiment=generate_dataset/smoke-shard "
         f"render={spec_name}"
     )
+
+
+def _load_plugin_loudly(
+    plugin_path: str,
+    plugin_name: str | None,
+    loader: Callable[[str, str | None], _PluginT],
+    *,
+    timeout_seconds: float,
+    heartbeat_seconds: float = _LOAD_HEARTBEAT_SECONDS,
+) -> _PluginT:
+    """Run ``loader`` on a daemon thread, echoing elapsed-time heartbeats until it returns.
+
+    Native VST3 init can block for minutes with no output, indistinguishable
+    from a hang — the operator's natural move is Ctrl-C (issue #1676). The
+    heartbeat reports progress to stderr; on timeout the load fails loudly
+    with the elapsed time, and the daemon thread cannot block process exit.
+
+    :param plugin_path: Path of the ``.vst3`` bundle, echoed in heartbeats.
+    :param plugin_name: Factory class forwarded to ``loader``.
+    :param loader: The blocking load call (``load_plugin``; injectable in tests).
+    :param timeout_seconds: Give up after this long.
+    :param heartbeat_seconds: Interval between elapsed-time echoes.
+    :returns: The loaded plugin.
+    :raises click.UsageError: The load outlasted ``timeout_seconds``, or the
+        loader rejected the bundle with a ``ValueError`` (pedalboard lists the
+        factory classes of a multi-class bundle this way when ``--plugin-name``
+        is absent).
+    :raises RuntimeError: Any other load failure, chained to the original.
+    """
+    outcome: dict[str, Any] = {}
+
+    def _run() -> None:
+        """Capture the loader's plugin or exception for the main thread."""
+        # Broad catch: the exception is re-raised on the main thread below.
+        try:
+            outcome["plugin"] = loader(plugin_path, plugin_name)
+        except BaseException as exc:  # noqa: BLE001
+            outcome["error"] = exc
+
+    thread = threading.Thread(target=_run, name="plugin-load", daemon=True)
+    started = time.monotonic()
+    thread.start()
+    while True:
+        thread.join(min(heartbeat_seconds, timeout_seconds))
+        if not thread.is_alive():
+            break
+        elapsed = time.monotonic() - started
+        if elapsed >= timeout_seconds:
+            raise click.UsageError(
+                f"{plugin_path} did not finish loading within {timeout_seconds:g}s "
+                f"(elapsed {elapsed:.0f}s). Multi-minute initialization is normal for "
+                "some synths — raise --load-timeout, and run GUI-heavy plugins under "
+                "src/synth_setter/scripts/run-linux-vst-headless.sh."
+            )
+        click.echo(
+            f"still loading {plugin_path}… {elapsed:.0f}s elapsed "
+            "(some plugins take minutes to initialize)",
+            err=True,
+        )
+    error = outcome.get("error")
+    if isinstance(error, ValueError):
+        raise click.UsageError(str(error)) from error
+    if isinstance(error, BaseException):
+        raise RuntimeError(f"loading {plugin_path} failed: {error!r}") from error
+    return outcome["plugin"]
 
 
 def _run_verification(
