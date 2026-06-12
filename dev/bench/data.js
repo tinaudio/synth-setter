@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781237522394,
+  "lastUpdate": 1781237524609,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -11904,6 +11904,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 19.303919260399994,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0de7109cf11d4b80dfec98a701755655c90bfc81",
+          "message": "chore(lint): pin wandb as ruff-isort third-party to stop import flips (#1637)\n\n* lint\n\n* chore(lint): pin wandb as ruff-isort third-party\n\nW&B runs leave an untracked ./wandb directory at the repo root, which\nflips ruff-isort's first-party detection: a local make format then moves\nevery `import wandb` into the first-party block, and CI (clean checkout)\nrejects exactly those edits. Pinning known-third-party makes import\norder deterministic regardless of local run artifacts.\n\nAlso applies the one real fix the pin surfaces: cadence_sweep_489.py had\n`import wandb` stranded in the first-party block from the same effect.\n\n* chore(lint): re-run make format with the wandb pin\n\nReverts the import reordering from the previous commit, which a stray\nlocal ./wandb run dir had induced; with known-third-party pinned, ruff\nrestores the ordering CI expects.",
+          "timestamp": "2026-06-11T23:03:32-04:00",
+          "tree_id": "13f1d07a284400ebf248b99e45e777a5170bd62a",
+          "url": "https://github.com/tinaudio/synth-setter/commit/0de7109cf11d4b80dfec98a701755655c90bfc81"
+        },
+        "date": 1781237524042,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 3.110783815383911,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 3.9890498669631778,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.018398139625787735,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.029089033603668213,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 2.4842677116394043,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 17.40734270769999,
             "unit": "seconds"
           }
         ]
