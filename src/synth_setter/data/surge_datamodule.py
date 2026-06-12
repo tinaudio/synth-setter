@@ -1,7 +1,7 @@
 import random
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Literal
+from typing import ClassVar, Literal, Protocol
 
 import h5py
 import hdf5plugin  # noqa: F401  # side-effect import: registers HDF5 blosc filters for shard I/O
@@ -10,12 +10,59 @@ import torch
 from lightning import LightningDataModule
 
 from synth_setter.data.ot import _hungarian_match
+from synth_setter.data.vst.param_spec_registry import param_specs
 from synth_setter.pipeline import r2_io
 
+# Registry key whose spec width sizes fake-mode batches and seeds the
+# datamodule default when no ``param_spec_name`` is configured.
+_DEFAULT_PARAM_SPEC_NAME = "surge_xt"
 
-class SurgeXTDataset(torch.utils.data.Dataset):
+
+class ShardColumn(Protocol):
+    """One named array column of a shard — the read surface of ``h5py.Dataset``."""
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        """``(num_rows, *per_row_shape)`` of the column."""
+        ...
+
+    def __getitem__(self, idx: slice | Sequence[int] | np.ndarray) -> np.ndarray:
+        """Materialize the selected rows as one array.
+
+        :param idx: Slice or per-row integer indices (samplers yield numpy arrays).
+        :return: ``(len(idx), *per_row_shape)`` array.
+        """
+        ...
+
+
+class ShardFile(Protocol):
+    """Read handle over one dataset shard — the surface of ``h5py.File`` the readers use."""
+
+    def __getitem__(self, name: str) -> ShardColumn:
+        """Return the named column view.
+
+        :param name: Column name within the shard.
+        :return: Read view over that column.
+        """
+        ...
+
+    def __bool__(self) -> bool:
+        """True while open, False after ``close`` — the teardown tests' contract.
+
+        :return: Whether the shard is still open.
+        """
+        ...
+
+    def close(self) -> None:
+        """Release the underlying storage handle."""
+        ...
+
+
+class VSTDataset(torch.utils.data.Dataset):
     mean: np.ndarray | None = None
     std: np.ndarray | None = None
+    # Declared here because __init__ assigns it on two branches (None in fake mode).
+    dataset_file: ShardFile | None
 
     def __init__(
         self,
@@ -29,6 +76,7 @@ class SurgeXTDataset(torch.utils.data.Dataset):
         rescale_params: bool = True,
         fake: bool = False,
         repeat_first_batch: bool = False,
+        num_params: int | None = None,
     ):
         self.batch_size = batch_size
         self.ot = ot
@@ -40,21 +88,33 @@ class SurgeXTDataset(torch.utils.data.Dataset):
         self.rescale_params = rescale_params
 
         self.fake = fake
+        # Fake-mode width only; real mode reads the width from the shard's param_array.
+        self.num_params = (
+            num_params if num_params is not None else len(param_specs[_DEFAULT_PARAM_SPEC_NAME])
+        )
         if fake:
             self.dataset_file = None
             return
 
         self.repeat_first_batch = repeat_first_batch
 
-        self.dataset_file = h5py.File(dataset_file, "r")
+        self.dataset_file = self._open(dataset_file)
 
         if use_saved_mean_and_variance:
             self._load_dataset_statistics(dataset_file)
 
+    def _open(self, dataset_file: str | Path) -> ShardFile:
+        """Open the shard read-only; storage-format subclasses override this hook.
+
+        :param dataset_file: Path to the shard on disk.
+        :return: Open read handle for the shard.
+        """
+        return h5py.File(dataset_file, "r")
+
     def _load_dataset_statistics(self, dataset_file: str | Path):
         # for /path/to/train.h5 we would expect to find /path/to/stats.npz
         # if not, we throw an error
-        stats_file = SurgeXTDataset.get_stats_file_path(dataset_file)
+        stats_file = VSTDataset.get_stats_file_path(dataset_file)
         if not stats_file.exists():
             raise FileNotFoundError(
                 f"Could not find statistics file {stats_file}. \n"
@@ -81,7 +141,7 @@ class SurgeXTDataset(torch.utils.data.Dataset):
         audio = torch.randn(self.batch_size, 2, 44100 * 4) if self.read_audio else None
         mel_spec = torch.randn(self.batch_size, 2, 128, 401) if self.read_mel else None
         m2l = torch.randn(self.batch_size, 128, 42) if self.read_m2l else None
-        param_array = torch.rand(self.batch_size, 189)
+        param_array = torch.rand(self.batch_size, self.num_params)
 
         if self.rescale_params:
             param_array = param_array * 2 - 1
@@ -96,7 +156,7 @@ class SurgeXTDataset(torch.utils.data.Dataset):
             audio=audio,
         )
 
-    def _index_dataset(self, ds: h5py.Dataset, idx: int | Sequence[int]):
+    def _index_dataset(self, ds: ShardColumn, idx: int | Sequence[int] | np.ndarray) -> np.ndarray:
         if self.repeat_first_batch:
             return ds[: self.batch_size]
         if isinstance(idx, int):
@@ -110,7 +170,7 @@ class SurgeXTDataset(torch.utils.data.Dataset):
 
         return ds[idx]
 
-    def __getitem__(self, idx: int | Sequence[int]):
+    def __getitem__(self, idx: int | Sequence[int] | np.ndarray):
         if self.fake:
             return self._get_fake_item()
 
@@ -231,7 +291,11 @@ class ShiftedBatchSampler(torch.utils.data.BatchSampler):
             yield (i * self.batch_size + offset, (i + 1) * self.batch_size + offset)
 
 
-class SurgeDataModule(LightningDataModule):
+class VSTDataModule(LightningDataModule):
+    # Storage-format extension points: subclasses pair a dataset class with its shard suffix.
+    dataset_cls: ClassVar[type[VSTDataset]] = VSTDataset
+    shard_suffix: ClassVar[str] = ".h5"
+
     def __init__(
         self,
         dataset_root: str | Path,
@@ -242,9 +306,10 @@ class SurgeDataModule(LightningDataModule):
         num_workers: int = 0,
         fake: bool = False,
         repeat_first_batch: bool = False,
-        predict_file: str | None = None,
+        predict_file: str | Path | None = None,
         conditioning: Literal["mel", "m2l"] = "mel",
         pin_memory: bool = True,
+        param_spec_name: str = _DEFAULT_PARAM_SPEC_NAME,
     ):
         super().__init__()
 
@@ -257,10 +322,13 @@ class SurgeDataModule(LightningDataModule):
         self.fake = fake
         self.repeat_first_batch = repeat_first_batch
         self.predict_file = (
-            predict_file if predict_file is not None else self.dataset_root / "test.h5"
+            Path(predict_file)
+            if predict_file is not None
+            else self.dataset_root / f"test{self.shard_suffix}"
         )
         self.conditioning = conditioning
         self.pin_memory = pin_memory
+        self.param_spec_name = param_spec_name
 
     def prepare_data(self) -> None:
         """Hydrate ``dataset_root`` from R2 when a download URI is configured.
@@ -275,8 +343,10 @@ class SurgeDataModule(LightningDataModule):
         r2_io.download_dir_no_overwrite(self.download_dataset_root_uri, self.dataset_root)
 
     def setup(self, stage: str | None = None):
-        self.train_dataset = SurgeXTDataset(
-            self.dataset_root / "train.h5",
+        # KeyError here fails fast on an unregistered param_spec_name.
+        num_params = len(param_specs[self.param_spec_name])
+        self.train_dataset = self.dataset_cls(
+            self.dataset_root / f"train{self.shard_suffix}",
             batch_size=self.batch_size,
             ot=self.ot,
             use_saved_mean_and_variance=self.use_saved_mean_and_variance,
@@ -284,9 +354,10 @@ class SurgeDataModule(LightningDataModule):
             repeat_first_batch=self.repeat_first_batch,
             read_mel=self.conditioning == "mel",
             read_m2l=self.conditioning == "m2l",
+            num_params=num_params,
         )
-        self.val_dataset = SurgeXTDataset(
-            self.dataset_root / "val.h5",
+        self.val_dataset = self.dataset_cls(
+            self.dataset_root / f"val{self.shard_suffix}",
             batch_size=self.batch_size,
             ot=False,
             use_saved_mean_and_variance=self.use_saved_mean_and_variance,
@@ -294,9 +365,10 @@ class SurgeDataModule(LightningDataModule):
             repeat_first_batch=self.repeat_first_batch,
             read_mel=self.conditioning == "mel",
             read_m2l=self.conditioning == "m2l",
+            num_params=num_params,
         )
-        self.test_dataset = SurgeXTDataset(
-            self.dataset_root / "test.h5",
+        self.test_dataset = self.dataset_cls(
+            self.dataset_root / f"test{self.shard_suffix}",
             batch_size=self.batch_size,
             ot=False,
             use_saved_mean_and_variance=self.use_saved_mean_and_variance,
@@ -304,8 +376,9 @@ class SurgeDataModule(LightningDataModule):
             repeat_first_batch=self.repeat_first_batch,
             read_mel=self.conditioning == "mel",
             read_m2l=self.conditioning == "m2l",
+            num_params=num_params,
         )
-        self.predict_dataset = SurgeXTDataset(
+        self.predict_dataset = self.dataset_cls(
             self.predict_file,
             batch_size=self.batch_size,
             ot=False,
@@ -314,6 +387,7 @@ class SurgeDataModule(LightningDataModule):
             fake=self.fake,
             read_mel=self.conditioning == "mel",
             read_m2l=self.conditioning == "m2l",
+            num_params=num_params,
         )
 
     def train_dataloader(self):
@@ -367,3 +441,9 @@ class SurgeDataModule(LightningDataModule):
         ):
             if dataset.dataset_file is not None:
                 dataset.dataset_file.close()
+
+
+# Deprecated aliases: archived W&B run configs and external job scripts resolve the
+# old ``_target_`` paths, so Hydra must keep finding these names.
+SurgeXTDataset = VSTDataset
+SurgeDataModule = VSTDataModule

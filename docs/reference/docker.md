@@ -1,6 +1,6 @@
 # Docker Reference
 
-> **Last verified:** 2026-06-02
+> **Last verified:** 2026-06-12
 
 How to build, run, and debug Docker images for the synth-setter training
 pipeline. Intended for developers working locally or in CI environments.
@@ -66,7 +66,12 @@ The rclone reference doc is planned ([#310](https://github.com/tinaudio/synth-se
 ### First build (dev-snapshot)
 
 The dev-snapshot image has Surge XT + Python deps + source code baked at a
-specific git ref.
+specific git ref, plus prebuilt VST3 synths (Dexed, OB-Xf, Six Sines) fetched by
+the `vst3-synths-fetch` stage in `docker/ubuntu22_04/Dockerfile` (amd64
+only; versions and SHA256 pins live there as `ARG`s). Each synth is
+load-validated at build time by
+`src/synth_setter/scripts/load_vst3_check.py` under headless X11 and
+symlinked into `plugins/`.
 
 ```bash
 make docker-build-dev-snapshot \
@@ -115,11 +120,12 @@ The `devcontainer-tools` stage is a sibling of `dev-snapshot` — both stages
 build `FROM dev-base`, the shared parent that holds Surge XT, the venv, and
 the synth-setter source. `devcontainer-tools` adds interactive CLI tooling
 (see the stage's `apt-get install` list and the GitHub CLI install block),
-Node.js + `@anthropic-ai/claude-code` installed system-wide, the OpenAI
-`@openai/codex` CLI installed for the `dev` user via a per-user npm prefix
-(`~/.npm-global`, on PATH) so later `npm install -g` runs avoid EACCES on the
-root-owned global tree, the Google Antigravity (`agy`) CLI installed by its
-upstream `install.sh` into `~/.local/bin` (also on PATH), the zellij
+Node.js installed system-wide, the `@anthropic-ai/claude-code` and
+`@openai/codex` CLIs installed for the `dev` user via a per-user npm prefix
+(`~/.npm-global`, on PATH) — so later `npm install -g` runs, including
+claude-code's in-app self-update, avoid EACCES on the root-owned tree and aren't
+shadowed by a system-wide copy. It also adds the Google Antigravity (`agy`) CLI
+installed by its upstream `install.sh` into `~/.local/bin` (also on PATH), the zellij
 terminal multiplexer (pinned upstream musl binary, SHA256-verified, in
 `/usr/local/bin`), a non-root
 `dev` user, chowns the baked uv venv at `/venv/main` to `dev` so
@@ -129,7 +135,11 @@ terminal multiplexer (pinned upstream musl binary, SHA256-verified, in
 history survives container rebuilds. The VS Code terminal defaults to the
 `zellij` profile (tmux stays selectable, with the generic defaults in
 `.devcontainer/tmux.conf` — mouse mode, true color, key bindings — but no
-session persistence); the `synth-setter-zellij-cache` and
+session persistence). `post-create.sh` installs `.devcontainer/zellij.kdl` to
+`~/.config/zellij/config.kdl` for both users; it silences the startup-tip and
+release-notes popups and reattaches every terminal to one shared `main` session
+(`session_name` + `attach_to_session true`), so a second VS Code terminal
+mirrors the first. The `synth-setter-zellij-cache` and
 `synth-setter-zellij-cache-root` named volumes at `/home/dev/.cache/zellij`
 and `/root/.cache/zellij` persist zellij's serialized (resurrectable) sessions
 across rebuilds for the same two users. The same devcontainer configs also
@@ -286,7 +296,7 @@ jq -r .r2.prefix input_spec.json
 
 ### Headless VST
 
-VST3 plugins (Surge XT) require an X11 display. For dataset generation,
+VST3 plugins require an X11 display. For dataset generation,
 X11 is bootstrapped automatically around the generator subprocess inside
 `generate()`. For ad-hoc VST work, prepend the headless wrapper to your command:
 

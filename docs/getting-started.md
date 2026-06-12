@@ -511,7 +511,7 @@ ______________________________________________________________________
 ## 7. Docker Workflow
 
 A Dockerfile is provided for reproducible environments (training, CI, cloud
-deployment). The image bakes in the source code, dependencies, and Surge XT.
+deployment). The image bakes in the source code, dependencies, Surge XT, and several other VST3 synths (see the `vst3-synths-fetch` stage in `docker/ubuntu22_04/Dockerfile`).
 No credentials — R2, W&B, or otherwise — are baked in.
 
 **Build the image:**
@@ -736,8 +736,17 @@ credentials are required.
    optionally authenticates with `RESTRICTED_AGENT_GIT_PAT`, and installs
    pre-commit hooks. If invoked as root (Codespaces default, or opt-in
    `DEVCONTAINER_USER=root` locally), it drops to the `dev` user first so
-   workspace mutations under `.git/` land with dev ownership. Then the
-   terminal is ready.
+   workspace mutations under `.git/` land with dev ownership. On a
+   root-owned host bind mount (the local-devcontainer case, where the
+   privilege drop alone can't fix files that arrive pre-owned by root), it
+   also recursively chowns the workspace to the running user — guarded by a
+   `stat`-based ownership check — before any `.git` write, so
+   `pre-commit install` and commits don't fail with permission denied. It also
+   makes the bundled coding agents non-interactive by default — the container
+   is the sandbox — by seeding `~/.codex/config.toml`
+   (`approval_policy = "never"`, `sandbox_mode = "danger-full-access"`, written
+   only when absent so a mounted config wins) and a `~/.bashrc` `agy` wrapper
+   that injects `--dangerously-skip-permissions`. Then the terminal is ready.
 4. Default terminal profile is configured in `.devcontainer/*/devcontainer.json`.
 
 **Verify:**

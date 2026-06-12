@@ -1,7 +1,7 @@
 defaults:
   - _self_
 
-_target_: synth_setter.models.surge_fake_oracle_module.SurgeFakeOracleModule
+_target_: synth_setter.models.surge_fake_oracle_module.VSTFakeOracleModule
 
 net:
   _target_: synth_setter.models.surge_fake_oracle_module.FakeOracleNet

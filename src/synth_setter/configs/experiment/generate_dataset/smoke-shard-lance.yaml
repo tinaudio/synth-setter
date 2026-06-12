@@ -1,0 +1,25 @@
+# @package _global_
+
+# Lance-format sibling of `smoke-shard-wds`. Same compact 12-sample render volume
+# but writes single `.lance` files so PR-time generation can exercise the Lance
+# writer, upload, validation, and finalize branches.
+
+defaults:
+  - override /datamodule: surge_simple
+  - override /render: surge_simple
+  - _self_
+
+task_name: smoke-shard-lance
+
+output_format: lance
+
+# 12-sample renders have constant mel bins; mask so finalize completes.
+mask_degenerate_bins: true
+
+train_val_test_sizes: [12, 0, 0]
+
+render:
+  sample_rate: 44100
+  min_loudness: -55.0
+  samples_per_render_batch: 4
+  samples_per_shard: 4

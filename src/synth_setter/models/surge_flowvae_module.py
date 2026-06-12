@@ -9,7 +9,7 @@ from lightning.pytorch.utilities import grad_norm
 from synth_setter.models.components.vae import compute_flowvae_loss
 
 
-class SurgeFlowVAEModule(LightningModule):
+class VSTFlowVAEModule(LightningModule):
     """Flow-VAE LightningModule that learns a latent flow and a regression flow to params."""
 
     def __init__(
@@ -24,6 +24,19 @@ class SurgeFlowVAEModule(LightningModule):
         beta_warmup_steps: int = 60_000,
         param_spec: str = "surge_xt",
     ):
+        """Wire the Flow-VAE net and persist the loss/schedule hyperparameters.
+
+        :param net: Flow-VAE network producing latent + regression flow outputs.
+        :param optimizer: ``functools.partial``-style optimizer factory (Hydra
+            ``_partial_: true``); invoked in :meth:`configure_optimizers`.
+        :param scheduler: ``functools.partial``-style scheduler factory or ``None``.
+        :param compile: Whether to ``torch.compile`` the net in :meth:`setup`.
+        :param warmup_steps: If positive, wrap the scheduler with a linear warmup.
+        :param beta_max: Final KL weight after beta warmup.
+        :param beta_start: Initial KL weight at step 0.
+        :param beta_warmup_steps: Steps over which beta ramps from start to max.
+        :param param_spec: Registry key naming the param spec the loss decodes against.
+        """
         super().__init__()
 
         self.save_hyperparameters(logger=False)
@@ -153,5 +166,6 @@ class SurgeFlowVAEModule(LightningModule):
         return {"optimizer": optimizer}
 
 
-if __name__ == "__main__":
-    pass
+# Deprecated alias: archived W&B run configs and external job scripts resolve the
+# old ``_target_`` path.
+SurgeFlowVAEModule = VSTFlowVAEModule

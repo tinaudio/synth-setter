@@ -21,12 +21,14 @@ from synth_setter.data.vst.shapes import (
     MEL_WINDOW,
     PARAM_ARRAY_FIELD,
     audio_dataset_shape,
+    dataset_field_shapes,
     mel_dataset_shape,
     mel_hop_length,
     mel_n_fft,
     mel_n_frames,
     param_array_dataset_shape,
 )
+from synth_setter.pipeline.schemas.spec import RenderConfig
 
 
 def test_dataset_field_names_match_writer_emissions() -> None:
@@ -104,6 +106,30 @@ def test_param_array_dataset_shape_matches_legacy_inline_calc() -> None:
     """Pins ``(num_samples, num_params)``."""
     assert param_array_dataset_shape(2, 175) == (2, 175)
     assert param_array_dataset_shape(0, 0) == (0, 0)
+
+
+def test_dataset_field_shapes_maps_every_field_to_full_writer_shape() -> None:
+    """``dataset_field_shapes`` returns the full writer-emitted shape for every dataset field."""
+    render = RenderConfig(
+        plugin_path="/fake/Plugin.vst3",
+        preset_path="presets/fake.vstpreset",
+        param_spec_name="surge_simple",
+        renderer_version="1.0.0-test",
+        sample_rate=44100,
+        channels=2,
+        velocity=100,
+        signal_duration_seconds=4.0,
+        min_loudness=-55.0,
+        samples_per_render_batch=4,
+        samples_per_shard=4,
+        gui_toggle_cadence="never",
+    )
+
+    assert dataset_field_shapes(render, num_params=7) == {
+        AUDIO_FIELD: (4, 2, 176400),
+        MEL_SPEC_FIELD: (4, 2, 128, 401),
+        PARAM_ARRAY_FIELD: (4, 7),
+    }
 
 
 def test_make_spectrogram_output_shape_matches_mel_dataset_shape_helper() -> None:

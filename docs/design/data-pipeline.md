@@ -840,24 +840,25 @@ No `check_tasks` method exists. Provider APIs answer the wrong question ("is the
 
 **RunPod instance tagging:** The CLI tags all RunPod instances with the `run_id` at launch. A `pipeline.cli cleanup --run-id <id>` command queries the RunPod API for any pods matching that `run_id` and terminates them — a safety net for orphaned pods if the CLI crashes after launching workers but before logging pod IDs locally.
 
-### 7.10 Output Format: HDF5 vs WebDataset
+### 7.10 Output Format: HDF5, WebDataset, or Lance
 
-The pipeline supports two output formats, selected via `output_format` in the config and frozen in the spec. The format determines both what the worker emits and how training consumes the data — the renderer CLI dispatches on the shard's filename suffix (`.h5` → `make_hdf5_dataset`, `.tar` → `make_wds_dataset`) via `OutputFormat.from_extension`.
+The pipeline supports three output formats, selected via `output_format` in the config and frozen in the spec. The format determines both what the worker emits and how training consumes the data — the renderer CLI dispatches on the shard's filename suffix (`.h5` → `make_hdf5_dataset`, `.tar` → `make_wds_dataset`, `.lance` → `make_lance_dataset`) via `OutputFormat.from_extension`.
 
-**Why two formats:**
+**Why three formats:**
 
 - **HDF5** (`output_format: hdf5`): Virtual datasets (`train.h5`, `val.h5`, `test.h5`) that reference promoted shards. Good for local single-GPU training where the full dataset is downloaded to the training machine. Random access, fast local I/O.
 - **WebDataset** (`output_format: wds`): Sequential `.tar` archives (`train-{shard}.tar`, etc.) optimized for streaming. Each archive contains N samples as individual NumPy files. Good for multi-GPU training (B200s, many GPUs) where streaming from R2 avoids downloading the full dataset to every node.
+- **Lance** (`output_format: lance`): Single-file Lance shards (`shard-000000.lance`) using the Lance *file* format — each shard stays one R2 object. Rows are Arrow fixed-shape-tensor columns (float16 `audio`, float32 `mel_spec` / `param_array`) with the `ShardMetadata` JSON embedded in the schema metadata. The columnar layout gives per-column projection (stats streaming reads only `mel_spec`); finalize concatenates each split's shards into `train.lance` / `val.lance` / `test.lance`.
 
 **Why HDF5 is insufficient for multi-GPU training:**
 
 HDF5 is random-access oriented. Multi-GPU DataLoaders need to stream shards sequentially without coordinating seeks across workers. Streaming HDF5 virtual datasets from R2 during training creates heavy seek traffic and GPU idle time. Downloading the full dataset to every training node wastes storage and time at scale. WebDataset solves both — each `.tar` shard is a sequential stream that can be read over HTTP with near-zero overhead.
 
-**HDF5 is resumable; WDS is not:**
+**HDF5 is resumable; WDS and Lance are not:**
 
-`make_hdf5_dataset` is resumable — a partially-written file picks up at the first all-zero row, so a crashed worker can re-run with the same render config and only the missing tail is regenerated, except under `render.param_sample_cadence="shard"`, where a partially-written shard is re-rendered from row 0 (a mid-shard resume can't preserve the one-patch-per-shard invariant). `make_wds_dataset` is not resumable today (the tar writer overwrites the destination on open); a crashed wds worker re-renders the whole shard. The staging/canonical split is unaffected by output format.
+`make_hdf5_dataset` is resumable — a partially-written file picks up at the first all-zero row, so a crashed worker can re-run with the same render config and only the missing tail is regenerated, except under `render.param_sample_cadence="shard"`, where a partially-written shard is re-rendered from row 0 (a mid-shard resume can't preserve the one-patch-per-shard invariant). `make_wds_dataset` and `make_lance_dataset` are not resumable today (the tar writer and `LanceFileWriter` both overwrite the destination on open); a crashed wds or lance worker re-renders the whole shard. The staging/canonical split is unaffected by output format.
 
-**Copying an existing dataset:** when `copy_dataset_root_uri` is set on the spec, generation re-renders the parameters of an existing dataset instead of sampling fresh ones. The root URI may be a bare path, `file://` URI, or `r2://` URI. The launcher forwards `--copy_dataset_root_uri` to the renderer subprocess, which resolves `<copy_dataset_root_uri>/<shard.filename>` to a local file (downloading it from R2 to a tempfile when the root is an `r2://` URI), reads the source shard's `param_array`, decodes each row into fixed synth/note params via `fixed_params_from_dataset` (`param_spec.decode`), and renders those. This is hdf5-only — the source is read as an HDF5 `param_array` of the same shard filename, so a `.tar` output with `--copy_dataset_root_uri` raises `SystemExit`. The source must share the target's `render.param_spec_name` (same encoding width) and have row count equal to `samples_per_shard`. Fixed params are indexed by absolute row, so resume re-renders only the missing tail from the matching source rows. Before any render, `generate` preflights the copy against the source's persisted spec: it loads `<copy_dataset_root_uri>/input_spec.json` (which sits beside the shards at the dataset prefix root) and asserts the source matches the target on every copy-relevant value — `param_spec_name`, `samples_per_shard`, `train_val_test_sizes`, and the full shard-filename set (source of truth: `DatasetSpec.validate_copy_source`) — failing once at launch (with all mismatches aggregated) rather than per-shard mid-render. A missing source `input_spec.json` is itself a launch error. `input_spec.json` files materialized before the dataset-copy source became a root URI still load: a `mode="before"` shim promotes the pre-rename flat `copy_dataset_root: …` and the older nested `datasetsrc: {copy_dataset_root: …}` shape (and drops `datasetsrc: null`) to `copy_dataset_root_uri`.
+**Copying an existing dataset:** when `copy_dataset_root_uri` is set on the spec, generation re-renders the parameters of an existing dataset instead of sampling fresh ones. The root URI may be a bare path, `file://` URI, or `r2://` URI. The launcher forwards `--copy_dataset_root_uri` to the renderer subprocess, which resolves `<copy_dataset_root_uri>/<shard.filename>` to a local file (downloading it from R2 to a tempfile when the root is an `r2://` URI), reads the source shard's `param_array`, decodes each row into fixed synth/note params via `fixed_params_from_dataset` (`param_spec.decode`), and renders those. This is hdf5-only — the source is read as an HDF5 `param_array` of the same shard filename, so a non-hdf5 output with `--copy_dataset_root_uri` raises `SystemExit`. The source must share the target's `render.param_spec_name` (same encoding width) and have row count equal to `samples_per_shard`. Fixed params are indexed by absolute row, so resume re-renders only the missing tail from the matching source rows. Before any render, `generate` preflights the copy against the source's persisted spec: it loads `<copy_dataset_root_uri>/input_spec.json` (which sits beside the shards at the dataset prefix root) and asserts the source matches the target on every copy-relevant value — `param_spec_name`, `samples_per_shard`, `train_val_test_sizes`, and the full shard-filename set (source of truth: `DatasetSpec.validate_copy_source`) — failing once at launch (with all mismatches aggregated) rather than per-shard mid-render. A missing source `input_spec.json` is itself a launch error. `input_spec.json` files materialized before the dataset-copy source became a root URI still load: a `mode="before"` shim promotes the pre-rename flat `copy_dataset_root: …` and the older nested `datasetsrc: {copy_dataset_root: …}` shape (and drops `datasetsrc: null`) to `copy_dataset_root_uri`.
 
 **WebDataset shard structure:**
 
@@ -1162,7 +1163,7 @@ Stage order would remain static and explicit — user runs commands in sequence.
 
 ### Data Format Abstraction
 
-The pipeline supports HDF5 and WebDataset output formats ([§7.10](#710-output-format-hdf5-vs-webdataset)). A general `ShardWriter`/`ShardReader` protocol could allow adding further formats (Parquet, Lance) in the future. This should be added when a third format is concretely needed, not speculatively.
+The pipeline supports HDF5, WebDataset, and Lance output formats ([§7.10](#710-output-format-hdf5-webdataset-or-lance)). Lance landed as a third enum branch on `OutputFormat` rather than a general `ShardWriter` protocol; extract a writer protocol only if a further format makes the dispatch unwieldy, not speculatively. Training-side reads are already format-pluggable (`ShardFile` protocol in `src/synth_setter/data/surge_datamodule.py`, with a Lance backend in `lance_datamodule.py`).
 
 ### Content-Addressable Outputs
 
@@ -1431,7 +1432,7 @@ src/
     ci/                 # CI validation scripts (implemented)
       materialize_spec.py # Compose a DatasetSpec from a Hydra experiment and write it to disk as JSON
       validate_spec.py  # Spec structural validation (required fields, git_sha format, etc.)
-      validate_shard.py # Shard validation (valid HDF5, full per-dataset shapes via synth_setter.data.vst.shapes — not just row count); iterates spec.shards via R2
+      validate_shard.py # Shard validation (suffix-dispatched hdf5/wds/lance, full per-dataset shapes via synth_setter.data.vst.shapes — not just row count); iterates spec.shards via R2
       load_image_config.py # Resolve Docker image configuration for the launcher
 
     constants.py        # Well-known filenames (INPUT_SPEC_FILENAME)

@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "synth-setter"
-version = "8.32.0"
+version = "8.33.0"
 description = "Studying the effect of permutation symmetry on audio synthesiser parameter inference."
 authors = [{name = "Khaled Tinubu"}, {name = "tinaudio"}]
 readme = "README.md"
@@ -105,6 +105,8 @@ synth-setter-skypilot-launch = "synth_setter.pipeline.skypilot_launch:main"
 
 
 
+
+
 [dependency-groups]
 docs = [
   "mkdocs",
@@ -146,6 +148,7 @@ data = [
   "webdataset",
   "pandas",
   "numpy",
+  "pylance>=7.0.0",
 ]
 # Pin: scipy>=1.14,<1.15 — a hard ==1.14.1 patch-pin risks backtracking against
 # torch / librosa / kymatio during lock resolution. See #1247.
@@ -302,7 +305,7 @@ markers = [
   "hypothesis: property-based tests (hypothesis)",
   "pipeline: pipeline integration tests",
   "benchmark: performance benchmarks",
-  "requires_vst: requires a VST plugin binary (Surge XT) — skipped unless plugin is present",
+  "requires_vst: requires a VST plugin binary — auto-skip keys on Surge XT presence; baked-in extra synth tests add per-bundle skips",
   "fake_vst: end-to-end tests that swap a duck-typed FakeVST3Plugin in place of a real VST",
   "r2: tests requiring R2/rclone access",
   "integration_r2: end-to-end launcher→R2 integration tests (auto-skipped without R2 creds; run in their own GHA workflow)",
@@ -337,6 +340,11 @@ select = ["E", "F", "I", "S", "T", "UP", "W", "ANN001",
           "D100", "D101", "D102", "D103", "D107", "D205", "D401"]
 # E501: line length handled by ruff-format, S101: allow assert in tests
 ignore = ["E501", "S101"]
+
+[tool.ruff.lint.isort]
+# W&B runs drop an untracked ./wandb dir that flips ruff's first-party detection,
+# making local `make format` reorder imports CI then rejects.
+known-third-party = ["wandb"]
 
 [tool.ruff.lint.per-file-ignores]
 "notebooks/**" = ["E702", "E722", "F841", "T201", "ANN001", "D102", "D103", "D107"]

@@ -234,6 +234,9 @@ link-thoughts: ## Symlink this worktree's thoughts/ to the primary checkout's ce
 	ln -sfn "$$central" "$$here/thoughts"; \
 	echo "linked thoughts/ -> $$central"
 
+link-skills: ## Project the installed skills marketplace into ~/.agents/skills for Gemini/Antigravity discovery
+	@scripts/dev/link-skills.sh
+
 # Mirrors the --cov flags used by .github/workflows/test.yml so local
 # coverage runs reproduce CI output (xml report feeds Codecov; html is for
 # local browsing).

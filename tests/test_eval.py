@@ -210,6 +210,7 @@ def _compose_fake_oracle_eval_cfg(
     *,
     mode: str,
     param_spec_name: str = "surge_4",
+    datamodule: str | None = None,
 ) -> DictConfig:
     """Compose ``eval.yaml`` with the CPU ``surge/fake_oracle`` experiment, pinned to a dataset.
 
@@ -221,25 +222,30 @@ def _compose_fake_oracle_eval_cfg(
 
     :param tmp_path: Pinned as ``paths.output_dir`` / ``paths.log_dir``; the
         predict-mode ``PredictionWriter`` writes ``predictions/`` beneath it.
-    :param dataset_root: Holds ``{train,val,test}.h5`` + ``stats.npz``.
+    :param dataset_root: Holds the ``{train,val,test}`` splits (``.h5`` or
+        ``.lance`` per the selected ``datamodule``) + ``stats.npz``.
     :param mode: ``cfg.mode`` under test (``test`` / ``validate`` / ``val`` /
         ``predict`` / an unknown spelling).
     :param param_spec_name: Param spec the dataset was rendered with; drives the
         inline ``render`` group and the per-param-MSE callback's spec.
+    :param datamodule: Optional datamodule group override (e.g. ``surge_lance``);
+        ``None`` keeps the experiment's HDF5 ``surge`` group.
     :returns: Composed eval ``DictConfig`` ready for ``evaluate``.
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="eval.yaml",
             return_hydra_config=True,
-            overrides=["experiment=surge/fake_oracle", f"mode={mode}"],
+            overrides=["experiment=surge/fake_oracle", f"mode={mode}"]
+            + ([f"datamodule={datamodule}"] if datamodule else []),
         )
     with open_dict(cfg):
         cfg.paths.root_dir = str(operator_workspace())
         cfg.paths.output_dir = str(tmp_path)
         cfg.paths.log_dir = str(tmp_path)
         cfg.datamodule.dataset_root = str(dataset_root)
-        cfg.datamodule.predict_file = str(dataset_root / "test.h5")
+        # None lets the datamodule derive ``test.<its shard suffix>`` under dataset_root.
+        cfg.datamodule.predict_file = None
         cfg.datamodule.batch_size = 1
         cfg.datamodule.num_workers = 0
         cfg.datamodule.use_saved_mean_and_variance = True
@@ -440,6 +446,32 @@ def test_evaluate_validate_mode_legacy_val_spelling_runs_oracle(
     assert param_mse.item() == 0.0
 
 
+def test_evaluate_unregistered_param_spec_name_raises_key_error_at_setup(
+    tmp_path: Path,
+) -> None:
+    """An unregistered ``datamodule.param_spec_name`` fails fast through ``evaluate``.
+
+    ``VSTDataModule.setup`` does a ``param_specs[param_spec_name]`` lookup to derive the
+    fake/real param width; an unknown spec must surface as a ``KeyError`` at the
+    ``evaluate`` entrypoint rather than a later opaque shape mismatch. Pins that the
+    registry-lookup contract is wired through the real eval entrypoint. The lookup
+    precedes any dataset open, so no dataset (and no fake plugin) is materialized.
+
+    :param tmp_path: Pinned as Hydra ``output_dir`` / ``log_dir``; the dataset root
+        points at a nonexistent subdirectory that is never read.
+    """
+    cfg = _compose_fake_oracle_eval_cfg(tmp_path, tmp_path / "missing-datasets", mode="validate")
+    with open_dict(cfg):
+        cfg.datamodule.param_spec_name = "does_not_exist"
+
+    HydraConfig().set_config(cfg)
+    try:
+        with pytest.raises(KeyError, match="does_not_exist"):
+            evaluate(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+
 @pytest.mark.fake_vst
 def test_evaluate_unknown_mode_returns_only_callback_metrics(
     tmp_path: Path,
@@ -578,19 +610,21 @@ def test_evaluate_loads_wandb_resolved_checkpoint_and_runs_inference(
     ckpt = Path(cfg_surge_xt_eval.ckpt_path)
     assert ckpt.is_file(), "train step did not write the checkpoint"
 
-    ref = publish_checkpoint_artifact(ckpt, "model-citest-ffn_full-eval", tmp_path / "wandb")
+    # Body runs inside the ``with`` so the resolver downloads before the artifact/run teardown.
+    with publish_checkpoint_artifact(
+        ckpt, "model-citest-ffn_full-eval", tmp_path / "wandb"
+    ) as ref:
+        # Contain the resolver's download cache under tmp_path so each run fetches fresh (a warm
+        # self-hosted runner must not reuse a stale cached ckpt for the same :latest ref).
+        monkeypatch.setenv("SYNTH_SETTER_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
+        operator_workspace.cache_clear()
+        register_resolvers()
+        with open_dict(cfg_surge_xt_eval):
+            cfg_surge_xt_eval.ckpt_path = "${wandb:" + ref + "}"
 
-    # Contain the resolver's download cache under tmp_path so each run fetches fresh (a warm
-    # self-hosted runner must not reuse a stale cached ckpt for the same :latest ref).
-    monkeypatch.setenv("SYNTH_SETTER_WORKSPACE", str(tmp_path))
-    monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
-    operator_workspace.cache_clear()
-    register_resolvers()
-    with open_dict(cfg_surge_xt_eval):
-        cfg_surge_xt_eval.ckpt_path = "${wandb:" + ref + "}"
-
-    HydraConfig().set_config(cfg_surge_xt_eval)
-    evaluate(cfg_surge_xt_eval)
+        HydraConfig().set_config(cfg_surge_xt_eval)
+        evaluate(cfg_surge_xt_eval)
 
     assert (tmp_path / ".cache" / "checkpoints").is_dir(), "resolver did not download the artifact"
     predictions_dir = tmp_path / "predictions"
@@ -600,3 +634,31 @@ def test_evaluate_loads_wandb_resolved_checkpoint_and_runs_inference(
     for pred_file in preds:
         tensor = torch.load(pred_file, weights_only=True)
         assert torch.isfinite(tensor).all(), f"{pred_file.name} contains NaN/Inf"
+
+
+@pytest.mark.fake_vst
+def test_evaluate_validate_mode_lance_datamodule_runs_oracle(
+    tmp_path: Path,
+    fake_surge_smoke_lance_datasets: Path,
+) -> None:
+    """``datamodule=surge_lance`` drives ``evaluate`` end-to-end over Lance splits.
+
+    The oracle returns params verbatim, so ``val/param_mse`` is exactly zero —
+    the same contract as the HDF5 leg, with every batch read from Lance.
+
+    :param tmp_path: Pinned as Hydra ``output_dir`` / ``log_dir``.
+    :param fake_surge_smoke_lance_datasets: Natively-generated Lance smoke dataset.
+    """
+    cfg = _compose_fake_oracle_eval_cfg(
+        tmp_path, fake_surge_smoke_lance_datasets, mode="validate", datamodule="surge_lance"
+    )
+
+    HydraConfig().set_config(cfg)
+    try:
+        metric_dict, _ = evaluate(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    param_mse = metric_dict["val/param_mse"]
+    assert isinstance(param_mse, torch.Tensor)
+    assert param_mse.item() == 0.0

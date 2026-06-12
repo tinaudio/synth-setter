@@ -61,6 +61,17 @@ class TestWandbConsoleCapture:
         logger_subtree = compose_subtree("logger", "wandb")
         assert logger_subtree["wandb"]["settings"]["console"] == "wrap"
 
+    def test_wandb_settings_console_multipart_is_true(self) -> None:
+        """The composed ``wandb.settings.console_multipart`` pins ``true``.
+
+        Config-pin guard: the inline oracle eval and finalize resume the same
+        run id, and without multipart each resumed session's ``output.log``
+        overwrites the previous one server-side — the generate session's log
+        vanishes. Multipart gives every session its own ``logs/output_*.log``.
+        """
+        logger_subtree = compose_subtree("logger", "wandb")
+        assert logger_subtree["wandb"]["settings"]["console_multipart"] is True
+
 
 _VALID_LOGGER = {
     "_target_": "lightning.pytorch.loggers.csv_logs.CSVLogger",

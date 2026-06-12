@@ -37,6 +37,7 @@ from synth_setter.data.vst.core import (
     set_params,
 )
 from synth_setter.data.vst.param_spec import ParamSpec
+from synth_setter.data.vst.param_spec_registry import default_plugin_path
 from synth_setter.data.vst.writers import make_hdf5_dataset
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.resources import as_file, vst_headless_wrapper
@@ -995,7 +996,12 @@ def eval_patches(
 
 
 @click.command()
-@click.option("--plugin-path", "-p", default="plugins/Surge XT.vst3", help="Path to VST3 plugin.")
+@click.option(
+    "--plugin-path",
+    "-p",
+    default=default_plugin_path,
+    help="Path to VST3 plugin. Defaults to $SYNTH_SETTER_PLUGIN_PATH or the in-repo bundle.",
+)
 @click.option(
     "--pred",
     type=PredictionRefType(),

@@ -2,7 +2,7 @@ defaults:
   - encoder: ast_for_mlp
   - _self_
 
-_target_: synth_setter.models.surge_flow_matching_module.SurgeFlowMatchingModule
+_target_: synth_setter.models.surge_flow_matching_module.VSTFlowMatchingModule
 
 warmup_steps: 0
 scheduler:

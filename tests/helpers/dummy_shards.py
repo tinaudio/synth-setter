@@ -5,13 +5,13 @@ and the fast fake-R2 orchestrator test (``tests/test_generate_dataset.py``) driv
 ``cli.generate_dataset`` with the Surge VST3 subprocess replaced by a deterministic
 stub that writes a validation-passing shard of the right shape. Centralizing the
 writers + stub here keeps the two lanes from drifting: a change to the writer's
-shard layout updates both at once.
+shard layout updates both at once. The lance writer is imported from
+``tests.helpers.finalize_shards``, which owns it for the finalize lanes.
 """
 
 from __future__ import annotations
 
 import io
-import subprocess
 import tarfile
 from collections.abc import Callable
 from pathlib import Path
@@ -21,20 +21,20 @@ import numpy as np
 
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
+    DATASET_FIELD_DTYPES,
     DATASET_FIELD_NAMES,
     MEL_SPEC_FIELD,
     PARAM_ARRAY_FIELD,
-    audio_dataset_shape,
-    mel_dataset_shape,
-    param_array_dataset_shape,
+    dataset_field_shapes,
 )
-from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat
+from synth_setter.pipeline.subprocess_stream import check_call_streamed
+from tests.helpers.finalize_shards import smoke_shard_metadata, write_minimal_lance_shard
 from tests.helpers.subprocess_args import find_script_index
 
-# Captured at import so the rclone-passthrough side effect calls the real
-# subprocess.check_call without recursing through any patch on that symbol.
-_REAL_CHECK_CALL = subprocess.check_call
+# rclone passthrough: bound from the pipeline module, so it bypasses the patched
+# cli seam (no recursion) yet runs the real streamed runner on the real binary.
+_REAL_CHECK_CALL = check_call_streamed
 
 
 def write_dummy_h5_shard(output_path: Path, spec: DatasetSpec) -> None:
@@ -48,19 +48,10 @@ def write_dummy_h5_shard(output_path: Path, spec: DatasetSpec) -> None:
     :param spec: Dataset spec whose ``render`` config and ``num_params`` drive the
         per-field array shapes.
     """
-    render = spec.render
-    n = render.samples_per_shard
-    audio_shape = audio_dataset_shape(
-        n, render.channels, render.sample_rate, render.signal_duration_seconds
-    )
-    mel_shape = mel_dataset_shape(
-        n, render.channels, render.sample_rate, render.signal_duration_seconds
-    )
-    param_shape = param_array_dataset_shape(n, spec.num_params)
+    shapes = dataset_field_shapes(spec.render, spec.num_params)
     with h5py.File(output_path, "w") as f:
-        f.create_dataset(AUDIO_FIELD, data=np.zeros(audio_shape, dtype=np.float16))
-        f.create_dataset(MEL_SPEC_FIELD, data=np.zeros(mel_shape, dtype=np.float32))
-        f.create_dataset(PARAM_ARRAY_FIELD, data=np.zeros(param_shape, dtype=np.float32))
+        for field, shape in shapes.items():
+            f.create_dataset(field, data=np.zeros(shape, dtype=DATASET_FIELD_DTYPES[field]))
 
 
 def write_dummy_tar_shard(output_path: Path, spec: DatasetSpec) -> None:
@@ -76,25 +67,11 @@ def write_dummy_tar_shard(output_path: Path, spec: DatasetSpec) -> None:
     :raises ValueError: If a field name is not in ``DATASET_FIELD_NAMES``.
     """
     render = spec.render
-    n = render.samples_per_shard
-    audio = np.zeros(
-        audio_dataset_shape(
-            n, render.channels, render.sample_rate, render.signal_duration_seconds
-        ),
-        dtype=np.float16,
-    )
-    mel = np.zeros(
-        mel_dataset_shape(n, render.channels, render.sample_rate, render.signal_duration_seconds),
-        dtype=np.float32,
-    )
-    params = np.zeros(param_array_dataset_shape(n, spec.num_params), dtype=np.float32)
-    metadata = ShardMetadata(
-        velocity=render.velocity,
-        signal_duration_seconds=render.signal_duration_seconds,
-        sample_rate=render.sample_rate,
-        channels=render.channels,
-        min_loudness=render.min_loudness,
-    )
+    shapes = dataset_field_shapes(render, spec.num_params)
+    audio = np.zeros(shapes[AUDIO_FIELD], dtype=DATASET_FIELD_DTYPES[AUDIO_FIELD])
+    mel = np.zeros(shapes[MEL_SPEC_FIELD], dtype=DATASET_FIELD_DTYPES[MEL_SPEC_FIELD])
+    params = np.zeros(shapes[PARAM_ARRAY_FIELD], dtype=DATASET_FIELD_DTYPES[PARAM_ARRAY_FIELD])
+    metadata = smoke_shard_metadata(render)
     with tarfile.open(output_path, mode="w") as tar:
         for field_name, arr in (
             (AUDIO_FIELD, audio),
@@ -116,21 +93,21 @@ def write_dummy_tar_shard(output_path: Path, spec: DatasetSpec) -> None:
 
 
 def stub_renderer(spec: DatasetSpec) -> Callable[[list[str]], None]:
-    """Return a ``subprocess.check_call`` side effect that writes dummy shards.
+    """Return a ``_check_call_streamed`` side effect that writes dummy shards.
 
     Dispatches on the renderer output path's suffix via ``OutputFormat.from_extension``,
-    so the same factory backs both hdf5 and wds runs. ``rclone`` invocations fall
-    through to the real binary so the R2 upload, the skip-existing probe, and any
-    purge hit the configured remote (real R2, or a local-backed fake remote).
+    so the same factory backs hdf5, wds, and lance runs. ``rclone`` invocations
+    fall through to the real binary so the R2 upload, the skip-existing probe, and
+    any purge hit the configured remote (real R2, or a local-backed fake remote).
 
     :param spec: Dataset spec the launcher will materialize; threaded into the
         dummy-shard writers so shapes match the validator's expectations.
-    :returns: A callable matching ``subprocess.check_call``'s side-effect contract.
+    :returns: A callable matching ``_check_call_streamed``'s side-effect contract.
     """
 
     def _side_effect(args: list[str]) -> None:
         if args and args[0] == "rclone":
-            _REAL_CHECK_CALL(args)  # noqa: S603 — passthrough to real rclone
+            _REAL_CHECK_CALL(args)
             return
         script_idx = find_script_index(args)
         output_file = Path(args[script_idx + 1])
@@ -140,6 +117,8 @@ def stub_renderer(spec: DatasetSpec) -> Callable[[list[str]], None]:
             write_dummy_h5_shard(output_file, spec)
         elif fmt is OutputFormat.WDS:
             write_dummy_tar_shard(output_file, spec)
+        elif fmt is OutputFormat.LANCE:
+            write_minimal_lance_shard(output_file, spec)
         else:
             raise AssertionError(
                 f"stubbed renderer cannot write output with suffix {output_file.suffix!r}"

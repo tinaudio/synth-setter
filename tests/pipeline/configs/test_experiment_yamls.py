@@ -37,6 +37,7 @@ DATASET_EXPERIMENTS: dict[str, str] = {
     "generate_dataset/ci-materialize-test-wds": "ci-materialize-test-wds",
     "generate_dataset/nightly-parallel-smoke": "nightly-parallel-smoke",
     "generate_dataset/smoke-shard": "smoke-shard",
+    "generate_dataset/smoke-shard-lance": "smoke-shard-lance",
     "generate_dataset/smoke-shard-wds": "smoke-shard-wds",
     "generate_dataset/surge-simple-480k-10k": "surge-simple-480k-10k",
     "generate_dataset/smoke-shard-with-finalize": "smoke-shard",

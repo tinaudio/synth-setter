@@ -8,12 +8,46 @@
 # configuration, or sourced manually inside the container shell.
 set -euo pipefail
 
-# Install ~/.tmux.conf for the current user (the VS Code terminal profile in
-# each .devcontainer/*/devcontainer.json launches tmux, which auto-discovers
-# this file). Done before the root→dev exec below so the root variant's
-# /root/.tmux.conf is populated for terminals that open as root.
+# Install ~/.tmux.conf for the current user (the selectable tmux terminal
+# profile in each .devcontainer/*/devcontainer.json auto-discovers this file).
+# Done before the root→dev exec below so the root variant's /root/.tmux.conf
+# is populated for terminals that open as root.
 _devc_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 install -m 0644 "$_devc_dir/tmux.conf" "$HOME/.tmux.conf"
+
+# Install the zellij config (default VS Code terminal profile) like tmux.conf
+# above — silences startup popups, shares one session; pre-exec so root is covered.
+install -D -m 0644 "$_devc_dir/zellij.kdl" "$HOME/.config/zellij/config.kdl"
+
+# Make the bundled coding agents non-interactive by default. Seeded before the
+# root→dev exec so it covers whichever $HOME is current, like ~/.tmux.conf above.
+configure_agent_autonomy() {
+  # Codex reads ~/.codex/config.toml on every invocation. Seed full-auto
+  # defaults only when absent so a user- or mount-provided config still wins.
+  local codex_config="$HOME/.codex/config.toml"
+  if [[ ! -f "$codex_config" ]]; then
+    mkdir -p "$(dirname "$codex_config")"
+    cat >"$codex_config" <<'EOF'
+# Full-auto defaults for the devcontainer (the container is the sandbox):
+# never pause for approval and allow unsandboxed command execution.
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+EOF
+  fi
+
+  # agy has no persisted skip-permissions setting, so wrap it — a function (not
+  # alias) so sourced shells inherit it and `command agy` still bypasses it.
+  if ! grep -qsF 'agy()' "$HOME/.bashrc"; then
+    cat >>"$HOME/.bashrc" <<'EOF'
+
+# agy full-auto — auto-approve all Antigravity tool permissions by default.
+agy() {
+  command agy --dangerously-skip-permissions "$@"
+}
+EOF
+  fi
+}
+configure_agent_autonomy
 
 # Drop to `dev` when invoked as root so workspace mutations (git config
 # --local, pre-commit install → .git/hooks/*) don't land root-owned in the
@@ -53,6 +87,21 @@ cd "$dir"
 # by another UID, tripping git's safe.directory check. Mark the repo trusted
 # before later git config calls and pre-commit install.
 git config --global --add safe.directory "$(pwd)"
+
+# Correct workspace ownership before the first .git write below. A root-owned
+# host checkout bind-mounts in with every file root-owned, so `dev` can't write
+# .git, run `pre-commit install`, or commit. Guard on both the workspace root
+# and `.git` so a mixed-ownership tree (e.g. `.git` left root-owned by an
+# earlier DEVCONTAINER_USER=root session) still self-heals — `.git` is the
+# dir the failing writes target. The recursive chown is skipped only when both
+# are already correct (post-create time budget), via the NOPASSWD sudo from
+# common-utils. `.git` is a real dir here (initialize.sh refuses pointer-file
+# `.git`). Capture owners first so a stat failure aborts under `set -e`.
+workspace_owner="$(stat -c %u "$dir")"
+gitdir_owner="$(stat -c %u "$dir/.git")"
+if [ "$workspace_owner" != "$(id -u)" ] || [ "$gitdir_owner" != "$(id -u)" ]; then
+  sudo chown -R "$(id -u):$(id -g)" "$dir"
+fi
 
 if [ -n "${RESTRICTED_AGENT_GIT_PAT:-}" ]; then
   # Strip surrounding double or single quotes if present
@@ -109,5 +158,9 @@ fi
 unset __ss_root
 EOF
 fi
+
+# Project skills into ~/.agents/skills for Gemini/Antigravity discovery;
+# best-effort (`|| true` keeps a fresh box without the plugin from failing). See #1561.
+"$dir/scripts/dev/link-skills.sh" || true
 
 echo "Dev container ready. Run 'make test-fast' to verify."

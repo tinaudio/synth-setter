@@ -218,6 +218,54 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     rm "./${fname}"
 
 # ==========================================
+# VST3 synth fetch: SHA256-pinned prebuilt Linux VST3 bundles, staged under
+# /plugins-staging for the runtime stage to copy. Upstream ships x86_64-only
+# binaries, so non-amd64 builds stage nothing and downstream steps skip.
+# Version pins are glibc-bound: Ubuntu 22.04 ships glibc 2.35, so assets
+# built against glibc 2.38 (Ubuntu 24.04 runners) cannot load (#1649).
+# License: these third-party binaries ship in the published GHCR image —
+# review upstream license/redistribution terms before adding or bumping an
+# asset (Dexed: GPL-3.0; OB-Xf: GPL-3.0; Six Sines: MIT).
+# ==========================================
+FROM ${BASE_IMAGE} AS vst3-synths-fetch
+SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
+ARG TARGETARCH
+RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    unzip \
+    wget
+WORKDIR /plugins-staging
+
+ARG DEXED_VERSION=0.9.8
+ARG DEXED_SHA256=5d026f53504f9303ae2a4a635cf6fdfc50ab9c947cbc0a20ecb5c8f323402dab
+RUN if [ "${TARGETARCH:-}" != "amd64" ]; then echo "skipping Dexed: x86_64-only asset" >&2; exit 0; fi; \
+    wget -q -O /tmp/dexed.zip "https://github.com/asb2m10/dexed/releases/download/v${DEXED_VERSION}/dexed-${DEXED_VERSION}-lnx.zip" && \
+    echo "${DEXED_SHA256}  /tmp/dexed.zip" | sha256sum -c - && \
+    unzip -q /tmp/dexed.zip -d /tmp/dexed && \
+    mv "/tmp/dexed/dexed-${DEXED_VERSION}-lnx/Dexed.vst3" . && \
+    rm -rf /tmp/dexed.zip /tmp/dexed
+
+ARG OBXF_VERSION=v1.0.3
+ARG OBXF_SHA256=72b60c83cf6426337031df744c34a047104a9d95f1feaf6cd048ecfa39f74c96
+RUN if [ "${TARGETARCH:-}" != "amd64" ]; then echo "skipping OB-Xf: x86_64-only asset" >&2; exit 0; fi; \
+    wget -q -O /tmp/obxf.zip "https://github.com/surge-synthesizer/OB-Xf/releases/download/${OBXF_VERSION}/ob-xf-Linux-${OBXF_VERSION}.zip" && \
+    echo "${OBXF_SHA256}  /tmp/obxf.zip" | sha256sum -c - && \
+    unzip -q /tmp/obxf.zip "obxf_products/OB-Xf.vst3/*" -d /tmp/obxf && \
+    mv "/tmp/obxf/obxf_products/OB-Xf.vst3" . && \
+    rm -rf /tmp/obxf.zip /tmp/obxf
+
+ARG SIX_SINES_VERSION=v1.1.0
+ARG SIX_SINES_ASSET=six-sines-linux-2025-03-18-43d10b2.tgz
+ARG SIX_SINES_SHA256=fae7c1c325fde7ed49c978358397cb4bcf69012c4e6eefe2a5968fe6a36d0421
+RUN if [ "${TARGETARCH:-}" != "amd64" ]; then echo "skipping Six Sines: x86_64-only asset" >&2; exit 0; fi; \
+    wget -q -O /tmp/six-sines.tgz "https://github.com/baconpaul/six-sines/releases/download/${SIX_SINES_VERSION}/${SIX_SINES_ASSET}" && \
+    echo "${SIX_SINES_SHA256}  /tmp/six-sines.tgz" | sha256sum -c - && \
+    tar -xzf /tmp/six-sines.tgz -C . "./Six Sines.vst3" && \
+    rm /tmp/six-sines.tgz
+
+# ==========================================
 # Source stage: download synth-setter at a specific git ref via tarball.
 # Uses GitHub archive endpoint — no full clone, no .git metadata.
 # ==========================================
@@ -363,6 +411,21 @@ RUN ./run-linux-vst-headless.sh \
 RUN mkdir -p /home/build/synth-setter/plugins && \
     ln -s "/usr/lib/vst3/Surge XT.vst3" "/home/build/synth-setter/plugins/Surge XT.vst3"
 
+COPY --from=vst3-synths-fetch /plugins-staging/ /usr/lib/vst3/
+COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/scripts/load_vst3_check.py /artifacts/
+
+# Validate each fetched synth loads under headless X11 — one wrapper run per
+# plugin, since sequential in-process loads crash order-dependently (#1649) —
+# then symlink it into plugins/ like Surge XT above. No-op on non-amd64.
+# Entries are "bundle|plugin_name" (the "|" is required; empty name = sole plugin).
+RUN if [ "${TARGETARCH:-}" != "amd64" ]; then echo "skipping VST3 synth validation on ${TARGETARCH:-<unset>}" >&2; exit 0; fi; \
+    for entry in "Dexed|" "OB-Xf|" "Six Sines|Six Sines"; do \
+      name="${entry%%|*}"; \
+      ./run-linux-vst-headless.sh \
+        python -X faulthandler load_vst3_check.py "/usr/lib/vst3/${name}.vst3" "${entry#*|}" && \
+      ln -s "/usr/lib/vst3/${name}.vst3" "/home/build/synth-setter/plugins/${name}.vst3" || exit 1; \
+    done
+
 WORKDIR /home/build/synth-setter
 
 # ==========================================
@@ -438,16 +501,16 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
       > /etc/apt/sources.list.d/github-cli.list \
   && apt-get update && apt-get install -y --no-install-recommends gh
 
-# --- Node.js + Claude Code CLI (system-wide) ---
-ARG CLAUDE_CODE_VERSION=latest
+# --- Node.js (system-wide) ---
+# CLI agents (claude-code, codex) install per-user below: a root-owned /usr/local/bin
+# copy would shadow dev's auto-updated ~/.npm-global copy in PATH, pinning the version.
 COPY --from=node:20-bullseye-slim /usr/local/bin/node /usr/local/bin/node
 COPY --from=node:20-bullseye-slim /usr/local/lib/node_modules /usr/local/lib/node_modules
 
 RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
  && ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
  && node --version \
- && npm --version \
- && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+ && npm --version
 
 # Zellij terminal multiplexer (https://github.com/zellij-org/zellij) — not in
 # the Ubuntu 22.04 apt repos, so install the upstream static musl binary,
@@ -500,14 +563,18 @@ ENV PATH="$PATH:/home/${USERNAME}/.npm-global/bin:/home/${USERNAME}/.local/bin"
 # the devcontainer (see #1423); stage under .cache, which wandb creates on demand.
 ENV WANDB_DATA_DIR="/home/${USERNAME}/.cache/wandb"
 
-# dev's `npm install -g` would EACCES on the root-owned global tree (claude-code
-# is baked in as root); a per-user prefix sends it to a writable one. $HOME is
-# unset after USER, so export it per-RUN (not ENV — that leaks to root sessions).
+# dev's `npm install -g` would EACCES on the root-owned global tree (/usr/local);
+# a per-user prefix sends it to a writable one, so the in-app updater can replace
+# claude-code in place. $HOME is unset after USER, so export it per-RUN (not ENV —
+# that leaks to root sessions).
+ARG CLAUDE_CODE_VERSION=latest
 ARG CODEX_VERSION=latest
 RUN export HOME="/home/${USERNAME}" \
  && npm config set prefix "/home/${USERNAME}/.npm-global" \
+ && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
  && npm install -g "@openai/codex@${CODEX_VERSION}" \
  && npm cache clean --force \
+ && claude --version \
  && codex --version
 
 # Antigravity (Google) ships the standalone `agy` binary, not on npm; its

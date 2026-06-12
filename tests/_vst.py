@@ -9,11 +9,15 @@ devcontainer); absent or empty, it falls back to the in-repo bundle. Importers u
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
-# ``or`` (not a get default) so an empty override also falls back to the bundle.
-PLUGIN_PATH = os.environ.get("SYNTH_SETTER_PLUGIN_PATH") or "plugins/Surge XT.vst3"
+from synth_setter.data.vst.param_spec_registry import default_plugin_path
+
+PLUGIN_PATH = default_plugin_path()
 
 # Probed once at import: a filesystem stat, no plugin load and no network hit.
 VST_AVAILABLE = Path(PLUGIN_PATH).exists()
+
+# Ceiling for any VST-driving subprocess a test spawns; generous because no
+# per-call tuning exists and a hung plugin load should fail, not wedge CI.
+VST_SUBPROCESS_TIMEOUT_SECONDS = 600

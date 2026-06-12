@@ -1,0 +1,9 @@
+_target_: synth_setter.data.surge_datamodule.VSTDataModule
+dataset_root: ${paths.output_dir}/data
+download_dataset_root_uri: null
+use_saved_mean_and_variance: true
+batch_size: 128
+ot: true
+num_workers: 11
+predict_file: null
+param_spec_name: surge_xt
