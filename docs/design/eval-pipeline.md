@@ -260,7 +260,7 @@ When `cfg.mode == "predict"`, `cli/eval.py` invokes `_run_predict_postprocessing
 
 On Linux the render subprocess is prefixed with the headless wrapper materialised via `synth_setter.resources.vst_headless_wrapper()` so the VST3 plugin sees an Xvfb display before pedalboard imports it; the metrics subprocess is CPU-only and runs unwrapped. Both default-off so `mode: test` and `mode: validate` paths are unchanged.
 
-When `evaluation.compute_metrics` runs, the aggregated values from `aggregated_metrics.csv` are surfaced to the active wandb run (as `audio/<name>_{mean,std}` scalars) and, when the auto-shuffle probe ran, `shuffled_audio/<name>_{mean,std}` from `aggregated_metrics_shuffled.csv` — and merged into the dict returned by `evaluate()` alongside Lightning's `trainer.callback_metrics`. Separately, `metrics.csv` is uploaded as `audio/per_sample_metrics` (a `wandb.Table`) — logged to W&B only, not included in the returned dict — so the same wandb run that holds `test/param_mse` can carry the aggregated, shuffled, and per-sample audio metrics too.
+When `evaluation.compute_metrics` runs, the aggregated values from `aggregated_metrics.csv` are surfaced to the active wandb run (as `audio/<name>_{mean,std}` scalars) and, when the auto-shuffle probe ran, `shuffled_audio/<name>_{mean,std}` from `aggregated_metrics_shuffled.csv` — and merged into the dict returned by `evaluate()` alongside Lightning's `trainer.callback_metrics`. Separately, `metrics.csv` is uploaded as `audio/per_sample_metrics` (a `wandb.Table`) — logged to W&B only, not included in the returned dict — so the same wandb run that holds `test/param_mse` can carry the aggregated, shuffled, and per-sample audio metrics too. When the auto-shuffle probe ran, the drawn permutation is also logged as a `shuffle/permutation` `wandb.Table` (from `shuffle_permutation.csv`) — W&B-only, not in the returned dict — so the render-order mapping behind the shuffled metrics is reproducible.
 
 ### 5.2 Render
 
@@ -285,12 +285,12 @@ The render stage loads each predicted parameter tensor, decodes it using the `Pa
 
 ### 5.3 Metrics
 
-| Property    | Value                                                                                                                                                                |
-| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Command** | `python -m synth_setter.evaluation.compute_audio_metrics {audio_dir} {output_dir}`                                                                                   |
-| **Input**   | Directory of `sample_{N}/` subdirectories, each containing `pred.wav` and `target.wav`                                                                               |
-| **Output**  | `metrics.csv` (per-sample), `aggregated_metrics.csv` (mean/std), `aggregated_metrics_shuffled.csv` (mean/std of shuffled pass — present when auto-shuffle probe ran) |
-| **Compute** | CPU — spectral analysis, DTW, optimal transport (parallelized with `ProcessPoolExecutor`)                                                                            |
+| Property    | Value                                                                                                                                                                                                                                                                   |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Command** | `python -m synth_setter.evaluation.compute_audio_metrics {audio_dir} {output_dir}`                                                                                                                                                                                      |
+| **Input**   | Directory of `sample_{N}/` subdirectories, each containing `pred.wav` and `target.wav`                                                                                                                                                                                  |
+| **Output**  | `metrics.csv` (per-sample), `aggregated_metrics.csv` (mean/std), `aggregated_metrics_shuffled.csv` (mean/std of shuffled pass — present when auto-shuffle probe ran), `shuffle_permutation.csv` (`dest_idx`→`src_idx` permutation, written alongside the shuffled pass) |
+| **Compute** | CPU — spectral analysis, DTW, optimal transport (parallelized with `ProcessPoolExecutor`)                                                                                                                                                                               |
 
 Four metrics are computed for each (predicted, target) audio pair:
 

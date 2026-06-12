@@ -419,6 +419,84 @@ def test_evaluate_predict_mode_logs_per_sample_metrics_table_to_wandb(
 
 
 @pytest.mark.fake_vst
+def test_evaluate_predict_mode_logs_shuffle_permutation_table_to_wandb(
+    tmp_path: Path,
+    fake_surge_smoke_datasets: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``mode=predict`` uploads the render-order probe permutation as a ``shuffle/permutation`` Table.
+
+    Exercises the ``_log_shuffle_permutation_to_wandb`` call-through via the real
+    ``evaluate`` entrypoint: the fake metrics subprocess writes ``aggregated_metrics.csv``
+    and ``shuffle_permutation.csv``; a spy on ``wandb.run.log`` verifies the permutation
+    Table arrives under ``shuffle/permutation`` (#1669).
+
+    :param tmp_path: Hydra ``output_dir``; the fake subprocess writes CSVs beneath it.
+    :param fake_surge_smoke_datasets: CPU-fast surge_4 dataset (no real VST).
+    :param monkeypatch: Stubs subprocesses, headless wrapper, and ``wandb.run``.
+    """
+    permutation_csv = "dest_idx,src_idx\n0,1\n1,0\n"
+    logged: list[dict[str, object]] = []
+
+    class _Spy:
+        """Stand-in for ``wandb.run`` that records ``log`` payloads; no-ops SDK lifecycle calls.
+
+        ``__getattr__`` absorbs wandb SDK cleanup methods (e.g. ``finish``,
+        ``summary``) that Lightning triggers after predict — they are irrelevant to
+        this test's contract.
+        """
+
+        def log(self, payload: dict[str, object]) -> None:
+            """Record one ``wandb.run.log`` call's argument.
+
+            :param payload: The dict passed to ``wandb.run.log``.
+            """
+            logged.append(payload)
+
+        def __getattr__(self, _name: str) -> object:
+            """Return a no-op callable for any undeclared wandb SDK method.
+
+            :param _name: Unused; any undeclared attribute resolves to the no-op.
+            :returns: A callable accepting any args and returning ``None``.
+            """
+            return lambda *_args, **_kwargs: None
+
+    def _fake_run_with_permutation(args: list[str], **_kwargs: object) -> None:
+        is_render = any(_PREDICT_VST_AUDIO_FRAGMENT in a for a in args)
+        is_metrics = any(_COMPUTE_AUDIO_METRICS_FRAGMENT in a for a in args)
+        if not (is_render or is_metrics):
+            return
+        out_dir = Path(args[args.index("-m") + 3])
+        out_dir.mkdir(parents=True, exist_ok=True)
+        if is_metrics:
+            (out_dir / "aggregated_metrics.csv").write_text(_FAKE_AGGREGATED_METRICS_CSV)
+            (out_dir / "shuffle_permutation.csv").write_text(permutation_csv)
+
+    cfg = _compose_fake_oracle_eval_cfg(tmp_path, fake_surge_smoke_datasets, mode="predict")
+    monkeypatch.setattr("synth_setter.cli.eval.subprocess.run", _fake_run_with_permutation)
+    monkeypatch.setattr("synth_setter.cli.eval.vst_headless_wrapper", lambda: object())
+    monkeypatch.setattr(
+        "synth_setter.cli.eval.as_file",
+        lambda _traversable: nullcontext(Path("/fake/headless-wrapper")),
+    )
+    monkeypatch.setattr(wandb, "run", _Spy())
+    monkeypatch.setattr(wandb, "finish", lambda *_args, **_kwargs: None)
+
+    HydraConfig().set_config(cfg)
+    try:
+        evaluate(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    table_payloads = [p for p in logged if "shuffle/permutation" in p]
+    assert len(table_payloads) == 1
+    table = table_payloads[0]["shuffle/permutation"]
+    assert isinstance(table, wandb.Table)
+    assert table.columns == ["dest_idx", "src_idx"]
+    assert table.data == [[0, 1], [1, 0]]
+
+
+@pytest.mark.fake_vst
 def test_evaluate_validate_mode_legacy_val_spelling_runs_oracle(
     tmp_path: Path,
     fake_surge_smoke_datasets: Path,
