@@ -1,6 +1,184 @@
 # CHANGELOG
 
 
+## v8.34.0 (2026-06-12)
+
+### Chores
+
+- Add ffn_smoke experiment on the R2 surge_xt fixture
+  ([#1678](https://github.com/tinaudio/synth-setter/pull/1678),
+  [`c7da6e1`](https://github.com/tinaudio/synth-setter/commit/c7da6e1f3537d170cc313beeb7a9719a3a1f210f))
+
+* feat(training): add surge_ffn smoke experiment backed by the R2 surge_xt fixture
+
+* fix(training): disable compile in the ffn_smoke experiment to clear the fit+test double-compile
+
+* test(training): pin min_steps floor + surge_xt spec wiring on ffn_smoke
+
+Add num_workers: 0 to the ffn_smoke experiment to match surge/test*.yaml single-process loading on
+  the 20-sample fixture, and extend the composition test to assert min_steps is dropped to None,
+  num_workers is 0, and the surge_xt spec stays wired through both the datamodule and the
+  LogPerParamMSE callback.
+
+Refs #1672
+
+* docs(training): fix ffn_smoke test docstring grammar
+
+- **config**: Surge_xt Lance generate_dataset config (10k/2k/1k)
+  ([#1673](https://github.com/tinaudio/synth-setter/pull/1673),
+  [`c9ffe46`](https://github.com/tinaudio/synth-setter/commit/c9ffe4695e91ae05bff189c01716fc6f80c7c091))
+
+Add a production-sized surge_xt datagen experiment that writes the Lance single-file shard format:
+  13k samples split 10k/2k/1k across train/val/test at samples_per_shard=1000 (13 shards). Register
+  it in the experiment-yaml composition allowlist so it round-trips through DatasetSpec.
+
+Refs #1600
+
+- **data**: Tighten Lance dataloader types and read-fidelity assertions
+  ([#1670](https://github.com/tinaudio/synth-setter/pull/1670),
+  [`68d4873`](https://github.com/tinaudio/synth-setter/commit/68d48731145a146556b241e0030565595c76f19b))
+
+Address advisory findings from the PR #1601 multi-skill review, behavior unchanged:
+
+- Annotate VSTDataset.__getitem__ return as dict[str, torch.Tensor | None] (the param type was
+  widened in the diff but the return stayed bare). - Build Path(path) once in
+  LanceShardFile.__init__ and reuse it for the directory/missing-file boundary checks instead of
+  reconstructing it. - Use np.testing.assert_array_equal for the bit-exact read-fidelity assertions
+  (float16 audio / float32 columns round-trip losslessly through Lance), matching the
+  writer-compatibility test and expressing the no-tolerance intent that assert_allclose obscured. -
+  Drop the redundant :rtype: from _smoke_fake_render_cfg (pydoclint check-return-types is off, so
+  the -> annotation is the single source).
+
+Refs #1599
+
+- **lint**: Drop stale F821 ignore for surge_ff_module
+  ([#1666](https://github.com/tinaudio/synth-setter/pull/1666),
+  [`de5078e`](https://github.com/tinaudio/synth-setter/commit/de5078e1307862226359594b8b0008ad6f34962a))
+
+The `if __name__ == "__main__":` block was the file's only F821 source and was removed in #1602, so
+  the token is now stale. D102/D103/D107 remain pending full graduation.
+
+Refs #25
+
+- **lint**: Graduate surge_datamodule.py off docstring ignores
+  ([#1667](https://github.com/tinaudio/synth-setter/pull/1667),
+  [`692e1d4`](https://github.com/tinaudio/synth-setter/commit/692e1d4e90c7e438d6fb0d667a22c12f9e428c0a))
+
+Add class and method docstrings across surge_datamodule.py, including the VSTDataset and
+  VSTDataModule class docstrings that PR #1602 deferred, plus sphinx
+  :param:/:returns:/:yields:/:raises: sections and -> None / Iterator[...] return annotations on the
+  previously bare members.
+
+Drop the D102/D103/D107 per-file-ignore for this file from pyproject.toml and drain its 2
+  WithinChunkShuffledSampler.__init__ rows (DOC101/DOC103) from .pydoclint-baseline.txt. The
+  baseline diff is restricted to this file's deletions; unrelated stale rows surfaced by a full
+  regenerate are left to the weekly sweep tracked in #1055.
+
+DOC601/DOC603 on VSTDataset are suppressed with a justification: docstring_parser drops sphinx
+  :ivar: fields from its attribute list, so pydoclint cannot see class-attribute docs in sphinx
+  style.
+
+Refs #938 Refs #25
+
+### Features
+
+- **data-pipeline**: Introspection CLI drafts ParamSpecs from any VST3
+  ([#1662](https://github.com/tinaudio/synth-setter/pull/1662),
+  [`624a54e`](https://github.com/tinaudio/synth-setter/commit/624a54e75c3b776cd472137c9781191d1cc04927))
+
+### Internal-Feat
+
+- **evaluation**: Log render-order probe permutation as a wandb metric
+  ([#1672](https://github.com/tinaudio/synth-setter/pull/1672),
+  [`46c0b92`](https://github.com/tinaudio/synth-setter/commit/46c0b92ce07d1d350a56715b6b1a8ad6f4011b74))
+
+* feat(evaluation): log render-order probe permutation as a wandb metric
+
+The inline oracle eval's render-order probe (#489) draws a dest_idx->src_idx permutation to re-score
+  pred audio against a shuffled render order, but discarded it after use — only the aggregate
+  shuffled metrics reached wandb, with no record of which permutation produced them.
+
+Persist the drawn permutation to shuffle_permutation.csv (columns dest_idx, src_idx) alongside
+  aggregated_metrics_shuffled.csv, and log it as a shuffle/permutation wandb Table from the eval
+  predict-postprocessing path, namespaced by the existing per-split metric_prefix. The probe runs
+  inline for the surge/fake_oracle eval, so the mapping now surfaces on the generate run.
+
+Refs #1669, #489
+
+* test(evaluation): harden shuffle-permutation wandb table assertions
+
+Strengthen the row/column checks on the shuffle/permutation wandb Table at the integration layer
+  (eval predict-postprocessing and the evaluate() entrypoint) to match the unit-level coverage, and
+  add the missing shuffle_permutation.csv absence assertion to the nested-output-dir probe-skip test
+  so every skip path pins both probe outputs.
+
+Refs #1669
+
+* docs(evaluation): document shuffle/permutation wandb table and CSV
+
+The render-order probe now writes shuffle_permutation.csv and logs a shuffle/permutation wandb
+  Table. Update the eval-pipeline and wandb-integration references and the compute_audio_metrics
+  doc-map entry, which enumerate the probe's outputs and logged wandb keys exhaustively.
+
+### Internal-Fix
+
+- **tools**: Clear #489 probe-7 loudness floor for the simple-on-xt-preset cross-render
+  ([#1675](https://github.com/tinaudio/synth-setter/pull/1675),
+  [`e633fe0`](https://github.com/tinaudio/synth-setter/commit/e633fe0df82c7611fb6d20bc0a4aa3c1865ccedc))
+
+The cadence_probe_surge_simple_xt_preset probe replays surge_simple copied params under the
+  surge-base (xt) preset, which renders deterministically to ~-55.6 dB -- just under the default
+  -55.0 min_loudness floor. Every fixed-param copy cell raised, the agent shut down after 5
+  consecutive failures, and the sequential launcher exited non-zero on its final sweep.
+
+Pin render.min_loudness=-60.0 on this probe alone so the quiet cross-render clears the floor,
+  without relaxing the quality gate on the other six sweeps.
+
+Refs #489
+
+### Refactoring
+
+- **data-pipeline**: Tidy preset-path resolve and pin VST-rename test gaps
+  ([#1665](https://github.com/tinaudio/synth-setter/pull/1665),
+  [`139c5bb`](https://github.com/tinaudio/synth-setter/commit/139c5bba0d3234354bcdb45d3ac1c6157961ac96))
+
+Address advisory findings from the #1602 self-review (Phase 1 VST rename), scoped to non-behavioral
+  cleanups and test coverage:
+
+- predict_vst_audio: order `resolve_preset_path` in priority (explicit path first) and annotate
+  `main` with `-> None`. - Drop the `:rtype:` echo from `_make_module` (check-return-types is off).
+  - Pin previously untested seams: the plain `surge` datamodule overlay, the `VSTFlowVAEModule`
+  class definition in the AST test (the one rename with no resolution pin), and the env-aware
+  `surge_xt_interactive --plugin-path` default via CliRunner.
+
+Two suggested rewrites are intentionally not applied because they conflict with this repo's
+  pydoclint config (skip-checking-short-docstrings=false, check-yield-types=true): collapsing
+  `resolve_preset_path` to one line and dropping the test `:ytype:` echo both introduce new DOC
+  violations. The registry module-docstring extension is likewise deferred — touching that file
+  pulls pre-existing `default_plugin_path` into review, whose pydoclint-required `:returns:` then
+  reads as redundant; that doc belongs with the dedicated plugin-path module the review suggested.
+
+Refs #1582
+
+### Testing
+
+- **data-pipeline**: Run finalize-artifact oracle on lance splits
+  ([#1668](https://github.com/tinaudio/synth-setter/pull/1668),
+  [`136c8c6`](https://github.com/tinaudio/synth-setter/commit/136c8c66358342a5d26d11d8867a7dee3cd1f628))
+
+The finalize-artifact oracle helper read only HDF5 and WDS splits, so the lance matrix row in
+  test-dataset-finalization.yml skipped the param-fidelity oracle and verified lance finalize by the
+  `rclone ls` presence pin alone — a corrupt `param_array` in a finalized `train.lance` would pass
+  CI.
+
+Route the helper's lance read through the `LanceShardFile` adapter the train/eval dataloader uses
+  (PR #1601), so it validates the exact bytes a model consumes; probe `train.lance` alongside
+  `train.h5`; and drop the `output_format != 'lance'` guards so the oracle runs for every format. A
+  local round-trip test pins the loader's value/row-order contract without R2.
+
+Refs #1600
+
+
 ## v8.33.0 (2026-06-12)
 
 ### Build System
