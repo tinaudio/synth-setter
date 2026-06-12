@@ -69,6 +69,11 @@ class _RegisterTarget:
     help="Path to the .vst3 bundle to introspect.",
 )
 @click.option(
+    "--plugin-name",
+    default=None,
+    help="Factory class to open from a multi-class .vst3 bundle (e.g. 'Six Sines').",
+)
+@click.option(
     "--preset-path",
     type=click.Path(exists=True, dir_okay=False),
     default=None,
@@ -123,6 +128,7 @@ class _RegisterTarget:
 )
 def main(
     plugin_path: str,
+    plugin_name: str | None,
     preset_path: str | None,
     spec_name: str,
     out_spec: str | None,
@@ -135,6 +141,8 @@ def main(
     """Draft a ParamSpec module + baseline preset + CSV table from a VST3 plugin.
 
     :param plugin_path: Path to the ``.vst3`` bundle to introspect.
+    :param plugin_name: Factory class to open from a multi-class bundle; ``None``
+        opens the sole class.
     :param preset_path: Optional starting ``.vstpreset`` applied before capture.
     :param spec_name: Registry key; names the emitted constant and default outputs.
     :param out_spec: Draft module destination; defaults from ``spec_name``.
@@ -147,7 +155,8 @@ def main(
     :raises click.BadParameter: ``spec_name`` is not a valid Python identifier.
     :raises click.UsageError: An output file exists and ``--force`` was not
         given; ``--register`` was combined with ``--out-*``; no checkout was
-        found; or ``spec_name`` conflicts with an existing registry entry.
+        found; ``spec_name`` conflicts with an existing registry entry; or the
+        plugin failed to load (e.g. a multi-class bundle needing ``--plugin-name``).
     """
     if not spec_name.isidentifier():
         raise click.BadParameter(
@@ -170,7 +179,13 @@ def main(
         if dest.exists() and not force:
             raise click.UsageError(f"{dest} already exists; pass --force to overwrite")
 
-    vst_plugin = load_plugin(plugin_path)
+    # pedalboard raises ValueError listing the factory classes when a bundle
+    # exposes more than one and --plugin-name is absent; surface it as a clean
+    # usage error rather than an uncaught traceback.
+    try:
+        vst_plugin = load_plugin(plugin_path, plugin_name)
+    except ValueError as exc:
+        raise click.UsageError(str(exc)) from exc
     if preset_path is not None:
         load_preset(vst_plugin, preset_path)
     # Cast: pedalboard's plugin surface is dynamic, so VST3Plugin's stubs don't

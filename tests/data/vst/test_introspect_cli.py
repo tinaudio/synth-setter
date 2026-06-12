@@ -64,7 +64,7 @@ def invoke_cli(
     :returns: ``_invoke(*args)`` callable returning a ``CliRun``.
     """
     monkeypatch.setattr(
-        "synth_setter.cli.introspect_plugin.load_plugin", lambda _path: fake_plugin
+        "synth_setter.cli.introspect_plugin.load_plugin", lambda _path, _name=None: fake_plugin
     )
 
     def _invoke(*args: str) -> CliRun:
@@ -243,7 +243,7 @@ def test_cli_force_overwrites_existing_outputs(
     :param tmp_path: Working directory holding the pre-existing spec file.
     """
     monkeypatch.setattr(
-        "synth_setter.cli.introspect_plugin.load_plugin", lambda _path: fake_plugin
+        "synth_setter.cli.introspect_plugin.load_plugin", lambda _path, _name=None: fake_plugin
     )
     monkeypatch.chdir(tmp_path)
     (tmp_path / "fake.vst3").touch()
@@ -286,7 +286,7 @@ def test_cli_force_keeps_existing_spec_when_capture_fails(
             """
 
     plugin = _CaptureFailsPlugin({"cutoff": IntrospectFakeParameter(float, [0.0, 1.0])})
-    monkeypatch.setattr("synth_setter.cli.introspect_plugin.load_plugin", lambda _path: plugin)
+    monkeypatch.setattr("synth_setter.cli.introspect_plugin.load_plugin", lambda _path, _name=None: plugin)
     monkeypatch.chdir(tmp_path)
     (tmp_path / "fake.vst3").touch()
     existing = tmp_path / "fake_synth_param_spec.py"
@@ -320,3 +320,63 @@ def test_cli_loads_starting_preset_before_capture(invoke_cli: InvokeCli, tmp_pat
 
     assert run.exit_code == 0
     assert (run.cwd / "fake_synth-base.vstpreset").read_bytes() == b"VST3-loaded-state"
+
+
+def test_cli_threads_plugin_name_to_the_loader(
+    fake_plugin: IntrospectFakePlugin, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``--plugin-name`` reaches ``load_plugin`` to select a class in a multi-class bundle.
+
+    :param fake_plugin: Stand-in returned by the patched loader.
+    :param monkeypatch: Patches the ``load_plugin`` boundary with a recording spy.
+    :param tmp_path: Parent for the isolated working directory.
+    """
+    seen: dict[str, str | None] = {}
+
+    def _spy(_path: str, plugin_name: str | None = None) -> IntrospectFakePlugin:
+        seen["plugin_name"] = plugin_name
+        return fake_plugin
+
+    monkeypatch.setattr("synth_setter.cli.introspect_plugin.load_plugin", _spy)
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        Path("fake.vst3").touch()
+        result = runner.invoke(
+            main,
+            ["--plugin-path", "fake.vst3", "--spec-name", "fake_synth", "--plugin-name", "Six Sines"],
+            catch_exceptions=False,
+        )
+
+    assert result.exit_code == 0
+    assert seen["plugin_name"] == "Six Sines"
+
+
+def test_cli_multi_class_bundle_reports_available_names_without_traceback(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A multi-class bundle without ``--plugin-name`` fails cleanly, listing the classes.
+
+    :param monkeypatch: Patches ``load_plugin`` to raise pedalboard's multi-class error.
+    :param tmp_path: Parent for the isolated working directory.
+    """
+
+    def _raise(_path: str, plugin_name: str | None = None) -> object:
+        raise ValueError(
+            f"Plugin file {_path} contains 2 plugins. To open a specific plugin within "
+            'this file, pass a "plugin_name" parameter with one of the following values:'
+            '\n\t"Six Sines"\n\t"Six Sines, Seven Outs"'
+        )
+
+    monkeypatch.setattr("synth_setter.cli.introspect_plugin.load_plugin", _raise)
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        Path("fake.vst3").touch()
+        result = runner.invoke(
+            main,
+            ["--plugin-path", "fake.vst3", "--spec-name", "six_sines"],
+            catch_exceptions=False,
+        )
+
+    assert result.exit_code == 2
+    assert "Six Sines, Seven Outs" in result.output
+    assert "Traceback" not in result.output

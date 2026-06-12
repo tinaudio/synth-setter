@@ -72,13 +72,23 @@ def extract_renderer_version(plugin_path: Path) -> str:
     return version
 
 
-def load_plugin(plugin_path: str) -> VST3Plugin:
+def load_plugin(plugin_path: str, plugin_name: str | None = None) -> VST3Plugin:
     """Load a VST3 plugin instance.
 
     No warm-up — see ``warmup_plugin``.
+
+    :param plugin_path: Path to the ``.vst3`` bundle.
+    :param plugin_name: Factory class to open from a multi-class bundle; ``None``
+        opens the sole class, and pedalboard raises ``ValueError`` listing the
+        classes when a bundle exposes more than one.
+    :returns: The loaded plugin.
     """
     logger.info(f"Loading plugin {plugin_path}")
-    p = VST3Plugin(plugin_path)
+    p = (
+        VST3Plugin(plugin_path)
+        if plugin_name is None
+        else VST3Plugin(plugin_path, plugin_name=plugin_name)
+    )
     logger.info(f"Plugin {plugin_path} loaded")
     return p
 

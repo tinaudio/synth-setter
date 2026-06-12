@@ -50,7 +50,7 @@ def fake_plugin(
     :returns: The shared fake, now wired behind ``load_plugin``.
     """
     monkeypatch.setattr(
-        "synth_setter.cli.introspect_plugin.load_plugin", lambda _path: fake_plugin
+        "synth_setter.cli.introspect_plugin.load_plugin", lambda _path, _name=None: fake_plugin
     )
     return fake_plugin
 
@@ -343,7 +343,7 @@ def test_register_capture_failure_leaves_registry_and_render_config_unwritten(
             """
 
     plugin = _CaptureFailsPlugin({"cutoff": IntrospectFakeParameter(float, [0.0, 1.0])})
-    monkeypatch.setattr("synth_setter.cli.introspect_plugin.load_plugin", lambda _path: plugin)
+    monkeypatch.setattr("synth_setter.cli.introspect_plugin.load_plugin", lambda _path, _name=None: plugin)
     registry_before = (checkout / "src/synth_setter/data/vst/param_spec_registry.py").read_text()
 
     result = CliRunner().invoke(
