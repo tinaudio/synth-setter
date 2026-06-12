@@ -18,11 +18,12 @@ This directory holds **shell / Python tooling that ships outside the `synth_sett
 
 The Python utilities live inside the `synth_setter` package and are invoked as `python -m synth_setter.<subpkg>.<module>`:
 
-| Subpackage                   | Modules                                                                                                                     |
-| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `synth_setter.evaluation`    | `predict_vst_audio`, `compute_audio_metrics`                                                                                |
-| `synth_setter.tools`         | `surge_xt_interactive`, `model_from_wandb`, `plot_param2tok`, `paramspec_to_table`, `sig_perf`, `cadence_investigation_489` |
-| `synth_setter.pipeline.data` | `reshard`, `rewrite_to_latest`, `stats`, `r2_report`, `add_music2latent`                                                    |
+| Subpackage                   | Modules                                                                                                             |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `synth_setter.evaluation`    | `predict_vst_audio`, `compute_audio_metrics`                                                                        |
+| `synth_setter.tools`         | `surge_xt_interactive`, `model_from_wandb`, `plot_param2tok`, `paramspec_to_table`, `sig_perf`, `cadence_sweep_489` |
+| `synth_setter.pipeline.data` | `reshard`, `rewrite_to_latest`, `stats`, `r2_report`, `add_music2latent`                                            |
+| `synth_setter.scripts`       | `load_vst3_check`                                                                                                   |
 
 The `synth-setter-train`, `synth-setter-eval`, and `synth-setter-generate-dataset` console scripts (declared in `pyproject.toml`'s `[project.scripts]`) remain the canonical entrypoints for the train / eval / dataset-generation workflows.
 

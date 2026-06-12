@@ -40,6 +40,8 @@ docs:
       - pattern: "Makefile"
         covers: "docker-build-* targets (dev-snapshot, devcontainer-tools), DOCKER_SECRETS, DOCKER_BUILD_FLAGS"
         scope: "docker"
+      - pattern: "src/synth_setter/scripts/load_vst3_check.py"
+        covers: "Per-synth VST3 load check run at image build and as the in-image smoke test"
       - pattern: "src/synth_setter/scripts/run-linux-vst-headless.sh"
         covers: "Headless X11 bootstrap, Xvfb setup, LIBGL_ALWAYS_SOFTWARE"
       - pattern: ".github/workflows/docker-build-validation.yml"
@@ -109,7 +111,9 @@ docs:
       - pattern: "src/synth_setter/data/vst/writers.py"
         covers: "make_hdf5_dataset + make_wds_dataset + make_lance_dataset entrypoints; per-batch sample-save helpers; ShardMetadata sidecar wiring; CLI suffix dispatch via OutputFormat.from_extension."
       - pattern: "src/synth_setter/data/vst/shapes.py"
-        covers: "Shared shape primitives consumed by writers + (planned) shard validator — DATASET_FIELD_NAMES, mel-front-end constants, audio_dataset_shape / mel_dataset_shape / param_array_dataset_shape."
+        covers: "Shared shape primitives consumed by the writers, the shard validator, and the test shard seeders — DATASET_FIELD_NAMES / DATASET_FIELD_DTYPES, mel-front-end constants, per-field shape helpers, and dataset_field_shapes (the single field→shape contract)."
+      - pattern: "src/synth_setter/pipeline/data/lance_shard.py"
+        covers: "Lance single-file shard codec — lance_schema / tensor_array / record_batch_from_arrays / write_lance_file on the encode side, read_shard_metadata / tensor_chunk_to_numpy / iter_lance_column_rows on the decode side; shared by the Lance writer, validator, and finalize."
 
   # ── SkyPilot compute integration design doc ─────────────────────
   - doc: docs/design/skypilot-compute-integration.md
@@ -296,7 +300,9 @@ docs:
     description: Test layout, fixtures, markers, and the cpu/mps/gpu CI lane split
     sources:
       - pattern: "tests/conftest.py"
-        covers: "Hydra cfg_train/cfg_train_lance/cfg_eval/cfg_dataset/cfg_surge_xt fixtures, accelerator parametrize, param_spec_name parametrize, experiment_name parametrize, _build_surge_xt_smoke_cfg, surge_xt_smoke_datasets, _validate_surge_dataset, Lance smoke helpers (_write_lance_smoke_split, _LANCE_SMOKE_*), shared constants (NUM_FIXTURE_SAMPLES, VST_HEADLESS_WRAPPER, _VST_SUBPROCESS_TIMEOUT_SECONDS)"
+        covers: "Hydra cfg_train/cfg_train_lance/cfg_eval/cfg_dataset/cfg_surge_xt fixtures, accelerator parametrize, param_spec_name parametrize, experiment_name parametrize, _build_surge_xt_smoke_cfg, surge_xt_smoke_datasets, _validate_surge_dataset, Lance smoke helpers (_write_lance_smoke_split, _LANCE_SMOKE_*), shared constants (NUM_FIXTURE_SAMPLES, VST_HEADLESS_WRAPPER)"
+      - pattern: "tests/_vst.py"
+        covers: "PLUGIN_PATH, VST_AVAILABLE, VST_SUBPROCESS_TIMEOUT_SECONDS"
       - pattern: "tests/test_train.py"
         covers: "E2E Hydra train / resume / Surge XT smoke + train→eval round-trip"
       - pattern: "tests/test_eval.py"

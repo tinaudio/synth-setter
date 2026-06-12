@@ -26,7 +26,7 @@ from synth_setter.resources import vst_headless_wrapper
 from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
 from tests._baseline_worktree import worktree_for_ref  # noqa: F401 — pytest fixture re-export
-from tests._vst import PLUGIN_PATH, VST_AVAILABLE
+from tests._vst import PLUGIN_PATH, VST_AVAILABLE, VST_SUBPROCESS_TIMEOUT_SECONDS
 from tests.data.vst._fake_plugin import FakeVST3Plugin
 from tests.pipeline.conftest import fake_r2_remote  # noqa: F401 — pytest fixture re-export
 
@@ -46,14 +46,6 @@ _SURGE_MEL_SHAPE = (2, 128, 401)
 # ~-80 dBFS — same threshold used by `test_train_eval_surge_xt` to catch
 # silent renders that would later poison metric computation.
 _SURGE_SILENCE_PEAK_THRESHOLD = 1e-4
-
-# Hard ceiling for VST subprocess calls (dataset generation, audio rendering).
-# Picked at 10 minutes: comfortably above the observed runtime on the slowest
-# CI runner (macOS with brew-installed cask), well below the workflow timeout
-# so a hung VST surfaces as a clear test failure instead of a job kill. Eager
-# constant on purpose — both call sites pass it directly to `subprocess.run`,
-# no per-call tuning, no stack-distant default.
-_VST_SUBPROCESS_TIMEOUT_SECONDS = 600
 
 NUM_FIXTURE_SAMPLES = 5
 
@@ -161,11 +153,11 @@ def _write_smoke_stats_npz(train_h5: Path) -> None:
     ]
     try:
         result = subprocess.run(  # noqa: S603
-            stats_args, text=True, check=False, timeout=_VST_SUBPROCESS_TIMEOUT_SECONDS
+            stats_args, text=True, check=False, timeout=VST_SUBPROCESS_TIMEOUT_SECONDS
         )
     except subprocess.TimeoutExpired:
         pytest.fail(
-            f"get_dataset_stats timed out after {_VST_SUBPROCESS_TIMEOUT_SECONDS}s\n"
+            f"get_dataset_stats timed out after {VST_SUBPROCESS_TIMEOUT_SECONDS}s\n"
             f"command: {stats_args}\n"
             f"(child stdout/stderr printed above; rerun with `pytest -s` if captured)",
             pytrace=False,
@@ -679,11 +671,11 @@ def _render_smoke_train_h5_subprocess(train_h5: Path, param_spec_name: str) -> N
             generate_dataset_args,
             text=True,
             check=False,
-            timeout=_VST_SUBPROCESS_TIMEOUT_SECONDS,
+            timeout=VST_SUBPROCESS_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired:
         pytest.fail(
-            f"generate_vst_dataset timed out after {_VST_SUBPROCESS_TIMEOUT_SECONDS}s\n"
+            f"generate_vst_dataset timed out after {VST_SUBPROCESS_TIMEOUT_SECONDS}s\n"
             f"command: {generate_dataset_args}\n"
             f"(child stdout/stderr printed above; rerun with `pytest -s` if captured)",
             pytrace=False,
@@ -988,9 +980,9 @@ def _cgroup_aware_cpu_count() -> int:
     return max(1, int(cpus))
 
 
-# Per-worker resident-memory budget for the -n auto memory clamp, overridable
-# via PYTEST_XDIST_WORKER_MEM_MB. 1 GiB suits a torch+h5py+Hydra worker.
-_DEFAULT_WORKER_MEM_MB = 1024
+# Per-worker resident-memory budget for the -n auto clamp (override via
+# PYTEST_XDIST_WORKER_MEM_MB); 2 GiB = measured peak RSS per worker slot (#1646).
+_DEFAULT_WORKER_MEM_MB = 2048
 
 # A v1 memory.limit_in_bytes at or above this is the kernel's unlimited sentinel.
 _MEM_UNLIMITED_SENTINEL = 1 << 62
@@ -1009,6 +1001,29 @@ def _meminfo_available_bytes() -> int | None:
     except (OSError, ValueError, IndexError):
         pass
     return None
+
+
+def _swap_in_use_bytes() -> int | None:
+    """Read swap currently in use from ``/proc/meminfo`` (``SwapTotal - SwapFree``).
+
+    :returns: Bytes of swap in use, or None if either field is unreadable.
+    """
+    total: int | None = None
+    free: int | None = None
+    try:
+        with open("/proc/meminfo") as fh:
+            for line in fh:
+                if line.startswith("SwapTotal:"):
+                    total = int(line.split()[1]) * 1024  # field is in kibibytes
+                elif line.startswith("SwapFree:"):
+                    free = int(line.split()[1]) * 1024
+                if total is not None and free is not None:
+                    break
+    except (OSError, ValueError, IndexError):
+        return None
+    if total is None or free is None:
+        return None
+    return max(0, total - free)
 
 
 def _cgroup_memory_limit_bytes() -> int | None:
@@ -1035,25 +1050,26 @@ def _cgroup_memory_limit_bytes() -> int | None:
 
 
 def _available_memory_bytes() -> int | None:
-    """Return usable memory as ``min(host MemAvailable, cgroup limit)``.
+    """Return usable memory as ``min(swap-adjusted host MemAvailable, cgroup limit)``.
 
-    On a shared host the cgroup limit is usually unset, so host MemAvailable is the real ceiling;
-    in a memory-capped container the cgroup limit wins.
+    MemAvailable counts reclaimable cache as free, so it overstates headroom on a swapping host;
+    used swap is debited from the host term before the min, a no-op when nothing is swapped.
 
     :returns: The tighter of the two figures in bytes, or None if neither is known.
     """
-    candidates = [
-        value
-        for value in (_meminfo_available_bytes(), _cgroup_memory_limit_bytes())
-        if value is not None
-    ]
+    host = _meminfo_available_bytes()
+    if host is not None:
+        swap_used = _swap_in_use_bytes()
+        if swap_used is not None:
+            host = max(0, host - swap_used)
+    candidates = [value for value in (host, _cgroup_memory_limit_bytes()) if value is not None]
     return min(candidates) if candidates else None
 
 
 def _memory_aware_worker_count() -> int | None:
     """Cap ``-n auto`` workers by available memory and a per-worker budget.
 
-    Divides available memory by ``PYTEST_XDIST_WORKER_MEM_MB`` (default 1 GiB) so
+    Divides available memory by ``PYTEST_XDIST_WORKER_MEM_MB`` (default 2 GiB) so
     a busy shared host doesn't OOM-kill the run — the failure #1490's CPU clamp
     can't catch, since neither cpu.max nor memory.max is set on a shared host.
 

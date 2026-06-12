@@ -118,7 +118,13 @@ def test_cfg_dataset_copy_dataset_root_uri_with_wds_output_is_rejected(
 
 
 @pytest.mark.fake_vst
+@pytest.mark.parametrize(
+    ("output_format", "shard_suffix"),
+    [("hdf5", ".h5"), ("wds", ".tar"), ("lance", ".lance")],
+)
 def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
+    output_format: str,
+    shard_suffix: str,
     cfg_dataset: DictConfig,
     fake_r2_remote: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -130,10 +136,15 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     validation-shaped shard) and ``r2:`` is a local-filesystem rclone remote via
     ``fake_r2_remote``, so the partition → render → ``rclone copy`` upload →
     skip-existing probe loop (#750) runs with no real plugin and no real R2.
-    Asserts (1) ``smoke-shard`` partitions into one shard per split, (2) every
-    shard lands under its spec-derived R2 URI, and (3) a second ``from_hydra``
-    pass renders nothing because the probe finds all shards already present.
+    Parametrized over ``output_format`` so every format's config surface
+    runs the same loop with its own shard suffix (#1600). Asserts
+    (1) ``smoke-shard`` partitions into one shard per split, (2) every shard
+    lands under its spec-derived R2 URI with the format's suffix, and (3) a
+    second ``from_hydra`` pass renders nothing because the probe finds all
+    shards already present.
 
+    :param output_format: Dataset output format the run is pinned to.
+    :param shard_suffix: File suffix the format's shards must carry.
     :param cfg_dataset: Hydra cfg composed with ``generate_dataset/smoke-shard``
         and ``tmp_path``-pinned paths (the same ``tmp_path`` ``fake_r2_remote``
         backs ``r2:`` against).
@@ -144,6 +155,7 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
     with open_dict(cfg_dataset):
+        cfg_dataset.output_format = output_format
         cfg_dataset.render.plugin_path = str(_TEST_PLUGIN_VST3)
         cfg_dataset.render.renderer_version = _TEST_PLUGIN_VERSION
         # Pin r2.prefix so the spec built here for assertions and the one
@@ -177,6 +189,7 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
         from_hydra(cfg_dataset)
 
     for shard in spec.shards:
+        assert shard.filename.endswith(shard_suffix)
         size = r2_io.object_size(spec.r2.shard_uri(shard))
         assert size is not None and size > 0, f"shard missing in fake R2: {shard.filename}"
 

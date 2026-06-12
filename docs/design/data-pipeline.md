@@ -1432,7 +1432,7 @@ src/
     ci/                 # CI validation scripts (implemented)
       materialize_spec.py # Compose a DatasetSpec from a Hydra experiment and write it to disk as JSON
       validate_spec.py  # Spec structural validation (required fields, git_sha format, etc.)
-      validate_shard.py # Shard validation (valid HDF5, full per-dataset shapes via synth_setter.data.vst.shapes — not just row count); iterates spec.shards via R2
+      validate_shard.py # Shard validation (suffix-dispatched hdf5/wds/lance, full per-dataset shapes via synth_setter.data.vst.shapes — not just row count); iterates spec.shards via R2
       load_image_config.py # Resolve Docker image configuration for the launcher
 
     constants.py        # Well-known filenames (INPUT_SPEC_FILENAME)

@@ -74,6 +74,51 @@ def test_swept_args_macro_is_last_so_grid_values_win_over_fixed_pins() -> None:
         assert config["command"][-1] == "${args_no_hyphens}"
 
 
+def test_grid_cell_count_is_the_product_of_each_swept_knob() -> None:
+    """The grid size is the product of every swept knob's value count (2 reload x 4 gui = 8)."""
+    config = _config_by_label(sweep.sweeps(2), "cadence_probe_surge_xt")
+    assert sweep._grid_cell_count(config) == 8
+
+
+def test_run_agent_bounds_the_agent_to_the_grid_cell_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``_run_agent`` passes ``--count <cells>`` so the agent exits when the grid is exhausted.
+
+    Unbounded, wandb 0.26.1 keeps the agent alive after the grid is exhausted and re-dispatches an
+    already-finished run, so the runner's sequential loop never reaches the next sweep (#489).
+
+    :param monkeypatch: Captures the ``subprocess.run`` argv without spawning a real agent.
+    """
+    captured: list[list[str]] = []
+    monkeypatch.setattr(sweep.subprocess, "run", lambda argv, **kwargs: captured.append(argv))
+
+    sweep._run_agent("sid-123", 8)
+
+    (argv,) = captured
+    assert argv[:2] == ["wandb", "agent"]
+    assert "--count" in argv
+    assert argv[argv.index("--count") + 1] == "8"
+    assert argv[-1].endswith("/sid-123")
+
+
+def test_run_bounds_every_agent_by_its_own_grid_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``run`` creates all sweeps, then drives each agent bounded by that sweep's grid size.
+
+    :param monkeypatch: Stubs source generation and ``wandb.sweep``, and records the per-agent count.
+    """
+    monkeypatch.setattr(sweep, "_run_generate", lambda overrides: None)
+    monkeypatch.setattr(sweep.wandb, "sweep", lambda config, **kwargs: "sid")
+    counts: list[int] = []
+    monkeypatch.setattr(sweep, "_run_agent", lambda sweep_id, count: counts.append(count))
+
+    sweep.run(2)
+
+    assert counts == [8] * 7
+
+
 def test_run_rejects_size_below_one_before_generating_any_source(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

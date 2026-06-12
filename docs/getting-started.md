@@ -511,7 +511,7 @@ ______________________________________________________________________
 ## 7. Docker Workflow
 
 A Dockerfile is provided for reproducible environments (training, CI, cloud
-deployment). The image bakes in the source code, dependencies, and Surge XT.
+deployment). The image bakes in the source code, dependencies, Surge XT, and several other VST3 synths (see the `vst3-synths-fetch` stage in `docker/ubuntu22_04/Dockerfile`).
 No credentials — R2, W&B, or otherwise — are baked in.
 
 **Build the image:**
