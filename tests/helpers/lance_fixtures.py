@@ -18,17 +18,18 @@ def write_lance_shard(path: Path, columns: Mapping[str, np.ndarray]) -> None:
     :param path: Output ``.lance`` shard file.
     :param columns: Mapping of column name to ``(num_rows, ...)`` array.
     """
+    items = list(columns.items())
     fields = [
         pa.field(
             name,
             pa.fixed_shape_tensor(pa.from_numpy_dtype(data.dtype), data.shape[1:]),
             nullable=False,
         )
-        for name, data in columns.items()
+        for name, data in items
     ]
     schema = pa.schema(fields)
     batch = pa.record_batch(
-        [tensor_array(data, data.dtype, data.shape[1:]) for data in columns.values()],
+        [tensor_array(data, data.dtype, data.shape[1:]) for _, data in items],
         schema=schema,
     )
     write_lance_file(path, schema, [batch])
