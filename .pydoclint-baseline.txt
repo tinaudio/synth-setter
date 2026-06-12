@@ -202,15 +202,15 @@ src/synth_setter/models/ksin_flow_matching_module.py
     DOC501: Method `KSinFlowMatchingModule._sample_x0_and_x1` has raise statements, but the docstring does not have a "Raises" section
     DOC503: Method `KSinFlowMatchingModule._sample_x0_and_x1` exceptions in the "Raises" section in the docstring do not match those in the function body. Raised exceptions in the docstring: []. Raised exceptions in the body: ['NotImplementedError'].
 --------------------
-src/synth_setter/models/surge_ff_module.py
+src/synth_setter/models/vst_ff_module.py
     DOC101: Method `SurgeFeedForwardModule.__init__`: Docstring contains fewer arguments than in function signature.
     DOC103: Method `SurgeFeedForwardModule.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [compile: bool, net: torch.nn.Module, optimizer: torch.optim.Optimizer, scheduler: torch.optim.lr_scheduler, warmup_steps: int].
 --------------------
-src/synth_setter/models/surge_flow_matching_module.py
+src/synth_setter/models/vst_flow_matching_module.py
     DOC101: Method `SurgeFlowMatchingModule.__init__`: Docstring contains fewer arguments than in function signature.
     DOC103: Method `SurgeFlowMatchingModule.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [cfg_dropout_rate: float, compile: bool, conditioning: Literal['mel', 'm2l'], encoder: torch.nn.Module, num_params: int, optimizer: torch.optim.Optimizer, rectified_sigma_min: float, scheduler: torch.optim.lr_scheduler, test_cfg_strength: float, test_sample_steps: int, validation_cfg_strength: float, validation_sample_steps: int, vector_field: torch.nn.Module, warmup_steps: int].
 --------------------
-src/synth_setter/models/surge_flowvae_module.py
+src/synth_setter/models/vst_flowvae_module.py
     DOC101: Method `SurgeFlowVAEModule.__init__`: Docstring contains fewer arguments than in function signature.
     DOC103: Method `SurgeFlowVAEModule.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [beta_max: float, beta_start: float, beta_warmup_steps: int, compile: bool, net: torch.nn.Module, optimizer: torch.optim.Optimizer, param_spec: str, scheduler: torch.optim.lr_scheduler, warmup_steps: int].
 --------------------

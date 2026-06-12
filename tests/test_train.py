@@ -257,7 +257,7 @@ def test_train_surge_xt(cfg_surge_xt: DictConfig, experiment_name: str) -> None:
     trainer = object_dict["trainer"]
     assert trainer.global_step >= 1, f"trainer did not advance: global_step={trainer.global_step}"
 
-    # `surge_ff_module` logs `train/loss` with `on_step=True, on_epoch=True`, which
+    # `vst_ff_module` logs `train/loss` with `on_step=True, on_epoch=True`, which
     # populates `train/loss_step` (and `train/loss_epoch` if an epoch boundary was
     # crossed) in `trainer.callback_metrics`. With `TRAINING_STEPS=1` only the
     # step-level key is guaranteed; assert whichever is present is finite.

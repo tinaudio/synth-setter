@@ -31,7 +31,7 @@ from synth_setter.data.lance_datamodule import (
     LanceVSTDataModule,
     LanceVSTDataset,
 )
-from synth_setter.data.surge_datamodule import ShiftedBatchSampler
+from synth_setter.data.vst_datamodule import ShiftedBatchSampler
 from synth_setter.data.vst.param_spec_registry import param_specs
 from tests.helpers.finalize_shards import build_lance_smoke_spec, write_minimal_lance_shard
 from tests.helpers.lance_fixtures import write_lance_shard

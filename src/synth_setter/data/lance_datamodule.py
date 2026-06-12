@@ -18,7 +18,7 @@ import numpy as np
 import pyarrow as pa
 from lance.file import LanceFileReader
 
-from synth_setter.data.surge_datamodule import VSTDataModule, VSTDataset
+from synth_setter.data.vst_datamodule import VSTDataModule, VSTDataset
 from synth_setter.pipeline.data.lance_shard import tensor_chunk_to_numpy
 
 

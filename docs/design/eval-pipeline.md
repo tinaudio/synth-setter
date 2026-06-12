@@ -316,7 +316,7 @@ When `datamodule.download_dataset_root_uri` is explicitly provided (via CLI over
 
 ```yaml
 # src/synth_setter/configs/datamodule/vst.yaml — base config; download URI opt-in, no env vars for paths
-_target_: synth_setter.data.surge_datamodule.VSTDataModule
+_target_: synth_setter.data.vst_datamodule.VSTDataModule
 dataset_root: ${paths.output_dir}/data
 download_dataset_root_uri: null  # null → local-only; opt in explicitly
 batch_size: 128
@@ -631,7 +631,7 @@ This section consolidates every configuration and environment behavior change in
 | **Dataset path**          | `dataset_root: ${paths.output_dir}/data`; `predict_file: null` (→ `dataset_root/test.h5`); CLI/experiment overrides for fixed datasets | `src/synth_setter/configs/datamodule/surge_simple.yaml`                        | No        | Defaults to per-run Hydra dir; `${paths.data_dir}` convention not yet adopted |
 | **Checkpoint resolution** | `get-ckpt-from-wandb.sh` searches local `logs/train/` by W&B run ID                                                                    | `jobs/predict/*.sh` (19 scripts)                                               | No        | Requires training logs on same machine                                        |
 | **Checkpoint path**       | `ckpt_path: ???` in eval, resolved by shell script to local path                                                                       | `src/synth_setter/configs/eval.yaml` + shell                                   | No        | Local filesystem dependency                                                   |
-| **R2 dataset access**     | Opt-in `download_dataset_root_uri` → `prepare_data()` no-clobber download (default `null`)                                             | `src/synth_setter/data/surge_datamodule.py` (`prepare_data`)                   | Yes       | Off by default; caller must supply the R2 URI                                 |
+| **R2 dataset access**     | Opt-in `download_dataset_root_uri` → `prepare_data()` no-clobber download (default `null`)                                             | `src/synth_setter/data/vst_datamodule.py` (`prepare_data`)                     | Yes       | Off by default; caller must supply the R2 URI                                 |
 | **Checkpoint access**     | `get-ckpt-from-wandb.sh` (local filesystem search by W&B run ID)                                                                       | `jobs/predict/*.sh`                                                            | No        | Only works on the machine where training happened                             |
 | **Checkpoint upload**     | Best checkpoint → R2 at train end, referenced by the `model-{config_id}` artifact (`log_model: False`)                                 | `src/synth_setter/configs/logger/wandb.yaml` + `src/synth_setter/cli/train.py` | Yes       | —                                                                             |
 | **Credentials**           | No `.env` pattern for R2                                                                                                               | —                                                                              | —         | No standardized credential management                                         |
@@ -915,7 +915,7 @@ ______________________________________________________________________
 
 **Files to modify:**
 
-- `src/synth_setter/data/surge_datamodule.py` — add optional `download_dataset_root_uri` field, call `r2_io.download_dir_no_overwrite` in `prepare_data()`
+- `src/synth_setter/data/vst_datamodule.py` — add optional `download_dataset_root_uri` field, call `r2_io.download_dir_no_overwrite` in `prepare_data()`
 - Data configs carry an explicit `download_dataset_root_uri: null` opt-in line; set via CLI or experiment config
 
 **Files to create:**

@@ -1,7 +1,7 @@
-"""Behavioral tests for :mod:`synth_setter.models.surge_fake_oracle_module`.
+"""Behavioral tests for :mod:`synth_setter.models.vst_fake_oracle_module`.
 
 The fake-oracle module is a drop-in replacement for
-:class:`synth_setter.models.surge_ff_module.VSTFeedForwardModule` that returns
+:class:`synth_setter.models.vst_ff_module.VSTFeedForwardModule` that returns
 ``batch["params"]`` as its prediction. The tests pin the oracle contract
 (perfect inversion, zero loss, grad-capable) and the four Lightning step
 shapes that downstream callbacks depend on (``PredictionWriter`` unpacks
@@ -19,7 +19,7 @@ from functools import partial
 import pytest
 import torch
 
-from synth_setter.models.surge_fake_oracle_module import (
+from synth_setter.models.vst_fake_oracle_module import (
     FakeOracleNet,
     VSTFakeOracleModule,
 )

@@ -2337,7 +2337,7 @@ class TestInlineOracleEvalVdsInPlaceRead:
 
         :param tmp_path: Holds the co-located shard, VDS split, and stats.
         """
-        from synth_setter.data.surge_datamodule import VSTDataset
+        from synth_setter.data.vst_datamodule import VSTDataset
 
         audio = _write_vds_split_with_shard(tmp_path)
         dataset = VSTDataset(
@@ -2370,7 +2370,7 @@ class TestInlineOracleEvalVdsInPlaceRead:
 
         :param tmp_path: Roots the populated source dir and the split-only copy.
         """
-        from synth_setter.data.surge_datamodule import VSTDataset
+        from synth_setter.data.vst_datamodule import VSTDataset
 
         source_dir = tmp_path / "source"
         source_dir.mkdir()

@@ -14,7 +14,7 @@ from functools import partial
 
 import torch
 
-from synth_setter.models.surge_fake_oracle_module import (
+from synth_setter.models.vst_fake_oracle_module import (
     FakeOracleNet,
     VSTFakeOracleModule,
 )

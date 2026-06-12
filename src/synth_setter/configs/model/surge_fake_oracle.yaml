@@ -1,10 +1,10 @@
 defaults:
   - _self_
 
-_target_: synth_setter.models.surge_fake_oracle_module.VSTFakeOracleModule
+_target_: synth_setter.models.vst_fake_oracle_module.VSTFakeOracleModule
 
 net:
-  _target_: synth_setter.models.surge_fake_oracle_module.FakeOracleNet
+  _target_: synth_setter.models.vst_fake_oracle_module.FakeOracleNet
   d_out: 92
 
 scheduler:
