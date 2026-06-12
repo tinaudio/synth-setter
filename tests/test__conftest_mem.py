@@ -11,6 +11,7 @@ import pytest
 from tests.conftest import (
     _available_memory_bytes,
     _memory_aware_worker_count,
+    _swap_in_use_bytes,
     pytest_xdist_auto_num_workers,
 )
 
@@ -36,15 +37,27 @@ def _make_open(files: dict[str, str]) -> Callable[..., io.StringIO]:
     return _side
 
 
-def _meminfo(avail_kb: int) -> str:
+def _meminfo(
+    avail_kb: int,
+    *,
+    swap_total_kb: int | None = None,
+    swap_free_kb: int | None = None,
+) -> str:
     """Render a minimal ``/proc/meminfo`` body carrying a ``MemAvailable`` line.
 
     :param avail_kb: Value to report for ``MemAvailable`` (kibibytes).
+    :param swap_total_kb: ``SwapTotal`` (kibibytes); the line is omitted when None.
+    :param swap_free_kb: ``SwapFree`` (kibibytes); the line is omitted when None.
     :returns: Multi-line meminfo text with realistic surrounding fields.
     """
-    return (
+    body = (
         f"MemTotal:       32000000 kB\nMemAvailable:   {avail_kb} kB\nBuffers:          100 kB\n"
     )
+    if swap_total_kb is not None:
+        body += f"SwapTotal:      {swap_total_kb} kB\n"
+    if swap_free_kb is not None:
+        body += f"SwapFree:       {swap_free_kb} kB\n"
+    return body
 
 
 class TestAvailableMemoryBytes:
@@ -109,6 +122,127 @@ class TestAvailableMemoryBytes:
         with patch("builtins.open", side_effect=_make_open(files)):
             assert _available_memory_bytes() is None
 
+    def test_swap_in_use_debited_from_host_avail(self) -> None:
+        """20 GiB avail with 5 GiB swapped → host figure debited to 15 GiB."""
+        files = {
+            _MEMINFO: _meminfo(
+                20 * 1024 * 1024, swap_total_kb=8 * 1024 * 1024, swap_free_kb=3 * 1024 * 1024
+            ),
+            _V2_MEM: "max\n",
+        }
+        with patch("builtins.open", side_effect=_make_open(files)):
+            assert _available_memory_bytes() == 15 * _GIB
+
+    def test_no_swap_used_leaves_host_avail_unchanged(self) -> None:
+        """SwapFree == SwapTotal → nothing swapped → host figure unchanged (no-op)."""
+        files = {
+            _MEMINFO: _meminfo(
+                20 * 1024 * 1024, swap_total_kb=8 * 1024 * 1024, swap_free_kb=8 * 1024 * 1024
+            ),
+            _V2_MEM: "max\n",
+        }
+        with patch("builtins.open", side_effect=_make_open(files)):
+            assert _available_memory_bytes() == 20 * _GIB
+
+    def test_swap_exceeds_avail_floors_host_to_zero(self) -> None:
+        """Swap-in-use larger than MemAvailable → host floored to 0, not negative."""
+        files = {
+            _MEMINFO: _meminfo(
+                4 * 1024 * 1024, swap_total_kb=8 * 1024 * 1024, swap_free_kb=1 * 1024 * 1024
+            ),
+            _V2_MEM: "max\n",
+        }
+        with patch("builtins.open", side_effect=_make_open(files)):
+            assert _available_memory_bytes() == 0
+
+    def test_swap_discount_applies_to_host_term_only(self) -> None:
+        """Discount debits the host figure; the cgroup cap is left untouched in the min."""
+        files = {
+            _MEMINFO: _meminfo(
+                20 * 1024 * 1024, swap_total_kb=8 * 1024 * 1024, swap_free_kb=3 * 1024 * 1024
+            ),
+            _V2_MEM: str(4 * _GIB),
+        }
+        with patch("builtins.open", side_effect=_make_open(files)):
+            assert _available_memory_bytes() == 4 * _GIB
+
+    def test_unreadable_host_avail_with_swap_present_skips_discount(self) -> None:
+        """MemAvailable absent but swap present → discount skipped, no crash → None."""
+        body = (
+            "MemTotal:       32000000 kB\nSwapTotal:      8000000 kB\nSwapFree:       1000000 kB\n"
+        )
+        with patch("builtins.open", side_effect=_make_open({_MEMINFO: body, _V2_MEM: "max\n"})):
+            assert _available_memory_bytes() is None
+
+
+class TestSwapInUseBytes:
+    """Unit tests for _swap_in_use_bytes covering SwapTotal - SwapFree."""
+
+    def test_partial_swap_returns_total_minus_free(self) -> None:
+        """SwapTotal 8 GiB, SwapFree 3 GiB → 5 GiB in use."""
+        files = {
+            _MEMINFO: _meminfo(
+                20 * 1024 * 1024, swap_total_kb=8 * 1024 * 1024, swap_free_kb=3 * 1024 * 1024
+            )
+        }
+        with patch("builtins.open", side_effect=_make_open(files)):
+            assert _swap_in_use_bytes() == 5 * _GIB
+
+    def test_fully_free_swap_returns_zero(self) -> None:
+        """SwapFree == SwapTotal → 0 bytes in use."""
+        files = {
+            _MEMINFO: _meminfo(
+                20 * 1024 * 1024, swap_total_kb=8 * 1024 * 1024, swap_free_kb=8 * 1024 * 1024
+            )
+        }
+        with patch("builtins.open", side_effect=_make_open(files)):
+            assert _swap_in_use_bytes() == 0
+
+    def test_missing_swap_fields_returns_none(self) -> None:
+        """No SwapTotal/SwapFree lines → None so the caller skips the discount."""
+        files = {_MEMINFO: _meminfo(20 * 1024 * 1024)}
+        with patch("builtins.open", side_effect=_make_open(files)):
+            assert _swap_in_use_bytes() is None
+
+    def test_swaptotal_without_swapfree_returns_none(self) -> None:
+        """Only SwapTotal present → None, not a partial figure."""
+        files = {_MEMINFO: _meminfo(20 * 1024 * 1024, swap_total_kb=8 * 1024 * 1024)}
+        with patch("builtins.open", side_effect=_make_open(files)):
+            assert _swap_in_use_bytes() is None
+
+    def test_swapfree_without_swaptotal_returns_none(self) -> None:
+        """Only SwapFree present → None (the symmetric half of the both-required guard)."""
+        files = {_MEMINFO: _meminfo(20 * 1024 * 1024, swap_free_kb=3 * 1024 * 1024)}
+        with patch("builtins.open", side_effect=_make_open(files)):
+            assert _swap_in_use_bytes() is None
+
+    def test_free_exceeding_total_floors_to_zero(self) -> None:
+        """SwapFree > SwapTotal (transient kernel skew) → clamped to 0, never negative."""
+        files = {
+            _MEMINFO: _meminfo(
+                20 * 1024 * 1024, swap_total_kb=2 * 1024 * 1024, swap_free_kb=3 * 1024 * 1024
+            )
+        }
+        with patch("builtins.open", side_effect=_make_open(files)):
+            assert _swap_in_use_bytes() == 0
+
+    def test_malformed_swap_line_returns_none(self) -> None:
+        """Non-integer SwapTotal value → ValueError caught → None, not a crash."""
+        body = "MemAvailable:   20000000 kB\nSwapTotal:      garbage kB\nSwapFree:       0 kB\n"
+        with patch("builtins.open", side_effect=_make_open({_MEMINFO: body})):
+            assert _swap_in_use_bytes() is None
+
+    def test_valueless_swap_line_returns_none(self) -> None:
+        """SwapTotal line with no value → IndexError caught → None, not a crash."""
+        body = "SwapTotal:\nSwapFree:       0 kB\n"
+        with patch("builtins.open", side_effect=_make_open({_MEMINFO: body})):
+            assert _swap_in_use_bytes() is None
+
+    def test_unreadable_meminfo_returns_none(self) -> None:
+        """/proc/meminfo unreadable → OSError caught → None, not a crash."""
+        with patch("builtins.open", side_effect=_make_open({})):
+            assert _swap_in_use_bytes() is None
+
 
 class TestMemoryAwareWorkerCount:
     """Unit tests for _memory_aware_worker_count covering budget division."""
@@ -122,6 +256,19 @@ class TestMemoryAwareWorkerCount:
         files = {_MEMINFO: _meminfo(20 * 1024 * 1024), _V2_MEM: "max\n"}
         with patch("builtins.open", side_effect=_make_open(files)):
             assert _memory_aware_worker_count() == 10
+
+    def test_swap_pressure_reduces_worker_count(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """20 GiB avail but 10 GiB swapped → 10 GiB / 2 GiB = 5 workers, not 10.
+
+        :param monkeypatch: Pytest monkeypatch fixture.
+        """
+        monkeypatch.delenv("PYTEST_XDIST_WORKER_MEM_MB", raising=False)
+        files = {
+            _MEMINFO: _meminfo(20 * 1024 * 1024, swap_total_kb=10 * 1024 * 1024, swap_free_kb=0),
+            _V2_MEM: "max\n",
+        }
+        with patch("builtins.open", side_effect=_make_open(files)):
+            assert _memory_aware_worker_count() == 5
 
     def test_fractional_floors_to_at_least_one(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """1.5 GiB avail / 2 GiB budget → 0.75 floors to 0, then lifted to 1.
