@@ -657,6 +657,87 @@ def test_main_uniform_params_writes_aggregated_metrics_shuffled_csv(tmp_path: Pa
 
 
 @pytest.mark.slow
+def test_main_uniform_params_writes_shuffle_permutation_csv(tmp_path: Path) -> None:
+    """Uniform params → ``shuffle_permutation.csv`` round-trips the ``dest_idx -> src_idx`` mapping.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    audio_root = tmp_path / "audio"
+    audio_root.mkdir()
+    metrics_dir = tmp_path / "metrics"
+    _make_uniform_sample_dir(audio_root, "0", _sine(seconds=0.3), _sine(seconds=0.3))
+    _make_uniform_sample_dir(
+        audio_root, "1", _sine(seconds=0.3, freq=440.0), _sine(seconds=0.3, freq=880.0)
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        compute_audio_metrics_main,
+        [str(audio_root), str(metrics_dir), "-w", "1"],
+        catch_exceptions=False,
+    )
+    assert result.exit_code == 0, result.output
+
+    permutation = pd.read_csv(metrics_dir / "shuffle_permutation.csv")
+    assert list(permutation.columns) == ["dest_idx", "src_idx"]
+    assert permutation["dest_idx"].tolist() == [0, 1]
+    assert sorted(permutation["src_idx"].tolist()) == [0, 1]
+    # _draw_non_identity_permutation guarantees ≥1 pred.wav moves even at the default
+    # seed 0, so for two dirs the only non-identity mapping is the full swap [1, 0].
+    assert permutation["src_idx"].tolist() == [1, 0]
+
+
+def test_run_shuffle_probe_fewer_than_two_sample_dirs_writes_neither_csv(tmp_path: Path) -> None:
+    """A <2 permutation (too few dirs with params) short-circuits before either probe write.
+
+    Pins the ``len(permutation) < 2`` guard, which the CLI cannot reach — its outer
+    ``len(probe_dirs) >= 2`` gate fires first.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    audio_root = tmp_path / "audio"
+    audio_root.mkdir()
+    output_dir = tmp_path / "metrics"
+    output_dir.mkdir()
+    _make_uniform_sample_dir(audio_root, "0", _sine(seconds=0.05), _sine(seconds=0.05))
+
+    cam._run_shuffle_probe(audio_root, output_dir, shuffle_seed=0, num_workers=1)
+
+    assert not (output_dir / "shuffle_permutation.csv").exists()
+    assert not (output_dir / "aggregated_metrics_shuffled.csv").exists()
+
+
+def test_run_shuffle_probe_aggregation_failure_leaves_no_permutation_csv(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed shuffled-metric aggregation leaves no orphaned ``shuffle_permutation.csv``.
+
+    Pins the write ordering: the permutation is recorded only after the shuffled metrics
+    land, so an aggregation that raises must not leave a permutation file behind.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param monkeypatch: Patches ``_aggregate_metrics`` to raise during the shuffled pass.
+    """
+    audio_root = tmp_path / "audio"
+    audio_root.mkdir()
+    output_dir = tmp_path / "metrics"
+    output_dir.mkdir()
+    _make_uniform_sample_dir(audio_root, "0", _sine(seconds=0.05), _sine(seconds=0.05))
+    _make_uniform_sample_dir(audio_root, "1", _sine(seconds=0.05), _sine(seconds=0.05))
+
+    def _raise(*_args: object, **_kwargs: object) -> pd.DataFrame:
+        raise RuntimeError("metric aggregation failed")
+
+    monkeypatch.setattr(cam, "_aggregate_metrics", _raise)
+
+    with pytest.raises(RuntimeError, match="metric aggregation failed"):
+        cam._run_shuffle_probe(audio_root, output_dir, shuffle_seed=0, num_workers=1)
+
+    assert not (output_dir / "shuffle_permutation.csv").exists()
+
+
+@pytest.mark.slow
 def test_main_auto_shuffle_does_not_mutate_source(tmp_path: Path) -> None:
     """The original ``audio/`` tree is byte-identical after the auto-shuffle pass.
 
@@ -714,6 +795,7 @@ def test_main_nonuniform_params_default_seed_skips_shuffle_no_shuffled_csv(
 
     assert result.exit_code == 0, result.output
     assert not (metrics_dir / "aggregated_metrics_shuffled.csv").exists()
+    assert not (metrics_dir / "shuffle_permutation.csv").exists()
 
 
 @pytest.mark.slow
@@ -778,9 +860,10 @@ def test_main_num_workers_zero_raises_usage_error(tmp_path: Path) -> None:
 
 @pytest.mark.slow
 def test_main_single_sample_dir_no_shuffled_csv(tmp_path: Path) -> None:
-    """Single sample dir cannot be shuffled → no ``aggregated_metrics_shuffled.csv``.
+    """Single sample dir cannot be shuffled → no shuffled-metrics or permutation CSV.
 
-    Drives ``main`` with one uniform-params dir; assertion is on filesystem state.
+    Drives ``main`` with one uniform-params dir; both probe outputs are written only when a
+    real shuffle ran (≥2 dirs), so neither must appear.
 
     :param tmp_path: Pytest fixture providing a fresh test directory.
     """
@@ -797,6 +880,7 @@ def test_main_single_sample_dir_no_shuffled_csv(tmp_path: Path) -> None:
     )
     assert result.exit_code == 0, result.output
     assert not (metrics_dir / "aggregated_metrics_shuffled.csv").exists()
+    assert not (metrics_dir / "shuffle_permutation.csv").exists()
 
 
 @pytest.mark.slow

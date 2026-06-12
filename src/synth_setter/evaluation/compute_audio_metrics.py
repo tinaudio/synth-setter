@@ -499,11 +499,12 @@ def _run_shuffle_probe(
     shuffle_seed: int,
     num_workers: int,
 ) -> None:
-    """Run the render-order probe and write ``aggregated_metrics_shuffled.csv``.
+    """Run the render-order probe, writing the shuffled-metrics and permutation CSVs.
 
-    Builds a symlink view with permuted ``pred.wav`` files, runs
-    :func:`_aggregate_metrics` over it, and writes the shuffled aggregation.
-    Cleans up the intermediate temp dir in all cases.
+    Builds a symlink view with permuted ``pred.wav`` files, scores it into
+    ``aggregated_metrics_shuffled.csv``, and records the drawn permutation alongside it to
+    ``shuffle_permutation.csv`` (columns ``dest_idx``, ``src_idx``). Cleans up the
+    intermediate temp dir in all cases.
 
     :param audio_dir_path: Root audio directory passed to :func:`shuffle_pred_audio`.
     :param output_dir_path: Destination dir for ``aggregated_metrics_shuffled.csv``.
@@ -547,6 +548,11 @@ def _run_shuffle_probe(
         pd.DataFrame({"mean": shuffled_df.mean(axis=0), "std": shuffled_df.std(axis=0)}).to_csv(
             output_dir_path / "aggregated_metrics_shuffled.csv"
         )
+    # Written only after the shuffled metrics land, so the permutation never
+    # appears without the metrics it explains.
+    pd.DataFrame({"dest_idx": range(len(permutation)), "src_idx": permutation}).to_csv(
+        output_dir_path / "shuffle_permutation.csv", index=False
+    )
 
 
 if __name__ == "__main__":
