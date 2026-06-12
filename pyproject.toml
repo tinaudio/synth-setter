@@ -339,6 +339,11 @@ select = ["E", "F", "I", "S", "T", "UP", "W", "ANN001",
 # E501: line length handled by ruff-format, S101: allow assert in tests
 ignore = ["E501", "S101"]
 
+[tool.ruff.lint.isort]
+# W&B runs drop an untracked ./wandb dir that flips ruff's first-party detection,
+# making local `make format` reorder imports CI then rejects.
+known-third-party = ["wandb"]
+
 [tool.ruff.lint.per-file-ignores]
 "notebooks/**" = ["E702", "E722", "F841", "T201", "ANN001", "D102", "D103", "D107"]
 "src/synth_setter/pipeline/data/add_music2latent.py" = ["S605", "D102", "D103", "D107"]
