@@ -152,6 +152,13 @@ def test_render_config_yaml_quotes_arbitrary_plugin_path() -> None:
     assert yaml.safe_load(text)["plugin_path"] == hostile
 
 
+def test_render_config_yaml_preserves_reserved_word_spec_name_as_string() -> None:
+    """A spec name that is a YAML 1.1 boolean literal stays a string after parsing."""
+    text = render_config_yaml("on", plugin_path="plugins/on.vst3", renderer_version="1.0")
+
+    assert yaml.safe_load(text)["param_spec_name"] == "on"
+
+
 def test_checkout_relative_path_inside_checkout_is_relative(tmp_path: Path) -> None:
     """A plugin inside the checkout is recorded checkout-relative (POSIX form).
 

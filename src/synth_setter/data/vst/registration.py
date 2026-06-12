@@ -220,9 +220,10 @@ def render_config_yaml(spec_name: str, *, plugin_path: str, renderer_version: st
 
     Generic render knobs (sample rate, shard sizing, cadences) inherit from
     the ``surge_xt`` group config — the same pattern as ``surge_simple.yaml``
-    — while the synth's identity fields are pinned here. Paths and version are
-    double-quoted via ``json.dumps`` (a subset of YAML's double-quote style)
-    so arbitrary plugin paths cannot break the scalar.
+    — while the synth's identity fields are pinned here. Every identity scalar
+    is double-quoted via ``json.dumps`` (a subset of YAML's double-quote style)
+    so arbitrary plugin paths cannot break the scalar and a spec name that is
+    a YAML 1.1 literal (``on``, ``true``) stays a string.
 
     :param spec_name: Registry key; names the param spec and preset.
     :param plugin_path: ``.vst3`` path recorded for render workers.
@@ -239,7 +240,7 @@ def render_config_yaml(spec_name: str, *, plugin_path: str, renderer_version: st
             "",
             f"plugin_path: {json.dumps(plugin_path)}",
             f"preset_path: {json.dumps(preset_repo_path(spec_name))}",
-            f"param_spec_name: {spec_name}",
+            f"param_spec_name: {json.dumps(spec_name)}",
             f"renderer_version: {json.dumps(renderer_version)}",
             "",
         ]
