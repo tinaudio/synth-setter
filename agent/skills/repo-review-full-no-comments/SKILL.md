@@ -30,7 +30,9 @@ agent you launch that agent and relay its result.
    "## Orchestrator agent brief" section below. Only substitute when an explicit
    `<N>` was passed — replace `<N>` with that number; otherwise pass the brief
    verbatim (Step 1 of the brief already resolves PR-or-local-branch mode). Do
-   not otherwise edit the brief.
+   not otherwise edit the brief. **Never spawn this orchestrator on a Fable
+   model** (any id containing `fable`) — pass an explicit `model` such as
+   `sonnet` or `opus`.
 3. The agent returns the **full rendered Markdown report** ending in a final
    `Sentinel: <path>` line. Print exactly what the orchestrator returned,
    verbatim — that trailing line already surfaces the sentinel path, so do not
@@ -45,6 +47,10 @@ sub-agents; you never launch those directly.
 > nothing to GitHub. Complete every step in order and do not stop early. "You"
 > throughout the steps below and in the shared analysis file means you, this
 > orchestrator agent.
+>
+> **Model policy: no Fable.** Pass an explicit `model` whose id does not contain
+> `fable` (e.g. `sonnet` or `opus`) to every per-skill review sub-agent you
+> spawn.
 >
 > ### Step 1: Resolve the target (PR or local branch)
 >

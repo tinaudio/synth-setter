@@ -1,7 +1,7 @@
 import random
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Literal
+from typing import ClassVar, Literal, Protocol
 
 import h5py
 import hdf5plugin  # noqa: F401  # side-effect import: registers HDF5 blosc filters for shard I/O
@@ -18,9 +18,51 @@ from synth_setter.pipeline import r2_io
 _DEFAULT_PARAM_SPEC_NAME = "surge_xt"
 
 
+class ShardColumn(Protocol):
+    """One named array column of a shard — the read surface of ``h5py.Dataset``."""
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        """``(num_rows, *per_row_shape)`` of the column."""
+        ...
+
+    def __getitem__(self, idx: slice | Sequence[int] | np.ndarray) -> np.ndarray:
+        """Materialize the selected rows as one array.
+
+        :param idx: Slice or per-row integer indices (samplers yield numpy arrays).
+        :return: ``(len(idx), *per_row_shape)`` array.
+        """
+        ...
+
+
+class ShardFile(Protocol):
+    """Read handle over one dataset shard — the surface of ``h5py.File`` the readers use."""
+
+    def __getitem__(self, name: str) -> ShardColumn:
+        """Return the named column view.
+
+        :param name: Column name within the shard.
+        :return: Read view over that column.
+        """
+        ...
+
+    def __bool__(self) -> bool:
+        """True while open, False after ``close`` — the teardown tests' contract.
+
+        :return: Whether the shard is still open.
+        """
+        ...
+
+    def close(self) -> None:
+        """Release the underlying storage handle."""
+        ...
+
+
 class VSTDataset(torch.utils.data.Dataset):
     mean: np.ndarray | None = None
     std: np.ndarray | None = None
+    # Declared here because __init__ assigns it on two branches (None in fake mode).
+    dataset_file: ShardFile | None
 
     def __init__(
         self,
@@ -56,10 +98,18 @@ class VSTDataset(torch.utils.data.Dataset):
 
         self.repeat_first_batch = repeat_first_batch
 
-        self.dataset_file = h5py.File(dataset_file, "r")
+        self.dataset_file = self._open(dataset_file)
 
         if use_saved_mean_and_variance:
             self._load_dataset_statistics(dataset_file)
+
+    def _open(self, dataset_file: str | Path) -> ShardFile:
+        """Open the shard read-only; storage-format subclasses override this hook.
+
+        :param dataset_file: Path to the shard on disk.
+        :return: Open read handle for the shard.
+        """
+        return h5py.File(dataset_file, "r")
 
     def _load_dataset_statistics(self, dataset_file: str | Path):
         # for /path/to/train.h5 we would expect to find /path/to/stats.npz
@@ -106,7 +156,7 @@ class VSTDataset(torch.utils.data.Dataset):
             audio=audio,
         )
 
-    def _index_dataset(self, ds: h5py.Dataset, idx: int | Sequence[int]):
+    def _index_dataset(self, ds: ShardColumn, idx: int | Sequence[int] | np.ndarray) -> np.ndarray:
         if self.repeat_first_batch:
             return ds[: self.batch_size]
         if isinstance(idx, int):
@@ -120,7 +170,7 @@ class VSTDataset(torch.utils.data.Dataset):
 
         return ds[idx]
 
-    def __getitem__(self, idx: int | Sequence[int]):
+    def __getitem__(self, idx: int | Sequence[int] | np.ndarray) -> dict[str, torch.Tensor | None]:
         if self.fake:
             return self._get_fake_item()
 
@@ -242,6 +292,10 @@ class ShiftedBatchSampler(torch.utils.data.BatchSampler):
 
 
 class VSTDataModule(LightningDataModule):
+    # Storage-format extension points: subclasses pair a dataset class with its shard suffix.
+    dataset_cls: ClassVar[type[VSTDataset]] = VSTDataset
+    shard_suffix: ClassVar[str] = ".h5"
+
     def __init__(
         self,
         dataset_root: str | Path,
@@ -252,7 +306,7 @@ class VSTDataModule(LightningDataModule):
         num_workers: int = 0,
         fake: bool = False,
         repeat_first_batch: bool = False,
-        predict_file: str | None = None,
+        predict_file: str | Path | None = None,
         conditioning: Literal["mel", "m2l"] = "mel",
         pin_memory: bool = True,
         param_spec_name: str = _DEFAULT_PARAM_SPEC_NAME,
@@ -268,7 +322,9 @@ class VSTDataModule(LightningDataModule):
         self.fake = fake
         self.repeat_first_batch = repeat_first_batch
         self.predict_file = (
-            predict_file if predict_file is not None else self.dataset_root / "test.h5"
+            Path(predict_file)
+            if predict_file is not None
+            else self.dataset_root / f"test{self.shard_suffix}"
         )
         self.conditioning = conditioning
         self.pin_memory = pin_memory
@@ -289,8 +345,8 @@ class VSTDataModule(LightningDataModule):
     def setup(self, stage: str | None = None):
         # KeyError here fails fast on an unregistered param_spec_name.
         num_params = len(param_specs[self.param_spec_name])
-        self.train_dataset = VSTDataset(
-            self.dataset_root / "train.h5",
+        self.train_dataset = self.dataset_cls(
+            self.dataset_root / f"train{self.shard_suffix}",
             batch_size=self.batch_size,
             ot=self.ot,
             use_saved_mean_and_variance=self.use_saved_mean_and_variance,
@@ -300,8 +356,8 @@ class VSTDataModule(LightningDataModule):
             read_m2l=self.conditioning == "m2l",
             num_params=num_params,
         )
-        self.val_dataset = VSTDataset(
-            self.dataset_root / "val.h5",
+        self.val_dataset = self.dataset_cls(
+            self.dataset_root / f"val{self.shard_suffix}",
             batch_size=self.batch_size,
             ot=False,
             use_saved_mean_and_variance=self.use_saved_mean_and_variance,
@@ -311,8 +367,8 @@ class VSTDataModule(LightningDataModule):
             read_m2l=self.conditioning == "m2l",
             num_params=num_params,
         )
-        self.test_dataset = VSTDataset(
-            self.dataset_root / "test.h5",
+        self.test_dataset = self.dataset_cls(
+            self.dataset_root / f"test{self.shard_suffix}",
             batch_size=self.batch_size,
             ot=False,
             use_saved_mean_and_variance=self.use_saved_mean_and_variance,
@@ -322,7 +378,7 @@ class VSTDataModule(LightningDataModule):
             read_m2l=self.conditioning == "m2l",
             num_params=num_params,
         )
-        self.predict_dataset = VSTDataset(
+        self.predict_dataset = self.dataset_cls(
             self.predict_file,
             batch_size=self.batch_size,
             ot=False,

@@ -42,15 +42,32 @@ def test_deprecated_alias_is_renamed_class(alias: type, renamed: type) -> None:
     assert alias is renamed
 
 
+def _flowvae_module_ast() -> ast.Module:
+    # Parse the source instead of importing it: the module pulls the undeclared optional nflows dep.
+    source = (Path(synth_setter.models.__file__).parent / "surge_flowvae_module.py").read_text()
+    return ast.parse(source)
+
+
+def test_flowvae_renamed_class_defined_in_module_source() -> None:
+    """Pin the renamed ``VSTFlowVAEModule`` class definition via AST.
+
+    Identity import needs the optional ``nflows`` dep, so a typo'd class name would
+    otherwise pass the suite and fail only at launch.
+    """
+    tree = _flowvae_module_ast()
+    assert any(
+        isinstance(node, ast.ClassDef) and node.name == "VSTFlowVAEModule"
+        for node in ast.walk(tree)
+    ), "no `class VSTFlowVAEModule` definition found"
+
+
 def test_flowvae_deprecated_alias_assigned_in_module_source() -> None:
     """``surge_flowvae_module`` binds ``SurgeFlowVAEModule`` to ``VSTFlowVAEModule``.
 
     Importing the module needs the undeclared optional ``nflows`` dependency, so
     the alias assignment is pinned in the module AST rather than by identity.
     """
-    source = (Path(synth_setter.models.__file__).parent / "surge_flowvae_module.py").read_text()
-    tree = ast.parse(source)
-    for node in ast.walk(tree):
+    for node in ast.walk(_flowvae_module_ast()):
         if (
             isinstance(node, ast.Assign)
             and any(isinstance(t, ast.Name) and t.id == "SurgeFlowVAEModule" for t in node.targets)
