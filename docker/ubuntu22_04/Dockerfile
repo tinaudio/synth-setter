@@ -218,6 +218,63 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     rm "./${fname}"
 
 # ==========================================
+# VST3 synth fetch: prebuilt Linux bundles for Dexed, Vital, Six Sines and
+# Cardinal, SHA256-pinned and staged under /plugins-staging for the runtime
+# stage to copy. Upstream ships x86_64-only binaries, so non-amd64 builds
+# stage nothing (and the downstream validation/symlink steps skip).
+#
+# Version pins are glibc-bound: Ubuntu 22.04 ships glibc 2.35, and any asset
+# built against glibc 2.38 (Ubuntu 24.04 runners) fails to dlopen. That rules
+# out Dexed > 0.9.8, every OB-Xd Linux release (v2.19 is the only one), and
+# every Ultramaster KR-106 release — hence the latter two are absent here.
+# ==========================================
+FROM ${BASE_IMAGE} AS vst3-synths-fetch
+SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
+ARG TARGETARCH
+RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    unzip \
+    wget
+WORKDIR /plugins-staging
+
+ARG DEXED_VERSION=0.9.8
+ARG DEXED_SHA256=5d026f53504f9303ae2a4a635cf6fdfc50ab9c947cbc0a20ecb5c8f323402dab
+RUN if [ "${TARGETARCH:-}" != "amd64" ]; then echo "skipping Dexed: x86_64-only asset" >&2; exit 0; fi; \
+    wget -q -O /tmp/dexed.zip "https://github.com/asb2m10/dexed/releases/download/v${DEXED_VERSION}/dexed-${DEXED_VERSION}-lnx.zip" && \
+    echo "${DEXED_SHA256}  /tmp/dexed.zip" | sha256sum -c - && \
+    unzip -q /tmp/dexed.zip -d /tmp/dexed && \
+    mv "/tmp/dexed/dexed-${DEXED_VERSION}-lnx/Dexed.vst3" . && \
+    rm -rf /tmp/dexed.zip /tmp/dexed
+
+ARG VITAL_VERSION=1_5_5
+ARG VITAL_SHA256=68f3c7e845f3d7a5b44a83adeb6e34ef221503df00e7964f7d5a1f132a252d13
+RUN if [ "${TARGETARCH:-}" != "amd64" ]; then echo "skipping Vital: x86_64-only asset" >&2; exit 0; fi; \
+    wget -q -O /tmp/vital.zip "https://builds.vital.audio/VitalAudio/vital/${VITAL_VERSION}/VitalInstaller.zip" && \
+    echo "${VITAL_SHA256}  /tmp/vital.zip" | sha256sum -c - && \
+    unzip -q /tmp/vital.zip "VitalInstaller/lib/vst3/Vital.vst3/*" -d /tmp/vital && \
+    mv "/tmp/vital/VitalInstaller/lib/vst3/Vital.vst3" . && \
+    rm -rf /tmp/vital.zip /tmp/vital
+
+ARG SIX_SINES_VERSION=v1.1.0
+ARG SIX_SINES_ASSET=six-sines-linux-2025-03-18-43d10b2.tgz
+ARG SIX_SINES_SHA256=fae7c1c325fde7ed49c978358397cb4bcf69012c4e6eefe2a5968fe6a36d0421
+RUN if [ "${TARGETARCH:-}" != "amd64" ]; then echo "skipping Six Sines: x86_64-only asset" >&2; exit 0; fi; \
+    wget -q -O /tmp/six-sines.tgz "https://github.com/baconpaul/six-sines/releases/download/${SIX_SINES_VERSION}/${SIX_SINES_ASSET}" && \
+    echo "${SIX_SINES_SHA256}  /tmp/six-sines.tgz" | sha256sum -c - && \
+    tar -xzf /tmp/six-sines.tgz -C . "./Six Sines.vst3" && \
+    rm /tmp/six-sines.tgz
+
+ARG CARDINAL_VERSION=26.02
+ARG CARDINAL_SHA256=657df0beeec04184de7359cbd3e173a36eeab78077e1e26da81405632f98ec25
+RUN if [ "${TARGETARCH:-}" != "amd64" ]; then echo "skipping Cardinal: x86_64-only asset" >&2; exit 0; fi; \
+    wget -q -O /tmp/cardinal.tgz "https://github.com/DISTRHO/Cardinal/releases/download/${CARDINAL_VERSION}/Cardinal-linux-x86_64-${CARDINAL_VERSION}.tar.gz" && \
+    echo "${CARDINAL_SHA256}  /tmp/cardinal.tgz" | sha256sum -c - && \
+    tar -xzf /tmp/cardinal.tgz -C . "Cardinal.vst3" && \
+    rm /tmp/cardinal.tgz
+
+# ==========================================
 # Source stage: download synth-setter at a specific git ref via tarball.
 # Uses GitHub archive endpoint — no full clone, no .git metadata.
 # ==========================================
@@ -359,6 +416,26 @@ RUN chmod +x ./run-linux-vst-headless.sh
 # Validate that Surge XT loads correctly under headless X11
 RUN ./run-linux-vst-headless.sh \
     python -X faulthandler -c "from core import load_plugin; load_plugin('/usr/lib/vst3/Surge XT.vst3')"
+
+COPY --from=vst3-synths-fetch /plugins-staging/ /usr/lib/vst3/
+
+# Validate that each fetched synth loads under headless X11, then symlink it
+# into plugins/ like Surge XT below (no-op on non-amd64, where the fetch
+# stage staged nothing). One wrapper invocation per plugin: loading several
+# VST3s sequentially in one process is order-dependently crashy (a Six Sines
+# load after Dexed+Vital segfaults). Entries are "bundle|plugin_name"; Six
+# Sines bundles two plugins, so its entry pins which one to instantiate.
+RUN if [ "${TARGETARCH:-}" != "amd64" ]; then echo "skipping VST3 synth validation on ${TARGETARCH:-<unset>}" >&2; exit 0; fi; \
+    mkdir -p /home/build/synth-setter/plugins; \
+    for entry in "Dexed|" "Vital|" "Six Sines|Six Sines" "Cardinal|"; do \
+      name="${entry%%|*}"; \
+      bundle="/usr/lib/vst3/${name}.vst3"; \
+      plugin_name="${entry#*|}"; \
+      ./run-linux-vst-headless.sh \
+        python -X faulthandler -c "import sys; from pedalboard import VST3Plugin; p = VST3Plugin(sys.argv[1], plugin_name=(sys.argv[2] or None)); assert len(p.parameters) > 0, sys.argv[1]" \
+        "${bundle}" "${plugin_name}"; \
+      ln -s "${bundle}" "/home/build/synth-setter/plugins/${name}.vst3"; \
+    done
 
 RUN mkdir -p /home/build/synth-setter/plugins && \
     ln -s "/usr/lib/vst3/Surge XT.vst3" "/home/build/synth-setter/plugins/Surge XT.vst3"
