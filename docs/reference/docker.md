@@ -66,10 +66,10 @@ The rclone reference doc is planned ([#310](https://github.com/tinaudio/synth-se
 ### First build (dev-snapshot)
 
 The dev-snapshot image has Surge XT + Python deps + source code baked at a
-specific git ref, plus prebuilt VST3 synths (Dexed, Vital, Six Sines,
-Cardinal) fetched by the `vst3-synths-fetch` stage in
-`docker/ubuntu22_04/Dockerfile` (amd64 only; versions and SHA256 pins live
-there as `ARG`s). Each synth is load-validated at build time by
+specific git ref, plus prebuilt VST3 synths (Dexed, Six Sines) fetched by
+the `vst3-synths-fetch` stage in `docker/ubuntu22_04/Dockerfile` (amd64
+only; versions and SHA256 pins live there as `ARG`s). Each synth is
+load-validated at build time by
 `src/synth_setter/scripts/load_vst3_check.py` under headless X11 and
 symlinked into `plugins/`.
 
