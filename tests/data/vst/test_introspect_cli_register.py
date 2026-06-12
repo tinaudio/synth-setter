@@ -401,13 +401,14 @@ def test_register_end_to_end_wires_a_runnable_synth_into_a_full_checkout_copy(
         from synth_setter.data.vst.param_spec_registry import param_specs, preset_paths
 
         spec = param_specs["fake_synth"]
-        sampled = spec.sample()
+        synth_params, note_params = spec.sample()
         print(
             json.dumps(
                 {
                     "preset_path": preset_paths["fake_synth"],
                     "encoded_width": len(spec),
-                    "sampled_params": len(sampled),
+                    "sampled_synth_params": sorted(synth_params),
+                    "sampled_note_params": sorted(note_params),
                 }
             )
         )
@@ -424,7 +425,8 @@ def test_register_end_to_end_wires_a_runnable_synth_into_a_full_checkout_copy(
     spec_source = (root / "src/synth_setter/data/vst/fake_synth_param_spec.py").read_text()
     expected_width = len(exec_module(spec_source)["FAKE_SYNTH_PARAM_SPEC"])
     assert report["encoded_width"] == expected_width
-    assert report["sampled_params"] > 0
+    assert report["sampled_synth_params"] == ["cutoff", "filter_type"]
+    assert report["sampled_note_params"] == ["note_start_and_end", "pitch"]
 
     with initialize_config_dir(
         config_dir=str(root / "src/synth_setter/configs"), version_base="1.3"
