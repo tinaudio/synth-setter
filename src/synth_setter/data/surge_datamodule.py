@@ -170,7 +170,7 @@ class VSTDataset(torch.utils.data.Dataset):
 
         return ds[idx]
 
-    def __getitem__(self, idx: int | Sequence[int] | np.ndarray):
+    def __getitem__(self, idx: int | Sequence[int] | np.ndarray) -> dict[str, torch.Tensor | None]:
         if self.fake:
             return self._get_fake_item()
 

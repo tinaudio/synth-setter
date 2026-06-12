@@ -90,13 +90,14 @@ class LanceShardFile:
             writes) — a stable contract independent of which exception
             ``LanceFileReader`` raises.
         """
+        path = Path(path)
         self._path = str(path)
-        if Path(path).is_dir():
+        if path.is_dir():
             raise ValueError(
                 f"expected a single-file Lance shard, got a directory "
                 f"(legacy Lance dataset layout?): {self._path}"
             )
-        if not Path(path).is_file():
+        if not path.is_file():
             raise ValueError(f"Lance shard file was not found: {self._path}")
         metadata = LanceFileReader(self._path).metadata()
         # The shard is immutable, so row count and per-column tensor shapes are

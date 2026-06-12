@@ -696,7 +696,6 @@ def _smoke_fake_render_cfg(param_spec_name: str) -> RenderConfig:
     :param param_spec_name: Key into :data:`synth_setter.data.vst.param_specs` and
         :data:`synth_setter.data.vst.preset_paths` selecting spec and preset.
     :returns: A CPU ``RenderConfig`` with the GUI toggle disabled.
-    :rtype: RenderConfig
     """
     return RenderConfig(
         plugin_path=PLUGIN_PATH,
