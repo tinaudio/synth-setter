@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781235242445,
+  "lastUpdate": 1781235244244,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -11761,6 +11761,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 17.539016231100003,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "edf59b15a83a43e4464bab3f08e40ddc219bafad",
+          "message": "chore(data-pipeline): real Lance writer tests, one shape contract (#1652)\n\n* refactor(data-pipeline): extract shared dataset_field_shapes helper\n\nThe field→shape mapping (audio/mel_spec/param_array keyed by\nDATASET_FIELD_NAMES, each fed the same render values) was duplicated\nacross make_lance_dataset, validate_shard's _expected_dataset_shapes,\nthe finalize/dummy test-shard seeders, and two lance validator tests —\nfive copies of one writer contract. Home it in\nsynth_setter.data.vst.shapes.dataset_field_shapes(render, num_params)\nand delegate every site to it.\n\nAddresses the code-health block on PR #1642.\n\nRefs #1600\n\n* test(data-pipeline): exercise the real Lance writer and codec in pytest\n\nmake_lance_dataset previously had wiring-only coverage (a mocked\ndispatch assert), and the only value-bearing codec test derived its\nexpectation through the decoder under test. Add:\n\n- fake-plugin e2e: the real writer's shard passes validate_shard, its\n  ShardMetadata round-trips, all three fields are byte-equal to the h5\n  writer's output, and a rerun overwrites rather than appends\n- write→read value-fidelity round-trips for the Lance tensor codec\n  with distinct arange values, two batches, and a non-contiguous\n  transposed input (expectations built directly in numpy)\n- a lance leg for the from_hydra fake-R2 e2e (P31), parametrizing the\n  render→upload→resume loop over hdf5/lance shard suffixes\n\nAddresses the tdd-impl, ml-test, and synth-setter blocks on PR #1642.\n\nRefs #1600\n\n* ci(data-pipeline): trigger finalize smoke on Lance writer/codec changes\n\nThe lance matrix row only fired when finalize_dataset.py or spec.py\nchanged; a regression in writers.py or lance_shard.py triggered no\npresubmit e2e. Add both to the workflow's paths filter.\n\nRefs #1600\n\n* internal-fix(data-pipeline): apply pre-PR review findings on Lance follow-ups\n\nSweep of the repo-review WARN/BLOCK findings: hoist the lance smoke\nrender default to a module constant, parametrize the from_hydra e2e\nover wds too, anchor the row-count assertion and add an inner-shape\nnegative validator test, compare ShardMetadata as a whole model, pin\nfixed params in the rerun test, run the lance/h5 parity multi-batch,\nadd shapes.py and validate_shard.py to the finalize-smoke paths\nfilter, and tighten stale docstrings.\n\nRefs #1600\n\n* internal-fix(data-pipeline): address second-round review findings\n\nResolve the round-two sentinel BLOCK (baked-in field count in a\ndocstring) and the actionable WARNs: dedupe the ShardMetadata and\nzero-array construction in the lance validator tests, stop mutating\ndataset_field_shapes' return value, use the field-name constants, add\na missing-column negative validator test, make the lance rerun pin\ncontent-bearing, type the smoke render constant precisely, note why\nthe RenderConfig import is type-only and the lance imports are\nfunction-local, and re-flow a ragged docstring.\n\nRefs #1600\n\n* internal-fix(data-pipeline): apply third-round comment-hygiene rewrites\n\nApply the sentinel's comment-hygiene rewrites (drop a baked-in batch\nsize and an issue aside, clarify the codec-metadata comment, name the\nlance import correctly), share one smoke_shard_metadata projection\nacross the test helpers and validator tests, accept a Mapping in\n_zero_arrays, and make the new docstring summaries verb-first.\n\nRefs #1600\n\n* test(data-pipeline): pin the remaining Lance validator error branches\n\nCover the value-dtype mismatch (float32 audio vs the halffloat\ncontract) and missing-schema-metadata rejection paths, and drop the\nbaked-in field count from the metadata projection docstrings.\n\nRefs #1600\n\n* docs(data-pipeline): refresh shapes/validator doc-map entries for Lance\n\nThe doc-map covers line for shapes.py still called the shard validator\na planned consumer and predated dataset_field_shapes; the design doc's\nmodule tree described validate_shard.py as HDF5-only. Update both and\nmap the lance_shard.py codec.\n\nRefs #1600",
+          "timestamp": "2026-06-11T22:56:46-04:00",
+          "tree_id": "8960415c7dfc2c1843850444224b7309727a6ff5",
+          "url": "https://github.com/tinaudio/synth-setter/commit/edf59b15a83a43e4464bab3f08e40ddc219bafad"
+        },
+        "date": 1781235243966,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 1.7573906183242798,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 2.0145882351510225,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.01729985512793064,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.007827460765838623,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 1.0678495168685913,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 19.303919260399994,
             "unit": "seconds"
           }
         ]
