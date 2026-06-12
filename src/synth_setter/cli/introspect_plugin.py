@@ -99,7 +99,7 @@ def main(
         load_preset(vst_plugin, preset_path)
     # Cast: pedalboard's plugin surface is dynamic, so VST3Plugin's stubs don't
     # declare the attributes IntrospectablePlugin pins structurally.
-    plugin = cast("IntrospectablePlugin", vst_plugin)
+    plugin = cast(IntrospectablePlugin, vst_plugin)
 
     drafted, skipped = draft_synth_params(plugin)
     source = render_param_spec_module(
