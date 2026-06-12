@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781235244244,
+  "lastUpdate": 1781237522394,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -6798,6 +6798,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.02424168586730957,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0de7109cf11d4b80dfec98a701755655c90bfc81",
+          "message": "chore(lint): pin wandb as ruff-isort third-party to stop import flips (#1637)\n\n* lint\n\n* chore(lint): pin wandb as ruff-isort third-party\n\nW&B runs leave an untracked ./wandb directory at the repo root, which\nflips ruff-isort's first-party detection: a local make format then moves\nevery `import wandb` into the first-party block, and CI (clean checkout)\nrejects exactly those edits. Pinning known-third-party makes import\norder deterministic regardless of local run artifacts.\n\nAlso applies the one real fix the pin surfaces: cadence_sweep_489.py had\n`import wandb` stranded in the first-party block from the same effect.\n\n* chore(lint): re-run make format with the wandb pin\n\nReverts the import reordering from the previous commit, which a stray\nlocal ./wandb run dir had induced; with known-third-party pinned, ruff\nrestores the ordering CI expects.",
+          "timestamp": "2026-06-11T23:03:32-04:00",
+          "tree_id": "13f1d07a284400ebf248b99e45e777a5170bd62a",
+          "url": "https://github.com/tinaudio/synth-setter/commit/0de7109cf11d4b80dfec98a701755655c90bfc81"
+        },
+        "date": 1781237521242,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.835141181945801,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.825598457306623,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.021616756916046143,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.01290595531463623,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.2225639820098877,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 14.86132151375,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 3.9759910106658936,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 7.005302878271323,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.022300463169813156,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.020580053329467773,
             "unit": "1-cos"
           },
           {
