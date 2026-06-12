@@ -85,8 +85,6 @@ class VSTFlowMatchingModule(LightningModule):
         self.vector_field = vector_field
 
     def on_train_start(self):
-        # by default lightning executes validation step sanity checks before training starts,
-        # so it's worth to make sure validation metrics don't store results from these checks
         pass
 
     def _sample_time(self, n: int, device: torch.device) -> torch.Tensor:
@@ -138,25 +136,21 @@ class VSTFlowMatchingModule(LightningModule):
         params = batch["params"]
         noise = batch["noise"]
 
-        # Get conditioning vector
         conditioning = self.encoder(conditioning)
         z = self.vector_field.apply_dropout(conditioning, self.hparams.cfg_dropout_rate)
 
         with torch.no_grad():
-            # Sample time-steps
             t = self._sample_time(params.shape[0], params.device)
             w = self._weight_time(t)
 
             x0 = noise
             x1 = params
 
-            # we sample a point along the trajectory
             x_t = self._sample_probability_path(x0, x1, t)
             target = self._evaluate_target_field(x0, x1, x_t, t)
 
         prediction = self.vector_field(x_t, t, z)
 
-        # compute and weight loss
         loss = (prediction - target).square().mean(dim=-1)
         loss = loss * w
         loss = loss.mean()

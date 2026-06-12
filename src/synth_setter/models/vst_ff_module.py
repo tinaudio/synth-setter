@@ -34,8 +34,6 @@ class VSTFeedForwardModule(LightningModule):
         self.net = net
 
     def on_train_start(self):
-        # by default lightning executes validation step sanity checks before training starts,
-        # so it's worth to make sure validation metrics don't store results from these checks
         pass
 
     def model_step(self, batch: dict[str, torch.Tensor]):

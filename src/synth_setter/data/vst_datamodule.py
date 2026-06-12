@@ -147,8 +147,6 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
         :param dataset_file: Shard path used to locate the sibling ``stats.npz``.
         :raises FileNotFoundError: If the expected ``stats.npz`` is missing.
         """
-        # for /path/to/train.h5 we would expect to find /path/to/stats.npz
-        # if not, we throw an error
         stats_file = VSTDataset.get_stats_file_path(dataset_file)
         if not stats_file.exists():
             raise FileNotFoundError(
