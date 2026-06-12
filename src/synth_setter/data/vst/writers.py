@@ -234,8 +234,8 @@ def _render_in_batches(
         sample_batch: list[VSTDataSample] = []
         sample_batch_start = start_idx
         warmup_done = False
-        # param_sample_cadence="shard": sample 0 sets the shard's single patch (drawn fresh, or
-        # seeded from a copy source's row 0 when fixed); every later render reuses it (#489).
+        # param_sample_cadence="shard": the first rendered row (start_idx) sets the shard's single
+        # patch (drawn fresh, or copied from the source's same row); later renders reuse it (#489).
         shared_synth: dict[str, float] | None = None
         shared_note: NoteParams | None = None
         for i in trange(start_idx, num_samples):
