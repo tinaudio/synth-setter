@@ -13,6 +13,11 @@ defaults:
 experiment_name: surge-smoke-fixture
 run_name: ffn
 
+model:
+  # surge_ff_module.setup() recompiles net on every stage; with fit + test that
+  # double-compiles and raises. Smoke runs don't need the compiled path anyway.
+  compile: false
+
 datamodule:
   # No-clobber-copied by prepare_data() before fit; opt-in R2 source.
   download_dataset_root_uri: r2://intermediate-data/fixtures/smoke-shard-surge-xt-v1/
