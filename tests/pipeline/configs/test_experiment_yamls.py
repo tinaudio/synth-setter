@@ -40,6 +40,7 @@ DATASET_EXPERIMENTS: dict[str, str] = {
     "generate_dataset/smoke-shard-lance": "smoke-shard-lance",
     "generate_dataset/smoke-shard-wds": "smoke-shard-wds",
     "generate_dataset/surge-simple-480k-10k": "surge-simple-480k-10k",
+    "generate_dataset/surge-xt-lance-10k-2k-1k": "surge-xt-lance-10k-2k-1k",
     "generate_dataset/smoke-shard-with-finalize": "smoke-shard",
     "generate_dataset/smoke-shard-with-oracle-eval": "smoke-shard",
 }
