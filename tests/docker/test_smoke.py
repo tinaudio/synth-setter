@@ -35,15 +35,12 @@ skip_no_pedalboard = pytest.mark.skipif(
 # the second element pins the plugin to instantiate in multi-plugin bundles.
 # Absent bundles skip rather than fail — the Dockerfile's build-time
 # validation is the hard gate that the image itself has them.
-EXTRA_SYNTH_VST3S = [
+EXTRA_SYNTH_VST3S = (
     ("/usr/lib/vst3/Dexed.vst3", None),
     ("/usr/lib/vst3/Vital.vst3", None),
     ("/usr/lib/vst3/Six Sines.vst3", "Six Sines"),
     ("/usr/lib/vst3/Cardinal.vst3", None),
-]
-
-# Shared with the Dockerfile's build-time validation of the same bundles.
-_LOAD_CHECK_SCRIPT = "src/synth_setter/scripts/load_vst3_check.py"
+)
 
 
 def _extra_synth_params() -> Iterator["ParameterSet"]:
@@ -98,10 +95,14 @@ def test_extra_synth_vst3_loads(bundle_path: str, plugin_name: str | None) -> No
     """
     # One subprocess per load: sequential in-process loads crash
     # order-dependently (a Six Sines load after Dexed+Vital segfaults).
+    # Same check the Dockerfile's build-time validation runs.
     load_args = [
         str(vst_headless_wrapper()),
         sys.executable,
-        _LOAD_CHECK_SCRIPT,
+        "-X",
+        "faulthandler",
+        "-m",
+        "synth_setter.scripts.load_vst3_check",
         bundle_path,
         plugin_name or "",
     ]

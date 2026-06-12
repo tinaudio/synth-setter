@@ -16,9 +16,12 @@ def main() -> None:
     An empty or missing ``argv[2]`` loads the bundle's sole plugin; bundles
     exposing several plugins require it.
 
-    :raises SystemExit: The bundle loaded but exposes no parameters (a load
-        failure raises pedalboard's own ImportError instead).
+    :raises SystemExit: No bundle argument was given, or the bundle loaded
+        but exposes no parameters (a load failure raises pedalboard's own
+        ImportError instead).
     """
+    if len(sys.argv) < 2:
+        raise SystemExit("usage: load_vst3_check.py BUNDLE [PLUGIN_NAME]")
     bundle_path = sys.argv[1]
     plugin_name = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] else None
     plugin = VST3Plugin(bundle_path, plugin_name=plugin_name)

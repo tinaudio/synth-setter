@@ -38,6 +38,8 @@ on:
       - "src/synth_setter/configs/image/**"
       - "src/synth_setter/pipeline/schemas/image_config.py"
       - "src/synth_setter/pipeline/ci/load_image_config.py"
+      - "src/synth_setter/scripts/load_vst3_check.py"
+      - "src/synth_setter/scripts/run-linux-vst-headless.sh"
       - ".github/workflows/docker-build-validation.yml"
       - "pyproject.toml"
       - "tests/docker/**"
@@ -51,8 +53,8 @@ jobs:
     name: Validate Docker image build
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest-4core
-    # 75 (was 60): the vst3-synths-fetch stage adds ~1.2 GB of downloads and
-    # four headless load validations to a cold-cache build.
+    # Headroom for the vst3-synths-fetch stage: ~1.2 GB of downloads and four
+    # headless load validations on a cold-cache build.
     timeout-minutes: 75
     permissions:
       contents: read
@@ -144,9 +146,8 @@ jobs:
     name: Build and push Docker image
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest-4core
-    # 75 (was 60): the vst3-synths-fetch stage adds ~1.2 GB of downloads and
-    # four headless load validations to a cold-cache build, and the smoke
-    # step now loads five VSTs instead of one.
+    # Headroom for the vst3-synths-fetch stage (~1.2 GB of downloads, four
+    # headless load validations, cold cache) plus the smoke step's per-VST loads.
     timeout-minutes: 75
     permissions:
       contents: read
