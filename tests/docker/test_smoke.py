@@ -93,9 +93,8 @@ def test_extra_synth_vst3_loads(bundle_path: str, plugin_name: str | None) -> No
     :param plugin_name: Plugin to instantiate for multi-plugin bundles, or
         ``None`` for single-plugin bundles.
     """
-    # One subprocess per load: sequential in-process loads crash
-    # order-dependently (a Six Sines load after Dexed+Vital segfaults).
-    # Same check the Dockerfile's build-time validation runs.
+    # One subprocess per load — sequential in-process loads crash
+    # order-dependently (#1649). Same check the Dockerfile build runs.
     load_args = [
         str(vst_headless_wrapper()),
         sys.executable,

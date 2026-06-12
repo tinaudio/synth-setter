@@ -6,29 +6,33 @@ Single source for the per-synth load check: the Docker image build runs it
 """
 
 import sys
+from collections.abc import Sequence
 
 from pedalboard import VST3Plugin
 
 
-def main() -> None:
-    """Load the bundle at ``argv[1]``, instantiating plugin ``argv[2]`` if given.
+def main(argv: Sequence[str] | None = None) -> None:
+    """Load the bundle at ``argv[0]``, instantiating plugin ``argv[1]`` if given.
 
-    An empty or missing ``argv[2]`` loads the bundle's sole plugin; bundles
+    An empty or missing ``argv[1]`` loads the bundle's sole plugin; bundles
     exposing several plugins require it.
 
+    :param argv: Arguments after the program name; defaults to ``sys.argv[1:]``.
     :raises SystemExit: No bundle argument was given, or the bundle loaded
         but exposes no parameters (a load failure raises pedalboard's own
         ImportError instead).
     """
-    if len(sys.argv) < 2:
+    args = list(argv) if argv is not None else sys.argv[1:]
+    if not args:
         raise SystemExit("usage: load_vst3_check.py BUNDLE [PLUGIN_NAME]")
-    bundle_path = sys.argv[1]
-    plugin_name = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] else None
+    bundle_path = args[0]
+    plugin_name = args[1] if len(args) > 1 and args[1] else None
     plugin = VST3Plugin(bundle_path, plugin_name=plugin_name)
     param_count = len(plugin.parameters)  # type: ignore[attr-defined]
     if param_count == 0:
         raise SystemExit(f"{bundle_path}: loaded but exposes no parameters")
-    print(f"{bundle_path}: param_count={param_count}")  # noqa: T201 — CLI check: stdout is its product
+    # CLI check: stdout is its product.
+    print(f"{bundle_path}: param_count={param_count}")  # noqa: T201
 
 
 if __name__ == "__main__":

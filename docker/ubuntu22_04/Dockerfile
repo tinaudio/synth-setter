@@ -222,8 +222,7 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
 # /plugins-staging for the runtime stage to copy. Upstream ships x86_64-only
 # binaries, so non-amd64 builds stage nothing and downstream steps skip.
 # Version pins are glibc-bound: Ubuntu 22.04 ships glibc 2.35, so assets
-# built against glibc 2.38 (Ubuntu 24.04 runners) cannot load — that rules
-# out Dexed > 0.9.8 and every OB-Xd / Ultramaster KR-106 Linux release.
+# built against glibc 2.38 (Ubuntu 24.04 runners) cannot load (#1649).
 # ==========================================
 FROM ${BASE_IMAGE} AS vst3-synths-fetch
 SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
@@ -420,16 +419,16 @@ RUN mkdir -p /home/build/synth-setter/plugins && \
 COPY --from=vst3-synths-fetch /plugins-staging/ /usr/lib/vst3/
 COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/scripts/load_vst3_check.py /artifacts/
 
-# Validate each fetched synth loads under headless X11, then symlink it into
-# plugins/ like Surge XT above (no-op on non-amd64 — nothing staged). One
-# wrapper invocation per plugin: sequential in-process loads crash
-# order-dependently. "bundle|plugin_name" pins multi-plugin bundles.
+# Validate each fetched synth loads under headless X11 — one wrapper run per
+# plugin, since sequential in-process loads crash order-dependently (#1649) —
+# then symlink it into plugins/ like Surge XT above. No-op on non-amd64.
+# Entries are "bundle|plugin_name" (the "|" is required; empty name = sole plugin).
 RUN if [ "${TARGETARCH:-}" != "amd64" ]; then echo "skipping VST3 synth validation on ${TARGETARCH:-<unset>}" >&2; exit 0; fi; \
     for entry in "Dexed|" "Vital|" "Six Sines|Six Sines" "Cardinal|"; do \
       name="${entry%%|*}"; \
       ./run-linux-vst-headless.sh \
-        python -X faulthandler load_vst3_check.py "/usr/lib/vst3/${name}.vst3" "${entry#*|}"; \
-      ln -s "/usr/lib/vst3/${name}.vst3" "/home/build/synth-setter/plugins/${name}.vst3"; \
+        python -X faulthandler load_vst3_check.py "/usr/lib/vst3/${name}.vst3" "${entry#*|}" && \
+      ln -s "/usr/lib/vst3/${name}.vst3" "/home/build/synth-setter/plugins/${name}.vst3" || exit 1; \
     done
 
 WORKDIR /home/build/synth-setter
