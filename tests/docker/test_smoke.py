@@ -37,6 +37,7 @@ skip_no_pedalboard = pytest.mark.skipif(
 # validation is the hard gate that the image itself has them.
 EXTRA_SYNTH_VST3S = (
     ("/usr/lib/vst3/Dexed.vst3", None),
+    ("/usr/lib/vst3/OB-Xf.vst3", None),
     ("/usr/lib/vst3/Six Sines.vst3", "Six Sines"),
 )
 
