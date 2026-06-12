@@ -1,6 +1,384 @@
 # CHANGELOG
 
 
+## v8.33.0 (2026-06-12)
+
+### Build System
+
+- **docker**: Bake Dexed, OB-Xf, Six Sines VST3s into the image
+  ([#1651](https://github.com/tinaudio/synth-setter/pull/1651),
+  [`f7f46d1`](https://github.com/tinaudio/synth-setter/commit/f7f46d1365fe11e97085c3d9f32291067da27256))
+
+* build(docker): bake Dexed, Vital, Six Sines and Cardinal VST3s into ubuntu22_04 image
+
+Add a vst3-synths-fetch stage that downloads SHA256-pinned prebuilt Linux VST3 bundles (Dexed 0.9.8,
+  Vital 1.5.5, Six Sines 1.1.0, Cardinal 26.02), copies them into /usr/lib/vst3, validates each
+  loads under headless X11, and symlinks them into plugins/ alongside Surge XT. Per-synth docker
+  smoke tests run each load in an isolated subprocess because sequential in-process loads crash
+  order-dependently; the CI smoke step now selects VST tests by marker so new synths are covered
+  automatically.
+
+OB-Xd and Ultramaster KR-106 are excluded: every published Linux binary requires glibc 2.38, which
+  the Ubuntu 22.04 base (glibc 2.35) cannot load, and OB-Xd no longer publishes buildable modern
+  source. Dexed is pinned to 0.9.8 for the same reason. All four installs are amd64-only since
+  upstream ships x86_64 binaries; non-amd64 builds skip fetch, validation and symlinks.
+
+Refs #1649
+
+* build(docker): address pre-PR review findings for baked-in VST3 synths
+
+Single-source the per-synth load check in load_vst3_check.py (used by both the Dockerfile validation
+  loop and the docker smoke test, replacing two inline scripts and a fragile stdout parse with an
+  exit-code contract); hoist the VST subprocess timeout to tests/_vst.py; mirror conftest's
+  TimeoutExpired handling and uncaptured-output pattern (#695); drop the duplicate plugins/ mkdir;
+  move ParameterSet under TYPE_CHECKING; bump docker job timeouts for the added downloads and
+  validations; update the requires_vst marker doc.
+
+* build(docker): harden load_vst3_check contract and CI coverage
+
+Add argv usage guard and host-side unit tests pinning load_vst3_check's argv normalization and
+  zero-parameter failure exit; invoke it via -m with -X faulthandler in the smoke test (drops the
+  cwd-relative path and matches the Dockerfile's native-traceback setup); make the synth roster a
+  tuple; add the script and the headless wrapper to docker-build-validation's PR paths filter so
+  changes to either re-validate the image; reword the job-timeout comments per comment-hygiene.
+
+* build(docker): converge review follow-ups on the VST3 synth check
+
+Make load_vst3_check.main take an injected argv (tests no longer patch sys.argv) and pin its exit
+  codes, module-execution path, and success-path stdout in the unit suite with a per-test recorder
+  reset; harden the Dockerfile validation loop with explicit && / || exit 1 chaining and pin the
+  "bundle|plugin_name" entry format; anchor the in-process multi-load crash rationale to #1649 in
+  both comment sites; make the CI timeout comments count-free so they survive roster changes.
+
+* build(docker): align module-execution test docstring with its assertions
+
+* docs(docker): document baked-in VST3 synths and load_vst3_check
+
+Sync docs with the vst3-synths-fetch stage: dev-snapshot image contents in docker.md and
+  getting-started.md, doc-map entries for tests/_vst.py and load_vst3_check.py, smoke-test marker
+  columns in testing.md, the broadened requires_vst marker row in CONTRIBUTING.md, and the
+  synth_setter.scripts row in scripts/README.md.
+
+* test(testing): materialize headless wrapper via as_file in smoke test
+
+resources.py documents str(Traversable) as install-layout dependent; as_file is the contract for
+  subprocess callers.
+
+* docs(docker): note third-party VST3 license terms in fetch stage
+
+Copilot review on PR #1651 asked for an explicit license/redistribution note on the
+  vst3-synths-fetch stage, since the staged binaries ship in the GHCR-published image. Records each
+  synth's upstream license and the review obligation when adding or bumping an asset.
+
+* build(docker): drop Vital and Cardinal from the baked-in VST3 synths
+
+Requested roster trim: keep Dexed 0.9.8 and Six Sines 1.1.0 only. Removes the Vital/Cardinal fetch
+  blocks, validation-loop entries, smoke-test params, and doc mentions, and reverts the CI job
+  timeouts to 60 minutes — without Cardinal the fetch stage downloads ~27 MB instead of ~1.2 GB.
+
+* docs(docker): trim license note to the remaining synth roster
+
+* build(docker): bake OB-Xf VST3 into the ubuntu22_04 image
+
+OB-Xf (surge-synthesizer/OB-Xf, GPL-3.0) is the Surge Synth Team continuation of OB-Xd and, unlike
+  OB-Xd's glibc-2.38-only binaries, ships Ubuntu 22.04-compatible Linux builds. Pin v1.0.3, validate
+  the load at build time, and cover it in the smoke roster (param_count=103 verified headlessly in
+  the devcontainer).
+
+### Chores
+
+- **data-pipeline**: Real Lance writer tests, one shape contract
+  ([#1652](https://github.com/tinaudio/synth-setter/pull/1652),
+  [`edf59b1`](https://github.com/tinaudio/synth-setter/commit/edf59b15a83a43e4464bab3f08e40ddc219bafad))
+
+* refactor(data-pipeline): extract shared dataset_field_shapes helper
+
+The field→shape mapping (audio/mel_spec/param_array keyed by DATASET_FIELD_NAMES, each fed the same
+  render values) was duplicated across make_lance_dataset, validate_shard's
+  _expected_dataset_shapes, the finalize/dummy test-shard seeders, and two lance validator tests —
+  five copies of one writer contract. Home it in
+  synth_setter.data.vst.shapes.dataset_field_shapes(render, num_params) and delegate every site to
+  it.
+
+Addresses the code-health block on PR #1642.
+
+Refs #1600
+
+* test(data-pipeline): exercise the real Lance writer and codec in pytest
+
+make_lance_dataset previously had wiring-only coverage (a mocked dispatch assert), and the only
+  value-bearing codec test derived its expectation through the decoder under test. Add:
+
+- fake-plugin e2e: the real writer's shard passes validate_shard, its ShardMetadata round-trips, all
+  three fields are byte-equal to the h5 writer's output, and a rerun overwrites rather than appends
+  - write→read value-fidelity round-trips for the Lance tensor codec with distinct arange values,
+  two batches, and a non-contiguous transposed input (expectations built directly in numpy) - a
+  lance leg for the from_hydra fake-R2 e2e (P31), parametrizing the render→upload→resume loop over
+  hdf5/lance shard suffixes
+
+Addresses the tdd-impl, ml-test, and synth-setter blocks on PR #1642.
+
+* ci(data-pipeline): trigger finalize smoke on Lance writer/codec changes
+
+The lance matrix row only fired when finalize_dataset.py or spec.py changed; a regression in
+  writers.py or lance_shard.py triggered no presubmit e2e. Add both to the workflow's paths filter.
+
+* internal-fix(data-pipeline): apply pre-PR review findings on Lance follow-ups
+
+Sweep of the repo-review WARN/BLOCK findings: hoist the lance smoke render default to a module
+  constant, parametrize the from_hydra e2e over wds too, anchor the row-count assertion and add an
+  inner-shape negative validator test, compare ShardMetadata as a whole model, pin fixed params in
+  the rerun test, run the lance/h5 parity multi-batch, add shapes.py and validate_shard.py to the
+  finalize-smoke paths filter, and tighten stale docstrings.
+
+* internal-fix(data-pipeline): address second-round review findings
+
+Resolve the round-two sentinel BLOCK (baked-in field count in a docstring) and the actionable WARNs:
+  dedupe the ShardMetadata and zero-array construction in the lance validator tests, stop mutating
+  dataset_field_shapes' return value, use the field-name constants, add a missing-column negative
+  validator test, make the lance rerun pin content-bearing, type the smoke render constant
+  precisely, note why the RenderConfig import is type-only and the lance imports are function-local,
+  and re-flow a ragged docstring.
+
+* internal-fix(data-pipeline): apply third-round comment-hygiene rewrites
+
+Apply the sentinel's comment-hygiene rewrites (drop a baked-in batch size and an issue aside,
+  clarify the codec-metadata comment, name the lance import correctly), share one
+  smoke_shard_metadata projection across the test helpers and validator tests, accept a Mapping in
+  _zero_arrays, and make the new docstring summaries verb-first.
+
+* test(data-pipeline): pin the remaining Lance validator error branches
+
+Cover the value-dtype mismatch (float32 audio vs the halffloat contract) and missing-schema-metadata
+  rejection paths, and drop the baked-in field count from the metadata projection docstrings.
+
+* docs(data-pipeline): refresh shapes/validator doc-map entries for Lance
+
+The doc-map covers line for shapes.py still called the shard validator a planned consumer and
+  predated dataset_field_shapes; the design doc's module tree described validate_shard.py as
+  HDF5-only. Update both and map the lance_shard.py codec.
+
+- **lint**: Pin wandb as ruff-isort third-party to stop import flips
+  ([#1637](https://github.com/tinaudio/synth-setter/pull/1637),
+  [`0de7109`](https://github.com/tinaudio/synth-setter/commit/0de7109cf11d4b80dfec98a701755655c90bfc81))
+
+* lint
+
+* chore(lint): pin wandb as ruff-isort third-party
+
+W&B runs leave an untracked ./wandb directory at the repo root, which flips ruff-isort's first-party
+  detection: a local make format then moves every `import wandb` into the first-party block, and CI
+  (clean checkout) rejects exactly those edits. Pinning known-third-party makes import order
+  deterministic regardless of local run artifacts.
+
+Also applies the one real fix the pin surfaces: cadence_sweep_489.py had `import wandb` stranded in
+  the first-party block from the same effect.
+
+* chore(lint): re-run make format with the wandb pin
+
+Reverts the import reordering from the previous commit, which a stray local ./wandb run dir had
+  induced; with known-third-party pinned, ruff restores the ordering CI expects.
+
+- **repo-review**: Forbid Fable models in the no-comments review gate
+  ([#1661](https://github.com/tinaudio/synth-setter/pull/1661),
+  [`701cfb6`](https://github.com/tinaudio/synth-setter/commit/701cfb6d64b779f2dab1f73c13e5ab6e9599519a))
+
+The pre-PR /repo-review-full-no-comments gate spawns one orchestrator agent that fans out parallel
+  per-skill review sub-agents. Running any of these on a Fable model burns tokens across many passes
+  for no review-quality gain. Forbid Fable at both levels: the main agent must not launch the
+  orchestrator on Fable, and the orchestrator must not launch any per-skill sub-agent on Fable.
+
+- **tools**: Remove obsolete #489 cadence-investigation probe runner
+  ([#1631](https://github.com/tinaudio/synth-setter/pull/1631),
+  [`efa4719`](https://github.com/tinaudio/synth-setter/commit/efa47199ed0a9beadaf1ce75476b1eaee151a62d))
+
+* chore(tools): remove obsolete #489 cadence-investigation probe runner
+
+The full-matrix sweep is now covered by the minimal cadence-sweep runner (cadence_sweep_489,
+  #1629/#1632), so the cadence_investigation_489 probe runner, its unit and e2e tests, its dedicated
+  opt-in CI workflow, and its scripts/README.md entry are removed.
+
+Closes #1630
+
+* docs(tools): list cadence_sweep_489 in the scripts README tools table
+
+### Features
+
+- **data**: Lance dataloader backend for train and eval
+  ([#1601](https://github.com/tinaudio/synth-setter/pull/1601),
+  [`065d776`](https://github.com/tinaudio/synth-setter/commit/065d776a7c97efcb5af978d1e4cee6c2cd5512fe))
+
+* feat(data): Lance dataloader backend for train and eval
+
+Add a Lance storage backend for VST datasets, selectable via datamodule=surge_lance in both the
+  train and eval entrypoints.
+
+VSTDataset gains an _open() hook typed against new ShardFile/ShardColumn protocols, and
+  VSTDataModule gains dataset_cls / shard_suffix extension points, so all batching, stats
+  normalization, OT matching, and fake-mode behavior stays single-sourced. The new lance_datamodule
+  module adapts a single-file Lance shard — the exact format the data pipeline's writer and finalize
+  steps emit via write_lance_file (#1642) — to the h5py-File-like read surface the base classes
+  consume, decoding through the pipeline's shared tensor_chunk_to_numpy helper.
+
+Reads go through per-column LanceFileReader projections: contiguous slices use read_range,
+  strided/fancy indices use take_rows (ascending indices only — the same contract h5py enforces and
+  the samplers already satisfy). Readers are not fork-safe, so each forked DataLoader worker reopens
+  its own on first read, pinned by a multi-worker equivalence test. Reads are copied out of Arrow's
+  read-only buffers before torch.from_numpy; missing columns raise KeyError at lookup like h5py.
+
+Test fixtures write through the pipeline's write_lance_file so they carry the production on-disk
+  format (incl. float16 audio), and a writer-compatibility test reads a shard produced by the
+  pipeline's own lance_schema/write_lance_file path through LanceVSTDataset end-to-end.
+
+* fix(testing): defer pyarrow import out of conftest module scope
+
+The Docker VST CI images install no data dependency group, so the module-scope 'from
+  tests.helpers.lance_fixtures import write_lance_shard' broke conftest collection for every
+  in-image pytest run (exit 4 in test-generate-dataset-shards). Import it inside
+  _write_lance_smoke_split, the only consumer.
+
+* fix(data): address Copilot round-3 review on Lance backend
+
+- Validate ascending fancy indices explicitly in LanceColumn instead of riding on take_rows' error
+  message, which may change across pylance versions; pin our message in the test. - Defer
+  test_eval's write_lance_shard import into the Lance fixture so the module stays collectible
+  without the data dependency group, matching the conftest pattern.
+
+* test(testing): build Lance fixture schema and batch from one items pass
+
+A single (name, data) sequence feeds both the Arrow schema fields and the record-batch arrays,
+  removing any reliance on Mapping iteration consistency across items() and values() (Copilot round
+  4).
+
+* fix(data): address Copilot round-5 review on Lance backend
+
+- Normalize VSTDataModule.predict_file to Path (annotation now str | Path | None), so the attribute
+  is one type on both branches. - Distinguish the legacy Lance dataset-directory layout from a
+  missing shard file in LanceShardFile's construction error; pin the message.
+
+* fix(data): reject negative-step slices in LanceColumn
+
+range() over a negative step yields descending indices, violating the ascending-order read contract;
+  mirror h5py and fail with a clear ValueError instead (Copilot round 6). Pin with a test.
+
+* test(data): generate Lance eval fixture natively, not via h5 conversion
+
+The fake-VST Lance smoke dataset backing test_evaluate_validate_mode_lance_datamodule_runs_oracle
+  was built by rendering HDF5 splits and copying their columns into Lance shards. Render the splits
+  directly through the production make_lance_dataset writer and fold stats.npz straight from the
+  Lance mel rows via stream_stats_lance, so the eval e2e exercises the real produce->consume path
+  end to end with no HDF5 intermediate.
+
+Extract the shared one-shard RenderConfig into _smoke_fake_render_cfg so the h5 and Lance fake
+  renderers stay single-sourced.
+
+Refs #1599
+
+* fix(data): add _self_ to surge_lance datamodule defaults
+
+Sibling datamodule overlays (surge, surge_simple, surge_debug) all list _self_ explicitly to fix
+  Hydra merge order; surge_lance omitted it. Adding it makes the _target_ override of the base
+  surge/vst target unambiguous and silences Hydra's implicit-merge-order warning.
+
+### Internal-Fix
+
+- **data-pipeline**: Seed shard-cadence patch from copy source
+  ([#1650](https://github.com/tinaudio/synth-setter/pull/1650),
+  [`198d69e`](https://github.com/tinaudio/synth-setter/commit/198d69eebfa23f133eea8e31a9e707b386de0fe2))
+
+* internal-fix(data-pipeline): let shard cadence seed its patch from a copy source
+
+`_render_in_batches` raised `ValueError` whenever `param_sample_cadence="shard"` was combined with
+  caller-supplied fixed-params lists (the copy path). That made the #489 "shuffle" cadence sweeps —
+  which pin both shard cadence and a copy URI to hold one fixed preset across the whole matrix —
+  fail on every cell.
+
+Shard cadence and a copy source are reconcilable: the shard's single patch is seeded from the copy
+  source's first row (start_idx is 0 under shard cadence) and reused for every render, so each cell
+  copying the same source renders the identical preset. The render loop already did exactly this
+  once the guard was removed; later source rows are intentionally ignored — shard cadence owns one
+  patch per shard.
+
+Drop the guard and replace `test_..._rejects_caller_fixed_params` with
+  `test_..._seeds_single_patch_from_caller_row_zero`, pinning that sample 0 takes the source's row 0
+  and samples 1..N reuse it. Verified end to end: a shard-cadence + copy run renders every shard
+  (previously raised at cell 0).
+
+Refs #489
+
+* internal-fix(data-pipeline): clarify shard-cadence note-param seeding in docstring
+
+Copilot review (#1650): the _render_in_batches docstring named only the synth list for shard-cadence
+  row-0 seeding and dropped the None case. Note the both lists accept None and that note params
+  share the synth list's row-0 seed-and-reuse behavior under shard cadence.
+
+* internal-fix(data-pipeline): qualify shard-cadence row-0 docstring with start_idx precondition
+
+Copilot review (#1650): the row-0 claim holds only because callers pin start_idx=0 under shard
+  cadence; the seed is fixed_*[start_idx]. State that precondition in the _render_in_batches param
+  docs.
+
+* internal-fix(data-pipeline): say start_idx not row 0 in shard-cadence loop comment
+
+Copilot review (#1650): the inline loop comment said the shard patch is seeded from row 0, but the
+  seed is the first rendered row (start_idx). Match the docstring's start_idx wording for
+  consistency.
+
+* test(data-pipeline): assert shard-cadence copy reuse on real row-0 values
+
+Copilot review (#1650): the fake generate_sample never set synth_params/ note_params, so the reuse
+  assertions rode on MagicMock placeholder attributes. Mirror the real renderer by reporting the
+  rendered params on the fake sample, and assert every render uses the concrete source row-0 dicts.
+
+- **tools**: Bound #489 sweep agents with --count so the run completes
+  ([#1648](https://github.com/tinaudio/synth-setter/pull/1648),
+  [`ad8d644`](https://github.com/tinaudio/synth-setter/commit/ad8d64438bee53607db95f0d7494028361e9d74b))
+
+The #489 cadence runner drove each grid sweep with an unbounded `wandb agent`. On wandb 0.26.1 the
+  agent does not terminate when a grid is exhausted — it stays alive and re-dispatches an
+  already-finished run (observed re-running the same cell hourly). Because `_run_agent` blocks on
+  that subprocess via `check=True`, the sequential loop never returns to start the next sweep, so a
+  single `--size N` run wedged on sweep #2 and never reached sweeps #3–#7.
+
+Bound each agent with `--count <grid cells>` (the product of the swept knob value counts) so it
+  exits once the grid is enumerated and the loop advances. Also correct the module docstring's stale
+  claim that agents serialize to avoid sharing one Xvfb display: each render already gets its own
+  ephemeral Xvfb from the headless wrapper, so the real reason to serialize is host CPU/RAM, not
+  display contention.
+
+Refs #489
+
+### Testing
+
+- **monitoring**: Absorb console_multipart in baseline config compare
+  ([#1654](https://github.com/tinaudio/synth-setter/pull/1654),
+  [`2481cc0`](https://github.com/tinaudio/synth-setter/commit/2481cc0a0a668b083388444bd1d61390d745f4be))
+
+PR #1641 added console_multipart: true to configs/logger/wandb.yaml, making the v0.0.0 baseline
+  compare fail on main (cpu-slow run 27382766985: 44 kosc + 8 surge failures, all on the single
+  logger.wandb.settings subtree). The key is W&B console-log capture — observability only, no model
+  impact — so absorb it via ACCEPTED_DIFFS next to the #1506 console entry, same pattern as #1645.
+
+Fixes #1653
+
+- **testing**: Debit swap-in-use from xdist available-memory estimate
+  ([#1658](https://github.com/tinaudio/synth-setter/pull/1658),
+  [`438f1cc`](https://github.com/tinaudio/synth-setter/commit/438f1ccde570e2f61869e25f40b52887c8074320))
+
+The -n auto clamp sized workers from _available_memory_bytes(), which used the kernel's
+  MemAvailable. MemAvailable counts reclaimable page cache as free, so on a host already swapping it
+  overstates real headroom and the clamp can still over-provision — e.g. on the dev host it read ~16
+  GiB while 7.6 GiB of swap was in use.
+
+Debit swap-in-use (SwapTotal - SwapFree) from the host MemAvailable term before the min with the
+  cgroup cap. It is a no-op when nothing is swapped, only ever lowers the worker count, applies to
+  the host term only (the cgroup hard-cap is untouched), and floors at 0 so severe thrash degrades
+  to one worker. Live on the dev host this takes the swap-adjusted figure to ~8 GiB and the resolved
+  worker count from 7 to 4.
+
+Refs #1646
+
+
 ## v8.32.1 (2026-06-12)
 
 ### Automation
