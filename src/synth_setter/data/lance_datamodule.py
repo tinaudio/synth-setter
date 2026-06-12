@@ -47,14 +47,19 @@ class LanceColumn:
     def __getitem__(self, idx: slice | Sequence[int] | np.ndarray) -> np.ndarray:
         """Materialize the selected rows as one numpy array.
 
-        :param idx: Slice, or ascending per-row integer indices — the same
-            sorted-fancy-index contract h5py enforces; the samplers sort.
+        :param idx: Slice (positive step), or ascending per-row integer
+            indices — the same sorted-index contract h5py enforces; the
+            samplers sort.
         :return: ``(len(idx), *tensor_shape)`` array of the column's dtype.
-        :raises ValueError: If fancy indices are not in ascending order.
+        :raises ValueError: If the slice step is negative or fancy indices are
+            not in ascending order.
         """
         reader = self._shard.column_reader(self._name)
         if isinstance(idx, slice):
             start, stop, step = idx.indices(self._shard.num_rows)
+            if step < 1:
+                # Mirrors h5py, and keeps reads on the ascending-order contract.
+                raise ValueError(f"slice step must be >= 1, got {step}")
             if step == 1:
                 results = reader.read_range(start, max(stop - start, 0))
             else:

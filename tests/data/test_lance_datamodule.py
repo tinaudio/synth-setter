@@ -312,6 +312,16 @@ class TestLanceShardFile:
         shard = LanceShardFile(tmp_path / "train.lance")
         np.testing.assert_allclose(shard["param_array"][1:8:3], columns["param_array"][1:8:3])
 
+    def test_column_negative_step_slice_raises_value_error(self, tmp_path: Path) -> None:
+        """A negative-step slice is rejected — the same contract h5py enforces.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        _write_seeded_lance_shard(tmp_path / "train.lance", num_rows=8)
+        shard = LanceShardFile(tmp_path / "train.lance")
+        with pytest.raises(ValueError, match="step"):
+            _ = shard["param_array"][::-1]
+
     def test_column_unsorted_fancy_index_raises_value_error(self, tmp_path: Path) -> None:
         """Fancy indices must be ascending — the same contract h5py enforces; samplers sort.
 
