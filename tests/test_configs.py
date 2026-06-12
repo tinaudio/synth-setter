@@ -181,3 +181,36 @@ def test_test_mps_yaml_matches_cfg_surge_xt_global(experiment: str, test_mps_yam
         f"{test_mps_yaml}.yaml drifted from "
         f"cfg_surge_xt_global(mps, surge_4, {experiment!r}):\n" + "\n".join(diffs)
     )
+
+
+def test_ffn_smoke_experiment_wires_surge_xt_fixture_source() -> None:
+    """``experiment=surge/ffn_smoke`` bakes in the R2 surge_xt fixture and smoke caps.
+
+    Pins the contract that lets the experiment run end-to-end with no pre-staged
+    local data: the opt-in R2 download URI; the batch size and single-process
+    loading that the 20-sample train split forces; the 10-step cap with the
+    surge-default 1M ``min_steps`` floor dropped; the surge_xt spec wiring
+    (datamodule param spec + LogPerParamMSE callback) and the output width
+    inherited from ``ffn_full``; and the disabled ``compile`` that keeps the
+    fit + test setup from double-compiling.
+    """
+    GlobalHydra.instance().clear()
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            return_hydra_config=False,
+            overrides=["experiment=surge/ffn_smoke"],
+        )
+    GlobalHydra.instance().clear()
+
+    assert cfg.datamodule.download_dataset_root_uri == (
+        "r2://intermediate-data/fixtures/smoke-shard-surge-xt-v1/"
+    )
+    assert cfg.datamodule.batch_size == 4
+    assert cfg.datamodule.num_workers == 0
+    assert cfg.datamodule.param_spec_name == "surge_xt"
+    assert cfg.callbacks.log_per_param_mse.param_spec == "surge_xt"
+    assert cfg.trainer.max_steps == 10
+    assert cfg.trainer.min_steps is None
+    assert cfg.model.net.d_out == 300
+    assert cfg.model.compile is False
