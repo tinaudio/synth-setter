@@ -114,17 +114,17 @@ class TestMemoryAwareWorkerCount:
     """Unit tests for _memory_aware_worker_count covering budget division."""
 
     def test_divides_avail_by_default_budget(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """20 GiB avail / 1 GiB default budget → 20 workers.
+        """20 GiB avail / 2 GiB default budget → 10 workers.
 
         :param monkeypatch: Pytest monkeypatch fixture.
         """
         monkeypatch.delenv("PYTEST_XDIST_WORKER_MEM_MB", raising=False)
         files = {_MEMINFO: _meminfo(20 * 1024 * 1024), _V2_MEM: "max\n"}
         with patch("builtins.open", side_effect=_make_open(files)):
-            assert _memory_aware_worker_count() == 20
+            assert _memory_aware_worker_count() == 10
 
     def test_fractional_floors_to_at_least_one(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """1.5 GiB avail / 1 GiB budget → floored to 1, never 0.
+        """1.5 GiB avail / 2 GiB budget → 0.75 floors to 0, then lifted to 1.
 
         :param monkeypatch: Pytest monkeypatch fixture.
         """
@@ -134,26 +134,29 @@ class TestMemoryAwareWorkerCount:
             assert _memory_aware_worker_count() == 1
 
     def test_env_budget_override_changes_divisor(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """PYTEST_XDIST_WORKER_MEM_MB=2048 → 16 GiB / 2 GiB = 8 workers.
+        """PYTEST_XDIST_WORKER_MEM_MB=4096 → 16 GiB / 4 GiB = 4 workers.
+
+        The override is deliberately distinct from the 2 GiB default so the test fails if the env
+        var is ignored and the default divisor is used instead.
 
         :param monkeypatch: Pytest monkeypatch fixture.
         """
-        monkeypatch.setenv("PYTEST_XDIST_WORKER_MEM_MB", "2048")
+        monkeypatch.setenv("PYTEST_XDIST_WORKER_MEM_MB", "4096")
         files = {_MEMINFO: _meminfo(16 * 1024 * 1024), _V2_MEM: "max\n"}
         with patch("builtins.open", side_effect=_make_open(files)):
-            assert _memory_aware_worker_count() == 8
+            assert _memory_aware_worker_count() == 4
 
     def test_invalid_env_budget_falls_back_to_default(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Non-integer budget env → default 1 GiB divisor, not a crash.
+        """Non-integer budget env → default 2 GiB divisor, not a crash.
 
         :param monkeypatch: Pytest monkeypatch fixture.
         """
         monkeypatch.setenv("PYTEST_XDIST_WORKER_MEM_MB", "not-a-number")
         files = {_MEMINFO: _meminfo(8 * 1024 * 1024), _V2_MEM: "max\n"}
         with patch("builtins.open", side_effect=_make_open(files)):
-            assert _memory_aware_worker_count() == 8
+            assert _memory_aware_worker_count() == 4
 
     def test_no_memory_signal_returns_none(self) -> None:
         """No readable memory signal → None so the caller falls back to CPU count."""
@@ -174,7 +177,7 @@ class TestHookCombinesCpuAndMemory:
         monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: set(range(32)), raising=False)
         files = {_MEMINFO: _meminfo(4 * 1024 * 1024), _V2_MEM: "max\n"}
         with patch("builtins.open", side_effect=_make_open(files)):
-            assert pytest_xdist_auto_num_workers(cast("pytest.Config", None)) == 4
+            assert pytest_xdist_auto_num_workers(cast("pytest.Config", None)) == 2
 
     def test_cpu_clamps_below_memory(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Plenty of memory but few CPUs → cpu count wins the min.

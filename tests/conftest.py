@@ -988,9 +988,9 @@ def _cgroup_aware_cpu_count() -> int:
     return max(1, int(cpus))
 
 
-# Per-worker resident-memory budget for the -n auto memory clamp, overridable
-# via PYTEST_XDIST_WORKER_MEM_MB. 1 GiB suits a torch+h5py+Hydra worker.
-_DEFAULT_WORKER_MEM_MB = 1024
+# Per-worker resident-memory budget for the -n auto clamp (override via
+# PYTEST_XDIST_WORKER_MEM_MB); 2 GiB = measured peak RSS per worker slot (#1646).
+_DEFAULT_WORKER_MEM_MB = 2048
 
 # A v1 memory.limit_in_bytes at or above this is the kernel's unlimited sentinel.
 _MEM_UNLIMITED_SENTINEL = 1 << 62
@@ -1053,7 +1053,7 @@ def _available_memory_bytes() -> int | None:
 def _memory_aware_worker_count() -> int | None:
     """Cap ``-n auto`` workers by available memory and a per-worker budget.
 
-    Divides available memory by ``PYTEST_XDIST_WORKER_MEM_MB`` (default 1 GiB) so
+    Divides available memory by ``PYTEST_XDIST_WORKER_MEM_MB`` (default 2 GiB) so
     a busy shared host doesn't OOM-kill the run — the failure #1490's CPU clamp
     can't catch, since neither cpu.max nor memory.max is set on a shared host.
 

@@ -1,17 +1,22 @@
-"""Shape and mel-front-end primitives shared by writer and validator.
+"""Shape and mel-front-end primitives shared by the writers and the validator.
 
-Hosts the per-row array names (``DATASET_FIELD_NAMES``), the per-field
-on-disk dtypes (``DATASET_FIELD_DTYPES``), the mel-spectrogram constants the
-writer's ``make_spectrogram`` uses, and the audio / mel-spec / param-array
+Hosts the per-row array names, on-disk dtypes, mel-spectrogram constants, and
 dataset-shape calculators. Kept as a thin sibling module so that the shard
-validator and the wds writer can import these primitives without pulling in
-the rest of ``generate_vst_dataset.py``'s import surface (h5py, pedalboard,
-the VST renderer).
+validator and the writers can import these primitives without pulling in the
+rest of ``generate_vst_dataset.py``'s import surface (h5py, pedalboard, the
+VST renderer).
 """
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
+
+if TYPE_CHECKING:
+    # Type-only on purpose: a runtime import would risk a cycle (spec.py lazily
+    # imports the param-spec registry from data.vst).
+    from synth_setter.pipeline.schemas.spec import RenderConfig
 
 AUDIO_FIELD: str = "audio"
 MEL_SPEC_FIELD: str = "mel_spec"
@@ -76,7 +81,7 @@ def mel_n_fft(sample_rate: float) -> int:
 
 
 def mel_n_frames(sample_rate: float, signal_duration_seconds: float) -> int:
-    """Number of mel-time frames librosa produces (``center=True`` default).
+    """Return the number of mel-time frames librosa produces (``center=True`` default).
 
     Mirrors librosa's ``1 + audio_length // hop_length`` calculation.
 
@@ -139,3 +144,32 @@ def param_array_dataset_shape(num_samples: int, num_params: int) -> tuple[int, i
     :rtype: tuple[int, int]
     """
     return (num_samples, num_params)
+
+
+def dataset_field_shapes(render: RenderConfig, num_params: int) -> dict[str, tuple[int, ...]]:
+    """Return the full per-field shapes (leading row axis included) the writers emit per shard.
+
+    Single source of the field→shape contract — keyed by
+    ``DATASET_FIELD_NAMES`` with ``N = render.samples_per_shard``.
+
+    :param render: Per-shard renderer config supplying row count, channels,
+        sample rate, and duration.
+    :param num_params: Width of the per-row parameter vector.
+    :returns: Mapping with one full ``(N, ...)`` shape tuple per dataset field.
+    :rtype: dict[str, tuple[int, ...]]
+    """
+    return {
+        AUDIO_FIELD: audio_dataset_shape(
+            render.samples_per_shard,
+            render.channels,
+            render.sample_rate,
+            render.signal_duration_seconds,
+        ),
+        MEL_SPEC_FIELD: mel_dataset_shape(
+            render.samples_per_shard,
+            render.channels,
+            render.sample_rate,
+            render.signal_duration_seconds,
+        ),
+        PARAM_ARRAY_FIELD: param_array_dataset_shape(render.samples_per_shard, num_params),
+    }

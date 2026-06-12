@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "synth-setter"
-version = "8.32.0"
+version = "8.32.1"
 description = "Studying the effect of permutation symmetry on audio synthesiser parameter inference."
 authors = [{name = "Khaled Tinubu"}, {name = "tinaudio"}]
 readme = "README.md"
@@ -79,6 +79,7 @@ synth-setter-spec-uri = "synth_setter.pipeline.ci.spec_uri:main"
 # (#1139); pip never installs them and uv pip only with `--group`, so a plain
 # `pip install -e .` keeps lite CI light. `runtime` aggregates every sub-group;
 # `dev` (the default group) includes it.
+
 
 
 
@@ -337,6 +338,11 @@ select = ["E", "F", "I", "S", "T", "UP", "W", "ANN001",
           "D100", "D101", "D102", "D103", "D107", "D205", "D401"]
 # E501: line length handled by ruff-format, S101: allow assert in tests
 ignore = ["E501", "S101"]
+
+[tool.ruff.lint.isort]
+# W&B runs drop an untracked ./wandb dir that flips ruff's first-party detection,
+# making local `make format` reorder imports CI then rejects.
+known-third-party = ["wandb"]
 
 [tool.ruff.lint.per-file-ignores]
 "notebooks/**" = ["E702", "E722", "F841", "T201", "ANN001", "D102", "D103", "D107"]
