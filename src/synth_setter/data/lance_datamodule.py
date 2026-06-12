@@ -50,6 +50,7 @@ class LanceColumn:
         :param idx: Slice, or ascending per-row integer indices — the same
             sorted-fancy-index contract h5py enforces; the samplers sort.
         :return: ``(len(idx), *tensor_shape)`` array of the column's dtype.
+        :raises ValueError: If fancy indices are not in ascending order.
         """
         reader = self._shard.column_reader(self._name)
         if isinstance(idx, slice):
@@ -59,7 +60,12 @@ class LanceColumn:
             else:
                 results = reader.take_rows(list(range(start, stop, step)))
         else:
-            results = reader.take_rows([int(i) for i in idx])
+            indices = [int(i) for i in idx]
+            # Explicit check so the contract doesn't ride on take_rows' message,
+            # which may change across pylance versions.
+            if any(b < a for a, b in zip(indices, indices[1:])):
+                raise ValueError(f"fancy indices must be in ascending order, got {indices}")
+            results = reader.take_rows(indices)
         chunk = results.to_table().column(self._name).combine_chunks()
         array = tensor_chunk_to_numpy(chunk, self._inner_shape)
         # Copy out of Arrow's read-only buffer: h5py reads return writable arrays,

@@ -319,7 +319,7 @@ class TestLanceShardFile:
         """
         _write_seeded_lance_shard(tmp_path / "train.lance", num_rows=8)
         shard = LanceShardFile(tmp_path / "train.lance")
-        with pytest.raises(ValueError, match="sorted"):
+        with pytest.raises(ValueError, match="ascending"):
             _ = shard["param_array"][[4, 1]]
 
 

@@ -31,7 +31,6 @@ from synth_setter.cli.train import train
 from synth_setter.data.vst import param_specs, preset_paths
 from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
-from tests.helpers.lance_fixtures import write_lance_shard
 from tests.helpers.run_if import RunIf
 from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
 
@@ -648,6 +647,11 @@ def fake_surge_smoke_lance_datasets(fake_surge_smoke_datasets: Path, tmp_path: P
     :param tmp_path: Per-test tmpdir holding the Lance copy.
     :return: Directory holding ``{train,val,test}.lance`` and ``stats.npz``.
     """
+    # Local import: pulls in pyarrow, which the Docker VST CI images don't
+    # install (no `data` dependency group) — module scope would break their
+    # collection if this file is ever added to an in-image pytest run.
+    from tests.helpers.lance_fixtures import write_lance_shard
+
     root = tmp_path / "lance-smoke"
     root.mkdir()
     for split in ("train", "val", "test"):
