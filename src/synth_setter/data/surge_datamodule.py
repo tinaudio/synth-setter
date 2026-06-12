@@ -1,7 +1,7 @@
 import random
 from collections.abc import Iterator, Sequence
 from pathlib import Path
-from typing import Literal
+from typing import ClassVar, Literal, Protocol
 
 import h5py
 import hdf5plugin  # noqa: F401  # side-effect import: registers HDF5 blosc filters for shard I/O
@@ -19,22 +19,66 @@ from synth_setter.pipeline import r2_io
 _DEFAULT_PARAM_SPEC_NAME = "surge_xt"
 
 
+class ShardColumn(Protocol):
+    """One named array column of a shard — the read surface of ``h5py.Dataset``."""
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        """``(num_rows, *per_row_shape)`` of the column."""
+        ...
+
+    def __getitem__(self, idx: slice | Sequence[int] | np.ndarray) -> np.ndarray:
+        """Materialize the selected rows as one array.
+
+        :param idx: Slice or per-row integer indices (samplers yield numpy arrays).
+        :return: ``(len(idx), *per_row_shape)`` array.
+        """
+        ...
+
+
+class ShardFile(Protocol):
+    """Read handle over one dataset shard — the surface of ``h5py.File`` the readers use."""
+
+    def __getitem__(self, name: str) -> ShardColumn:
+        """Return the named column view.
+
+        :param name: Column name within the shard.
+        :return: Read view over that column.
+        """
+        ...
+
+    def __bool__(self) -> bool:
+        """True while open, False after ``close`` — the teardown tests' contract.
+
+        :return: Whether the shard is still open.
+        """
+        ...
+
+    def close(self) -> None:
+        """Release the underlying storage handle."""
+        ...
+
+
 # DOC601/DOC603: pydoclint cannot see sphinx ``:ivar:`` class-attribute docs (the
 # underlying docstring_parser drops them from its attribute list), so a documented
-# class with class-level annotations is unavoidably flagged; mean/std are described in
-# the class docstring body instead.
+# class with class-level annotations is unavoidably flagged; mean/std/dataset_file are
+# described in the class docstring body instead.
 class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
-    """Batch-indexed dataset over an HDF5 shard of VST renders.
+    """Batch-indexed dataset over one shard of VST renders (HDF5 by default).
 
     Each ``__getitem__`` returns a whole batch (the dataloader uses ``batch_size=None``)
     of conditioning features, target params, and noise (Hungarian-matched to params when
     ``ot`` is set). Fake mode synthesises
     random tensors of the configured width without opening any file. ``mean`` and ``std``
-    hold the optional saved mel statistics applied during reads (``None`` when unloaded).
+    hold the optional saved mel statistics applied during reads (``None`` when unloaded);
+    ``dataset_file`` is the open :class:`ShardFile` handle (``None`` in fake mode).
+    Storage-format subclasses override ``_open`` to read non-HDF5 shards.
     """
 
     mean: np.ndarray | None = None
     std: np.ndarray | None = None
+    # Declared here because __init__ assigns it on two branches (None in fake mode).
+    dataset_file: ShardFile | None
 
     def __init__(
         self,
@@ -84,10 +128,18 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
 
         self.repeat_first_batch = repeat_first_batch
 
-        self.dataset_file = h5py.File(dataset_file, "r")
+        self.dataset_file = self._open(dataset_file)
 
         if use_saved_mean_and_variance:
             self._load_dataset_statistics(dataset_file)
+
+    def _open(self, dataset_file: str | Path) -> ShardFile:
+        """Open the shard read-only; storage-format subclasses override this hook.
+
+        :param dataset_file: Path to the shard on disk.
+        :return: Open read handle for the shard.
+        """
+        return h5py.File(dataset_file, "r")
 
     def _load_dataset_statistics(self, dataset_file: str | Path) -> None:
         """Load the mel mean and std saved alongside the shard.
@@ -152,10 +204,10 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
             audio=audio,
         )
 
-    def _index_dataset(self, ds: h5py.Dataset, idx: int | Sequence[int]) -> np.ndarray:
-        """Slice one batch out of an HDF5 dataset for the given index.
+    def _index_dataset(self, ds: ShardColumn, idx: int | Sequence[int] | np.ndarray) -> np.ndarray:
+        """Slice one batch out of a shard column for the given index.
 
-        :param ds: HDF5 dataset to slice.
+        :param ds: Shard column to slice.
         :param idx: Batch index, or a ``(start, stop)`` pair, or a sequence of rows.
         :returns: The selected batch as a NumPy array.
         """
@@ -172,7 +224,7 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
 
         return ds[idx]
 
-    def __getitem__(self, idx: int | Sequence[int]) -> dict[str, torch.Tensor | None]:
+    def __getitem__(self, idx: int | Sequence[int] | np.ndarray) -> dict[str, torch.Tensor | None]:
         """Read one batch of features, params, and matched noise at ``idx``.
 
         :param idx: Batch index, or a ``(start, stop)`` pair, or a sequence of rows.
@@ -343,7 +395,18 @@ class VSTDataModule(LightningDataModule):
 
     Optionally hydrates ``dataset_root`` from R2 in ``prepare_data``, builds a
     :class:`VSTDataset` per split in ``setup``, and closes open shards in ``teardown``.
+
+    .. attribute :: dataset_cls
+
+        Storage-format extension point: the dataset class each split opens.
+
+    .. attribute :: shard_suffix
+
+        Storage-format extension point: the shard filename suffix per split.
     """
+
+    dataset_cls: ClassVar[type[VSTDataset]] = VSTDataset
+    shard_suffix: ClassVar[str] = ".h5"
 
     def __init__(
         self,
@@ -355,14 +418,15 @@ class VSTDataModule(LightningDataModule):
         num_workers: int = 0,
         fake: bool = False,
         repeat_first_batch: bool = False,
-        predict_file: str | None = None,
+        predict_file: str | Path | None = None,
         conditioning: Literal["mel", "m2l"] = "mel",
         pin_memory: bool = True,
         param_spec_name: str = _DEFAULT_PARAM_SPEC_NAME,
     ) -> None:
         """Store dataloader and dataset configuration for later ``setup``.
 
-        :param dataset_root: Local directory holding the per-split ``.h5`` shards.
+        :param dataset_root: Local directory holding the per-split shard files
+            (``shard_suffix`` names the format).
         :param download_dataset_root_uri: R2 URI to hydrate ``dataset_root`` from, or
             ``None`` to use the local directory as-is.
         :param use_saved_mean_and_variance: Whether to load and apply saved mel stats.
@@ -371,7 +435,7 @@ class VSTDataModule(LightningDataModule):
         :param num_workers: Number of dataloader worker processes.
         :param fake: Whether datasets synthesise random batches instead of reading shards.
         :param repeat_first_batch: Whether every index returns the first batch.
-        :param predict_file: Shard used for prediction; defaults to ``test.h5``.
+        :param predict_file: Shard used for prediction; defaults to the test split.
         :param conditioning: Conditioning feature, either ``"mel"`` or ``"m2l"``.
         :param pin_memory: Whether dataloaders pin memory for faster host-to-device copies.
         :param param_spec_name: Registry key selecting the param spec width.
@@ -387,7 +451,9 @@ class VSTDataModule(LightningDataModule):
         self.fake = fake
         self.repeat_first_batch = repeat_first_batch
         self.predict_file = (
-            predict_file if predict_file is not None else self.dataset_root / "test.h5"
+            Path(predict_file)
+            if predict_file is not None
+            else self.dataset_root / f"test{self.shard_suffix}"
         )
         self.conditioning = conditioning
         self.pin_memory = pin_memory
@@ -406,15 +472,15 @@ class VSTDataModule(LightningDataModule):
         r2_io.download_dir_no_overwrite(self.download_dataset_root_uri, self.dataset_root)
 
     def setup(self, stage: str | None = None) -> None:
-        """Build a :class:`VSTDataset` for each split.
+        """Build a ``dataset_cls`` dataset for each split.
 
         :param stage: Lightning stage hint (``fit``/``validate``/``test``/``predict``);
             unused because every split dataset is constructed eagerly.
         """
         # KeyError here fails fast on an unregistered param_spec_name.
         num_params = len(param_specs[self.param_spec_name])
-        self.train_dataset = VSTDataset(
-            self.dataset_root / "train.h5",
+        self.train_dataset = self.dataset_cls(
+            self.dataset_root / f"train{self.shard_suffix}",
             batch_size=self.batch_size,
             ot=self.ot,
             use_saved_mean_and_variance=self.use_saved_mean_and_variance,
@@ -424,8 +490,8 @@ class VSTDataModule(LightningDataModule):
             read_m2l=self.conditioning == "m2l",
             num_params=num_params,
         )
-        self.val_dataset = VSTDataset(
-            self.dataset_root / "val.h5",
+        self.val_dataset = self.dataset_cls(
+            self.dataset_root / f"val{self.shard_suffix}",
             batch_size=self.batch_size,
             ot=False,
             use_saved_mean_and_variance=self.use_saved_mean_and_variance,
@@ -435,8 +501,8 @@ class VSTDataModule(LightningDataModule):
             read_m2l=self.conditioning == "m2l",
             num_params=num_params,
         )
-        self.test_dataset = VSTDataset(
-            self.dataset_root / "test.h5",
+        self.test_dataset = self.dataset_cls(
+            self.dataset_root / f"test{self.shard_suffix}",
             batch_size=self.batch_size,
             ot=False,
             use_saved_mean_and_variance=self.use_saved_mean_and_variance,
@@ -446,7 +512,7 @@ class VSTDataModule(LightningDataModule):
             read_m2l=self.conditioning == "m2l",
             num_params=num_params,
         )
-        self.predict_dataset = VSTDataset(
+        self.predict_dataset = self.dataset_cls(
             self.predict_file,
             batch_size=self.batch_size,
             ot=False,
@@ -516,7 +582,7 @@ class VSTDataModule(LightningDataModule):
         )
 
     def teardown(self, stage: str | None = None) -> None:
-        """Close every open HDF5 shard handle.
+        """Close every open shard handle.
 
         :param stage: Lightning stage hint; unused because all splits are closed together.
         """

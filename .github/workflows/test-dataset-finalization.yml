@@ -206,20 +206,12 @@ jobs:
           fi
           echo "all required artifacts present at ${PREFIX}"
 
-      # Exercises the operator's stated invariant — the fake_oracle predicts
-      # `batch["params"]` verbatim, so audio metrics on the finalized dataset
-      # stay inside the same bounds `tests/test_train.py::test_train_eval_surge_xt`
-      # pins for the oracle leg. Helper auto-skips when R2 is unreachable.
-      # Heavy runtime lives in PEP 735 groups since #1139; `--group dev`
-      # transitively includes `runtime`. No cpu/cu128 extra (which
-      # [tool.uv.sources] keys torch routing on) is active, so torch resolves
-      # from PyPI — runs on the CPU runner, as before.
+      # Param-fidelity invariant against the finalized dataset; auto-skips when
+      # R2 is unreachable. `--group dev` pulls the PEP 735 runtime group → CPU runner (see #1139).
       - name: Install project deps for oracle helper
-        if: ${{ matrix.output_format != 'lance' }}
         run: uv pip install --system --group dev -e .
 
       - name: Run finalize-artifact oracle helper
-        if: ${{ matrix.output_format != 'lance' }}
         env:
           R2_BUCKET: ${{ steps.bucket.outputs.r2_bucket }}
           FINALIZE_RUN_PREFIX: r2:${{ steps.bucket.outputs.r2_bucket }}/data/${{ matrix.task_name }}/${{ steps.run_id.outputs.run_id }}/

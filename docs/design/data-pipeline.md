@@ -1163,7 +1163,7 @@ Stage order would remain static and explicit — user runs commands in sequence.
 
 ### Data Format Abstraction
 
-The pipeline supports HDF5, WebDataset, and Lance output formats ([§7.10](#710-output-format-hdf5-webdataset-or-lance)). Lance landed as a third enum branch on `OutputFormat` rather than a general `ShardWriter`/`ShardReader` protocol; extract a protocol only if a further format makes the dispatch unwieldy, not speculatively.
+The pipeline supports HDF5, WebDataset, and Lance output formats ([§7.10](#710-output-format-hdf5-webdataset-or-lance)). Lance landed as a third enum branch on `OutputFormat` rather than a general `ShardWriter` protocol; extract a writer protocol only if a further format makes the dispatch unwieldy, not speculatively. Training-side reads are already format-pluggable (`ShardFile` protocol in `src/synth_setter/data/surge_datamodule.py`, with a Lance backend in `lance_datamodule.py`).
 
 ### Content-Addressable Outputs
 

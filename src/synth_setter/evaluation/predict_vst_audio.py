@@ -108,7 +108,7 @@ def resolve_preset_path(preset_path: str | None, param_spec: str) -> str:
     :param param_spec: Registry key naming the spec whose default preset to use.
     :returns: Resolved preset path.
     """
-    return preset_paths[param_spec] if preset_path is None else preset_path
+    return preset_path if preset_path is not None else preset_paths[param_spec]
 
 
 @click.command()
@@ -137,7 +137,7 @@ def main(
     rerender_target: bool = False,
     no_params: bool = False,
     skip_spectrogram: bool = False,
-):
+) -> None:
     preset_path = resolve_preset_path(preset_path, param_spec)
     spec = param_specs[param_spec]
     os.makedirs(output_dir, exist_ok=True)
