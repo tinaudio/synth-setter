@@ -105,7 +105,7 @@ def test_main_plugin_name_passed_through(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 def test_module_execution_bare_invocation_exits_with_usage() -> None:
-    """``python -m synth_setter.scripts.load_vst3_check`` (the smoke-test invocation) works."""
+    """Bare ``python -m`` invocation (the smoke-test entry point) exits non-zero with usage."""
     result = subprocess.run(  # noqa: S603 — fixed argv, no shell
         [sys.executable, "-m", "synth_setter.scripts.load_vst3_check"],
         capture_output=True,
