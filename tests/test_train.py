@@ -450,3 +450,16 @@ def test_train_resumes_from_wandb_resolved_checkpoint(
     assert step_after_resume > step_after_first, (
         f"resume did not advance training: before={step_after_first}, after={step_after_resume}"
     )
+
+
+def test_train_fast_dev_run_lance_datamodule(cfg_train_lance: DictConfig) -> None:
+    """Run 1 train, val, and test step on CPU reading batches from Lance shards.
+
+    Exercises config wiring, ``LanceVSTDataModule`` setup, and real Lance batch
+    reads end-to-end through the in-process ``train(cfg)`` entrypoint; the
+    Hydra composition path lives on the ``cfg_train_lance`` fixture.
+
+    :param cfg_train_lance: Composed ``datamodule=surge_lance`` training config.
+    """
+    HydraConfig().set_config(cfg_train_lance)
+    train(cfg_train_lance)

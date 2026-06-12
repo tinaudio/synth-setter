@@ -21,6 +21,8 @@ import pytest
 from lance.file import LanceFileReader
 
 from synth_setter.data.vst import core
+from synth_setter.data.vst.generate_vst_dataset import fixed_params_from_dataset
+from synth_setter.data.vst.param_spec_registry import param_specs
 from synth_setter.data.vst.shapes import AUDIO_FIELD, MEL_SPEC_FIELD, PARAM_ARRAY_FIELD
 from synth_setter.data.vst.writers import make_hdf5_dataset, make_lance_dataset, make_wds_dataset
 from synth_setter.pipeline.ci.validate_shard import validate_shard
@@ -34,6 +36,7 @@ from tests.data.vst._fake_plugin import FakeVST3Plugin  # noqa: E402
 from tests.data.vst.test_generate_vst_dataset import (  # noqa: E402  pinned canonical patch
     _HARDCODED_NOTE_PARAMS,
     _HARDCODED_SYNTH_PARAMS,
+    _SPEC_NAME,
     _render_cfg,
 )
 from tests.helpers.finalize_shards import build_lance_smoke_spec  # noqa: E402
@@ -194,6 +197,65 @@ def test_make_hdf5_dataset_shard_cadence_writes_one_identical_patch_per_shard(
     assert params.shape[0] == num_samples
     assert np.array_equal(params, np.broadcast_to(params[0], params.shape)), (
         "shard-cadence shard has non-identical param rows"
+    )
+
+
+@pytest.mark.fake_vst
+def test_make_hdf5_dataset_shard_cadence_copy_seeds_whole_shard_from_source_row_zero(
+    tmp_path: Path,
+    install_fake_plugin: FakeVST3Plugin,
+) -> None:
+    """Shard cadence + a copy source renders the source's row-0 patch across the whole shard.
+
+    The wired #489 single-preset path end to end under the fake plugin: a sample-cadence source
+    shard (distinct per-row patches) is decoded by ``fixed_params_from_dataset`` and replayed under
+    ``param_sample_cadence="shard"`` via ``make_hdf5_dataset``. Every output row must equal the
+    source's first row — proving the shard's single patch is seeded from the copy source (not drawn
+    fresh) and reused, with later source rows ignored.
+
+    :param tmp_path: Destination directory for the source and output shards.
+    :param install_fake_plugin: Swaps the plugin loader for the fake so renders need no VST3/X11.
+    """
+    num_samples = 3
+    spec = param_specs[_SPEC_NAME]
+
+    source = tmp_path / "shard-000000.h5"
+    make_hdf5_dataset(
+        hdf5_file=source,
+        render_cfg=_fake_render_cfg(num_samples=num_samples, param_sample_cadence="sample"),
+    )
+    synth_list, note_list = fixed_params_from_dataset(source, spec)
+
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    out = out_dir / "shard-000000.h5"
+    make_hdf5_dataset(
+        hdf5_file=out,
+        render_cfg=_fake_render_cfg(num_samples=num_samples, param_sample_cadence="shard"),
+        fixed_synth_params_list=synth_list,
+        fixed_note_params_list=note_list,
+    )
+
+    with h5py.File(source, "r") as f:
+        src_ds = f["param_array"]
+        assert isinstance(src_ds, h5py.Dataset)
+        src_params = src_ds[...]
+    with h5py.File(out, "r") as f:
+        out_ds = f["param_array"]
+        assert isinstance(out_ds, h5py.Dataset)
+        out_params = out_ds[...]
+
+    # Source rows must differ so "seeded from row 0" is distinguishable from any other row.
+    assert not np.array_equal(src_params[0], src_params[1]), (
+        "source rows must differ for this test"
+    )
+    assert out_params.shape[0] == num_samples
+    assert np.array_equal(out_params, np.broadcast_to(out_params[0], out_params.shape)), (
+        "shard-cadence copy shard has non-identical param rows"
+    )
+    # atol absorbs the float32 decode->re-encode round trip through fixed_params_from_dataset.
+    assert np.allclose(out_params[0], src_params[0], atol=1e-4), (
+        "shard-cadence copy did not seed the shard from the source's first row"
     )
 
 

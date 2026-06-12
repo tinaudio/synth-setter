@@ -1,6 +1,6 @@
 # Docker Reference
 
-> **Last verified:** 2026-06-10
+> **Last verified:** 2026-06-12
 
 How to build, run, and debug Docker images for the synth-setter training
 pipeline. Intended for developers working locally or in CI environments.
@@ -66,7 +66,12 @@ The rclone reference doc is planned ([#310](https://github.com/tinaudio/synth-se
 ### First build (dev-snapshot)
 
 The dev-snapshot image has Surge XT + Python deps + source code baked at a
-specific git ref.
+specific git ref, plus prebuilt VST3 synths (Dexed, OB-Xf, Six Sines) fetched by
+the `vst3-synths-fetch` stage in `docker/ubuntu22_04/Dockerfile` (amd64
+only; versions and SHA256 pins live there as `ARG`s). Each synth is
+load-validated at build time by
+`src/synth_setter/scripts/load_vst3_check.py` under headless X11 and
+symlinked into `plugins/`.
 
 ```bash
 make docker-build-dev-snapshot \
@@ -292,7 +297,7 @@ jq -r .r2.prefix input_spec.json
 
 ### Headless VST
 
-VST3 plugins (Surge XT) require an X11 display. For dataset generation,
+VST3 plugins require an X11 display. For dataset generation,
 X11 is bootstrapped automatically around the generator subprocess inside
 `generate()`. For ad-hoc VST work, prepend the headless wrapper to your command:
 

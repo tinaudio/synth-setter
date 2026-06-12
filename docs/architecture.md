@@ -63,6 +63,9 @@ original parameters.
    checkpoint is uploaded to R2 and referenced by the `model-{config_id}` W&B
    artifact (`log_model: False`, so no checkpoint files go to W&B). Hydra composes
    experiment configs from datamodule, model, trainer, and callback configs.
+   Surge datasets load from HDF5 shards (`datamodule=surge`) or
+   [Lance](https://github.com/lance-format/lance) shards (`datamodule=surge_lance`);
+   both serve training and evaluation.
    Design: [training-pipeline.md](design/training-pipeline.md)
 
 5. **Evaluate** -- Three stages: **predict** (model inference on test data),

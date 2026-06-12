@@ -205,25 +205,18 @@ def _render_in_batches(
     :param render_cfg: Per-shard renderer config from the dataset spec.
     :param param_spec: Resolved parameter spec for the render.
     :param start_idx: First absolute row index this run renders (non-zero on resume).
-    :param fixed_synth_params_list: Optional pre-set synth params, indexed by absolute row.
-    :param fixed_note_params_list: Optional pre-set note params, indexed by absolute row.
+    :param fixed_synth_params_list: Pre-set synth params (or ``None``), indexed by absolute row.
+        Under shard cadence the shard's single patch is seeded from row ``start_idx`` and reused;
+        callers pin ``start_idx=0`` for shard cadence (``make_hdf5_dataset`` resets a partial-shard
+        resume to row 0), so that seed is row 0 and the remaining rows go unused.
+    :param fixed_note_params_list: Pre-set note params (or ``None``), indexed by absolute row;
+        shares the synth list's shard-cadence seed-from-``start_idx``-and-reuse behavior.
     :param flush_batch: Called with ``(batch, batch_start_idx)`` to persist each batch.
     :raises RuntimeError: ``gui_toggle_cadence="always_on"`` reaches the
         renderer without ``plugin_reload_cadence="once"`` (validator regression).
-    :raises ValueError: ``param_sample_cadence="shard"`` combined with
-        caller-supplied fixed-params lists (shard cadence owns its own patch).
     """
     num_samples = render_cfg.samples_per_shard
     share_params = render_cfg.param_sample_cadence == "shard"
-    # Shard cadence draws and owns the shard's single patch, so caller-supplied
-    # fixed lists are contradictory (make_hdf5_dataset keeps start_idx at 0 here).
-    if share_params and (
-        fixed_synth_params_list is not None or fixed_note_params_list is not None
-    ):
-        raise ValueError(
-            'param_sample_cadence="shard" cannot be combined with caller-supplied '
-            "fixed-params lists; shard cadence draws and reuses its own single patch"
-        )
 
     # plugin_reload_cadence="once": load + preset once per shard, reuse instance (#705).
     # "render" (default): cached_plugin stays None; each render reloads (#489 historical).
@@ -236,9 +229,8 @@ def _render_in_batches(
         sample_batch: list[VSTDataSample] = []
         sample_batch_start = start_idx
         warmup_done = False
-        # param_sample_cadence="shard": sample 0 draws params via the normal
-        # loudness-gated path; every later render reuses them so the whole shard
-        # is one identical patch (#489 variance probe).
+        # param_sample_cadence="shard": the first rendered row (start_idx) sets the shard's single
+        # patch (drawn fresh, or copied from the source's same row); later renders reuse it (#489).
         shared_synth: dict[str, float] | None = None
         shared_note: NoteParams | None = None
         for i in trange(start_idx, num_samples):
@@ -350,7 +342,9 @@ def make_hdf5_dataset(
     :param fixed_synth_params_list: Optional pre-set synth params, one dict per
         shard row. Must have length ``samples_per_shard`` (the full shard); rows
         are indexed absolutely, so a resumed run re-renders only its tail while
-        still reading the matching source row.
+        still reading the matching source row. Under ``param_sample_cadence="shard"``
+        only row 0 is consumed (it seeds the shard's single patch); rows 1..N are
+        required but unused.
     :param fixed_note_params_list: Optional pre-set note params; same full-shard
         contract as ``fixed_synth_params_list``.
     """
@@ -419,7 +413,9 @@ def make_wds_dataset(
     :param render_cfg: Per-shard renderer config from the dataset spec.
     :param fixed_synth_params_list: Optional pre-set synth params, one dict per
         shard row. Must have length ``samples_per_shard``; ``list[0]`` lands at
-        row 0 (the wds path is non-resumable, ``start_idx = 0``).
+        row 0 (the wds path is non-resumable, ``start_idx = 0``). Under
+        ``param_sample_cadence="shard"`` only row 0 is consumed (it seeds the
+        shard's single patch); rows 1..N are required but unused.
     :param fixed_note_params_list: Optional pre-set note params; same full-shard
         contract as ``fixed_synth_params_list``.
     """
@@ -469,7 +465,9 @@ def make_lance_dataset(
     :param lance_file: Destination ``.lance`` file.
     :param render_cfg: Per-shard renderer config from the dataset spec.
     :param fixed_synth_params_list: Optional pre-set synth params, one dict per
-        shard row. Must have length ``samples_per_shard``.
+        shard row. Must have length ``samples_per_shard``. Under
+        ``param_sample_cadence="shard"`` only row 0 is consumed (it seeds the
+        shard's single patch); rows 1..N are required but unused.
     :param fixed_note_params_list: Optional pre-set note params; same full-shard
         contract as ``fixed_synth_params_list``.
     """
