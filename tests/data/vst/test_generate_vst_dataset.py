@@ -20,8 +20,6 @@ _ = hdf5plugin  # keep type checkers from flagging the side-effect import
 import numpy as np
 import pytest
 
-from tests._vst import PLUGIN_PATH
-
 from synth_setter.data.vst import param_specs
 from synth_setter.data.vst.core import load_plugin, load_preset, render_params
 from synth_setter.data.vst.generate_vst_dataset import fixed_params_from_dataset
@@ -35,6 +33,7 @@ from synth_setter.evaluation.compute_audio_metrics import (
     compute_wmfcc,
 )
 from synth_setter.pipeline.schemas.spec import RenderConfig
+from tests._vst import PLUGIN_PATH
 
 log = logging.getLogger(__name__)
 
