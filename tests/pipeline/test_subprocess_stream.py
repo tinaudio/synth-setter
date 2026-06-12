@@ -81,16 +81,33 @@ def _child(script: str, marker: str) -> list[str]:
 
 
 def _pid_alive(pid: int) -> bool:
-    """Probe liveness via signal 0; a zombie counts as dead once reaped.
+    r"""Probe liveness via signal 0, treating an unreaped zombie as dead.
+
+    Under ``docker build`` the test process is PID 1: swept descendants
+    reparent to it and stay zombies because nothing ``wait()``\ s them, so
+    signal 0 alone reports them alive forever (#1655). Where ``/proc`` is
+    absent (macOS) the signal-0 result stands — there the runner's init
+    reaps orphans, so zombies do not linger.
 
     :param pid: Process id to probe.
-    :returns: True when the pid still exists.
+    :returns: True when the pid still exists and is not a zombie.
     """
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
-    return True
+    if not Path("/proc").exists():
+        return True
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    fields = stat.rsplit(")", 1)
+    if len(fields) < 2 or not fields[1].split():
+        return True
+    return fields[1].split()[0] != "Z"
 
 
 def _wait_for_file(path: Path, deadline_seconds: float = 5.0) -> str:
@@ -598,6 +615,30 @@ class TestTimeoutEscalation:
         size_after_kill = heartbeat.stat().st_size
         time.sleep(1.0)
         assert heartbeat.stat().st_size == size_after_kill, "grandchild still heartbeating"
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="zombie-state probe reads /proc")
+def test_pid_alive_unreaped_zombie_reports_dead() -> None:
+    """A killed-but-unreaped child (zombie) must not count as alive.
+
+    Guards the ``/proc`` zombie check in ``_pid_alive`` (rationale documented
+    there): a bare signal-0 probe counts an unreaped zombie as alive (#1655).
+    """
+    pid = os.fork()
+    if pid == 0:
+        os._exit(0)
+    try:
+        state = ""
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+            if state == "Z":
+                break
+            time.sleep(0.05)
+        assert state == "Z", f"child never became a zombie (state {state})"
+        assert not _pid_alive(pid), "unreaped zombie reported alive"
+    finally:
+        os.waitpid(pid, 0)
 
 
 class TestPostExitSweep:
