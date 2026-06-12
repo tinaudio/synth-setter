@@ -51,7 +51,9 @@ jobs:
     name: Validate Docker image build
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest-4core
-    timeout-minutes: 60
+    # 75 (was 60): the vst3-synths-fetch stage adds ~1.2 GB of downloads and
+    # four headless load validations to a cold-cache build.
+    timeout-minutes: 75
     permissions:
       contents: read
 
@@ -142,7 +144,10 @@ jobs:
     name: Build and push Docker image
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest-4core
-    timeout-minutes: 60
+    # 75 (was 60): the vst3-synths-fetch stage adds ~1.2 GB of downloads and
+    # four headless load validations to a cold-cache build, and the smoke
+    # step now loads five VSTs instead of one.
+    timeout-minutes: 75
     permissions:
       contents: read
       packages: write

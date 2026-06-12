@@ -218,15 +218,12 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     rm "./${fname}"
 
 # ==========================================
-# VST3 synth fetch: prebuilt Linux bundles for Dexed, Vital, Six Sines and
-# Cardinal, SHA256-pinned and staged under /plugins-staging for the runtime
-# stage to copy. Upstream ships x86_64-only binaries, so non-amd64 builds
-# stage nothing (and the downstream validation/symlink steps skip).
-#
-# Version pins are glibc-bound: Ubuntu 22.04 ships glibc 2.35, and any asset
-# built against glibc 2.38 (Ubuntu 24.04 runners) fails to dlopen. That rules
-# out Dexed > 0.9.8, every OB-Xd Linux release (v2.19 is the only one), and
-# every Ultramaster KR-106 release — hence the latter two are absent here.
+# VST3 synth fetch: SHA256-pinned prebuilt Linux VST3 bundles, staged under
+# /plugins-staging for the runtime stage to copy. Upstream ships x86_64-only
+# binaries, so non-amd64 builds stage nothing and downstream steps skip.
+# Version pins are glibc-bound: Ubuntu 22.04 ships glibc 2.35, so assets
+# built against glibc 2.38 (Ubuntu 24.04 runners) cannot load — that rules
+# out Dexed > 0.9.8 and every OB-Xd / Ultramaster KR-106 Linux release.
 # ==========================================
 FROM ${BASE_IMAGE} AS vst3-synths-fetch
 SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
@@ -417,28 +414,23 @@ RUN chmod +x ./run-linux-vst-headless.sh
 RUN ./run-linux-vst-headless.sh \
     python -X faulthandler -c "from core import load_plugin; load_plugin('/usr/lib/vst3/Surge XT.vst3')"
 
-COPY --from=vst3-synths-fetch /plugins-staging/ /usr/lib/vst3/
-
-# Validate that each fetched synth loads under headless X11, then symlink it
-# into plugins/ like Surge XT below (no-op on non-amd64, where the fetch
-# stage staged nothing). One wrapper invocation per plugin: loading several
-# VST3s sequentially in one process is order-dependently crashy (a Six Sines
-# load after Dexed+Vital segfaults). Entries are "bundle|plugin_name"; Six
-# Sines bundles two plugins, so its entry pins which one to instantiate.
-RUN if [ "${TARGETARCH:-}" != "amd64" ]; then echo "skipping VST3 synth validation on ${TARGETARCH:-<unset>}" >&2; exit 0; fi; \
-    mkdir -p /home/build/synth-setter/plugins; \
-    for entry in "Dexed|" "Vital|" "Six Sines|Six Sines" "Cardinal|"; do \
-      name="${entry%%|*}"; \
-      bundle="/usr/lib/vst3/${name}.vst3"; \
-      plugin_name="${entry#*|}"; \
-      ./run-linux-vst-headless.sh \
-        python -X faulthandler -c "import sys; from pedalboard import VST3Plugin; p = VST3Plugin(sys.argv[1], plugin_name=(sys.argv[2] or None)); assert len(p.parameters) > 0, sys.argv[1]" \
-        "${bundle}" "${plugin_name}"; \
-      ln -s "${bundle}" "/home/build/synth-setter/plugins/${name}.vst3"; \
-    done
-
 RUN mkdir -p /home/build/synth-setter/plugins && \
     ln -s "/usr/lib/vst3/Surge XT.vst3" "/home/build/synth-setter/plugins/Surge XT.vst3"
+
+COPY --from=vst3-synths-fetch /plugins-staging/ /usr/lib/vst3/
+COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/scripts/load_vst3_check.py /artifacts/
+
+# Validate each fetched synth loads under headless X11, then symlink it into
+# plugins/ like Surge XT above (no-op on non-amd64 — nothing staged). One
+# wrapper invocation per plugin: sequential in-process loads crash
+# order-dependently. "bundle|plugin_name" pins multi-plugin bundles.
+RUN if [ "${TARGETARCH:-}" != "amd64" ]; then echo "skipping VST3 synth validation on ${TARGETARCH:-<unset>}" >&2; exit 0; fi; \
+    for entry in "Dexed|" "Vital|" "Six Sines|Six Sines" "Cardinal|"; do \
+      name="${entry%%|*}"; \
+      ./run-linux-vst-headless.sh \
+        python -X faulthandler load_vst3_check.py "/usr/lib/vst3/${name}.vst3" "${entry#*|}"; \
+      ln -s "/usr/lib/vst3/${name}.vst3" "/home/build/synth-setter/plugins/${name}.vst3"; \
+    done
 
 WORKDIR /home/build/synth-setter
 

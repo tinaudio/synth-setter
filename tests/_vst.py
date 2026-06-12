@@ -17,3 +17,7 @@ PLUGIN_PATH = default_plugin_path()
 
 # Probed once at import: a filesystem stat, no plugin load and no network hit.
 VST_AVAILABLE = Path(PLUGIN_PATH).exists()
+
+# Ceiling for any VST-driving subprocess a test spawns; generous because no
+# per-call tuning exists and a hung plugin load should fail, not wedge CI.
+VST_SUBPROCESS_TIMEOUT_SECONDS = 600

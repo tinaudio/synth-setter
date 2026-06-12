@@ -16,22 +16,25 @@ import subprocess
 import sys
 from collections.abc import Iterator
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
-from _pytest.mark import ParameterSet
 
-from tests._vst import PLUGIN_PATH
+from synth_setter.resources import vst_headless_wrapper
+from tests._vst import PLUGIN_PATH, VST_SUBPROCESS_TIMEOUT_SECONDS
+
+if TYPE_CHECKING:
+    from _pytest.mark import ParameterSet
 
 skip_no_pedalboard = pytest.mark.skipif(
     not __import__("importlib").util.find_spec("pedalboard"),
     reason="pedalboard not installed (run inside Docker image)",
 )
 
-# Extra synths baked into the image by the vst3-synths-fetch Dockerfile stage
-# (amd64 only). plugin_name disambiguates multi-plugin bundles; None means the
-# bundle exposes a single plugin. Skip (not fail) when a bundle is absent so
-# the suite stays green on hosts without the baked plugins; the Dockerfile's
-# build-time validation is the hard gate that the image itself has them.
+# Synths baked in by the Dockerfile's vst3-synths-fetch stage (amd64 only);
+# the second element pins the plugin to instantiate in multi-plugin bundles.
+# Absent bundles skip rather than fail — the Dockerfile's build-time
+# validation is the hard gate that the image itself has them.
 EXTRA_SYNTH_VST3S = [
     ("/usr/lib/vst3/Dexed.vst3", None),
     ("/usr/lib/vst3/Vital.vst3", None),
@@ -39,8 +42,11 @@ EXTRA_SYNTH_VST3S = [
     ("/usr/lib/vst3/Cardinal.vst3", None),
 ]
 
+# Shared with the Dockerfile's build-time validation of the same bundles.
+_LOAD_CHECK_SCRIPT = "src/synth_setter/scripts/load_vst3_check.py"
 
-def _extra_synth_params() -> Iterator[ParameterSet]:
+
+def _extra_synth_params() -> Iterator["ParameterSet"]:
     """Yield one pytest param per baked-in synth, skipping absent bundles.
 
     :yields: One ``(bundle_path, plugin_name)`` param per synth.
@@ -90,34 +96,35 @@ def test_extra_synth_vst3_loads(bundle_path: str, plugin_name: str | None) -> No
     :param plugin_name: Plugin to instantiate for multi-plugin bundles, or
         ``None`` for single-plugin bundles.
     """
-    from synth_setter.resources import vst_headless_wrapper
-
-    # Loading several VST3s sequentially in one process is order-dependently
-    # crashy (a Six Sines load after Dexed+Vital segfaults), so each load runs
-    # in its own subprocess under the headless X11 wrapper — the same
-    # isolation boundary tests/conftest.py uses for dataset-generation
-    # subprocesses.
-    load_script = (
-        "import sys; from pedalboard import VST3Plugin; "
-        "p = VST3Plugin(sys.argv[1], plugin_name=(sys.argv[2] or None)); "
-        "print(f'param_count={len(p.parameters)}')"
-    )
-    result = subprocess.run(  # noqa: S603 — fixed argv, no shell
-        [
-            str(vst_headless_wrapper()),
-            sys.executable,
-            "-c",
-            load_script,
-            bundle_path,
-            plugin_name or "",
-        ],
-        capture_output=True,
-        text=True,
-        # Same generous ceiling as conftest's _VST_SUBPROCESS_TIMEOUT_SECONDS;
-        # the slowest load (Six Sines) takes ~155s.
-        timeout=600,
-        check=False,
-    )
-    assert result.returncode == 0, f"load failed for {bundle_path}:\n{result.stderr}"
-    param_count = int(result.stdout.split("param_count=")[1].split()[0])
-    assert param_count > 0
+    # One subprocess per load: sequential in-process loads crash
+    # order-dependently (a Six Sines load after Dexed+Vital segfaults).
+    load_args = [
+        str(vst_headless_wrapper()),
+        sys.executable,
+        _LOAD_CHECK_SCRIPT,
+        bundle_path,
+        plugin_name or "",
+    ]
+    # capture_output stays off to avoid the fork-inherited-fd pipe deadlock
+    # documented in tests/conftest.py (#695); the exit code is the contract.
+    try:
+        result = subprocess.run(  # noqa: S603 — fixed argv, no shell
+            load_args,
+            text=True,
+            check=False,
+            timeout=VST_SUBPROCESS_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail(
+            f"load_vst3_check timed out after {VST_SUBPROCESS_TIMEOUT_SECONDS}s\n"
+            f"command: {load_args}\n"
+            f"(child stdout/stderr printed above; rerun with `pytest -s` if captured)",
+            pytrace=False,
+        )
+    if result.returncode != 0:
+        pytest.fail(
+            f"load_vst3_check failed for {bundle_path} (exit {result.returncode})\n"
+            f"command: {load_args}\n"
+            f"(child stdout/stderr printed above; rerun with `pytest -s` if captured)",
+            pytrace=False,
+        )
