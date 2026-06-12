@@ -614,12 +614,10 @@ class TestTimeoutEscalation:
 
 @pytest.mark.skipif(sys.platform != "linux", reason="zombie-state probe reads /proc")
 def test_pid_alive_unreaped_zombie_reports_dead() -> None:
-    r"""A killed-but-unreaped child (zombie) must not count as alive.
+    """A killed-but-unreaped child (zombie) must not count as alive.
 
-    Inside ``docker build`` the test process is PID 1, so swept grandchildren
-    reparent to it and linger as zombies nothing ``wait()``\ s; probing with
-    signal 0 alone reported them alive forever and failed the sweep tests in
-    every image build (#1655).
+    Guards the ``/proc`` zombie check in ``_pid_alive`` (rationale documented
+    there): a bare signal-0 probe counts an unreaped zombie as alive (#1655).
     """
     pid = os.fork()
     if pid == 0:
