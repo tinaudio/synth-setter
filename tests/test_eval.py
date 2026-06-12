@@ -493,6 +493,7 @@ def test_evaluate_predict_mode_logs_shuffle_permutation_table_to_wandb(
     table = table_payloads[0]["shuffle/permutation"]
     assert isinstance(table, wandb.Table)
     assert table.columns == ["dest_idx", "src_idx"]
+    assert table.data == [[0, 1], [1, 0]]
 
 
 @pytest.mark.fake_vst

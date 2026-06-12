@@ -1077,4 +1077,6 @@ def test_postprocessing_logs_shuffle_permutation_table_when_subprocess_writes_cs
 
     permutation_payloads = [p for p in wandb_log_spy.payloads if "shuffle/permutation" in p]
     assert len(permutation_payloads) == 1
-    assert isinstance(permutation_payloads[0]["shuffle/permutation"], wandb.Table)
+    table = permutation_payloads[0]["shuffle/permutation"]
+    assert isinstance(table, wandb.Table)
+    assert table.columns == ["dest_idx", "src_idx"]

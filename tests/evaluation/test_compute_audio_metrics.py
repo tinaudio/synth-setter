@@ -907,6 +907,7 @@ def test_main_output_dir_inside_audio_dir_default_seed_skips_shuffle(tmp_path: P
     )
     assert result.exit_code == 0, result.output
     assert not (metrics_dir / "aggregated_metrics_shuffled.csv").exists()
+    assert not (metrics_dir / "shuffle_permutation.csv").exists()
 
 
 @pytest.mark.slow
