@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from synth_setter.resources import vst_headless_wrapper
+from synth_setter.resources import as_file, vst_headless_wrapper
 from tests._vst import PLUGIN_PATH, VST_SUBPROCESS_TIMEOUT_SECONDS
 
 if TYPE_CHECKING:
@@ -95,32 +95,34 @@ def test_extra_synth_vst3_loads(bundle_path: str, plugin_name: str | None) -> No
     """
     # One subprocess per load — sequential in-process loads crash
     # order-dependently (#1649). Same check the Dockerfile build runs.
-    load_args = [
-        str(vst_headless_wrapper()),
-        sys.executable,
-        "-X",
-        "faulthandler",
-        "-m",
-        "synth_setter.scripts.load_vst3_check",
-        bundle_path,
-        plugin_name or "",
-    ]
-    # capture_output stays off to avoid the fork-inherited-fd pipe deadlock
-    # documented in tests/conftest.py (#695); the exit code is the contract.
-    try:
-        result = subprocess.run(  # noqa: S603 — fixed argv, no shell
-            load_args,
-            text=True,
-            check=False,
-            timeout=VST_SUBPROCESS_TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired:
-        pytest.fail(
-            f"load_vst3_check timed out after {VST_SUBPROCESS_TIMEOUT_SECONDS}s\n"
-            f"command: {load_args}\n"
-            f"(child stdout/stderr printed above; rerun with `pytest -s` if captured)",
-            pytrace=False,
-        )
+    # as_file materializes the wrapper to a real path (resources.py contract).
+    with as_file(vst_headless_wrapper()) as wrapper_path:
+        load_args = [
+            str(wrapper_path),
+            sys.executable,
+            "-X",
+            "faulthandler",
+            "-m",
+            "synth_setter.scripts.load_vst3_check",
+            bundle_path,
+            plugin_name or "",
+        ]
+        # capture_output stays off to avoid the fork-inherited-fd pipe deadlock
+        # documented in tests/conftest.py (#695); the exit code is the contract.
+        try:
+            result = subprocess.run(  # noqa: S603 — fixed argv, no shell
+                load_args,
+                text=True,
+                check=False,
+                timeout=VST_SUBPROCESS_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            pytest.fail(
+                f"load_vst3_check timed out after {VST_SUBPROCESS_TIMEOUT_SECONDS}s\n"
+                f"command: {load_args}\n"
+                f"(child stdout/stderr printed above; rerun with `pytest -s` if captured)",
+                pytrace=False,
+            )
     if result.returncode != 0:
         pytest.fail(
             f"load_vst3_check failed for {bundle_path} (exit {result.returncode})\n"
