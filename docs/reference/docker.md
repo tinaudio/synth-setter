@@ -351,14 +351,16 @@ If the YAML violates the schema, the workflow fails before any build starts.
 
 ### Tags
 
-| Tag                                              | Mutable? | Purpose                                                                          |
-| ------------------------------------------------ | -------- | -------------------------------------------------------------------------------- |
-| `tinaudio/synth-setter:latest`                   | Yes      | Convenience pointer to the most recent default-branch build                      |
-| `tinaudio/synth-setter:dev-snapshot`             | Yes      | Latest dev-snapshot from main (gated like `latest`)                              |
-| `tinaudio/synth-setter:dev-snapshot-<branch>`    | Yes      | Per-branch floating tag for feature-branch dispatches (slug = branch, `/` → `-`) |
-| `tinaudio/synth-setter:dev-snapshot-<sha>`       | No       | Immutable, used for smoke tests                                                  |
-| `tinaudio/synth-setter:devcontainer-tools`       | Yes      | Latest devcontainer-tools (consumed by `.devcontainer/`)                         |
-| `tinaudio/synth-setter:devcontainer-tools-<sha>` | No       | Immutable, pinnable from `.devcontainer/Dockerfile`                              |
+| Tag                                                 | Mutable? | Purpose                                                                                              |
+| --------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------- |
+| `tinaudio/synth-setter:latest`                      | Yes      | Convenience pointer to the most recent default-branch build                                          |
+| `tinaudio/synth-setter:dev-snapshot`                | Yes      | Latest dev-snapshot from main (gated like `latest`)                                                  |
+| `tinaudio/synth-setter:dev-snapshot-<branch>`       | Yes      | Per-branch floating tag for feature-branch dispatches (slug = branch, `/` → `-`)                     |
+| `tinaudio/synth-setter:dev-snapshot-<sha>`          | No       | Immutable, used for smoke tests                                                                      |
+| `tinaudio/synth-setter:experimental-ubuntu24`       | Yes      | Latest on-demand experimental Ubuntu 24.04 (Noble) build (see [Base OS variants](#base-os-variants)) |
+| `tinaudio/synth-setter:experimental-ubuntu24-<sha>` | No       | Immutable, used for the experimental image's smoke tests                                             |
+| `tinaudio/synth-setter:devcontainer-tools`          | Yes      | Latest devcontainer-tools (consumed by `.devcontainer/`)                                             |
+| `tinaudio/synth-setter:devcontainer-tools-<sha>`    | No       | Immutable, pinnable from `.devcontainer/Dockerfile`                                                  |
 
 Every tag above is also published to `ghcr.io/tinaudio/synth-setter:<same-tag>`
 as a Docker Hub pull mirror.

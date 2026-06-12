@@ -36,7 +36,8 @@ on:
       build_experimental_ubuntu24:
         description: "Build and push the experimental Ubuntu 24.04 (Noble) image under the experimental-ubuntu24 tag instead of the dev-snapshot image."
         required: false
-        default: "false"
+        type: boolean
+        default: false
   push:
     branches: [main]
   pull_request:

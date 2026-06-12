@@ -262,8 +262,8 @@ class TestStaticFieldsAndYamlMerge:
     def test_static_field_values_match_experimental_ubuntu24_yaml(self) -> None:
         """Real experimental-ubuntu24.yaml fields match expected defaults (catches drift).
 
-        Shares the dev-snapshot Dockerfile and build inputs; only the Noble base image and the
-        ubuntu24_04 tag differ.
+        Shares the dev-snapshot Dockerfile and build inputs; the Noble base image, the ubuntu24_04
+        tag, and the config id are what differ.
         """
         config_path = Path(str(configs_dir() / "image" / "experimental-ubuntu24.yaml"))
 
