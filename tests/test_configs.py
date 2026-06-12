@@ -187,9 +187,11 @@ def test_ffn_smoke_experiment_wires_surge_xt_fixture_source() -> None:
     """``experiment=surge/ffn_smoke`` bakes in the R2 surge_xt fixture and smoke caps.
 
     Pins the contract that lets the experiment run end-to-end with no pre-staged
-    local data: the opt-in R2 download URI, the batch size the 20-sample train split
-    forces, the 10-step cap, the surge_xt output width inherited from ``ffn_full``,
-    and the disabled ``compile`` that keeps the fit + test setup from double-compiling.
+    local data: the opt-in R2 download URI, the batch size and single-process loading
+    the 20-sample train split forces, the 10-step cap with the surge-default 1M
+    ``min_steps`` floor dropped, the surge_xt spec wiring (datamodule param spec +
+    LogPerParamMSE callback) and output width inherited from ``ffn_full``, and the
+    disabled ``compile`` that keeps the fit + test setup from double-compiling.
     """
     GlobalHydra.instance().clear()
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
@@ -204,6 +206,10 @@ def test_ffn_smoke_experiment_wires_surge_xt_fixture_source() -> None:
         "r2://intermediate-data/fixtures/smoke-shard-surge-xt-v1/"
     )
     assert cfg.datamodule.batch_size == 4
+    assert cfg.datamodule.num_workers == 0
+    assert cfg.datamodule.param_spec_name == "surge_xt"
+    assert cfg.callbacks.log_per_param_mse.param_spec == "surge_xt"
     assert cfg.trainer.max_steps == 10
+    assert cfg.trainer.min_steps is None
     assert cfg.model.net.d_out == 300
     assert cfg.model.compile is False

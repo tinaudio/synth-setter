@@ -23,6 +23,8 @@ datamodule:
   download_dataset_root_uri: r2://intermediate-data/fixtures/smoke-shard-surge-xt-v1/
   # The fixture's train split holds 20 samples; a larger batch yields zero batches.
   batch_size: 4
+  # Single-process loading for the 20-sample fixture, matching surge/test*.yaml.
+  num_workers: 0
 
 trainer:
   max_steps: 10
