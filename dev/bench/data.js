@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781275758818,
+  "lastUpdate": 1781278053240,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -7050,6 +7050,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.028925955295562744,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "de5078e1307862226359594b8b0008ad6f34962a",
+          "message": "chore(lint): drop stale F821 ignore for surge_ff_module (#1666)\n\nThe `if __name__ == \"__main__\":` block was the file's only F821 source\nand was removed in #1602, so the token is now stale. D102/D103/D107\nremain pending full graduation.\n\nRefs #25",
+          "timestamp": "2026-06-12T10:44:43-04:00",
+          "tree_id": "4e43ada6bde6c26c1b72ac2956bee0c278c237fb",
+          "url": "https://github.com/tinaudio/synth-setter/commit/de5078e1307862226359594b8b0008ad6f34962a"
+        },
+        "date": 1781278052536,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.9200332164764404,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.116879633069038,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.024062074720859528,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.020252346992492676,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.258761405944824,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 15.026844568833326,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.252424716949463,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.373735932856798,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.030734818428754807,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.02457904815673828,
             "unit": "1-cos"
           },
           {
