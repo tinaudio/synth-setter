@@ -100,9 +100,14 @@ def _pid_alive(pid: int) -> bool:
         return True
     try:
         stat = Path(f"/proc/{pid}/stat").read_text()
-    except OSError:
+    except FileNotFoundError:
         return False
-    return stat.rsplit(")", 1)[1].split()[0] != "Z"
+    except OSError:
+        return True
+    fields = stat.rsplit(")", 1)
+    if len(fields) < 2 or not fields[1].split():
+        return True
+    return fields[1].split()[0] != "Z"
 
 
 def _wait_for_file(path: Path, deadline_seconds: float = 5.0) -> str:
@@ -623,6 +628,7 @@ def test_pid_alive_unreaped_zombie_reports_dead() -> None:
     if pid == 0:
         os._exit(0)
     try:
+        state = ""
         deadline = time.monotonic() + 3.0
         while time.monotonic() < deadline:
             state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
