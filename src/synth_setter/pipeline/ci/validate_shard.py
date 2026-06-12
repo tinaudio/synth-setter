@@ -3,7 +3,8 @@
 
 Performs full per-shard validation. Each shard file is dispatched by its
 filename suffix via ``synth_setter.pipeline.schemas.spec.OutputFormat.from_extension``
-to either the HDF5 path (``.h5``) or the wds tar path (``.tar``):
+to the HDF5 path (``.h5``), the wds tar path (``.tar``), or the Lance path
+(``.lance``):
 
 - HDF5 path: each top-level dataset's full ``.shape`` matches the writer's
   source-of-truth shape helpers in ``synth_setter.data.vst.shapes`` —
@@ -14,6 +15,9 @@ to either the HDF5 path (``.h5``) or the wds tar path (``.tar``):
   as a numpy array whose trailing dims (``arr.shape[1:]``) match the same
   shape helpers; and the summed row count per field equals
   ``spec.render.samples_per_shard``.
+- Lance path: schema metadata parses as a strict ``ShardMetadata``; every
+  field is a fixed-shape tensor column whose dtype and inner shape match the
+  same shape helpers; and ``num_rows`` equals ``spec.render.samples_per_shard``.
 
 CLI usage:
     python3 -m synth_setter.pipeline.ci.validate_shard <spec.json|r2://bucket/spec.json>
@@ -37,14 +41,9 @@ import numpy as np
 from pydantic import ValidationError
 
 from synth_setter.data.vst.shapes import (
-    AUDIO_FIELD,
     DATASET_FIELD_DTYPES,
     DATASET_FIELD_NAMES,
-    MEL_SPEC_FIELD,
-    PARAM_ARRAY_FIELD,
-    audio_dataset_shape,
-    mel_dataset_shape,
-    param_array_dataset_shape,
+    dataset_field_shapes,
 )
 from synth_setter.pipeline.r2_io import downloaded_to_tempfile
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
@@ -149,11 +148,7 @@ def check_shard_contracts(
 
 
 def _expected_dataset_shapes(spec: DatasetSpec) -> dict[str, tuple[int, ...]]:
-    """Full per-field shapes (N + inner) the writer emits for ``spec``.
-
-    Keys match ``DATASET_FIELD_NAMES``; values come from the writer's own
-    shape helpers in ``synth_setter.data.vst.shapes`` so a future renderer
-    change that drifts the audio / mel / param shapes fails fast here.
+    """Adapt ``spec`` to :func:`dataset_field_shapes`, the shape contract's home.
 
     :param spec: Dataset spec whose ``render`` config and ``num_params`` parameterize
         the per-field shapes the writer would emit for one shard.
@@ -161,17 +156,7 @@ def _expected_dataset_shapes(spec: DatasetSpec) -> dict[str, tuple[int, ...]]:
         ``(N, ...)`` shape tuple.
     :rtype: dict[str, tuple[int, ...]]
     """
-    render = spec.render
-    num_samples = render.samples_per_shard
-    return {
-        AUDIO_FIELD: audio_dataset_shape(
-            num_samples, render.channels, render.sample_rate, render.signal_duration_seconds
-        ),
-        MEL_SPEC_FIELD: mel_dataset_shape(
-            num_samples, render.channels, render.sample_rate, render.signal_duration_seconds
-        ),
-        PARAM_ARRAY_FIELD: param_array_dataset_shape(num_samples, spec.num_params),
-    }
+    return dataset_field_shapes(spec.render, spec.num_params)
 
 
 def validate_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:

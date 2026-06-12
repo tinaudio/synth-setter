@@ -1,6 +1,809 @@
 # CHANGELOG
 
 
+## v8.32.1 (2026-06-12)
+
+### Automation
+
+- **codex**: Add repo skill projection ([#1576](https://github.com/tinaudio/synth-setter/pull/1576),
+  [`4000aaf`](https://github.com/tinaudio/synth-setter/commit/4000aaf2b0b78c950e1f2e32feb4270109c65804))
+
+* internal-feat(codex): add repo skill projection
+
+* Apply suggestions from code review
+
+Co-authored-by: Copilot Autofix powered by AI <175728472+Copilot@users.noreply.github.com>
+
+---------
+
+- **codex**: Cover agent skill discovery
+  ([#1577](https://github.com/tinaudio/synth-setter/pull/1577),
+  [`166b5fb`](https://github.com/tinaudio/synth-setter/commit/166b5fb7d8ec068486667976775515b9f2e6d4da))
+
+* internal-feat(codex): add repo skill projection
+
+* internal-feat(codex): cover agent skill discovery
+
+* internal-feat(codex): add setup doctor (#1579)
+
+* internal-fix(codex): make doctor cwd-robust and test PATH portable
+
+Address review feedback on PR #1577: - scripts/dev/codex-doctor.sh: cd into repo_root before
+  has_skill so repo-relative skill probes resolve when run from a subdirectory (comment #3385288401)
+  - tests/infra/test_codex_doctor.py: use os.pathsep instead of a hard-coded ':' PATH separator for
+  cross-platform parity (comment #3385288421)
+
+Refs #1561
+
+* Apply suggestions from code review
+
+Co-authored-by: Copilot Autofix powered by AI <175728472+Copilot@users.noreply.github.com>
+
+---------
+
+### Bug Fixes
+
+- **testing**: Treat unreaped zombies as dead in _pid_alive probe
+  ([#1656](https://github.com/tinaudio/synth-setter/pull/1656),
+  [`bfd70cc`](https://github.com/tinaudio/synth-setter/commit/bfd70cce9a9b933547c8ae62e8339016b8d43eb0))
+
+* fix(testing): treat unreaped zombies as dead in _pid_alive liveness probe
+
+Inside a docker build RUN step pytest is PID 1, so descendants killed by the post-exit sweep
+  reparent to it and linger as zombies nothing wait()s. The signal-0 probe reports zombies alive, so
+  test_clean_exit_sweep_reaps_ingroup_grandchild failed in every image build since #1641 (main
+  pushes and PRs alike) while ordinary runners stayed green — init reaps the orphan there. Probe
+  /proc/<pid>/stat and count state Z as dead, keeping the signal-0 result where /proc is absent
+  (macOS). Regression-tested with a forked, deliberately unreaped child; the sweep test now passes
+  as PID 1 (verified under unshare --pid --fork --mount-proc).
+
+Fixes #1655
+
+* fix(testing): tighten zombie regression-test docstring
+
+Refs #1655
+
+* fix(testing): narrow _pid_alive /proc error handling per review
+
+Only FileNotFoundError means the pid is gone; other OSErrors (procfs permission quirks) fall back to
+  the signal-0 verdict. Guard the stat parse against malformed content and pre-bind the regression
+  test's state variable.
+
+### Build System
+
+- **devcontainer**: Move claude-code to per-user npm prefix
+  ([#1593](https://github.com/tinaudio/synth-setter/pull/1593),
+  [`b5cef6a`](https://github.com/tinaudio/synth-setter/commit/b5cef6a3270fd77b86af51d65d0e2824410292b2))
+
+* build(devcontainer): move claude-code to per-user npm prefix
+
+The devcontainer baked @anthropic-ai/claude-code into the root-owned global tree
+  (/usr/local/lib/node_modules) as root, exposing it at /usr/local/bin/claude. PATH lists that
+  system bin ahead of dev's ~/.npm-global/bin, so the in-app self-update — which writes to the
+  per-user prefix — was silently shadowed: every session stayed pinned to the build-time version no
+  matter how many times the UI reported an upgrade.
+
+Install claude-code into the dev user's ~/.npm-global prefix instead, exactly as @openai/codex
+  already is, leaving only Node.js system-wide. The auto-updated copy is now the only one on PATH,
+  so upgrades stick.
+
+Root-default sessions (root_gpu) no longer ship the claude CLI, matching how codex is already
+  handled; the VS Code claude-code extension is unaffected.
+
+* docs(reference): bump docker.md verified date, tighten install prose
+
+Bump the "Last verified" marker to 2026-06-10 (the doc was re-verified against the Dockerfile in
+  this PR) and re-flow the per-user-prefix sentence so the claude-code/codex clause reads cleanly
+  and the list boundary into the Antigravity item is unambiguous. No factual change — addresses the
+  doc-drift advisory's two low-confidence notes.
+
+* docs(reference): split run-on sentence in devcontainer-tools description
+
+Address review feedback on PR #1593.
+
+Style/nit: - docs/reference/docker.md: end the sentence at "system-wide copy" and resume the tooling
+  list with "It also adds ..." so the claude-code shadowing clause no longer runs straight into the
+  Antigravity CLI item (Copilot comment #3385717312).
+
+- **devcontainer**: Run codex and agy full-auto by default
+  ([#1644](https://github.com/tinaudio/synth-setter/pull/1644),
+  [`36904c2`](https://github.com/tinaudio/synth-setter/commit/36904c2885cd0cee7824f37179c5bbdc0c1af2af))
+
+* chore(devcontainer): run codex and agy full-auto by default
+
+post-create.sh now seeds `~/.codex/config.toml` (approval_policy = never, sandbox_mode =
+  danger-full-access; written only when absent so a mounted config wins) and a `~/.bashrc` agy
+  wrapper that injects `--dangerously-skip-permissions`. The devcontainer is itself the sandbox, so
+  the bundled coding agents should run without per-command approval prompts. Seeded before the
+  root->dev exec so the root variant's /root config is covered too, mirroring the ~/.tmux.conf
+  install. Adds static infra tests pinning the config keys, the agy wrapper, the
+  seed-only-when-absent guard, and idempotency.
+
+* docs(doc-map): note agent full-auto seeding in post-create and infra-test covers
+
+The post-create.sh and tests/infra covers strings enumerated their responsibilities but omitted the
+  new configure_agent_autonomy seeding step and its test module. Flagged by doc-drift on #1644.
+
+* test(infra): extract post-create function in Python, not sed
+
+The behavioral helper extracted configure_agent_autonomy via a GNU-sed range, which produced
+  different output under macOS's BSD sed and tripped the self-check guard (run_tests_macos failed).
+  Slice the definition in Python instead, so the bounds match identically across GNU/BSD userlands.
+
+### Chores
+
+- **devcontainer**: Chown root-owned bind mount so dev can write .git
+  ([#1591](https://github.com/tinaudio/synth-setter/pull/1591),
+  [`0b492db`](https://github.com/tinaudio/synth-setter/commit/0b492db0c4c2dedba7e09276e9b5e333622bac6b))
+
+* chore(devcontainer): chown bind-mounted workspace to dev in post-create
+
+A root-owned host checkout bind-mounts into the container with every file owned by root, so the
+  unprivileged `dev` user can't write `.git`, run `pre-commit install`, or commit — every git write
+  fails with permission denied. `updateRemoteUserUID` and `safe.directory` don't help: the files are
+  root-owned, not host-user-owned, and `safe.directory` only silences the warning. Locally
+  `postCreateCommand` runs as `dev`, so the existing Codespaces-only chown path never fires.
+
+Correct ownership early in post-create.sh, before the first `.git` write, guarded on the top-level
+  owner so an already-correct rebuild skips the recursive walk and stays under the post-create time
+  budget. Add static invariant tests pinning the chown, its ordering before `pre-commit install`,
+  and the idempotency guard.
+
+Fixes #1588
+
+* docs(devcontainer): note the bind-mount ownership fix in post-create
+
+Document the new guarded recursive chown in the Codespaces/devcontainer walkthrough and the
+  post-create.sh doc-map entry, so the narrative covers the local root-owned bind-mount case the
+  privilege drop alone can't fix.
+
+Refs #1588
+
+* chore(devcontainer): guard .git ownership so mixed trees self-heal
+
+The idempotency guard checked only the workspace root owner, so a mixed-ownership tree — root dir
+  already dev-owned but `.git` left root-owned by an earlier DEVCONTAINER_USER=root session — would
+  skip the chown and let the later `git config --local` / `pre-commit install` writes fail. Also
+  stat `.git` (the dir those writes target) and run the chown when either is misowned. Pin the new
+  check with a static test.
+
+- **devcontainer**: Quiet zellij popups, share one terminal session
+  ([#1639](https://github.com/tinaudio/synth-setter/pull/1639),
+  [`5a76a19`](https://github.com/tinaudio/synth-setter/commit/5a76a19da5aef6980f716261cd84b287895ce623))
+
+The default VS Code terminal profile is zellij, but no config ships with the container, so every
+  terminal opens onto the first-run usage-tip / release-notes popup and spawns its own throwaway
+  session.
+
+Add `.devcontainer/zellij.kdl` and install it to `~/.config/zellij/config.kdl` from `post-create.sh`
+  (mirroring the tmux.conf install, before the root->dev exec so root terminals are covered too).
+  The config:
+
+- sets `show_startup_tips false` + `show_release_notes false` to drop both popups - sets
+  `session_name "main"` + `attach_to_session true` so a plain `zellij` reattaches to one shared
+  session instead of opening a fresh one
+
+Infra tests pin the config contents and the pre-exec install ordering.
+
+Refs #1410
+
+- **tools**: Fix #489 sweep names and surge_simple control
+  ([#1632](https://github.com/tinaudio/synth-setter/pull/1632),
+  [`c0655fb`](https://github.com/tinaudio/synth-setter/commit/c0655fb342e3365f784d6c65d7d21662df468196))
+
+* internal-fix(tools): correct #489 sweep names and surge_simple control
+
+`_sweep` hardcoded a trailing `_surge_xt` on every sweep name, a leftover from the surge_xt-only
+  original. Now that each label already carries its synth variant, this doubled the suffix on
+  surge_xt sweeps (`...surge_xt_surge_xt`) and mislabeled every surge_simple sweep as
+  `...surge_simple_surge_xt`. Drop the suffix so each sweep is named for the variant it renders.
+
+`control_cadence_probe_surge_simple` also pinned `simple_copy_uri`, so it replayed the copy source
+  under the same cadence grid as `cadence_probe_surge_simple` (the two configs differ only in
+  `task_name`) instead of regenerating fresh — no control at all. Drop the copy URI so it
+  regenerates fresh, mirroring `control_cadence_probe_surge_xt`.
+
+Add unit tests pinning both, and refresh the now-stale 'five sweeps' / probe / singular-source
+  docstrings to match the seven sweeps and two sources the runner actually builds.
+
+Refs #489
+
+* internal-fix(tools): drop stale surge_xt qualifier from #489 module docstring
+
+The module opener still called this the '#489 surge_xt cadence investigation' even though it now
+  generates both surge_xt and surge_simple copy sources and sweeps. Drop the surge_xt qualifier so
+  the opening line matches the body (which already names both variants).
+
+Addresses Copilot review comment on PR #1632.
+
+* internal-fix(tools): move swept-args macro last in #489 sweep command
+
+`_sweep` placed `${args_no_hyphens}` (the W&B-injected grid cell) before the fixed Hydra overrides.
+  Hydra applies later overrides last, so a fixed pin that shared a key with a swept param would
+  silently shadow the sweep. No current fixed pin overlaps the swept keys (`plugin_reload_cadence`,
+  `gui_toggle_cadence`), so this is behavior-preserving today, but it diverged from the canonical
+  order used by `cadence_investigation_489.build_sweep_config` and every `sweeps/*.yaml`. Move the
+  macro last and pin the order with a test.
+
+* internal-fix(tools): fail fast on invalid #489 size before generating sources
+
+`run` generated both copy sources via two `generate_dataset` subprocesses before reaching the `n >=
+  1` guard inside `sweeps(n)`, so `run(0)` burned real subprocess work before raising `ValueError`.
+  Build the sweep configs first (which validates `n`) and reuse them, so an invalid size fails fast
+  and `sweeps()` is no longer evaluated twice.
+
+* fix
+
+### Continuous Integration
+
+- Fix #489 cadence job plugin path and gate it on workflow-file PRs
+  ([#1575](https://github.com/tinaudio/synth-setter/pull/1575),
+  [`f2bbbd3`](https://github.com/tinaudio/synth-setter/commit/f2bbbd3e317da16d83b5f6401e47b675b901c930))
+
+The #489 cadence investigation job bind-mounts the workspace over /home/build/synth-setter, which
+  shadows the Surge symlink the dev image bakes at plugins/Surge XT.vst3. The generate_dataset
+  subprocess uses that relative render.plugin_path default, so the job died with "FileNotFoundError:
+  Plugin path does not exist: plugins/Surge XT.vst3". Restore the symlink inside the container with
+  ensure_plugin_symlinks.sh, matching generate-dataset-shards.yaml and
+  generate-and-finalize-dataset.yaml.
+
+Also run the cadence job on a pull request that edits this workflow file (a tj-actions/changed-files
+  gate), so the costly real-W&B job is validated pre-merge without a manual dispatch and without
+  firing on every VST-path PR.
+
+Refs #489
+
+- Split #489 cadence job into its own workflow with configurable size
+  ([#1580](https://github.com/tinaudio/synth-setter/pull/1580),
+  [`80698fd`](https://github.com/tinaudio/synth-setter/commit/80698fd7d89eba88f7296452b54624193c3879c5))
+
+* ci: split #489 cadence job into its own workflow with configurable size
+
+The #489 cadence investigation lived as two jobs (detect_changes + run_cadence_investigation) inside
+  test-vst-slow.yml, sharing that file's dispatch and forcing a tj-actions/changed-files gate plus a
+  mutual-exclusion if: on the VST suite. Move it to a dedicated cadence-investigation-489.yml
+
+whose own pull_request: paths: filter (the workflow file, the orchestrator tool, and the e2e test)
+  gates the costly self-validation natively, dropping detect_changes, the changed-files action, and
+  the !cancelled()/needs plumbing. The VST suite in test-vst-slow.yml now always runs.
+
+Make the sweep dataset size configurable: a cadence_scale choice input (smoke|full, default smoke)
+  flows in as CADENCE_SCALE, which the e2e test resolves through the new
+  tools.cadence_investigation_489.SCALES map to pick the matching Scale for both source generation
+  and the copy probes. A bare PR self-validation defaults to smoke so it stays cheap.
+
+Refs #489
+
+* ci: skip cadence self-validation on fork PRs
+
+Fork PRs can't read the RCLONE_CONFIG_R2_* / WANDB_* secrets the cadence run needs, and setup-r2's
+  inputs are required: true, so the job would fail in setup rather than skip. Gate it with the same
+  same-repo fork guard cpu-slow.yml and test-local-launcher-roundtrip.yml already use.
+
+- Take an integer dataset size for the #489 cadence sweep
+  ([#1581](https://github.com/tinaudio/synth-setter/pull/1581),
+  [`269d69d`](https://github.com/tinaudio/synth-setter/commit/269d69de0959cb5c9956eced8f3ddc567ed3d050))
+
+* ci: take an integer dataset size for the #489 cadence sweep
+
+## Why
+
+The cadence workflow's `cadence_scale` input only offered a `smoke`/`full` choice backed by two
+  hardcoded `Scale` presets. There was no way to dispatch an arbitrary dataset size, so any size
+  between the tiny smoke run and the full 40-per-split run required a code change.
+
+## What changed
+
+- **Workflow**: replaced the `cadence_scale` choice input with a `cadence_size` `number` input
+  (default 2), forwarded as `CADENCE_SIZE`. - **Orchestrator**: dropped the `FULL`/`SMOKE`/`SCALES`
+  presets for a `Scale.from_size(N)` factory — `sizes=(N,N,N)`, one shard per split
+  (`samples_per_shard=N`), and a no-reuse/full-reuse depth sweep `(1, N)` (deduped at `N == 1`).
+  `from_size(2)` reproduces the old smoke scale exactly. The CLI `--scale {smoke,full}` flag is now
+  `--size N` (default 40, the full #489 run). - **e2e test**: reads `CADENCE_SIZE` (default 2) as an
+  int and threads it through `Scale.from_size`.
+
+## Test plan
+
+- `tests/tools/test_cadence_investigation_489.py`: 23 fast tests green; added `from_size` coverage
+  (cubic build, `N == 1` dedupe, `< 1` rejection) and `test_main_maps_size_to_scale`. -
+  `tests/integration/test_cadence_investigation_489_e2e.py`: collects clean; self-skips without
+  VST/R2/W&B. This PR edits all three `pull_request: paths:` entries, so the cadence workflow
+  self-validates at size 2 on this PR. - `make format` (pre-commit) clean.
+
+Refs #489
+
+* ci: fail fast on a dispatched cadence_size of 0
+
+Address Copilot review on PR #1581:
+
+- Use ``github.event.inputs.cadence_size`` so an explicitly dispatched ``0`` stays a truthy string
+  and reaches the Python guard (which rejects ``< 1``), instead of ``inputs.cadence_size`` where
+  ``0`` is falsy and silently coalesces to ``2``. The ``|| 2`` fallback still applies on
+  pull_request, where dispatch inputs are absent. - Reword the online-sweep test docstring from "at
+  the env scale" to "at the env-set size" to match the integer ``CADENCE_SIZE`` / ``--size`` knob.
+
+### Internal-Feat
+
+- **agent-skills**: Project skill pack into ~/.agents/skills
+  ([#1587](https://github.com/tinaudio/synth-setter/pull/1587),
+  [`59067f0`](https://github.com/tinaudio/synth-setter/commit/59067f04d246f021cceb4b1e4d8c1f4913c6b3ec))
+
+* internal-feat(agent-skills): project skill pack into ~/.agents/skills
+
+Add `make link-skills` (scripts/dev/link-skills.sh) to symlink each installed tinaudio/skills
+  marketplace skill into the user-level ~/.agents/skills alias, so Agent Skills-compatible CLIs
+  (Gemini, Antigravity) discover the full pack via the discovery root #1577 adds. Wire a best-effort
+  call into devcontainer post-create so a fresh box projects on creation. No-ops cleanly when the
+  plugin is not installed.
+
+Refs #1561
+
+* docs(agent-harness): map link-skills + ~/.agents/skills layout
+
+Document the third skill-discovery layout the link-skills projection makes real: add the
+  Agent-Skills standard (.agents/skills, ~/.agents/skills) bullet to agent-harness-parity.md and map
+  link-skills.sh, the make target, and the post-create call into doc-map.yaml. Clears the doc-drift
+  advisory for this PR's new surface.
+
+- **data-pipeline**: Add Lance shard output backend
+  ([#1642](https://github.com/tinaudio/synth-setter/pull/1642),
+  [`66bea5e`](https://github.com/tinaudio/synth-setter/commit/66bea5eb6b8a0e6b40f911d0615144b3a2477c15))
+
+* internal-feat(data-pipeline): add Lance shard output backend
+
+* internal-fix(data-pipeline): make Lance tensor rows contiguous before encoding
+
+pyarrow records a permutation on the fixed_shape_tensor extension type when from_numpy_ndarray
+  receives a transposed view, and that permuted type cannot cast to the schema's declared shape.
+  Copy rows to C-contiguous layout first and pin the behavior with a regression test exercising a
+  transposed mel_spec batch.
+
+Refs #1600
+
+* internal-fix(data-pipeline): address PR #1642 review feedback
+
+- validate_shard.py: read Lance reader.num_rows() once instead of twice in the row-count check. -
+  tests/helpers/finalize_shards.py: seed_train_shards now branches explicitly on wds vs lance and
+  raises ValueError for any other output_format instead of silently writing a tar shard.
+
+* internal-fix(ci): install data extra in launcher venv for Lance validation
+
+Host-side validate_shard lazily imports lance for .lance shards, but the launcher venv only synced
+  the cpu extra, so the lance smoke leg failed with ModuleNotFoundError after the worker finished.
+  hdf5/wds were unaffected because h5py is a core dep and tar validation is stdlib.
+
+* docs(data-pipeline): document lance as a third output format
+
+Address Copilot round-2 review on PR #1642:
+
+- finalize_dataset.py: module docstring now describes all three finalize branches, including what
+  the lance branch produces - validate_shard.py: validate_shard docstring lists the .lance suffix
+  dispatch alongside .h5 and .tar - docs/design/data-pipeline.md: retitle 7.10 to cover Lance, add
+  the lance format rationale bullet, note lance is non-resumable, generalize the dataset-copy
+  rejection wording, and update the Data Format Abstraction note now that the third format exists
+
+* internal-fix(ci): select data dependency group with --group, not --extra
+
+uv defines data under [dependency-groups], so --extra data fails sync with 'Extra data is not
+  defined' and broke all three smoke legs.
+
+* internal-fix(ci): sync data group into image venv before shard validation
+
+The validate step runs inside the dev-snapshot image, whose deps are baked from main, so a PR adding
+  a data-group dependency (pylance) hits ModuleNotFoundError during .lance validation. Install the
+  data group from the mounted PR checkout first — the same image-bake-lag workaround
+  scripts/sync_worker_checkout.sh uses for workers. Also drop the previous launcher-venv --group
+  data flag: dev already includes data transitively, and the launcher env was never the failing one.
+
+* internal-fix(ci): purge more unused toolchains before kind image load
+
+kind load needs the 16 GB worker image on disk twice (docker store + kind-node containerd) and has
+  hit ENOSPC three times today with ~30 GB free. Dropping miniconda, swift, julia, and global node
+  modules — all unused by the skypilot-local row — frees roughly 7 GB more headroom.
+
+- **tools**: Add minimal #489 cadence-sweep runner
+  ([#1629](https://github.com/tinaudio/synth-setter/pull/1629),
+  [`3231bd9`](https://github.com/tinaudio/synth-setter/commit/3231bd971a61ffe145a51064a1063b62ffaf6397))
+
+* internal-feat(tools): add minimal #489 cadence-sweep runner
+
+Add cadence_sweep_489.py, a stripped-down sibling of cadence_investigation_489.py whose only input
+  is the dataset size N. It generates the fixed surge_xt copy source, then creates five W&B grid
+  sweeps (two within-run probes, three paired-copy probes) and runs an agent for each, one at a
+  time.
+
+The over-abstracted orchestrator collapses to six plain configs plus the code that runs them: no
+  Scale/Experiment dataclasses, no launcher/only/ count/max-parallel/dry-run flags, no local
+  executor, no concurrent agent supervisor. The copy probes still share the source's copy-preflight
+  match set (param spec / samples-per-shard / split sizes) so shard filenames and the param encoding
+  cannot drift.
+
+The original cadence_investigation_489.py and its tests are left untouched.
+
+Refs #489
+
+* internal-fix(tools): fail fast in sweeps() on a sub-1 dataset size
+
+sweeps() is public and called directly by tests/helpers, but only source_overrides() guarded n >= 1,
+  so sweeps(0) silently built schema-invalid overrides (train_val_test_sizes=[0,0,0],
+  samples_per_shard=0) that would fail later in a less obvious way. Add the same fail-fast
+  ValueError and a unit test.
+
+* internal-fix(tools): correct match-set docstring in cadence-sweep tests
+
+The test module docstring implied the copy-preflight match set keeps the derived
+  copy_dataset_root_uri aligned. The URI derives from task/run/prefix_root; the match set instead
+  keeps shard filenames and the param encoding aligned between the source and the copy probes.
+
+* fix
+
+* remove out of date test file
+
+### Internal-Fix
+
+- **codex**: Repair main broken by autofix merge in #1577
+  ([#1583](https://github.com/tinaudio/synth-setter/pull/1583),
+  [`3fbdcf3`](https://github.com/tinaudio/synth-setter/commit/3fbdcf3231e852332ad35cb98089630118db1f5d))
+
+PR #1577 was merged at the broken Copilot autofix commit (29615ca2); the repair (dca2a48) landed on
+  the branch only after the merge, so main shipped: - scripts/dev/codex-doctor.sh: missing the
+  closing `fi` of the missing-skills block (bash syntax error — `make codex-doctor` and its tests
+  fail) - tests/claude_hooks/test_settings_hooks.py: duplicated subprocess.run kwargs
+  (IndentationError — whole module fails to collect)
+
+Restore the closing `fi` + repo-local-skills remediation line, drop the duplicated kwargs block, and
+  align test_codex_doctor.py assertions with the repaired doctor output.
+
+Refs #1561
+
+- **data-pipeline**: Launch all cadence sweeps independently
+  ([#1620](https://github.com/tinaudio/synth-setter/pull/1620),
+  [`2c16557`](https://github.com/tinaudio/synth-setter/commit/2c16557edfb9743eae16b2d86e248763476a4075))
+
+* internal-fix(data-pipeline): launch cadence-investigation experiments independently
+
+The wandb launcher created each sweep then blocked on its agent before creating the next, so a
+  stalled or interrupted first agent left only the shuffle_probe sweep created and experiments 2-5
+  never launched at all.
+
+Create every selected sweep up front, then run agents concurrently as `wandb agent` subprocesses
+  under a `--max-parallel` cap (default 2, since agents share one Xvfb display). All sweeps now
+  appear regardless of agent fate, and one stalled agent occupies a single pool slot instead of
+  blocking the rest; copy-source generation stays sequential ahead of dispatch.
+
+Fixes #1619
+
+* internal-fix(data-pipeline): address pre-PR review findings
+
+Apply the pre-PR multi-skill review WARNs: - drop historical-narration clauses from the _run_agent
+  and test docstrings (describe current behavior only) - make the S603 rationale accurate (list
+  argv, no shell; sweep id from wandb) - state the precise stalled-agent semantic (one slot tied up;
+  supervisor waits for every agent) instead of "never blocks the others" - make the concurrency test
+  deterministic via a threading.Barrier and assert the peak equals the cap, not just <= it -
+  strengthen failure coverage: collect-and-raise-all across agents, and assert --count is forwarded
+  to the agent argv - hoist threading import to module top
+
+Refs #1619
+
+* internal-fix(data-pipeline): make local launcher truly ignore max_parallel
+
+Copilot flagged that `max_parallel` is documented "ignored by local" yet was validated for every
+  launcher, so `--launcher local --max-parallel 0` raised. Guard the sub-1 check on the wandb
+  launcher so the local path genuinely ignores the cap, and pin it with a test.
+
+- **monitoring**: Tee generate_dataset subprocess output to W&B
+  ([#1617](https://github.com/tinaudio/synth-setter/pull/1617),
+  [`2962ad7`](https://github.com/tinaudio/synth-setter/commit/2962ad75aeef5b5005557aa97bfb7827353081b0))
+
+### Monitoring
+
+- Enable W&B logging in subprocess (generate_dataset)
+  ([#1641](https://github.com/tinaudio/synth-setter/pull/1641),
+  [`29f20d3`](https://github.com/tinaudio/synth-setter/commit/29f20d374163bebcc3ebd926088f5518ff87947d))
+
+* internal-fix(monitoring): tee generate_dataset subprocess output via exit-keyed runner
+
+Reapply the #1617 W&B console tee (console_multipart, the sys.stderr tee seam, test-helper
+  contracts) but replace the EOF-keyed _check_call_streamed with
+  pipeline/subprocess_stream.check_call_streamed: an asyncio runner whose completion is keyed on
+  child exit, never pipe EOF. A pipe-holding descendant (the headless-VST X11 daemon tree, #1634)
+  can no longer hang the read loop nor get a successful child misreported as TimeoutExpired;
+  wall-clock timeouts stay per-call-site policy with SIGTERM-first escalation so the VST wrapper's
+  EXIT trap still reaps its X tree, and the post-exit group sweep reaps in-group stragglers.
+
+Fixes #1604
+
+* internal-fix(monitoring): harden exit-keyed runner per pre-PR review
+
+pgid now comes straight from proc.pid (the child is its own group leader under start_new_session),
+  removing a getpgid reap race that let ProcessLookupError escape on fast-exiting children and
+  bypass the renderer retry loop. The tee flushes the incremental decoder at EOF so a trailing
+  partial multibyte sequence is not dropped. The rclone test passthrough now routes through the real
+  streamed runner, slow-marks the multi-second escalation tests, pins the 4b xfail as strict, and
+  covers the facade's TimeoutExpired surface the oracle-eval call site relies on.
+
+* internal-fix(monitoring): guard the tee and tighten runner semantics per re-review
+
+The tee write is now best-effort: a raising wrapped stream degrades to capture-only instead of
+  killing the pump (a dead pump re-opens the #735 full-pipe hang) or surfacing a foreign exception
+  past the renderer retry loop. TERM-to-KILL escalation and an abandoned drain now emit structlog
+  warnings so both degradations are diagnosable from W&B logs. The drain cancel uses
+  gather(return_exceptions=True) so an external cancellation is no longer swallowed, TimeoutExpired
+  carries the real policy bound instead of an 'or 0.0' pacifier, and the rclone passthrough in
+  dummy_shards now matches render_subprocess in routing through the real streamed runner. Facade
+  gains env-forwarding, concurrency, and timeout pins; comment-hygiene findings applied.
+
+* internal-fix(monitoring): log tee degradation and pin runner diagnostics
+
+The tee's capture-only degradation now emits a structlog warning (after the pump settles, where a
+  sink failure can't kill it), tests assert the escalation/drain/degradation breadcrumbs via
+  capture_logs, TimeoutExpired value/cmd are pinned, the wandb-integration console-capture cell
+  shrinks to one clause with the tee + multipart detail moved to prose, and the tee-coverage claim
+  is narrowed to the three generate_dataset children (other rclone call sites bypass capture).
+
+* internal-fix(monitoring): assert the tee-degradation breadcrumb in its test
+
+Mirrors the escalation/drain capture_logs assertions so a refactor dropping (or per-chunk
+  re-logging) the subprocess_tee_degraded warning fails the suite.
+
+* internal-fix(monitoring): close abandoned subprocess transport before loop teardown
+
+Surfaced by out-of-pytest verification of PR #1641: on the abandoned-drain path the unclosed
+  subprocess transport was GC'd after asyncio.run closed the loop, spraying 'Exception ignored ...
+  Event loop is closed' tracebacks into the very logs the tee exists to keep clean. Close it
+  explicitly while the loop is open; pinned by a fresh-interpreter test asserting clean stderr at
+  exit. Also applies the doc-drift advisory: freshness stamp bumped, wandb.yaml covers-line now
+  names console capture, brittle line-number refs replaced with key pointers.
+
+* internal-fix(monitoring): poll reaped returncode instead of Process.wait for exit detection
+
+Python 3.11+ wakes Process.wait()'s exit waiters only after every pipe disconnects, re-coupling
+  completion to EOF: the CI 3.11 lane hung 60s on each pipe-holding-grandchild test while 3.10
+  passed. The child watcher still sets returncode the moment the child is reaped, so the runner now
+  polls that (50ms cadence) for the initial wait, the TERM grace, and the post-KILL reap. Verified
+  against 3.10 and 3.11 interpreters on the daemon-holder and timeout/escalation scenarios.
+
+* internal-fix(monitoring): guard empty argv and finalize the pump task on every exit path
+
+Copilot review on #1641: an empty cmd now raises ValueError before reaching create_subprocess_exec,
+  and the finally block awaits the cancelled pump via gather(return_exceptions=True) — after the
+  group sweep, so an external cancel can't skip it — eliminating pending-task noise for
+  persistent-loop callers of the async API.
+
+* internal-fix(monitoring): bound retained subprocess capture to a 1 MiB tail
+
+The runner buffered the child's entire merged output for the return value and error diagnostics, so
+  a noisy hours-long renderer or rclone -vv child grew worker memory without bound (and doubled it
+  at the final join). Keep only the trailing _CAPTURE_MAX_BYTES window in a deque; the sys.stderr
+  tee still forwards the full stream, so wandb console logs stay complete.
+
+Refs #1604
+
+* internal-fix(monitoring): derive the driver's src path from the imported module
+
+Copilot on #1641: Path('src').resolve() in the loop-teardown-hygiene test broke when pytest ran from
+  a subdirectory; resolve it from subprocess_stream.__file__ instead.
+
+### Refactoring
+
+- **data-pipeline**: Rename Surge* model/data classes to VST*
+  ([#1602](https://github.com/tinaudio/synth-setter/pull/1602),
+  [`5ea7d58`](https://github.com/tinaudio/synth-setter/commit/5ea7d5893056afdbb7daf0a700a5c28319e59455))
+
+* refactor(data-pipeline): rename Surge* classes to synth-neutral VST* equivalents
+
+Phase 1 of the multi-synth generalization (#1582): the pipeline is already synth-agnostic by design,
+  so decouple the remaining Surge-specific naming and defaults without changing behavior.
+
+- Rename SurgeXTDataset/SurgeDataModule and the four Surge* Lightning modules to VST* in place (file
+  paths unchanged: the modules sit in append-frozen lint exclusion lists keyed by path). Deprecated
+  aliases keep archived W&B run configs and external job scripts resolving the old _target_ paths. -
+  Restructure the Hydra datamodule group: new synth-neutral vst.yaml base; surge*.yaml become thin
+  instances of it. - Derive the fake-data param width from the registered param spec instead of a
+  stale 189 literal (surge_xt is 300 wide); VSTDataModule gains param_spec_name so fake mode matches
+  the dataset it stands in for. - Route CLI plugin/preset defaults through the registry: new
+  default_plugin_path() helper (SYNTH_SETTER_PLUGIN_PATH-aware) used by predict_vst_audio,
+  surge_xt_interactive, and tests/_vst.py; predict_vst_audio preset default now resolves via
+  preset_paths.
+
+Refs #1595
+
+* refactor(data-pipeline): address pre-PR review findings for VST rename
+
+- Cover the registry-derived fake param width and the param_spec_name fail-fast through the train
+  and eval entrypoints (P31). - Hoist _DEFAULT_PARAM_SPEC_NAME and assign VSTDataset.num_params
+  unconditionally so the fake-only width contract is explicit. - Drop the unreachable in-body
+  plugin-path re-resolution in predict_vst_audio (click callable default is the single mechanism). -
+  Fix the latent NameError in surge_ff_module's __main__ smoke line and move deprecated aliases
+  above the __main__ guards. - Tighten new helper docstrings, remove decorative banners, realign
+  legacy banner rails touched by the rename. - Pin registry widths (300/92/7), the
+  param_specs/preset_paths key invariant, model-alias identities, datamodule overlay composition,
+  and the render_params plugin/preset wiring.
+
+* refactor(data-pipeline): polish VST rename per second review round
+
+- Drop the baked-in 92-wide count and a temporal 'new' from test prose. - Slow-mark the fake-mode
+  train e2e (11.5s; file convention) and point the eval KeyError test at a nonexistent dataset root
+  - the setup() lookup fails before any dataset open, so the 12s fake-plugin render fixture was pure
+  waste. - Sync the predict_vst_audio / surge_xt_interactive default docs with the env-aware plugin
+  path and registry-keyed preset resolution. - Pin the surge_simple datamodule overlay composition.
+  - Shorten two >99-char lines ruff cannot see (data/ basename exclude).
+
+* refactor(data-pipeline): resolve renamed model targets and drop dead skip
+
+- Pin the renamed VST* _target_ strings in the surge model YAMLs via hydra get_class (a typo passed
+  schema validation and failed only at launch); surge_flowvae is pinned at the AST level instead
+  because its module imports the undeclared optional nflows dependency, which also replaces the
+  alias identity test that could never run. - Mirror the env-aware --plugin-path help string into
+  the CLI-reference table (the guide quotes help strings verbatim). - Drop a baked-in spec count,
+  compress a 3-line comment, shorten a >99-char docstring, add match= to the resolve_preset_path
+  KeyError pin.
+
+* test(testing): move fake-mode train cfg builder into conftest
+
+The entrypoint-only test file tests/test_train.py must not import Hydra config-initializers
+  (tests/_meta/test_entrypoint_e2e_only.py enforces it); the new fake-mode train e2e composed its
+  cfg inline, tripping that meta-test on every platform. Extract build_fake_train_cfg into conftest
+  (where the initializer import is allowed, alongside _build_surge_xt_smoke_cfg) and have the test
+  receive the composed cfg.
+
+* fix(data-pipeline): add _self_ to VST datamodule overlay defaults
+
+Append _self_ after the vst base in the surge/surge_simple/surge_mini/ surge_debug defaults lists so
+  local overrides win deterministically and Hydra stops warning about a missing _self_, matching the
+  repo convention (train.yaml, model/surge_flow.yaml). Refresh the eval-pipeline doc snippet to show
+  the vst.yaml base and note surge_simple is a thin overlay.
+
+Refs #1582
+
+* ci: re-trigger default-setup CodeQL after transient GitHub API flake
+
+Analyze (actions) failed at 16:09 UTC with 'Requires authentication - HttpError' during CodeQL init
+  — a transient GitHub API incident that also hit setup-uv and the taxonomy-gate GraphQL lookup in
+  the same window. Analyze (python) in the same suite succeeded. The default-setup CodeQL pipeline
+  is GitHub-managed and cannot be re-requested via API, so an empty commit is the only way to
+  re-trigger it.
+
+* refactor(data-pipeline): drop misleading __main__ blocks from VST modules
+
+The renamed feed-forward and flow-matching modules carried __main__ blocks that instantiated the
+  module with four None placeholders — not a runnable example, and misleading since the optimizer
+  arg must be a callable. The flowvae sibling already carried an equally pointless empty block. Drop
+  all three so the modules import cleanly without dead entrypoints.
+
+- **pipeline**: Centralize rclone reliability flags in one builder
+  ([#1618](https://github.com/tinaudio/synth-setter/pull/1618),
+  [`9d4e029`](https://github.com/tinaudio/synth-setter/commit/9d4e0299a9db3257f62400e91c2e37191b179c7b))
+
+* refactor(pipeline): centralize rclone reliability flags in one argv builder
+
+The block ``-vv --checksum --contimeout=30s --timeout=300s --retries=3`` was duplicated across five
+  r2_io transfer helpers and generate_dataset._rclone_copy. Extract a private _rclone_argv(verb,
+  *operands, timeout="300s") builder and route every call site through it. Behavior-preserving: each
+  site keeps its verb (copy vs copyto), operand order, and download_dir_no_overwrite's --immutable;
+  upload_dir still passes the wider _UPLOAD_DIR_TIMEOUT via the timeout param.
+
+Refs #1614
+
+* docs(pipeline): escape varargs star and broaden _rclone_argv operands doc
+
+Match the repo's Sphinx varargs convention (``:param \*operands:``, as in utils/pylogger.py) and
+  note that operands carry extra flags like --immutable, not only source/destination paths.
+
+- **repo-review**: Run full review inside one orchestrator agent
+  ([#1616](https://github.com/tinaudio/synth-setter/pull/1616),
+  [`9a28243`](https://github.com/tinaudio/synth-setter/commit/9a28243a0f1d55d49b699f060b0b87b90b341471))
+
+* refactor(repo-review): run full-review pipeline inside one orchestrator agent
+
+The repo-review-full and repo-review-full-no-comments skills had the main agent run the whole
+  pipeline inline — PR resolution, health inspection, skill selection, finding aggregation, JSON
+  construction, and posting — with only the per-skill checklist reviews delegated to parallel
+  agents.
+
+Restructure both skills so the main agent spawns exactly one general-purpose orchestrator agent that
+  runs the end-to-end pipeline (and fans out its own parallel per-skill review sub-agents), then
+  relays the orchestrator's result. This keeps the main agent's context clean: it launches one agent
+  and reports the posted review URL (full) or prints the returned report (no-comments).
+
+The shared analysis file is reframed so 'you' is the orchestrator agent and Step 4 gains a
+  sequential fallback for harnesses that disallow nested agents. The sentinel contract,
+  post_review.py, and the findings-JSON shape are unchanged.
+
+* docs(repo-review): correct shared-file intro on per-skill Step ownership
+
+repo-review-full-no-comments owns its own Steps 1-2 (for local-branch mode) and delegates only Steps
+  3-6 to the shared file; the intro previously claimed both skills run all of Steps 1-6, which could
+  mislead the orchestrator into the wrong Step 1 behavior (e.g. stopping when no PR exists).
+
+* docs(repo-review): clarify no-<N> resolution, verbatim print, and sequential-fallback output shape
+
+Address Copilot re-review findings on PR #1616: - no-comments PR-mode: resolve the PR number from
+  the current branch when no <N> was passed; never run gh pr view with the literal placeholder. -
+  no-comments main-agent Step 3: print the orchestrator's return verbatim; the trailing 'Sentinel:
+  <path>' line already surfaces the path, so append nothing. - shared Step 4 sequential fallback:
+  require the same inputs and the per-agent BLOCK/WARN output contract as the parallel path so Step
+  5 parses both identically.
+
+* docs(repo-review): mirror <N>-resolution guard in full skill, clarify substitute-or-verbatim
+
+Address Copilot re-review findings on PR #1616: - repo-review-full orchestrator brief: resolve the
+  PR number from the current branch when none was provided and substitute it wherever <N> appears in
+  the shared analysis commands; never run gh pr view with the literal placeholder (mirrors the
+  no-comments sibling). - both skills' main-agent Step 2: only substitute <N> when an explicit
+  number was passed, otherwise pass the brief verbatim — no prompt surgery.
+
+* fix(repo-review): write the sentinel even on a zero-diff no-comments run
+
+The orchestrator's local-branch Step 1 told it to stop and return a bare 'PASS — no diff' string
+  when the branch had no changes, but the skill contract requires it to always write the sentinel
+  file — the pre-PR gate parses that path. Route the zero-diff case through Step 7's PASS short form
+  so the sentinel is written and the return ends in 'Sentinel: <path>'.
+
+Addresses Copilot re-review finding on PR #1616.
+
+### Testing
+
+- **data-pipeline**: Absorb datamodule.param_spec_name in baseline config compare
+  ([#1645](https://github.com/tinaudio/synth-setter/pull/1645),
+  [`b357c27`](https://github.com/tinaudio/synth-setter/commit/b357c275d66efaa3cd8de1c2e6c5572418d6cc72))
+
+PR #1602's vst.yaml datamodule restructure adds datamodule.param_spec_name (default surge_xt) to the
+  resolved surge train config. That key is absent at the v0.0.0 MODEL_BASELINE and not in
+  ACCEPTED_DIFFS, so test_surge_train_configs_are_equal would flag it as drift across all 8 surge
+  cases once #1602 merges. Add it to ACCEPTED_DIFFS to pre-absorb the selection knob (not a model
+  knob).
+
+_strip_dotted_keys no-ops on absent keys, so this is a no-op on main until #1602 merges and is safe
+  to land in either order.
+
+Refs #1595
+
+- **testing**: Auto-delete citest W&B round-trip checkpoint artifacts
+  ([#1590](https://github.com/tinaudio/synth-setter/pull/1590),
+  [`12f2918`](https://github.com/tinaudio/synth-setter/commit/12f291875f852b3cd0e7f670426e5139d56b0d8d))
+
+* test(testing): auto-delete citest W&B round-trip checkpoint artifacts
+
+The live ${wandb:...} resolver round-trip tests (test_eval / test_train) published a full checkpoint
+  to synth-setter-citest under a fixed name, so every CI run committed a new :latest version that
+  lingered against the shared 5 GB W&B storage budget that #1572 set out to protect.
+
+publish_checkpoint_artifact is now a context manager that names each artifact
+  model-citest-<id>-<token> (so parallel runs never collide on :latest) and deletes the artifact and
+  its run on context exit, best-effort so a teardown failure never masks the test result. The two
+  call sites run inside the with-block so the resolver downloads before teardown. Adds network-free
+  unit tests (mocked wandb SDK) pinning the unique-naming and delete-on-exit contract; verified
+  end-to-end against live W&B that the artifact resolves inside the context and is gone after.
+
+Fixes #1585 Refs #92
+
+* test(testing): suppress run.finish() so citest teardown always deletes
+
+Copilot flagged that run.finish() in publish_checkpoint_artifact's finally was not suppressed: a
+  transient W&B comm error from finish() would both fail the test and skip the subsequent
+  artifact/run deletion, leaking the artifact — contradicting the helper's stated best-effort
+  teardown contract.
+
+Wrap run.finish() in contextlib.suppress(Exception) so a finish failure neither propagates nor
+  short-circuits cleanup, and add a unit test pinning that a raising finish() still reaches both
+  deletions without escaping.
+
+Refs #1585
+
+- **testing**: Consolidate duplicated cfg_* fixtures in conftest.py via a factory
+  ([#1626](https://github.com/tinaudio/synth-setter/pull/1626),
+  [`64a23cb`](https://github.com/tinaudio/synth-setter/commit/64a23cbf13da40e3349acda9ee5b06c69fade198))
+
+- **testing**: Parametrize duplicate rank/world/shard partition tests
+  ([#1624](https://github.com/tinaudio/synth-setter/pull/1624),
+  [`dff6aef`](https://github.com/tinaudio/synth-setter/commit/dff6aeffa26fe6a3ebd933aff187fbee65c19215))
+
+- **testing**: Raise xdist per-worker mem budget to measured 2 GiB peak
+  ([#1647](https://github.com/tinaudio/synth-setter/pull/1647),
+  [`60c5be7`](https://github.com/tinaudio/synth-setter/commit/60c5be7ca9388dc12234d07629f22269313b97cd))
+
+
 ## v8.32.0 (2026-06-09)
 
 ### Features
