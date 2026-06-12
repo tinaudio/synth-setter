@@ -375,13 +375,15 @@ def test_render_in_batches_shard_cadence_seeds_single_patch_from_caller_row_zero
         samples_per_render_batch=n,
         param_sample_cadence="shard",
     )
-    returned: list[MagicMock] = []
     captured: list[dict[str, object]] = []
 
     def _fake_generate_sample(_plugin_path: str, **kwargs: object) -> MagicMock:
         captured.append(dict(kwargs))
-        sample = MagicMock(name=f"sample_{len(returned)}")
-        returned.append(sample)
+        sample = MagicMock(name=f"sample_{len(captured)}")
+        # Mirror the real renderer: the sample reports the params it rendered with, so shard
+        # cadence reuses concrete row-0 values rather than MagicMock placeholder attributes.
+        sample.synth_params = kwargs["fixed_synth_params"]
+        sample.note_params = kwargs["fixed_note_params"]
         return sample
 
     monkeypatch.setattr(writers, "generate_sample", _fake_generate_sample)
@@ -390,6 +392,8 @@ def test_render_in_batches_shard_cadence_seeds_single_patch_from_caller_row_zero
     note_rows: list[NoteParams] = [
         {"pitch": 60 + i, "note_start_and_end": (0.0, 1.0)} for i in range(n)
     ]
+    # Source rows must differ so "only row 0 is used" is a real assertion, not a tautology.
+    assert synth_rows[0] != synth_rows[1]
     _render_in_batches(
         render_cfg=render_cfg,
         param_spec=MagicMock(name="param_spec"),
@@ -399,15 +403,11 @@ def test_render_in_batches_shard_cadence_seeds_single_patch_from_caller_row_zero
         flush_batch=lambda _batch, _start: None,
     )
 
+    # Sample 0 seeds the patch from row 0; every later render reuses it, so all renders use row 0.
     assert len(captured) == n
-    # Sample 0 is seeded from the copy source's first row...
-    assert captured[0]["fixed_synth_params"] == synth_rows[0]
-    assert captured[0]["fixed_note_params"] is note_rows[0]
-    # ...and every later render reuses sample 0's patch, ignoring source rows 1..N.
-    first = returned[0]
-    for call_kwargs in captured[1:]:
-        assert call_kwargs["fixed_synth_params"] is first.synth_params
-        assert call_kwargs["fixed_note_params"] is first.note_params
+    for call_kwargs in captured:
+        assert call_kwargs["fixed_synth_params"] == synth_rows[0]
+        assert call_kwargs["fixed_note_params"] == note_rows[0]
 
 
 def test_make_hdf5_dataset_shard_cadence_rerenders_partial_shard_from_row_zero(
