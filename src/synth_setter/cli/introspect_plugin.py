@@ -283,7 +283,8 @@ def _write_register_wiring(
         click.echo(
             f"WARNING: renderer_version is 'unknown' — edit {render_config} to pin the "
             "real plugin version before generating; generate_dataset cross-checks it "
-            "against the loaded plugin."
+            "against the loaded plugin.",
+            err=True,
         )
     click.echo(
         "Next: hand-tune the spec, run `make format`, commit, then render with:\n"
@@ -306,7 +307,8 @@ def _plugin_version(plugin_path: str) -> str:
     try:
         return extract_renderer_version(Path(plugin_path))
     except (OSError, ValueError, KeyError, RuntimeError, ImportError) as exc:
-        click.echo(f"note: could not extract plugin version: {exc}")
+        # stderr: keep diagnostics out of the parseable summary on stdout.
+        click.echo(f"note: could not extract plugin version: {exc}", err=True)
         return "unknown"
 
 
