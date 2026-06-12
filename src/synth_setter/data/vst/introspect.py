@@ -7,8 +7,10 @@ draft is a starting point to hand-tune, not a finished spec.
 
 from __future__ import annotations
 
+import csv
+import io
 import textwrap
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, TypeAlias
@@ -34,6 +36,16 @@ class IntrospectableParameter(Protocol):
     @property
     def type(self) -> type:
         """Python type pedalboard inferred (``float`` / ``str`` / ``bool``)."""
+        ...
+
+    @property
+    def name(self) -> str:
+        """Display name, as the host reports it."""
+        ...
+
+    @property
+    def range(self) -> tuple[float | None, float | None, float | None]:
+        """``(min, max, step)`` in display units; ``None`` entries when unreported."""
         ...
 
     @property
@@ -339,3 +351,52 @@ def capture_preset(plugin: IntrospectablePlugin, out_path: Path) -> None:
     :param out_path: Destination file; parent directories must exist.
     """
     out_path.write_bytes(plugin.preset_data)
+
+
+def render_param_table_csv(
+    plugin: IntrospectablePlugin,
+    params: Sequence[Parameter],
+    skipped: Sequence[SkippedParameter],
+) -> str:
+    """Render every plugin parameter as a CSV row with its draft outcome.
+
+    Columns follow ``surge_params.csv`` (index, ``pyname``, display ``name``,
+    ``range``) plus ``drafted_as`` (the drafted ``Parameter`` subclass, empty if
+    skipped) and ``skipped_reason`` (empty if drafted) — a triage sheet for
+    hand-tuning the draft spec.
+
+    :param plugin: The introspected plugin; rows follow its parameter order.
+    :param params: Drafted parameters from ``draft_synth_params``.
+    :param skipped: Skipped parameters from ``draft_synth_params``.
+    :returns: CSV text including the header row.
+    """
+    drafted_as = {p.name: type(p).__name__ for p in params}
+    skip_reason = {s.name: s.reason for s in skipped}
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(["", "pyname", "name", "range", "drafted_as", "skipped_reason"])
+    for index, (pyname, param) in enumerate(plugin.parameters.items()):
+        writer.writerow(
+            [
+                index,
+                pyname,
+                _read_or_blank(lambda p=param: p.name),
+                _read_or_blank(lambda p=param: str(p.range)),
+                drafted_as.get(pyname, ""),
+                skip_reason.get(pyname, ""),
+            ]
+        )
+    return buffer.getvalue()
+
+
+def _read_or_blank(getter: Callable[[], str]) -> str:
+    """Return ``getter()``, or ``""`` when the host metadata read raises.
+
+    :param getter: Zero-arg metadata accessor on a parameter wrapper.
+    :returns: The metadata value, or an empty cell on any error.
+    """
+    # Broad catch: one unreadable metadata field must not lose the whole table.
+    try:
+        return getter()
+    except Exception:
+        return ""

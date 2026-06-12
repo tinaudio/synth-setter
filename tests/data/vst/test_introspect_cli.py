@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+import csv
+import io
 from pathlib import Path
 from typing import TypeAlias
 
@@ -121,6 +123,7 @@ def test_cli_reports_draft_summary_and_next_steps(invoke_cli: InvokeCli) -> None
     assert "Drafted 2 parameter(s), skipped 0." in run.output
     assert "fake_synth_param_spec.py" in run.output
     assert "fake_synth-base.vstpreset" in run.output
+    assert "fake_synth_params.csv" in run.output
     assert "param_spec_registry" in run.output
 
 
@@ -152,6 +155,19 @@ def test_cli_provenance_version_falls_back_to_unknown(invoke_cli: InvokeCli) -> 
     assert "(version unknown)" in (run.cwd / "fake_synth_param_spec.py").read_text()
 
 
+def test_cli_writes_param_table_csv(invoke_cli: InvokeCli) -> None:
+    """The CLI writes a per-parameter CSV triage table next to the spec.
+
+    :param invoke_cli: Fixture invoking the CLI with plugin loading patched.
+    """
+    run = invoke_cli("--plugin-path", "fake.vst3", "--spec-name", "fake_synth")
+
+    rows = list(csv.reader(io.StringIO((run.cwd / "fake_synth_params.csv").read_text())))
+    assert rows[0] == ["", "pyname", "name", "range", "drafted_as", "skipped_reason"]
+    assert [r[1] for r in rows[1:]] == ["cutoff", "filter_type"]
+    assert [r[4] for r in rows[1:]] == ["ContinuousParameter", "CategoricalParameter"]
+
+
 def test_cli_honors_explicit_output_paths(invoke_cli: InvokeCli) -> None:
     """``--out-spec`` / ``--out-preset`` override the spec-name-derived defaults.
 
@@ -166,10 +182,13 @@ def test_cli_honors_explicit_output_paths(invoke_cli: InvokeCli) -> None:
         "out/custom_spec.py",
         "--out-preset",
         "out/custom.vstpreset",
+        "--out-csv",
+        "out/custom_params.csv",
     )
 
     assert run.exit_code == 0
     assert (run.cwd / "out" / "custom_spec.py").exists()
+    assert (run.cwd / "out" / "custom_params.csv").exists()
     assert (run.cwd / "out" / "custom.vstpreset").read_bytes() == b"VST3\x01\x00fake-state"
 
 

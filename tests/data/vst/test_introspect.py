@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import csv
+import io
 from pathlib import Path
 
 import pytest
@@ -11,6 +13,7 @@ from synth_setter.data.vst.introspect import (
     capture_preset,
     draft_synth_params,
     render_param_spec_module,
+    render_param_table_csv,
 )
 from synth_setter.data.vst.param_spec import (
     CategoricalParameter,
@@ -369,3 +372,85 @@ def test_capture_preset_writes_plugin_preset_data_bytes(tmp_path: Path) -> None:
     capture_preset(plugin, out)
 
     assert out.read_bytes() == b"VST3\x01\x00fake-state"
+
+
+def test_param_table_csv_lists_every_parameter_with_draft_outcome() -> None:
+    """The CSV carries one row per plugin parameter, in plugin order, with the
+    surge_params.csv columns plus the drafted class and skip reason."""
+    plugin = IntrospectFakePlugin(
+        {
+            "cutoff": IntrospectFakeParameter(
+                float, [0.0, 0.5, 1.0], name="A Cutoff", range_=(0.0, 100.0, 0.5)
+            ),
+            "filter_type": IntrospectFakeParameter(
+                str, ["LP", "HP"], raw_values=[0.0, 1.0], name="A Filter Type"
+            ),
+            "m1": IntrospectFakeParameter(float, [0.0], name="M1: -"),
+        }
+    )
+    params, skipped = draft_synth_params(plugin)
+
+    table = render_param_table_csv(plugin, params, skipped)
+
+    rows = list(csv.reader(io.StringIO(table)))
+    assert rows[0] == ["", "pyname", "name", "range", "drafted_as", "skipped_reason"]
+    assert rows[1] == ["0", "cutoff", "A Cutoff", "(0.0, 100.0, 0.5)", "ContinuousParameter", ""]
+    assert rows[2] == [
+        "1",
+        "filter_type",
+        "A Filter Type",
+        "(None, None, None)",
+        "CategoricalParameter",
+        "",
+    ]
+    assert rows[3] == [
+        "2",
+        "m1",
+        "M1: -",
+        "(None, None, None)",
+        "",
+        "degenerate: 1 valid value(s)",
+    ]
+
+
+def test_param_table_csv_survives_metadata_errors_per_row() -> None:
+    """A parameter whose display metadata raises still gets a row, not a crash."""
+
+    class _NoMetadataParameter:
+        type = float
+        valid_values = [0.0, 1.0]
+
+        @property
+        def name(self) -> str:
+            """Fail, simulating a wrapper whose display-name read crashes.
+
+            :returns: Never returns.
+            :raises RuntimeError: Always.
+            """
+            raise RuntimeError("no display name")
+
+        @property
+        def range(self) -> tuple[float | None, float | None, float | None]:
+            """Fail, simulating a wrapper whose range read crashes.
+
+            :returns: Never returns.
+            :raises RuntimeError: Always.
+            """
+            raise RuntimeError("no range")
+
+        def get_raw_value_for(self, value: float) -> float:
+            """Identity raw lookup.
+
+            :param value: Raw value.
+            :returns: ``value`` unchanged.
+            """
+            return value
+
+    plugin = IntrospectFakePlugin({"weird": _NoMetadataParameter()})  # type: ignore[dict-item]
+    params, skipped = draft_synth_params(plugin)
+
+    table = render_param_table_csv(plugin, params, skipped)
+
+    rows = list(csv.reader(io.StringIO(table)))
+    assert rows[1][1] == "weird"
+    assert rows[1][4] == "ContinuousParameter"

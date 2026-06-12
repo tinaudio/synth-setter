@@ -25,6 +25,8 @@ class IntrospectFakeParameter:
         type_: type,
         valid_values: list[FakeValue],
         raw_values: list[float] | None = None,
+        name: str = "",
+        range_: tuple[float | None, float | None, float | None] = (None, None, None),
     ) -> None:
         """Pair each entry of ``valid_values`` with its raw [0, 1] host value.
 
@@ -32,9 +34,13 @@ class IntrospectFakeParameter:
         :param valid_values: Values the parameter can take, as pedalboard reports them.
         :param raw_values: Raw host value for each entry of ``valid_values``; evenly
             spaced on [0, 1] when omitted.
+        :param name: Display name, as ``pedalboard``'s wrapper reports it.
+        :param range_: ``(min, max, step)`` tuple, as the wrapper's ``range`` reports it.
         """
         self.type = type_
         self.valid_values = valid_values
+        self.name = name
+        self.range = range_
         if raw_values is None:
             n = len(valid_values)
             raw_values = [i / max(n - 1, 1) for i in range(n)]

@@ -19,6 +19,7 @@ from synth_setter.data.vst.introspect import (
     capture_preset,
     draft_synth_params,
     render_param_spec_module,
+    render_param_table_csv,
 )
 from synth_setter.data.vst.param_spec_registry import default_plugin_path
 
@@ -58,6 +59,13 @@ from synth_setter.data.vst.param_spec_registry import default_plugin_path
     help="Where to write the captured baseline preset.",
 )
 @click.option(
+    "--out-csv",
+    type=click.Path(dir_okay=False, writable=True),
+    default=None,
+    show_default="<spec-name>_params.csv",
+    help="Where to write the per-parameter CSV triage table.",
+)
+@click.option(
     "--force",
     is_flag=True,
     default=False,
@@ -69,15 +77,17 @@ def main(
     spec_name: str,
     out_spec: str | None,
     out_preset: str | None,
+    out_csv: str | None,
     force: bool,
 ) -> None:
-    """Draft a ParamSpec module + baseline preset from a VST3 plugin.
+    """Draft a ParamSpec module + baseline preset + CSV table from a VST3 plugin.
 
     :param plugin_path: Path to the ``.vst3`` bundle to introspect.
     :param preset_path: Optional starting ``.vstpreset`` applied before capture.
     :param spec_name: Registry key; names the emitted constant and default outputs.
     :param out_spec: Draft module destination; defaults from ``spec_name``.
     :param out_preset: Captured preset destination; defaults from ``spec_name``.
+    :param out_csv: Per-parameter CSV table destination; defaults from ``spec_name``.
     :param force: Allow overwriting existing output files.
     :raises click.BadParameter: ``spec_name`` is not a valid Python identifier.
     :raises click.UsageError: An output file exists and ``--force`` was not given.
@@ -88,9 +98,10 @@ def main(
         )
     spec_dest = Path(out_spec or f"{spec_name}_param_spec.py")
     preset_dest = Path(out_preset or f"{spec_name}-base.vstpreset")
+    csv_dest = Path(out_csv or f"{spec_name}_params.csv")
     # Fail before the (slow) plugin load: re-running with the same spec-name
     # must not clobber a hand-tuned spec.
-    for dest in (spec_dest, preset_dest):
+    for dest in (spec_dest, preset_dest, csv_dest):
         if dest.exists() and not force:
             raise click.UsageError(f"{dest} already exists; pass --force to overwrite")
 
@@ -115,10 +126,13 @@ def main(
     capture_preset(plugin, preset_dest)
     spec_dest.parent.mkdir(parents=True, exist_ok=True)
     spec_dest.write_text(source, encoding="utf-8")
+    csv_dest.parent.mkdir(parents=True, exist_ok=True)
+    csv_dest.write_text(render_param_table_csv(plugin, drafted, skipped), encoding="utf-8")
 
     click.echo(f"Drafted {len(drafted)} parameter(s), skipped {len(skipped)}.")
     click.echo(f"Spec module : {spec_dest}")
     click.echo(f"Baseline    : {preset_dest}")
+    click.echo(f"Param table : {csv_dest}")
     click.echo(
         "Next: hand-tune the spec, then register it under "
         f"{spec_name!r} in synth_setter.data.vst.param_spec_registry."
