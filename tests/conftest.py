@@ -21,7 +21,7 @@ from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, open_dict
 
 from synth_setter.data.vst import core, param_specs, preset_paths
-from synth_setter.pipeline.schemas.spec import DatasetSpec
+from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.resources import vst_headless_wrapper
 from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
@@ -690,17 +690,15 @@ def _render_smoke_train_h5_subprocess(train_h5: Path, param_spec_name: str) -> N
     assert train_h5.exists(), "Dataset generation failed to produce train.h5 fixture"
 
 
-def _render_smoke_train_h5_fake(train_h5: Path, param_spec_name: str) -> None:
-    """Render the smoke ``train.h5`` in-process via ``make_hdf5_dataset``; requires the caller to have installed ``FakeVST3Plugin``.
+def _smoke_fake_render_cfg(param_spec_name: str) -> RenderConfig:
+    """Build the one-shard fake-plugin ``RenderConfig`` shared by the h5 and Lance smoke renders.
 
-    :param train_h5: Destination ``train.h5`` path; its parent must already exist.
     :param param_spec_name: Key into :data:`synth_setter.data.vst.param_specs` and
         :data:`synth_setter.data.vst.preset_paths` selecting spec and preset.
+    :returns: A CPU ``RenderConfig`` with the GUI toggle disabled.
+    :rtype: RenderConfig
     """
-    from synth_setter.data.vst.writers import make_hdf5_dataset
-    from synth_setter.pipeline.schemas.spec import RenderConfig
-
-    render_cfg = RenderConfig(
+    return RenderConfig(
         plugin_path=PLUGIN_PATH,
         preset_path=str(preset_paths[param_spec_name]),
         param_spec_name=param_spec_name,
@@ -714,7 +712,30 @@ def _render_smoke_train_h5_fake(train_h5: Path, param_spec_name: str) -> None:
         samples_per_shard=NUM_FIXTURE_SAMPLES,
         gui_toggle_cadence="never",
     )
-    make_hdf5_dataset(train_h5, render_cfg)
+
+
+def _render_smoke_train_h5_fake(train_h5: Path, param_spec_name: str) -> None:
+    """Render the smoke ``train.h5`` in-process via ``make_hdf5_dataset``; requires the caller to have installed ``FakeVST3Plugin``.
+
+    :param train_h5: Destination ``train.h5`` path; its parent must already exist.
+    :param param_spec_name: Key into :data:`synth_setter.data.vst.param_specs` and
+        :data:`synth_setter.data.vst.preset_paths` selecting spec and preset.
+    """
+    from synth_setter.data.vst.writers import make_hdf5_dataset
+
+    make_hdf5_dataset(train_h5, _smoke_fake_render_cfg(param_spec_name))
+
+
+def _render_smoke_train_lance_fake(train_lance: Path, param_spec_name: str) -> None:
+    """Render the smoke ``train.lance`` in-process via ``make_lance_dataset``; requires the caller to have installed ``FakeVST3Plugin``.
+
+    :param train_lance: Destination ``train.lance`` file; its parent must already exist.
+    :param param_spec_name: Key into :data:`synth_setter.data.vst.param_specs` and
+        :data:`synth_setter.data.vst.preset_paths` selecting spec and preset.
+    """
+    from synth_setter.data.vst.writers import make_lance_dataset
+
+    make_lance_dataset(train_lance, _smoke_fake_render_cfg(param_spec_name))
 
 
 def _build_surge_smoke_datasets(
@@ -745,6 +766,40 @@ def _build_surge_smoke_datasets(
 
     shutil.copy(train_h5, smoke_dataset_dir / "val.h5")
     shutil.copy(train_h5, smoke_dataset_dir / "test.h5")
+    return smoke_dataset_dir
+
+
+def _build_surge_smoke_lance_datasets(tmp_path: Path, param_spec_name: str) -> Path:
+    """Render the N-sample Surge smoke dataset natively as single-file Lance shards.
+
+    The Lance counterpart to :func:`_build_surge_smoke_datasets`: renders
+    ``train.lance`` through the production :func:`make_lance_dataset` writer, folds
+    its mel rows into ``stats.npz`` via :func:`stream_stats_lance`, and clones the
+    split into ``val``/``test``. No HDF5 file is produced — every shard carries the
+    exact on-disk format the pipeline's Lance finalize emits.
+
+    :param tmp_path: Per-test temporary directory; the dataset is written under
+        ``tmp_path / "data" / "smoke-lance"``.
+    :param param_spec_name: Key into :data:`synth_setter.data.vst.param_specs` and
+        :data:`synth_setter.data.vst.preset_paths` selecting spec and preset.
+
+    :return: Path to the directory holding ``{train,val,test}.lance`` and ``stats.npz``.
+    """
+    from synth_setter.pipeline.data.stats import stream_stats_lance
+
+    smoke_dataset_dir = tmp_path / "data" / "smoke-lance"
+    smoke_dataset_dir.mkdir(parents=True, exist_ok=True)
+    train_lance = smoke_dataset_dir / "train.lance"
+
+    _render_smoke_train_lance_fake(train_lance, param_spec_name)
+
+    # Sibling stats.npz folded straight from the Lance mel rows; mask degenerate
+    # bins as the h5 path's --mask-degenerate-bins flag does for fake-plugin data.
+    mean, std = stream_stats_lance([train_lance], mask_degenerate=True)
+    np.savez(smoke_dataset_dir / "stats.npz", mean=mean, std=std)
+
+    shutil.copy(train_lance, smoke_dataset_dir / "val.lance")
+    shutil.copy(train_lance, smoke_dataset_dir / "test.lance")
     return smoke_dataset_dir
 
 
@@ -788,6 +843,29 @@ def fake_surge_smoke_datasets(
     :return: Path to the directory holding ``{train,val,test}.h5`` and ``stats.npz``.
     """
     return _build_surge_smoke_datasets(tmp_path, param_spec_name, _render_smoke_train_h5_fake)
+
+
+@pytest.fixture(scope="function")
+def fake_surge_smoke_lance_datasets(
+    tmp_path: Path, param_spec_name: str, install_fake_plugin: FakeVST3Plugin
+) -> Path:
+    """Render the N-sample Surge smoke dataset in-process as native Lance shards (no real VST/X11).
+
+    The Lance counterpart to :func:`fake_surge_smoke_datasets`: ``install_fake_plugin``
+    swaps the loader for ``FakeVST3Plugin`` so :func:`make_lance_dataset` writes
+    structurally-valid ``{train,val,test}.lance`` shards directly — no HDF5
+    intermediate to convert. Backs the Lance ``evaluate`` oracle smoke test.
+
+    :param tmp_path: Per-test temporary directory; the dataset is written under
+        ``tmp_path / "data" / "smoke-lance"``.
+    :param param_spec_name: Param spec name (key into :data:`synth_setter.data.vst.param_specs`
+        and :data:`synth_setter.data.vst.preset_paths`); defaults to ``"surge_4"``.
+    :param install_fake_plugin: Swaps ``core.load_plugin`` / ``core.VST3Plugin``
+        for the fake so the render needs no real VST3 binary or display server.
+
+    :return: Path to the directory holding ``{train,val,test}.lance`` and ``stats.npz``.
+    """
+    return _build_surge_smoke_lance_datasets(tmp_path, param_spec_name)
 
 
 @pytest.fixture(scope="function")

@@ -300,7 +300,7 @@ docs:
     description: Test layout, fixtures, markers, and the cpu/mps/gpu CI lane split
     sources:
       - pattern: "tests/conftest.py"
-        covers: "Hydra cfg_train/cfg_train_lance/cfg_eval/cfg_dataset/cfg_surge_xt fixtures, accelerator parametrize, param_spec_name parametrize, experiment_name parametrize, _build_surge_xt_smoke_cfg, surge_xt_smoke_datasets, _validate_surge_dataset, Lance smoke helpers (_write_lance_smoke_split, _LANCE_SMOKE_*), shared constants (NUM_FIXTURE_SAMPLES, VST_HEADLESS_WRAPPER)"
+        covers: "Hydra cfg_train/cfg_train_lance/cfg_eval/cfg_dataset/cfg_surge_xt fixtures, accelerator parametrize, param_spec_name parametrize, experiment_name parametrize, _build_surge_xt_smoke_cfg, surge_xt_smoke_datasets, _validate_surge_dataset, Lance smoke helpers (_write_lance_smoke_split, fake_surge_smoke_lance_datasets, _LANCE_SMOKE_*), shared constants (NUM_FIXTURE_SAMPLES, VST_HEADLESS_WRAPPER)"
       - pattern: "tests/_vst.py"
         covers: "PLUGIN_PATH, VST_AVAILABLE, VST_SUBPROCESS_TIMEOUT_SECONDS"
       - pattern: "tests/test_train.py"

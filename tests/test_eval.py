@@ -10,14 +10,11 @@ postprocessing argv in ``test_eval_postprocessing``, metric IO in
 
 import math
 import os
-import shutil
 import subprocess
 from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
 
-import h5py
-import numpy as np
 import pytest
 import torch
 import wandb
@@ -639,33 +636,6 @@ def test_evaluate_loads_wandb_resolved_checkpoint_and_runs_inference(
         assert torch.isfinite(tensor).all(), f"{pred_file.name} contains NaN/Inf"
 
 
-@pytest.fixture
-def fake_surge_smoke_lance_datasets(fake_surge_smoke_datasets: Path, tmp_path: Path) -> Path:
-    """Convert the fake-VST HDF5 smoke splits into single-file Lance shards under one root.
-
-    :param fake_surge_smoke_datasets: HDF5 smoke dataset directory to convert.
-    :param tmp_path: Per-test tmpdir holding the Lance copy.
-    :return: Directory holding ``{train,val,test}.lance`` and ``stats.npz``.
-    """
-    # Local import: pulls in pyarrow, which the Docker VST CI images don't
-    # install (no `data` dependency group) — module scope would break their
-    # collection if this file is ever added to an in-image pytest run.
-    from tests.helpers.lance_fixtures import write_lance_shard
-
-    root = tmp_path / "lance-smoke"
-    root.mkdir()
-    for split in ("train", "val", "test"):
-        columns: dict[str, np.ndarray] = {}
-        with h5py.File(fake_surge_smoke_datasets / f"{split}.h5", "r") as f:
-            for name in ("audio", "mel_spec", "param_array"):
-                dataset = f[name]
-                assert isinstance(dataset, h5py.Dataset)
-                columns[name] = dataset[...]
-        write_lance_shard(root / f"{split}.lance", columns)
-    shutil.copy(fake_surge_smoke_datasets / "stats.npz", root / "stats.npz")
-    return root
-
-
 @pytest.mark.fake_vst
 def test_evaluate_validate_mode_lance_datamodule_runs_oracle(
     tmp_path: Path,
@@ -677,7 +647,7 @@ def test_evaluate_validate_mode_lance_datamodule_runs_oracle(
     the same contract as the HDF5 leg, with every batch read from Lance.
 
     :param tmp_path: Pinned as Hydra ``output_dir`` / ``log_dir``.
-    :param fake_surge_smoke_lance_datasets: Lance conversion of the smoke dataset.
+    :param fake_surge_smoke_lance_datasets: Natively-generated Lance smoke dataset.
     """
     cfg = _compose_fake_oracle_eval_cfg(
         tmp_path, fake_surge_smoke_lance_datasets, mode="validate", datamodule="surge_lance"
