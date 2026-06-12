@@ -196,12 +196,13 @@ ______________________________________________________________________
 | CPU Slow Tests  | `cpu-slow.yml`                 | push (main), dispatch                | `ubuntu-latest-4core`           | —                   | —                                                                |
 | Data Generation | `generate-dataset-shards.yaml` | `workflow_call`, `workflow_dispatch` | `ubuntu-latest`                 | R2, RunPod, OCI     | see `workflow_call.inputs` in `generate-dataset-shards.yaml`     |
 | Data Validation | `validate-dataset-shards.yaml` | `workflow_call`, `workflow_dispatch` | `ubuntu-latest`                 | R2                  | `image_tag`, `spec_uri`                                          |
-| Training        | `train.yml`                    | `workflow_dispatch`                  | `gpu-x64`                       | R2, W&B             | `experiment`, `hydra_overrides`                                  |
-| Evaluation      | `eval.yml`                     | `workflow_dispatch`                  | `gpu-x64`                       | R2, W&B             | `experiment`, `ckpt_path`, `hydra_overrides`                     |
+| Training        | `train.yml`                    | `workflow_dispatch`                  | `ubuntu-latest`                 | R2, W&B, RunPod     | `launch_config`                                                  |
+| Evaluation      | `eval.yml`                     | `workflow_dispatch`                  | `ubuntu-latest`                 | R2, W&B, RunPod     | `launch_config`                                                  |
 | Model Promotion | `promote.yml` (planned)        | `workflow_dispatch`                  | `ubuntu-latest`                 | W&B, `GITHUB_TOKEN` | `train_wandb_run_id`, `eval_wandb_run_id`, `registry`, `dry_run` |
 
-- All workflows that create W&B runs must export `GITHUB_SHA` into the run environment.
-- Evaluation requires `ckpt_path` (the checkpoint to restore — a local path, or a W&B model artifact via the `${wandb:…}` OmegaConf resolver, e.g. `ckpt_path='${wandb:tinaudio/synth-setter/model-<train_config_id>:latest}'`, as the `experiment/surge/wandb_checkpoint/*` overlays do) and `experiment` (which selects the eval dataset).
+- All workflows that create W&B runs must guarantee the §12 `github_sha` provenance: runner-local runs export `GITHUB_SHA` into the run environment; SkyPilot-dispatched runs instead pin the worker checkout via `WORKER_GIT_REF` (the worker records its synced `HEAD`).
+- Training and evaluation dispatch SkyPilot managed jobs via `synth-setter-skypilot-launch <launch_config>`; the launch config (`src/synth_setter/configs/launch/*.yaml`) bakes the compute template, worker image tag, and worker `cmd` — the workflows take no other inputs. The workflows forward `WORKER_GIT_REF=<dispatched SHA>`, and the launcher injects `IMAGE_TAG` into every rank's env, so both §12 provenance fields match the dispatched commit and image.
+- Evaluation sources its checkpoint inside the launch config's `cmd` via the `experiment/surge/wandb_checkpoint/*` overlays, which pin `ckpt_path` to the published model artifact through the `${wandb:…}` OmegaConf resolver (e.g. `ckpt_path='${wandb:tinaudio/synth-setter/model-<train_config_id>:latest}'`); the experiment selects the eval dataset.
 - Promotion requires both `train_wandb_run_id` and `eval_wandb_run_id`. It pulls the model artifact from the training run and eval metrics from the eval run.
 
 **GitHub Release body schema** (produced by promote workflow):
@@ -252,7 +253,7 @@ ______________________________________________________________________
 | ------------------------------------ | ----------------------------------- | ----------------------- |
 | `WANDB_API_KEY`                      | data-gen, training, eval, promotion | wandb.ai/settings       |
 | `GITHUB_TOKEN`                       | promotion                           | Automatic in GHA        |
-| `RUNPOD_API_KEY`                     | data-gen                            | runpod.io               |
+| `RUNPOD_API_KEY`                     | data-gen, training, eval            | runpod.io               |
 | `RCLONE_CONFIG_R2_ACCESS_KEY_ID`     | data-gen, training, eval            | Cloudflare R2 dashboard |
 | `RCLONE_CONFIG_R2_SECRET_ACCESS_KEY` | data-gen, training, eval            | Cloudflare R2 dashboard |
 | `RCLONE_CONFIG_R2_ENDPOINT`          | data-gen, training, eval            | Cloudflare R2 dashboard |

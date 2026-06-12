@@ -1,10 +1,12 @@
 """Generic SkyPilot launcher used by ``synth-setter-*`` entrypoints.
 
-``dispatch_via_skypilot(sky_cfg)`` is the only public surface. Callers pass a
+``dispatch_via_skypilot(sky_cfg)`` is the programmatic surface. Callers pass a
 fully populated ``SkypilotLaunchConfig`` — ``compute_template`` and ``cmd``
 required; dataset-specific envs flow through ``sky_cfg.extra_envs``; the
 worker job-name stem comes from ``sky_cfg.job_name`` (callers pin a
-domain-specific stem) or falls back to ``synth-setter-<uuid8>``.
+domain-specific stem) or falls back to ``synth-setter-<uuid8>``. The
+``synth-setter-skypilot-launch`` CLI (``main``) wraps it for checked-in launch
+configs under ``src/synth_setter/configs/launch/`` (train/eval workflows).
 
 Provider-neutral: the same call launches against
 `src/synth_setter/configs/compute/runpod-template.yaml`,
@@ -67,6 +69,10 @@ from synth_setter.workspace import operator_workspace
 
 _WORKER_IMAGE_ENV = "WORKER_IMAGE"
 _WORKER_IMAGE_REPO = "tinaudio/synth-setter"
+
+# Bare image tag for the worker's wandb provenance — log_wandb_provenance
+# reads IMAGE_TAG into wandb.config.image_tag (storage-provenance-spec.md §12).
+_IMAGE_TAG_ENV = "IMAGE_TAG"
 
 # OCI distribution tag grammar: leading alnum/_, then up to 127 of [A-Za-z0-9_.-].
 _DOCKER_TAG_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$")
@@ -479,6 +485,7 @@ def _launch_one_rank_from_doc(
         WORKER_RANK_ENV_VAR: str(rank),
         NUM_WORKERS_ENV_VAR: str(num_workers),
         _WORKER_IMAGE_ENV: worker_image,
+        _IMAGE_TAG_ENV: worker_image.rpartition(":")[2],
     }
     task = sky.Task.from_yaml_config(task_doc)
     _override_image_id(task, worker_image)
@@ -636,3 +643,49 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
             f"{len(failed)} of {sky_cfg.num_workers} worker(s) failed: "
             + ", ".join(f"{name}(rc={rc})" for name, rc in failed)
         )
+
+
+def load_launch_config(path: Path) -> SkypilotLaunchConfig:
+    """Load a checked-in launch-config YAML into a validated ``SkypilotLaunchConfig``.
+
+    The YAML is the full launch description (``cmd`` included) — unlike the
+    Hydra ``skypilot_launch`` group, which forbids ``cmd`` because the
+    generate-dataset entrypoint builds it from argv. ``extra="forbid"`` on the
+    model surfaces config typos instead of silently ignoring them.
+
+    :param path: Path to a YAML file whose top level is a mapping of
+        ``SkypilotLaunchConfig`` fields.
+    :return: Validated launcher config.
+    :raises FileNotFoundError: ``path`` does not point to a file.
+    :raises ValueError: top-level YAML is not a mapping, or field validation
+        fails (``pydantic.ValidationError`` is a ``ValueError`` subclass).
+    """
+    if not path.is_file():
+        raise FileNotFoundError(f"launch config not found: {path}")
+    with path.open(encoding="utf-8") as f:
+        doc = yaml.safe_load(f)
+    if not isinstance(doc, dict):
+        raise ValueError(f"launch config {path} must be a YAML mapping, got {type(doc).__name__}")
+    return SkypilotLaunchConfig(**doc)
+
+
+@click.command()
+@click.argument("launch_config", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+def main(launch_config: Path) -> None:
+    """Dispatch the SkyPilot launch config at LAUNCH_CONFIG.
+
+    Relative paths inside the config (``compute_template``, ``env_file``) are
+    resolved against the working directory, so run from the repo root.
+
+    :param launch_config: Path to a launch-config YAML (see ``load_launch_config``).
+    :raises click.ClickException: the config fails to load or validate.
+    """
+    try:
+        sky_cfg = load_launch_config(launch_config)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    dispatch_via_skypilot(sky_cfg)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,23 @@
+# SkyPilot launch config for a manually-dispatched training run on RunPod.
+#
+# Consumed by `synth-setter-skypilot-launch <this file>` — the only input
+# .github/workflows/train.yml takes. Fields mirror SkypilotLaunchConfig;
+# relative paths resolve against the working directory (run from the repo
+# root). Copy this file to train a different experiment.
+#
+# Worker provenance (storage-provenance-spec.md §12): sync_worker_checkout.sh
+# moves the baked checkout to the launcher-forwarded WORKER_GIT_REF so
+# `git rev-parse HEAD` records the dispatched SHA; the launcher injects
+# IMAGE_TAG into every rank's env.
+
+compute_template: src/synth_setter/configs/compute/runpod-template.yaml
+worker_image_tag: dev-snapshot
+env_file: .env
+# tail=false detaches after submission; follow with `sky jobs logs --name <job>`.
+tail: false
+cmd: >-
+  cd /home/build/synth-setter &&
+  bash scripts/sync_worker_checkout.sh &&
+  exec synth-setter-train
+  experiment=surge/ffn_simple
+  hydra.run.dir=/home/build/synth-setter/train-run
