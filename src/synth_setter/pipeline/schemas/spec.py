@@ -16,7 +16,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from functools import cached_property
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from pydantic import (
     BaseModel,
@@ -397,7 +397,7 @@ def _default_run_id(data: dict[str, Any]) -> str:
     )
 
 
-def _default_r2_location(data: dict[str, Any]) -> dict[str, Any]:
+def _default_r2_location(data: dict[str, Any]) -> R2Location:
     """Build a partial ``r2`` dict (no ``bucket``) when the ``r2`` field was omitted.
 
     The DatasetSpec model_validator promotes the legacy flat keys and fills
@@ -408,10 +408,13 @@ def _default_r2_location(data: dict[str, Any]) -> dict[str, Any]:
     a placeholder that would mask the real misconfiguration).
 
     :param data: Already-validated DatasetSpec field data exposed to the factory.
-    :returns: Dict shaped like ``R2Location.model_fields`` minus ``bucket``;
-        ``R2Location`` validation then raises the missing-field error.
+    :returns: Dict shaped like ``R2Location.model_fields`` minus ``bucket``, which
+        ``validate_default=True`` re-validates into ``R2Location``; the missing
+        ``bucket`` surfaces as the standard missing-field error.
     """
-    return {
+    # ``validate_default=True`` re-validates this partial mapping into R2Location;
+    # the cast aligns the declared return with the field type for pyright.
+    partial = {
         "prefix_root": DEFAULT_R2_PREFIX_ROOT,
         "prefix": make_r2_prefix(
             DatasetConfigId(data["task_name"]),
@@ -419,6 +422,7 @@ def _default_r2_location(data: dict[str, Any]) -> dict[str, Any]:
             prefix_root=DEFAULT_R2_PREFIX_ROOT,
         ),
     }
+    return cast(R2Location, partial)
 
 
 def _coerce_created_at_to_datetime(value: Any) -> datetime | None:
@@ -671,9 +675,7 @@ class DatasetSpec(BaseModel):
         description="Deterministic W&B run ID derived from ``task_name`` and ``created_at``.",
     )
     r2: R2Location = Field(
-        # Returns a dict that Pydantic re-validates as R2Location via
-        # ``validate_default=True``; pyright doesn't see the coercion.
-        default_factory=_default_r2_location,  # type: ignore[arg-type]
+        default_factory=_default_r2_location,
         description=(
             "Nested R2 storage location (bucket + prefix_root + materialized prefix). "
             "Replaces the legacy flat ``r2_bucket`` / ``r2_prefix_root`` / ``r2_prefix`` "

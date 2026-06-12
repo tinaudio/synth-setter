@@ -29,7 +29,6 @@ import re
 import sys
 import tarfile
 from pathlib import Path
-from typing import cast
 
 import click
 import h5py
@@ -227,7 +226,13 @@ def _validate_h5_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
             if name not in f:
                 errors.append(f"missing dataset: {name!r}")
                 continue
-            actual = cast(h5py.Dataset, f[name]).shape
+            member = f[name]
+            # A Group at a dataset name is reported, not raised, so the CLI/finalize
+            # paths see a structured error like every other check here.
+            if not isinstance(member, h5py.Dataset):
+                errors.append(f"dataset {name!r} is a {type(member).__name__}, not a Dataset")
+                continue
+            actual = member.shape
             expected = expected_shapes[name]
             if actual != expected:
                 errors.append(f"dataset {name!r} has shape {actual}, expected {expected}")

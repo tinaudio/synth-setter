@@ -1,4 +1,5 @@
 import random
+import weakref
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Literal
@@ -57,6 +58,9 @@ class VSTDataset(torch.utils.data.Dataset):
         self.repeat_first_batch = repeat_first_batch
 
         self.dataset_file = h5py.File(dataset_file, "r")
+        # Safety net so the handle is released even if ``teardown`` never runs;
+        # ``h5py.File.close`` is idempotent, so a later ``teardown`` close is safe.
+        weakref.finalize(self, self.dataset_file.close)
 
         if use_saved_mean_and_variance:
             self._load_dataset_statistics(dataset_file)
