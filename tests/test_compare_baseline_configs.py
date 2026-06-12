@@ -319,6 +319,7 @@ ACCEPTED_DIFFS: tuple[str, ...] = (
     "logger.wandb.log_model",  # changed `true` → False (artifact upload policy, not training)
     "logger.wandb.project",  # env-derived (${oc.env:WANDB_PROJECT,synth-setter})
     "logger.wandb.settings.console",  # `wrap` added in #1506; console capture, no model impact
+    "logger.wandb.settings.console_multipart",  # added in #1641; console capture, no model impact
     # Cleared to `???` (mandatory override) in #809 — dataset locality, not a model knob.
     "datamodule.dataset_root",
     "datamodule.predict_file",
