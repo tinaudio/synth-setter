@@ -81,6 +81,15 @@ class IntrospectablePlugin(Protocol):
         ...
 
 
+# Categorical-draft caps, shared with the --verify battery. Above the str cap,
+# the value list is a formatted numeric sweep ("-100.0 cents" x ~1001, OB-Xf)
+# or a 128-note selector, not a label set — Surge XT's largest genuine label
+# set is the 43-value waveshaper type, OB-Xf's smallest sweep is 49. Above the
+# numeric cap, a float/int set is a continuous knob rather than a switch or
+# stepped selector (Odin 2 reports both at small cardinality).
+MAX_STR_CATEGORY_VALUES = 48
+MAX_NUMERIC_CATEGORY_VALUES = 16
+
 # Note-conditioning defaults copied from the Surge specs; every spec needs a
 # pitch + note_start_and_end pair and these ranges are sane for most synths.
 _DEFAULT_PITCH_MIN = 48
@@ -113,9 +122,11 @@ def draft_synth_params(
 ) -> tuple[list[Parameter], list[SkippedParameter]]:
     """Classify every plugin parameter into a draft ``Parameter``, in plugin order.
 
-    ``str``-typed parameters become onehot ``CategoricalParameter``s with raw
-    values asked from the host; ``bool``-typed become two-value categoricals;
-    every other type (pedalboard reports ``float``) becomes a full-range
+    Classification keys on ``valid_values`` cardinality, not ``type`` alone: a
+    small value set (``str``/``bool`` labels up to 48, numeric switches and
+    stepped selectors up to 16) becomes an onehot ``CategoricalParameter`` with
+    raw values asked from the host; anything larger — dense float sweeps and
+    str-formatted numeric sweeps alike — becomes a full-range
     ``ContinuousParameter``. Parameters with fewer than two valid values carry
     no signal and are skipped, as is any parameter whose metadata lookup raises.
 
@@ -146,8 +157,9 @@ def _classify(name: str, param: IntrospectableParameter) -> Parameter:
         ``get_raw_value_for``).
     :returns: The drafted parameter.
     """
-    if param.type in (str, bool):
-        values = list(param.valid_values)
+    values = list(param.valid_values)
+    cap = MAX_STR_CATEGORY_VALUES if param.type in (str, bool) else MAX_NUMERIC_CATEGORY_VALUES
+    if len(values) <= cap:
         raw_values = [float(param.get_raw_value_for(v)) for v in values]
         return CategoricalParameter(
             name=name, values=values, raw_values=raw_values, encoding="onehot"

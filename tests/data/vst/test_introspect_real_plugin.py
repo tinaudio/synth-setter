@@ -14,7 +14,11 @@ from click.testing import CliRunner
 
 from synth_setter.cli.introspect_plugin import main
 from synth_setter.data.vst.core import load_plugin, load_preset
-from synth_setter.data.vst.param_spec import CategoricalParameter, ParamSpec
+from synth_setter.data.vst.param_spec import (
+    CategoricalParameter,
+    ContinuousParameter,
+    ParamSpec,
+)
 from tests._vst import PLUGIN_PATH
 from tests.data.vst._introspect_fakes import assert_ruff_format_clean, exec_module
 
@@ -65,6 +69,12 @@ def test_introspect_cli_surge_xt_emits_usable_spec_and_vstpreset(tmp_path: Path)
     filter_type = next(p for p in spec.synth_params if p.name == "a_filter_1_type")
     assert isinstance(filter_type, CategoricalParameter)
     assert "LP 12 dB" in filter_type.values
+    # Cardinality boundaries: the 43-label waveshaper set survives as a
+    # categorical while the 128-note keytrack selector tips to continuous.
+    waveshaper = next(p for p in spec.synth_params if p.name == "a_waveshaper_type")
+    assert isinstance(waveshaper, CategoricalParameter)
+    keytrack = next(p for p in spec.synth_params if p.name == "a_keytrack_root_key")
+    assert isinstance(keytrack, ContinuousParameter)
 
     # The drafted spec is immediately usable by the sampling pipeline.
     synth_params, note_params = spec.sample()

@@ -28,11 +28,13 @@ from tests.data.vst._introspect_fakes import (
     exec_module,
 )
 
-_CONTINUOUS = IntrospectFakeParameter(float, [0.0, 0.5, 1.0])
+# Realistic continuous-knob surface: pedalboard reports a formatted value per
+# host step, so a real continuous float carries far more than 16 valid values.
+_CONTINUOUS = IntrospectFakeParameter(float, [i / 100 for i in range(101)])
 
 
-def test_draft_float_parameter_yields_full_range_continuous() -> None:
-    """A float-typed plugin parameter drafts as a full-range ``ContinuousParameter``."""
+def test_draft_float_parameter_with_many_values_yields_full_range_continuous() -> None:
+    """A float parameter with a dense value sweep drafts as a full-range continuous."""
     plugin = IntrospectFakePlugin({"cutoff": _CONTINUOUS})
 
     params, skipped = draft_synth_params(plugin)
@@ -46,16 +48,93 @@ def test_draft_float_parameter_yields_full_range_continuous() -> None:
     assert param.max == 1.0
 
 
-def test_draft_int_typed_parameter_falls_through_to_continuous() -> None:
-    """A parameter of any non-str/bool type drafts as a continuous fallback."""
+def test_draft_binary_float_parameter_yields_two_value_categorical() -> None:
+    """A float parameter with exactly two valid values drafts as an on/off categorical."""
+    plugin = IntrospectFakePlugin(
+        {"osc1_reset": IntrospectFakeParameter(float, [0.0, 1.0], raw_values=[0.0, 1.0])}
+    )
+
+    params, skipped = draft_synth_params(plugin)
+
+    assert skipped == []
+    (param,) = params
+    assert isinstance(param, CategoricalParameter)
+    assert param.values == [0.0, 1.0]
+    assert param.raw_values == [0.0, 1.0]
+    assert param.encoding == "onehot"
+
+
+def test_draft_small_discrete_float_selector_yields_categorical_with_host_raw_values() -> None:
+    """A float selector with a small value set keeps each step, raw values from the host."""
+    octaves = [-4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0]
+    plugin = IntrospectFakePlugin(
+        {
+            "osc1_octave": IntrospectFakeParameter(
+                float, octaves, raw_values=[v / 8 + 0.5 for v in octaves]
+            )
+        }
+    )
+
+    params, skipped = draft_synth_params(plugin)
+
+    assert skipped == []
+    (param,) = params
+    assert isinstance(param, CategoricalParameter)
+    assert param.values == octaves
+    assert param.raw_values[0] == 0.0
+    assert param.raw_values[-1] == 1.0
+
+
+def test_draft_int_typed_parameter_with_small_value_set_yields_categorical() -> None:
+    """A small int-typed value set drafts as a categorical, like any discrete selector."""
     plugin = IntrospectFakePlugin({"voices": IntrospectFakeParameter(int, [1, 2, 4, 8])})
 
     params, skipped = draft_synth_params(plugin)
 
     assert skipped == []
     (param,) = params
-    assert isinstance(param, ContinuousParameter)
+    assert isinstance(param, CategoricalParameter)
     assert param.name == "voices"
+    assert param.values == [1, 2, 4, 8]
+
+
+def test_draft_str_numeric_sweep_above_cap_yields_continuous_not_onehot() -> None:
+    """A str parameter with a huge formatted-numeric sweep drafts as continuous."""
+    sweep = [f"{v / 10:.1f} cents" for v in range(-200, 201)]
+    plugin = IntrospectFakePlugin({"tune_cents": IntrospectFakeParameter(str, sweep)})
+
+    params, skipped = draft_synth_params(plugin)
+
+    assert skipped == []
+    (param,) = params
+    assert isinstance(param, ContinuousParameter)
+    assert param.name == "tune_cents"
+    assert param.min == 0.0
+    assert param.max == 1.0
+
+
+def test_draft_str_parameter_at_cap_boundary_stays_categorical() -> None:
+    """A 48-value str label set is still drafted as a categorical; 49 tips to continuous."""
+    at_cap = IntrospectFakeParameter(str, [f"L{i}" for i in range(48)])
+    over_cap = IntrospectFakeParameter(str, [f"L{i}" for i in range(49)])
+    plugin = IntrospectFakePlugin({"at_cap": at_cap, "over_cap": over_cap})
+
+    params, _ = draft_synth_params(plugin)
+
+    assert isinstance(params[0], CategoricalParameter)
+    assert isinstance(params[1], ContinuousParameter)
+
+
+def test_draft_float_parameter_at_cap_boundary_stays_categorical() -> None:
+    """A 16-value float set is still drafted as a categorical; 17 tips to continuous."""
+    at_cap = IntrospectFakeParameter(float, [i / 15 for i in range(16)])
+    over_cap = IntrospectFakeParameter(float, [i / 16 for i in range(17)])
+    plugin = IntrospectFakePlugin({"at_cap": at_cap, "over_cap": over_cap})
+
+    params, _ = draft_synth_params(plugin)
+
+    assert isinstance(params[0], CategoricalParameter)
+    assert isinstance(params[1], ContinuousParameter)
 
 
 def test_draft_str_parameter_yields_onehot_categorical_with_host_raw_values() -> None:
@@ -320,7 +399,7 @@ def test_rendered_module_is_ruff_format_clean() -> None:
             "retrigger": IntrospectFakeParameter(bool, [False, True]),
             # long name exercises the wrapped multi-line ContinuousParameter form
             "a_scene_voice_filter_2_keytrack_response_depth_modulation_amount_extended": (
-                IntrospectFakeParameter(float, [0.0, 1.0])
+                IntrospectFakeParameter(float, [i / 100 for i in range(101)])
             ),
             "m1": IntrospectFakeParameter(float, [0.0]),
         }
@@ -392,7 +471,7 @@ def test_param_table_csv_lists_every_parameter_with_draft_outcome() -> None:
     plugin = IntrospectFakePlugin(
         {
             "cutoff": IntrospectFakeParameter(
-                float, [0.0, 0.5, 1.0], name="A Cutoff", range_=(0.0, 100.0, 0.5)
+                float, [i / 100 for i in range(101)], name="A Cutoff", range_=(0.0, 100.0, 0.5)
             ),
             "filter_type": IntrospectFakeParameter(
                 str, ["LP", "HP"], raw_values=[0.0, 1.0], name="A Filter Type"
@@ -465,4 +544,4 @@ def test_param_table_csv_survives_metadata_errors_per_row() -> None:
 
     rows = list(csv.reader(io.StringIO(table)))
     assert rows[1][1] == "weird"
-    assert rows[1][4] == "ContinuousParameter"
+    assert rows[1][4] == "CategoricalParameter"

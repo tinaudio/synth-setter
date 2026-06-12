@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, TypeAlias
 
-# int covers the fall-through-to-continuous case the tests pin; the real
+# int covers the cardinality-classification cases the tests pin; the real
 # pedalboard surface reports float / str / bool.
 FakeValue: TypeAlias = float | str | bool | int
 
@@ -23,8 +24,8 @@ class IntrospectFakeParameter:
     def __init__(
         self,
         type_: type,
-        valid_values: list[FakeValue],
-        raw_values: list[float] | None = None,
+        valid_values: Sequence[FakeValue],
+        raw_values: Sequence[float] | None = None,
         name: str = "",
         range_: tuple[float | None, float | None, float | None] = (None, None, None),
     ) -> None:

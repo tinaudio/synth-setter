@@ -18,7 +18,9 @@ def fake_plugin() -> IntrospectFakePlugin:
     """
     return IntrospectFakePlugin(
         {
-            "cutoff": IntrospectFakeParameter(float, [0.0, 0.5, 1.0]),
+            # Dense sweep: a real continuous knob reports a value per host step,
+            # far above the numeric categorical cap.
+            "cutoff": IntrospectFakeParameter(float, [i / 100 for i in range(101)]),
             "filter_type": IntrospectFakeParameter(str, ["LP", "HP"], raw_values=[0.0, 1.0]),
         },
         preset_data=b"VST3\x01\x00fake-state",
