@@ -534,21 +534,46 @@ def test_finalize_wds_downloads_every_train_shard_uri(
     assert uri_to_local_path(fake_r2_remote, spec.r2.stats_uri()).is_file()
 
 
-def test_finalize_lance_writes_split_files_stats_and_marker_last(
+def _redirect_lance_streaming_to_remote(
+    monkeypatch: pytest.MonkeyPatch, fake_r2_remote: Path
+) -> None:
+    """Point lance's native S3 reads/writes at the local-typed rclone remote.
+
+    Streaming finalize hands ``r2_io.to_s3_uri(...)`` + ``r2_storage_options()``
+    to ``LanceFileReader`` / ``LanceFileWriter``. Mapping the ``r2://`` URI to
+    its ``<remote>/<bucket>/<key>`` path (with no ``storage_options``) makes
+    lance read/write the same fake remote ``rclone`` serves, so the test asserts
+    on materialized objects rather than reaching real R2.
+
+    :param monkeypatch: Pytest fixture used to install the redirects.
+    :param fake_r2_remote: Root of the local-typed remote the URIs resolve under.
+    """
+    monkeypatch.setattr(
+        "synth_setter.pipeline.r2_io.to_s3_uri",
+        lambda r2_uri: str(uri_to_local_path(fake_r2_remote, r2_uri)),
+    )
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.r2_storage_options", lambda: None)
+
+
+def test_finalize_lance_streams_splits_to_r2_without_downloading_shards(
     fake_r2_remote: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001
 ) -> None:
-    """``finalize_from_spec`` handles Lance splits and uploads the marker last.
+    """Lance finalize concatenates split files by streaming — no shard ever lands on disk.
 
-    :param fake_r2_remote: Local-typed rclone remote where train shards are seeded.
+    Reading each shard natively over the S3 API and writing the split straight
+    back means ``download_to_path`` must never fire; the marker is uploaded
+    last, after ``stats.npz``.
+
+    :param fake_r2_remote: Local-typed rclone remote where shards are seeded.
     :param tmp_path: Pytest tmp dir; hosts finalize scratch files.
-    :param monkeypatch: Pytest fixture used to spy on upload order.
+    :param monkeypatch: Pytest fixture used to redirect streaming + spy uploads.
     :param stub_finalize_setup: Fixture-activation only.
     """
     spec = build_lance_smoke_spec(
-        task_name="finalize-lance-marker-last",
+        task_name="finalize-lance-stream",
         train_val_test_sizes=(4, 4, 0),
     )
     seed_train_shards(fake_r2_remote, spec)
@@ -556,6 +581,11 @@ def test_finalize_lance_writes_split_files_stats_and_marker_last(
         write_minimal_lance_shard(
             uri_to_local_path(fake_r2_remote, spec.r2.shard_uri(shard)), spec
         )
+    _redirect_lance_streaming_to_remote(monkeypatch, fake_r2_remote)
+    monkeypatch.setattr(
+        "synth_setter.pipeline.r2_io.download_to_path",
+        lambda *a, **kw: pytest.fail("streaming lance finalize must not download shards"),
+    )
     work_dir = tmp_path / "work"
     work_dir.mkdir()
 
@@ -579,6 +609,49 @@ def test_finalize_lance_writes_split_files_stats_and_marker_last(
     assert upload_order.index(spec.r2.stats_uri()) < upload_order.index(
         spec.r2.dataset_complete_marker_uri()
     )
+
+
+@pytest.mark.parametrize("flag", [True, False])
+def test_finalize_lance_forwards_mask_degenerate_bins_to_stream_stats(
+    fake_r2_remote: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, flag: bool
+) -> None:
+    """``finalize_lance`` forwards ``spec.mask_degenerate_bins`` to ``stream_stats_lance`` verbatim.
+
+    Mirrors the wds/hdf5 wire tests so a regression that hard-wires the kwarg fails here rather
+    than silently re-breaking the lance stats fold.
+
+    :param fake_r2_remote: Local-typed rclone remote where the train shard is seeded.
+    :param tmp_path: Pytest tmp dir; hosts the finalize scratch work_dir.
+    :param monkeypatch: Pytest fixture used to capture the forwarded kwarg.
+    :param flag: Parametrized polarity threaded through the wire via the spec field.
+    """
+    spec = build_lance_smoke_spec(
+        task_name=f"mask-forwards-lance-{flag}",
+        train_val_test_sizes=(4, 0, 0),
+        mask_degenerate_bins=flag,
+    )
+    seed_train_shards(fake_r2_remote, spec)
+    _redirect_lance_streaming_to_remote(monkeypatch, fake_r2_remote)
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.upload", lambda *a, **kw: None)
+
+    captured: dict[str, bool] = {}
+
+    def fake_stream_stats(
+        shard_paths: object,
+        mask_degenerate: bool = False,
+        storage_options: object = None,
+    ) -> tuple[Any, Any]:
+        list(shard_paths)  # type: ignore[arg-type]
+        captured["mask_degenerate"] = mask_degenerate
+        return np.zeros((2, 2), dtype=np.float32), np.ones((2, 2), dtype=np.float32)
+
+    monkeypatch.setattr("synth_setter.pipeline.data.stats.stream_stats_lance", fake_stream_stats)
+
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    finalize_dataset.finalize_lance(spec, work_dir)
+
+    assert captured == {"mask_degenerate": flag}
 
 
 def test_finalize_wds_raises_on_empty_train_split(fake_r2_remote: Path, tmp_path: Path) -> None:

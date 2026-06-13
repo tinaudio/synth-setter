@@ -343,6 +343,8 @@ Behavior:
 - Otherwise → `r2_io.download_dir_no_overwrite(uri, dataset_root)` shells out to `rclone copy --immutable --checksum`; `--immutable` hard-fails on a differing destination file, surfacing drift instead of overwriting or skipping
 - **`download_dataset_root_uri` defaults to `null`** — you opt in explicitly, never accidentally
 
+For the Lance datamodule (`datamodule=surge_lance`), `datamodule.stream_from_r2=true` skips the download entirely: `prepare_data()` fetches only `stats.npz`, and each split is opened directly from its `s3://` URI over R2's S3-compatible API (`LanceFileReader` + `r2_io.r2_storage_options()`). This avoids the per-run re-download of large datasets ([#1357](https://github.com/tinaudio/synth-setter/issues/1357)) and needs no local disk for the splits. Still requires `download_dataset_root_uri` (the dataset prefix to stream from).
+
 ### 6.2 Checkpoint Storage (R2, referenced by W&B Artifacts)
 
 The best checkpoint is stored in **R2** and referenced by a W&B artifact — `log_model: False` keeps checkpoint files out of W&B (5 GB total budget). See [§10](#10-alternatives-considered) for the full analysis.

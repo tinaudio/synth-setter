@@ -340,12 +340,16 @@ def stream_stats_wds(
 
 
 def _fold_lance_shard_into_welford(
-    existing: tuple[int, Any, Any], shard_path: Path
+    existing: tuple[int, Any, Any],
+    shard_path: str | Path,
+    storage_options: dict[str, str] | None = None,
 ) -> tuple[int, Any, Any]:
     """Fold every Lance ``mel_spec`` row from one shard into Welford state.
 
     :param existing: Welford state ``(count, mean, M2)`` before this shard.
-    :param shard_path: Filesystem path to one ``shard-*.lance`` file.
+    :param shard_path: One ``shard-*.lance`` file (local path or ``s3://`` URI).
+    :param storage_options: ``object_store`` kwargs when ``shard_path`` is a
+        cloud URI; ``None`` reads from local disk.
     :returns: Updated Welford state after every readable mel row was folded.
     :rtype: tuple[int, Any, Any]
     :raises ValueError: The shard carried no readable ``mel_spec`` rows.
@@ -353,24 +357,29 @@ def _fold_lance_shard_into_welford(
     from synth_setter.pipeline.data.lance_shard import iter_lance_column_rows
 
     shard_rows = 0
-    for row in iter_lance_column_rows(shard_path, MEL_SPEC_FIELD):
+    for row in iter_lance_column_rows(shard_path, MEL_SPEC_FIELD, storage_options=storage_options):
         existing = update(existing, row)
         shard_rows += 1
     if shard_rows == 0:
         raise ValueError(
-            f"shard {shard_path.name} contained no readable {MEL_SPEC_FIELD!r} rows; "
+            f"shard {Path(shard_path).name} contained no readable {MEL_SPEC_FIELD!r} rows; "
             "aborting so partial stats are never written silently"
         )
     return existing
 
 
 def stream_stats_lance(
-    shard_paths: Iterable[Path], mask_degenerate: bool = False
+    shard_paths: Iterable[str | Path],
+    mask_degenerate: bool = False,
+    storage_options: dict[str, str] | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Stream Welford mean/std across an iterable of ``shard-*.lance`` paths.
 
-    :param shard_paths: Iterable yielding Lance shard paths in fold order.
+    :param shard_paths: Iterable yielding Lance shard paths or ``s3://`` URIs in
+        fold order.
     :param mask_degenerate: See :func:`get_stats_wds`.
+    :param storage_options: ``object_store`` kwargs forwarded to each read when
+        the shards are cloud URIs; ``None`` reads from local disk.
     :returns: ``(mean, std)`` arrays as produced by :func:`finalize`.
     :rtype: tuple[np.ndarray, np.ndarray]
     :raises FileNotFoundError: ``shard_paths`` yielded zero paths.
@@ -378,8 +387,8 @@ def stream_stats_lance(
     existing: tuple[int, Any, Any] = (0, 0, 0)
     folded_any = False
     for shard_path in shard_paths:
-        logger.info(f"Processing {shard_path.name}...")
-        existing = _fold_lance_shard_into_welford(existing, shard_path)
+        logger.info(f"Processing {Path(shard_path).name}...")
+        existing = _fold_lance_shard_into_welford(existing, shard_path, storage_options)
         folded_any = True
     if not folded_any:
         raise FileNotFoundError("stream_stats_lance received no shard paths")

@@ -19,6 +19,8 @@ import pyarrow as pa
 from lance.file import LanceFileReader
 
 from synth_setter.data.surge_datamodule import VSTDataModule, VSTDataset
+from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.constants import STATS_NPZ_FILENAME
 from synth_setter.pipeline.data.lance_shard import tensor_chunk_to_numpy
 
 
@@ -78,28 +80,45 @@ class LanceColumn:
         return array if array.flags.writeable else array.copy()
 
 
+def _is_remote_uri(path: str) -> bool:
+    """Return whether ``path`` is a cloud URI lance reads via ``object_store``.
+
+    Any ``<scheme>://`` form (``s3://`` for R2) routes through lance's native
+    backend; everything else is a local filesystem path the fs guards apply to.
+
+    :param path: Candidate shard path or URI.
+    :returns: ``True`` for a ``scheme://`` URI, ``False`` for a local path.
+    """
+    return "://" in path
+
+
 class LanceShardFile:
     """Read-only adapter exposing a single-file Lance shard via the h5py-``File`` read surface."""
 
-    def __init__(self, path: str | Path):
-        """Open the ``.lance`` shard file read-only.
+    def __init__(self, path: str | Path, storage_options: dict[str, str] | None = None):
+        """Open the ``.lance`` shard read-only from local disk or an ``s3://`` URI.
 
-        :param path: Path to the ``.lance`` shard file.
-        :raises ValueError: If ``path`` is missing or is a directory (the Lance
-            *dataset* layout, not the single-file shard format the pipeline
-            writes) — a stable contract independent of which exception
-            ``LanceFileReader`` raises.
+        :param path: Path to the ``.lance`` shard file, or an ``s3://`` URI when
+            ``storage_options`` is set (native R2 streaming).
+        :param storage_options: ``object_store`` kwargs forwarded to every
+            ``LanceFileReader`` when ``path`` is a cloud URI; ``None`` reads local.
+        :raises ValueError: For a local ``path`` that is missing or is a directory
+            (the Lance *dataset* layout, not the single-file shard format the
+            pipeline writes) — a stable contract independent of which exception
+            ``LanceFileReader`` raises. Remote URIs skip these filesystem guards.
         """
-        path = Path(path)
         self._path = str(path)
-        if path.is_dir():
-            raise ValueError(
-                f"expected a single-file Lance shard, got a directory "
-                f"(legacy Lance dataset layout?): {self._path}"
-            )
-        if not path.is_file():
-            raise ValueError(f"Lance shard file was not found: {self._path}")
-        metadata = LanceFileReader(self._path).metadata()
+        self._storage_options = storage_options
+        if not _is_remote_uri(self._path):
+            local = Path(path)
+            if local.is_dir():
+                raise ValueError(
+                    f"expected a single-file Lance shard, got a directory "
+                    f"(legacy Lance dataset layout?): {self._path}"
+                )
+            if not local.is_file():
+                raise ValueError(f"Lance shard file was not found: {self._path}")
+        metadata = LanceFileReader(self._path, storage_options=storage_options).metadata()
         # The shard is immutable, so row count and per-column tensor shapes are
         # cached once instead of re-querying file metadata on every batch read.
         self.num_rows = metadata.num_rows
@@ -127,7 +146,9 @@ class LanceShardFile:
             self._pid = os.getpid()
         reader = self._readers.get(name)
         if reader is None:
-            reader = LanceFileReader(self._path, columns=[name])
+            reader = LanceFileReader(
+                self._path, storage_options=self._storage_options, columns=[name]
+            )
             self._readers[name] = reader
         return reader
 
@@ -162,16 +183,21 @@ class LanceVSTDataset(VSTDataset):
     """``VSTDataset`` reading a single-file ``.lance`` shard instead of HDF5."""
 
     def _open(self, dataset_file: str | Path) -> LanceShardFile:
-        """Open the ``.lance`` shard file read-only.
+        """Open the ``.lance`` shard read-only, streaming from R2 when configured.
 
-        :param dataset_file: Path to the ``.lance`` shard file.
+        :param dataset_file: Path to the ``.lance`` shard file, or an ``s3://``
+            URI when ``self.storage_options`` is set.
         :return: Adapter handle the base-class readers consume.
         """
-        return LanceShardFile(dataset_file)
+        return LanceShardFile(dataset_file, storage_options=self.storage_options)
 
 
 class LanceVSTDataModule(VSTDataModule):
     """``VSTDataModule`` over ``train/val/test.lance`` splits.
+
+    With ``stream_from_r2`` the splits are read natively over R2's S3 API
+    instead of being downloaded — ``prepare_data`` fetches only the small
+    ``stats.npz`` and ``setup`` opens each split from its ``s3://`` URI.
 
     .. attribute :: dataset_cls
 
@@ -180,7 +206,72 @@ class LanceVSTDataModule(VSTDataModule):
     .. attribute :: shard_suffix
 
         Shard filename suffix selecting ``*.lance`` splits.
+
+    .. attribute :: supports_streaming
+
+        ``True`` — Lance splits can be read natively from R2 via ``stream_from_r2``.
     """
 
     dataset_cls: ClassVar[type[VSTDataset]] = LanceVSTDataset
     shard_suffix: ClassVar[str] = ".lance"
+    supports_streaming: ClassVar[bool] = True
+
+    def _dataset_prefix(self) -> str:
+        """Return the trailing-slash-stripped ``r2://`` dataset prefix.
+
+        :returns: The ``download_dataset_root_uri`` without its trailing slash.
+        :raises ValueError: ``download_dataset_root_uri`` is unset (streaming
+            paths only reach here after the constructor's guard, so this is a
+            defensive narrow for the type checker).
+        """
+        if self.download_dataset_root_uri is None:
+            raise ValueError("streaming requires download_dataset_root_uri")
+        return self.download_dataset_root_uri.rstrip("/")
+
+    def _remote_split_uri(self, basename: str) -> str:
+        """Return the ``s3://`` URI for ``basename`` under the dataset prefix.
+
+        :param basename: Split filename, e.g. ``"train.lance"``.
+        :returns: ``s3://<bucket>/<prefix>/<basename>`` for native lance reads.
+        """
+        return r2_io.to_s3_uri(f"{self._dataset_prefix()}/{basename}")
+
+    def _hydrate_dataset_root(self) -> None:
+        """Fetch only ``stats.npz`` when streaming; otherwise mirror the whole prefix.
+
+        Streaming reads the splits remotely, so the only local artifact is the
+        small ``stats.npz`` the dataset normalizes with (skipped entirely when
+        ``use_saved_mean_and_variance`` is off).
+        """
+        if not self.stream_from_r2:
+            super()._hydrate_dataset_root()
+            return
+        if not self.use_saved_mean_and_variance:
+            return
+        self.dataset_root.mkdir(parents=True, exist_ok=True)
+        r2_io.download_to_path(
+            f"{self._dataset_prefix()}/{STATS_NPZ_FILENAME}",
+            self.dataset_root / STATS_NPZ_FILENAME,
+        )
+
+    def _split_target(self, basename: str) -> str | Path:
+        """Return the ``s3://`` split URI when streaming, else the local path.
+
+        :param basename: Split filename, e.g. ``"train.lance"``.
+        :returns: Remote URI (streaming) or ``dataset_root / basename`` (local).
+        """
+        if self.stream_from_r2:
+            return self._remote_split_uri(basename)
+        return super()._split_target(basename)
+
+    def _dataset_extra_kwargs(self) -> dict[str, object]:
+        """Supply ``storage_options`` + the local ``stats.npz`` path when streaming.
+
+        :returns: Streaming extras for each split, or ``{}`` for the local path.
+        """
+        if not self.stream_from_r2:
+            return {}
+        return {
+            "storage_options": r2_io.r2_storage_options(),
+            "stats_file": self.dataset_root / STATS_NPZ_FILENAME,
+        }

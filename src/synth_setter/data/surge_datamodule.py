@@ -93,10 +93,13 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
         fake: bool = False,
         repeat_first_batch: bool = False,
         num_params: int | None = None,
+        storage_options: dict[str, str] | None = None,
+        stats_file: str | Path | None = None,
     ) -> None:
         """Open the shard and configure which features each batch reads.
 
-        :param dataset_file: Path to the HDF5 shard; ignored when ``fake`` is set.
+        :param dataset_file: Path to the shard (local path, or ``s3://`` URI when
+            ``storage_options`` is set); ignored when ``fake`` is set.
         :param batch_size: Number of samples returned per ``__getitem__``.
         :param ot: Whether to optimal-transport match noise to params per batch.
         :param read_audio: Whether to read the raw audio tensor.
@@ -107,6 +110,10 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
         :param fake: Whether to synthesise random batches instead of reading the shard.
         :param repeat_first_batch: Whether every index returns the first batch.
         :param num_params: Param width for fake mode; defaults to the registry spec width.
+        :param storage_options: ``object_store`` kwargs forwarded to the shard
+            opener when ``dataset_file`` is a cloud URI; ``None`` reads local disk.
+        :param stats_file: Explicit ``stats.npz`` path; when ``None`` it is
+            derived as the sibling of ``dataset_file`` (the local-shard default).
         """
         self.batch_size = batch_size
         self.ot = ot
@@ -116,6 +123,7 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
         self.read_m2l = read_m2l
 
         self.rescale_params = rescale_params
+        self.storage_options = storage_options
 
         self.fake = fake
         # Fake-mode width only; real mode reads the width from the shard's param_array.
@@ -131,7 +139,12 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
         self.dataset_file = self._open(dataset_file)
 
         if use_saved_mean_and_variance:
-            self._load_dataset_statistics(dataset_file)
+            stats_path = (
+                Path(stats_file)
+                if stats_file is not None
+                else VSTDataset.get_stats_file_path(dataset_file)
+            )
+            self._load_dataset_statistics(stats_path)
 
     def _open(self, dataset_file: str | Path) -> ShardFile:
         """Open the shard read-only; storage-format subclasses override this hook.
@@ -141,15 +154,13 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
         """
         return h5py.File(dataset_file, "r")
 
-    def _load_dataset_statistics(self, dataset_file: str | Path) -> None:
-        """Load the mel mean and std saved alongside the shard.
+    def _load_dataset_statistics(self, stats_file: str | Path) -> None:
+        """Load the mel mean and std from ``stats_file``.
 
-        :param dataset_file: Shard path used to locate the sibling ``stats.npz``.
-        :raises FileNotFoundError: If the expected ``stats.npz`` is missing.
+        :param stats_file: Path to the ``stats.npz`` carrying ``mean`` / ``std``.
+        :raises FileNotFoundError: If ``stats_file`` is missing.
         """
-        # for /path/to/train.h5 we would expect to find /path/to/stats.npz
-        # if not, we throw an error
-        stats_file = VSTDataset.get_stats_file_path(dataset_file)
+        stats_file = Path(stats_file)
         if not stats_file.exists():
             raise FileNotFoundError(
                 f"Could not find statistics file {stats_file}. \n"
@@ -403,10 +414,16 @@ class VSTDataModule(LightningDataModule):
     .. attribute :: shard_suffix
 
         Storage-format extension point: the shard filename suffix per split.
+
+    .. attribute :: supports_streaming
+
+        Whether the subclass can serve splits via ``stream_from_r2`` (only the
+        Lance backend does); the base format downloads, so it is ``False``.
     """
 
     dataset_cls: ClassVar[type[VSTDataset]] = VSTDataset
     shard_suffix: ClassVar[str] = ".h5"
+    supports_streaming: ClassVar[bool] = False
 
     def __init__(
         self,
@@ -422,6 +439,7 @@ class VSTDataModule(LightningDataModule):
         conditioning: Literal["mel", "m2l"] = "mel",
         pin_memory: bool = True,
         param_spec_name: str = _DEFAULT_PARAM_SPEC_NAME,
+        stream_from_r2: bool = False,
     ) -> None:
         """Store dataloader and dataset configuration for later ``setup``.
 
@@ -439,6 +457,12 @@ class VSTDataModule(LightningDataModule):
         :param conditioning: Conditioning feature, either ``"mel"`` or ``"m2l"``.
         :param pin_memory: Whether dataloaders pin memory for faster host-to-device copies.
         :param param_spec_name: Registry key selecting the param spec width.
+        :param stream_from_r2: Read splits natively over R2's S3 API instead of
+            downloading them (requires ``download_dataset_root_uri`` and a
+            ``supports_streaming`` subclass — the Lance backend).
+        :raises NotImplementedError: ``stream_from_r2`` on a backend whose
+            ``supports_streaming`` is ``False``.
+        :raises ValueError: ``stream_from_r2`` without ``download_dataset_root_uri``.
         """
         super().__init__()
 
@@ -450,10 +474,21 @@ class VSTDataModule(LightningDataModule):
         self.num_workers = num_workers
         self.fake = fake
         self.repeat_first_batch = repeat_first_batch
-        self.predict_file = (
+        self.stream_from_r2 = stream_from_r2
+        if stream_from_r2 and not self.supports_streaming:
+            raise NotImplementedError(
+                f"{type(self).__name__} does not support stream_from_r2 "
+                f"(only the Lance datamodule streams splits natively from R2)."
+            )
+        if stream_from_r2 and not download_dataset_root_uri:
+            raise ValueError(
+                "stream_from_r2=True requires download_dataset_root_uri "
+                "(the r2:// dataset prefix to stream splits from)."
+            )
+        self.predict_file: str | Path = (
             Path(predict_file)
             if predict_file is not None
-            else self.dataset_root / f"test{self.shard_suffix}"
+            else self._split_target(f"test{self.shard_suffix}")
         )
         self.conditioning = conditioning
         self.pin_memory = pin_memory
@@ -469,7 +504,36 @@ class VSTDataModule(LightningDataModule):
         if not self.download_dataset_root_uri:
             return
         r2_io.ensure_r2_env_loaded()
+        self._hydrate_dataset_root()
+
+    def _hydrate_dataset_root(self) -> None:
+        """No-clobber-copy the whole R2 dataset prefix into ``dataset_root``.
+
+        Storage-format extension point: streaming subclasses override this to
+        fetch only the small sidecar (``stats.npz``) and read splits remotely.
+        """
         r2_io.download_dir_no_overwrite(self.download_dataset_root_uri, self.dataset_root)
+
+    def _split_target(self, basename: str) -> str | Path:
+        """Return the path or URI a split dataset opens for ``basename``.
+
+        Storage-format extension point: defaults to the local
+        ``dataset_root / basename``; streaming subclasses return an ``s3://`` URI.
+
+        :param basename: Split filename, e.g. ``"train.lance"``.
+        :returns: Local path (default) or cloud URI for the split.
+        """
+        return self.dataset_root / basename
+
+    def _dataset_extra_kwargs(self) -> dict[str, object]:
+        """Return per-dataset extras forwarded to every ``dataset_cls`` in ``setup``.
+
+        Storage-format extension point: empty by default; streaming subclasses
+        add ``storage_options`` and an explicit local ``stats_file``.
+
+        :returns: Keyword arguments merged into each split's construction.
+        """
+        return {}
 
     def setup(self, stage: str | None = None) -> None:
         """Build a ``dataset_cls`` dataset for each split.
@@ -479,8 +543,9 @@ class VSTDataModule(LightningDataModule):
         """
         # KeyError here fails fast on an unregistered param_spec_name.
         num_params = len(param_specs[self.param_spec_name])
+        extra = self._dataset_extra_kwargs()
         self.train_dataset = self.dataset_cls(
-            self.dataset_root / f"train{self.shard_suffix}",
+            self._split_target(f"train{self.shard_suffix}"),
             batch_size=self.batch_size,
             ot=self.ot,
             use_saved_mean_and_variance=self.use_saved_mean_and_variance,
@@ -489,9 +554,10 @@ class VSTDataModule(LightningDataModule):
             read_mel=self.conditioning == "mel",
             read_m2l=self.conditioning == "m2l",
             num_params=num_params,
+            **extra,
         )
         self.val_dataset = self.dataset_cls(
-            self.dataset_root / f"val{self.shard_suffix}",
+            self._split_target(f"val{self.shard_suffix}"),
             batch_size=self.batch_size,
             ot=False,
             use_saved_mean_and_variance=self.use_saved_mean_and_variance,
@@ -500,9 +566,10 @@ class VSTDataModule(LightningDataModule):
             read_mel=self.conditioning == "mel",
             read_m2l=self.conditioning == "m2l",
             num_params=num_params,
+            **extra,
         )
         self.test_dataset = self.dataset_cls(
-            self.dataset_root / f"test{self.shard_suffix}",
+            self._split_target(f"test{self.shard_suffix}"),
             batch_size=self.batch_size,
             ot=False,
             use_saved_mean_and_variance=self.use_saved_mean_and_variance,
@@ -511,6 +578,7 @@ class VSTDataModule(LightningDataModule):
             read_mel=self.conditioning == "mel",
             read_m2l=self.conditioning == "m2l",
             num_params=num_params,
+            **extra,
         )
         self.predict_dataset = self.dataset_cls(
             self.predict_file,
@@ -522,6 +590,7 @@ class VSTDataModule(LightningDataModule):
             read_mel=self.conditioning == "mel",
             read_m2l=self.conditioning == "m2l",
             num_params=num_params,
+            **extra,
         )
 
     def train_dataloader(self) -> DataLoader:

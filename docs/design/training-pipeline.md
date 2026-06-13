@@ -303,6 +303,7 @@ Behavior:
 
 - Local-only by default
 - If `download_dataset_root_uri` is specified, no-clobber-copy the dataset before training
+- With the Lance datamodule, `datamodule.stream_from_r2=true` reads splits natively over R2's S3 API instead of downloading them (only `stats.npz` is fetched locally)
 - No hidden default R2 fetch
 
 ### 6.2 Checkpoint Durability via R2

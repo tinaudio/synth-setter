@@ -278,11 +278,12 @@ Model `run.log_artifact()` lineage is wired via `_log_model_artifact()` (train),
 
 ### 5.3 Data Portability
 
-| Input                                  | Type           | What's Needed                                                                                                  | Reference                                                   |
-| -------------------------------------- | -------------- | -------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| `datamodule.dataset_root`              | string         | Defaults to `${paths.output_dir}/data` (Hydra per-run dir); CLI/experiment override for fixed datasets         | training-pipeline.md §6.1                                   |
-| `datamodule.download_dataset_root_uri` | string \| null | Optional `r2://` directory URI; `prepare_data()` no-clobber-copies it into `dataset_root` before training/eval | `src/synth_setter/data/surge_datamodule.py` §`prepare_data` |
-| `datamodule.stats_file`                | string         | Hardcoded paths removed (now `???` in `nsynth.yaml`/`fsd.yaml`); replace with run-id-aware default still open  | `nsynth.yaml` / `fsd.yaml`                                  |
+| Input                                  | Type           | What's Needed                                                                                                                                                    | Reference                                                         |
+| -------------------------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `datamodule.dataset_root`              | string         | Defaults to `${paths.output_dir}/data` (Hydra per-run dir); CLI/experiment override for fixed datasets                                                           | training-pipeline.md §6.1                                         |
+| `datamodule.download_dataset_root_uri` | string \| null | Optional `r2://` directory URI; `prepare_data()` no-clobber-copies it into `dataset_root` before training/eval                                                   | `src/synth_setter/data/surge_datamodule.py` §`prepare_data`       |
+| `datamodule.stream_from_r2`            | bool           | Lance only (`surge_lance`): read splits natively over R2's S3 API instead of downloading; fetches only `stats.npz` locally. Requires `download_dataset_root_uri` | `src/synth_setter/data/lance_datamodule.py` §`LanceVSTDataModule` |
+| `datamodule.stats_file`                | string         | Hardcoded paths removed (now `???` in `nsynth.yaml`/`fsd.yaml`); replace with run-id-aware default still open                                                    | `nsynth.yaml` / `fsd.yaml`                                        |
 
 ### 5.4 Hardware & Compute
 

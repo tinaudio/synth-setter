@@ -32,6 +32,7 @@ __all__ = [
     "is_r2_uri",
     "object_size",
     "purge_prefix",
+    "r2_storage_options",
     "shard_uri",
     "to_rclone_path",
     "to_s3_uri",
@@ -236,6 +237,35 @@ def from_s3_uri(s3_uri: str) -> str:
     if not s3_uri.startswith("s3://"):
         raise ValueError(f"not an s3:// URI: {s3_uri!r}")
     return R2_URI_SCHEME + s3_uri[len("s3://") :]
+
+
+def r2_storage_options() -> dict[str, str]:
+    """Build the ``object_store`` ``storage_options`` lance reads/writes R2 with natively.
+
+    R2 exposes an S3-compatible API, so lance's S3 backend streams a ``.lance``
+    object directly when handed the connection parameters as ``aws_*`` keys.
+    Region is fixed to ``"auto"`` (R2 ignores the value but ``object_store``
+    requires one). Reads the same three secrets ``ensure_r2_env_loaded``
+    validates, so callers run that first; this is the lance-native counterpart
+    to the rclone path the other helpers take.
+
+    :returns: ``storage_options`` mapping for ``LanceFileReader`` /
+        ``LanceFileWriter`` against ``s3://`` URIs (see :func:`to_s3_uri`).
+    :raises RuntimeError: A required ``RCLONE_CONFIG_R2_*`` secret is unset;
+        the message names the absent keys.
+    """
+    missing = [key for key in _SECRET_R2_ENV_KEYS if key not in os.environ]
+    if missing:
+        raise RuntimeError(
+            f"R2 credentials missing from process env: {', '.join(missing)}. "
+            f"Call ensure_r2_env_loaded() (or set RCLONE_CONFIG_R2_* directly) first."
+        )
+    return {
+        "aws_access_key_id": os.environ["RCLONE_CONFIG_R2_ACCESS_KEY_ID"],
+        "aws_secret_access_key": os.environ["RCLONE_CONFIG_R2_SECRET_ACCESS_KEY"],
+        "aws_endpoint": os.environ["RCLONE_CONFIG_R2_ENDPOINT"],
+        "aws_region": "auto",
+    }
 
 
 def download_dir_no_overwrite(r2_uri: str, dest_path: Path) -> None:

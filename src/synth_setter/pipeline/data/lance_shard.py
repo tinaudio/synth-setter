@@ -83,14 +83,22 @@ def record_batch_from_arrays(
     return pa.record_batch(columns, schema=schema)
 
 
-def write_lance_file(path: Path | str, schema: pa.Schema, batches: Iterable[pa.RecordBatch]) -> None:
+def write_lance_file(
+    path: Path | str,
+    schema: pa.Schema,
+    batches: Iterable[pa.RecordBatch],
+    storage_options: dict[str, str] | None = None,
+) -> None:
     """Write a single Lance file from pre-shaped Arrow record batches.
 
-    :param path: Destination ``.lance`` file.
+    :param path: Destination ``.lance`` file (local path or ``s3://`` URI).
     :param schema: Arrow schema for every batch.
     :param batches: Record batches to append in row order.
+    :param storage_options: ``object_store`` kwargs (see
+        :func:`synth_setter.pipeline.r2_io.r2_storage_options`) when ``path`` is
+        a cloud URI; ``None`` writes to local disk.
     """
-    writer = LanceFileWriter(str(path), schema)
+    writer = LanceFileWriter(str(path), schema, storage_options=storage_options)
     try:
         for batch in batches:
             writer.write_batch(batch)
@@ -131,15 +139,19 @@ def tensor_chunk_to_numpy(chunk: pa.Array, inner_shape: tuple[int, ...]) -> np.n
     return values.reshape(len(chunk), *inner_shape)
 
 
-def iter_lance_column_rows(path: Path, column: str) -> Iterator[np.ndarray]:
+def iter_lance_column_rows(
+    path: Path | str, column: str, storage_options: dict[str, str] | None = None
+) -> Iterator[np.ndarray]:
     """Yield rows from one projected Lance tensor column.
 
-    :param path: Local ``.lance`` shard path.
+    :param path: ``.lance`` shard path (local path or ``s3://`` URI).
     :param column: Column to project from the Lance file.
+    :param storage_options: ``object_store`` kwargs when ``path`` is a cloud
+        URI; ``None`` reads from local disk.
     :yields: One numpy tensor row at a time.
     :ytype: np.ndarray
     """
-    reader = LanceFileReader(str(path), columns=[column])
+    reader = LanceFileReader(str(path), columns=[column], storage_options=storage_options)
     field = reader.metadata().schema.field(column)
     inner_shape = tuple(field.type.shape)
     for batch in reader.read_all().to_batches():

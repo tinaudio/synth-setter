@@ -109,6 +109,45 @@ class TestToS3Uri:
             r2_io.to_s3_uri("s3://bucket/already-s3.ckpt")
 
 
+class TestR2StorageOptions:
+    """Tests for r2_storage_options — object_store kwargs for lance's native S3 backend."""
+
+    _SECRETS = {
+        "RCLONE_CONFIG_R2_ACCESS_KEY_ID": "ak-123",
+        "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY": "sk-456",
+        "RCLONE_CONFIG_R2_ENDPOINT": "https://acct.r2.cloudflarestorage.com",
+    }
+
+    def test_maps_env_secrets_to_object_store_keys(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The three R2 secrets land on the aws_* keys object_store reads, with region 'auto'.
+
+        :param monkeypatch: Pytest fixture used to set the R2 secret env vars.
+        """
+        for key, value in self._SECRETS.items():
+            monkeypatch.setenv(key, value)
+
+        assert r2_io.r2_storage_options() == {
+            "aws_access_key_id": "ak-123",
+            "aws_secret_access_key": "sk-456",
+            "aws_endpoint": "https://acct.r2.cloudflarestorage.com",
+            "aws_region": "auto",
+        }
+
+    def test_missing_secret_raises_listing_the_absent_key(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A missing secret raises RuntimeError naming the absent key, not a bare KeyError.
+
+        :param monkeypatch: Pytest fixture used to set then drop one R2 secret.
+        """
+        for key, value in self._SECRETS.items():
+            monkeypatch.setenv(key, value)
+        monkeypatch.delenv("RCLONE_CONFIG_R2_ENDPOINT")
+
+        with pytest.raises(RuntimeError, match="RCLONE_CONFIG_R2_ENDPOINT"):
+            r2_io.r2_storage_options()
+
+
 class TestFromS3Uri:
     """Tests for from_s3_uri — s3:// → r2:// rewrite that inverts to_s3_uri."""
 

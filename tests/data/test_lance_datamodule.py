@@ -19,6 +19,7 @@ ML behavior, mirroring ``tests/data/test_surge_datamodule.py``.
 from __future__ import annotations
 
 import contextlib
+import shutil
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -30,6 +31,7 @@ from synth_setter.data.lance_datamodule import (
     LanceShardFile,
     LanceVSTDataModule,
     LanceVSTDataset,
+    _is_remote_uri,
 )
 from synth_setter.data.surge_datamodule import ShiftedBatchSampler
 from synth_setter.data.vst.param_spec_registry import param_specs
@@ -177,6 +179,32 @@ def _unwrap(maybe_tensor: torch.Tensor | None) -> torch.Tensor:
     """
     assert maybe_tensor is not None
     return maybe_tensor
+
+
+class TestIsRemoteUri:
+    """Scheme detection routing local-fs guards vs lance's native object_store backend."""
+
+    @pytest.mark.parametrize(
+        "path",
+        ["s3://intermediate-data/data/run/train.lance", "r2://bucket/key.lance"],
+    )
+    def test_scheme_uri_is_remote(self, path: str) -> None:
+        """A ``scheme://`` URI streams through ``object_store``.
+
+        :param path: Parametrized cloud URI.
+        """
+        assert _is_remote_uri(path)
+
+    @pytest.mark.parametrize(
+        "path",
+        ["/abs/data/train.lance", "data/train.lance", "train.lance"],
+    )
+    def test_local_path_is_not_remote(self, path: str) -> None:
+        """A local filesystem path keeps the missing/dir guards.
+
+        :param path: Parametrized local path.
+        """
+        assert not _is_remote_uri(path)
 
 
 class TestLanceShardFile:
@@ -335,6 +363,34 @@ class TestLanceShardFile:
 
 class TestLanceVSTDataset:
     """Lance-backed dataset: same batch-per-index contract as ``VSTDataset``."""
+
+    def test_explicit_stats_file_overrides_sibling_stats_npz(self, tmp_path: Path) -> None:
+        """An explicit ``stats_file`` loads mel mean/std from that path, not the shard's sibling.
+
+        Streaming reads the shard from R2 while ``stats.npz`` is fetched to a
+        separate local dir, so the two locations must decouple.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        shard_dir = tmp_path / "data"
+        shard_dir.mkdir()
+        _write_seeded_lance_shard(shard_dir / "train.lance", num_rows=8)
+        _write_stats(shard_dir, mean=0.0, std=1.0)
+        custom_dir = tmp_path / "elsewhere"
+        custom_dir.mkdir()
+        custom_stats = _write_stats(custom_dir, mean=7.0, std=3.0)
+
+        dataset = LanceVSTDataset(
+            shard_dir / "train.lance",
+            batch_size=2,
+            ot=False,
+            use_saved_mean_and_variance=True,
+            stats_file=custom_stats,
+        )
+
+        mel_shape = (_MEL_CHANNELS, _MEL_N_MELS, _MEL_N_FRAMES)
+        np.testing.assert_array_equal(dataset.mean, np.full(mel_shape, 7.0, dtype=np.float32))
+        np.testing.assert_array_equal(dataset.std, np.full(mel_shape, 3.0, dtype=np.float32))
 
     def test_len_equals_num_rows_floor_divided_by_batch_size(self, single_shard: Path) -> None:
         """``__len__`` floor-divides the row count by ``batch_size``, dropping the ragged tail.
@@ -752,3 +808,107 @@ class TestPipelineWriterCompatibility:
         assert _unwrap(item["params"]).shape == (2, spec.num_params)
         assert _unwrap(item["audio"]).dtype == torch.float32
         assert _unwrap(item["mel_spec"]).dtype == torch.float32
+
+
+@pytest.fixture()
+def local_r2_remote(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Back the ``r2:`` rclone remote with the local filesystem for real-binary e2e.
+
+    ``RCLONE_CONFIG_R2_TYPE=local`` resolves ``r2://<bucket>/<key>`` to
+    ``<cwd>/<bucket>/<key>``, and the three secret keys satisfy
+    ``ensure_r2_env_loaded`` / ``r2_storage_options`` presence checks (their
+    values are unused by the local backend). Skips when ``rclone`` is absent.
+
+    :param tmp_path: Pytest tmp dir; the returned subdir is the fake R2 root.
+    :param monkeypatch: Sets the rclone env vars and chdirs into the remote root.
+    :return: The fake R2 root; ``r2://<bucket>/<key>`` materializes under it.
+    """
+    if shutil.which("rclone") is None:
+        pytest.skip("rclone binary not available on PATH")
+    remote_root = tmp_path / "r2"
+    remote_root.mkdir()
+    monkeypatch.setenv("RCLONE_CONFIG_R2_TYPE", "local")
+    monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", "stub")
+    monkeypatch.setenv("RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", "stub")
+    monkeypatch.setenv("RCLONE_CONFIG_R2_ENDPOINT", "stub")
+    monkeypatch.chdir(remote_root)
+    return remote_root
+
+
+class TestLanceVSTDataModuleStreaming:
+    """``stream_from_r2`` wiring: remote split URIs, stats-only hydration, validation."""
+
+    _ROOT_URI = "r2://intermediate-data/data/run/"
+
+    def test_stream_from_r2_without_root_uri_raises(self) -> None:
+        """Streaming needs a dataset prefix to read from; omitting it fails fast."""
+        with pytest.raises(ValueError, match="download_dataset_root_uri"):
+            LanceVSTDataModule(dataset_root="/cache", stream_from_r2=True)
+
+    def test_split_target_is_s3_uri_under_dataset_prefix(self) -> None:
+        """Each split resolves to its ``s3://`` object under the dataset prefix."""
+        module = LanceVSTDataModule(
+            dataset_root="/cache",
+            download_dataset_root_uri=self._ROOT_URI,
+            stream_from_r2=True,
+        )
+        assert module._split_target("train.lance") == "s3://intermediate-data/data/run/train.lance"
+
+    def test_predict_file_defaults_to_remote_test_split(self) -> None:
+        """With no explicit predict_file, predict streams the remote test split."""
+        module = LanceVSTDataModule(
+            dataset_root="/cache",
+            download_dataset_root_uri=self._ROOT_URI,
+            stream_from_r2=True,
+        )
+        assert module.predict_file == "s3://intermediate-data/data/run/test.lance"
+
+    def test_dataset_extra_kwargs_supplies_storage_options_and_local_stats(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Streaming hands each split the R2 storage_options plus the local stats path.
+
+        :param monkeypatch: Sets the R2 secrets ``r2_storage_options`` reads.
+        """
+        monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", "ak")
+        monkeypatch.setenv("RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", "sk")
+        monkeypatch.setenv("RCLONE_CONFIG_R2_ENDPOINT", "https://acct.r2.cloudflarestorage.com")
+        module = LanceVSTDataModule(
+            dataset_root="/cache",
+            download_dataset_root_uri=self._ROOT_URI,
+            stream_from_r2=True,
+        )
+
+        extra = module._dataset_extra_kwargs()
+
+        assert extra["stats_file"] == Path("/cache") / "stats.npz"
+        assert extra["storage_options"] == {
+            "aws_access_key_id": "ak",
+            "aws_secret_access_key": "sk",
+            "aws_endpoint": "https://acct.r2.cloudflarestorage.com",
+            "aws_region": "auto",
+        }
+
+    def test_prepare_data_streaming_fetches_only_stats_npz(
+        self, local_r2_remote: Path, tmp_path: Path
+    ) -> None:
+        """Streaming hydration pulls just ``stats.npz`` — the splits stay in R2.
+
+        :param local_r2_remote: Real rclone remote backed by the local filesystem.
+        :param tmp_path: Holds the (initially absent) local cache root.
+        """
+        remote_prefix = local_r2_remote / "intermediate-data" / "data" / "run"
+        remote_prefix.mkdir(parents=True)
+        (remote_prefix / "stats.npz").write_bytes(b"stats-bytes")
+        (remote_prefix / "train.lance").write_bytes(b"lance-bytes")
+        dataset_root = tmp_path / "cache"
+
+        module = LanceVSTDataModule(
+            dataset_root=str(dataset_root),
+            download_dataset_root_uri=self._ROOT_URI,
+            stream_from_r2=True,
+        )
+        module.prepare_data()
+
+        assert (dataset_root / "stats.npz").read_bytes() == b"stats-bytes"
+        assert not (dataset_root / "train.lance").exists()
