@@ -40,18 +40,19 @@ def encode_mp3_preview(audio: np.ndarray, sample_rate: int) -> bytes:
         raise ValueError(f"audio must be (channels, samples), got shape {audio.shape}")
 
     waveform = np.ascontiguousarray(audio, dtype=np.float32)
+    out_rate = sample_rate
     if sample_rate not in _MP3_SUPPORTED_SAMPLE_RATES:
         import librosa
 
         waveform = librosa.resample(
             waveform, orig_sr=sample_rate, target_sr=MP3_PREVIEW_SAMPLE_RATE, axis=-1
         )
-        sample_rate = MP3_PREVIEW_SAMPLE_RATE
+        out_rate = MP3_PREVIEW_SAMPLE_RATE
 
     num_channels = waveform.shape[0]
     buffer = io.BytesIO()
     with AudioFile(
-        buffer, "w", samplerate=sample_rate, num_channels=num_channels, format="mp3"
+        buffer, "w", samplerate=out_rate, num_channels=num_channels, format="mp3"
     ) as out:
         out.write(waveform)
     return buffer.getvalue()

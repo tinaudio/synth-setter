@@ -186,6 +186,40 @@ def test_append_mp3_preview_column_adds_decodable_mp3_per_row() -> None:
             assert int(decoded.samplerate) == _PREVIEW_METADATA.sample_rate
 
 
+def test_schema_with_mp3_preview_tags_field_with_audio_mpeg_mime() -> None:
+    """The preview field is non-nullable and tagged ``audio/mpeg`` for viewer detection."""
+    schema = lance_schema(_PREVIEW_FIELD_SHAPES, _PREVIEW_METADATA)
+
+    field = schema_with_mp3_preview(schema).field(MP3_PREVIEW_FIELD)
+
+    assert not field.nullable
+    assert field.metadata == {b"mime_type": b"audio/mpeg"}
+
+
+def test_append_mp3_preview_column_wraps_row_encode_failure_with_index(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A per-row encode failure re-raises with the failing row index, not a truncated shard.
+
+    :param monkeypatch: Pytest fixture used to force the second row's encode to fail.
+    """
+    batch = _zero_preview_batch()
+    encode_calls = {"count": 0}
+
+    def encode_then_fail(row: np.ndarray, sample_rate: int) -> bytes:
+        encode_calls["count"] += 1
+        if encode_calls["count"] == 1:
+            return b"\x00"
+        raise ValueError("boom")
+
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.audio_preview.encode_mp3_preview", encode_then_fail
+    )
+
+    with pytest.raises(RuntimeError, match="audio row 1"):
+        append_mp3_preview_column(batch, _PREVIEW_METADATA.sample_rate)
+
+
 def test_append_mp3_preview_column_raises_when_audio_column_absent() -> None:
     """A batch without an ``audio`` column fails loudly rather than encoding the wrong one."""
     schema = pa.schema([pa.field(PARAM_ARRAY_FIELD, pa.binary(), nullable=False)])

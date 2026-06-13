@@ -32,6 +32,7 @@ spec builders shared across those lanes live in
 from __future__ import annotations
 
 import glob
+import io
 import os
 from collections.abc import Callable
 from pathlib import Path
@@ -39,14 +40,20 @@ from typing import NoReturn, cast
 
 import pytest
 import wandb
+from lance.file import LanceFileReader
 from omegaconf import DictConfig, OmegaConf
+from pedalboard.io import AudioFile
 
 from synth_setter.cli import finalize_dataset
+from synth_setter.data.vst.shapes import DATASET_FIELD_NAMES
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.data.audio_preview import MP3_PREVIEW_SAMPLE_RATE
+from synth_setter.pipeline.data.lance_shard import MP3_PREVIEW_FIELD
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from tests.helpers.finalize_shards import (
     build_finalize_cfg,
     build_hdf5_smoke_spec,
+    build_lance_smoke_spec,
     build_wds_smoke_spec,
     copy_shard_for_download,
     install_finalize_setup_stubs,
@@ -117,6 +124,36 @@ def test_finalize_uploads_stats_then_marker_at_canonical_uris(
     assert upload_order.count(marker_uri) == 1
     assert upload_order.index(marker_uri) == len(upload_order) - 1
     assert upload_order.index(stats_uri) < upload_order.index(marker_uri)
+
+
+def test_finalize_lance_entrypoint_adds_decodable_mp3_preview_column(
+    tmp_path: Path,
+    fake_r2_remote: Path,
+    stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001 — installs stubs only
+) -> None:
+    """The Lance ``finalize(cfg)`` path adds a decodable ``audio_mp3`` preview column.
+
+    :param tmp_path: Pytest tmp dir; hosts the on-disk spec JSON + Hydra-style output_dir.
+    :param fake_r2_remote: Local-typed rclone remote where shards/outputs land.
+    :param stub_finalize_setup: Fixture-activation only — installs the auth/marker stubs.
+    """
+    spec = build_lance_smoke_spec(task_name="finalize-mp3-preview-entrypoint")
+    seed_train_shards(fake_r2_remote, spec)
+    output_dir = tmp_path / "hydra_output"
+    output_dir.mkdir()
+    cfg = build_finalize_cfg(write_spec_to_root(spec, tmp_path), output_dir)
+
+    finalize_dataset.finalize(cfg)
+
+    train_lance = uri_to_local_path(fake_r2_remote, spec.r2.split_lance_uri("train"))
+    table = LanceFileReader(str(train_lance)).read_all().to_table()
+    assert table.schema.names == [*DATASET_FIELD_NAMES, MP3_PREVIEW_FIELD]
+    previews = table.column(MP3_PREVIEW_FIELD).to_pylist()
+    assert len(previews) == spec.train_val_test_sizes[0]
+    for payload in previews:
+        with AudioFile(io.BytesIO(payload)) as decoded:
+            assert decoded.num_channels == spec.render.channels
+            assert int(decoded.samplerate) == MP3_PREVIEW_SAMPLE_RATE
 
 
 def test_finalize_is_idempotent_when_marker_already_exists(

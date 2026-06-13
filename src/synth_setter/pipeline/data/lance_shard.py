@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from pathlib import Path
+from types import MappingProxyType
 
 import numpy as np
 import pyarrow as pa
@@ -18,7 +19,9 @@ SHARD_METADATA_SCHEMA_KEY = b"synth_setter.shard_metadata"
 # Finalize-only audio preview: variable-length ``binary`` (encoded sizes differ
 # per row, so not a fixed-shape tensor); the mime tag lets viewers detect MP3.
 MP3_PREVIEW_FIELD: str = "audio_mp3"
-_MP3_PREVIEW_FIELD_METADATA: dict[bytes, bytes] = {b"mime_type": b"audio/mpeg"}
+_MP3_PREVIEW_FIELD_METADATA: Mapping[bytes, bytes] = MappingProxyType(
+    {b"mime_type": b"audio/mpeg"}
+)
 
 
 def lance_schema(
