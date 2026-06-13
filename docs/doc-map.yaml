@@ -371,6 +371,15 @@ docs:
         covers: "Packer template, packer variables (synth_setter_git_ref/python_version/uv_version/vm_name/surge_xt_version/codex_version/base_image_digest), provisioner steps, brew packages (git/gh/jq/rclone/bats-core/tmux/zellij/node), Codex CLI + Antigravity (agy) installs, venv layout via `uv sync --frozen` (MPS-capable torch from PyPI), VST3 path, smoke tests, .zshrc auto-activation, ~/.zprofile env defaults (HYDRA_FULL_ERROR/PYTHONDONTWRITEBYTECODE/PYTHONFAULTHANDLER/PYTHONUNBUFFERED/WANDB_DATA_DIR), prebuilt image at registry-1.docker.io/tinaudio/synth-setter-macos, Docker Hub publishing workflow, local validate/build helper (build.sh)"
         scope: "tart"
 
+  # ── Lance dataset browsing guide (SmooSense) ────────────────────
+  - doc: docs/guides/browse-lance-datasets.md
+    description: Browse pipeline Lance shards/splits in the SmooSense GUI
+    sources:
+      - pattern: "src/synth_setter/cli/browse_dataset.py"
+        covers: "the synth-setter-browse-dataset CLI that exports Lance shards/splits and launches the SmooSense browser"
+      - pattern: "src/synth_setter/pipeline/data/lance_browse.py"
+        covers: "the single-file-shard to Lance-dataset export functions behind the browse CLI"
+
   # ── Surge XT interactive guide ──────────────────────────────────
   - doc: docs/guides/surge-xt-interactive.md
     description: Interactive Surge XT prediction audition and patch-recording guide

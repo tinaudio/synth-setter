@@ -59,6 +59,7 @@ synth-setter-eval = "synth_setter.cli.eval:main"
 synth-setter-generate-dataset = "synth_setter.cli.generate_dataset:main"
 synth-setter-generate-dataset-from-hydra = "synth_setter.cli.generate_dataset:from_hydra"
 synth-setter-finalize-dataset = "synth_setter.cli.finalize_dataset:main"
+synth-setter-browse-dataset = "synth_setter.cli.browse_dataset:main"
 synth-setter-introspect-plugin = "synth_setter.cli.introspect_plugin:main"
 synth-setter-spec-uri = "synth_setter.pipeline.ci.spec_uri:main"
 
