@@ -48,8 +48,8 @@ Browse a finalized split straight from R2:
 synth-setter-browse-dataset r2://<bucket>/<run-prefix>/train.lance
 ```
 
-Browse several sources together (each becomes a table named by its filename
-stem — here `train`, `val`, `test`):
+Browse several sources together (each becomes a `<stem>.lance` table directory
+— here `train.lance`, `val.lance`, `test.lance`):
 
 ```bash
 synth-setter-browse-dataset \

@@ -110,7 +110,8 @@ def main(sources: tuple[str, ...], db_dir: str | None, launch: bool) -> None:
     after this command returns; the path is printed.
 
     :param sources: One or more single-file ``.lance`` shards/splits, given as
-        local paths or ``r2://`` URIs; each becomes a table named by its stem.
+        local paths or ``r2://`` URIs; each becomes a ``<stem>.lance`` table
+        directory (e.g. ``train.lance``).
     :param db_dir: Browse-db root; a fresh temp directory when omitted.
     :param launch: Whether to launch ``sense db`` after exporting (which raises
         ``click.UsageError`` via :func:`_launch_sense` when ``sense`` is absent).
