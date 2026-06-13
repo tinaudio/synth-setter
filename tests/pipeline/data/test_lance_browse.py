@@ -108,6 +108,21 @@ def test_export_shard_to_dataset_overwrites_with_second_shards_data(tmp_path: Pa
     np.testing.assert_array_equal(restored, one_row_values)
 
 
+def test_export_shard_to_dataset_replaces_a_plain_file_destination(tmp_path: Path) -> None:
+    """A pre-existing plain file at the destination is replaced, not an error.
+
+    :param tmp_path: Holds the source shard and the file-occupied destination.
+    """
+    shard = tmp_path / "shard-000000.lance"
+    _write_two_row_shard(shard)
+    dest = tmp_path / "train.lance"
+    dest.write_text("stale file where a dataset dir should go")
+
+    export_shard_to_dataset(shard, dest)
+
+    assert lance.dataset(str(dest)).count_rows() == 2
+
+
 def test_export_shard_to_dataset_directory_source_raises_value_error(tmp_path: Path) -> None:
     """A directory source is rejected — the pipeline emits single-file shards, not datasets.
 

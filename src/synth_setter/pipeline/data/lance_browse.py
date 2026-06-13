@@ -29,7 +29,8 @@ def export_shard_to_dataset(shard_path: Path | str, dataset_dir: Path | str) -> 
 
     :param shard_path: Source ``.lance`` shard file (the single-file format the
         pipeline writes), never a Lance dataset directory.
-    :param dataset_dir: Destination dataset directory; replaced if it exists.
+    :param dataset_dir: Destination dataset directory; an existing directory,
+        file, or symlink at the path is removed first, and its parent created.
     :returns: The browsable Lance dataset directory just written.
     :raises ValueError: ``shard_path`` is a directory (already a dataset layout).
     :raises FileNotFoundError: ``shard_path`` does not exist.
@@ -47,9 +48,14 @@ def export_shard_to_dataset(shard_path: Path | str, dataset_dir: Path | str) -> 
     schema = reader.metadata().schema
 
     dataset_dir = Path(dataset_dir)
-    # Wipe first so repeated exports don't leave stale Lance version fragments behind.
-    if dataset_dir.exists():
+    # Wipe first so repeated exports don't leave stale Lance version fragments
+    # behind. A symlink or plain file at the path is unlinked (rmtree rejects
+    # both); a real directory is removed wholesale.
+    if dataset_dir.is_symlink() or dataset_dir.is_file():
+        dataset_dir.unlink()
+    elif dataset_dir.is_dir():
         shutil.rmtree(dataset_dir)
+    dataset_dir.parent.mkdir(parents=True, exist_ok=True)
     batches = pa.RecordBatchReader.from_batches(schema, reader.read_all().to_batches())
     lance.write_dataset(batches, str(dataset_dir), mode="create")
     return dataset_dir

@@ -121,17 +121,20 @@ def main(sources: tuple[str, ...], db_dir: str | None, launch: bool) -> None:
     _assert_distinct_table_names(sources)
     auto_db_root = db_dir is None
     db_root = Path(db_dir) if db_dir else Path(tempfile.mkdtemp(prefix="synth-setter-browse-"))
-    with tempfile.TemporaryDirectory(prefix="synth-setter-browse-dl-") as dl_dir:
-        try:
+    try:
+        with tempfile.TemporaryDirectory(prefix="synth-setter-browse-dl-") as dl_dir:
             local_sources = [_resolve_source(source, Path(dl_dir)) for source in sources]
             tables = build_browse_db(local_sources, db_root)
-        # RuntimeError: r2_io.ensure_r2_env_loaded on absent R2 creds; OSError: an
-        # unreadable shard whose metadata fails to open after the is_file() guard.
-        except (ValueError, OSError, RuntimeError, subprocess.CalledProcessError) as exc:
-            # Don't leave the auto-created temp db root behind on a failed export.
-            if auto_db_root:
-                shutil.rmtree(db_root, ignore_errors=True)
-            raise click.UsageError(str(exc)) from exc
+    # click.UsageError already comes from _resolve_source (bad r2:// URI); the rest
+    # — RuntimeError (absent R2 creds), OSError (unreadable shard) — are wrapped.
+    except click.UsageError:
+        if auto_db_root:
+            shutil.rmtree(db_root, ignore_errors=True)
+        raise
+    except (ValueError, OSError, RuntimeError, subprocess.CalledProcessError) as exc:
+        if auto_db_root:
+            shutil.rmtree(db_root, ignore_errors=True)
+        raise click.UsageError(str(exc)) from exc
 
     click.echo(f"Exported {len(tables)} table(s) to {db_root}:")
     for table in tables:

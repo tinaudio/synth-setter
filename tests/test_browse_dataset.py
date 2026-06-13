@@ -274,3 +274,31 @@ def test_main_r2_uri_without_lance_filename_errors(
 
     assert result.exit_code == 2
     assert "no .lance filename component" in result.output
+
+
+def test_main_auto_db_dir_removed_when_source_resolution_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An auto-created temp db root is cleaned up when a source raises (no orphan dir).
+
+    :param tmp_path: Backs the stubbed auto db root.
+    :param monkeypatch: Pins ``tempfile.mkdtemp`` so the db root path is inspectable.
+    """
+    auto_dir = tmp_path / "auto-db"
+    real_mkdtemp = browse_dataset.tempfile.mkdtemp
+
+    def _fake_mkdtemp(
+        suffix: str | None = None, prefix: str | None = None, dir: str | None = None
+    ) -> str:
+        if prefix and prefix.startswith("synth-setter-browse-dl-"):
+            return real_mkdtemp(suffix, prefix, dir)
+        auto_dir.mkdir()
+        return str(auto_dir)
+
+    monkeypatch.setattr(browse_dataset.tempfile, "mkdtemp", _fake_mkdtemp)
+
+    # "r2://bucket" has no .lance filename, so _resolve_source raises UsageError.
+    result = CliRunner().invoke(browse_dataset.main, ["r2://bucket", "--no-launch"])
+
+    assert result.exit_code == 2
+    assert not auto_dir.exists()
