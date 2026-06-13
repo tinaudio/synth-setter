@@ -135,7 +135,7 @@ class VSTFlowMatchingModule(LightningModule):
 
     def _train_step(
         self, batch: dict[str, torch.Tensor]
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+    ) -> tuple[torch.Tensor, torch.Tensor | float | None]:
         conditioning = self._get_conditioning_from_batch(batch)
         params = batch["params"]
         noise = batch["noise"]

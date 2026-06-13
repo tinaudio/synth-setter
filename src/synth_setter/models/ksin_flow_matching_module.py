@@ -318,8 +318,8 @@ class KSinFlowMatchingModule(LightningModule):
         return target
 
     def _train_step(
-        self, batch: tuple[torch.Tensor, torch.Tensor]
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        self, batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor, Callable[..., torch.Tensor]]
+    ) -> tuple[torch.Tensor, torch.Tensor | float | None]:
         signal, params, noise, _ = batch
 
         # Get conditioning vector
@@ -353,7 +353,9 @@ class KSinFlowMatchingModule(LightningModule):
         return loss, penalty
 
     def training_step(
-        self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int
+        self,
+        batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor, Callable[..., torch.Tensor]],
+        batch_idx: int,
     ) -> torch.Tensor:
         if self.global_step < self.hparams.freeze_for_first_n_steps:
             # freeze vector_field and encoder, leaving only projection active
