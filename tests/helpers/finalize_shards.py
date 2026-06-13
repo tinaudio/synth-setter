@@ -111,6 +111,7 @@ def build_lance_smoke_spec(
     train_val_test_sizes: tuple[int, int, int] = (4, 0, 0),
     mask_degenerate_bins: bool = False,
     render: RenderConfig | None = None,
+    compute_clap_embeddings: bool = False,
 ) -> DatasetSpec:
     """Construct a lance ``DatasetSpec`` directly (no Hydra compose).
 
@@ -120,6 +121,7 @@ def build_lance_smoke_spec(
     :param mask_degenerate_bins: Threaded onto the spec for stats-fold tests.
     :param render: Optional render config replacing the smoke default — used by
         e2e tests that must wrap the exact config a writer rendered with.
+    :param compute_clap_embeddings: Threaded onto the spec for the CLAP finalize lane.
     :returns: A frozen lance ``DatasetSpec`` whose shards are deterministic.
     """
     kwargs: dict[str, Any] = {
@@ -128,6 +130,7 @@ def build_lance_smoke_spec(
         "train_val_test_sizes": list(train_val_test_sizes),
         "base_seed": 42,
         "mask_degenerate_bins": mask_degenerate_bins,
+        "compute_clap_embeddings": compute_clap_embeddings,
         "r2": {"bucket": "intermediate-data"},
         "render": render if render is not None else dict(_LANCE_SMOKE_RENDER),
     }

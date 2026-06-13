@@ -26,9 +26,12 @@ from unittest.mock import MagicMock
 import h5py
 import numpy as np
 import pytest
+from lance.file import LanceFileReader
 
 from synth_setter.cli import finalize_dataset
+from synth_setter.data.vst.shapes import CLAP_EMBEDDING_DIM, CLAP_FIELD
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.data.lance_shard import iter_lance_column_rows
 from synth_setter.pipeline.data.stats import get_stats_hdf5 as real_get_stats_hdf5
 from synth_setter.pipeline.data.stats import stream_stats_wds as real_stream_stats_wds
 from tests.helpers.finalize_shards import (
@@ -579,6 +582,93 @@ def test_finalize_lance_writes_split_files_stats_and_marker_last(
     assert upload_order.index(spec.r2.stats_uri()) < upload_order.index(
         spec.r2.dataset_complete_marker_uri()
     )
+
+
+def _stub_clap_encoder(monkeypatch: pytest.MonkeyPatch, fill_value: float) -> None:
+    """Replace the CLAP model loader with a fake returning constant ``CLAP_EMBEDDING_DIM`` rows.
+
+    Keeps the finalize path real (Lance read/encode-loop/write/upload) while faking only the model
+    boundary, so the test needs no checkpoint download.
+
+    :param monkeypatch: Pytest fixture used to swap the loader.
+    :param fill_value: Constant value every embedding element is set to.
+    """
+
+    def fake_encode(mono: np.ndarray, sample_rate: int) -> np.ndarray:  # noqa: ARG001
+        return np.full((mono.shape[0], CLAP_EMBEDDING_DIM), fill_value, dtype=np.float32)
+
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.clap_lance.load_clap_audio_encoder",
+        lambda *args, **kwargs: fake_encode,
+    )
+
+
+def test_finalize_lance_appends_clap_column_when_enabled(
+    fake_r2_remote: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001
+) -> None:
+    """With the flag set, every split row carries the encoder's ``clap`` embedding.
+
+    :param fake_r2_remote: Local-typed rclone remote where the shard is seeded.
+    :param tmp_path: Pytest tmp dir hosting finalize scratch files.
+    :param monkeypatch: Installs the fake CLAP encoder.
+    :param stub_finalize_setup: Fixture-activation only.
+    """
+    spec = build_lance_smoke_spec(
+        task_name="finalize-lance-clap-on",
+        train_val_test_sizes=(4, 0, 0),
+        compute_clap_embeddings=True,
+    )
+    seed_train_shards(fake_r2_remote, spec)
+    _stub_clap_encoder(monkeypatch, fill_value=0.25)
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+
+    finalize_dataset.finalize_from_spec(spec, work_dir)
+
+    train_lance = uri_to_local_path(fake_r2_remote, spec.r2.split_lance_uri("train"))
+    clap_rows = list(iter_lance_column_rows(train_lance, CLAP_FIELD))
+    assert len(clap_rows) == 4
+    for row in clap_rows:
+        assert row.shape == (CLAP_EMBEDDING_DIM,)
+        np.testing.assert_array_equal(row, np.full(CLAP_EMBEDDING_DIM, 0.25, dtype=np.float32))
+
+
+def test_finalize_lance_omits_clap_column_by_default(
+    fake_r2_remote: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001
+) -> None:
+    """The default (flag off) preserves the legacy schema — no ``clap`` column, no model load.
+
+    :param fake_r2_remote: Local-typed rclone remote where the shard is seeded.
+    :param tmp_path: Pytest tmp dir hosting finalize scratch files.
+    :param monkeypatch: Installs a loader that fails if finalize touches the model boundary.
+    :param stub_finalize_setup: Fixture-activation only.
+    """
+    spec = build_lance_smoke_spec(
+        task_name="finalize-lance-clap-off",
+        train_val_test_sizes=(4, 0, 0),
+    )
+    seed_train_shards(fake_r2_remote, spec)
+
+    def fail_if_loaded(*args: object, **kwargs: object) -> NoReturn:
+        raise AssertionError("CLAP encoder loaded despite compute_clap_embeddings=False")
+
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.clap_lance.load_clap_audio_encoder", fail_if_loaded
+    )
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+
+    finalize_dataset.finalize_from_spec(spec, work_dir)
+
+    train_lance = uri_to_local_path(fake_r2_remote, spec.r2.split_lance_uri("train"))
+    reader = LanceFileReader(str(train_lance))
+    assert CLAP_FIELD not in reader.metadata().schema.names
 
 
 def test_finalize_wds_raises_on_empty_train_split(fake_r2_remote: Path, tmp_path: Path) -> None:

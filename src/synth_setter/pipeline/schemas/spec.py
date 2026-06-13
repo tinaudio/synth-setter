@@ -559,6 +559,12 @@ class DatasetSpec(BaseModel):
         Whether finalize substitutes ``std=1.0`` at zero-variance mel bins
         instead of raising; ``False`` is the strict production default.
 
+    .. attribute :: compute_clap_embeddings
+
+        Whether finalize appends a ``clap`` audio-embedding column to each Lance
+        split file; ``False`` is the default and the only value allowed for
+        non-lance output.
+
     .. attribute :: git_sha
 
         Commit SHA of the launcher's working tree at construction.
@@ -639,6 +645,15 @@ class DatasetSpec(BaseModel):
             "mel bins instead of raising; ``False`` is the strict production default. "
             "Smoke configs override to ``True`` because tiny renders have constant "
             "attack-time frames and channels below the source's active bandwidth."
+        ),
+    )
+
+    compute_clap_embeddings: bool = Field(
+        default=False,
+        description=(
+            "Whether finalize appends a ``clap`` LAION-CLAP audio-embedding column to each "
+            "Lance split file (``lance`` output only; ``False`` is the default). Enabling it "
+            "makes finalize load a CLAP checkpoint and encode every row's audio."
         ),
     )
 
@@ -982,6 +997,25 @@ class DatasetSpec(BaseModel):
                 "copy_dataset_root_uri (dataset copy) supports output_format='hdf5' only; got "
                 f"output_format={self.output_format!r}. The source is read as an HDF5 "
                 "param_array of the same shard filename."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _reject_clap_embeddings_for_non_lance(self) -> DatasetSpec:
+        """Reject ``compute_clap_embeddings`` paired with non-lance output.
+
+        The CLAP column is appended only on the Lance finalize branch, so pairing
+        the flag with an hdf5/wds output would be silently ignored. Failing at spec
+        construction surfaces the misconfig at launch instead.
+
+        :returns: ``self`` when the flag is unset or output is lance.
+        :raises ValueError: ``compute_clap_embeddings`` is set with ``output_format != "lance"``.
+        """
+        if self.compute_clap_embeddings and self.output_format != "lance":
+            raise ValueError(
+                "compute_clap_embeddings supports output_format='lance' only; got "
+                f"output_format={self.output_format!r}. The CLAP column is appended on the "
+                "Lance finalize branch."
             )
         return self
 

@@ -15,7 +15,7 @@ Welford for ``stats.npz``, and concatenates each split's shards into
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeAlias
 
@@ -49,6 +49,10 @@ if TYPE_CHECKING:
     LanceSplitBatches: TypeAlias = tuple[pa.Schema, LanceBatchIterator]
 else:
     LanceSplitBatches: TypeAlias = tuple[object, Iterator[object]]
+
+# Mono ``(B, T)`` batch + sample rate → ``(B, D)`` CLAP embedding batch; mirrors
+# ``clap_lance.EncodeFn`` without importing it (keeps pyarrow off the import path).
+ClapEncodeFn: TypeAlias = Callable[[np.ndarray, int], np.ndarray]
 
 # Resolve workspace at import so ``${oc.env:PROJECT_ROOT}`` in
 # ``configs/paths/default.yaml`` interpolates under any install layout.
@@ -194,8 +198,36 @@ def _lance_split_batches(shard_paths: list[Path]) -> LanceSplitBatches:
     return schema, _batches()
 
 
+def _append_clap_column(parts: LanceSplitBatches, encode: ClapEncodeFn) -> LanceSplitBatches:
+    """Augment a split's ``(schema, batches)`` with a CLAP embedding column.
+
+    The split's sample rate is read from the shard schema metadata and threaded
+    to ``encode``; the embedding width is pinned to ``CLAP_EMBEDDING_DIM`` (the
+    default checkpoint's projection).
+
+    :param parts: ``(schema, batches)`` from :func:`_lance_split_batches`.
+    :param encode: Mono-batch CLAP encoder built by ``load_clap_audio_encoder``.
+    :returns: ``(augmented_schema, augmented_batches)`` for :func:`write_lance_file`.
+    :rtype: LanceSplitBatches
+    """
+    from synth_setter.data.vst.shapes import CLAP_EMBEDDING_DIM
+    from synth_setter.pipeline.data.clap_lance import clap_augmented_schema, iter_clap_batches
+    from synth_setter.pipeline.data.lance_shard import read_shard_metadata
+
+    schema, batches = parts
+    sample_rate = read_shard_metadata(schema).sample_rate
+    augmented = clap_augmented_schema(schema, CLAP_EMBEDDING_DIM)
+    return augmented, iter_clap_batches(
+        schema, batches, encode, sample_rate, dim=CLAP_EMBEDDING_DIM
+    )
+
+
 def finalize_lance(spec: DatasetSpec, work_dir: Path) -> None:
     """Download Lance shards, write split Lance files, compute stats, and upload artifacts.
+
+    When ``spec.compute_clap_embeddings`` is set, each split file gains a ``clap``
+    audio-embedding column: finalize loads a CLAP encoder once and appends the
+    embedding per row as the splits are written.
 
     :param spec: Validated dataset spec (``output_format == "lance"``).
     :param work_dir: Scratch directory for downloaded shards and finalized outputs.
@@ -219,12 +251,20 @@ def finalize_lance(spec: DatasetSpec, work_dir: Path) -> None:
     stats_npz = work_dir / STATS_NPZ_FILENAME
     np.savez(stats_npz, mean=mean, std=std)
 
+    encode = None
+    if spec.compute_clap_embeddings:
+        from synth_setter.pipeline.data.clap_lance import load_clap_audio_encoder
+
+        encode = load_clap_audio_encoder()
+
     for split, (lo, hi) in spec.split_shard_ranges.items():
         if lo >= hi:
             continue
         split_path = work_dir / f"{split}.lance"
         shard_paths = [work_dir / shard.filename for shard in spec.shards[lo:hi]]
         schema, batches = _lance_split_batches(shard_paths)
+        if encode is not None:
+            schema, batches = _append_clap_column((schema, batches), encode)
         write_lance_file(split_path, schema, batches)
         split_uri = spec.r2.split_lance_uri(split)
         r2_io.upload(split_path, split_uri)

@@ -1183,6 +1183,35 @@ class TestCopyDatasetRootUri:
 
         assert restored.copy_dataset_root_uri == spec.copy_dataset_root_uri
 
+    def test_compute_clap_embeddings_defaults_to_false(self) -> None:
+        """The flag is opt-in, so a spec that omits it does not request CLAP embeddings."""
+        spec = DatasetSpec(**_valid_spec_kwargs(output_format="lance"))
+
+        assert spec.compute_clap_embeddings is False
+
+    def test_compute_clap_embeddings_with_lance_constructs(self) -> None:
+        """``compute_clap_embeddings=True`` is accepted on a lance spec."""
+        spec = DatasetSpec(
+            **_valid_spec_kwargs(output_format="lance", compute_clap_embeddings=True)
+        )
+
+        assert spec.compute_clap_embeddings is True
+
+    def test_compute_clap_embeddings_with_hdf5_is_rejected(self) -> None:
+        """CLAP embeddings are a Lance-only finalize step; pairing with hdf5 fails at build."""
+        with pytest.raises(ValidationError, match="output_format='lance' only"):
+            DatasetSpec(**_valid_spec_kwargs(output_format="hdf5", compute_clap_embeddings=True))
+
+    def test_compute_clap_embeddings_survives_json_round_trip(self) -> None:
+        """A worker reconstructing the spec from JSON sees the same CLAP flag."""
+        spec = DatasetSpec(
+            **_valid_spec_kwargs(output_format="lance", compute_clap_embeddings=True)
+        )
+
+        restored = DatasetSpec.model_validate_json(spec.model_dump_json())
+
+        assert restored.compute_clap_embeddings is True
+
     def test_legacy_flat_copy_dataset_root_is_promoted(self) -> None:
         """A pre-rename flat ``copy_dataset_root`` promotes to ``copy_dataset_root_uri``."""
         spec = DatasetSpec(**_valid_spec_kwargs(copy_dataset_root="/data/source-dataset"))

@@ -21,7 +21,14 @@ if TYPE_CHECKING:
 AUDIO_FIELD: str = "audio"
 MEL_SPEC_FIELD: str = "mel_spec"
 PARAM_ARRAY_FIELD: str = "param_array"
+CLAP_FIELD: str = "clap"
 DATASET_FIELD_NAMES: tuple[str, ...] = (AUDIO_FIELD, MEL_SPEC_FIELD, PARAM_ARRAY_FIELD)
+
+# Pooled-projection width of the LAION CLAP HTSAT audio tower; the row dimension
+# of the optional ``clap`` side column finalize can append to Lance split files.
+# ``CLAP_FIELD`` stays outside ``DATASET_FIELD_NAMES`` because it is an opt-in
+# embedding, not a core field the writers and validator require on every shard.
+CLAP_EMBEDDING_DIM: int = 512
 
 # Per-field on-disk dtype, matching what the HDF5 / wds writers emit. Audio is
 # stored as ``float16`` for compressed storage efficiency; mel and params stay
