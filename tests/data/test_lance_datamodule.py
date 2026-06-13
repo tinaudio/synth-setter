@@ -31,7 +31,6 @@ from synth_setter.data.lance_datamodule import (
     LanceShardFile,
     LanceVSTDataModule,
     LanceVSTDataset,
-    _is_remote_uri,
 )
 from synth_setter.data.surge_datamodule import ShiftedBatchSampler
 from synth_setter.data.vst.param_spec_registry import param_specs
@@ -179,32 +178,6 @@ def _unwrap(maybe_tensor: torch.Tensor | None) -> torch.Tensor:
     """
     assert maybe_tensor is not None
     return maybe_tensor
-
-
-class TestIsRemoteUri:
-    """Scheme detection routing local-fs guards vs lance's native object_store backend."""
-
-    @pytest.mark.parametrize(
-        "path",
-        ["s3://intermediate-data/data/run/train.lance", "r2://bucket/key.lance"],
-    )
-    def test_scheme_uri_is_remote(self, path: str) -> None:
-        """A ``scheme://`` URI streams through ``object_store``.
-
-        :param path: Parametrized cloud URI.
-        """
-        assert _is_remote_uri(path)
-
-    @pytest.mark.parametrize(
-        "path",
-        ["/abs/data/train.lance", "data/train.lance", "train.lance"],
-    )
-    def test_local_path_is_not_remote(self, path: str) -> None:
-        """A local filesystem path keeps the missing/dir guards.
-
-        :param path: Parametrized local path.
-        """
-        assert not _is_remote_uri(path)
 
 
 class TestLanceShardFile:

@@ -385,7 +385,7 @@ def stream_stats_lance(
     existing: tuple[int, Any, Any] = (0, 0, 0)
     folded_any = False
     for shard_path in shard_paths:
-        logger.info(f"Processing {Path(shard_path).name}...")
+        logger.info("Processing %s...", Path(shard_path).name)
         existing = _fold_lance_shard_into_welford(
             existing, shard_path, storage_options=storage_options
         )

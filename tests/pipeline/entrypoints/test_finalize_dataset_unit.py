@@ -26,6 +26,7 @@ from unittest.mock import MagicMock
 import h5py
 import numpy as np
 import pytest
+from lance.file import LanceFileReader
 
 from synth_setter.cli import finalize_dataset
 from synth_setter.pipeline import r2_io
@@ -602,9 +603,14 @@ def test_finalize_lance_streams_splits_to_r2_without_downloading_shards(
 
     finalize_dataset.finalize_from_spec(spec, work_dir)
 
-    assert uri_to_local_path(fake_r2_remote, spec.r2.split_lance_uri("train")).is_file()
-    assert uri_to_local_path(fake_r2_remote, spec.r2.split_lance_uri("val")).is_file()
     assert not uri_to_local_path(fake_r2_remote, spec.r2.split_lance_uri("test")).exists()
+    # Each split is a well-formed Lance file (4 rows, full schema) — not just present.
+    for split in ("train", "val"):
+        meta = LanceFileReader(
+            str(uri_to_local_path(fake_r2_remote, spec.r2.split_lance_uri(split)))
+        ).metadata()
+        assert meta.num_rows == 4
+        assert {field.name for field in meta.schema} == {"audio", "mel_spec", "param_array"}
     assert uri_to_local_path(fake_r2_remote, spec.r2.stats_uri()).is_file()
     assert uri_to_local_path(fake_r2_remote, spec.r2.dataset_complete_marker_uri()).is_file()
     assert upload_order[-1] == spec.r2.dataset_complete_marker_uri()

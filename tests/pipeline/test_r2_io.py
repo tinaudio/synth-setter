@@ -109,6 +109,28 @@ class TestToS3Uri:
             r2_io.to_s3_uri("s3://bucket/already-s3.ckpt")
 
 
+class TestIsCloudUri:
+    """Tests for is_cloud_uri — the local-path vs object-store branch predicate."""
+
+    @pytest.mark.parametrize(
+        "uri", ["s3://intermediate-data/data/run/train.lance", "r2://bucket/key.lance"]
+    )
+    def test_cloud_uri_returns_true(self, uri: str) -> None:
+        """An ``s3://`` / ``r2://`` URI routes through the object-store backend.
+
+        :param uri: Parametrized cloud URI.
+        """
+        assert r2_io.is_cloud_uri(uri)
+
+    @pytest.mark.parametrize("path", ["/abs/data/train.lance", "data/train.lance", "train.lance"])
+    def test_local_path_returns_false(self, path: str) -> None:
+        """A local filesystem path keeps the local-disk branch.
+
+        :param path: Parametrized local path.
+        """
+        assert not r2_io.is_cloud_uri(path)
+
+
 class TestR2StorageOptions:
     """Tests for r2_storage_options — object_store kwargs for lance's native S3 backend."""
 

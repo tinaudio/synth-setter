@@ -39,11 +39,12 @@ from typing import NoReturn, cast
 
 import pytest
 import wandb
+from lance.file import LanceFileReader
 from omegaconf import DictConfig, OmegaConf
 
 from synth_setter.cli import finalize_dataset
 from synth_setter.pipeline import r2_io
-from synth_setter.pipeline.schemas.spec import DatasetSpec
+from synth_setter.pipeline.schemas.spec import DatasetSpec, Split
 from tests.helpers.finalize_shards import (
     build_finalize_cfg,
     build_hdf5_smoke_spec,
@@ -370,9 +371,16 @@ def test_finalize_lance_branch_streams_splits_without_downloading(
 
     finalize_dataset.finalize(cfg)
 
-    assert uri_to_local_path(fake_r2_remote, spec.r2.split_lance_uri("train")).is_file()
-    assert uri_to_local_path(fake_r2_remote, spec.r2.split_lance_uri("val")).is_file()
     assert not uri_to_local_path(fake_r2_remote, spec.r2.split_lance_uri("test")).exists()
+    # Each written split is a well-formed Lance file (right row count + schema),
+    # not just a present object — a zero-byte or corrupt write would fail here.
+    expected_rows: dict[Split, int] = {"train": 4, "val": 4}
+    for split, size in expected_rows.items():
+        meta = LanceFileReader(
+            str(uri_to_local_path(fake_r2_remote, spec.r2.split_lance_uri(split)))
+        ).metadata()
+        assert meta.num_rows == size
+        assert {field.name for field in meta.schema} == {"audio", "mel_spec", "param_array"}
     marker_uri = spec.r2.dataset_complete_marker_uri()
     assert uri_to_local_path(fake_r2_remote, marker_uri).is_file()
     assert upload_order[-1] == marker_uri

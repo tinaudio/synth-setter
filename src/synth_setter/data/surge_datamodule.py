@@ -139,7 +139,11 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
 
         self.repeat_first_batch = repeat_first_batch
 
-        if use_saved_mean_and_variance and stats_file is None and "://" in str(dataset_file):
+        if (
+            use_saved_mean_and_variance
+            and stats_file is None
+            and r2_io.is_cloud_uri(str(dataset_file))
+        ):
             raise ValueError(
                 f"stats_file is required when the shard is a remote URI ({dataset_file}); "
                 "a sibling stats.npz cannot be derived from a cloud path."
@@ -497,7 +501,7 @@ class VSTDataModule(LightningDataModule):
         self.predict_file: str | Path
         if predict_file is None:
             self.predict_file = self._split_target(f"test{self.shard_suffix}")
-        elif "://" in str(predict_file):
+        elif r2_io.is_cloud_uri(str(predict_file)):
             # A cloud URI must stay a string — Path() would collapse ``s3://`` to ``s3:/``.
             self.predict_file = str(predict_file)
         else:

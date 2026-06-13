@@ -28,6 +28,7 @@ __all__ = [
     "downloaded_to_tempfile",
     "ensure_r2_env_loaded",
     "from_s3_uri",
+    "is_cloud_uri",
     "is_r2_reachable",
     "is_r2_uri",
     "object_size",
@@ -187,6 +188,18 @@ def is_r2_reachable() -> bool:
 def is_r2_uri(uri: str) -> bool:
     """Return True if `uri` is an `r2://bucket/key` URI."""
     return uri.startswith(R2_URI_SCHEME)
+
+
+def is_cloud_uri(path: str) -> bool:
+    """Return whether `path` is an `s3://` / `r2://` cloud URI rather than a local path.
+
+    The shared scheme test for code that branches local-disk vs object-store
+    access (lance's native S3 reads/writes go through ``s3://``).
+
+    :param path: Candidate filesystem path or URI.
+    :returns: ``True`` for an ``s3://`` or ``r2://`` URI; ``False`` otherwise.
+    """
+    return path.startswith(("s3://", R2_URI_SCHEME))
 
 
 def to_rclone_path(r2_uri: str) -> str:

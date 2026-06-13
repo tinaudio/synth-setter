@@ -80,15 +80,6 @@ class LanceColumn:
         return array if array.flags.writeable else array.copy()
 
 
-def _is_remote_uri(path: str) -> bool:
-    """Return whether ``path`` is an ``s3://`` / ``r2://`` cloud URI lance streams over.
-
-    :param path: Candidate shard path or URI.
-    :returns: ``True`` for an ``s3://`` / ``r2://`` URI; ``False`` keeps the local-fs guards.
-    """
-    return path.startswith(("s3://", "r2://"))
-
-
 class LanceShardFile:
     """Read-only adapter exposing a single-file Lance shard via the h5py-``File`` read surface."""
 
@@ -106,7 +97,7 @@ class LanceShardFile:
         """
         self._path = str(path)
         self._storage_options = storage_options
-        if not _is_remote_uri(self._path):
+        if not r2_io.is_cloud_uri(self._path):
             local = Path(path)
             if local.is_dir():
                 raise ValueError(
