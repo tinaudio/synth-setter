@@ -250,8 +250,9 @@ class LanceVSTDataModule(VSTDataModule):
     def _dataset_extra_kwargs(self) -> dict[str, object]:
         """Supply ``storage_options`` + the local ``stats.npz`` path when streaming.
 
-        ``stats_file`` is injected only when ``use_saved_mean_and_variance`` is set — the same
-        condition :meth:`_hydrate_dataset_root` fetches it under — so it can't point at a missing file.
+        ``stats_file`` is injected only when ``use_saved_mean_and_variance`` is
+        set — the same condition :meth:`_hydrate_dataset_root` fetches it under —
+        so it can't point at a file that was not downloaded.
 
         :returns: Streaming extras for each split, or ``{}`` for the local path.
         """

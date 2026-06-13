@@ -576,7 +576,8 @@ def test_finalize_lance_streams_splits_to_r2_without_downloading_shards(
         train_val_test_sizes=(4, 4, 0),
     )
     seed_train_shards(fake_r2_remote, spec)
-    for shard in spec.shards[1:2]:
+    val_lo, val_hi = spec.split_shard_ranges["val"]
+    for shard in spec.shards[val_lo:val_hi]:
         write_minimal_lance_shard(
             uri_to_local_path(fake_r2_remote, spec.r2.shard_uri(shard)), spec
         )
@@ -623,7 +624,7 @@ def test_finalize_lance_streams_splits_to_r2_without_downloading_shards(
 def test_finalize_lance_forwards_mask_degenerate_bins_to_stream_stats(
     fake_r2_remote: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, flag: bool
 ) -> None:
-    """``finalize_lance`` forwards ``spec.mask_degenerate_bins`` to ``stream_stats_lance`` verbatim.
+    """``finalize_lance`` forwards ``spec.mask_degenerate_bins`` to ``stream_stats_lance``.
 
     Mirrors the wds/hdf5 wire tests so a regression that hard-wires the kwarg fails here rather
     than silently re-breaking the lance stats fold.

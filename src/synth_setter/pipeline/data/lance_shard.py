@@ -91,10 +91,9 @@ def write_lance_file(
 ) -> None:
     """Write a single Lance file from pre-shaped Arrow record batches.
 
-    Not atomic: a mid-stream exception still closes the writer, leaving a partial
-    object at ``path``. Finalize relies on the ``dataset.complete`` marker for
-    correctness — a re-run overwrites the partial split — so this is only safe
-    while no per-split existence guard short-circuits a present-but-partial file.
+    Not atomic: a mid-stream failure closes the writer, leaving a partial object
+    at ``path``; finalize's ``dataset.complete`` marker is the correctness anchor,
+    and a re-run overwrites the partial split.
 
     :param path: Destination ``.lance`` file (local path or ``s3://`` URI).
     :param schema: Arrow schema for every batch.

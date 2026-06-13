@@ -191,7 +191,7 @@ def is_r2_uri(uri: str) -> bool:
 
 
 def is_cloud_uri(path: str) -> bool:
-    """Return whether `path` is an `s3://` / `r2://` cloud URI rather than a local path.
+    """Return whether ``path`` is an ``s3://`` / ``r2://`` cloud URI rather than a local path.
 
     The shared scheme test for code that branches local-disk vs object-store
     access (lance's native S3 reads/writes go through ``s3://``).

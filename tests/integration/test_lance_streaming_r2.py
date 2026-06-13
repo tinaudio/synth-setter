@@ -118,9 +118,8 @@ def test_finalize_lance_streams_to_r2_then_datamodule_streams_back(
 
     assert r2_io.object_size(spec.r2.stats_uri()) is not None
 
-    # Each split must be a well-formed Lance file, not merely a non-empty object:
-    # read every split back natively and pin its row count + schema, so a dropped
-    # shard or off-by-one in the val/test concatenation can't slip through.
+    # Pin each split's row count + schema (not just presence) so a dropped shard
+    # or off-by-one in the val/test concatenation can't slip through.
     storage_options = r2_io.r2_storage_options()
     for split, size in zip(("train", "val", "test"), spec.train_val_test_sizes):
         meta = LanceFileReader(
@@ -148,7 +147,8 @@ def test_finalize_lance_streams_to_r2_then_datamodule_streams_back(
 
     assert batch["params"] is not None
     assert batch["params"].shape == (2, spec.num_params)
+    assert torch.isfinite(batch["params"]).all()
+    # Normalization ran against the streamed stats.npz: a finite 4-D mel batch.
     assert batch["mel_spec"] is not None
-    assert batch["mel_spec"].shape[0] == 2
-    # Normalization ran against the streamed stats.npz: no NaN/Inf leaked through.
+    assert batch["mel_spec"].ndim == 4 and batch["mel_spec"].shape[0] == 2
     assert torch.isfinite(batch["mel_spec"]).all()
