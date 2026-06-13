@@ -142,6 +142,16 @@ def test_tensor_array_missing_row_axis_raises_value_error() -> None:
         tensor_array(np.zeros((2, 7), dtype=np.float16), np.dtype(np.float16), (2, 7))
 
 
+def test_tensor_array_empty_batch_raises_value_error() -> None:
+    """A correctly-shaped but row-empty batch raises a clear ValueError, not Arrow's.
+
+    ``(0, 2, 7)`` passes the inner-shape check, so the explicit N >= 1 guard —
+    not the opaque extension-builder error — is what must fire.
+    """
+    with pytest.raises(ValueError, match=r"non-empty batch .* got 0 rows"):
+        tensor_array(np.zeros((0, 2, 7), dtype=np.float16), np.dtype(np.float16), (2, 7))
+
+
 def test_record_batch_from_arrays_schema_dtype_wins_over_field_default() -> None:
     """Each column's dtype comes from the schema, not ``DATASET_FIELD_DTYPES``.
 

@@ -48,11 +48,15 @@ def tensor_array(values: np.ndarray, dtype: np.dtype, inner_shape: tuple[int, ..
     :param dtype: Scalar dtype the values are cast to — the column's on-disk type.
     :param inner_shape: Schema per-row tensor shape, without the leading row axis.
     :returns: Arrow extension array compatible with :func:`lance_schema`.
-    :raises ValueError: ``values`` is not shaped ``(N, *inner_shape)`` for some ``N >= 1``.
+    :raises ValueError: ``values`` inner axes differ from ``inner_shape``, or the batch is empty.
     """
     rows = np.ascontiguousarray(values, dtype=dtype)
     if rows.shape[1:] != inner_shape:
         raise ValueError(f"tensor rows have inner shape {rows.shape[1:]}, expected {inner_shape}")
+    # Enforce N >= 1 with a clear message; the extension builder otherwise
+    # rejects an empty batch with an opaque "non-empty ndarray" error.
+    if rows.shape[0] == 0:
+        raise ValueError(f"expected a non-empty batch of {inner_shape} tensors, got 0 rows")
     return pa.FixedShapeTensorArray.from_numpy_ndarray(rows)
 
 
