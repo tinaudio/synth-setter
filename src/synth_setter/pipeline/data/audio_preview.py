@@ -5,10 +5,9 @@ column so open-source Lance viewers can play an audio preview. The MP3 is a
 lossy convenience artifact, never a training input — the lossless ``audio``
 tensor column remains the source of truth.
 
-Kept free of the project's heavy import surface: ``pedalboard`` and
-``librosa`` import lazily inside :func:`encode_mp3_preview` so importing this
-module (or its caller, ``lance_shard``) stays cheap for the validator and
-launcher paths that never encode a preview.
+``pedalboard`` and ``librosa`` import lazily inside :func:`encode_mp3_preview`
+so this module stays cheap to import on validator and launcher paths that never
+encode a preview.
 """
 
 from __future__ import annotations

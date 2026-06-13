@@ -544,7 +544,7 @@ def test_finalize_lance_writes_split_files_stats_and_marker_last(
     fake_r2_remote: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001
+    stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001 — installs stubs only
 ) -> None:
     """``finalize_from_spec`` handles Lance splits and uploads the marker last.
 
@@ -590,7 +590,7 @@ def test_finalize_lance_writes_split_files_stats_and_marker_last(
 def test_finalize_lance_split_has_decodable_mp3_preview_column(
     fake_r2_remote: Path,
     tmp_path: Path,
-    stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001
+    stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001 — installs stubs only
 ) -> None:
     """The finalized train split carries a decodable MP3 preview beside intact audio.
 
