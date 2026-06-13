@@ -55,10 +55,15 @@ def _resolve_source(source: str, download_dir: Path) -> Path:
     :param source: A local ``.lance`` path or an ``r2://`` URI.
     :param download_dir: Scratch dir for downloaded shards (caller-owned).
     :returns: The source path unchanged, or the downloaded copy for ``r2://`` URIs.
+    :raises click.UsageError: An ``r2://`` URI has no ``.lance`` filename
+        component (e.g. a bare bucket or a path ending in ``..``).
     """
     if source.startswith("r2://"):
+        name = Path(source).name
+        if not name.endswith(".lance"):
+            raise click.UsageError(f"r2:// URI has no .lance filename component: {source!r}")
         r2_io.ensure_r2_env_loaded()
-        local = download_dir / Path(source).name
+        local = download_dir / name
         r2_io.download_to_path(source, local)
         return local
     return Path(source)

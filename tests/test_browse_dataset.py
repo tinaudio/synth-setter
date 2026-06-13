@@ -239,7 +239,8 @@ def test_main_duplicate_table_names_error_before_any_download(
     :param tmp_path: Provides the export dir (never written on this path).
     :param monkeypatch: Asserts r2_io download is never reached.
     """
-    monkeypatch.setattr(browse_dataset.r2_io, "ensure_r2_env_loaded", lambda: None)
+    # Both stubbed to refuse: no R2 I/O of any kind may precede the collision check.
+    monkeypatch.setattr(browse_dataset.r2_io, "ensure_r2_env_loaded", _refuse_download)
     monkeypatch.setattr(browse_dataset.r2_io, "download_to_path", _refuse_download)
 
     result = CliRunner().invoke(
@@ -255,3 +256,21 @@ def test_main_duplicate_table_names_error_before_any_download(
 
     assert result.exit_code == 2
     assert "collide on table name" in result.output
+
+
+def test_main_r2_uri_without_lance_filename_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bare-bucket ``r2://`` URI is rejected before any R2 I/O.
+
+    :param tmp_path: Provides the export dir (never written on this path).
+    :param monkeypatch: Asserts r2 creds loading is never reached.
+    """
+    monkeypatch.setattr(browse_dataset.r2_io, "ensure_r2_env_loaded", _refuse_download)
+
+    result = CliRunner().invoke(
+        browse_dataset.main, ["r2://bucket", "--db-dir", str(tmp_path / "browse"), "--no-launch"]
+    )
+
+    assert result.exit_code == 2
+    assert "no .lance filename component" in result.output
