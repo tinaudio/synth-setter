@@ -31,16 +31,26 @@ from lance.file import LanceFileReader
 from pedalboard.io import AudioFile
 
 from synth_setter.cli import finalize_dataset
-from synth_setter.data.vst.shapes import AUDIO_FIELD, DATASET_FIELD_NAMES
+from synth_setter.data.vst.shapes import (
+    AUDIO_FIELD,
+    DATASET_FIELD_DTYPES,
+    DATASET_FIELD_NAMES,
+    MEL_SPEC_FIELD,
+    PARAM_ARRAY_FIELD,
+)
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.audio_preview import MP3_PREVIEW_SAMPLE_RATE
 from synth_setter.pipeline.data.lance_shard import (
     MP3_PREVIEW_FIELD,
     iter_lance_column_rows,
+    lance_schema,
     read_shard_metadata,
+    record_batch_from_arrays,
+    write_lance_file,
 )
 from synth_setter.pipeline.data.stats import get_stats_hdf5 as real_get_stats_hdf5
 from synth_setter.pipeline.data.stats import stream_stats_wds as real_stream_stats_wds
+from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from tests.helpers.finalize_shards import (
     build_hdf5_smoke_spec,
     build_lance_smoke_spec,
@@ -624,6 +634,48 @@ def test_finalize_lance_split_has_decodable_mp3_preview_column(
         with AudioFile(io.BytesIO(payload)) as decoded:
             assert decoded.num_channels == spec.render.channels
             assert int(decoded.samplerate) == MP3_PREVIEW_SAMPLE_RATE
+
+
+def test_lance_split_batches_heterogeneous_shard_rates_write_under_one_schema(
+    tmp_path: Path,
+) -> None:
+    """Shards whose embedded sample rate differs still finalize under one output schema.
+
+    Each shard's previews encode at its own rate, but every yielded batch must
+    carry the single output-file schema so ``LanceFileWriter`` never sees a
+    per-shard schema-metadata mismatch.
+
+    :param tmp_path: Pytest tmp dir hosting the shard fixtures and finalized split.
+    """
+    shapes = {AUDIO_FIELD: (2, 2, 441), MEL_SPEC_FIELD: (2, 2, 3, 4), PARAM_ARRAY_FIELD: (2, 7)}
+
+    def _write_shard(path: Path, sample_rate: int) -> None:
+        metadata = ShardMetadata(
+            velocity=100,
+            signal_duration_seconds=0.01,
+            sample_rate=sample_rate,
+            channels=2,
+            min_loudness=-55.0,
+        )
+        schema = lance_schema(shapes, metadata)
+        arrays = {f: np.zeros(s, dtype=DATASET_FIELD_DTYPES[f]) for f, s in shapes.items()}
+        write_lance_file(path, schema, [record_batch_from_arrays(arrays, schema)])
+
+    shard_0 = tmp_path / "shard-000000.lance"
+    shard_1 = tmp_path / "shard-000001.lance"
+    _write_shard(shard_0, sample_rate=44100)
+    _write_shard(shard_1, sample_rate=48000)
+    split = tmp_path / "train.lance"
+
+    schema, batches = finalize_dataset._lance_split_batches([shard_0, shard_1])
+    write_lance_file(split, schema, batches)
+
+    table = LanceFileReader(str(split)).read_all().to_table()
+    assert table.num_rows == 4
+    assert table.schema.names == [*DATASET_FIELD_NAMES, MP3_PREVIEW_FIELD]
+    for payload in table.column(MP3_PREVIEW_FIELD).to_pylist():
+        with AudioFile(io.BytesIO(payload)) as decoded:
+            assert decoded.num_channels == 2
 
 
 def test_finalize_wds_raises_on_empty_train_split(fake_r2_remote: Path, tmp_path: Path) -> None:

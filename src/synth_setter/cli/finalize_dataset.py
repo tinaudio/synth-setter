@@ -184,6 +184,7 @@ def _lance_split_batches(shard_paths: list[Path]) -> LanceSplitBatches:
     :returns: ``(schema, batches)`` for :func:`write_lance_file`.
     :rtype: LanceSplitBatches
     """
+    import pyarrow as pa
     from lance.file import LanceFileReader
 
     from synth_setter.pipeline.data.lance_shard import (
@@ -199,7 +200,11 @@ def _lance_split_batches(shard_paths: list[Path]) -> LanceSplitBatches:
             reader = LanceFileReader(str(shard_path))
             sample_rate = read_shard_metadata(reader.metadata().schema).sample_rate
             for batch in reader.read_all().to_batches():
-                yield append_mp3_preview_column(batch, sample_rate)
+                augmented = append_mp3_preview_column(batch, sample_rate)
+                # Pin every batch to the single output-file schema: encode at each
+                # shard's own rate, but never let per-shard schema metadata reach the
+                # writer's fixed schema (LanceFileWriter rejects a schema mismatch).
+                yield pa.RecordBatch.from_arrays(list(augmented.columns), schema=schema)
 
     return schema, _batches()
 
