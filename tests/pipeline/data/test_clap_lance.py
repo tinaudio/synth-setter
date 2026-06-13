@@ -346,6 +346,12 @@ def _install_fake_clap_stack(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int,
     import torchaudio.functional as audio_fn
     import transformers
 
+    # Belt-and-suspenders: even though from_pretrained is faked below, force
+    # HuggingFace offline so any unintercepted call fails fast instead of hanging
+    # on the Hub's 429-retry backoff (which has stalled the conda CI lane).
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    monkeypatch.setenv("TRANSFORMERS_OFFLINE", "1")
+
     resample_calls: list[tuple[int, int]] = []
 
     def fake_resample(wav: Any, orig_freq: int, new_freq: int) -> Any:
