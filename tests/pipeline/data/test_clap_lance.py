@@ -267,7 +267,35 @@ def test_clap_augment_split_raises_when_encoder_width_differs_from_dim(
     _, out_batches = clap_augment_split(
         schema, batches, wrong_width_encode, _SAMPLE_RATE, dim=_TEST_DIM
     )
-    with pytest.raises(ValueError, match=r"expected \(B, 4\)"):
+    with pytest.raises(ValueError, match=r"expected \(2, 4\)"):
+        list(out_batches)
+
+
+def test_clap_augment_split_raises_when_encoder_row_count_differs_from_batch(
+    tmp_path: Path,
+) -> None:
+    """The guard rejects an encoder that returns a different row count than the input batch.
+
+    Without it a row-count mismatch would surface only as a cryptic Arrow length error when the
+    batch is reassembled.
+
+    :param tmp_path: Pytest tmp dir hosting the input shard.
+    """
+    _write_shard(
+        tmp_path / "in.lance",
+        audio=_constant_audio(2, 2, 4),
+        mel=np.zeros((2, 2, 3), dtype=np.float32),
+        params=np.zeros((2, 5), dtype=np.float32),
+    )
+    schema, batches = _read_schema_and_batches(tmp_path / "in.lance")
+
+    def dropped_row_encode(mono: np.ndarray, sample_rate: int) -> np.ndarray:  # noqa: ARG001
+        return np.zeros((mono.shape[0] - 1, _TEST_DIM), dtype=np.float32)
+
+    _, out_batches = clap_augment_split(
+        schema, batches, dropped_row_encode, _SAMPLE_RATE, dim=_TEST_DIM
+    )
+    with pytest.raises(ValueError, match=r"expected \(2, 4\)"):
         list(out_batches)
 
 

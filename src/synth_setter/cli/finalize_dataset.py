@@ -247,7 +247,7 @@ def finalize_lance(spec: DatasetSpec, work_dir: Path) -> None:
     stats_npz = work_dir / STATS_NPZ_FILENAME
     np.savez(stats_npz, mean=mean, std=std)
 
-    encode = None
+    encode: ClapEncodeFn | None = None
     if spec.compute_clap_embeddings:
         from synth_setter.pipeline.data.clap_lance import load_clap_audio_encoder
 
@@ -260,6 +260,7 @@ def finalize_lance(spec: DatasetSpec, work_dir: Path) -> None:
         shard_paths = [work_dir / shard.filename for shard in spec.shards[lo:hi]]
         schema, batches = _lance_split_batches(shard_paths)
         if encode is not None:
+            logger.info("appending clap embeddings to {}", split)
             schema, batches = _append_clap_column((schema, batches), encode)
         write_lance_file(split_path, schema, batches)
         split_uri = spec.r2.split_lance_uri(split)

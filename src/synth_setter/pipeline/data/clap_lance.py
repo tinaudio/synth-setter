@@ -80,16 +80,20 @@ def _iter_clap_record_batches(
     :param dim: Expected embedding width; ``encode`` output is asserted to match.
     :yields: Each batch with the trailing ``clap`` column.
     :ytype: pa.RecordBatch
-    :raises ValueError: ``encode`` returns anything other than a ``(B, dim)`` batch.
+    :raises ValueError: ``encode`` returns anything other than a ``(num_rows, dim)``
+        batch, where ``num_rows`` is the input batch's row count.
     """
     audio_inner = tuple(in_schema.field(AUDIO_FIELD).type.shape)
     audio_index = in_schema.get_field_index(AUDIO_FIELD)
     for batch in batches:
         audio = tensor_chunk_to_numpy(batch.column(audio_index), audio_inner)
         embeddings = np.asarray(encode(_downmix_to_mono(audio), sample_rate))
-        if embeddings.ndim != 2 or embeddings.shape[1] != dim:
+        # Pin both axes: a wrong row count would otherwise surface only as a cryptic
+        # Arrow "arrays must have the same length" error at record_batch assembly.
+        if embeddings.shape != (batch.num_rows, dim):
             raise ValueError(
-                f"CLAP encoder produced shape {embeddings.shape}, expected (B, {dim})"
+                f"CLAP encoder produced shape {embeddings.shape}, "
+                f"expected ({batch.num_rows}, {dim})"
             )
         clap_column = tensor_array(embeddings, _CLAP_DTYPE, (dim,))
         yield pa.record_batch([*batch.columns, clap_column], schema=out_schema)
@@ -161,8 +165,7 @@ def load_clap_audio_encoder(
             audio=list(wav.numpy()), sampling_rate=CLAP_SAMPLE_RATE, return_tensors="pt"
         )
         inputs = {key: value.to(device) for key, value in inputs.items()}
-        # get_audio_features returns a pooled output whose pooler_output holds the
-        # projected, L2-normalized joint-space audio embedding (B, D).
+        # pooler_output holds the projected, L2-normalized embedding (B, D).
         features = model.get_audio_features(**inputs)
         return features.pooler_output.cpu().numpy()
 
