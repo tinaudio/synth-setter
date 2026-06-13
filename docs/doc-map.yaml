@@ -85,7 +85,7 @@ docs:
       - pattern: "src/synth_setter/configs/finalize_dataset.yaml"
         covers: "Finalize @hydra.main entry config; required `dataset_root_uri` (run prefix) loads the persisted DatasetSpec from `input_spec.json` under it (file://, r2://, or bare path); overrides `hydra.run.dir` (task_name/run_name absent here); composes `logger: wandb` for best-effort dataset-artifact logging"
       - pattern: "src/synth_setter/cli/finalize_dataset.py"
-        covers: "Finalize entrypoint: loads the frozen DatasetSpec, dispatches by `spec.output_format` across hdf5/wds/lance, writes `dataset.complete` last, and logs the canonical dataset W&B artifact."
+        covers: "Finalize entrypoint: loads the frozen DatasetSpec, dispatches by `spec.output_format` across hdf5/wds/lance, writes `dataset.complete` last, and logs the canonical dataset W&B artifact. The lance path appends a per-row `audio_mp3` preview column encoded at each shard's own sample rate."
       - pattern: ".github/workflows/generate-dataset-shards.yaml"
         covers: "Reusable launcher fan-out across providers (skypilot-local kind, runpod, oci); per-provider artifact upload; emits a `spec_uri` workflow output (the materialized spec's canonical under-prefix `input_spec.json` URI, computed by the `synth-setter-spec-uri` console script — see `src/synth_setter/pipeline/ci/spec_uri.py`) consumed by validate-dataset-shards"
       - pattern: ".github/workflows/validate-dataset-shards.yaml"
@@ -113,7 +113,9 @@ docs:
       - pattern: "src/synth_setter/data/vst/shapes.py"
         covers: "Shared shape primitives consumed by the writers, the shard validator, and the test shard seeders — DATASET_FIELD_NAMES / DATASET_FIELD_DTYPES, mel-front-end constants, per-field shape helpers, and dataset_field_shapes (the single field→shape contract)."
       - pattern: "src/synth_setter/pipeline/data/lance_shard.py"
-        covers: "Lance single-file shard codec — lance_schema / tensor_array / record_batch_from_arrays / write_lance_file on the encode side, read_shard_metadata / tensor_chunk_to_numpy / iter_lance_column_rows on the decode side; shared by the Lance writer, validator, and finalize."
+        covers: "Lance single-file shard codec — lance_schema / tensor_array / record_batch_from_arrays / write_lance_file / schema_with_mp3_preview / append_mp3_preview_column on the encode side, read_shard_metadata / tensor_chunk_to_numpy / iter_lance_column_rows on the decode side; shared by the Lance writer, validator, and finalize. Hosts the finalize-only `audio_mp3` preview column (MP3_PREVIEW_FIELD)."
+      - pattern: "src/synth_setter/pipeline/data/audio_preview.py"
+        covers: "Per-row MP3 preview encoder (encode_mp3_preview) backing the finalize-only `audio_mp3` Lance column; resamples non-MPEG rates to MP3_PREVIEW_SAMPLE_RATE; lazy pedalboard/librosa imports."
 
   # ── SkyPilot compute integration design doc ─────────────────────
   - doc: docs/design/skypilot-compute-integration.md
