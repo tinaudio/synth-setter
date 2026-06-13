@@ -19,7 +19,6 @@ import pyarrow as pa
 from lance.file import LanceFileReader
 
 from synth_setter.data.surge_datamodule import VSTDataModule, VSTDataset
-from synth_setter.pipeline.data.lance_shard import tensor_chunk_to_numpy
 
 
 class LanceColumn:
@@ -34,6 +33,8 @@ class LanceColumn:
         """
         self._shard = shard
         self._name = name
+        # Backs the h5py-like ``shape`` property; decode reads the shape from
+        # Arrow's tensor type, so reads don't consult this.
         self._inner_shape = inner_shape
 
     @property
@@ -72,7 +73,7 @@ class LanceColumn:
                 raise ValueError(f"fancy indices must be in ascending order, got {indices}")
             results = reader.take_rows(indices)
         chunk = results.to_table().column(self._name).combine_chunks()
-        array = tensor_chunk_to_numpy(chunk, self._inner_shape)
+        array = chunk.to_numpy_ndarray()
         # Copy out of Arrow's read-only buffer: h5py reads return writable arrays,
         # and torch.from_numpy over a read-only view is undefined behavior on write.
         return array if array.flags.writeable else array.copy()
