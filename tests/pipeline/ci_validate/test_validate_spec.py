@@ -26,6 +26,7 @@ def _make_valid_spec(*, output_format: str = "hdf5", **overrides: object) -> dic
         "base_seed": 42,
         "copy_dataset_root_uri": None,
         "mask_degenerate_bins": False,
+        "compute_clap_embeddings": False,
         "num_params": 92,
         "num_shards": 3,
         "r2": {
