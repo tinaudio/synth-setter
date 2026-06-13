@@ -123,6 +123,19 @@ def test_export_shard_to_dataset_replaces_a_plain_file_destination(tmp_path: Pat
     assert lance.dataset(str(dest)).count_rows() == 2
 
 
+def test_export_shard_to_dataset_in_place_export_raises_and_keeps_source(tmp_path: Path) -> None:
+    """Exporting a shard onto its own path is rejected, leaving the source intact.
+
+    :param tmp_path: Holds the shard used as both source and (rejected) destination.
+    """
+    shard = tmp_path / "train.lance"
+    _write_two_row_shard(shard)
+
+    with pytest.raises(ValueError, match="in-place export"):
+        export_shard_to_dataset(shard, shard)
+    assert shard.is_file()
+
+
 def test_export_shard_to_dataset_directory_source_raises_value_error(tmp_path: Path) -> None:
     """A directory source is rejected — the pipeline emits single-file shards, not datasets.
 

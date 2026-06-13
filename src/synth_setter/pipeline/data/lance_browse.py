@@ -32,7 +32,9 @@ def export_shard_to_dataset(shard_path: Path | str, dataset_dir: Path | str) -> 
     :param dataset_dir: Destination dataset directory; an existing directory,
         file, or symlink at the path is removed first, and its parent created.
     :returns: The browsable Lance dataset directory just written.
-    :raises ValueError: ``shard_path`` is a directory (already a dataset layout).
+    :raises ValueError: ``shard_path`` is a directory (already a dataset layout),
+        or it resolves to ``dataset_dir`` (an in-place export would wipe the
+        source before it is read).
     :raises FileNotFoundError: ``shard_path`` does not exist.
     """
     shard_path = Path(shard_path)
@@ -44,10 +46,15 @@ def export_shard_to_dataset(shard_path: Path | str, dataset_dir: Path | str) -> 
     if not shard_path.is_file():
         raise FileNotFoundError(f"Lance shard file not found: {shard_path}")
 
+    dataset_dir = Path(dataset_dir)
+    # The destination is wiped before the (lazy) reader is consumed, so writing
+    # onto the source path would destroy the shard mid-read.
+    if shard_path.resolve() == dataset_dir.resolve():
+        raise ValueError(f"in-place export would destroy the source shard: {shard_path}")
+
     reader = LanceFileReader(str(shard_path))
     schema = reader.metadata().schema
 
-    dataset_dir = Path(dataset_dir)
     # Wipe first so repeated exports don't leave stale Lance version fragments
     # behind. A symlink or plain file at the path is unlinked (rmtree rejects
     # both); a real directory is removed wholesale.
