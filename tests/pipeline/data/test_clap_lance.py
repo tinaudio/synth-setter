@@ -1,13 +1,16 @@
 """Tests for the Lance CLAP-embedding augmentation core.
 
-The encoder is injected as a plain callable, so every path here runs without
-loading a CLAP checkpoint; :func:`load_clap_audio_encoder` (the real model
-shell) is exercised manually — see the PR's "Verification" checklist.
+The augmentation core injects the encoder as a plain callable, so those paths
+run without a CLAP checkpoint; :func:`load_clap_audio_encoder` is tested against
+fake ``transformers``/``torchaudio`` stand-ins (a real checkpoint is exercised
+manually — see the PR's "Verification" checklist).
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import numpy as np
 import pyarrow as pa
@@ -16,14 +19,17 @@ from lance.file import LanceFileReader
 
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
+    CLAP_EMBEDDING_DIM,
     CLAP_FIELD,
     MEL_SPEC_FIELD,
     PARAM_ARRAY_FIELD,
 )
 from synth_setter.pipeline.data.clap_lance import (
+    CLAP_SAMPLE_RATE,
     EncodeFn,
     clap_augment_split,
     clap_augmented_schema,
+    load_clap_audio_encoder,
 )
 from synth_setter.pipeline.data.lance_shard import iter_lance_column_rows, write_lance_file
 
@@ -323,3 +329,89 @@ def test_clap_augment_split_preserves_existing_columns(tmp_path: Path) -> None:
     param_rows = list(iter_lance_column_rows(tmp_path / "out.lance", PARAM_ARRAY_FIELD))
     np.testing.assert_array_equal(np.stack(mel_rows), mel)
     np.testing.assert_array_equal(np.stack(param_rows), params)
+
+
+def _install_fake_clap_stack(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, int]]:
+    """Swap the lazily-imported CLAP stack for fakes; return a resample-call log.
+
+    Replaces ``transformers.ClapModel`` / ``ClapProcessor`` and
+    ``torchaudio.functional.resample`` with in-memory fakes so the wiring inside
+    :func:`load_clap_audio_encoder` runs without a checkpoint download. The fake
+    model projects any batch to zeros ``(B, CLAP_EMBEDDING_DIM)`` float32.
+
+    :param monkeypatch: Pytest monkeypatch fixture.
+    :returns: List that records ``(orig_freq, new_freq)`` for each ``resample`` call.
+    """
+    import torch
+    import torchaudio.functional as audio_fn
+    import transformers
+
+    resample_calls: list[tuple[int, int]] = []
+
+    def fake_resample(wav: Any, orig_freq: int, new_freq: int) -> Any:
+        resample_calls.append((orig_freq, new_freq))
+        return wav
+
+    def get_audio_features(**inputs: Any) -> SimpleNamespace:
+        (batch,) = {value.shape[0] for value in inputs.values()}
+        pooled = torch.zeros((batch, CLAP_EMBEDDING_DIM), dtype=torch.float32)
+        return SimpleNamespace(pooler_output=pooled)
+
+    fake_model = SimpleNamespace(
+        to=lambda device: fake_model,  # noqa: ARG005
+        eval=lambda: fake_model,
+        get_audio_features=get_audio_features,
+    )
+
+    def fake_processor(*, audio: list[Any], sampling_rate: int, return_tensors: str) -> dict:  # noqa: ARG001
+        return {"input_features": torch.zeros((len(audio), 3), dtype=torch.float32)}
+
+    monkeypatch.setattr(
+        transformers,
+        "ClapModel",
+        SimpleNamespace(from_pretrained=lambda checkpoint: fake_model),  # noqa: ARG005
+    )
+    monkeypatch.setattr(
+        transformers,
+        "ClapProcessor",
+        SimpleNamespace(from_pretrained=lambda checkpoint: fake_processor),  # noqa: ARG005
+    )
+    monkeypatch.setattr(audio_fn, "resample", fake_resample)
+    return resample_calls
+
+
+def test_load_clap_audio_encoder_maps_mono_batch_to_embedding_dim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The loaded encoder maps a mono ``(B, T)`` batch to ``(B, CLAP_EMBEDDING_DIM)`` float32.
+
+    The transformers/torchaudio stack is faked so the wiring inside
+    :func:`load_clap_audio_encoder` runs without a checkpoint download.
+
+    :param monkeypatch: Pytest monkeypatch fixture swapping in the fake CLAP stack.
+    """
+    resample_calls = _install_fake_clap_stack(monkeypatch)
+    encode = load_clap_audio_encoder(device="cpu")
+
+    embeddings = encode(np.zeros((2, 8), dtype=np.float32), CLAP_SAMPLE_RATE)
+
+    assert embeddings.shape == (2, CLAP_EMBEDDING_DIM)
+    assert embeddings.dtype == np.float32
+    # At the native rate the encoder must not resample.
+    assert resample_calls == []
+
+
+def test_load_clap_audio_encoder_resamples_when_sample_rate_differs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-native sample rate is resampled to ``CLAP_SAMPLE_RATE`` before encoding.
+
+    :param monkeypatch: Pytest monkeypatch fixture swapping in the fake CLAP stack.
+    """
+    resample_calls = _install_fake_clap_stack(monkeypatch)
+    encode = load_clap_audio_encoder(device="cpu")
+
+    embeddings = encode(np.zeros((1, 8), dtype=np.float32), _SAMPLE_RATE)
+
+    assert embeddings.shape == (1, CLAP_EMBEDDING_DIM)
+    assert resample_calls == [(_SAMPLE_RATE, CLAP_SAMPLE_RATE)]

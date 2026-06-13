@@ -6,7 +6,8 @@ extra ``clap`` fixed-shape-tensor column, reading each batch's ``audio`` rows,
 downmixing them to mono, and running an *injected* ``encode`` callable — so it
 is exercised without loading a CLAP checkpoint. :func:`load_clap_audio_encoder`
 is the thin shell that builds the real encoder behind a lazy ``transformers``
-import; its only test is a manual run (see the PR's "Verification" checklist).
+import; its wiring is unit-tested against fake ``transformers``/``torchaudio``
+stand-ins, and a real checkpoint is exercised by the PR's "Verification" checklist.
 """
 
 from __future__ import annotations
