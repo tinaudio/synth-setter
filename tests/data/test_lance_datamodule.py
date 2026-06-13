@@ -856,8 +856,11 @@ class TestLanceVSTDataModuleStreaming:
     ) -> None:
         """Streaming hands each split the R2 storage_options plus the local stats path.
 
-        :param monkeypatch: Sets the R2 secrets ``r2_storage_options`` reads.
+        :param monkeypatch: Sets the R2 secrets and stubs the auth ping.
         """
+        monkeypatch.setattr(
+            "synth_setter.pipeline.r2_io.ensure_r2_env_loaded", lambda *a, **k: None
+        )
         monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", "ak")
         monkeypatch.setenv("RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", "sk")
         monkeypatch.setenv("RCLONE_CONFIG_R2_ENDPOINT", "https://acct.r2.cloudflarestorage.com")
@@ -882,8 +885,11 @@ class TestLanceVSTDataModuleStreaming:
     ) -> None:
         """With stats off, no ``stats_file`` is injected — matching the hydration that skips it.
 
-        :param monkeypatch: Sets the R2 secrets ``r2_storage_options`` reads.
+        :param monkeypatch: Sets the R2 secrets and stubs the auth ping.
         """
+        monkeypatch.setattr(
+            "synth_setter.pipeline.r2_io.ensure_r2_env_loaded", lambda *a, **k: None
+        )
         monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", "ak")
         monkeypatch.setenv("RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", "sk")
         monkeypatch.setenv("RCLONE_CONFIG_R2_ENDPOINT", "https://acct.r2.cloudflarestorage.com")

@@ -258,6 +258,10 @@ class LanceVSTDataModule(VSTDataModule):
         """
         if not self.stream_from_r2:
             return {}
+        # setup() runs on every DDP rank but prepare_data() (the first env load)
+        # only on rank 0; re-assert credentials so a non-rank-0 worker fails with
+        # a clear error here rather than deep in a reader.
+        r2_io.ensure_r2_env_loaded()
         extra: dict[str, object] = {"storage_options": r2_io.r2_storage_options()}
         if self.use_saved_mean_and_variance:
             extra["stats_file"] = self.dataset_root / STATS_NPZ_FILENAME

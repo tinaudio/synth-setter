@@ -3,6 +3,5 @@ defaults:
   - _self_
 
 _target_: synth_setter.data.lance_datamodule.LanceVSTDataModule
-# Stream splits natively over R2's S3 API instead of downloading them; requires
-# download_dataset_root_uri. Only stats.npz is fetched locally.
+# Stream splits over R2's S3 API instead of downloading; needs download_dataset_root_uri.
 stream_from_r2: false
