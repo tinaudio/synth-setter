@@ -306,6 +306,37 @@ def cfg_train(cfg_train_global: DictConfig, tmp_path: Path) -> DictConfig:
 
 
 @pytest.fixture(scope="function")
+def cfg_train_flow(tmp_path: Path) -> Iterator[DictConfig]:
+    """Compose a CPU ``model=flow`` training config for end-to-end smoke tests.
+
+    Selects ``model=flow`` so a ``fast_dev_run`` step drives the flow-matching
+    ``training_step`` (loss-plus-penalty) through the real ``train`` entrypoint.
+
+    :param tmp_path: Per-test output/log directory.
+    :yields: A ready-to-run flow-matching training config.
+    :ytype: DictConfig
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            return_hydra_config=True,
+            overrides=["datamodule=ksin", "model=flow", "trainer=cpu"],
+        )
+        with open_dict(cfg):
+            _apply_common_train_eval_overrides(cfg)
+            cfg.datamodule.num_workers = 0
+            callbacks = cfg.get("callbacks")
+            if callbacks is not None and "lr_monitor" in callbacks:
+                del callbacks.lr_monitor
+            cfg.paths.output_dir = str(tmp_path)
+            cfg.paths.log_dir = str(tmp_path)
+
+    yield cfg
+
+    GlobalHydra.instance().clear()
+
+
+@pytest.fixture(scope="function")
 def cfg_eval(cfg_eval_global: DictConfig, tmp_path: Path) -> DictConfig:
     """Build on top of ``cfg_eval_global()`` and redirect logging into ``tmp_path``.
 
