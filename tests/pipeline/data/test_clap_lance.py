@@ -366,15 +366,13 @@ def _install_fake_clap_stack(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int,
     def fake_processor(*, audio: list[Any], sampling_rate: int, return_tensors: str) -> dict:  # noqa: ARG001
         return {"input_features": torch.zeros((len(audio), 3), dtype=torch.float32)}
 
+    # Patch ``from_pretrained`` on the real classes rather than swapping the classes
+    # on the lazy ``transformers`` module: ``from transformers import ClapModel`` inside
+    # the loader resolves the real class object, so only a method patch on that object
+    # is seen — a module-attribute swap is bypassed and the real checkpoint downloads.
+    monkeypatch.setattr(transformers.ClapModel, "from_pretrained", lambda checkpoint: fake_model)
     monkeypatch.setattr(
-        transformers,
-        "ClapModel",
-        SimpleNamespace(from_pretrained=lambda checkpoint: fake_model),  # noqa: ARG005
-    )
-    monkeypatch.setattr(
-        transformers,
-        "ClapProcessor",
-        SimpleNamespace(from_pretrained=lambda checkpoint: fake_processor),  # noqa: ARG005
+        transformers.ClapProcessor, "from_pretrained", lambda checkpoint: fake_processor
     )
     monkeypatch.setattr(audio_fn, "resample", fake_resample)
     return resample_calls
