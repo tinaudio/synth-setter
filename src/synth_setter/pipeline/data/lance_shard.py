@@ -17,8 +17,8 @@ SHARD_METADATA_SCHEMA_KEY = b"synth_setter.shard_metadata"
 
 # Finalize-only audio preview: variable-length ``binary`` (encoded sizes differ
 # per row, so not a fixed-shape tensor); the mime tag lets viewers detect MP3.
-MP3_PREVIEW_FIELD = "audio_mp3"
-_MP3_PREVIEW_FIELD_METADATA = {b"mime_type": b"audio/mpeg"}
+MP3_PREVIEW_FIELD: str = "audio_mp3"
+_MP3_PREVIEW_FIELD_METADATA: dict[bytes, bytes] = {b"mime_type": b"audio/mpeg"}
 
 
 def lance_schema(
@@ -160,7 +160,6 @@ def schema_with_mp3_preview(schema: pa.Schema) -> pa.Schema:
     :param schema: Shard schema carrying the tensor columns and shard metadata.
     :returns: ``schema`` with the MP3 preview field appended last; the embedded
         :class:`ShardMetadata` is preserved.
-    :rtype: pa.Schema
     """
     preview_field = pa.field(
         MP3_PREVIEW_FIELD,
@@ -171,26 +170,43 @@ def schema_with_mp3_preview(schema: pa.Schema) -> pa.Schema:
     return schema.append(preview_field)
 
 
+def _encode_audio_rows_to_mp3(audio_rows: np.ndarray, sample_rate: int) -> pa.Array:
+    """Encode each ``(channels, samples)`` row to MP3, surfacing the failing row index.
+
+    :param audio_rows: Decoded audio batch, shape ``(rows, channels, samples)``.
+    :param sample_rate: Source sample rate in Hz, forwarded to the encoder.
+    :returns: A binary Arrow array, one MP3 payload per row.
+    :raises RuntimeError: Encoding a row failed; a partial column would otherwise
+        truncate the shard with no diagnosable cause.
+    """
+    from synth_setter.pipeline.data.audio_preview import encode_mp3_preview
+
+    payloads: list[bytes] = []
+    for index, row in enumerate(audio_rows):
+        try:
+            payloads.append(encode_mp3_preview(row, sample_rate))
+        except Exception as exc:  # noqa: BLE001 — re-raised with the row index for triage
+            raise RuntimeError(f"failed to encode mp3 preview for audio row {index}") from exc
+    return pa.array(payloads, type=pa.binary())
+
+
 def append_mp3_preview_column(batch: pa.RecordBatch, sample_rate: int) -> pa.RecordBatch:
     """Return ``batch`` with an MP3 preview encoded from its ``audio`` column.
 
     :param batch: Shard record batch holding the ``audio`` tensor column.
     :param sample_rate: Source audio sample rate in Hz, forwarded to the encoder.
-    :returns: A batch with one extra :data:`MP3_PREVIEW_FIELD` row per audio row;
-        every other column is carried through unchanged.
-    :rtype: pa.RecordBatch
+    :returns: A batch with one extra :data:`MP3_PREVIEW_FIELD` column whose rows
+        align with ``audio``; every other column is carried through unchanged.
+    :raises KeyError: ``batch`` has no ``audio`` column to encode.
     """
-    from synth_setter.pipeline.data.audio_preview import encode_mp3_preview
-
     audio_index = batch.schema.get_field_index(AUDIO_FIELD)
+    if audio_index < 0:
+        raise KeyError(f"batch has no {AUDIO_FIELD!r} column to build an mp3 preview from")
     audio_rows = tensor_chunk_to_numpy(
         batch.column(audio_index),
         tuple(batch.schema.field(audio_index).type.shape),
     )
-    previews = pa.array(
-        [encode_mp3_preview(row, sample_rate) for row in audio_rows],
-        type=pa.binary(),
-    )
+    previews = _encode_audio_rows_to_mp3(audio_rows, sample_rate)
     return pa.RecordBatch.from_arrays(
         [*batch.columns, previews],
         schema=schema_with_mp3_preview(batch.schema),

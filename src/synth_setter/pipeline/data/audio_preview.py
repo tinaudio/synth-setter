@@ -28,13 +28,16 @@ def encode_mp3_preview(audio: np.ndarray, sample_rate: int) -> bytes:
 
     :param audio: A single render's waveform, shape ``(channels, samples)``;
         any float dtype (the on-disk column is ``float16``).
-    :param sample_rate: Source sample rate in Hz. Rates outside
-        :data:`_MP3_SUPPORTED_SAMPLE_RATES` are resampled to
-        :data:`MP3_PREVIEW_SAMPLE_RATE` since MP3 cannot represent them.
+    :param sample_rate: Source sample rate in Hz. Rates MP3 cannot represent
+        (i.e. not 32000/44100/48000) are resampled to
+        :data:`MP3_PREVIEW_SAMPLE_RATE`.
     :returns: The encoded MP3 payload.
-    :rtype: bytes
+    :raises ValueError: ``audio`` is not 2-D ``(channels, samples)``.
     """
     from pedalboard.io import AudioFile
+
+    if audio.ndim != 2:
+        raise ValueError(f"audio must be (channels, samples), got shape {audio.shape}")
 
     waveform = np.ascontiguousarray(audio, dtype=np.float32)
     if sample_rate not in _MP3_SUPPORTED_SAMPLE_RATES:
@@ -45,9 +48,10 @@ def encode_mp3_preview(audio: np.ndarray, sample_rate: int) -> bytes:
         )
         sample_rate = MP3_PREVIEW_SAMPLE_RATE
 
+    num_channels = waveform.shape[0]
     buffer = io.BytesIO()
     with AudioFile(
-        buffer, "w", samplerate=sample_rate, num_channels=waveform.shape[0], format="mp3"
+        buffer, "w", samplerate=sample_rate, num_channels=num_channels, format="mp3"
     ) as out:
         out.write(waveform)
     return buffer.getvalue()

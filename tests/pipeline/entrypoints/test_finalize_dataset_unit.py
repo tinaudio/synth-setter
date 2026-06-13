@@ -31,8 +31,10 @@ from lance.file import LanceFileReader
 from pedalboard.io import AudioFile
 
 from synth_setter.cli import finalize_dataset
+from synth_setter.data.vst.shapes import AUDIO_FIELD, DATASET_FIELD_NAMES
 from synth_setter.pipeline import r2_io
-from synth_setter.pipeline.data.lance_shard import MP3_PREVIEW_FIELD
+from synth_setter.pipeline.data.audio_preview import MP3_PREVIEW_SAMPLE_RATE
+from synth_setter.pipeline.data.lance_shard import MP3_PREVIEW_FIELD, iter_lance_column_rows
 from synth_setter.pipeline.data.stats import get_stats_hdf5 as real_get_stats_hdf5
 from synth_setter.pipeline.data.stats import stream_stats_wds as real_stream_stats_wds
 from tests.helpers.finalize_shards import (
@@ -590,12 +592,10 @@ def test_finalize_lance_split_has_decodable_mp3_preview_column(
     tmp_path: Path,
     stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001
 ) -> None:
-    """The finalized train split carries one decodable MP3 preview per row.
+    """The finalized train split carries a decodable MP3 preview beside intact audio.
 
-    Drives the real ``finalize_from_spec`` Lance branch end-to-end against the
-    fake remote: the smoke spec's 100 Hz rate forces the encoder's resample
-    path, and every preview row is decoded back through ``AudioFile`` so a
-    corrupt blob fails rather than passing silently.
+    Drives the real ``finalize_from_spec`` Lance branch end-to-end; the smoke
+    spec's 100 Hz rate also forces the encoder's resample path.
 
     :param fake_r2_remote: Local-typed rclone remote where shards/outputs land.
     :param tmp_path: Pytest tmp dir hosting finalize scratch files.
@@ -610,11 +610,16 @@ def test_finalize_lance_split_has_decodable_mp3_preview_column(
 
     train_lance = uri_to_local_path(fake_r2_remote, spec.r2.split_lance_uri("train"))
     table = LanceFileReader(str(train_lance)).read_all().to_table()
-    assert MP3_PREVIEW_FIELD in table.schema.names
+    assert table.schema.names == [*DATASET_FIELD_NAMES, MP3_PREVIEW_FIELD]
     assert table.num_rows == 4
+    # The lossless audio tensor column must survive finalize untouched.
+    audio_rows = list(iter_lance_column_rows(train_lance, AUDIO_FIELD))
+    assert len(audio_rows) == 4
+    assert all(row.shape == (spec.render.channels, 100) and not row.any() for row in audio_rows)
     for payload in table.column(MP3_PREVIEW_FIELD).to_pylist():
         with AudioFile(io.BytesIO(payload)) as decoded:
             assert decoded.num_channels == spec.render.channels
+            assert int(decoded.samplerate) == MP3_PREVIEW_SAMPLE_RATE
 
 
 def test_finalize_wds_raises_on_empty_train_split(fake_r2_remote: Path, tmp_path: Path) -> None:

@@ -10,7 +10,9 @@ from __future__ import annotations
 import io
 
 import numpy as np
+import pytest
 from pedalboard.io import AudioFile
+
 from synth_setter.pipeline.data.audio_preview import (
     MP3_PREVIEW_SAMPLE_RATE,
     encode_mp3_preview,
@@ -27,23 +29,38 @@ def _decode(mp3_bytes: bytes) -> tuple[int, int]:
         return int(f.samplerate), int(f.num_channels)
 
 
-def test_encode_mp3_preview_supported_rate_keeps_that_rate() -> None:
-    """A standard MP3 rate is encoded as-is, not resampled away."""
-    audio = (np.random.default_rng(0).random((2, 44100)) * 2 - 1).astype(np.float32)
+@pytest.mark.parametrize("rate", [32000, 44100, 48000])
+def test_encode_mp3_preview_supported_rate_keeps_that_rate(rate: int) -> None:
+    """Each MP3-native rate is encoded as-is, not resampled away.
 
-    samplerate, channels = _decode(encode_mp3_preview(audio, 44100))
+    :param rate: A sample rate the MP3 encoder accepts directly.
+    """
+    audio = (np.random.default_rng(0).random((2, rate)) * 2 - 1).astype(np.float32)
 
-    assert samplerate == 44100
+    samplerate, channels = _decode(encode_mp3_preview(audio, rate))
+
+    assert samplerate == rate
     assert channels == 2
 
 
 def test_encode_mp3_preview_unsupported_rate_resamples_to_preview_rate() -> None:
     """A rate MP3 cannot represent is resampled to the standard preview rate."""
-    audio = np.zeros((2, 100), dtype=np.float16)
+    audio = (np.random.default_rng(3).random((2, 100)) * 2 - 1).astype(np.float16)
 
-    samplerate, _ = _decode(encode_mp3_preview(audio, 100))
+    payload = encode_mp3_preview(audio, 100)
+    samplerate, channels = _decode(payload)
 
     assert samplerate == MP3_PREVIEW_SAMPLE_RATE
+    assert channels == 2
+    # A degenerate near-empty encode would still carry a valid header; require
+    # real frame bytes so a dropped-signal regression fails here.
+    assert len(payload) > 100
+
+
+def test_encode_mp3_preview_non_2d_input_raises_value_error() -> None:
+    """A 1-D waveform (missing the channel axis) is rejected before encoding."""
+    with pytest.raises(ValueError, match="channels, samples"):
+        encode_mp3_preview(np.zeros(44100, dtype=np.float16), 44100)
 
 
 def test_encode_mp3_preview_mono_input_stays_mono() -> None:

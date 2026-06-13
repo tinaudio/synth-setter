@@ -296,11 +296,6 @@ class TestLanceShardFile:
     ) -> None:
         """A finalized split's ``audio_mp3`` binary column is tolerated, not a fatal init error.
 
-        The finalize stage appends a variable-length ``audio_mp3`` column. The
-        loader projects tensor columns by name, so the preview must neither
-        crash construction (which eagerly reads per-column tensor shapes) nor
-        become readable as a tensor.
-
         :param tmp_path: Pytest fixture providing a fresh test directory.
         """
         src = tmp_path / "shard.lance"

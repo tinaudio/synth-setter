@@ -30,6 +30,7 @@ from synth_setter.pipeline.data.lance_shard import (
     read_shard_metadata,
     record_batch_from_arrays,
     schema_with_mp3_preview,
+    tensor_chunk_to_numpy,
     write_lance_file,
 )
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
@@ -124,8 +125,7 @@ def test_lance_round_trip_noncontiguous_transposed_input_preserves_values(
     np.testing.assert_array_equal(decoded, transposed_mel)
 
 
-# Inner audio shape (channels, samples); 441 samples at 44.1 kHz is a 10 ms
-# preview — long enough to encode without exercising the resample path.
+# 441 samples at 44.1 kHz keeps the encode on the direct (non-resample) path.
 _PREVIEW_FIELD_SHAPES: dict[str, tuple[int, ...]] = {
     AUDIO_FIELD: (2, 2, 441),
     MEL_SPEC_FIELD: (2, 2, 3, 4),
@@ -173,16 +173,26 @@ def test_schema_with_mp3_preview_preserves_shard_metadata() -> None:
 
 
 def test_append_mp3_preview_column_adds_decodable_mp3_per_row() -> None:
-    """Each appended row holds an MP3 that decodes back to the audio's channel count."""
+    """Each appended row decodes back to the audio's channel count and source rate."""
     batch = _zero_preview_batch()
 
     augmented = append_mp3_preview_column(batch, _PREVIEW_METADATA.sample_rate)
 
     assert augmented.num_rows == 2
     mp3_column = augmented.column(augmented.schema.get_field_index(MP3_PREVIEW_FIELD))
-    for row in range(2):
-        with AudioFile(io.BytesIO(mp3_column[row].as_py())) as decoded:
+    for row in (mp3_column[0].as_py(), mp3_column[1].as_py()):
+        with AudioFile(io.BytesIO(row)) as decoded:
             assert decoded.num_channels == 2
+            assert int(decoded.samplerate) == _PREVIEW_METADATA.sample_rate
+
+
+def test_append_mp3_preview_column_raises_when_audio_column_absent() -> None:
+    """A batch without an ``audio`` column fails loudly rather than encoding the wrong one."""
+    schema = pa.schema([pa.field(PARAM_ARRAY_FIELD, pa.binary(), nullable=False)])
+    batch = pa.record_batch([pa.array([b"x"], type=pa.binary())], schema=schema)
+
+    with pytest.raises(KeyError, match=AUDIO_FIELD):
+        append_mp3_preview_column(batch, 44100)
 
 
 def test_append_mp3_preview_column_leaves_audio_column_unchanged() -> None:
@@ -191,6 +201,8 @@ def test_append_mp3_preview_column_leaves_audio_column_unchanged() -> None:
 
     augmented = append_mp3_preview_column(batch, _PREVIEW_METADATA.sample_rate)
 
-    original = batch.column(batch.schema.get_field_index(AUDIO_FIELD))
-    carried = augmented.column(augmented.schema.get_field_index(AUDIO_FIELD))
-    assert carried.to_pylist() == original.to_pylist()
+    audio_index = augmented.schema.get_field_index(AUDIO_FIELD)
+    inner_shape = tuple(batch.schema.field(audio_index).type.shape)
+    original = tensor_chunk_to_numpy(batch.column(audio_index), inner_shape)
+    carried = tensor_chunk_to_numpy(augmented.column(audio_index), inner_shape)
+    np.testing.assert_array_equal(carried, original)
