@@ -34,7 +34,11 @@ from synth_setter.cli import finalize_dataset
 from synth_setter.data.vst.shapes import AUDIO_FIELD, DATASET_FIELD_NAMES
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.audio_preview import MP3_PREVIEW_SAMPLE_RATE
-from synth_setter.pipeline.data.lance_shard import MP3_PREVIEW_FIELD, iter_lance_column_rows
+from synth_setter.pipeline.data.lance_shard import (
+    MP3_PREVIEW_FIELD,
+    iter_lance_column_rows,
+    read_shard_metadata,
+)
 from synth_setter.pipeline.data.stats import get_stats_hdf5 as real_get_stats_hdf5
 from synth_setter.pipeline.data.stats import stream_stats_wds as real_stream_stats_wds
 from tests.helpers.finalize_shards import (
@@ -609,9 +613,12 @@ def test_finalize_lance_split_has_decodable_mp3_preview_column(
     finalize_dataset.finalize_from_spec(spec, work_dir)
 
     train_lance = uri_to_local_path(fake_r2_remote, spec.r2.split_lance_uri("train"))
+    finalized_schema = LanceFileReader(str(train_lance)).metadata().schema
     table = LanceFileReader(str(train_lance)).read_all().to_table()
     assert table.schema.names == [*DATASET_FIELD_NAMES, MP3_PREVIEW_FIELD]
     assert table.num_rows == 4
+    # Appending the preview must not drop the embedded ShardMetadata.
+    assert read_shard_metadata(finalized_schema).sample_rate == spec.render.sample_rate
     # The lossless audio tensor column must survive finalize untouched.
     audio_rows = list(iter_lance_column_rows(train_lance, AUDIO_FIELD))
     assert len(audio_rows) == 4

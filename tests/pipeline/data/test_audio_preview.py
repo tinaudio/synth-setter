@@ -52,8 +52,7 @@ def test_encode_mp3_preview_unsupported_rate_resamples_to_preview_rate() -> None
 
     assert samplerate == MP3_PREVIEW_SAMPLE_RATE
     assert channels == 2
-    # A degenerate near-empty encode would still carry a valid header; require
-    # real frame bytes so a dropped-signal regression fails here.
+    # Require real frame bytes so a dropped-signal encode (valid header, no audio) fails here.
     assert len(payload) > 100
 
 

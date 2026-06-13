@@ -177,7 +177,9 @@ def finalize_hdf5(spec: DatasetSpec, work_dir: Path) -> None:
 def _lance_split_batches(shard_paths: list[Path]) -> LanceSplitBatches:
     """Return the schema and batch iterator for a finalized Lance split.
 
-    Each batch gains an ``audio_mp3`` preview column encoded from ``audio``.
+    Each batch gains an ``audio_mp3`` preview column encoded from ``audio`` at
+    that shard's own ``ShardMetadata.sample_rate`` — splits are not assumed to
+    be sample-rate homogeneous.
 
     :param shard_paths: Non-empty list of local shard files in split order.
     :returns: ``(schema, batches)`` for :func:`write_lance_file`.
@@ -191,13 +193,12 @@ def _lance_split_batches(shard_paths: list[Path]) -> LanceSplitBatches:
         schema_with_mp3_preview,
     )
 
-    shard_schema = LanceFileReader(str(shard_paths[0])).metadata().schema
-    sample_rate = read_shard_metadata(shard_schema).sample_rate
-    schema = schema_with_mp3_preview(shard_schema)
+    schema = schema_with_mp3_preview(LanceFileReader(str(shard_paths[0])).metadata().schema)
 
     def _batches() -> LanceBatchIterator:
         for shard_path in shard_paths:
             reader = LanceFileReader(str(shard_path))
+            sample_rate = read_shard_metadata(reader.metadata().schema).sample_rate
             for batch in reader.read_all().to_batches():
                 yield append_mp3_preview_column(batch, sample_rate)
 
