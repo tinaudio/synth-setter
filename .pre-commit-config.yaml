@@ -244,6 +244,7 @@ repos:
           (?x)^(
             CHANGELOG\.md|
             src/synth_setter/models/ksin_flow_matching_module\.py|
+            src/synth_setter/data/vst/[A-Za-z0-9_]+_param_spec\.py|
             \.claude/.*
           )$
         args:

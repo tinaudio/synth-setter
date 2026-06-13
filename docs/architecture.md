@@ -79,7 +79,7 @@ original parameters.
 ```
 synth-setter/
 ├── src/synth_setter/       # PEP src-layout package (#784)
-│   ├── cli/                #   @hydra.main entrypoints (published as synth-setter-* console scripts)
+│   ├── cli/                #   @hydra.main / click entrypoints (published as synth-setter-* console scripts)
 │   │   ├── train.py        #     Training entrypoint
 │   │   ├── eval.py         #     Evaluation entrypoint
 │   │   └── generate_dataset.py  # Dataset-generation entrypoint

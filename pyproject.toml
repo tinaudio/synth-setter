@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "synth-setter"
-version = "8.33.0"
+version = "8.34.0"
 description = "Studying the effect of permutation symmetry on audio synthesiser parameter inference."
 authors = [{name = "Khaled Tinubu"}, {name = "tinaudio"}]
 readme = "README.md"
@@ -59,6 +59,7 @@ synth-setter-eval = "synth_setter.cli.eval:main"
 synth-setter-generate-dataset = "synth_setter.cli.generate_dataset:main"
 synth-setter-generate-dataset-from-hydra = "synth_setter.cli.generate_dataset:from_hydra"
 synth-setter-finalize-dataset = "synth_setter.cli.finalize_dataset:main"
+synth-setter-introspect-plugin = "synth_setter.cli.introspect_plugin:main"
 synth-setter-spec-uri = "synth_setter.pipeline.ci.spec_uri:main"
 
 
@@ -79,6 +80,7 @@ synth-setter-spec-uri = "synth_setter.pipeline.ci.spec_uri:main"
 # (#1139); pip never installs them and uv pip only with `--group`, so a plain
 # `pip install -e .` keeps lite CI light. `runtime` aggregates every sub-group;
 # `dev` (the default group) includes it.
+
 
 
 

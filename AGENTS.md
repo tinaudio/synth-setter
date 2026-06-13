@@ -105,6 +105,14 @@ edit is a **removal** via the `/lint-cleanup` workflow (one file per PR,
 `chore(lint):` prefix). `[tool.pydoclint].exclude` is infra-only after #1044
 and must not be edited at all.
 
+**Documented exception — generated ParamSpec modules.**
+`src/synth_setter/data/vst/*_param_spec.py` are codespell-excluded in
+`.pre-commit-config.yaml`: they embed verbatim host parameter labels (e.g. a
+synth shipping `TRIANGE`) that are load-bearing onehot keys and cannot be
+spell-corrected. `synth-setter-introspect-plugin` stamps each module with a
+self-documenting note; scoping this to per-line `# codespell:ignore` once the
+hook reaches codespell ≥2.3.0 is tracked in #1674.
+
 A `PreToolUse` hook (`agent/hooks/no-baseline-additions.sh`) blocks new rows
 in `.pydoclint-baseline.txt`. If a check fails on a file your PR touches,
 the remediation is to fix the underlying lint — never register the file as
