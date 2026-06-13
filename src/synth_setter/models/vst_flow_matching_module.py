@@ -305,7 +305,6 @@ class VSTFlowMatchingModule(LightningModule):
                 "optimizer": optimizer,
                 "lr_scheduler": {
                     "scheduler": scheduler,
-                    # "monitor": "val/chamfer",
                     "interval": "step",
                     "frequency": 1,
                 },

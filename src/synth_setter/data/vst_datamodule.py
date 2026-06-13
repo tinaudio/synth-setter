@@ -532,12 +532,7 @@ class VSTDataModule(LightningDataModule):
             batch_size=None,
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
-            # sampler=WithinChunkShuffledSampler(
-            #     self.batch_size, len(self.train_dataset), 4
-            # ),
             sampler=ShiftedBatchSampler(self.batch_size, len(self.train_dataset)),
-            # sampler=ShuffledSampler(self.batch_size, len(self.train_dataset)),
-            # shuffle=True,
         )
 
     def val_dataloader(self) -> DataLoader:
