@@ -597,6 +597,8 @@ def _stub_clap_encoder(monkeypatch: pytest.MonkeyPatch, fill_value: float) -> No
     def fake_encode(mono: np.ndarray, sample_rate: int) -> np.ndarray:  # noqa: ARG001
         return np.full((mono.shape[0], CLAP_EMBEDDING_DIM), fill_value, dtype=np.float32)
 
+    # Patch the source-module attribute, not a finalize_dataset alias: finalize_lance
+    # imports load_clap_audio_encoder lazily from clap_lance at call time.
     monkeypatch.setattr(
         "synth_setter.pipeline.data.clap_lance.load_clap_audio_encoder",
         lambda *args, **kwargs: fake_encode,

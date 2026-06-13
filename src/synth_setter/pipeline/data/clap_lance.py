@@ -12,13 +12,16 @@ import; its only test is a manual run (see the project test plan).
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator
-from typing import Any
+from typing import Any, TypeAlias
 
 import numpy as np
 import pyarrow as pa
+import structlog
 
 from synth_setter.data.vst.shapes import AUDIO_FIELD, CLAP_FIELD
 from synth_setter.pipeline.data.lance_shard import tensor_array, tensor_chunk_to_numpy
+
+logger = structlog.get_logger(__name__)
 
 # HuggingFace CLAP checkpoint whose audio tower projects to ``CLAP_EMBEDDING_DIM``.
 DEFAULT_CLAP_CHECKPOINT = "laion/clap-htsat-unfused"
@@ -27,7 +30,7 @@ DEFAULT_CLAP_CHECKPOINT = "laion/clap-htsat-unfused"
 CLAP_SAMPLE_RATE = 48000
 
 # Maps a mono ``(B, T)`` batch and its sample rate to a ``(B, D)`` embedding batch.
-EncodeFn = Callable[[np.ndarray, int], np.ndarray]
+EncodeFn: TypeAlias = Callable[[np.ndarray, int], np.ndarray]
 
 
 def clap_augmented_schema(schema: pa.Schema, dim: int) -> pa.Schema:
@@ -45,7 +48,10 @@ def clap_augmented_schema(schema: pa.Schema, dim: int) -> pa.Schema:
 def _downmix_to_mono(audio: np.ndarray) -> np.ndarray:
     """Average the channel axis of an ``(B, C, T)`` batch into ``(B, T)`` mono float32.
 
-    :param audio: Audio batch shaped ``(B, C, T)``.
+    ``dtype=np.float32`` upcasts the stored float16 audio in the reduction, so the
+    encoder never sees half-precision.
+
+    :param audio: Audio batch shaped ``(B, C, T)`` (on-disk float16).
     :returns: Mono batch shaped ``(B, T)`` as float32.
     :rtype: np.ndarray
     """
@@ -73,7 +79,7 @@ def iter_clap_batches(
     :param dim: Expected embedding width; ``encode`` output is asserted to match.
     :yields: Each batch with the trailing ``clap`` column.
     :ytype: pa.RecordBatch
-    :raises ValueError: ``encode`` returns a width other than ``dim``.
+    :raises ValueError: ``encode`` returns anything other than a ``(B, dim)`` batch.
     """
     out_schema = clap_augmented_schema(schema, dim)
     audio_inner = tuple(schema.field(AUDIO_FIELD).type.shape)
@@ -81,8 +87,10 @@ def iter_clap_batches(
     for batch in batches:
         audio = tensor_chunk_to_numpy(batch.column(audio_index), audio_inner)
         embeddings = np.asarray(encode(_downmix_to_mono(audio), sample_rate))
-        if embeddings.shape[1] != dim:
-            raise ValueError(f"CLAP encoder produced width {embeddings.shape[1]}, expected {dim}")
+        if embeddings.ndim != 2 or embeddings.shape[1] != dim:
+            raise ValueError(
+                f"CLAP encoder produced shape {embeddings.shape}, expected (B, {dim})"
+            )
         clap_column = tensor_array(embeddings, np.dtype("float32"), (dim,))
         yield pa.record_batch([*batch.columns, clap_column], schema=out_schema)
 
@@ -109,6 +117,7 @@ def load_clap_audio_encoder(
 
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
+    logger.info("loading_clap_checkpoint", checkpoint=checkpoint, device=device)
     # transformers' processor/model call surface is dynamically typed; Any at this
     # external boundary keeps the type checker honest about what it cannot verify.
     model: Any = ClapModel.from_pretrained(checkpoint)

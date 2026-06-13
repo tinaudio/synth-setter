@@ -1190,17 +1190,23 @@ class TestCopyDatasetRootUri:
         assert spec.compute_clap_embeddings is False
 
     def test_compute_clap_embeddings_with_lance_constructs(self) -> None:
-        """``compute_clap_embeddings=True`` is accepted on a lance spec."""
+        """Lance is the one output the CLAP flag is allowed on, so the spec builds."""
         spec = DatasetSpec(
             **_valid_spec_kwargs(output_format="lance", compute_clap_embeddings=True)
         )
 
         assert spec.compute_clap_embeddings is True
 
-    def test_compute_clap_embeddings_with_hdf5_is_rejected(self) -> None:
-        """CLAP embeddings are a Lance-only finalize step; pairing with hdf5 fails at build."""
+    @pytest.mark.parametrize("output_format", ["hdf5", "wds"])
+    def test_compute_clap_embeddings_with_non_lance_is_rejected(self, output_format: str) -> None:
+        """CLAP embeddings are a Lance-only finalize step; any non-lance output fails at build.
+
+        :param output_format: A non-lance output the flag must be rejected against.
+        """
         with pytest.raises(ValidationError, match="output_format='lance' only"):
-            DatasetSpec(**_valid_spec_kwargs(output_format="hdf5", compute_clap_embeddings=True))
+            DatasetSpec(
+                **_valid_spec_kwargs(output_format=output_format, compute_clap_embeddings=True)
+            )
 
     def test_compute_clap_embeddings_survives_json_round_trip(self) -> None:
         """A worker reconstructing the spec from JSON sees the same CLAP flag."""

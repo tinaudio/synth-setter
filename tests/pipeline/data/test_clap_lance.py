@@ -49,22 +49,25 @@ def _write_shard(path: Path, audio: np.ndarray, mel: np.ndarray, params: np.ndar
 
 
 def _read_schema_and_batches(path: Path) -> tuple[pa.Schema, list[pa.RecordBatch]]:
-    """Read a Lance file's schema and all record batches, as finalize does.
+    """Open a Lance shard the way finalize does, returning its schema and batches.
 
     :param path: Lance shard file to read.
-    :returns: The file's schema and its record batches.
+    :returns: The shard's Arrow schema paired with every record batch in it.
     :rtype: tuple[pa.Schema, list[pa.RecordBatch]]
     """
     reader = LanceFileReader(str(path))
-    return reader.metadata().schema, reader.read_all().to_batches()
+    return reader.metadata().schema, list(reader.read_all().to_batches())
 
 
 def _constant_audio(num_rows: int, channels: int, time: int) -> np.ndarray:
-    """Build an audio batch whose channel ``c`` is filled with ``c + 1``.
+    """Build float16 audio whose channel ``c`` is filled with ``c + 1`` (distinct per channel).
 
-    :param num_rows: Row count ``N``.
-    :param channels: Channel count ``C``.
-    :param time: Sample count ``T``.
+    The per-channel constant makes the mono downmix a known value, so downmix
+    tests can assert the exact averaged input.
+
+    :param num_rows: Leading row axis ``N``.
+    :param channels: Channel axis ``C`` whose distinct fills drive the downmix.
+    :param time: Sample axis ``T``.
     :returns: ``(N, C, T)`` float16 audio.
     :rtype: np.ndarray
     """
@@ -146,7 +149,39 @@ def test_iter_clap_batches_writes_encoder_output_as_clap_column(tmp_path: Path) 
     expected_row = (1.5 + np.arange(_TEST_DIM)).astype(np.float32)
     assert len(clap_rows) == 3
     for row in clap_rows:
+        assert row.shape == (_TEST_DIM,)
+        assert row.dtype == np.float32
         np.testing.assert_array_equal(row, expected_row)
+
+
+def test_iter_clap_batches_appends_clap_to_every_input_batch(tmp_path: Path) -> None:
+    """Multi-batch input: each incoming batch is yielded with its own ``clap`` column.
+
+    Exercises the ``for batch in batches`` boundary that the single-batch
+    Lance-reader fixtures do not reach.
+
+    :param tmp_path: Pytest tmp dir hosting the output shard.
+    """
+    _write_shard(
+        tmp_path / "seed.lance",
+        audio=_constant_audio(1, 2, 4),
+        mel=np.zeros((1, 2, 3), dtype=np.float32),
+        params=np.zeros((1, 5), dtype=np.float32),
+    )
+    schema, one_batch = _read_schema_and_batches(tmp_path / "seed.lance")
+    two_batches = [one_batch[0], one_batch[0]]
+
+    out_schema = clap_augmented_schema(schema, _TEST_DIM)
+    out_batches = list(
+        iter_clap_batches(
+            schema, two_batches, _row_indexed_encoder(_TEST_DIM), _SAMPLE_RATE, dim=_TEST_DIM
+        )
+    )
+
+    assert len(out_batches) == 2
+    for batch in out_batches:
+        assert batch.num_rows == 1
+        assert batch.schema.names == out_schema.names
 
 
 def test_iter_clap_batches_downmixes_channels_to_mono_before_encoding(tmp_path: Path) -> None:
@@ -213,7 +248,7 @@ def test_iter_clap_batches_raises_when_encoder_width_differs_from_dim(tmp_path: 
     def wrong_width_encode(mono: np.ndarray, sample_rate: int) -> np.ndarray:  # noqa: ARG001
         return np.zeros((mono.shape[0], _TEST_DIM + 1), dtype=np.float32)
 
-    with pytest.raises(ValueError, match="width"):
+    with pytest.raises(ValueError, match=r"expected \(B, 4\)"):
         list(iter_clap_batches(schema, batches, wrong_width_encode, _SAMPLE_RATE, dim=_TEST_DIM))
 
 
