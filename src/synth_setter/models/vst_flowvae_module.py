@@ -1,4 +1,4 @@
-"""Lightning module for the Surge XT Flow-VAE preset prediction model."""
+"""Lightning module for the VST Flow-VAE preset prediction model."""
 
 from typing import Any
 

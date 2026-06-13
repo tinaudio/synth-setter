@@ -1,4 +1,4 @@
-"""Lightning module for feed-forward Surge XT parameter prediction."""
+"""Lightning module for feed-forward VST parameter prediction."""
 
 from typing import Any
 
@@ -8,7 +8,7 @@ from lightning.pytorch.utilities import grad_norm
 
 
 class VSTFeedForwardModule(LightningModule):
-    """Feed-forward LightningModule that regresses Surge XT parameters from audio features."""
+    """Feed-forward LightningModule that regresses VST parameters from audio features."""
 
     def __init__(
         self,

@@ -1,4 +1,4 @@
-"""Lightning module for flow-matching Surge XT parameter prediction."""
+"""Lightning module for flow-matching VST parameter prediction."""
 
 from collections.abc import Callable
 from functools import partial
@@ -40,7 +40,7 @@ def rk4_with_cfg(
 
 
 class VSTFlowMatchingModule(LightningModule):
-    """Flow-matching LightningModule for Surge XT parameter prediction (CFG + RK4 sampling)."""
+    """Flow-matching LightningModule for VST parameter prediction (CFG + RK4 sampling)."""
 
     def __init__(
         self,
