@@ -199,7 +199,10 @@ def is_cloud_uri(path: str) -> bool:
     :param path: Candidate filesystem path or URI.
     :returns: ``True`` for an ``s3://`` or ``r2://`` URI; ``False`` otherwise.
     """
-    return path.startswith(("s3://", R2_URI_SCHEME))
+    # Also match the single-slash forms: ``Path("s3://b/k")`` collapses the
+    # double slash to ``s3:/b/k``, so a Path-wrapped cloud URI still classifies
+    # as remote instead of being misrouted to the local-disk branch.
+    return path.startswith(("s3://", "s3:/", "r2://", "r2:/"))
 
 
 def to_rclone_path(r2_uri: str) -> str:

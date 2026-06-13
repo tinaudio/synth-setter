@@ -113,10 +113,17 @@ class TestIsCloudUri:
     """Tests for is_cloud_uri — the local-path vs object-store branch predicate."""
 
     @pytest.mark.parametrize(
-        "uri", ["s3://intermediate-data/data/run/train.lance", "r2://bucket/key.lance"]
+        "uri",
+        [
+            "s3://intermediate-data/data/run/train.lance",
+            "r2://bucket/key.lance",
+            # Path-collapsed forms: ``str(Path("s3://b/k"))`` drops a slash.
+            "s3:/intermediate-data/data/run/train.lance",
+            "r2:/bucket/key.lance",
+        ],
     )
     def test_cloud_uri_returns_true(self, uri: str) -> None:
-        """An ``s3://`` / ``r2://`` URI routes through the object-store backend.
+        """An ``s3://`` / ``r2://`` URI (or its Path-collapsed form) routes through object-store.
 
         :param uri: Parametrized cloud URI.
         """
