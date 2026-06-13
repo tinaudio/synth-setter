@@ -29,6 +29,10 @@ DEFAULT_CLAP_CHECKPOINT: str = "laion/clap-htsat-unfused"
 # this before encoding.
 CLAP_SAMPLE_RATE: int = 48000
 
+# On-disk dtype of the ``clap`` column. float32 keeps the projected embedding at
+# full precision (unlike the float16 audio it is derived from).
+_CLAP_DTYPE = np.dtype("float32")
+
 # Maps a mono ``(B, T)`` batch and its sample rate to a ``(B, D)`` embedding batch.
 EncodeFn: TypeAlias = Callable[[np.ndarray, int], np.ndarray]
 
@@ -40,7 +44,7 @@ def clap_augmented_schema(schema: pa.Schema, dim: int) -> pa.Schema:
     :param dim: Embedding width; the appended column's per-row tensor shape.
     :returns: ``schema`` with the trailing ``clap`` column, metadata preserved.
     """
-    clap_type = pa.fixed_shape_tensor(pa.from_numpy_dtype(np.dtype("float32")), (dim,))
+    clap_type = pa.fixed_shape_tensor(pa.from_numpy_dtype(_CLAP_DTYPE), (dim,))
     return schema.append(pa.field(CLAP_FIELD, clap_type, nullable=False))
 
 
@@ -87,7 +91,7 @@ def _iter_clap_record_batches(
             raise ValueError(
                 f"CLAP encoder produced shape {embeddings.shape}, expected (B, {dim})"
             )
-        clap_column = tensor_array(embeddings, np.dtype("float32"), (dim,))
+        clap_column = tensor_array(embeddings, _CLAP_DTYPE, (dim,))
         yield pa.record_batch([*batch.columns, clap_column], schema=out_schema)
 
 
@@ -142,11 +146,10 @@ def load_clap_audio_encoder(
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
     logger.info("loading_clap_checkpoint", checkpoint=checkpoint, device=device)
-    # ``Any`` at this external boundary is deliberate: ``from_pretrained`` and the
-    # processor call are dynamically typed, and ``@can_return_tuple`` makes
-    # ``get_audio_features`` return a union that would defeat the ``.pooler_output``
-    # access below under concrete annotations.
-    model: Any = ClapModel.from_pretrained(checkpoint).to(device).eval()
+    # ``Any``: ``@can_return_tuple`` makes ``get_audio_features`` return a union that
+    # would defeat the ``.pooler_output`` access below under concrete annotations.
+    model: Any = ClapModel.from_pretrained(checkpoint)
+    model = model.to(device).eval()
     processor: Any = ClapProcessor.from_pretrained(checkpoint)
 
     @torch.no_grad()
@@ -155,7 +158,7 @@ def load_clap_audio_encoder(
         if sample_rate != CLAP_SAMPLE_RATE:
             wav = audio_fn.resample(wav, sample_rate, CLAP_SAMPLE_RATE)
         inputs = processor(
-            audio=list(wav.cpu().numpy()), sampling_rate=CLAP_SAMPLE_RATE, return_tensors="pt"
+            audio=list(wav.numpy()), sampling_rate=CLAP_SAMPLE_RATE, return_tensors="pt"
         )
         inputs = {key: value.to(device) for key, value in inputs.items()}
         # get_audio_features returns a pooled output whose pooler_output holds the
