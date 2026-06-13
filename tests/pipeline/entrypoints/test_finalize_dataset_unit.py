@@ -30,6 +30,7 @@ import pytest
 from synth_setter.cli import finalize_dataset
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.stats import get_stats_hdf5 as real_get_stats_hdf5
+from synth_setter.pipeline.data.stats import stream_stats_lance as real_stream_stats_lance
 from synth_setter.pipeline.data.stats import stream_stats_wds as real_stream_stats_wds
 from tests.helpers.finalize_shards import (
     build_hdf5_smoke_spec,
@@ -581,6 +582,10 @@ def test_finalize_lance_streams_splits_to_r2_without_downloading_shards(
         write_minimal_lance_shard(
             uri_to_local_path(fake_r2_remote, spec.r2.shard_uri(shard)), spec
         )
+    # Pin the seed so the "no download" invariant below can't pass vacuously by
+    # finalize erroring out before it would ever read a shard.
+    for shard in spec.shards:
+        assert uri_to_local_path(fake_r2_remote, spec.r2.shard_uri(shard)).is_file()
     _redirect_lance_streaming_to_remote(monkeypatch, fake_r2_remote)
     monkeypatch.setattr(
         "synth_setter.pipeline.r2_io.download_to_path",
@@ -645,13 +650,27 @@ def test_finalize_lance_forwards_mask_degenerate_bins_to_stream_stats(
         captured["mask_degenerate"] = mask_degenerate
         return np.zeros((2, 2), dtype=np.float32), np.ones((2, 2), dtype=np.float32)
 
-    monkeypatch.setattr("synth_setter.pipeline.data.stats.stream_stats_lance", fake_stream_stats)
+    monkeypatch.setattr("synth_setter.cli.finalize_dataset.stream_stats_lance", fake_stream_stats)
 
     work_dir = tmp_path / "work"
     work_dir.mkdir()
     finalize_dataset.finalize_lance(spec, work_dir)
 
     assert captured == {"mask_degenerate": flag}
+
+
+def test_finalize_lance_raises_on_empty_train_split(tmp_path: Path) -> None:
+    """An empty train split surfaces a clear ValueError before any streaming I/O.
+
+    Mirrors the wds/hdf5 empty-train guards so the lance branch fails the same way rather than with
+    a low-signal error deep in the stats fold.
+
+    :param tmp_path: Pytest tmp dir used as finalize's local work_dir.
+    """
+    spec = build_lance_smoke_spec(task_name="empty-train-lance", train_val_test_sizes=(0, 4, 0))
+
+    with pytest.raises(ValueError, match="train split is empty"):
+        finalize_dataset.finalize_lance(spec, tmp_path)
 
 
 def test_finalize_wds_raises_on_empty_train_split(fake_r2_remote: Path, tmp_path: Path) -> None:
@@ -787,14 +806,13 @@ def test_finalize_wds_unlinks_each_shard_after_folding(
 def test_stubbed_stats_signatures_match_production() -> None:
     """Stub stats signatures in the finalize test lanes match the real stats functions.
 
-    Several tests stub ``finalize_dataset.get_stats_hdf5`` and
-    ``finalize_dataset.stream_stats_wds`` with hand-written signatures
-    (``(train_h5_path, mask_degenerate=False)`` and
-    ``(shard_paths, mask_degenerate=False)``). If production renamed a kwarg or
-    changed a default, those stubs would keep passing while masking a real
-    break. Compare the production parameter names and defaults via
-    ``inspect.signature`` — a state-based contract check, since there is no
-    runtime behavior to observe here.
+    Several tests stub ``finalize_dataset.get_stats_hdf5``,
+    ``finalize_dataset.stream_stats_wds``, and
+    ``finalize_dataset.stream_stats_lance`` with hand-written signatures. If
+    production renamed a kwarg or changed a default, those stubs would keep
+    passing while masking a real break. Compare the production parameter names
+    and defaults via ``inspect.signature`` — a state-based contract check, since
+    there is no runtime behavior to observe here.
     """
     real_get_stats = inspect.signature(real_get_stats_hdf5)
     assert list(real_get_stats.parameters) == ["filename", "mask_degenerate"]
@@ -803,3 +821,12 @@ def test_stubbed_stats_signatures_match_production() -> None:
     real_stream = inspect.signature(real_stream_stats_wds)
     assert list(real_stream.parameters) == ["shard_paths", "mask_degenerate"]
     assert real_stream.parameters["mask_degenerate"].default is False
+
+    real_stream_lance = inspect.signature(real_stream_stats_lance)
+    assert list(real_stream_lance.parameters) == [
+        "shard_paths",
+        "mask_degenerate",
+        "storage_options",
+    ]
+    assert real_stream_lance.parameters["mask_degenerate"].default is False
+    assert real_stream_lance.parameters["storage_options"].default is None

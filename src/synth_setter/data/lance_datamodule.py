@@ -81,10 +81,7 @@ class LanceColumn:
 
 
 def _is_remote_uri(path: str) -> bool:
-    """Return whether ``path`` is a cloud URI lance reads via ``object_store``.
-
-    Any ``<scheme>://`` form (``s3://`` for R2) routes through lance's native
-    backend; everything else is a local filesystem path the fs guards apply to.
+    """Return whether ``path`` is a ``scheme://`` cloud URI (vs a local path).
 
     :param path: Candidate shard path or URI.
     :returns: ``True`` for a ``scheme://`` URI, ``False`` for a local path.
@@ -267,11 +264,15 @@ class LanceVSTDataModule(VSTDataModule):
     def _dataset_extra_kwargs(self) -> dict[str, object]:
         """Supply ``storage_options`` + the local ``stats.npz`` path when streaming.
 
+        ``stats_file`` is injected only when stats are used, matching
+        :meth:`_hydrate_dataset_root` which fetches ``stats.npz`` under the same
+        condition — so the path is never pointed at a file that was not fetched.
+
         :returns: Streaming extras for each split, or ``{}`` for the local path.
         """
         if not self.stream_from_r2:
             return {}
-        return {
-            "storage_options": r2_io.r2_storage_options(),
-            "stats_file": self.dataset_root / STATS_NPZ_FILENAME,
-        }
+        extra: dict[str, object] = {"storage_options": r2_io.r2_storage_options()}
+        if self.use_saved_mean_and_variance:
+            extra["stats_file"] = self.dataset_root / STATS_NPZ_FILENAME
+        return extra

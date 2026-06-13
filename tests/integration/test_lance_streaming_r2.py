@@ -1,12 +1,8 @@
-"""End-to-end native-R2-streaming tests for the Lance dataset path.
+"""End-to-end native-R2-streaming round-trip for the Lance dataset path.
 
-Auto-skips when R2 is unreachable (rclone missing, no creds, network down)
-via ``r2_io.is_r2_reachable``. Stages tiny Lance shards under a unique R2
-prefix, runs the streaming ``finalize_lance`` (which reads each shard over
-R2's S3 API and writes the split files straight back — nothing lands on local
-disk), then opens the finalized ``train.lance`` through ``LanceVSTDataModule``
-with ``stream_from_r2`` and asserts a real batch decodes. The prefix is purged
-on teardown regardless of pass/fail.
+Stages shards under a unique R2 prefix, runs streaming ``finalize_lance``, then
+streams the splits back via ``LanceVSTDataModule``. Auto-skips when R2 is
+unreachable; the prefix is purged on teardown regardless of outcome.
 """
 
 from __future__ import annotations
@@ -20,6 +16,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import torch
+from lance.file import LanceFileReader
 
 from synth_setter.cli import finalize_dataset
 from synth_setter.data.lance_datamodule import LanceVSTDataModule
@@ -118,10 +116,23 @@ def test_finalize_lance_streams_to_r2_then_datamodule_streams_back(
     with tempfile.TemporaryDirectory() as raw_work_dir:
         finalize_dataset.finalize_lance(spec, Path(raw_work_dir))
 
-    assert r2_io.object_size(spec.r2.split_lance_uri("train")) is not None
-    assert r2_io.object_size(spec.r2.split_lance_uri("val")) is not None
-    assert r2_io.object_size(spec.r2.split_lance_uri("test")) is not None
+    for split in ("train", "val", "test"):
+        assert r2_io.object_size(spec.r2.split_lance_uri(split)) is not None
     assert r2_io.object_size(spec.r2.stats_uri()) is not None
+
+    # The split must be a well-formed Lance file, not merely a non-empty object:
+    # read it back natively and pin its row count + schema.
+    train_reader = LanceFileReader(
+        r2_io.to_s3_uri(spec.r2.split_lance_uri("train")),
+        storage_options=r2_io.r2_storage_options(),
+    )
+    train_meta = train_reader.metadata()
+    assert train_meta.num_rows == spec.train_val_test_sizes[0]
+    assert {field.name for field in train_meta.schema} == {
+        "audio",
+        "mel_spec",
+        "param_array",
+    }
 
     module = LanceVSTDataModule(
         dataset_root=str(tmp_path / "cache"),
@@ -143,3 +154,5 @@ def test_finalize_lance_streams_to_r2_then_datamodule_streams_back(
     assert batch["params"].shape == (2, spec.num_params)
     assert batch["mel_spec"] is not None
     assert batch["mel_spec"].shape[0] == 2
+    # Normalization ran against the streamed stats.npz: no NaN/Inf leaked through.
+    assert torch.isfinite(batch["mel_spec"]).all()

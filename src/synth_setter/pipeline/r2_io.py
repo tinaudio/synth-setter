@@ -242,12 +242,9 @@ def from_s3_uri(s3_uri: str) -> str:
 def r2_storage_options() -> dict[str, str]:
     """Build the ``object_store`` ``storage_options`` lance reads/writes R2 with natively.
 
-    R2 exposes an S3-compatible API, so lance's S3 backend streams a ``.lance``
-    object directly when handed the connection parameters as ``aws_*`` keys.
     Region is fixed to ``"auto"`` (R2 ignores the value but ``object_store``
     requires one). Reads the same three secrets ``ensure_r2_env_loaded``
-    validates, so callers run that first; this is the lance-native counterpart
-    to the rclone path the other helpers take.
+    validates, so callers run that first.
 
     :returns: ``storage_options`` mapping for ``LanceFileReader`` /
         ``LanceFileWriter`` against ``s3://`` URIs (see :func:`to_s3_uri`).

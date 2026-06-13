@@ -33,8 +33,9 @@ from synth_setter.pipeline.constants import (
     INPUT_SPEC_FILENAME,
     STATS_NPZ_FILENAME,
 )
+from synth_setter.pipeline.data.lance_shard import write_lance_file
 from synth_setter.pipeline.data.reshard import reshard_dataset
-from synth_setter.pipeline.data.stats import get_stats_hdf5, stream_stats_wds
+from synth_setter.pipeline.data.stats import get_stats_hdf5, stream_stats_lance, stream_stats_wds
 from synth_setter.pipeline.schemas.prefix import assert_r2_prefix_matches
 from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat
 from synth_setter.pipeline.spec_io import load_spec_from_root, write_spec_to_path
@@ -187,12 +188,14 @@ def _lance_split_batches(
     """
     from lance.file import LanceFileReader
 
-    first_reader = LanceFileReader(shard_uris[0], storage_options=storage_options)
-    schema = first_reader.metadata().schema
+    # LanceFileReader has no close()/context-manager API; each reader (and its
+    # remote connection) is released by GC when the batch generator advances.
+    schema = LanceFileReader(shard_uris[0], storage_options=storage_options).metadata().schema
 
     def _batches() -> LanceBatchIterator:
         for shard_uri in shard_uris:
             reader = LanceFileReader(shard_uri, storage_options=storage_options)
+            # read_all() streams batches of its default size, not the whole shard.
             yield from reader.read_all().to_batches()
 
     return schema, _batches()
@@ -203,16 +206,12 @@ def finalize_lance(spec: DatasetSpec, work_dir: Path) -> None:
 
     Reads every shard natively over R2's S3 API and writes each split straight
     back, so no shard or split file is materialized on local disk — only the
-    tiny ``stats.npz`` passes through ``work_dir``. Caller must have loaded R2
-    creds (``finalize`` does before dispatch).
+    tiny ``stats.npz`` passes through ``work_dir``.
 
     :param spec: Validated dataset spec (``output_format == "lance"``).
     :param work_dir: Scratch directory for the streamed ``stats.npz``.
     :raises ValueError: The train split is empty.
     """
-    from synth_setter.pipeline.data.lance_shard import write_lance_file
-    from synth_setter.pipeline.data.stats import stream_stats_lance
-
     train_lo, train_hi = spec.split_shard_ranges["train"]
     if train_lo >= train_hi:
         raise ValueError(
@@ -287,23 +286,6 @@ def finalize_from_spec(spec: DatasetSpec, work_dir: Path) -> None:
     logger.info("wrote dataset.complete to {}", marker_uri)
 
 
-def _r2_to_s3_uri(r2_uri: str) -> str:
-    """Rewrite an ``r2://`` URI to the ``s3://`` scheme W&B references record.
-
-    R2 exposes an S3-compatible API; only the scheme differs, so the
-    bucket/key path is preserved verbatim. ``storage-provenance-spec.md`` §4
-    logs dataset references as ``s3://``.
-
-    :param r2_uri: An ``r2://<bucket>/<key>`` URI (e.g. from ``R2Location``).
-    :returns: The same location as ``s3://<bucket>/<key>``.
-    :raises ValueError: ``r2_uri`` does not start with the ``r2://`` scheme.
-    """
-    scheme = "r2://"
-    if not r2_uri.startswith(scheme):
-        raise ValueError(f"expected an r2:// URI, got {r2_uri!r}")
-    return f"s3://{r2_uri[len(scheme) :]}"
-
-
 def _finalized_reference_uris(spec: DatasetSpec) -> list[str]:
     """Return the R2 URIs of the objects finalize materialized for this run.
 
@@ -357,7 +339,7 @@ def build_dataset_artifact(spec: DatasetSpec) -> wandb.Artifact:
         },
     )
     for r2_uri in _finalized_reference_uris(spec):
-        artifact.add_reference(_r2_to_s3_uri(r2_uri), checksum=False)
+        artifact.add_reference(r2_io.to_s3_uri(r2_uri), checksum=False)
     return artifact
 
 

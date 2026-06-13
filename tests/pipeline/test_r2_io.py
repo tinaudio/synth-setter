@@ -133,18 +133,20 @@ class TestR2StorageOptions:
             "aws_region": "auto",
         }
 
+    @pytest.mark.parametrize("absent_key", list(_SECRETS))
     def test_missing_secret_raises_listing_the_absent_key(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, absent_key: str
     ) -> None:
-        """A missing secret raises RuntimeError naming the absent key, not a bare KeyError.
+        """Any absent secret raises RuntimeError naming that key, not a bare KeyError.
 
-        :param monkeypatch: Pytest fixture used to set then drop one R2 secret.
+        :param monkeypatch: Pytest fixture used to set all secrets then drop one.
+        :param absent_key: The single secret dropped before the call.
         """
         for key, value in self._SECRETS.items():
             monkeypatch.setenv(key, value)
-        monkeypatch.delenv("RCLONE_CONFIG_R2_ENDPOINT")
+        monkeypatch.delenv(absent_key)
 
-        with pytest.raises(RuntimeError, match="RCLONE_CONFIG_R2_ENDPOINT"):
+        with pytest.raises(RuntimeError, match=absent_key):
             r2_io.r2_storage_options()
 
 

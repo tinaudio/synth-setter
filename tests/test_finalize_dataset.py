@@ -47,6 +47,7 @@ from synth_setter.pipeline.schemas.spec import DatasetSpec
 from tests.helpers.finalize_shards import (
     build_finalize_cfg,
     build_hdf5_smoke_spec,
+    build_lance_smoke_spec,
     build_wds_smoke_spec,
     copy_shard_for_download,
     install_finalize_setup_stubs,
@@ -54,6 +55,7 @@ from tests.helpers.finalize_shards import (
     seed_train_shards,
     stub_get_stats_hdf5,
     uri_to_local_path,
+    write_minimal_lance_shard,
     write_spec_to_root,
 )
 from tests.helpers.wandb_offline import read_run_binary
@@ -314,6 +316,66 @@ def test_finalize_hdf5_branch_uploads_marker_last(
     assert marker_index == len(upload_order) - 1
     for artifact_uri in (spec.r2.stats_uri(), spec.r2.split_h5_uri("train")):
         assert upload_order.index(artifact_uri) < marker_index
+
+
+def test_finalize_lance_branch_streams_splits_without_downloading(
+    tmp_path: Path,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001 — installs stubs only
+) -> None:
+    """The lance ``finalize(cfg)`` path streams splits to R2 and never downloads a shard.
+
+    Pins the third dispatch branch end-to-end through the entrypoint: each
+    shard is read natively over the (local-typed) S3 remote and the split files
+    are written straight back, so ``download_to_path`` must never fire and the
+    marker lands last. Lance's S3 reads/writes are redirected at the same fake
+    remote rclone serves (``to_s3_uri`` → local path, no ``storage_options``).
+
+    :param tmp_path: Pytest tmp dir; hosts the on-disk spec JSON + output_dir.
+    :param fake_r2_remote: Local-typed rclone remote; shards + splits land here.
+    :param monkeypatch: Redirects lance streaming + spies the upload order.
+    :param stub_finalize_setup: Installs the auth + marker-probe stubs.
+    """
+    spec = build_lance_smoke_spec(
+        task_name="finalize-lance-entrypoint", train_val_test_sizes=(4, 4, 0)
+    )
+    seed_train_shards(fake_r2_remote, spec)
+    for shard in spec.shards[1:2]:
+        write_minimal_lance_shard(
+            uri_to_local_path(fake_r2_remote, spec.r2.shard_uri(shard)), spec
+        )
+    monkeypatch.setattr(
+        "synth_setter.pipeline.r2_io.to_s3_uri",
+        lambda r2_uri: str(uri_to_local_path(fake_r2_remote, r2_uri)),
+    )
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.r2_storage_options", lambda: None)
+    monkeypatch.setattr(
+        "synth_setter.pipeline.r2_io.download_to_path",
+        lambda *a, **kw: pytest.fail("streaming lance finalize must not download shards"),
+    )
+
+    real_upload = r2_io.upload
+    upload_order: list[str] = []
+
+    def spy_upload(src: str | Path, dst: str) -> None:
+        upload_order.append(dst)
+        real_upload(src, dst)
+
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.upload", spy_upload)
+
+    output_dir = tmp_path / "hydra_output"
+    output_dir.mkdir()
+    cfg = build_finalize_cfg(write_spec_to_root(spec, tmp_path), output_dir)
+
+    finalize_dataset.finalize(cfg)
+
+    assert uri_to_local_path(fake_r2_remote, spec.r2.split_lance_uri("train")).is_file()
+    assert uri_to_local_path(fake_r2_remote, spec.r2.split_lance_uri("val")).is_file()
+    assert not uri_to_local_path(fake_r2_remote, spec.r2.split_lance_uri("test")).exists()
+    marker_uri = spec.r2.dataset_complete_marker_uri()
+    assert uri_to_local_path(fake_r2_remote, marker_uri).is_file()
+    assert upload_order[-1] == marker_uri
 
 
 def _build_finalize_cfg_with_offline_wandb(

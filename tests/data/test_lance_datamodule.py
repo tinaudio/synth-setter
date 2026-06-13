@@ -370,7 +370,7 @@ class TestLanceVSTDataset:
         Streaming reads the shard from R2 while ``stats.npz`` is fetched to a
         separate local dir, so the two locations must decouple.
 
-        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param tmp_path: Hosts the shard with its sibling stats and the override stats.
         """
         shard_dir = tmp_path / "data"
         shard_dir.mkdir()
@@ -889,6 +889,7 @@ class TestLanceVSTDataModuleStreaming:
             "aws_region": "auto",
         }
 
+    @pytest.mark.slow
     def test_prepare_data_streaming_fetches_only_stats_npz(
         self, local_r2_remote: Path, tmp_path: Path
     ) -> None:
