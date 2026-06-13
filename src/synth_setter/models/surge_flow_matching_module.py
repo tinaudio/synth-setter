@@ -142,6 +142,8 @@ class VSTFlowMatchingModule(LightningModule):
         conditioning = self._get_conditioning_from_batch(batch)
         params = batch["params"]
         noise = batch["noise"]
+        # The dataset always populates params and noise (only audio/mel/m2l may be None).
+        assert params is not None and noise is not None
 
         # Get conditioning vector
         conditioning = self.encoder(conditioning)
@@ -223,14 +225,16 @@ class VSTFlowMatchingModule(LightningModule):
         self, batch: dict[str, torch.Tensor | None], batch_idx: int
     ) -> dict[str, torch.Tensor]:
         conditioning = self._get_conditioning_from_batch(batch)
+        params = batch["params"]
+        assert params is not None  # the dataset always populates params
         pred_params = self._sample(
             conditioning,
-            torch.randn_like(batch["params"]),
+            torch.randn_like(params),
             self.hparams.validation_sample_steps,
             self.hparams.validation_cfg_strength,
         )
 
-        per_param_mse = (pred_params - batch["params"]).square().mean(dim=0)
+        per_param_mse = (pred_params - params).square().mean(dim=0)
         param_mse = per_param_mse.mean()
         self.log("val/param_mse", param_mse, on_step=False, on_epoch=True, prog_bar=True)
 
@@ -241,14 +245,16 @@ class VSTFlowMatchingModule(LightningModule):
 
     def test_step(self, batch: dict[str, torch.Tensor | None], batch_idx: int) -> torch.Tensor:
         conditioning = self._get_conditioning_from_batch(batch)
+        params = batch["params"]
+        assert params is not None  # the dataset always populates params
         pred_params = self._sample(
             conditioning,
-            torch.randn_like(batch["params"]),
+            torch.randn_like(params),
             self.hparams.test_sample_steps,
             self.hparams.test_cfg_strength,
         )
 
-        param_mse = (pred_params - batch["params"]).square().mean()
+        param_mse = (pred_params - params).square().mean()
         self.log("test/param_mse", param_mse, on_step=False, on_epoch=True, prog_bar=True)
 
         return param_mse
