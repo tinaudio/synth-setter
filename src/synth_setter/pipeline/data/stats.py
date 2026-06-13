@@ -351,7 +351,6 @@ def _fold_lance_shard_into_welford(
     :param storage_options: ``object_store`` kwargs when ``shard_path`` is a
         cloud URI; ``None`` reads from local disk.
     :returns: Updated Welford state after every readable mel row was folded.
-    :rtype: tuple[int, Any, Any]
     :raises ValueError: The shard carried no readable ``mel_spec`` rows.
     """
     from synth_setter.pipeline.data.lance_shard import iter_lance_column_rows
@@ -381,7 +380,6 @@ def stream_stats_lance(
     :param storage_options: ``object_store`` kwargs forwarded to each read when
         the shards are cloud URIs; ``None`` reads from local disk.
     :returns: ``(mean, std)`` arrays as produced by :func:`finalize`.
-    :rtype: tuple[np.ndarray, np.ndarray]
     :raises FileNotFoundError: ``shard_paths`` yielded zero paths.
     """
     existing: tuple[int, Any, Any] = (0, 0, 0)

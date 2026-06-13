@@ -889,6 +889,28 @@ class TestLanceVSTDataModuleStreaming:
             "aws_region": "auto",
         }
 
+    def test_dataset_extra_kwargs_omits_stats_file_when_stats_unused(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With stats off, no ``stats_file`` is injected — matching the hydration that skips it.
+
+        :param monkeypatch: Sets the R2 secrets ``r2_storage_options`` reads.
+        """
+        monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", "ak")
+        monkeypatch.setenv("RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", "sk")
+        monkeypatch.setenv("RCLONE_CONFIG_R2_ENDPOINT", "https://acct.r2.cloudflarestorage.com")
+        module = LanceVSTDataModule(
+            dataset_root="/cache",
+            download_dataset_root_uri=self._ROOT_URI,
+            stream_from_r2=True,
+            use_saved_mean_and_variance=False,
+        )
+
+        extra = module._dataset_extra_kwargs()
+
+        assert "stats_file" not in extra
+        assert "storage_options" in extra
+
     @pytest.mark.slow
     def test_prepare_data_streaming_fetches_only_stats_npz(
         self, local_r2_remote: Path, tmp_path: Path

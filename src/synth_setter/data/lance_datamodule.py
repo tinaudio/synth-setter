@@ -81,12 +81,12 @@ class LanceColumn:
 
 
 def _is_remote_uri(path: str) -> bool:
-    """Return whether ``path`` is a ``scheme://`` cloud URI (vs a local path).
+    """Return whether ``path`` is an ``s3://`` / ``r2://`` cloud URI lance streams over.
 
     :param path: Candidate shard path or URI.
-    :returns: ``True`` for a ``scheme://`` URI, ``False`` for a local path.
+    :returns: ``True`` for an ``s3://`` / ``r2://`` URI; ``False`` keeps the local-fs guards.
     """
-    return "://" in path
+    return path.startswith(("s3://", "r2://"))
 
 
 class LanceShardFile:
@@ -214,9 +214,9 @@ class LanceVSTDataModule(VSTDataModule):
     supports_streaming: ClassVar[bool] = True
 
     def _dataset_prefix(self) -> str:
-        """Return the trailing-slash-stripped ``r2://`` dataset prefix.
+        """Return ``download_dataset_root_uri`` with any trailing slash stripped.
 
-        :returns: The ``download_dataset_root_uri`` without its trailing slash.
+        :returns: The ``r2://`` dataset prefix used to build split/stats URIs.
         :raises ValueError: ``download_dataset_root_uri`` is unset (streaming
             paths only reach here after the constructor's guard, so this is a
             defensive narrow for the type checker).

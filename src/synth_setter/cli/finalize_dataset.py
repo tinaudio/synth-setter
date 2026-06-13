@@ -188,8 +188,9 @@ def _lance_split_batches(
     """
     from lance.file import LanceFileReader
 
-    # LanceFileReader has no close()/context-manager API; each reader (and its
-    # remote connection) is released by GC when the batch generator advances.
+    # LanceFileReader has no close()/context-manager API; readers (and their
+    # remote connections) are freed by CPython refcounting when they fall out of
+    # scope — the schema-fetch temporary here, each per-shard reader below.
     schema = LanceFileReader(shard_uris[0], storage_options=storage_options).metadata().schema
 
     def _batches() -> LanceBatchIterator:
