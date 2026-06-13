@@ -17,6 +17,7 @@ live in ``tests/helpers/finalize_shards.py``.
 from __future__ import annotations
 
 import inspect
+import io
 import shutil
 from collections.abc import Callable
 from pathlib import Path
@@ -26,9 +27,12 @@ from unittest.mock import MagicMock
 import h5py
 import numpy as np
 import pytest
+from lance.file import LanceFileReader
+from pedalboard.io import AudioFile
 
 from synth_setter.cli import finalize_dataset
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.data.lance_shard import MP3_PREVIEW_FIELD
 from synth_setter.pipeline.data.stats import get_stats_hdf5 as real_get_stats_hdf5
 from synth_setter.pipeline.data.stats import stream_stats_wds as real_stream_stats_wds
 from tests.helpers.finalize_shards import (
@@ -579,6 +583,38 @@ def test_finalize_lance_writes_split_files_stats_and_marker_last(
     assert upload_order.index(spec.r2.stats_uri()) < upload_order.index(
         spec.r2.dataset_complete_marker_uri()
     )
+
+
+def test_finalize_lance_split_has_decodable_mp3_preview_column(
+    fake_r2_remote: Path,
+    tmp_path: Path,
+    stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001
+) -> None:
+    """The finalized train split carries one decodable MP3 preview per row.
+
+    Drives the real ``finalize_from_spec`` Lance branch end-to-end against the
+    fake remote: the smoke spec's 100 Hz rate forces the encoder's resample
+    path, and every preview row is decoded back through ``AudioFile`` so a
+    corrupt blob fails rather than passing silently.
+
+    :param fake_r2_remote: Local-typed rclone remote where shards/outputs land.
+    :param tmp_path: Pytest tmp dir hosting finalize scratch files.
+    :param stub_finalize_setup: Fixture-activation only.
+    """
+    spec = build_lance_smoke_spec(task_name="finalize-lance-mp3-preview")
+    seed_train_shards(fake_r2_remote, spec)
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+
+    finalize_dataset.finalize_from_spec(spec, work_dir)
+
+    train_lance = uri_to_local_path(fake_r2_remote, spec.r2.split_lance_uri("train"))
+    table = LanceFileReader(str(train_lance)).read_all().to_table()
+    assert MP3_PREVIEW_FIELD in table.schema.names
+    assert table.num_rows == 4
+    for payload in table.column(MP3_PREVIEW_FIELD).to_pylist():
+        with AudioFile(io.BytesIO(payload)) as decoded:
+            assert decoded.num_channels == spec.render.channels
 
 
 def test_finalize_wds_raises_on_empty_train_split(fake_r2_remote: Path, tmp_path: Path) -> None:

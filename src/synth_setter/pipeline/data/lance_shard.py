@@ -10,10 +10,15 @@ import pyarrow as pa
 from lance.file import LanceFileReader, LanceFileWriter
 from pydantic import ValidationError
 
-from synth_setter.data.vst.shapes import DATASET_FIELD_DTYPES, DATASET_FIELD_NAMES
+from synth_setter.data.vst.shapes import AUDIO_FIELD, DATASET_FIELD_DTYPES, DATASET_FIELD_NAMES
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 
 SHARD_METADATA_SCHEMA_KEY = b"synth_setter.shard_metadata"
+
+# Finalize-only audio preview: variable-length ``binary`` (encoded sizes differ
+# per row, so not a fixed-shape tensor); the mime tag lets viewers detect MP3.
+MP3_PREVIEW_FIELD = "audio_mp3"
+_MP3_PREVIEW_FIELD_METADATA = {b"mime_type": b"audio/mpeg"}
 
 
 def lance_schema(
@@ -83,7 +88,9 @@ def record_batch_from_arrays(
     return pa.record_batch(columns, schema=schema)
 
 
-def write_lance_file(path: Path | str, schema: pa.Schema, batches: Iterable[pa.RecordBatch]) -> None:
+def write_lance_file(
+    path: Path | str, schema: pa.Schema, batches: Iterable[pa.RecordBatch]
+) -> None:
     """Write a single Lance file from pre-shaped Arrow record batches.
 
     :param path: Destination ``.lance`` file.
@@ -145,3 +152,46 @@ def iter_lance_column_rows(path: Path, column: str) -> Iterator[np.ndarray]:
     for batch in reader.read_all().to_batches():
         array = tensor_chunk_to_numpy(batch.column(0), inner_shape)
         yield from array
+
+
+def schema_with_mp3_preview(schema: pa.Schema) -> pa.Schema:
+    """Append the :data:`MP3_PREVIEW_FIELD` binary column to a shard schema.
+
+    :param schema: Shard schema carrying the tensor columns and shard metadata.
+    :returns: ``schema`` with the MP3 preview field appended last; the embedded
+        :class:`ShardMetadata` is preserved.
+    :rtype: pa.Schema
+    """
+    preview_field = pa.field(
+        MP3_PREVIEW_FIELD,
+        pa.binary(),
+        nullable=False,
+        metadata=_MP3_PREVIEW_FIELD_METADATA,
+    )
+    return schema.append(preview_field)
+
+
+def append_mp3_preview_column(batch: pa.RecordBatch, sample_rate: int) -> pa.RecordBatch:
+    """Return ``batch`` with an MP3 preview encoded from its ``audio`` column.
+
+    :param batch: Shard record batch holding the ``audio`` tensor column.
+    :param sample_rate: Source audio sample rate in Hz, forwarded to the encoder.
+    :returns: A batch with one extra :data:`MP3_PREVIEW_FIELD` row per audio row;
+        every other column is carried through unchanged.
+    :rtype: pa.RecordBatch
+    """
+    from synth_setter.pipeline.data.audio_preview import encode_mp3_preview
+
+    audio_index = batch.schema.get_field_index(AUDIO_FIELD)
+    audio_rows = tensor_chunk_to_numpy(
+        batch.column(audio_index),
+        tuple(batch.schema.field(audio_index).type.shape),
+    )
+    previews = pa.array(
+        [encode_mp3_preview(row, sample_rate) for row in audio_rows],
+        type=pa.binary(),
+    )
+    return pa.RecordBatch.from_arrays(
+        [*batch.columns, previews],
+        schema=schema_with_mp3_preview(batch.schema),
+    )

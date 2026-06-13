@@ -25,6 +25,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
+from lance.file import LanceFileReader
 
 from synth_setter.data.lance_datamodule import (
     LanceShardFile,
@@ -33,6 +34,11 @@ from synth_setter.data.lance_datamodule import (
 )
 from synth_setter.data.surge_datamodule import ShiftedBatchSampler
 from synth_setter.data.vst.param_spec_registry import param_specs
+from synth_setter.pipeline.data.lance_shard import (
+    MP3_PREVIEW_FIELD,
+    append_mp3_preview_column,
+    write_lance_file,
+)
 from tests.helpers.finalize_shards import build_lance_smoke_spec, write_minimal_lance_shard
 from tests.helpers.lance_fixtures import write_lance_shard
 
@@ -284,6 +290,31 @@ class TestLanceShardFile:
         shard = LanceShardFile(tmp_path / "train.lance")
         with pytest.raises(KeyError, match="no-such-column"):
             _ = shard["no-such-column"]
+
+    def test_binary_preview_column_does_not_break_tensor_column_reads(
+        self, tmp_path: Path
+    ) -> None:
+        """A finalized split's ``audio_mp3`` binary column is tolerated, not a fatal init error.
+
+        The finalize stage appends a variable-length ``audio_mp3`` column. The
+        loader projects tensor columns by name, so the preview must neither
+        crash construction (which eagerly reads per-column tensor shapes) nor
+        become readable as a tensor.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        src = tmp_path / "shard.lance"
+        columns = _write_seeded_lance_shard(src, num_rows=4)
+        shard_batch = next(iter(LanceFileReader(str(src)).read_all().to_batches()))
+        finalized = tmp_path / "train.lance"
+        with_preview = append_mp3_preview_column(shard_batch, sample_rate=44100)
+        write_lance_file(finalized, with_preview.schema, [with_preview])
+
+        shard = LanceShardFile(finalized)
+
+        np.testing.assert_array_equal(shard["mel_spec"][:], columns["mel_spec"])
+        with pytest.raises(KeyError, match=MP3_PREVIEW_FIELD):
+            _ = shard[MP3_PREVIEW_FIELD]
 
     def test_missing_shard_file_raises_value_error(self, tmp_path: Path) -> None:
         """Opening a nonexistent ``.lance`` path errors at construction, not first read.
