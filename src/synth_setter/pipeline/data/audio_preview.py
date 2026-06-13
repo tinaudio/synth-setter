@@ -1,13 +1,8 @@
 """Encode rendered audio rows to MP3 for the Lance dataset's preview column.
 
-The finalize stage attaches the returned bytes as a per-row ``audio_mp3``
-column so open-source Lance viewers can play an audio preview. The MP3 is a
-lossy convenience artifact, never a training input — the lossless ``audio``
-tensor column remains the source of truth.
-
-``pedalboard`` and ``librosa`` import lazily inside :func:`encode_mp3_preview`
-so this module stays cheap to import on validator and launcher paths that never
-encode a preview.
+The bytes become a per-row ``audio_mp3`` column for Lance viewers — a lossy
+convenience artifact, never a training input. ``pedalboard`` and ``librosa``
+import lazily so this module stays cheap on paths that never encode a preview.
 """
 
 from __future__ import annotations

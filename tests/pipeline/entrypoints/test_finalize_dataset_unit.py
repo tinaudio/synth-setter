@@ -598,8 +598,7 @@ def test_finalize_lance_split_has_decodable_mp3_preview_column(
 ) -> None:
     """The finalized train split carries a decodable MP3 preview beside intact audio.
 
-    Drives the real ``finalize_from_spec`` Lance branch end-to-end; the smoke
-    spec's 100 Hz rate also forces the encoder's resample path.
+    The smoke spec's 100 Hz rate also forces the encoder's resample path.
 
     :param fake_r2_remote: Local-typed rclone remote where shards/outputs land.
     :param tmp_path: Pytest tmp dir hosting finalize scratch files.

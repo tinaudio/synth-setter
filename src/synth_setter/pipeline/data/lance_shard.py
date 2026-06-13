@@ -176,8 +176,8 @@ def schema_with_mp3_preview(schema: pa.Schema) -> pa.Schema:
 def _encode_audio_rows_to_mp3(audio_rows: np.ndarray, sample_rate: int) -> pa.Array:
     """Encode each ``(channels, samples)`` row to MP3, surfacing the failing row index.
 
-    :param audio_rows: Decoded audio batch, shape ``(rows, channels, samples)``.
-    :param sample_rate: Source sample rate in Hz, forwarded to the encoder.
+    :param audio_rows: Decoded audio batch, shape ``(N, channels, samples)``.
+    :param sample_rate: Source sample rate in Hz.
     :returns: A binary Arrow array, one MP3 payload per row.
     :raises RuntimeError: Encoding a row failed; a partial column would otherwise
         truncate the shard with no diagnosable cause.
@@ -197,7 +197,7 @@ def append_mp3_preview_column(batch: pa.RecordBatch, sample_rate: int) -> pa.Rec
     """Return ``batch`` with an MP3 preview encoded from its ``audio`` column.
 
     :param batch: Shard record batch holding the ``audio`` tensor column.
-    :param sample_rate: Source audio sample rate in Hz, forwarded to the encoder.
+    :param sample_rate: Source audio sample rate in Hz.
     :returns: A batch with one extra :data:`MP3_PREVIEW_FIELD` column whose rows
         align with ``audio``; every other column is carried through unchanged.
     :raises KeyError: ``batch`` has no ``audio`` column to encode.
