@@ -270,6 +270,34 @@ def test_stream_stats_lance_matches_numpy(stats_script: ModuleType, tmp_path: Pa
     np.testing.assert_allclose(std, expected.std(axis=0))
 
 
+def test_stream_stats_lance_accumulates_across_shards_matches_numpy(
+    stats_script: ModuleType, tmp_path: Path
+) -> None:
+    """Welford folds two distinct lance shards to the same mean/std as numpy over their union.
+
+    Single-shard coverage cannot catch a cross-shard accumulator bug (wrong
+    count or M2 merge); distinct per-shard mel data pins the multi-shard fold.
+
+    :param stats_script: Imported get_dataset_stats module (fixture).
+    :param tmp_path: Hosts the two written ``.lance`` shards.
+    """
+    from tests.helpers.lance_fixtures import write_lance_shard
+
+    rng = np.random.default_rng(0)
+    mel_a = rng.standard_normal((4, 2, 4, 5)).astype(np.float32)
+    mel_b = rng.standard_normal((3, 2, 4, 5)).astype(np.float32)
+    shard_a = tmp_path / "shard-000000.lance"
+    shard_b = tmp_path / "shard-000001.lance"
+    write_lance_shard(shard_a, {"mel_spec": mel_a})
+    write_lance_shard(shard_b, {"mel_spec": mel_b})
+
+    mean, std = stats_script.stream_stats_lance([shard_a, shard_b])
+
+    stacked = np.concatenate([mel_a, mel_b], axis=0)
+    np.testing.assert_allclose(mean, stacked.mean(axis=0), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(std, stacked.std(axis=0), rtol=1e-5, atol=1e-5)
+
+
 def _write_mel_shard(path: Path, mel_batches: list[np.ndarray]) -> None:
     """Write a tar shard at ``path`` containing one ``mel_spec.npy`` per batch.
 

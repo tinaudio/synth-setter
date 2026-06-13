@@ -203,9 +203,8 @@ def _lance_split_batches(
 def finalize_lance(spec: DatasetSpec, work_dir: Path) -> None:
     """Stream Lance shards from R2 into split files written back to R2; compute + upload stats.
 
-    Reads every shard natively over R2's S3 API and writes each split straight
-    back, so no shard or split file is materialized on local disk — only the
-    tiny ``stats.npz`` passes through ``work_dir``.
+    Only the tiny ``stats.npz`` passes through ``work_dir``; shards and splits
+    never land on local disk.
 
     :param spec: Validated dataset spec (``output_format == "lance"``).
     :param work_dir: Scratch directory for the streamed ``stats.npz``.

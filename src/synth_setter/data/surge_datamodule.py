@@ -494,11 +494,14 @@ class VSTDataModule(LightningDataModule):
                 "stream_from_r2=True requires download_dataset_root_uri "
                 "(the r2:// dataset prefix to stream splits from)."
             )
-        self.predict_file: str | Path = (
-            Path(predict_file)
-            if predict_file is not None
-            else self._split_target(f"test{self.shard_suffix}")
-        )
+        self.predict_file: str | Path
+        if predict_file is None:
+            self.predict_file = self._split_target(f"test{self.shard_suffix}")
+        elif "://" in str(predict_file):
+            # A cloud URI must stay a string — Path() would collapse ``s3://`` to ``s3:/``.
+            self.predict_file = str(predict_file)
+        else:
+            self.predict_file = Path(predict_file)
         self.conditioning = conditioning
         self.pin_memory = pin_memory
         self.param_spec_name = param_spec_name

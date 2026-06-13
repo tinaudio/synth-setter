@@ -116,23 +116,19 @@ def test_finalize_lance_streams_to_r2_then_datamodule_streams_back(
     with tempfile.TemporaryDirectory() as raw_work_dir:
         finalize_dataset.finalize_lance(spec, Path(raw_work_dir))
 
-    for split in ("train", "val", "test"):
-        assert r2_io.object_size(spec.r2.split_lance_uri(split)) is not None
     assert r2_io.object_size(spec.r2.stats_uri()) is not None
 
-    # The split must be a well-formed Lance file, not merely a non-empty object:
-    # read it back natively and pin its row count + schema.
-    train_reader = LanceFileReader(
-        r2_io.to_s3_uri(spec.r2.split_lance_uri("train")),
-        storage_options=r2_io.r2_storage_options(),
-    )
-    train_meta = train_reader.metadata()
-    assert train_meta.num_rows == spec.train_val_test_sizes[0]
-    assert {field.name for field in train_meta.schema} == {
-        "audio",
-        "mel_spec",
-        "param_array",
-    }
+    # Each split must be a well-formed Lance file, not merely a non-empty object:
+    # read every split back natively and pin its row count + schema, so a dropped
+    # shard or off-by-one in the val/test concatenation can't slip through.
+    storage_options = r2_io.r2_storage_options()
+    for split, size in zip(("train", "val", "test"), spec.train_val_test_sizes):
+        meta = LanceFileReader(
+            r2_io.to_s3_uri(spec.r2.split_lance_uri(split)),
+            storage_options=storage_options,
+        ).metadata()
+        assert meta.num_rows == size, f"{split}.lance has {meta.num_rows} rows, expected {size}"
+        assert {field.name for field in meta.schema} == {"audio", "mel_spec", "param_array"}
 
     module = LanceVSTDataModule(
         dataset_root=str(tmp_path / "cache"),

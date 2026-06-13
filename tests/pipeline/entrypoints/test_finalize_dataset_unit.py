@@ -538,13 +538,10 @@ def test_finalize_wds_downloads_every_train_shard_uri(
 def _redirect_lance_streaming_to_remote(
     monkeypatch: pytest.MonkeyPatch, fake_r2_remote: Path
 ) -> None:
-    """Point lance's native S3 reads/writes at the local-typed rclone remote.
+    """Map lance's native S3 reads/writes onto the local-typed rclone remote.
 
-    Streaming finalize hands ``r2_io.to_s3_uri(...)`` + ``r2_storage_options()``
-    to ``LanceFileReader`` / ``LanceFileWriter``. Mapping the ``r2://`` URI to
-    its ``<remote>/<bucket>/<key>`` path (with no ``storage_options``) makes
-    lance read/write the same fake remote ``rclone`` serves, so the test asserts
-    on materialized objects rather than reaching real R2.
+    ``to_s3_uri`` → the URI's ``<remote>/<bucket>/<key>`` path and
+    ``r2_storage_options`` → ``None`` make lance read/write the same fake remote.
 
     :param monkeypatch: Pytest fixture used to install the redirects.
     :param fake_r2_remote: Root of the local-typed remote the URIs resolve under.
