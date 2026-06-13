@@ -125,16 +125,19 @@ class VSTFlowMatchingModule(LightningModule):
         target = self._rectified_vector_field(x0, x1)
         return target
 
-    def _get_conditioning_from_batch(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
+    def _get_conditioning_from_batch(self, batch: dict[str, torch.Tensor | None]) -> torch.Tensor:
         if self.hparams.conditioning == "mel":
-            return batch["mel_spec"]
+            conditioning = batch["mel_spec"]
         elif self.hparams.conditioning == "m2l":
-            return batch["m2l"]
+            conditioning = batch["m2l"]
         else:
             raise ValueError(f"Unknown conditioning {self.hparams.conditioning}")
+        # The dataset leaves unread feature keys as None; the selected one must be present.
+        assert conditioning is not None, f"conditioning {self.hparams.conditioning!r} not read"
+        return conditioning
 
     def _train_step(
-        self, batch: dict[str, torch.Tensor]
+        self, batch: dict[str, torch.Tensor | None]
     ) -> tuple[torch.Tensor, torch.Tensor | float | None]:
         conditioning = self._get_conditioning_from_batch(batch)
         params = batch["params"]
@@ -169,7 +172,7 @@ class VSTFlowMatchingModule(LightningModule):
 
         return loss, penalty
 
-    def training_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
+    def training_step(self, batch: dict[str, torch.Tensor | None], batch_idx: int) -> torch.Tensor:
         loss, penalty = self._train_step(batch)
         self.log("train/loss", loss, on_step=True, on_epoch=True, prog_bar=True)
 
@@ -217,7 +220,7 @@ class VSTFlowMatchingModule(LightningModule):
         return sample
 
     def validation_step(
-        self, batch: dict[str, torch.Tensor], batch_idx: int
+        self, batch: dict[str, torch.Tensor | None], batch_idx: int
     ) -> dict[str, torch.Tensor]:
         conditioning = self._get_conditioning_from_batch(batch)
         pred_params = self._sample(
@@ -236,7 +239,7 @@ class VSTFlowMatchingModule(LightningModule):
     def on_validation_epoch_end(self):
         pass
 
-    def test_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
+    def test_step(self, batch: dict[str, torch.Tensor | None], batch_idx: int) -> torch.Tensor:
         conditioning = self._get_conditioning_from_batch(batch)
         pred_params = self._sample(
             conditioning,

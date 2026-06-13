@@ -107,7 +107,7 @@ def test_surge_training_step_real_penaltyless_field_returns_finite_scalar() -> N
         num_params=num_params,
     )
     module.log = MagicMock()  # type: ignore[method-assign]
-    batch = {
+    batch: dict[str, torch.Tensor | None] = {
         "mel_spec": torch.randn(3, conditioning_dim),
         "params": torch.rand(3, num_params),
         "noise": torch.randn(3, num_params),
