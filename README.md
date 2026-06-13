@@ -3,7 +3,7 @@
 <p>Synthesizer parameter prediction, sound matching, and preset exploration tools.</p>
 <p>
   <a href="https://github.com/tinaudio/synth-setter/actions/workflows/test.yml"><img src="https://github.com/tinaudio/synth-setter/actions/workflows/test.yml/badge.svg" alt="CI"></a>
-  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python 3.10+"></a>
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.11%2B-blue" alt="Python 3.11+"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="License: GPL-3.0"></a>
 </p>
 </div>
@@ -50,7 +50,7 @@ under the GPL-3.0 license.
 - **Supported platforms**: Linux (x86_64) and macOS only. Windows is not supported — the `sh` test dependency and the VST rendering tooling are POSIX-only, and CI covers Ubuntu and macOS only.
 - **Git**, **curl**, **make** (for the canonical install path)
 
-`make install` handles uv, Python 3.10, and all dependencies for you.
+`make install` handles uv, Python 3.11, and all dependencies for you.
 `make install-surge-xt` fetches the pinned Surge XT VST3 release — no need
 to install Surge XT yourself.
 
@@ -61,7 +61,7 @@ to install Surge XT yourself.
 git clone https://github.com/tinaudio/synth-setter.git
 cd synth-setter
 
-# 2. Install uv, create .venv (Python 3.10), install deps, register pre-commit
+# 2. Install uv, create .venv (Python 3.11), install deps, register pre-commit
 #    (pre-commit install is skipped if core.hooksPath is set, e.g. in the dev
 #    container)
 make install

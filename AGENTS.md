@@ -5,7 +5,7 @@ Canonical agent instructions for synth-setter. Shared by Claude and Codex.
 ## Project
 
 synth-setter: synth inversion, sound matching, preset exploration tools.
-Python 3.10+, PyTorch Lightning, Hydra, distributed data pipeline on
+Python 3.11+, PyTorch Lightning, Hydra, distributed data pipeline on
 SkyPilot-managed compute (RunPod + OCI), stored in Cloudflare R2.
 Architecture: [docs/architecture.md](docs/architecture.md).
 

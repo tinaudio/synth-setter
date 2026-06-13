@@ -44,7 +44,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.10"
+          python-version: "3.11"
 
       # Pin so an upstream tool release can't flip this gate red without a
       # repo-side change. twine 5 rejects Metadata-Version 2.4 emitted by
