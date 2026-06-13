@@ -85,7 +85,7 @@ docs:
       - pattern: "src/synth_setter/configs/finalize_dataset.yaml"
         covers: "Finalize @hydra.main entry config; required `dataset_root_uri` (run prefix) loads the persisted DatasetSpec from `input_spec.json` under it (file://, r2://, or bare path); overrides `hydra.run.dir` (task_name/run_name absent here); composes `logger: wandb` for best-effort dataset-artifact logging"
       - pattern: "src/synth_setter/cli/finalize_dataset.py"
-        covers: "Finalize entrypoint: loads the frozen DatasetSpec, dispatches by `spec.output_format` across hdf5/wds/lance, writes `dataset.complete` last, and logs the canonical dataset W&B artifact."
+        covers: "Finalize entrypoint: loads the frozen DatasetSpec, dispatches by `spec.output_format` across hdf5/wds/lance, writes `dataset.complete` last, and logs the canonical dataset W&B artifact. The lance branch optionally appends a `clap` audio-embedding column per split when `spec.compute_clap_embeddings` is set."
       - pattern: ".github/workflows/generate-dataset-shards.yaml"
         covers: "Reusable launcher fan-out across providers (skypilot-local kind, runpod, oci); per-provider artifact upload; emits a `spec_uri` workflow output (the materialized spec's canonical under-prefix `input_spec.json` URI, computed by the `synth-setter-spec-uri` console script — see `src/synth_setter/pipeline/ci/spec_uri.py`) consumed by validate-dataset-shards"
       - pattern: ".github/workflows/validate-dataset-shards.yaml"
@@ -105,15 +105,17 @@ docs:
       - pattern: "src/synth_setter/pipeline/schemas/r2_location.py"
         covers: "`R2Location` nested R2-storage model (bucket + prefix_root + prefix) plus `uri()` / `rclone_prefix()` / `shard_uri()` helpers — the single source of R2 URI construction"
       - pattern: "src/synth_setter/pipeline/schemas/spec.py"
-        covers: "DatasetSpec, RenderConfig, ShardSpec, and `OutputFormat` suffix dispatch (`.extension` / `.from_extension()`) consumed by the renderer CLI for hdf5/wds/lance writer selection."
+        covers: "DatasetSpec, RenderConfig, ShardSpec, and `OutputFormat` suffix dispatch (`.extension` / `.from_extension()`) consumed by the renderer CLI for hdf5/wds/lance writer selection. DatasetSpec carries the lance-only `compute_clap_embeddings` flag (rejected for non-lance output by a model validator)."
       - pattern: "src/synth_setter/pipeline/schemas/shard_metadata.py"
         covers: "ShardMetadata — strict pydantic sidecar payload written into wds tar shards as metadata.json, into HDF5 shards as audio.attrs, and into Lance schema metadata; mirrored across shard formats by make_hdf5_dataset / make_wds_dataset / make_lance_dataset in writers.py."
       - pattern: "src/synth_setter/data/vst/writers.py"
         covers: "make_hdf5_dataset + make_wds_dataset + make_lance_dataset entrypoints; per-batch sample-save helpers; ShardMetadata sidecar wiring; CLI suffix dispatch via OutputFormat.from_extension."
       - pattern: "src/synth_setter/data/vst/shapes.py"
-        covers: "Shared shape primitives consumed by the writers, the shard validator, and the test shard seeders — DATASET_FIELD_NAMES / DATASET_FIELD_DTYPES, mel-front-end constants, per-field shape helpers, and dataset_field_shapes (the single field→shape contract)."
+        covers: "Shared shape primitives consumed by the writers, the shard validator, and the test shard seeders — DATASET_FIELD_NAMES / DATASET_FIELD_DTYPES, mel-front-end constants, per-field shape helpers, and dataset_field_shapes (the single field→shape contract). Also hosts the optional `clap` side-column constants CLAP_FIELD / CLAP_EMBEDDING_DIM."
       - pattern: "src/synth_setter/pipeline/data/lance_shard.py"
         covers: "Lance single-file shard codec — lance_schema / tensor_array / record_batch_from_arrays / write_lance_file on the encode side, read_shard_metadata / tensor_chunk_to_numpy / iter_lance_column_rows on the decode side; shared by the Lance writer, validator, and finalize."
+      - pattern: "src/synth_setter/pipeline/data/clap_lance.py"
+        covers: "Optional LAION-CLAP audio-embedding column appended to Lance splits during finalize — clap_augmented_schema / clap_augment_split (injectable-encoder functional core, mono downmix + shape-guarded encode) plus load_clap_audio_encoder (lazy transformers/torch shell); gated by DatasetSpec.compute_clap_embeddings."
 
   # ── SkyPilot compute integration design doc ─────────────────────
   - doc: docs/design/skypilot-compute-integration.md

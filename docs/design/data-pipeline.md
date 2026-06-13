@@ -225,10 +225,11 @@ The pipeline has two stages. Each is an independent command with well-defined in
 
 Finalize output depends on `output_format` in the spec:
 
-| `output_format` | Finalize outputs                                                                 | Training access pattern            |
-| --------------- | -------------------------------------------------------------------------------- | ---------------------------------- |
-| `hdf5`          | `train.h5`, `val.h5`, `test.h5` (HDF5 virtual datasets)                          | Local random access                |
-| `wds`           | `train-{shard}.tar`, `val-{shard}.tar`, `test-{shard}.tar` (WebDataset archives) | Sequential streaming (local or R2) |
+| `output_format` | Finalize outputs                                                                                                                       | Training access pattern            |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| `hdf5`          | `train.h5`, `val.h5`, `test.h5` (HDF5 virtual datasets)                                                                                | Local random access                |
+| `wds`           | `train-{shard}.tar`, `val-{shard}.tar`, `test-{shard}.tar` (WebDataset archives)                                                       | Sequential streaming (local or R2) |
+| `lance`         | `train.lance`, `val.lance`, `test.lance` (Lance files; optional trailing `clap` audio-embedding column when `compute_clap_embeddings`) | Columnar random access             |
 
 Each worker container runs with `MODE=generate-shards` — the entrypoint mode IS the worker. Scoped and validated on the `experiment` branch; pending port to main ([#407](https://github.com/tinaudio/synth-setter/issues/407)).
 

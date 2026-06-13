@@ -61,13 +61,15 @@ synth-setter-finalize-dataset dataset_root_uri=r2://…/<task_name>/<run_id>/
       → r2_io.object_size(spec.r2.dataset_complete_marker_uri()) probe (idempotency short-circuit)
       → assert_r2_prefix_matches(…) (advisory: warns on a non-canonical prefix, never aborts — custom prefixes like the oracle-eval e2e's test-runs/ are legitimate)
       → branch on spec.output_format:
-          ├─ wds:  finalize_wds  — Welford-stream stats over train shards → upload stats.npz
-          └─ hdf5: finalize_hdf5 — download every shard → reshard into {train,val,test}.h5 → stats.npz
+          ├─ wds:   finalize_wds   — Welford-stream stats over train shards → upload stats.npz
+          ├─ hdf5:  finalize_hdf5  — download every shard → reshard into {train,val,test}.h5 → stats.npz
+          └─ lance: finalize_lance — download every shard → concatenate into {train,val,test}.lance → stats.npz
+                                     (optionally append a `clap` audio-embedding column per split when spec.compute_clap_embeddings)
       → upload dataset.complete marker LAST (R2 source-of-truth resumability invariant)
 ```
 
 - Single required input: `dataset_root_uri` (the run prefix `.../<task_name>/<run_id>/`). `load_spec_from_root` joins `input_spec.json` under it; the URI scheme is dispatched by `load_spec_from_uri` (`file://`, `r2://`, or bare path)
-- `cfg.paths.output_dir` (Hydra's per-run dir under `${paths.log_dir}/finalize_dataset/<timestamp>`) is the scratch work_dir for both branches
+- `cfg.paths.output_dir` (Hydra's per-run dir under `${paths.log_dir}/finalize_dataset/<timestamp>`) is the scratch work_dir for all branches
 - Idempotency: a re-run against a prefix that already has `dataset.complete` exits cleanly without downloads or uploads. R2 is the source of truth (see `pipeline/CLAUDE.md`)
 - Marker-last invariant: `dataset.complete` is uploaded strictly after every artifact a downstream consumer expects, so an interrupted run never leaves a marker without its splits / stats
 
