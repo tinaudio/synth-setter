@@ -617,9 +617,7 @@ def test_finalize_lance_split_has_decodable_mp3_preview_column(
     table = LanceFileReader(str(train_lance)).read_all().to_table()
     assert table.schema.names == [*DATASET_FIELD_NAMES, MP3_PREVIEW_FIELD]
     assert table.num_rows == 4
-    # Appending the preview must not drop the embedded ShardMetadata.
     assert read_shard_metadata(finalized_schema).sample_rate == spec.render.sample_rate
-    # The lossless audio tensor column must survive finalize untouched.
     audio_rows = list(iter_lance_column_rows(train_lance, AUDIO_FIELD))
     assert len(audio_rows) == 4
     assert all(row.shape == (spec.render.channels, 100) and not row.any() for row in audio_rows)
