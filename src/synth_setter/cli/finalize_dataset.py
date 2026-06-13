@@ -8,9 +8,9 @@ and then writes the ``dataset.complete`` marker last per
 ``pipeline/CLAUDE.md``. The wds branch streams train shards through
 Welford row-by-row; the hdf5 branch downloads every shard, reshards into
 ``{train,val,test}.h5``, and computes ``stats.npz`` over the train split;
-the lance branch downloads every shard, streams train shards through
-Welford for ``stats.npz``, and concatenates each split's shards into
-``{train,val,test}.lance``.
+the lance branch streams shards natively over R2's S3 API — reading each
+into the Welford fold and concatenating each split straight back to
+``{train,val,test}.lance`` without staging anything on local disk.
 """
 
 from __future__ import annotations
@@ -184,13 +184,11 @@ def _lance_split_batches(
     :param storage_options: ``object_store`` kwargs for the native S3 reads;
         ``None`` reads local paths (the unit-test redirect).
     :returns: ``(schema, batches)`` for :func:`write_lance_file`.
-    :rtype: LanceSplitBatches
     """
     from lance.file import LanceFileReader
 
-    # LanceFileReader has no close()/context-manager API; readers (and their
-    # remote connections) are freed by CPython refcounting when they fall out of
-    # scope — the schema-fetch temporary here, each per-shard reader below.
+    # LanceFileReader has no close(); readers (and their remote connections) are
+    # freed by refcounting when they fall out of scope.
     schema = LanceFileReader(shard_uris[0], storage_options=storage_options).metadata().schema
 
     def _batches() -> LanceBatchIterator:

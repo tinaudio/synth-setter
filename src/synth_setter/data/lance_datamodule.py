@@ -234,12 +234,7 @@ class LanceVSTDataModule(VSTDataModule):
         return r2_io.to_s3_uri(f"{self._dataset_prefix()}/{basename}")
 
     def _hydrate_dataset_root(self) -> None:
-        """Fetch only ``stats.npz`` when streaming; otherwise mirror the whole prefix.
-
-        Streaming reads the splits remotely, so the only local artifact is the
-        small ``stats.npz`` the dataset normalizes with (skipped entirely when
-        ``use_saved_mean_and_variance`` is off).
-        """
+        """Fetch only ``stats.npz`` when streaming; otherwise mirror the whole prefix."""
         if not self.stream_from_r2:
             super()._hydrate_dataset_root()
             return

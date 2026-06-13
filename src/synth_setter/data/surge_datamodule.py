@@ -114,6 +114,9 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
             opener when ``dataset_file`` is a cloud URI; ``None`` reads local disk.
         :param stats_file: Explicit ``stats.npz`` path; when ``None`` it is
             derived as the sibling of ``dataset_file`` (the local-shard default).
+        :raises ValueError: ``use_saved_mean_and_variance`` is set with a remote
+            ``dataset_file`` but no ``stats_file`` — a sibling ``stats.npz``
+            cannot be derived from a cloud URI.
         """
         self.batch_size = batch_size
         self.ot = ot
@@ -135,6 +138,12 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
             return
 
         self.repeat_first_batch = repeat_first_batch
+
+        if use_saved_mean_and_variance and stats_file is None and "://" in str(dataset_file):
+            raise ValueError(
+                f"stats_file is required when the shard is a remote URI ({dataset_file}); "
+                "a sibling stats.npz cannot be derived from a cloud path."
+            )
 
         self.dataset_file = self._open(dataset_file)
 

@@ -386,7 +386,9 @@ def stream_stats_lance(
     folded_any = False
     for shard_path in shard_paths:
         logger.info(f"Processing {Path(shard_path).name}...")
-        existing = _fold_lance_shard_into_welford(existing, shard_path, storage_options)
+        existing = _fold_lance_shard_into_welford(
+            existing, shard_path, storage_options=storage_options
+        )
         folded_any = True
     if not folded_any:
         raise FileNotFoundError("stream_stats_lance received no shard paths")

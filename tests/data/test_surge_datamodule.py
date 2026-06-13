@@ -857,6 +857,18 @@ class TestVSTDataModule:
         assert (dataset_root / "train.h5").read_bytes() == b"train-bytes"
         assert (dataset_root / "stats.npz").read_bytes() == b"stats-bytes"
 
+    def test_stream_from_r2_on_nonsupporting_backend_raises(self, tmp_path: Path) -> None:
+        """The base (HDF5) backend cannot stream, so ``stream_from_r2`` is rejected at construction.
+
+        :param tmp_path: Holds the (unused) local dataset root.
+        """
+        with pytest.raises(NotImplementedError, match="does not support stream_from_r2"):
+            VSTDataModule(
+                dataset_root=str(tmp_path),
+                download_dataset_root_uri="r2://intermediate-data/data/run/",
+                stream_from_r2=True,
+            )
+
     def test_prepare_data_no_download_when_uri_none(
         self, local_r2_remote: Path, tmp_path: Path
     ) -> None:

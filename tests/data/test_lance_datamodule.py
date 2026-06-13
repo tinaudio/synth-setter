@@ -392,6 +392,21 @@ class TestLanceVSTDataset:
         np.testing.assert_array_equal(dataset.mean, np.full(mel_shape, 7.0, dtype=np.float32))
         np.testing.assert_array_equal(dataset.std, np.full(mel_shape, 3.0, dtype=np.float32))
 
+    def test_remote_shard_without_stats_file_raises_before_open(self) -> None:
+        """A remote shard with saved stats but no explicit ``stats_file`` fails fast.
+
+        The sibling ``stats.npz`` derivation only works for local paths, so the
+        constructor must reject the remote-without-``stats_file`` combination
+        before it opens the (network) shard.
+        """
+        with pytest.raises(ValueError, match="stats_file is required"):
+            LanceVSTDataset(
+                "s3://intermediate-data/data/run/train.lance",
+                batch_size=2,
+                ot=False,
+                use_saved_mean_and_variance=True,
+            )
+
     def test_len_equals_num_rows_floor_divided_by_batch_size(self, single_shard: Path) -> None:
         """``__len__`` floor-divides the row count by ``batch_size``, dropping the ragged tail.
 
@@ -922,7 +937,7 @@ class TestLanceVSTDataModuleStreaming:
         """
         remote_prefix = local_r2_remote / "intermediate-data" / "data" / "run"
         remote_prefix.mkdir(parents=True)
-        (remote_prefix / "stats.npz").write_bytes(b"stats-bytes")
+        _write_stats(remote_prefix, mean=2.0, std=0.5)
         (remote_prefix / "train.lance").write_bytes(b"lance-bytes")
         dataset_root = tmp_path / "cache"
 
@@ -933,5 +948,11 @@ class TestLanceVSTDataModuleStreaming:
         )
         module.prepare_data()
 
-        assert (dataset_root / "stats.npz").read_bytes() == b"stats-bytes"
+        # The split stays remote; only stats.npz is fetched — and it is a real,
+        # loadable .npz the dataset can normalize with, not opaque bytes.
         assert not (dataset_root / "train.lance").exists()
+        with np.load(dataset_root / "stats.npz") as fetched:
+            np.testing.assert_array_equal(
+                fetched["mean"],
+                np.full((_MEL_CHANNELS, _MEL_N_MELS, _MEL_N_FRAMES), 2.0, np.float32),
+            )
