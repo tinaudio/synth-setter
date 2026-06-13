@@ -584,7 +584,9 @@ def test_finalize_lance_writes_split_files_stats_and_marker_last(
     )
 
 
-def _stub_clap_encoder(monkeypatch: pytest.MonkeyPatch, fill_value: float) -> None:
+def _stub_clap_encoder(
+    monkeypatch: pytest.MonkeyPatch, fill_value: float, seen_rates: list[int] | None = None
+) -> None:
     """Replace the CLAP model loader with a fake returning constant ``CLAP_EMBEDDING_DIM`` rows.
 
     Keeps the finalize path real (Lance read/encode-loop/write/upload) while faking only the model
@@ -592,9 +594,12 @@ def _stub_clap_encoder(monkeypatch: pytest.MonkeyPatch, fill_value: float) -> No
 
     :param monkeypatch: Pytest fixture used to swap the loader.
     :param fill_value: Constant value every embedding element is set to.
+    :param seen_rates: When given, every sample rate the encoder is called with is appended to it.
     """
 
-    def fake_encode(mono: np.ndarray, sample_rate: int) -> np.ndarray:  # noqa: ARG001
+    def fake_encode(mono: np.ndarray, sample_rate: int) -> np.ndarray:
+        if seen_rates is not None:
+            seen_rates.append(sample_rate)
         return np.full((mono.shape[0], CLAP_EMBEDDING_DIM), fill_value, dtype=np.float32)
 
     # Patch the source-module attribute, not a finalize_dataset alias: finalize_lance
@@ -605,37 +610,91 @@ def _stub_clap_encoder(monkeypatch: pytest.MonkeyPatch, fill_value: float) -> No
     )
 
 
-def test_finalize_lance_appends_clap_column_when_enabled(
+def test_finalize_lance_appends_clap_column_to_every_split_when_enabled(
     fake_r2_remote: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001
 ) -> None:
-    """With the flag set, every split row carries the encoder's ``clap`` embedding.
+    """With the flag set, every split's rows carry the encoder's ``clap`` embedding.
 
-    :param fake_r2_remote: Local-typed rclone remote where the shard is seeded.
+    Uses a non-empty val split so a regression that augments only the train split would fail here.
+
+    :param fake_r2_remote: Local-typed rclone remote where the shards are seeded.
     :param tmp_path: Pytest tmp dir hosting finalize scratch files.
     :param monkeypatch: Installs the fake CLAP encoder.
     :param stub_finalize_setup: Fixture-activation only.
     """
     spec = build_lance_smoke_spec(
         task_name="finalize-lance-clap-on",
-        train_val_test_sizes=(4, 0, 0),
+        train_val_test_sizes=(4, 4, 0),
         compute_clap_embeddings=True,
     )
     seed_train_shards(fake_r2_remote, spec)
+    for shard in spec.shards[1:2]:
+        write_minimal_lance_shard(
+            uri_to_local_path(fake_r2_remote, spec.r2.shard_uri(shard)), spec
+        )
     _stub_clap_encoder(monkeypatch, fill_value=0.25)
     work_dir = tmp_path / "work"
     work_dir.mkdir()
 
     finalize_dataset.finalize_from_spec(spec, work_dir)
 
-    train_lance = uri_to_local_path(fake_r2_remote, spec.r2.split_lance_uri("train"))
-    clap_rows = list(iter_lance_column_rows(train_lance, CLAP_FIELD))
-    assert len(clap_rows) == 4
-    for row in clap_rows:
-        assert row.shape == (CLAP_EMBEDDING_DIM,)
-        np.testing.assert_array_equal(row, np.full(CLAP_EMBEDDING_DIM, 0.25, dtype=np.float32))
+    for split in ("train", "val"):
+        split_lance = uri_to_local_path(fake_r2_remote, spec.r2.split_lance_uri(split))
+        clap_rows = list(iter_lance_column_rows(split_lance, CLAP_FIELD))
+        assert len(clap_rows) == 4, split
+        for row in clap_rows:
+            assert row.shape == (CLAP_EMBEDDING_DIM,)
+            np.testing.assert_array_equal(row, np.full(CLAP_EMBEDDING_DIM, 0.25, dtype=np.float32))
+
+
+def test_finalize_lance_encodes_at_the_shard_metadata_sample_rate(
+    fake_r2_remote: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001
+) -> None:
+    """The encoder is called with the sample rate read from the shard metadata, not a constant.
+
+    Pins the ``read_shard_metadata(schema).sample_rate`` derivation: a regression
+    hardcoding the rate would diverge from the smoke render's value.
+
+    :param fake_r2_remote: Local-typed rclone remote where the shard is seeded.
+    :param tmp_path: Pytest tmp dir hosting finalize scratch files.
+    :param monkeypatch: Installs the rate-recording fake CLAP encoder.
+    :param stub_finalize_setup: Fixture-activation only.
+    """
+    spec = build_lance_smoke_spec(
+        task_name="finalize-lance-clap-rate",
+        train_val_test_sizes=(4, 0, 0),
+        compute_clap_embeddings=True,
+    )
+    seen_rates: list[int] = []
+    seed_train_shards(fake_r2_remote, spec)
+    _stub_clap_encoder(monkeypatch, fill_value=0.0, seen_rates=seen_rates)
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+
+    finalize_dataset.finalize_from_spec(spec, work_dir)
+
+    assert seen_rates == [spec.render.sample_rate]
+
+
+def test_finalize_lance_raises_on_empty_train_split(fake_r2_remote: Path, tmp_path: Path) -> None:
+    """An empty train split surfaces as a clear ValueError before any download.
+
+    :param fake_r2_remote: Local-typed rclone remote — asserted untouched because the guard
+        short-circuits before any I/O.
+    :param tmp_path: Pytest tmp dir used as finalize's local work_dir.
+    """
+    spec = build_lance_smoke_spec(task_name="empty-train-lance", train_val_test_sizes=(0, 4, 0))
+
+    with pytest.raises(ValueError, match="train split is empty"):
+        finalize_dataset.finalize_lance(spec, tmp_path)
+
+    assert [p for p in fake_r2_remote.rglob("*") if p.is_file()] == []
 
 
 def test_finalize_lance_omits_clap_column_by_default(

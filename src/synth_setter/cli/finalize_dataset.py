@@ -208,18 +208,14 @@ def _append_clap_column(parts: LanceSplitBatches, encode: ClapEncodeFn) -> Lance
     :param parts: ``(schema, batches)`` from :func:`_lance_split_batches`.
     :param encode: Mono-batch CLAP encoder built by ``load_clap_audio_encoder``.
     :returns: ``(augmented_schema, augmented_batches)`` for :func:`write_lance_file`.
-    :rtype: LanceSplitBatches
     """
     from synth_setter.data.vst.shapes import CLAP_EMBEDDING_DIM
-    from synth_setter.pipeline.data.clap_lance import clap_augmented_schema, iter_clap_batches
+    from synth_setter.pipeline.data.clap_lance import clap_augment_split
     from synth_setter.pipeline.data.lance_shard import read_shard_metadata
 
     schema, batches = parts
     sample_rate = read_shard_metadata(schema).sample_rate
-    augmented = clap_augmented_schema(schema, CLAP_EMBEDDING_DIM)
-    return augmented, iter_clap_batches(
-        schema, batches, encode, sample_rate, dim=CLAP_EMBEDDING_DIM
-    )
+    return clap_augment_split(schema, batches, encode, sample_rate, dim=CLAP_EMBEDDING_DIM)
 
 
 def finalize_lance(spec: DatasetSpec, work_dir: Path) -> None:

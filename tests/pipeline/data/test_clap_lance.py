@@ -2,7 +2,7 @@
 
 The encoder is injected as a plain callable, so every path here runs without
 loading a CLAP checkpoint; :func:`load_clap_audio_encoder` (the real model
-shell) is exercised manually — see the module docstring of ``clap_lance``.
+shell) is exercised manually — see the PR's "Verification" checklist.
 """
 
 from __future__ import annotations
@@ -22,8 +22,8 @@ from synth_setter.data.vst.shapes import (
 )
 from synth_setter.pipeline.data.clap_lance import (
     EncodeFn,
+    clap_augment_split,
     clap_augmented_schema,
-    iter_clap_batches,
 )
 from synth_setter.pipeline.data.lance_shard import iter_lance_column_rows, write_lance_file
 
@@ -53,7 +53,6 @@ def _read_schema_and_batches(path: Path) -> tuple[pa.Schema, list[pa.RecordBatch
 
     :param path: Lance shard file to read.
     :returns: The shard's Arrow schema paired with every record batch in it.
-    :rtype: tuple[pa.Schema, list[pa.RecordBatch]]
     """
     reader = LanceFileReader(str(path))
     return reader.metadata().schema, list(reader.read_all().to_batches())
@@ -69,7 +68,6 @@ def _constant_audio(num_rows: int, channels: int, time: int) -> np.ndarray:
     :param channels: Channel axis ``C`` whose distinct fills drive the downmix.
     :param time: Sample axis ``T``.
     :returns: ``(N, C, T)`` float16 audio.
-    :rtype: np.ndarray
     """
     rows = np.empty((num_rows, channels, time), dtype=np.float16)
     for channel in range(channels):
@@ -82,7 +80,6 @@ def _row_indexed_encoder(dim: int) -> EncodeFn:
 
     :param dim: Embedding width the encoder emits.
     :returns: An encode callable producing distinct, reproducible rows.
-    :rtype: EncodeFn
     """
 
     def encode(mono: np.ndarray, sample_rate: int) -> np.ndarray:  # noqa: ARG001
@@ -124,7 +121,7 @@ def test_clap_augmented_schema_preserves_shard_metadata() -> None:
     assert augmented.metadata == base.metadata
 
 
-def test_iter_clap_batches_writes_encoder_output_as_clap_column(tmp_path: Path) -> None:
+def test_clap_augment_split_writes_encoder_output_as_clap_column(tmp_path: Path) -> None:
     """Each row's ``clap`` column equals the injected encoder's output for that row's audio.
 
     :param tmp_path: Pytest tmp dir hosting the input and output shards.
@@ -138,8 +135,7 @@ def test_iter_clap_batches_writes_encoder_output_as_clap_column(tmp_path: Path) 
     )
     schema, batches = _read_schema_and_batches(tmp_path / "in.lance")
 
-    out_schema = clap_augmented_schema(schema, _TEST_DIM)
-    out_batches = iter_clap_batches(
+    out_schema, out_batches = clap_augment_split(
         schema, batches, _row_indexed_encoder(_TEST_DIM), _SAMPLE_RATE, dim=_TEST_DIM
     )
     write_lance_file(tmp_path / "out.lance", out_schema, out_batches)
@@ -154,37 +150,47 @@ def test_iter_clap_batches_writes_encoder_output_as_clap_column(tmp_path: Path) 
         np.testing.assert_array_equal(row, expected_row)
 
 
-def test_iter_clap_batches_appends_clap_to_every_input_batch(tmp_path: Path) -> None:
-    """Multi-batch input: each incoming batch is yielded with its own ``clap`` column.
+def test_clap_augment_split_appends_clap_to_every_input_batch(tmp_path: Path) -> None:
+    """Multi-batch input: each incoming batch is yielded with its own ``clap`` values.
 
-    Exercises the ``for batch in batches`` boundary that the single-batch
-    Lance-reader fixtures do not reach.
+    Exercises the per-batch boundary that the single-batch Lance-reader fixtures
+    do not reach, and pins that each batch is encoded from its own audio.
 
-    :param tmp_path: Pytest tmp dir hosting the output shard.
+    :param tmp_path: Pytest tmp dir hosting the seed shard.
     """
     _write_shard(
-        tmp_path / "seed.lance",
-        audio=_constant_audio(1, 2, 4),
+        tmp_path / "a.lance",
+        audio=_constant_audio(1, 2, 4),  # channel mean 1.5
         mel=np.zeros((1, 2, 3), dtype=np.float32),
         params=np.zeros((1, 5), dtype=np.float32),
     )
-    schema, one_batch = _read_schema_and_batches(tmp_path / "seed.lance")
-    two_batches = [one_batch[0], one_batch[0]]
-
-    out_schema = clap_augmented_schema(schema, _TEST_DIM)
-    out_batches = list(
-        iter_clap_batches(
-            schema, two_batches, _row_indexed_encoder(_TEST_DIM), _SAMPLE_RATE, dim=_TEST_DIM
-        )
+    _write_shard(
+        tmp_path / "b.lance",
+        audio=_constant_audio(1, 2, 4) + 2,  # channel mean 3.5
+        mel=np.zeros((1, 2, 3), dtype=np.float32),
+        params=np.zeros((1, 5), dtype=np.float32),
     )
+    schema, batch_a = _read_schema_and_batches(tmp_path / "a.lance")
+    _, batch_b = _read_schema_and_batches(tmp_path / "b.lance")
 
-    assert len(out_batches) == 2
-    for batch in out_batches:
-        assert batch.num_rows == 1
-        assert batch.schema.names == out_schema.names
+    out_schema, out_batches = clap_augment_split(
+        schema,
+        [batch_a[0], batch_b[0]],
+        _row_indexed_encoder(_TEST_DIM),
+        _SAMPLE_RATE,
+        dim=_TEST_DIM,
+    )
+    materialized = list(out_batches)
+
+    assert len(materialized) == 2
+    clap_index = out_schema.get_field_index(CLAP_FIELD)
+    first = materialized[0].column(clap_index).to_pylist()[0]
+    second = materialized[1].column(clap_index).to_pylist()[0]
+    np.testing.assert_array_equal(first, (1.5 + np.arange(_TEST_DIM)).astype(np.float32))
+    np.testing.assert_array_equal(second, (3.5 + np.arange(_TEST_DIM)).astype(np.float32))
 
 
-def test_iter_clap_batches_downmixes_channels_to_mono_before_encoding(tmp_path: Path) -> None:
+def test_clap_augment_split_downmixes_channels_to_mono_before_encoding(tmp_path: Path) -> None:
     """The encoder receives a mono ``(B, T)`` batch averaged across the channel axis.
 
     :param tmp_path: Pytest tmp dir hosting the input shard.
@@ -203,13 +209,18 @@ def test_iter_clap_batches_downmixes_channels_to_mono_before_encoding(tmp_path: 
         seen.append(mono.copy())
         return np.zeros((mono.shape[0], _TEST_DIM), dtype=np.float32)
 
-    list(iter_clap_batches(schema, batches, recording_encode, _SAMPLE_RATE, dim=_TEST_DIM))
+    _, out_batches = clap_augment_split(
+        schema, batches, recording_encode, _SAMPLE_RATE, dim=_TEST_DIM
+    )
+    list(out_batches)
 
+    assert len(seen) == 1
     assert seen[0].shape == (2, 4)
+    assert seen[0].dtype == np.float32
     np.testing.assert_array_equal(seen[0], np.full((2, 4), 1.5, dtype=np.float32))
 
 
-def test_iter_clap_batches_passes_sample_rate_to_encoder(tmp_path: Path) -> None:
+def test_clap_augment_split_passes_sample_rate_to_encoder(tmp_path: Path) -> None:
     """The sample rate threaded into the iterator reaches the encoder unchanged.
 
     :param tmp_path: Pytest tmp dir hosting the input shard.
@@ -227,15 +238,20 @@ def test_iter_clap_batches_passes_sample_rate_to_encoder(tmp_path: Path) -> None
         seen_rates.append(sample_rate)
         return np.zeros((mono.shape[0], _TEST_DIM), dtype=np.float32)
 
-    list(iter_clap_batches(schema, batches, recording_encode, 22050, dim=_TEST_DIM))
+    _, out_batches = clap_augment_split(schema, batches, recording_encode, 22050, dim=_TEST_DIM)
+    list(out_batches)
 
     assert seen_rates == [22050]
 
 
-def test_iter_clap_batches_raises_when_encoder_width_differs_from_dim(tmp_path: Path) -> None:
+@pytest.mark.parametrize("bad_width", [_TEST_DIM - 1, _TEST_DIM + 1])
+def test_clap_augment_split_raises_when_encoder_width_differs_from_dim(
+    tmp_path: Path, bad_width: int
+) -> None:
     """A width guard rejects an encoder whose output dimension is not the declared ``dim``.
 
     :param tmp_path: Pytest tmp dir hosting the input shard.
+    :param bad_width: A wrong embedding width the encoder emits.
     """
     _write_shard(
         tmp_path / "in.lance",
@@ -246,13 +262,16 @@ def test_iter_clap_batches_raises_when_encoder_width_differs_from_dim(tmp_path: 
     schema, batches = _read_schema_and_batches(tmp_path / "in.lance")
 
     def wrong_width_encode(mono: np.ndarray, sample_rate: int) -> np.ndarray:  # noqa: ARG001
-        return np.zeros((mono.shape[0], _TEST_DIM + 1), dtype=np.float32)
+        return np.zeros((mono.shape[0], bad_width), dtype=np.float32)
 
+    _, out_batches = clap_augment_split(
+        schema, batches, wrong_width_encode, _SAMPLE_RATE, dim=_TEST_DIM
+    )
     with pytest.raises(ValueError, match=r"expected \(B, 4\)"):
-        list(iter_clap_batches(schema, batches, wrong_width_encode, _SAMPLE_RATE, dim=_TEST_DIM))
+        list(out_batches)
 
 
-def test_iter_clap_batches_preserves_existing_columns(tmp_path: Path) -> None:
+def test_clap_augment_split_preserves_existing_columns(tmp_path: Path) -> None:
     """Augmentation is additive: the original audio/mel/param rows round-trip unchanged.
 
     :param tmp_path: Pytest tmp dir hosting the input and output shards.
@@ -267,8 +286,7 @@ def test_iter_clap_batches_preserves_existing_columns(tmp_path: Path) -> None:
     )
     schema, batches = _read_schema_and_batches(tmp_path / "in.lance")
 
-    out_schema = clap_augmented_schema(schema, _TEST_DIM)
-    out_batches = iter_clap_batches(
+    out_schema, out_batches = clap_augment_split(
         schema, batches, _row_indexed_encoder(_TEST_DIM), _SAMPLE_RATE, dim=_TEST_DIM
     )
     write_lance_file(tmp_path / "out.lance", out_schema, out_batches)

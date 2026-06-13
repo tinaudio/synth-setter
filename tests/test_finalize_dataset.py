@@ -37,16 +37,20 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import NoReturn, cast
 
+import numpy as np
 import pytest
 import wandb
 from omegaconf import DictConfig, OmegaConf
 
 from synth_setter.cli import finalize_dataset
+from synth_setter.data.vst.shapes import CLAP_EMBEDDING_DIM, CLAP_FIELD
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.data.lance_shard import iter_lance_column_rows
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from tests.helpers.finalize_shards import (
     build_finalize_cfg,
     build_hdf5_smoke_spec,
+    build_lance_smoke_spec,
     build_wds_smoke_spec,
     copy_shard_for_download,
     install_finalize_setup_stubs,
@@ -592,3 +596,50 @@ def test_finalize_forces_wandb_resume_allow_when_wandb_cfg_present(
 
     assert OmegaConf.select(cfg, "logger.wandb.resume") == "allow"
     assert OmegaConf.select(captured_logger_cfg["cfg"], "wandb.resume") == "allow"
+
+
+def test_finalize_lance_entrypoint_writes_clap_column_when_enabled(
+    tmp_path: Path,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001 — installs stubs only
+) -> None:
+    """``finalize(cfg)`` end-to-end appends the ``clap`` column to the uploaded Lance split.
+
+    Drives the real entrypoint (cfg compose → spec load → lance dispatch → real
+    rclone upload) with ``compute_clap_embeddings=True``, stubbing only the CLAP
+    model loader so no checkpoint download is needed, and reads the ``clap`` column
+    back from the materialized ``train.lance``.
+
+    :param tmp_path: Hosts the on-disk spec JSON + Hydra-style output_dir.
+    :param fake_r2_remote: Local-typed rclone remote; the seeded shard + split land here.
+    :param monkeypatch: Installs the fake CLAP encoder at the source-module attribute.
+    :param stub_finalize_setup: Installs the auth + marker-probe stubs.
+    """
+
+    def fake_encode(mono: np.ndarray, sample_rate: int) -> np.ndarray:  # noqa: ARG001
+        return np.full((mono.shape[0], CLAP_EMBEDDING_DIM), 0.5, dtype=np.float32)
+
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.clap_lance.load_clap_audio_encoder",
+        lambda *args, **kwargs: fake_encode,
+    )
+
+    spec = build_lance_smoke_spec(
+        task_name="finalize-lance-clap-entrypoint",
+        train_val_test_sizes=(4, 0, 0),
+        compute_clap_embeddings=True,
+    )
+    seed_train_shards(fake_r2_remote, spec)
+    output_dir = tmp_path / "hydra_output"
+    output_dir.mkdir()
+    cfg = build_finalize_cfg(write_spec_to_root(spec, tmp_path), output_dir)
+
+    finalize_dataset.finalize(cfg)
+
+    train_lance = uri_to_local_path(fake_r2_remote, spec.r2.split_lance_uri("train"))
+    clap_rows = list(iter_lance_column_rows(train_lance, CLAP_FIELD))
+    assert len(clap_rows) == 4
+    for row in clap_rows:
+        assert row.shape == (CLAP_EMBEDDING_DIM,)
+        np.testing.assert_array_equal(row, np.full(CLAP_EMBEDDING_DIM, 0.5, dtype=np.float32))
