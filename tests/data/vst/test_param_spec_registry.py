@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from synth_setter.data.vst.param_spec_registry import (
@@ -84,15 +85,18 @@ def test_obxf_is_registered_with_an_existing_preset() -> None:
     assert (_REPO_ROOT / preset_paths["obxf"]).is_file()
 
 
-def test_obxf_spec_round_trips_through_sample_encode_decode() -> None:
-    """A sampled OB-Xf param set survives encode → decode with matching keys."""
+def test_obxf_spec_encode_decode_round_trip_preserves_values_and_shape() -> None:
+    """A sampled OB-Xf param set survives encode → decode in keys, values, and width."""
     spec = param_specs["obxf"]
 
     synth, note = spec.sample()
-    decoded_synth, decoded_note = spec.decode(spec.encode(synth, note))
+    encoded = spec.encode(synth, note)
+    decoded_synth, decoded_note = spec.decode(encoded)
 
-    assert set(decoded_synth) == set(synth)
-    assert set(decoded_note) == set(note)
+    assert encoded.shape == (187,)
+    assert encoded.dtype == np.float32
+    assert decoded_synth == pytest.approx(synth)
+    assert decoded_note == pytest.approx(note)
 
 
 def test_obxf_spec_has_94_synth_params_after_prune() -> None:

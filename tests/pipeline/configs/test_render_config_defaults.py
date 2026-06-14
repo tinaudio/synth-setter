@@ -87,4 +87,5 @@ def test_render_obxf_composes_into_valid_render_config() -> None:
     assert spec.render.param_spec_name == "obxf"
     assert spec.render.renderer_version == "1.0.3"
     assert spec.render.plugin_path == "plugins/OB-Xf.vst3"
+    assert spec.render.preset_path == "presets/obxf-base.vstpreset"
     assert not spec.render.plugin_path.startswith("/")
