@@ -1,4 +1,4 @@
-"""Behavioral tests for :mod:`synth_setter.data.surge_datamodule`.
+"""Behavioral tests for :mod:`synth_setter.data.vst_datamodule`.
 
 Covers the four public symbols exposed by the module:
 
@@ -36,8 +36,8 @@ import numpy as np
 import pytest
 import torch
 
-from synth_setter.data import surge_datamodule
-from synth_setter.data.surge_datamodule import (
+from synth_setter.data import vst_datamodule
+from synth_setter.data.vst_datamodule import (
     ShiftedBatchSampler,
     ShuffledSampler,
     VSTDataModule,
@@ -558,7 +558,7 @@ class TestVSTDatasetH5Mode:
 
         :param single_h5: Fixture-provided single-shard HDF5 path.
         """
-        with patch("synth_setter.data.surge_datamodule._hungarian_match") as mock_match:
+        with patch("synth_setter.data.vst_datamodule._hungarian_match") as mock_match:
             dataset = VSTDataset(
                 single_h5,
                 batch_size=2,
@@ -574,7 +574,7 @@ class TestVSTDatasetH5Mode:
         :param single_h5: Fixture-provided single-shard HDF5 path.
         """
         with patch(
-            "synth_setter.data.surge_datamodule._hungarian_match",
+            "synth_setter.data.vst_datamodule._hungarian_match",
             side_effect=lambda noise, params, *args: (noise, params, *args),
         ) as mock_match:
             dataset = VSTDataset(
@@ -612,7 +612,7 @@ class TestVSTDatasetH5Mode:
         :param single_h5: Fixture-provided single-shard HDF5 path.
         """
         with patch(
-            "synth_setter.data.surge_datamodule._hungarian_match",
+            "synth_setter.data.vst_datamodule._hungarian_match",
             side_effect=lambda noise, params, *args: (noise, params, *args),
         ) as mock_match:
             dataset = VSTDataset(
@@ -1140,8 +1140,8 @@ class TestBackCompatAliases:
 
     def test_surge_data_module_alias_is_vst_data_module(self) -> None:
         """``SurgeDataModule`` resolves to ``VSTDataModule`` so old ``_target_``s load."""
-        assert surge_datamodule.SurgeDataModule is VSTDataModule
+        assert vst_datamodule.SurgeDataModule is VSTDataModule
 
     def test_surge_xt_dataset_alias_is_vst_dataset(self) -> None:
         """``SurgeXTDataset`` resolves to ``VSTDataset`` so old ``_target_``s load."""
-        assert surge_datamodule.SurgeXTDataset is VSTDataset
+        assert vst_datamodule.SurgeXTDataset is VSTDataset

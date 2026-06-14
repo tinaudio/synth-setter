@@ -4,7 +4,7 @@ Operator ask on PR #1202: "Write a helper to verify the metrics. You should
 use the fake oracle model. See test_train.py for reference."
 
 The Surge XT fake oracle's ``predict_step`` returns ``batch["params"]``
-verbatim (see :mod:`synth_setter.models.surge_fake_oracle_module`). The
+verbatim (see :mod:`synth_setter.models.vst_fake_oracle_module`). The
 strongest invariant the oracle pins is therefore ``pred == target_params``
 exactly — ``test_train.py::test_train_eval_surge_xt`` pins this at the
 "oracle pred != target-params" assertion. Loss is exactly zero by

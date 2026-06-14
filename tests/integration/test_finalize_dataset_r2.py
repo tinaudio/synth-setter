@@ -130,8 +130,8 @@ def test_finalize_wds_uploads_stats_and_marker_to_real_r2(
         f"expected zero-byte marker at {spec.r2.dataset_complete_marker_uri()}; "
         f"got size={marker_size}"
     )
-    # stats.npz must carry the keys the VSTDataset reader pulls
-    # (surge_datamodule.py:62-64) — pull it back and validate the schema.
+    # stats.npz must carry the keys the VSTDataset stats reader pulls —
+    # pull it back and validate the schema.
     with tempfile.TemporaryDirectory() as raw_verify_dir:
         verify_dir = Path(raw_verify_dir)
         local_stats = verify_dir / "stats.npz"

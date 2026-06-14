@@ -14,7 +14,7 @@ experiment_name: surge-smoke-fixture
 run_name: ffn
 
 model:
-  # surge_ff_module.setup() recompiles net on every stage; with fit + test that
+  # vst_ff_module.setup() recompiles net on every stage; with fit + test that
   # double-compiles and raises. Smoke runs don't need the compiled path anyway.
   compile: false
 
