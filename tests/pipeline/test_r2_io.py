@@ -155,6 +155,17 @@ class TestR2StorageOptions:
         with pytest.raises(RuntimeError, match="R2 credentials missing"):
             r2_io.r2_storage_options()
 
+    def test_blank_secret_value_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A present-but-blank secret is treated as missing, not built into a partial dict.
+
+        :param monkeypatch: Pytest fixture used to set the R2 secret env vars.
+        """
+        monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", "ak")
+        monkeypatch.setenv("RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", "   ")
+        monkeypatch.setenv("RCLONE_CONFIG_R2_ENDPOINT", "https://acct.r2.cloudflarestorage.com")
+        with pytest.raises(RuntimeError, match="SECRET_ACCESS_KEY"):
+            r2_io.r2_storage_options()
+
 
 class TestR2DirectoryExists:
     """Tests for r2_directory_exists — prefix existence probe via non-recursive ``rclone lsf``.

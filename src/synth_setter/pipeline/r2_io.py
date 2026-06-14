@@ -195,7 +195,9 @@ def r2_storage_options() -> dict[str, str]:
         ``lance.dataset`` / ``lance.write_dataset``.
     :raises RuntimeError: A required secret key is unset in ``os.environ``.
     """
-    missing = [k for k in _SECRET_R2_ENV_KEYS if k not in os.environ]
+    # Treat empty/whitespace as missing: a blank env var would otherwise build a
+    # partial dict that fails opaquely on the first S3/Lance call.
+    missing = [k for k in _SECRET_R2_ENV_KEYS if not os.environ.get(k, "").strip()]
     if missing:
         raise RuntimeError(
             f"R2 credentials missing from process env: {', '.join(missing)}. "
