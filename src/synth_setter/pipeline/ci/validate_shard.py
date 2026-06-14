@@ -321,9 +321,10 @@ def _validate_lance_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
     :returns: List of error strings (empty = valid).
     :rtype: list[str]
     """
+    import pyarrow as pa
     from lance.file import LanceFileReader
 
-    from synth_setter.pipeline.data.lance_shard import read_shard_metadata
+    from synth_setter.pipeline.data.lance_shard import MP3_AUDIO_FIELD, read_shard_metadata
 
     try:
         reader = LanceFileReader(str(shard_path))
@@ -349,6 +350,14 @@ def _validate_lance_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
             errors.append(f"missing column: {name!r}")
             continue
         errors.extend(_validate_lance_field(name, field, expected_shapes[name]))
+
+    # large_binary can't go through _validate_lance_field (FixedShapeTensorType-only).
+    if MP3_AUDIO_FIELD not in schema.names:
+        errors.append(f"missing column: {MP3_AUDIO_FIELD!r}")
+    else:
+        observed = schema.field(MP3_AUDIO_FIELD).type
+        if observed != pa.large_binary():
+            errors.append(f"column {MP3_AUDIO_FIELD!r} has type {observed}, expected large_binary")
     return errors
 
 

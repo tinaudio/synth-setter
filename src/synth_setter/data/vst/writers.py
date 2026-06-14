@@ -471,14 +471,16 @@ def make_lance_dataset(
     :param fixed_note_params_list: Optional pre-set note params; same full-shard
         contract as ``fixed_synth_params_list``.
     """
-    # Function-local so the h5/wds writer paths never pay the `lance` import cost.
+    # Function-local so the h5/wds writer paths never pay the `lance`/`pedalboard` import cost.
     from lance.file import LanceFileWriter
 
+    from synth_setter.pipeline.data.audio_preview import encode_mp3_preview
     from synth_setter.pipeline.data.lance_shard import lance_schema, record_batch_from_arrays
 
     param_spec = param_specs[render_cfg.param_spec_name]
     meta = _shard_metadata_from_render(render_cfg)
     start_idx = 0
+    sample_rate = int(render_cfg.sample_rate)
 
     _validate_fixed_params_lengths(
         num_samples=render_cfg.samples_per_shard,
@@ -490,7 +492,11 @@ def make_lance_dataset(
     writer = LanceFileWriter(str(lance_file), schema)
 
     def _flush(batch: list[VSTDataSample], _batch_start: int) -> None:
-        writer.write_batch(record_batch_from_arrays(_sample_batch_arrays(batch), schema))
+        # Lance-only encode (kept off the shared h5/wds path); .T → (channels, samples).
+        mp3_bytes = [encode_mp3_preview(sample.audio.T, sample_rate) for sample in batch]
+        writer.write_batch(
+            record_batch_from_arrays(_sample_batch_arrays(batch), schema, mp3_bytes)
+        )
 
     try:
         _render_in_batches(

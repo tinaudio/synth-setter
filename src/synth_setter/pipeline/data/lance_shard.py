@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
 from pathlib import Path
+from types import MappingProxyType
 
 import numpy as np
 import pyarrow as pa
@@ -15,6 +16,12 @@ from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 
 SHARD_METADATA_SCHEMA_KEY = b"synth_setter.shard_metadata"
 
+# Variable-length per-row MP3 preview: inline ``large_binary``, not in DATASET_FIELD_NAMES.
+MP3_AUDIO_FIELD = "audio_mp3"
+_MP3_AUDIO_FIELD_METADATA: MappingProxyType[bytes, bytes] = MappingProxyType(
+    {b"mime_type": b"audio/mpeg"}
+)
+
 
 def lance_schema(
     field_shapes: dict[str, tuple[int, ...]],
@@ -22,9 +29,12 @@ def lance_schema(
 ) -> pa.Schema:
     """Build the Arrow schema used by one Lance shard file.
 
+    The fixed-shape tensor columns (``DATASET_FIELD_NAMES``) are followed by the
+    ``audio_mp3`` ``large_binary`` preview column.
+
     :param field_shapes: Full writer shapes including the leading row axis.
     :param metadata: Per-shard render metadata to embed in schema metadata.
-    :returns: Arrow schema with fixed-shape tensor columns and shard metadata.
+    :returns: Arrow schema with the tensor columns, the MP3 preview column, and shard metadata.
     """
     fields = []
     for field in DATASET_FIELD_NAMES:
@@ -34,6 +44,11 @@ def lance_schema(
             field_shapes[field][1:],
         )
         fields.append(pa.field(field, tensor_type, nullable=False))
+    fields.append(
+        pa.field(
+            MP3_AUDIO_FIELD, pa.large_binary(), nullable=False, metadata=_MP3_AUDIO_FIELD_METADATA
+        )
+    )
     return pa.schema(
         fields,
         metadata={SHARD_METADATA_SCHEMA_KEY: metadata.model_dump_json().encode("utf-8")},
@@ -63,20 +78,29 @@ def tensor_array(values: np.ndarray, dtype: np.dtype, inner_shape: tuple[int, ..
 def record_batch_from_arrays(
     arrays: dict[str, np.ndarray],
     schema: pa.Schema,
+    mp3_bytes: list[bytes],
 ) -> pa.RecordBatch:
-    """Build a Lance record batch from numpy arrays keyed by dataset field.
+    """Build a Lance record batch from per-field tensors plus the MP3 preview column.
 
-    :param arrays: Mapping with one ``(N, *inner)`` array per dataset field.
+    :param arrays: Mapping with one ``(N, *inner)`` array per ``DATASET_FIELD_NAMES`` field.
     :param schema: Schema returned by :func:`lance_schema`.
+    :param mp3_bytes: One MP3 blob per row, in row order; length must equal the
+        tensor batch's ``N``.
     :returns: Arrow record batch ready for ``LanceFileWriter.write_batch``.
+    :raises ValueError: ``mp3_bytes`` length differs from the tensor batch's ``N``.
     """
-    columns = []
+    columns: list[pa.Array] = []
     for field in DATASET_FIELD_NAMES:
         # Read dtype and shape from the schema so an overridden field wins over
         # the global DATASET_FIELD_DTYPES default and the batch matches the file.
         tensor_type = schema.field(field).type
         np_dtype = np.dtype(tensor_type.value_type.to_pandas_dtype())
         columns.append(tensor_array(arrays[field], np_dtype, tuple(tensor_type.shape)))
+    # Explicit row-count guard: Arrow's own column-length error is opaque.
+    n_rows = len(columns[0])
+    if len(mp3_bytes) != n_rows:
+        raise ValueError(f"mp3_bytes has {len(mp3_bytes)} rows, expected {n_rows}")
+    columns.append(pa.array(mp3_bytes, type=pa.large_binary()))
     return pa.record_batch(columns, schema=schema)
 
 

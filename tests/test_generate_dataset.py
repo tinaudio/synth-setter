@@ -35,13 +35,16 @@ from unittest.mock import patch
 import h5py
 import numpy as np
 import pytest
+from lance.file import LanceFileReader
 from omegaconf import DictConfig, open_dict
 
 from synth_setter.cli.generate_dataset import from_hydra, spec_from_cfg
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.data.lance_shard import MP3_AUDIO_FIELD
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from tests.evaluation._oracle_helpers import ORACLE_AUDIO_METRIC_BOUNDS
 from tests.helpers.dummy_shards import stub_renderer
+from tests.helpers.finalize_shards import uri_to_local_path
 
 # The predict-mode oracle eval (surge/fake_oracle) dumps one mean+std per audio
 # metric; predict leaves ``trainer.callback_metrics`` empty, so these are the
@@ -209,6 +212,59 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     assert renderer_invocations == 0, (
         f"resume re-rendered {renderer_invocations} shard(s) already present in R2"
     )
+
+
+def test_from_hydra_lance_run_emits_audio_mp3_column(
+    cfg_dataset: DictConfig,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A lance ``generate_dataset`` run emits shards carrying the ``audio_mp3`` preview column.
+
+    Pins, at the entrypoint→artifact boundary, that lance is the format carrying
+    the preview column. Real-encoder fidelity (decodable MP3 bytes) is covered by
+    ``tests/data/vst/test_fake_plugin_e2e.py``.
+
+    :param cfg_dataset: Hydra cfg composed with ``generate_dataset/smoke-shard``.
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
+    :param monkeypatch: Pins the single-worker env and the moduleinfo-only plugin.
+    """
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    with open_dict(cfg_dataset):
+        cfg_dataset.output_format = "lance"
+        cfg_dataset.render.plugin_path = str(_TEST_PLUGIN_VST3)
+        cfg_dataset.render.renderer_version = _TEST_PLUGIN_VERSION
+        cfg_dataset.r2.prefix = "fake-r2/test-run/"
+        cfg_dataset.logger = None
+
+    # Local rclone errors on a missing path; real R2 returns None. Bridge that so
+    # the skip-existing probe sees the absent-object contract unchanged.
+    real_object_size = r2_io.object_size
+
+    def _fake_r2_object_size(r2_uri: str) -> int | None:
+        try:
+            return real_object_size(r2_uri)
+        except subprocess.CalledProcessError:
+            return None
+
+    monkeypatch.setattr(r2_io, "object_size", _fake_r2_object_size)
+
+    spec = spec_from_cfg(cfg_dataset)
+    render_shard = stub_renderer(spec)
+    with patch(
+        "synth_setter.cli.generate_dataset._check_call_streamed",
+        side_effect=render_shard,
+    ):
+        from_hydra(cfg_dataset)
+
+    # The stub renderer writes placeholder MP3 bytes, so this pins only the
+    # entrypoint→artifact schema contract; decodable-bytes fidelity is pinned in
+    # tests/data/vst/test_fake_plugin_e2e.py.
+    shard_path = uri_to_local_path(fake_r2_remote, spec.r2.shard_uri(spec.shards[0]))
+    schema = LanceFileReader(str(shard_path)).metadata().schema
+    assert MP3_AUDIO_FIELD in schema.names
+    assert str(schema.field(MP3_AUDIO_FIELD).type) == "large_binary"
 
 
 def test_from_hydra_applies_extras_writing_tags_and_config_tree(

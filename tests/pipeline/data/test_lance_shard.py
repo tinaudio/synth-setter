@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 import pyarrow as pa
 import pytest
+from lance.file import LanceFileReader
 
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
@@ -21,6 +22,7 @@ from synth_setter.data.vst.shapes import (
     PARAM_ARRAY_FIELD,
 )
 from synth_setter.pipeline.data.lance_shard import (
+    MP3_AUDIO_FIELD,
     iter_lance_column_rows,
     lance_schema,
     record_batch_from_arrays,
@@ -62,6 +64,16 @@ def _arange_arrays(offset: int) -> dict[str, np.ndarray]:
     }
 
 
+def _mp3_rows(tag: str, n: int = 2) -> list[bytes]:
+    """Build per-row MP3 stand-in blobs, unique within and across ``tag`` values.
+
+    :param tag: Folded into each blob so two batches' bytes never coincide.
+    :param n: Rows to emit; must equal the tensor batch's leading axis (Arrow rejects a mismatch).
+    :returns: ``n`` blobs in row order, byte-distinct for round-trip assertions.
+    """
+    return [f"mp3-{tag}-{i}".encode() for i in range(n)]
+
+
 @pytest.mark.parametrize("field", DATASET_FIELD_NAMES)
 def test_lance_round_trip_two_batches_preserves_values_and_row_order(
     field: str, tmp_path: Path
@@ -79,7 +91,10 @@ def test_lance_round_trip_two_batches_preserves_values_and_row_order(
     write_lance_file(
         shard,
         schema,
-        [record_batch_from_arrays(first, schema), record_batch_from_arrays(second, schema)],
+        [
+            record_batch_from_arrays(first, schema, _mp3_rows("a")),
+            record_batch_from_arrays(second, schema, _mp3_rows("b")),
+        ],
     )
 
     decoded = np.stack(list(iter_lance_column_rows(shard, field)), axis=0)
@@ -112,7 +127,7 @@ def test_lance_round_trip_noncontiguous_transposed_input_preserves_values(
     schema = lance_schema(_FIELD_SHAPES, _METADATA)
     shard = tmp_path / "shard-000000.lance"
 
-    write_lance_file(shard, schema, [record_batch_from_arrays(arrays, schema)])
+    write_lance_file(shard, schema, [record_batch_from_arrays(arrays, schema, _mp3_rows("t"))])
 
     decoded = np.stack(list(iter_lance_column_rows(shard, MEL_SPEC_FIELD)), axis=0)
     np.testing.assert_array_equal(decoded, transposed_mel)
@@ -125,7 +140,11 @@ def test_iter_lance_column_rows_yields_read_only_views(tmp_path: Path) -> None:
     """
     schema = lance_schema(_FIELD_SHAPES, _METADATA)
     shard = tmp_path / "shard-000000.lance"
-    write_lance_file(shard, schema, [record_batch_from_arrays(_arange_arrays(offset=0), schema)])
+    write_lance_file(
+        shard,
+        schema,
+        [record_batch_from_arrays(_arange_arrays(offset=0), schema, _mp3_rows("r"))],
+    )
 
     row = next(iter_lance_column_rows(shard, AUDIO_FIELD))
 
@@ -173,6 +192,51 @@ def test_record_batch_from_arrays_schema_dtype_wins_over_field_default() -> None
     arrays = _arange_arrays(offset=0)
     arrays[AUDIO_FIELD] = arrays[AUDIO_FIELD].astype(np.float32)
 
-    batch = record_batch_from_arrays(arrays, schema)
+    batch = record_batch_from_arrays(arrays, schema, _mp3_rows("d"))
 
     assert batch.schema.field(AUDIO_FIELD).type.value_type == pa.float32()
+
+
+def test_record_batch_from_arrays_mp3_row_count_mismatch_raises_value_error() -> None:
+    """Fewer MP3 blobs than tensor rows raises a clear ValueError, not Arrow's opaque one."""
+    schema = lance_schema(_FIELD_SHAPES, _METADATA)
+    arrays = _arange_arrays(offset=0)
+
+    with pytest.raises(ValueError, match=r"mp3_bytes has 1 rows, expected 2"):
+        record_batch_from_arrays(arrays, schema, _mp3_rows("x", n=1))
+
+
+def test_lance_schema_includes_audio_mp3_large_binary_with_mime_metadata() -> None:
+    """The MP3 preview column is a non-tensor ``large_binary`` field tagged audio/mpeg."""
+    schema = lance_schema(_FIELD_SHAPES, _METADATA)
+
+    field = schema.field(MP3_AUDIO_FIELD)
+    assert field.type == pa.large_binary()
+    assert field.metadata == {b"mime_type": b"audio/mpeg"}
+    # Pin column order: the preview blob always trails the fixed-shape tensors.
+    assert schema.names[-1] == MP3_AUDIO_FIELD
+
+
+def test_lance_round_trip_audio_mp3_preserves_bytes_and_row_order(tmp_path: Path) -> None:
+    """Per-row MP3 blobs written in two batches read back byte-identical, in order.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    first, second = _mp3_rows("a"), _mp3_rows("b")
+    schema = lance_schema(_FIELD_SHAPES, _METADATA)
+    shard = tmp_path / "shard-000000.lance"
+
+    write_lance_file(
+        shard,
+        schema,
+        [
+            record_batch_from_arrays(_arange_arrays(offset=0), schema, first),
+            record_batch_from_arrays(_arange_arrays(offset=1000), schema, second),
+        ],
+    )
+
+    reader = LanceFileReader(str(shard), columns=[MP3_AUDIO_FIELD])
+    decoded = [
+        value for batch in reader.read_all().to_batches() for value in batch.column(0).to_pylist()
+    ]
+    assert decoded == first + second

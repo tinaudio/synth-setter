@@ -220,7 +220,9 @@ def write_minimal_lance_shard(dest: Path, spec: DatasetSpec) -> None:
             dtype=DATASET_FIELD_DTYPES[PARAM_ARRAY_FIELD],
         ),
     }
-    write_lance_file(dest, schema, [record_batch_from_arrays(arrays, schema)])
+    num_rows = shapes[AUDIO_FIELD][0]
+    mp3_bytes = [b"\xff\xfb"] * num_rows
+    write_lance_file(dest, schema, [record_batch_from_arrays(arrays, schema, mp3_bytes)])
 
 
 def uri_to_local_path(fake_r2_remote: Path, r2_uri: str) -> Path:

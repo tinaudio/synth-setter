@@ -104,9 +104,11 @@ class LanceShardFile:
         # The shard is immutable, so row count and per-column tensor shapes are
         # cached once instead of re-querying file metadata on every batch read.
         self.num_rows = metadata.num_rows
+        # Skip the non-tensor audio_mp3 column: only FixedShapeTensorType has ``.shape``.
         self._inner_shapes = {
             field.name: tuple(cast(pa.FixedShapeTensorType, field.type).shape)
             for field in metadata.schema
+            if isinstance(field.type, pa.FixedShapeTensorType)
         }
         self._readers: dict[str, LanceFileReader] | None = {}
         self._pid = os.getpid()

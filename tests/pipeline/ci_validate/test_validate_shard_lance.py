@@ -19,6 +19,7 @@ from synth_setter.data.vst.shapes import (
 )
 from synth_setter.pipeline.ci.validate_shard import validate_shard
 from synth_setter.pipeline.data.lance_shard import (
+    MP3_AUDIO_FIELD,
     lance_schema,
     record_batch_from_arrays,
     tensor_array,
@@ -56,6 +57,15 @@ def _zero_arrays(shapes: Mapping[str, tuple[int, ...]]) -> dict[str, np.ndarray]
     }
 
 
+def _mp3_rows(shapes: Mapping[str, tuple[int, ...]]) -> list[bytes]:
+    """Build placeholder ``audio_mp3`` blobs sized to a batch's row count.
+
+    :param shapes: Per-field shapes; the ``audio`` leading axis sets the count.
+    :returns: One non-decodable ``\\xff\\xfb`` placeholder blob per row, in row order.
+    """
+    return [b"\xff\xfb"] * shapes[AUDIO_FIELD][0]
+
+
 def test_validate_lance_shard_accepts_valid_file(tmp_path: Path) -> None:
     """A structurally valid Lance shard returns no validation errors.
 
@@ -83,7 +93,7 @@ def test_lance_record_batch_preserves_transposed_tensor_shape(tmp_path: Path) ->
     )
     shard = tmp_path / spec.shards[0].filename
 
-    write_lance_file(shard, schema, [record_batch_from_arrays(arrays, schema)])
+    write_lance_file(shard, schema, [record_batch_from_arrays(arrays, schema, _mp3_rows(shapes))])
 
     reader = LanceFileReader(str(shard), columns=[MEL_SPEC_FIELD])
     field = reader.metadata().schema.field(MEL_SPEC_FIELD)
@@ -118,7 +128,9 @@ def test_validate_lance_shard_reports_row_count_mismatch(tmp_path: Path) -> None
     shapes = _one_row_shapes(spec)
     schema = lance_schema(shapes, smoke_shard_metadata(spec.render))
     shard = tmp_path / spec.shards[0].filename
-    write_lance_file(shard, schema, [record_batch_from_arrays(_zero_arrays(shapes), schema)])
+    write_lance_file(
+        shard, schema, [record_batch_from_arrays(_zero_arrays(shapes), schema, _mp3_rows(shapes))]
+    )
 
     errors = validate_shard(shard, spec)
 
@@ -137,7 +149,9 @@ def test_validate_lance_shard_reports_inner_shape_mismatch(tmp_path: Path) -> No
     shapes = {**expected_shapes, MEL_SPEC_FIELD: (n, channels, n_mels + 1, n_frames)}
     schema = lance_schema(shapes, smoke_shard_metadata(spec.render))
     shard = tmp_path / spec.shards[0].filename
-    write_lance_file(shard, schema, [record_batch_from_arrays(_zero_arrays(shapes), schema)])
+    write_lance_file(
+        shard, schema, [record_batch_from_arrays(_zero_arrays(shapes), schema, _mp3_rows(shapes))]
+    )
 
     errors = validate_shard(shard, spec)
 
@@ -171,6 +185,7 @@ def test_validate_lance_shard_reports_value_dtype_mismatch(tmp_path: Path) -> No
         )
         for field in DATASET_FIELD_NAMES
     ]
+    columns.append(pa.array(_mp3_rows(shapes), type=pa.large_binary()))
     shard = tmp_path / spec.shards[0].filename
     write_lance_file(shard, schema, [pa.record_batch(columns, schema=schema)])
 
@@ -191,7 +206,9 @@ def test_validate_lance_shard_reports_missing_schema_metadata(tmp_path: Path) ->
     shapes = dataset_field_shapes(spec.render, spec.num_params)
     schema = lance_schema(shapes, smoke_shard_metadata(spec.render)).remove_metadata()
     shard = tmp_path / spec.shards[0].filename
-    write_lance_file(shard, schema, [record_batch_from_arrays(_zero_arrays(shapes), schema)])
+    write_lance_file(
+        shard, schema, [record_batch_from_arrays(_zero_arrays(shapes), schema, _mp3_rows(shapes))]
+    )
 
     errors = validate_shard(shard, spec)
 
@@ -215,9 +232,64 @@ def test_validate_lance_shard_reports_missing_column(tmp_path: Path) -> None:
         )
         for field in (AUDIO_FIELD, MEL_SPEC_FIELD)
     ]
+    columns.append(pa.array(_mp3_rows(shapes), type=pa.large_binary()))
     shard = tmp_path / spec.shards[0].filename
     write_lance_file(shard, schema, [pa.record_batch(columns, schema=schema)])
 
     errors = validate_shard(shard, spec)
 
     assert any(f"missing column: {PARAM_ARRAY_FIELD!r}" in error for error in errors)
+
+
+def test_validate_lance_shard_reports_missing_audio_mp3_column(tmp_path: Path) -> None:
+    """A Lance shard without the ``audio_mp3`` preview column reports it as missing.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    spec = build_lance_smoke_spec()
+    shapes = dataset_field_shapes(spec.render, spec.num_params)
+    full_schema = lance_schema(shapes, smoke_shard_metadata(spec.render))
+    schema = full_schema.remove(full_schema.get_field_index(MP3_AUDIO_FIELD))
+    columns = [
+        tensor_array(
+            np.zeros(shapes[field], dtype=DATASET_FIELD_DTYPES[field]),
+            DATASET_FIELD_DTYPES[field],
+            shapes[field][1:],
+        )
+        for field in DATASET_FIELD_NAMES
+    ]
+    shard = tmp_path / spec.shards[0].filename
+    write_lance_file(shard, schema, [pa.record_batch(columns, schema=schema)])
+
+    errors = validate_shard(shard, spec)
+
+    assert any(f"missing column: {MP3_AUDIO_FIELD!r}" in error for error in errors)
+
+
+def test_validate_lance_shard_reports_wrong_audio_mp3_type(tmp_path: Path) -> None:
+    """An ``audio_mp3`` column typed as anything but ``large_binary`` is rejected.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    spec = build_lance_smoke_spec()
+    shapes = dataset_field_shapes(spec.render, spec.num_params)
+    schema = lance_schema(shapes, smoke_shard_metadata(spec.render))
+    binary_mp3 = pa.field(MP3_AUDIO_FIELD, pa.binary(), nullable=False)
+    schema = schema.set(schema.get_field_index(MP3_AUDIO_FIELD), binary_mp3)
+    columns = [
+        tensor_array(
+            np.zeros(shapes[field], dtype=DATASET_FIELD_DTYPES[field]),
+            DATASET_FIELD_DTYPES[field],
+            shapes[field][1:],
+        )
+        for field in DATASET_FIELD_NAMES
+    ]
+    columns.append(pa.array(_mp3_rows(shapes), type=pa.binary()))
+    shard = tmp_path / spec.shards[0].filename
+    write_lance_file(shard, schema, [pa.record_batch(columns, schema=schema)])
+
+    errors = validate_shard(shard, spec)
+
+    assert any(
+        f"column {MP3_AUDIO_FIELD!r}" in error and "large_binary" in error for error in errors
+    )

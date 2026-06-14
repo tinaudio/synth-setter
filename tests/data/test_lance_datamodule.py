@@ -246,6 +246,20 @@ class TestLanceShardFile:
         assert shard["mel_spec"].shape == (8, _MEL_CHANNELS, _MEL_N_MELS, _MEL_N_FRAMES)
         assert shard["param_array"].shape == (8, _NUM_PARAMS)
 
+    def test_open_shard_with_audio_mp3_column_reads_tensor_columns(self, tmp_path: Path) -> None:
+        """Non-tensor ``audio_mp3`` is skipped during open; tensor columns still read back.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        spec = build_lance_smoke_spec(train_val_test_sizes=(4, 0, 0))
+        shard_path = tmp_path / "train.lance"
+        write_minimal_lance_shard(shard_path, spec)
+
+        shard = LanceShardFile(shard_path)
+
+        assert shard["mel_spec"].shape[0] == 4
+        assert shard["audio"][0:2].flags.writeable
+
     def test_open_shard_is_truthy_closed_shard_is_falsy(self, tmp_path: Path) -> None:
         """``close()`` flips the handle falsy — the contract ``teardown`` relies on.
 

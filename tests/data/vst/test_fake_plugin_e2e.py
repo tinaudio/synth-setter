@@ -26,7 +26,11 @@ from synth_setter.data.vst.param_spec_registry import param_specs
 from synth_setter.data.vst.shapes import AUDIO_FIELD, MEL_SPEC_FIELD, PARAM_ARRAY_FIELD
 from synth_setter.data.vst.writers import make_hdf5_dataset, make_lance_dataset, make_wds_dataset
 from synth_setter.pipeline.ci.validate_shard import validate_shard
-from synth_setter.pipeline.data.lance_shard import iter_lance_column_rows, read_shard_metadata
+from synth_setter.pipeline.data.lance_shard import (
+    MP3_AUDIO_FIELD,
+    iter_lance_column_rows,
+    read_shard_metadata,
+)
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 
@@ -300,6 +304,45 @@ def test_make_lance_dataset_writes_validator_passing_shard_under_fake_plugin(
         channels=render_cfg.channels,
         min_loudness=render_cfg.min_loudness,
     )
+
+
+@pytest.mark.fake_vst
+def test_make_lance_dataset_writes_decodable_audio_mp3_per_row_under_fake_plugin(
+    tmp_path: Path,
+    install_fake_plugin: FakeVST3Plugin,
+) -> None:
+    """Every rendered row gets an MP3 blob that decodes back to the render's channels.
+
+    Drives the produced ``audio_mp3`` column through a real ``AudioFile``
+    decode — a dropped or corrupt encode surfaces as a decode failure or
+    wrong channel count, not a silently-stored blob.
+
+    :param tmp_path: Destination directory for the Lance shard under test.
+    :param install_fake_plugin: Swaps the plugin loader for the fake so the
+        render runs without a real VST3 or X11.
+    """
+    from pedalboard.io import AudioFile
+
+    num_samples = 4
+    render_cfg = _fake_render_cfg(num_samples=num_samples, samples_per_render_batch=2)
+    out = tmp_path / "shard-000000.lance"
+
+    make_lance_dataset(
+        lance_file=out,
+        render_cfg=render_cfg,
+        fixed_synth_params_list=[_HARDCODED_SYNTH_PARAMS] * num_samples,
+        fixed_note_params_list=[_HARDCODED_NOTE_PARAMS] * num_samples,
+    )
+
+    reader = LanceFileReader(str(out), columns=[MP3_AUDIO_FIELD])
+    rows = [v for batch in reader.read_all().to_batches() for v in batch.column(0).to_pylist()]
+    assert len(rows) == num_samples
+    for blob in rows:
+        with AudioFile(io.BytesIO(blob)) as decoded:
+            assert int(decoded.num_channels) == render_cfg.channels
+            assert int(decoded.samplerate) == int(render_cfg.sample_rate)
+            # A valid-header-only stub has no audio; require real decoded frames.
+            assert decoded.frames > 0
 
 
 @pytest.mark.fake_vst
