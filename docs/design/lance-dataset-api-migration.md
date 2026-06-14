@@ -97,10 +97,13 @@ after an rclone download. A review against the pinned library
 ### R2 layout
 
 - `shard-XXXXXX.lance` and `<split>.lance` are now directory prefixes, not
-  objects. Worker upload uses `r2_io.upload_dir`; training download uses
-  `download_dir_no_overwrite`. `dataset.complete` marker and `stats.npz`
-  unchanged. `OutputFormat.from_extension` still matches on the `.lance` name
-  suffix of the directory.
+  objects, keyed off `OutputFormat.is_directory`. The worker uploads each shard
+  tree with `rclone copy <dir> <prefix>/<filename>` and skip-probes existence
+  with `r2_io.r2_directory_exists` (object size can't size a directory); training
+  download uses `download_dir_no_overwrite` (already directory-recursive).
+  `dataset.complete` marker and `stats.npz` are unchanged.
+  `OutputFormat.from_extension` still matches on the `.lance` name suffix of the
+  directory.
 
 ## Affected files
 
