@@ -1,4 +1,4 @@
-"""Lance single-file shard helpers shared by writer, validator, and finalize."""
+"""Lance dataset-shard helpers shared by writer, validator, and finalize."""
 
 from __future__ import annotations
 
@@ -74,7 +74,7 @@ def record_batch_from_arrays(
 
     :param arrays: Mapping with one ``(N, *inner)`` array per dataset field.
     :param schema: Schema returned by :func:`lance_schema`.
-    :returns: Arrow record batch ready for ``LanceFileWriter.write_batch``.
+    :returns: Arrow record batch for :func:`write_lance_dataset` / :func:`lance_fragment`.
     """
     columns = []
     for field in DATASET_FIELD_NAMES:
@@ -95,10 +95,8 @@ def write_lance_dataset(
 ) -> None:
     """Write a Lance dataset from a pull source of pre-shaped record batches.
 
-    Streams ``batches`` into a fresh dataset, overwriting any dataset already at
-    ``uri`` (shards/splits are immutable and rewritten, never appended). Use for
-    sequential producers like finalize; the push-based worker render loop uses
-    :func:`lance_fragment` + :func:`commit_lance_dataset` instead.
+    Overwrites any dataset at ``uri`` (shards are immutable, never appended); the
+    push-based worker loop uses :func:`lance_fragment` + :func:`commit_lance_dataset`.
 
     :param uri: Destination dataset directory (local path or ``s3://`` URI).
     :param schema: Arrow schema shared by every batch.
@@ -126,9 +124,8 @@ def lance_fragment(
 ) -> lance.fragment.FragmentMetadata:
     """Write one record batch as a Lance fragment under ``uri`` (push source).
 
-    Writes the fragment's data file immediately and returns its metadata; collect
-    the results and hand them to :func:`commit_lance_dataset`. Lets the push-based
-    render loop stream batches without buffering a whole shard in memory.
+    Writes the data file immediately and returns its metadata; collect the results
+    for :func:`commit_lance_dataset`. Streams batches without buffering a shard.
 
     :param uri: Destination dataset directory (local path or ``s3://`` URI).
     :param schema: Arrow schema shared by every fragment.

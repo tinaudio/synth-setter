@@ -81,10 +81,9 @@ class LanceShardFile:
         """Open the ``.lance`` shard dataset read-only.
 
         :param path: Path to the ``.lance`` dataset directory.
-        :raises ValueError: If ``path`` is missing or is a file (the legacy
-            single-file shard format, not the dataset directory the pipeline now
-            writes) — a stable contract independent of which exception
-            ``lance.dataset`` raises.
+        :raises ValueError: If ``path`` is missing or is a file rather than a
+            Lance dataset directory — a stable contract independent of which
+            exception ``lance.dataset`` would raise.
         """
         path = Path(path)
         self._path = str(path)

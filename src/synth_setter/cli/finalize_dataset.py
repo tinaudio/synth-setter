@@ -288,23 +288,6 @@ def finalize_from_spec(spec: DatasetSpec, work_dir: Path) -> None:
     logger.info("wrote dataset.complete to {}", marker_uri)
 
 
-def _r2_to_s3_uri(r2_uri: str) -> str:
-    """Rewrite an ``r2://`` URI to the ``s3://`` scheme W&B references record.
-
-    R2 exposes an S3-compatible API; only the scheme differs, so the
-    bucket/key path is preserved verbatim. ``storage-provenance-spec.md`` §4
-    logs dataset references as ``s3://``.
-
-    :param r2_uri: An ``r2://<bucket>/<key>`` URI (e.g. from ``R2Location``).
-    :returns: The same location as ``s3://<bucket>/<key>``.
-    :raises ValueError: ``r2_uri`` does not start with the ``r2://`` scheme.
-    """
-    scheme = "r2://"
-    if not r2_uri.startswith(scheme):
-        raise ValueError(f"expected an r2:// URI, got {r2_uri!r}")
-    return f"s3://{r2_uri[len(scheme) :]}"
-
-
 def _finalized_reference_uris(spec: DatasetSpec) -> list[str]:
     """Return the R2 URIs of the objects finalize materialized for this run.
 
@@ -358,7 +341,7 @@ def build_dataset_artifact(spec: DatasetSpec) -> wandb.Artifact:
         },
     )
     for r2_uri in _finalized_reference_uris(spec):
-        artifact.add_reference(_r2_to_s3_uri(r2_uri), checksum=False)
+        artifact.add_reference(r2_io.to_s3_uri(r2_uri), checksum=False)
     return artifact
 
 

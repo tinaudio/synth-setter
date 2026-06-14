@@ -335,8 +335,7 @@ def _validate_lance_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
 def _validate_lance_dataset(dataset: lance.LanceDataset, spec: DatasetSpec) -> list[str]:
     """Validate an open Lance shard dataset's schema, metadata, and row count.
 
-    Shared by the local-path and direct-from-R2 validators so both apply the identical
-    schema/metadata/row-count checks.
+    Shared by the local-path and direct-from-R2 validators.
 
     :param dataset: Open Lance dataset handle for one shard.
     :param spec: Dataset spec the shard is expected to conform to.
@@ -522,10 +521,7 @@ def validate_all_shards_from_r2(spec: DatasetSpec) -> list[str]:
 
 
 def _validate_all_lance_shards_from_r2(spec: DatasetSpec) -> list[str]:
-    """Validate every Lance shard by reading directly from R2 (no download).
-
-    Lance datasets are directories, so they stream straight from object storage
-    via ``storage_options`` instead of round-tripping through a local download.
+    """Validate every Lance shard by streaming it directly from R2 via ``storage_options``.
 
     :param spec: Dataset spec whose ``shards`` list drives the iteration.
     :returns: Aggregated error strings across all shards, each prefixed with the

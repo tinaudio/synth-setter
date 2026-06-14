@@ -188,11 +188,8 @@ def is_r2_reachable() -> bool:
 def r2_storage_options() -> dict[str, str]:
     """Build Lance's object-store ``storage_options`` for the R2 bucket from env.
 
-    Lance reaches R2 through its S3-compatible backend (an ``s3://`` URI); the
-    object-store docs require both ``region`` and ``endpoint`` for S3-compatible
-    stores. Credentials come from the same ``RCLONE_CONFIG_R2_*`` vars rclone
-    uses, so :func:`ensure_r2_env_loaded` populates both backends from one
-    source; call it first.
+    Reads the same ``RCLONE_CONFIG_R2_*`` vars rclone uses (call
+    :func:`ensure_r2_env_loaded` first); S3-compatible stores require both keys.
 
     :returns: ``{access_key_id, secret_access_key, endpoint, region}`` for
         ``lance.dataset`` / ``lance.write_dataset``.
@@ -410,11 +407,8 @@ def object_size(r2_uri: str) -> int | None:
 def r2_directory_exists(r2_uri: str) -> bool:
     """Return whether any object exists under the ``r2_uri`` prefix.
 
-    Existence probe for directory-shaped artifacts (Lance dataset shards) — the
-    directory counterpart of :func:`object_size`. Uses a recursive ``rclone lsf``
-    and reports ``True`` when at least one object is listed. A non-zero rclone
-    exit (auth, network) raises ``subprocess.CalledProcessError`` so callers fail
-    fast rather than mistaking an outage for an absent directory.
+    Directory counterpart of :func:`object_size`; a non-zero rclone exit (auth,
+    network) raises ``CalledProcessError`` so an outage isn't read as absent.
 
     :param r2_uri: Canonical ``r2://bucket/prefix`` URI of the directory.
     :returns: ``True`` if the prefix contains at least one object.

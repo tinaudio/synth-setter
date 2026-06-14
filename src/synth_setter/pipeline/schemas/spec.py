@@ -90,10 +90,7 @@ class OutputFormat(StrEnum):
     def is_directory(self) -> bool:
         """Whether a shard is a directory tree (Lance dataset) rather than one file.
 
-        Drives directory-vs-file handling in the worker upload and existence
-        probes; HDF5/WDS shards are single files, Lance shards are directories.
-
-        :returns: ``True`` for ``LANCE``, ``False`` for the single-file formats.
+        Drives directory-vs-file handling in the worker upload and existence probes.
         """
         return self is OutputFormat.LANCE
 
