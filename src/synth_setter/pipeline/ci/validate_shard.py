@@ -322,7 +322,6 @@ def _validate_lance_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
     :param shard_path: Local filesystem path to the Lance shard dataset directory.
     :param spec: Dataset spec the shard is expected to conform to.
     :returns: List of error strings (empty = valid).
-    :rtype: list[str]
     """
     import lance
 
@@ -342,7 +341,6 @@ def _validate_lance_dataset(dataset: lance.LanceDataset, spec: DatasetSpec) -> l
     :param dataset: Open Lance dataset handle for one shard.
     :param spec: Dataset spec the shard is expected to conform to.
     :returns: List of error strings (empty = valid).
-    :rtype: list[str]
     """
     from synth_setter.pipeline.data.lance_shard import read_shard_metadata
 
@@ -532,7 +530,6 @@ def _validate_all_lance_shards_from_r2(spec: DatasetSpec) -> list[str]:
     :param spec: Dataset spec whose ``shards`` list drives the iteration.
     :returns: Aggregated error strings across all shards, each prefixed with the
         shard filename.
-    :rtype: list[str]
     """
     import lance
 

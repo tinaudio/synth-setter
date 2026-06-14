@@ -24,6 +24,7 @@ import pytest
 
 from synth_setter.cli import finalize_dataset
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.data.lance_shard import LANCE_DATA_STORAGE_VERSION
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from tests.helpers.finalize_shards import write_minimal_lance_shard, write_minimal_wds_shard
 
@@ -181,7 +182,7 @@ def test_finalize_lance_writes_split_and_stats_to_real_r2(
     assert r2_io.r2_directory_exists(split_uri), f"expected split dataset at {split_uri}"
     dataset = lance.dataset(r2_io.to_s3_uri(split_uri), storage_options=r2_io.r2_storage_options())
     assert dataset.count_rows() == spec.render.samples_per_shard
-    assert dataset.data_storage_version == "2.1"
+    assert dataset.data_storage_version == LANCE_DATA_STORAGE_VERSION
 
 
 def test_finalize_wds_uploads_stats_and_marker_to_real_r2(

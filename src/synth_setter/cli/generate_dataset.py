@@ -626,11 +626,8 @@ def _render_one_owned_shard(
     """
     shard = spec.shards[shard_id]
     if spec.output_format.is_directory:
-        # Lance shards are directories; object_size can't size them. Probe the
-        # ``_versions/`` manifest, not just any object: a render that crashed
-        # after LanceFragment.create but before commit leaves orphan ``data/``
-        # files with no manifest, and skipping that would strand an unreadable
-        # shard. Byte size is unknown on this branch.
+        # Probe the _versions/ manifest, not bare data/ files: a render that
+        # crashed before commit leaves orphan fragments that must not be skipped.
         already_present = r2_io.r2_directory_exists(f"{spec.r2.shard_uri(shard)}/_versions")
         existing_size = 0
     else:
@@ -703,9 +700,8 @@ def _render_and_upload_shard(
             )
         byte_size = sum(p.stat().st_size for p in shard_path.rglob("*") if p.is_file())
         logger.info(f"shard rendered: {shard_path} ({byte_size} bytes)")
-        # ``upload_dir`` syncs the tree under the shard URI with the wide
-        # directory-upload IO timeout — a multi-fragment Lance shard can outlast
-        # the 300s single-file default ``_rclone_copy`` uses.
+        # upload_dir syncs the tree under the shard URI with the wide directory
+        # IO timeout; a multi-fragment shard can outlast the single-file default.
         dest = spec.r2.shard_uri(shard)
         r2_io.upload_dir(shard_path, dest)
     else:

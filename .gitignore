@@ -183,3 +183,6 @@ presets/*.fxp
 
 # wandb local run/sweep artifacts
 wandb/
+
+# Local training/eval metrics artifact (written by runs, never committed)
+metrics/

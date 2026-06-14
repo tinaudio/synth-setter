@@ -185,7 +185,6 @@ def _lance_split_batches(
     :param shard_uris: Non-empty list of ``s3://`` shard dataset URIs in split order.
     :param storage_options: Object-store config for the R2 bucket.
     :returns: ``(schema, batches)`` for :func:`write_lance_dataset`.
-    :rtype: LanceSplitBatches
     """
     import lance
 

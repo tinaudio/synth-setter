@@ -532,12 +532,9 @@ def test_finalize_wds_downloads_every_train_shard_uri(
     assert uri_to_local_path(fake_r2_remote, spec.r2.stats_uri()).is_file()
 
 
-# NOTE: the Lance finalize path streams shards directly from R2 via object-store
-# ``storage_options`` (real S3 protocol), so it cannot run against the local-typed
-# ``fake_r2_remote``. Its marker-last ordering is format-agnostic (enforced in
-# ``finalize_from_spec`` and covered by the wds/hdf5 cases above); the Lance split
-# write + read-back is covered against real R2 in
-# ``tests/integration/test_finalize_dataset_r2.py``.
+# The Lance finalize path streams shards directly from R2 (real S3), so it can't
+# run against the local-typed fake_r2_remote. Marker-last ordering is format-agnostic
+# (wds/hdf5 cases cover it); the Lance split is covered in test_finalize_dataset_r2.py.
 
 
 def test_finalize_wds_raises_on_empty_train_split(fake_r2_remote: Path, tmp_path: Path) -> None:
