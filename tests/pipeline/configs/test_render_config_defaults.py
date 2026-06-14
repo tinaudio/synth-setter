@@ -78,12 +78,7 @@ def test_base_render_config_surfaced_defaults_compose_correctly() -> None:
 
 
 def test_render_obxf_composes_into_valid_render_config() -> None:
-    """``render=obxf`` composes into a ``RenderConfig`` pinning OB-Xf's identity.
-
-    ``plugin_path`` must stay repo-relative so renders resolve against the checkout.
-    ``num_params`` is the registry lookup the shard writer makes, so a resolving
-    width proves the composed spec reaches the OB-Xf registry without a ``KeyError``.
-    """
+    """``render=obxf`` composes into a valid ``RenderConfig``; plugin_path stays repo-relative and num_params resolves without ``KeyError``."""
     spec = _spec_from_dataset_overrides(["render=obxf"])
 
     assert spec.render.param_spec_name == "obxf"

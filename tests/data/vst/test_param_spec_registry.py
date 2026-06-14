@@ -105,11 +105,7 @@ def test_obxf_spec_encode_decode_round_trip_preserves_values_and_shape() -> None
 
 
 def test_obxf_spec_has_94_synth_params_after_prune() -> None:
-    """Pin both the synth param count and its encoded width.
-
-    Pinning both dimensions catches a swap that preserves the object count while reshaping the
-    encoded tensor (e.g. a 15-slot categorical replacing a bool).
-    """
+    """Pin the synth param count and encoded width; catching a count-preserving tensor reshape requires both."""
     spec = param_specs["obxf"]
 
     assert len(spec.synth_params) == 94
