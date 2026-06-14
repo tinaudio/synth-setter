@@ -181,7 +181,7 @@ jobs:
         if: always() && hashFiles('coverage.xml') != ''
         uses: ./.github/actions/upload-coverage
         with:
-          flags: vst
+          flags: vst-${{ matrix.synth }}
           token: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Surface per-bucket bench JSON files on the runner

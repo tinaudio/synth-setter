@@ -16,8 +16,8 @@ from pathlib import Path
 from synth_setter.data.vst.param_spec_registry import default_plugin_path, preset_paths
 
 # ``or`` (not a ``get`` default) so an empty override also falls back to Surge XT.
-# The key doubles as the ``--param_spec_name`` the render CLI takes.
 TEST_SYNTH = os.environ.get("SYNTH_SETTER_TEST_SYNTH") or "surge_xt"
+# Registry key doubles as the render CLI's ``--param_spec_name``.
 TEST_PARAM_SPEC_NAME = TEST_SYNTH
 
 # Eager lookup so an unregistered TEST_SYNTH raises KeyError at import rather

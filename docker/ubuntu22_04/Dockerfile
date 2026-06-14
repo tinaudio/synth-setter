@@ -330,8 +330,7 @@ RUN python --version && \
 # ==========================================
 FROM python-base AS builder-install-synth-setter-deps
 # Re-declare the predefined platform ARG so ${TARGETARCH} resolves in this
-# stage's RUN steps (the pueue case, the bundle presence gate, and the synth
-# load-validation all read it); buildkit does not inherit ARG across FROM.
+# stage's RUN steps; buildkit does not inherit ARG across FROM.
 ARG TARGETARCH
 # Install Python dependencies via `uv sync --frozen` against the committed
 # lockfile. uv's cache (mounted below) persists torch wheels (~2.5 GB)
