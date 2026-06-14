@@ -421,10 +421,10 @@ COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/scripts/l
 # required on every arch; OB-Xf (and the other fetched synths) are amd64-only, so
 # OB-Xf is asserted only on amd64. The per-synth X11 load-validation follows.
 RUN for bundle in "Surge XT" "OB-Xf"; do \
-      if [ "$bundle" = "OB-Xf" ] && [ "${TARGETARCH:-}" != "amd64" ]; then \
+      if [[ "$bundle" == "OB-Xf" && "${TARGETARCH:-}" != "amd64" ]]; then \
         echo "skipping ${bundle}.vst3 presence check on ${TARGETARCH:-<unset>}" >&2; continue; \
       fi; \
-      test -n "$(ls -A "/usr/lib/vst3/${bundle}.vst3" 2>/dev/null)" \
+      [[ -d "/usr/lib/vst3/${bundle}.vst3" ]] \
         || { echo "ERROR: ${bundle}.vst3 not found in /usr/lib/vst3/" >&2; exit 1; }; \
     done
 

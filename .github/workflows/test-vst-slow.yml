@@ -85,11 +85,10 @@ jobs:
     permissions:
       contents: write
 
-    # One cell per registered synth so the render/round-trip suite proves more
-    # than one VST3 renders end-to-end. ``fail-fast: false`` keeps one synth's
-    # failure from masking the other. ``surge_xt`` runs the full Surge-specific
-    # suite and is the only cell that publishes benchmark metrics (Issue #703);
-    # ``obxf`` runs just the synth-agnostic render test as the OB-Xf proof.
+    # One cell per synth proves more than one VST3 renders end-to-end;
+    # ``fail-fast: false`` so one synth's failure doesn't mask the other.
+    # ``surge_xt`` runs the full Surge suite and alone publishes benchmarks
+    # (see #703); ``obxf`` runs only the synth-agnostic render as its proof.
     strategy:
       fail-fast: false
       matrix:
@@ -149,6 +148,10 @@ jobs:
         # imports load the VST host which needs a live X display, so the
         # headless wrapper has to apply at the pytest level (not the
         # entire container).
+        #
+        # ``matrix.pytest_targets`` is a space-separated node list; the
+        # container splits it into a bash array (``read -ra``) so each target is
+        # a distinct pytest arg. Node IDs here carry no spaces or glob chars.
         env:
           PLUGIN_PATH: ${{ matrix.plugin_path }}
           TEST_SYNTH: ${{ matrix.synth }}
@@ -168,10 +171,11 @@ jobs:
               set -euo pipefail
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
+              read -ra targets <<< "$PYTEST_TARGETS"
               src/synth_setter/scripts/run-linux-vst-headless.sh \
                 pytest -vv -s \
                   --cov=src --cov-branch --cov-report=xml --cov-report=term \
-                  $PYTEST_TARGETS
+                  "${targets[@]}"
             '
 
       # coverage.xml is written inside the container at the workspace mount,

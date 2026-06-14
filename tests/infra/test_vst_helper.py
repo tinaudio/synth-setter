@@ -162,7 +162,10 @@ def test_test_synth_falls_back_to_surge_xt_when_env_empty(
     :param reload_vst: re-resolves the module constants under the patched env.
     """
     monkeypatch.setenv(_SYNTH_ENV_VAR, "")
-    assert reload_vst().TEST_SYNTH == "surge_xt"
+    mod = reload_vst()
+    assert mod.TEST_SYNTH == "surge_xt"
+    assert mod.TEST_PARAM_SPEC_NAME == "surge_xt"
+    assert mod.TEST_PRESET_PATH == "presets/surge-base.vstpreset"
 
 
 @pytest.mark.infra
