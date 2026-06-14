@@ -100,8 +100,13 @@ def test_obxf_spec_encode_decode_round_trip_preserves_values_and_shape() -> None
     assert not np.any(np.isinf(encoded))
     assert set(decoded_synth) == set(spec.synth_param_names)
     assert set(decoded_note) == set(spec.note_param_names)
-    assert decoded_synth == pytest.approx(synth)
-    assert decoded_note == pytest.approx(note)
+    # encode() stores float32, so the round trip drifts ~1e-7 from the float64
+    # samples; pin an explicit float32 tolerance and keep ``pitch`` an exact int.
+    assert decoded_synth == pytest.approx(synth, abs=1e-6)
+    assert decoded_note["pitch"] == note["pitch"]
+    assert decoded_note["note_start_and_end"] == pytest.approx(
+        note["note_start_and_end"], abs=1e-6
+    )
 
 
 def test_obxf_spec_has_94_synth_params_after_prune() -> None:
