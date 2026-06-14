@@ -344,6 +344,46 @@ def test_generate_dataset_renders_shards_to_r2(
 @pytest.mark.r2
 @pytest.mark.requires_vst
 @pytest.mark.slow
+def test_generate_dataset_renders_obxf_shards_to_r2(
+    cfg_dataset_obxf: DictConfig,
+) -> None:
+    """``from_hydra`` renders every OB-Xf shard with the real plugin and uploads to R2.
+
+    The second-synth counterpart to ``test_generate_dataset_renders_shards_to_r2``,
+    under ``render=obxf`` so the real OB-Xf VST3 renders each shard (no stub) before the
+    ``rclone copy`` upload. The unique-per-run ``r2.prefix`` keeps concurrent runs
+    isolated; a best-effort ``rclone purge`` in ``finally`` removes the prefix even on
+    failure so we don't leak shards. Auto-skips when ``rclone`` is missing or
+    ``rclone lsd r2:`` fails (contributor laptops, fork PRs without secrets).
+
+    :param cfg_dataset_obxf: ``render=obxf`` cfg composed with the
+        ``generate_dataset/smoke-shard`` experiment; carries the real OB-Xf bundle,
+        preset, and pinned renderer version.
+    """
+    if not r2_io.is_r2_reachable():
+        pytest.skip("R2 not reachable (rclone not on PATH or `rclone lsd r2:` failed)")
+
+    unique_prefix = (
+        f"test-runs/test_generate_dataset_renders_obxf_shards_to_r2/{uuid.uuid4().hex[:12]}/"
+    )
+    with open_dict(cfg_dataset_obxf):
+        cfg_dataset_obxf.r2.prefix = unique_prefix
+
+    spec = spec_from_cfg(cfg_dataset_obxf)
+    assert spec.render.param_spec_name == "obxf"
+    try:
+        from_hydra(cfg_dataset_obxf)
+        for shard in spec.shards:
+            size = r2_io.object_size(spec.r2.shard_uri(shard))
+            assert size is not None and size > 0, f"shard missing in R2: {shard.filename}"
+    finally:
+        r2_io.purge_prefix(spec.r2.bucket, spec.r2.prefix)
+
+
+@pytest.mark.integration_r2
+@pytest.mark.r2
+@pytest.mark.requires_vst
+@pytest.mark.slow
 def test_generate_dataset_shard_cadence_renders_one_identical_patch_per_shard(
     cfg_dataset: DictConfig,
 ) -> None:
