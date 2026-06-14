@@ -131,7 +131,7 @@ class VSTFlowMatchingModule(LightningModule):
         else:
             raise ValueError(f"Unknown conditioning {self.hparams.conditioning}")
 
-    def _train_step(self, batch: tuple[torch.Tensor, torch.Tensor]):
+    def _train_step(self, batch: dict[str, torch.Tensor]):
         conditioning = self._get_conditioning_from_batch(batch)
         params = batch["params"]
         noise = batch["noise"]
@@ -161,7 +161,7 @@ class VSTFlowMatchingModule(LightningModule):
 
         return loss, penalty
 
-    def training_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int):
+    def training_step(self, batch: dict[str, torch.Tensor], batch_idx: int):
         loss, penalty = self._train_step(batch)
         self.log("train/loss", loss, on_step=True, on_epoch=True, prog_bar=True)
 
@@ -208,7 +208,7 @@ class VSTFlowMatchingModule(LightningModule):
 
         return sample
 
-    def validation_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int):
+    def validation_step(self, batch: dict[str, torch.Tensor], batch_idx: int):
         conditioning = self._get_conditioning_from_batch(batch)
         pred_params = self._sample(
             conditioning,
@@ -226,7 +226,7 @@ class VSTFlowMatchingModule(LightningModule):
     def on_validation_epoch_end(self):
         pass
 
-    def test_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int):
+    def test_step(self, batch: dict[str, torch.Tensor], batch_idx: int):
         conditioning = self._get_conditioning_from_batch(batch)
         pred_params = self._sample(
             conditioning,

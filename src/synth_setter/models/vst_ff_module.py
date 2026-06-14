@@ -44,7 +44,7 @@ class VSTFeedForwardModule(LightningModule):
         loss = torch.nn.functional.mse_loss(pred_params, target_params)
         return loss, pred_params, target_params, mel_spec
 
-    def training_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int):
+    def training_step(self, batch: dict[str, torch.Tensor], batch_idx: int):
         loss, *_ = self.model_step(batch)
         self.log("train/loss", loss, on_step=True, on_epoch=True, prog_bar=True)
 
@@ -53,7 +53,7 @@ class VSTFeedForwardModule(LightningModule):
     def on_train_epoch_end(self) -> None:
         pass
 
-    def validation_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int):
+    def validation_step(self, batch: dict[str, torch.Tensor], batch_idx: int):
         loss, preds, targets, *_ = self.model_step(batch)
         per_param_mse = (preds - targets).square().mean(dim=0)
         param_mse = per_param_mse.mean()
@@ -64,7 +64,7 @@ class VSTFeedForwardModule(LightningModule):
     def on_validation_epoch_end(self):
         pass
 
-    def test_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int):
+    def test_step(self, batch: dict[str, torch.Tensor], batch_idx: int):
         loss, preds, targets, *_ = self.model_step(batch)
         per_param_mse = (preds - targets).square().mean(dim=0)
         param_mse = per_param_mse.mean()
@@ -75,7 +75,7 @@ class VSTFeedForwardModule(LightningModule):
     def on_test_epoch_end(self) -> None:
         pass
 
-    def predict_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int):
+    def predict_step(self, batch: dict[str, torch.Tensor], batch_idx: int):
         mel_spec = batch["mel_spec"]
         preds = self.net(mel_spec)
         return (
