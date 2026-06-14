@@ -180,7 +180,6 @@ class TestR2DirectoryExists:
         """Empty ``rclone lsf`` stdout (R2's missing-prefix shape) returns ``False``."""
         completed = MagicMock(spec=subprocess.CompletedProcess)
         completed.stdout = ""
-        completed.returncode = 0
         with patch("synth_setter.pipeline.r2_io.subprocess.run", return_value=completed):
             assert r2_io.r2_directory_exists("r2://bucket/missing.lance") is False
 

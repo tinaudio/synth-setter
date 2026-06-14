@@ -415,12 +415,11 @@ def r2_directory_exists(r2_uri: str) -> bool:
     :param r2_uri: Canonical ``r2://bucket/prefix`` URI of the directory.
     :returns: ``True`` if the prefix contains at least one object.
     """
-    # --max-depth=1 keeps the probe O(1): a boolean existence check must not
-    # enumerate a committed dataset's full ``data/`` + version history.
+    # rclone lsf is non-recursive by default, so this lists only the prefix's
+    # immediate entries — an O(1) boolean probe, not a full-tree enumeration.
     args = [  # noqa: S607 — rclone resolved by image's PATH
         "rclone",
         "lsf",
-        "--max-depth=1",
         _to_rclone_path(r2_uri),
     ]
     result = subprocess.run(  # noqa: S603 — args from validated URI
