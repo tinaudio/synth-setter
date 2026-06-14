@@ -76,7 +76,7 @@ permissions:
 
 jobs:
   run_vst_slow_tests:
-    name: VST slow tests (Docker)
+    name: VST slow tests (Docker, ${{ matrix.synth }})
     runs-on: ubuntu-latest-4core
     timeout-minutes: 120
 
@@ -84,6 +84,27 @@ jobs:
     # benchmark history. Workflow-level default is ``contents: read``.
     permissions:
       contents: write
+
+    # One cell per registered synth so the render/round-trip suite proves more
+    # than one VST3 renders end-to-end. ``fail-fast: false`` keeps one synth's
+    # failure from masking the other. ``surge_xt`` runs the full Surge-specific
+    # suite and is the only cell that publishes benchmark metrics (Issue #703);
+    # ``obxf`` runs just the synth-agnostic render test as the OB-Xf proof.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - synth: surge_xt
+            plugin_path: /usr/lib/vst3/Surge XT.vst3
+            pytest_targets: >-
+              tests/data/vst/test_generate_vst_dataset.py
+              tests/data/vst/test_always_on_integration.py
+              tests/data/vst/test_run_with_editor_held_open_real_plugin.py
+              tests/data/vst/test_pedalboard_threading_contract.py
+              tests/integration/test_parallel_shard_render_linux.py
+          - synth: obxf
+            plugin_path: /usr/lib/vst3/OB-Xf.vst3
+            pytest_targets: tests/data/vst/test_generate_vst_dataset.py::test_make_dataset
 
     env:
       IMAGE: tinaudio/synth-setter:${{ inputs.image_tag || 'dev-snapshot' }}
@@ -96,20 +117,23 @@ jobs:
         run: docker pull "$IMAGE"
 
       # Mirrors the headless plugin-load smoke check in
-      # ``docker/ubuntu22_04/Dockerfile:312-314`` (and the local-runner version
+      # ``docker/ubuntu22_04/Dockerfile`` (and the local-runner version
       # in ``cpu-slow.yml``) — fails fast if the plugin / image / mount layout
       # is broken before the much-longer pytest run.
-      - name: Smoke-test Surge XT plugin load
+      - name: Smoke-test ${{ matrix.synth }} plugin load
+        env:
+          PLUGIN_PATH: ${{ matrix.plugin_path }}
         run: |
           docker run --rm \
             -v ${{ github.workspace }}:/home/build/synth-setter \
+            -e "PLUGIN_PATH=$PLUGIN_PATH" \
             "$IMAGE" \
             bash -c '
               set -euo pipefail
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
               src/synth_setter/scripts/run-linux-vst-headless.sh \
-                python -X faulthandler -c "from synth_setter.data.vst.core import load_plugin; load_plugin(\"/usr/lib/vst3/Surge XT.vst3\")"
+                python -X faulthandler -c "import os; from synth_setter.data.vst.core import load_plugin; load_plugin(os.environ[\"PLUGIN_PATH\"])"
             '
 
       - name: Run VST slow tests in Docker
@@ -125,6 +149,10 @@ jobs:
         # imports load the VST host which needs a live X display, so the
         # headless wrapper has to apply at the pytest level (not the
         # entire container).
+        env:
+          PLUGIN_PATH: ${{ matrix.plugin_path }}
+          TEST_SYNTH: ${{ matrix.synth }}
+          PYTEST_TARGETS: ${{ matrix.pytest_targets }}
         run: |
           mkdir -p /tmp/bench
           docker run --rm \
@@ -132,7 +160,9 @@ jobs:
             -v /tmp/bench:/bench \
             -e BENCHMARK_OUTPUT_DIR=/bench \
             -e HYDRA_FULL_ERROR=1 \
-            -e "SYNTH_SETTER_PLUGIN_PATH=/usr/lib/vst3/Surge XT.vst3" \
+            -e "SYNTH_SETTER_PLUGIN_PATH=$PLUGIN_PATH" \
+            -e "SYNTH_SETTER_TEST_SYNTH=$TEST_SYNTH" \
+            -e "PYTEST_TARGETS=$PYTEST_TARGETS" \
             "$IMAGE" \
             bash -c '
               set -euo pipefail
@@ -141,11 +171,7 @@ jobs:
               src/synth_setter/scripts/run-linux-vst-headless.sh \
                 pytest -vv -s \
                   --cov=src --cov-branch --cov-report=xml --cov-report=term \
-                  tests/data/vst/test_generate_vst_dataset.py \
-                  tests/data/vst/test_always_on_integration.py \
-                  tests/data/vst/test_run_with_editor_held_open_real_plugin.py \
-                  tests/data/vst/test_pedalboard_threading_contract.py \
-                  tests/integration/test_parallel_shard_render_linux.py
+                  $PYTEST_TARGETS
             '
 
       # coverage.xml is written inside the container at the workspace mount,
@@ -163,8 +189,9 @@ jobs:
         # ``<prefix>.json`` out of the host-mounted volume to where the
         # publish steps expect it. Each prefix maps 1:1 to a chart bucket.
         # Skipped cleanly if a file is missing (test deselected, xfailed
-        # before emit, etc).
-        if: always()
+        # before emit, etc). Surge-only: the benchmark buckets (Issue #703)
+        # track Surge's noise floor; the obxf cell renders but never publishes.
+        if: always() && matrix.synth == 'surge_xt'
         run: |
           for f in vst-noise-floor-1-preset-n-renders.json vst-noise-floor-random-preset-replay.json; do
             if [ -f "/tmp/bench/$f" ]; then
@@ -183,6 +210,7 @@ jobs:
         # ``publish_metrics`` opt-in. ``hashFiles`` skips the step cleanly if
         # the file is missing.
         if: |
+          matrix.synth == 'surge_xt' &&
           hashFiles('vst-noise-floor-1-preset-n-renders.json') != '' && (
             (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/test/vst-roundtrip-xfail-tests')) ||
             (github.event_name == 'workflow_dispatch' && inputs.publish_metrics == true)
@@ -209,6 +237,7 @@ jobs:
         # invariant rather than the every-other-render bug. See
         # ``docs/reference/audio-similarity-benchmarks.md``.
         if: |
+          matrix.synth == 'surge_xt' &&
           hashFiles('vst-noise-floor-random-preset-replay.json') != '' && (
             (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/test/vst-roundtrip-xfail-tests')) ||
             (github.event_name == 'workflow_dispatch' && inputs.publish_metrics == true)
