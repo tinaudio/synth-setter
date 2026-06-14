@@ -113,7 +113,9 @@ docs:
       - pattern: "src/synth_setter/data/vst/shapes.py"
         covers: "Shared shape primitives consumed by the writers, the shard validator, and the test shard seeders — DATASET_FIELD_NAMES / DATASET_FIELD_DTYPES, mel-front-end constants, per-field shape helpers, and dataset_field_shapes (the single field→shape contract)."
       - pattern: "src/synth_setter/pipeline/data/lance_shard.py"
-        covers: "Lance single-file shard codec — lance_schema / tensor_array / record_batch_from_arrays / write_lance_file on the encode side, read_shard_metadata / iter_lance_column_rows on the decode side; shared by the Lance writer, validator, and finalize."
+        covers: "Lance single-file shard codec — lance_schema / tensor_array / record_batch_from_arrays / write_lance_file on the encode side, read_shard_metadata / iter_lance_column_rows on the decode side; shared by the Lance writer, validator, and finalize; emits the audio_mp3 (MP3_AUDIO_FIELD) large_binary preview column alongside the tensor columns."
+      - pattern: "src/synth_setter/pipeline/data/audio_preview.py"
+        covers: "encode_mp3_preview — Lance-only MP3 preview encoder (pedalboard/librosa lazy import) for the audio_mp3 column; MP3-native sample-rate set + MP3_PREVIEW_SAMPLE_RATE resample fallback."
 
   # ── SkyPilot compute integration design doc ─────────────────────
   - doc: docs/design/skypilot-compute-integration.md
