@@ -12,7 +12,7 @@ version = "8.34.0"
 description = "Studying the effect of permutation symmetry on audio synthesiser parameter inference."
 authors = [{name = "Khaled Tinubu"}, {name = "tinaudio"}]
 readme = "README.md"
-requires-python = ">=3.10,<3.14"
+requires-python = ">=3.11,<3.14"
 # Lite import closure for the lite CI sites (validate_spec, ensure_r2_env_loaded,
 # load_image_config); heavy runtime is in [dependency-groups]. Pinned by
 # tests/infra/test_lite_dependency_base.py — see docs/reference/dependency-management.md (#1139).
@@ -131,7 +131,6 @@ config = [
   "hydra-optuna-sweeper==1.2.0",
   "omegaconf",
   "pydantic-settings>=2",
-  "tomli; python_version < '3.11'",
 ]
 # `kubernetes` extra serves skypilot-local kind-cluster CI; locking it here
 # keeps `uv sync --frozen` self-sufficient.
@@ -321,7 +320,7 @@ testpaths = "tests/"
 
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py311"
 line-length = 99
 exclude = ["logs", "data"]
 # Legacy files excluded until per-file lint cleanup is done (see issue #25).

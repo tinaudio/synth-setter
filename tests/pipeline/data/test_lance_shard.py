@@ -1,8 +1,8 @@
 """Write→read value-fidelity tests for the Lance shard codec.
 
 The expected arrays are constructed directly in numpy — never through the
-decoder under test — so a row-ordering or reshape bug in ``tensor_array`` /
-``tensor_chunk_to_numpy`` cannot corrupt both sides identically and pass.
+codec under test — so a row-ordering or reshape bug in ``tensor_array`` or the
+tensor decode cannot corrupt both sides identically and pass.
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pyarrow as pa
 import pytest
 
 from synth_setter.data.vst.shapes import (
@@ -23,12 +24,12 @@ from synth_setter.pipeline.data.lance_shard import (
     iter_lance_column_rows,
     lance_schema,
     record_batch_from_arrays,
+    tensor_array,
     write_lance_file,
 )
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 
-# Small distinct inner shapes so every element has a unique, exactly
-# representable value (float16 is exact for integers up to 2048).
+# Small shapes: each element gets a unique value, exactly representable as float16 (<= 2048).
 _FIELD_SHAPES: dict[str, tuple[int, ...]] = {
     AUDIO_FIELD: (2, 2, 5),
     MEL_SPEC_FIELD: (2, 2, 3, 4),
@@ -115,3 +116,63 @@ def test_lance_round_trip_noncontiguous_transposed_input_preserves_values(
 
     decoded = np.stack(list(iter_lance_column_rows(shard, MEL_SPEC_FIELD)), axis=0)
     np.testing.assert_array_equal(decoded, transposed_mel)
+
+
+def test_iter_lance_column_rows_yields_read_only_views(tmp_path: Path) -> None:
+    """Yielded rows share Arrow's read-only buffer, so callers must copy to mutate.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    schema = lance_schema(_FIELD_SHAPES, _METADATA)
+    shard = tmp_path / "shard-000000.lance"
+    write_lance_file(shard, schema, [record_batch_from_arrays(_arange_arrays(offset=0), schema)])
+
+    row = next(iter_lance_column_rows(shard, AUDIO_FIELD))
+
+    assert not row.flags.writeable
+
+
+def test_tensor_array_missing_row_axis_raises_value_error() -> None:
+    """A tensor whose ndim equals ``inner_shape``'s (no row axis) raises ValueError.
+
+    ``(2, 7)`` under inner shape ``(2, 7)`` is rejected, not read as a single
+    row of shape ``(2, 7)``.
+    """
+    with pytest.raises(ValueError, match=r"inner shape .+, expected \(2, 7\)"):
+        tensor_array(np.zeros((2, 7), dtype=np.float16), np.dtype(np.float16), (2, 7))
+
+
+def test_tensor_array_empty_batch_raises_value_error() -> None:
+    """A correctly-shaped but row-empty batch raises a clear ValueError, not Arrow's.
+
+    ``(0, 2, 7)`` passes the inner-shape check, so the explicit N >= 1 guard —
+    not the opaque extension-builder error — is what must fire.
+    """
+    with pytest.raises(ValueError, match=r"non-empty batch .* got 0 rows"):
+        tensor_array(np.zeros((0, 2, 7), dtype=np.float16), np.dtype(np.float16), (2, 7))
+
+
+def test_record_batch_from_arrays_schema_dtype_wins_over_field_default() -> None:
+    """Each column's dtype comes from the schema, not ``DATASET_FIELD_DTYPES``.
+
+    ``audio`` defaults to float16, so a schema overriding it to float32 must
+    yield a float32 column; sourcing the dtype from the global dict would emit
+    float16 and fail ``pa.record_batch`` schema validation.
+    """
+    assert (
+        DATASET_FIELD_DTYPES[AUDIO_FIELD] == np.float16
+    )  # guards the override's discriminating power
+    schema = lance_schema(_FIELD_SHAPES, _METADATA)
+    field_index = schema.get_field_index(AUDIO_FIELD)
+    float32_audio = pa.field(
+        AUDIO_FIELD,
+        pa.fixed_shape_tensor(pa.float32(), _FIELD_SHAPES[AUDIO_FIELD][1:]),
+        nullable=False,
+    )
+    schema = schema.set(field_index, float32_audio)
+    arrays = _arange_arrays(offset=0)
+    arrays[AUDIO_FIELD] = arrays[AUDIO_FIELD].astype(np.float32)
+
+    batch = record_batch_from_arrays(arrays, schema)
+
+    assert batch.schema.field(AUDIO_FIELD).type.value_type == pa.float32()

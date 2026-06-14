@@ -22,7 +22,6 @@ from synth_setter.pipeline.data.lance_shard import (
     lance_schema,
     record_batch_from_arrays,
     tensor_array,
-    tensor_chunk_to_numpy,
     write_lance_file,
 )
 from synth_setter.pipeline.schemas.spec import DatasetSpec
@@ -90,7 +89,7 @@ def test_lance_record_batch_preserves_transposed_tensor_shape(tmp_path: Path) ->
     field = reader.metadata().schema.field(MEL_SPEC_FIELD)
     assert tuple(field.type.shape) == shapes[MEL_SPEC_FIELD][1:]
     batch = next(reader.read_all().to_batches())
-    decoded = tensor_chunk_to_numpy(batch.column(0), shapes[MEL_SPEC_FIELD][1:])
+    decoded = batch.column(0).to_numpy_ndarray()
     assert decoded.shape == shapes[MEL_SPEC_FIELD]
 
 

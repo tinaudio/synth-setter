@@ -48,7 +48,7 @@ RUN case "${TARGETARCH:-}" in \
     esac
 
 # TODO: add appropriate build labels
-# TODO: Consider taking python runtime from `python:3.10-*` stage.
+# TODO: Consider taking python runtime from `python:3.11-*` stage.
 # This would involving copying`/usr/local`.
 # TODO: Add diagram of stages and dependencies.
 # TODO(deduplicate package lists)
@@ -299,13 +299,11 @@ RUN ls /usr/lib/vst3/ && test -n "$(ls -A /usr/lib/vst3/Surge\ XT.vst3 2>/dev/nu
 # so container callers don't have to pass `-e SYNTH_SETTER_PLUGIN_PATH=...`.
 ENV SYNTH_SETTER_PLUGIN_PATH="/usr/lib/vst3/Surge XT.vst3"
 
-# Install Python and create venv
+# Install build-time system Python and uv; the runtime venv is created below.
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-dev
-RUN python3 --version && \
-    python3 -c "import sys; exit(0) if sys.version_info[:2] == (3,10) else exit(1)"
 COPY --from=ghcr.io/astral-sh/uv:0.11.2 /uv /uvx /usr/local/bin/
 ENV VIRTUAL_ENV=/venv/main
 # HYDRA_FULL_ERROR=1 — full Python traceback instead of Hydra's trimmed output
@@ -318,10 +316,12 @@ ENV HYDRA_FULL_ERROR=1 \
     PYTHONFAULTHANDLER=1 \
     PYTHONUNBUFFERED=1 \
     PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-RUN uv venv $VIRTUAL_ENV
+# Runtime venv: a uv-managed CPython 3.11 (matches `requires-python` in
+# `pyproject.toml`), decoupled from the apt python3 used at build time.
+RUN uv venv --python 3.11 "$VIRTUAL_ENV"
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 RUN python --version && \
-    python -c "import sys; assert sys.version_info[:2] == (3, 10), sys.version"
+    python -c "import sys; assert sys.version_info[:2] == (3, 11), sys.version"
 
 # ==========================================
 # Shared runtime base: Python + runtime deps on top of python-base.

@@ -195,13 +195,18 @@ class TestLanceShardFile:
         np.testing.assert_array_equal(out, columns["mel_spec"][2:5])
 
     def test_column_reads_return_writable_arrays(self, tmp_path: Path) -> None:
-        """Reads are copied out of Arrow's read-only buffer before reaching torch.
+        """Every decode path copies out of Arrow's read-only buffer.
+
+        ``to_numpy_ndarray`` returns a read-only view, and torch.from_numpy over
+        one is undefined behavior on write, so every read must hit ``.copy()``.
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
         """
         _write_seeded_lance_shard(tmp_path / "train.lance", num_rows=8)
         shard = LanceShardFile(tmp_path / "train.lance")
         assert shard["audio"][0:2].flags.writeable
+        assert shard["audio"][[0, 3, 5]].flags.writeable
+        assert shard["audio"][0:8:2].flags.writeable
 
     def test_column_open_ended_slice_reads_from_row_zero(self, tmp_path: Path) -> None:
         """``file[name][:k]`` (no explicit start) reads the first ``k`` rows.
@@ -440,6 +445,27 @@ class TestLanceVSTDataset:
         for key in _ALL_TENSOR_KEYS:
             assert _unwrap(item[key]).dtype == torch.float32, key
             assert _unwrap(item[key]).is_contiguous(), f"{key} not contiguous"
+
+    def test_getitem_returns_writable_tensors_through_decode_path(
+        self, single_shard: Path
+    ) -> None:
+        """End-to-end: dataset tensors are writable out of the Lance decode path.
+
+        The column decode yields a read-only Arrow view; only the ``.copy()``
+        guard makes it safe for ``torch.from_numpy`` (writable iff its buffer is).
+
+        :param single_shard: Fixture-provided single-shard Lance path.
+        """
+        dataset = LanceVSTDataset(
+            single_shard,
+            batch_size=2,
+            ot=False,
+            use_saved_mean_and_variance=False,
+            read_audio=True,
+            read_mel=True,
+        )
+        item = dataset[0]
+        assert _unwrap(item["audio"]).numpy().flags.writeable
 
     def test_read_flags_route_modalities(self, single_shard: Path) -> None:
         """``read_audio`` / ``read_mel`` / ``read_m2l`` toggle their dict slots.

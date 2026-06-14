@@ -59,3 +59,12 @@ def test_value_is_the_lowercase_token() -> None:
     assert OutputFormat.HDF5 == "hdf5"
     assert OutputFormat.WDS == "wds"
     assert OutputFormat.LANCE == "lance"
+
+
+@pytest.mark.parametrize("member", list(OutputFormat))
+def test_member_str_coercion_returns_its_value(member: OutputFormat) -> None:
+    """``str(member)`` is the bare value, not ``"OutputFormat.X"`` (``StrEnum`` contract).
+
+    :param member: The output format under test (swept over every enum member).
+    """
+    assert str(member) == member.value
