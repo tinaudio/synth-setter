@@ -95,8 +95,8 @@ class LanceShardFile:
         if not path.is_dir():
             raise ValueError(f"Lance shard dataset was not found: {self._path}")
         dataset = lance.dataset(self._path)
-        # The shard is immutable, so row count and per-column tensor shapes are
-        # cached once instead of re-querying dataset metadata on every batch read.
+        # count_rows()/schema each traverse the version manifest, so cache them
+        # once: the shard is immutable, and reads happen per training batch.
         self.num_rows = dataset.count_rows()
         self._inner_shapes = {
             field.name: tuple(cast(pa.FixedShapeTensorType, field.type).shape)

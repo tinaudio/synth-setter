@@ -700,10 +700,12 @@ def _render_and_upload_shard(
             )
         byte_size = sum(p.stat().st_size for p in shard_path.rglob("*") if p.is_file())
         logger.info(f"shard rendered: {shard_path} ({byte_size} bytes)")
-        # upload_dir syncs the tree under the shard URI with the wide directory
-        # IO timeout; a multi-fragment shard can outlast the single-file default.
+        # Upload data first, then the _versions/ manifest last (rclone copy has no
+        # ordering guarantee). The resume skip-probe checks _versions/, so a crash
+        # mid-upload must never leave a manifest whose data files are absent.
         dest = spec.r2.shard_uri(shard)
-        r2_io.upload_dir(shard_path, dest)
+        r2_io.upload_dir(shard_path, dest, exclude="_versions/**")
+        r2_io.upload_dir(shard_path / "_versions", f"{dest}/_versions")
     else:
         if not shard_path.is_file():
             raise RuntimeError(

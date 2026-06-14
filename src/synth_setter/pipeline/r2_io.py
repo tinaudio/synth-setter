@@ -308,7 +308,7 @@ def upload_to_uri(local_path: Path, r2_uri: str) -> None:
     subprocess.check_call(args)  # noqa: S603 — args from validated URI
 
 
-def upload_dir(local_dir: Path, r2_uri: str) -> None:
+def upload_dir(local_dir: Path, r2_uri: str, exclude: str | None = None) -> None:
     """Copy a local directory tree into an R2 prefix (upload mirror of the dir download).
 
     ``rclone copy`` walks ``local_dir`` and writes each file under ``r2_uri``,
@@ -323,10 +323,12 @@ def upload_dir(local_dir: Path, r2_uri: str) -> None:
     :param local_dir: Local directory whose contents land directly under
         ``r2_uri`` (the directory itself is not nested under its own name).
     :param r2_uri: ``r2://`` destination prefix; created implicitly by rclone.
+    :param exclude: Optional rclone ``--exclude`` glob; lets a caller stage a
+        subtree last by excluding it from a first pass.
     """
-    args = _rclone_argv(
-        "copy", str(local_dir), _to_rclone_path(r2_uri), timeout=_UPLOAD_DIR_TIMEOUT
-    )
+    operands = [f"--exclude={exclude}"] if exclude is not None else []
+    operands += [str(local_dir), _to_rclone_path(r2_uri)]
+    args = _rclone_argv("copy", *operands, timeout=_UPLOAD_DIR_TIMEOUT)
     subprocess.check_call(args)  # noqa: S603 — args from validated URI
 
 
