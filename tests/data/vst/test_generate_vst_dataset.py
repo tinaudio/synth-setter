@@ -37,9 +37,8 @@ from tests._vst import PLUGIN_PATH, TEST_PARAM_SPEC_NAME, TEST_PRESET_PATH
 
 log = logging.getLogger(__name__)
 
-# Default Surge XT, redirected to the env's synth so the synth-agnostic
-# ``test_make_dataset`` renders a second synth in CI. The Surge-specific tests
-# below (hardcoded param names, tuned audio thresholds) are deselected there.
+# Env-driven (Surge XT default) so the synth-agnostic ``test_make_dataset``
+# renders a second synth in CI; the Surge-specific tests below are deselected there.
 _PRESET_PATH = TEST_PRESET_PATH
 _NUM_SAMPLES = 5
 _SAMPLE_RATE = 44100.0
