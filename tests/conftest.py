@@ -797,7 +797,6 @@ def _build_surge_smoke_lance_datasets(tmp_path: Path, param_spec_name: str) -> P
     mean, std = stream_stats_lance([train_lance], mask_degenerate=True)
     np.savez(smoke_dataset_dir / "stats.npz", mean=mean, std=std)
 
-    # Lance shards are directories, so clone the tree rather than a single file.
     shutil.copytree(train_lance, smoke_dataset_dir / "val.lance")
     shutil.copytree(train_lance, smoke_dataset_dir / "test.lance")
     return smoke_dataset_dir

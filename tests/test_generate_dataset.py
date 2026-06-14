@@ -203,8 +203,10 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     for shard in spec.shards:
         assert shard.filename.endswith(shard_suffix)
         if spec.output_format.is_directory:
-            assert r2_io.r2_directory_exists(spec.r2.shard_uri(shard)), (
-                f"shard missing in fake R2: {shard.filename}"
+            # Probe the committed manifest, mirroring the production skip-probe:
+            # asserts the shard landed AND was committed (not orphaned fragments).
+            assert r2_io.r2_directory_exists(f"{spec.r2.shard_uri(shard)}/_versions"), (
+                f"committed shard missing in fake R2: {shard.filename}"
             )
         else:
             size = r2_io.object_size(spec.r2.shard_uri(shard))

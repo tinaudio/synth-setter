@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from pathlib import Path
 
 import lance
@@ -117,7 +117,12 @@ def write_lance_dataset(
 
 
 def lance_fragment(
-    uri: Path | str, schema: pa.Schema, batch: pa.RecordBatch, fragment_id: int
+    uri: Path | str,
+    schema: pa.Schema,
+    batch: pa.RecordBatch,
+    fragment_id: int,
+    *,
+    storage_options: dict[str, str] | None = None,
 ) -> lance.fragment.FragmentMetadata:
     """Write one record batch as a Lance fragment under ``uri`` (push source).
 
@@ -125,10 +130,12 @@ def lance_fragment(
     the results and hand them to :func:`commit_lance_dataset`. Lets the push-based
     render loop stream batches without buffering a whole shard in memory.
 
-    :param uri: Destination dataset directory the fragment data file lands under.
+    :param uri: Destination dataset directory (local path or ``s3://`` URI).
     :param schema: Arrow schema shared by every fragment.
     :param batch: One record batch to persist as a fragment.
     :param fragment_id: Zero-based fragment index, contiguous within the dataset.
+    :param storage_options: Object-store config for a cloud ``uri`` (see
+        :func:`synth_setter.pipeline.r2_io.r2_storage_options`); ``None`` local.
     :returns: Fragment metadata for the commit.
     """
     return LanceFragment.create(
@@ -137,22 +144,27 @@ def lance_fragment(
         fragment_id=fragment_id,
         schema=schema,
         data_storage_version=LANCE_DATA_STORAGE_VERSION,
+        storage_options=storage_options,
     )
 
 
 def commit_lance_dataset(
     uri: Path | str,
     schema: pa.Schema,
-    fragments: list[lance.fragment.FragmentMetadata],
+    fragments: Sequence[lance.fragment.FragmentMetadata],
+    *,
+    storage_options: dict[str, str] | None = None,
 ) -> None:
     """Commit fragments from :func:`lance_fragment` as a fresh Lance dataset.
 
-    :param uri: Destination dataset directory holding the fragment data files.
+    :param uri: Destination dataset directory (local path or ``s3://`` URI).
     :param schema: Arrow schema the dataset is created with.
     :param fragments: Fragment metadata from :func:`lance_fragment`, in row order.
+    :param storage_options: Object-store config for a cloud ``uri`` (see
+        :func:`synth_setter.pipeline.r2_io.r2_storage_options`); ``None`` local.
     """
-    operation = lance.LanceOperation.Overwrite(schema, fragments)
-    lance.LanceDataset.commit(str(uri), operation)
+    operation = lance.LanceOperation.Overwrite(schema, list(fragments))
+    lance.LanceDataset.commit(str(uri), operation, storage_options=storage_options)
 
 
 def read_shard_metadata(schema: pa.Schema) -> ShardMetadata:

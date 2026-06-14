@@ -184,6 +184,15 @@ class TestR2DirectoryExists:
         with patch("synth_setter.pipeline.r2_io.subprocess.run", return_value=completed):
             assert r2_io.r2_directory_exists("r2://bucket/missing.lance") is False
 
+    def test_nonzero_rclone_exit_propagates(self) -> None:
+        """A non-zero rclone exit (auth/network) fails fast rather than reading as absent."""
+        err = subprocess.CalledProcessError(returncode=1, cmd=["rclone", "lsf"])
+        with (
+            patch("synth_setter.pipeline.r2_io.subprocess.run", side_effect=err),
+            pytest.raises(subprocess.CalledProcessError),
+        ):
+            r2_io.r2_directory_exists("r2://bucket/shard.lance")
+
 
 class TestDownloadToPath:
     """Tests for download_to_path — file→file copy."""
