@@ -6,7 +6,7 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Callable, Iterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -364,6 +364,36 @@ def cfg_dataset(cfg_dataset_global: DictConfig, tmp_path: Path) -> Iterator[Dict
         cfg.paths.output_dir = str(tmp_path)
         cfg.paths.work_dir = str(tmp_path)
         cfg.paths.log_dir = str(tmp_path)
+
+    yield cfg
+
+    GlobalHydra.instance().clear()
+
+
+@pytest.fixture(scope="function")
+def cfg_dataset_obxf(tmp_path: Path) -> Iterator[DictConfig]:
+    """Compose ``dataset.yaml`` with ``render=obxf`` for entrypoint OB-Xf coverage.
+
+    The Hydra config-initializer lives here, not in ``tests/test_generate_dataset.py``,
+    so that module stays free of the imports banned by
+    ``tests/_meta/test_entrypoint_e2e_only.py`` while still carrying the
+    second-synth entrypoint test ``synth-setter-project-standards`` P31 requires.
+
+    :param tmp_path: Per-test output/work/log root.
+
+    :yields DictConfig: ``render=obxf`` cfg with ``tmp_path``-pinned paths;
+        teardown clears Hydra's global singleton.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="dataset",
+            overrides=["experiment=generate_dataset/smoke-shard", "render=obxf"],
+        )
+        with open_dict(cfg):
+            _set_workspace_root(cfg)
+            cfg.paths.output_dir = str(tmp_path)
+            cfg.paths.work_dir = str(tmp_path)
+            cfg.paths.log_dir = str(tmp_path)
 
     yield cfg
 
@@ -980,7 +1010,7 @@ def _base_dataset_spec_kwargs() -> dict[str, Any]:
     :returns: A fresh kwargs dict safe for in-place override per call.
     """
     return {
-        "created_at": datetime(2026, 5, 20, 0, 0, 0, tzinfo=timezone.utc),
+        "created_at": datetime(2026, 5, 20, 0, 0, 0, tzinfo=UTC),
         "git_sha": "0" * 40,
         "is_repo_dirty": False,
         "output_format": "hdf5",

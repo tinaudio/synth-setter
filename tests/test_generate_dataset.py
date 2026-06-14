@@ -71,6 +71,23 @@ def test_cfg_dataset_composes_and_validates_as_dataset_spec(
     assert spec.render.samples_per_shard >= 1
 
 
+def test_cfg_dataset_render_obxf_resolves_obxf_param_spec_through_spec_from_cfg(
+    cfg_dataset_obxf: DictConfig,
+) -> None:
+    """``render=obxf`` flows through ``spec_from_cfg`` to OB-Xf's registered width.
+
+    Pins the second synth through the real entrypoint helper: ``num_params`` is
+    looked up by ``render.param_spec_name`` in the registry, so 187 guards the
+    OB-Xf spec against a count-changing edit.
+
+    :param cfg_dataset_obxf: Function-scoped fixture composing ``dataset.yaml``
+        with the ``generate_dataset/smoke-shard`` experiment and ``render=obxf``.
+    """
+    spec = spec_from_cfg(cfg_dataset_obxf)
+    assert spec.render.param_spec_name == "obxf"
+    assert spec.num_params == 187
+
+
 def test_cfg_dataset_without_copy_dataset_root_uri_composes_with_no_copy_source(
     cfg_dataset: DictConfig,
 ) -> None:
@@ -115,6 +132,23 @@ def test_cfg_dataset_copy_dataset_root_uri_with_wds_output_is_rejected(
 
     with pytest.raises(ValueError, match="supports output_format='hdf5' only"):
         spec_from_cfg(cfg_dataset)
+
+
+def test_cfg_dataset_render_obxf_resolves_param_spec_through_spec_from_cfg(
+    cfg_dataset_obxf: DictConfig,
+) -> None:
+    """``render=obxf`` resolves its registered spec through the ``spec_from_cfg`` entrypoint path.
+
+    ``num_params`` is ``len(param_specs[param_spec_name])`` — the registry lookup
+    the shard writer makes — so a resolving width proves the entrypoint reaches the
+    OB-Xf spec without a ``KeyError`` (P31 e2e gate for the new ``render`` group).
+
+    :param cfg_dataset_obxf: Function-scoped fixture composing ``dataset.yaml`` with
+        the smoke-shard experiment, ``render=obxf``, and ``tmp_path``-pinned paths.
+    """
+    spec = spec_from_cfg(cfg_dataset_obxf)
+    assert spec.render.param_spec_name == "obxf"
+    assert spec.num_params == 187
 
 
 @pytest.mark.fake_vst
