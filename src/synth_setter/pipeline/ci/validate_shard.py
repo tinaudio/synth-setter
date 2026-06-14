@@ -22,8 +22,9 @@ to the HDF5 path (``.h5``), the wds tar path (``.tar``), or the Lance path
 CLI usage:
     python3 -m synth_setter.pipeline.ci.validate_shard <spec.json|r2://bucket/spec.json>
 
-Iterates `spec.shards` and downloads each shard from R2 (under
-`r2://{spec.r2.bucket}/{spec.r2.prefix}{shard.filename}`) before validating.
+Iterates `spec.shards` from R2 (under
+`r2://{spec.r2.bucket}/{spec.r2.prefix}{shard.filename}`): HDF5/WDS shards
+download to a tempfile first, Lance shards stream directly from R2.
 """
 
 from __future__ import annotations
@@ -499,13 +500,16 @@ def _load_spec(spec_arg: str) -> DatasetSpec:
 
 
 def validate_all_shards_from_r2(spec: DatasetSpec) -> list[str]:
-    """Validate every shard in ``spec.shards`` by downloading from R2.
+    """Validate every shard in ``spec.shards`` from R2.
+
+    HDF5/WDS shards download to a tempfile before validating; Lance shards
+    short-circuit to :func:`_validate_all_lance_shards_from_r2`, which streams
+    each dataset directly from R2 (no local download).
 
     :param spec: Dataset spec whose ``shards`` list drives the iteration; each
-        listed shard is fetched from R2 under ``r2://{spec.r2.bucket}/{spec.r2.prefix}``.
+        listed shard lives under ``r2://{spec.r2.bucket}/{spec.r2.prefix}``.
     :returns: Aggregated error strings across all shards (empty = all valid). Each
         error is prefixed with the shard filename so the source is obvious.
-    :rtype: list[str]
     """
     if spec.output_format is OutputFormat.LANCE:
         return _validate_all_lance_shards_from_r2(spec)

@@ -8,9 +8,9 @@ and then writes the ``dataset.complete`` marker last per
 ``pipeline/CLAUDE.md``. The wds branch streams train shards through
 Welford row-by-row; the hdf5 branch downloads every shard, reshards into
 ``{train,val,test}.h5``, and computes ``stats.npz`` over the train split;
-the lance branch downloads every shard, streams train shards through
-Welford for ``stats.npz``, and concatenates each split's shards into
-``{train,val,test}.lance``.
+the lance branch streams every shard directly from R2 (no local download),
+folds train shards through Welford for ``stats.npz``, and writes each split
+straight back to R2 as a ``{train,val,test}.lance`` dataset directory.
 """
 
 from __future__ import annotations
