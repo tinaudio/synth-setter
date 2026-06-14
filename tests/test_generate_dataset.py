@@ -35,14 +35,11 @@ from unittest.mock import patch
 import h5py
 import numpy as np
 import pytest
-from hydra import compose, initialize_config_module
-from hydra.core.global_hydra import GlobalHydra
 from omegaconf import DictConfig, open_dict
 
 from synth_setter.cli.generate_dataset import from_hydra, spec_from_cfg
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import DatasetSpec
-from synth_setter.workspace import operator_workspace
 from tests.evaluation._oracle_helpers import ORACLE_AUDIO_METRIC_BOUNDS
 from tests.helpers.dummy_shards import stub_renderer
 
@@ -118,36 +115,6 @@ def test_cfg_dataset_copy_dataset_root_uri_with_wds_output_is_rejected(
 
     with pytest.raises(ValueError, match="supports output_format='hdf5' only"):
         spec_from_cfg(cfg_dataset)
-
-
-def test_cfg_dataset_render_obxf_resolves_param_spec_through_spec_from_cfg(
-    tmp_path: Path,
-) -> None:
-    """``render=obxf`` composes through ``spec_from_cfg`` and resolves its registered spec.
-
-    ``num_params`` is ``len(param_specs[param_spec_name])`` — the same registry
-    lookup the shard writer makes — so a resolving width proves the entrypoint
-    reaches the OB-Xf spec without a ``KeyError`` (P31 e2e gate for the new group).
-
-    :param tmp_path: Per-test output/work/log root for the composed paths.
-    """
-    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
-        cfg = compose(
-            config_name="dataset",
-            overrides=["experiment=generate_dataset/smoke-shard", "render=obxf"],
-        )
-        with open_dict(cfg):
-            cfg.paths.root_dir = str(operator_workspace())
-            cfg.paths.output_dir = str(tmp_path)
-            cfg.paths.work_dir = str(tmp_path)
-            cfg.paths.log_dir = str(tmp_path)
-
-        spec = spec_from_cfg(cfg)
-
-    assert spec.render.param_spec_name == "obxf"
-    assert spec.num_params == 187
-
-    GlobalHydra.instance().clear()
 
 
 @pytest.mark.fake_vst

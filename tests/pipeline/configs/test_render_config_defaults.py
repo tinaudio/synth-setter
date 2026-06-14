@@ -81,6 +81,8 @@ def test_render_obxf_composes_into_valid_render_config() -> None:
     """``render=obxf`` composes into a ``RenderConfig`` pinning OB-Xf's identity.
 
     ``plugin_path`` must stay repo-relative so renders resolve against the checkout.
+    ``num_params`` is the registry lookup the shard writer makes, so a resolving
+    width proves the composed spec reaches the OB-Xf registry without a ``KeyError``.
     """
     spec = _spec_from_dataset_overrides(["render=obxf"])
 
@@ -88,5 +90,6 @@ def test_render_obxf_composes_into_valid_render_config() -> None:
     assert spec.render.renderer_version == "1.0.3"
     assert spec.render.plugin_path == "plugins/OB-Xf.vst3"
     assert spec.render.preset_path == "presets/obxf-base.vstpreset"
+    assert spec.num_params == 187
     # Inherited from the surge_xt base group, proving defaults: [surge_xt] is live.
     assert spec.render.plugin_reload_cadence == "render"
