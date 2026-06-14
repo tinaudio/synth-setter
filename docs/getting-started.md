@@ -16,7 +16,7 @@ ______________________________________________________________________
   are available but significantly slower.
 
 `make install` installs [uv](https://docs.astral.sh/uv/) and a managed
-Python 3.10 interpreter for you — you do not need to install Python
+Python 3.11 interpreter for you — you do not need to install Python
 yourself. If you prefer to manage the interpreter and venv manually, see
 [Appendix A](#appendix-a-manual-environment-setup).
 
@@ -36,7 +36,7 @@ cd synth-setter
 `make install` is the canonical end-to-end install. It:
 
 1. Installs [uv](https://docs.astral.sh/uv/) if it is not already on your PATH.
-2. Creates `.venv/` using a managed Python 3.10 interpreter (downloaded by uv
+2. Creates `.venv/` using a managed Python 3.11 interpreter (downloaded by uv
    if you do not have one locally). The venv prompt label is `synth-setter`.
 3. Installs the project itself in editable mode together with its `dev`
    dependency-group (⊇ `runtime`) from `pyproject.toml`
@@ -52,7 +52,7 @@ make install
 ```
 
 Re-running `make install` is safe: it reuses `.venv/` if it already exists and
-is Python 3.10, and refreshes the installed packages. If `.venv/` exists with a
+is Python 3.11, and refreshes the installed packages. If `.venv/` exists with a
 different Python version, `make install` errors and asks you to remove it
 first.
 
@@ -631,18 +631,18 @@ ______________________________________________________________________
 ## Appendix A: Manual environment setup
 
 `make install` is the canonical path for most users — it installs uv, a
-managed Python 3.10 interpreter, the venv, dependencies, and pre-commit.
+managed Python 3.11 interpreter, the venv, dependencies, and pre-commit.
 This appendix is for users who want to manage Python and the environment
 themselves (pip, conda, pyenv, system Python, etc.).
 
 **Requirement:** see the `requires-python` field in `pyproject.toml`
-(currently `>=3.10,<3.14`; `pip` enforces this).
+(currently `>=3.11,<3.14`; `pip` enforces this).
 
 ### A.1. Plain pip + venv
 
 ```bash
-# Use any Python 3.10+ interpreter
-python3.10 -m venv .venv
+# Use any Python 3.11+ interpreter
+python3.11 -m venv .venv
 source .venv/bin/activate
 
 # The heavy runtime lives in PEP 735 dependency-groups (see #1139), which plain
@@ -657,7 +657,7 @@ Drop `-e` for a non-editable install.
 ### A.2. conda
 
 ```bash
-conda create -n synth-setter python=3.10
+conda create -n synth-setter python=3.11
 conda activate synth-setter
 
 # conda owns the torch stack; uv pulls the rest of the runtime + dev tooling
@@ -677,7 +677,7 @@ If you want to drive uv directly (e.g., to point at a specific interpreter
 you manage yourself):
 
 ```bash
-uv venv --python 3.10 --prompt synth-setter .venv
+uv venv --python 3.11 --prompt synth-setter .venv
 source .venv/bin/activate
 uv pip install --group dev -e .
 pre-commit install
@@ -832,7 +832,7 @@ the failure surfaces immediately rather than partway through `post-create`.
 ### B.3. macOS VM (Tart)
 
 If you want full dev parity on Apple Silicon inside a throwaway, mostly
-reproducible VM — Python 3.10 venv, Surge XT (native .vst3 via cask), Claude
+reproducible VM — Python 3.11 venv, Surge XT (native .vst3 via cask), Claude
 Code installed, auto-activated venv — pull the prebuilt Tart image published
 at `registry-1.docker.io/tinaudio/synth-setter-macos`. Rebuilds from the template are not
 fully pinned: Homebrew formulas/casks may resolve to newer versions over time,
@@ -877,7 +877,7 @@ base image, updated `uv`, updated Surge XT, etc.), the Packer template at
 See the bottom of the file for the full publishing workflow to Docker Hub.
 The template's `variable` blocks are the authoritative source for supported
 overrides. User-overridable packer vars: `synth_setter_git_ref` (default
-`main`), `python_version` (default `3.10`), `vm_name` (default
+`main`), `python_version` (default `3.11`), `vm_name` (default
 `synth-setter-macos`), `codex_version` (default `latest`),
 `base_image_digest`, `uv_version`, and `surge_xt_version`.
 

@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from datetime import datetime, timedelta, timezone
-from enum import Enum
+from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -58,12 +58,11 @@ _LEGACY_FLAT_R2_KEYS: dict[str, str] = {
 }
 
 
-class OutputFormat(str, Enum):
+class OutputFormat(StrEnum):
     """Shard container format; the enum value is the on-disk / JSON token.
 
-    Subclasses ``str`` (rather than 3.11's ``StrEnum``, unavailable on the
-    ``>=3.10`` floor) so a value compares equal to and serializes as its plain
-    string token across the Hydra / R2-JSON boundary.
+    Member values are persisted as R2 / ``input_spec.json`` keys — renaming or
+    removing one requires a data migration.
 
     .. attribute :: HDF5
 
@@ -165,7 +164,7 @@ def _is_repo_dirty() -> bool:
 
 def _utc_now() -> datetime:
     """Return the current time as a timezone-aware UTC datetime."""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _current_platform() -> str:
@@ -901,9 +900,8 @@ class DatasetSpec(BaseModel):
         """Parse an ISO 8601 string into a tz-aware UTC ``datetime``.
 
         Strict-mode Python validation rejects str → datetime coercion, so JSON inputs (where
-        datetime is a string) need pre-conversion here. Also normalizes the trailing ``Z``
-        offset that ``model_dump_json`` emits for UTC, which Python 3.10's ``fromisoformat``
-        does not accept (3.11+ does).
+        datetime is a string) need pre-conversion here. Also normalizes the trailing ``Z`` UTC
+        designator that ``model_dump_json`` emits to an explicit ``+00:00`` offset before parsing.
 
         Rejects naive datetimes and non-UTC offsets so error attribution stays at the
         ``created_at`` boundary rather than surfacing later as a ``run_id`` derivation crash

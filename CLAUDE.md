@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-synth-setter: synth inversion, sound matching, and preset-exploration tools — Python 3.10+, PyTorch Lightning, Hydra, with a distributed data pipeline on SkyPilot-managed compute (RunPod + OCI) stored in Cloudflare R2.
+synth-setter: synth inversion, sound matching, and preset-exploration tools — Python 3.11+, PyTorch Lightning, Hydra, with a distributed data pipeline on SkyPilot-managed compute (RunPod + OCI) stored in Cloudflare R2.
 
 Shared agent instructions for Claude and Codex; AGENTS.md is the canonical source. Architecture: [docs/architecture.md](docs/architecture.md).
 

@@ -34,7 +34,7 @@ channels:
 # to use the conda path.
 
 dependencies:
-  - python=3.10
+  - python=3.11
   - pytorch>=2.0.0
   - torchvision>=0.15.0
   - torchaudio>=2.0.0

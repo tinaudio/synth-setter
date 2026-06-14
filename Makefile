@@ -96,7 +96,7 @@ deflake: ## Rerun TEST COUNT times; retain failed tmp_paths under deflake-artifa
 	  --junitxml deflake-artifacts/junit.xml \
 	  -- "$(TEST)" 2>&1 | tee deflake-artifacts/pytest.log
 
-install: ## End-to-end: install uv, create .venv (Python 3.10), install deps, set up pre-commit
+install: ## End-to-end: install uv, create .venv (Python 3.11), install deps, set up pre-commit
 	@command -v uv >/dev/null 2>&1 || [ -x "$$HOME/.local/bin/uv" ] || \
 		{ echo "Installing uv..."; curl -LsSf https://astral.sh/uv/install.sh | sh; }
 	@set -e; \
@@ -104,9 +104,9 @@ install: ## End-to-end: install uv, create .venv (Python 3.10), install deps, se
 	[ -x "$$UV" ] || { echo "ERROR: uv not found at $$UV"; exit 1; }; \
 	if [ -d .venv ]; then \
 		PY_VER=$$(.venv/bin/python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null); \
-		[ "$$PY_VER" = "3.10" ] || { echo "ERROR: existing .venv has Python $$PY_VER, need 3.10 (rm -rf .venv to recreate)"; exit 1; }; \
+		[ "$$PY_VER" = "3.11" ] || { echo "ERROR: existing .venv has Python $$PY_VER, need 3.11 (rm -rf .venv to recreate)"; exit 1; }; \
 	else \
-		"$$UV" venv --python 3.10 --prompt synth-setter .venv; \
+		"$$UV" venv --python 3.11 --prompt synth-setter .venv; \
 	fi; \
 	"$$UV" pip install --python .venv/bin/python --group dev -e .; \
 	if [ -n "$$(git config --get core.hooksPath 2>/dev/null)" ]; then \
