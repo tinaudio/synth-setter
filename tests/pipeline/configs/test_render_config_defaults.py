@@ -74,3 +74,17 @@ def test_base_render_config_surfaced_defaults_compose_correctly() -> None:
     assert spec.render.plugin_reload_cadence == "render"
     assert spec.render.gui_toggle_cadence == "once"
     assert spec.render.param_sample_cadence == "sample"
+
+
+def test_render_obxf_composes_into_valid_render_config() -> None:
+    """``render=obxf`` composes into a ``RenderConfig`` pinning OB-Xf's identity.
+
+    Inherits the surge_xt render knobs, overriding only the synth-identity fields;
+    ``plugin_path`` stays repo-relative so renders resolve against the checkout.
+    """
+    spec = _spec_from_dataset_overrides(["render=obxf"])
+
+    assert spec.render.param_spec_name == "obxf"
+    assert spec.render.renderer_version == "1.0.3"
+    assert spec.render.plugin_path == "plugins/OB-Xf.vst3"
+    assert not spec.render.plugin_path.startswith("/")

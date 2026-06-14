@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 
+from synth_setter.data.vst.obxf_param_spec import OBXF_PARAM_SPEC
 from synth_setter.data.vst.param_spec import ParamSpec
 from synth_setter.data.vst.surge_xt_param_spec import (
     SURGE_4_PARAM_SPEC,
@@ -27,12 +28,14 @@ param_specs: dict[str, ParamSpec] = {
     "surge_xt": SURGE_XT_PARAM_SPEC,
     "surge_simple": SURGE_SIMPLE_PARAM_SPEC,
     "surge_4": SURGE_4_PARAM_SPEC,
+    "obxf": OBXF_PARAM_SPEC,
 }
 
 preset_paths: dict[str, str] = {
     "surge_xt": "presets/surge-base.vstpreset",
     "surge_simple": "presets/surge-simple.vstpreset",
     "surge_4": "presets/surge-mini.vstpreset",
+    "obxf": "presets/obxf-base.vstpreset",
 }
 
 
