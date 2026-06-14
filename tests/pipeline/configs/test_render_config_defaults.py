@@ -1,11 +1,12 @@
 """Tests that ``RenderConfig`` fields are surfaced in ``surge_xt.yaml`` and overridable.
 
-Verifies two contracts:
+Verifies three contracts:
 - Plain ``render.<field>=...`` Hydra CLI overrides (no ``+``) are accepted when
   ``surge_xt.yaml`` surfaces the field — Hydra struct mode rejects unknown keys,
   so a passing compose proves the field is present in the composed tree (#489).
 - A no-override compose yields the values hard-coded in ``surge_xt.yaml`` on
   every platform (not the ``RenderConfig`` model's platform-dependent defaults).
+- ``render=obxf`` composes into a valid ``RenderConfig`` pinning OB-Xf's identity.
 """
 
 from __future__ import annotations
@@ -79,8 +80,8 @@ def test_base_render_config_surfaced_defaults_compose_correctly() -> None:
 def test_render_obxf_composes_into_valid_render_config() -> None:
     """``render=obxf`` composes into a ``RenderConfig`` pinning OB-Xf's identity.
 
-    Inherits the surge_xt render knobs, overriding only the synth-identity fields;
-    ``plugin_path`` stays repo-relative so renders resolve against the checkout.
+    Inherits the surge_xt render knobs, overriding only the synth-identity fields.
+    The repo-relative ``plugin_path`` is what lets renders resolve against the checkout.
     """
     spec = _spec_from_dataset_overrides(["render=obxf"])
 
@@ -88,4 +89,3 @@ def test_render_obxf_composes_into_valid_render_config() -> None:
     assert spec.render.renderer_version == "1.0.3"
     assert spec.render.plugin_path == "plugins/OB-Xf.vst3"
     assert spec.render.preset_path == "presets/obxf-base.vstpreset"
-    assert not spec.render.plugin_path.startswith("/")

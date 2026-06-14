@@ -16,8 +16,8 @@ from synth_setter.data.vst.param_spec_registry import (
 _ENV_VAR = "SYNTH_SETTER_PLUGIN_PATH"
 _BUNDLED_PATH = "plugins/Surge XT.vst3"
 
-# Single-note, monophonic, no-pitch-bend render harness (``core.make_midi_events``)
-# makes these OB-Xf params inert or harmful, so PR1 pruned them from the spec.
+# Inert or harmful under the render harness's single-note, monophonic,
+# no-pitch-bend playback (``core.make_midi_events``), so absent from the spec.
 _OBXF_PRUNED_PARAMS = (
     "bypass",
     "pitch_bend_up_semitones",
@@ -95,13 +95,23 @@ def test_obxf_spec_encode_decode_round_trip_preserves_values_and_shape() -> None
 
     assert encoded.shape == (187,)
     assert encoded.dtype == np.float32
+    assert np.all((encoded >= 0.0) & (encoded <= 1.0))
+    assert not np.any(np.isnan(encoded))
+    assert not np.any(np.isinf(encoded))
     assert decoded_synth == pytest.approx(synth)
     assert decoded_note == pytest.approx(note)
 
 
 def test_obxf_spec_has_94_synth_params_after_prune() -> None:
-    """The hand-pruned OB-Xf spec keeps 94 synth params (234→187 encoded width)."""
-    assert len(param_specs["obxf"].synth_params) == 94
+    """The hand-pruned spec keeps 94 synth params encoding to width 184 (187 total).
+
+    Pinning the encoded synth width alongside the object count catches a swap that keeps the count
+    but reshapes the tensor (e.g. a 15-slot categorical for a bool).
+    """
+    spec = param_specs["obxf"]
+
+    assert len(spec.synth_params) == 94
+    assert spec.synth_param_length == 184
 
 
 @pytest.mark.parametrize("pruned", _OBXF_PRUNED_PARAMS)
@@ -110,6 +120,6 @@ def test_obxf_spec_omits_inert_param_under_single_note_harness(pruned: str) -> N
 
     ``bypass`` is the load-bearing case — sampling it would silence renders.
 
-    :param pruned: Name of a param PR1 removed from ``OBXF_PARAM_SPEC``.
+    :param pruned: Name of a pruned param expected to be absent from the spec.
     """
     assert pruned not in param_specs["obxf"].synth_param_names
