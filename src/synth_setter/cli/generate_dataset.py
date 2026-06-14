@@ -626,9 +626,12 @@ def _render_one_owned_shard(
     """
     shard = spec.shards[shard_id]
     if spec.output_format.is_directory:
-        # Lance shards are directories; object_size can't size them, so probe for
-        # any object under the prefix. Byte size is unknown on this branch.
-        already_present = r2_io.r2_directory_exists(spec.r2.shard_uri(shard))
+        # Lance shards are directories; object_size can't size them. Probe the
+        # ``_versions/`` manifest, not just any object: a render that crashed
+        # after LanceFragment.create but before commit leaves orphan ``data/``
+        # files with no manifest, and skipping that would strand an unreadable
+        # shard. Byte size is unknown on this branch.
+        already_present = r2_io.r2_directory_exists(f"{spec.r2.shard_uri(shard)}/_versions")
         existing_size = 0
     else:
         existing_size = r2_io.object_size(spec.r2.shard_uri(shard)) or 0

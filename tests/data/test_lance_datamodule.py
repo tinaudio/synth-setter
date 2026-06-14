@@ -290,7 +290,7 @@ class TestLanceShardFile:
         with pytest.raises(KeyError, match="no-such-column"):
             _ = shard["no-such-column"]
 
-    def test_missing_shard_file_raises_value_error(self, tmp_path: Path) -> None:
+    def test_missing_shard_dataset_raises_value_error(self, tmp_path: Path) -> None:
         """Opening a nonexistent ``.lance`` path errors at construction, not first read.
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
@@ -298,15 +298,15 @@ class TestLanceShardFile:
         with pytest.raises(ValueError, match="does-not-exist"):
             LanceShardFile(tmp_path / "does-not-exist.lance")
 
-    def test_directory_path_raises_value_error(self, tmp_path: Path) -> None:
-        """A ``.lance`` *directory* (the Lance dataset format) is rejected — shards are files.
+    def test_single_file_path_raises_value_error(self, tmp_path: Path) -> None:
+        """A single-file ``.lance`` (the legacy shard format) is rejected — shards are directories.
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
         """
-        dataset_dir = tmp_path / "old-format.lance"
-        dataset_dir.mkdir()
-        with pytest.raises(ValueError, match="directory"):
-            LanceShardFile(dataset_dir)
+        legacy_file = tmp_path / "old-format.lance"
+        legacy_file.write_bytes(b"legacy single-file lance shard")
+        with pytest.raises(ValueError, match="file"):
+            LanceShardFile(legacy_file)
 
     def test_column_step_slice_reads_strided_rows(self, tmp_path: Path) -> None:
         """``file[name][a:b:s]`` with a step gathers exactly the strided rows.

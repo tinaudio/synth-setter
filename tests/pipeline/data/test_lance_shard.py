@@ -23,7 +23,9 @@ from synth_setter.data.vst.shapes import (
 )
 from synth_setter.pipeline.data.lance_shard import (
     LANCE_DATA_STORAGE_VERSION,
+    commit_lance_dataset,
     iter_lance_column_rows,
+    lance_fragment,
     lance_schema,
     record_batch_from_arrays,
     tensor_array,
@@ -148,6 +150,30 @@ def test_write_lance_dataset_pins_data_storage_version(tmp_path: Path) -> None:
     )
 
     assert lance.dataset(str(shard)).data_storage_version == LANCE_DATA_STORAGE_VERSION
+
+
+def test_lance_fragment_commit_round_trips_values_and_pins_version(tmp_path: Path) -> None:
+    """Push-path fragments commit into one dataset preserving rows, order, and the pinned version.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    first = _arange_arrays(offset=0)
+    second = _arange_arrays(offset=1000)
+    schema = lance_schema(_FIELD_SHAPES, _METADATA)
+    shard = tmp_path / "shard-000000.lance"
+
+    fragments = [
+        lance_fragment(shard, schema, record_batch_from_arrays(first, schema), 0),
+        lance_fragment(shard, schema, record_batch_from_arrays(second, schema), 1),
+    ]
+    commit_lance_dataset(shard, schema, fragments)
+
+    dataset = lance.dataset(str(shard))
+    assert dataset.count_rows() == 2 * _FIELD_SHAPES[AUDIO_FIELD][0]
+    assert dataset.data_storage_version == LANCE_DATA_STORAGE_VERSION
+    decoded = np.stack(list(iter_lance_column_rows(shard, MEL_SPEC_FIELD)), axis=0)
+    expected = np.concatenate([first[MEL_SPEC_FIELD], second[MEL_SPEC_FIELD]], axis=0)
+    np.testing.assert_array_equal(decoded, expected)
 
 
 def test_tensor_array_missing_row_axis_raises_value_error() -> None:
