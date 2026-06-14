@@ -60,7 +60,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     :param items: mutated in-place to insert skip markers for missing resources.
     """
     skip_vst = pytest.mark.skip(
-        reason=f"Surge XT VST not found at {PLUGIN_PATH!r} "
+        reason=f"VST plugin not found at {PLUGIN_PATH!r} "
         f"(set SYNTH_SETTER_PLUGIN_PATH or place plugin at that path)"
     )
     skip_r2 = pytest.mark.skip(

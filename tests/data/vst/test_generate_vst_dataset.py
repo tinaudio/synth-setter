@@ -33,18 +33,21 @@ from synth_setter.evaluation.compute_audio_metrics import (
     compute_wmfcc,
 )
 from synth_setter.pipeline.schemas.spec import RenderConfig
-from tests._vst import PLUGIN_PATH
+from tests._vst import PLUGIN_PATH, TEST_PARAM_SPEC_NAME, TEST_PRESET_PATH
 
 log = logging.getLogger(__name__)
 
-_PRESET_PATH = "presets/surge-base.vstpreset"
+# Default Surge XT, redirected to the env's synth so the synth-agnostic
+# ``test_make_dataset`` renders a second synth in CI. The Surge-specific tests
+# below (hardcoded param names, tuned audio thresholds) are deselected there.
+_PRESET_PATH = TEST_PRESET_PATH
 _NUM_SAMPLES = 5
 _SAMPLE_RATE = 44100.0
 _CHANNELS = 2
 _DURATION = 4.0
 _VELOCITY = 100
 _MIN_LOUDNESS = -55.0
-_SPEC_NAME = "surge_xt"
+_SPEC_NAME = TEST_PARAM_SPEC_NAME
 _RENDERER_VERSION = "1.3.4"
 _ABSOLUTE_TOLERANCE = 1e-7
 _RELATIVE_TOLERANCE = 1e-9

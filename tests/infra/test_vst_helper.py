@@ -16,31 +16,35 @@ from types import ModuleType
 import pytest
 
 _ENV_VAR = "SYNTH_SETTER_PLUGIN_PATH"
+_SYNTH_ENV_VAR = "SYNTH_SETTER_TEST_SYNTH"
 _DEFAULT_PATH = "plugins/Surge XT.vst3"
+_RESTORED_ENV_VARS = (_ENV_VAR, _SYNTH_ENV_VAR)
 
 
 @pytest.fixture
 def reload_vst(request: pytest.FixtureRequest) -> Callable[[], ModuleType]:
     """Reload ``tests._vst`` on demand, restoring real-env values at teardown.
 
-    The finalizer restores ``SYNTH_SETTER_PLUGIN_PATH`` itself (not via
-    ``monkeypatch``, whose teardown may run after this one) before the final
-    reload, so the module is left resolved against the real environment
-    regardless of fixture-finalization order.
+    The finalizer restores ``SYNTH_SETTER_PLUGIN_PATH`` and
+    ``SYNTH_SETTER_TEST_SYNTH`` itself (not via ``monkeypatch``, whose teardown
+    may run after this one) before the final reload, so the module is left
+    resolved against the real environment regardless of fixture-finalization
+    order.
 
     :param request: registers the teardown that restores env + reloads the module.
     :returns: a callable that reloads and returns the freshly imported module.
     """
-    original = os.environ.get(_ENV_VAR)
+    originals = {name: os.environ.get(name) for name in _RESTORED_ENV_VARS}
 
     def _reload() -> ModuleType:
         return importlib.reload(importlib.import_module("tests._vst"))
 
     def _restore() -> None:
-        if original is None:
-            os.environ.pop(_ENV_VAR, None)
-        else:
-            os.environ[_ENV_VAR] = original
+        for name, value in originals.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
         _reload()
 
     request.addfinalizer(_restore)
@@ -114,3 +118,62 @@ def test_vst_available_false_when_path_absent(
     """
     monkeypatch.setenv("SYNTH_SETTER_PLUGIN_PATH", str(tmp_path / "missing.vst3"))
     assert reload_vst().VST_AVAILABLE is False
+
+
+@pytest.mark.infra
+def test_test_synth_defaults_to_surge_xt_when_env_unset(
+    monkeypatch: pytest.MonkeyPatch, reload_vst: Callable[[], ModuleType]
+) -> None:
+    """The target synth defaults to Surge XT, keeping existing tests synth-stable.
+
+    :param monkeypatch: removes ``SYNTH_SETTER_TEST_SYNTH``.
+    :param reload_vst: re-resolves the module constants under the patched env.
+    """
+    monkeypatch.delenv(_SYNTH_ENV_VAR, raising=False)
+    mod = reload_vst()
+    assert mod.TEST_SYNTH == "surge_xt"
+    assert mod.TEST_PARAM_SPEC_NAME == "surge_xt"
+    assert mod.TEST_PRESET_PATH == "presets/surge-base.vstpreset"
+
+
+@pytest.mark.infra
+def test_test_synth_selects_registry_entry_from_env_override(
+    monkeypatch: pytest.MonkeyPatch, reload_vst: Callable[[], ModuleType]
+) -> None:
+    """A registered synth key resolves its spec name and preset from the registry.
+
+    :param monkeypatch: pins ``SYNTH_SETTER_TEST_SYNTH`` to ``obxf``.
+    :param reload_vst: re-resolves the module constants under the patched env.
+    """
+    monkeypatch.setenv(_SYNTH_ENV_VAR, "obxf")
+    mod = reload_vst()
+    assert mod.TEST_SYNTH == "obxf"
+    assert mod.TEST_PARAM_SPEC_NAME == "obxf"
+    assert mod.TEST_PRESET_PATH == "presets/obxf-base.vstpreset"
+
+
+@pytest.mark.infra
+def test_test_synth_falls_back_to_surge_xt_when_env_empty(
+    monkeypatch: pytest.MonkeyPatch, reload_vst: Callable[[], ModuleType]
+) -> None:
+    """An empty override falls back to Surge XT (the normalized ``or`` semantic).
+
+    :param monkeypatch: sets an empty ``SYNTH_SETTER_TEST_SYNTH``.
+    :param reload_vst: re-resolves the module constants under the patched env.
+    """
+    monkeypatch.setenv(_SYNTH_ENV_VAR, "")
+    assert reload_vst().TEST_SYNTH == "surge_xt"
+
+
+@pytest.mark.infra
+def test_test_synth_rejects_unregistered_key(
+    monkeypatch: pytest.MonkeyPatch, reload_vst: Callable[[], ModuleType]
+) -> None:
+    """An unregistered synth key fails loud at import rather than skipping silently.
+
+    :param monkeypatch: pins ``SYNTH_SETTER_TEST_SYNTH`` to an unknown key.
+    :param reload_vst: re-resolves the module constants under the patched env.
+    """
+    monkeypatch.setenv(_SYNTH_ENV_VAR, "not_a_synth")
+    with pytest.raises(KeyError, match="not_a_synth"):
+        reload_vst()
