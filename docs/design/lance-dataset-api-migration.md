@@ -98,10 +98,11 @@ after an rclone download. A review against the pinned library
 
 - `shard-XXXXXX.lance` and `<split>.lance` are now directory prefixes, not
   objects, keyed off `OutputFormat.is_directory`. The worker uploads each shard
-  tree with `rclone copy <dir> <prefix>/<filename>` and skip-probes existence
-  with `r2_io.r2_directory_exists` (object size can't size a directory); training
-  download uses `download_dir_no_overwrite` (already directory-recursive).
-  `dataset.complete` marker and `stats.npz` are unchanged.
+  tree with `r2_io.upload_dir` and skip-probes the committed dataset via
+  `r2_io.r2_directory_exists("<shard>/_versions")` (a crashed render leaves
+  orphan `data/` files with no manifest, so probing any object would strand an
+  unreadable shard); training download uses `download_dir_no_overwrite` (already
+  directory-recursive). `dataset.complete` marker and `stats.npz` are unchanged.
   `OutputFormat.from_extension` still matches on the `.lance` name suffix of the
   directory.
 

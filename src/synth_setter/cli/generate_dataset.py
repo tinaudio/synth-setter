@@ -702,9 +702,12 @@ def _render_and_upload_shard(
                 f"dataset: {shard_path}"
             )
         byte_size = sum(p.stat().st_size for p in shard_path.rglob("*") if p.is_file())
-        # rclone copy of a directory lands its *contents* under the dest, so name
-        # the dest with the shard filename to recreate ``<prefix>/<filename>/``.
-        dest = f"{r2_dest_prefix.rstrip('/')}/{shard.filename}"
+        logger.info(f"shard rendered: {shard_path} ({byte_size} bytes)")
+        # ``upload_dir`` syncs the tree under the shard URI with the wide
+        # directory-upload IO timeout — a multi-fragment Lance shard can outlast
+        # the 300s single-file default ``_rclone_copy`` uses.
+        dest = spec.r2.shard_uri(shard)
+        r2_io.upload_dir(shard_path, dest)
     else:
         if not shard_path.is_file():
             raise RuntimeError(
@@ -713,8 +716,8 @@ def _render_and_upload_shard(
             )
         byte_size = shard_path.stat().st_size
         dest = r2_dest_prefix
-    logger.info(f"shard rendered: {shard_path} ({byte_size} bytes)")
-    _rclone_copy(str(shard_path), dest)
+        logger.info(f"shard rendered: {shard_path} ({byte_size} bytes)")
+        _rclone_copy(str(shard_path), dest)
     logger.info(f"shard uploaded: {shard.filename} -> {dest}")
     return byte_size
 

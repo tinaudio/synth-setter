@@ -1,9 +1,9 @@
-"""Per-shard dataset writers — HDF5, WebDataset tar, and Lance file.
+"""Per-shard dataset writers — HDF5, WebDataset tar, and Lance dataset.
 
 Consist of entrypoints dispatched by the renderer CLI on the output file's suffix:
 ``make_hdf5_dataset`` keeps the resumable HDF5 path (signature takes a path and
 opens the file internally), ``make_wds_dataset`` writes tar shards using
-``webdataset.TarWriter``, and ``make_lance_dataset`` writes a single Lance file.
+``webdataset.TarWriter``, and ``make_lance_dataset`` writes a Lance dataset directory.
 """
 
 from __future__ import annotations
