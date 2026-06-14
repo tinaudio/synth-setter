@@ -122,7 +122,7 @@ jobs:
           PLUGIN_PATH: ${{ matrix.plugin_path }}
         run: |
           docker run --rm \
-            -v ${{ github.workspace }}:/home/build/synth-setter \
+            -v "${{ github.workspace }}:/home/build/synth-setter" \
             -e "PLUGIN_PATH=$PLUGIN_PATH" \
             "$IMAGE" \
             bash -c '
@@ -156,7 +156,7 @@ jobs:
         run: |
           mkdir -p /tmp/bench
           docker run --rm \
-            -v ${{ github.workspace }}:/home/build/synth-setter \
+            -v "${{ github.workspace }}:/home/build/synth-setter" \
             -v /tmp/bench:/bench \
             -e BENCHMARK_OUTPUT_DIR=/bench \
             -e HYDRA_FULL_ERROR=1 \

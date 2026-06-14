@@ -291,9 +291,8 @@ RUN curl -fsSL \
 # Python base: Python + venv on top of the chosen Surge install.
 # ==========================================
 FROM builder-install-surge-from-${BUILD_MODE} AS python-base
-# Surge XT is the only bundle present at this stage; the amd64-only fetched
-# synths land in /usr/lib/vst3/ after the vst3-synths-fetch COPY downstream,
-# where the presence gate + per-synth X11 load-validation cover them.
+# Surge XT is the only bundle present here; the amd64-only fetched synths land
+# downstream (vst3-synths-fetch COPY), gated and load-validated there.
 RUN ls /usr/lib/vst3/ && test -n "$(ls -A /usr/lib/vst3/Surge\ XT.vst3 2>/dev/null)" \
     || (echo "ERROR: Surge XT.vst3 not found in /usr/lib/vst3/" >&2; exit 1)
 
@@ -330,6 +329,10 @@ RUN python --version && \
 # Both dev and final-stage inherit from this stage.
 # ==========================================
 FROM python-base AS builder-install-synth-setter-deps
+# Re-declare the predefined platform ARG so ${TARGETARCH} resolves in this
+# stage's RUN steps (the pueue case, the bundle presence gate, and the synth
+# load-validation all read it); buildkit does not inherit ARG across FROM.
+ARG TARGETARCH
 # Install Python dependencies via `uv sync --frozen` against the committed
 # lockfile. uv's cache (mounted below) persists torch wheels (~2.5 GB)
 # across builds. Cache scope: only pyproject.toml + uv.lock + README.md

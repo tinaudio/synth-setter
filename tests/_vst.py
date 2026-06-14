@@ -1,15 +1,11 @@
 """Single source of truth for VST plugin discovery in tests.
 
-The target synth defaults to Surge XT and is overridable via
-``SYNTH_SETTER_TEST_SYNTH`` (a key into
-:data:`synth_setter.data.vst.preset_paths`), so a CI cell can point the slow
-render/round-trip suite at a second synth without hardcoding. ``TEST_SYNTH``
-drives ``TEST_PARAM_SPEC_NAME`` / ``TEST_PRESET_PATH``; the plugin binary is
-resolved separately via ``SYNTH_SETTER_PLUGIN_PATH`` (set by CI and the
-devcontainer), falling back to the in-repo Surge bundle. Importers use
-``PLUGIN_PATH`` for the path and ``VST_AVAILABLE`` for the presence check that
-``conftest.pytest_collection_modifyitems`` consults when auto-skipping
-``requires_vst`` tests.
+``SYNTH_SETTER_TEST_SYNTH`` (a ``preset_paths`` key, default ``surge_xt``)
+drives ``TEST_SYNTH`` / ``TEST_PARAM_SPEC_NAME`` / ``TEST_PRESET_PATH`` so a CI
+cell can target a second synth without hardcoding. The plugin binary resolves
+separately via ``SYNTH_SETTER_PLUGIN_PATH`` (``PLUGIN_PATH`` / ``VST_AVAILABLE``);
+``conftest.pytest_collection_modifyitems`` consults ``VST_AVAILABLE`` to
+auto-skip ``requires_vst`` tests.
 """
 
 from __future__ import annotations
