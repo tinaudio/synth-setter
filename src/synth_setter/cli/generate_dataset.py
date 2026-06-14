@@ -625,12 +625,16 @@ def _render_one_owned_shard(
     :returns: ``(rendered, skipped)`` — exactly one is ``True``.
     """
     shard = spec.shards[shard_id]
-    existing_size = r2_io.object_size(spec.r2.shard_uri(shard))
-    if existing_size is not None and existing_size > 0:
-        logger.info(
-            f"skipping shard {shard.shard_id} — already in R2 "
-            f"({existing_size} bytes): {shard.filename}"
-        )
+    if spec.output_format.is_directory:
+        # Lance shards are directories; object_size can't size them, so probe for
+        # any object under the prefix. Byte size is unknown on this branch.
+        already_present = r2_io.r2_directory_exists(spec.r2.shard_uri(shard))
+        existing_size = 0
+    else:
+        existing_size = r2_io.object_size(spec.r2.shard_uri(shard)) or 0
+        already_present = existing_size > 0
+    if already_present:
+        logger.info(f"skipping shard {shard.shard_id} — already in R2: {shard.filename}")
         _log_shard_metrics(loggers, shard_id, byte_size=existing_size, render_seconds=0.0)
         return False, True
     t0 = time.monotonic()
@@ -687,15 +691,28 @@ def _render_and_upload_shard(
                 )
     shard_path = work_dir / shard.filename
     # Surface a generator that exited 0 without writing output here, not as a
-    # downstream rclone "source not found".
-    if not shard_path.is_file():
-        raise RuntimeError(
-            f"generate_vst_dataset.py exited 0 but did not write expected shard file: {shard_path}"
-        )
-    byte_size = shard_path.stat().st_size
+    # downstream rclone "source not found". Lance shards are directories.
+    if spec.output_format.is_directory:
+        if not shard_path.is_dir():
+            raise RuntimeError(
+                "generate_vst_dataset.py exited 0 but did not write expected shard "
+                f"dataset: {shard_path}"
+            )
+        byte_size = sum(p.stat().st_size for p in shard_path.rglob("*") if p.is_file())
+        # rclone copy of a directory lands its *contents* under the dest, so name
+        # the dest with the shard filename to recreate ``<prefix>/<filename>/``.
+        dest = f"{r2_dest_prefix.rstrip('/')}/{shard.filename}"
+    else:
+        if not shard_path.is_file():
+            raise RuntimeError(
+                "generate_vst_dataset.py exited 0 but did not write expected shard "
+                f"file: {shard_path}"
+            )
+        byte_size = shard_path.stat().st_size
+        dest = r2_dest_prefix
     logger.info(f"shard rendered: {shard_path} ({byte_size} bytes)")
-    _rclone_copy(str(shard_path), r2_dest_prefix)
-    logger.info(f"shard uploaded: {shard.filename} -> {r2_dest_prefix}")
+    _rclone_copy(str(shard_path), dest)
+    logger.info(f"shard uploaded: {shard.filename} -> {dest}")
     return byte_size
 
 

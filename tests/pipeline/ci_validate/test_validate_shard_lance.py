@@ -5,9 +5,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from pathlib import Path
 
+import lance
 import numpy as np
 import pyarrow as pa
-from lance.file import LanceFileReader
 
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
@@ -22,7 +22,7 @@ from synth_setter.pipeline.data.lance_shard import (
     lance_schema,
     record_batch_from_arrays,
     tensor_array,
-    write_lance_file,
+    write_lance_dataset,
 )
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from tests.helpers.finalize_shards import (
@@ -83,12 +83,12 @@ def test_lance_record_batch_preserves_transposed_tensor_shape(tmp_path: Path) ->
     )
     shard = tmp_path / spec.shards[0].filename
 
-    write_lance_file(shard, schema, [record_batch_from_arrays(arrays, schema)])
+    write_lance_dataset(shard, schema, [record_batch_from_arrays(arrays, schema)])
 
-    reader = LanceFileReader(str(shard), columns=[MEL_SPEC_FIELD])
-    field = reader.metadata().schema.field(MEL_SPEC_FIELD)
+    dataset = lance.dataset(str(shard))
+    field = dataset.schema.field(MEL_SPEC_FIELD)
     assert tuple(field.type.shape) == shapes[MEL_SPEC_FIELD][1:]
-    batch = next(reader.read_all().to_batches())
+    batch = next(dataset.to_batches(columns=[MEL_SPEC_FIELD]))
     decoded = batch.column(0).to_numpy_ndarray()
     assert decoded.shape == shapes[MEL_SPEC_FIELD]
 
@@ -105,7 +105,7 @@ def test_validate_lance_shard_rejects_bad_suffix_payload(tmp_path: Path) -> None
     errors = validate_shard(shard, spec)
 
     assert errors
-    assert "valid Lance file" in errors[0]
+    assert "valid Lance dataset" in errors[0]
 
 
 def test_validate_lance_shard_reports_row_count_mismatch(tmp_path: Path) -> None:
@@ -118,11 +118,11 @@ def test_validate_lance_shard_reports_row_count_mismatch(tmp_path: Path) -> None
     shapes = _one_row_shapes(spec)
     schema = lance_schema(shapes, smoke_shard_metadata(spec.render))
     shard = tmp_path / spec.shards[0].filename
-    write_lance_file(shard, schema, [record_batch_from_arrays(_zero_arrays(shapes), schema)])
+    write_lance_dataset(shard, schema, [record_batch_from_arrays(_zero_arrays(shapes), schema)])
 
     errors = validate_shard(shard, spec)
 
-    row_count_error = f"file has 1 rows, expected {spec.render.samples_per_shard}"
+    row_count_error = f"dataset has 1 rows, expected {spec.render.samples_per_shard}"
     assert any(row_count_error in error for error in errors)
 
 
@@ -137,7 +137,7 @@ def test_validate_lance_shard_reports_inner_shape_mismatch(tmp_path: Path) -> No
     shapes = {**expected_shapes, MEL_SPEC_FIELD: (n, channels, n_mels + 1, n_frames)}
     schema = lance_schema(shapes, smoke_shard_metadata(spec.render))
     shard = tmp_path / spec.shards[0].filename
-    write_lance_file(shard, schema, [record_batch_from_arrays(_zero_arrays(shapes), schema)])
+    write_lance_dataset(shard, schema, [record_batch_from_arrays(_zero_arrays(shapes), schema)])
 
     errors = validate_shard(shard, spec)
 
@@ -172,7 +172,7 @@ def test_validate_lance_shard_reports_value_dtype_mismatch(tmp_path: Path) -> No
         for field in DATASET_FIELD_NAMES
     ]
     shard = tmp_path / spec.shards[0].filename
-    write_lance_file(shard, schema, [pa.record_batch(columns, schema=schema)])
+    write_lance_dataset(shard, schema, [pa.record_batch(columns, schema=schema)])
 
     errors = validate_shard(shard, spec)
 
@@ -191,7 +191,7 @@ def test_validate_lance_shard_reports_missing_schema_metadata(tmp_path: Path) ->
     shapes = dataset_field_shapes(spec.render, spec.num_params)
     schema = lance_schema(shapes, smoke_shard_metadata(spec.render)).remove_metadata()
     shard = tmp_path / spec.shards[0].filename
-    write_lance_file(shard, schema, [record_batch_from_arrays(_zero_arrays(shapes), schema)])
+    write_lance_dataset(shard, schema, [record_batch_from_arrays(_zero_arrays(shapes), schema)])
 
     errors = validate_shard(shard, spec)
 
@@ -216,7 +216,7 @@ def test_validate_lance_shard_reports_missing_column(tmp_path: Path) -> None:
         for field in (AUDIO_FIELD, MEL_SPEC_FIELD)
     ]
     shard = tmp_path / spec.shards[0].filename
-    write_lance_file(shard, schema, [pa.record_batch(columns, schema=schema)])
+    write_lance_dataset(shard, schema, [pa.record_batch(columns, schema=schema)])
 
     errors = validate_shard(shard, spec)
 

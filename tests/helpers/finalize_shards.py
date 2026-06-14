@@ -202,7 +202,7 @@ def write_minimal_lance_shard(dest: Path, spec: DatasetSpec) -> None:
     from synth_setter.pipeline.data.lance_shard import (
         lance_schema,
         record_batch_from_arrays,
-        write_lance_file,
+        write_lance_dataset,
     )
 
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -220,7 +220,7 @@ def write_minimal_lance_shard(dest: Path, spec: DatasetSpec) -> None:
             dtype=DATASET_FIELD_DTYPES[PARAM_ARRAY_FIELD],
         ),
     }
-    write_lance_file(dest, schema, [record_batch_from_arrays(arrays, schema)])
+    write_lance_dataset(dest, schema, [record_batch_from_arrays(arrays, schema)])
 
 
 def uri_to_local_path(fake_r2_remote: Path, r2_uri: str) -> Path:

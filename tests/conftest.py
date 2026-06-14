@@ -6,7 +6,7 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Callable, Iterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -797,8 +797,9 @@ def _build_surge_smoke_lance_datasets(tmp_path: Path, param_spec_name: str) -> P
     mean, std = stream_stats_lance([train_lance], mask_degenerate=True)
     np.savez(smoke_dataset_dir / "stats.npz", mean=mean, std=std)
 
-    shutil.copy(train_lance, smoke_dataset_dir / "val.lance")
-    shutil.copy(train_lance, smoke_dataset_dir / "test.lance")
+    # Lance shards are directories, so clone the tree rather than a single file.
+    shutil.copytree(train_lance, smoke_dataset_dir / "val.lance")
+    shutil.copytree(train_lance, smoke_dataset_dir / "test.lance")
     return smoke_dataset_dir
 
 
@@ -980,7 +981,7 @@ def _base_dataset_spec_kwargs() -> dict[str, Any]:
     :returns: A fresh kwargs dict safe for in-place override per call.
     """
     return {
-        "created_at": datetime(2026, 5, 20, 0, 0, 0, tzinfo=timezone.utc),
+        "created_at": datetime(2026, 5, 20, 0, 0, 0, tzinfo=UTC),
         "git_sha": "0" * 40,
         "is_repo_dirty": False,
         "output_format": "hdf5",

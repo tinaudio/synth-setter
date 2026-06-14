@@ -32,6 +32,8 @@ __all__ = [
     "is_r2_uri",
     "object_size",
     "purge_prefix",
+    "r2_directory_exists",
+    "r2_storage_options",
     "shard_uri",
     "to_rclone_path",
     "to_s3_uri",
@@ -181,6 +183,35 @@ def is_r2_reachable() -> bool:
     except (subprocess.CalledProcessError, FileNotFoundError):
         return False
     return True
+
+
+def r2_storage_options() -> dict[str, str]:
+    """Build Lance's object-store ``storage_options`` for the R2 bucket from env.
+
+    Lance reaches R2 through its S3-compatible backend (an ``s3://`` URI); the
+    object-store docs require both ``region`` and ``endpoint`` for S3-compatible
+    stores. Credentials come from the same ``RCLONE_CONFIG_R2_*`` vars rclone
+    uses, so :func:`ensure_r2_env_loaded` populates both backends from one
+    source; call it first.
+
+    :returns: ``{access_key_id, secret_access_key, endpoint, region}`` for
+        ``lance.dataset`` / ``lance.write_dataset``.
+    :raises RuntimeError: A required secret key is unset in ``os.environ``.
+    """
+    missing = [k for k in _SECRET_R2_ENV_KEYS if k not in os.environ]
+    if missing:
+        raise RuntimeError(
+            f"R2 credentials missing from process env: {', '.join(missing)}. "
+            "Call ensure_r2_env_loaded() or set RCLONE_CONFIG_R2_* first."
+        )
+    return {
+        "access_key_id": os.environ["RCLONE_CONFIG_R2_ACCESS_KEY_ID"],
+        "secret_access_key": os.environ["RCLONE_CONFIG_R2_SECRET_ACCESS_KEY"],
+        "endpoint": os.environ["RCLONE_CONFIG_R2_ENDPOINT"],
+        # R2 ignores region, but object-store requires it set for S3-compatible
+        # stores; "auto" is R2's documented placeholder.
+        "region": "auto",
+    }
 
 
 def is_r2_uri(uri: str) -> bool:
@@ -374,6 +405,30 @@ def object_size(r2_uri: str) -> int | None:
         raise RuntimeError(
             f"rclone lsf --format=s returned unparsable size {out!r} for {r2_uri}"
         ) from exc
+
+
+def r2_directory_exists(r2_uri: str) -> bool:
+    """Return whether any object exists under the ``r2_uri`` prefix.
+
+    Existence probe for directory-shaped artifacts (Lance dataset shards) — the
+    directory counterpart of :func:`object_size`. Uses a recursive ``rclone lsf``
+    and reports ``True`` when at least one object is listed. A non-zero rclone
+    exit (auth, network) raises ``subprocess.CalledProcessError`` so callers fail
+    fast rather than mistaking an outage for an absent directory.
+
+    :param r2_uri: Canonical ``r2://bucket/prefix`` URI of the directory.
+    :returns: ``True`` if the prefix contains at least one object.
+    """
+    args = [  # noqa: S607 — rclone resolved by image's PATH
+        "rclone",
+        "lsf",
+        "--recursive",
+        _to_rclone_path(r2_uri),
+    ]
+    result = subprocess.run(  # noqa: S603 — args from validated URI
+        args, check=True, capture_output=True, text=True
+    )
+    return bool(result.stdout.strip())
 
 
 def purge_prefix(bucket: str, prefix: str) -> None:

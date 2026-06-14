@@ -327,15 +327,16 @@ class TestLanceShardFile:
         with pytest.raises(ValueError, match="step"):
             _ = shard["param_array"][::-1]
 
-    def test_column_unsorted_fancy_index_raises_value_error(self, tmp_path: Path) -> None:
-        """Fancy indices must be ascending — the same contract h5py enforces; samplers sort.
+    def test_column_unsorted_fancy_index_preserves_requested_order(self, tmp_path: Path) -> None:
+        """Unsorted fancy indices return rows in the requested order (LanceDataset.take).
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
         """
         _write_seeded_lance_shard(tmp_path / "train.lance", num_rows=8)
         shard = LanceShardFile(tmp_path / "train.lance")
-        with pytest.raises(ValueError, match="ascending"):
-            _ = shard["param_array"][[4, 1]]
+        rows = shard["param_array"][0:8]
+        unsorted = shard["param_array"][[4, 1]]
+        np.testing.assert_array_equal(unsorted, np.stack([rows[4], rows[1]]))
 
 
 class TestLanceVSTDataset:
@@ -739,7 +740,7 @@ class TestPipelineWriterCompatibility:
     """Shards from the pipeline's Lance writer are readable by the datamodule classes."""
 
     def test_shard_file_reads_pipeline_written_shard(self, tmp_path: Path) -> None:
-        """A shard written via the production ``lance_schema``/``write_lance_file`` path reads back.
+        """A shard written via the production ``lance_schema``/``write_lance_dataset`` path reads back.
 
         ``write_minimal_lance_shard`` fills ``mel_spec`` with ``np.arange`` and
         stores ``audio`` as float16, so this pins values, dtype, and the

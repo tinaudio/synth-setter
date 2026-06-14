@@ -16,9 +16,9 @@ from pathlib import Path
 
 import h5py
 import hdf5plugin  # noqa: F401  side-effect: registers Blosc2 filter for h5py reads
+import lance
 import numpy as np
 import pytest
-from lance.file import LanceFileReader
 
 from synth_setter.data.vst import core
 from synth_setter.data.vst.generate_vst_dataset import fixed_params_from_dataset
@@ -283,14 +283,14 @@ def test_make_lance_dataset_writes_validator_passing_shard_under_fake_plugin(
     out = tmp_path / spec.shards[0].filename
 
     make_lance_dataset(
-        lance_file=out,
+        lance_dir=out,
         render_cfg=render_cfg,
         fixed_synth_params_list=[_HARDCODED_SYNTH_PARAMS] * num_samples,
         fixed_note_params_list=[_HARDCODED_NOTE_PARAMS] * num_samples,
     )
 
     assert validate_shard(out, spec) == []
-    meta = read_shard_metadata(LanceFileReader(str(out)).metadata().schema)
+    meta = read_shard_metadata(lance.dataset(str(out)).schema)
     # Whole-model equality: a new ShardMetadata field fails construction here,
     # forcing this round-trip pin to cover it.
     assert meta == ShardMetadata(
@@ -326,7 +326,7 @@ def test_make_lance_dataset_arrays_match_h5_writer_under_fake_plugin(
     h5_out = tmp_path / "shard-000000.h5"
 
     make_lance_dataset(
-        lance_file=lance_out,
+        lance_dir=lance_out,
         render_cfg=render_cfg,
         fixed_synth_params_list=fixed_synth,
         fixed_note_params_list=fixed_note,
@@ -354,9 +354,9 @@ def test_make_lance_dataset_rerun_overwrites_rather_than_appends(
 ) -> None:
     """Re-running the Lance writer on an existing path overwrites it (non-resumable).
 
-    ``make_lance_dataset`` pins ``start_idx=0`` and reopens the path with
-    ``LanceFileWriter``, so a second pass yields exactly ``samples_per_shard``
-    rows, not double — the lance counterpart of the wds pin below.
+    ``make_lance_dataset`` pins ``start_idx=0`` and commits with overwrite
+    semantics, so a second pass yields exactly ``samples_per_shard`` rows, not
+    double — the lance counterpart of the wds pin below.
 
     :param tmp_path: Destination directory for the Lance shard under test.
     :param install_fake_plugin: Swaps the plugin loader for the fake so the
@@ -369,21 +369,21 @@ def test_make_lance_dataset_rerun_overwrites_rather_than_appends(
     out = tmp_path / "shard-000000.lance"
 
     make_lance_dataset(
-        lance_file=out,
+        lance_dir=out,
         render_cfg=render_cfg,
         fixed_synth_params_list=fixed_synth,
         fixed_note_params_list=fixed_note,
     )
-    assert LanceFileReader(str(out)).num_rows() == num_samples
+    assert lance.dataset(str(out)).count_rows() == num_samples
     first_run_params = np.stack(list(iter_lance_column_rows(out, PARAM_ARRAY_FIELD)), axis=0)
 
     make_lance_dataset(
-        lance_file=out,
+        lance_dir=out,
         render_cfg=render_cfg,
         fixed_synth_params_list=fixed_synth,
         fixed_note_params_list=fixed_note,
     )
-    assert LanceFileReader(str(out)).num_rows() == num_samples, (
+    assert lance.dataset(str(out)).count_rows() == num_samples, (
         "lance re-run appended instead of overwriting the shard"
     )
     rerun_params = np.stack(list(iter_lance_column_rows(out, PARAM_ARRAY_FIELD)), axis=0)

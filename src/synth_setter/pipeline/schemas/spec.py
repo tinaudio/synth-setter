@@ -74,7 +74,7 @@ class OutputFormat(StrEnum):
 
     .. attribute :: LANCE
 
-        Lance file container; shards are written as single ``.lance`` files.
+        Lance container; shards are written as ``.lance`` dataset directories.
     """
 
     HDF5 = "hdf5"
@@ -85,6 +85,17 @@ class OutputFormat(StrEnum):
     def extension(self) -> str:
         """Shard filename suffix for this format, leading dot included."""
         return _OUTPUT_FORMAT_EXTENSIONS[self]
+
+    @property
+    def is_directory(self) -> bool:
+        """Whether a shard is a directory tree (Lance dataset) rather than one file.
+
+        Drives directory-vs-file handling in the worker upload and existence
+        probes; HDF5/WDS shards are single files, Lance shards are directories.
+
+        :returns: ``True`` for ``LANCE``, ``False`` for the single-file formats.
+        """
+        return self is OutputFormat.LANCE
 
     @classmethod
     def from_extension(cls, suffix: str) -> OutputFormat | None:

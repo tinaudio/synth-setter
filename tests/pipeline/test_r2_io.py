@@ -127,6 +127,35 @@ class TestFromS3Uri:
             r2_io.from_s3_uri("r2://bucket/not-s3.ckpt")
 
 
+class TestR2StorageOptions:
+    """Tests for r2_storage_options — Lance object-store config from R2 env vars."""
+
+    def test_builds_object_store_dict_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The three RCLONE_CONFIG_R2_* secrets map to the documented S3 keys plus region.
+
+        :param monkeypatch: Pytest fixture used to set the R2 secret env vars.
+        """
+        monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", "ak")
+        monkeypatch.setenv("RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", "sk")
+        monkeypatch.setenv("RCLONE_CONFIG_R2_ENDPOINT", "https://acct.r2.cloudflarestorage.com")
+        assert r2_io.r2_storage_options() == {
+            "access_key_id": "ak",
+            "secret_access_key": "sk",
+            "endpoint": "https://acct.r2.cloudflarestorage.com",
+            "region": "auto",
+        }
+
+    def test_raises_when_secret_env_keys_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A missing secret raises RuntimeError rather than emitting a partial dict.
+
+        :param monkeypatch: Pytest fixture used to clear the R2 secret env vars.
+        """
+        for key in r2_io._SECRET_R2_ENV_KEYS:
+            monkeypatch.delenv(key, raising=False)
+        with pytest.raises(RuntimeError, match="R2 credentials missing"):
+            r2_io.r2_storage_options()
+
+
 class TestDownloadToPath:
     """Tests for download_to_path — file→file copy."""
 

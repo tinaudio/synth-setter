@@ -449,20 +449,21 @@ def make_wds_dataset(
 
 
 def make_lance_dataset(
-    lance_file: Path | str,
+    lance_dir: Path | str,
     render_cfg: RenderConfig,
     *,
     fixed_synth_params_list: list[dict[str, float]] | None = None,
     fixed_note_params_list: list[NoteParams] | None = None,
 ) -> None:
-    """Render ``render_cfg.samples_per_shard`` samples to a single Lance file.
+    """Render ``render_cfg.samples_per_shard`` samples to a Lance dataset directory.
 
-    Not resumable: the file is overwritten by ``LanceFileWriter`` on each run.
-    Audio is stored as ``float16``; ``mel_spec`` and ``param_array`` stay
+    Not resumable: any dataset already at ``lance_dir`` is overwritten on each
+    run. Audio is stored as ``float16``; ``mel_spec`` and ``param_array`` stay
     ``float32``. The shard metadata is embedded in Arrow schema metadata so
-    validation and finalize recover the same sidecar payload as HDF5/WDS.
+    validation and finalize recover the same sidecar payload as HDF5/WDS. Each
+    render batch becomes one Lance fragment, committed as one dataset at the end.
 
-    :param lance_file: Destination ``.lance`` file.
+    :param lance_dir: Destination ``.lance`` dataset directory.
     :param render_cfg: Per-shard renderer config from the dataset spec.
     :param fixed_synth_params_list: Optional pre-set synth params, one dict per
         shard row. Must have length ``samples_per_shard``. Under
@@ -472,9 +473,14 @@ def make_lance_dataset(
         contract as ``fixed_synth_params_list``.
     """
     # Function-local so the h5/wds writer paths never pay the `lance` import cost.
-    from lance.file import LanceFileWriter
+    import lance
 
-    from synth_setter.pipeline.data.lance_shard import lance_schema, record_batch_from_arrays
+    from synth_setter.pipeline.data.lance_shard import (
+        commit_lance_dataset,
+        lance_fragment,
+        lance_schema,
+        record_batch_from_arrays,
+    )
 
     param_spec = param_specs[render_cfg.param_spec_name]
     meta = _shard_metadata_from_render(render_cfg)
@@ -487,19 +493,20 @@ def make_lance_dataset(
     )
     schema = lance_schema(dataset_field_shapes(render_cfg, len(param_spec)), meta)
 
-    writer = LanceFileWriter(str(lance_file), schema)
+    fragments: list[lance.fragment.FragmentMetadata] = []
 
     def _flush(batch: list[VSTDataSample], _batch_start: int) -> None:
-        writer.write_batch(record_batch_from_arrays(_sample_batch_arrays(batch), schema))
+        record_batch = record_batch_from_arrays(_sample_batch_arrays(batch), schema)
+        fragments.append(lance_fragment(lance_dir, schema, record_batch, len(fragments)))
 
-    try:
-        _render_in_batches(
-            render_cfg=render_cfg,
-            param_spec=param_spec,
-            start_idx=start_idx,
-            fixed_synth_params_list=fixed_synth_params_list,
-            fixed_note_params_list=fixed_note_params_list,
-            flush_batch=_flush,
-        )
-    finally:
-        writer.close()
+    # Commit only after a clean render: orphaned fragment data files from a failed
+    # run stay uncommitted (no dataset manifest references them).
+    _render_in_batches(
+        render_cfg=render_cfg,
+        param_spec=param_spec,
+        start_idx=start_idx,
+        fixed_synth_params_list=fixed_synth_params_list,
+        fixed_note_params_list=fixed_note_params_list,
+        flush_batch=_flush,
+    )
+    commit_lance_dataset(lance_dir, schema, fragments)

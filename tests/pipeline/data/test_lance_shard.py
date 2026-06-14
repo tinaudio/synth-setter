@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import lance
 import numpy as np
 import pyarrow as pa
 import pytest
@@ -21,11 +22,12 @@ from synth_setter.data.vst.shapes import (
     PARAM_ARRAY_FIELD,
 )
 from synth_setter.pipeline.data.lance_shard import (
+    LANCE_DATA_STORAGE_VERSION,
     iter_lance_column_rows,
     lance_schema,
     record_batch_from_arrays,
     tensor_array,
-    write_lance_file,
+    write_lance_dataset,
 )
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 
@@ -76,7 +78,7 @@ def test_lance_round_trip_two_batches_preserves_values_and_row_order(
     schema = lance_schema(_FIELD_SHAPES, _METADATA)
     shard = tmp_path / "shard-000000.lance"
 
-    write_lance_file(
+    write_lance_dataset(
         shard,
         schema,
         [record_batch_from_arrays(first, schema), record_batch_from_arrays(second, schema)],
@@ -112,7 +114,7 @@ def test_lance_round_trip_noncontiguous_transposed_input_preserves_values(
     schema = lance_schema(_FIELD_SHAPES, _METADATA)
     shard = tmp_path / "shard-000000.lance"
 
-    write_lance_file(shard, schema, [record_batch_from_arrays(arrays, schema)])
+    write_lance_dataset(shard, schema, [record_batch_from_arrays(arrays, schema)])
 
     decoded = np.stack(list(iter_lance_column_rows(shard, MEL_SPEC_FIELD)), axis=0)
     np.testing.assert_array_equal(decoded, transposed_mel)
@@ -125,11 +127,27 @@ def test_iter_lance_column_rows_yields_read_only_views(tmp_path: Path) -> None:
     """
     schema = lance_schema(_FIELD_SHAPES, _METADATA)
     shard = tmp_path / "shard-000000.lance"
-    write_lance_file(shard, schema, [record_batch_from_arrays(_arange_arrays(offset=0), schema)])
+    write_lance_dataset(
+        shard, schema, [record_batch_from_arrays(_arange_arrays(offset=0), schema)]
+    )
 
     row = next(iter_lance_column_rows(shard, AUDIO_FIELD))
 
     assert not row.flags.writeable
+
+
+def test_write_lance_dataset_pins_data_storage_version(tmp_path: Path) -> None:
+    """The written dataset reports the pinned on-disk format version, not the library default.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    schema = lance_schema(_FIELD_SHAPES, _METADATA)
+    shard = tmp_path / "shard-000000.lance"
+    write_lance_dataset(
+        shard, schema, [record_batch_from_arrays(_arange_arrays(offset=0), schema)]
+    )
+
+    assert lance.dataset(str(shard)).data_storage_version == LANCE_DATA_STORAGE_VERSION
 
 
 def test_tensor_array_missing_row_axis_raises_value_error() -> None:
