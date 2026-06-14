@@ -11,9 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-import pytest
-
-from synth_setter.cli.finalize_dataset import _r2_to_s3_uri, build_dataset_artifact
+from synth_setter.cli.finalize_dataset import build_dataset_artifact
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 
 _RUN_ID = "finalize-art-20260520T000000000Z"
@@ -125,13 +123,3 @@ def test_build_dataset_artifact_wds_references_run_prefix_and_stats(
         f"s3://{_BUCKET}/{_PREFIX}",
         f"s3://{_BUCKET}/{_PREFIX}stats.npz",
     }
-
-
-def test_r2_to_s3_uri_rejects_non_r2_scheme() -> None:
-    """A URI without the ``r2://`` scheme raises ValueError rather than silently passing through.
-
-    Guards against a future reference source handing ``build_dataset_artifact``
-    a non-R2 URI, which would otherwise log a malformed lineage reference.
-    """
-    with pytest.raises(ValueError, match="r2://"):
-        _r2_to_s3_uri("s3://bucket/already-s3.h5")

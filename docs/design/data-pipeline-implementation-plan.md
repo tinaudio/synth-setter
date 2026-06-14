@@ -746,9 +746,9 @@ ______________________________________________________________________
     from HDF5 metadata. Does NOT call `reshard_data.py` (it hardcodes 10k shard size).
   - `wds`: WebDataset tar shards stay in place; finalize streams train-shard `mel_spec`
     arrays into `stats.npz`.
-  - `lance`: single-file Lance shards (`shard-000000.lance`) are combined into
-    non-empty split files (`train.lance`, `val.lance`, `test.lance`), and finalize streams
-    train-shard `mel_spec` tensors into `stats.npz`.
+  - `lance`: Lance dataset-directory shards (`shard-000000.lance/`) are streamed
+    from R2 into non-empty split directories (`train.lance`, `val.lance`, `test.lance`),
+    and finalize streams train-shard `mel_spec` tensors into `stats.npz`.
 - Dataset card includes `output_format`, `worker_architectures` (logs warning if
   heterogeneous), content hashes, shard manifest
 - Upload finalized outputs to R2 storage
