@@ -157,7 +157,7 @@ class TestR2StorageOptions:
 
 
 class TestR2DirectoryExists:
-    """Tests for r2_directory_exists — prefix existence probe via recursive ``rclone lsf``.
+    """Tests for r2_directory_exists — prefix existence probe via non-recursive ``rclone lsf``.
 
     Present case is state-based against the fake-local remote. The absent case
     stays mock-based: on R2 ``lsf`` returns empty stdout for a missing prefix,

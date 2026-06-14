@@ -51,10 +51,10 @@ after an rclone download. A review against the pinned library
 
 - `LANCE_DATA_STORAGE_VERSION = "2.1"` constant in `pipeline/data/lance_shard.py`,
   passed to every `write_dataset`.
-- New `r2_io.r2_storage_options() -> dict[str, str]`: calls
-  `ensure_r2_env_loaded()` then builds the object-store dict from env using the
-  canonical keys from the official docs (S3-compatible stores require both
-  `region` and `endpoint`):
+- New `r2_io.r2_storage_options() -> dict[str, str]`: reads the
+  `RCLONE_CONFIG_R2_*` env (callers run `ensure_r2_env_loaded()` first) and
+  builds the object-store dict using the canonical keys from the official docs
+  (S3-compatible stores require both `region` and `endpoint`):
   `{"access_key_id", "secret_access_key", "endpoint", "region": "auto"}`
   (`endpoint` is `RCLONE_CONFIG_R2_ENDPOINT`, the
   `https://<acct>.r2.cloudflarestorage.com` form). Whether R2 also needs
@@ -87,7 +87,7 @@ after an rclone download. A review against the pinned library
 ### Read path — sequential (direct R2, #2)
 
 - `iter_lance_column_rows(uri, column, *, storage_options=None)` →
-  `lance.dataset(uri, storage_options=...).scanner(columns=[column]).to_batches()`.
+  `lance.dataset(uri, storage_options=...).to_batches(columns=[column])`.
 - `stats.stream_stats_lance(...)` threads `storage_options` through to the above.
 - `finalize_lance`: open each shard with `lance.dataset(s3_uri, storage_options)`,
   stream `.to_batches()`, and `write_dataset` the split directly to its `s3://`

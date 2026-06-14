@@ -393,7 +393,7 @@ def stream_stats_lance(
         )
         folded_any = True
     if not folded_any:
-        raise FileNotFoundError("stream_stats_lance received no shard paths")
+        raise FileNotFoundError("stream_stats_lance received no shard URIs")
     return finalize(existing, mask_degenerate=mask_degenerate)
 
 
