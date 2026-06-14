@@ -177,6 +177,18 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
 
     monkeypatch.setattr(r2_io, "object_size", _fake_r2_object_size)
 
+    # Same local-vs-real bridge for the directory (Lance) skip-probe: a local
+    # rclone remote errors on an absent prefix where real R2 lists empty.
+    real_directory_exists = r2_io.r2_directory_exists
+
+    def _fake_r2_directory_exists(r2_uri: str) -> bool:
+        try:
+            return real_directory_exists(r2_uri)
+        except subprocess.CalledProcessError:
+            return False
+
+    monkeypatch.setattr(r2_io, "r2_directory_exists", _fake_r2_directory_exists)
+
     spec = spec_from_cfg(cfg_dataset)
     # smoke-shard partitions into one shard per split, so the stub covers train→val→test.
     assert spec.split_shard_ranges == {"train": (0, 1), "val": (1, 2), "test": (2, 3)}
@@ -190,8 +202,13 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
 
     for shard in spec.shards:
         assert shard.filename.endswith(shard_suffix)
-        size = r2_io.object_size(spec.r2.shard_uri(shard))
-        assert size is not None and size > 0, f"shard missing in fake R2: {shard.filename}"
+        if spec.output_format.is_directory:
+            assert r2_io.r2_directory_exists(spec.r2.shard_uri(shard)), (
+                f"shard missing in fake R2: {shard.filename}"
+            )
+        else:
+            size = r2_io.object_size(spec.r2.shard_uri(shard))
+            assert size is not None and size > 0, f"shard missing in fake R2: {shard.filename}"
 
     renderer_invocations = 0
 

@@ -156,6 +156,35 @@ class TestR2StorageOptions:
             r2_io.r2_storage_options()
 
 
+class TestR2DirectoryExists:
+    """Tests for r2_directory_exists — prefix existence probe via recursive ``rclone lsf``.
+
+    Present case is state-based against the fake-local remote. The absent case
+    stays mock-based: on R2 ``lsf`` returns empty stdout for a missing prefix,
+    while the local backend exits non-zero — the same divergence ``object_size``
+    documents.
+    """
+
+    def test_present_prefix_returns_true(self, fake_r2_remote: Path) -> None:
+        """A prefix containing at least one object returns ``True``.
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        """
+        obj = fake_r2_remote / "bucket" / "shard-000000.lance" / "data" / "part.lance"
+        obj.parent.mkdir(parents=True)
+        obj.write_bytes(b"x")
+
+        assert r2_io.r2_directory_exists("r2://bucket/shard-000000.lance") is True
+
+    def test_empty_listing_returns_false(self) -> None:
+        """Empty ``rclone lsf`` stdout (R2's missing-prefix shape) returns ``False``."""
+        completed = MagicMock(spec=subprocess.CompletedProcess)
+        completed.stdout = ""
+        completed.returncode = 0
+        with patch("synth_setter.pipeline.r2_io.subprocess.run", return_value=completed):
+            assert r2_io.r2_directory_exists("r2://bucket/missing.lance") is False
+
+
 class TestDownloadToPath:
     """Tests for download_to_path — file→file copy."""
 

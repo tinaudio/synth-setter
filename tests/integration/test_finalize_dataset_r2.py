@@ -18,13 +18,14 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+import lance
 import numpy as np
 import pytest
 
 from synth_setter.cli import finalize_dataset
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import DatasetSpec
-from tests.helpers.finalize_shards import write_minimal_wds_shard
+from tests.helpers.finalize_shards import write_minimal_lance_shard, write_minimal_wds_shard
 
 pytestmark = [pytest.mark.integration_r2, pytest.mark.r2, pytest.mark.slow]
 
@@ -100,6 +101,87 @@ def staged_wds_spec() -> Iterator[DatasetSpec]:
             capture_output=True,
             check=False,
         )
+
+
+@pytest.fixture()
+def staged_lance_spec() -> Iterator[DatasetSpec]:
+    """Yield a 1-shard Lance ``DatasetSpec`` with its shard dataset pre-uploaded to R2.
+
+    Mirrors :func:`staged_wds_spec` but for the Lance directory format: the shard
+    is a dataset directory uploaded under ``spec.r2.shard_uri`` so ``finalize_lance``
+    exercises the real direct-from-R2 streaming read.
+
+    :yields DatasetSpec: A frozen spec whose train split is one 4-row Lance shard
+        already present on R2 at ``spec.r2.shard_uri(spec.shards[0])``.
+    """
+    if not r2_io.is_r2_reachable():
+        pytest.skip("R2 not reachable (rclone not on PATH or rclone lsd r2: failed)")
+    r2_io.ensure_r2_env_loaded()
+
+    prefix = _unique_test_prefix_suffix()
+    bucket = "intermediate-data"
+    spec_kwargs: dict[str, Any] = {
+        "task_name": "finalize-it-test",
+        "output_format": "lance",
+        "train_val_test_sizes": [4, 0, 0],
+        "base_seed": 42,
+        "r2": {"bucket": bucket, "prefix": prefix},
+        "render": {
+            "plugin_path": "/fake/Plugin.vst3",
+            "preset_path": "presets/surge-base.vstpreset",
+            "param_spec_name": "surge_simple",
+            "renderer_version": "1.0.0-test",
+            "sample_rate": 44100,
+            "channels": 2,
+            "velocity": 100,
+            "signal_duration_seconds": 4.0,
+            "min_loudness": -55.0,
+            "samples_per_render_batch": 4,
+            "samples_per_shard": 4,
+            "gui_toggle_cadence": "never",
+        },
+    }
+    spec = DatasetSpec(**spec_kwargs)  # type: ignore[arg-type]
+
+    with tempfile.TemporaryDirectory() as raw_local:
+        local = Path(raw_local) / spec.shards[0].filename
+        write_minimal_lance_shard(local, spec)
+        # Lance shards are directories: upload the tree under the shard URI.
+        r2_io.upload_dir(local, spec.r2.shard_uri(spec.shards[0]))
+    try:
+        yield spec
+    finally:
+        subprocess.run(  # noqa: S603 — args are literal strings
+            ["rclone", "purge", f"r2:{bucket}/{prefix}"],  # noqa: S607
+            capture_output=True,
+            check=False,
+        )
+
+
+def test_finalize_lance_writes_split_and_stats_to_real_r2(
+    staged_lance_spec: DatasetSpec,
+) -> None:
+    """``finalize_lance`` streams the R2 shard into a split dataset written back to R2.
+
+    Exercises the direct-R2 path end-to-end: read shard from R2 via
+    ``storage_options`` → stream stats → write the train split dataset straight
+    to its ``s3://`` URI → upload ``stats.npz``. The split reads back with the
+    pinned on-disk version and the expected row count.
+
+    :param staged_lance_spec: Fixture-provided spec whose train shard dataset is on R2.
+    """
+    spec = staged_lance_spec
+    with tempfile.TemporaryDirectory() as raw_work_dir:
+        finalize_dataset.finalize_lance(spec, Path(raw_work_dir))
+
+    assert r2_io.object_size(spec.r2.stats_uri()) is not None, (
+        f"expected stats.npz at {spec.r2.stats_uri()} after finalize"
+    )
+    split_uri = spec.r2.split_lance_uri("train")
+    assert r2_io.r2_directory_exists(split_uri), f"expected split dataset at {split_uri}"
+    dataset = lance.dataset(r2_io.to_s3_uri(split_uri), storage_options=r2_io.r2_storage_options())
+    assert dataset.count_rows() == spec.render.samples_per_shard
+    assert dataset.data_storage_version == "2.1"
 
 
 def test_finalize_wds_uploads_stats_and_marker_to_real_r2(
