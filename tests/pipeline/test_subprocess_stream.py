@@ -52,6 +52,9 @@ _PROMPT_SECONDS = 10.0
 # the child interpreter startup margin on loaded CI runners.
 _POLICY_TIMEOUT_SECONDS = 2.0
 
+# Per-phase heartbeat-sweep window (seconds); must exceed the grandchild's write cadence.
+_SWEEP_SETTLE_SECONDS = 1.0
+
 
 def _streamed(
     cmd: list[str], *, timeout: float | None = None, env: dict[str, str] | None = None
@@ -611,9 +614,9 @@ class TestTimeoutEscalation:
             _streamed(_child(script, leak_marker), timeout=_POLICY_TIMEOUT_SECONDS)
 
         _wait_for_file(heartbeat)
-        time.sleep(1.0)
+        time.sleep(_SWEEP_SETTLE_SECONDS)
         size_after_kill = heartbeat.stat().st_size
-        time.sleep(1.0)
+        time.sleep(_SWEEP_SETTLE_SECONDS)
         assert heartbeat.stat().st_size == size_after_kill, "grandchild still heartbeating"
 
 
@@ -644,35 +647,38 @@ def test_pid_alive_unreaped_zombie_reports_dead() -> None:
 class TestPostExitSweep:
     """Problem 4b: the unconditional post-exit in-group SIGTERM sweep."""
 
+    @pytest.mark.slow
     def test_clean_exit_sweep_reaps_ingroup_grandchild(
         self, tmp_path: Path, leak_marker: str
     ) -> None:
         """An in-group grandchild outliving a *successful* child is swept.
 
-        Nothing on the timeout path exercises this: the sweep after a clean
-        exit is the only thing standing between a daemonized descendant and
-        an infinite leak.
+        The post-exit sweep is the only guard against a daemonized in-group descendant leaking
+        forever — no timeout path exercises it.
 
-        :param tmp_path: Holds the grandchild pidfile.
+        :param tmp_path: Holds the grandchild heartbeat file.
         :param leak_marker: argv stamp from the autouse sweep fixture.
         """
-        pidfile = tmp_path / "grandchild.pid"
+        heartbeat = tmp_path / "heartbeat"
         script = (
             "import os, time\n"
             "if os.fork() == 0:\n"
-            f"    with open({str(pidfile)!r}, 'w') as f:\n"
-            "        f.write(str(os.getpid()))\n"
-            "    time.sleep(60)\n"
-            "    os._exit(0)\n"
+            "    while True:\n"
+            f"        with open({str(heartbeat)!r}, 'a') as f:\n"
+            "            f.write('x')\n"
+            "        time.sleep(0.2)\n"
         )
 
         _streamed(_child(script, leak_marker))
 
-        grandchild_pid = int(_wait_for_file(pidfile))
-        deadline = time.monotonic() + 3.0
-        while time.monotonic() < deadline and _pid_alive(grandchild_pid):
-            time.sleep(0.05)
-        assert not _pid_alive(grandchild_pid), "post-exit sweep missed the in-group grandchild"
+        # _streamed returns only after the SUT's finally runs, so the sweep has been dispatched.
+        _wait_for_file(heartbeat)
+        time.sleep(_SWEEP_SETTLE_SECONDS)
+        size_after_sweep = heartbeat.stat().st_size
+        time.sleep(_SWEEP_SETTLE_SECONDS)
+        assert heartbeat.stat().st_size == size_after_sweep, (
+            "post-exit sweep missed the in-group grandchild"
+        )
 
     @pytest.mark.slow
     @pytest.mark.xfail(
