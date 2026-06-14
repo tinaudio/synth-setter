@@ -36,7 +36,7 @@ import subprocess
 import sys
 import threading
 from collections.abc import Iterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -98,7 +98,7 @@ def _base_spec_kwargs(tmp_path: Path, **overrides: object) -> dict[str, object]:
     kwargs: dict[str, object] = {
         "task_name": "test-dataset",
         "run_id": "test-dataset-20260328T120000000Z",
-        "created_at": datetime(2026, 3, 28, 12, 0, 0, tzinfo=timezone.utc),
+        "created_at": datetime(2026, 3, 28, 12, 0, 0, tzinfo=UTC),
         "git_sha": "a" * 40,
         "is_repo_dirty": False,
         "output_format": "hdf5",
