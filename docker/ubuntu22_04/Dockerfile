@@ -291,10 +291,9 @@ RUN curl -fsSL \
 # Python base: Python + venv on top of the chosen Surge install.
 # ==========================================
 FROM builder-install-surge-from-${BUILD_MODE} AS python-base
-# Check the surge-stage VST3 install. Surge XT is the only bundle present at this
-# stage; the amd64-only fetched synths (OB-Xf/Dexed/Six Sines) land in
-# /usr/lib/vst3/ after the ``vst3-synths-fetch`` COPY downstream, where each is
-# load-validated under headless X11 (see the "fetched synth" RUN below).
+# Surge XT is the only bundle present at this stage; the amd64-only fetched
+# synths land in /usr/lib/vst3/ after the vst3-synths-fetch COPY downstream,
+# where the presence gate + per-synth X11 load-validation cover them.
 RUN ls /usr/lib/vst3/ && test -n "$(ls -A /usr/lib/vst3/Surge\ XT.vst3 2>/dev/null)" \
     || (echo "ERROR: Surge XT.vst3 not found in /usr/lib/vst3/" >&2; exit 1)
 
@@ -417,9 +416,8 @@ RUN mkdir -p /home/build/synth-setter/plugins && \
 COPY --from=vst3-synths-fetch /plugins-staging/ /usr/lib/vst3/
 COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/scripts/load_vst3_check.py /artifacts/
 
-# Synth-neutral presence gate for the bundles the image must ship. Surge XT is
-# required on every arch; OB-Xf (and the other fetched synths) are amd64-only, so
-# OB-Xf is asserted only on amd64. The per-synth X11 load-validation follows.
+# Presence gate for the bundles the image must ship: Surge XT on every arch,
+# OB-Xf on amd64 only (the fetched synths are amd64-only). Load-validation follows.
 RUN for bundle in "Surge XT" "OB-Xf"; do \
       if [[ "$bundle" == "OB-Xf" && "${TARGETARCH:-}" != "amd64" ]]; then \
         echo "skipping ${bundle}.vst3 presence check on ${TARGETARCH:-<unset>}" >&2; continue; \

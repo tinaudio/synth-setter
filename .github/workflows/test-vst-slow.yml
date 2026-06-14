@@ -85,10 +85,8 @@ jobs:
     permissions:
       contents: write
 
-    # One cell per synth proves more than one VST3 renders end-to-end;
-    # ``fail-fast: false`` so one synth's failure doesn't mask the other.
-    # ``surge_xt`` runs the full Surge suite and alone publishes benchmarks
-    # (see #703); ``obxf`` runs only the synth-agnostic render as its proof.
+    # One cell per synth (``fail-fast: false`` so neither masks the other);
+    # only ``surge_xt`` runs the full suite and publishes benchmarks (see #703).
     strategy:
       fail-fast: false
       matrix:
@@ -149,9 +147,8 @@ jobs:
         # headless wrapper has to apply at the pytest level (not the
         # entire container).
         #
-        # ``matrix.pytest_targets`` is a space-separated node list; the
-        # container splits it into a bash array (``read -ra``) so each target is
-        # a distinct pytest arg. Node IDs here carry no spaces or glob chars.
+        # ``matrix.pytest_targets`` is a space-separated node list split into a
+        # bash array (``read -ra``); node IDs here carry no spaces or globs.
         env:
           PLUGIN_PATH: ${{ matrix.plugin_path }}
           TEST_SYNTH: ${{ matrix.synth }}
