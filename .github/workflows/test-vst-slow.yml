@@ -80,10 +80,10 @@ jobs:
     runs-on: ubuntu-latest-4core
     timeout-minutes: 120
 
-    # Job-level grant so only this job can push to ``gh-pages`` for the
-    # benchmark history. Workflow-level default is ``contents: read``.
-    permissions:
-      contents: write
+    # No write grant here: both matrix cells stay at the workflow-default
+    # ``contents: read``. Pushing to ``gh-pages`` is scoped to the separate
+    # ``publish_benchmarks`` job, so a compromised test/run step in either
+    # synth cell can't reach the repo's contents (#703).
 
     # One cell per synth (``fail-fast: false`` so neither masks the other);
     # only ``surge_xt`` runs the full suite and publishes benchmarks (see #703).
@@ -203,19 +203,57 @@ jobs:
             fi
           done
 
+      # Hand the bench JSON to the ``publish_benchmarks`` job, which holds the
+      # ``contents: write`` grant. Surge-only: only this cell produces the
+      # benchmark buckets (#703). ``if-no-files-found: ignore`` keeps a
+      # deselected/xfailed run from failing the upload.
+      - name: Upload benchmark JSON for the publish job
+        if: always() && matrix.synth == 'surge_xt'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vst-benchmark-json
+          path: |
+            ${{ github.workspace }}/vst-noise-floor-1-preset-n-renders.json
+            ${{ github.workspace }}/vst-noise-floor-random-preset-replay.json
+          if-no-files-found: ignore
+          retention-days: 1
+
+  publish_benchmarks:
+    name: Publish VST benchmarks to gh-pages
+    needs: run_vst_slow_tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # The only job that pushes to ``gh-pages`` (Issue #703), so the
+    # ``contents: write`` grant lives here alone — the matrix test cells run
+    # untrusted plugin/render code at ``contents: read``. Push-to-main always
+    # publishes; manual dispatch requires the ``publish_metrics`` opt-in. PRs
+    # never reach this job.
+    permissions:
+      contents: write
+    if: |
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/test/vst-roundtrip-xfail-tests')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish_metrics == true)
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      # Pulls the Surge bench JSON surfaced by ``run_vst_slow_tests`` into the
+      # workspace where ``benchmark-action`` and the ``hashFiles`` guards
+      # expect it.
+      - name: Download benchmark JSON
+        uses: actions/download-artifact@v4
+        with:
+          name: vst-benchmark-json
+          path: ${{ github.workspace }}
+
       - name: Publish "1 preset N renders" metrics to benchmark history
         # Bucket 1: same hardcoded patch rendered ``num_samples`` times across
         # both stages, exposing the every-other-render variance described in
         # bug #489. See ``docs/reference/audio-similarity-benchmarks.md``.
-        # Push-to-main always publishes; manual dispatch requires the
-        # ``publish_metrics`` opt-in. ``hashFiles`` skips the step cleanly if
-        # the file is missing.
-        if: |
-          matrix.synth == 'surge_xt' &&
-          hashFiles('vst-noise-floor-1-preset-n-renders.json') != '' && (
-            (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/test/vst-roundtrip-xfail-tests')) ||
-            (github.event_name == 'workflow_dispatch' && inputs.publish_metrics == true)
-          )
+        # ``hashFiles`` skips the step cleanly if the file is missing.
+        if: hashFiles('vst-noise-floor-1-preset-n-renders.json') != ''
         uses: benchmark-action/github-action-benchmark@a60cea5bc7b49e15c1f58f411161f99e0df48372 # v1.22.0
         with:
           name: VST noise floor (1 preset N renders)
@@ -237,12 +275,7 @@ jobs:
         # only (no all-pairs), so it tracks the API-level round-trip
         # invariant rather than the every-other-render bug. See
         # ``docs/reference/audio-similarity-benchmarks.md``.
-        if: |
-          matrix.synth == 'surge_xt' &&
-          hashFiles('vst-noise-floor-random-preset-replay.json') != '' && (
-            (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/test/vst-roundtrip-xfail-tests')) ||
-            (github.event_name == 'workflow_dispatch' && inputs.publish_metrics == true)
-          )
+        if: hashFiles('vst-noise-floor-random-preset-replay.json') != ''
         uses: benchmark-action/github-action-benchmark@a60cea5bc7b49e15c1f58f411161f99e0df48372 # v1.22.0
         with:
           name: VST noise floor (random preset replay)
