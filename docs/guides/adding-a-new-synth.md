@@ -63,7 +63,8 @@ Useful flags (`synth-setter-introspect-plugin --help` for the full list):
 - `--load-timeout` — seconds to wait for plugin init (default `600`);
   multi-minute loads are normal for some synths.
 - `--out-spec` / `--out-preset` / `--out-csv` — override the default output
-  paths (loose files in the cwd unless `--register` is given).
+  paths in loose-file mode; they cannot be combined with `--register`, which
+  writes to fixed checkout paths.
 - `--force` — overwrite existing outputs; off by default so a re-run won't
   clobber a hand-tuned spec.
 
@@ -150,7 +151,7 @@ preset_paths: dict[str, str] = {
 
 The render config pins this synth's identity and inherits generic render knobs
 (sample rate, cadence, batch size) from the base `surge_xt` render config
-(`configs/render/surge_xt.yaml`):
+(`src/synth_setter/configs/render/surge_xt.yaml`):
 
 ```yaml
 # src/synth_setter/configs/render/mysynth.yaml

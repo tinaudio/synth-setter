@@ -31,7 +31,7 @@ code**. See
  │  │          │    │          │    │          │    │                  │  │
  │  │ Render   │    │ Reshard  │    │ Flow     │    │ Predict → Render │  │
  │  │ audio via│    │ into     │    │ matching │    │ → Metrics        │  │
- │  │VST3 synth│    │ splits   │    │ model    │    │                  │  │
+ │  │ VST synth│    │ splits   │    │ model    │    │                  │  │
  │  └────┬─────┘    └────┬─────┘    └────┬─────┘    └────────┬─────────┘  │
  │       │               │               │                   │            │
  │       ▼               ▼               ▼                   ▼            │
@@ -134,7 +134,8 @@ synth-setter/
 
 **Synth-agnostic core, registry as the contract.** A synth is fully described
 by three registered artifacts — a `ParamSpec` (`param_specs[name]`), a baseline
-preset (`preset_paths[name]`), and a `RenderConfig` (`configs/render/<name>.yaml`)
+preset (`preset_paths[name]`), and a `RenderConfig`
+(`src/synth_setter/configs/render/<name>.yaml`)
 — keyed by name in `src/synth_setter/data/vst/param_spec_registry.py`. The
 rendering, HDF5/Lance storage, mel features, distributed workers, and models all
 read width and behavior from the resolved spec, never from a synth literal.
