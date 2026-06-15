@@ -48,6 +48,9 @@ from tests.helpers.dummy_shards import stub_renderer
 # only keys in ``metrics.json`` (see ``synth_setter.evaluation.compute_audio_metrics``).
 _ORACLE_AUDIO_METRICS = ("mss", "wmfcc", "sot", "rms")
 
+# Min RMS-envelope cosine for a single-patch render: below #1677 jitter, above silence (~0).
+_SINGLE_PATCH_RMS_MIN = 0.5
+
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # Moduleinfo-only VST3 bundle: extract_renderer_version reads its
@@ -479,10 +482,9 @@ def test_oracle_eval_inline_writes_shuffled_audio_metrics_when_params_uniform(
     ``shuffled_audio/<name>_{mean,std}``.
 
     Asserts each audio metric (mss, wmfcc, sot, rms) produces a finite, bounded
-    value under both the ``audio/`` and ``shuffled_audio/`` prefixes.  Because
-    all samples share one patch, shuffled predictions match the same target as
-    the originals, so the shuffled means satisfy the same
-    ``ORACLE_AUDIO_METRIC_BOUNDS`` envelope.
+    value under both the ``audio/`` and ``shuffled_audio/`` prefixes.  mss/wmfcc/sot
+    use the shared ``ORACLE_AUDIO_METRIC_BOUNDS``; both groups' ``rms`` uses the
+    looser ``_SINGLE_PATCH_RMS_MIN`` (cadence=shard renders one patch; see #1677).
 
     :param cfg_dataset: Composed config; read only for ``r2.bucket`` (cleanup
         purge).
@@ -553,8 +555,6 @@ def test_oracle_eval_inline_writes_shuffled_audio_metrics_when_params_uniform(
                             f"(split={split}, metrics={metrics})"
                         )
 
-            # Uniform params → shuffled pred matches the same target; means satisfy
-            # the same oracle envelope as the non-shuffled pass.
             for group in ("audio", "shuffled_audio"):
                 assert metrics[f"{metric_prefix}{group}/mss_mean"] < bounds.mss_max, (
                     split,
@@ -568,8 +568,9 @@ def test_oracle_eval_inline_writes_shuffled_audio_metrics_when_params_uniform(
                     split,
                     metrics,
                 )
-                assert metrics[f"{metric_prefix}{group}/rms_mean"] > bounds.rms_min, (
+                assert metrics[f"{metric_prefix}{group}/rms_mean"] > _SINGLE_PATCH_RMS_MIN, (
                     split,
+                    _SINGLE_PATCH_RMS_MIN,
                     metrics,
                 )
     finally:
