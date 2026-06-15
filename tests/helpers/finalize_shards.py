@@ -190,6 +190,7 @@ def smoke_shard_metadata(render: RenderConfig) -> ShardMetadata:
         sample_rate=render.sample_rate,
         channels=render.channels,
         min_loudness=render.min_loudness,
+        base_seed=render.base_seed,
     )
 
 

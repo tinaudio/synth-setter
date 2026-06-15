@@ -243,7 +243,10 @@ def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -
         "src/synth_setter/data/vst/generate_vst_dataset.py",
         str(output_path),
     ]
-    for key, value in spec.render.model_dump().items():
+    # Each subprocess renders a distinct, reproducible per-sample stream keyed by
+    # its shard's seed (#884), so override the render default before dumping flags.
+    render_args = spec.render.model_copy(update={"base_seed": shard.seed}).model_dump()
+    for key, value in render_args.items():
         args.extend([f"--{key}", str(value)])
     if spec.copy_dataset_root_uri is not None:
         args.extend(["--copy_dataset_root_uri", spec.copy_dataset_root_uri])

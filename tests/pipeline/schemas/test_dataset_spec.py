@@ -560,7 +560,7 @@ class TestDatasetSpecValidators:
         self, patch_runtime_io: None, bad_value: Any
     ) -> None:
         """Setting train_val_test_seeds raises NotImplementedError — reserved for #884."""
-        with pytest.raises(NotImplementedError, match="reserved for per-sample seeding"):
+        with pytest.raises(NotImplementedError, match="reserved for per-split independent seed"):
             DatasetSpec(**_valid_spec_kwargs(train_val_test_seeds=bad_value))
 
     def test_train_val_test_seeds_defaults_to_none(self, patch_runtime_io: None) -> None:

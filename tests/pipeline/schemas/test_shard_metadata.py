@@ -25,6 +25,7 @@ def _valid_kwargs(**overrides: Any) -> dict[str, Any]:
         "sample_rate": 44100,
         "channels": 2,
         "min_loudness": -55.0,
+        "base_seed": 42,
     }
     kwargs.update(overrides)
     return kwargs

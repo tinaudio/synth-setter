@@ -1198,7 +1198,7 @@ def test_generate_sample_retries_when_only_fixed_note_params(
             (_HARDCODED_SYNTH_PARAMS, _HARDCODED_NOTE_PARAMS),
         ]
     )
-    monkeypatch.setattr(spec, "sample", lambda: next(sample_returns))
+    monkeypatch.setattr(spec, "sample", lambda rng=None: next(sample_returns))
 
     sample = generate_vst_dataset.generate_sample(
         plugin_path=PLUGIN_PATH,
@@ -1252,7 +1252,7 @@ def _install_fake_render_params(
     monkeypatch.setattr(generate_vst_dataset, "render_params", _fake_render_params)
 
     sample_returns = iter([(_HARDCODED_SYNTH_PARAMS, _HARDCODED_NOTE_PARAMS)] * (num_retries + 1))
-    monkeypatch.setattr(spec, "sample", lambda: next(sample_returns))
+    monkeypatch.setattr(spec, "sample", lambda rng=None: next(sample_returns))
     return warmup_mock
 
 

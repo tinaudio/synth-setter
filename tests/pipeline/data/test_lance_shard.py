@@ -48,6 +48,7 @@ _METADATA = ShardMetadata(
     sample_rate=100,
     channels=2,
     min_loudness=-55.0,
+    base_seed=42,
 )
 
 

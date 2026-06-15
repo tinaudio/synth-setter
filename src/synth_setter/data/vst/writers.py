@@ -23,6 +23,7 @@ from tqdm import trange
 from synth_setter.data.vst import param_specs
 from synth_setter.data.vst.core import load_plugin, load_preset, run_with_editor_held_open
 from synth_setter.data.vst.generate_vst_dataset import (
+    SampleSeed,
     VSTDataSample,
     create_datasets_and_get_start_idx,
     generate_sample,
@@ -264,6 +265,13 @@ def _render_in_batches(
                 fixed_note_params=fixed_note,
                 plugin=cached_plugin,
                 warmup=warmup_this_render,
+                # sample_idx is the absolute row index (the seed key); resumability
+                # must preserve it or per-row seed isolation breaks (#884).
+                seed=SampleSeed(
+                    master_seed=render_cfg.base_seed,
+                    sample_idx=i,
+                    max_attempts=render_cfg.attempts_per_sample,
+                ),
             )
             if share_params and shared_synth is None:
                 shared_synth = sample.synth_params
@@ -313,6 +321,7 @@ def _shard_metadata_from_render(render_cfg: RenderConfig) -> ShardMetadata:
         sample_rate=render_cfg.sample_rate,
         channels=render_cfg.channels,
         min_loudness=render_cfg.min_loudness,
+        base_seed=render_cfg.base_seed,
     )
 
 

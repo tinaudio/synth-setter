@@ -51,7 +51,7 @@ def _smoke_render_cfg(**overrides: object) -> RenderConfig:
     return RenderConfig(**kwargs)  # type: ignore[arg-type]
 
 
-def test_shard_metadata_from_render_projects_five_fields() -> None:
+def test_shard_metadata_from_render_projects_six_fields() -> None:
     """``_shard_metadata_from_render`` returns a strict ``ShardMetadata`` with renderer values."""
     render_cfg = _smoke_render_cfg(
         velocity=64,
@@ -59,6 +59,7 @@ def test_shard_metadata_from_render_projects_five_fields() -> None:
         sample_rate=22050,
         channels=1,
         min_loudness=-40.0,
+        base_seed=7,
     )
 
     meta = _shard_metadata_from_render(render_cfg)
@@ -69,6 +70,7 @@ def test_shard_metadata_from_render_projects_five_fields() -> None:
     assert meta.sample_rate == 22050
     assert meta.channels == 1
     assert meta.min_loudness == -40.0
+    assert meta.base_seed == 7
 
 
 def test_shard_metadata_from_render_round_trips_through_json() -> None:

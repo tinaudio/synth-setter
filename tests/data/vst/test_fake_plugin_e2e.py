@@ -299,6 +299,7 @@ def test_make_lance_dataset_writes_validator_passing_shard_under_fake_plugin(
         sample_rate=render_cfg.sample_rate,
         channels=render_cfg.channels,
         min_loudness=render_cfg.min_loudness,
+        base_seed=render_cfg.base_seed,
     )
 
 

@@ -24,6 +24,10 @@ class ShardMetadata(BaseModel):
     ``RenderConfig._ranges_must_be_sane`` so a corrupted or hand-edited
     sidecar fails validation rather than being accepted with nonsensical
     values that would only surface later as a training-time crash.
+
+    .. attribute :: base_seed
+
+        Per-shard master seed the row RNGs are derived from (#884).
     """
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
@@ -35,6 +39,14 @@ class ShardMetadata(BaseModel):
     sample_rate: int = Field(description="Audio sample rate in Hz.")
     channels: int = Field(description="Audio channel count.")
     min_loudness: float = Field(description="Per-sample loudness floor used during rendering.")
+    base_seed: int = Field(
+        default=0,
+        description=(
+            "Per-shard master seed the row RNGs are derived from (#884). Defaults to 0 so "
+            "sidecars written before this field existed still validate; new shards write the "
+            "real seed."
+        ),
+    )
 
     @model_validator(mode="after")
     def _ranges_must_be_sane(self) -> ShardMetadata:

@@ -21,7 +21,7 @@ from __future__ import annotations
 import io
 import json
 import tarfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import h5py
@@ -41,6 +41,7 @@ _VALID_METADATA: dict[str, object] = {
     "sample_rate": 44100,
     "channels": _VALID_AUDIO_CHANNELS,
     "min_loudness": -55.0,
+    "base_seed": 42,
 }
 
 
@@ -59,7 +60,7 @@ def real_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> DatasetSpec:
     :returns: Spec whose render fields match the ``_VALID_*`` constants in this module.
     :rtype: DatasetSpec
     """
-    fixed_now = datetime(2026, 3, 28, 12, 0, 0, tzinfo=timezone.utc)
+    fixed_now = datetime(2026, 3, 28, 12, 0, 0, tzinfo=UTC)
     monkeypatch.setattr("synth_setter.pipeline.schemas.spec._get_git_sha", lambda: "a" * 40)
     monkeypatch.setattr("synth_setter.pipeline.schemas.spec._is_repo_dirty", lambda: False)
     monkeypatch.setattr("synth_setter.pipeline.schemas.spec._utc_now", lambda: fixed_now)
