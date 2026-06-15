@@ -33,12 +33,19 @@ from synth_setter.evaluation.compute_audio_metrics import (
     compute_wmfcc,
 )
 from synth_setter.pipeline.schemas.spec import RenderConfig
-from tests._vst import PLUGIN_PATH, TEST_PARAM_SPEC_NAME, TEST_PRESET_PATH
+from tests._vst import (
+    PLUGIN_PATH,
+    TEST_PARAM_SPEC_NAME,
+    TEST_PRESET_PATH,
+    TEST_RENDERER_VERSION,
+)
 
 log = logging.getLogger(__name__)
 
 # Env-driven (Surge XT default) so the synth-agnostic ``test_make_dataset``
 # renders a second synth in CI; the Surge-specific tests below are deselected there.
+# Preset, spec name, and renderer version all track the selected synth so the
+# OB-Xf cell pins OB-Xf's version, not Surge XT's.
 _PRESET_PATH = TEST_PRESET_PATH
 _NUM_SAMPLES = 5
 _SAMPLE_RATE = 44100.0
@@ -47,7 +54,7 @@ _DURATION = 4.0
 _VELOCITY = 100
 _MIN_LOUDNESS = -55.0
 _SPEC_NAME = TEST_PARAM_SPEC_NAME
-_RENDERER_VERSION = "1.3.4"
+_RENDERER_VERSION = TEST_RENDERER_VERSION
 _ABSOLUTE_TOLERANCE = 1e-7
 _RELATIVE_TOLERANCE = 1e-9
 

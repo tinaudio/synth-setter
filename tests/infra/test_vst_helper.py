@@ -134,6 +134,7 @@ def test_test_synth_defaults_to_surge_xt_when_env_unset(
     assert mod.TEST_SYNTH == "surge_xt"
     assert mod.TEST_PARAM_SPEC_NAME == "surge_xt"
     assert mod.TEST_PRESET_PATH == "presets/surge-base.vstpreset"
+    assert mod.TEST_RENDERER_VERSION == "1.3.4"
 
 
 @pytest.mark.infra
@@ -150,6 +151,7 @@ def test_test_synth_selects_registry_entry_from_env_override(
     assert mod.TEST_SYNTH == "obxf"
     assert mod.TEST_PARAM_SPEC_NAME == "obxf"
     assert mod.TEST_PRESET_PATH == "presets/obxf-base.vstpreset"
+    assert mod.TEST_RENDERER_VERSION == "1.0.3"
 
 
 @pytest.mark.infra

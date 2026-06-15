@@ -1,8 +1,9 @@
 """Single source of truth for VST plugin discovery in tests.
 
 ``SYNTH_SETTER_TEST_SYNTH`` (a ``preset_paths`` key, default ``surge_xt``)
-drives ``TEST_SYNTH`` / ``TEST_PARAM_SPEC_NAME`` / ``TEST_PRESET_PATH`` so a CI
-cell can target a second synth without hardcoding. The plugin binary resolves
+drives ``TEST_SYNTH`` / ``TEST_PARAM_SPEC_NAME`` / ``TEST_PRESET_PATH`` /
+``TEST_RENDERER_VERSION`` so a CI cell can target a second synth without
+hardcoding. The plugin binary resolves
 separately via ``SYNTH_SETTER_PLUGIN_PATH`` (``PLUGIN_PATH`` / ``VST_AVAILABLE``);
 ``conftest.pytest_collection_modifyitems`` consults ``VST_AVAILABLE`` to
 auto-skip ``requires_vst`` tests.
@@ -23,6 +24,17 @@ TEST_PARAM_SPEC_NAME = TEST_SYNTH
 # Eager lookup so an unregistered TEST_SYNTH raises KeyError at import rather
 # than letting a downstream render test skip or fail opaquely.
 TEST_PRESET_PATH = preset_paths[TEST_SYNTH]
+
+# Per-synth renderer pin mirroring ``configs/render/<synth>.yaml`` (the value
+# ``generate_dataset`` cross-checks against the plugin), so the synth-agnostic
+# dataset test labels provenance for the selected synth, not always Surge XT's.
+# The Surge family shares one plugin binary, hence one version.
+TEST_RENDERER_VERSION = {
+    "surge_xt": "1.3.4",
+    "surge_simple": "1.3.4",
+    "surge_4": "1.3.4",
+    "obxf": "1.0.3",
+}[TEST_SYNTH]
 
 PLUGIN_PATH = default_plugin_path()
 
