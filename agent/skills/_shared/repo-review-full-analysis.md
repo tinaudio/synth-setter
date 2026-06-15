@@ -99,7 +99,7 @@ Each agent's prompt MUST include:
 
 - The PR number, repo, base SHA, head SHA.
 - The full file list (with per-file line counts is helpful but optional).
-- The exact skill to invoke: `Invoke the tinaudio-synth-setter-skills:<skill-name> skill via the Skill tool and apply its checklist to this PR's diff.`
+- The exact skill to invoke: `Invoke the tinaudio-synth-setter-skills:<skill-name> skill via the Skill tool and apply its checklist to this PR's diff.` **Exception:** `lance-review` is repo-local, not a plugin skill — instruct its agent to invoke the bare `lance-review` skill (no `tinaudio-synth-setter-skills:` prefix), per the note just below. Do not emit the plugin-prefixed string for it.
 - The expected output shape (see below).
 
 `lance-review` is **repo-local**, not a plugin skill: its agent attempts the bare

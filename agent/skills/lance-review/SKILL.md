@@ -59,14 +59,15 @@ Restrict to files in the PR/diff. Find every Lance interaction. `$BASE` and
 export them before running the snippet:
 
 ```bash
-# --diff-filter=d drops deleted paths so grep never runs on a missing file
-mapfile -t changed_files < <(git diff --name-only --diff-filter=d "$BASE"..."$HEAD")
-[[ ${#changed_files[@]} -gt 0 ]] && grep -nE 'import lance|lancedb|lance\.[a-z]|Lance[A-Z]|FragmentMetadata|write_dataset|\.scanner\(|\.to_batches\(|\.take\(|add_columns|merge_columns' -- "${changed_files[@]}"
+# --diff-filter=d drops deleted paths; the '*.py' pathspec keeps the scan on
+# code so prose mentions of Lance APIs in docs/markdown don't false-positive
+mapfile -t changed_py < <(git diff --name-only --diff-filter=d "$BASE"..."$HEAD" -- '*.py')
+[[ ${#changed_py[@]} -gt 0 ]] && grep -nE 'import lance|lancedb|lance\.[a-z]|Lance[A-Z]|FragmentMetadata|write_dataset|\.scanner\(|\.to_batches\(|\.take\(|add_columns|merge_columns' -- "${changed_py[@]}"
 ```
 
 This is the **same pattern** the fan-out router uses to decide whether to run
-this skill at all (`_shared/repo-review-full-analysis.md` Step 3) — keep the two
-in sync. It deliberately avoids bare `fragment`/`commit` tokens (they match
+this skill at all (`agent/skills/_shared/repo-review-full-analysis.md` Step 3) —
+keep the two in sync. It deliberately avoids bare `fragment`/`commit` tokens (they match
 `fragment_id`, `git commit`, and other non-Lance code); `Lance[A-Z]` already
 covers `LanceOperation` / `LanceDataset.commit` / `LanceFragment`.
 
