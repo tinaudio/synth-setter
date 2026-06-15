@@ -317,7 +317,9 @@ class KSinFlowMatchingModule(LightningModule):
 
         return target
 
-    def _train_step(self, batch: tuple[torch.Tensor, torch.Tensor]):
+    def _train_step(
+        self, batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor, Callable[..., torch.Tensor]]
+    ) -> tuple[torch.Tensor, torch.Tensor | float | None]:
         signal, params, noise, _ = batch
 
         # Get conditioning vector
@@ -350,7 +352,11 @@ class KSinFlowMatchingModule(LightningModule):
 
         return loss, penalty
 
-    def training_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int):
+    def training_step(
+        self,
+        batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor, Callable[..., torch.Tensor]],
+        batch_idx: int,
+    ) -> torch.Tensor:
         if self.global_step < self.hparams.freeze_for_first_n_steps:
             # freeze vector_field and encoder, leaving only projection active
             for param in self.vector_field.parameters():
@@ -374,7 +380,7 @@ class KSinFlowMatchingModule(LightningModule):
         if penalty is not None:
             self.log("train/penalty", penalty, on_step=True, on_epoch=True, prog_bar=True)
 
-        return loss + penalty
+        return loss if penalty is None else loss + penalty
 
     def on_train_epoch_end(self) -> None:
         pass

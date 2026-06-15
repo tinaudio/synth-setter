@@ -125,18 +125,25 @@ class VSTFlowMatchingModule(LightningModule):
         target = self._rectified_vector_field(x0, x1)
         return target
 
-    def _get_conditioning_from_batch(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
+    def _get_conditioning_from_batch(self, batch: dict[str, torch.Tensor | None]) -> torch.Tensor:
         if self.hparams.conditioning == "mel":
-            return batch["mel_spec"]
+            conditioning = batch["mel_spec"]
         elif self.hparams.conditioning == "m2l":
-            return batch["m2l"]
+            conditioning = batch["m2l"]
         else:
             raise ValueError(f"Unknown conditioning {self.hparams.conditioning}")
+        # The dataset leaves unread feature keys as None; the selected one must be present.
+        assert conditioning is not None, f"conditioning {self.hparams.conditioning!r} not read"
+        return conditioning
 
-    def _train_step(self, batch: tuple[torch.Tensor, torch.Tensor]):
+    def _train_step(
+        self, batch: dict[str, torch.Tensor | None]
+    ) -> tuple[torch.Tensor, torch.Tensor | float | None]:
         conditioning = self._get_conditioning_from_batch(batch)
         params = batch["params"]
         noise = batch["noise"]
+        # The dataset always populates params and noise (only audio/mel/m2l may be None).
+        assert params is not None and noise is not None
 
         # Get conditioning vector
         conditioning = self.encoder(conditioning)
@@ -167,14 +174,14 @@ class VSTFlowMatchingModule(LightningModule):
 
         return loss, penalty
 
-    def training_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int):
+    def training_step(self, batch: dict[str, torch.Tensor | None], batch_idx: int) -> torch.Tensor:
         loss, penalty = self._train_step(batch)
         self.log("train/loss", loss, on_step=True, on_epoch=True, prog_bar=True)
 
         if penalty is not None:
             self.log("train/penalty", penalty, on_step=True, on_epoch=True, prog_bar=True)
 
-        return loss + penalty
+        return loss if penalty is None else loss + penalty
 
     def on_train_epoch_end(self) -> None:
         pass
@@ -214,16 +221,20 @@ class VSTFlowMatchingModule(LightningModule):
 
         return sample
 
-    def validation_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int):
+    def validation_step(
+        self, batch: dict[str, torch.Tensor | None], batch_idx: int
+    ) -> dict[str, torch.Tensor]:
         conditioning = self._get_conditioning_from_batch(batch)
+        params = batch["params"]
+        assert params is not None  # the dataset always populates params
         pred_params = self._sample(
             conditioning,
-            torch.randn_like(batch["params"]),
+            torch.randn_like(params),
             self.hparams.validation_sample_steps,
             self.hparams.validation_cfg_strength,
         )
 
-        per_param_mse = (pred_params - batch["params"]).square().mean(dim=0)
+        per_param_mse = (pred_params - params).square().mean(dim=0)
         param_mse = per_param_mse.mean()
         self.log("val/param_mse", param_mse, on_step=False, on_epoch=True, prog_bar=True)
 
@@ -232,16 +243,18 @@ class VSTFlowMatchingModule(LightningModule):
     def on_validation_epoch_end(self):
         pass
 
-    def test_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int):
+    def test_step(self, batch: dict[str, torch.Tensor | None], batch_idx: int) -> torch.Tensor:
         conditioning = self._get_conditioning_from_batch(batch)
+        params = batch["params"]
+        assert params is not None  # the dataset always populates params
         pred_params = self._sample(
             conditioning,
-            torch.randn_like(batch["params"]),
+            torch.randn_like(params),
             self.hparams.test_sample_steps,
             self.hparams.test_cfg_strength,
         )
 
-        param_mse = (pred_params - batch["params"]).square().mean()
+        param_mse = (pred_params - params).square().mean()
         self.log("test/param_mse", param_mse, on_step=False, on_epoch=True, prog_bar=True)
 
         return param_mse

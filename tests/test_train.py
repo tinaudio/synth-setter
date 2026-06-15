@@ -54,6 +54,20 @@ def test_train_fast_dev_run_tiny_model_tiny_data(cfg_train: DictConfig) -> None:
     train(cfg_train)
 
 
+@pytest.mark.slow
+def test_train_fast_dev_run_flow_matching_folds_penalty_into_loss(
+    cfg_train_flow: DictConfig,
+) -> None:
+    """``train`` + ``fast_dev_run`` drives flow-matching ``training_step`` end-to-end (#1689).
+
+    :param cfg_train_flow: Training cfg wired with ``model=flow`` and ``trainer=cpu``.
+    """
+    HydraConfig().set_config(cfg_train_flow)
+    with open_dict(cfg_train_flow):
+        cfg_train_flow.trainer.fast_dev_run = True
+    train(cfg_train_flow)
+
+
 @pytest.mark.gpu
 @RunIf(min_gpus=1)
 def test_train_fast_dev_run_gpu(cfg_train: DictConfig) -> None:
