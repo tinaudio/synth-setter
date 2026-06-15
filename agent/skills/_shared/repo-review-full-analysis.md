@@ -78,7 +78,8 @@ Always run `code-health` and `synth-setter-project-standards`. Other skills opt 
 only when the diff touches the Lance API. Grep the changed Python files:
 
 ```bash
-grep -lE 'import lance|lancedb|lance\.[a-z]|Lance[A-Z]|FragmentMetadata|write_dataset|\.scanner\(|\.to_batches\(|\.take\(|add_columns|merge_columns' "${changed_py[@]}"
+mapfile -t changed_py < <(gh pr view <N> --json files -q '.files[].path' | grep '\.py$')
+[[ ${#changed_py[@]} -gt 0 ]] && grep -lE 'import lance|lancedb|lance\.[a-z]|Lance[A-Z]|FragmentMetadata|write_dataset|\.scanner\(|\.to_batches\(|\.take\(|add_columns|merge_columns' "${changed_py[@]}"
 ```
 
 This is the **same pattern** the skill itself uses to enumerate touch-points

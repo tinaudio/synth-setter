@@ -56,7 +56,8 @@ against in your report so a future reviewer can re-check against a newer release
 Restrict to files in the PR/diff. Find every Lance interaction:
 
 ```bash
-grep -nE 'import lance|lancedb|lance\.[a-z]|Lance[A-Z]|FragmentMetadata|write_dataset|\.scanner\(|\.to_batches\(|\.take\(|add_columns|merge_columns' "${changed_files[@]}"
+mapfile -t changed_files < <(git diff --name-only "$BASE"..."$HEAD")
+[[ ${#changed_files[@]} -gt 0 ]] && grep -nE 'import lance|lancedb|lance\.[a-z]|Lance[A-Z]|FragmentMetadata|write_dataset|\.scanner\(|\.to_batches\(|\.take\(|add_columns|merge_columns' "${changed_files[@]}"
 ```
 
 This is the **same pattern** the fan-out router uses to decide whether to run
