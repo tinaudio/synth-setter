@@ -69,22 +69,47 @@ Read the file list from Step 1. Map file types → relevant skills:
 | Any `*.{yml,yaml}` under `configs/`                                         | `comment-hygiene`                                       |
 | `docs/doc-map.yaml`                                                         | `comment-hygiene`                                       |
 | ML model / pipeline / training code under `src/synth_setter/`               | `ml-data-pipeline`, `ml-test`                           |
+| `*.py` that imports or calls Lance (content-detected — see below)           | `lance-review`                                          |
 | Diff renames or moves files (anything with `R` in `git diff --name-status`) | `tdd-refactor`                                          |
 
 Always run `code-health` and `synth-setter-project-standards`. Other skills opt in based on file extensions in the diff. `comment-hygiene` deduplicates: even if multiple rows above select it, fan out only one parallel agent per skill. Note which skills you selected; you'll launch one parallel agent per skill.
+
+`lance-review` opts in by **content, not extension** — a `*.py` file selects it
+only when the diff touches the Lance API. Grep the changed Python files:
+
+```bash
+mapfile -t changed_py < <(gh pr view <N> --repo "$(gh repo view --json nameWithOwner -q .nameWithOwner)" --json files -q '.files[].path' | grep '\.py$')
+# PR file lists include deleted paths; keep only files present in the checkout
+present=(); for f in "${changed_py[@]}"; do [[ -f $f ]] && present+=("$f"); done
+[[ ${#present[@]} -gt 0 ]] && grep -lE 'import lance|lancedb|lance\.[a-z]|Lance[A-Z]|FragmentMetadata|write_dataset|\.scanner\(|\.to_batches\(|\.take\(|add_columns|merge_columns' -- "${present[@]}"
+```
+
+This is the **same pattern** the skill itself uses to enumerate touch-points
+(`agent/skills/lance-review/SKILL.md` Step 2) — they are kept identical so the
+router never skips a file the skill would have findings for. If nothing matches,
+skip `lance-review`.
 
 ## Step 4: Launch parallel review agents
 
 Launch one `general-purpose` Agent per selected skill. **All agents in a single message** so they run concurrently (one message with N tool calls = N parallel agents). You are an orchestrator agent yourself, so these review agents are your sub-agents.
 
-If your harness does not let a sub-agent spawn its own sub-agents, fall back to running each selected skill sequentially in your own context — invoke each `tinaudio-synth-setter-skills:<skill-name>` via the Skill tool one at a time. The fallback must produce the *same* per-skill result as the parallel path: feed each skill the same inputs the sub-agent prompt would carry (PR number, repo, base/head SHA, file list) and capture its findings in the per-agent output contract below (BLOCK/WARN sections, each finding citing `<path>:<line>`), so Step 5 aggregation parses sequential and parallel output identically. Parallel fan-out is preferred; the sequential fallback preserves correctness when nesting is unavailable.
+If your harness does not let a sub-agent spawn its own sub-agents, fall back to running each selected skill sequentially in your own context — invoke each `tinaudio-synth-setter-skills:<skill-name>` via the Skill tool one at a time (with the same `lance-review` exception as the parallel path: invoke it bare, not under the `tinaudio-synth-setter-skills:` prefix — see the note below). The fallback must produce the *same* per-skill result as the parallel path: feed each skill the same inputs the sub-agent prompt would carry (PR number, repo, base/head SHA, file list) and capture its findings in the per-agent output contract below (BLOCK/WARN sections, each finding citing `<path>:<line>`), so Step 5 aggregation parses sequential and parallel output identically. Parallel fan-out is preferred; the sequential fallback preserves correctness when nesting is unavailable.
 
 Each agent's prompt MUST include:
 
 - The PR number, repo, base SHA, head SHA.
 - The full file list (with per-file line counts is helpful but optional).
-- The exact skill to invoke: `Invoke the tinaudio-synth-setter-skills:<skill-name> skill via the Skill tool and apply its checklist to this PR's diff.`
+- The exact skill to invoke: `Invoke the tinaudio-synth-setter-skills:<skill-name> skill via the Skill tool and apply its checklist to this PR's diff.` **Exception:** `lance-review` is repo-local, not a plugin skill — instruct its agent to invoke the bare `lance-review` skill (no `tinaudio-synth-setter-skills:` prefix), per the note just below. Do not emit the plugin-prefixed string for it.
 - The expected output shape (see below).
+
+`lance-review` is **repo-local**, not a plugin skill: its agent attempts the bare
+`lance-review` skill via the Skill tool first, and only if that call errors (the
+harness has not registered it) falls back to reading and applying
+`agent/skills/lance-review/SKILL.md` directly. The
+per-agent output contract below is unchanged. **Either path** requires web access
+(`WebFetch`/`WebSearch`): the skill's grounding rule only holds if the agent can
+fetch the live Lance docs, so spawn its sub-agent as `general-purpose` (which has
+both tools) regardless of which invocation path it takes.
 
 Each agent returns a Markdown report with `BLOCK` and `WARN` sections. Each finding cites `<path>:<line>`. Agents work independently — they should not coordinate.
 
@@ -135,6 +160,7 @@ Skill → tag (short form for comment body):
 | `tdd-refactor`                   | `tdd-refactor`    |
 | `ml-data-pipeline`               | `ml-pipeline`     |
 | `ml-test`                        | `ml-test`         |
+| `lance-review`                   | `lance`           |
 
 A BLOCK finding becomes one entry in the `findings` array:
 
