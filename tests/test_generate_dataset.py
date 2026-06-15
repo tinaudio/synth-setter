@@ -354,7 +354,10 @@ def test_generate_dataset_renders_obxf_shards_to_r2(
     ``rclone copy`` upload. The unique-per-run ``r2.prefix`` keeps concurrent runs
     isolated; a best-effort ``rclone purge`` in ``finally`` removes the prefix even on
     failure so we don't leak shards. Auto-skips when ``rclone`` is missing or
-    ``rclone lsd r2:`` fails (contributor laptops, fork PRs without secrets).
+    ``rclone lsd r2:`` fails (contributor laptops, fork PRs without secrets), and
+    when the OB-Xf bundle is absent: ``requires_vst`` only gates the env-selected
+    synth (``SYNTH_SETTER_PLUGIN_PATH``), so a Surge-only host would otherwise fail
+    here rather than skip when ``render=obxf``'s ``plugin_path`` is missing.
 
     :param cfg_dataset_obxf: ``render=obxf`` cfg composed with the
         ``generate_dataset/smoke-shard`` experiment; carries the real OB-Xf bundle,
@@ -371,6 +374,9 @@ def test_generate_dataset_renders_obxf_shards_to_r2(
 
     spec = spec_from_cfg(cfg_dataset_obxf)
     assert spec.render.param_spec_name == "obxf"
+    obxf_bundle = Path(spec.render.plugin_path)
+    if not obxf_bundle.exists():
+        pytest.skip(f"OB-Xf bundle not found at {obxf_bundle} (render=obxf plugin_path)")
     try:
         from_hydra(cfg_dataset_obxf)
         for shard in spec.shards:
