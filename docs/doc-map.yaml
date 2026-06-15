@@ -107,13 +107,13 @@ docs:
       - pattern: "src/synth_setter/pipeline/schemas/spec.py"
         covers: "DatasetSpec, RenderConfig, ShardSpec, and `OutputFormat` suffix dispatch (`.extension` / `.from_extension()`) plus `.is_directory` (directory-vs-file shard handling), consumed by the renderer CLI for hdf5/wds/lance writer selection."
       - pattern: "src/synth_setter/pipeline/schemas/shard_metadata.py"
-        covers: "ShardMetadata — strict pydantic sidecar payload written into wds tar shards as metadata.json, into HDF5 shards as audio.attrs, and into Lance schema metadata; mirrored across shard formats by make_hdf5_dataset / make_wds_dataset / make_lance_dataset in writers.py."
+        covers: "ShardMetadata — strict pydantic sidecar payload written into wds tar shards as metadata.json, into HDF5 shards as audio.attrs, and into Lance schema metadata; mirrored across shard formats by make_hdf5_dataset / make_wds_dataset / make_lance_dataset in writers.py. Plus BlobFieldSpec — per-column large_binary shape/dtype embedded in Lance schema metadata, recovered by the reader/validator."
       - pattern: "src/synth_setter/data/vst/writers.py"
         covers: "make_hdf5_dataset + make_wds_dataset + make_lance_dataset entrypoints; per-batch sample-save helpers; ShardMetadata sidecar wiring; CLI suffix dispatch via OutputFormat.from_extension."
       - pattern: "src/synth_setter/data/vst/shapes.py"
         covers: "Shared shape primitives consumed by the writers, the shard validator, and the test shard seeders — DATASET_FIELD_NAMES / DATASET_FIELD_DTYPES, mel-front-end constants, per-field shape helpers, and dataset_field_shapes (the single field→shape contract)."
       - pattern: "src/synth_setter/pipeline/data/lance_shard.py"
-        covers: "Lance dataset-shard codec — lance_schema / tensor_array / record_batch_from_arrays / write_lance_dataset / lance_fragment / commit_lance_dataset on the encode side, read_shard_metadata / iter_lance_column_rows on the decode side; shared by the Lance writer, validator, and finalize."
+        covers: "Lance dataset-shard codec — lance_schema / tensor_array / record_batch_from_arrays / write_lance_dataset / lance_fragment / commit_lance_dataset on the encode side, read_shard_metadata / iter_lance_column_rows on the decode side, plus read_blob_field_specs / blob_array / decode_blob_array for the large_binary BLOB columns (audio/mel_spec); shared by the Lance writer, validator, and finalize."
 
   # ── SkyPilot compute integration design doc ─────────────────────
   - doc: docs/design/skypilot-compute-integration.md

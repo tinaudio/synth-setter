@@ -194,6 +194,19 @@ class TestLanceShardFile:
         assert out.dtype == columns["mel_spec"].dtype
         np.testing.assert_array_equal(out, columns["mel_spec"][2:5])
 
+    def test_empty_slice_on_blob_column_returns_zero_row_array(self, tmp_path: Path) -> None:
+        """An empty slice on a BLOB column yields a ``(0, *inner)`` array of the right dtype.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        columns = _write_seeded_lance_shard(tmp_path / "train.lance", num_rows=8)
+        shard = LanceShardFile(tmp_path / "train.lance")
+
+        out = shard["audio"][2:2]
+
+        assert out.shape == (0, _AUDIO_CHANNELS, _AUDIO_SAMPLES)
+        assert out.dtype == columns["audio"].dtype
+
     def test_column_reads_return_writable_arrays(self, tmp_path: Path) -> None:
         """Every decode path copies out of Arrow's read-only buffer.
 

@@ -7,6 +7,7 @@ tensor decode cannot corrupt both sides identically and pass.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import lance
@@ -22,16 +23,20 @@ from synth_setter.data.vst.shapes import (
     PARAM_ARRAY_FIELD,
 )
 from synth_setter.pipeline.data.lance_shard import (
+    BLOB_FIELD_SPECS_SCHEMA_KEY,
     LANCE_DATA_STORAGE_VERSION,
+    blob_array,
     commit_lance_dataset,
+    decode_blob_array,
     iter_lance_column_rows,
     lance_fragment,
     lance_schema,
+    read_blob_field_specs,
     record_batch_from_arrays,
     tensor_array,
     write_lance_dataset,
 )
-from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
+from synth_setter.pipeline.schemas.shard_metadata import BlobFieldSpec, ShardMetadata
 
 # Small shapes: each element gets a unique value, exactly representable as float16 (<= 2048).
 _FIELD_SHAPES: dict[str, tuple[int, ...]] = {
@@ -122,8 +127,8 @@ def test_lance_round_trip_noncontiguous_transposed_input_preserves_values(
     np.testing.assert_array_equal(decoded, transposed_mel)
 
 
-def test_iter_lance_column_rows_yields_read_only_views(tmp_path: Path) -> None:
-    """Yielded rows share Arrow's read-only buffer, so callers must copy to mutate.
+def test_iter_lance_column_rows_yields_read_only_rows(tmp_path: Path) -> None:
+    """Yielded rows are read-only, so callers must copy before mutating.
 
     :param tmp_path: Pytest fixture providing a fresh test directory.
     """
@@ -196,27 +201,194 @@ def test_tensor_array_empty_batch_raises_value_error() -> None:
         tensor_array(np.zeros((0, 2, 7), dtype=np.float16), np.dtype(np.float16), (2, 7))
 
 
-def test_record_batch_from_arrays_schema_dtype_wins_over_field_default() -> None:
-    """Each column's dtype comes from the schema, not ``DATASET_FIELD_DTYPES``.
+def test_record_batch_from_arrays_tensor_dtype_comes_from_schema_not_field_default() -> None:
+    """A tensor column's dtype comes from the schema, not ``DATASET_FIELD_DTYPES``.
 
-    ``audio`` defaults to float16, so a schema overriding it to float32 must
-    yield a float32 column; sourcing the dtype from the global dict would emit
-    float16 and fail ``pa.record_batch`` schema validation.
+    ``param_array`` defaults to float32, so a schema overriding it to float16
+    must yield a float16 column; sourcing the dtype from the global dict would
+    emit float32 and fail ``pa.record_batch`` schema validation.
     """
     assert (
-        DATASET_FIELD_DTYPES[AUDIO_FIELD] == np.float16
+        DATASET_FIELD_DTYPES[PARAM_ARRAY_FIELD] == np.float32
     )  # guards the override's discriminating power
     schema = lance_schema(_FIELD_SHAPES, _METADATA)
-    field_index = schema.get_field_index(AUDIO_FIELD)
-    float32_audio = pa.field(
-        AUDIO_FIELD,
-        pa.fixed_shape_tensor(pa.float32(), _FIELD_SHAPES[AUDIO_FIELD][1:]),
+    field_index = schema.get_field_index(PARAM_ARRAY_FIELD)
+    float16_params = pa.field(
+        PARAM_ARRAY_FIELD,
+        pa.fixed_shape_tensor(pa.float16(), _FIELD_SHAPES[PARAM_ARRAY_FIELD][1:]),
         nullable=False,
     )
-    schema = schema.set(field_index, float32_audio)
+    schema = schema.set(field_index, float16_params)
     arrays = _arange_arrays(offset=0)
-    arrays[AUDIO_FIELD] = arrays[AUDIO_FIELD].astype(np.float32)
+    arrays[PARAM_ARRAY_FIELD] = arrays[PARAM_ARRAY_FIELD].astype(np.float16)
 
     batch = record_batch_from_arrays(arrays, schema)
 
-    assert batch.schema.field(AUDIO_FIELD).type.value_type == pa.float32()
+    assert batch.schema.field(PARAM_ARRAY_FIELD).type.value_type == pa.float16()
+
+
+def test_lance_schema_stores_blob_fields_as_large_binary_and_param_array_as_tensor() -> None:
+    """``audio``/``mel_spec`` become ``large_binary`` BLOB columns; ``param_array`` stays a tensor.
+
+    Pins the property that fixes the SmooSense/DuckDB OOM: a tensor column makes the lance reader
+    pre-allocate a full chunk sized by the tensor width, while a BLOB column does not.
+    """
+    schema = lance_schema(_FIELD_SHAPES, _METADATA)
+
+    assert pa.types.is_large_binary(schema.field(AUDIO_FIELD).type)
+    assert pa.types.is_large_binary(schema.field(MEL_SPEC_FIELD).type)
+    assert isinstance(schema.field(PARAM_ARRAY_FIELD).type, pa.FixedShapeTensorType)
+
+
+def test_read_blob_field_specs_round_trips_inner_shape_and_dtype() -> None:
+    """The embedded BLOB specs recover each blob column's inner shape and dtype.
+
+    A ``large_binary`` Arrow type carries neither, so the reader and validator
+    depend on this metadata to decode and check the column.
+    """
+    schema = lance_schema(_FIELD_SHAPES, _METADATA)
+
+    specs = read_blob_field_specs(schema)
+
+    assert set(specs) == {AUDIO_FIELD, MEL_SPEC_FIELD}
+    assert tuple(specs[AUDIO_FIELD].shape) == _FIELD_SHAPES[AUDIO_FIELD][1:]
+    assert specs[AUDIO_FIELD].dtype == DATASET_FIELD_DTYPES[AUDIO_FIELD].name
+    assert tuple(specs[MEL_SPEC_FIELD].shape) == _FIELD_SHAPES[MEL_SPEC_FIELD][1:]
+    assert specs[MEL_SPEC_FIELD].dtype == DATASET_FIELD_DTYPES[MEL_SPEC_FIELD].name
+
+
+def test_read_blob_field_specs_returns_empty_for_legacy_schema_without_key() -> None:
+    """A schema with no embedded BLOB specs (legacy all-tensor shard) yields ``{}``.
+
+    Absence is benign — such columns are fixed-shape tensors decoded natively — so the reader must
+    not raise on it.
+    """
+    schema = lance_schema(_FIELD_SHAPES, _METADATA).remove_metadata()
+
+    assert read_blob_field_specs(schema) == {}
+
+
+def test_blob_array_empty_batch_raises_value_error() -> None:
+    """A correctly-shaped but row-empty blob batch raises a clear ValueError.
+
+    Mirrors ``tensor_array``'s N >= 1 guard so an empty shard fails loudly at
+    write time, not with opaque bytes downstream.
+    """
+    spec = BlobFieldSpec(shape=[2, 5], dtype="float16")
+    with pytest.raises(ValueError, match=r"non-empty batch .* got 0 rows"):
+        blob_array(np.zeros((0, 2, 5), dtype=np.float16), spec)
+
+
+def test_blob_array_wrong_inner_shape_raises_value_error() -> None:
+    """Rows whose inner shape differs from the spec raise ValueError, naming both shapes."""
+    spec = BlobFieldSpec(shape=[2, 5], dtype="float16")
+    with pytest.raises(ValueError, match=r"inner shape \(2, 6\), expected \(2, 5\)"):
+        blob_array(np.zeros((3, 2, 6), dtype=np.float16), spec)
+
+
+@pytest.mark.parametrize(
+    ("num_rows", "inner_shape", "dtype"),
+    [
+        (1, (4,), "float16"),  # single row
+        (3, (2, 3), "float32"),
+        (3, (2, 176400), "float16"),  # production audio
+        (3, (2, 128, 401), "float32"),  # production mel
+    ],
+)
+def test_blob_array_decode_round_trips_values_shape_and_dtype(
+    num_rows: int, inner_shape: tuple[int, ...], dtype: str
+) -> None:
+    """``blob_array`` then ``decode_blob_array`` recovers rows for production and edge shapes.
+
+    Exercises the codec directly (not via ``iter_lance_column_rows``) so a reshape
+    or dtype bug surfaces in isolation; the decoded array must own its memory.
+    Random data round-trips byte-exactly, sidestepping float16 range limits.
+
+    :param num_rows: Row count under test (1 exercises the single-row edge).
+    :param inner_shape: Per-row inner shape under test.
+    :param dtype: Stored numpy dtype under test.
+    """
+    spec = BlobFieldSpec(shape=list(inner_shape), dtype=dtype)
+    rows = np.random.default_rng(0).standard_normal((num_rows, *inner_shape)).astype(dtype)
+
+    decoded = decode_blob_array(blob_array(rows, spec), spec)
+
+    assert decoded.shape == (num_rows, *inner_shape)
+    assert decoded.dtype == np.dtype(dtype)
+    assert decoded.flags.writeable
+    np.testing.assert_array_equal(decoded, rows)
+
+
+def test_decode_blob_array_handles_sliced_arrow_offset() -> None:
+    """Decoding a sliced (non-zero ``array.offset``) ``large_binary`` array reads the right rows."""
+    spec = BlobFieldSpec(shape=[2, 3], dtype="float16")
+    rows = np.arange(4 * 2 * 3, dtype=np.float16).reshape(4, 2, 3)
+
+    decoded = decode_blob_array(blob_array(rows, spec).slice(1, 2), spec)
+
+    np.testing.assert_array_equal(decoded, rows[1:3])
+
+
+def test_decode_blob_array_combines_chunked_array() -> None:
+    """A ``ChunkedArray`` of BLOB rows is combined and decoded in row order."""
+    spec = BlobFieldSpec(shape=[2, 3], dtype="float16")
+    first = np.arange(2 * 3, dtype=np.float16).reshape(1, 2, 3)
+    second = np.arange(100, 100 + 2 * 3, dtype=np.float16).reshape(1, 2, 3)
+    chunked = pa.chunked_array([blob_array(first, spec), blob_array(second, spec)])
+
+    decoded = decode_blob_array(chunked, spec)
+
+    np.testing.assert_array_equal(decoded, np.concatenate([first, second], axis=0))
+
+
+def test_decode_blob_array_byte_count_mismatch_raises_value_error() -> None:
+    """A spec whose width disagrees with the stored bytes raises rather than mis-decoding."""
+    written = BlobFieldSpec(shape=[2, 3], dtype="float16")
+    column = blob_array(np.zeros((2, 2, 3), dtype=np.float16), written)
+    wrong = BlobFieldSpec(shape=[2, 4], dtype="float16")
+    with pytest.raises(ValueError, match="blob column holds"):
+        decode_blob_array(column, wrong)
+
+
+def test_read_blob_field_specs_malformed_payload_raises_value_error() -> None:
+    """A blob-specs metadata payload that is not valid JSON raises a clear ValueError.
+
+    The payload is read at shard-open time off an R2 trust boundary, so a corrupt entry must fail
+    loudly rather than crash later in decode.
+    """
+    schema = lance_schema(_FIELD_SHAPES, _METADATA).with_metadata(
+        {BLOB_FIELD_SPECS_SCHEMA_KEY: b"not json"}
+    )
+    with pytest.raises(ValueError, match="invalid blob field specs"):
+        read_blob_field_specs(schema)
+
+
+def test_read_blob_field_specs_rejects_spec_for_non_blob_column() -> None:
+    """A spec naming a fixed-shape tensor column is rejected, not silently misclassified.
+
+    Consumers treat a column as BLOB by its presence in this mapping, so a
+    tampered spec for a tensor column (e.g. ``param_array``) must fail loudly.
+    """
+    schema = lance_schema(_FIELD_SHAPES, _METADATA)
+    tampered = dict(json.loads(schema.metadata[BLOB_FIELD_SPECS_SCHEMA_KEY]))
+    tampered[PARAM_ARRAY_FIELD] = {
+        "shape": list(_FIELD_SHAPES[PARAM_ARRAY_FIELD][1:]),
+        "dtype": "float32",
+    }
+    schema = schema.with_metadata(
+        {**schema.metadata, BLOB_FIELD_SPECS_SCHEMA_KEY: json.dumps(tampered).encode("utf-8")}
+    )
+    with pytest.raises(ValueError, match="non-large_binary column 'param_array'"):
+        read_blob_field_specs(schema)
+
+
+def test_read_blob_field_specs_non_object_json_raises_value_error() -> None:
+    """A payload that is valid JSON but not an object (e.g. a list) raises a clear ValueError.
+
+    Guards the ``.items()`` call from an ``AttributeError`` escaping the trust boundary.
+    """
+    schema = lance_schema(_FIELD_SHAPES, _METADATA).with_metadata(
+        {BLOB_FIELD_SPECS_SCHEMA_KEY: b"[1, 2, 3]"}
+    )
+    with pytest.raises(ValueError, match="invalid blob field specs"):
+        read_blob_field_specs(schema)

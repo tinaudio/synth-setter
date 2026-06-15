@@ -12,30 +12,39 @@ from __future__ import annotations
 import os
 from collections.abc import Sequence
 from pathlib import Path
-from typing import ClassVar, cast
+from typing import ClassVar
 
 import lance
 import numpy as np
 import pyarrow as pa
 
 from synth_setter.data.surge_datamodule import VSTDataModule, VSTDataset
+from synth_setter.pipeline.data.lance_shard import decode_blob_array, read_blob_field_specs
+from synth_setter.pipeline.schemas.shard_metadata import BlobFieldSpec
 
 
 class LanceColumn:
-    """H5py-``Dataset``-like read view over one fixed-shape tensor column."""
+    """H5py-``Dataset``-like read view over one Lance column (tensor or BLOB)."""
 
-    def __init__(self, shard: LanceShardFile, name: str, inner_shape: tuple[int, ...]):
+    def __init__(
+        self,
+        shard: LanceShardFile,
+        name: str,
+        inner_shape: tuple[int, ...],
+        blob_spec: BlobFieldSpec | None,
+    ):
         """Wrap one column of an open Lance shard.
 
         :param shard: Open shard the reads go through.
         :param name: Column name within the schema.
-        :param inner_shape: Per-row tensor shape from the schema.
+        :param inner_shape: Per-row tensor shape backing the ``shape`` property.
+        :param blob_spec: BLOB shape/dtype when the column is ``large_binary``;
+            ``None`` for a fixed-shape tensor column decoded natively.
         """
         self._shard = shard
         self._name = name
-        # Backs the h5py-like ``shape`` property; decode reads the shape from
-        # Arrow's tensor type, so reads don't consult this.
         self._inner_shape = inner_shape
+        self._blob_spec = blob_spec
 
     @property
     def shape(self) -> tuple[int, ...]:
@@ -68,9 +77,19 @@ class LanceColumn:
         else:
             table = dataset.take([int(i) for i in idx], columns=[self._name])
         chunk = table.column(self._name).combine_chunks()
+        return self._decode(chunk)
+
+    def _decode(self, chunk: pa.Array) -> np.ndarray:
+        """Decode a selected column chunk to a writable ``(len, *tensor_shape)`` array.
+
+        :param chunk: Combined Arrow array for the requested rows.
+        :return: Writable numpy array — ``torch.from_numpy`` over a read-only
+            view is undefined behavior on write, and h5py reads return writable.
+        """
+        if self._blob_spec is not None:
+            # decode_blob_array already returns an owned, writable array.
+            return decode_blob_array(chunk, self._blob_spec)
         array = chunk.to_numpy_ndarray()
-        # Copy out of Arrow's read-only buffer: h5py reads return writable arrays,
-        # and torch.from_numpy over a read-only view is undefined behavior on write.
         return array if array.flags.writeable else array.copy()
 
 
@@ -98,12 +117,30 @@ class LanceShardFile:
         # count_rows()/schema each traverse the version manifest, so cache them
         # once: the shard is immutable, and reads happen per training batch.
         self.num_rows = dataset.count_rows()
+        self._blob_specs = read_blob_field_specs(dataset.schema)
         self._inner_shapes = {
-            field.name: tuple(cast(pa.FixedShapeTensorType, field.type).shape)
-            for field in dataset.schema
+            field.name: self._field_inner_shape(field) for field in dataset.schema
         }
         self._dataset: lance.LanceDataset | None = dataset
         self._pid = os.getpid()
+
+    def _field_inner_shape(self, field: pa.Field) -> tuple[int, ...]:
+        """Return the per-row inner shape for a schema field.
+
+        :param field: Arrow schema field — a BLOB column with an embedded spec, or a fixed-shape
+            tensor.
+        :return: The field's per-row inner shape.
+        :raises ValueError: If the field is neither a known BLOB column nor a fixed-shape tensor (a
+            malformed or unexpected shard column).
+        """
+        if field.name in self._blob_specs:
+            return tuple(self._blob_specs[field.name].shape)
+        if isinstance(field.type, pa.FixedShapeTensorType):
+            return tuple(field.type.shape)
+        raise ValueError(
+            f"column {field.name!r} is {field.type}, expected a fixed-shape tensor "
+            f"or a BLOB column with an embedded spec"
+        )
 
     def live_dataset(self) -> lance.LanceDataset:
         """Return the dataset handle, reopening after a fork.
@@ -134,7 +171,7 @@ class LanceShardFile:
             raise ValueError("I/O on closed LanceShardFile")
         if name not in self._inner_shapes:
             raise KeyError(name)
-        return LanceColumn(self, name, self._inner_shapes[name])
+        return LanceColumn(self, name, self._inner_shapes[name], self._blob_specs.get(name))
 
     def __bool__(self) -> bool:
         """Mirror ``h5py.File`` truthiness: True while open, False after ``close``.

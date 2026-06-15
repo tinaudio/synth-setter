@@ -15,7 +15,52 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
+from synth_setter.pipeline.schemas.shard_metadata import BlobFieldSpec, ShardMetadata
+
+
+class TestBlobFieldSpec:
+    """Strict-validation behavior of the BLOB column shape/dtype spec."""
+
+    def test_valid_spec_round_trips_through_json(self) -> None:
+        """A well-formed spec validates from its own JSON dump unchanged."""
+        spec = BlobFieldSpec(shape=[2, 176400], dtype="float16")
+
+        restored = BlobFieldSpec.model_validate_json(spec.model_dump_json())
+
+        assert restored.shape == [2, 176400]
+        assert restored.dtype == "float16"
+
+    def test_unresolvable_dtype_raises_validation_error(self) -> None:
+        """A ``dtype`` string numpy cannot resolve is rejected at parse time.
+
+        Without this, the bad value would survive to ``np.dtype()`` in the
+        decoder/validator and crash with an uncaught ``TypeError``.
+        """
+        with pytest.raises(ValidationError, match="invalid numpy dtype"):
+            BlobFieldSpec(shape=[2, 3], dtype="not_a_dtype")
+
+    @pytest.mark.parametrize("bad_shape", [[2, -1], [0, 3], []])
+    def test_non_positive_or_empty_shape_is_rejected(self, bad_shape: list[int]) -> None:
+        """A shape with a non-positive dim (or none) is rejected at parse time.
+
+        ``-1`` would otherwise be numpy's reshape "infer" sentinel and silently
+        decode a wrong geometry; an empty shape collapses the row.
+
+        :param bad_shape: Invalid inner shape under test.
+        """
+        with pytest.raises(ValidationError, match="shape dims must be positive"):
+            BlobFieldSpec(shape=bad_shape, dtype="float16")
+
+    def test_extra_field_is_rejected(self) -> None:
+        """An unknown field is rejected (``extra='forbid'`` trust-boundary contract)."""
+        with pytest.raises(ValidationError):
+            BlobFieldSpec.model_validate({"shape": [2, 3], "dtype": "float16", "stride": 1})
+
+    def test_spec_is_frozen(self) -> None:
+        """The spec is immutable, mirroring ``ShardMetadata``."""
+        spec = BlobFieldSpec(shape=[2, 3], dtype="float16")
+        with pytest.raises(ValidationError):
+            spec.dtype = "float32"
 
 
 def _valid_kwargs(**overrides: Any) -> dict[str, Any]:

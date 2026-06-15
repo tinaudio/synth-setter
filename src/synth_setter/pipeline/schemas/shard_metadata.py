@@ -8,7 +8,7 @@ would otherwise form a launcher-side import cycle.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class ShardMetadata(BaseModel):
@@ -48,3 +48,63 @@ class ShardMetadata(BaseModel):
         if self.channels < 1:
             raise ValueError("channels must be >= 1")
         return self
+
+
+class BlobFieldSpec(BaseModel):
+    """Per-row shape and dtype of a column stored as opaque ``large_binary`` bytes.
+
+    Embedded in the Lance schema metadata so a BLOB column — which, unlike a
+    fixed-shape tensor, carries no shape or dtype in its Arrow type — stays
+    self-describing: the reader and validator recover the row geometry without
+    the render config. Read off a shard file, so a trust boundary.
+
+    .. attribute :: model_config
+
+        Pydantic model config sentinel — see ``ConfigDict(...)`` below for active settings.
+
+    .. attribute :: shape
+
+        Per-row inner shape (no leading row axis).
+
+    .. attribute :: dtype
+
+        NumPy dtype name of the stored bytes, e.g. ``float16``.
+    """
+
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
+
+    shape: list[int]
+    dtype: str
+
+    @field_validator("shape")
+    @classmethod
+    def _shape_dims_must_be_positive(cls, value: list[int]) -> list[int]:
+        """Reject empty or non-positive dims so ``reshape`` can't infer a wrong geometry.
+
+        A ``-1`` would be numpy's "infer" sentinel and an empty shape collapses the
+        row; both must fail at this trust boundary rather than silently mis-decode.
+
+        :param value: Candidate per-row inner shape.
+        :returns: The validated shape unchanged.
+        :raises ValueError: If the shape is empty or has a non-positive dimension.
+        """
+        if not value or any(dim <= 0 for dim in value):
+            raise ValueError(f"shape dims must be positive and non-empty, got {value}")
+        return value
+
+    @field_validator("dtype")
+    @classmethod
+    def _dtype_must_name_a_numpy_dtype(cls, value: str) -> str:
+        """Reject a ``dtype`` string numpy can't resolve, so decode fails at parse not read.
+
+        :param value: Candidate numpy dtype name.
+        :returns: The validated dtype name unchanged.
+        :raises ValueError: If ``np.dtype(value)`` does not resolve.
+        """
+        import numpy as np
+
+        try:
+            np.dtype(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"invalid numpy dtype {value!r}") from exc
+        return value

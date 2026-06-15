@@ -92,7 +92,16 @@ after an rclone download. A review against the pinned library
 - `finalize_lance`: open each shard with `lance.dataset(s3_uri, storage_options)`,
   stream `.to_batches()`, and `write_dataset` the split directly to its `s3://`
   URI. Drops the per-shard download and the split upload.
-- `validate_shard._validate_lance_shard`: open via `lance.dataset(s3_uri, storage_options)`, validate `schema` (fixed-shape tensor types) + `count_rows`.
+- `validate_shard._validate_lance_shard`: open via `lance.dataset(s3_uri, storage_options)`, validate `schema` (`param_array` fixed-shape tensor; `audio`/`mel_spec` `large_binary` BLOB with matching `synth_setter.blob_field_specs`) + `count_rows`.
+
+> **Update — `audio`/`mel_spec` are BLOB, not fixed-shape tensors.** A later
+> change stores `audio` and `mel_spec` as opaque `large_binary` columns (raw
+> per-row bytes; inner shape/dtype recorded under the
+> `synth_setter.blob_field_specs` schema key, decoded client-side) so the
+> DuckDB/Lance reader no longer over-allocates a full tensor-width chunk per
+> column and OOMs SmooSense's Table view. `param_array` stays a fixed-shape
+> tensor. The decode notes below that say "fixed-shape tensor" apply only to
+> `param_array`; the BLOB columns decode via `decode_blob_array`.
 
 ### R2 layout
 

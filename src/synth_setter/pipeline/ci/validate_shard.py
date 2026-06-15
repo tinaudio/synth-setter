@@ -15,9 +15,11 @@ to the HDF5 path (``.h5``), the wds tar path (``.tar``), or the Lance path
   as a numpy array whose trailing dims (``arr.shape[1:]``) match the same
   shape helpers; and the summed row count per field equals
   ``spec.render.samples_per_shard``.
-- Lance path: schema metadata parses as a strict ``ShardMetadata``; every
-  field is a fixed-shape tensor column whose dtype and inner shape match the
-  same shape helpers; and ``num_rows`` equals ``spec.render.samples_per_shard``.
+- Lance path: schema metadata parses as a strict ``ShardMetadata``;
+  ``param_array`` is a fixed-shape tensor and ``audio`` / ``mel_spec`` are
+  ``large_binary`` BLOBs with embedded specs, each whose dtype and inner shape
+  match the same shape helpers; and ``num_rows`` equals
+  ``spec.render.samples_per_shard``.
 
 CLI usage:
     python3 -m synth_setter.pipeline.ci.validate_shard <spec.json|r2://bucket/spec.json>
@@ -43,14 +45,16 @@ from pydantic import ValidationError
 
 if TYPE_CHECKING:
     import lance
+    import pyarrow as pa
 
 from synth_setter.data.vst.shapes import (
+    BLOB_FIELDS,
     DATASET_FIELD_DTYPES,
     DATASET_FIELD_NAMES,
     dataset_field_shapes,
 )
 from synth_setter.pipeline.r2_io import downloaded_to_tempfile
-from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
+from synth_setter.pipeline.schemas.shard_metadata import BlobFieldSpec, ShardMetadata
 from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat
 from synth_setter.pipeline.spec_io import read_spec_text
 
@@ -342,7 +346,7 @@ def _validate_lance_dataset(dataset: lance.LanceDataset, spec: DatasetSpec) -> l
     :param spec: Dataset spec the shard is expected to conform to.
     :returns: List of error strings (empty = valid).
     """
-    from synth_setter.pipeline.data.lance_shard import read_shard_metadata
+    from synth_setter.pipeline.data.lance_shard import read_blob_field_specs, read_shard_metadata
 
     errors: list[str] = []
     schema = dataset.schema
@@ -350,6 +354,12 @@ def _validate_lance_dataset(dataset: lance.LanceDataset, spec: DatasetSpec) -> l
         read_shard_metadata(schema)
     except ValueError as exc:
         errors.append(str(exc))
+
+    try:
+        blob_specs = read_blob_field_specs(schema)
+    except ValueError as exc:
+        errors.append(str(exc))
+        blob_specs = {}
 
     num_rows = dataset.count_rows()
     if num_rows != spec.render.samples_per_shard:
@@ -361,16 +371,27 @@ def _validate_lance_dataset(dataset: lance.LanceDataset, spec: DatasetSpec) -> l
         if field is None:
             errors.append(f"missing column: {name!r}")
             continue
-        errors.extend(_validate_lance_field(name, field, expected_shapes[name]))
+        errors.extend(
+            _validate_lance_field(name, field, expected_shapes[name], blob_specs.get(name))
+        )
     return errors
 
 
-def _validate_lance_field(name: str, field: object, expected_shape: tuple[int, ...]) -> list[str]:
-    """Validate one Lance fixed-shape tensor field against the writer contract.
+def _validate_lance_field(
+    name: str,
+    field: object,
+    expected_shape: tuple[int, ...],
+    blob_spec: BlobFieldSpec | None,
+) -> list[str]:
+    """Validate one Lance column against the writer contract.
+
+    ``BLOB_FIELDS`` must be ``large_binary`` with a matching embedded spec; the
+    rest must be fixed-shape tensors.
 
     :param name: Column name being checked.
     :param field: Arrow schema field read from the Lance file.
     :param expected_shape: Full expected shape including leading row axis.
+    :param blob_spec: Embedded BLOB spec for ``name``, or ``None`` if absent.
     :returns: List of error strings for this field.
     :rtype: list[str]
     """
@@ -378,20 +399,77 @@ def _validate_lance_field(name: str, field: object, expected_shape: tuple[int, .
 
     if not isinstance(field, pa.Field):
         return [f"column {name!r} schema entry is not an Arrow field: {field!r}"]
-    arrow_field = cast(pa.Field, field)
-    errors: list[str] = []
-    field_type = arrow_field.type
+    field_type = cast(pa.Field, field).type
+    expected_inner = expected_shape[1:]
+    expected_dtype = DATASET_FIELD_DTYPES[name]
+    if name in BLOB_FIELDS:
+        return _validate_lance_blob_field(
+            name, field_type, blob_spec, expected_inner, expected_dtype
+        )
+    return _validate_lance_tensor_field(name, field_type, expected_inner, expected_dtype)
+
+
+def _validate_lance_tensor_field(
+    name: str, field_type: pa.DataType, expected_inner: tuple[int, ...], expected_dtype: np.dtype
+) -> list[str]:
+    """Validate a fixed-shape tensor column's type, inner shape, and dtype.
+
+    :param name: Column name being checked.
+    :param field_type: Arrow type of the column.
+    :param expected_inner: Expected per-row shape (no leading row axis).
+    :param expected_dtype: Expected NumPy scalar dtype.
+    :returns: List of error strings for this field.
+    :rtype: list[str]
+    """
+    import pyarrow as pa
+
     if not isinstance(field_type, pa.FixedShapeTensorType):
         return [f"column {name!r} has type {field_type}, expected fixed-shape tensor"]
-    expected_inner = expected_shape[1:]
+    errors: list[str] = []
     if tuple(field_type.shape) != expected_inner:
         errors.append(
             f"column {name!r} has inner shape {tuple(field_type.shape)}, expected {expected_inner}"
         )
-    expected_dtype = pa.from_numpy_dtype(DATASET_FIELD_DTYPES[name])
-    if field_type.value_type != expected_dtype:
+    expected_arrow_dtype = pa.from_numpy_dtype(expected_dtype)
+    if field_type.value_type != expected_arrow_dtype:
         errors.append(
-            f"column {name!r} has value type {field_type.value_type}, expected {expected_dtype}"
+            f"column {name!r} has value type {field_type.value_type}, "
+            f"expected {expected_arrow_dtype}"
+        )
+    return errors
+
+
+def _validate_lance_blob_field(
+    name: str,
+    field_type: pa.DataType,
+    blob_spec: BlobFieldSpec | None,
+    expected_inner: tuple[int, ...],
+    expected_dtype: np.dtype,
+) -> list[str]:
+    """Validate a BLOB column's ``large_binary`` type and embedded shape/dtype spec.
+
+    :param name: Column name being checked.
+    :param field_type: Arrow type of the column.
+    :param blob_spec: Embedded BLOB spec for ``name``, or ``None`` if absent.
+    :param expected_inner: Expected per-row shape (no leading row axis).
+    :param expected_dtype: Expected NumPy scalar dtype.
+    :returns: List of error strings for this field.
+    :rtype: list[str]
+    """
+    import pyarrow as pa
+
+    if not pa.types.is_large_binary(field_type):
+        return [f"column {name!r} has type {field_type}, expected large_binary (BLOB)"]
+    if blob_spec is None:
+        return [f"column {name!r} is missing its blob field spec in schema metadata"]
+    errors: list[str] = []
+    if tuple(blob_spec.shape) != expected_inner:
+        errors.append(
+            f"column {name!r} has inner shape {tuple(blob_spec.shape)}, expected {expected_inner}"
+        )
+    if np.dtype(blob_spec.dtype) != expected_dtype:
+        errors.append(
+            f"column {name!r} has value type {np.dtype(blob_spec.dtype)}, expected {expected_dtype}"
         )
     return errors
 

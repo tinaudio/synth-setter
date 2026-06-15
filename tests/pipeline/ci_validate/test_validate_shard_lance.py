@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -12,14 +13,18 @@ import pyarrow as pa
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
     DATASET_FIELD_DTYPES,
-    DATASET_FIELD_NAMES,
     MEL_SPEC_FIELD,
     PARAM_ARRAY_FIELD,
     dataset_field_shapes,
 )
 from synth_setter.pipeline.ci.validate_shard import validate_shard
 from synth_setter.pipeline.data.lance_shard import (
+    BLOB_FIELD_SPECS_SCHEMA_KEY,
+    SHARD_METADATA_SCHEMA_KEY,
+    blob_array,
+    iter_lance_column_rows,
     lance_schema,
+    read_blob_field_specs,
     record_batch_from_arrays,
     tensor_array,
     write_lance_dataset,
@@ -68,8 +73,11 @@ def test_validate_lance_shard_accepts_valid_file(tmp_path: Path) -> None:
     assert validate_shard(shard, spec) == []
 
 
-def test_lance_record_batch_preserves_transposed_tensor_shape(tmp_path: Path) -> None:
-    """Non-contiguous rendered tensors keep the schema's declared shape.
+def test_lance_blob_column_preserves_transposed_mel_logical_values(tmp_path: Path) -> None:
+    """A non-contiguous rendered mel decodes from its BLOB column to logical values.
+
+    The mel column is ``large_binary``, so a codec serializing raw buffer order
+    instead of logical order would scramble values while keeping shapes intact.
 
     :param tmp_path: Pytest fixture providing a fresh test directory.
     """
@@ -77,20 +85,20 @@ def test_lance_record_batch_preserves_transposed_tensor_shape(tmp_path: Path) ->
     shapes = _one_row_shapes(spec)
     schema = lance_schema(shapes, smoke_shard_metadata(spec.render))
     n, channels, n_mels, n_frames = shapes[MEL_SPEC_FIELD]
-    arrays = _zero_arrays(shapes)
-    arrays[MEL_SPEC_FIELD] = np.zeros((n, n_mels, channels, n_frames), dtype=np.float32).transpose(
-        0, 2, 1, 3
+    transposed_mel = (
+        np.arange(n * channels * n_mels * n_frames, dtype=np.float32)
+        .reshape(n, n_mels, channels, n_frames)
+        .transpose(0, 2, 1, 3)
     )
+    arrays = _zero_arrays(shapes)
+    arrays[MEL_SPEC_FIELD] = transposed_mel
     shard = tmp_path / spec.shards[0].filename
 
     write_lance_dataset(shard, schema, [record_batch_from_arrays(arrays, schema)])
 
-    dataset = lance.dataset(str(shard))
-    field = dataset.schema.field(MEL_SPEC_FIELD)
-    assert tuple(field.type.shape) == shapes[MEL_SPEC_FIELD][1:]
-    batch = next(dataset.to_batches(columns=[MEL_SPEC_FIELD]))
-    decoded = batch.column(0).to_numpy_ndarray()
-    assert decoded.shape == shapes[MEL_SPEC_FIELD]
+    assert pa.types.is_large_binary(lance.dataset(str(shard)).schema.field(MEL_SPEC_FIELD).type)
+    decoded = np.stack(list(iter_lance_column_rows(shard, MEL_SPEC_FIELD)), axis=0)
+    np.testing.assert_array_equal(decoded, transposed_mel)
 
 
 def test_validate_lance_shard_rejects_bad_suffix_payload(tmp_path: Path) -> None:
@@ -150,34 +158,140 @@ def test_validate_lance_shard_reports_inner_shape_mismatch(tmp_path: Path) -> No
     )
 
 
-def test_validate_lance_shard_reports_value_dtype_mismatch(tmp_path: Path) -> None:
-    """A Lance shard whose audio column is float32 reports the dtype contract.
+def test_validate_lance_shard_reports_tensor_value_dtype_mismatch(tmp_path: Path) -> None:
+    """A Lance shard whose ``param_array`` tensor is float16 reports the dtype contract.
 
     :param tmp_path: Pytest fixture providing a fresh test directory.
     """
     spec = build_lance_smoke_spec()
     shapes = dataset_field_shapes(spec.render, spec.num_params)
     schema = lance_schema(shapes, smoke_shard_metadata(spec.render))
-    float32_audio = pa.field(
-        AUDIO_FIELD,
-        pa.fixed_shape_tensor(pa.float32(), shapes[AUDIO_FIELD][1:]),
+    float16_params = pa.field(
+        PARAM_ARRAY_FIELD,
+        pa.fixed_shape_tensor(pa.float16(), shapes[PARAM_ARRAY_FIELD][1:]),
         nullable=False,
     )
-    schema = schema.set(schema.get_field_index(AUDIO_FIELD), float32_audio)
-    dtypes = {**DATASET_FIELD_DTYPES, AUDIO_FIELD: np.dtype("float32")}
+    schema = schema.set(schema.get_field_index(PARAM_ARRAY_FIELD), float16_params)
+    arrays = _zero_arrays(shapes)
+    arrays[PARAM_ARRAY_FIELD] = arrays[PARAM_ARRAY_FIELD].astype(np.float16)
+    shard = tmp_path / spec.shards[0].filename
+    write_lance_dataset(shard, schema, [record_batch_from_arrays(arrays, schema)])
+
+    errors = validate_shard(shard, spec)
+
+    assert any(
+        f"column {PARAM_ARRAY_FIELD!r} has value type halffloat, expected float" in error
+        for error in errors
+    )
+
+
+def test_validate_lance_shard_rejects_blob_field_stored_as_tensor(tmp_path: Path) -> None:
+    """A Lance shard whose ``audio`` is a fixed-shape tensor reports the BLOB contract.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    spec = build_lance_smoke_spec()
+    shapes = dataset_field_shapes(spec.render, spec.num_params)
+    schema = lance_schema(shapes, smoke_shard_metadata(spec.render))
+    # Capture the mel spec before mutating audio — the audio blob spec stays in
+    # the schema metadata even after audio is rewritten as a fixed-shape tensor.
+    mel_spec_obj = read_blob_field_specs(schema)[MEL_SPEC_FIELD]
+    tensor_audio = pa.field(
+        AUDIO_FIELD,
+        pa.fixed_shape_tensor(
+            pa.from_numpy_dtype(DATASET_FIELD_DTYPES[AUDIO_FIELD]), shapes[AUDIO_FIELD][1:]
+        ),
+        nullable=False,
+    )
+    schema = schema.set(schema.get_field_index(AUDIO_FIELD), tensor_audio)
     columns = [
         tensor_array(
-            np.zeros(shapes[field], dtype=dtypes[field]), dtypes[field], shapes[field][1:]
-        )
-        for field in DATASET_FIELD_NAMES
+            np.zeros(shapes[AUDIO_FIELD], dtype=DATASET_FIELD_DTYPES[AUDIO_FIELD]),
+            DATASET_FIELD_DTYPES[AUDIO_FIELD],
+            shapes[AUDIO_FIELD][1:],
+        ),
+        blob_array(
+            np.zeros(shapes[MEL_SPEC_FIELD], dtype=DATASET_FIELD_DTYPES[MEL_SPEC_FIELD]),
+            mel_spec_obj,
+        ),
+        tensor_array(
+            np.zeros(shapes[PARAM_ARRAY_FIELD], dtype=DATASET_FIELD_DTYPES[PARAM_ARRAY_FIELD]),
+            DATASET_FIELD_DTYPES[PARAM_ARRAY_FIELD],
+            shapes[PARAM_ARRAY_FIELD][1:],
+        ),
     ]
     shard = tmp_path / spec.shards[0].filename
     write_lance_dataset(shard, schema, [pa.record_batch(columns, schema=schema)])
 
     errors = validate_shard(shard, spec)
 
+    assert any(f"non-large_binary column {AUDIO_FIELD!r}" in error for error in errors)
+
+
+def test_validate_lance_shard_reports_blob_field_missing_its_spec(tmp_path: Path) -> None:
+    """A ``large_binary`` BLOB column whose embedded spec is absent reports the missing spec.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    spec = build_lance_smoke_spec()
+    shapes = dataset_field_shapes(spec.render, spec.num_params)
+    full_schema = lance_schema(shapes, smoke_shard_metadata(spec.render))
+    blob_specs = read_blob_field_specs(full_schema)
+    columns = [
+        blob_array(
+            np.zeros(shapes[AUDIO_FIELD], dtype=DATASET_FIELD_DTYPES[AUDIO_FIELD]),
+            blob_specs[AUDIO_FIELD],
+        ),
+        blob_array(
+            np.zeros(shapes[MEL_SPEC_FIELD], dtype=DATASET_FIELD_DTYPES[MEL_SPEC_FIELD]),
+            blob_specs[MEL_SPEC_FIELD],
+        ),
+        tensor_array(
+            np.zeros(shapes[PARAM_ARRAY_FIELD], dtype=DATASET_FIELD_DTYPES[PARAM_ARRAY_FIELD]),
+            DATASET_FIELD_DTYPES[PARAM_ARRAY_FIELD],
+            shapes[PARAM_ARRAY_FIELD][1:],
+        ),
+    ]
+    # Strip the BLOB specs key while leaving the columns large_binary.
+    metadata = {SHARD_METADATA_SCHEMA_KEY: full_schema.metadata[SHARD_METADATA_SCHEMA_KEY]}
+    schema = full_schema.with_metadata(metadata)
+    shard = tmp_path / spec.shards[0].filename
+    write_lance_dataset(shard, schema, [pa.record_batch(columns, schema=schema)])
+
+    errors = validate_shard(shard, spec)
+
     assert any(
-        f"column {AUDIO_FIELD!r} has value type float, expected halffloat" in error
+        f"column {AUDIO_FIELD!r} is missing its blob field spec" in error for error in errors
+    )
+
+
+def test_validate_lance_shard_reports_blob_value_dtype_mismatch(tmp_path: Path) -> None:
+    """A Lance shard whose ``audio`` BLOB spec claims float32 reports the dtype contract.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    spec = build_lance_smoke_spec()
+    shapes = dataset_field_shapes(spec.render, spec.num_params)
+    schema = lance_schema(shapes, smoke_shard_metadata(spec.render))
+    # Tamper each BLOB field to the *other* field's dtype so both mismatch.
+    tampered = {
+        AUDIO_FIELD: {"shape": list(shapes[AUDIO_FIELD][1:]), "dtype": "float32"},
+        MEL_SPEC_FIELD: {"shape": list(shapes[MEL_SPEC_FIELD][1:]), "dtype": "float16"},
+    }
+    schema = schema.with_metadata(
+        {**schema.metadata, BLOB_FIELD_SPECS_SCHEMA_KEY: json.dumps(tampered).encode("utf-8")}
+    )
+    shard = tmp_path / spec.shards[0].filename
+    write_lance_dataset(shard, schema, [record_batch_from_arrays(_zero_arrays(shapes), schema)])
+
+    errors = validate_shard(shard, spec)
+
+    assert any(
+        f"column {AUDIO_FIELD!r} has value type float32, expected float16" in error
+        for error in errors
+    )
+    assert any(
+        f"column {MEL_SPEC_FIELD!r} has value type float16, expected float32" in error
         for error in errors
     )
 
@@ -189,7 +303,10 @@ def test_validate_lance_shard_reports_missing_schema_metadata(tmp_path: Path) ->
     """
     spec = build_lance_smoke_spec()
     shapes = dataset_field_shapes(spec.render, spec.num_params)
-    schema = lance_schema(shapes, smoke_shard_metadata(spec.render)).remove_metadata()
+    full_schema = lance_schema(shapes, smoke_shard_metadata(spec.render))
+    # Drop only the ShardMetadata key, keeping the BLOB specs the writer needs.
+    metadata = {k: v for k, v in full_schema.metadata.items() if k != SHARD_METADATA_SCHEMA_KEY}
+    schema = full_schema.with_metadata(metadata)
     shard = tmp_path / spec.shards[0].filename
     write_lance_dataset(shard, schema, [record_batch_from_arrays(_zero_arrays(shapes), schema)])
 
@@ -206,13 +323,10 @@ def test_validate_lance_shard_reports_missing_column(tmp_path: Path) -> None:
     spec = build_lance_smoke_spec()
     shapes = dataset_field_shapes(spec.render, spec.num_params)
     full_schema = lance_schema(shapes, smoke_shard_metadata(spec.render))
+    blob_specs = read_blob_field_specs(full_schema)
     schema = full_schema.remove(full_schema.get_field_index(PARAM_ARRAY_FIELD))
     columns = [
-        tensor_array(
-            np.zeros(shapes[field], dtype=DATASET_FIELD_DTYPES[field]),
-            DATASET_FIELD_DTYPES[field],
-            shapes[field][1:],
-        )
+        blob_array(np.zeros(shapes[field], dtype=DATASET_FIELD_DTYPES[field]), blob_specs[field])
         for field in (AUDIO_FIELD, MEL_SPEC_FIELD)
     ]
     shard = tmp_path / spec.shards[0].filename

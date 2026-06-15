@@ -34,6 +34,10 @@ DATASET_FIELD_DTYPES: dict[str, np.dtype] = {
     PARAM_ARRAY_FIELD: np.dtype("float32"),
 }
 
+# BLOB (``large_binary``) columns avoid DuckDB's per-tensor-column OOM — see
+# docs/design/data-pipeline.md §"Output Format". ``param_array`` stays a tensor.
+BLOB_FIELDS: frozenset[str] = frozenset({AUDIO_FIELD, MEL_SPEC_FIELD})
+
 MEL_FRAMES_PER_SECOND = 100
 MEL_N_MELS = 128
 MEL_N_FFT_FRACTION_OF_SAMPLE_RATE = 0.025
