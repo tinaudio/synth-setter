@@ -138,6 +138,11 @@ def test_iter_lance_column_rows_yields_read_only_views(tmp_path: Path) -> None:
     assert not row.flags.writeable
 
 
+def test_lance_data_storage_version_constant_equals_pinned_literal() -> None:
+    """LANCE_DATA_STORAGE_VERSION must equal the literal "2.2", guarding a silent revert."""
+    assert LANCE_DATA_STORAGE_VERSION == "2.2"
+
+
 def test_write_lance_dataset_pins_data_storage_version(tmp_path: Path) -> None:
     """The written dataset reports the pinned on-disk format version, not the library default.
 

@@ -16,10 +16,9 @@ from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 
 SHARD_METADATA_SCHEMA_KEY = b"synth_setter.shard_metadata"
 
-# Pin the on-disk Lance file-format version so it never floats with the pylance
-# default across upgrades; "2.1" equals the current default. See
-# docs/design/lance-dataset-api-migration.md.
-LANCE_DATA_STORAGE_VERSION = "2.1"
+# Pin the Lance on-disk format instead of floating with the pylance default;
+# "2.2" leads that default and needs a reader new enough to open it (#1714).
+LANCE_DATA_STORAGE_VERSION = "2.2"
 
 
 def lance_schema(
