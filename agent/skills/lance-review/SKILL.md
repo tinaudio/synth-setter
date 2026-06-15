@@ -56,7 +56,7 @@ against in your report so a future reviewer can re-check against a newer release
 Restrict to files in the PR/diff. Find every Lance interaction:
 
 ```bash
-grep -nE 'import lance|lancedb|lance\.[a-z]|Lance[A-Z]|FragmentMetadata|write_dataset|\.scanner\(|\.to_batches\(|\.take\(|add_columns|merge_columns' <changed-files>
+grep -nE 'import lance|lancedb|lance\.[a-z]|Lance[A-Z]|FragmentMetadata|write_dataset|\.scanner\(|\.to_batches\(|\.take\(|add_columns|merge_columns' "${changed_files[@]}"
 ```
 
 This is the **same pattern** the fan-out router uses to decide whether to run
@@ -117,9 +117,9 @@ Every BLOCK and WARN body MUST contain, in this order:
 
 Example finding body:
 
-> Builds a per-shard "latest" pointer file by hand at `r2_io.py:212`; Lance
-> tracks this natively via dataset versions. Docs: "Lance supports versioning of
-> data. Each write operation creates a new version of the dataset."
+> Builds a per-shard "latest" pointer file by hand at `path/to/shard_io.py:NN`;
+> Lance tracks this natively via dataset versions. Docs: "Lance supports
+> versioning of data. Each write operation creates a new version of the dataset."
 > — https://lancedb.github.io/lance/format/#dataset-versioning
 
 If you fetched the docs and the native API does **not** cover the case (e.g. the
