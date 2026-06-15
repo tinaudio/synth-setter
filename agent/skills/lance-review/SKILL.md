@@ -53,7 +53,10 @@ against in your report so a future reviewer can re-check against a newer release
 
 ## Step 2: Enumerate the Lance touch-points in the diff
 
-Restrict to files in the PR/diff. Find every Lance interaction:
+Restrict to files in the PR/diff. Find every Lance interaction. `$BASE` and
+`$HEAD` are the PR's base- and head-commit SHAs (from PR metadata, e.g.
+`gh pr view <N> --json baseRefOid,headRefOid`, or otherwise set by the harness);
+export them before running the snippet:
 
 ```bash
 # --diff-filter=d drops deleted paths so grep never runs on a missing file
