@@ -69,9 +69,22 @@ Read the file list from Step 1. Map file types → relevant skills:
 | Any `*.{yml,yaml}` under `configs/`                                         | `comment-hygiene`                                       |
 | `docs/doc-map.yaml`                                                         | `comment-hygiene`                                       |
 | ML model / pipeline / training code under `src/synth_setter/`               | `ml-data-pipeline`, `ml-test`                           |
+| `*.py` that imports or calls Lance (content-detected — see below)           | `lance-review`                                          |
 | Diff renames or moves files (anything with `R` in `git diff --name-status`) | `tdd-refactor`                                          |
 
 Always run `code-health` and `synth-setter-project-standards`. Other skills opt in based on file extensions in the diff. `comment-hygiene` deduplicates: even if multiple rows above select it, fan out only one parallel agent per skill. Note which skills you selected; you'll launch one parallel agent per skill.
+
+`lance-review` opts in by **content, not extension** — a `*.py` file selects it
+only when the diff touches the Lance API. Grep the changed Python files:
+
+```bash
+grep -lE 'import lance|lancedb|lance\.[a-z]|Lance[A-Z]|FragmentMetadata|write_dataset|\.scanner\(|\.to_batches\(|\.take\(|add_columns|merge_columns' <changed *.py>
+```
+
+This is the **same pattern** the skill itself uses to enumerate touch-points
+(`agent/skills/lance-review/SKILL.md` Step 2) — they are kept identical so the
+router never skips a file the skill would have findings for. If nothing matches,
+skip `lance-review`.
 
 ## Step 4: Launch parallel review agents
 
@@ -85,6 +98,15 @@ Each agent's prompt MUST include:
 - The full file list (with per-file line counts is helpful but optional).
 - The exact skill to invoke: `Invoke the tinaudio-synth-setter-skills:<skill-name> skill via the Skill tool and apply its checklist to this PR's diff.`
 - The expected output shape (see below).
+
+`lance-review` is **repo-local**, not a plugin skill: its agent attempts the bare
+`lance-review` skill via the Skill tool first, and only if that call errors (the
+harness has not registered it) falls back to reading and applying
+`agent/skills/lance-review/SKILL.md` directly. The
+per-agent output contract below is unchanged. **Either path** requires web access
+(`WebFetch`/`WebSearch`): the skill's grounding rule only holds if the agent can
+fetch the live Lance docs, so spawn its sub-agent as `general-purpose` (which has
+both tools) regardless of which invocation path it takes.
 
 Each agent returns a Markdown report with `BLOCK` and `WARN` sections. Each finding cites `<path>:<line>`. Agents work independently — they should not coordinate.
 
@@ -135,6 +157,7 @@ Skill → tag (short form for comment body):
 | `tdd-refactor`                   | `tdd-refactor`    |
 | `ml-data-pipeline`               | `ml-pipeline`     |
 | `ml-test`                        | `ml-test`         |
+| `lance-review`                   | `lance`           |
 
 A BLOCK finding becomes one entry in the `findings` array:
 
