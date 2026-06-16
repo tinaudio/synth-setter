@@ -104,6 +104,18 @@ def test_generate_sample_all_attempts_silent_raises_runtimeerror_naming_sample_i
         _generate(max_attempts=3)
 
 
+@pytest.mark.parametrize("bad_attempts", [0, -1])
+def test_generate_sample_rejects_nonpositive_seed_attempt_budget(
+    bad_attempts: int,
+) -> None:
+    """Invalid ``SampleSeed.max_attempts`` fails before rendering.
+
+    :param bad_attempts: Invalid attempt budget value.
+    """
+    with pytest.raises(ValueError, match="max_attempts must be >= 1"):
+        _generate(max_attempts=bad_attempts)
+
+
 def test_generate_sample_last_attempt_audible_succeeds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

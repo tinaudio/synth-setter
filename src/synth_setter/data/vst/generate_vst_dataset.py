@@ -135,10 +135,13 @@ def generate_sample(
         retrying sample never exceeds the per-shard cadence budget (#714).
     :param seed: Per-sample seeding inputs; ``None`` samples non-deterministically.
     :returns: The accepted sample, with ``attempt`` set to the winning retry.
-    :raises ValueError: A ``fixed_synth_params`` render fell below ``min_loudness``.
+    :raises ValueError: If the attempt budget is nonpositive, or a
+        ``fixed_synth_params`` render fell below ``min_loudness``.
     :raises RuntimeError: The sampling path stayed silent for the whole attempt budget.
     """
     max_attempts = seed.max_attempts if seed is not None else DEFAULT_MAX_ATTEMPTS
+    if max_attempts < 1:
+        raise ValueError(f"max_attempts must be >= 1, got {max_attempts}")
     for attempt in range(max_attempts):
         if fixed_synth_params is None or fixed_note_params is None:
             logger.debug("sampling params")

@@ -213,6 +213,31 @@ class TestValidateShard:
 
         assert any("base_seed" in error for error in errors)
 
+    def test_legacy_hdf5_metadata_without_seed_fields_validates(
+        self, real_spec: DatasetSpec, tmp_path: Path
+    ) -> None:
+        """Legacy attrs without seed provenance do not invent mismatch errors.
+
+        :param real_spec: Spec whose render config matches the canonical valid shapes.
+        :param tmp_path: pytest-provided temp directory for the shard file.
+        """
+        shard_path = tmp_path / "shard-000000.h5"
+        _create_shard(
+            shard_path,
+            shard_size=real_spec.render.samples_per_shard,
+            audio_attrs={
+                "velocity": real_spec.render.velocity,
+                "signal_duration_seconds": real_spec.render.signal_duration_seconds,
+                "sample_rate": real_spec.render.sample_rate,
+                "channels": real_spec.render.channels,
+                "min_loudness": real_spec.render.min_loudness,
+            },
+        )
+
+        errors = validate_shard(shard_path, real_spec)
+
+        assert errors == []
+
 
 # ---------------------------------------------------------------------------
 # Tests for main() CLI entry point

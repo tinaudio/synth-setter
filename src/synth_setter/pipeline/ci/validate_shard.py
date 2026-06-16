@@ -30,6 +30,7 @@ download to a tempfile first, Lance shards stream directly from R2.
 from __future__ import annotations
 
 import io
+import json
 import re
 import sys
 import tarfile
@@ -233,17 +234,23 @@ def _validate_h5_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
 
 
 def _metadata_mismatch_errors(
-    metadata: ShardMetadata, expected: ShardMetadata, source: str
+    metadata: ShardMetadata,
+    expected: ShardMetadata,
+    source: str,
+    present_fields: set[str] | frozenset[str],
 ) -> list[str]:
     """Return errors for sidecar provenance that disagrees with the input spec.
 
     :param metadata: Metadata parsed from the shard being validated.
     :param expected: Metadata projected from the spec used for validation.
     :param source: Human-readable metadata source for the error prefix.
+    :param present_fields: Metadata fields physically present in the artifact.
     :returns: One error per mismatched field.
     """
     errors: list[str] = []
     for field in ("base_seed", "attempts_per_sample"):
+        if field not in present_fields:
+            continue
         observed = getattr(metadata, field)
         wanted = getattr(expected, field)
         if observed != wanted:
@@ -309,7 +316,7 @@ def _validate_h5_metadata(dataset: h5py.Dataset, expected: ShardMetadata) -> lis
         metadata = ShardMetadata.model_validate(payload)
     except ValidationError as exc:
         return [f"audio attrs: invalid ShardMetadata: {exc}"]
-    return _metadata_mismatch_errors(metadata, expected, "audio attrs")
+    return _metadata_mismatch_errors(metadata, expected, "audio attrs", present_fields)
 
 
 def _validate_tar_metadata(
@@ -335,7 +342,8 @@ def _validate_tar_metadata(
         metadata = ShardMetadata.model_validate_json(payload)
     except ValidationError as exc:
         return [f"{member_name}: invalid ShardMetadata: {exc}"]
-    return _metadata_mismatch_errors(metadata, expected, member_name)
+    present_fields = _SHARD_METADATA_FIELDS & set(json.loads(payload))
+    return _metadata_mismatch_errors(metadata, expected, member_name, present_fields)
 
 
 def _validate_tar_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
@@ -452,7 +460,12 @@ def _validate_lance_dataset(
         errors.append(str(exc))
     else:
         errors.extend(
-            _metadata_mismatch_errors(metadata, expected_metadata, "Lance schema metadata")
+            _metadata_mismatch_errors(
+                metadata,
+                expected_metadata,
+                "Lance schema metadata",
+                metadata.model_fields_set,
+            )
         )
 
     num_rows = dataset.count_rows()

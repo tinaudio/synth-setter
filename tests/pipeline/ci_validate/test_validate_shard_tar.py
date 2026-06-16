@@ -279,6 +279,32 @@ class TestTarShardValidation:
 
         assert any("metadata.json" in err and "ShardMetadata" in err for err in errors)
 
+    def test_validate_shard_tar_accepts_legacy_metadata_without_seed_fields(
+        self, real_spec: DatasetSpec, tmp_path: Path
+    ) -> None:
+        """A legacy sidecar without seed provenance does not invent mismatch errors.
+
+        :param real_spec: Spec whose render config matches the canonical valid shapes.
+        :param tmp_path: pytest-provided temp directory for the shard file.
+        :returns: ``None``.
+        :rtype: None
+        """
+        shard_path = tmp_path / "shard-000000.tar"
+        members: dict[str, bytes] = {}
+        for field, arr in _valid_batch_arrays(real_spec.render.samples_per_shard).items():
+            members[f"00000000.{field}.npy"] = _npy_bytes(arr)
+        legacy_metadata = {
+            key: value
+            for key, value in _VALID_METADATA.items()
+            if key not in {"base_seed", "attempts_per_sample"}
+        }
+        members["metadata.json"] = json.dumps(legacy_metadata).encode("utf-8")
+        _make_tar_with(shard_path, members)
+
+        errors = validate_shard(shard_path, real_spec)
+
+        assert errors == []
+
     def test_validate_shard_tar_rejects_base_seed_metadata_mismatch(
         self, real_spec: DatasetSpec, tmp_path: Path
     ) -> None:
