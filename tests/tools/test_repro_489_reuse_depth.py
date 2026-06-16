@@ -51,8 +51,7 @@ def test_all_pairs_worst_mss_scores_and_counts_every_unordered_pair() -> None:
     calls: list[tuple[int, int]] = []
 
     def counting_metric(a: np.ndarray, b: np.ndarray) -> float:
-        # Encode each render's index in its fill value so the closure can record
-        # which pairs were scored without sharing mutable index state.
+        # Fill value encodes render index; avoids shared mutable index state.
         calls.append((int(a[0, 0]), int(b[0, 0])))
         return 0.0
 
@@ -151,5 +150,5 @@ def test_main_passes_parsed_depths_through_to_run(monkeypatch: pytest.MonkeyPatc
 @pytest.mark.slow
 @pytest.mark.requires_vst
 def test_main_drives_the_real_render_chain_end_to_end() -> None:
-    """``main`` completes at depth 2 on a real VST with no #489 SystemExit (see #489)."""
+    """Real VST smoke test: depth-2 run must not raise SystemExit (regression for #489)."""
     assert repro.main(["--depths", "2", "--no-control"]) is None
