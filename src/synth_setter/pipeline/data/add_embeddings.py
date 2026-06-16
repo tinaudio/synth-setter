@@ -144,7 +144,12 @@ def build_clap_index(
     :param metric: Distance metric for the index.
     :returns: ``True`` if an index was built, ``False`` if skipped (too few rows
         to train PQ — exact ``nearest`` still works without an index).
+    :raises ValueError: ``num_sub_vectors`` does not divide the ``clap`` column's
+        vector width (Lance's own PQ-training failure is opaque).
     """
+    clap_dim = dataset.schema.field(CLAP_FIELD).type.list_size
+    if clap_dim % num_sub_vectors != 0:
+        raise ValueError(f"num_sub_vectors={num_sub_vectors} does not divide clap dim {clap_dim}")
     rows = dataset.count_rows()
     if rows < MIN_ROWS_FOR_INDEX:
         logger.warning("clap_index_skipped_too_few_rows", rows=rows, minimum=MIN_ROWS_FOR_INDEX)
@@ -191,13 +196,16 @@ def add_embeddings(
     :param num_partitions: IVF partition count; ``None`` uses ``round(sqrt(rows))``.
     :param num_sub_vectors: PQ sub-vector count (must divide ``clap_dim``).
     :param metric: Vector-index distance metric.
-    :raises ValueError: ``dataset`` already has an ``m2l`` or ``clap`` column —
-        re-running on an augmented dataset would hit Lance's opaque
-        "column already exists" error.
+    :raises ValueError: ``dataset`` already has an ``m2l`` or ``clap`` column
+        (re-running on an augmented dataset would hit Lance's opaque "column
+        already exists" error), or lacks the ``audio`` column the UDF reads
+        (an absent source column would otherwise fail opaquely mid-transaction).
     """
     existing = {M2L_FIELD, CLAP_FIELD} & set(dataset.schema.names)
     if existing:
         raise ValueError(f"dataset already has embedding column(s): {sorted(existing)}")
+    if AUDIO_FIELD not in dataset.schema.names:
+        raise ValueError(f"dataset has no {AUDIO_FIELD!r} column to embed")
 
     @lance.batch_udf()
     def udf(batch: pa.RecordBatch) -> pa.RecordBatch:
@@ -259,7 +267,7 @@ def load_clap_audio_encoder(
     logger.info("loading_clap_checkpoint", checkpoint=checkpoint, device=device)
     # transformers' own types are too loose for the surface used below, so pyright
     # is scoped off the two offending calls (the from_pretrained `.to()` chain and
-    # the get_audio_features tensor return) rather than widened to Any; the
+    # the get_audio_features output access) rather than widened to Any; the
     # processor's audio kwargs are dict-splatted, which the stub can't object to.
     model = ClapModel.from_pretrained(checkpoint).to(device).eval()  # pyright: ignore
     processor = ClapProcessor.from_pretrained(checkpoint)
@@ -278,7 +286,10 @@ def load_clap_audio_encoder(
         }
         inputs = processor(**clap_kwargs)
         device_inputs = {key: value.to(device) for key, value in inputs.items()}
-        return model.get_audio_features(**device_inputs).cpu().numpy()  # pyright: ignore
+        # transformers>=5 returns a BaseModelOutputWithPooling; the projected
+        # (B, CLAP_EMBEDDING_DIM) audio embedding is its pooler_output.
+        features = model.get_audio_features(**device_inputs)
+        return features.pooler_output.cpu().numpy()  # pyright: ignore
 
     return encode
 
@@ -322,12 +333,34 @@ def _open_lance_dataset(uri: str) -> lance.LanceDataset:
     show_default=True,
     help="Build an IVF_PQ vector index on the clap column.",
 )
+@click.option(
+    "--num-partitions",
+    type=int,
+    default=None,
+    help="IVF partition count; defaults to round(sqrt(rows)).",
+)
+@click.option(
+    "--num-sub-vectors",
+    type=int,
+    default=DEFAULT_NUM_SUB_VECTORS,
+    show_default=True,
+    help="PQ sub-vector count (must divide the clap dim).",
+)
+@click.option(
+    "--metric",
+    default=DEFAULT_INDEX_METRIC,
+    show_default=True,
+    help="Vector-index distance metric.",
+)
 def main(
     lance_uri: str,
     clap_checkpoint: str,
     device: str | None,
     batch_size: int | None,
     build_index: bool,
+    num_partitions: int | None,
+    num_sub_vectors: int,
+    metric: str,
 ) -> None:
     """Add ``m2l`` + ``clap`` embedding columns to the Lance dataset at LANCE_URI.
 
@@ -341,6 +374,9 @@ def main(
     :param device: Torch device for CLAP; ``None`` selects cuda when available, else cpu.
     :param batch_size: Rows per UDF call; ``None`` uses the Lance default.
     :param build_index: Build an IVF_PQ index on the clap column after writing it.
+    :param num_partitions: IVF partition count; ``None`` uses ``round(sqrt(rows))``.
+    :param num_sub_vectors: PQ sub-vector count; must divide the clap dim.
+    :param metric: Vector-index distance metric.
     """
     try:
         dataset = _open_lance_dataset(lance_uri)
@@ -365,6 +401,9 @@ def main(
         sample_rate,
         batch_size=batch_size,
         build_index=build_index,
+        num_partitions=num_partitions,
+        num_sub_vectors=num_sub_vectors,
+        metric=metric,
     )
     logger.info("added_embeddings", uri=lance_uri, columns=[M2L_FIELD, CLAP_FIELD])
 

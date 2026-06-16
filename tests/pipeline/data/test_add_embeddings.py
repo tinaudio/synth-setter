@@ -133,6 +133,23 @@ def _audio_dataset(uri: str, rows: int, *, with_params: bool = False) -> np.ndar
     return audio
 
 
+def _distinct_clap(mono: np.ndarray, sample_rate: int) -> np.ndarray:
+    """Give every row a unique embedding so each row is its own nearest neighbour.
+
+    Encodes the row's mono mean into channel 0 and the row index into channel 1,
+    leaving the rest zero — distinct per row regardless of duplicate audio.
+
+    :param mono: ``(B, T)`` mono batch.
+    :param sample_rate: Ignored.
+    :returns: ``(B, CLAP_EMBEDDING_DIM)`` embedding batch, distinct per row.
+    """
+    del sample_rate
+    out = np.zeros((mono.shape[0], CLAP_EMBEDDING_DIM), dtype=np.float32)
+    out[:, 0] = mono.mean(axis=1)
+    out[:, 1] = np.arange(mono.shape[0], dtype=np.float32)
+    return out
+
+
 def test_downmix_to_mono_averages_channels_to_float32() -> None:
     """Channel averaging yields float32 mono with the channel axis collapsed."""
     audio = np.array([[[1.0, 3.0], [3.0, 5.0]]], dtype=np.float16)
@@ -241,6 +258,39 @@ def test_add_embeddings_builds_ivf_pq_index_on_clap(tmp_path: Path) -> None:
 
 
 @pytest.mark.slow
+def test_clap_exact_search_returns_queried_row_as_top_hit(tmp_path: Path) -> None:
+    """Exact nearest search over ``clap`` returns the queried row itself at distance ~0.
+
+    Uses Lance's exact (brute-force) scan — deterministic regardless of vector distribution — to
+    pin the *semantic* contract: a stored vector's nearest neighbour is its own row. (IVF_PQ recall
+    on realistic dense embeddings is covered by the real ≥256-row R2 e2e; PQ on synthetic toy
+    vectors is degenerate and not a meaningful correctness signal.)
+
+    :param tmp_path: Pytest-provided scratch directory for the dataset.
+    """
+    uri = str(tmp_path / "semantic.lance")
+    _audio_dataset(uri, 64, with_params=True)
+
+    # _distinct_clap gives every row a unique vector, so the exact nearest of a
+    # stored vector is unambiguously its own row.
+    add_embeddings(lance.dataset(uri), _fake_m2l, _distinct_clap, _SAMPLE_RATE, build_index=False)
+
+    dataset = lance.dataset(uri)
+    stored = dataset.to_table(columns=[CLAP_FIELD, PARAM_ARRAY_FIELD])
+    target_row = 37
+    query = np.array(stored.column(CLAP_FIELD)[target_row].as_py(), dtype=np.float32)
+    expected_params = stored.column(PARAM_ARRAY_FIELD)[target_row].as_py()
+
+    hits = dataset.to_table(
+        nearest={"column": CLAP_FIELD, "q": query, "k": 1}, columns=[PARAM_ARRAY_FIELD]
+    )
+
+    assert hits.num_rows == 1
+    assert hits.column(PARAM_ARRAY_FIELD)[0].as_py() == expected_params
+    np.testing.assert_allclose(hits.column("_distance")[0].as_py(), 0.0, atol=1e-5)
+
+
+@pytest.mark.slow
 def test_build_clap_index_skips_when_too_few_rows(tmp_path: Path) -> None:
     uri = str(tmp_path / "tiny.lance")
     _audio_dataset(uri, 8)
@@ -249,6 +299,37 @@ def test_build_clap_index_skips_when_too_few_rows(tmp_path: Path) -> None:
     built = build_clap_index(lance.dataset(uri))
 
     assert built is False
+    assert lance.dataset(uri).list_indices() == []
+
+
+@pytest.mark.slow
+def test_add_embeddings_rejects_dataset_without_audio_column(tmp_path: Path) -> None:
+    """A dataset lacking the audio column raises before the UDF runs.
+
+    :param tmp_path: Pytest-provided scratch directory for the dataset.
+    """
+    uri = str(tmp_path / "no_audio.lance")
+    rng = np.random.default_rng(0)
+    write_lance_shard(Path(uri), {PARAM_ARRAY_FIELD: rng.random((4, 3)).astype(np.float32)})
+
+    with pytest.raises(ValueError, match="no 'audio' column"):
+        add_embeddings(lance.dataset(uri), _fake_m2l, _fake_clap, _SAMPLE_RATE, build_index=False)
+
+
+@pytest.mark.slow
+def test_build_clap_index_rejects_num_sub_vectors_not_dividing_dim(tmp_path: Path) -> None:
+    """A num_sub_vectors that does not divide the clap dim raises before any index work.
+
+    :param tmp_path: Pytest-provided scratch directory for the dataset.
+    """
+    uri = str(tmp_path / "indivisible.lance")
+    _audio_dataset(uri, 8)
+    add_embeddings(lance.dataset(uri), _fake_m2l, _fake_clap, _SAMPLE_RATE, build_index=False)
+
+    # 7 does not divide 512; reject before any index/training work begins.
+    with pytest.raises(ValueError, match="does not divide clap dim"):
+        build_clap_index(lance.dataset(uri), num_sub_vectors=7)
+
     assert lance.dataset(uri).list_indices() == []
 
 
@@ -292,6 +373,62 @@ def test_main_adds_embeddings_using_sample_rate_from_metadata(
     assert seen_sample_rate
     assert all(sr == int(spec.render.sample_rate) for sr in seen_sample_rate)
     assert {M2L_FIELD, CLAP_FIELD} <= set(lance.dataset(str(uri)).schema.names)
+
+
+def test_main_exposes_index_tuning_options() -> None:
+    """The CLI surfaces the IVF_PQ tuning flags threaded into ``add_embeddings``."""
+    result = CliRunner().invoke(main, ["--help"])
+
+    assert result.exit_code == 0, result.output
+    for flag in ("--num-partitions", "--num-sub-vectors", "--metric"):
+        assert flag in result.output
+
+
+@pytest.mark.slow
+def test_main_threads_index_tuning_options_into_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The CLI's index-tuning flags reach ``build_clap_index`` unchanged.
+
+    :param tmp_path: Pytest-provided scratch directory for the dataset.
+    :param monkeypatch: Fixture used to inject fake encoders + a spy index builder.
+    """
+    spec = build_lance_smoke_spec()
+    uri = tmp_path / "tuned.lance"
+    write_minimal_lance_shard(uri, spec)
+
+    captured: dict[str, object] = {}
+
+    def spy_build_clap_index(
+        dataset: object,
+        *,
+        num_partitions: int | None = None,
+        num_sub_vectors: int = 0,
+        metric: str = "",
+    ) -> bool:
+        captured.update(
+            num_partitions=num_partitions, num_sub_vectors=num_sub_vectors, metric=metric
+        )
+        return False
+
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.load_m2l_audio_encoder", lambda: _fake_m2l
+    )
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.load_clap_audio_encoder",
+        lambda checkpoint, device=None: _fake_clap,
+    )
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.build_clap_index", spy_build_clap_index
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [str(uri), "--num-partitions", "4", "--num-sub-vectors", "8", "--metric", "l2"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured == {"num_partitions": 4, "num_sub_vectors": 8, "metric": "l2"}
 
 
 def test_main_exits_1_when_open_fails_with_runtime_error(monkeypatch: pytest.MonkeyPatch) -> None:
