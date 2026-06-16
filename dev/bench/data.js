@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781648757277,
+  "lastUpdate": 1781648759616,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -12905,6 +12905,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 16.34383978850001,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "486f663474d53d1efc211721324f7ef7c184f7c5",
+          "message": "feat(data-pipeline): reproducible per-sample seeding for datagen (#1713)\n\n* feat(data-pipeline): deterministic per-sample seeding for reproducible datagen\n\nDerive every sample's RNG from (base_seed, sample_idx, attempt) via a SHA-256\nseed in a new seeding module, so a row's content is reproducible regardless of\nworker, order, or retry history (#884). Thread an explicit numpy Generator\nthrough ParamSpec.sample and all Parameter subtypes (killing global-RNG bleed),\ngive generate_sample a bounded, deterministic loudness-retry loop that records\nthe accepted attempt, and add RenderConfig.base_seed / attempts_per_sample with\nthe launcher plumbing each shard's seed.\n\nPer-split independent seed streams (train_val_test_seeds) and persisted\nattempt / dataset_version remain gated as separate follow-ups.\n\nRefs #884\n\n* fix(data-pipeline): address seed provenance review warnings\n\n* test(data-pipeline): cover worker-count seed stability\n\n* fix(data-pipeline): preserve legacy shard metadata validation\n\n* fix(data-pipeline): align dummy shard seed metadata\n\n* test(data-pipeline): cover repeat-run seed metadata\n\n* docs(data-pipeline): consolidate seeding design\n\n* test(data-pipeline): align VST replay sampler with seeded API\n\n* fix(data-pipeline): address seeded sampler review findings",
+          "timestamp": "2026-06-16T17:54:02-04:00",
+          "tree_id": "7f770e78357cb53e0a5aaa6361e4af00be1b9d0b",
+          "url": "https://github.com/tinaudio/synth-setter/commit/486f663474d53d1efc211721324f7ef7c184f7c5"
+        },
+        "date": 1781648759302,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.6382417678833,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 14.207576871290803,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.08146112412214279,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.0063436031341552734,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.2629809379577637,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 16.673802859499993,
             "unit": "seconds"
           }
         ]
