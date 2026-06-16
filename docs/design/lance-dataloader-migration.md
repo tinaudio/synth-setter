@@ -35,7 +35,7 @@ single HDF5 limitation: **slow random access**. The workarounds keep reads
 *contiguous* so h5py stays fast, then claw back approximate shuffling on top of
 that contiguity.
 
-Lance's headline property is fast random access (its own docs market "100x
+Lance's headline property is fast random access (its own docs claim "100x
 faster random access" vs Parquet — see §10). So the premise those workarounds
 were built on no longer holds. This migration deletes the reason they exist
 rather than porting them to Lance.
