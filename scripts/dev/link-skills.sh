@@ -33,7 +33,7 @@ for src in "${marketplace}" "${codex_src}"; do
 
     # 2. Project into workspace agent/skills/ for Gemini/Antigravity
     if [[ -d "${repo_dest}" ]]; then
-      if [[ ! -d "${repo_dest}/${skill_name}" || -L "${repo_dest}/${skill_name}" ]]; then
+      if [[ ! -e "${repo_dest}/${skill_name}" || -L "${repo_dest}/${skill_name}" ]]; then
         ln -sfn "${skill_dir%/}" "${repo_dest}/${skill_name}"
         workspace_linked=$((workspace_linked + 1))
 
