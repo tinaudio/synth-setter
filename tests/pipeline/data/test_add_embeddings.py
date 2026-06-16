@@ -459,3 +459,22 @@ def test_main_exits_1_when_open_fails_with_runtime_error(monkeypatch: pytest.Mon
 
     assert result.exit_code == 1
     assert result.exception is None or isinstance(result.exception, SystemExit)
+
+
+@pytest.mark.slow
+def test_main_exits_1_when_add_step_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    spec = build_lance_smoke_spec()
+    uri = tmp_path / "shard.lance"
+    write_minimal_lance_shard(uri, spec)
+
+    def boom() -> M2LEncodeFn:
+        raise RuntimeError("encoder load blew up")
+
+    # Dataset opens fine; a failure in the encode/add step must still exit 1 cleanly.
+    monkeypatch.setattr("synth_setter.pipeline.data.add_embeddings.load_m2l_audio_encoder", boom)
+
+    result = CliRunner().invoke(main, [str(uri)])
+
+    assert result.exit_code == 1
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    assert {M2L_FIELD, CLAP_FIELD}.isdisjoint(lance.dataset(str(uri)).schema.names)

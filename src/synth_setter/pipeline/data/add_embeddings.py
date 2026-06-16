@@ -412,19 +412,25 @@ def main(
     logger.info(
         "adding_embeddings", uri=lance_uri, sample_rate=sample_rate, rows=dataset.count_rows()
     )
-    m2l_encode = load_m2l_audio_encoder()
-    clap_encode = load_clap_audio_encoder(clap_checkpoint, device)
-    add_embeddings(
-        dataset,
-        m2l_encode,
-        clap_encode,
-        sample_rate,
-        batch_size=batch_size,
-        build_index=build_index,
-        num_partitions=num_partitions,
-        num_sub_vectors=num_sub_vectors,
-        metric=metric,
-    )
+    try:
+        m2l_encode = load_m2l_audio_encoder()
+        clap_encode = load_clap_audio_encoder(clap_checkpoint, device)
+        add_embeddings(
+            dataset,
+            m2l_encode,
+            clap_encode,
+            sample_rate,
+            batch_size=batch_size,
+            build_index=build_index,
+            num_partitions=num_partitions,
+            num_sub_vectors=num_sub_vectors,
+            metric=metric,
+        )
+    # Encoder load (missing dep) or the add/index step (validation, Lance, CUDA)
+    # should exit cleanly with a logged cause, not a raw CLI traceback.
+    except (OSError, ValueError, RuntimeError, ImportError) as exc:
+        logger.error("add_embeddings_failed", uri=lance_uri, error=str(exc))
+        sys.exit(1)
     logger.info("added_embeddings", uri=lance_uri, columns=[M2L_FIELD, CLAP_FIELD])
 
 
