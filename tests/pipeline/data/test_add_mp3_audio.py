@@ -122,13 +122,17 @@ def _read_mp3_blobs(uri: Path, indices: list[int]) -> list[bytes]:
     ]
 
 
-def test_encode_audio_to_mp3_starts_with_frame_sync() -> None:
-    """A valid MP3 stream opens with the 11-bit frame-sync prefix (0xFF 0xEy/0xFy)."""
+def test_encode_audio_to_mp3_contains_frame_sync() -> None:
+    """A valid MP3 stream carries the 11-bit frame-sync word (0xFF 0xEy/0xFy).
+
+    Scans the head rather than asserting offset 0: an MP3 may legally lead with
+    an ID3 tag or padding before the first frame.
+    """
     payload = encode_audio_to_mp3(_sine_rows()[0], _SAMPLE_RATE, 128)
 
     assert len(payload) > 0
-    assert payload[0] == 0xFF
-    assert payload[1] & 0xE0 == 0xE0
+    head = payload[:1024]
+    assert any(head[i] == 0xFF and head[i + 1] & 0xE0 == 0xE0 for i in range(len(head) - 1))
 
 
 def test_encode_audio_to_mp3_higher_bitrate_yields_larger_payload() -> None:
