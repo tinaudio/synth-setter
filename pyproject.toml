@@ -59,6 +59,7 @@ synth-setter-eval = "synth_setter.cli.eval:main"
 synth-setter-generate-dataset = "synth_setter.cli.generate_dataset:main"
 synth-setter-generate-dataset-from-hydra = "synth_setter.cli.generate_dataset:from_hydra"
 synth-setter-finalize-dataset = "synth_setter.cli.finalize_dataset:main"
+synth-setter-add-embeddings = "synth_setter.pipeline.data.add_embeddings:main"
 synth-setter-introspect-plugin = "synth_setter.cli.introspect_plugin:main"
 synth-setter-spec-uri = "synth_setter.pipeline.ci.spec_uri:main"
 
@@ -127,6 +128,11 @@ torch = [
   "torchaudio>=2.0.0",
   "lightning>=2.6.0",
   "torchmetrics>=0.11.4",
+  # Audio-embedding encoders for the add_embeddings CLI (lazy-imported). CLAP
+  # rides on transformers (>=5: ClapProcessor takes `audio=`, not `audios=`);
+  # music2latent ships its own torch-backed encoder.
+  "transformers>=5.0.0",
+  "music2latent>=0.1.8",
 ]
 config = [
   "hydra-core==1.3.2",
