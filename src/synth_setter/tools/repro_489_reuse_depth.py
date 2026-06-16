@@ -27,9 +27,11 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from itertools import combinations
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
+from omegaconf import OmegaConf
 from pyloudnorm import Meter
 
 from synth_setter.data.vst import param_specs, preset_paths
@@ -44,20 +46,15 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Render settings mirror configs/render/surge_xt.yaml so the reproduction matches
-# the production render path the #489 datasets are generated with.
-_SAMPLE_RATE = 44100
-_CHANNELS = 2
-_VELOCITY = 100
-_DURATION_SECONDS = 4.0
-_MIN_LOUDNESS_DB = -55.0
-
 # PR #706 threshold: identical-param renders sit well under this; the junk render
 # pushed the worst pair to ~21, ~6x the clean per-pair value.
 _MSS_THRESHOLD = 10.0
 _DEFAULT_DEPTHS = (12, 40)
 # Guards the loud-patch search from spinning forever on a silent param spec.
 _MAX_PATCH_DRAWS = 200
+_LOG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
+# configs/render/<spec>.yaml relative to this tools/ module.
+_RENDER_CONFIG_DIR = Path(__file__).resolve().parent.parent / "configs" / "render"
 
 
 class Verdict(StrEnum):
@@ -82,8 +79,40 @@ class Verdict(StrEnum):
 
 
 @dataclass(frozen=True)
+class RenderSettings:
+    """Render knobs sourced from ``configs/render/<spec>.yaml`` (single source of truth).
+
+    .. attribute :: sample_rate
+
+       Audio sample rate in Hz.
+
+    .. attribute :: channels
+
+       Audio channel count.
+
+    .. attribute :: velocity
+
+       MIDI velocity for every render.
+
+    .. attribute :: duration_seconds
+
+       Render length in seconds.
+
+    .. attribute :: min_loudness_db
+
+       Loudness floor (LUFS) the seed patch must clear.
+    """
+
+    sample_rate: int
+    channels: int
+    velocity: int
+    duration_seconds: float
+    min_loudness_db: float
+
+
+@dataclass(frozen=True)
 class PatchSpec:
-    """One synth patch plus the plugin and preset that render it.
+    """One synth patch plus everything needed to render it identically.
 
     .. attribute :: plugin_path
 
@@ -100,12 +129,17 @@ class PatchSpec:
     .. attribute :: note_params
 
        ``pitch`` and ``note_start_and_end`` held identical across every render.
+
+    .. attribute :: settings
+
+       Render knobs (sample rate, channels, velocity, duration, loudness floor).
     """
 
     plugin_path: str
     preset_path: str
     synth_params: dict[str, float]
     note_params: NoteParams
+    settings: RenderSettings
 
 
 @dataclass(frozen=True)
@@ -146,7 +180,7 @@ def all_pairs_worst_mss(
 ) -> ReuseDepthResult:
     """Score every unordered pair of renders and return the worst-case divergence.
 
-    :param renders: Audio clips, each shape ``(C, T)``, all rendered from one patch.
+    :param renders: Audio clips, each shape ``(C, T)`` float32, all from one patch.
     :param metric: Pairwise distance; defaults to :func:`compute_mss`.
     :returns: A :class:`ReuseDepthResult` for the ``len(renders)`` renders.
     :raises ValueError: Fewer than two renders — no pair to compare.
@@ -185,89 +219,105 @@ def classify(reused_max: float, reloaded_max: float | None, threshold: float) ->
     return Verdict.BUG_PRESENT
 
 
-def _integrated_loudness(audio: np.ndarray) -> float:
-    """Return ITU integrated loudness (LUFS) of a ``(C, T)`` clip.
+def load_render_settings(spec_name: str) -> RenderSettings:
+    """Read render knobs from ``configs/render/<spec_name>.yaml``.
 
-    :param audio: Rendered clip, shape ``(C, T)``.
-    :returns: Integrated loudness in LUFS.
+    :param spec_name: Param-spec registry key, also the render config stem.
+    :returns: The render settings the production pipeline uses for this spec.
+    :raises FileNotFoundError: No render config exists for ``spec_name``.
     """
-    return float(Meter(_SAMPLE_RATE).integrated_loudness(audio.T))
-
-
-def resolve_patch(spec_name: str) -> PatchSpec:
-    """Draw one patch that renders above ``_MIN_LOUDNESS_DB`` for the named spec.
-
-    Renders each candidate once via the reload path (a fresh plugin) so the gate
-    decision is never itself contaminated by reuse-state.
-
-    :param spec_name: Param-spec registry key (e.g. ``"surge_xt"``).
-    :returns: The first loud draw, bound to its plugin and preset.
-    :raises RuntimeError: No draw cleared the gate within ``_MAX_PATCH_DRAWS``.
-    """
-    plugin_path = default_plugin_path()
-    preset_path = preset_paths[spec_name]
-    spec = param_specs[spec_name]
-    for draw in range(_MAX_PATCH_DRAWS):
-        synth_params, note_params = spec.sample()
-        audio = render_params(
-            plugin_path,
-            synth_params,
-            note_params["pitch"],
-            _VELOCITY,
-            note_params["note_start_and_end"],
-            _DURATION_SECONDS,
-            _SAMPLE_RATE,
-            _CHANNELS,
-            preset_path=preset_path,
-        )
-        loudness = _integrated_loudness(audio)
-        if loudness >= _MIN_LOUDNESS_DB:
-            logger.info("loud patch found on draw %d (%.1f LUFS)", draw, loudness)
-            return PatchSpec(plugin_path, preset_path, synth_params, note_params)
-        logger.debug("draw %d: %.1f LUFS below gate, redrawing", draw, loudness)
-    raise RuntimeError(
-        f"no patch cleared {_MIN_LOUDNESS_DB} dB in {_MAX_PATCH_DRAWS} draws for {spec_name!r}"
+    config_path = _RENDER_CONFIG_DIR / f"{spec_name}.yaml"
+    if not config_path.is_file():
+        raise FileNotFoundError(f"no render config for spec {spec_name!r} at {config_path}")
+    cfg = OmegaConf.load(config_path)
+    return RenderSettings(
+        sample_rate=int(cfg.sample_rate),
+        channels=int(cfg.channels),
+        velocity=int(cfg.velocity),
+        duration_seconds=float(cfg.signal_duration_seconds),
+        min_loudness_db=float(cfg.min_loudness),
     )
 
 
-def _render_repeated(
-    patch: PatchSpec, depth: int, cached_plugin: VST3Plugin | None
-) -> list[np.ndarray]:
-    """Render ``patch`` ``depth`` times, reusing ``cached_plugin`` when supplied.
+def integrated_loudness(audio: np.ndarray, sample_rate: int) -> float:
+    """Return ITU integrated loudness (LUFS) of a ``(C, T)`` clip.
 
-    :param patch: The identical patch and its plugin/preset.
-    :param depth: Number of renders (the reuse depth).
-    :param cached_plugin: Reused instance for the #489 ``once`` arm, or ``None`` to
-        reload a fresh plugin per render (the #713 reload arm / current default).
-    :returns: ``depth`` rendered clips, each shape ``(C, T)``.
+    :param audio: Rendered clip, shape ``(C, T)`` float32.
+    :param sample_rate: Sample rate of ``audio`` in Hz.
+    :returns: Integrated loudness in LUFS.
     """
-    return [
-        render_params(
-            patch.plugin_path,
-            patch.synth_params,
-            patch.note_params["pitch"],
-            _VELOCITY,
-            patch.note_params["note_start_and_end"],
-            _DURATION_SECONDS,
-            _SAMPLE_RATE,
-            _CHANNELS,
-            preset_path=patch.preset_path,
-            plugin=cached_plugin,
-        )
-        for _ in range(depth)
-    ]
+    return float(Meter(sample_rate).integrated_loudness(audio.T))
 
 
-def _render_reusing_one_plugin(patch: PatchSpec, depth: int) -> list[np.ndarray]:
+def _render_once(patch: PatchSpec, cached_plugin: VST3Plugin | None) -> np.ndarray:
+    """Render ``patch`` once, on ``cached_plugin`` if given else a freshly loaded plugin.
+
+    :param patch: The patch and its plugin/preset/settings.
+    :param cached_plugin: Injected instance to reuse, or ``None`` to load fresh.
+    :returns: One rendered clip, shape ``(C, T)``.
+    """
+    return render_params(
+        patch.plugin_path,
+        patch.synth_params,
+        patch.note_params["pitch"],
+        patch.settings.velocity,
+        patch.note_params["note_start_and_end"],
+        patch.settings.duration_seconds,
+        patch.settings.sample_rate,
+        patch.settings.channels,
+        preset_path=patch.preset_path,
+        plugin=cached_plugin,
+    )
+
+
+def render_reusing_one_plugin(patch: PatchSpec, depth: int) -> list[np.ndarray]:
     """Render ``patch`` ``depth`` times against one cached instance (the #489 ``once`` arm).
 
-    :param patch: The identical patch and its plugin/preset.
+    :param patch: The patch and its plugin/preset/settings.
     :param depth: Number of renders sharing the cached instance.
     :returns: ``depth`` rendered clips, each shape ``(C, T)``.
     """
     plugin = load_plugin(patch.plugin_path)
     load_preset(plugin, patch.preset_path)
-    return _render_repeated(patch, depth, cached_plugin=plugin)
+    return [_render_once(patch, plugin) for _ in range(depth)]
+
+
+def render_reloading_each_render(patch: PatchSpec, depth: int) -> list[np.ndarray]:
+    """Render ``patch`` ``depth`` times, reloading a fresh plugin per render (#713 default arm).
+
+    :param patch: The patch and its plugin/preset/settings.
+    :param depth: Number of independent reload-and-render cycles.
+    :returns: ``depth`` rendered clips, each shape ``(C, T)``.
+    """
+    return [_render_once(patch, None) for _ in range(depth)]
+
+
+def resolve_patch(spec_name: str) -> PatchSpec:
+    """Draw one patch that renders above the spec's loudness floor.
+
+    Renders each candidate once via a fresh plugin so the gate decision is never
+    itself contaminated by reuse-state.
+
+    :param spec_name: Param-spec registry key (e.g. ``"surge_xt"``).
+    :returns: The first loud draw, bound to its plugin, preset, and settings.
+    :raises RuntimeError: No draw cleared the floor within ``_MAX_PATCH_DRAWS``.
+    """
+    plugin_path = default_plugin_path()
+    preset_path = preset_paths[spec_name]
+    settings = load_render_settings(spec_name)
+    spec = param_specs[spec_name]
+    for draw in range(_MAX_PATCH_DRAWS):
+        synth_params, note_params = spec.sample()
+        patch = PatchSpec(plugin_path, preset_path, synth_params, note_params, settings)
+        loudness = integrated_loudness(_render_once(patch, None), settings.sample_rate)
+        if loudness >= settings.min_loudness_db:
+            logger.info("loud patch found on draw %d (%.1f LUFS)", draw, loudness)
+            return patch
+        logger.debug("draw %d: %.1f LUFS below floor, redrawing", draw, loudness)
+    raise RuntimeError(
+        f"no patch cleared {settings.min_loudness_db} dB in {_MAX_PATCH_DRAWS} draws "
+        f"for {spec_name!r}"
+    )
 
 
 def run(
@@ -288,22 +338,22 @@ def run(
     patch = resolve_patch(spec_name)
     wandb_run = _init_wandb(spec_name, depths) if wandb_enabled else None
     verdicts: dict[int, Verdict] = {}
-    for depth in depths:
-        reused = all_pairs_worst_mss(_render_reusing_one_plugin(patch, depth))
-        # Control arm reloads a fresh plugin per render (cached_plugin=None) — the #713
-        # workaround / current default; skipped under --no-control.
-        reloaded_max = (
-            all_pairs_worst_mss(_render_repeated(patch, depth, cached_plugin=None)).mss_max
-            if control
-            else None
-        )
-        verdict = classify(reused.mss_max, reloaded_max, _MSS_THRESHOLD)
-        verdicts[depth] = verdict
-        _report_depth(depth, reused, reloaded_max, verdict)
+    try:
+        for depth in depths:
+            reused = all_pairs_worst_mss(render_reusing_one_plugin(patch, depth))
+            reloaded_max = (
+                all_pairs_worst_mss(render_reloading_each_render(patch, depth)).mss_max
+                if control
+                else None
+            )
+            verdict = classify(reused.mss_max, reloaded_max, _MSS_THRESHOLD)
+            verdicts[depth] = verdict
+            _report_depth(depth, reused, reloaded_max, verdict)
+            if wandb_run is not None:
+                _log_depth_to_wandb(wandb_run, depth, reused, reloaded_max)
+    finally:
         if wandb_run is not None:
-            _log_depth_to_wandb(wandb_run, depth, reused, reloaded_max)
-    if wandb_run is not None:
-        wandb_run.finish()
+            wandb_run.finish()
     return verdicts
 
 
@@ -333,8 +383,8 @@ def _report_depth(
 def _init_wandb(spec_name: str, depths: Sequence[int]) -> Run:
     """Start a W&B run for the reproduction; import is local so non-W&B runs stay light.
 
-    :param spec_name: Param-spec registry key.
-    :param depths: Reuse depths probed.
+    :param spec_name: Param-spec registry key, recorded so a run ties to its synth.
+    :param depths: Reuse depths probed, recorded for the depth axis.
     :returns: The initialised W&B run handle.
     """
     import wandb
@@ -346,7 +396,6 @@ def _init_wandb(spec_name: str, depths: Sequence[int]) -> Run:
             "spec_name": spec_name,
             "depths": list(depths),
             "mss_threshold": _MSS_THRESHOLD,
-            "min_loudness_db": _MIN_LOUDNESS_DB,
         },
     )
 
@@ -395,7 +444,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--wandb", action="store_true", help="log per-depth metrics to W&B")
     args = parser.parse_args(argv)
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.basicConfig(level=logging.INFO, format=_LOG_FORMAT)
     verdicts = run(
         args.depths,
         spec_name=args.spec,
