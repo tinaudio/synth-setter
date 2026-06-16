@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781632392994,
+  "lastUpdate": 1781648757277,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -7386,6 +7386,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.030915260314941406,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "486f663474d53d1efc211721324f7ef7c184f7c5",
+          "message": "feat(data-pipeline): reproducible per-sample seeding for datagen (#1713)\n\n* feat(data-pipeline): deterministic per-sample seeding for reproducible datagen\n\nDerive every sample's RNG from (base_seed, sample_idx, attempt) via a SHA-256\nseed in a new seeding module, so a row's content is reproducible regardless of\nworker, order, or retry history (#884). Thread an explicit numpy Generator\nthrough ParamSpec.sample and all Parameter subtypes (killing global-RNG bleed),\ngive generate_sample a bounded, deterministic loudness-retry loop that records\nthe accepted attempt, and add RenderConfig.base_seed / attempts_per_sample with\nthe launcher plumbing each shard's seed.\n\nPer-split independent seed streams (train_val_test_seeds) and persisted\nattempt / dataset_version remain gated as separate follow-ups.\n\nRefs #884\n\n* fix(data-pipeline): address seed provenance review warnings\n\n* test(data-pipeline): cover worker-count seed stability\n\n* fix(data-pipeline): preserve legacy shard metadata validation\n\n* fix(data-pipeline): align dummy shard seed metadata\n\n* test(data-pipeline): cover repeat-run seed metadata\n\n* docs(data-pipeline): consolidate seeding design\n\n* test(data-pipeline): align VST replay sampler with seeded API\n\n* fix(data-pipeline): address seeded sampler review findings",
+          "timestamp": "2026-06-16T17:54:02-04:00",
+          "tree_id": "7f770e78357cb53e0a5aaa6361e4af00be1b9d0b",
+          "url": "https://github.com/tinaudio/synth-setter/commit/486f663474d53d1efc211721324f7ef7c184f7c5"
+        },
+        "date": 1781648756516,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 4.032527446746826,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.277436277791858,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.02872435562312603,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.030513525009155273,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.202645778656006,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 14.074761439416667,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.643231391906738,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.722399437669664,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.03454846143722534,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.04941946268081665,
             "unit": "1-cos"
           },
           {
