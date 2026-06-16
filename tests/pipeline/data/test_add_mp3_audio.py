@@ -372,6 +372,7 @@ def test_main_rewrites_r2_uri_and_forwards_storage_options(
     monkeypatch.setattr(
         "synth_setter.pipeline.r2_io.to_s3_uri", lambda uri: "s3://bucket/key.lance"
     )
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.ensure_r2_env_loaded", lambda: None)
     monkeypatch.setattr(
         "synth_setter.pipeline.r2_io.r2_storage_options", lambda: {"aws_secret": "x"}
     )
