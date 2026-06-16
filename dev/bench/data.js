@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781650330227,
+  "lastUpdate": 1781650332311,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -13048,6 +13048,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 16.673802859499993,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "68ea67944ce5fed2abe7831f61a79e8640c3eea3",
+          "message": "feat(data-pipeline): add_embeddings CLI for m2l + CLAP Lance columns (#1720)\n\n* feat(data-pipeline): add_embeddings CLI for vector-searchable CLAP + m2l columns\n\nAdd `python -m synth_setter.pipeline.data.add_embeddings DATASET.lance` (also\n`synth-setter-add-embeddings`), which reads a Lance dataset from generate_dataset\n/ finalize_dataset and appends two audio-embedding columns derived from `audio`:\n\n- `clap` (LAION CLAP) as a `FixedSizeList<float32, 512>` vector column, so Lance\n  can build an IVF_PQ index over it and serve `nearest=` vector search; the CLI\n  builds that index by default (skipped under ~256 rows, where exact search\n  still works).\n- `m2l` (music2latent) as a `fixed_shape_tensor<float32, (C*D, T)>` latent\n  column — retrievable, not a search vector.\n\nThe functional core (`embeddings_record_batch`, `add_embeddings`) takes injected\nencode callables, so it runs and is tested without a checkpoint;\n`load_m2l_audio_encoder` / `load_clap_audio_encoder` are lazy-import shells\n(music2latent / transformers, declared in the torch group). Columns are added\nvia `LanceDataset.add_columns` with a `lance.batch_udf` that reads only `audio`;\nrow-count, CLAP-dim, and finiteness are validated before write. Audio sample\nrate comes from the shard ShardMetadata; cloud URIs open with R2 storage_options.\n\nAdd notebooks/add_embeddings_smoke.ipynb: build a smoke Lance dataset, run the\nadd step, build a DataFrame of params + embeddings, and run a `clap` vector\nsearch. Document the CLI across scripts/README, docker.md, data-pipeline.md, and\ndoc-map.yaml.\n\nCloses #1716\n\n* refactor(data-pipeline): drop Any from the CLAP loader per review (PY8)\n\nReplace the `model: Any` / `processor: Any` widenings (AGENTS.md PY8 no-Any)\nwith inferred transformers types, scoping pyright off only the three calls\nwhere transformers' own stubs are too narrow (the model `.to()` chain, the\nprocessor's audio kwargs — splatted so the stub can't object — and the\nget_audio_features tensor return). Addresses the review comment on #1720.\n\nRefs #1716\n\n* fix(data-pipeline): use transformers>=5 audio= kwarg; add real-R2 e2e test\n\nA no-mocks end-to-end test (tests/integration/test_add_embeddings_r2.py) drives\ntwo real CLIs — generate a 1-shard Lance dataset via the real VST renderer,\nupload to a unique R2 prefix, then `synth-setter-add-embeddings` on that r2://\nURI with the real music2latent + LAION-CLAP encoders — then reopens the remote\ndataset and asserts the `clap` FixedSizeList<float32,512> + `m2l`\nfixed-shape-tensor columns, preserved source columns, finiteness, and an exact\n`nearest=` query (IVF_PQ skipped below MIN_ROWS_FOR_INDEX). Marked slow /\nrequires_vst / integration_r2; R2 prefix purged on teardown.\n\nThat test caught a real bug: transformers>=5's `ClapProcessor` takes `audio=`,\nnot `audios=` (the latter now raises), so the CLI failed against the locked\ntransformers 5.12.1. Switch to `audio=` and pin `transformers>=5.0.0`.\n\nRefs #1716\n\n* fix(data-pipeline): respect explicit num_partitions; correct ignore comment\n\nAddress Copilot review on #1720:\n- build_clap_index: use `is None` instead of a truthy check so an explicit\n  num_partitions (incl. a deliberate small value) is honored, not silently\n  replaced by round(sqrt(rows)).\n- Correct the CLAP-loader comment: pyright is scoped off two calls (the\n  from_pretrained `.to()` chain and get_audio_features), not three — the\n  processor audio kwargs are dict-splatted.\n\nRefs #1716\n\n* fix(data-pipeline): read CLAP pooler_output; harden add_embeddings + ANN tests\n\nThe real ≥256-row no-mocks e2e caught a second production bug: transformers>=5\n`get_audio_features(**inputs)` returns a `BaseModelOutputWithPooling`, not a\ntensor, so `.cpu()` raised `AttributeError` on every real CLI run. Read the\nprojected (B, 512) embedding from `.pooler_output`.\n\nHardening (Part A):\n- add_embeddings: fail fast with a clear error if the dataset has no `audio`\n  column (vs an opaque batch-UDF crash mid-transaction).\n- build_clap_index: validate num_sub_vectors divides the clap column's vector\n  width before create_index (Lance's PQ-training failure is opaque).\n- CLI: expose --num-partitions / --num-sub-vectors / --metric (add_embeddings\n  already accepted them) so the IVF_PQ index is tunable and buildable at the\n  256-row floor.\n\nTests:\n- exact-search semantic test: a stored vector's exact nearest is its own row\n  (distance ~0), deterministic regardless of vector distribution.\n- real R2 e2e extended to a 256-row single-shard dataset (plugin_reload_cadence\n  \"once\") that actually builds IVF_PQ and exercises indexed `nearest=`.\n- guards: missing-audio-column and non-dividing-num_sub_vectors raise.\n\nRefs #1716\n\n* fix(data-pipeline): sub-batch the encoders so add_embeddings doesn't OOM at scale\n\nThe real 256-row e2e exposed a CUDA OOM: lance.batch_udf hands the encoders the\nwhole read batch at once, and a 256-row CLAP forward alone tried to allocate\n~5 GiB (> free GPU). Bound GPU memory inside the encoders, independent of\nLance's read batch:\n- CLAP: sub-batch the forward at CLAP_ENCODE_MAX_BATCH=32, pulling each chunk's\n  pooler_output to CPU before the next.\n- music2latent: lower M2L_ENCODE_MAX_BATCH 256 -> 64.\n\nThe 256-row R2 e2e also now passes --batch-size 16 as defence in depth.\n\nVerified with the real CLAP + music2latent checkpoints on 256 rows of 1 s\n44.1 kHz audio: no OOM; clap=FixedSizeList<float32,512>, m2l fixed-shape tensor,\nIVF_PQ index builds, and an ANN nearest query for a stored vector returns that\nrow at distance ~0.\n\nRefs #1716\n\n* test(data-pipeline): drop redundant --batch-size from the add_embeddings e2e\n\nThe encoders now self-bound GPU memory (CLAP_ENCODE_MAX_BATCH /\nM2L_ENCODE_MAX_BATCH), so the e2e's explicit --batch-size 16 added no safety and\nisn't a speed knob — it only masked the default path. Remove it so the test\nexercises what actually ships (default read batch + encoder sub-batching), which\nwas the configuration verified not to OOM on 256 real-encoder rows.\n\nRefs #1716\n\n* fix(data-pipeline): validate index params are positive in build_clap_index\n\nPer Copilot review on #1720: guard against non-positive index params before they\ncrash deep in Lance —\n- num_sub_vectors=0 (or negative) previously raised ZeroDivisionError on\n  `clap_dim % num_sub_vectors`;\n- num_partitions<=0 was forwarded to create_index and failed opaquely.\nBoth now raise a clear ValueError up front. Pinned by a unit test.\n\nRefs #1716\n\n* docs(data-pipeline): note _open_lance_dataset treats s3:// as the R2 endpoint\n\nPer Copilot review on #1720: clarify that any s3:// URI is the project's R2\n(S3-compatible) endpoint, credentialed via r2_storage_options; generic non-R2\nS3 buckets are not a supported input.\n\nRefs #1716\n\n* fix(data-pipeline): exit 1 cleanly on encode/add failures in add_embeddings CLI\n\nPer Copilot review on #1720: main() only guarded the dataset-open + rerun paths,\nso a failure in encoder load or add_embeddings() (missing-audio guard, non-finite\nembeddings, bad index params, Lance/CUDA errors) escaped as a raw traceback.\nWrap the encode+add+index step in the same (OSError, ValueError, RuntimeError,\nImportError) handler -> logged `add_embeddings_failed` + exit(1). CUDA OOM\n(RuntimeError subclass) and Lance's OSError-wrapped UDF errors are covered.\nPinned by a CliRunner test.\n\nRefs #1716",
+          "timestamp": "2026-06-16T18:24:44-04:00",
+          "tree_id": "200185c4a48833f62ecccf3f4efc25e53f791593",
+          "url": "https://github.com/tinaudio/synth-setter/commit/68ea67944ce5fed2abe7831f61a79e8640c3eea3"
+        },
+        "date": 1781650331903,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.02889347076416,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 14.787989247739315,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.08989249169826508,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.007868468761444092,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.2558207511901855,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 13.358625377299996,
             "unit": "seconds"
           }
         ]
