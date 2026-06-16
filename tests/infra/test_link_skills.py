@@ -239,3 +239,28 @@ def test_link_skills_exclude_file_is_idempotent(tmp_path: Path) -> None:
     assert exclude_file.exists()
     exclude_lines = exclude_file.read_text().splitlines()
     assert exclude_lines.count("agent/skills/code-health") == 1
+
+
+def test_link_skills_uses_git_exclude_path_when_repo_is_initialized(tmp_path: Path) -> None:
+    """Initialized repos write exclusions to Git's resolved exclude path.
+
+    :param tmp_path: Temporary test root.
+    """
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)  # noqa: S603, S607
+
+    _write_marketplace_skill(home, "code-health")
+
+    result = _run_link_skills(home, repo)
+
+    assert result.returncode == 0, result.stderr
+    exclude_path = subprocess.check_output(  # noqa: S603
+        ["git", "-C", str(repo), "rev-parse", "--git-path", "info/exclude"],  # noqa: S607
+        text=True,
+    ).strip()
+    exclude_file = Path(exclude_path)
+    if not exclude_file.is_absolute():
+        exclude_file = repo / exclude_file
+    assert exclude_file.read_text().splitlines().count("agent/skills/code-health") == 1
