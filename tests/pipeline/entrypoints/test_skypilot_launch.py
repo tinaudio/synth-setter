@@ -24,6 +24,7 @@ import yaml
 
 from synth_setter.pipeline.constants import WORKER_SPEC_URI_ENV
 from synth_setter.pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
+from synth_setter.pipeline.schemas.r2_credentials import RCLONE_ENV_KEYS
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
 from synth_setter.pipeline.skypilot_launch import (
     _SECRET_WORKER_ENV_KEYS,
@@ -238,6 +239,48 @@ class TestResolveWorkerEnvR2RemoteConstants:
         env_file.write_text("RCLONE_CONFIG_R2_PROVIDER=Other\n")
         resolved = resolve_worker_env(env_file)
         assert resolved["RCLONE_CONFIG_R2_PROVIDER"] == "Other"
+
+    def test_blank_secret_in_env_file_is_not_forwarded(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A blank ``.env`` value is treated as absent, never forwarding an empty credential.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param monkeypatch: Pytest fixture used to clear the process-env fallback.
+        """
+        monkeypatch.delenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", raising=False)
+        env_file = tmp_path / ".env"
+        env_file.write_text("RCLONE_CONFIG_R2_ACCESS_KEY_ID=\n")
+        resolved = resolve_worker_env(env_file)
+        assert "RCLONE_CONFIG_R2_ACCESS_KEY_ID" not in resolved
+
+    def test_blank_env_file_value_falls_back_to_process_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A blank ``.env`` entry does not mask a real process-env value — the fallback is used.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param monkeypatch: Pytest fixture used to set the process-env fallback.
+        """
+        monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", "from-process-env")
+        env_file = tmp_path / ".env"
+        env_file.write_text("RCLONE_CONFIG_R2_ACCESS_KEY_ID=\n")
+        resolved = resolve_worker_env(env_file)
+        assert resolved["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "from-process-env"
+
+    def test_padded_secret_in_env_file_is_trimmed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A surrounding-whitespace ``.env`` value is forwarded trimmed, not verbatim.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param monkeypatch: Pytest fixture used to clear the process-env fallback.
+        """
+        monkeypatch.delenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", raising=False)
+        env_file = tmp_path / ".env"
+        env_file.write_text('RCLONE_CONFIG_R2_ACCESS_KEY_ID="  ak  "\n')
+        resolved = resolve_worker_env(env_file)
+        assert resolved["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "ak"
 
 
 class TestEnsureCiSkyConfig:
@@ -597,6 +640,10 @@ class TestSecretWorkerEnvKeys:
     def test_is_subset_of_worker_env_keys(self) -> None:
         """The secret subset is closed-form derived from ``_WORKER_ENV_KEYS``."""
         assert set(_SECRET_WORKER_ENV_KEYS).issubset(set(_WORKER_ENV_KEYS))
+
+    def test_all_canonical_rclone_keys_flow_into_worker_env(self) -> None:
+        """Every ``RCLONE_ENV_KEYS`` entry is forwarded, so the constant cannot silently drift."""
+        assert set(RCLONE_ENV_KEYS).issubset(set(_WORKER_ENV_KEYS))
 
 
 # ---------------------------------------------------------------------------

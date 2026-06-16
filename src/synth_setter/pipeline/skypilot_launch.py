@@ -51,7 +51,7 @@ import os
 import re
 import subprocess
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -62,6 +62,7 @@ import yaml
 from dotenv import dotenv_values
 
 from synth_setter.pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
+from synth_setter.pipeline.schemas.r2_credentials import RCLONE_ENV_KEYS, STRUCTURAL_DEFAULTS
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
 from synth_setter.workspace import operator_workspace
 
@@ -80,33 +81,20 @@ _WORKER_GIT_REF_RE = re.compile(r"^[0-9a-f]{7,40}$")
 _JOB_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$")
 
 # Forwarded via task.update_envs; each resolved from .env then process env.
-# Keep in sync with the envs: block in src/synth_setter/configs/compute/runpod-template.yaml.
-# WORKER_GIT_REF: pod fetches+checks out this ref before generate_dataset, to
-# bypass dev-snapshot image-bake lag in PR CI.
+# Keep in sync with the envs: block in
+# src/synth_setter/configs/compute/runpod-template.yaml.
 _WORKER_ENV_KEYS: tuple[str, ...] = (
-    "RCLONE_CONFIG_R2_TYPE",
-    "RCLONE_CONFIG_R2_PROVIDER",
-    "RCLONE_CONFIG_R2_ACCESS_KEY_ID",
-    "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY",
-    "RCLONE_CONFIG_R2_ENDPOINT",
+    *RCLONE_ENV_KEYS,
     "WANDB_API_KEY",
+    # Pod checks out this ref before generate_dataset, bypassing image-bake lag in PR CI.
     "WORKER_GIT_REF",
 )
 
-# rclone needs `type` + `provider` to construct the `r2:` remote, but those
-# values are constants for Cloudflare R2 — not secrets — so default them
-# rather than burdening every workflow / .env with two extra lines. An
-# explicit override (env or .env) wins.
-_R2_RCLONE_CONSTANTS: dict[str, str] = {
-    "RCLONE_CONFIG_R2_TYPE": "s3",
-    "RCLONE_CONFIG_R2_PROVIDER": "Cloudflare",
-}
+# Cloudflare R2 structural constants (not secrets); a caller override wins.
+_R2_RCLONE_CONSTANTS: Mapping[str, str] = STRUCTURAL_DEFAULTS
 
-# Residual `_WORKER_ENV_KEYS` that are not defaulted by `_R2_RCLONE_CONSTANTS`.
-# Detects the unconfigured-creds case: the rclone TYPE/PROVIDER constants
-# default in, so an "empty" worker_env still has those keys — only this residual
-# subset (R2 access creds, WANDB_API_KEY, WORKER_GIT_REF) signals whether
-# anything was actually resolved from .env / process env.
+# Secrets-only subset of _WORKER_ENV_KEYS: TYPE/PROVIDER default in, so this
+# subset is what signals whether any creds were actually resolved.
 _SECRET_WORKER_ENV_KEYS: tuple[str, ...] = tuple(
     k for k in _WORKER_ENV_KEYS if k not in _R2_RCLONE_CONSTANTS
 )
@@ -178,10 +166,11 @@ def resolve_worker_env(env_file: Path | None) -> dict[str, str]:
     """Resolve the launcher's `_WORKER_ENV_KEYS` from .env and process env.
 
     For each key in `_WORKER_ENV_KEYS`, the value is taken from `env_file` if
-    that file exists and the key is set there, else from the launcher's
-    process env if set, else skipped. Skipped keys keep the template's
-    default (typically the empty string) — `task.update_envs` only overrides
-    keys that are actually resolved here.
+    that file sets it non-blank, else from the launcher's process env if set
+    non-blank, else skipped. Blank/whitespace counts as absent (matching
+    `R2Credentials.from_env`) so a `.env` line `KEY=` never forwards an empty
+    credential to a worker. Skipped keys keep the template's default (typically
+    the empty string) — `task.update_envs` only overrides keys resolved here.
 
     `.env` is the local-dev source of truth; CI flows pass secrets via
     `docker run -e KEY=VAL` and never touch a .env on disk.
@@ -192,10 +181,14 @@ def resolve_worker_env(env_file: Path | None) -> dict[str, str]:
 
     resolved: dict[str, str] = {}
     for key in _WORKER_ENV_KEYS:
-        if key in file_env:
-            resolved[key] = file_env[key]
-        elif key in os.environ:
-            resolved[key] = os.environ[key]
+        # First non-blank wins, .env over process env; a blank candidate is
+        # skipped (not preferred-then-dropped), so a quoted-whitespace `.env`
+        # value can't mask a real process-env fallback.
+        for candidate in (file_env.get(key), os.environ.get(key)):
+            cleaned = candidate.strip() if candidate else ""
+            if cleaned:
+                resolved[key] = cleaned
+                break
 
     for key, default in _R2_RCLONE_CONSTANTS.items():
         resolved.setdefault(key, default)
@@ -597,9 +590,8 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
     elif sky_cfg.local:
         os.environ.pop(_SKYPILOT_API_SERVER_ENV, None)
 
-    # Defensive: mirror RCLONE_CONFIG_R2_* into os.environ so any downstream subprocess
-    # (e.g. SkyPilot's storage backend) inherits credentials when .env populated worker_env
-    # without exporting them.
+    # Mirror RCLONE_CONFIG_R2_* into os.environ so subprocesses (e.g. SkyPilot's
+    # storage backend) inherit creds resolved from .env that were never exported.
     for key, value in worker_env.items():
         if key.startswith("RCLONE_CONFIG_R2_"):
             os.environ[key] = value

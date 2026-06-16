@@ -122,11 +122,13 @@ Anything outside the tuple is *not* forwarded to the worker, even if it's set in
 
 #### Resolution order (per key)
 
-For each key in `_WORKER_ENV_KEYS`, the launcher takes the first value it finds:
+For each key in `_WORKER_ENV_KEYS`, the launcher takes the first **non-blank** value it finds:
 
-1. The `.env` file at `sky_cfg.env_file` (default `<repo_root>/.env`), if the file exists and has the key.
-2. The launcher's process env (`os.environ`), if the key is set.
+1. The `.env` file at `sky_cfg.env_file` (default `<repo_root>/.env`), if the file sets the key to a non-blank value.
+2. The launcher's process env (`os.environ`), if the key is set non-blank.
 3. Otherwise: skipped — the key keeps the SkyPilot template's default (typically `""`). If the worker actually needs it, rclone fails downstream with an actionable error.
+
+A blank/whitespace value (a `.env` line `KEY=`) counts as absent and falls through — matching `R2Credentials.from_env` — so an empty `.env` line never forwards an empty credential and a stale blank can't shadow a real process-env value. Resolved values are stripped.
 
 This is per-key, not all-or-nothing — `.env` can resolve some keys and process env can resolve others in the same run.
 
@@ -155,8 +157,8 @@ and runs the same way for every caller — one resolver, one `.env` lookup,
 one set of failure modes.
 
 The resolver finds `<repo_root>/.env`, parses it via `python-dotenv`, and
-resolves all keys from there. Process env is a non-event because `.env` wins
-per key — useful when you have stale shell exports.
+resolves all keys from there. Process env is a non-event because a non-blank
+`.env` value wins per key — useful when you have stale shell exports.
 
 #### Caller-supplied worker envs
 

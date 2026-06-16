@@ -194,6 +194,13 @@ docs:
       - pattern: "src/synth_setter/pipeline/constants.py"
         covers: "INPUT_SPEC_FILENAME constant"
 
+  # ── R2 credential centralization design doc ─────────────────────
+  - doc: docs/design/r2-credential-centralization.md
+    description: Single-source-of-truth R2 credential model and env-var resolution
+    sources:
+      - pattern: "src/synth_setter/pipeline/schemas/r2_credentials.py"
+        covers: "Canonical RCLONE_CONFIG_R2_* env-var names + structural defaults; the strict frozen `R2Credentials` model (SecretStr secrets), `from_env` resolution (blank-as-absent, R2_ACCOUNT_ID endpoint derivation), and the `lance_storage_options` projection — the single validator `r2_io` and `skypilot_launch` source from"
+
   # ── Training pipeline design doc ────────────────────────────────
   - doc: docs/design/training-pipeline.md
     description: Training pipeline design — Hydra configs, Lightning training, RunPod portability

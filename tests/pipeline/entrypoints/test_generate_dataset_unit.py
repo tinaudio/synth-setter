@@ -2580,9 +2580,9 @@ class TestMainSpecPersistence:
         :param monkeypatch: Pytest fixture used to patch ``sys.argv``.
         """
         import synth_setter.cli.generate_dataset as gd
-        from synth_setter.pipeline.r2_io import _SECRET_R2_ENV_KEYS
+        from synth_setter.pipeline.schemas.r2_credentials import SECRET_ENV_KEYS
 
-        probe_key = _SECRET_R2_ENV_KEYS[0]
+        probe_key = SECRET_ENV_KEYS[0]
         monkeypatch.delenv(probe_key, raising=False)
 
         argv = [
