@@ -85,12 +85,12 @@ main() {
     exit 0
   fi
 
-  log "running make link-plugins && make link-thoughts in $wt_path"
+  log "running make link-plugins && make link-thoughts && make link-skills in $wt_path"
   (
     cd "$wt_path"
-    make link-plugins && make link-thoughts
+    make link-plugins && make link-thoughts && make link-skills
   ) || {
-    log "make link-plugins/link-thoughts failed in $wt_path (non-fatal)"
+    log "make link-plugins/link-thoughts/link-skills failed in $wt_path (non-fatal)"
   }
 }
 
