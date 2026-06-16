@@ -762,22 +762,25 @@ PYEOF
 it "edit-write: test mode falls back to flat layout tests/test_<base>.py when mirror missing" T_edit_write_test_mode_falls_back_to_flat_layout
 
 T_edit_write_format_preserves_unused_import() {
-  # Regression: --unfixable F401 in format mode keeps an import typed before its
-  # first use. Plain --fix would delete it; the PATH guard avoids a vacuous pass.
-  command -v ruff >/dev/null 2>&1 \
-    || { echo "ruff not on PATH — cannot exercise the format hook"; return 1; }
+  # Regression: --unfixable F401 in format mode keeps an unused import written
+  # one edit before its first use. The `x=1` reformat is the executed-signal:
+  # `ruff format` rewrites it to `x = 1` regardless of lint config, so a no-op
+  # hook (missing jq/ruff, unparsed path) fails the reformat check instead of
+  # passing this vacuously.
   local scratch
   scratch=$(mktemp -d "$TEST_DIR/scratch-XXXX")
   local py="$scratch/probe.py"
-  printf 'import os\n\nprint("x")\n' > "${py}" \
+  printf 'import os\nx=1\n' > "${py}" \
     || { echo "could not write probe file"; rm -rf "$scratch"; return 1; }
   echo "{\"tool_input\":{\"file_path\":\"${py}\"}}" \
     | bash "$REPO_ROOT/agent/hooks/edit-write.sh" format >/dev/null 2>&1 || true
   [[ -f "${py}" ]] || { echo "probe file vanished — hook errored"; rm -rf "$scratch"; return 1; }
-  local import_present=no
-  grep -q '^import os$' "${py}" && import_present=yes
+  local out
+  out=$(cat "${py}")
   rm -rf "$scratch"
-  [[ "${import_present}" == yes ]] \
+  [[ "${out}" == *"x = 1"* ]] \
+    || { echo "hook did not reformat probe — jq/ruff missing or path unparsed; test would be vacuous: ${out}"; return 1; }
+  grep -q '^import os$' <<<"${out}" \
     || { echo "format mode deleted the unused import (F401 should be unfixable)"; return 1; }
 }
 it "edit-write: format mode keeps an unused import (F401 unfixable)" T_edit_write_format_preserves_unused_import

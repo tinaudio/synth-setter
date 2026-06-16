@@ -43,8 +43,8 @@ Architecture: [docs/architecture.md](docs/architecture.md).
 - `structlog` in pipeline code; stdlib `logging` elsewhere.
 - All `rclone` operations use `--checksum`.
 - Save-time tooling — the VS Code ruff LSP and the Claude edit hook
-  (`agent/hooks/edit-write.sh`) — won't auto-delete an unused import (`F401`),
-  so one typed an edit before its first use survives. CLI `ruff check --fix`,
+  (`agent/hooks/edit-write.sh`) — won't auto-delete an unused import (`F401`)
+  written one edit before its first use. CLI `ruff check --fix`,
   `make format`, and pre-commit still strip genuinely-dead imports. CI enforces
   `F401`, so none ever ship.
 - Run `make format` before committing. Pre-commit (ruff, ruff-format,
