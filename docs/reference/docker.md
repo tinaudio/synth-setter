@@ -212,7 +212,7 @@ Available console scripts (declared in `pyproject.toml`'s
 `[project.scripts]`): `synth-setter-train`, `synth-setter-eval`,
 `synth-setter-generate-dataset`, `synth-setter-generate-dataset-from-hydra`,
 `synth-setter-finalize-dataset`, `synth-setter-introspect-plugin`,
-`synth-setter-spec-uri`.
+`synth-setter-spec-uri`, `synth-setter-add-embeddings`.
 
 Prefer `docker run --env-file .env` over `set -a && source .env` to avoid
 polluting your host shell.

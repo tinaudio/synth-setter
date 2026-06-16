@@ -1152,12 +1152,17 @@ The following are of interest for next steps but are out of scope for this docum
 
 Additional stages could follow the same contract (§5) without modifying existing stages:
 
-| Stage              | Input        | Output                 | Compute |
-| ------------------ | ------------ | ---------------------- | ------- |
-| **augment-reverb** | raw shards   | augmented shards       | CPU     |
-| **add-captions**   | audio shards | shards + text column   | GPU     |
-| **add-embeddings** | audio shards | shards + latent column | GPU     |
-| **render-presets** | preset bank  | audio shards           | CPU     |
+| Stage              | Input        | Output               | Compute |
+| ------------------ | ------------ | -------------------- | ------- |
+| **augment-reverb** | raw shards   | augmented shards     | CPU     |
+| **add-captions**   | audio shards | shards + text column | GPU     |
+| **render-presets** | preset bank  | audio shards         | CPU     |
+
+`add-embeddings` is now implemented as the `synth-setter-add-embeddings` CLI: it
+augments a finalized Lance dataset in place with a `clap` (LAION-CLAP)
+`FixedSizeList<float32, 512>` vector column — optionally IVF_PQ-indexed for
+`nearest=` vector search — and an `m2l` (music2latent) fixed-shape-tensor
+latent column, both derived from the audio column.
 
 Stage order would remain static and explicit — user runs commands in sequence. If the number of stages grows to 4-6 and manual commands become unwieldy, adopt Prefect rather than building a homegrown orchestrator.
 
