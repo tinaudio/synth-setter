@@ -8,6 +8,7 @@ that no private ``synth_setter.cli`` helper is imported here.
 """
 
 import os
+from contextlib import nullcontext
 from pathlib import Path
 
 import numpy as np
@@ -35,8 +36,40 @@ from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
 # the parametrize lists on the two ``test_train_*_surge_xt`` tests cannot drift apart.
 _ORACLE_EXPERIMENT = "surge/fake_oracle"
 _SURGE_SMOKE_EXPERIMENTS = (_ORACLE_EXPERIMENT, "surge/ffn_full")
+_PREDICT_VST_AUDIO_FRAGMENT = "predict_vst_audio"
+_COMPUTE_AUDIO_METRICS_FRAGMENT = "compute_audio_metrics"
+_FAKE_AGGREGATED_METRICS_CSV = (
+    ",mean,std\nmss,0.5,0.02\nwmfcc,0.25,0.01\nsot,0.1,0.005\nrms,0.9,0.01\n"
+)
+_FAKE_METRICS_CSV = "mss,wmfcc,sot,rms\n" + "\n".join(
+    "0.5,0.25,0.1,0.9" for _ in range(NUM_FIXTURE_SAMPLES)
+)
 
 # TODO(#40): add @pytest.mark.ram gate for memory-intensive CPU tests test_train_fast_dev_run
+
+
+def _fake_predict_postprocessing_subprocess(args: list[str], **_kwargs: object) -> None:
+    """Materialize the render and metrics outputs the Lance smoke test asserts.
+
+    :param args: Subprocess argv from the eval postprocessing step.
+    :param **_kwargs: Ignored ``subprocess.run`` keyword arguments.
+    """
+    is_render = any(_PREDICT_VST_AUDIO_FRAGMENT in arg for arg in args)
+    is_metrics = any(_COMPUTE_AUDIO_METRICS_FRAGMENT in arg for arg in args)
+    if not (is_render or is_metrics):
+        return
+
+    output_dir = Path(args[args.index("-m") + 3])
+    output_dir.mkdir(parents=True, exist_ok=True)
+    if is_render:
+        for sample_idx in range(NUM_FIXTURE_SAMPLES):
+            sample_dir = output_dir / f"sample_{sample_idx}"
+            sample_dir.mkdir()
+            for name in ("target.wav", "pred.wav", "spec.png", "params.csv"):
+                (sample_dir / name).write_text("fake")
+    if is_metrics:
+        (output_dir / "aggregated_metrics.csv").write_text(_FAKE_AGGREGATED_METRICS_CSV)
+        (output_dir / "metrics.csv").write_text(_FAKE_METRICS_CSV)
 
 
 def test_train_fast_dev_run_tiny_model_tiny_data(cfg_train: DictConfig) -> None:
@@ -471,3 +504,116 @@ def test_train_fast_dev_run_lance_datamodule(cfg_train_lance: DictConfig) -> Non
     # is a Lance dataset directory, not the legacy single ``.lance`` file.
     train_split = Path(object_dict["datamodule"].dataset_root) / "train.lance"
     assert train_split.is_dir()
+
+
+@pytest.mark.fake_vst
+@pytest.mark.parametrize("experiment_name", _SURGE_SMOKE_EXPERIMENTS, indirect=True)
+def test_train_surge_lance(cfg_surge_xt_lance: DictConfig, experiment_name: str) -> None:
+    """Run the Surge smoke training matrix over native Lance splits.
+
+    :param cfg_surge_xt_lance: CPU training config using ``datamodule=surge_lance``.
+    :param experiment_name: Hydra experiment override the cfg was built from.
+    """
+    HydraConfig().set_config(cfg_surge_xt_lance)
+    metric_dict, object_dict = train(cfg_surge_xt_lance)
+
+    trainer = object_dict["trainer"]
+    assert trainer.global_step >= 1, f"trainer did not advance: global_step={trainer.global_step}"
+
+    train_split = Path(object_dict["datamodule"].dataset_root) / "train.lance"
+    assert train_split.is_dir()
+
+    loss_keys = [key for key in metric_dict if key.startswith("train/loss")]
+    assert loss_keys, f"no train/loss* key in metric_dict: {sorted(metric_dict)}"
+    for key in loss_keys:
+        loss = metric_dict[key]
+        assert torch.isfinite(loss).all(), f"{key} is not finite: {loss}"
+
+    if experiment_name == _ORACLE_EXPERIMENT:
+        for key in loss_keys:
+            loss_value = metric_dict[key].item()
+            assert loss_value == 0.0, f"oracle {key} not exactly zero: {loss_value}"
+
+
+@pytest.mark.fake_vst
+@pytest.mark.parametrize("experiment_name", _SURGE_SMOKE_EXPERIMENTS, indirect=True)
+def test_train_eval_surge_lance(
+    tmp_path: Path,
+    cfg_surge_xt_lance: DictConfig,
+    cfg_surge_xt_lance_eval: DictConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    experiment_name: str,
+) -> None:
+    """Train on Lance splits, then predict from the saved checkpoint over Lance splits.
+
+    :param tmp_path: The temporary logging path.
+    :param cfg_surge_xt_lance: CPU training config using ``datamodule=surge_lance``.
+    :param cfg_surge_xt_lance_eval: Matching eval config pinned to ``last.ckpt``.
+    :param monkeypatch: Stubs render/metrics subprocesses so no real VST host launches.
+    :param experiment_name: Hydra experiment override the cfg was built from.
+    """
+    HydraConfig().set_config(cfg_surge_xt_lance)
+    train(cfg_surge_xt_lance)
+
+    assert Path(cfg_surge_xt_lance_eval.ckpt_path).exists()
+
+    monkeypatch.setattr(
+        "synth_setter.cli.eval.subprocess.run", _fake_predict_postprocessing_subprocess
+    )
+    monkeypatch.setattr("synth_setter.cli.eval.vst_headless_wrapper", lambda: object())
+    monkeypatch.setattr(
+        "synth_setter.cli.eval.as_file",
+        lambda _traversable: nullcontext(Path("/fake/headless-wrapper")),
+    )
+
+    HydraConfig().set_config(cfg_surge_xt_lance_eval)
+    metric_dict, object_dict = evaluate(cfg_surge_xt_lance_eval)
+
+    assert metric_dict["audio/mss_mean"] == pytest.approx(0.5)
+    assert metric_dict["audio/rms_std"] == pytest.approx(0.01)
+
+    test_split = Path(object_dict["datamodule"].dataset_root) / "test.lance"
+    assert test_split.is_dir()
+
+    predictions_dir = tmp_path / "predictions"
+    assert predictions_dir.is_dir()
+    expected_names = sorted(
+        f"{prefix}-{sample_idx}.pt"
+        for prefix in ("pred", "target-audio", "target-params")
+        for sample_idx in range(NUM_FIXTURE_SAMPLES)
+    )
+    assert sorted(path.name for path in predictions_dir.iterdir()) == expected_names
+
+    for sample_idx in range(NUM_FIXTURE_SAMPLES):
+        pred = torch.load(predictions_dir / f"pred-{sample_idx}.pt", weights_only=True)
+        assert torch.isfinite(pred).all(), f"pred-{sample_idx}.pt contains NaN/Inf"
+
+        if experiment_name == _ORACLE_EXPERIMENT:
+            target_params = torch.load(
+                predictions_dir / f"target-params-{sample_idx}.pt", weights_only=True
+            )
+            assert torch.equal(pred, target_params), (
+                f"oracle pred-{sample_idx}.pt != target-params-{sample_idx}.pt"
+            )
+
+    audio_dir = tmp_path / "audio"
+    sample_dirs = sorted(path for path in audio_dir.iterdir() if path.is_dir())
+    assert [path.name for path in sample_dirs] == [
+        f"sample_{sample_idx}" for sample_idx in range(NUM_FIXTURE_SAMPLES)
+    ]
+    for sample_dir in sample_dirs:
+        assert (sample_dir / "target.wav").is_file()
+        assert (sample_dir / "pred.wav").is_file()
+        assert (sample_dir / "spec.png").is_file()
+        assert (sample_dir / "params.csv").is_file()
+
+    metrics_dir = tmp_path / "metrics"
+    for metrics_file, expected_rows in {
+        "aggregated_metrics.csv": 4,
+        "metrics.csv": NUM_FIXTURE_SAMPLES,
+    }.items():
+        assert (metrics_dir / metrics_file).is_file(), f"{metrics_file} not found"
+        metrics_df = pd.read_csv(metrics_dir / metrics_file)
+        assert len(metrics_df) == expected_rows
+        numeric = metrics_df.select_dtypes(include=[np.number]).to_numpy()
+        assert np.isfinite(numeric).all(), f"{metrics_file} contains NaN/Inf:\n{metrics_df}"

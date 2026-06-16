@@ -37,6 +37,10 @@ from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
 # ``tests/_meta/test_entrypoint_test_modules.py``).
 _PREDICT_VST_AUDIO_FRAGMENT = "predict_vst_audio"
 _COMPUTE_AUDIO_METRICS_FRAGMENT = "compute_audio_metrics"
+_FAKE_ORACLE_DATASETS = [
+    pytest.param("fake_surge_smoke_datasets", None, id="h5"),
+    pytest.param("fake_surge_smoke_lance_datasets", "surge_lance", id="lance"),
+]
 
 # Aggregated audio-metrics CSV the fake metrics subprocess writes; one row per
 # metric, columns mean/std — the shape ``_load_audio_metrics`` flattens.
@@ -266,6 +270,27 @@ def _compose_fake_oracle_eval_cfg(
     return cfg
 
 
+def _compose_parametrized_fake_oracle_eval_cfg(
+    tmp_path: Path,
+    request: pytest.FixtureRequest,
+    dataset_fixture: str,
+    datamodule: str | None,
+    *,
+    mode: str,
+) -> DictConfig:
+    """Compose the fake-oracle eval cfg for the parametrized H5/Lance dataset.
+
+    :param tmp_path: Pinned as ``paths.output_dir`` / ``paths.log_dir``.
+    :param request: Fetches the parametrized dataset fixture.
+    :param dataset_fixture: Fixture name for the dataset root under test.
+    :param datamodule: Optional datamodule group override.
+    :param mode: Eval mode to compose.
+    :returns: Composed eval ``DictConfig`` ready for ``evaluate``.
+    """
+    dataset_root = request.getfixturevalue(dataset_fixture)
+    return _compose_fake_oracle_eval_cfg(tmp_path, dataset_root, mode=mode, datamodule=datamodule)
+
+
 def _fake_postprocessing_subprocess(
     audio_metrics_csv: str,
 ) -> Callable[[list[str]], None]:
@@ -297,9 +322,12 @@ def _fake_postprocessing_subprocess(
 
 
 @pytest.mark.fake_vst
+@pytest.mark.parametrize(("dataset_fixture", "datamodule"), _FAKE_ORACLE_DATASETS)
 def test_evaluate_predict_mode_merges_audio_metrics_into_metric_dict(
     tmp_path: Path,
-    fake_surge_smoke_datasets: Path,
+    request: pytest.FixtureRequest,
+    dataset_fixture: str,
+    datamodule: str | None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``mode=predict`` runs the oracle's predict + postprocessing and merges audio metrics.
@@ -313,11 +341,15 @@ def test_evaluate_predict_mode_merges_audio_metrics_into_metric_dict(
 
     :param tmp_path: Hydra ``output_dir``; ``predictions/`` / ``audio/`` / ``metrics/``
         are derived beneath it.
-    :param fake_surge_smoke_datasets: CPU-fast surge_4 dataset (no real VST).
+    :param request: Fetches the parametrized dataset fixture.
+    :param dataset_fixture: Fixture name for the dataset root under test.
+    :param datamodule: Optional datamodule group override.
     :param monkeypatch: Stubs the render/metrics subprocesses and the headless
         wrapper extraction so no real VST host or Python subprocess launches.
     """
-    cfg = _compose_fake_oracle_eval_cfg(tmp_path, fake_surge_smoke_datasets, mode="predict")
+    cfg = _compose_parametrized_fake_oracle_eval_cfg(
+        tmp_path, request, dataset_fixture, datamodule, mode="predict"
+    )
     monkeypatch.setattr(
         "synth_setter.cli.eval.subprocess.run",
         _fake_postprocessing_subprocess(_FAKE_AGGREGATED_METRICS_CSV),
@@ -343,9 +375,12 @@ def test_evaluate_predict_mode_merges_audio_metrics_into_metric_dict(
 
 
 @pytest.mark.fake_vst
+@pytest.mark.parametrize(("dataset_fixture", "datamodule"), _FAKE_ORACLE_DATASETS)
 def test_evaluate_predict_mode_logs_per_sample_metrics_table_to_wandb(
     tmp_path: Path,
-    fake_surge_smoke_datasets: Path,
+    request: pytest.FixtureRequest,
+    dataset_fixture: str,
+    datamodule: str | None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``mode=predict`` with an active wandb run uploads ``metrics.csv`` as a wandb.Table.
@@ -356,7 +391,9 @@ def test_evaluate_predict_mode_logs_per_sample_metrics_table_to_wandb(
     verifies the per-sample Table arrives under ``audio/per_sample_metrics``.
 
     :param tmp_path: Hydra ``output_dir``; the fake subprocess writes CSVs beneath it.
-    :param fake_surge_smoke_datasets: CPU-fast surge_4 dataset (no real VST).
+    :param request: Fetches the parametrized dataset fixture.
+    :param dataset_fixture: Fixture name for the dataset root under test.
+    :param datamodule: Optional datamodule group override.
     :param monkeypatch: Stubs subprocesses, headless wrapper, and ``wandb.run``.
     """
     logged: list[dict[str, object]] = []
@@ -395,7 +432,9 @@ def test_evaluate_predict_mode_logs_per_sample_metrics_table_to_wandb(
             (out_dir / "aggregated_metrics.csv").write_text(_FAKE_AGGREGATED_METRICS_CSV)
             (out_dir / "metrics.csv").write_text(_FAKE_METRICS_CSV)
 
-    cfg = _compose_fake_oracle_eval_cfg(tmp_path, fake_surge_smoke_datasets, mode="predict")
+    cfg = _compose_parametrized_fake_oracle_eval_cfg(
+        tmp_path, request, dataset_fixture, datamodule, mode="predict"
+    )
     monkeypatch.setattr("synth_setter.cli.eval.subprocess.run", _fake_run_with_metrics)
     monkeypatch.setattr("synth_setter.cli.eval.vst_headless_wrapper", lambda: object())
     monkeypatch.setattr(
@@ -419,9 +458,12 @@ def test_evaluate_predict_mode_logs_per_sample_metrics_table_to_wandb(
 
 
 @pytest.mark.fake_vst
+@pytest.mark.parametrize(("dataset_fixture", "datamodule"), _FAKE_ORACLE_DATASETS)
 def test_evaluate_predict_mode_logs_shuffle_permutation_table_to_wandb(
     tmp_path: Path,
-    fake_surge_smoke_datasets: Path,
+    request: pytest.FixtureRequest,
+    dataset_fixture: str,
+    datamodule: str | None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``mode=predict`` uploads the render-order probe permutation as a ``shuffle/permutation`` Table.
@@ -432,7 +474,9 @@ def test_evaluate_predict_mode_logs_shuffle_permutation_table_to_wandb(
     Table arrives under ``shuffle/permutation`` (#1669).
 
     :param tmp_path: Hydra ``output_dir``; the fake subprocess writes CSVs beneath it.
-    :param fake_surge_smoke_datasets: CPU-fast surge_4 dataset (no real VST).
+    :param request: Fetches the parametrized dataset fixture.
+    :param dataset_fixture: Fixture name for the dataset root under test.
+    :param datamodule: Optional datamodule group override.
     :param monkeypatch: Stubs subprocesses, headless wrapper, and ``wandb.run``.
     """
     permutation_csv = "dest_idx,src_idx\n0,1\n1,0\n"
@@ -472,7 +516,9 @@ def test_evaluate_predict_mode_logs_shuffle_permutation_table_to_wandb(
             (out_dir / "aggregated_metrics.csv").write_text(_FAKE_AGGREGATED_METRICS_CSV)
             (out_dir / "shuffle_permutation.csv").write_text(permutation_csv)
 
-    cfg = _compose_fake_oracle_eval_cfg(tmp_path, fake_surge_smoke_datasets, mode="predict")
+    cfg = _compose_parametrized_fake_oracle_eval_cfg(
+        tmp_path, request, dataset_fixture, datamodule, mode="predict"
+    )
     monkeypatch.setattr("synth_setter.cli.eval.subprocess.run", _fake_run_with_permutation)
     monkeypatch.setattr("synth_setter.cli.eval.vst_headless_wrapper", lambda: object())
     monkeypatch.setattr(
@@ -497,9 +543,12 @@ def test_evaluate_predict_mode_logs_shuffle_permutation_table_to_wandb(
 
 
 @pytest.mark.fake_vst
+@pytest.mark.parametrize(("dataset_fixture", "datamodule"), _FAKE_ORACLE_DATASETS)
 def test_evaluate_validate_mode_legacy_val_spelling_runs_oracle(
     tmp_path: Path,
-    fake_surge_smoke_datasets: Path,
+    request: pytest.FixtureRequest,
+    dataset_fixture: str,
+    datamodule: str | None,
 ) -> None:
     """``mode=val`` (legacy spelling) routes to ``trainer.validate`` and logs zero MSE.
 
@@ -509,9 +558,13 @@ def test_evaluate_validate_mode_legacy_val_spelling_runs_oracle(
     verbatim, so ``val/param_mse`` is exactly zero.
 
     :param tmp_path: Pinned as Hydra ``output_dir`` / ``log_dir``.
-    :param fake_surge_smoke_datasets: CPU-fast surge_4 dataset (no real VST).
+    :param request: Fetches the parametrized dataset fixture.
+    :param dataset_fixture: Fixture name for the dataset root under test.
+    :param datamodule: Optional datamodule group override.
     """
-    cfg = _compose_fake_oracle_eval_cfg(tmp_path, fake_surge_smoke_datasets, mode="val")
+    cfg = _compose_parametrized_fake_oracle_eval_cfg(
+        tmp_path, request, dataset_fixture, datamodule, mode="val"
+    )
 
     HydraConfig().set_config(cfg)
     try:
@@ -577,9 +630,12 @@ def test_evaluate_unknown_mode_returns_only_callback_metrics(
 
 
 @pytest.mark.fake_vst
+@pytest.mark.parametrize(("dataset_fixture", "datamodule"), _FAKE_ORACLE_DATASETS)
 def test_evaluate_predict_mode_includes_shuffled_audio_metrics_when_subprocess_writes_shuffled_csv(
     tmp_path: Path,
-    fake_surge_smoke_datasets: Path,
+    request: pytest.FixtureRequest,
+    dataset_fixture: str,
+    datamodule: str | None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Merges ``shuffled_audio/*`` keys when the metrics subprocess also writes the shuffled CSV.
@@ -592,7 +648,9 @@ def test_evaluate_predict_mode_includes_shuffled_audio_metrics_when_subprocess_w
     is wired through the real ``evaluate()`` entrypoint (#489).
 
     :param tmp_path: Hydra ``output_dir``; output files are derived beneath it.
-    :param fake_surge_smoke_datasets: CPU-fast surge_4 dataset (no real VST).
+    :param request: Fetches the parametrized dataset fixture.
+    :param dataset_fixture: Fixture name for the dataset root under test.
+    :param datamodule: Optional datamodule group override.
     :param monkeypatch: Stubs render/metrics subprocesses; no real VST launches.
     """
     _SHUFFLED_CSV = ",mean,std\nmss,0.8,0.05\nwmfcc,0.4,0.03\nsot,0.3,0.02\nrms,0.7,0.01\n"
@@ -608,7 +666,9 @@ def test_evaluate_predict_mode_includes_shuffled_audio_metrics_when_subprocess_w
             (out_dir / "aggregated_metrics.csv").write_text(_FAKE_AGGREGATED_METRICS_CSV)
             (out_dir / "aggregated_metrics_shuffled.csv").write_text(_SHUFFLED_CSV)
 
-    cfg = _compose_fake_oracle_eval_cfg(tmp_path, fake_surge_smoke_datasets, mode="predict")
+    cfg = _compose_parametrized_fake_oracle_eval_cfg(
+        tmp_path, request, dataset_fixture, datamodule, mode="predict"
+    )
     monkeypatch.setattr("synth_setter.cli.eval.subprocess.run", _fake_run_with_shuffled)
     monkeypatch.setattr("synth_setter.cli.eval.vst_headless_wrapper", lambda: object())
     monkeypatch.setattr(
