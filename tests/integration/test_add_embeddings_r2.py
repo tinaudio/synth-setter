@@ -76,9 +76,6 @@ _EMBED_SUBPROCESS_TIMEOUT_SECONDS = 1800
 # Observed real-VST throughput is ~2.5 s/sample (param load + render + flush);
 # 5 s/sample keeps a 256-row render comfortably inside its scaled timeout.
 _RENDER_SECONDS_PER_SAMPLE = 5
-# Rows per add_columns UDF call; bounds the audio fed to the GPU per CLAP/m2l
-# forward pass so a whole-shard batch never exhausts CUDA memory.
-_EMBED_BATCH_SIZE = 16
 
 
 def _unique_test_prefix() -> str:
@@ -312,9 +309,9 @@ def test_add_embeddings_cli_against_real_r2_builds_ivf_pq_index(
         dataset with enough rows to train the index.
     """
     # num_partitions=4 / num_sub_vectors=16 (512 % 16 == 0) train cleanly at 256
-    # rows; the partition count stays well under the row floor PQ needs.
-    # --batch-size bounds the per-UDF read so a whole-shard batch of audio does
-    # not exhaust GPU memory in the real CLAP/m2l forward pass.
+    # rows; the partition count stays well under the row floor PQ needs. No
+    # --batch-size: exercise the default path, since the encoders self-bound their
+    # GPU memory (CLAP_ENCODE_MAX_BATCH / M2L_ENCODE_MAX_BATCH).
     result = subprocess.run(  # noqa: S603 — literal cmd + a validated r2:// URI
         [
             _ADD_EMBEDDINGS_CMD,
@@ -324,8 +321,6 @@ def test_add_embeddings_cli_against_real_r2_builds_ivf_pq_index(
             "4",
             "--num-sub-vectors",
             "16",
-            "--batch-size",
-            str(_EMBED_BATCH_SIZE),
         ],
         check=False,
         capture_output=True,
