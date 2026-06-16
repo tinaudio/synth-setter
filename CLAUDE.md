@@ -29,7 +29,6 @@ Never run `make docker-*` or RunPod commands without asking — they spend money
 - Pydantic `BaseModel(strict=True)` at trust boundaries (config parsing, JSON from R2, worker reports); dataclasses for internal typed containers.
 - `structlog` in pipeline code; stdlib `logging` elsewhere.
 - All `rclone` operations use `--checksum`.
-- Save-time tooling — the VS Code ruff LSP and the Claude edit hook (`agent/hooks/edit-write.sh`) — won't auto-delete an unused import (`F401`) written one edit before its first use. CLI `ruff check --fix`, `make format`, and pre-commit still strip genuinely-dead imports. CI enforces `F401`, so none ever ship.
 
 </important>
 

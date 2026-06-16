@@ -762,18 +762,17 @@ PYEOF
 it "edit-write: test mode falls back to flat layout tests/test_<base>.py when mirror missing" T_edit_write_test_mode_falls_back_to_flat_layout
 
 T_edit_write_format_preserves_unused_import() {
-  # Regression: --unfixable F401 in format mode keeps an unused import written
-  # one edit before its first use. The `x=1` reformat is the executed-signal:
-  # `ruff format` rewrites it to `x = 1` regardless of lint config, so a no-op
-  # hook (missing jq/ruff, unparsed path) fails the reformat check instead of
-  # passing this vacuously.
+  command -v jq >/dev/null 2>&1 \
+    || { echo "jq not on PATH — cannot parse the hook payload"; return 1; }
+  command -v ruff >/dev/null 2>&1 \
+    || { echo "ruff not on PATH — cannot exercise the format hook"; return 1; }
   local scratch
   scratch=$(mktemp -d "$TEST_DIR/scratch-XXXX")
   local py="$scratch/probe.py"
   printf 'import os\nx=1\n' > "${py}" \
     || { echo "could not write probe file"; rm -rf "$scratch"; return 1; }
   echo "{\"tool_input\":{\"file_path\":\"${py}\"}}" \
-    | bash "$REPO_ROOT/agent/hooks/edit-write.sh" format >/dev/null 2>&1 || true
+    | bash "$REPO_ROOT/agent/hooks/edit-write.sh" format >/dev/null 2>&1
   [[ -f "${py}" ]] || { echo "probe file vanished — hook errored"; rm -rf "$scratch"; return 1; }
   local out
   out=$(cat "${py}")
