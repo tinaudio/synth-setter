@@ -183,14 +183,10 @@ build {
   }
 
   # Third-party VST3 synths — parity with the `vst3-synths-fetch` stage in
-  # docker/ubuntu22_04/Dockerfile. Each upstream ships a macOS DMG with a
-  # multi-component `.pkg` installer; we hash-verify the downloaded asset,
-  # mount/unzip it, and run `sudo installer -pkg … -target /` which lays the
-  # VST3 down at /Library/Audio/Plug-Ins/VST3/<Bundle>.vst3 (sibling to the
-  # cask-installed Surge XT). Passwordless sudo for the `admin` user is part
-  # of the cirruslabs/macos-tahoe-base contract — same root the Surge XT cask
-  # relies on. Symlinks into the repo-relative `plugins/` dir happen below
-  # alongside Surge XT, and the smoke gate validates each load.
+  # docker/ubuntu22_04/Dockerfile. Each .pkg lands at
+  # /Library/Audio/Plug-Ins/VST3/<Bundle>.vst3 (sibling to the cask-installed
+  # Surge XT). Passwordless sudo for the `admin` user is part of the
+  # cirruslabs/macos-tahoe-base contract — same root the Surge XT cask uses.
   provisioner "shell" {
     inline = [
       "touch ~/.zprofile && . ~/.zprofile",
@@ -217,7 +213,7 @@ build {
       "curl -fsSL -o /tmp/six-sines.dmg 'https://github.com/baconpaul/six-sines/releases/download/${var.six_sines_version}/${var.six_sines_macos_asset}'",
       "echo '${var.six_sines_macos_sha256}  /tmp/six-sines.dmg' | shasum -a 256 -c -",
       "rm -rf /tmp/six-sines-mnt && hdiutil attach -nobrowse -quiet -mountpoint /tmp/six-sines-mnt /tmp/six-sines.dmg",
-      "sudo installer -pkg '/tmp/six-sines-mnt/${replace(var.six_sines_macos_asset, ".dmg", ".pkg")}' -target /",
+      "sudo installer -pkg '/tmp/six-sines-mnt/${regex_replace(var.six_sines_macos_asset, "\\.dmg$", ".pkg")}' -target /",
       "hdiutil detach -quiet /tmp/six-sines-mnt && rm /tmp/six-sines.dmg",
       "test -d '/Library/Audio/Plug-Ins/VST3/Six Sines.vst3'",
     ]
@@ -245,9 +241,8 @@ build {
       "cd ~/synth-setter && uv sync --frozen",
       # Mirror the Docker dev-base convention: symlink each system-wide VST3
       # bundle to the repo-relative `plugins/<Name>.vst3` path that configs,
-      # CLI `--plugin_path` defaults, and tests all assume. Surge XT is the
-      # cask install; Dexed / OB-Xf / Six Sines come from the .pkg installs
-      # above. See docker/ubuntu22_04/Dockerfile's `ln -s` loop in
+      # CLI `--plugin_path` defaults, and tests all assume. See
+      # docker/ubuntu22_04/Dockerfile's `ln -s` loop in
       # builder-install-synth-setter-deps.
       "mkdir -p ~/synth-setter/plugins",
       "ln -sfn '/Library/Audio/Plug-Ins/VST3/Surge XT.vst3' ~/synth-setter/'plugins/Surge XT.vst3'",
