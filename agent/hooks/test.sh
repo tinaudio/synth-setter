@@ -1427,7 +1427,7 @@ MAKE_STUB
     echo "make link-skills not called; log: $(cat "$make_log" 2>/dev/null)"; return 1
   }
 }
-it "worktree-post-setup: valid path → make link-plugins + link-thoughts run in that directory" T_wt_post_setup_runs_make_in_new_worktree
+it "worktree-post-setup: valid path → make link-plugins + link-thoughts + link-skills run in that directory" T_wt_post_setup_runs_make_in_new_worktree
 
 T_wt_post_setup_exits_0_on_missing_path() {
   local out

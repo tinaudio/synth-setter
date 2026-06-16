@@ -51,7 +51,7 @@ for src in "${marketplace}" "${codex_src}"; do
         if [[ -n "${exclude_file}" ]]; then
           mkdir -p "$(dirname "${exclude_file}")"
           touch "${exclude_file}"
-          if ! grep -q "^agent/skills/${skill_name}$" "${exclude_file}"; then
+          if ! grep -q -xF "agent/skills/${skill_name}" "${exclude_file}"; then
             echo "agent/skills/${skill_name}" >> "${exclude_file}"
           fi
         fi
