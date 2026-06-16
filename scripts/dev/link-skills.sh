@@ -39,8 +39,11 @@ for src in "${marketplace}" "${codex_src}"; do
 
         # Add to .git/info/exclude to avoid dirtying git status
         exclude_file=""
-        if [[ -d "${repo_root}/.git" ]]; then
-          exclude_file=$(git -C "${repo_root}" rev-parse --git-path info/exclude 2>/dev/null || echo "${repo_root}/.git/info/exclude")
+        if git -C "${repo_root}" rev-parse --git-dir &>/dev/null; then
+          exclude_file=$(git -C "${repo_root}" rev-parse --git-path info/exclude 2>/dev/null)
+          if [[ "${exclude_file}" == .git/* ]]; then
+            exclude_file="${repo_root}/${exclude_file}"
+          fi
         else
           exclude_file="${repo_root}/.git/info/exclude"
         fi
