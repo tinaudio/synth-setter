@@ -141,22 +141,26 @@ def main(uri: str, bitrate_kbps: int) -> None:
     URI is a ``.lance`` dataset directory written by ``synth-setter-generate-dataset``
     or ``synth-setter-finalize-dataset``.
 
-    :param uri: A ``.lance`` dataset; a local path or ``s3://`` URI is used as-is,
-        an ``r2://`` URI is rewritten to ``s3://`` with env-derived credentials.
+    :param uri: A ``.lance`` dataset; a local path is used as-is, an ``r2://`` URI
+        is rewritten to ``s3://``, and any ``s3://`` URI is treated as the project's
+        R2 endpoint and credentialed with env-derived credentials (mirroring
+        ``add_embeddings``; generic non-R2 S3 buckets are not a supported input).
     :param bitrate_kbps: Forwarded to :func:`add_mp3_audio_column`; default shown in ``--help``.
     :raises click.ClickException: The dataset is missing its ``audio`` column,
         already has an ``audio_mp3`` column, lacks readable shard metadata,
-        cannot be opened (e.g. a cloud I/O error), or an ``r2://`` URI is given
+        cannot be opened (e.g. a cloud I/O error), or an R2 URI is given
         with missing/blank R2 credentials.
     """
-    # Lance opens R2 over its S3-compatible API: rewrite the scheme and pass the
-    # env-derived credentials, mirroring finalize_dataset's lance path. R2
-    # credential resolution raises RuntimeError on missing/blank env, so it stays
-    # inside the try to surface as a clean ClickException.
+    # Lance opens R2 over its S3-compatible API: rewrite r2:// to s3:// and treat
+    # any s3:// as R2, passing env-derived credentials (mirroring add_embeddings).
+    # R2 credential resolution raises RuntimeError on missing/blank env, so it
+    # stays inside the try to surface as a clean ClickException.
     try:
-        is_r2 = r2_io.is_r2_uri(uri)
-        resolved_uri = r2_io.to_s3_uri(uri) if is_r2 else uri
-        storage_options = r2_io.r2_storage_options() if is_r2 else None
+        resolved_uri = r2_io.to_s3_uri(uri) if r2_io.is_r2_uri(uri) else uri
+        storage_options: dict[str, str] | None = None
+        if resolved_uri.startswith("s3://"):
+            r2_io.ensure_r2_env_loaded()
+            storage_options = r2_io.r2_storage_options()
         add_mp3_audio_column(
             resolved_uri, bitrate_kbps=bitrate_kbps, storage_options=storage_options
         )

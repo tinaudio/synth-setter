@@ -389,3 +389,50 @@ def test_main_rewrites_r2_uri_and_forwards_storage_options(
         "bitrate_kbps": 192,
         "storage_options": {"aws_secret": "x"},
     }
+
+
+def test_main_credentials_bare_s3_uri_as_r2(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A bare ``s3://`` URI is treated as R2 and credentialed, matching add_embeddings.
+
+    R2 datasets are commonly referenced as ``s3://`` in this repo, so an ``s3://``
+    input must still receive ``r2_storage_options`` rather than relying on ambient
+    AWS env config.
+
+    :param monkeypatch: Pytest fixture stubbing the r2_io helpers and the column adder.
+    """
+    captured: dict[str, object] = {}
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.is_r2_uri", lambda uri: False)
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.ensure_r2_env_loaded", lambda: None)
+    monkeypatch.setattr(
+        "synth_setter.pipeline.r2_io.r2_storage_options", lambda: {"aws_secret": "x"}
+    )
+
+    def _spy(uri: str, *, bitrate_kbps: int, storage_options: dict[str, str] | None) -> None:
+        captured.update(uri=uri, bitrate_kbps=bitrate_kbps, storage_options=storage_options)
+
+    monkeypatch.setattr("synth_setter.pipeline.data.add_mp3_audio.add_mp3_audio_column", _spy)
+
+    result = CliRunner().invoke(main, ["s3://bucket/key.lance"])
+
+    assert result.exit_code == 0
+    assert captured["uri"] == "s3://bucket/key.lance"
+    assert captured["storage_options"] == {"aws_secret": "x"}
+
+
+def test_main_local_path_passes_no_storage_options(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A local path is opened without storage options.
+
+    :param monkeypatch: Pytest fixture stubbing the r2_io helpers and the column adder.
+    """
+    captured: dict[str, object] = {}
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.is_r2_uri", lambda uri: False)
+
+    def _spy(uri: str, *, bitrate_kbps: int, storage_options: dict[str, str] | None) -> None:
+        captured.update(uri=uri, storage_options=storage_options)
+
+    monkeypatch.setattr("synth_setter.pipeline.data.add_mp3_audio.add_mp3_audio_column", _spy)
+
+    result = CliRunner().invoke(main, ["/local/path/key.lance"])
+
+    assert result.exit_code == 0
+    assert captured == {"uri": "/local/path/key.lance", "storage_options": None}
