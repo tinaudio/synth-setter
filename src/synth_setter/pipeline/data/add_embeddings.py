@@ -48,9 +48,11 @@ CLAP_SAMPLE_RATE: int = 48000
 # Projected audio-embedding width of the default checkpoint; the ``clap`` column's
 # fixed-size-list length, and the dim a vector query must match.
 CLAP_EMBEDDING_DIM: int = 512
-# Caps the music2latent sub-batch independent of Lance's read batch, so GPU
-# memory stays bounded however large add_columns makes each UDF batch.
-M2L_ENCODE_MAX_BATCH: int = 256
+# Per-forward sub-batch caps for the encoders, independent of Lance's read batch:
+# the batch_udf hands an encoder the whole read batch at once, so without these a
+# large dataset OOMs the GPU (a 256-row CLAP forward alone needs ~5 GiB).
+M2L_ENCODE_MAX_BATCH: int = 64
+CLAP_ENCODE_MAX_BATCH: int = 32
 # IVF_PQ needs ~256 training vectors (256 PQ centroids); below this the index is
 # skipped and callers fall back to Lance's exact (brute-force) ``nearest`` scan.
 MIN_ROWS_FOR_INDEX: int = 256
@@ -273,8 +275,8 @@ def load_clap_audio_encoder(
     processor = ClapProcessor.from_pretrained(checkpoint)
 
     @torch.no_grad()
-    def encode(mono: np.ndarray, sample_rate: int) -> np.ndarray:
-        wav = torch.from_numpy(np.ascontiguousarray(mono, dtype=np.float32))
+    def _encode_chunk(chunk: np.ndarray, sample_rate: int) -> np.ndarray:
+        wav = torch.from_numpy(np.ascontiguousarray(chunk, dtype=np.float32))
         if sample_rate != CLAP_SAMPLE_RATE:
             wav = audio_fn.resample(wav, sample_rate, CLAP_SAMPLE_RATE)
         # `audio=` (singular) per transformers>=5; the splat also hides the stub's
@@ -290,6 +292,15 @@ def load_clap_audio_encoder(
         # (B, CLAP_EMBEDDING_DIM) audio embedding is its pooler_output.
         features = model.get_audio_features(**device_inputs)
         return features.pooler_output.cpu().numpy()  # pyright: ignore
+
+    def encode(mono: np.ndarray, sample_rate: int) -> np.ndarray:
+        # Sub-batch the forward so the whole UDF read batch never hits the GPU at
+        # once; each chunk's result is pulled to CPU before the next runs.
+        chunks = [
+            _encode_chunk(mono[start : start + CLAP_ENCODE_MAX_BATCH], sample_rate)
+            for start in range(0, len(mono), CLAP_ENCODE_MAX_BATCH)
+        ]
+        return np.concatenate(chunks, axis=0)
 
     return encode
 
