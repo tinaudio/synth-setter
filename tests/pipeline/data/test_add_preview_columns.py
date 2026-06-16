@@ -1,4 +1,4 @@
-"""Behavior tests for the MP3-audio column adder.
+"""Behavior tests for the preview-column adder (``audio_mp3`` + ``audio_uuid``).
 
 Encoded bytes are validated structurally (MP3 frame sync, decoded sample rate / channel count)
 rather than byte-for-byte, since LAME output is not promised to be bit-reproducible across
@@ -9,6 +9,7 @@ sample-rate or channel bug can't corrupt both sides identically and pass.
 from __future__ import annotations
 
 import io
+import uuid
 from pathlib import Path
 
 import lance
@@ -23,9 +24,11 @@ from synth_setter.data.vst.shapes import (
     MEL_SPEC_FIELD,
     PARAM_ARRAY_FIELD,
 )
-from synth_setter.pipeline.data.add_mp3_audio import (
+from synth_setter.pipeline.data.add_preview_columns import (
     AUDIO_MP3_FIELD,
-    add_mp3_audio_column,
+    AUDIO_UUID_FIELD,
+    add_preview_columns,
+    audio_uuid,
     encode_audio_to_mp3,
     main,
 )
@@ -213,7 +216,46 @@ def test_encode_audio_to_mp3_preserves_sample_rate_and_channels(sample_rate: int
     assert samples.shape[0] == _CHANNELS
 
 
-def test_add_mp3_audio_column_adds_blob_column_for_every_row(tmp_path: Path) -> None:
+def test_audio_uuid_is_deterministic_for_equal_bytes() -> None:
+    """Identical audio bytes hash to the same uuid, even across distinct array objects.
+
+    The contract is content-addressing: re-running the tool on the same dataset
+    must reproduce the id, so equal bytes (not array identity) drive it.
+    """
+    row = _sine_rows()[0]
+    twin = np.array(row, copy=True)
+
+    assert audio_uuid(row) == audio_uuid(twin)
+
+
+def test_audio_uuid_ignores_array_memory_layout() -> None:
+    """A non-contiguous view hashes identically to its C-contiguous copy.
+
+    ``tobytes`` canonicalizes to C order, so a transposed/sliced view that holds
+    the same logical samples must not change the id.
+    """
+    row = _sine_rows()[0]
+    non_contiguous = np.asfortranarray(row)
+
+    assert not non_contiguous.flags["C_CONTIGUOUS"]
+    assert audio_uuid(non_contiguous) == audio_uuid(np.ascontiguousarray(row))
+
+
+def test_audio_uuid_differs_for_different_audio() -> None:
+    """Two different waveforms map to different uuids (no trivial constant)."""
+    rows = _sine_rows()
+
+    assert audio_uuid(rows[0]) != audio_uuid(rows[1])
+
+
+def test_audio_uuid_returns_canonical_version5_uuid() -> None:
+    """The returned string parses as a version-5 UUID under the project namespace."""
+    parsed = uuid.UUID(audio_uuid(_sine_rows()[0]))
+
+    assert parsed.version == 5
+
+
+def test_add_preview_columns_adds_blob_column_for_every_row(tmp_path: Path) -> None:
     """Every row gains a decodable ``audio_mp3`` blob cell; source columns and row count unchanged.
 
     :param tmp_path: Pytest fixture providing a fresh test directory.
@@ -222,7 +264,7 @@ def test_add_mp3_audio_column_adds_blob_column_for_every_row(tmp_path: Path) -> 
     _write_smoke_dataset(uri)
     before = {f: lance.dataset(str(uri)).schema.field(f).type for f in _SOURCE_FIELDS}
 
-    add_mp3_audio_column(uri)
+    add_preview_columns(uri)
 
     ds = lance.dataset(str(uri))
     for field in _SOURCE_FIELDS:
@@ -236,7 +278,29 @@ def test_add_mp3_audio_column_adds_blob_column_for_every_row(tmp_path: Path) -> 
     assert samples.shape[0] == _CHANNELS
 
 
-def test_add_mp3_audio_column_tags_field_with_audio_mime_type(tmp_path: Path) -> None:
+def test_add_preview_columns_adds_uuid_column_matching_per_row_audio(tmp_path: Path) -> None:
+    """Each row gains a string ``audio_uuid`` equal to ``audio_uuid`` of its own audio tensor.
+
+    Ties the persisted column to the pure helper so a regression in the batch path (wrong row
+    order, wrong source bytes) can't pass.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    uri = tmp_path / "shard-000000.lance"
+    _write_smoke_dataset(uri)
+    audio_rows = _sine_rows()
+
+    add_preview_columns(uri)
+
+    ds = lance.dataset(str(uri))
+    assert ds.schema.field(AUDIO_UUID_FIELD).type == pa.string()
+    stored = ds.to_table(columns=[AUDIO_UUID_FIELD]).column(AUDIO_UUID_FIELD).to_pylist()
+    assert stored == [audio_uuid(row) for row in audio_rows]
+    # Distinct pitches => distinct fingerprints; no row collapses onto another.
+    assert len(set(stored)) == _ROWS
+
+
+def test_add_preview_columns_tags_field_with_audio_mime_type(tmp_path: Path) -> None:
     """The added column carries ``mime_type: audio/mpeg`` so Lance viewers auto-play it.
 
     :param tmp_path: Pytest fixture providing a fresh test directory.
@@ -244,13 +308,13 @@ def test_add_mp3_audio_column_tags_field_with_audio_mime_type(tmp_path: Path) ->
     uri = tmp_path / "shard-000000.lance"
     _write_smoke_dataset(uri)
 
-    add_mp3_audio_column(uri)
+    add_preview_columns(uri)
 
     field = lance.dataset(str(uri)).schema.field(AUDIO_MP3_FIELD)
     assert field.metadata == {b"mime_type": b"audio/mpeg"}
 
 
-def test_add_mp3_audio_column_uses_sample_rate_from_metadata(tmp_path: Path) -> None:
+def test_add_preview_columns_uses_sample_rate_from_metadata(tmp_path: Path) -> None:
     """The encoded column honors the shard metadata's sample rate, not a hardcoded value.
 
     :param tmp_path: Pytest fixture providing a fresh test directory.
@@ -258,27 +322,27 @@ def test_add_mp3_audio_column_uses_sample_rate_from_metadata(tmp_path: Path) -> 
     uri = tmp_path / "shard-000000.lance"
     _write_smoke_dataset(uri, sample_rate=16000)
 
-    add_mp3_audio_column(uri)
+    add_preview_columns(uri)
 
     first = _read_mp3_blobs(uri, [0])[0]
     _, decoded_rate = _decode_mp3(first)
     assert decoded_rate == 16000
 
 
-def test_add_mp3_audio_column_existing_column_raises(tmp_path: Path) -> None:
-    """A second add onto a dataset that already has ``audio_mp3`` fails fast.
+def test_add_preview_columns_existing_column_raises(tmp_path: Path) -> None:
+    """A second add onto a dataset that already has the preview columns fails fast.
 
     :param tmp_path: Pytest fixture providing a fresh test directory.
     """
     uri = tmp_path / "shard-000000.lance"
     _write_smoke_dataset(uri)
-    add_mp3_audio_column(uri)
+    add_preview_columns(uri)
 
     with pytest.raises(ValueError, match=AUDIO_MP3_FIELD):
-        add_mp3_audio_column(uri)
+        add_preview_columns(uri)
 
 
-def test_add_mp3_audio_column_missing_audio_column_raises(tmp_path: Path) -> None:
+def test_add_preview_columns_missing_audio_column_raises(tmp_path: Path) -> None:
     """A dataset without the source audio column raises a clear error.
 
     :param tmp_path: Pytest fixture providing a fresh test directory.
@@ -289,11 +353,11 @@ def test_add_mp3_audio_column_missing_audio_column_raises(tmp_path: Path) -> Non
     lance.write_dataset(pa.table({"other": [1, 2]}), str(uri), mode="overwrite")
 
     with pytest.raises(ValueError, match=AUDIO_FIELD):
-        add_mp3_audio_column(uri)
+        add_preview_columns(uri)
 
 
 def test_main_adds_column_and_reports_success(tmp_path: Path) -> None:
-    """The CLI entrypoint encodes the column and echoes a success line.
+    """The CLI entrypoint adds both preview columns and echoes a success line naming each.
 
     :param tmp_path: Pytest fixture providing a fresh test directory.
     """
@@ -304,7 +368,10 @@ def test_main_adds_column_and_reports_success(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     assert AUDIO_MP3_FIELD in result.output
-    assert AUDIO_MP3_FIELD in lance.dataset(str(uri)).schema.names
+    assert AUDIO_UUID_FIELD in result.output
+    schema_names = lance.dataset(str(uri)).schema.names
+    assert AUDIO_MP3_FIELD in schema_names
+    assert AUDIO_UUID_FIELD in schema_names
 
 
 def test_main_existing_column_exits_nonzero_with_message(tmp_path: Path) -> None:
@@ -314,7 +381,7 @@ def test_main_existing_column_exits_nonzero_with_message(tmp_path: Path) -> None
     """
     uri = tmp_path / "shard-000000.lance"
     _write_smoke_dataset(uri)
-    add_mp3_audio_column(uri)
+    add_preview_columns(uri)
 
     result = CliRunner().invoke(main, [str(uri)])
 
@@ -322,7 +389,7 @@ def test_main_existing_column_exits_nonzero_with_message(tmp_path: Path) -> None
     assert AUDIO_MP3_FIELD in result.output
 
 
-def test_add_mp3_audio_column_missing_shard_metadata_raises(tmp_path: Path) -> None:
+def test_add_preview_columns_missing_shard_metadata_raises(tmp_path: Path) -> None:
     """An ``audio`` column with no embedded ShardMetadata raises a clear error.
 
     :param tmp_path: Pytest fixture providing a fresh test directory.
@@ -333,7 +400,7 @@ def test_add_mp3_audio_column_missing_shard_metadata_raises(tmp_path: Path) -> N
     lance.write_dataset(pa.table({AUDIO_FIELD: audio}), str(uri), mode="overwrite")
 
     with pytest.raises(ValueError, match="metadata"):
-        add_mp3_audio_column(uri)
+        add_preview_columns(uri)
 
 
 def test_main_rejects_out_of_range_bitrate(tmp_path: Path) -> None:
@@ -384,7 +451,7 @@ def test_main_rewrites_r2_uri_and_forwards_storage_options(
     def _spy(uri: str, *, bitrate_kbps: int, storage_options: dict[str, str] | None) -> None:
         captured.update(uri=uri, bitrate_kbps=bitrate_kbps, storage_options=storage_options)
 
-    monkeypatch.setattr("synth_setter.pipeline.data.add_mp3_audio.add_mp3_audio_column", _spy)
+    monkeypatch.setattr("synth_setter.pipeline.data.add_preview_columns.add_preview_columns", _spy)
 
     result = CliRunner().invoke(main, ["r2://bucket/key.lance", "--bitrate-kbps", "192"])
 
@@ -415,7 +482,7 @@ def test_main_credentials_bare_s3_uri_as_r2(monkeypatch: pytest.MonkeyPatch) -> 
     def _spy(uri: str, *, bitrate_kbps: int, storage_options: dict[str, str] | None) -> None:
         captured.update(uri=uri, bitrate_kbps=bitrate_kbps, storage_options=storage_options)
 
-    monkeypatch.setattr("synth_setter.pipeline.data.add_mp3_audio.add_mp3_audio_column", _spy)
+    monkeypatch.setattr("synth_setter.pipeline.data.add_preview_columns.add_preview_columns", _spy)
 
     result = CliRunner().invoke(main, ["s3://bucket/key.lance"])
 
@@ -435,7 +502,7 @@ def test_main_local_path_passes_no_storage_options(monkeypatch: pytest.MonkeyPat
     def _spy(uri: str, *, bitrate_kbps: int, storage_options: dict[str, str] | None) -> None:
         captured.update(uri=uri, storage_options=storage_options)
 
-    monkeypatch.setattr("synth_setter.pipeline.data.add_mp3_audio.add_mp3_audio_column", _spy)
+    monkeypatch.setattr("synth_setter.pipeline.data.add_preview_columns.add_preview_columns", _spy)
 
     result = CliRunner().invoke(main, ["/local/path/key.lance"])
 
