@@ -25,7 +25,6 @@ SANDBOX="$TEST_DIR/repo"
 mkdir -p "$SANDBOX/agent/hooks" "$SANDBOX/agent/_shared"
 cp agent/hooks/_lib.sh \
    agent/hooks/doc-drift.sh \
-   agent/hooks/pr-review-resolver.sh \
    agent/hooks/pre-pr-review-gate.sh \
    agent/hooks/edit-write.sh \
    agent/hooks/verify-gh-taxonomy.sh \
@@ -250,130 +249,12 @@ T_doc_drift_agent_failure() {
 }
 it "doc-drift: headless agent failure → verbose FAILED report (exit code + stderr captured)" T_doc_drift_agent_failure
 
-# ===========================================================================
-# pr-review-resolver.sh
-# ===========================================================================
-
-T_resolver_no_match() {
-  local out
-  export RESOLVER_SLEEP_SECS=1 RESOLVER_DRY_RUN=1
-  out=$(echo '{"tool_input":{"command":"git commit -m x"}}' | bash agent/hooks/pr-review-resolver.sh 2>&1; echo "EXIT:$?")
-  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0, got: $out"; return 1; }
-  [[ ! -d .agent-reviews ]] || { echo ".agent-reviews should not exist"; return 1; }
-}
-it "pr-review-resolver: non-matching command exits 0 silently" T_resolver_no_match
-
-T_resolver_quoted_substring() {
-  local out
-  export RESOLVER_SLEEP_SECS=1 RESOLVER_DRY_RUN=1
-  out=$(echo '{"tool_input":{"command":"git commit -m \"fix git push bug\""}}' | bash agent/hooks/pr-review-resolver.sh 2>&1; echo "EXIT:$?")
-  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0, got: $out"; return 1; }
-  [[ ! -d .agent-reviews ]] || { echo ".agent-reviews should not exist"; return 1; }
-}
-it "pr-review-resolver: quoted 'git push' substring inside commit message does NOT trigger" T_resolver_quoted_substring
-
-T_resolver_main_branch() {
-  local out start elapsed
-  export RESOLVER_SLEEP_SECS=5 RESOLVER_DRY_RUN=1
-  git checkout -q -b main 2>/dev/null || git checkout -q main
-  start=$(date +%s)
-  out=$(echo '{"tool_input":{"command":"git push origin main"}}' | bash agent/hooks/pr-review-resolver.sh 2>&1; echo "EXIT:$?")
-  elapsed=$(($(date +%s) - start))
-  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0, got: $out"; return 1; }
-  [[ "$elapsed" -lt 2 ]] || { echo "main-branch push should not have slept (elapsed=${elapsed}s)"; return 1; }
-  [[ ! -d .agent-reviews ]] || { echo ".agent-reviews should not exist"; return 1; }
-}
-it "pr-review-resolver: git push on main → exits 0 before sleeping" T_resolver_main_branch
-
-T_resolver_no_pr() {
-  local out
-  export RESOLVER_SLEEP_SECS=1 RESOLVER_DRY_RUN=1
-  unset GH_STUB_PR
-  git checkout -q -b feature-x 2>/dev/null || git checkout -q feature-x
-  out=$(echo '{"tool_input":{"command":"git push"}}' | bash agent/hooks/pr-review-resolver.sh 2>&1; echo "EXIT:$?")
-  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0, got: $out"; return 1; }
-  if compgen -G ".agent-reviews/pr-review-resolver-*.md" >/dev/null; then
-    echo "no report should exist"
-    return 1
-  fi
-}
-it "pr-review-resolver: feature branch push with no PR → exits 0, no report" T_resolver_no_pr
-
-T_resolver_with_pr() {
-  local out stderr_file report
-  export RESOLVER_SLEEP_SECS=1 RESOLVER_DRY_RUN=1 GH_STUB_PR=99
-  git checkout -q -b feature-x 2>/dev/null || git checkout -q feature-x
-  stderr_file="$TEST_DIR/stderr.txt"
-  out=$(echo '{"tool_input":{"command":"git push"}}' | bash agent/hooks/pr-review-resolver.sh 2>"$stderr_file"; echo "EXIT:$?")
-  [[ "$(last_exit_line "$out")" == "EXIT:2" ]] || { echo "expected EXIT:2, got: $out"; return 1; }
-  report=$(find .agent-reviews -maxdepth 1 -name 'pr-review-resolver-*.md' 2>/dev/null | head -1)
-  [[ -n "$report" ]] || { echo "report missing"; return 1; }
-  grep -q "PR #99" "$stderr_file" || { echo "stderr should mention PR #99"; return 1; }
-  grep -q "gh api repos" "$report" || { echo "fallback report should mention gh api repos"; return 1; }
-}
-it "pr-review-resolver: feature branch push with PR → exit 2, report written, fallback prompt content" T_resolver_with_pr
-
-T_resolver_lockfile_dedupe() {
-  local bg_pid bg_exit
-  export RESOLVER_SLEEP_SECS=3 RESOLVER_DRY_RUN=1 GH_STUB_PR=99
-  git checkout -q -b feature-x 2>/dev/null || git checkout -q feature-x
-  ( echo '{"tool_input":{"command":"git push"}}' | bash agent/hooks/pr-review-resolver.sh >/dev/null 2>&1; echo $? > "$TEST_DIR/bg_exit" ) &
-  bg_pid=$!
-  sleep 1
-  mkdir -p .agent-reviews
-  echo "intruder-token" > .agent-reviews/.resolver-feature-x.lock
-  wait "$bg_pid"
-  bg_exit=$(cat "$TEST_DIR/bg_exit")
-  [[ "$bg_exit" == "0" ]] || { echo "superseded run should exit 0, got $bg_exit"; return 1; }
-  if compgen -G ".agent-reviews/pr-review-resolver-*.md" >/dev/null; then
-    echo "superseded run should not write a report"
-    return 1
-  fi
-}
-it "pr-review-resolver: lockfile dedupe — superseded run exits 0 with no report" T_resolver_lockfile_dedupe
-
-T_resolver_invalid_sleep_secs() {
-  local out
-  export RESOLVER_SLEEP_SECS=abc RESOLVER_DRY_RUN=1 GH_STUB_PR=99
-  git checkout -q -b feature-x 2>/dev/null || git checkout -q feature-x
-  # An invalid RESOLVER_SLEEP_SECS used to abort at `sleep` under set -e.
-  # The hook must fall back to the default; we keep a tiny override via
-  # the existence of GH_STUB_PR to avoid waiting the full 360s — instead
-  # we only assert that the hook starts and gets past the validation.
-  # Run with a 4s timeout; if it took >4s the validation didn't engage.
-  timeout 4 bash -c 'echo "{\"tool_input\":{\"command\":\"git push\"}}" | bash agent/hooks/pr-review-resolver.sh' >/dev/null 2>"$TEST_DIR/stderr.txt" &
-  local hook_pid=$!
-  sleep 2
-  # The hook should still be running (sleeping its 360s default) after 2s
-  # but NOT exited from a `sleep abc` set -e abort.
-  if kill -0 "$hook_pid" 2>/dev/null; then
-    kill "$hook_pid" 2>/dev/null || true
-    wait "$hook_pid" 2>/dev/null || true
-    # Check the log captured the validation message.
-    grep -q "invalid RESOLVER_SLEEP_SECS=abc" .agent-reviews/.hook.log 2>/dev/null || {
-      echo "expected validation log; .hook.log: $(cat .agent-reviews/.hook.log 2>/dev/null || echo missing)"
-      return 1
-    }
-  else
-    wait "$hook_pid" 2>/dev/null || true
-    echo "hook exited early — RESOLVER_SLEEP_SECS=abc validation did not engage"; return 1
-  fi
-}
-it "pr-review-resolver: invalid RESOLVER_SLEEP_SECS falls back to default (not set -e abort)" T_resolver_invalid_sleep_secs
-
 # ---------------------------------------------------------------------------
-# pr-review-resolver — worktree isolation + cross-session safety
+# doc-drift — worktree isolation + cross-session safety
 # ---------------------------------------------------------------------------
-# Pin the cascade-bug fixes: (1) the headless agent's cwd must NOT be the
-# user's main worktree, so a prompt that asks it to switch branches can't
-# `git checkout` over uncommitted work; (2) the report file must land in the
-# main repo's $REVIEWS_DIR (absolute path), not the temp worktree's, so the
-# receiving session can read it after the EXIT trap cleans the worktree;
-# (3) the rewake stderr stamps origin HEAD/branch/PR so a session that
-# receives a cross-session leak can detect it.
 
-resolver_setup_feature_branch() {
-  # Usage: resolver_setup_feature_branch <branch>
+setup_feature_branch() {
+  # Usage: setup_feature_branch <branch>
   # `--allow-empty` keeps each branch's HEAD distinct from init without
   # depending on a tracked marker file (which would clash across tests that
   # reuse the sandbox repo).
@@ -382,202 +263,6 @@ resolver_setup_feature_branch() {
   git commit -q --allow-empty -m "feature commit on $branch"
 }
 
-T_resolver_headless_agent_runs_in_isolated_worktree() {
-  local pwd_file head_file pwd_seen head_seen sandbox_root sandbox_head
-  pwd_file="$TEST_DIR/claude-pwd.txt"
-  head_file="$TEST_DIR/claude-head.txt"
-  rm -f "$pwd_file" "$head_file"
-  export RESOLVER_SLEEP_SECS=1 GH_STUB_PR=99
-  export CLAUDE_STUB_PWD_FILE="$pwd_file" CLAUDE_STUB_HEAD_FILE="$head_file"
-  resolver_setup_feature_branch "feature-iso"
-  sandbox_root=$(pwd)
-  sandbox_head=$(git rev-parse HEAD)
-  echo '{"tool_input":{"command":"git push"}}' | bash agent/hooks/pr-review-resolver.sh >/dev/null 2>&1 || true
-  [[ -f "$pwd_file" ]] || { echo "claude stub did not record PWD — headless agent not invoked"; return 1; }
-  pwd_seen=$(cat "$pwd_file")
-  head_seen=$(cat "$head_file" 2>/dev/null || echo "")
-  [[ "$pwd_seen" != "$sandbox_root" ]] || {
-    echo "headless agent ran from sandbox repo root ($sandbox_root) — worktree isolation failed"
-    return 1
-  }
-  [[ "$pwd_seen" == *"/worktrees/"* ]] || {
-    echo "expected pwd under .agent-reviews/worktrees/, got: $pwd_seen"
-    return 1
-  }
-  [[ "$head_seen" == "$sandbox_head" ]] || {
-    echo "worktree HEAD ($head_seen) != captured sandbox HEAD ($sandbox_head)"
-    return 1
-  }
-}
-it "pr-review-resolver: headless agent runs inside isolated worktree pinned to captured HEAD" T_resolver_headless_agent_runs_in_isolated_worktree
-
-T_resolver_report_lands_in_main_repo() {
-  local report
-  export RESOLVER_SLEEP_SECS=1 GH_STUB_PR=99
-  unset CLAUDE_STUB_PWD_FILE CLAUDE_STUB_HEAD_FILE
-  resolver_setup_feature_branch "feature-report-path"
-  echo '{"tool_input":{"command":"git push"}}' | bash agent/hooks/pr-review-resolver.sh >/dev/null 2>&1 || true
-  report=$(find .agent-reviews -maxdepth 1 -name 'pr-review-resolver-*.md' 2>/dev/null | head -1)
-  [[ -n "$report" ]] || {
-    echo "report missing from main repo .agent-reviews/ — anything under worktrees/?"
-    find .agent-reviews -name 'pr-review-resolver-*.md' 2>/dev/null
-    return 1
-  }
-}
-it "pr-review-resolver: report file lands in main repo .agent-reviews/, not the worktree" T_resolver_report_lands_in_main_repo
-
-T_resolver_headless_agent_gets_allowedtools_for_gh() {
-  local report
-  export RESOLVER_SLEEP_SECS=1 GH_STUB_PR=99
-  unset CLAUDE_STUB_PWD_FILE CLAUDE_STUB_HEAD_FILE AGENT_ALLOWED_TOOLS
-  resolver_setup_feature_branch "feature-allowedtools"
-  echo '{"tool_input":{"command":"git push"}}' | bash agent/hooks/pr-review-resolver.sh >/dev/null 2>&1 || true
-  report=$(find .agent-reviews -maxdepth 1 -name 'pr-review-resolver-*.md' 2>/dev/null | head -1)
-  [[ -n "$report" ]] || { echo "no report written"; return 1; }
-  grep -q -- "--allowedTools" "$report" || {
-    echo "headless agent invoked without --allowedTools — gh would be auto-denied:"
-    cat "$report"
-    return 1
-  }
-  grep -q -- "Bash(gh:\*)" "$report" || {
-    echo "allowlist is missing Bash(gh:*) — the resolver can't fetch PR comments:"
-    cat "$report"
-    return 1
-  }
-}
-it "pr-review-resolver: headless agent gets --allowedTools incl. Bash(gh:*) so gh isn't auto-denied" T_resolver_headless_agent_gets_allowedtools_for_gh
-
-T_resolver_agent_allowed_tools_env_overrides_default() {
-  local report
-  export RESOLVER_SLEEP_SECS=1 GH_STUB_PR=99
-  unset CLAUDE_STUB_PWD_FILE CLAUDE_STUB_HEAD_FILE
-  export AGENT_ALLOWED_TOOLS="Bash(gh:*) Read"
-  resolver_setup_feature_branch "feature-allowedtools-override"
-  echo '{"tool_input":{"command":"git push"}}' | bash agent/hooks/pr-review-resolver.sh >/dev/null 2>&1 || true
-  report=$(find .agent-reviews -maxdepth 1 -name 'pr-review-resolver-*.md' 2>/dev/null | head -1)
-  [[ -n "$report" ]] || { echo "no report written"; return 1; }
-  grep -q -- "Bash(gh:\*) Read" "$report" || {
-    echo "AGENT_ALLOWED_TOOLS override not passed through to the agent:"
-    cat "$report"
-    return 1
-  }
-  grep -q -- "Bash(pre-commit:\*)" "$report" && {
-    echo "default allowlist leaked despite AGENT_ALLOWED_TOOLS override"
-    cat "$report"
-    return 1
-  }
-  return 0
-}
-it "pr-review-resolver: AGENT_ALLOWED_TOOLS overrides the default allowlist" T_resolver_agent_allowed_tools_env_overrides_default
-
-T_resolver_worktree_cleaned_up_after_exit() {
-  export RESOLVER_SLEEP_SECS=1 GH_STUB_PR=99
-  resolver_setup_feature_branch "feature-cleanup"
-  echo '{"tool_input":{"command":"git push"}}' | bash agent/hooks/pr-review-resolver.sh >/dev/null 2>&1 || true
-  if compgen -G ".agent-reviews/worktrees/resolver-*" >/dev/null; then
-    echo "worktree directory still present after hook exit:"
-    ls -la .agent-reviews/worktrees/
-    return 1
-  fi
-}
-it "pr-review-resolver: EXIT trap removes the worktree after hook completes" T_resolver_worktree_cleaned_up_after_exit
-
-T_resolver_stderr_stamps_origin_head_branch_pr() {
-  local stderr_file head_full head_short
-  stderr_file="$TEST_DIR/stderr.txt"
-  export RESOLVER_SLEEP_SECS=1 RESOLVER_DRY_RUN=1 GH_STUB_PR=99
-  resolver_setup_feature_branch "feature-stamp"
-  head_full=$(git rev-parse HEAD)
-  head_short="${head_full:0:7}"
-  echo '{"tool_input":{"command":"git push"}}' | bash agent/hooks/pr-review-resolver.sh 2>"$stderr_file" || true
-  grep -q "PR #99" "$stderr_file" || { echo "stderr missing PR number; got: $(cat "$stderr_file")"; return 1; }
-  grep -q "branch feature-stamp" "$stderr_file" || { echo "stderr missing branch name; got: $(cat "$stderr_file")"; return 1; }
-  grep -qE "origin HEAD ${head_short}" "$stderr_file" || {
-    echo "stderr missing origin HEAD short sha ($head_short); got: $(cat "$stderr_file")"
-    return 1
-  }
-  grep -q "crossed sessions" "$stderr_file" || {
-    echo "stderr missing cross-session caveat; got: $(cat "$stderr_file")"
-    return 1
-  }
-}
-it "pr-review-resolver: rewake stderr stamps PR/branch/origin-HEAD so receivers can detect cross-session leaks" T_resolver_stderr_stamps_origin_head_branch_pr
-
-T_resolver_gh_pr_view_uses_explicit_branch() {
-  local gh_log
-  gh_log="$TEST_DIR/gh-log.txt"
-  rm -f "$gh_log"
-  export RESOLVER_SLEEP_SECS=1 RESOLVER_DRY_RUN=1 GH_STUB_PR=99 GH_STUB_LOG="$gh_log"
-  resolver_setup_feature_branch "feature-gh-arg"
-  echo '{"tool_input":{"command":"git push"}}' | bash agent/hooks/pr-review-resolver.sh >/dev/null 2>&1 || true
-  grep -qE '^pr view feature-gh-arg ' "$gh_log" || {
-    echo "expected 'gh pr view feature-gh-arg ...' invocation, log was:"
-    cat "$gh_log"
-    return 1
-  }
-}
-it "pr-review-resolver: gh pr view is called with the captured branch as an explicit arg" T_resolver_gh_pr_view_uses_explicit_branch
-
-T_resolver_bails_skip_worktree_creation() {
-  export RESOLVER_SLEEP_SECS=1 RESOLVER_DRY_RUN=1
-  # (a) main branch: no PR lookup, no worktree
-  git checkout -q -b main 2>/dev/null || git checkout -q main
-  export GH_STUB_PR=99
-  echo '{"tool_input":{"command":"git push origin main"}}' | bash agent/hooks/pr-review-resolver.sh >/dev/null 2>&1 || true
-  if compgen -G ".agent-reviews/worktrees/resolver-*" >/dev/null; then
-    echo "main-branch bail leaked a worktree"; return 1
-  fi
-  # (b) no PR: gh stub returns nothing, no worktree
-  resolver_setup_feature_branch "feature-bail-no-pr"
-  unset GH_STUB_PR
-  echo '{"tool_input":{"command":"git push"}}' | bash agent/hooks/pr-review-resolver.sh >/dev/null 2>&1 || true
-  if compgen -G ".agent-reviews/worktrees/resolver-*" >/dev/null; then
-    echo "no-PR bail leaked a worktree"; return 1
-  fi
-}
-it "pr-review-resolver: main-branch and no-PR bails skip worktree creation" T_resolver_bails_skip_worktree_creation
-
-T_resolver_sweeps_stale_worktrees_on_start() {
-  local stale
-  stale=".agent-reviews/worktrees/resolver-stale-abcdef1234"
-  export RESOLVER_SLEEP_SECS=1 RESOLVER_DRY_RUN=1 GH_STUB_PR=99
-  resolver_setup_feature_branch "feature-sweep"
-  mkdir -p "$stale"
-  perl -e '$t = time - 3600; utime $t, $t, @ARGV or die "utime failed: $!"' "$stale"
-  echo '{"tool_input":{"command":"git push"}}' | bash agent/hooks/pr-review-resolver.sh >/dev/null 2>&1 || true
-  [[ ! -d "$stale" ]] || {
-    echo "stale worktree directory survived the sweep: $stale"
-    return 1
-  }
-}
-it "pr-review-resolver: sweeps leaked resolver-* worktrees older than 30 minutes on hook start" T_resolver_sweeps_stale_worktrees_on_start
-
-T_resolver_headless_timeout_yields_failed_report() {
-  local report
-  export RESOLVER_SLEEP_SECS=1 GH_STUB_PR=99
-  export CLAUDE_STUB_SLEEP_SECS=5 AGENT_TIMEOUT_SECS=1
-  resolver_setup_feature_branch "feature-timeout"
-  echo '{"tool_input":{"command":"git push"}}' | bash agent/hooks/pr-review-resolver.sh >/dev/null 2>&1 || true
-  report=$(find .agent-reviews -maxdepth 1 -name 'pr-review-resolver-*.md' 2>/dev/null | head -1)
-  [[ -n "$report" ]] || { echo "report missing after timeout"; return 1; }
-  grep -q "FAILED" "$report" || {
-    echo "expected FAILED marker in timeout report; got:"
-    cat "$report"
-    return 1
-  }
-  # GNU timeout exits 124 on TERM; the report header records that code.
-  awk '/^## headless agent exit code$/{getline; print; exit}' "$report" | grep -qE '^124$' || {
-    echo "expected exit code 124 (timeout) in report, got:"
-    awk '/^## headless agent exit code$/{getline; print; exit}' "$report"
-    return 1
-  }
-}
-it "pr-review-resolver: AGENT_TIMEOUT_SECS bounds the headless agent and surfaces exit 124 in the report" T_resolver_headless_timeout_yields_failed_report
-
-# ---------------------------------------------------------------------------
-# doc-drift — worktree isolation + cross-session safety
-# ---------------------------------------------------------------------------
-
 T_doc_drift_headless_agent_runs_in_isolated_worktree() {
   local pwd_file head_file pwd_seen head_seen sandbox_root sandbox_head
   pwd_file="$TEST_DIR/claude-pwd.txt"
@@ -585,7 +270,7 @@ T_doc_drift_headless_agent_runs_in_isolated_worktree() {
   rm -f "$pwd_file" "$head_file"
   export GH_STUB_PR=42
   export CLAUDE_STUB_PWD_FILE="$pwd_file" CLAUDE_STUB_HEAD_FILE="$head_file"
-  resolver_setup_feature_branch "drift-iso"
+  setup_feature_branch "drift-iso"
   sandbox_root=$(pwd)
   sandbox_head=$(git rev-parse HEAD)
   echo '{"tool_input":{"command":"gh pr create --title x"}}' | bash agent/hooks/doc-drift.sh >/dev/null 2>&1 || true
@@ -611,7 +296,7 @@ T_doc_drift_stderr_stamps_origin_head_branch_pr() {
   local stderr_file head_short
   stderr_file="$TEST_DIR/stderr.txt"
   export GH_STUB_PR=42 DOC_DRIFT_DRY_RUN=1
-  resolver_setup_feature_branch "drift-stamp"
+  setup_feature_branch "drift-stamp"
   head_short=$(git rev-parse HEAD); head_short="${head_short:0:7}"
   echo '{"tool_input":{"command":"gh pr create --title x"}}' | bash agent/hooks/doc-drift.sh 2>"$stderr_file" || true
   grep -q "PR #42" "$stderr_file" || { echo "stderr missing PR; got: $(cat "$stderr_file")"; return 1; }
@@ -632,7 +317,7 @@ T_doc_drift_gh_pr_view_uses_explicit_branch() {
   gh_log="$TEST_DIR/gh-log.txt"
   rm -f "$gh_log"
   export GH_STUB_PR=42 DOC_DRIFT_DRY_RUN=1 GH_STUB_LOG="$gh_log"
-  resolver_setup_feature_branch "drift-gh-arg"
+  setup_feature_branch "drift-gh-arg"
   echo '{"tool_input":{"command":"gh pr create --title x"}}' | bash agent/hooks/doc-drift.sh >/dev/null 2>&1 || true
   grep -qE '^pr view drift-gh-arg ' "$gh_log" || {
     echo "expected 'gh pr view drift-gh-arg ...' invocation, log was:"

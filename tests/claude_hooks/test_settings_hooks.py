@@ -172,7 +172,6 @@ _EXPECTED_HANDLER_SCOPES: tuple[tuple[str, str], ...] = (
     # ...` (git-level options before the subcommand); the wrapper defers to
     # the Python scanner, which re-scopes to actual commit invocations.
     ("Git-commit-trailer-check", "Bash(git*)"),
-    ("PR review resolver", "Bash(git push *)"),
     ("Pre-PR review gate", "Bash(gh pr create *)"),
 )
 
@@ -184,7 +183,6 @@ _EXPECTED_SHARED_HOOK_COMMANDS: tuple[tuple[str, str], ...] = (
     ("Git-commit-trailer-check", "bash agent/hooks/git-commit-trailer-check.sh"),
     ("No-baseline-additions", "bash agent/hooks/no-baseline-additions.sh"),
     ("No-yaml-run-comments", "bash agent/hooks/no-yaml-run-comments.sh"),
-    ("PR review resolver", "bash agent/hooks/pr-review-resolver.sh"),
     ("PR-readiness gate", "bash agent/hooks/pr-readiness-stop.sh"),
     ("Taxonomy verification", "bash agent/hooks/verify-gh-taxonomy.sh"),
     ("Worktree guard", "bash agent/hooks/worktree-guard.sh"),
