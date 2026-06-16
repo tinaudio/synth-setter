@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
@@ -15,12 +15,12 @@ class TestMakeWandbRunId:
 
     def test_fixed_utc_timestamp_produces_expected_id(self) -> None:
         """A whole-second UTC timestamp yields ``<config_id>-YYYYMMDDTHHMMSS000Z``."""
-        ts = datetime(2026, 3, 13, 10, 0, 0, tzinfo=timezone.utc)
+        ts = datetime(2026, 3, 13, 10, 0, 0, tzinfo=UTC)
         assert make_wandb_run_id("flow_simple", timestamp=ts) == "flow_simple-20260313T100000000Z"
 
     def test_microseconds_render_as_three_digit_millis(self) -> None:
         """Sub-second precision is truncated to a 3-digit millisecond field."""
-        ts = datetime(2026, 5, 3, 13, 36, 33, 456789, tzinfo=timezone.utc)
+        ts = datetime(2026, 5, 3, 13, 36, 33, 456789, tzinfo=UTC)
         assert make_wandb_run_id("cfg", timestamp=ts) == "cfg-20260503T133633456Z"
 
     def test_naive_timestamp_raises(self) -> None:

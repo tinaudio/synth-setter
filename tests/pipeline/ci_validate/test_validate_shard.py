@@ -9,7 +9,7 @@ shard files it expects ``validate_all_shards_from_r2`` to download.
 from __future__ import annotations
 
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import h5py
@@ -50,7 +50,7 @@ def _create_shard(
 @pytest.fixture()
 def real_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> DatasetSpec:
     """Build a real DatasetSpec with mocked git/timestamp factories."""
-    fixed_now = datetime(2026, 3, 28, 12, 0, 0, tzinfo=timezone.utc)
+    fixed_now = datetime(2026, 3, 28, 12, 0, 0, tzinfo=UTC)
     monkeypatch.setattr("synth_setter.pipeline.schemas.spec._get_git_sha", lambda: "a" * 40)
     monkeypatch.setattr("synth_setter.pipeline.schemas.spec._is_repo_dirty", lambda: False)
     monkeypatch.setattr("synth_setter.pipeline.schemas.spec._utc_now", lambda: fixed_now)
