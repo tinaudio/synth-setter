@@ -28,10 +28,11 @@ after an rclone download. A review against the pinned library
   validate read directly from R2 via `storage_options`; the training dataloader
   keeps rclone local-first (random per-batch reads across epochs must not hit
   the network).
-- **#3 → pin `data_storage_version="2.1"`** on every `write_dataset` call.
-  Behavior-preserving today (equals the default), but locks the on-disk format
-  across pylance upgrades. (`"next"` panics at the Rust layer; `"2.1"` is the
-  stable anchor.)
+- **#3 → pin `data_storage_version="2.2"`** on every `write_dataset` call.
+  `"2.2"` is one format ahead of the pylance default / stable anchor (`"2.1"`);
+  it writes without the unstable-format warning (`"2.3"` does not) but requires
+  a reader new enough to open `"2.2"`. The pin locks the on-disk format across
+  pylance upgrades. (`"next"` panics at the Rust layer.)
 
 ## Non-goals / cutover
 
@@ -49,7 +50,7 @@ after an rclone download. A review against the pinned library
 
 ### Format version + storage_options helpers
 
-- `LANCE_DATA_STORAGE_VERSION = "2.1"` constant in `pipeline/data/lance_shard.py`,
+- `LANCE_DATA_STORAGE_VERSION = "2.2"` constant in `pipeline/data/lance_shard.py`,
   passed to every `write_dataset`.
 - New `r2_io.r2_storage_options() -> dict[str, str]`: reads the
   `RCLONE_CONFIG_R2_*` env (callers run `ensure_r2_env_loaded()` first) and

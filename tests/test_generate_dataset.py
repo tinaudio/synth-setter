@@ -33,12 +33,14 @@ from pathlib import Path
 from unittest.mock import patch
 
 import h5py
+import lance
 import numpy as np
 import pytest
 from omegaconf import DictConfig, open_dict
 
 from synth_setter.cli.generate_dataset import from_hydra, spec_from_cfg
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.data.lance_shard import LANCE_DATA_STORAGE_VERSION
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from tests.evaluation._oracle_helpers import ORACLE_AUDIO_METRIC_BOUNDS
 from tests.helpers.dummy_shards import stub_renderer
@@ -156,7 +158,8 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     Parametrized over ``output_format`` so every format's config surface
     runs the same loop with its own shard suffix (#1600). Asserts
     (1) ``smoke-shard`` partitions into one shard per split, (2) every shard
-    lands under its spec-derived R2 URI with the format's suffix, and (3) a
+    lands under its spec-derived R2 URI with the format's suffix, (3) the Lance
+    leg writes at the pinned ``LANCE_DATA_STORAGE_VERSION`` (#1714), and (4) a
     second ``from_hydra`` pass renders nothing because the probe finds all
     shards already present.
 
@@ -225,6 +228,14 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
             assert r2_io.r2_directory_exists(f"{spec.r2.shard_uri(shard)}/_versions"), (
                 f"committed shard missing in fake R2: {shard.filename}"
             )
+            if output_format == "lance":
+                # fake_r2_remote materializes r2://<bucket>/<key> at <root>/<bucket>/<key>.
+                shard_key = spec.r2.shard_uri(shard).removeprefix(r2_io.R2_URI_SCHEME)
+                shard_dir = fake_r2_remote / shard_key
+                assert (
+                    lance.dataset(str(shard_dir)).data_storage_version
+                    == LANCE_DATA_STORAGE_VERSION
+                ), f"shard {shard.filename} not written at pinned storage version"
         else:
             size = r2_io.object_size(spec.r2.shard_uri(shard))
             assert size is not None and size > 0, f"shard missing in fake R2: {shard.filename}"
