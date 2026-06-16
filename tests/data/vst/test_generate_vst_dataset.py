@@ -370,7 +370,7 @@ def _patched_sample(
     replay_iter = iter(replay)
     pull_count = [0]
 
-    def fake_sample() -> tuple[dict[str, float], NoteParams]:
+    def fake_sample(_rng: np.random.Generator | None = None) -> tuple[dict[str, float], NoteParams]:
         pull_count[0] += 1
         return next(replay_iter)
 
