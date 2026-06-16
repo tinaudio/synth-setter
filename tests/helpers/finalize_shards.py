@@ -197,6 +197,19 @@ def smoke_shard_metadata(render: RenderConfig) -> ShardMetadata:
     )
 
 
+def shard_seed_for_path(dest: Path, spec: DatasetSpec) -> int:
+    """Return the spec shard seed matching ``dest.name``.
+
+    :param dest: Shard path being written.
+    :param spec: Dataset spec whose shard filenames define per-shard seeds.
+    :returns: Matching shard seed, or the first shard seed for ad hoc test paths.
+    """
+    for shard in spec.shards:
+        if shard.filename == dest.name:
+            return shard.seed
+    return spec.shards[0].seed
+
+
 def write_minimal_lance_shard(dest: Path, spec: DatasetSpec) -> None:
     """Write a structurally valid Lance shard for ``spec`` at ``dest``.
 
@@ -210,7 +223,7 @@ def write_minimal_lance_shard(dest: Path, spec: DatasetSpec) -> None:
     )
 
     dest.parent.mkdir(parents=True, exist_ok=True)
-    render = spec.render.model_copy(update={"base_seed": spec.shards[0].seed})
+    render = spec.render.model_copy(update={"base_seed": shard_seed_for_path(dest, spec)})
     shapes = dataset_field_shapes(render, spec.num_params)
     schema = lance_schema(shapes, smoke_shard_metadata(render))
     arrays = {
