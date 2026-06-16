@@ -28,6 +28,45 @@ from tests.helpers.finalize_shards import build_hdf5_smoke_spec
 _BASE_SEED = 20260615
 
 
+def _read_param_array(out: Path) -> np.ndarray:
+    """Read a rendered shard's encoded parameter rows.
+
+    :param out: Rendered HDF5 shard path.
+    :returns: ``param_array`` rows from the shard.
+    """
+    with h5py.File(out, "r") as f:
+        param_array = f[PARAM_ARRAY_FIELD]
+        assert isinstance(param_array, h5py.Dataset)
+        return param_array[...]
+
+
+def _read_int_attr(attrs: h5py.AttributeManager, key: str) -> int:
+    """Return an integer HDF5 attr, failing if the stored value is not scalar.
+
+    :param attrs: HDF5 attribute manager to read from.
+    :param key: Attribute key.
+    :returns: Scalar integer attribute value.
+    """
+    value = attrs[key]
+    assert isinstance(value, int | np.integer)
+    return int(value)
+
+
+def _read_seed_metadata(out: Path) -> dict[str, int]:
+    """Read seed provenance attrs from a rendered HDF5 shard.
+
+    :param out: Rendered HDF5 shard path.
+    :returns: Seed provenance attrs relevant to repeat-run determinism.
+    """
+    with h5py.File(out, "r") as f:
+        audio = f[AUDIO_FIELD]
+        assert isinstance(audio, h5py.Dataset)
+        return {
+            "base_seed": _read_int_attr(audio.attrs, "base_seed"),
+            "attempts_per_sample": _read_int_attr(audio.attrs, "attempts_per_sample"),
+        }
+
+
 def _render_param_array(out: Path, *, base_seed: int, num_samples: int) -> np.ndarray:
     """Render a fake-plugin HDF5 shard and return its parameter array.
 
@@ -42,10 +81,7 @@ def _render_param_array(out: Path, *, base_seed: int, num_samples: int) -> np.nd
         update={"base_seed": base_seed}
     )
     make_hdf5_dataset(hdf5_file=out, render_cfg=cfg)
-    with h5py.File(out, "r") as f:
-        param_array = f[PARAM_ARRAY_FIELD]
-        assert isinstance(param_array, h5py.Dataset)
-        return param_array[...]
+    return _read_param_array(out)
 
 
 def _render_worker_layout(
@@ -93,6 +129,31 @@ def test_same_base_seed_yields_identical_param_arrays(
     a = _render_param_array(tmp_path / "a.h5", base_seed=_BASE_SEED, num_samples=4)
     b = _render_param_array(tmp_path / "b.h5", base_seed=_BASE_SEED, num_samples=4)
     assert np.array_equal(a, b)
+
+
+@pytest.mark.fake_vst
+def test_same_render_config_yields_identical_params_and_seed_metadata(
+    tmp_path: Path, install_fake_plugin: FakeVST3Plugin
+) -> None:
+    """Same experiment renders identical params and seed provenance twice.
+
+    :param tmp_path: Pytest fixture providing destination paths.
+    :param install_fake_plugin: Swaps the VST loader for a deterministic fake plugin.
+    """
+    first = tmp_path / "first.h5"
+    second = tmp_path / "second.h5"
+    cfg = _fake_render_cfg(num_samples=4, min_loudness=float("-inf")).model_copy(
+        update={"base_seed": _BASE_SEED, "attempts_per_sample": 3}
+    )
+
+    make_hdf5_dataset(hdf5_file=first, render_cfg=cfg)
+    make_hdf5_dataset(hdf5_file=second, render_cfg=cfg)
+
+    assert np.array_equal(_read_param_array(first), _read_param_array(second))
+    assert _read_seed_metadata(first) == _read_seed_metadata(second) == {
+        "base_seed": _BASE_SEED,
+        "attempts_per_sample": 3,
+    }
 
 
 @pytest.mark.fake_vst
