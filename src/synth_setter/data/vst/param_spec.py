@@ -18,7 +18,7 @@ class Parameter:
     def __init__(self, name: str):
         self.name = name
 
-    def sample(self, rng: np.random.Generator) -> float | tuple[float, float]:
+    def sample(self, rng: np.random.Generator) -> Any:
         raise NotImplementedError
 
 

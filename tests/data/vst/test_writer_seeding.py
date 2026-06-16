@@ -48,7 +48,7 @@ def _read_int_attr(attrs: h5py.AttributeManager, key: str) -> int:
     :returns: Scalar integer attribute value.
     """
     value = attrs[key]
-    assert isinstance(value, int | np.integer)
+    assert isinstance(value, (int, np.integer))
     return int(value)
 
 
