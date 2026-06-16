@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781632390960,
+  "lastUpdate": 1781632392994,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -12762,6 +12762,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 15.764055517800022,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3a7d6ed928f64f6ff814d869e8440ebd9ff50536",
+          "message": "ci(testing): trial standard ubuntu-latest runner for slow CPU and VST suites (#1726)\n\nBoth slow suites run pytest serially (no `-n auto`), so per-test PyTorch\npeak — not xdist parallelism — is the only OOM risk on the smaller runner.\nThis swaps `ubuntu-latest-4core` for the standard 2-core/7 GB `ubuntu-latest`\nto measure whether they still OOM; the 4-core label was a 2x-cost driver in\nGitHub Actions billing. Revert per-job if runs exit 137.\n\nCo-authored-by: khaledtin <khaledtin@users.noreply.github.com>",
+          "timestamp": "2026-06-16T13:22:50-04:00",
+          "tree_id": "bc4c13769e1c0e1aecdb2e2fd30c17f2aa2684df",
+          "url": "https://github.com/tinaudio/synth-setter/commit/3a7d6ed928f64f6ff814d869e8440ebd9ff50536"
+        },
+        "date": 1781632392711,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 3.1129112243652344,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 5.961996467113495,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.02405753917992115,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.12124383449554443,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 2.394282341003418,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 16.34383978850001,
             "unit": "seconds"
           }
         ]
