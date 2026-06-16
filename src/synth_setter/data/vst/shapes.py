@@ -23,6 +23,11 @@ MEL_SPEC_FIELD: str = "mel_spec"
 PARAM_ARRAY_FIELD: str = "param_array"
 DATASET_FIELD_NAMES: tuple[str, ...] = (AUDIO_FIELD, MEL_SPEC_FIELD, PARAM_ARRAY_FIELD)
 
+# Optional audio-embedding columns appended post-hoc by the add_embeddings CLI;
+# not in DATASET_FIELD_NAMES because the writers never emit them.
+M2L_FIELD: str = "m2l"
+CLAP_FIELD: str = "clap"
+
 # Per-field on-disk dtype, matching what the HDF5 / wds writers emit. Audio is
 # stored as ``float16`` for compressed storage efficiency; mel and params stay
 # ``float32``. Consumers upcast as needed; this map is the single source of

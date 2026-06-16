@@ -9,7 +9,8 @@ name: VST Slow Tests
 # waiting for Xvfb to start" intermittently — see the failing run at
 # https://github.com/tinaudio/synth-setter/actions/runs/25026506440 — which
 # is why this lives in its own Docker-only workflow rather than as another
-# step in ``test-expensive.yml``.
+# step in ``test-expensive.yml``. The host ``runs-on:`` label is independent —
+# Xvfb runs inside the container regardless of runner size.
 #
 # Also publishes per-run audio-similarity metrics to the ``gh-pages``
 # benchmark chart (Issue #703) on push-to-main, or on dispatch when the
@@ -77,7 +78,9 @@ permissions:
 jobs:
   run_vst_slow_tests:
     name: VST slow tests (Docker, ${{ matrix.synth }})
-    runs-on: ubuntu-latest-4core
+    # Standard 2-core/7 GB `ubuntu-latest`: pytest runs serially in the Docker image (which supplies Xvfb),
+    # so per-test peak is the only OOM risk; an exit-137 OOM means re-pin to `ubuntu-latest-4core`.
+    runs-on: ubuntu-latest
     timeout-minutes: 120
 
     # No write grant here: both matrix cells stay at the workflow-default

@@ -30,6 +30,7 @@ download to a tempfile first, Lance shards stream directly from R2.
 from __future__ import annotations
 
 import io
+import json
 import re
 import sys
 import tarfile
@@ -56,6 +57,7 @@ from synth_setter.pipeline.spec_io import read_spec_text
 
 _TAR_METADATA_MEMBER = "metadata.json"
 _TAR_NPY_NAME_RE = re.compile(r"^(?P<batch_key>\d{8})\.(?P<field>[^./]+)\.npy$")
+_SHARD_METADATA_FIELDS = frozenset(ShardMetadata.model_fields)
 
 
 def _check_dataset_dtype(shard: Path, key: str, observed: np.dtype) -> None:
@@ -210,6 +212,9 @@ def _validate_h5_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
         return [f"file is not valid HDF5: {shard_path}"]
 
     expected_shapes = _expected_dataset_shapes(spec)
+    expected_metadata = _expected_shard_metadata(
+        spec, base_seed=_expected_base_seed_for_shard(shard_path, spec)
+    )
     errors: list[str] = []
     with f:
         for name in DATASET_FIELD_NAMES:
@@ -220,11 +225,103 @@ def _validate_h5_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
             expected = expected_shapes[name]
             if actual != expected:
                 errors.append(f"dataset {name!r} has shape {actual}, expected {expected}")
+            if name == "audio":
+                errors.extend(
+                    _validate_h5_metadata(cast(h5py.Dataset, f[name]), expected_metadata)
+                )
 
     return errors
 
 
-def _validate_tar_metadata(tar: tarfile.TarFile, member_name: str) -> list[str]:
+def _metadata_mismatch_errors(
+    metadata: ShardMetadata,
+    expected: ShardMetadata,
+    source: str,
+    present_fields: set[str] | frozenset[str],
+) -> list[str]:
+    """Return errors for sidecar provenance that disagrees with the input spec.
+
+    :param metadata: Metadata parsed from the shard being validated.
+    :param expected: Metadata projected from the spec used for validation.
+    :param source: Human-readable metadata source for the error prefix.
+    :param present_fields: Metadata fields physically present in the artifact.
+    :returns: One error per mismatched field.
+    """
+    errors: list[str] = []
+    for field in ("base_seed", "attempts_per_sample"):
+        if field not in present_fields:
+            continue
+        observed = getattr(metadata, field)
+        wanted = getattr(expected, field)
+        if observed != wanted:
+            errors.append(f"{source}: {field}={observed!r} does not match spec value {wanted!r}")
+    return errors
+
+
+def _normalize_h5_attr(value: object) -> object:
+    """Convert h5py scalar attrs to native Python values before strict validation.
+
+    :param value: Attribute value read from h5py.
+    :returns: Native scalar when ``value`` is a numpy scalar; otherwise ``value`` unchanged.
+    """
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
+def _expected_base_seed_for_shard(shard_path: Path, spec: DatasetSpec) -> int:
+    """Return the seed the launcher injects for ``shard_path``.
+
+    :param shard_path: Local path being validated.
+    :param spec: Dataset spec whose ``shards`` define per-shard seeds.
+    :returns: Matching ``ShardSpec.seed``, or ``spec.render.base_seed`` for ad hoc paths.
+    """
+    for shard in spec.shards:
+        if shard.filename == shard_path.name:
+            return shard.seed
+    return spec.render.base_seed
+
+
+def _expected_shard_metadata(spec: DatasetSpec, *, base_seed: int | None = None) -> ShardMetadata:
+    """Project the spec's render config onto the shard metadata contract.
+
+    :param spec: Dataset spec whose render config the shard should match.
+    :param base_seed: Per-shard seed injected into the renderer; defaults to
+        ``spec.render.base_seed`` for ad hoc validation paths.
+    :returns: Strict shard metadata expected for rendered shards.
+    """
+    return ShardMetadata(
+        velocity=spec.render.velocity,
+        signal_duration_seconds=spec.render.signal_duration_seconds,
+        sample_rate=spec.render.sample_rate,
+        channels=spec.render.channels,
+        min_loudness=spec.render.min_loudness,
+        base_seed=spec.render.base_seed if base_seed is None else base_seed,
+        attempts_per_sample=spec.render.attempts_per_sample,
+    )
+
+
+def _validate_h5_metadata(dataset: h5py.Dataset, expected: ShardMetadata) -> list[str]:
+    """Validate HDF5 ``audio.attrs`` metadata when a shard carries it.
+
+    :param dataset: Open audio dataset whose attrs may contain shard metadata.
+    :param expected: Shard metadata projected from the spec under validation.
+    :returns: One error per invalid or mismatched metadata field.
+    """
+    present_fields = _SHARD_METADATA_FIELDS & set(dataset.attrs)
+    if not present_fields:
+        return []
+    payload = {field: _normalize_h5_attr(dataset.attrs[field]) for field in present_fields}
+    try:
+        metadata = ShardMetadata.model_validate(payload)
+    except ValidationError as exc:
+        return [f"audio attrs: invalid ShardMetadata: {exc}"]
+    return _metadata_mismatch_errors(metadata, expected, "audio attrs", present_fields)
+
+
+def _validate_tar_metadata(
+    tar: tarfile.TarFile, member_name: str, expected: ShardMetadata
+) -> list[str]:
     """Validate the tar's ``metadata.json`` parses as a strict ``ShardMetadata``.
 
     Trust-boundary parse: ``ShardMetadata`` is constructed with
@@ -233,7 +330,8 @@ def _validate_tar_metadata(tar: tarfile.TarFile, member_name: str) -> list[str]:
 
     :param tar: Open ``TarFile`` handle. Caller owns the lifecycle.
     :param member_name: Name of the metadata member to extract.
-    :returns: One error string per problem; empty if metadata is valid.
+    :param expected: Shard metadata projected from the spec under validation.
+    :returns: One error string per problem; empty if metadata is valid and matches.
     :rtype: list[str]
     """
     extracted = tar.extractfile(member_name)
@@ -241,10 +339,11 @@ def _validate_tar_metadata(tar: tarfile.TarFile, member_name: str) -> list[str]:
         return [f"unable to extract tar member: {member_name!r}"]
     payload = extracted.read()
     try:
-        ShardMetadata.model_validate_json(payload)
+        metadata = ShardMetadata.model_validate_json(payload)
     except ValidationError as exc:
         return [f"{member_name}: invalid ShardMetadata: {exc}"]
-    return []
+    present_fields = _SHARD_METADATA_FIELDS & set(json.loads(payload))
+    return _metadata_mismatch_errors(metadata, expected, member_name, present_fields)
 
 
 def _validate_tar_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
@@ -276,6 +375,9 @@ def _validate_tar_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
         return [f"file is not a valid uncompressed tar archive: {shard_path}"]
 
     expected_inner = {field: shape[1:] for field, shape in _expected_dataset_shapes(spec).items()}
+    expected_metadata = _expected_shard_metadata(
+        spec, base_seed=_expected_base_seed_for_shard(shard_path, spec)
+    )
     errors: list[str] = []
     with tar:
         members = sorted(m.name for m in tar.getmembers())
@@ -283,7 +385,7 @@ def _validate_tar_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
         if _TAR_METADATA_MEMBER not in members:
             errors.append(f"missing tar member: {_TAR_METADATA_MEMBER!r}")
         else:
-            errors.extend(_validate_tar_metadata(tar, _TAR_METADATA_MEMBER))
+            errors.extend(_validate_tar_metadata(tar, _TAR_METADATA_MEMBER, expected_metadata))
 
         rows_by_batch: dict[str, dict[str, int]] = {}
         for name in members:
@@ -330,26 +432,41 @@ def _validate_lance_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
         dataset = lance.dataset(str(shard_path))
     except (OSError, ValueError, RuntimeError) as exc:
         return [f"path is not a valid Lance dataset: {shard_path}: {exc}"]
-    return _validate_lance_dataset(dataset, spec)
+    return _validate_lance_dataset(
+        dataset, spec, base_seed=_expected_base_seed_for_shard(shard_path, spec)
+    )
 
 
-def _validate_lance_dataset(dataset: lance.LanceDataset, spec: DatasetSpec) -> list[str]:
+def _validate_lance_dataset(
+    dataset: lance.LanceDataset, spec: DatasetSpec, *, base_seed: int | None = None
+) -> list[str]:
     """Validate an open Lance shard dataset's schema, metadata, and row count.
 
     Shared by the local-path and direct-from-R2 validators.
 
     :param dataset: Open Lance dataset handle for one shard.
     :param spec: Dataset spec the shard is expected to conform to.
+    :param base_seed: Per-shard seed expected in schema metadata.
     :returns: List of error strings (empty = valid).
     """
     from synth_setter.pipeline.data.lance_shard import read_shard_metadata
 
     errors: list[str] = []
     schema = dataset.schema
+    expected_metadata = _expected_shard_metadata(spec, base_seed=base_seed)
     try:
-        read_shard_metadata(schema)
+        metadata = read_shard_metadata(schema)
     except ValueError as exc:
         errors.append(str(exc))
+    else:
+        errors.extend(
+            _metadata_mismatch_errors(
+                metadata,
+                expected_metadata,
+                "Lance schema metadata",
+                metadata.model_fields_set,
+            )
+        )
 
     num_rows = dataset.count_rows()
     if num_rows != spec.render.samples_per_shard:
@@ -541,7 +658,7 @@ def _validate_all_lance_shards_from_r2(spec: DatasetSpec) -> list[str]:
         s3_uri = r2_io.to_s3_uri(spec.r2.shard_uri(shard))
         try:
             dataset = lance.dataset(s3_uri, storage_options=storage_options)
-            shard_errors = _validate_lance_dataset(dataset, spec)
+            shard_errors = _validate_lance_dataset(dataset, spec, base_seed=shard.seed)
         except (OSError, ValueError, RuntimeError) as exc:
             shard_errors = [f"path is not a valid Lance dataset: {s3_uri}: {exc}"]
         for err in shard_errors:

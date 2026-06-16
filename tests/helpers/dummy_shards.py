@@ -29,7 +29,11 @@ from synth_setter.data.vst.shapes import (
 )
 from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat
 from synth_setter.pipeline.subprocess_stream import check_call_streamed
-from tests.helpers.finalize_shards import smoke_shard_metadata, write_minimal_lance_shard
+from tests.helpers.finalize_shards import (
+    shard_seed_for_path,
+    smoke_shard_metadata,
+    write_minimal_lance_shard,
+)
 from tests.helpers.subprocess_args import find_script_index
 
 # rclone passthrough: bound from the pipeline module, so it bypasses the patched
@@ -66,7 +70,7 @@ def write_dummy_tar_shard(output_path: Path, spec: DatasetSpec) -> None:
         per-field array shapes and the ``ShardMetadata`` field values.
     :raises ValueError: If a field name is not in ``DATASET_FIELD_NAMES``.
     """
-    render = spec.render
+    render = spec.render.model_copy(update={"base_seed": shard_seed_for_path(output_path, spec)})
     shapes = dataset_field_shapes(render, spec.num_params)
     audio = np.zeros(shapes[AUDIO_FIELD], dtype=DATASET_FIELD_DTYPES[AUDIO_FIELD])
     mel = np.zeros(shapes[MEL_SPEC_FIELD], dtype=DATASET_FIELD_DTYPES[MEL_SPEC_FIELD])

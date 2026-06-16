@@ -127,7 +127,7 @@ make finalize ARGS="--run-id surge-simple-480k-10k-20260313T100000123Z"
 
 ### Goals
 
-- **Reproducible pipeline with full provenance.** The input spec freezes all generation parameters — per-shard seeds, shapes, renderer version. Re-running from the same spec on the same hardware and Docker image produces an identical dataset. This is a *controlled-conditions* guarantee, not an absolute one: VST plugin floating-point behavior may vary across CPU architectures, and Docker base image updates could change system libraries. The pipeline records enough provenance to detect and diagnose these differences (git commit, `is_repo_dirty: bool`, renderer version, per-shard content hashes), but does not claim bit-identical output across arbitrary hardware. Provenance matters because this is ML research: when a model behaves unexpectedly, you need to trace from the trained model back to the exact dataset, the exact code that generated it, and which worker attempt produced each shard. Per-shard provenance is tracked via lifecycle markers and content hashes in worker reports.
+- **Reproducible pipeline with full provenance.** The input spec freezes all generation parameters: seeds, shapes, splits, and renderer version. Re-running from the same spec on the same hardware and Docker image produces an identical dataset. This is a *controlled-conditions* guarantee, not an absolute one: VST plugin floating-point behavior may vary across CPU architectures, and Docker base image updates could change system libraries. The pipeline records enough provenance to detect and diagnose these differences (git commit, `is_repo_dirty: bool`, renderer version, per-shard content hashes), but does not claim bit-identical output across arbitrary hardware. Provenance matters because this is ML research: when a model behaves unexpectedly, you need to trace from the trained model back to the exact dataset, the exact code that generated it, and which worker attempt produced each shard. Per-shard provenance is tracked via lifecycle markers and content hashes in worker reports. See [Deterministic Dataset Seeding](deterministic-seeding.md) for the seed contract.
 - **Minimal hand-holding.** Two commands, no babysitting. Launch generation, come back later, run finalize. No monitoring dashboards to watch, no coordination services to keep alive, no manual intervention between steps.
 - **Debugability.** When something fails, the failure is easy to find and understand. Per-shard error tracking, structured debug logs that survive crashes, reconciliation reports that show exactly which shards are missing and why. No need to dig through cloud provider consoles.
 - **Low cost.** Cheap GPUs, free egress, no infrastructure to manage. A full dataset generation run costs ~$2. Monthly compute at 1-2 runs/week is ~$8-16. R2 storage accumulates but free egress makes it far cheaper than S3 for frequently-downloaded datasets.
@@ -751,7 +751,6 @@ All worker artifacts live under `metadata/workers/`. Unique filenames per attemp
 
 ```python
 import multiprocessing
-import random
 
 _spawn_ctx = multiprocessing.get_context("spawn")
 
@@ -761,11 +760,7 @@ def _render_shard(shard_spec, shard_path):
     Under spawn, the child is a fresh Python interpreter with no inherited state.
     The import happens here, in the child, so the VST plugin loads cleanly.
     """
-    import numpy as np
     from synth_setter.data.vst.writers import make_hdf5_dataset
-    # P3 (post-launch): seed both RNGs for reproducibility — see #100
-    # random.seed(shard_spec.seed)
-    # np.random.seed(shard_spec.seed)
     make_hdf5_dataset(shard_path, shard_spec)
 
 # In the parent worker:
@@ -793,26 +788,20 @@ else:
 
 **Why not direct function call (`make_hdf5_dataset()` in-process):** A direct call is simpler and avoids per-shard process overhead, but a SIGSEGV in the plugin kills the entire worker process. Per-shard try/except cannot catch OS-level signals. The bash EXIT trap (Layer 2) would upload logs, and reconciliation (Layer 3) would detect the missing shards — but all in-progress shards on that worker are lost, not just the crashing one. For a 48-shard worker, losing all shards to one bad shard is unacceptable.
 
-**Why not `subprocess.run` calling `generate_vst_dataset.py`:** Same crash isolation as `multiprocessing.Process`, but requires adding a `--seed` CLI parameter to `generate_vst_dataset.py` (which doesn't exist). The subprocess approach also makes testing harder — you'd need to mock the subprocess, which couples tests to CLI argument construction. With `multiprocessing.Process`, the child imports `make_hdf5_dataset` directly and receives only simple data (`shard_spec`, `shard_path`) as args. For tests, `LocalBackend` runs in-process (no spawn) so test fixtures can inject a fake generate function directly.
+**Why not `subprocess.run` calling `generate_vst_dataset.py`:** Same crash isolation as `multiprocessing.Process`, but makes tests couple to CLI argument construction. With `multiprocessing.Process`, the child imports `make_hdf5_dataset` directly and receives only simple data (`shard_spec`, `shard_path`) as args. For tests, `LocalBackend` runs in-process (no spawn) so test fixtures can inject a fake generate function directly.
 
-**P3 — Dual-RNG seeding (post-launch, [#100](https://github.com/tinaudio/synth-setter/issues/100)):** The existing VST parameter sampling code (`param_spec.py`) uses both `random` (stdlib) and `np.random` for parameter generation. For v1, shards generate without seeding (current behavior — non-reproducible but correct). The seeding lines in `_render_shard` above are commented out until this is implemented. Post-launch, uncomment and seed both RNGs from `shard_spec.seed`:
-
-```python
-import numpy as np
-random.seed(shard_spec.seed)
-np.random.seed(shard_spec.seed)
-```
-
-Without dual seeding, parameters sampled via `np.random.choice` / `np.random.uniform` / `np.random.randint` in `param_spec.py` still use OS entropy. Required for debugging and exact dataset recreation, but not for generating a correct dataset.
+**Seeding design:** See
+[Deterministic Dataset Seeding](deterministic-seeding.md) for the canonical
+seed flow, guarantees, current status, and tracked follow-up work.
 
 **Trade-off summary:**
 
-| Approach                    | Crash isolation             | Seed passing             | Per-shard timeout   | Plugin state                       | Testability                        |
-| --------------------------- | --------------------------- | ------------------------ | ------------------- | ---------------------------------- | ---------------------------------- |
-| Direct function call        | None (SIGSEGV kills worker) | `random.seed()`          | Manual timer        | Shared (unsafe if mutable)         | Inject fake `generate_fn`          |
-| `multiprocessing` fork      | OS process boundary         | Python arg               | `join(timeout)`     | Inherited via COW (unsafe for VST) | Inject fake `generate_fn`          |
-| **`multiprocessing` spawn** | **OS process boundary**     | **Python arg**           | **`join(timeout)`** | **Fresh load (clean)**             | **LocalBackend in-process inject** |
-| `subprocess.run`            | OS process boundary         | Needs `--seed` CLI param | `timeout=` kwarg    | Fresh load (clean)                 | Must mock subprocess               |
+| Approach                    | Crash isolation             | Seed passing   | Per-shard timeout   | Plugin state                       | Testability                        |
+| --------------------------- | --------------------------- | -------------- | ------------------- | ---------------------------------- | ---------------------------------- |
+| Direct function call        | None (SIGSEGV kills worker) | Python arg     | Manual timer        | Shared (unsafe if mutable)         | Inject fake `generate_fn`          |
+| `multiprocessing` fork      | OS process boundary         | Python arg     | `join(timeout)`     | Inherited via COW (unsafe for VST) | Inject fake `generate_fn`          |
+| **`multiprocessing` spawn** | **OS process boundary**     | **Python arg** | **`join(timeout)`** | **Fresh load (clean)**             | **LocalBackend in-process inject** |
+| `subprocess.run`            | OS process boundary         | CLI args       | `timeout=` kwarg    | Fresh load (clean)                 | Must mock subprocess               |
 
 **Cost:** Per-shard process startup (~0.5-1s) plus fresh plugin load (~1-3s for Surge XT). Shard renders take minutes, so this is negligible — roughly 1-3% overhead.
 
@@ -1152,14 +1141,19 @@ The following are of interest for next steps but are out of scope for this docum
 
 Additional stages could follow the same contract (§5) without modifying existing stages:
 
-| Stage              | Input        | Output                 | Compute |
-| ------------------ | ------------ | ---------------------- | ------- |
-| **augment-reverb** | raw shards   | augmented shards       | CPU     |
-| **add-captions**   | audio shards | shards + text column   | GPU     |
-| **add-embeddings** | audio shards | shards + latent column | GPU     |
-| **render-presets** | preset bank  | audio shards           | CPU     |
+| Stage              | Input        | Output               | Compute |
+| ------------------ | ------------ | -------------------- | ------- |
+| **augment-reverb** | raw shards   | augmented shards     | CPU     |
+| **add-captions**   | audio shards | shards + text column | GPU     |
+| **render-presets** | preset bank  | audio shards         | CPU     |
 
-The first such stage has landed and validates this contract: `synth-setter-add-mp3-audio` (`pipeline/data/add_mp3_audio.py`) takes Lance audio shards and adds an `audio_mp3` preview column (CPU), without modifying existing stages.
+`add-embeddings` is now implemented as the `synth-setter-add-embeddings` CLI: it
+augments a finalized Lance dataset in place with a `clap` (LAION-CLAP)
+`FixedSizeList<float32, 512>` vector column — optionally IVF_PQ-indexed for
+`nearest=` vector search — and an `m2l` (music2latent) fixed-shape-tensor
+latent column, both derived from the audio column.
+
+`synth-setter-add-mp3-audio` (`pipeline/data/add_mp3_audio.py`) follows the same contract: it takes Lance audio shards and adds an `audio_mp3` preview column (CPU), without modifying existing stages.
 
 Stage order would remain static and explicit — user runs commands in sequence. If the number of stages grows to 4-6 and manual commands become unwieldy, adopt Prefect rather than building a homegrown orchestrator.
 
@@ -1217,6 +1211,7 @@ class RenderConfig(BaseModel):
     min_loudness: float
     samples_per_render_batch: int = 32
     samples_per_shard: int
+    attempts_per_sample: int = 100
     max_retries: int = 0        # per-shard retry budget for transient renderer failures
     parallel: bool = False      # dispatch shard renders concurrently (ThreadPoolExecutor)
     plugin_reload_cadence: Literal["once", "render"] = "render"
@@ -1244,7 +1239,7 @@ class DatasetSpec(BaseModel):
     task_name: str
     output_format: Literal["hdf5", "wds"]
     train_val_test_sizes: tuple[int, int, int]
-    train_val_test_seeds: tuple[int, int, int]
+    train_val_test_seeds: tuple[int, int, int] | None = None
     base_seed: int
     # Sub-models
     render: RenderConfig
@@ -1272,7 +1267,10 @@ class DatasetSpec(BaseModel):
 
 All three models (`DatasetSpec`, `RenderConfig`, `ShardSpec`) use Pydantic strict mode at the trust boundary. JSON-mode coercions (`list→tuple` for `train_val_test_sizes` / `train_val_test_seeds`, `str→datetime` for `created_at`) are handled by explicit per-field validators on `DatasetSpec`; `extra="forbid"` plus those validators keep the boundary tight without relaxing strict. `frozen=True` makes specs immutable at the type level.
 
-**Seed derivation:** Per-shard seeds are computed deterministically during spec materialization: `seed = base_seed + shard_id`, where `base_seed` is derived from the run config. This means the same config always produces the same spec (and therefore the same seeds). Reproducibility comes from re-running with the same frozen spec — the spec is the reproducibility unit, not the config.
+**Seed derivation:** `DatasetSpec` stores `base_seed`, each `ShardSpec` stores
+the derived shard seed, and row-level retries derive per-sample RNGs from that
+shard seed. See [Deterministic Dataset Seeding](deterministic-seeding.md) for
+the canonical seeding design.
 
 **Why JSON for specs and reports:** Machine-generated, stored in R2, read back by the CLI. JSON is the simplest correct format — Pydantic has native JSON methods (`.model_dump_json()` / `.model_validate_json()`), it's human-readable (`rclone cat` + `jq`), and handles nested structures natively. Config files use YAML because they're human-authored.
 

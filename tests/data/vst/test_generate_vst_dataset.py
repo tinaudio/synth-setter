@@ -379,7 +379,7 @@ def _patched_sample(
     replay_iter = iter(replay)
     pull_count = [0]
 
-    def fake_sample() -> tuple[dict[str, float], NoteParams]:
+    def fake_sample(_rng: np.random.Generator | None = None) -> tuple[dict[str, float], NoteParams]:
         pull_count[0] += 1
         return next(replay_iter)
 
@@ -1207,7 +1207,7 @@ def test_generate_sample_retries_when_only_fixed_note_params(
             (_HARDCODED_SYNTH_PARAMS, _HARDCODED_NOTE_PARAMS),
         ]
     )
-    monkeypatch.setattr(spec, "sample", lambda: next(sample_returns))
+    monkeypatch.setattr(spec, "sample", lambda rng=None: next(sample_returns))
 
     sample = generate_vst_dataset.generate_sample(
         plugin_path=PLUGIN_PATH,
@@ -1261,7 +1261,7 @@ def _install_fake_render_params(
     monkeypatch.setattr(generate_vst_dataset, "render_params", _fake_render_params)
 
     sample_returns = iter([(_HARDCODED_SYNTH_PARAMS, _HARDCODED_NOTE_PARAMS)] * (num_retries + 1))
-    monkeypatch.setattr(spec, "sample", lambda: next(sample_returns))
+    monkeypatch.setattr(spec, "sample", lambda rng=None: next(sample_returns))
     return warmup_mock
 
 
@@ -1916,6 +1916,31 @@ def test_copy_dataset_reproduces_source_param_array(tmp_path: Path) -> None:
         atol=_ABSOLUTE_TOLERANCE,
         err_msg="copied dataset param_array does not match source",
     )
+
+
+@pytest.mark.slow
+@pytest.mark.requires_vst
+def test_same_seed_real_plugin_renders_bitwise_identical_param_arrays(tmp_path: Path) -> None:
+    """Two real Surge XT renders with the same seed produce byte-identical params.
+
+    :param tmp_path: Pytest temp dir holding both rendered shards.
+    """
+    num_samples = 2
+    render_cfg = _render_cfg(num_samples, min_loudness=float("-inf")).model_copy(
+        update={"base_seed": 8675309}
+    )
+    first = tmp_path / "first.h5"
+    second = tmp_path / "second.h5"
+
+    make_hdf5_dataset(hdf5_file=first, render_cfg=render_cfg)
+    make_hdf5_dataset(hdf5_file=second, render_cfg=render_cfg)
+
+    with h5py.File(first, "r") as first_h5, h5py.File(second, "r") as second_h5:
+        first_params = first_h5[PARAM_ARRAY_FIELD]
+        second_params = second_h5[PARAM_ARRAY_FIELD]
+        assert isinstance(first_params, h5py.Dataset)
+        assert isinstance(second_params, h5py.Dataset)
+        assert np.array_equal(first_params[...], second_params[...])
 
 
 # HDF5 resume correctness: output row i renders fixed_*_params_list[i] by absolute

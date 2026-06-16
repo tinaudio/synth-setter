@@ -761,6 +761,29 @@ PYEOF
 }
 it "edit-write: test mode falls back to flat layout tests/test_<base>.py when mirror missing" T_edit_write_test_mode_falls_back_to_flat_layout
 
+T_edit_write_format_preserves_unused_import() {
+  command -v jq >/dev/null 2>&1 \
+    || { echo "jq not on PATH — cannot parse the hook payload"; return 1; }
+  command -v ruff >/dev/null 2>&1 \
+    || { echo "ruff not on PATH — cannot exercise the format hook"; return 1; }
+  local scratch
+  scratch=$(mktemp -d "$TEST_DIR/scratch-XXXX")
+  local py="$scratch/probe.py"
+  printf 'import os\nx=1\n' > "${py}" \
+    || { echo "could not write probe file"; rm -rf "$scratch"; return 1; }
+  echo "{\"tool_input\":{\"file_path\":\"${py}\"}}" \
+    | bash "$REPO_ROOT/agent/hooks/edit-write.sh" format >/dev/null 2>&1
+  [[ -f "${py}" ]] || { echo "probe file vanished — hook errored"; rm -rf "$scratch"; return 1; }
+  local out
+  out=$(cat "${py}")
+  rm -rf "$scratch"
+  [[ "${out}" == *"x = 1"* ]] \
+    || { echo "hook did not reformat probe — jq/ruff missing or path unparsed; test would be vacuous: ${out}"; return 1; }
+  grep -q '^import os$' <<<"${out}" \
+    || { echo "format mode deleted the unused import (F401 should be unfixable)"; return 1; }
+}
+it "edit-write: format mode keeps an unused import (F401 unfixable)" T_edit_write_format_preserves_unused_import
+
 # ===========================================================================
 # verify-gh-taxonomy.sh — smoke tests for early-exit paths
 # (mode_pr / mode_issue / mode_hierarchy require full gh-API stubbing; those
@@ -913,6 +936,7 @@ T_worktree_guard_warns_in_primary() {
   grep -q "git worktree add" "$stderr_file" || { echo "stderr should suggest 'git worktree add'"; return 1; }
   grep -q "make link-plugins" "$stderr_file" || { echo "remediation should chain 'make link-plugins' so the new worktree gets the VST symlink; got: $(cat "$stderr_file")"; return 1; }
   grep -q "make link-thoughts" "$stderr_file" || { echo "remediation should chain 'make link-thoughts' so the new worktree shares central thoughts/; got: $(cat "$stderr_file")"; return 1; }
+  grep -q "make link-skills" "$stderr_file" || { echo "remediation should chain 'make link-skills' so the new worktree gets the workspace skills linked; got: $(cat "$stderr_file")"; return 1; }
 }
 it "worktree-guard: edit in primary (warn mode default) → exit 0 with WARNING + remediation on stderr" T_worktree_guard_warns_in_primary
 
@@ -1054,6 +1078,7 @@ T_session_start_banner_in_primary() {
   [[ "$out" == *"git worktree add"* ]] || { echo "banner should suggest 'git worktree add'; got: $out"; return 1; }
   [[ "$out" == *"make link-plugins"* ]] || { echo "spawn command should chain 'make link-plugins' so the new worktree gets the VST symlink; got: $out"; return 1; }
   [[ "$out" == *"make link-thoughts"* ]] || { echo "spawn command should chain 'make link-thoughts' so the new worktree shares central thoughts/; got: $out"; return 1; }
+  [[ "$out" == *"make link-skills"* ]] || { echo "spawn command should chain 'make link-skills' so the new worktree gets the workspace skills linked; got: $out"; return 1; }
 }
 it "session-start-banner: in primary → stdout flags PRIMARY CHECKOUT and shows remediation" T_session_start_banner_in_primary
 
@@ -1421,8 +1446,11 @@ MAKE_STUB
   grep -q "ARGS=link-thoughts" "$make_log" 2>/dev/null || {
     echo "make link-thoughts not called; log: $(cat "$make_log" 2>/dev/null)"; return 1
   }
+  grep -q "ARGS=link-skills" "$make_log" 2>/dev/null || {
+    echo "make link-skills not called; log: $(cat "$make_log" 2>/dev/null)"; return 1
+  }
 }
-it "worktree-post-setup: valid path → make link-plugins + link-thoughts run in that directory" T_wt_post_setup_runs_make_in_new_worktree
+it "worktree-post-setup: valid path → make link-plugins + link-thoughts + link-skills run in that directory" T_wt_post_setup_runs_make_in_new_worktree
 
 T_wt_post_setup_exits_0_on_missing_path() {
   local out

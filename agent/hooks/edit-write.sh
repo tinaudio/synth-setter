@@ -21,7 +21,9 @@ case "$MODE" in
   format)
     case "$FILE_PATH" in
       *.py)
-        ruff check --fix --quiet "$FILE_PATH" 2>/dev/null || true
+        # Guard mid-edit imports: an import often lands one tool call before its
+        # use, so the save-time fix must not delete it. CLI/pre-commit strip dead ones.
+        ruff check --fix --unfixable F401 --quiet "$FILE_PATH" 2>/dev/null || true
         ruff format --quiet "$FILE_PATH" 2>/dev/null || true
         ;;
       *.md)

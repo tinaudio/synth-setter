@@ -258,6 +258,64 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     )
 
 
+def test_from_hydra_passes_per_shard_base_seed_to_renderer(
+    cfg_dataset: DictConfig,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each shard's render subprocess carries its own ``--base_seed`` end-to-end (#884).
+
+    Drives the real worker entrypoint; the renderer subprocess is stubbed but its
+    composed argv is captured, pinning that ``build_generate_args`` injected
+    ``ShardSpec.seed`` per shard through the full ``from_hydra`` path — the behavior
+    the argv-shape unit test only asserts in isolation.
+
+    :param cfg_dataset: Hydra cfg composed with the smoke-shard dataset.
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
+    :param monkeypatch: Pins the single-worker env, the moduleinfo-only plugin, and
+        the local-vs-real R2 skip-probe bridge.
+    """
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    with open_dict(cfg_dataset):
+        cfg_dataset.output_format = "hdf5"
+        cfg_dataset.render.plugin_path = str(_TEST_PLUGIN_VST3)
+        cfg_dataset.render.renderer_version = _TEST_PLUGIN_VERSION
+        cfg_dataset.r2.prefix = "fake-r2/seed-run/"
+        cfg_dataset.logger = None
+
+    # Local rclone errors on a missing object where real R2 returns None; bridge it
+    # so the skip-existing probe sees every shard as absent and renders all of them.
+    real_object_size = r2_io.object_size
+
+    def _fake_r2_object_size(r2_uri: str) -> int | None:
+        try:
+            return real_object_size(r2_uri)
+        except subprocess.CalledProcessError:
+            return None
+
+    monkeypatch.setattr(r2_io, "object_size", _fake_r2_object_size)
+
+    spec = spec_from_cfg(cfg_dataset)
+    render_shard = stub_renderer(spec)
+    captured: list[list[str]] = []
+
+    def _capture(args: list[str]) -> None:
+        if not (args and args[0] == "rclone"):
+            captured.append(args)
+        render_shard(args)
+
+    with patch(
+        "synth_setter.cli.generate_dataset._check_call_streamed",
+        side_effect=_capture,
+    ):
+        from_hydra(cfg_dataset)
+
+    for shard in spec.shards:
+        argv = next(a for a in captured if any(shard.filename in tok for tok in a))
+        assert argv[argv.index("--base_seed") + 1] == str(shard.seed)
+
+
 def test_from_hydra_applies_extras_writing_tags_and_config_tree(
     cfg_dataset: DictConfig,
     monkeypatch: pytest.MonkeyPatch,
