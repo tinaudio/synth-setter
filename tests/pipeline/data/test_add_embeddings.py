@@ -333,6 +333,23 @@ def test_build_clap_index_rejects_num_sub_vectors_not_dividing_dim(tmp_path: Pat
     assert lance.dataset(uri).list_indices() == []
 
 
+def test_build_clap_index_rejects_non_positive_index_params(tmp_path: Path) -> None:
+    """Non-positive num_sub_vectors / num_partitions raise instead of ZeroDivision/opaque.
+
+    :param tmp_path: Pytest-provided scratch directory for the dataset.
+    """
+    uri = str(tmp_path / "badparams.lance")
+    _audio_dataset(uri, 8)
+    add_embeddings(lance.dataset(uri), _fake_m2l, _fake_clap, _SAMPLE_RATE, build_index=False)
+
+    with pytest.raises(ValueError, match="num_sub_vectors must be >= 1"):
+        build_clap_index(lance.dataset(uri), num_sub_vectors=0)
+    with pytest.raises(ValueError, match="num_partitions must be >= 1"):
+        build_clap_index(lance.dataset(uri), num_partitions=0)
+
+    assert lance.dataset(uri).list_indices() == []
+
+
 @pytest.mark.slow
 def test_add_embeddings_rejects_rerun_when_columns_already_exist(tmp_path: Path) -> None:
     uri = str(tmp_path / "twice.lance")

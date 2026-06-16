@@ -146,9 +146,14 @@ def build_clap_index(
     :param metric: Distance metric for the index.
     :returns: ``True`` if an index was built, ``False`` if skipped (too few rows
         to train PQ — exact ``nearest`` still works without an index).
-    :raises ValueError: ``num_sub_vectors`` does not divide the ``clap`` column's
-        vector width (Lance's own PQ-training failure is opaque).
+    :raises ValueError: ``num_sub_vectors`` or ``num_partitions`` is non-positive,
+        or ``num_sub_vectors`` does not divide the ``clap`` column's vector width
+        (Lance's own failures here are a ``ZeroDivisionError`` / opaque PQ error).
     """
+    if num_sub_vectors < 1:
+        raise ValueError(f"num_sub_vectors must be >= 1, got {num_sub_vectors}")
+    if num_partitions is not None and num_partitions < 1:
+        raise ValueError(f"num_partitions must be >= 1, got {num_partitions}")
     clap_dim = dataset.schema.field(CLAP_FIELD).type.list_size
     if clap_dim % num_sub_vectors != 0:
         raise ValueError(f"num_sub_vectors={num_sub_vectors} does not divide clap dim {clap_dim}")
