@@ -7,6 +7,8 @@ layer is stubbed. One ``@slow @requires_vst`` test drives the real render chain.
 
 from __future__ import annotations
 
+import random
+
 import numpy as np
 import pytest
 
@@ -72,6 +74,16 @@ def test_all_pairs_worst_mss_rejects_fewer_than_two_renders() -> None:
     """A single render has no pair to compare, so the reducer refuses it."""
     with pytest.raises(ValueError, match="at least 2"):
         repro.all_pairs_worst_mss([_const(0.1)], metric=lambda a, b: 0.0)
+
+
+def test_all_pairs_worst_mss_treats_non_finite_score_as_maximal_divergence() -> None:
+    """A NaN metric (the silent-junk symptom) is coerced to +inf, not skipped as clean."""
+    result = repro.all_pairs_worst_mss(
+        [_const(0.0), _const(0.0)], metric=lambda a, b: float("nan")
+    )
+    assert result.mss_max == float("inf")
+    assert result.worst_pair == (0, 1)
+    assert repro.classify(result.mss_max, reloaded_max=1.0) is repro.Verdict.BUG_PRESENT
 
 
 def test_integrated_loudness_rises_with_amplitude() -> None:
@@ -151,4 +163,8 @@ def test_main_passes_parsed_depths_through_to_run(monkeypatch: pytest.MonkeyPatc
 @pytest.mark.requires_vst
 def test_main_drives_the_real_render_chain_end_to_end() -> None:
     """Real VST smoke test: depth-2 run must not raise SystemExit (regression for #489)."""
+    # Seed both RNGs param_spec.sample() draws from so the loudness-gated patch
+    # search is deterministic and the test cannot flake on an unlucky draw.
+    random.seed(0)
+    np.random.seed(0)
     assert repro.main(["--depths", "2", "--no-control"]) is None

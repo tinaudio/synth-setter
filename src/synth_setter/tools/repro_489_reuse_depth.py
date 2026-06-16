@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import math
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -31,13 +32,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
-from omegaconf import OmegaConf
+from omegaconf import DictConfig, OmegaConf
 from pyloudnorm import Meter
 
-from synth_setter.data.vst import param_specs, preset_paths
+from synth_setter.data.vst import param_specs
 from synth_setter.data.vst.core import load_plugin, load_preset, render_params
 from synth_setter.data.vst.param_spec import NoteParams
-from synth_setter.data.vst.param_spec_registry import default_plugin_path
 from synth_setter.evaluation.compute_audio_metrics import compute_mss
 
 if TYPE_CHECKING:
@@ -191,6 +191,10 @@ def all_pairs_worst_mss(
     worst_score, worst_i, worst_j = float("-inf"), -1, -1
     for i, j in combinations(range(n), 2):
         score = metric(renders[i], renders[j])
+        # A non-finite score (e.g. NaN MSS from a silent junk render) is the #489
+        # symptom itself; treat it as maximal divergence so it can't read as clean.
+        if not math.isfinite(score):
+            score = float("inf")
         if score > worst_score:
             worst_score, worst_i, worst_j = score, i, j
     peaks = [float(np.abs(render).max()) for render in renders]
@@ -221,17 +225,40 @@ def classify(
     return Verdict.BUG_PRESENT
 
 
-def load_render_settings(spec_name: str) -> RenderSettings:
-    """Read render knobs from ``configs/render/<spec_name>.yaml``.
+def _load_render_config(spec_name: str) -> DictConfig:
+    """Load ``configs/render/<spec_name>.yaml`` with its ``defaults:`` chain merged.
+
+    ``OmegaConf.load`` does not resolve Hydra ``defaults:``, so specs that inherit
+    generic knobs (``surge_simple``, ``obxf`` declare ``defaults: - surge_xt``)
+    would be missing ``sample_rate`` etc. Each listed base is merged under the
+    spec's own overrides, recursively.
 
     :param spec_name: Param-spec registry key, also the render config stem.
-    :returns: The render settings the production pipeline uses for this spec.
+    :returns: The merged render config (bases first, spec overrides last).
     :raises FileNotFoundError: No render config exists for ``spec_name``.
     """
     config_path = _RENDER_CONFIG_DIR / f"{spec_name}.yaml"
     if not config_path.is_file():
         raise FileNotFoundError(f"no render config for spec {spec_name!r} at {config_path}")
     cfg = OmegaConf.load(config_path)
+    assert isinstance(cfg, DictConfig)
+    bases = cfg.pop("defaults", [])
+    merged = OmegaConf.create({})
+    for base in bases:
+        if isinstance(base, str):
+            merged = OmegaConf.merge(merged, _load_render_config(base))
+    merged = OmegaConf.merge(merged, cfg)
+    assert isinstance(merged, DictConfig)
+    return merged
+
+
+def load_render_settings(spec_name: str) -> RenderSettings:
+    """Read render knobs from the merged ``configs/render/<spec_name>.yaml``.
+
+    :param spec_name: Param-spec registry key, also the render config stem.
+    :returns: The render settings the production pipeline uses for this spec.
+    """
+    cfg = _load_render_config(spec_name)
     return RenderSettings(
         sample_rate=int(cfg.sample_rate),
         channels=int(cfg.channels),
@@ -304,8 +331,9 @@ def resolve_patch(spec_name: str) -> PatchSpec:
     :returns: The first loud draw, bound to its plugin, preset, and settings.
     :raises RuntimeError: No draw cleared the floor within ``_MAX_PATCH_DRAWS``.
     """
-    plugin_path = default_plugin_path()
-    preset_path = preset_paths[spec_name]
+    cfg = _load_render_config(spec_name)
+    plugin_path = str(cfg.plugin_path)
+    preset_path = str(cfg.preset_path)
     settings = load_render_settings(spec_name)
     spec = param_specs[spec_name]
     for draw in range(_MAX_PATCH_DRAWS):
