@@ -103,7 +103,7 @@ def test_classify_labels_each_reuse_reload_combination(
     :param reloaded_max: Reload-arm worst all-pairs MSS, or ``None`` when skipped.
     :param expected: The verdict ``classify`` must return.
     """
-    assert repro.classify(reused_max, reloaded_max, repro._MSS_THRESHOLD) == expected
+    assert repro.classify(reused_max, reloaded_max) == expected
 
 
 @pytest.mark.parametrize(
@@ -151,10 +151,5 @@ def test_main_passes_parsed_depths_through_to_run(monkeypatch: pytest.MonkeyPatc
 @pytest.mark.slow
 @pytest.mark.requires_vst
 def test_main_drives_the_real_render_chain_end_to_end() -> None:
-    """``main`` renders through resolve_patch -> all_pairs_worst_mss -> classify on a real VST.
-
-    Exercises the integration the stubbed CLI tests cannot: at depth 2 with no control
-    the run completes without raising and stays NO_REPRO (no #489 SystemExit) on the
-    current, flush-everything render path.
-    """
-    repro.main(["--depths", "2", "--no-control"])
+    """``main`` completes at depth 2 on a real VST with no #489 SystemExit (see #489)."""
+    assert repro.main(["--depths", "2", "--no-control"]) is None

@@ -53,7 +53,7 @@ _DEFAULT_DEPTHS = (12, 40)
 # Guards the loud-patch search from spinning forever on a silent param spec.
 _MAX_PATCH_DRAWS = 200
 _LOG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
-# configs/render/<spec>.yaml relative to this tools/ module.
+# Two parents climb tools/ -> synth_setter/ package root, then into configs/render/.
 _RENDER_CONFIG_DIR = Path(__file__).resolve().parent.parent / "configs" / "render"
 
 
@@ -203,7 +203,9 @@ def all_pairs_worst_mss(
     )
 
 
-def classify(reused_max: float, reloaded_max: float | None, threshold: float) -> Verdict:
+def classify(
+    reused_max: float, reloaded_max: float | None, threshold: float = _MSS_THRESHOLD
+) -> Verdict:
     """Label a depth's outcome from its reuse and reload all-pairs worst scores.
 
     :param reused_max: Worst all-pairs MSS on the cached-plugin (reuse) arm.
@@ -346,7 +348,7 @@ def run(
                 if control
                 else None
             )
-            verdict = classify(reused.mss_max, reloaded_max, _MSS_THRESHOLD)
+            verdict = classify(reused.mss_max, reloaded_max)
             verdicts[depth] = verdict
             _report_depth(depth, reused, reloaded_max, verdict)
             if wandb_run is not None:
