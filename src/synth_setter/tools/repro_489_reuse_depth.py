@@ -1,19 +1,16 @@
 """Standalone #489 reproducer: render one identical patch N times and score all-pairs MSS.
 
-Measures the bug at its source, bypassing the oracle/sweep harness that masks it.
 For each reuse depth N it renders the *same* patch N times against a single cached
 ``VST3Plugin`` (the ``plugin_reload_cadence="once"`` path) and reports the
 **all-pairs worst-case** multi-scale spectral loss across those N renders — the
-exact signal that defined #489 in the PR #706 reproducer. Identical params should
-render identically, so any worst pair above the threshold is render-to-render junk.
+signal that defined #489 in the PR #706 reproducer. Identical params should render
+identically, so any worst pair above the threshold is render-to-render junk.
 
 A control arm re-renders the same patch reloading the plugin per call (the #713
-workaround, now the default), so a run that prints reuse≫threshold while
-reload<threshold confirms the bug is still live and merely worked around.
-
-The harness sweeps (``synth_setter.tools.cadence_sweep_489``) could not surface
-this: they score target-vs-oracle-prediction *means*, never two raw renders of one
-patch against each other.
+workaround, now the default), so reuse>>threshold while reload<threshold pins the
+bug as live and merely worked around. The oracle/sweep harness scores
+target-vs-prediction means, so only a direct render-vs-render comparison like this
+can surface it.
 
 Run it::
 
@@ -24,14 +21,15 @@ Run it::
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from itertools import combinations
-from typing import Any
+from typing import TYPE_CHECKING
 
 import numpy as np
-from loguru import logger
 from pyloudnorm import Meter
 
 from synth_setter.data.vst import param_specs, preset_paths
@@ -39,6 +37,12 @@ from synth_setter.data.vst.core import load_plugin, load_preset, render_params
 from synth_setter.data.vst.param_spec import NoteParams
 from synth_setter.data.vst.param_spec_registry import default_plugin_path
 from synth_setter.evaluation.compute_audio_metrics import compute_mss
+
+if TYPE_CHECKING:
+    from pedalboard import VST3Plugin
+    from wandb.sdk.wandb_run import Run
+
+logger = logging.getLogger(__name__)
 
 # Render settings mirror configs/render/surge_xt.yaml so the reproduction matches
 # the production render path the #489 datasets are generated with.
@@ -48,17 +52,60 @@ _VELOCITY = 100
 _DURATION_SECONDS = 4.0
 _MIN_LOUDNESS_DB = -55.0
 
-# PR #706 threshold: the per-pair MSS of identical params sits well under this; the
-# junk render pushed the worst pair to ~21, ~6x the clean per-pair value.
+# PR #706 threshold: identical-param renders sit well under this; the junk render
+# pushed the worst pair to ~21, ~6x the clean per-pair value.
 _MSS_THRESHOLD = 10.0
 _DEFAULT_DEPTHS = (12, 40)
 # Guards the loud-patch search from spinning forever on a silent param spec.
 _MAX_PATCH_DRAWS = 200
 
-# Verdict labels for ``classify``.
-BUG_PRESENT = "BUG_PRESENT"
-NO_REPRO = "NO_REPRO"
-INCONCLUSIVE = "INCONCLUSIVE"
+
+class Verdict(StrEnum):
+    """Outcome of one reuse depth's reuse-vs-reload comparison.
+
+    .. attribute :: BUG_PRESENT
+
+       Reuse arm above threshold while the reload control held — #489 live.
+
+    .. attribute :: NO_REPRO
+
+       Reuse arm within threshold — no junk at this depth.
+
+    .. attribute :: INCONCLUSIVE
+
+       Both arms above threshold — divergence is patch/phase, not reuse.
+    """
+
+    BUG_PRESENT = "BUG_PRESENT"
+    NO_REPRO = "NO_REPRO"
+    INCONCLUSIVE = "INCONCLUSIVE"
+
+
+@dataclass(frozen=True)
+class PatchSpec:
+    """One synth patch plus the plugin and preset that render it.
+
+    .. attribute :: plugin_path
+
+       VST3 bundle path.
+
+    .. attribute :: preset_path
+
+       Preset applied before each render.
+
+    .. attribute :: synth_params
+
+       Synth patch held identical across every render.
+
+    .. attribute :: note_params
+
+       ``pitch`` and ``note_start_and_end`` held identical across every render.
+    """
+
+    plugin_path: str
+    preset_path: str
+    synth_params: dict[str, float]
+    note_params: NoteParams
 
 
 @dataclass(frozen=True)
@@ -67,23 +114,23 @@ class ReuseDepthResult:
 
     .. attribute :: depth
 
-       Number of renders compared (the reuse depth).
+       Render count; equals ``len(renders)``.
 
     .. attribute :: mss_max
 
-       Worst-case multi-scale spectral loss over all unordered pairs.
+       Worst-case multi-scale spectral loss (dB) over all pairs.
 
     .. attribute :: worst_pair
 
-       ``(i, j)`` render indices that produced ``mss_max``.
+       ``(i, j)`` indices of the render pair scoring ``mss_max``.
 
     .. attribute :: pair_count
 
-       Number of unordered pairs scored, ``depth*(depth-1)/2``.
+       ``depth*(depth-1)/2``.
 
     .. attribute :: peaks
 
-       Per-render peak amplitude; a near-zero entry is a silent junk render.
+       Per-render peak amplitude; near-zero marks a silent junk render.
     """
 
     depth: int
@@ -94,20 +141,20 @@ class ReuseDepthResult:
 
 
 def all_pairs_worst_mss(
-    renders: list[np.ndarray],
+    renders: Sequence[np.ndarray],
     metric: Callable[[np.ndarray, np.ndarray], float] = compute_mss,
 ) -> ReuseDepthResult:
     """Score every unordered pair of renders and return the worst-case divergence.
 
     :param renders: Audio clips, each shape ``(C, T)``, all rendered from one patch.
     :param metric: Pairwise distance; defaults to :func:`compute_mss`.
-    :returns: The worst pair, its score, the pair count, and per-render peaks.
+    :returns: A :class:`ReuseDepthResult` for the ``len(renders)`` renders.
     :raises ValueError: Fewer than two renders — no pair to compare.
     """
     n = len(renders)
     if n < 2:
         raise ValueError(f"all-pairs scoring needs at least 2 renders, got {n}")
-    worst_score, worst_i, worst_j = -1.0, -1, -1
+    worst_score, worst_i, worst_j = float("-inf"), -1, -1
     for i, j in combinations(range(n), 2):
         score = metric(renders[i], renders[j])
         if score > worst_score:
@@ -122,18 +169,20 @@ def all_pairs_worst_mss(
     )
 
 
-def classify(reused_max: float, reloaded_max: float, threshold: float) -> str:
+def classify(reused_max: float, reloaded_max: float | None, threshold: float) -> Verdict:
     """Label a depth's outcome from its reuse and reload all-pairs worst scores.
 
     :param reused_max: Worst all-pairs MSS on the cached-plugin (reuse) arm.
-    :param reloaded_max: Worst all-pairs MSS on the per-render-reload control arm.
+    :param reloaded_max: Worst all-pairs MSS on the reload control arm, or ``None``
+        when the control arm was skipped.
     :param threshold: Score above which identical-patch renders count as junk.
-    :returns: ``BUG_PRESENT`` (reuse diverges, reload holds), ``INCONCLUSIVE``
-        (both diverge — patch/phase, not the reuse bug), or ``NO_REPRO``.
+    :returns: One of the :class:`Verdict` members.
     """
     if reused_max <= threshold:
-        return NO_REPRO
-    return INCONCLUSIVE if reloaded_max > threshold else BUG_PRESENT
+        return Verdict.NO_REPRO
+    if reloaded_max is not None and reloaded_max > threshold:
+        return Verdict.INCONCLUSIVE
+    return Verdict.BUG_PRESENT
 
 
 def _integrated_loudness(audio: np.ndarray) -> float:
@@ -145,21 +194,18 @@ def _integrated_loudness(audio: np.ndarray) -> float:
     return float(Meter(_SAMPLE_RATE).integrated_loudness(audio.T))
 
 
-def _sample_loud_patch(
-    spec_name: str, plugin_path: str, preset_path: str
-) -> tuple[dict[str, float], NoteParams]:
-    """Draw one patch that renders above ``_MIN_LOUDNESS_DB``, reused across all depths.
+def resolve_patch(spec_name: str) -> PatchSpec:
+    """Draw one patch that renders above ``_MIN_LOUDNESS_DB`` for the named spec.
 
     Renders each candidate once via the reload path (a fresh plugin) so the gate
-    decision is never itself contaminated by reuse-state. Reuses one patch for the
-    whole run so depths and arms are directly comparable.
+    decision is never itself contaminated by reuse-state.
 
     :param spec_name: Param-spec registry key (e.g. ``"surge_xt"``).
-    :param plugin_path: VST3 bundle path.
-    :param preset_path: Preset applied before each render.
-    :returns: The ``(synth_params, note_params)`` tuple of the first loud draw.
+    :returns: The first loud draw, bound to its plugin and preset.
     :raises RuntimeError: No draw cleared the gate within ``_MAX_PATCH_DRAWS``.
     """
+    plugin_path = default_plugin_path()
+    preset_path = preset_paths[spec_name]
     spec = param_specs[spec_name]
     for draw in range(_MAX_PATCH_DRAWS):
         synth_params, note_params = spec.sample()
@@ -176,96 +222,89 @@ def _sample_loud_patch(
         )
         loudness = _integrated_loudness(audio)
         if loudness >= _MIN_LOUDNESS_DB:
-            logger.info(f"loud patch found on draw {draw} ({loudness:.1f} LUFS)")
-            return synth_params, note_params
-        logger.debug(f"draw {draw}: {loudness:.1f} LUFS below gate, redrawing")
+            logger.info("loud patch found on draw %d (%.1f LUFS)", draw, loudness)
+            return PatchSpec(plugin_path, preset_path, synth_params, note_params)
+        logger.debug("draw %d: %.1f LUFS below gate, redrawing", draw, loudness)
     raise RuntimeError(
         f"no patch cleared {_MIN_LOUDNESS_DB} dB in {_MAX_PATCH_DRAWS} draws for {spec_name!r}"
     )
 
 
-def render_identical_patch(
-    plugin_path: str,
-    preset_path: str,
-    synth_params: dict[str, float],
-    note_params: NoteParams,
-    depth: int,
-    *,
-    reuse_plugin: bool,
+def _render_repeated(
+    patch: PatchSpec, depth: int, cached_plugin: VST3Plugin | None
 ) -> list[np.ndarray]:
-    """Render one patch ``depth`` times, either reusing one instance or reloading per call.
+    """Render ``patch`` ``depth`` times, reusing ``cached_plugin`` when supplied.
 
-    :param plugin_path: VST3 bundle path.
-    :param preset_path: Preset applied to the plugin.
-    :param synth_params: Synth patch held identical across every render.
-    :param note_params: Note params (``pitch``, ``note_start_and_end``) held identical.
+    :param patch: The identical patch and its plugin/preset.
     :param depth: Number of renders (the reuse depth).
-    :param reuse_plugin: When True, load + preset once and reuse the cached instance
-        (the ``plugin_reload_cadence="once"`` bug path); when False, reload per render
-        (the #713 workaround / current default).
+    :param cached_plugin: Reused instance, or ``None`` to reload per render.
     :returns: ``depth`` rendered clips, each shape ``(C, T)``.
     """
-    cached = None
-    if reuse_plugin:
-        cached = load_plugin(plugin_path)
-        load_preset(cached, preset_path)
     return [
         render_params(
-            plugin_path,
-            synth_params,
-            note_params["pitch"],
+            patch.plugin_path,
+            patch.synth_params,
+            patch.note_params["pitch"],
             _VELOCITY,
-            note_params["note_start_and_end"],
+            patch.note_params["note_start_and_end"],
             _DURATION_SECONDS,
             _SAMPLE_RATE,
             _CHANNELS,
-            preset_path=preset_path,
-            plugin=cached,
+            preset_path=patch.preset_path,
+            plugin=cached_plugin,
         )
         for _ in range(depth)
     ]
 
 
+def render_reusing_one_plugin(patch: PatchSpec, depth: int) -> list[np.ndarray]:
+    """Render ``patch`` ``depth`` times against one cached instance (the #489 bug path).
+
+    :param patch: The identical patch and its plugin/preset.
+    :param depth: Number of renders (the reuse depth).
+    :returns: ``depth`` rendered clips, each shape ``(C, T)``.
+    """
+    plugin = load_plugin(patch.plugin_path)
+    load_preset(plugin, patch.preset_path)
+    return _render_repeated(patch, depth, cached_plugin=plugin)
+
+
+def render_reloading_each_call(patch: PatchSpec, depth: int) -> list[np.ndarray]:
+    """Render ``patch`` ``depth`` times reloading per call (the #713 workaround / default).
+
+    :param patch: The identical patch and its plugin/preset.
+    :param depth: Number of renders (the reuse depth).
+    :returns: ``depth`` rendered clips, each shape ``(C, T)``.
+    """
+    return _render_repeated(patch, depth, cached_plugin=None)
+
+
 def run(
-    depths: tuple[int, ...],
+    depths: Sequence[int],
     *,
     spec_name: str,
     control: bool,
     wandb_enabled: bool,
-) -> dict[int, str]:
+) -> dict[int, Verdict]:
     """Reproduce #489 at each depth and report all-pairs worst MSS for reuse vs reload.
 
     :param depths: Reuse depths to probe, in order.
     :param spec_name: Param-spec registry key selecting synth + preset.
     :param control: Also render the per-render-reload control arm at each depth.
     :param wandb_enabled: Log per-depth all-pairs metrics to W&B.
-    :returns: Map of depth to its :data:`classify` verdict.
+    :returns: Map of depth to its :func:`classify` verdict.
     """
-    plugin_path = default_plugin_path()
-    preset_path = preset_paths[spec_name]
-    synth_params, note_params = _sample_loud_patch(spec_name, plugin_path, preset_path)
-
+    patch = resolve_patch(spec_name)
     wandb_run = _init_wandb(spec_name, depths) if wandb_enabled else None
-    verdicts: dict[int, str] = {}
+    verdicts: dict[int, Verdict] = {}
     for depth in depths:
-        reused = all_pairs_worst_mss(
-            render_identical_patch(
-                plugin_path, preset_path, synth_params, note_params, depth, reuse_plugin=True
-            )
-        )
-        reloaded_max = float("nan")
-        if control:
-            reloaded = all_pairs_worst_mss(
-                render_identical_patch(
-                    plugin_path, preset_path, synth_params, note_params, depth, reuse_plugin=False
-                )
-            )
-            reloaded_max = reloaded.mss_max
-        verdict = (
-            classify(reused.mss_max, reloaded_max, _MSS_THRESHOLD)
+        reused = all_pairs_worst_mss(render_reusing_one_plugin(patch, depth))
+        reloaded_max = (
+            all_pairs_worst_mss(render_reloading_each_call(patch, depth)).mss_max
             if control
-            else (BUG_PRESENT if reused.mss_max > _MSS_THRESHOLD else NO_REPRO)
+            else None
         )
+        verdict = classify(reused.mss_max, reloaded_max, _MSS_THRESHOLD)
         verdicts[depth] = verdict
         _report_depth(depth, reused, reloaded_max, verdict)
         if wandb_run is not None:
@@ -275,27 +314,34 @@ def run(
     return verdicts
 
 
-def _report_depth(depth: int, reused: ReuseDepthResult, reloaded_max: float, verdict: str) -> None:
-    """Print one depth's reuse/reload worst-pair scores, peaks, and verdict.
+def _report_depth(
+    depth: int, reused: ReuseDepthResult, reloaded_max: float | None, verdict: Verdict
+) -> None:
+    """Log one depth's reuse/reload worst-pair scores, peaks, and verdict.
 
     :param depth: Reuse depth being reported.
     :param reused: All-pairs result of the cached-plugin arm.
-    :param reloaded_max: Worst all-pairs MSS of the reload control (``nan`` when skipped).
+    :param reloaded_max: Worst all-pairs MSS of the reload control, or ``None`` if skipped.
     :param verdict: This depth's :func:`classify` label.
     """
+    reload_str = "    N/A" if reloaded_max is None else f"{reloaded_max:7.3f}"
     logger.info(
-        f"depth={depth:>3} | reuse worst mss={reused.mss_max:7.3f} @ {reused.worst_pair} "
-        f"| reload worst mss={reloaded_max:7.3f} | {verdict}"
+        "depth=%3d | reuse worst mss=%7.3f @ %s | reload worst mss=%s | %s",
+        depth,
+        reused.mss_max,
+        reused.worst_pair,
+        reload_str,
+        verdict,
     )
-    logger.info(f"depth={depth:>3} | reuse peaks={[round(p, 4) for p in reused.peaks]}")
+    logger.info("depth=%3d | reuse peaks=%s", depth, [round(p, 4) for p in reused.peaks])
 
 
-def _init_wandb(spec_name: str, depths: tuple[int, ...]) -> Any:
+def _init_wandb(spec_name: str, depths: Sequence[int]) -> Run:
     """Start a W&B run for the reproduction; import is local so non-W&B runs stay light.
 
-    :param spec_name: Param-spec registry key, logged to the run config.
-    :param depths: Reuse depths probed, logged to the run config.
-    :returns: The initialised ``wandb`` run handle.
+    :param spec_name: Param-spec registry key.
+    :param depths: Reuse depths probed.
+    :returns: The initialised W&B run handle.
     """
     import wandb
 
@@ -312,23 +358,23 @@ def _init_wandb(spec_name: str, depths: tuple[int, ...]) -> Any:
 
 
 def _log_depth_to_wandb(
-    wandb_run: Any, depth: int, reused: ReuseDepthResult, reloaded_max: float
+    wandb_run: Run, depth: int, reused: ReuseDepthResult, reloaded_max: float | None
 ) -> None:
-    """Log a depth's all-pairs worst MSS (reuse and reload) and min peak to W&B.
+    """Log a depth's all-pairs worst MSS (reuse, and reload when run) and min peak to W&B.
 
     :param wandb_run: Active W&B run handle from :func:`_init_wandb`.
     :param depth: Reuse depth being logged (the x-axis).
     :param reused: All-pairs result of the cached-plugin arm.
-    :param reloaded_max: Worst all-pairs MSS of the reload control (``nan`` when skipped).
+    :param reloaded_max: Worst all-pairs MSS of the reload control, or ``None`` if skipped.
     """
-    wandb_run.log(
-        {
-            "depth": depth,
-            "reuse-once/all-pairs-mss-max": reused.mss_max,
-            "reload-render/all-pairs-mss-max": reloaded_max,
-            "reuse-once/min-peak-amplitude": min(reused.peaks),
-        }
-    )
+    metrics: dict[str, float] = {
+        "depth": depth,
+        "reuse-once/all-pairs-mss-max": reused.mss_max,
+        "reuse-once/min-peak-amplitude": min(reused.peaks),
+    }
+    if reloaded_max is not None:
+        metrics["reload-render/all-pairs-mss-max"] = reloaded_max
+    wandb_run.log(metrics)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -355,15 +401,16 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--wandb", action="store_true", help="log per-depth metrics to W&B")
     args = parser.parse_args(argv)
 
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     verdicts = run(
-        tuple(args.depths),
+        args.depths,
         spec_name=args.spec,
         control=not args.no_control,
         wandb_enabled=args.wandb,
     )
-    if BUG_PRESENT in verdicts.values():
-        depths = [d for d, v in verdicts.items() if v == BUG_PRESENT]
-        logger.warning(f"#489 reproduced at depths {depths}: reuse junk, reload clean")
+    bug_depths = [depth for depth, verdict in verdicts.items() if verdict is Verdict.BUG_PRESENT]
+    if bug_depths:
+        logger.warning("#489 reproduced at depths %s: reuse junk, reload clean", bug_depths)
         sys.exit(1)
 
 
