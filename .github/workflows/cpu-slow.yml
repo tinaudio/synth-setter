@@ -33,17 +33,14 @@ permissions:
 jobs:
   run_slow_tests:
     # Skip fork-PR runs: forks can't see `secrets.RCLONE_CONFIG_R2_*` and the
-    # 90-min suite would burn a 4-core runner with `integration_r2` skipping
+    # 90-min suite would burn a runner with `integration_r2` skipping
     # silently. Workflow_dispatch / push / schedule runs are unaffected — only
     # the `pull_request` trigger checks head-repo identity (see #1206).
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
 
-    # Larger runner: the slow CPU suite runs PyTorch forward passes on the FFN
-    # smoke fixtures, and the standard 2-core/7 GB `ubuntu-latest` OOMs during
-    # those passes. `ubuntu-latest-4core` (4 vCPU / 16 GB) is the smallest
-    # GitHub-hosted label that fits — see `docs/reference/github-actions.md`
-    # for the runner inventory. Don't downgrade without a CPU+memory probe.
-    runs-on: ubuntu-latest-4core
+    # Standard 2-core/7 GB `ubuntu-latest`: the suite runs serially (no `-n auto`),
+    # so per-test PyTorch peak is the only OOM risk; an exit-137 OOM means re-pin to `ubuntu-latest-4core`.
+    runs-on: ubuntu-latest
 
     timeout-minutes: 90
 
