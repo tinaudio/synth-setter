@@ -116,6 +116,8 @@ docs:
         covers: "Lance dataset-shard codec — lance_schema / tensor_array / record_batch_from_arrays / write_lance_dataset / lance_fragment / commit_lance_dataset on the encode side, read_shard_metadata / iter_lance_column_rows on the decode side; shared by the Lance writer, validator, and finalize."
       - pattern: "src/synth_setter/pipeline/data/add_embeddings.py"
         covers: "`synth-setter-add-embeddings` CLI — appends a `clap` (LAION-CLAP) `FixedSizeList<float32,512>` vector column (with an optional IVF_PQ index for `nearest=` search) and an `m2l` (music2latent) fixed-shape-tensor column to a finalized Lance dataset via `lance.batch_udf`, with injected/lazy-loaded encoders and row-count + dim + finiteness validation (post-finalize augmenter)."
+      - pattern: "src/synth_setter/pipeline/data/add_mp3_audio.py"
+        covers: "`synth-setter-add-mp3-audio` CLI — backfills an `audio_mp3` Lance blob v2 column (`lance.blob_field` / `lance.blob_array`, tagged `mime_type: audio/mpeg`) holding a CBR MP3 preview (via pedalboard) onto a Lance dataset via `lance.batch_udf` `add_columns`; a lossy auditioning preview, never a training input."
       - pattern: "src/synth_setter/pipeline/data/add_music2latent.py"
         covers: "`python -m synth_setter.pipeline.data.add_music2latent` CLI — adds a `music2latent` dataset to HDF5 shards via reader/writer multiprocessing around a GPU encode loop."
 

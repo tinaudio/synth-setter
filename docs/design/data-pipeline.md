@@ -1153,6 +1153,8 @@ augments a finalized Lance dataset in place with a `clap` (LAION-CLAP)
 `nearest=` vector search — and an `m2l` (music2latent) fixed-shape-tensor
 latent column, both derived from the audio column.
 
+`synth-setter-add-mp3-audio` (`pipeline/data/add_mp3_audio.py`) follows the same contract: it takes Lance audio shards and adds an `audio_mp3` preview column (CPU), without modifying existing stages.
+
 Stage order would remain static and explicit — user runs commands in sequence. If the number of stages grows to 4-6 and manual commands become unwieldy, adopt Prefect rather than building a homegrown orchestrator.
 
 ### Data Format Abstraction
