@@ -1159,6 +1159,8 @@ Additional stages could follow the same contract (§5) without modifying existin
 | **add-embeddings** | audio shards | shards + latent column | GPU     |
 | **render-presets** | preset bank  | audio shards           | CPU     |
 
+The first such stage has landed and validates this contract: `synth-setter-add-mp3-audio` (`pipeline/data/add_mp3_audio.py`) takes Lance audio shards and adds an `audio_mp3` preview column (CPU), without modifying existing stages.
+
 Stage order would remain static and explicit — user runs commands in sequence. If the number of stages grows to 4-6 and manual commands become unwieldy, adopt Prefect rather than building a homegrown orchestrator.
 
 ### Data Format Abstraction
