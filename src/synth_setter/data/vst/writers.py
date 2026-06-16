@@ -322,6 +322,7 @@ def _shard_metadata_from_render(render_cfg: RenderConfig) -> ShardMetadata:
         channels=render_cfg.channels,
         min_loudness=render_cfg.min_loudness,
         base_seed=render_cfg.base_seed,
+        attempts_per_sample=render_cfg.attempts_per_sample,
     )
 
 
@@ -339,8 +340,7 @@ def make_hdf5_dataset(
     rendered — except under ``render_cfg.param_sample_cadence="shard"``, where a
     partial shard is re-rendered from row 0 (a mid-shard resume can't preserve
     the one-patch-per-shard invariant). Audio is stored as ``float16`` (Blosc2-compressed); ``mel_spec``
-    and ``param_array`` are ``float32``. The five sidecar attrs (velocity,
-    signal duration, sample rate, channels, min_loudness) are written to
+    and ``param_array`` are ``float32``. Render metadata is written to
     ``audio.attrs`` from a single ``ShardMetadata`` instance — the same
     instance ``make_wds_dataset`` uses for its ``metadata.json`` member, so
     both formats expose identical metadata.

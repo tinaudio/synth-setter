@@ -30,11 +30,11 @@ from synth_setter.pipeline.schemas.spec import (
     OutputFormat,
     RenderConfig,
 )
+from synth_setter.pipeline.schemas.shard_metadata import DEFAULT_ATTEMPTS_PER_SAMPLE
 from synth_setter.pipeline.spec_io import join_uri, localized_uri
 
-# Loudness-gate retry ceiling when a caller does not override it; a
-# perpetually-silent row raises RuntimeError rather than looping forever (#884).
-DEFAULT_MAX_ATTEMPTS = 100
+# Loudness-gate retry ceiling when a caller does not override it (#884).
+DEFAULT_MAX_ATTEMPTS = DEFAULT_ATTEMPTS_PER_SAMPLE
 
 
 @dataclass(frozen=True)
@@ -200,9 +200,14 @@ def generate_sample(
         )
 
     failed_idx = str(seed.sample_idx) if seed is not None else "<unseeded>"
+    seed_hint = (
+        "Production callers should pass SampleSeed/base_seed for reproducibility; "
+        if seed is None
+        else ""
+    )
     raise RuntimeError(
         f"sample {failed_idx} stayed below min_loudness {min_loudness:.2f} dB "
-        f"after {max_attempts} attempts; raise the per-sample attempt budget "
+        f"after {max_attempts} attempts. {seed_hint}Raise the per-sample attempt budget "
         f"(``attempts_per_sample`` / ``SampleSeed.max_attempts``) or lower min_loudness."
     )
 

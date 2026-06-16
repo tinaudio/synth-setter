@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+DEFAULT_ATTEMPTS_PER_SAMPLE = 100
+
 
 class ShardMetadata(BaseModel):
     """Sidecar JSON written into wds tar shards (member ``metadata.json``).
@@ -25,9 +27,44 @@ class ShardMetadata(BaseModel):
     sidecar fails validation rather than being accepted with nonsensical
     values that would only surface later as a training-time crash.
 
+    .. attribute :: model_config
+
+        Strict, frozen, extra-forbid Pydantic configuration.
+
+    .. attribute :: velocity
+        :type: int
+
+        MIDI velocity used for every render.
+
+    .. attribute :: signal_duration_seconds
+        :type: float
+
+        Duration of each rendered audio sample, in seconds.
+
+    .. attribute :: sample_rate
+        :type: int
+
+        Audio sample rate in Hz.
+
+    .. attribute :: channels
+        :type: int
+
+        Audio channel count.
+
+    .. attribute :: min_loudness
+        :type: float
+
+        Per-sample loudness floor used during rendering.
+
     .. attribute :: base_seed
+        :type: int
 
         Per-shard master seed the row RNGs are derived from (#884).
+
+    .. attribute :: attempts_per_sample
+        :type: int
+
+        Per-row loudness-gate retry budget used during rendering.
     """
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
@@ -47,6 +84,14 @@ class ShardMetadata(BaseModel):
             "real seed."
         ),
     )
+    attempts_per_sample: int = Field(
+        default=DEFAULT_ATTEMPTS_PER_SAMPLE,
+        description=(
+            "Per-row loudness-gate retry budget used during rendering. Defaults to "
+            f"{DEFAULT_ATTEMPTS_PER_SAMPLE} so sidecars written before this field existed "
+            "still validate."
+        ),
+    )
 
     @model_validator(mode="after")
     def _ranges_must_be_sane(self) -> ShardMetadata:
@@ -59,4 +104,6 @@ class ShardMetadata(BaseModel):
             raise ValueError("sample_rate must be positive")
         if self.channels < 1:
             raise ValueError("channels must be >= 1")
+        if self.attempts_per_sample < 1:
+            raise ValueError("attempts_per_sample must be >= 1")
         return self

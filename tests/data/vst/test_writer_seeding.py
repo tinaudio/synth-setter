@@ -18,10 +18,10 @@ from synth_setter.data.vst.param_spec_registry import param_specs
 from synth_setter.data.vst.seeding import rng_for_sample
 from synth_setter.data.vst.shapes import AUDIO_FIELD, MEL_SPEC_FIELD, PARAM_ARRAY_FIELD
 from synth_setter.data.vst.writers import make_hdf5_dataset
-from tests.data.vst._fake_plugin import FakeVST3Plugin  # noqa: E402
-from tests.data.vst.test_fake_plugin_e2e import _fake_render_cfg  # noqa: E402
-from tests.data.vst.test_generate_vst_dataset import _SPEC_NAME  # noqa: E402
-from tests.helpers.finalize_shards import build_hdf5_smoke_spec  # noqa: E402
+from tests.data.vst._fake_plugin import FakeVST3Plugin
+from tests.data.vst.test_fake_plugin_e2e import _fake_render_cfg
+from tests.data.vst.test_generate_vst_dataset import _SPEC_NAME
+from tests.helpers.finalize_shards import build_hdf5_smoke_spec
 
 _BASE_SEED = 20260615
 

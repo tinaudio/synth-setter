@@ -26,6 +26,7 @@ def _valid_kwargs(**overrides: Any) -> dict[str, Any]:
         "channels": 2,
         "min_loudness": -55.0,
         "base_seed": 42,
+        "attempts_per_sample": 100,
     }
     kwargs.update(overrides)
     return kwargs
@@ -42,6 +43,16 @@ class TestShardMetadataConstruction:
         assert meta.sample_rate == 44100
         assert meta.channels == 2
         assert meta.min_loudness == -55.0
+        assert meta.attempts_per_sample == 100
+
+    def test_legacy_payload_defaults_attempts_per_sample(self) -> None:
+        """Sidecars written before retry provenance existed still validate."""
+        kwargs = _valid_kwargs()
+        del kwargs["attempts_per_sample"]
+
+        meta = ShardMetadata(**kwargs)
+
+        assert meta.attempts_per_sample == 100
 
     def test_json_round_trip_preserves_values(self) -> None:
         """``model_dump_json`` → ``model_validate_json`` round-trips identity."""
@@ -109,6 +120,15 @@ class TestShardMetadataRangeValidators:
         """Channels must be >= 1."""
         with pytest.raises(ValidationError, match="channels must be >= 1"):
             ShardMetadata(**_valid_kwargs(channels=bad_channels))
+
+    @pytest.mark.parametrize("bad_attempts", [0, -1])
+    def test_attempts_per_sample_less_than_one_raises(self, bad_attempts: int) -> None:
+        """attempts_per_sample must stay positive for reproducibility provenance.
+
+        :param bad_attempts: Invalid retry budget value.
+        """
+        with pytest.raises(ValidationError, match="attempts_per_sample must be >= 1"):
+            ShardMetadata(**_valid_kwargs(attempts_per_sample=bad_attempts))
 
 
 class TestShardMetadataLeafImport:

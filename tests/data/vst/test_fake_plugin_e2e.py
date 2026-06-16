@@ -84,6 +84,7 @@ def _lance_spec_for(render_cfg: RenderConfig) -> DatasetSpec:
         task_name="fake-plugin-lance-e2e",
         train_val_test_sizes=(render_cfg.samples_per_shard, 0, 0),
         render=render_cfg,
+        base_seed=render_cfg.base_seed,
     )
 
 
@@ -300,6 +301,7 @@ def test_make_lance_dataset_writes_validator_passing_shard_under_fake_plugin(
         channels=render_cfg.channels,
         min_loudness=render_cfg.min_loudness,
         base_seed=render_cfg.base_seed,
+        attempts_per_sample=render_cfg.attempts_per_sample,
     )
 
 

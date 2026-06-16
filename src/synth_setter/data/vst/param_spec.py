@@ -59,7 +59,7 @@ class CategoricalParameter(Parameter):
         else:
             return len(self.raw_values)
 
-    def sample(self, rng: np.random.Generator) -> float:
+    def sample(self, rng: np.random.Generator) -> Any:
         p = np.array(self.weights)
         p /= p.sum()
         return rng.choice(self.raw_values, p=p)
@@ -122,8 +122,7 @@ class DiscreteLiteralParameter(Parameter):
     def sample(self, rng: np.random.Generator) -> int:
         # Native int, not np.int64: a sampled pitch flows into mido/pedalboard's
         # MIDI parser, which rejects numpy scalars ("must be bytes or lists of
-        # byte values"). ``Generator.integers`` returns np.int64, unlike the
-        # legacy ``np.random.randint`` this replaced.
+        # byte values"). ``Generator.integers`` returns np.int64.
         return int(rng.integers(self.min, self.max + 1))
 
     def _encode_onehot(self, raw_value: int) -> np.ndarray:

@@ -1909,6 +1909,31 @@ def test_copy_dataset_reproduces_source_param_array(tmp_path: Path) -> None:
     )
 
 
+@pytest.mark.slow
+@pytest.mark.requires_vst
+def test_same_seed_real_plugin_renders_bitwise_identical_param_arrays(tmp_path: Path) -> None:
+    """Two real Surge XT renders with the same seed produce byte-identical params.
+
+    :param tmp_path: Pytest temp dir holding both rendered shards.
+    """
+    num_samples = 2
+    render_cfg = _render_cfg(num_samples, min_loudness=float("-inf")).model_copy(
+        update={"base_seed": 8675309}
+    )
+    first = tmp_path / "first.h5"
+    second = tmp_path / "second.h5"
+
+    make_hdf5_dataset(hdf5_file=first, render_cfg=render_cfg)
+    make_hdf5_dataset(hdf5_file=second, render_cfg=render_cfg)
+
+    with h5py.File(first, "r") as first_h5, h5py.File(second, "r") as second_h5:
+        first_params = first_h5[PARAM_ARRAY_FIELD]
+        second_params = second_h5[PARAM_ARRAY_FIELD]
+        assert isinstance(first_params, h5py.Dataset)
+        assert isinstance(second_params, h5py.Dataset)
+        assert np.array_equal(first_params[...], second_params[...])
+
+
 # HDF5 resume correctness: output row i renders fixed_*_params_list[i] by absolute
 # index, for both the copy (fixed params) and plain (sampled) paths — see #1430.
 # render_params is stubbed, so no plugin is needed and the stored param_array is a

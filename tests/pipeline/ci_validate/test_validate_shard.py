@@ -9,7 +9,7 @@ shard files it expects ``validate_all_shards_from_r2`` to download.
 from __future__ import annotations
 
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import h5py
@@ -34,9 +34,18 @@ _PARAM_LENGTH = 92
 
 
 def _create_shard(
-    path: Path, shard_size: int, datasets: dict[str, tuple[int, ...]] | None = None
+    path: Path,
+    shard_size: int,
+    datasets: dict[str, tuple[int, ...]] | None = None,
+    audio_attrs: dict[str, object] | None = None,
 ) -> None:
-    """Create a minimal HDF5 shard with given datasets and shapes."""
+    """Create a minimal HDF5 shard with given datasets, shapes, and attrs.
+
+    :param path: Destination HDF5 path.
+    :param shard_size: Number of rows for default datasets.
+    :param datasets: Optional explicit dataset shapes keyed by dataset name.
+    :param audio_attrs: Optional attrs written to the ``audio`` dataset.
+    """
     defaults: dict[str, tuple[int, ...]] = {
         "audio": (shard_size, _AUDIO_CHANNELS, _AUDIO_SAMPLES_PER_ROW),
         "mel_spec": (shard_size, *_MEL_SHAPE_PER_ROW),
@@ -44,13 +53,16 @@ def _create_shard(
     }
     with h5py.File(path, "w") as f:
         for name, shape in (datasets or defaults).items():
-            f.create_dataset(name, shape=shape, dtype=np.float32)
+            dataset = f.create_dataset(name, shape=shape, dtype=np.float32)
+            if name == "audio" and audio_attrs is not None:
+                for key, value in audio_attrs.items():
+                    dataset.attrs[key] = value
 
 
 @pytest.fixture()
 def real_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> DatasetSpec:
     """Build a real DatasetSpec with mocked git/timestamp factories."""
-    fixed_now = datetime(2026, 3, 28, 12, 0, 0, tzinfo=timezone.utc)
+    fixed_now = datetime(2026, 3, 28, 12, 0, 0, tzinfo=UTC)
     monkeypatch.setattr("synth_setter.pipeline.schemas.spec._get_git_sha", lambda: "a" * 40)
     monkeypatch.setattr("synth_setter.pipeline.schemas.spec._is_repo_dirty", lambda: False)
     monkeypatch.setattr("synth_setter.pipeline.schemas.spec._utc_now", lambda: fixed_now)
@@ -173,6 +185,33 @@ class TestValidateShard:
         errors = validate_shard(shard_path, real_spec)
 
         assert errors == []
+
+    def test_seed_metadata_mismatch_returns_error(
+        self, real_spec: DatasetSpec, tmp_path: Path
+    ) -> None:
+        """A shard carrying seed metadata for a different spec is rejected.
+
+        :param real_spec: Spec whose render config matches the canonical valid shapes.
+        :param tmp_path: pytest-provided temp directory for the shard file.
+        """
+        shard_path = tmp_path / "shard-000000.h5"
+        _create_shard(
+            shard_path,
+            shard_size=real_spec.render.samples_per_shard,
+            audio_attrs={
+                "velocity": real_spec.render.velocity,
+                "signal_duration_seconds": real_spec.render.signal_duration_seconds,
+                "sample_rate": real_spec.render.sample_rate,
+                "channels": real_spec.render.channels,
+                "min_loudness": real_spec.render.min_loudness,
+                "base_seed": real_spec.render.base_seed + 1,
+                "attempts_per_sample": real_spec.render.attempts_per_sample,
+            },
+        )
+
+        errors = validate_shard(shard_path, real_spec)
+
+        assert any("base_seed" in error for error in errors)
 
 
 # ---------------------------------------------------------------------------

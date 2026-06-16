@@ -1,16 +1,10 @@
 """Deterministic per-sample seed derivation for reproducible datagen (#884).
 
-Every sample's RNG is a pure function of ``(master_seed, sample_idx, attempt)``,
-so sample ``N`` gets the same seed regardless of which worker renders it, the
-order workers process rows in, whether earlier rows were retried, or how the run
-is sharded. A single advancing global RNG cannot give this — its state depends on
-consumption order. The derivation (SHA-256 of the three inputs) is load-bearing:
-changing it silently invalidates every existing dataset, so it is pinned by a
-golden-value test.
-
-The accepted ``attempt`` is deterministic given a fixed ``min_loudness``, so
-cross-run reproducibility holds without persisting it — a per-row audit trail in
-the artifact is a #884 follow-up.
+Each row seed is a pure SHA-256 function of ``(master_seed, sample_idx, attempt)``,
+so worker count, row order, and sharding cannot perturb parameter draws. The
+encoding is golden-pinned because changing it reseeds existing datasets. The
+accepted attempt is deterministic for a fixed ``min_loudness``; per-row attempt
+provenance remains a follow-up.
 """
 
 import hashlib
@@ -37,9 +31,9 @@ def seed_for_sample(master_seed: int, sample_idx: int, attempt: int = 0) -> int:
 def rng_for_sample(master_seed: int, sample_idx: int, attempt: int = 0) -> np.random.Generator:
     """Build a ``numpy`` ``Generator`` seeded by :func:`seed_for_sample`.
 
-    :param master_seed: Per-shard master seed (``ShardSpec.seed``).
+    :param master_seed: Per-shard master seed.
     :param sample_idx: Absolute row index within the shard.
     :param attempt: Retry attempt for the row.
-    :returns: A fresh generator deterministic in the three inputs.
+    :returns: A fresh generator deterministic in ``(master_seed, sample_idx, attempt)``.
     """
     return np.random.default_rng(seed_for_sample(master_seed, sample_idx, attempt))

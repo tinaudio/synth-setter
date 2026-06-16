@@ -34,6 +34,7 @@ from synth_setter.pipeline.schemas.prefix import (
     make_r2_prefix,
 )
 from synth_setter.pipeline.schemas.r2_location import R2Location
+from synth_setter.pipeline.schemas.shard_metadata import DEFAULT_ATTEMPTS_PER_SAMPLE
 
 if TYPE_CHECKING:
     from omegaconf import DictConfig
@@ -303,7 +304,7 @@ class RenderConfig(BaseModel):
         ),
     )
     attempts_per_sample: int = Field(
-        default=100,
+        default=DEFAULT_ATTEMPTS_PER_SAMPLE,
         ge=1,
         description=(
             "Loudness-gate retry budget per sampled row before the render fails loudly. "

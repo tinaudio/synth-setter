@@ -111,6 +111,7 @@ def build_lance_smoke_spec(
     train_val_test_sizes: tuple[int, int, int] = (4, 0, 0),
     mask_degenerate_bins: bool = False,
     render: RenderConfig | None = None,
+    base_seed: int = 42,
 ) -> DatasetSpec:
     """Construct a lance ``DatasetSpec`` directly (no Hydra compose).
 
@@ -120,13 +121,14 @@ def build_lance_smoke_spec(
     :param mask_degenerate_bins: Threaded onto the spec for stats-fold tests.
     :param render: Optional render config replacing the smoke default — used by
         e2e tests that must wrap the exact config a writer rendered with.
+    :param base_seed: Dataset seed used to derive shard seeds.
     :returns: A frozen lance ``DatasetSpec`` whose shards are deterministic.
     """
     kwargs: dict[str, Any] = {
         "task_name": task_name,
         "output_format": "lance",
         "train_val_test_sizes": list(train_val_test_sizes),
-        "base_seed": 42,
+        "base_seed": base_seed,
         "mask_degenerate_bins": mask_degenerate_bins,
         "r2": {"bucket": "intermediate-data"},
         "render": render if render is not None else dict(_LANCE_SMOKE_RENDER),
@@ -191,6 +193,7 @@ def smoke_shard_metadata(render: RenderConfig) -> ShardMetadata:
         channels=render.channels,
         min_loudness=render.min_loudness,
         base_seed=render.base_seed,
+        attempts_per_sample=render.attempts_per_sample,
     )
 
 
@@ -207,7 +210,7 @@ def write_minimal_lance_shard(dest: Path, spec: DatasetSpec) -> None:
     )
 
     dest.parent.mkdir(parents=True, exist_ok=True)
-    render = spec.render
+    render = spec.render.model_copy(update={"base_seed": spec.shards[0].seed})
     shapes = dataset_field_shapes(render, spec.num_params)
     schema = lance_schema(shapes, smoke_shard_metadata(render))
     arrays = {

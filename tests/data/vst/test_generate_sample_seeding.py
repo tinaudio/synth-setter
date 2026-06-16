@@ -114,8 +114,10 @@ def test_generate_sample_last_attempt_audible_succeeds(
 def test_generate_sample_without_master_seed_samples_nondeterministically(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # master_seed=None drives the fallback branch (fresh rng per attempt); a broken
-    # ``if master_seed is not None`` guard would otherwise pass unnoticed.
     _patch_render(monkeypatch, [_loud_audio()])
-    sample = _generate(master_seed=None)
-    assert set(sample.synth_params) and sample.attempt == 0
+    first = _generate(master_seed=None)
+    _patch_render(monkeypatch, [_loud_audio()])
+    second = _generate(master_seed=None)
+
+    assert first.synth_params != second.synth_params
+    assert first.attempt == second.attempt == 0

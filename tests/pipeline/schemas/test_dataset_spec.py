@@ -573,6 +573,21 @@ class TestDatasetSpecValidators:
         spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_seeds=None))
         assert spec.train_val_test_seeds is None
 
+    @pytest.mark.parametrize("bad_attempts", [0, -1])
+    def test_render_config_rejects_non_positive_attempts_per_sample(
+        self, patch_runtime_io: None, bad_attempts: int
+    ) -> None:
+        """attempts_per_sample must be positive at the DatasetSpec trust boundary.
+
+        :param patch_runtime_io: Fixture stubbing git/clock runtime fields.
+        :param bad_attempts: Invalid retry budget value.
+        """
+        kwargs = _valid_spec_kwargs()
+        kwargs["render"] = {**kwargs["render"], "attempts_per_sample": bad_attempts}
+
+        with pytest.raises(ValidationError):
+            DatasetSpec(**kwargs)
+
     def test_explicit_empty_r2_prefix_raises(self, patch_runtime_io: None) -> None:
         """Empty ``r2.prefix`` raises via the ``_prefix_must_end_with_slash`` validator.
 
