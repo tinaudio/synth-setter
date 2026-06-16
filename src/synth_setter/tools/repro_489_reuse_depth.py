@@ -237,7 +237,8 @@ def _render_repeated(
 
     :param patch: The identical patch and its plugin/preset.
     :param depth: Number of renders (the reuse depth).
-    :param cached_plugin: Reused instance, or ``None`` to reload per render.
+    :param cached_plugin: Reused instance for the #489 ``once`` arm, or ``None`` to
+        reload a fresh plugin per render (the #713 reload arm / current default).
     :returns: ``depth`` rendered clips, each shape ``(C, T)``.
     """
     return [
@@ -257,26 +258,16 @@ def _render_repeated(
     ]
 
 
-def render_reusing_one_plugin(patch: PatchSpec, depth: int) -> list[np.ndarray]:
-    """Render ``patch`` ``depth`` times against one cached instance (the #489 bug path).
+def _render_reusing_one_plugin(patch: PatchSpec, depth: int) -> list[np.ndarray]:
+    """Render ``patch`` ``depth`` times against one cached instance (the #489 ``once`` arm).
 
     :param patch: The identical patch and its plugin/preset.
-    :param depth: Number of renders (the reuse depth).
+    :param depth: Number of renders sharing the cached instance.
     :returns: ``depth`` rendered clips, each shape ``(C, T)``.
     """
     plugin = load_plugin(patch.plugin_path)
     load_preset(plugin, patch.preset_path)
     return _render_repeated(patch, depth, cached_plugin=plugin)
-
-
-def render_reloading_each_call(patch: PatchSpec, depth: int) -> list[np.ndarray]:
-    """Render ``patch`` ``depth`` times reloading per call (the #713 workaround / default).
-
-    :param patch: The identical patch and its plugin/preset.
-    :param depth: Number of renders (the reuse depth).
-    :returns: ``depth`` rendered clips, each shape ``(C, T)``.
-    """
-    return _render_repeated(patch, depth, cached_plugin=None)
 
 
 def run(
@@ -298,9 +289,11 @@ def run(
     wandb_run = _init_wandb(spec_name, depths) if wandb_enabled else None
     verdicts: dict[int, Verdict] = {}
     for depth in depths:
-        reused = all_pairs_worst_mss(render_reusing_one_plugin(patch, depth))
+        reused = all_pairs_worst_mss(_render_reusing_one_plugin(patch, depth))
+        # Control arm reloads a fresh plugin per render (cached_plugin=None) — the #713
+        # workaround / current default; skipped under --no-control.
         reloaded_max = (
-            all_pairs_worst_mss(render_reloading_each_call(patch, depth)).mss_max
+            all_pairs_worst_mss(_render_repeated(patch, depth, cached_plugin=None)).mss_max
             if control
             else None
         )
@@ -321,7 +314,8 @@ def _report_depth(
 
     :param depth: Reuse depth being reported.
     :param reused: All-pairs result of the cached-plugin arm.
-    :param reloaded_max: Worst all-pairs MSS of the reload control, or ``None`` if skipped.
+    :param reloaded_max: Worst all-pairs MSS of the reload control, or ``None`` if skipped
+        (rendered as ``N/A`` to keep columns aligned).
     :param verdict: This depth's :func:`classify` label.
     """
     reload_str = "    N/A" if reloaded_max is None else f"{reloaded_max:7.3f}"

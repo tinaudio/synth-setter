@@ -32,7 +32,6 @@ def test_all_pairs_worst_mss_selects_the_first_most_divergent_pair() -> None:
     )
     assert result.worst_pair == (0, 1)
     assert result.mss_max == pytest.approx(5.0)
-    assert result.mss_max >= 0.0
 
 
 def test_all_pairs_worst_mss_scores_and_counts_every_unordered_pair() -> None:
@@ -40,12 +39,14 @@ def test_all_pairs_worst_mss_scores_and_counts_every_unordered_pair() -> None:
     calls: list[tuple[int, int]] = []
 
     def counting_metric(a: np.ndarray, b: np.ndarray) -> float:
+        # _const(i) fills the clip with i, so a[0, 0] recovers each render's index.
         calls.append((int(a[0, 0]), int(b[0, 0])))
         return 0.0
 
     renders = [_const(float(i)) for i in range(4)]
     result = repro.all_pairs_worst_mss(renders, metric=counting_metric)
-    assert calls == [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
+    # Contract: every unordered pair scored exactly once (order-independent).
+    assert sorted(calls) == [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
     assert result.pair_count == 6
     # A worst pair is recorded even when every score ties at 0.0 (sentinel is -inf).
     assert result.worst_pair == (0, 1)
@@ -115,3 +116,15 @@ def test_main_exits_zero_when_no_depth_reproduces_the_bug(
     monkeypatch.setattr(repro, "run", fake_run)
     repro.main(["--depths", "12", "40"])
     assert captured["depths"] == [12, 40]
+
+
+@pytest.mark.slow
+@pytest.mark.requires_vst
+def test_main_drives_the_real_render_chain_end_to_end() -> None:
+    """``main`` renders through resolve_patch -> all_pairs_worst_mss -> classify on a real VST.
+
+    Exercises the integration the stubbed CLI tests cannot: at depth 2 with no control
+    the run completes without raising and stays NO_REPRO (no #489 SystemExit) on the
+    current, flush-everything render path.
+    """
+    repro.main(["--depths", "2", "--no-control"])
