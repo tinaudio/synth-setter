@@ -251,7 +251,7 @@ shared network mount. Phase 3 verifies this.
 
 The DDP risk in the *current* code has nothing to do with Lance. The training
 dataloader is `DataLoader(train_dataset, batch_size=None, sampler=ShiftedBatchSampler(...))`, the DDP config uses `strategy: ddp` on 4
-devices (`configs/trainer/ddp.yaml`), and nothing sets `use_distributed_sampler`
+devices (`src/synth_setter/configs/trainer/ddp.yaml`), and nothing sets `use_distributed_sampler`
 → Lightning's default `True`.
 
 Under that default, Lightning **rewrites the dataloader's sampler** for DDP. Its
@@ -366,4 +366,4 @@ assertions almost always trace to ungoverned RNG here.
 - `src/synth_setter/pipeline/r2_io.py` — `r2_storage_options` (L188); `download_dir_no_overwrite`.
 - `src/synth_setter/pipeline/data/lance_shard.py` — `LANCE_DATA_STORAGE_VERSION = "2.2"` constant (L21), applied as the `data_storage_version` write kwarg (L111/L142).
 - `docs/design/lance-dataset-api-migration.md` — storage/write-API sibling; "training dataloader keeps rclone local-first" decision.
-- `configs/trainer/ddp.yaml` — `strategy: ddp`, `devices: 4`; no `use_distributed_sampler` override.
+- `src/synth_setter/configs/trainer/ddp.yaml` — `strategy: ddp`, `devices: 4`; no `use_distributed_sampler` override.
