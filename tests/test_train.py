@@ -8,6 +8,7 @@ that no private ``synth_setter.cli`` helper is imported here.
 """
 
 import os
+from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
 
@@ -29,6 +30,11 @@ from tests.conftest import (
     build_fake_train_cfg,
 )
 from tests.evaluation._oracle_helpers import ORACLE_AUDIO_METRIC_BOUNDS
+from tests.helpers.eval_fakes import (
+    FAKE_AGGREGATED_METRICS_CSV,
+    fake_metrics_csv,
+    fake_postprocessing_subprocess,
+)
 from tests.helpers.run_if import RunIf
 from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
 
@@ -36,40 +42,22 @@ from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
 # the parametrize lists on the two ``test_train_*_surge_xt`` tests cannot drift apart.
 _ORACLE_EXPERIMENT = "surge/fake_oracle"
 _SURGE_SMOKE_EXPERIMENTS = (_ORACLE_EXPERIMENT, "surge/ffn_full")
-_PREDICT_VST_AUDIO_FRAGMENT = "predict_vst_audio"
-_COMPUTE_AUDIO_METRICS_FRAGMENT = "compute_audio_metrics"
-_FAKE_AGGREGATED_METRICS_CSV = (
-    ",mean,std\nmss,0.5,0.02\nwmfcc,0.25,0.01\nsot,0.1,0.005\nrms,0.9,0.01\n"
-)
-_FAKE_METRICS_CSV = "mss,wmfcc,sot,rms\n" + "\n".join(
-    "0.5,0.25,0.1,0.9" for _ in range(NUM_FIXTURE_SAMPLES)
-)
+_PREDICTION_PT_PREFIXES = ("pred", "target-audio", "target-params")
+_FAKE_METRICS_CSV = fake_metrics_csv(NUM_FIXTURE_SAMPLES)
 
 # TODO(#40): add @pytest.mark.ram gate for memory-intensive CPU tests test_train_fast_dev_run
 
 
-def _fake_predict_postprocessing_subprocess(args: list[str], **_kwargs: object) -> None:
-    """Materialize the render and metrics outputs the Lance smoke test asserts.
+def _lance_eval_postprocessing_fake() -> Callable[[list[str]], None]:
+    """Return fake eval postprocessing that materializes Lance smoke outputs.
 
-    :param args: Subprocess argv from the eval postprocessing step.
-    :param **_kwargs: Ignored ``subprocess.run`` keyword arguments.
+    :returns: ``subprocess.run``-compatible callable.
     """
-    is_render = any(_PREDICT_VST_AUDIO_FRAGMENT in arg for arg in args)
-    is_metrics = any(_COMPUTE_AUDIO_METRICS_FRAGMENT in arg for arg in args)
-    if not (is_render or is_metrics):
-        return
-
-    output_dir = Path(args[args.index("-m") + 3])
-    output_dir.mkdir(parents=True, exist_ok=True)
-    if is_render:
-        for sample_idx in range(NUM_FIXTURE_SAMPLES):
-            sample_dir = output_dir / f"sample_{sample_idx}"
-            sample_dir.mkdir()
-            for name in ("target.wav", "pred.wav", "spec.png", "params.csv"):
-                (sample_dir / name).write_text("fake")
-    if is_metrics:
-        (output_dir / "aggregated_metrics.csv").write_text(_FAKE_AGGREGATED_METRICS_CSV)
-        (output_dir / "metrics.csv").write_text(_FAKE_METRICS_CSV)
+    return fake_postprocessing_subprocess(
+        audio_metrics_csv=FAKE_AGGREGATED_METRICS_CSV,
+        per_sample_metrics_csv=_FAKE_METRICS_CSV,
+        render_sample_count=NUM_FIXTURE_SAMPLES,
+    )
 
 
 def test_train_fast_dev_run_tiny_model_tiny_data(cfg_train: DictConfig) -> None:
@@ -544,7 +532,7 @@ def test_train_eval_surge_lance(
     monkeypatch: pytest.MonkeyPatch,
     experiment_name: str,
 ) -> None:
-    """Train on Lance splits, then predict from the saved checkpoint over Lance splits.
+    """Train on Lance splits, then verify prediction tensors from checkpoint eval.
 
     :param tmp_path: The temporary logging path.
     :param cfg_surge_xt_lance: CPU training config using ``datamodule=surge_lance``.
@@ -552,37 +540,15 @@ def test_train_eval_surge_lance(
     :param monkeypatch: Stubs render/metrics subprocesses so no real VST host launches.
     :param experiment_name: Hydra experiment override the cfg was built from.
     """
-    HydraConfig().set_config(cfg_surge_xt_lance)
-    train(cfg_surge_xt_lance)
-
-    assert Path(cfg_surge_xt_lance_eval.ckpt_path).exists()
-
-    monkeypatch.setattr(
-        "synth_setter.cli.eval.subprocess.run", _fake_predict_postprocessing_subprocess
-    )
-    monkeypatch.setattr("synth_setter.cli.eval.vst_headless_wrapper", lambda: object())
-    monkeypatch.setattr(
-        "synth_setter.cli.eval.as_file",
-        lambda _traversable: nullcontext(Path("/fake/headless-wrapper")),
+    metric_dict, object_dict = _evaluate_surge_lance_checkpoint(
+        cfg_surge_xt_lance, cfg_surge_xt_lance_eval, monkeypatch
     )
 
-    HydraConfig().set_config(cfg_surge_xt_lance_eval)
-    metric_dict, object_dict = evaluate(cfg_surge_xt_lance_eval)
-
-    assert metric_dict["audio/mss_mean"] == pytest.approx(0.5)
-    assert metric_dict["audio/rms_std"] == pytest.approx(0.01)
-
-    test_split = Path(object_dict["datamodule"].dataset_root) / "test.lance"
-    assert test_split.is_dir()
+    _assert_surge_lance_eval_basics(metric_dict, object_dict)
 
     predictions_dir = tmp_path / "predictions"
     assert predictions_dir.is_dir()
-    expected_names = sorted(
-        f"{prefix}-{sample_idx}.pt"
-        for prefix in ("pred", "target-audio", "target-params")
-        for sample_idx in range(NUM_FIXTURE_SAMPLES)
-    )
-    assert sorted(path.name for path in predictions_dir.iterdir()) == expected_names
+    assert sorted(path.name for path in predictions_dir.iterdir()) == _prediction_file_names()
 
     for sample_idx in range(NUM_FIXTURE_SAMPLES):
         pred = torch.load(predictions_dir / f"pred-{sample_idx}.pt", weights_only=True)
@@ -595,6 +561,30 @@ def test_train_eval_surge_lance(
             assert torch.equal(pred, target_params), (
                 f"oracle pred-{sample_idx}.pt != target-params-{sample_idx}.pt"
             )
+
+
+@pytest.mark.fake_vst
+@pytest.mark.parametrize("experiment_name", _SURGE_SMOKE_EXPERIMENTS, indirect=True)
+def test_train_eval_surge_lance_writes_audio_and_metrics_outputs(
+    tmp_path: Path,
+    cfg_surge_xt_lance: DictConfig,
+    cfg_surge_xt_lance_eval: DictConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    experiment_name: str,
+) -> None:
+    """Train on Lance splits, then verify fake render and metrics outputs.
+
+    :param tmp_path: The temporary logging path.
+    :param cfg_surge_xt_lance: CPU training config using ``datamodule=surge_lance``.
+    :param cfg_surge_xt_lance_eval: Matching eval config pinned to ``last.ckpt``.
+    :param monkeypatch: Stubs render/metrics subprocesses so no real VST host launches.
+    :param experiment_name: Hydra experiment override; parametrizes the train/eval run.
+    """
+    metric_dict, object_dict = _evaluate_surge_lance_checkpoint(
+        cfg_surge_xt_lance, cfg_surge_xt_lance_eval, monkeypatch
+    )
+
+    _assert_surge_lance_eval_basics(metric_dict, object_dict)
 
     audio_dir = tmp_path / "audio"
     sample_dirs = sorted(path for path in audio_dir.iterdir() if path.is_dir())
@@ -617,3 +607,62 @@ def test_train_eval_surge_lance(
         assert len(metrics_df) == expected_rows
         numeric = metrics_df.select_dtypes(include=[np.number]).to_numpy()
         assert np.isfinite(numeric).all(), f"{metrics_file} contains NaN/Inf:\n{metrics_df}"
+
+
+def _evaluate_surge_lance_checkpoint(
+    cfg_surge_xt_lance: DictConfig,
+    cfg_surge_xt_lance_eval: DictConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Run the Lance train-to-predict smoke path with faked postprocessing.
+
+    :param cfg_surge_xt_lance: CPU training config using ``datamodule=surge_lance``.
+    :param cfg_surge_xt_lance_eval: Matching eval config pinned to ``last.ckpt``.
+    :param monkeypatch: Stubs postprocessing subprocess dependencies.
+    :returns: ``evaluate`` metric and object dictionaries.
+    """
+    HydraConfig().set_config(cfg_surge_xt_lance)
+    train(cfg_surge_xt_lance)
+
+    assert Path(cfg_surge_xt_lance_eval.ckpt_path).exists()
+
+    monkeypatch.setattr("synth_setter.cli.eval.subprocess.run", _lance_eval_postprocessing_fake())
+    monkeypatch.setattr("synth_setter.cli.eval.vst_headless_wrapper", lambda: object())
+    monkeypatch.setattr(
+        "synth_setter.cli.eval.as_file",
+        lambda _traversable: nullcontext(Path("/fake/headless-wrapper")),
+    )
+
+    HydraConfig().set_config(cfg_surge_xt_lance_eval)
+    return evaluate(cfg_surge_xt_lance_eval)
+
+
+def _assert_surge_lance_eval_basics(
+    metric_dict: dict[str, object],
+    object_dict: dict[str, object],
+) -> None:
+    """Assert the shared Lance predict-mode eval invariants.
+
+    :param metric_dict: Metrics returned by ``evaluate``.
+    :param object_dict: Objects returned by ``evaluate``.
+    """
+    assert metric_dict["audio/mss_mean"] == pytest.approx(0.5)
+    assert metric_dict["audio/rms_std"] == pytest.approx(0.01)
+
+    dataset_root = getattr(object_dict["datamodule"], "dataset_root")
+    assert isinstance(dataset_root, str | os.PathLike)
+
+    test_split = Path(dataset_root) / "test.lance"
+    assert test_split.is_dir()
+
+
+def _prediction_file_names() -> list[str]:
+    """Return the per-batch files ``PredictionWriter`` writes for the smoke split.
+
+    :returns: Sorted expected prediction filenames.
+    """
+    return sorted(
+        f"{prefix}-{sample_idx}.pt"
+        for prefix in _PREDICTION_PT_PREFIXES
+        for sample_idx in range(NUM_FIXTURE_SAMPLES)
+    )

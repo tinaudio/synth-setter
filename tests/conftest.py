@@ -8,7 +8,7 @@ import sys
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import h5py
 import hdf5plugin  # noqa: F401   side-effect import: registers HDF5_PLUGIN_PATH so h5py can load Blosc2 filters in fixtures
@@ -514,7 +514,7 @@ def _build_surge_xt_smoke_cfg(
     accelerator: str,
     param_spec_name: str,
     experiment: str,
-    datamodule: str | None = None,
+    datamodule_group: Literal["surge", "surge_lance"] = "surge",
 ) -> DictConfig:
     """Construct the Surge XT smoke-test config without the accelerator availability gate.
 
@@ -534,8 +534,7 @@ def _build_surge_xt_smoke_cfg(
         ``model.net.d_out`` and ``callbacks.log_per_param_mse.param_spec``.
     :param experiment: Hydra ``experiment=...`` override (e.g. ``"surge/fake_oracle"``,
         ``"surge/ffn_full"``); selects which model the smoke cfg wires up.
-    :param datamodule: Optional Hydra datamodule group override; ``None`` keeps
-        the experiment's HDF5 ``surge`` datamodule.
+    :param datamodule_group: Hydra datamodule group override.
 
     :return: Resolved DictConfig with the smoke-test bake-ins applied.
     """
@@ -543,8 +542,11 @@ def _build_surge_xt_smoke_cfg(
         cfg = compose(
             config_name="train.yaml",
             return_hydra_config=True,
-            overrides=[f"experiment={experiment}", "callbacks=[default_surge,eval_surge]"]
-            + ([f"datamodule={datamodule}"] if datamodule else []),
+            overrides=[
+                f"experiment={experiment}",
+                f"datamodule={datamodule_group}",
+                "callbacks=[default_surge,eval_surge]",
+            ],
         )
         TRAINING_STEPS = 1
         with open_dict(cfg):
@@ -936,7 +938,7 @@ def cfg_surge_xt_lance_global(param_spec_name: str, experiment_name: str) -> Dic
         accelerator="cpu",
         param_spec_name=param_spec_name,
         experiment=experiment_name,
-        datamodule="surge_lance",
+        datamodule_group="surge_lance",
     )
 
 
@@ -988,29 +990,60 @@ def cfg_surge_xt_eval(
         dataset.
     """
     cfg = cfg_surge_xt_global.copy()
+    _configure_surge_xt_eval_cfg(
+        cfg,
+        tmp_path=tmp_path,
+        dataset_root=surge_xt_smoke_datasets,
+        predict_file=surge_xt_smoke_datasets / "test.h5",
+        param_spec_name=param_spec_name,
+        plugin_path=PLUGIN_PATH,
+        rerender_target=True,
+    )
+
+    yield cfg
+
+    GlobalHydra.instance().clear()
+
+
+def _configure_surge_xt_eval_cfg(
+    cfg: DictConfig,
+    *,
+    tmp_path: Path,
+    dataset_root: Path,
+    predict_file: Path,
+    param_spec_name: str,
+    plugin_path: str,
+    rerender_target: bool,
+) -> None:
+    """Apply shared train-to-predict eval overrides to a Surge smoke config.
+
+    :param cfg: Config copied from the matching train fixture.
+    :param tmp_path: Shared output/log directory and checkpoint parent.
+    :param dataset_root: Directory holding the eval split and stats.
+    :param predict_file: Split consumed by ``trainer.predict``.
+    :param param_spec_name: Param spec used by the rendered fixture.
+    :param plugin_path: Plugin path forwarded to render postprocessing.
+    :param rerender_target: Whether postprocessing should render target audio.
+    """
     with open_dict(cfg):
         cfg.paths.output_dir = str(tmp_path)
         cfg.paths.log_dir = str(tmp_path)
         cfg.datamodule.batch_size = 1
-        cfg.datamodule.dataset_root = str(surge_xt_smoke_datasets)
-        cfg.datamodule.predict_file = str(surge_xt_smoke_datasets / "test.h5")
+        cfg.datamodule.dataset_root = str(dataset_root)
+        cfg.datamodule.predict_file = str(predict_file)
         cfg.ckpt_path = str(tmp_path / "checkpoints" / "last.ckpt")
         cfg.mode = "predict"
         cfg.evaluation = {
             "render_vst": True,
             "compute_metrics": True,
-            "rerender_target": True,
+            "rerender_target": rerender_target,
             "num_workers": 1,
         }
         cfg.render = {
             "param_spec_name": param_spec_name,
             "preset_path": preset_paths[param_spec_name],
-            "plugin_path": PLUGIN_PATH,
+            "plugin_path": plugin_path,
         }
-
-    yield cfg
-
-    GlobalHydra.instance().clear()
 
 
 @pytest.fixture(scope="function")
@@ -1029,25 +1062,15 @@ def cfg_surge_xt_lance_eval(
     :yields DictConfig: Config that predicts from ``last.ckpt`` over Lance splits.
     """
     cfg = cfg_surge_xt_lance_global.copy()
-    with open_dict(cfg):
-        cfg.paths.output_dir = str(tmp_path)
-        cfg.paths.log_dir = str(tmp_path)
-        cfg.datamodule.batch_size = 1
-        cfg.datamodule.dataset_root = str(fake_surge_smoke_lance_datasets)
-        cfg.datamodule.predict_file = str(fake_surge_smoke_lance_datasets / "test.lance")
-        cfg.ckpt_path = str(tmp_path / "checkpoints" / "last.ckpt")
-        cfg.mode = "predict"
-        cfg.evaluation = {
-            "render_vst": True,
-            "compute_metrics": True,
-            "rerender_target": False,
-            "num_workers": 1,
-        }
-        cfg.render = {
-            "param_spec_name": param_spec_name,
-            "preset_path": preset_paths[param_spec_name],
-            "plugin_path": "plugins/fake.vst3",
-        }
+    _configure_surge_xt_eval_cfg(
+        cfg,
+        tmp_path=tmp_path,
+        dataset_root=fake_surge_smoke_lance_datasets,
+        predict_file=fake_surge_smoke_lance_datasets / "test.lance",
+        param_spec_name=param_spec_name,
+        plugin_path="plugins/fake.vst3",
+        rerender_target=True,
+    )
 
     yield cfg
 
