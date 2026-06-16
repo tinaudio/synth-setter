@@ -281,8 +281,10 @@ Sub-issues: [#18](https://github.com/tinaudio/synth-setter/issues/18) (config-dr
   ID conventions follow [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids).
   Splits use explicit `{train: N, val: N, test: N}` matching design doc §14.4.
   Validation: `train + val + test == num_shards`.
-- `ShardSpec`: `shard_id: int`, `filename: str` (`"shard-000042.h5"`), `seed` (= `base_seed + shard_id`).
+- `ShardSpec`: `shard_id: int`, `filename: str` (`"shard-000042.h5"`), `seed`.
   `shard_id` is int in schema; formatted to string for paths via `shard_dir_name(shard_id) -> str`.
+  Current row-level seed derivation is documented in
+  [deterministic-seeding.md](deterministic-seeding.md).
   **Note:** As implemented, `ShardSpec` has only `shard_id`, `filename`, `seed`.
   Fields `row_start`, `row_count`, `expected_datasets`, `audio_shape`, `mel_shape`,
   `param_shape` from the original plan are not yet implemented.
@@ -946,10 +948,10 @@ ______________________________________________________________________
     Child process imports `make_hdf5_dataset` directly (`from synth_setter.data.vst.writers import make_hdf5_dataset`).
     Only `shard_spec` and `shard_path` cross the process boundary — no function objects.
     `LocalBackend` accepts an optional `generate_fn` for tests (runs in-process, no spawn).
-    For v1, no seeding (current behavior). Post-launch, dual-RNG seeding
-    (`random.seed()` + `np.random.seed()`) for reproducibility (#100, P3). Provides
-    OS-level crash isolation (SIGSEGV/OOM kill only one shard), per-shard timeout, and
-    clean VST plugin state. See design doc §7.8.1
+    Seed derivation is documented in
+    [deterministic-seeding.md](deterministic-seeding.md). The process boundary
+    provides OS-level crash isolation (SIGSEGV/OOM kill only one shard),
+    per-shard timeout, and clean VST plugin state. See design doc §7.8.1
 08. Entrypoint gets `MODE=generate-shards`, existing modes untouched
 09. Tests in `tests/pipeline/` with own conftest
 10. Finalize implements fresh resharding using HDF5 virtual datasets (not calling

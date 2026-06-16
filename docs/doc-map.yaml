@@ -115,6 +115,27 @@ docs:
       - pattern: "src/synth_setter/pipeline/data/lance_shard.py"
         covers: "Lance dataset-shard codec — lance_schema / tensor_array / record_batch_from_arrays / write_lance_dataset / lance_fragment / commit_lance_dataset on the encode side, read_shard_metadata / iter_lance_column_rows on the decode side; shared by the Lance writer, validator, and finalize."
 
+  # ── Deterministic data-generation seeding design ─────────────────
+  - doc: docs/design/deterministic-seeding.md
+    description: Canonical data-generation seed flow, guarantees, current status, and tracked follow-up work
+    sources:
+      - pattern: "src/synth_setter/data/vst/seeding.py"
+        covers: "seed_for_sample / rng_for_sample deterministic row-seed derivation"
+      - pattern: "src/synth_setter/data/vst/generate_vst_dataset.py"
+        covers: "SampleSeed, attempt-budget handling, generate_sample retry semantics, and accepted-attempt reporting"
+      - pattern: "src/synth_setter/data/vst/param_spec.py"
+        covers: "Explicit numpy Generator parameter sampling used by seeded dataset rows"
+      - pattern: "src/synth_setter/data/vst/writers.py"
+        covers: "Writer loop passing SampleSeed per row and projecting seed provenance into shard metadata"
+      - pattern: "src/synth_setter/pipeline/schemas/spec.py"
+        covers: "DatasetSpec base_seed, ShardSpec seed derivation, attempts_per_sample, and reserved train_val_test_seeds"
+      - pattern: "src/synth_setter/pipeline/schemas/shard_metadata.py"
+        covers: "ShardMetadata seed provenance fields and legacy sidecar defaults"
+      - pattern: "src/synth_setter/pipeline/ci/validate_shard.py"
+        covers: "HDF5, WDS, and Lance seed-provenance validation"
+      - pattern: "tests/data/vst/test_*seeding*.py"
+        covers: "Seed derivation, generate_sample retry semantics, writer repeatability, and metadata regression tests"
+
   # ── SkyPilot compute integration design doc ─────────────────────
   - doc: docs/design/skypilot-compute-integration.md
     description: SkyPilot dispatch for the data pipeline — single generic launcher consumed by every `synth-setter-*` entrypoint with compute support (RunPod + OCI smoke)
