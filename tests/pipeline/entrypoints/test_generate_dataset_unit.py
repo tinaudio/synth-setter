@@ -67,6 +67,7 @@ from tests.helpers.render_subprocess import (
 from tests.helpers.subprocess_args import find_script_index
 
 VST_HEADLESS_WRAPPER = str(vst_headless_wrapper())
+VST_HEADLESS_WRAPPER_NAME = Path(VST_HEADLESS_WRAPPER).name
 
 # Reusable VST3 bundle with a real Contents/moduleinfo.json so
 # extract_renderer_version (called by generate) returns a deterministic version
@@ -393,7 +394,7 @@ class TestRun:
         assert len(renderer_calls) == 1
         args = renderer_calls[0]
         if sys.platform == "linux":
-            assert args[0] == VST_HEADLESS_WRAPPER
+            assert Path(args[0]).name == VST_HEADLESS_WRAPPER_NAME
             assert args[2] == "src/synth_setter/data/vst/generate_vst_dataset.py"
         else:
             assert VST_HEADLESS_WRAPPER not in args
@@ -1323,7 +1324,8 @@ class TestBuildRendererCommand:
         with ExitStack() as stack:
             args = _build_renderer_command(spec, spec.shards[0], tmp_path, stack)
 
-        assert args[0] == VST_HEADLESS_WRAPPER
+            assert Path(args[0]).name == VST_HEADLESS_WRAPPER_NAME
+            assert Path(args[0]).is_file()
         assert args[1:] == build_generate_args(spec, spec.shards[0], tmp_path)
 
     def test_non_linux_uses_generate_args_directly(

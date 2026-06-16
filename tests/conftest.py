@@ -20,6 +20,7 @@ from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, open_dict
 
+from synth_setter.cli.generate_dataset import build_generate_args
 from synth_setter.data.vst import core, param_specs, preset_paths
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig, ShardSpec
 from synth_setter.resources import vst_headless_wrapper
@@ -669,8 +670,6 @@ def _render_smoke_train_h5_subprocess(train_h5: Path, param_spec_name: str) -> N
     :param param_spec_name: Key into :data:`synth_setter.data.vst.param_specs` and
         :data:`synth_setter.data.vst.preset_paths` selecting spec and preset.
     """
-    from synth_setter.cli.generate_dataset import build_generate_args
-
     spec = DatasetSpec(
         task_name="surge-smoke-fixture",
         git_sha="0" * 40,
