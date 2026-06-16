@@ -149,7 +149,7 @@ def build_clap_index(
     if rows < MIN_ROWS_FOR_INDEX:
         logger.warning("clap_index_skipped_too_few_rows", rows=rows, minimum=MIN_ROWS_FOR_INDEX)
         return False
-    partitions = num_partitions or max(1, round(rows**0.5))
+    partitions = max(1, round(rows**0.5)) if num_partitions is None else num_partitions
     dataset.create_index(
         CLAP_FIELD,
         index_type="IVF_PQ",
@@ -257,9 +257,10 @@ def load_clap_audio_encoder(
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
     logger.info("loading_clap_checkpoint", checkpoint=checkpoint, device=device)
-    # transformers' own types are too loose for the narrow surface used below
-    # (the processor's audio kwargs, and get_audio_features' tensor return), so
-    # pyright is scoped off the three offending calls rather than widened to Any.
+    # transformers' own types are too loose for the surface used below, so pyright
+    # is scoped off the two offending calls (the from_pretrained `.to()` chain and
+    # the get_audio_features tensor return) rather than widened to Any; the
+    # processor's audio kwargs are dict-splatted, which the stub can't object to.
     model = ClapModel.from_pretrained(checkpoint).to(device).eval()  # pyright: ignore
     processor = ClapProcessor.from_pretrained(checkpoint)
 
