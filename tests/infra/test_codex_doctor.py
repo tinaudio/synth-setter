@@ -17,6 +17,7 @@ REQUIRED_PLUGIN_SKILLS = (
     "simplify",
     "tdd-implementation",
 )
+MARKETPLACE_CODEX_REL = ".claude/plugins/marketplaces/tinaudio-skills/codex/synth-setter-skills"
 
 
 def _write_fake_codex(bin_dir: Path) -> None:
@@ -37,6 +38,17 @@ def _write_user_skill(home: Path, name: str) -> None:
     :param name: Skill name.
     """
     skill_dir = home / ".agents" / "skills" / name
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(f"---\nname: {name}\n---\n")
+
+
+def _write_claude_marketplace_skill(home: Path, name: str) -> None:
+    """Create a fake skill in Claude's installed marketplace Codex projection.
+
+    :param home: Isolated HOME root so the doctor cannot read the real cache.
+    :param name: Required skill identifier that ``codex-doctor`` must discover.
+    """
+    skill_dir = home / MARKETPLACE_CODEX_REL / name
     skill_dir.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text(f"---\nname: {name}\n---\n")
 
@@ -80,6 +92,24 @@ def test_codex_doctor_with_required_plugin_skills_passes(tmp_path: Path) -> None
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "Codex setup looks ready." in result.stdout
+
+
+def test_codex_doctor_projects_claude_marketplace_before_checking(
+    tmp_path: Path,
+) -> None:
+    """Doctor self-heals from Claude's marketplace cache before skill checks.
+
+    :param tmp_path: Isolated filesystem root that starts without ``~/.agents`` links.
+    """
+    home = tmp_path / "home"
+    for skill in REQUIRED_PLUGIN_SKILLS:
+        _write_claude_marketplace_skill(home, skill)
+
+    result = _run_doctor(tmp_path)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Codex setup looks ready." in result.stdout
+    assert (home / ".agents" / "skills" / "code-health").is_symlink()
 
 
 def test_codex_doctor_missing_plugin_skills_prints_install_command(

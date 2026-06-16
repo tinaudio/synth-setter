@@ -12,6 +12,8 @@ main() {
   # shellcheck disable=SC1091
   source "$repo_root/agent/hooks/_lib.sh"
 
+  "$repo_root/scripts/dev/link-skills.sh"
+
   if command -v codex >/dev/null 2>&1; then
     printf 'OK: codex CLI found\n'
   else

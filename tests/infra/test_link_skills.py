@@ -9,6 +9,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LINK_SKILLS = REPO_ROOT / "scripts" / "dev" / "link-skills.sh"
 MARKETPLACE_REL = ".claude/plugins/marketplaces/tinaudio-skills"
+CODEX_SKILLS_REL = f"{MARKETPLACE_REL}/codex/synth-setter-skills"
 
 
 def _write_marketplace_skill(home: Path, name: str) -> Path:
@@ -19,6 +20,19 @@ def _write_marketplace_skill(home: Path, name: str) -> Path:
     :returns: The created skill directory.
     """
     skill_dir = home / MARKETPLACE_REL / name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(f"---\nname: {name}\n---\n")
+    return skill_dir
+
+
+def _write_codex_marketplace_skill(home: Path, name: str) -> Path:
+    """Create a fake installed skill under the Claude cache's Codex projection.
+
+    :param home: Isolated HOME root so projection never reads the real cache.
+    :param name: Skill identifier expected to become a ``~/.agents`` link.
+    :returns: Directory that the projected link must resolve to.
+    """
+    skill_dir = home / CODEX_SKILLS_REL / name
     skill_dir.mkdir(parents=True, exist_ok=True)
     (skill_dir / "SKILL.md").write_text(f"---\nname: {name}\n---\n")
     return skill_dir
@@ -58,6 +72,56 @@ def test_link_skills_projects_marketplace_skills_into_agents_skills(tmp_path: Pa
         link = dest / name
         assert link.is_symlink()
         assert link.resolve() == source.resolve()
+
+
+def test_link_skills_projects_claude_codex_skill_projection(tmp_path: Path) -> None:
+    """The Claude marketplace's Codex skill path is projected into ``~/.agents``.
+
+    :param tmp_path: Temporary test root.
+    """
+    home = tmp_path / "home"
+    simplify = _write_codex_marketplace_skill(home, "simplify")
+
+    result = _run_link_skills(home)
+
+    assert result.returncode == 0, result.stderr
+    link = home / ".agents" / "skills" / "simplify"
+    assert link.is_symlink()
+    assert link.resolve() == simplify.resolve()
+
+
+def test_link_skills_falls_back_when_codex_projection_is_empty(tmp_path: Path) -> None:
+    """An empty Codex projection does not mask top-level marketplace skills.
+
+    :param tmp_path: Isolated filesystem root for the fake marketplace cache.
+    """
+    home = tmp_path / "home"
+    code_health = _write_marketplace_skill(home, "code-health")
+    (home / CODEX_SKILLS_REL).mkdir(parents=True)
+
+    result = _run_link_skills(home)
+
+    assert result.returncode == 0, result.stderr
+    link = home / ".agents" / "skills" / "code-health"
+    assert link.is_symlink()
+    assert link.resolve() == code_health.resolve()
+
+
+def test_link_skills_projects_codex_and_top_level_only_skills(tmp_path: Path) -> None:
+    """Mixed marketplace layouts project both Codex and top-level-only skills.
+
+    :param tmp_path: Isolated filesystem root for the fake mixed-layout cache.
+    """
+    home = tmp_path / "home"
+    codex_skill = _write_codex_marketplace_skill(home, "code-health")
+    top_level_only = _write_marketplace_skill(home, "wiki-content")
+
+    result = _run_link_skills(home)
+
+    assert result.returncode == 0, result.stderr
+    dest = home / ".agents" / "skills"
+    assert (dest / "code-health").resolve() == codex_skill.resolve()
+    assert (dest / "wiki-content").resolve() == top_level_only.resolve()
 
 
 def test_link_skills_skips_marketplace_dirs_without_a_skill_file(tmp_path: Path) -> None:
