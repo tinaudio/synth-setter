@@ -28,6 +28,7 @@ from synth_setter.cli.train import train
 from synth_setter.data.vst import param_specs, preset_paths
 from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
+from tests.conftest import REAL_VST_VARIANTS
 from tests.helpers.eval_fakes import (
     FAKE_METRICS_CSV,
     fake_postprocessing_subprocess,
@@ -106,11 +107,12 @@ def test_evaluate_runs_oracle_with_null_ckpt_path(
 
 @pytest.mark.requires_vst
 @pytest.mark.slow
+@pytest.mark.parametrize("surge_smoke_variant", REAL_VST_VARIANTS, indirect=True)
 def test_evaluate_predict_explicit_shuffle_seed_rejects_nonuniform_params_via_subprocess(
-    cfg_surge_xt: DictConfig,
-    cfg_surge_xt_eval: DictConfig,
+    cfg_surge_real_train: DictConfig,
+    cfg_surge_real_eval: DictConfig,
 ) -> None:
-    """Non-zero ``shuffle_seed`` with non-uniform params causes the metrics subprocess to fail.
+    """Non-zero ``shuffle_seed`` with non-uniform params causes the metrics subprocess to fail, for both dataset formats.
 
     Drives the real train→eval roundtrip end-to-end with ``shuffle_seed=7``,
     exercising the ``evaluate()`` → ``_run_predict_postprocessing`` →
@@ -121,20 +123,20 @@ def test_evaluate_predict_explicit_shuffle_seed_rejects_nonuniform_params_via_su
     ``evaluate()`` boundary — confirming the gate is wired through the real
     entrypoint (#489).
 
-    :param cfg_surge_xt: Surge XT smoke-test training config.
-    :param cfg_surge_xt_eval: Matching predict-mode eval config (render + metrics on),
+    :param cfg_surge_real_train: Surge XT smoke-test training config (h5 or Lance arm).
+    :param cfg_surge_real_eval: Matching predict-mode eval config (render + metrics on),
         sharing ``tmp_path`` so eval reads the checkpoint training writes.
     """
-    HydraConfig().set_config(cfg_surge_xt)
-    train(cfg_surge_xt)
-    assert Path(cfg_surge_xt_eval.ckpt_path).exists()
+    HydraConfig().set_config(cfg_surge_real_train)
+    train(cfg_surge_real_train)
+    assert Path(cfg_surge_real_eval.ckpt_path).exists()
 
-    with open_dict(cfg_surge_xt_eval):
-        cfg_surge_xt_eval.evaluation.shuffle_seed = 7
+    with open_dict(cfg_surge_real_eval):
+        cfg_surge_real_eval.evaluation.shuffle_seed = 7
 
-    HydraConfig().set_config(cfg_surge_xt_eval)
+    HydraConfig().set_config(cfg_surge_real_eval)
     with pytest.raises(subprocess.CalledProcessError):
-        evaluate(cfg_surge_xt_eval)
+        evaluate(cfg_surge_real_eval)
 
 
 @pytest.mark.gpu
