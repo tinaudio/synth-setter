@@ -761,6 +761,27 @@ PYEOF
 }
 it "edit-write: test mode falls back to flat layout tests/test_<base>.py when mirror missing" T_edit_write_test_mode_falls_back_to_flat_layout
 
+T_edit_write_format_preserves_unused_import() {
+  # Regression: --unfixable F401 in format mode keeps an import typed before its
+  # first use. Plain --fix would delete it; the PATH guard avoids a vacuous pass.
+  command -v ruff >/dev/null 2>&1 \
+    || { echo "ruff not on PATH — cannot exercise the format hook"; return 1; }
+  local scratch
+  scratch=$(mktemp -d "$TEST_DIR/scratch-XXXX")
+  local py="$scratch/probe.py"
+  printf 'import os\n\nprint("x")\n' > "${py}" \
+    || { echo "could not write probe file"; rm -rf "$scratch"; return 1; }
+  echo "{\"tool_input\":{\"file_path\":\"${py}\"}}" \
+    | bash "$REPO_ROOT/agent/hooks/edit-write.sh" format >/dev/null 2>&1 || true
+  [[ -f "${py}" ]] || { echo "probe file vanished — hook errored"; rm -rf "$scratch"; return 1; }
+  local import_present=no
+  grep -q '^import os$' "${py}" && import_present=yes
+  rm -rf "$scratch"
+  [[ "${import_present}" == yes ]] \
+    || { echo "format mode deleted the unused import (F401 should be unfixable)"; return 1; }
+}
+it "edit-write: format mode keeps an unused import (F401 unfixable)" T_edit_write_format_preserves_unused_import
+
 # ===========================================================================
 # verify-gh-taxonomy.sh — smoke tests for early-exit paths
 # (mode_pr / mode_issue / mode_hierarchy require full gh-API stubbing; those
