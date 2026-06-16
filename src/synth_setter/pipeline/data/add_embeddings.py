@@ -313,7 +313,11 @@ def load_clap_audio_encoder(
 def _open_lance_dataset(uri: str) -> lance.LanceDataset:
     """Open a Lance dataset, attaching R2 ``storage_options`` for cloud URIs.
 
-    :param uri: Local path, ``r2://bucket/key``, or ``s3://bucket/key``.
+    Any ``s3://`` URI is treated as the project's R2 (S3-compatible) endpoint and
+    credentialed via :func:`r2_io.r2_storage_options`; generic non-R2 S3 buckets
+    are not a supported input.
+
+    :param uri: Local path, ``r2://bucket/key``, or ``s3://bucket/key`` (R2).
     :returns: The opened dataset, credentialed when ``uri`` is on R2.
     """
     if r2_io.is_r2_uri(uri):
