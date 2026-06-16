@@ -1,6 +1,267 @@
 # CHANGELOG
 
 
+## v8.37.0 (2026-06-16)
+
+### Automation
+
+- Add lance-review skill to the repo-review fan-out
+  ([#1708](https://github.com/tinaudio/synth-setter/pull/1708),
+  [`0686490`](https://github.com/tinaudio/synth-setter/commit/0686490a48cbee0b50ec0b032d618f3dad7f7f90))
+
+* automation: add lance-review skill to the repo-review fan-out
+
+Add a repo-local review checklist that deep-scans the Lance docs and audits this repo's pylance
+  usage for code that hand-rolls a primitive Lance already provides natively (manual fragment
+  bookkeeping, custom row reordering, bespoke object-store wiring, reimplemented scanners/filters,
+  ad-hoc schema evolution or versioning). Every finding must carry a verbatim doc quote and a deep
+  link to the section it came from; ungrounded suggestions are dropped.
+
+Wire it into the shared repo-review-full analysis so both /repo-review-full and
+  /repo-review-full-no-comments fan out to it. Selection is content-based: a changed *.py file opts
+  in only when its diff touches the Lance API. The skill is repo-local rather than a plugin skill,
+  so its sub-agent invokes the bare lance-review skill (or reads agent/skills/lance-review/SKILL.md)
+  and needs web access to fetch the docs.
+
+* docs(repo-review): make lance-review grep examples shell-safe
+
+Replace the angle-bracket placeholders (`<changed-files>` / `<changed *.py>`) in the touch-point
+  grep snippets with quoted array expansions (`"${changed_files[@]}"` / `"${changed_py[@]}"`) so a
+  reader can copy-paste them without the space-and-glob inside the placeholder being mis-parsed by
+  the shell. Also reword the example finding body to cite an obviously-illustrative path
+  (`path/to/shard_io.py:NN`) instead of a real source file, so it can't be misread as a known
+  finding.
+
+* docs(repo-review): make lance grep snippets self-contained
+
+The fcd00314 fix replaced the shell-unsafe <changed *.py> placeholder with "${changed_py[@]}" /
+  "${changed_files[@]}", but neither doc populated the array — a literal copy-paste ran grep with
+  zero file arguments and hung on stdin. Populate each array first (gh pr files in the router, git
+  diff in the skill) and guard the grep on a non-empty array so the snippets are genuinely
+  copy-paste-safe.
+
+* docs(repo-review): harden lance grep snippets against deleted paths
+
+Copilot flagged that the example touch-point greps could break on PR file lists / `git diff` output
+  that include deleted or renamed paths (grep then runs on a missing file) and on filenames
+  beginning with `-` (no argument terminator). Drop deletions with `--diff-filter=d` in the skill's
+  `git diff` and with an existence filter on the router's `gh pr view` file list, pass `--repo` on
+  `gh pr view` to match Step 1, and add a `--` terminator before the file arguments in both
+  snippets.
+
+* docs(repo-review): document $BASE/$HEAD provenance in lance Step 2
+
+* docs(repo-review): scope lance scan to *.py and fix Step 4 carve-out
+
+Address Copilot's review of the snippets and wiring: - Skill Step 2 now filters `git diff` with a
+  `'*.py'` pathspec so prose mentions of Lance APIs in docs/markdown don't false-positive, matching
+  the router's changed-Python-files intent. - The router cross-reference in the skill uses the full
+  `agent/skills/_shared/repo-review-full-analysis.md` path for consistency with the repo-review*
+  skill docs. - Step 4's "exact skill to invoke" requirement now carves out `lance-review`
+  explicitly: it is repo-local, so orchestrators must invoke it bare rather than
+
+emit the plugin-prefixed `tinaudio-synth-setter-skills:` string.
+
+* docs(repo-review): carve out lance-review in the sequential fallback too
+
+Step 4's sequential-fallback path still hard-coded the plugin-prefixed
+  `tinaudio-synth-setter-skills:<skill-name>` invocation, contradicting the `lance-review` exception
+  added for the parallel path. Apply the same bare-invoke carve-out to the fallback so an
+  orchestrator without sub-agent nesting doesn't emit an invalid Skill call for the repo-local
+  skill.
+
+- Keep the edit hook from deleting unused imports (F401)
+  ([#1732](https://github.com/tinaudio/synth-setter/pull/1732),
+  [`e3b5500`](https://github.com/tinaudio/synth-setter/commit/e3b5500945032253cf7ad214a8bcf9374761f3eb))
+
+* automation: keep the edit hook from deleting unused imports (F401)
+
+The PostToolUse format hook ran `ruff check --fix` after every Edit/Write, so an import added one
+  tool call before its first use was deleted out from under the agent, forcing a re-add cycle. Pass
+  --unfixable F401 so the save-time fix leaves unused imports in place; CLI `ruff --fix`, `make
+  format`, pre-commit, and CI still strip and enforce F401, so dead imports never ship.
+
+Mirrors the editor-only override shipped for the VS Code ruff LSP in #1432, completing the same fix
+  for the Claude edit hook.
+
+Fixes #1431
+
+* automation: harden the F401 hook test and fix doc grammar
+
+Address Copilot review on #1732: - test asserts the probe was actually reformatted (ruff format
+  rewrites x=1 to x = 1, config-independent) before checking the unused import survived, so a no-op
+  hook (missing jq/ruff, unparsed path) fails loudly instead of passing vacuously. - reword the
+  AGENTS.md/CLAUDE.md F401 bullet to drop the awkward "typed an edit" phrasing.
+
+Refs #1431
+
+* test(hooks): address edit hook review feedback
+
+Remove the save-time F401 guidance from agent docs now that the hook behavior is covered by tests,
+  and harden the regression test so it explicitly requires jq, ruff, and a successful format hook
+  run.\n\nAddresses review comments 3422938673, 3422938737, and 3422938759 on PR #1732.
+
+- Post WARN findings as individual unresolved inline threads
+  ([#1727](https://github.com/tinaudio/synth-setter/pull/1727),
+  [`6c2c76d`](https://github.com/tinaudio/synth-setter/commit/6c2c76da30cd1628f721ca8c708b22f13268a9e3))
+
+The repo-review-full pipeline previously collapsed WARN findings into a ``## Advisory (WARN)
+  findings`` bullet list inside the review body and limited inline threads to BLOCK findings. The
+  collapse design was meant to keep BLOCKs visible, but in practice the body bullets were silently
+  ignored — a typical review converged on ``event=COMMENT`` with zero inline threads and the WARNs
+  were never addressed.
+
+Route every BLOCK and WARN through the ``findings`` JSON array so each posts as its own inline
+  review comment. ``post_review.py`` already leaves threads unresolved, which lets "Conversations
+  must be resolved" branch protection force an explicit reply or resolution before merge. The
+  ``[<short-tag>:<severity>]`` prefix lets reviewers filter or batch-resolve. PR-health BLOCKs still
+  fold into ``review_body`` because they aren't anchored to diff lines.
+
+Refs #1406
+
+Co-authored-by: Managed via Tart <admin@Manageds-Virtual-Machine.local>
+
+### Continuous Integration
+
+- **data-pipeline**: Run VST slow suite for OB-Xf and Surge in matrix
+  ([#1695](https://github.com/tinaudio/synth-setter/pull/1695),
+  [`7f33518`](https://github.com/tinaudio/synth-setter/commit/7f33518e0c36a73a2de34a4892e6ee7d708bdc0b))
+
+- **testing**: Trial standard ubuntu-latest runner for slow CPU and VST suites
+  ([#1726](https://github.com/tinaudio/synth-setter/pull/1726),
+  [`3a7d6ed`](https://github.com/tinaudio/synth-setter/commit/3a7d6ed928f64f6ff814d869e8440ebd9ff50536))
+
+Both slow suites run pytest serially (no `-n auto`), so per-test PyTorch peak — not xdist
+  parallelism — is the only OOM risk on the smaller runner. This swaps `ubuntu-latest-4core` for the
+  standard 2-core/7 GB `ubuntu-latest` to measure whether they still OOM; the 4-core label was a
+  2x-cost driver in GitHub Actions billing. Revert per-job if runs exit 137.
+
+Co-authored-by: khaledtin <khaledtin@users.noreply.github.com>
+
+### Documentation
+
+- **config**: Add AWS_* R2-redirect vars to .env.example
+  ([#1711](https://github.com/tinaudio/synth-setter/pull/1711),
+  [`c005e25`](https://github.com/tinaudio/synth-setter/commit/c005e2598ea28212222947a4ebedaf3b664ea38a))
+
+* docs(config): document AWS_* R2 redirect vars for the lance viewer
+
+SmooSense's DuckDB-`lance` data viewer reads s3:// .lance datasets through Lance's Rust object_store
+  and DuckDB's httpfs, neither of which consume the RCLONE_CONFIG_R2_* vars. Without AWS_ENDPOINT /
+  AWS_ENDPOINT_URL pointed at R2, a query over an R2-backed .lance dataset retries against real AWS
+  S3 and hangs.
+
+Add the five AWS_* vars (keys, both endpoint forms, region=auto) to .env.example, documenting them
+  as global AWS SDK overrides, and drop the now-contradictory commented-out AWS_ENDPOINT_URL line.
+
+* docs(config): lead AWS_* R2 block with the override warning and var-name constraint
+
+Restructure the comment per review: surface the global AWS SDK override caveat and the two-consumer
+  / two-var-name constraint (AWS_ENDPOINT for Lance's object_store, AWS_ENDPOINT_URL for DuckDB
+  httpfs) up front instead of mid-block.
+
+* docs(config): extend configuration-reference §5.6 for the AWS_* R2 vars
+
+The §5.6 row covered only AWS_ENDPOINT_URL with a W&B-narrow framing. Replace it with the full AWS_*
+  group, the SmooSense / DuckDB-lance viewer use case, and the AWS_ENDPOINT (Lance object_store) vs
+  AWS_ENDPOINT_URL (DuckDB httpfs) split, pointing at .env.example as the sample. Flagged by
+  doc-drift on PR #1711.
+
+* docs(config): tidy AWS_* comment wording per Copilot
+
+Drop the odd "s3:// .lance" spacing (read like a malformed URI) and name the variable fully
+  (AWS_REGION=auto, not region=auto) so the comment matches the key it describes.
+
+* docs(config): rewrap AWS_* comment and reword s3:// phrasing per Copilot
+
+Keep DuckDB-`lance` together across the line wrap in .env.example, and reword the
+  configuration-reference row so the s3:// example reads as a complete URI (".lance datasets
+  referenced by s3://... URIs") instead of split spans.
+
+- **data-pipeline**: Document multi-synth support, add new-synth guide
+  ([#1709](https://github.com/tinaudio/synth-setter/pull/1709),
+  [`e266c90`](https://github.com/tinaudio/synth-setter/commit/e266c905161242dde164c82d503a60fdf5e14c95))
+
+* docs(data-pipeline): document multi-synth support and add new-synth guide
+
+Phase 4 of the multi-synth epic: generalize the architecture overview from Surge-only to any
+  registered VST3 synth, and add a step-by-step onboarding guide covering introspect → hand-tune →
+  register → generate, plus optional Docker baking.
+
+Registers the guide in docs/doc-map.yaml so doc-drift tracks the introspection CLI, registry,
+  ParamSpec types, render configs, and the Dockerfile fetch stage it cites.
+
+Closes #1598 Part of #1582
+
+* docs(data-pipeline): correct render-config paths and CLI/diagram nits
+
+Address Copilot review on #1709: use full src/synth_setter/configs/render paths (no top-level
+  configs/), clarify that --out-* flags cannot combine with --register, and fix the system-diagram
+  cell alignment.
+
+Refs #1598
+
+### Features
+
+- **data-pipeline**: Reproducible per-sample seeding for datagen
+  ([#1713](https://github.com/tinaudio/synth-setter/pull/1713),
+  [`486f663`](https://github.com/tinaudio/synth-setter/commit/486f663474d53d1efc211721324f7ef7c184f7c5))
+
+* feat(data-pipeline): deterministic per-sample seeding for reproducible datagen
+
+Derive every sample's RNG from (base_seed, sample_idx, attempt) via a SHA-256 seed in a new seeding
+  module, so a row's content is reproducible regardless of worker, order, or retry history (#884).
+  Thread an explicit numpy Generator through ParamSpec.sample and all Parameter subtypes (killing
+  global-RNG bleed), give generate_sample a bounded, deterministic loudness-retry loop that records
+  the accepted attempt, and add RenderConfig.base_seed / attempts_per_sample with the launcher
+  plumbing each shard's seed.
+
+Per-split independent seed streams (train_val_test_seeds) and persisted attempt / dataset_version
+  remain gated as separate follow-ups.
+
+Refs #884
+
+* fix(data-pipeline): address seed provenance review warnings
+
+* test(data-pipeline): cover worker-count seed stability
+
+* fix(data-pipeline): preserve legacy shard metadata validation
+
+* fix(data-pipeline): align dummy shard seed metadata
+
+* test(data-pipeline): cover repeat-run seed metadata
+
+* docs(data-pipeline): consolidate seeding design
+
+* test(data-pipeline): align VST replay sampler with seeded API
+
+* fix(data-pipeline): address seeded sampler review findings
+
+### Internal-Fix
+
+- **codex**: Project Claude skills before doctor checks
+  ([#1722](https://github.com/tinaudio/synth-setter/pull/1722),
+  [`8359d3b`](https://github.com/tinaudio/synth-setter/commit/8359d3b607838e4cc10e43e511b07419cc4613f1))
+
+### Testing
+
+- Deflake clean-exit sweep test via heartbeat liveness
+  ([#1701](https://github.com/tinaudio/synth-setter/pull/1701),
+  [`f062506`](https://github.com/tinaudio/synth-setter/commit/f0625069e340081d3e809bc40d3ee0ac4bec10fc))
+
+test_clean_exit_sweep_reaps_ingroup_grandchild proved the grandchild dead with a bare-PID probe
+  (_pid_alive on the pidfile pid). After the sweep reaps the grandchild, its PID can be recycled by
+  an unrelated process inside the 3s poll window, so the probe reports a stranger alive and the
+  assert flakes — load-correlated, hence green locally (pid_max=4194304) but intermittent on busy CI
+  with smaller pid_max and -n auto fork churn.
+
+Read death from a heartbeat file only the grandchild writes, mirroring the sibling
+  test_timeout_group_kill_stops_ingroup_grandchild_heartbeat: a recycled PID is a different process
+  that won't grow our file, so the check is identity-bound and immune to PID reuse. The clean-exit
+  trigger (parent forks then exits 0) is unchanged, so the post-exit sweep is still the only thing
+  that can stop the heartbeat.
+
+
 ## v8.36.0 (2026-06-14)
 
 ### Features
