@@ -222,6 +222,21 @@ docs:
         covers: "Training Docker image, GPU support, environment portability"
         scope: "training"
 
+  # ── Lance-native dataloader migration design doc ────────────────
+  - doc: docs/design/lance-dataloader-migration.md
+    description: Read/dataloader migration — map-style LanceMapDataset, projected __getitems__, R2→local pre-staging, h5 removal
+    sources:
+      - pattern: "src/synth_setter/data/surge_datamodule.py"
+        covers: "Batch-indexed VSTDataset.__getitem__ per-column reads, custom samplers, batch_size=None dataloaders, prepare_data staging"
+      - pattern: "src/synth_setter/data/lance_datamodule.py"
+        covers: "Lance h5py-shaped adapter (LanceColumn scanner/take, LanceShardFile.live_dataset getpid reopen) the migration replaces"
+      - pattern: "src/synth_setter/pipeline/data/lance_shard.py"
+        covers: "LANCE_DATA_STORAGE_VERSION constant and the on-disk Lance format the read path opens"
+      - pattern: "src/synth_setter/pipeline/r2_io.py"
+        covers: "download_dir_no_overwrite + r2_storage_options backing R2→node-local pre-staging"
+      - pattern: "src/synth_setter/configs/trainer/ddp.yaml"
+        covers: "DDP strategy/devices and use_distributed_sampler default the §7 analysis depends on"
+
   # ── Eval pipeline design doc ────────────────────────────────────
   - doc: docs/design/eval-pipeline.md
     description: Evaluation pipeline design — predict, render, metrics, R2 integration
