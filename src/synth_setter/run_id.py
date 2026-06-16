@@ -6,7 +6,7 @@ pulling ``omegaconf``/``hydra`` (see ``test_bare_spec_import_does_not_pull_omega
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 def make_wandb_run_id(config_id: str, timestamp: datetime | None = None) -> str:
@@ -22,7 +22,7 @@ def make_wandb_run_id(config_id: str, timestamp: datetime | None = None) -> str:
     :raises ValueError: If ``timestamp`` is naive or not UTC.
     """
     if timestamp is None:
-        timestamp = datetime.now(timezone.utc)
+        timestamp = datetime.now(UTC)
     if timestamp.tzinfo is None:
         raise ValueError("timestamp must be timezone-aware (got naive datetime)")
     offset = timestamp.utcoffset()

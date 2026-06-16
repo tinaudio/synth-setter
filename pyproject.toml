@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "synth-setter"
-version = "8.37.0"
+version = "8.38.0"
 description = "Studying the effect of permutation symmetry on audio synthesiser parameter inference."
 authors = [{name = "Khaled Tinubu"}, {name = "tinaudio"}]
 readme = "README.md"
@@ -82,6 +82,7 @@ synth-setter-spec-uri = "synth_setter.pipeline.ci.spec_uri:main"
 # (#1139); pip never installs them and uv pip only with `--group`, so a plain
 # `pip install -e .` keeps lite CI light. `runtime` aggregates every sub-group;
 # `dev` (the default group) includes it.
+
 
 
 
