@@ -51,9 +51,9 @@ and get clean rank sharding for free.
   the dataloader uses `batch_size=None`
   (`src/synth_setter/data/surge_datamodule.py`, `__getitem__` ~L227–272,
   `train_dataloader` ~L527–543).
-- Each batch reads **one column at a time**. `__getitem__` calls
-  `self.dataset_file["mel_spec"]`, then `["param_array"]`, then optionally
-  `["music2latent"]` / `["audio"]` — each a *separate* read
+- Each batch reads **one column at a time**. `__getitem__` reads each needed
+  column separately — `audio`, `mel_spec`, `music2latent` each gated by a
+  `read_*` flag, `param_array` always — so a batch issues N independent reads
   (`surge_datamodule.py` L236–256).
 - The Lance adapter (`src/synth_setter/data/lance_datamodule.py`) makes a Lance
   column look like an `h5py.Dataset`. Contiguous slices go through
