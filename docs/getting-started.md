@@ -143,8 +143,9 @@ that the virtual environment is active and dependencies installed correctly.
 > you need before editing `tests/`.
 
 > **Prefer a container- or VM-based setup?** GitHub Codespaces, the local
-> dev container, and the Tart macOS VM all come with Python, Surge XT,
-> and rclone pre-installed. See
+> dev container, and the Tart macOS VM all come with Python, Surge XT (plus
+> the additional VST3 synths the data pipeline supports — Dexed, OB-Xf, Six
+> Sines), and rclone pre-installed. See
 > [Appendix B: Container-based setup](#appendix-b-container-based-setup).
 
 ______________________________________________________________________
@@ -832,11 +833,13 @@ the failure surfaces immediately rather than partway through `post-create`.
 ### B.3. macOS VM (Tart)
 
 If you want full dev parity on Apple Silicon inside a throwaway, mostly
-reproducible VM — Python 3.11 venv, Surge XT (native .vst3 via cask), Claude
-Code installed, auto-activated venv — pull the prebuilt Tart image published
-at `registry-1.docker.io/tinaudio/synth-setter-macos`. Rebuilds from the template are not
-fully pinned: Homebrew formulas/casks may resolve to newer versions over time,
-even if you pin the base image digest and git SHA.
+reproducible VM — Python 3.11 venv, Surge XT (native .vst3 via cask) plus
+Dexed, OB-Xf, and Six Sines (SHA256-pinned macOS installers from upstream
+GitHub releases — parity with the Docker image's baked VST3 set), Claude Code
+installed, auto-activated venv — pull the prebuilt Tart image published at
+`registry-1.docker.io/tinaudio/synth-setter-macos`. Rebuilds from the template
+are not fully pinned: Homebrew formulas/casks may resolve to newer versions
+over time, even if you pin the base image digest and git SHA.
 
 **Prerequisites:**
 
@@ -861,8 +864,9 @@ ssh admin@$(tart ip synth-setter-macos)           # password: admin
 The image ships with the repo cloned at `~/synth-setter`, a venv synced from
 `uv.lock` (MPS-capable torch wheels from PyPI's default index — the
 `[tool.uv.sources]` markers route Linux/Windows to the CUDA/CPU indexes but
-don't match `darwin`, so macOS falls through to PyPI), Surge XT at
-`/Library/Audio/Plug-Ins/VST3/Surge XT.vst3`, and
+don't match `darwin`, so macOS falls through to PyPI), Surge XT, Dexed, OB-Xf,
+and Six Sines under `/Library/Audio/Plug-Ins/VST3/` (each also symlinked into
+`~/synth-setter/plugins/` so the repo's relative-path defaults resolve), and
 `source ~/synth-setter/.venv/bin/activate` appended to `~/.zshrc` so every
 interactive shell has the venv active from login.
 
@@ -872,14 +876,18 @@ on first boot.
 **Build the image yourself (advanced):**
 
 If you need a custom build (pinned repo ref, pinned Codex CLI version, pinned
-base image, updated `uv`, updated Surge XT, etc.), the Packer template at
+base image, updated `uv`, updated Surge XT, bumped third-party VST3 synth,
+etc.), the Packer template at
 [`tart/macos.pkr.hcl`](../tart/macos.pkr.hcl) builds the same image locally.
 See the bottom of the file for the full publishing workflow to Docker Hub.
 The template's `variable` blocks are the authoritative source for supported
 overrides. User-overridable packer vars: `synth_setter_git_ref` (default
 `main`), `python_version` (default `3.11`), `vm_name` (default
 `synth-setter-macos`), `codex_version` (default `latest`),
-`base_image_digest`, `uv_version`, and `surge_xt_version`.
+`base_image_digest`, `uv_version`, `surge_xt_version`, and the third-party
+VST3 pins `dexed_version` + `dexed_macos_sha256`, `obxf_version` +
+`obxf_macos_sha256`, and `six_sines_version` + `six_sines_macos_asset` +
+`six_sines_macos_sha256` (refresh each version/SHA pair atomically).
 
 ```bash
 brew install cirruslabs/cli/tart packer

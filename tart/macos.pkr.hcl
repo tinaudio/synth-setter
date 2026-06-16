@@ -71,6 +71,58 @@ variable "codex_version" {
   description = "OpenAI Codex CLI version installed via `npm install -g @openai/codex@<version>`. Matches the CODEX_VERSION arg in docker/ubuntu22_04/Dockerfile's devcontainer-tools stage."
 }
 
+# ---------------------------------------------------------------------------
+# Third-party VST3 synths baked into the image — parity with the
+# `vst3-synths-fetch` stage in docker/ubuntu22_04/Dockerfile. Each asset is
+# pinned by version and SHA256 (refresh both atomically by running
+# `shasum -a 256` against the upstream macOS asset). Licensing review applies
+# to bumps for the same reason it does in Docker — these third-party binaries
+# ship in the published Tart image: Dexed (GPL-3.0), OB-Xf (GPL-3.0), Six Sines
+# (MIT).
+# ---------------------------------------------------------------------------
+
+variable "dexed_version" {
+  type        = string
+  default     = "0.9.8"
+  description = "Dexed (asb2m10/dexed, GPL-3.0) release version. Templated into both the asset URL and the .pkg filename inside the macOS DMG. Matches DEXED_VERSION in docker/ubuntu22_04/Dockerfile."
+}
+
+variable "dexed_macos_sha256" {
+  type        = string
+  default     = "3be32f98e56b40d9555a4069368c7307b8bae3368459bb087cf6195ae7538704"
+  description = "SHA256 of the asb2m10/dexed `dexed-<dexed_version>-macos.zip` asset. Refresh atomically with `dexed_version`."
+}
+
+variable "obxf_version" {
+  type        = string
+  default     = "v1.0.3"
+  description = "OB-Xf (surge-synthesizer/OB-Xf, GPL-3.0) release tag. Matches OBXF_VERSION in docker/ubuntu22_04/Dockerfile."
+}
+
+variable "obxf_macos_sha256" {
+  type        = string
+  default     = "e6f52f453c476dfafbd3225b80c5c3ec341ec20be5748c6f70c01cef14e7e7a8"
+  description = "SHA256 of the surge-synthesizer/OB-Xf `ob-xf-macOS-<obxf_version>.dmg` asset. Refresh atomically with `obxf_version`."
+}
+
+variable "six_sines_version" {
+  type        = string
+  default     = "v1.1.0"
+  description = "Six Sines (baconpaul/six-sines, MIT) release tag. Matches SIX_SINES_VERSION in docker/ubuntu22_04/Dockerfile."
+}
+
+variable "six_sines_macos_asset" {
+  type        = string
+  default     = "six-sines-macOS-2025-03-18-43d10b2.dmg"
+  description = "Six Sines macOS DMG asset filename — upstream embeds a date+SHA, not the release tag, in the filename. Matches the per-platform SIX_SINES_ASSET in docker/ubuntu22_04/Dockerfile."
+}
+
+variable "six_sines_macos_sha256" {
+  type        = string
+  default     = "d6fdf29179cd5b35aa024f25912a50bd14df59fa73cea9ce3da6f3fbf1abe55a"
+  description = "SHA256 of the Six Sines macOS DMG. Refresh atomically with `six_sines_macos_asset`."
+}
+
 source "tart-cli" "tart" {
   vm_base_name = "ghcr.io/cirruslabs/macos-tahoe-base@${var.base_image_digest}"
   vm_name      = var.vm_name
@@ -130,6 +182,47 @@ build {
     ]
   }
 
+  # Third-party VST3 synths — parity with the `vst3-synths-fetch` stage in
+  # docker/ubuntu22_04/Dockerfile. Each upstream ships a macOS DMG with a
+  # multi-component `.pkg` installer; we hash-verify the downloaded asset,
+  # mount/unzip it, and run `sudo installer -pkg … -target /` which lays the
+  # VST3 down at /Library/Audio/Plug-Ins/VST3/<Bundle>.vst3 (sibling to the
+  # cask-installed Surge XT). Passwordless sudo for the `admin` user is part
+  # of the cirruslabs/macos-tahoe-base contract — same root the Surge XT cask
+  # relies on. Symlinks into the repo-relative `plugins/` dir happen below
+  # alongside Surge XT, and the smoke gate validates each load.
+  provisioner "shell" {
+    inline = [
+      "touch ~/.zprofile && . ~/.zprofile",
+      # Dexed (asb2m10/dexed, GPL-3.0) — the macOS release ships as a zip
+      # wrapping a DMG; mount the inner DMG and run the embedded multi-pkg.
+      "curl -fsSL -o /tmp/dexed.zip 'https://github.com/asb2m10/dexed/releases/download/v${var.dexed_version}/dexed-${var.dexed_version}-macos.zip'",
+      "echo '${var.dexed_macos_sha256}  /tmp/dexed.zip' | shasum -a 256 -c -",
+      "rm -rf /tmp/dexed && unzip -q /tmp/dexed.zip -d /tmp/dexed",
+      "rm -rf /tmp/dexed-mnt && hdiutil attach -nobrowse -quiet -mountpoint /tmp/dexed-mnt '/tmp/dexed/dexed-${var.dexed_version}-macos.dmg'",
+      "sudo installer -pkg '/tmp/dexed-mnt/dexed-macOS-${var.dexed_version}.pkg' -target /",
+      "hdiutil detach -quiet /tmp/dexed-mnt && rm -rf /tmp/dexed /tmp/dexed.zip",
+      "test -d '/Library/Audio/Plug-Ins/VST3/Dexed.vst3'",
+      # OB-Xf (surge-synthesizer/OB-Xf, GPL-3.0) — DMG ships the multi-pkg
+      # directly.
+      "curl -fsSL -o /tmp/obxf.dmg 'https://github.com/surge-synthesizer/OB-Xf/releases/download/${var.obxf_version}/ob-xf-macOS-${var.obxf_version}.dmg'",
+      "echo '${var.obxf_macos_sha256}  /tmp/obxf.dmg' | shasum -a 256 -c -",
+      "rm -rf /tmp/obxf-mnt && hdiutil attach -nobrowse -quiet -mountpoint /tmp/obxf-mnt /tmp/obxf.dmg",
+      "sudo installer -pkg '/tmp/obxf-mnt/ob-xf-macOS-${var.obxf_version}.pkg' -target /",
+      "hdiutil detach -quiet /tmp/obxf-mnt && rm /tmp/obxf.dmg",
+      "test -d '/Library/Audio/Plug-Ins/VST3/OB-Xf.vst3'",
+      # Six Sines (baconpaul/six-sines, MIT) — pkg name shares the asset's
+      # date+SHA basename, so derive the .pkg filename from
+      # ${var.six_sines_macos_asset} by swapping the trailing `.dmg`.
+      "curl -fsSL -o /tmp/six-sines.dmg 'https://github.com/baconpaul/six-sines/releases/download/${var.six_sines_version}/${var.six_sines_macos_asset}'",
+      "echo '${var.six_sines_macos_sha256}  /tmp/six-sines.dmg' | shasum -a 256 -c -",
+      "rm -rf /tmp/six-sines-mnt && hdiutil attach -nobrowse -quiet -mountpoint /tmp/six-sines-mnt /tmp/six-sines.dmg",
+      "sudo installer -pkg '/tmp/six-sines-mnt/${replace(var.six_sines_macos_asset, ".dmg", ".pkg")}' -target /",
+      "hdiutil detach -quiet /tmp/six-sines-mnt && rm /tmp/six-sines.dmg",
+      "test -d '/Library/Audio/Plug-Ins/VST3/Six Sines.vst3'",
+    ]
+  }
+
   # Install and pin Python via uv.
   provisioner "shell" {
     inline = [
@@ -150,12 +243,17 @@ build {
       "cd ~/synth-setter && git checkout ${var.synth_setter_git_ref}",
       "cd ~/synth-setter && uv venv --python ${var.python_version}",
       "cd ~/synth-setter && uv sync --frozen",
-      # Mirror the Docker dev-base convention: symlink the cask-installed
-      # VST3 bundle to the repo-relative `plugins/Surge XT.vst3` path that
-      # configs, CLI `--plugin_path` defaults, and tests all assume. See
-      # docker/ubuntu22_04/Dockerfile step `ln -s "/usr/lib/vst3/Surge XT.vst3" ...`.
+      # Mirror the Docker dev-base convention: symlink each system-wide VST3
+      # bundle to the repo-relative `plugins/<Name>.vst3` path that configs,
+      # CLI `--plugin_path` defaults, and tests all assume. Surge XT is the
+      # cask install; Dexed / OB-Xf / Six Sines come from the .pkg installs
+      # above. See docker/ubuntu22_04/Dockerfile's `ln -s` loop in
+      # builder-install-synth-setter-deps.
       "mkdir -p ~/synth-setter/plugins",
       "ln -sfn '/Library/Audio/Plug-Ins/VST3/Surge XT.vst3' ~/synth-setter/'plugins/Surge XT.vst3'",
+      "ln -sfn '/Library/Audio/Plug-Ins/VST3/Dexed.vst3' ~/synth-setter/'plugins/Dexed.vst3'",
+      "ln -sfn '/Library/Audio/Plug-Ins/VST3/OB-Xf.vst3' ~/synth-setter/'plugins/OB-Xf.vst3'",
+      "ln -sfn '/Library/Audio/Plug-Ins/VST3/Six Sines.vst3' ~/synth-setter/'plugins/Six Sines.vst3'",
       # Auto-activate the venv for every interactive shell so tools installed
       # into .venv/bin (pre-commit, pyright, pytest, ruff, etc.) are on PATH
       # from login without a manual `source .venv/bin/activate`.
@@ -172,11 +270,19 @@ build {
   }
 
   # Smoke tests — mirror the two gates from Docker dev-base. No xvfb wrapper
-  # is needed; the macOS VM has a native window server.
+  # is needed; the macOS VM has a native window server. One subprocess per
+  # plugin because sequential in-process VST3 loads crash order-dependently
+  # (#1649) — same isolation reason Docker uses the load_vst3_check.py loop.
+  # Six Sines needs an explicit `plugin_name` because the bundle exposes more
+  # than one factory class; Surge XT, Dexed, and OB-Xf each ship a sole
+  # plugin so `plugin_name=None` is the right default.
   provisioner "shell" {
     inline = [
       "touch ~/.zprofile && . ~/.zprofile",
       "cd ~/synth-setter && .venv/bin/python -X faulthandler -c \"from synth_setter.data.vst.core import load_plugin; load_plugin('plugins/Surge XT.vst3')\"",
+      "cd ~/synth-setter && .venv/bin/python -X faulthandler -c \"from synth_setter.data.vst.core import load_plugin; load_plugin('plugins/Dexed.vst3')\"",
+      "cd ~/synth-setter && .venv/bin/python -X faulthandler -c \"from synth_setter.data.vst.core import load_plugin; load_plugin('plugins/OB-Xf.vst3')\"",
+      "cd ~/synth-setter && .venv/bin/python -X faulthandler -c \"from synth_setter.data.vst.core import load_plugin; load_plugin('plugins/Six Sines.vst3', plugin_name='Six Sines')\"",
       "cd ~/synth-setter && .venv/bin/pytest -k 'not slow' -v",
     ]
   }
