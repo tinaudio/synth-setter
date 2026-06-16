@@ -1,6 +1,149 @@
 # CHANGELOG
 
 
+## v8.38.0 (2026-06-16)
+
+### Features
+
+- **data-pipeline**: Add_embeddings CLI for m2l + CLAP Lance columns
+  ([#1720](https://github.com/tinaudio/synth-setter/pull/1720),
+  [`68ea679`](https://github.com/tinaudio/synth-setter/commit/68ea67944ce5fed2abe7831f61a79e8640c3eea3))
+
+* feat(data-pipeline): add_embeddings CLI for vector-searchable CLAP + m2l columns
+
+Add `python -m synth_setter.pipeline.data.add_embeddings DATASET.lance` (also
+  `synth-setter-add-embeddings`), which reads a Lance dataset from generate_dataset /
+  finalize_dataset and appends two audio-embedding columns derived from `audio`:
+
+- `clap` (LAION CLAP) as a `FixedSizeList<float32, 512>` vector column, so Lance can build an IVF_PQ
+  index over it and serve `nearest=` vector search; the CLI builds that index by default (skipped
+  under ~256 rows, where exact search still works). - `m2l` (music2latent) as a
+  `fixed_shape_tensor<float32, (C*D, T)>` latent column — retrievable, not a search vector.
+
+The functional core (`embeddings_record_batch`, `add_embeddings`) takes injected encode callables,
+  so it runs and is tested without a checkpoint; `load_m2l_audio_encoder` /
+  `load_clap_audio_encoder` are lazy-import shells (music2latent / transformers, declared in the
+  torch group). Columns are added via `LanceDataset.add_columns` with a `lance.batch_udf` that reads
+  only `audio`; row-count, CLAP-dim, and finiteness are validated before write. Audio sample rate
+  comes from the shard ShardMetadata; cloud URIs open with R2 storage_options.
+
+Add notebooks/add_embeddings_smoke.ipynb: build a smoke Lance dataset, run the add step, build a
+  DataFrame of params + embeddings, and run a `clap` vector search. Document the CLI across
+  scripts/README, docker.md, data-pipeline.md, and doc-map.yaml.
+
+Closes #1716
+
+* refactor(data-pipeline): drop Any from the CLAP loader per review (PY8)
+
+Replace the `model: Any` / `processor: Any` widenings (AGENTS.md PY8 no-Any) with inferred
+  transformers types, scoping pyright off only the three calls where transformers' own stubs are too
+  narrow (the model `.to()` chain, the processor's audio kwargs — splatted so the stub can't object
+  — and the get_audio_features tensor return). Addresses the review comment on #1720.
+
+Refs #1716
+
+* fix(data-pipeline): use transformers>=5 audio= kwarg; add real-R2 e2e test
+
+A no-mocks end-to-end test (tests/integration/test_add_embeddings_r2.py) drives two real CLIs —
+  generate a 1-shard Lance dataset via the real VST renderer, upload to a unique R2 prefix, then
+  `synth-setter-add-embeddings` on that r2:// URI with the real music2latent + LAION-CLAP encoders —
+  then reopens the remote dataset and asserts the `clap` FixedSizeList<float32,512> + `m2l`
+  fixed-shape-tensor columns, preserved source columns, finiteness, and an exact `nearest=` query
+  (IVF_PQ skipped below MIN_ROWS_FOR_INDEX). Marked slow / requires_vst / integration_r2; R2 prefix
+  purged on teardown.
+
+That test caught a real bug: transformers>=5's `ClapProcessor` takes `audio=`, not `audios=` (the
+  latter now raises), so the CLI failed against the locked transformers 5.12.1. Switch to `audio=`
+  and pin `transformers>=5.0.0`.
+
+* fix(data-pipeline): respect explicit num_partitions; correct ignore comment
+
+Address Copilot review on #1720: - build_clap_index: use `is None` instead of a truthy check so an
+  explicit num_partitions (incl. a deliberate small value) is honored, not silently replaced by
+  round(sqrt(rows)). - Correct the CLAP-loader comment: pyright is scoped off two calls (the
+  from_pretrained `.to()` chain and get_audio_features), not three — the processor audio kwargs are
+  dict-splatted.
+
+* fix(data-pipeline): read CLAP pooler_output; harden add_embeddings + ANN tests
+
+The real ≥256-row no-mocks e2e caught a second production bug: transformers>=5
+  `get_audio_features(**inputs)` returns a `BaseModelOutputWithPooling`, not a tensor, so `.cpu()`
+  raised `AttributeError` on every real CLI run. Read the projected (B, 512) embedding from
+  `.pooler_output`.
+
+Hardening (Part A): - add_embeddings: fail fast with a clear error if the dataset has no `audio`
+  column (vs an opaque batch-UDF crash mid-transaction). - build_clap_index: validate
+  num_sub_vectors divides the clap column's vector width before create_index (Lance's PQ-training
+  failure is opaque). - CLI: expose --num-partitions / --num-sub-vectors / --metric (add_embeddings
+  already accepted them) so the IVF_PQ index is tunable and buildable at the 256-row floor.
+
+Tests: - exact-search semantic test: a stored vector's exact nearest is its own row (distance ~0),
+  deterministic regardless of vector distribution. - real R2 e2e extended to a 256-row single-shard
+  dataset (plugin_reload_cadence "once") that actually builds IVF_PQ and exercises indexed
+  `nearest=`. - guards: missing-audio-column and non-dividing-num_sub_vectors raise.
+
+* fix(data-pipeline): sub-batch the encoders so add_embeddings doesn't OOM at scale
+
+The real 256-row e2e exposed a CUDA OOM: lance.batch_udf hands the encoders the whole read batch at
+  once, and a 256-row CLAP forward alone tried to allocate ~5 GiB (> free GPU). Bound GPU memory
+  inside the encoders, independent of Lance's read batch: - CLAP: sub-batch the forward at
+  CLAP_ENCODE_MAX_BATCH=32, pulling each chunk's pooler_output to CPU before the next. -
+  music2latent: lower M2L_ENCODE_MAX_BATCH 256 -> 64.
+
+The 256-row R2 e2e also now passes --batch-size 16 as defence in depth.
+
+Verified with the real CLAP + music2latent checkpoints on 256 rows of 1 s 44.1 kHz audio: no OOM;
+  clap=FixedSizeList<float32,512>, m2l fixed-shape tensor, IVF_PQ index builds, and an ANN nearest
+  query for a stored vector returns that row at distance ~0.
+
+* test(data-pipeline): drop redundant --batch-size from the add_embeddings e2e
+
+The encoders now self-bound GPU memory (CLAP_ENCODE_MAX_BATCH / M2L_ENCODE_MAX_BATCH), so the e2e's
+  explicit --batch-size 16 added no safety and isn't a speed knob — it only masked the default path.
+  Remove it so the test exercises what actually ships (default read batch + encoder sub-batching),
+  which was the configuration verified not to OOM on 256 real-encoder rows.
+
+* fix(data-pipeline): validate index params are positive in build_clap_index
+
+Per Copilot review on #1720: guard against non-positive index params before they crash deep in Lance
+  — - num_sub_vectors=0 (or negative) previously raised ZeroDivisionError on `clap_dim %
+  num_sub_vectors`; - num_partitions<=0 was forwarded to create_index and failed opaquely. Both now
+  raise a clear ValueError up front. Pinned by a unit test.
+
+* docs(data-pipeline): note _open_lance_dataset treats s3:// as the R2 endpoint
+
+Per Copilot review on #1720: clarify that any s3:// URI is the project's R2 (S3-compatible)
+  endpoint, credentialed via r2_storage_options; generic non-R2 S3 buckets are not a supported
+  input.
+
+* fix(data-pipeline): exit 1 cleanly on encode/add failures in add_embeddings CLI
+
+Per Copilot review on #1720: main() only guarded the dataset-open + rerun paths, so a failure in
+  encoder load or add_embeddings() (missing-audio guard, non-finite embeddings, bad index params,
+  Lance/CUDA errors) escaped as a raw traceback. Wrap the encode+add+index step in the same
+  (OSError, ValueError, RuntimeError, ImportError) handler -> logged `add_embeddings_failed` +
+  exit(1). CUDA OOM (RuntimeError subclass) and Lance's OSError-wrapped UDF errors are covered.
+  Pinned by a CliRunner test.
+
+### Internal-Feat
+
+- **agent-skills**: Project skills for Antigravity autoloading
+  ([#1733](https://github.com/tinaudio/synth-setter/pull/1733),
+  [`c75b3b7`](https://github.com/tinaudio/synth-setter/commit/c75b3b7b7c11c5f79aa431f5bd9053557751d33b))
+
+* internal-feat(agent-skills): project marketplace skills into workspace for Antigravity autoloading
+
+* internal-feat(agent-skills): run link-skills automatically in new worktrees
+
+* internal-fix(agent-skills): address Copilot review findings on skill exclusion and test labelling
+
+* internal-fix(agent-skills): avoid clobbering existing non-directory entries when symlinking
+
+* internal-fix(agent-skills): isolate doctor tests from repo state
+
+* test(agent-skills): cover git exclude path resolution
+
+
 ## v8.37.0 (2026-06-16)
 
 ### Automation
