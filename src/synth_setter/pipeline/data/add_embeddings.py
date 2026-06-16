@@ -268,9 +268,10 @@ def load_clap_audio_encoder(
         wav = torch.from_numpy(np.ascontiguousarray(mono, dtype=np.float32))
         if sample_rate != CLAP_SAMPLE_RATE:
             wav = audio_fn.resample(wav, sample_rate, CLAP_SAMPLE_RATE)
-        # Build kwargs as a dict so the splat hides transformers' too-narrow __call__ stub.
+        # `audio=` (singular) per transformers>=5; the splat also hides the stub's
+        # too-narrow __call__ signature from pyright.
         clap_kwargs = {
-            "audios": list(wav.numpy()),
+            "audio": list(wav.numpy()),
             "sampling_rate": CLAP_SAMPLE_RATE,
             "return_tensors": "pt",
         }

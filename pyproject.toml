@@ -128,8 +128,9 @@ torch = [
   "lightning>=2.6.0",
   "torchmetrics>=0.11.4",
   # Audio-embedding encoders for the add_embeddings CLI (lazy-imported). CLAP
-  # rides on transformers; music2latent ships its own torch-backed encoder.
-  "transformers>=4.40.0",
+  # rides on transformers (>=5: ClapProcessor takes `audio=`, not `audios=`);
+  # music2latent ships its own torch-backed encoder.
+  "transformers>=5.0.0",
   "music2latent>=0.1.8",
 ]
 config = [
