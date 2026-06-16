@@ -167,7 +167,7 @@ checkpoints/
 # Claude Code
 .claude/
 
-# Advisory reports written by .claude/hooks/doc-drift.sh and pr-review-resolver.sh
+# Advisory reports written by .claude/hooks/doc-drift.sh
 .agent-reviews/
 
 # Local working notes from qrspi skills. No trailing slash: `make link-thoughts`
