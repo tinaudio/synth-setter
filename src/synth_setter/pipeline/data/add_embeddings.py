@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Callable
-from typing import Any, TypeAlias
+from typing import TypeAlias
 
 import click
 import lance
@@ -257,22 +257,26 @@ def load_clap_audio_encoder(
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
     logger.info("loading_clap_checkpoint", checkpoint=checkpoint, device=device)
-    # ``Any``: transformers' from_pretrained / processor / get_audio_features
-    # carry typing that rejects the kwargs and tensor access used below.
-    model: Any = ClapModel.from_pretrained(checkpoint)
-    model = model.to(device).eval()
-    processor: Any = ClapProcessor.from_pretrained(checkpoint)
+    # transformers' own types are too loose for the narrow surface used below
+    # (the processor's audio kwargs, and get_audio_features' tensor return), so
+    # pyright is scoped off the three offending calls rather than widened to Any.
+    model = ClapModel.from_pretrained(checkpoint).to(device).eval()  # pyright: ignore
+    processor = ClapProcessor.from_pretrained(checkpoint)
 
     @torch.no_grad()
     def encode(mono: np.ndarray, sample_rate: int) -> np.ndarray:
         wav = torch.from_numpy(np.ascontiguousarray(mono, dtype=np.float32))
         if sample_rate != CLAP_SAMPLE_RATE:
             wav = audio_fn.resample(wav, sample_rate, CLAP_SAMPLE_RATE)
-        inputs = processor(
-            audios=list(wav.numpy()), sampling_rate=CLAP_SAMPLE_RATE, return_tensors="pt"
-        )
-        inputs = {key: value.to(device) for key, value in inputs.items()}
-        return model.get_audio_features(**inputs).cpu().numpy()
+        # Build kwargs as a dict so the splat hides transformers' too-narrow __call__ stub.
+        clap_kwargs = {
+            "audios": list(wav.numpy()),
+            "sampling_rate": CLAP_SAMPLE_RATE,
+            "return_tensors": "pt",
+        }
+        inputs = processor(**clap_kwargs)
+        device_inputs = {key: value.to(device) for key, value in inputs.items()}
+        return model.get_audio_features(**device_inputs).cpu().numpy()  # pyright: ignore
 
     return encode
 
