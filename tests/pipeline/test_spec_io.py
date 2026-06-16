@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -23,7 +23,7 @@ def _spec_kwargs() -> dict[str, object]:
     return {
         "task_name": "test-task",
         "run_id": "test-task-20260519T120000000Z",
-        "created_at": datetime(2026, 5, 19, 12, 0, 0, tzinfo=timezone.utc),
+        "created_at": datetime(2026, 5, 19, 12, 0, 0, tzinfo=UTC),
         "git_sha": "a" * 40,
         "is_repo_dirty": False,
         "output_format": "hdf5",
