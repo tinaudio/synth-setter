@@ -36,6 +36,7 @@ import subprocess
 import sys
 import threading
 from collections.abc import Iterator
+from contextlib import ExitStack
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -46,6 +47,7 @@ import numpy as np
 import pytest
 
 from synth_setter.cli.generate_dataset import (
+    _build_renderer_command,
     build_generate_args,
     generate,
 )
@@ -1302,6 +1304,43 @@ class TestBuildGenerateArgs:
 
         flag_idx = args.index("--copy_dataset_root_uri")
         assert args[flag_idx + 1] == "r2://bucket/source"
+
+
+class TestBuildRendererCommand:
+    """Renderer command construction composes environment policy around CLI args."""
+
+    def test_linux_prefixes_headless_wrapper_without_changing_generate_args(
+        self, spec: DatasetSpec, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Linux command wraps the renderer argv while ``build_generate_args`` stays pure.
+
+        :param spec: Source for the unwrapped renderer argv expected after the wrapper.
+        :param tmp_path: Output root used to compare wrapped and unwrapped commands.
+        :param monkeypatch: Forces the Linux-only wrapper branch.
+        """
+        monkeypatch.setattr("synth_setter.cli.generate_dataset.sys.platform", "linux")
+
+        with ExitStack() as stack:
+            args = _build_renderer_command(spec, spec.shards[0], tmp_path, stack)
+
+        assert args[0] == VST_HEADLESS_WRAPPER
+        assert args[1:] == build_generate_args(spec, spec.shards[0], tmp_path)
+
+    def test_non_linux_uses_generate_args_directly(
+        self, spec: DatasetSpec, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Non-Linux command is exactly the renderer CLI argv.
+
+        :param spec: Source for the canonical renderer argv.
+        :param tmp_path: Output root used for the expected renderer command.
+        :param monkeypatch: Forces the non-Linux branch.
+        """
+        monkeypatch.setattr("synth_setter.cli.generate_dataset.sys.platform", "darwin")
+
+        with ExitStack() as stack:
+            args = _build_renderer_command(spec, spec.shards[0], tmp_path, stack)
+
+        assert args == build_generate_args(spec, spec.shards[0], tmp_path)
 
 
 # ---------------------------------------------------------------------------

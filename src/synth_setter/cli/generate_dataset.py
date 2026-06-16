@@ -254,6 +254,25 @@ def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -
     return args
 
 
+def _build_renderer_command(
+    spec: DatasetSpec, shard: ShardSpec, work_dir: Path, stack: ExitStack
+) -> list[str]:
+    """Build subprocess argv, materializing the Linux wrapper for stack lifetime.
+
+    :param spec: Dataset spec whose render config becomes CLI flags.
+    :param shard: Shard whose filename becomes the renderer's positional output.
+    :param work_dir: Directory joined with ``shard.filename`` for renderer output.
+    :param stack: Lifetime owner for package resources returned by ``as_file``.
+    :returns: Renderer argv, with the Linux headless wrapper prepended when needed.
+    """
+    args = build_generate_args(spec, shard, work_dir)
+    if sys.platform != "linux":
+        return args
+
+    wrapper_path = stack.enter_context(as_file(vst_headless_wrapper()))
+    return [str(wrapper_path), *args]
+
+
 def _validate_copy_source(spec: DatasetSpec) -> None:
     """Preflight a dataset-copy run against the source's persisted spec.
 
@@ -673,12 +692,7 @@ def _render_and_upload_shard(
     # ``as_file()`` is open; ``ExitStack`` keeps it on disk across the retry
     # loop, and skips materialization on non-Linux.
     with ExitStack() as stack:
-        if sys.platform == "linux":
-            wrapper_path = stack.enter_context(as_file(vst_headless_wrapper()))
-            args = [str(wrapper_path)]
-        else:
-            args = []
-        args += build_generate_args(spec, shard, work_dir)
+        args = _build_renderer_command(spec, shard, work_dir, stack)
         logger.info(f"rendering shard {shard.shard_id} -> {shard.filename}")
         max_attempts = spec.render.max_retries + 1
         for attempt in range(max_attempts):

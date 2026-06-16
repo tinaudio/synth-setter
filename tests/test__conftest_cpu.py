@@ -2,12 +2,14 @@
 
 import io
 import os
+import subprocess
 from collections.abc import Callable
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from tests.conftest import _cgroup_aware_cpu_count
+from tests.conftest import _cgroup_aware_cpu_count, _render_smoke_train_h5_subprocess
 
 _V2_PATH = "/sys/fs/cgroup/cpu.max"
 _V1_QUOTA_PATH = "/sys/fs/cgroup/cpu/cpu.cfs_quota_us"
@@ -191,3 +193,27 @@ class TestCgroupAwareCpuCount:
 
         with patch("builtins.open", side_effect=_bad_all):
             assert _cgroup_aware_cpu_count() == 3
+
+
+def test_render_smoke_train_h5_subprocess_uses_render_config_flags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real-VST smoke subprocess reuses the shared RenderConfig arg mapping.
+
+    :param tmp_path: Output parent captured in the generated renderer argv.
+    :param monkeypatch: Replaces subprocess execution with a writer for the expected file.
+    """
+    train_h5 = tmp_path / "train.h5"
+    captured_args: list[str] = []
+
+    def _fake_run(args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        captured_args.extend(args)
+        train_h5.touch()
+        return subprocess.CompletedProcess(args=args, returncode=0)
+
+    monkeypatch.setattr("tests.conftest.subprocess.run", _fake_run)
+
+    _render_smoke_train_h5_subprocess(train_h5, "surge_simple")
+
+    flag_idx = captured_args.index("--gui_toggle_cadence")
+    assert captured_args[flag_idx + 1] == "never"

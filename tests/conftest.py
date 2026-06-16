@@ -21,7 +21,7 @@ from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, open_dict
 
 from synth_setter.data.vst import core, param_specs, preset_paths
-from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
+from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig, ShardSpec
 from synth_setter.resources import vst_headless_wrapper
 from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
@@ -669,26 +669,22 @@ def _render_smoke_train_h5_subprocess(train_h5: Path, param_spec_name: str) -> N
     :param param_spec_name: Key into :data:`synth_setter.data.vst.param_specs` and
         :data:`synth_setter.data.vst.preset_paths` selecting spec and preset.
     """
-    generate_dataset_args = []
-    if sys.platform == "linux":
-        generate_dataset_args.append(VST_HEADLESS_WRAPPER)
+    from synth_setter.cli.generate_dataset import build_generate_args
 
-    generate_dataset_args += [
-        sys.executable,
-        "src/synth_setter/data/vst/generate_vst_dataset.py",
-        str(train_h5),
-        f"--plugin_path={PLUGIN_PATH}",
-        f"--preset_path={preset_paths[param_spec_name]}",
-        f"--param_spec_name={param_spec_name}",
-        f"--renderer_version={_SURGE_FIXTURE_RENDERER_VERSION}",
-        f"--sample_rate={_SURGE_FIXTURE_SAMPLE_RATE}",
-        f"--channels={_SURGE_FIXTURE_CHANNELS}",
-        f"--velocity={_SURGE_FIXTURE_VELOCITY}",
-        f"--signal_duration_seconds={_SURGE_FIXTURE_DURATION_SECONDS}",
-        f"--min_loudness={_SURGE_FIXTURE_MIN_LOUDNESS}",
-        f"--samples_per_render_batch={NUM_FIXTURE_SAMPLES}",
-        f"--samples_per_shard={NUM_FIXTURE_SAMPLES}",
-    ]
+    spec = DatasetSpec(
+        task_name="surge-smoke-fixture",
+        git_sha="0" * 40,
+        is_repo_dirty=False,
+        output_format="hdf5",
+        train_val_test_sizes=(NUM_FIXTURE_SAMPLES, 0, 0),
+        base_seed=42,
+        r2={"bucket": "fixture-only"},  # type: ignore[arg-type]
+        render=_smoke_fake_render_cfg(param_spec_name),
+    )
+    shard = ShardSpec(shard_id=0, filename=train_h5.name, seed=spec.base_seed)
+    generate_dataset_args = build_generate_args(spec, shard, train_h5.parent)
+    if sys.platform == "linux":
+        generate_dataset_args = [VST_HEADLESS_WRAPPER, *generate_dataset_args]
 
     # capture_output=False (default): child inherits parent's stdout/stderr, no pipe is
     # created. Avoids the `capture_output=True` deadlock where fork-inherited fds in
