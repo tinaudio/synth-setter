@@ -117,7 +117,7 @@ docs:
       - pattern: "src/synth_setter/pipeline/data/add_embeddings.py"
         covers: "`synth-setter-add-embeddings` CLI — appends a `clap` (LAION-CLAP) `FixedSizeList<float32,512>` vector column (with an optional IVF_PQ index for `nearest=` search) and an `m2l` (music2latent) fixed-shape-tensor column to a finalized Lance dataset via `lance.batch_udf`, with injected/lazy-loaded encoders and row-count + dim + finiteness validation (post-finalize augmenter)."
       - pattern: "src/synth_setter/pipeline/data/add_preview_columns.py"
-        covers: "`synth-setter-add-preview-columns` CLI — backfills two columns in one `lance.batch_udf` `add_columns` transaction: an `audio_mp3` Lance blob v2 column (`lance.blob_field` / `lance.blob_array`, tagged `mime_type: audio/mpeg`) holding a CBR MP3 preview (via pedalboard), and an `audio_uuid` string column holding a deterministic UUIDv5 fingerprint of each row's `audio` tensor bytes; lossy preview + content-addressed id, neither a training input."
+        covers: "`synth-setter-add-preview-columns` CLI — one `lance.batch_udf` `add_columns` pass adds an `audio_mp3` blob v2 column (CBR MP3 preview, tagged `mime_type: audio/mpeg`) and an `audio_uuid` UUIDv5 fingerprint of each row's `audio` bytes. Neither is a training input."
       - pattern: "src/synth_setter/pipeline/data/add_music2latent.py"
         covers: "`python -m synth_setter.pipeline.data.add_music2latent` CLI — adds a `music2latent` dataset to HDF5 shards via reader/writer multiprocessing around a GPU encode loop."
 

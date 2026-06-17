@@ -81,7 +81,7 @@ def _sine_rows(sample_rate: int = _SAMPLE_RATE) -> np.ndarray:
 def _write_smoke_dataset(path: Path, *, sample_rate: int = _SAMPLE_RATE) -> None:
     """Write a smoke Lance dataset: real sine ``audio`` plus zeroed mel/param tensors.
 
-    :param path: Destination ``.lance`` directory.
+    :param path: Filesystem location the ``.lance`` dataset is written to.
     :param sample_rate: Sample rate embedded in the shard metadata.
     """
     metadata = ShardMetadata(
@@ -163,7 +163,10 @@ def test_encode_audio_to_mp3_accepts_any_float_dtype(dtype: type[np.floating]) -
 
     payload = encode_audio_to_mp3(row, _SAMPLE_RATE, 128)
 
-    assert payload[0] == 0xFF
+    # Scan for the frame-sync word, not byte 0: an MP3 may legally lead with an
+    # ID3 tag, so a dtype-coercion bug emitting only a stray 0xFF would not pass.
+    head = payload[:1024]
+    assert any(head[i] == 0xFF and head[i + 1] & 0xE0 == 0xE0 for i in range(len(head) - 1))
 
 
 def test_encode_audio_to_mp3_mono_input_decodes_to_one_channel() -> None:
@@ -255,6 +258,16 @@ def test_audio_uuid_returns_canonical_version5_uuid() -> None:
     assert parsed.version == 5
 
 
+def test_audio_uuid_matches_pinned_value_for_fixed_input() -> None:
+    """A fixed input hashes to a hardcoded uuid, pinning the namespace + hex-input format.
+
+    Computed independently of production code, so a change to the namespace, the
+    ``tobytes().hex()`` input, or the uuid version would break this — the
+    on-disk ids are a stable contract that must not drift silently.
+    """
+    assert audio_uuid(np.zeros((1, 4), dtype=np.float16)) == "34ef8dee-3474-5863-85cf-d299a7827175"
+
+
 def test_add_preview_columns_adds_blob_column_for_every_row(tmp_path: Path) -> None:
     """Every row gains a decodable ``audio_mp3`` blob cell; source columns and row count unchanged.
 
@@ -273,9 +286,10 @@ def test_add_preview_columns_adds_blob_column_for_every_row(tmp_path: Path) -> N
     assert ds.count_rows() == _ROWS
     payloads = _read_mp3_blobs(uri, list(range(_ROWS)))
     assert all(len(p) > 0 for p in payloads)
-    # Decode one cell to confirm the batch_udf path emits a real MP3, not just bytes.
+    # A decodable cell proves the batch_udf wrote a real MP3, not arbitrary bytes.
     samples, _ = _decode_mp3(payloads[0])
     assert samples.shape[0] == _CHANNELS
+    assert samples.shape[1] > 0
 
 
 def test_add_preview_columns_adds_uuid_column_matching_per_row_audio(tmp_path: Path) -> None:
@@ -339,6 +353,23 @@ def test_add_preview_columns_existing_column_raises(tmp_path: Path) -> None:
     add_preview_columns(uri)
 
     with pytest.raises(ValueError, match=AUDIO_MP3_FIELD):
+        add_preview_columns(uri)
+
+
+def test_add_preview_columns_partial_existing_column_raises(tmp_path: Path) -> None:
+    """A dataset with only ``audio_uuid`` (a crashed half-add) is still rejected.
+
+    The realistic post-crash state has one preview column present, not both. The
+    guard names the offending column, so the error must mention ``audio_uuid``.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    uri = tmp_path / "shard-000000.lance"
+    _write_smoke_dataset(uri)
+    # Seed only the uuid column, mimicking a run that died before audio_mp3.
+    lance.dataset(str(uri)).add_columns({AUDIO_UUID_FIELD: "'seed'"})
+
+    with pytest.raises(ValueError, match=AUDIO_UUID_FIELD):
         add_preview_columns(uri)
 
 

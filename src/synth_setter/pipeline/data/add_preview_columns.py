@@ -25,25 +25,25 @@ import click
 import lance
 import numpy as np
 import pyarrow as pa
+import structlog
 from pedalboard.io import AudioFile
 
 from synth_setter.data.vst.shapes import AUDIO_FIELD
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.lance_shard import read_shard_metadata
 
+logger = structlog.get_logger(__name__)
+
 AUDIO_MP3_FIELD = "audio_mp3"
 AUDIO_UUID_FIELD = "audio_uuid"
 
 DEFAULT_MP3_BITRATE_KBPS = 128
 
-# Viewer hint so Lance UIs offer per-row playback; a repo convention, not a
-# Lance-defined contract. Arrow field metadata is a bytes->bytes map.
+# Viewer hint for Lance UIs — a repo convention, not a Lance-defined contract.
 _MP3_FIELD_METADATA: dict[bytes, bytes] = {b"mime_type": b"audio/mpeg"}
 
-# Project-scoped UUIDv5 namespace, derived deterministically from a DNS name so
-# the constant is reproducible and self-documenting (no opaque literal). UUIDv5
-# hashes (namespace, name) with SHA-1, so a fixed namespace makes audio_uuid a
-# pure function of the audio bytes.
+# DNS-derived namespace so the constant is reproducible; a fixed namespace makes
+# audio_uuid a pure function of the audio bytes (same input -> same id).
 _AUDIO_UUID_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_DNS, "synth-setter.tinaudio.com")
 
 
@@ -87,9 +87,9 @@ def audio_uuid(audio: np.ndarray) -> str:
     :param audio: One row of audio of any shape/dtype; hashed by its exact bytes.
     :returns: The canonical hyphenated UUIDv5 string under the project namespace.
     """
-    # tobytes() always copies into C-contiguous order, so a non-contiguous view
-    # hashes identically to its contiguous twin. hex() keeps the name a str
-    # (uuid5 takes bytes names only on Python >= 3.12; the repo targets 3.11).
+    # Hash the hex string of the C-ordered bytes: uuid5 accepts a bytes name only
+    # on Python >= 3.12 (repo floor is 3.11), and the id is content-addressed, so
+    # switching to raw-bytes input on 3.12+ would silently change every uuid.
     return str(uuid.uuid5(_AUDIO_UUID_NAMESPACE, audio.tobytes().hex()))
 
 
@@ -114,11 +114,14 @@ def _encode_preview_columns(
     uuids = []
     for row_index, row in enumerate(rows):
         try:
-            mp3_blobs.append(encode_audio_to_mp3(row, sample_rate, bitrate_kbps))
+            mp3 = encode_audio_to_mp3(row, sample_rate, bitrate_kbps)
         except (ValueError, RuntimeError, OSError) as exc:
             raise ValueError(
                 f"failed to encode audio row {row_index} (shape {row.shape}): {exc}"
             ) from exc
+        # Append as a pair only after the encode succeeds, so a failed row never
+        # leaves the two columns at mismatched lengths.
+        mp3_blobs.append(mp3)
         uuids.append(audio_uuid(row))
     return pa.record_batch(
         [lance.blob_array(mp3_blobs), pa.array(uuids, type=pa.string())],
@@ -160,14 +163,19 @@ def add_preview_columns(
         ]
     )
 
-    # output_schema makes Lance skip the first-batch inference probe (which would
-    # encode that batch twice) and carries the blob type + mime metadata onto the
-    # new columns.
+    # output_schema skips Lance's first-batch inference probe (avoids a double
+    # encode) and carries the blob type + mime metadata onto the new columns.
     @lance.batch_udf(output_schema=preview_schema)
     def _to_preview(batch: pa.RecordBatch) -> pa.RecordBatch:
         return _encode_preview_columns(batch, sample_rate, bitrate_kbps)
 
     dataset.add_columns(_to_preview, read_columns=[AUDIO_FIELD])
+    logger.info(
+        "added_preview_columns",
+        uri=str(uri),
+        columns=[AUDIO_MP3_FIELD, AUDIO_UUID_FIELD],
+        rows=dataset.count_rows(),
+    )
 
 
 @click.command()
@@ -189,16 +197,14 @@ def main(uri: str, bitrate_kbps: int) -> None:
         is rewritten to ``s3://``, and any ``s3://`` URI is treated as the project's
         R2 endpoint and credentialed with env-derived credentials (mirroring
         ``add_embeddings``; generic non-R2 S3 buckets are not a supported input).
-    :param bitrate_kbps: Forwarded to :func:`add_preview_columns`; default shown in ``--help``.
+    :param bitrate_kbps: CBR bitrate in kbps for the MP3 column (8-320, Click-validated).
     :raises click.ClickException: The dataset is missing its ``audio`` column,
         already has an ``audio_mp3`` or ``audio_uuid`` column, lacks readable
         shard metadata, cannot be opened (e.g. a cloud I/O error), or an R2 URI
         is given with missing/blank R2 credentials.
     """
-    # Lance opens R2 over its S3-compatible API: rewrite r2:// to s3:// and treat
-    # any s3:// as R2, passing env-derived credentials (mirroring add_embeddings).
-    # R2 credential resolution raises RuntimeError on missing/blank env, so it
-    # stays inside the try to surface as a clean ClickException.
+    # R2 credential resolution raises RuntimeError on missing/blank env, so keep
+    # it inside the try to surface as a clean ClickException (mirrors add_embeddings).
     try:
         resolved_uri = r2_io.to_s3_uri(uri) if r2_io.is_r2_uri(uri) else uri
         storage_options: dict[str, str] | None = None
