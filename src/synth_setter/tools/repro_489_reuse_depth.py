@@ -473,6 +473,8 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--wandb", action="store_true", help="log per-depth metrics to W&B")
     args = parser.parse_args(argv)
+    if any(depth < 2 for depth in args.depths):
+        parser.error("--depths values must be >= 2 (a pair needs at least two renders)")
 
     logging.basicConfig(level=logging.INFO, format=_LOG_FORMAT)
     verdicts = run(

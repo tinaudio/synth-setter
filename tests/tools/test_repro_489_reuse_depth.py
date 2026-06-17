@@ -159,12 +159,28 @@ def test_main_passes_parsed_depths_through_to_run(monkeypatch: pytest.MonkeyPatc
     assert captured["depths"] == [12, 40]
 
 
+def test_main_rejects_depths_below_two(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``--depths`` below 2 is rejected up front, before any render runs.
+
+    :param monkeypatch: Stubs ``run`` so a regression that skips validation can't render.
+    """
+    monkeypatch.setattr(repro, "run", lambda *a, **k: {})
+    with pytest.raises(SystemExit) as exc:
+        repro.main(["--depths", "1"])
+    assert exc.value.code == 2  # argparse parser.error exit code
+
+
 @pytest.mark.slow
 @pytest.mark.requires_vst
 def test_main_drives_the_real_render_chain_end_to_end() -> None:
     """Real VST smoke test: depth-2 run must not raise SystemExit (regression for #489)."""
     # Seed both RNGs param_spec.sample() draws from so the loudness-gated patch
-    # search is deterministic and the test cannot flake on an unlucky draw.
+    # search is deterministic; restore prior state so the seed can't leak to other tests.
+    py_state, np_state = random.getstate(), np.random.get_state()
     random.seed(0)
     np.random.seed(0)
-    assert repro.main(["--depths", "2", "--no-control"]) is None
+    try:
+        assert repro.main(["--depths", "2", "--no-control"]) is None
+    finally:
+        random.setstate(py_state)
+        np.random.set_state(np_state)
