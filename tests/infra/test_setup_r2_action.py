@@ -219,6 +219,7 @@ def test_setup_r2_install_rclone_is_opt_in(project_root: Path) -> None:
 SETUP_R2_USES = "./.github/actions/setup-r2"
 INLINE_R2_ENV_KEY = "RCLONE_CONFIG_R2_ACCESS_KEY_ID:"
 AUTH_PROBE_WORKFLOW = "r2-auth-probe.yaml"
+PURE_RCLONE_DOCKER_COMMANDS = ("rclone purge",)
 
 
 def _workflows_using_setup_r2(project_root: Path) -> list[Path]:
@@ -271,3 +272,54 @@ def test_r2_auth_probe_sets_canonical_storage_env(project_root: Path, key: str) 
     job = cast(dict[str, object], jobs["r2-auth-probe"])
     env = cast(dict[str, object], job["env"])
     assert key in env
+
+
+def _docker_run_blocks(path: Path) -> list[tuple[int, str]]:
+    """Return ``docker run`` command blocks with their 1-based start lines.
+
+    :param path: workflow file to scan.
+    :returns: ``(line_number, block_text)`` tuples for each Docker command.
+    """
+    lines = path.read_text().splitlines()
+    blocks: list[tuple[int, str]] = []
+    index = 0
+    while index < len(lines):
+        if "docker run" not in lines[index]:
+            index += 1
+            continue
+        start = index
+        block: list[str] = []
+        while index < len(lines):
+            block.append(lines[index])
+            stripped = lines[index].rstrip()
+            index += 1
+            if len(block) > 1 and not stripped.endswith("\\"):
+                break
+        blocks.append((start + 1, "\n".join(block)))
+    return blocks
+
+
+@pytest.mark.infra
+@pytest.mark.parametrize("key", sorted(STORAGE_SECRET_EXPORTS.values()))
+def test_workflow_docker_rclone_blocks_forward_canonical_storage_env(
+    project_root: Path, key: str
+) -> None:
+    """Docker Python paths that receive rclone env also receive storage env.
+
+    :param project_root: session fixture from ``tests/infra/conftest.py``.
+    :param key: canonical secret env key expected inside the container.
+    """
+    workflows_dir = project_root / ".github" / "workflows"
+    offenders: list[str] = []
+    for workflow in [*workflows_dir.glob("*.yml"), *workflows_dir.glob("*.yaml")]:
+        for line_number, block in _docker_run_blocks(workflow):
+            if "RCLONE_CONFIG_R2_" not in block:
+                continue
+            if any(command in block for command in PURE_RCLONE_DOCKER_COMMANDS):
+                continue
+            if key not in block:
+                offenders.append(f"{workflow.name}:{line_number}")
+    assert not offenders, (
+        f"docker run blocks forward rclone env without canonical storage env {key}: "
+        f"{sorted(offenders)}"
+    )

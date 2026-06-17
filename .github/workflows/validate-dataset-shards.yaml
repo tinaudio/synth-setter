@@ -107,7 +107,7 @@ jobs:
         run: docker pull "${IMAGE}"
 
       # rclone runs inside the container; setup-r2 only exports the
-      # `RCLONE_CONFIG_R2_*` values the `docker run -e <VAR>` lines forward.
+      # setup-r2 exports canonical storage env plus the current rclone projection.
       - name: Set up R2
         uses: ./.github/actions/setup-r2
         with:
@@ -122,6 +122,11 @@ jobs:
           set -euo pipefail
           docker run --rm \
             -v "${{ github.workspace }}:/home/build/synth-setter:ro" \
+            -e SYNTH_SETTER_STORAGE_PROVIDER \
+            -e SYNTH_SETTER_STORAGE_RCLONE_REMOTE \
+            -e SYNTH_SETTER_STORAGE_ACCESS_KEY_ID \
+            -e SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY \
+            -e SYNTH_SETTER_STORAGE_ENDPOINT_URL \
             -e RCLONE_CONFIG_R2_TYPE \
             -e RCLONE_CONFIG_R2_PROVIDER \
             -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
