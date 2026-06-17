@@ -46,6 +46,9 @@ This PR lands the credential slice of the provider-neutral direction:
 - `r2_io.r2_storage_options()`, `ensure_r2_env_loaded()`, and
   `is_r2_reachable()` now read canonical `SYNTH_SETTER_STORAGE_*` settings and
   project the current rclone env block at the subprocess boundary.
+- `SYNTH_SETTER_STORAGE_RCLONE_REMOTE` and
+  `SYNTH_SETTER_STORAGE_RCLONE_TYPE` are temporary adapter settings for the
+  rclone-backed facade; the app model remains bucket/key object storage.
 - `skypilot_launch.resolve_worker_env()` reads the same canonical settings and
   forwards the projected rclone env to existing worker templates.
 - `R2Credentials` is intentionally removed. New code must not reintroduce it as

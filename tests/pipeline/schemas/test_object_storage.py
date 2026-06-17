@@ -35,6 +35,7 @@ _VALID_ENV = {
     "SYNTH_SETTER_STORAGE_PROVIDER": "r2",
     "SYNTH_SETTER_STORAGE_DEFAULT_BUCKET": "bucket",
     "SYNTH_SETTER_STORAGE_RCLONE_REMOTE": "r2",
+    "SYNTH_SETTER_STORAGE_RCLONE_TYPE": "s3",
 }
 
 
@@ -76,6 +77,7 @@ class TestStorageSettings:
         assert settings.provider is ObjectStoreProvider.R2
         assert settings.default_bucket == "bucket"
         assert settings.rclone_remote == "r2"
+        assert settings.rclone_type == "s3"
 
     def test_ignores_legacy_rclone_env_names(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Legacy rclone env alone does not satisfy storage settings.
@@ -165,6 +167,12 @@ class TestStorageConfig:
             "RCLONE_CONFIG_OBJECT_STORE_SECRET_ACCESS_KEY": "sk",
             "RCLONE_CONFIG_OBJECT_STORE_ENDPOINT": _ENDPOINT,
         }
+
+    def test_rclone_env_projects_current_rclone_type(self) -> None:
+        """The rclone projection derives backend type from storage config."""
+        config = _config(rclone_type="local")
+
+        assert config.rclone_env()["RCLONE_CONFIG_R2_TYPE"] == "local"
 
     def test_projection_keys_match_constants(self) -> None:
         """Default rclone projection stays aligned with exported constants."""

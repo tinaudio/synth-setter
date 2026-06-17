@@ -23,6 +23,7 @@ __all__ = [
     "ENV_STORAGE_PROVIDER",
     "ENV_STORAGE_REGION",
     "ENV_STORAGE_RCLONE_REMOTE",
+    "ENV_STORAGE_RCLONE_TYPE",
     "ENV_STORAGE_SECRET_ACCESS_KEY",
     "ObjectStoreProvider",
     "ObjectLocation",
@@ -43,6 +44,7 @@ ENV_STORAGE_REGION: Final = "SYNTH_SETTER_STORAGE_REGION"
 ENV_STORAGE_PROVIDER: Final = "SYNTH_SETTER_STORAGE_PROVIDER"
 ENV_STORAGE_DEFAULT_BUCKET: Final = "SYNTH_SETTER_STORAGE_DEFAULT_BUCKET"
 ENV_STORAGE_RCLONE_REMOTE: Final = "SYNTH_SETTER_STORAGE_RCLONE_REMOTE"
+ENV_STORAGE_RCLONE_TYPE: Final = "SYNTH_SETTER_STORAGE_RCLONE_TYPE"
 
 STORAGE_REQUIRED_ENV_KEYS: Final[tuple[str, ...]] = (
     ENV_STORAGE_ACCESS_KEY_ID,
@@ -92,6 +94,7 @@ def _settings_kwargs_from_sources(env_file: Path | None) -> dict[str, str]:
         ENV_STORAGE_ENDPOINT_URL: "endpoint_url",
         ENV_STORAGE_PROVIDER: "provider",
         ENV_STORAGE_RCLONE_REMOTE: "rclone_remote",
+        ENV_STORAGE_RCLONE_TYPE: "rclone_type",
         ENV_STORAGE_REGION: "region",
     }
     for env_key, field_name in env_to_field.items():
@@ -158,6 +161,10 @@ class StorageConfig(BaseModel):
     .. attribute :: rclone_remote
 
         rclone remote section name used by the current backend adapter.
+
+    .. attribute :: rclone_type
+
+        rclone backend type used by the current backend adapter.
     """
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
@@ -169,6 +176,7 @@ class StorageConfig(BaseModel):
     region: str = Field(default="auto")
     default_bucket: str | None = None
     rclone_remote: str = Field(default=_DEFAULT_RCLONE_REMOTE)
+    rclone_type: str = Field(default=RCLONE_STRUCTURAL_DEFAULTS[_RCLONE_ENV_TYPE])
 
     @field_validator("access_key_id", "secret_access_key")
     @classmethod
@@ -177,7 +185,7 @@ class StorageConfig(BaseModel):
             raise ValueError("must be non-blank")
         return value
 
-    @field_validator("endpoint_url", "region", "rclone_remote")
+    @field_validator("endpoint_url", "region", "rclone_remote", "rclone_type")
     @classmethod
     def _string_is_nonblank(cls, value: str) -> str:
         stripped = value.strip()
@@ -221,7 +229,7 @@ class StorageConfig(BaseModel):
         """
         prefix = f"RCLONE_CONFIG_{self.rclone_remote.upper()}_"
         return {
-            f"{prefix}TYPE": RCLONE_STRUCTURAL_DEFAULTS[_RCLONE_ENV_TYPE],
+            f"{prefix}TYPE": self.rclone_type,
             f"{prefix}PROVIDER": RCLONE_STRUCTURAL_DEFAULTS[_RCLONE_ENV_PROVIDER],
             f"{prefix}ACCESS_KEY_ID": self.access_key_id.get_secret_value(),
             f"{prefix}SECRET_ACCESS_KEY": self.secret_access_key.get_secret_value(),
@@ -263,6 +271,10 @@ class StorageSettings(BaseSettings):
     .. attribute :: rclone_remote
 
         rclone remote section name used by the current backend adapter.
+
+    .. attribute :: rclone_type
+
+        rclone backend type used by the current backend adapter.
     """
 
     model_config = SettingsConfigDict(
@@ -280,6 +292,7 @@ class StorageSettings(BaseSettings):
     region: str = "auto"
     default_bucket: str | None = None
     rclone_remote: str = _DEFAULT_RCLONE_REMOTE
+    rclone_type: str = RCLONE_STRUCTURAL_DEFAULTS[_RCLONE_ENV_TYPE]
 
     @field_validator("access_key_id", "secret_access_key")
     @classmethod
@@ -288,7 +301,7 @@ class StorageSettings(BaseSettings):
             raise ValueError("must be non-blank")
         return value
 
-    @field_validator("endpoint_url", "region", "rclone_remote")
+    @field_validator("endpoint_url", "region", "rclone_remote", "rclone_type")
     @classmethod
     def _string_is_nonblank(cls, value: str) -> str:
         stripped = value.strip()
@@ -326,6 +339,7 @@ class StorageSettings(BaseSettings):
             region=self.region,
             default_bucket=self.default_bucket,
             rclone_remote=self.rclone_remote,
+            rclone_type=self.rclone_type,
         )
 
 

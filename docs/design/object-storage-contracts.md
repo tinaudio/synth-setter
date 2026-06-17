@@ -63,6 +63,7 @@ class StorageSettings(BaseSettings):
     secret_access_key: SecretStr
     default_bucket: str | None = None
     rclone_remote: str = "r2"  # current backend remote name; not app model
+    rclone_type: str = "s3"  # current backend type; tests may use "local"
 
     def to_config(self) -> StorageConfig: ...
 ```
@@ -77,6 +78,7 @@ SYNTH_SETTER_STORAGE_ACCESS_KEY_ID=...
 SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY=...
 SYNTH_SETTER_STORAGE_DEFAULT_BUCKET=intermediate-data
 SYNTH_SETTER_STORAGE_RCLONE_REMOTE=r2
+SYNTH_SETTER_STORAGE_RCLONE_TYPE=s3
 ```
 
 ### `StorageConfig`
@@ -96,6 +98,7 @@ class StorageConfig(BaseModel):
     secret_access_key: SecretStr
     default_bucket: str | None
     rclone_remote: str
+    rclone_type: str
 
     def lance_storage_options(self) -> dict[str, str]: ...
     def rclone_env(self) -> dict[str, str]: ...
