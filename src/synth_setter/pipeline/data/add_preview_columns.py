@@ -78,16 +78,17 @@ def encode_audio_to_mp3(audio: np.ndarray, sample_rate: int, bitrate_kbps: int) 
 def audio_uuid(audio: np.ndarray) -> str:
     """Compute the deterministic UUIDv5 fingerprint of one audio tensor.
 
-    The id is a pure function of the raw on-disk ``audio`` bytes (dtype and
-    shape included via ``tobytes``), so the same rendered waveform always yields
-    the same uuid; a different render — even one sample — yields a different one.
+    The id is a pure function of the row's element bytes in C order (so dtype
+    and value count matter, but not array shape), so the same rendered waveform
+    always yields the same uuid; a different render — even one sample — differs.
 
-    :param audio: One row of audio of any shape/dtype; hashed by its exact bytes.
+    :param audio: One ``(channels, time)`` row; hashed by its C-ordered bytes.
     :returns: The canonical hyphenated UUIDv5 string under the project namespace.
     """
-    # uuid5 on Python 3.11 needs a str name, not bytes; hashing tobytes().hex()
-    # canonicalizes byte order and keeps the id stable (changing it shifts all ids).
-    return str(uuid.uuid5(_AUDIO_UUID_NAMESPACE, audio.tobytes().hex()))
+    # hex() losslessly encodes the C-ordered bytes as a str, the name type uuid5
+    # requires on Python 3.11 (bytes names are accepted only on 3.12+). Changing
+    # this input would shift every id, so it is part of the on-disk contract.
+    return str(uuid.uuid5(_AUDIO_UUID_NAMESPACE, audio.tobytes(order="C").hex()))
 
 
 def _encode_preview_columns(
