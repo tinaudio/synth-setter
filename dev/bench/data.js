@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781652095904,
+  "lastUpdate": 1781654475258,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -7638,6 +7638,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.033818721771240234,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0b093d3220f2d09b684e91548913560df4dcbabe",
+          "message": "feat(data-pipeline): add audio_mp3 preview-column CLI for Lance datasets (#1718)\n\n* feat(data-pipeline): add audio_mp3 preview-column CLI for Lance datasets\n\nAdd `synth-setter-add-mp3-audio` (src/synth_setter/pipeline/data/add_mp3_audio.py),\na standalone CLI that backfills a per-row `audio_mp3` preview column onto an\nexisting Lance dataset written by generate-dataset or finalize-dataset.\n\nEach row's raw `audio` tensor (float16 `(channels, time)`) is encoded to a CBR\nMP3 with pedalboard (already a dependency — no new deps) and stored as a Lance\nblob v2 column tagged `mime_type: audio/mpeg`, so viewers auto-play it and\nper-row reads stay lazy. The column is added via Lance's `batch_udf`-driven\n`add_columns`, which backfills in place without rewriting existing columns; the\nsample rate is read from the shard's embedded `ShardMetadata`. The MP3 is a\nlossy preview artifact — never a training input.\n\nAlso adds notebooks/add_mp3_audio.ipynb: a smoke run that builds a tiny Lance\ndataset, runs the add step, and renders a params + MP3 dataframe.\n\nThis is a post-hoc batch tool rather than the inline-at-generation/finalize\napproach the issues propose, so it partially addresses both.\n\nRefs #1697\nRefs #1682\n\n* build(deps): sync uv.lock to 8.38.0 after merging main\n\n* fix(data-pipeline): credential bare s3:// URIs as R2 in add-mp3-audio\n\nMirror add_embeddings._open_lance_dataset: treat any s3:// URI as the\nproject's R2 endpoint and attach r2_storage_options, rather than only\ncrediting r2:// URIs. R2 datasets are commonly referenced as s3:// in\nthis repo, so the prior path failed when only RCLONE_CONFIG_R2_* creds\nwere set.\n\n* test(data-pipeline): stub ensure_r2_env_loaded in add-mp3-audio r2 test\n\nThe r2:// main() path now resolves to s3:// and calls ensure_r2_env_loaded,\nwhich raises without R2 creds (and runs an rclone auth ping). Stub it so the\ntest is hermetic and passes in CI, matching the new bare-s3 test.\n\n* docs(data-pipeline): correct add-mp3-audio doc-map type; robustify frame-sync test\n\n- doc-map called the audio_mp3 column 'large_binary', but it is a Lance blob v2\n  column (lance.blob_field / lance.blob_array); reword and backtick tokens to\n  match adjacent entries.\n- Frame-sync test scans the head for the sync word instead of requiring it at\n  byte 0, since a valid MP3 may lead with an ID3 tag or padding.",
+          "timestamp": "2026-06-16T19:33:10-04:00",
+          "tree_id": "89f7e34a5b25ccfed0e8975cdc635f1f7d9e1589",
+          "url": "https://github.com/tinaudio/synth-setter/commit/0b093d3220f2d09b684e91548913560df4dcbabe"
+        },
+        "date": 1781654473873,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 2.9555275440216064,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 5.940604069381952,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.015125880017876625,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.009469747543334961,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 2.904707908630371,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 12.547527601416675,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 3.803494691848755,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.725548420585692,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.027520468458533287,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.026348233222961426,
             "unit": "1-cos"
           },
           {
