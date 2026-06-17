@@ -302,7 +302,9 @@ def _render_once(patch: PatchSpec, cached_plugin: VST3Plugin | None) -> np.ndarr
         patch.settings.duration_seconds,
         patch.settings.sample_rate,
         patch.settings.channels,
-        preset_path=patch.preset_path,
+        # render_params ignores preset_path when a plugin is supplied (the caller
+        # already applied the preset), so only pass it on the reload arm.
+        preset_path=None if cached_plugin is not None else patch.preset_path,
         plugin=cached_plugin,
     )
 
