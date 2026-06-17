@@ -170,6 +170,17 @@ def test_main_rejects_depths_below_two(monkeypatch: pytest.MonkeyPatch) -> None:
     assert exc.value.code == 2  # argparse parser.error exit code
 
 
+def test_main_rejects_spec_without_a_render_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A spec lacking ``configs/render/<spec>.yaml`` is rejected by argparse choices.
+
+    :param monkeypatch: Stubs ``run`` so a regression that skips validation can't render.
+    """
+    monkeypatch.setattr(repro, "run", lambda *a, **k: {})
+    with pytest.raises(SystemExit) as exc:
+        repro.main(["--spec", "surge_4", "--depths", "2"])
+    assert exc.value.code == 2  # argparse invalid-choice exit code
+
+
 @pytest.mark.slow
 @pytest.mark.requires_vst
 def test_main_drives_the_real_render_chain_end_to_end() -> None:

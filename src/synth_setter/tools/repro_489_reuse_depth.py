@@ -464,6 +464,19 @@ def _log_depth_to_wandb(
     wandb_run.log(metrics)
 
 
+def available_specs() -> list[str]:
+    """Return specs valid for ``--spec``: those with both a param spec and a render config.
+
+    ``param_specs`` can hold specs (e.g. ``surge_4``) that have no
+    ``configs/render/<spec>.yaml``; offering them would crash in
+    :func:`_load_render_config`, so they are excluded from the CLI choices.
+
+    :returns: Sorted spec names that both render-configure and resolve a param spec.
+    """
+    stems = {path.stem for path in _RENDER_CONFIG_DIR.glob("*.yaml")}
+    return sorted(set(param_specs) & stems)
+
+
 def main(argv: list[str] | None = None) -> None:
     """CLI: reproduce #489 at the chosen depths and exit non-zero if the bug is present.
 
@@ -478,7 +491,10 @@ def main(argv: list[str] | None = None) -> None:
         help=f"reuse depths to probe (default: {' '.join(map(str, _DEFAULT_DEPTHS))})",
     )
     parser.add_argument(
-        "--spec", default="surge_xt", help="param-spec registry key (default: surge_xt)"
+        "--spec",
+        default="surge_xt",
+        choices=available_specs(),
+        help="param-spec registry key (default: surge_xt)",
     )
     parser.add_argument(
         "--no-control",
