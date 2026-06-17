@@ -1,10 +1,8 @@
 name: Setup R2
 description: >-
-  Export the RCLONE_CONFIG_R2_* environment rclone needs to reach Cloudflare R2
-  and (optionally) install the rclone binary. Subsequent job steps see the vars
-  via $GITHUB_ENV. Structural values mirror
-  synth_setter.pipeline.r2_io._R2_STRUCTURAL_DEFAULTS; drift is caught by
-  tests/infra/test_setup_r2_action.py.
+  Export canonical SYNTH_SETTER_STORAGE_* settings plus the RCLONE_CONFIG_R2_*
+  projection rclone needs to reach Cloudflare R2. Subsequent job steps see the
+  vars via $GITHUB_ENV. Drift is caught by tests/infra/test_setup_r2_action.py.
 
 inputs:
   access-key-id:
@@ -29,11 +27,8 @@ runs:
       shell: bash
       run: sudo apt-get update -qq && sudo apt-get install -y -qq rclone
 
-    # `is_r2_reachable()` does not apply the structural setdefault that
-    # `ensure_r2_env_loaded()` does, so type/provider must be exported here too
-    # or `rclone lsd r2:` fails with "didn't find section in config file" and
-    # `integration_r2` tests skip silently — see #1185. Secrets pass through the
-    # step env rather than the inline script so they are never echoed verbatim.
+    # Secrets pass through step env so they are masked in logs while the action
+    # writes both the public storage contract and today's rclone backend env.
     - name: Export R2 credentials
       shell: bash
       env:
@@ -43,6 +38,11 @@ runs:
       run: |
         set -euo pipefail
         {
+          echo "SYNTH_SETTER_STORAGE_PROVIDER=r2"
+          echo "SYNTH_SETTER_STORAGE_RCLONE_REMOTE=r2"
+          echo "SYNTH_SETTER_STORAGE_ACCESS_KEY_ID=${ACCESS_KEY_ID}"
+          echo "SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY=${SECRET_ACCESS_KEY}"
+          echo "SYNTH_SETTER_STORAGE_ENDPOINT_URL=${ENDPOINT}"
           echo "RCLONE_CONFIG_R2_TYPE=s3"
           echo "RCLONE_CONFIG_R2_PROVIDER=Cloudflare"
           echo "RCLONE_CONFIG_R2_ACCESS_KEY_ID=${ACCESS_KEY_ID}"
