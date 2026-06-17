@@ -66,6 +66,20 @@ from tests.helpers.subprocess_args import find_script_index
 
 VST_HEADLESS_WRAPPER = str(vst_headless_wrapper())
 
+
+def _write_audio_h5(path: Path, num_samples: int) -> None:
+    """Write a minimal HDF5 split exposing ``audio`` with ``num_samples`` rows.
+
+    ``_run_oracle_eval_subprocess`` reads this row count to scale the eval
+    timeout, so only the leading dimension is load-bearing here.
+
+    :param path: Destination ``.h5`` file.
+    :param num_samples: Row count the ``audio`` dataset is given.
+    """
+    with h5py.File(path, "w") as f:
+        f.create_dataset("audio", data=np.zeros((num_samples, 1), dtype=np.float32))
+
+
 # Reusable VST3 bundle with a real Contents/moduleinfo.json so
 # extract_renderer_version (called by generate) returns a deterministic version
 # without loading any .so via pedalboard. Version inside is "1.0.0-test" — the
@@ -1894,7 +1908,7 @@ class TestMainDispatchBranches:
 
         dataset_root = tmp_path / "data"
         dataset_root.mkdir()
-        for name in ("train.h5", "val.h5", "test.h5", "stats.npz"):
+        for name in ("train.h5", "val.h5", "stats.npz"):
             (dataset_root / name).touch()
         run_dir = tmp_path / "oracle_eval" / "some-run-id"
         render = spec.render.model_copy(
@@ -1905,6 +1919,8 @@ class TestMainDispatchBranches:
             }
         )
         predict_file = dataset_root / "test.h5"
+        n_samples = 4
+        _write_audio_h5(predict_file, n_samples)
         gd._run_oracle_eval_subprocess(
             dataset_root,
             run_dir,
@@ -1915,9 +1931,10 @@ class TestMainDispatchBranches:
         )
 
         streamed_call_mock.assert_called_once()
-        # The timeout bound is the helper's only guard against an unbounded
-        # eval hang (#735); the hardcoded value catches a wrong constant too.
-        assert streamed_call_mock.call_args.kwargs["timeout"] == 600
+        # Hard-coded (not mirroring the module constants) so a wrong constant fails;
+        # the timeout bounds an otherwise-unbounded eval hang (#735) and now scales
+        # with the split: 600 overhead + 120/sample * 4 rows = 1080.
+        assert streamed_call_mock.call_args.kwargs["timeout"] == 1080.0
         called_argv = streamed_call_mock.call_args[0][0]
         assert "-m" in called_argv
         assert "synth_setter.cli.eval" in called_argv
@@ -1980,9 +1997,10 @@ class TestMainDispatchBranches:
 
         dataset_root = tmp_path / "data"
         dataset_root.mkdir()
-        for name in ("train.h5", "val.h5", "test.h5", "stats.npz"):
+        for name in ("val.h5", "test.h5", "stats.npz"):
             (dataset_root / name).touch()
         predict_file = dataset_root / "train.h5"
+        _write_audio_h5(predict_file, 4)
         gd._run_oracle_eval_subprocess(
             dataset_root,
             tmp_path / "oracle_eval" / "train" / "some-run-id",
@@ -1996,6 +2014,45 @@ class TestMainDispatchBranches:
         called_argv = streamed_call_mock.call_args[0][0]
         # ``+`` appends the key: it is absent from eval.yaml's evaluation group.
         assert "+evaluation.metric_prefix=train/" in called_argv
+
+    def test_run_oracle_eval_subprocess_timeout_grows_with_split_sample_count(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        spec: DatasetSpec,
+    ) -> None:
+        """A larger predict split yields a strictly larger eval timeout.
+
+        Pins the scaling itself (not just one formula point): a flat ceiling
+        would return the same budget for both splits and fail this.
+
+        :param monkeypatch: Patches ``_check_call_streamed`` to capture the timeout.
+        :param tmp_path: Roots the two distinct dataset roots.
+        :param spec: Source of a valid ``RenderConfig``.
+        """
+        import synth_setter.cli.generate_dataset as gd
+
+        def _timeout_for_split(root: Path, num_samples: int) -> float:
+            root.mkdir()
+            for name in ("train.h5", "val.h5", "stats.npz"):
+                (root / name).touch()
+            predict_file = root / "test.h5"
+            _write_audio_h5(predict_file, num_samples)
+            mock = MagicMock()
+            monkeypatch.setattr(gd, "_check_call_streamed", mock)
+            gd._run_oracle_eval_subprocess(
+                root,
+                root / "run",
+                "some-run-id",
+                render=spec.render,
+                num_workers=1,
+                predict_file=predict_file,
+            )
+            return mock.call_args.kwargs["timeout"]
+
+        small = _timeout_for_split(tmp_path / "small", 4)
+        large = _timeout_for_split(tmp_path / "large", 40)
+        assert large > small
 
     def test_run_oracle_eval_subprocess_missing_local_artifacts_raises(
         self,

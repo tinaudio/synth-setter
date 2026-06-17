@@ -27,7 +27,7 @@ from typing import cast
 
 import structlog
 
-__all__ = ["check_call_streamed", "check_call_streamed_async"]
+__all__ = ["check_call_streamed", "check_call_streamed_async", "scaled_timeout"]
 
 _LOG = structlog.get_logger(__name__)
 
@@ -49,6 +49,47 @@ _CAPTURE_MAX_BYTES = 1 << 20
 # Exit-detection poll cadence, seconds. Negligible against children that run
 # seconds to hours; bounds added exit-detection latency to one tick.
 _EXIT_POLL_SECONDS = 0.05
+
+
+def scaled_timeout(
+    num_samples: int,
+    *,
+    workers: int = 1,
+    overhead_seconds: float,
+    per_sample_seconds: float,
+) -> float:
+    """Wall-clock timeout for a child whose runtime grows with ``num_samples``.
+
+    Cost is modelled as a fixed ``overhead_seconds`` (import, plugin/model load,
+    config compose — independent of dataset size) plus ``per_sample_seconds`` per
+    item, the per-item term divided across ``workers`` that process items
+    concurrently. Scaling the per-item term rather than fixing a flat ceiling
+    keeps a larger dataset from tripping a spurious ``TimeoutExpired``; the
+    constant term still fails a true startup hang fast at small ``num_samples``.
+    Any safety margin belongs folded into the two cost constants the caller
+    passes, so this stays the bare cost model.
+
+    :param num_samples: Item count the child will process; must be >= 0.
+    :param workers: Concurrent workers the child fans items across; the per-item
+        term is divided by this (ceil, so a partial final batch still counts).
+        Must be >= 1.
+    :param overhead_seconds: Fixed cost independent of ``num_samples``; must be >= 0.
+    :param per_sample_seconds: Marginal cost per item, margin included; must be >= 0.
+    :returns: ``overhead_seconds + per_sample_seconds * ceil(num_samples / workers)``.
+    :raises ValueError: if ``num_samples`` < 0, ``workers`` < 1, or either cost
+        is negative.
+    """
+    if num_samples < 0:
+        raise ValueError(f"num_samples must be >= 0, got {num_samples}")
+    if workers < 1:
+        raise ValueError(f"workers must be >= 1, got {workers}")
+    if overhead_seconds < 0:
+        raise ValueError(f"overhead_seconds must be >= 0, got {overhead_seconds}")
+    if per_sample_seconds < 0:
+        raise ValueError(f"per_sample_seconds must be >= 0, got {per_sample_seconds}")
+    # Integer ceil-division: exact for any size, unlike float math.ceil(a / b).
+    batches = -(-num_samples // workers)
+    return overhead_seconds + per_sample_seconds * batches
 
 
 async def _wait_exit(proc: asyncio.subprocess.Process) -> int:

@@ -19,8 +19,9 @@ import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextlib import ExitStack
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
+import h5py
 import hydra
 import wandb
 from hydra.core.hydra_config import HydraConfig
@@ -54,6 +55,7 @@ from synth_setter.pipeline.spec_io import (
 # Imported under the module-local name tests already patch as the render /
 # rclone / eval subprocess seam (see tests/helpers/render_subprocess.py).
 from synth_setter.pipeline.subprocess_stream import check_call_streamed as _check_call_streamed
+from synth_setter.pipeline.subprocess_stream import scaled_timeout
 from synth_setter.resources import as_file, vst_headless_wrapper
 from synth_setter.utils import extras, log_wandb_provenance, pin_wandb_run_id, register_resolvers
 from synth_setter.utils.instantiators import close_loggers, instantiate_loggers
@@ -71,8 +73,10 @@ register_resolvers()
 # launcher's workspace (which may not exist on the worker filesystem).
 _WORKER_REPO_ROOT = "/home/build/synth-setter"
 
-# Smoke-shard-sized; longer eval runs belong on the dispatch path, not inline.
-_ORACLE_EVAL_TIMEOUT_SECONDS = 600
+# The inline eval (predict + re-render + metrics over a whole split) scales its
+# timeout with that split's sample count; per-sample covers all three. See scaled_timeout.
+_ORACLE_EVAL_TIMEOUT_OVERHEAD_SECONDS = 600.0
+_ORACLE_EVAL_TIMEOUT_PER_SAMPLE_SECONDS = 120.0
 
 # Finalized artifacts the eval datamodule opens; all must sit in dataset_root.
 _ORACLE_EVAL_REQUIRED_ARTIFACTS = ("train.h5", "val.h5", "test.h5", STATS_NPZ_FILENAME)
@@ -178,8 +182,20 @@ def _run_oracle_eval_subprocess(
     # (test split) leaves keys bare so existing sweeps/dashboards keep resolving.
     if metric_prefix:
         argv.append(f"+evaluation.metric_prefix={metric_prefix}")
+    # Budget scales with the split's sample count (predict + re-render + metrics
+    # all run over it); the finalized split exposes it as the audio row count.
+    # cast narrows h5py's Group|Dataset|Datatype union — "audio" is always a Dataset.
+    with h5py.File(predict_file, "r") as split_h5:
+        num_samples = int(cast(h5py.Dataset, split_h5["audio"]).shape[0])
     logger.info(f"oracle_eval_inline subprocess: {argv}")
-    _check_call_streamed(argv, timeout=_ORACLE_EVAL_TIMEOUT_SECONDS)
+    _check_call_streamed(
+        argv,
+        timeout=scaled_timeout(
+            num_samples,
+            overhead_seconds=_ORACLE_EVAL_TIMEOUT_OVERHEAD_SECONDS,
+            per_sample_seconds=_ORACLE_EVAL_TIMEOUT_PER_SAMPLE_SECONDS,
+        ),
+    )
 
 
 def _unsupported_cadence_reason(render_cfg: DictConfig) -> str | None:
