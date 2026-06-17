@@ -178,6 +178,9 @@ metrics = [
   "POT",
   "einops",
 ]
+notebooks = [
+  "smoosense[jupyter,emb]",
+]
 util = [
   "click<8.2",
   "structlog",
@@ -216,6 +219,7 @@ dev = [
   "rootutils",
   "ruff",
   { include-group = "docs" },
+  { include-group = "notebooks" },
   { include-group = "runtime" },
 ]
 
