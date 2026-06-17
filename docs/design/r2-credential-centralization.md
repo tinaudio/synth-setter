@@ -1,10 +1,10 @@
 # R2 Credential Centralization
 
 > How synth-setter resolves Cloudflare R2 access credentials and projects them
-> into the dialects each consumer needs. Storage **paths** and provenance
-> conventions remain owned by
-> [storage-provenance-spec.md](storage-provenance-spec.md) — this doc covers
-> only the credential-resolution code surface.
+> into the dialects each current consumer needs. This is a transitional slice
+> toward the provider-neutral object-storage contracts in
+> [object-storage-contracts.md](object-storage-contracts.md), not the final
+> storage abstraction.
 
 | Field        | Value      |
 | ------------ | ---------- |
@@ -16,12 +16,20 @@ ______________________________________________________________________
 
 ## 1. Problem
 
-The repo talks to one object store (Cloudflare R2, S3-compatible) through
-`rclone` and Lance. The I/O surface is already centralized — every rclone call
-goes through `r2_io._rclone_argv`, every Lance handoff through
-`r2_io.r2_storage_options`, every URI through the `R2Location` schema, and there
-are zero loose `boto3` clients. The mess is one layer down, in **credential
-resolution**:
+The repo currently talks to Cloudflare R2 through `rclone` and Lance. R2 is an
+S3-compatible provider, but the application model leaks the provider everywhere:
+`DatasetSpec.r2`, `R2Location`, `r2://` URIs, and `RCLONE_CONFIG_R2_*`
+credentials.
+
+The target architecture is provider-neutral object storage, documented in
+[object-storage-contracts.md](object-storage-contracts.md). It replaces
+provider-shaped public types with `StorageSettings`, `StorageConfig`,
+`ObjectLocation`, `DatasetStorageLayout`, and an `ObjectStorage` facade that can
+keep using rclone for bulk sync.
+
+This PR is intentionally narrower. It addresses the credential-resolution layer
+first while preserving public contracts, so the current R2-shaped code has one
+source of truth before the larger rename/facade work starts:
 
 1. **One logical secret, four env-var vocabularies.** The same R2 access
    key / secret / endpoint is expressed as `RCLONE_CONFIG_R2_*` (rclone + Lance),
@@ -49,12 +57,19 @@ resolution**:
   each dialect (Lance `storage_options`, the rclone env block) is *projected*.
 - Behavior-preserving: public helpers (`r2_io.r2_storage_options`, the launcher
   forwarding) keep their contracts so the migration is invisible to call sites.
+- Make the follow-on provider-neutral storage migration easier by collapsing
+  today's credential duplication before broad call-site renames.
 
 **Non-Goals**
 
-- No new storage backend abstraction (s3fs / obstore / a generic
-  `StorageBackend`). The shop is single-provider; a portability layer is YAGNI.
-- No change to rclone's role (bulk/CLI sync) or to the `R2Location` URI schema.
+- No new storage facade in this PR. The facade, `ObjectLocation`, and
+  `DatasetStorageLayout` are specified in
+  [object-storage-contracts.md](object-storage-contracts.md).
+- No change to rclone's role. The object-storage contracts keep rclone as the
+  first backend for bulk sync and probes.
+- No change to the `R2Location` URI schema in this PR. The follow-on storage
+  phase will replace it with `DatasetSpec.storage.root: {bucket, key}` and can
+  break old specs.
 - The `AWS_*` / `WANDB_*` projections and the GHA-workflow / `.env.example`
   collapse are **out of scope for this PR** (see §5).
 
@@ -107,6 +122,11 @@ pass as-is, and new tests pin the model and its projections.
 
 ## 5. Follow-ups (tracked, not in this PR)
 
+- Implement the provider-neutral storage contracts from
+  [object-storage-contracts.md](object-storage-contracts.md) as a phase under the
+  existing storage epic. The phase owns the breaking `R2Location` /
+  `DatasetSpec.r2` removal, `s3://bucket/key` CLI normalization, and
+  rclone-backed `ObjectStorage` facade.
 - Project `AWS_*` (Lance-rust / DuckDB) and `WANDB_S3_ENDPOINT_URL` from
   `R2Credentials`; collapse the four endpoint repetitions in `.env.example`.
 - Replace the per-workflow inline `RCLONE_CONFIG_R2_*` lists in GHA / compute
@@ -116,10 +136,15 @@ pass as-is, and new tests pin the model and its projections.
 
 ## 6. Alternatives Considered
 
-- **Standardize on `fsspec`/`s3fs` or `obstore` as the single transport.**
-  Rejected: it adds a dependency and a portability layer for a single-provider
-  setup, and rclone's bulk-sync role (with `--checksum`) is already the right
-  tool. Revisit only if a second object store is introduced.
+- **Jump straight to the provider-neutral storage facade.** Deferred. The
+  contracts are agreed in
+  [object-storage-contracts.md](object-storage-contracts.md), but this PR keeps
+  the blast radius to credential centralization. It gives the current R2-shaped
+  code one credential source before the breaking type/config rename.
+- **Standardize immediately on `fsspec`/`s3fs` or `obstore` as the single
+  transport.** Deferred. The storage facade should land first while delegating
+  to rclone. A later client swap can be benchmarked behind the facade without
+  changing application call sites.
 - **A `BaseSettings` that auto-reads env on construction.** Rejected in favor of
   an explicit `from_env` classmethod so the trust boundary (and its validation
   error) is a visible call, and so the pure model stays trivially constructible
@@ -129,5 +154,7 @@ pass as-is, and new tests pin the model and its projections.
 
 - [storage-provenance-spec.md](storage-provenance-spec.md) — authoritative R2
   paths and W&B artifact conventions
+- [object-storage-contracts.md](object-storage-contracts.md) — target
+  provider-neutral storage contracts and migration shape
 - [skypilot-compute-integration.md](skypilot-compute-integration.md) — worker
   env-var resolution and forwarding

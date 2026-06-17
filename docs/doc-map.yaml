@@ -201,6 +201,17 @@ docs:
       - pattern: "src/synth_setter/pipeline/schemas/r2_credentials.py"
         covers: "Canonical RCLONE_CONFIG_R2_* env-var names + structural defaults; the strict frozen `R2Credentials` model (SecretStr secrets), `from_env` resolution (blank-as-absent, R2_ACCOUNT_ID endpoint derivation), and the `lance_storage_options` projection — the single validator `r2_io` and `skypilot_launch` source from"
 
+  # ── Provider-neutral object storage contracts ───────────────────
+  - doc: docs/design/object-storage-contracts.md
+    description: Target provider-neutral storage settings, location, layout, and facade contracts
+    sources:
+      - pattern: "src/synth_setter/pipeline/r2_io.py"
+        covers: "Current rclone-backed transfer/probe helpers and Lance storage_options projection that migrate behind ObjectStorage"
+      - pattern: "src/synth_setter/pipeline/schemas/r2_location.py"
+        covers: "Current R2Location layout helpers that migrate to DatasetStorageLayout returning ObjectLocation"
+      - pattern: "src/synth_setter/pipeline/schemas/spec.py"
+        covers: "Current DatasetSpec.r2 field that becomes DatasetSpec.storage with storage.root {bucket, key}"
+
   # ── Training pipeline design doc ────────────────────────────────
   - doc: docs/design/training-pipeline.md
     description: Training pipeline design — Hydra configs, Lightning training, RunPod portability
