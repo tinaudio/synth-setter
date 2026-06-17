@@ -17,6 +17,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.schemas.object_storage import (
+    STORAGE_REQUIRED_ENV_KEYS,
+)
 
 
 class TestIsR2Uri:
@@ -130,14 +133,28 @@ class TestFromS3Uri:
 class TestR2StorageOptions:
     """Tests for r2_storage_options — Lance object-store config from R2 env vars."""
 
+    @pytest.fixture(autouse=True)
+    def _clear_r2_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Drop stray storage env so tests do not read a developer shell.
+
+        :param monkeypatch: Pytest fixture used to remove env vars.
+        """
+        import os
+
+        for key in list(os.environ):
+            if key.startswith(("SYNTH_SETTER_STORAGE_", "RCLONE_CONFIG_R2_")):
+                monkeypatch.delenv(key, raising=False)
+
     def test_builds_object_store_dict_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """The three RCLONE_CONFIG_R2_* secrets map to the documented S3 keys plus region.
+        """The canonical storage settings map to the documented S3 keys plus region.
 
         :param monkeypatch: Pytest fixture used to set the R2 secret env vars.
         """
-        monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", "ak")
-        monkeypatch.setenv("RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", "sk")
-        monkeypatch.setenv("RCLONE_CONFIG_R2_ENDPOINT", "https://acct.r2.cloudflarestorage.com")
+        monkeypatch.setenv("SYNTH_SETTER_STORAGE_ACCESS_KEY_ID", "ak")
+        monkeypatch.setenv("SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY", "sk")
+        monkeypatch.setenv(
+            "SYNTH_SETTER_STORAGE_ENDPOINT_URL", "https://acct.r2.cloudflarestorage.com"
+        )
         assert r2_io.r2_storage_options() == {
             "access_key_id": "ak",
             "secret_access_key": "sk",
@@ -150,9 +167,9 @@ class TestR2StorageOptions:
 
         :param monkeypatch: Pytest fixture used to clear the R2 secret env vars.
         """
-        for key in r2_io._SECRET_R2_ENV_KEYS:
+        for key in STORAGE_REQUIRED_ENV_KEYS:
             monkeypatch.delenv(key, raising=False)
-        with pytest.raises(RuntimeError, match="R2 credentials missing"):
+        with pytest.raises(RuntimeError, match="Object storage settings unresolved"):
             r2_io.r2_storage_options()
 
     def test_blank_secret_value_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -160,10 +177,25 @@ class TestR2StorageOptions:
 
         :param monkeypatch: Pytest fixture used to set the R2 secret env vars.
         """
+        monkeypatch.setenv("SYNTH_SETTER_STORAGE_ACCESS_KEY_ID", "ak")
+        monkeypatch.setenv("SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY", "   ")
+        monkeypatch.setenv(
+            "SYNTH_SETTER_STORAGE_ENDPOINT_URL", "https://acct.r2.cloudflarestorage.com"
+        )
+        with pytest.raises(RuntimeError, match="SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY"):
+            r2_io.r2_storage_options()
+
+    def test_legacy_rclone_env_is_not_a_storage_settings_source(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The app no longer treats implementation-specific rclone env as canonical settings.
+
+        :param monkeypatch: Pytest fixture used to set the R2 secret env vars.
+        """
         monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", "ak")
-        monkeypatch.setenv("RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", "   ")
+        monkeypatch.setenv("RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", "sk")
         monkeypatch.setenv("RCLONE_CONFIG_R2_ENDPOINT", "https://acct.r2.cloudflarestorage.com")
-        with pytest.raises(RuntimeError, match="SECRET_ACCESS_KEY"):
+        with pytest.raises(RuntimeError, match="SYNTH_SETTER_STORAGE_ACCESS_KEY_ID"):
             r2_io.r2_storage_options()
 
 
@@ -467,6 +499,18 @@ class TestUploadToUri:
 class TestIsR2Reachable:
     """Tests for ``is_r2_reachable`` — boolean auth-probe used as a test-skip gate."""
 
+    @pytest.fixture(autouse=True)
+    def _clear_r2_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Drop stray storage env for a clean unreachable baseline.
+
+        :param monkeypatch: Pytest fixture used to remove env vars.
+        """
+        import os
+
+        for key in list(os.environ):
+            if key.startswith(("SYNTH_SETTER_STORAGE_", "RCLONE_CONFIG_R2_")):
+                monkeypatch.delenv(key, raising=False)
+
     def test_returns_true_when_rclone_lsd_exits_zero(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -477,7 +521,7 @@ class TestIsR2Reachable:
         monkeypatch.setattr(
             "synth_setter.pipeline.r2_io.shutil.which", lambda name: f"/usr/bin/{name}"
         )
-        for key in r2_io._SECRET_R2_ENV_KEYS:  # noqa: SLF001 — test asserts contract
+        for key in STORAGE_REQUIRED_ENV_KEYS:
             monkeypatch.setenv(key, "stub")
 
         class _OK:
@@ -498,7 +542,7 @@ class TestIsR2Reachable:
         monkeypatch.setattr(
             "synth_setter.pipeline.r2_io.shutil.which", lambda name: f"/usr/bin/{name}"
         )
-        for key in r2_io._SECRET_R2_ENV_KEYS:  # noqa: SLF001 — test asserts contract
+        for key in STORAGE_REQUIRED_ENV_KEYS:
             monkeypatch.setenv(key, "stub")
 
         def fake_run(*args: object, **kwargs: object) -> object:
@@ -535,7 +579,7 @@ class TestIsR2Reachable:
         monkeypatch.setattr(
             "synth_setter.pipeline.r2_io.shutil.which", lambda name: f"/usr/bin/{name}"
         )
-        for key in r2_io._SECRET_R2_ENV_KEYS:  # noqa: SLF001 — test asserts contract
+        for key in STORAGE_REQUIRED_ENV_KEYS:
             monkeypatch.delenv(key, raising=False)
         # subprocess.run must never be called — short-circuit on missing env.
         monkeypatch.setattr(
@@ -846,14 +890,14 @@ class TestPurgePrefix:
 
 
 def _set_all_r2_secrets(monkeypatch: pytest.MonkeyPatch, suffix: str = "from-env") -> None:
-    """Populate `RCLONE_CONFIG_R2_*` secrets so `ensure_r2_env_loaded` finds them.
+    """Populate canonical storage settings so `ensure_r2_env_loaded` finds them.
 
     :param monkeypatch: Pytest fixture used to set env vars.
     :param suffix: Value suffix (lets one targeted test distinguish dotenv vs os.environ origin).
     """
-    monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", f"id-{suffix}")
-    monkeypatch.setenv("RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", f"secret-{suffix}")
-    monkeypatch.setenv("RCLONE_CONFIG_R2_ENDPOINT", f"endpoint-{suffix}")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ACCESS_KEY_ID", f"id-{suffix}")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY", f"secret-{suffix}")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ENDPOINT_URL", f"endpoint-{suffix}")
 
 
 class TestEnsureR2EnvLoaded:
@@ -866,18 +910,18 @@ class TestEnsureR2EnvLoaded:
 
     @pytest.fixture(autouse=True)
     def _clear_r2_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Drop any `RCLONE_CONFIG_R2_*` keys so each test starts from a known state.
+        """Drop storage/rclone env so each test starts from a known state.
 
         :param monkeypatch: Pytest fixture used to remove env vars.
         """
         import os
 
         for key in list(os.environ):
-            if key.startswith("RCLONE_CONFIG_R2_"):
+            if key.startswith(("SYNTH_SETTER_STORAGE_", "RCLONE_CONFIG_R2_")):
                 monkeypatch.delenv(key, raising=False)
 
     def test_dotenv_values_reach_the_rclone_subprocess(self, tmp_path: Path) -> None:
-        """An env_file's secrets are visible in the rclone auth-ping's environment.
+        """An env_file's storage settings are projected into the rclone auth-ping env.
 
         Captures ``os.environ`` at the moment ``subprocess.run`` is invoked — that's
         the contract boundary, and the only place we need to verify it.
@@ -888,9 +932,9 @@ class TestEnsureR2EnvLoaded:
 
         env_file = tmp_path / ".env"
         env_file.write_text(
-            "RCLONE_CONFIG_R2_ACCESS_KEY_ID=id-from-file\n"
-            "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=secret-from-file\n"
-            "RCLONE_CONFIG_R2_ENDPOINT=endpoint-from-file\n"
+            "SYNTH_SETTER_STORAGE_ACCESS_KEY_ID=id-from-file\n"
+            "SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY=secret-from-file\n"
+            "SYNTH_SETTER_STORAGE_ENDPOINT_URL=endpoint-from-file\n"
         )
         captured: dict[str, str] = {}
 
@@ -902,22 +946,109 @@ class TestEnsureR2EnvLoaded:
             r2_io.ensure_r2_env_loaded(env_file)
 
         assert captured["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "id-from-file"
+        assert captured["RCLONE_CONFIG_R2_ENDPOINT"] == "endpoint-from-file"
 
     def test_missing_secret_keys_raises_actionable_error(self) -> None:
-        """Missing R2 secret keys raise an actionable RuntimeError.
+        """Missing storage settings raise an actionable RuntimeError.
 
-        No env_file and no ``RCLONE_CONFIG_R2_*`` in os.environ → the function
+        No env_file and no ``SYNTH_SETTER_STORAGE_*`` in os.environ → the function
         names all three missing keys in its error message.
         """
-        with pytest.raises(RuntimeError, match="R2 credentials missing") as excinfo:
+        with pytest.raises(RuntimeError, match="Object storage settings unresolved") as excinfo:
             r2_io.ensure_r2_env_loaded(env_file=None)
         msg = str(excinfo.value)
-        for key in (
-            "RCLONE_CONFIG_R2_ACCESS_KEY_ID",
-            "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY",
-            "RCLONE_CONFIG_R2_ENDPOINT",
-        ):
+        for key in STORAGE_REQUIRED_ENV_KEYS:
             assert key in msg
+
+    def test_blank_secret_value_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A present-but-blank setting is rejected.
+
+        :param monkeypatch: Pytest fixture used to set env vars.
+        """
+        monkeypatch.setenv("SYNTH_SETTER_STORAGE_ACCESS_KEY_ID", "   ")
+        monkeypatch.setenv("SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY", "secret")
+        monkeypatch.setenv(
+            "SYNTH_SETTER_STORAGE_ENDPOINT_URL", "https://stub.r2.cloudflarestorage.com"
+        )
+        with pytest.raises(RuntimeError, match="SYNTH_SETTER_STORAGE_ACCESS_KEY_ID"):
+            r2_io.ensure_r2_env_loaded(env_file=None)
+
+    def test_blank_type_is_normalized_to_default_for_the_subprocess(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The rclone type is projected from storage config's default.
+
+        :param monkeypatch: Pytest fixture used to set env vars.
+        """
+        import os
+
+        monkeypatch.setenv("SYNTH_SETTER_STORAGE_ACCESS_KEY_ID", "id")
+        monkeypatch.setenv("SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY", "secret")
+        monkeypatch.setenv(
+            "SYNTH_SETTER_STORAGE_ENDPOINT_URL", "https://stub.r2.cloudflarestorage.com"
+        )
+        captured: dict[str, str] = {}
+
+        def _capture(*_a: object, **_kw: object) -> subprocess.CompletedProcess[str]:
+            captured.update(os.environ)
+            return subprocess.CompletedProcess(args=[], returncode=0)
+
+        with patch.object(r2_io.subprocess, "run", side_effect=_capture):
+            r2_io.ensure_r2_env_loaded(env_file=None)
+
+        assert captured["RCLONE_CONFIG_R2_TYPE"] == "s3"
+
+    def test_padded_env_file_value_is_stripped_for_the_subprocess(self, tmp_path: Path) -> None:
+        """A quoted/padded ``.env`` value lands stripped in the auth-ping env, not raw.
+
+        :param tmp_path: Pytest tmp dir for the env_file.
+        """
+        import os
+
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            'SYNTH_SETTER_STORAGE_ACCESS_KEY_ID="  ak  "\n'
+            "SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY=secret\n"
+            "SYNTH_SETTER_STORAGE_ENDPOINT_URL=https://stub.r2.cloudflarestorage.com\n"
+        )
+        captured: dict[str, str] = {}
+
+        def _capture(*_a: object, **_kw: object) -> subprocess.CompletedProcess[str]:
+            captured.update(os.environ)
+            return subprocess.CompletedProcess(args=[], returncode=0)
+
+        with patch.object(r2_io.subprocess, "run", side_effect=_capture):
+            r2_io.ensure_r2_env_loaded(env_file)
+
+        assert captured["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "ak"
+
+    def test_blank_env_file_value_does_not_clobber_real_process_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A blank ``.env`` entry is skipped, so a real process-env credential survives.
+
+        :param tmp_path: Pytest tmp dir for the env_file.
+        :param monkeypatch: Pytest fixture used to set the process-env value.
+        """
+        import os
+
+        monkeypatch.setenv("SYNTH_SETTER_STORAGE_ACCESS_KEY_ID", "from-process-env")
+        monkeypatch.setenv("SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY", "secret")
+        monkeypatch.setenv(
+            "SYNTH_SETTER_STORAGE_ENDPOINT_URL", "https://stub.r2.cloudflarestorage.com"
+        )
+        env_file = tmp_path / ".env"
+        env_file.write_text("SYNTH_SETTER_STORAGE_ACCESS_KEY_ID=\n")
+        captured: dict[str, str] = {}
+
+        def _capture(*_a: object, **_kw: object) -> subprocess.CompletedProcess[str]:
+            captured.update(os.environ)
+            return subprocess.CompletedProcess(args=[], returncode=0)
+
+        with patch.object(r2_io.subprocess, "run", side_effect=_capture):
+            r2_io.ensure_r2_env_loaded(env_file)
+
+        assert captured["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "from-process-env"
 
     def test_auth_ping_failure_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Rclone non-zero exit on the auth ping → RuntimeError with stderr excerpt.
@@ -1006,14 +1137,10 @@ class TestEnsureR2EnvLoaded:
         assert captured["RCLONE_CONFIG_R2_TYPE"] == "s3"
         assert captured["RCLONE_CONFIG_R2_PROVIDER"] == "Cloudflare"
 
-    def test_does_not_overwrite_caller_provided_type_and_provider(
+    def test_rclone_projection_overwrites_legacy_type_and_provider(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A caller's ``TYPE`` / ``PROVIDER`` win — the defaults only fill the unset case.
-
-        Preserves the rclone env-override design: callers (e.g. a future non-Cloudflare
-        S3-compatible backend) can override the structural keys without having to opt out
-        of ``ensure_r2_env_loaded``.
+        """Legacy rclone structural env is replaced by the storage config projection.
 
         :param monkeypatch: Pytest fixture used to populate env vars.
         """
@@ -1031,5 +1158,5 @@ class TestEnsureR2EnvLoaded:
         with patch.object(r2_io.subprocess, "run", side_effect=_capture):
             r2_io.ensure_r2_env_loaded(env_file=None)
 
-        assert captured["RCLONE_CONFIG_R2_TYPE"] == "caller-type"
-        assert captured["RCLONE_CONFIG_R2_PROVIDER"] == "caller-provider"
+        assert captured["RCLONE_CONFIG_R2_TYPE"] == "s3"
+        assert captured["RCLONE_CONFIG_R2_PROVIDER"] == "Cloudflare"

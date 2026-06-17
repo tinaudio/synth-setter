@@ -149,7 +149,7 @@ docs:
       - pattern: "src/synth_setter/pipeline/skypilot_launch.py"
         covers: "Generic `dispatch_via_skypilot(sky_cfg)` entrypoint: managed-jobs SDK via `sky.jobs.launch`, two-phase validate-then-side-effect, tail/detach split keyed on `sky_cfg.tail`. Callers thread domain envs through `sky_cfg.extra_envs` (merged after `resolve_worker_env`; rejected on collision with `_WORKER_ENV_KEYS`). Job-name fallback is domain-neutral (`synth-setter-<uuid8>`)."
       - pattern: "src/synth_setter/configs/compute/runpod-template.yaml"
-        covers: 'SkyPilot Task YAML for RunPod: resources block, image_id injected per-launch by the launcher (`sky_cfg.worker_image_tag`, default `"dev-snapshot"`) via `_override_image_id`, env-var injection (RCLONE_CONFIG_R2_*), R2-URI spec contract (`WORKER_SPEC_URI` carries the canonical `input_spec.json` URI for CI validate-time consumers; the worker rebuilds the spec from pinned Hydra overrides)'
+        covers: 'SkyPilot Task YAML for RunPod: resources block, image_id injected per-launch by the launcher (`sky_cfg.worker_image_tag`, default `"dev-snapshot"`) via `_override_image_id`, env-var injection (currently projected rclone env for the worker backend), R2-URI spec contract (`WORKER_SPEC_URI` carries the canonical `input_spec.json` URI for CI validate-time consumers; the worker rebuilds the spec from pinned Hydra overrides)'
       - pattern: "src/synth_setter/configs/compute/oci-cpu-template.yaml"
         covers: "SkyPilot Task YAML for OCI CPU: resources block (Flex shape, no image_id — OCI rejects `docker:<image>`, so `_override_image_id` skips OCI Resources and the worker image is fed via the `WORKER_IMAGE` env), docker-in-run worker invocation, --privileged hammer for Xvfb/dbus (#776), delegates WORKER_GIT_REF checkout + uv install to `scripts/sync_worker_checkout.sh`, then invokes `synth-setter-generate-dataset-from-hydra` against the synced checkout."
       - pattern: "docker/ubuntu22_04/ensure_plugin_symlinks.sh"
@@ -165,7 +165,7 @@ docs:
       - pattern: ".github/workflows/test-skypilot-debug.yml"
         covers: "Permanent diagnostic matrix for the SkyPilot+RunPod path (workflow_dispatch only). Same cred-bootstrap gate as test-dataset-generation: writer is invoked iff SKYPILOT_API_SERVER_ENDPOINT is unset."
       - pattern: ".github/workflows/test-skypilot-local.yml"
-        covers: "kind/local-Kubernetes smoke for the launcher's env-forwarding contract. Triggers on workflow_dispatch and on pull_request events that touch the workflow file or the local-debug template (path-filtered). sky local up + sky launch on the kubernetes backend with no billable cloud capacity — verifies RCLONE_CONFIG_R2_* flow through task.update_envs into the worker pod."
+        covers: "kind/local-Kubernetes smoke for the launcher's env-forwarding contract. Triggers on workflow_dispatch and on pull_request events that touch the workflow file or the local-debug template (path-filtered). sky local up + sky launch on the kubernetes backend with no billable cloud capacity — verifies canonical storage settings project into the worker backend env."
       - pattern: "src/synth_setter/configs/compute/local-debug-rclone-template.yaml"
         covers: "SkyPilot Task YAML for the kubernetes backend (no `image_id`, defers to SkyPilot's stock kube image). Setup installs rclone; run uploads a sentinel file to R2 with the same flags the production worker uses. Used by test-skypilot-local.yml."
       - pattern: "src/synth_setter/configs/compute/local-template.yaml"
@@ -193,6 +193,24 @@ docs:
         covers: "`input_spec.json` writers — `write_spec_locally` materializes the operator-side local mirror at `<cfg.paths.output_dir>/data/<task_name>/<run_id>/metadata/input_spec.json` (runner anchors at the Hydra per-run dir, anticipating §3a's `metadata/` target layout); `upload_spec` writes the R2 copy at `spec.r2.input_spec_uri()` (flat MVP path per #385)."
       - pattern: "src/synth_setter/pipeline/constants.py"
         covers: "INPUT_SPEC_FILENAME constant"
+
+  # ── Object storage credential centralization design doc ─────────
+  - doc: docs/design/r2-credential-centralization.md
+    description: Provider-neutral object-storage credential settings and backend projections
+    sources:
+      - pattern: "src/synth_setter/pipeline/schemas/object_storage.py"
+        covers: "Canonical `SYNTH_SETTER_STORAGE_*` settings, strict frozen `StorageConfig`, `ObjectLocation`, rclone env projection, Lance `storage_options` projection, and the small rclone-backed `ObjectStorage` facade"
+
+  # ── Provider-neutral object storage contracts ───────────────────
+  - doc: docs/design/object-storage-contracts.md
+    description: Target provider-neutral storage settings, location, layout, and facade contracts
+    sources:
+      - pattern: "src/synth_setter/pipeline/r2_io.py"
+        covers: "Current rclone-backed transfer/probe helpers and Lance storage_options projection that migrate behind ObjectStorage"
+      - pattern: "src/synth_setter/pipeline/schemas/r2_location.py"
+        covers: "Current R2Location layout helpers that migrate to DatasetStorageLayout returning ObjectLocation"
+      - pattern: "src/synth_setter/pipeline/schemas/spec.py"
+        covers: "Current DatasetSpec.r2 field that becomes DatasetSpec.storage with storage.root {bucket, key}"
 
   # ── Training pipeline design doc ────────────────────────────────
   - doc: docs/design/training-pipeline.md

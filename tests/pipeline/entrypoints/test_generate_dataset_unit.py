@@ -2566,13 +2566,13 @@ class TestMainSpecPersistence:
         gd.upload_spec.assert_called_once()  # type: ignore[attr-defined]
         gd.write_spec_locally.assert_called_once()  # type: ignore[attr-defined]
 
-    def test_main_uploads_spec_with_r2_creds_present_in_env(
+    def test_main_uploads_spec_with_projected_rclone_env_present(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``upload_spec`` sees R2 creds in ``os.environ`` (set by ``ensure_r2_env_loaded``).
+        """``upload_spec`` sees projected rclone env after ``ensure_r2_env_loaded``.
 
-        Asserts the observable invariant — credentials are present in process
-        env when the upload fires — rather than the internal call ORDER. A
+        Asserts the observable invariant — backend env is present in process
+        env when the upload fires — rather than the internal call order. A
         benign re-ordering that still loads creds before uploading passes; a
         regression that uploads before ``ensure_r2_env_loaded`` populates the
         env fails because the stub records an absent key.
@@ -2580,9 +2580,9 @@ class TestMainSpecPersistence:
         :param monkeypatch: Pytest fixture used to patch ``sys.argv``.
         """
         import synth_setter.cli.generate_dataset as gd
-        from synth_setter.pipeline.r2_io import _SECRET_R2_ENV_KEYS
+        from synth_setter.pipeline.schemas.object_storage import RCLONE_REQUIRED_ENV_KEYS
 
-        probe_key = _SECRET_R2_ENV_KEYS[0]
+        probe_key = RCLONE_REQUIRED_ENV_KEYS[0]
         monkeypatch.delenv(probe_key, raising=False)
 
         argv = [

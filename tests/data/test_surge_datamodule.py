@@ -62,10 +62,9 @@ _ALL_TENSOR_KEYS = ("audio", "mel_spec", "m2l", "params", "noise")
 def local_r2_remote(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Back the ``r2:`` rclone remote with the local filesystem for real-binary e2e.
 
-    ``RCLONE_CONFIG_R2_TYPE=local`` resolves ``r2://<bucket>/<key>`` to
-    ``<cwd>/<bucket>/<key>``, and the three secret keys satisfy
-    ``ensure_r2_env_loaded``'s presence check (their values are unused by the
-    local backend). Skips when ``rclone`` is absent.
+    ``SYNTH_SETTER_STORAGE_RCLONE_TYPE=local`` resolves ``r2://<bucket>/<key>`` to
+    ``<cwd>/<bucket>/<key>``. Canonical storage settings satisfy the credential
+    check; their rclone projection is unused by the local backend.
 
     :param tmp_path: Pytest tmp dir; the returned subdir is the fake R2 root.
     :param monkeypatch: Sets the rclone env vars and chdirs into the remote root.
@@ -75,10 +74,10 @@ def local_r2_remote(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         pytest.skip("rclone binary not available on PATH")
     remote_root = tmp_path / "r2"
     remote_root.mkdir()
-    monkeypatch.setenv("RCLONE_CONFIG_R2_TYPE", "local")
-    monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", "stub")
-    monkeypatch.setenv("RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", "stub")
-    monkeypatch.setenv("RCLONE_CONFIG_R2_ENDPOINT", "stub")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ACCESS_KEY_ID", "stub")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY", "stub")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ENDPOINT_URL", "http://localhost:0")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_RCLONE_TYPE", "local")
     monkeypatch.chdir(remote_root)
     return remote_root
 
