@@ -111,7 +111,7 @@ def test_smoosense_viewer_deps_are_notebook_only(project_root: Path) -> None:
 
     dependency_groups = pyproject["dependency-groups"]
 
-    assert "smoosense[jupyter,emb]" in dependency_groups["notebooks"]
+    assert "smoosense[jupyter]" in dependency_groups["notebooks"]
     assert "duckdb>=1.5.4" in dependency_groups["notebooks"]
     assert {"include-group": "notebooks"} in dependency_groups["dev"]
     assert all("smoosense" not in str(dep) for dep in pyproject["project"]["dependencies"])

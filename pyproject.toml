@@ -180,7 +180,7 @@ metrics = [
 ]
 notebooks = [
   "duckdb>=1.5.4",
-  "smoosense[jupyter,emb]",
+  "smoosense[jupyter]",
 ]
 util = [
   "click<8.2",
