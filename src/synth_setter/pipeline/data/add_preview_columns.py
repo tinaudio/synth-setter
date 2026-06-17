@@ -4,15 +4,13 @@ Backfills two derived columns onto a dataset written by
 ``synth-setter-generate-dataset`` or ``synth-setter-finalize-dataset``, in a
 single Lance ``add_columns`` transaction:
 
-- ``audio_mp3`` — each row's float16 ``audio`` tensor encoded to a CBR MP3
-  (pedalboard) and stored as a Lance blob v2 column tagged
-  ``mime_type: audio/mpeg``, so open-source Lance viewers auto-play a per-row
-  preview. Blob v2 (storage version >= 2.2) keeps per-row reads lazy, so a scan
-  need not materialize every MP3. A lossy auditioning preview, never a training
-  input; the ``audio`` tensor stays the source of truth.
-- ``audio_uuid`` — a deterministic :rfc:`4122` UUIDv5 fingerprint of the same
-  ``audio`` tensor bytes, so the same rendered waveform always maps to the same
-  id (content-addressed, stable across re-runs of this tool).
+- ``audio_mp3`` — each row's ``audio`` tensor encoded to a CBR MP3 (pedalboard),
+  stored as a Lance blob v2 column tagged ``mime_type: audio/mpeg`` so Lance
+  viewers auto-play a per-row preview.
+- ``audio_uuid`` — a deterministic UUIDv5 fingerprint of the same ``audio`` bytes,
+  so the same rendered waveform always maps to the same id (content-addressed).
+
+Neither column is a training input; the ``audio`` tensor stays the source of truth.
 """
 
 from __future__ import annotations
@@ -87,9 +85,8 @@ def audio_uuid(audio: np.ndarray) -> str:
     :param audio: One row of audio of any shape/dtype; hashed by its exact bytes.
     :returns: The canonical hyphenated UUIDv5 string under the project namespace.
     """
-    # Hash the hex string of the C-ordered bytes: uuid5 accepts a bytes name only
-    # on Python >= 3.12 (repo floor is 3.11), and the id is content-addressed, so
-    # switching to raw-bytes input on 3.12+ would silently change every uuid.
+    # uuid5 on Python 3.11 needs a str name, not bytes; hashing tobytes().hex()
+    # canonicalizes byte order and keeps the id stable (changing it shifts all ids).
     return str(uuid.uuid5(_AUDIO_UUID_NAMESPACE, audio.tobytes().hex()))
 
 
@@ -197,7 +194,7 @@ def main(uri: str, bitrate_kbps: int) -> None:
         is rewritten to ``s3://``, and any ``s3://`` URI is treated as the project's
         R2 endpoint and credentialed with env-derived credentials (mirroring
         ``add_embeddings``; generic non-R2 S3 buckets are not a supported input).
-    :param bitrate_kbps: CBR bitrate in kbps for the MP3 column (8-320, Click-validated).
+    :param bitrate_kbps: See :func:`add_preview_columns` (Click validates the 8-320 range).
     :raises click.ClickException: The dataset is missing its ``audio`` column,
         already has an ``audio_mp3`` or ``audio_uuid`` column, lacks readable
         shard metadata, cannot be opened (e.g. a cloud I/O error), or an R2 URI

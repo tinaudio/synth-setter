@@ -46,7 +46,7 @@ _TIME_SAMPLES = int(_SAMPLE_RATE * _DURATION_SECONDS)
 _ROWS = 3
 
 # A full second at CD rate: enough frames that the 320-vs-128 kbps size
-# difference shows. Sub-second / low-rate clips are dominated by padding.
+# difference shows. Sub-second clips are dominated by MP3 header/reservoir overhead.
 _BITRATE_PROBE_RATE = 44100
 
 # Concert-pitch A; an audible test tone, value not otherwise significant.
@@ -73,8 +73,8 @@ def _sine_rows(sample_rate: int = _SAMPLE_RATE) -> np.ndarray:
     t = np.arange(_TIME_SAMPLES) / sample_rate
     rows = [np.sin(2 * np.pi * freq * t) for freq in (220.0, 440.0, 660.0)]
     mono = np.stack(rows)[:, None, :]
-    # broadcast_to is a read-only view, but the trailing .astype materializes a
-    # fresh writable float16 array, so the returned value is safe to mutate.
+    # broadcast_to returns a read-only view; the trailing .astype materializes a
+    # fresh writable float16 copy.
     return np.broadcast_to(mono, (_ROWS, _CHANNELS, _TIME_SAMPLES)).astype(np.float16)
 
 
