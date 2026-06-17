@@ -37,6 +37,7 @@ import pytest
 import torch
 
 from synth_setter.data import surge_datamodule
+from synth_setter.data.ot import _hungarian_match
 from synth_setter.data.surge_datamodule import (
     ShiftedBatchSampler,
     ShuffledSampler,
@@ -104,19 +105,10 @@ def _set_up_module(**kwargs: object) -> Iterator[VSTDataModule]:
 
 
 def _unwrap(maybe_tensor: torch.Tensor | None) -> torch.Tensor:
-    """Assert ``maybe_tensor`` is non-None and return it as a ``torch.Tensor``.
-
-    The dataset's ``__getitem__`` returns a dict where every value is typed
-    ``Tensor | None`` (mel/audio/m2l really are optional depending on read
-    flags; params/noise are unconditionally populated but share the same
-    dict type). Tests that exercise the populated keys go through this
-    helper so pyright narrows the type once, instead of every test
-    inlining ``assert x is not None``.
+    """Assert ``maybe_tensor`` is non-None and narrow it for pyright.
 
     :param maybe_tensor: The dict value to narrow.
-
     :return: The same tensor, now typed as non-None.
-    :rtype: torch.Tensor
     """
     assert maybe_tensor is not None
     return maybe_tensor
@@ -225,11 +217,6 @@ def single_h5(tmp_path: Path) -> Path:
     return h5_path
 
 
-# --------------------------------------------------------------------------- #
-# VSTDataset — fake mode                                                      #
-# --------------------------------------------------------------------------- #
-
-
 class TestVSTDatasetFakeMode:
     """``fake=True`` skips HDF5 entirely and returns randomly-generated tensors."""
 
@@ -284,9 +271,8 @@ class TestVSTDatasetFakeMode:
 
     def test_fake_mode_rescale_params_maps_into_minus_one_to_one(self) -> None:
         """``rescale_params=True`` rescales ``torch.rand`` from [0, 1) into [-1, 1)."""
-        # read_mel=False + read_audio=False skips the ~190 MB mel/audio
-        # allocations that fake mode would otherwise build at batch_size=128;
-        # this test only inspects params.
+        # batch_size=128 with mel/audio enabled allocates ~190 MB; disable both
+        # since this test only inspects params.
         dataset = VSTDataset(
             "ignored",
             batch_size=128,
@@ -298,9 +284,8 @@ class TestVSTDatasetFakeMode:
         params = _unwrap(dataset[0]["params"])
         assert params.min().item() >= -1.0
         assert params.max().item() < 1.0
-        # With 128*num_params samples from rand()*2 - 1 we will reach into
-        # [-1, 0) and [0, 1) with vanishing probability of staying on one side —
-        # pin the rescaling behavior, not just the bounds.
+        # 128*num_params samples make staying on one side vanishingly unlikely;
+        # assert both to pin the rescaling, not just the bounds.
         assert params.min().item() < 0.0
         assert params.max().item() > 0.0
 
@@ -343,11 +328,6 @@ class TestVSTDatasetFakeMode:
         assert _unwrap(item["noise"]).shape == (2, 92)
 
 
-# --------------------------------------------------------------------------- #
-# VSTDataset — real HDF5 mode                                                 #
-# --------------------------------------------------------------------------- #
-
-
 class TestVSTDatasetH5Mode:
     """HDF5-backed path: indexing, type conversion, OT routing, normalization."""
 
@@ -357,6 +337,18 @@ class TestVSTDatasetH5Mode:
         :param single_h5: Fixture-provided single-shard HDF5 path.
         """
         dataset = VSTDataset(single_h5, batch_size=3, ot=False)
+        assert len(dataset) == 8 // 3
+
+    def test_len_counts_param_array_rows_without_audio_column(self, tmp_path: Path) -> None:
+        """``__len__`` counts rows off ``param_array`` so an audio-less shard still works.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        h5_path = tmp_path / "train.h5"
+        _write_h5_shard(h5_path, num_rows=8)
+        with h5py.File(h5_path, "a") as f:
+            del f["audio"]
+        dataset = VSTDataset(h5_path, batch_size=3, ot=False, use_saved_mean_and_variance=False)
         assert len(dataset) == 8 // 3
 
     def test_getitem_int_returns_batch_size_slice(self, single_h5: Path) -> None:
@@ -588,9 +580,8 @@ class TestVSTDatasetH5Mode:
         mock_match.assert_called_once()
         positional = mock_match.call_args.args
         assert len(positional) == 4
-        # Positional contract: (noise, params, mel_spec, audio). Pin each slot's
-        # shape so a regression that swaps positions is caught — bare arity does
-        # not distinguish `(noise, params, audio, mel_spec)` from the correct order.
+        # Pin per-slot shapes: bare arity can't distinguish a swapped
+        # (mel_spec, audio) order from the (noise, params, mel_spec, audio) contract.
         noise, params, mel_spec, audio = positional
         assert isinstance(noise, torch.Tensor) and noise.shape == (2, _NUM_PARAMS)
         assert isinstance(params, torch.Tensor) and params.shape == (2, _NUM_PARAMS)
@@ -649,9 +640,93 @@ class TestVSTDatasetH5Mode:
         assert set(item.keys()) == set(_ALL_TENSOR_KEYS)
 
 
-# --------------------------------------------------------------------------- #
-# WithinChunkShuffledSampler                                                  #
-# --------------------------------------------------------------------------- #
+def _reference_getitem(
+    dataset: VSTDataset, idx: int, *, seed: int
+) -> dict[str, torch.Tensor | None]:
+    """Apply the batch math against the same shard independently of ``__getitem__``.
+
+    Seeds the global RNG before the noise draw; a seeded ``VSTDataset.generator``
+    reproduces this bit-for-bit, so a match proves the delegation is a no-op.
+
+    :param dataset: Open HDF5-backed dataset to read columns from.
+    :param idx: Batch index to read.
+    :param seed: Global-RNG seed for the noise draw.
+    :raises ValueError: If ``dataset`` has no open shard handle.
+    :returns: The batch dict ``__getitem__`` is expected to return.
+    """
+    shard = dataset.dataset_file
+    if shard is None:
+        raise ValueError("dataset has no open shard handle")
+    if dataset.read_audio:
+        audio = dataset._index_dataset(shard["audio"], idx)
+        audio = torch.from_numpy(audio).to(dtype=torch.float32)
+    else:
+        audio = None
+
+    if dataset.read_mel:
+        mel_spec = dataset._index_dataset(shard["mel_spec"], idx)
+        if dataset.mean is not None and dataset.std is not None:
+            mel_spec = (mel_spec - dataset.mean) / dataset.std
+        mel_spec = torch.from_numpy(mel_spec).to(dtype=torch.float32)
+    else:
+        mel_spec = None
+
+    if dataset.read_m2l:
+        m2l = dataset._index_dataset(shard["music2latent"], idx)
+        m2l = torch.from_numpy(m2l).to(dtype=torch.float32)
+    else:
+        m2l = None
+
+    param_array = dataset._index_dataset(shard["param_array"], idx)
+    if dataset.rescale_params:
+        param_array = param_array * 2 - 1
+    param_array = torch.from_numpy(param_array).to(dtype=torch.float32)
+    with torch.random.fork_rng():
+        torch.manual_seed(seed)
+        noise = torch.randn_like(param_array)
+    if dataset.ot:
+        noise, param_array, mel_spec, audio = _hungarian_match(noise, param_array, mel_spec, audio)
+
+    return dict(
+        mel_spec=mel_spec.contiguous() if mel_spec is not None else None,
+        m2l=m2l.contiguous() if m2l is not None else None,
+        params=param_array.contiguous(),
+        noise=noise.contiguous(),
+        audio=audio.contiguous() if audio is not None else None,
+    )
+
+
+class TestGetitemNoOpAfterExtraction:
+    """The post-extraction ``__getitem__`` matches the independent golden."""
+
+    @pytest.mark.parametrize("idx", [0, 1])
+    def test_getitem_unchanged_after_extraction(self, single_h5: Path, idx: int) -> None:
+        """Seeding ``dataset.generator`` reproduces the golden at each batch index.
+
+        :param single_h5: Fixture-provided single-shard HDF5 path.
+        :param idx: Batch index to read; covers more than the first batch so an
+            off-by-one in the ``_read_column`` slicing would surface.
+        """
+        seed = 0
+        dataset = VSTDataset(
+            single_h5,
+            batch_size=4,
+            ot=True,
+            use_saved_mean_and_variance=True,
+            read_audio=True,
+            read_mel=True,
+            read_m2l=True,
+        )
+        golden = _reference_getitem(dataset, idx, seed=seed)
+        dataset.generator.manual_seed(seed)
+        out = dataset[idx]
+        for key in _ALL_TENSOR_KEYS:
+            if golden[key] is None:
+                assert out[key] is None, key
+                continue
+            # atol=rtol=0: the extraction is a pure structural move, so output
+            # must be bit-identical under the matched seed.
+            torch.testing.assert_close(out[key], golden[key], atol=0.0, rtol=0.0)
 
 
 class TestWithinChunkShuffledSampler:
@@ -711,11 +786,6 @@ class TestWithinChunkShuffledSampler:
         assert len(rows) == 5
 
 
-# --------------------------------------------------------------------------- #
-# ShuffledSampler                                                             #
-# --------------------------------------------------------------------------- #
-
-
 class TestShuffledSampler:
     """Global random permutation sampler — no locality guarantees."""
 
@@ -744,11 +814,6 @@ class TestShuffledSampler:
         sampler = ShuffledSampler(batch_size=batch_size, num_batches=num_batches)
         flat = [int(idx) for row in sampler for idx in row]
         assert sorted(flat) == list(range(batch_size * num_batches))
-
-
-# --------------------------------------------------------------------------- #
-# ShiftedBatchSampler                                                         #
-# --------------------------------------------------------------------------- #
 
 
 class TestShiftedBatchSampler:
@@ -787,9 +852,8 @@ class TestShiftedBatchSampler:
 
     def test_offset_can_vary_across_epochs(self) -> None:
         """A fresh ``iter()`` redraws the offset — over many epochs we see >1 distinct value."""
-        # Seed Python's random + numpy so the test is deterministic but still
-        # exercises the redraw. Save/restore the global states so other tests
-        # in the same pytest-xdist worker don't see a leaked seed.
+        # Seed global RNGs for determinism; save/restore so xdist workers don't
+        # see a leaked state.
         py_state = random.getstate()
         np_state = np.random.get_state()
         try:
@@ -814,11 +878,6 @@ class TestShiftedBatchSampler:
             for start, _ in ShiftedBatchSampler(batch_size=batch_size, num_batches=num_batches)
         )
         assert pair_indices == list(range(num_batches - 1))
-
-
-# --------------------------------------------------------------------------- #
-# VSTDataModule                                                               #
-# --------------------------------------------------------------------------- #
 
 
 class TestVSTDataModule:
