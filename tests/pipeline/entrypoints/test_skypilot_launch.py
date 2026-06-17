@@ -24,7 +24,7 @@ import yaml
 
 from synth_setter.pipeline.constants import WORKER_SPEC_URI_ENV
 from synth_setter.pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
-from synth_setter.pipeline.schemas.r2_credentials import RCLONE_ENV_KEYS
+from synth_setter.pipeline.schemas.object_storage import RCLONE_ENV_KEYS
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
 from synth_setter.pipeline.skypilot_launch import (
     _SECRET_WORKER_ENV_KEYS,
@@ -44,14 +44,12 @@ from synth_setter.resources import configs_dir
 
 @pytest.fixture()
 def env_file(tmp_path: Path) -> Path:
-    """Write a minimal valid .env with the rclone-R2 keys the launcher forwards."""
+    """Write a minimal valid .env with canonical storage settings."""
     path = tmp_path / ".env"
     path.write_text(
-        "RCLONE_CONFIG_R2_TYPE=s3\n"
-        "RCLONE_CONFIG_R2_PROVIDER=Cloudflare\n"
-        "RCLONE_CONFIG_R2_ACCESS_KEY_ID=key\n"
-        "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=secret\n"
-        "RCLONE_CONFIG_R2_ENDPOINT=https://acct.r2.cloudflarestorage.com\n"
+        "SYNTH_SETTER_STORAGE_ACCESS_KEY_ID=key\n"
+        "SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY=secret\n"
+        "SYNTH_SETTER_STORAGE_ENDPOINT_URL=https://acct.r2.cloudflarestorage.com\n"
     )
     return path
 
@@ -66,6 +64,9 @@ def clear_worker_env_from_process(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     for key in _WORKER_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
+    for key in list(os.environ):
+        if key.startswith("SYNTH_SETTER_STORAGE_"):
+            monkeypatch.delenv(key, raising=False)
 
 
 @pytest.fixture(autouse=True)
@@ -206,7 +207,7 @@ class TestResolveWorkerEnvGitRefValidation:
             resolve_worker_env(None)
 
 
-class TestResolveWorkerEnvR2RemoteConstants:
+class TestResolveWorkerEnvRcloneProjection:
     """Cover rclone-constant defaulting for the R2 type and provider keys.
 
     Targets ``RCLONE_CONFIG_R2_TYPE`` and ``RCLONE_CONFIG_R2_PROVIDER``. These are constants
@@ -215,70 +216,88 @@ class TestResolveWorkerEnvR2RemoteConstants:
     non-Cloudflare R2-compatible setups (e.g. self-hosted MinIO test rigs).
     """
 
-    def test_type_and_provider_default_when_unset(self) -> None:
-        """Without TYPE/PROVIDER in env or .env, the launcher fills the rclone constants."""
+    def test_type_and_provider_default_when_storage_unset(self) -> None:
+        """Without storage settings, the launcher still fills rclone structural constants."""
         resolved = resolve_worker_env(None)
         assert resolved["RCLONE_CONFIG_R2_TYPE"] == "s3"
         assert resolved["RCLONE_CONFIG_R2_PROVIDER"] == "Cloudflare"
 
-    def test_type_override_from_env_wins(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """An explicit override via process env is preserved (not clobbered by the default).
+    def test_legacy_rclone_type_override_is_ignored(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Implementation-specific rclone env is not a canonical storage setting.
 
         :param monkeypatch: Pytest fixture for env/attribute mocking.
         """
         monkeypatch.setenv("RCLONE_CONFIG_R2_TYPE", "s3-other")
         resolved = resolve_worker_env(None)
-        assert resolved["RCLONE_CONFIG_R2_TYPE"] == "s3-other"
+        assert resolved["RCLONE_CONFIG_R2_TYPE"] == "s3"
 
-    def test_provider_override_from_env_file_wins(self, tmp_path: Path) -> None:
-        """An explicit override via ``.env`` is preserved (not clobbered by the default).
+    def test_storage_settings_project_to_rclone_env(self, tmp_path: Path) -> None:
+        """Canonical storage settings become the rclone worker env block.
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
         """
         env_file = tmp_path / ".env"
-        env_file.write_text("RCLONE_CONFIG_R2_PROVIDER=Other\n")
+        env_file.write_text(
+            "SYNTH_SETTER_STORAGE_ACCESS_KEY_ID=ak\n"
+            "SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY=sk\n"
+            "SYNTH_SETTER_STORAGE_ENDPOINT_URL=https://acct.r2.cloudflarestorage.com\n"
+        )
         resolved = resolve_worker_env(env_file)
-        assert resolved["RCLONE_CONFIG_R2_PROVIDER"] == "Other"
+        assert resolved["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "ak"
+        assert resolved["RCLONE_CONFIG_R2_SECRET_ACCESS_KEY"] == "sk"  # noqa: S105
+        assert resolved["RCLONE_CONFIG_R2_ENDPOINT"] == "https://acct.r2.cloudflarestorage.com"
 
     def test_blank_secret_in_env_file_is_not_forwarded(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A blank ``.env`` value is treated as absent, never forwarding an empty credential.
+        """A blank storage ``.env`` value is treated as absent, never forwarding a credential.
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
         :param monkeypatch: Pytest fixture used to clear the process-env fallback.
         """
         monkeypatch.delenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", raising=False)
         env_file = tmp_path / ".env"
-        env_file.write_text("RCLONE_CONFIG_R2_ACCESS_KEY_ID=\n")
+        env_file.write_text(
+            "SYNTH_SETTER_STORAGE_ACCESS_KEY_ID=\n"
+            "SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY=sk\n"
+            "SYNTH_SETTER_STORAGE_ENDPOINT_URL=https://acct.r2.cloudflarestorage.com\n"
+        )
         resolved = resolve_worker_env(env_file)
         assert "RCLONE_CONFIG_R2_ACCESS_KEY_ID" not in resolved
 
     def test_blank_env_file_value_falls_back_to_process_env(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A blank ``.env`` entry does not mask a real process-env value — the fallback is used.
+        """A blank storage ``.env`` entry does not mask a real process-env value.
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
         :param monkeypatch: Pytest fixture used to set the process-env fallback.
         """
-        monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", "from-process-env")
+        monkeypatch.setenv("SYNTH_SETTER_STORAGE_ACCESS_KEY_ID", "from-process-env")
+        monkeypatch.setenv("SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY", "sk")
+        monkeypatch.setenv(
+            "SYNTH_SETTER_STORAGE_ENDPOINT_URL", "https://acct.r2.cloudflarestorage.com"
+        )
         env_file = tmp_path / ".env"
-        env_file.write_text("RCLONE_CONFIG_R2_ACCESS_KEY_ID=\n")
+        env_file.write_text("SYNTH_SETTER_STORAGE_ACCESS_KEY_ID=\n")
         resolved = resolve_worker_env(env_file)
         assert resolved["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "from-process-env"
 
     def test_padded_secret_in_env_file_is_trimmed(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A surrounding-whitespace ``.env`` value is forwarded trimmed, not verbatim.
+        """A surrounding-whitespace storage ``.env`` value is forwarded trimmed.
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
         :param monkeypatch: Pytest fixture used to clear the process-env fallback.
         """
         monkeypatch.delenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", raising=False)
         env_file = tmp_path / ".env"
-        env_file.write_text('RCLONE_CONFIG_R2_ACCESS_KEY_ID="  ak  "\n')
+        env_file.write_text(
+            'SYNTH_SETTER_STORAGE_ACCESS_KEY_ID="  ak  "\n'
+            "SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY=sk\n"
+            "SYNTH_SETTER_STORAGE_ENDPOINT_URL=https://acct.r2.cloudflarestorage.com\n"
+        )
         resolved = resolve_worker_env(env_file)
         assert resolved["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "ak"
 
@@ -622,13 +641,13 @@ class TestSecretWorkerEnvKeys:
     def test_excludes_non_secret_rclone_constants(self) -> None:
         """Verify TYPE / PROVIDER (non-secret rclone config) are excluded from the subset."""
         from synth_setter.pipeline.skypilot_launch import (
-            _R2_RCLONE_CONSTANTS,
+            _RCLONE_STRUCTURAL_CONSTANTS,
             _SECRET_WORKER_ENV_KEYS,
         )
 
         assert "RCLONE_CONFIG_R2_TYPE" not in _SECRET_WORKER_ENV_KEYS
         assert "RCLONE_CONFIG_R2_PROVIDER" not in _SECRET_WORKER_ENV_KEYS
-        for key in _R2_RCLONE_CONSTANTS:
+        for key in _RCLONE_STRUCTURAL_CONSTANTS:
             assert key not in _SECRET_WORKER_ENV_KEYS
 
     def test_includes_runtime_secret_keys(self) -> None:
@@ -894,7 +913,7 @@ class TestDispatchViaSkypilot:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """No rclone creds in env → fail loudly rather than launching a task that can't upload.
+        """No storage settings in env → fail loudly rather than launching a task that can't upload.
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
         :param monkeypatch: Pytest fixture for env/attribute mocking.
@@ -908,7 +927,7 @@ class TestDispatchViaSkypilot:
             cmd="exec synth-setter-generate-dataset-from-hydra experiment=foo",
             env_file=None,
         )
-        with pytest.raises(ValueError, match="No worker env vars resolved"):
+        with pytest.raises(ValueError, match="No object storage settings resolved"):
             dispatch_via_skypilot(sky_cfg)
 
     @pytest.mark.parametrize(
@@ -919,7 +938,7 @@ class TestDispatchViaSkypilot:
             ({"api_server": "https://api.example", "local": True}, "mutually exclusive"),
             ({"job_name": "has/slash"}, "job_name must match"),
             ({"worker_image_tag": "bad tag"}, "worker_image_tag must match"),
-            ({"env_file": None}, "No worker env vars"),
+            ({"env_file": None}, "No object storage settings"),
         ],
         ids=[
             "missing-compute-template",

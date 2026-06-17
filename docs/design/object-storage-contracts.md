@@ -62,7 +62,7 @@ class StorageSettings(BaseSettings):
     access_key_id: SecretStr
     secret_access_key: SecretStr
     default_bucket: str | None = None
-    rclone_remote: str = "object_store"
+    rclone_remote: str = "r2"  # current backend remote name; not app model
 
     def to_config(self) -> StorageConfig: ...
 ```
@@ -76,7 +76,7 @@ SYNTH_SETTER_STORAGE_REGION=auto
 SYNTH_SETTER_STORAGE_ACCESS_KEY_ID=...
 SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY=...
 SYNTH_SETTER_STORAGE_DEFAULT_BUCKET=intermediate-data
-SYNTH_SETTER_STORAGE_RCLONE_REMOTE=object_store
+SYNTH_SETTER_STORAGE_RCLONE_REMOTE=r2
 ```
 
 ### `StorageConfig`
@@ -140,7 +140,6 @@ class DatasetStorageLayout(BaseModel):
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
     root: ObjectLocation
-    prefix_root: str = "data"
 
     def input_spec(self) -> ObjectLocation: ...
     def config_yaml(self) -> ObjectLocation: ...
@@ -167,7 +166,6 @@ storage:
   root:
     bucket: intermediate-data
     key: data/task-name/run-id/
-  prefix_root: data
 ```
 
 The old `r2: R2Location` field and legacy `r2_bucket` / `r2_prefix_root` /

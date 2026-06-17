@@ -60,9 +60,15 @@ import sky
 import sky.jobs  # managed-jobs SDK: sky.jobs.launch / tail_logs / cancel
 import yaml
 from dotenv import dotenv_values
+from pydantic import ValidationError
 
 from synth_setter.pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
-from synth_setter.pipeline.schemas.r2_credentials import RCLONE_ENV_KEYS, STRUCTURAL_DEFAULTS
+from synth_setter.pipeline.schemas.object_storage import (
+    RCLONE_ENV_KEYS,
+    RCLONE_REQUIRED_ENV_KEYS,
+    RCLONE_STRUCTURAL_DEFAULTS,
+    storage_settings_from_sources,
+)
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
 from synth_setter.workspace import operator_workspace
 
@@ -90,14 +96,12 @@ _WORKER_ENV_KEYS: tuple[str, ...] = (
     "WORKER_GIT_REF",
 )
 
-# Cloudflare R2 structural constants (not secrets); a caller override wins.
-_R2_RCLONE_CONSTANTS: Mapping[str, str] = STRUCTURAL_DEFAULTS
+# rclone structural constants (not secrets); produced from storage config projection.
+_RCLONE_STRUCTURAL_CONSTANTS: Mapping[str, str] = RCLONE_STRUCTURAL_DEFAULTS
 
 # Secrets-only subset of _WORKER_ENV_KEYS: TYPE/PROVIDER default in, so this
 # subset is what signals whether any creds were actually resolved.
-_SECRET_WORKER_ENV_KEYS: tuple[str, ...] = tuple(
-    k for k in _WORKER_ENV_KEYS if k not in _R2_RCLONE_CONSTANTS
-)
+_SECRET_WORKER_ENV_KEYS: tuple[str, ...] = RCLONE_REQUIRED_ENV_KEYS
 
 # sky.jobs.tail_logs(follow=True) rc: 0 = SUCCEEDED, 100 = non-SUCCEEDED terminal.
 _TAIL_LOGS_RC_SUCCESS = 0
@@ -165,12 +169,12 @@ def load_worker_env(path: Path) -> dict[str, str]:
 def resolve_worker_env(env_file: Path | None) -> dict[str, str]:
     """Resolve the launcher's `_WORKER_ENV_KEYS` from .env and process env.
 
-    For each key in `_WORKER_ENV_KEYS`, the value is taken from `env_file` if
-    that file sets it non-blank, else from the launcher's process env if set
-    non-blank, else skipped. Blank/whitespace counts as absent (matching
-    `R2Credentials.from_env`) so a `.env` line `KEY=` never forwards an empty
-    credential to a worker. Skipped keys keep the template's default (typically
-    the empty string) — `task.update_envs` only overrides keys resolved here.
+    Storage settings are loaded from canonical ``SYNTH_SETTER_STORAGE_*`` keys
+    and projected into the ``RCLONE_CONFIG_R2_*`` keys the current worker
+    templates consume. Blank/whitespace counts as absent, so a `.env` line
+    `KEY=` never forwards an empty credential to a worker. Missing storage
+    credentials leave only the structural rclone defaults, letting
+    ``dispatch_via_skypilot`` produce the user-facing "no worker env" error.
 
     `.env` is the local-dev source of truth; CI flows pass secrets via
     `docker run -e KEY=VAL` and never touch a .env on disk.
@@ -179,8 +183,12 @@ def resolve_worker_env(env_file: Path | None) -> dict[str, str]:
     if env_file is not None and env_file.is_file():
         file_env = load_worker_env(env_file)
 
-    resolved: dict[str, str] = {}
-    for key in _WORKER_ENV_KEYS:
+    try:
+        resolved: dict[str, str] = storage_settings_from_sources(env_file).to_config().rclone_env()
+    except ValidationError:
+        resolved = dict(_RCLONE_STRUCTURAL_CONSTANTS)
+
+    for key in ("WANDB_API_KEY", "WORKER_GIT_REF"):
         # First non-blank wins, .env over process env; a blank candidate is
         # skipped (not preferred-then-dropped), so a quoted-whitespace `.env`
         # value can't mask a real process-env fallback.
@@ -189,9 +197,6 @@ def resolve_worker_env(env_file: Path | None) -> dict[str, str]:
             if cleaned:
                 resolved[key] = cleaned
                 break
-
-    for key, default in _R2_RCLONE_CONSTANTS.items():
-        resolved.setdefault(key, default)
 
     git_ref = resolved.get("WORKER_GIT_REF", "")
     if git_ref and not _WORKER_GIT_REF_RE.match(git_ref):
@@ -571,10 +576,10 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
     worker_env = resolve_worker_env(env_file_path)
     if not any(k in worker_env for k in _SECRET_WORKER_ENV_KEYS):
         raise ValueError(
-            "No worker env vars resolved. Set the rclone-R2 keys in process env "
-            f"(e.g. via `docker run -e RCLONE_CONFIG_R2_*=...`) or populate "
+            "No object storage settings resolved. Set SYNTH_SETTER_STORAGE_* in process env "
+            f"(e.g. via `docker run -e SYNTH_SETTER_STORAGE_*=...`) or populate "
             f"{env_file_path if env_file_path is not None else '<env_file not set>'}. "
-            f"Expected at least one of: {', '.join(_SECRET_WORKER_ENV_KEYS)}."
+            "Expected access key id, secret access key, and endpoint URL."
         )
     worker_env.update(sky_cfg.extra_envs)
 

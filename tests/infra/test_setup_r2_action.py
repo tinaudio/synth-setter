@@ -17,13 +17,16 @@ from typing import cast
 import pytest
 from workflow_fixtures import load_composite_action
 
-from synth_setter.pipeline.schemas.r2_credentials import SECRET_ENV_KEYS, STRUCTURAL_DEFAULTS
+from synth_setter.pipeline.schemas.object_storage import (
+    RCLONE_REQUIRED_ENV_KEYS,
+    RCLONE_STRUCTURAL_DEFAULTS,
+)
 
 ACTION_NAME = "setup-r2"
 EXPORT_STEP_NAME = "Export R2 credentials"
 INSTALL_STEP_NAME = "Install rclone"
 
-# input name -> the `SECRET_ENV_KEYS` member it supplies.
+# input name -> the `RCLONE_REQUIRED_ENV_KEYS` member it supplies.
 SECRET_INPUTS: dict[str, str] = {
     "access-key-id": "RCLONE_CONFIG_R2_ACCESS_KEY_ID",
     "secret-access-key": "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY",
@@ -88,14 +91,14 @@ def test_setup_r2_declares_required_secret_inputs(project_root: Path) -> None:
 
 
 @pytest.mark.infra
-@pytest.mark.parametrize(("key", "expected"), sorted(STRUCTURAL_DEFAULTS.items()))
+@pytest.mark.parametrize(("key", "expected"), sorted(RCLONE_STRUCTURAL_DEFAULTS.items()))
 def test_setup_r2_exports_structural_literals(project_root: Path, key: str, expected: str) -> None:
     """The export step writes each structural key with its canonical literal.
 
     :param project_root: session fixture from ``tests/infra/conftest.py``.
-    :param key: one of ``STRUCTURAL_DEFAULTS`` (``RCLONE_CONFIG_R2_TYPE`` / ``_PROVIDER``).
+    :param key: one of the rclone structural defaults.
     :param expected: the literal rclone needs (``s3`` / ``Cloudflare``); drift
-        from ``STRUCTURAL_DEFAULTS`` fails here loudly.
+        from ``RCLONE_STRUCTURAL_DEFAULTS`` fails here loudly.
     """
     run = cast(str, _find_step(project_root, EXPORT_STEP_NAME)["run"])
     assert f"{key}={expected}" in run, (
@@ -123,13 +126,13 @@ def test_setup_r2_routes_secrets_through_step_env(
     Interpolating ``${{ inputs.<secret> }}`` straight into a ``run:`` body would
     expose the value to shell history / process listings; passing it through the
     step ``env`` keeps it a masked variable. This pins both that the secret is
-    wired up and that the export key matches a ``SECRET_ENV_KEYS`` member.
+    wired up and that the export key matches a ``RCLONE_REQUIRED_ENV_KEYS`` member.
 
     :param project_root: session fixture from ``tests/infra/conftest.py``.
     :param input_name: composite input carrying the secret.
     :param env_key: the ``RCLONE_CONFIG_R2_*`` key it is exported as.
     """
-    assert env_key in SECRET_ENV_KEYS
+    assert env_key in RCLONE_REQUIRED_ENV_KEYS
     step = _find_step(project_root, EXPORT_STEP_NAME)
     env = cast(dict[str, str], step.get("env") or {})
     referenced = [v for v in env.values() if f"inputs.{input_name}" in v]

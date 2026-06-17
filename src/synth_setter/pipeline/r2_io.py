@@ -1,10 +1,9 @@
-"""R2 object-store I/O primitives shared across pipeline stages.
+"""Object-store I/O primitives shared across pipeline stages.
 
 Wraps `rclone` with a small set of typed helpers so worker, launcher, and CI
-validation code can share one implementation. Resolution of `r2:` is left to
-the caller's environment — the standard `RCLONE_CONFIG_R2_*` vars must be set
-when any of these functions runs; ``ensure_r2_env_loaded`` is the load + validate
-+ auth-check entry point callers use to set them up.
+validation code can share one implementation. The application reads
+``SYNTH_SETTER_STORAGE_*`` settings and projects them to rclone's current
+``RCLONE_CONFIG_R2_*`` remote dialect at the subprocess boundary.
 """
 
 from __future__ import annotations
@@ -17,10 +16,14 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from dotenv import dotenv_values
+from pydantic import ValidationError
 
 from synth_setter.pipeline.constants import R2_URI_SCHEME, RCLONE_REMOTE
-from synth_setter.pipeline.schemas.r2_credentials import ENV_ACCOUNT_ID, R2Credentials
+from synth_setter.pipeline.schemas.object_storage import (
+    STORAGE_REQUIRED_ENV_KEYS,
+    StorageConfig,
+    storage_settings_from_sources,
+)
 
 __all__ = [
     "R2_URI_SCHEME",
@@ -45,6 +48,17 @@ __all__ = [
 
 # IO idle timeout (not wall-clock); directory uploads need more than the 300s per-file default.
 _UPLOAD_DIR_TIMEOUT = "3h"
+
+
+def _storage_config_from_sources(env_file: Path | None = None) -> StorageConfig:
+    try:
+        return storage_settings_from_sources(env_file).to_config()
+    except ValidationError as exc:
+        where = str(env_file) if env_file is not None else "<env_file not set>"
+        raise RuntimeError(
+            f"Object storage settings unresolved after dotenv load ({where}). "
+            f"Expected: {', '.join(STORAGE_REQUIRED_ENV_KEYS)}."
+        ) from exc
 
 
 def _rclone_argv(verb: str, *operands: str, timeout: str = "300s") -> list[str]:
@@ -74,24 +88,20 @@ def _rclone_argv(verb: str, *operands: str, timeout: str = "300s") -> list[str]:
 
 
 def ensure_r2_env_loaded(env_file: Path | None = None) -> None:
-    """Load ``RCLONE_CONFIG_R2_*`` from ``env_file`` into ``os.environ``; validate.
+    """Load storage settings from ``env_file`` into rclone env; validate.
 
     Three-step pre-flight that callers run once before invoking any other helper
     in this module:
 
     1. If ``env_file`` is provided and exists on disk, mirror every non-blank
-       ``RCLONE_CONFIG_R2_`` key plus ``R2_ACCOUNT_ID`` from that dotenv file
-       into ``os.environ``. Blank/whitespace values are skipped (matching the
-       launcher's non-blank precedence) so a ``.env`` line ``KEY=`` never
-       clobbers a real process-env credential.
-    2. Validate via :meth:`R2Credentials.from_env` — the single resolver: blank
-       counts as missing, type/provider default in, and the endpoint is derived
-       from ``R2_ACCOUNT_ID`` when unset. Raises ``RuntimeError`` if a required
-       secret is unset or blank.
-    3. Write the resolved block (:meth:`R2Credentials.rclone_env`) back into
-       ``os.environ``, so the ``rclone lsd r2:`` auth ping reads exactly the
-       stripped, blank-free, default-filled, derived values that were validated —
-       never a raw/blank/padded dotenv value. A non-zero ping exit also raises.
+       ``SYNTH_SETTER_STORAGE_*`` key from that dotenv file into the storage
+       settings view. Blank/whitespace values are skipped so a ``.env`` line
+       ``KEY=`` never clobbers a real process-env credential.
+    2. Validate the provider-neutral settings and build an env-free
+       :class:`StorageConfig`.
+    3. Write the rclone projection (:meth:`StorageConfig.rclone_env`) back into
+       ``os.environ`` so the auth ping and later transfers use the normalized
+       values. A non-zero ping exit also raises.
 
     No-op on the dotenv step if ``env_file`` is ``None`` or doesn't exist; the
     resolution + normalization + auth checks still run against whatever
@@ -99,31 +109,11 @@ def ensure_r2_env_loaded(env_file: Path | None = None) -> None:
 
     :param env_file: Optional dotenv file to merge into ``os.environ`` first
         (typically ``sky_cfg.env_file``).
-    :raises RuntimeError: A required secret key is unset/blank after the load, or
+    :raises RuntimeError: A required setting is unset/blank after the load, or
         ``rclone lsd r2:`` exits non-zero (bad creds, network, etc.).
     """
-    if env_file is not None and env_file.is_file():
-        # R2_ACCOUNT_ID rides along so from_env can derive the endpoint from a
-        # .env-only account id (rclone ignores it; the others it reads directly).
-        # Skip blanks so a `.env` line KEY= can't clobber a real process-env value.
-        for key, value in dotenv_values(env_file).items():
-            relevant = bool(key) and (key.startswith("RCLONE_CONFIG_R2_") or key == ENV_ACCOUNT_ID)
-            if relevant and value and value.strip():
-                os.environ[key] = value
-
-    # Single resolver for validation (blank-aware, account-id derivation), so this
-    # can't drift from r2_storage_options.
-    try:
-        creds = R2Credentials.from_env()
-    except RuntimeError as exc:
-        where = str(env_file) if env_file is not None else "<env_file not set>"
-        raise RuntimeError(
-            f"R2 credentials unresolved after dotenv load ({where}): {exc}"
-        ) from exc
-    # Normalize os.environ to the resolved values so the auth ping (and any later
-    # rclone call) reads what was validated, not a present-but-blank/padded env var
-    # that os.environ.setdefault or a raw dotenv copy would otherwise leave behind.
-    os.environ.update(creds.rclone_env())
+    config = _storage_config_from_sources(env_file)
+    os.environ.update(config.rclone_env())
 
     # Auth ping — fail fast on bad creds instead of several seconds into the first
     # real operation. Cheap (<1 RTT): `rclone lsd r2:` lists visible buckets.
@@ -151,14 +141,13 @@ def is_r2_reachable() -> bool:
     test then calls :func:`ensure_r2_env_loaded` and hits a hard
     ``RuntimeError`` instead of the intended auto-skip.
 
-    :returns: ``True`` when rclone is on PATH AND :meth:`R2Credentials.from_env`
-        resolves (secrets present and non-blank) AND a credentialled
-        ``rclone lsd r2:`` exits 0; ``False`` otherwise.
+    :returns: ``True`` when rclone is on PATH, storage settings resolve, and a
+        credentialled ``rclone lsd r2:`` exits 0; ``False`` otherwise.
     """
     if shutil.which("rclone") is None:
         return False
     try:
-        R2Credentials.from_env()
+        _storage_config_from_sources()
     except RuntimeError:
         return False
     try:
@@ -176,14 +165,13 @@ def is_r2_reachable() -> bool:
 def r2_storage_options() -> dict[str, str]:
     """Build Lance's object-store ``storage_options`` for the R2 bucket from env.
 
-    Delegates to :meth:`R2Credentials.from_env`, which reads the same
-    ``RCLONE_CONFIG_R2_*`` vars rclone uses (call :func:`ensure_r2_env_loaded`
-    first) and raises ``RuntimeError`` if a required secret is unset or blank.
+    Reads ``SYNTH_SETTER_STORAGE_*`` and raises ``RuntimeError`` if a required
+    setting is unset or blank.
 
     :returns: ``{access_key_id, secret_access_key, endpoint, region}`` for
         ``lance.dataset`` / ``lance.write_dataset``.
     """
-    return R2Credentials.from_env().lance_storage_options()
+    return _storage_config_from_sources().lance_storage_options()
 
 
 def is_r2_uri(uri: str) -> bool:
