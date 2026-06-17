@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
+from loguru import logger as loguru_logger
 from omegaconf import DictConfig, OmegaConf
 from pyloudnorm import Meter
 
@@ -45,6 +46,10 @@ if TYPE_CHECKING:
     from wandb.sdk.wandb_run import Run
 
 logger = logging.getLogger(__name__)
+
+# stdlib logging is this tool's own logger (project rule); the loguru handle is
+# only used to mute the shared compute_mss INFO line during the pairwise loop.
+_MSS_LOGGER = "synth_setter.evaluation.compute_audio_metrics"
 
 # PR #706 threshold: identical-param renders sit well under this; the junk render
 # pushed the worst pair to ~21, ~6x the clean per-pair value.
@@ -236,19 +241,22 @@ def _load_render_config(spec_name: str) -> DictConfig:
     :param spec_name: Param-spec registry key, also the render config stem.
     :returns: The merged render config (bases first, spec overrides last).
     :raises FileNotFoundError: No render config exists for ``spec_name``.
+    :raises TypeError: The config (or a base) is a sequence, not a mapping.
     """
     config_path = _RENDER_CONFIG_DIR / f"{spec_name}.yaml"
     if not config_path.is_file():
         raise FileNotFoundError(f"no render config for spec {spec_name!r} at {config_path}")
     cfg = OmegaConf.load(config_path)
-    assert isinstance(cfg, DictConfig)
+    if not isinstance(cfg, DictConfig):
+        raise TypeError(f"render config {config_path} must be a mapping, got {type(cfg).__name__}")
     bases = cfg.pop("defaults", [])
     merged = OmegaConf.create({})
     for base in bases:
         if isinstance(base, str):
             merged = OmegaConf.merge(merged, _load_render_config(base))
     merged = OmegaConf.merge(merged, cfg)
-    assert isinstance(merged, DictConfig)
+    if not isinstance(merged, DictConfig):
+        raise TypeError(f"merged render config for {config_path} is not a mapping")
     return merged
 
 
@@ -345,7 +353,7 @@ def resolve_patch(spec_name: str) -> PatchSpec:
             return patch
         logger.debug("draw %d: %.1f LUFS below floor, redrawing", draw, loudness)
     raise RuntimeError(
-        f"no patch cleared {settings.min_loudness_db} dB in {_MAX_PATCH_DRAWS} draws "
+        f"no patch cleared {settings.min_loudness_db} LUFS in {_MAX_PATCH_DRAWS} draws "
         f"for {spec_name!r}"
     )
 
@@ -368,6 +376,9 @@ def run(
     patch = resolve_patch(spec_name)
     wandb_run = _init_wandb(spec_name, depths) if wandb_enabled else None
     verdicts: dict[int, Verdict] = {}
+    # compute_mss emits an INFO line per call; mute it around the O(depth^2)
+    # pairwise loop so the verdict table isn't buried, then restore.
+    loguru_logger.disable(_MSS_LOGGER)
     try:
         for depth in depths:
             reused = all_pairs_worst_mss(render_reusing_one_plugin(patch, depth))
@@ -382,6 +393,7 @@ def run(
             if wandb_run is not None:
                 _log_depth_to_wandb(wandb_run, depth, reused, reloaded_max)
     finally:
+        loguru_logger.enable(_MSS_LOGGER)
         if wandb_run is not None:
             wandb_run.finish()
     return verdicts
