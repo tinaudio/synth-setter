@@ -27,6 +27,7 @@ from synth_setter.data.vst.shapes import (
 from synth_setter.pipeline.data.add_preview_columns import (
     AUDIO_MP3_FIELD,
     AUDIO_UUID_FIELD,
+    _encode_preview_columns,
     add_preview_columns,
     audio_uuid,
     encode_audio_to_mp3,
@@ -265,6 +266,51 @@ def test_audio_uuid_matches_pinned_value_for_fixed_input() -> None:
     on-disk ids are a stable contract that must not drift silently.
     """
     assert audio_uuid(np.zeros((1, 4), dtype=np.float16)) == "34ef8dee-3474-5863-85cf-d299a7827175"
+
+
+def test__encode_preview_columns_non_tensor_audio_column_raises() -> None:
+    """A non-tensor ``audio`` column is rejected before any row is encoded.
+
+    The guard is unreachable through a real Lance round-trip (the projection
+    always yields a ``FixedShapeTensorArray``), so a direct call pins the
+    contract and the type named in its message.
+    """
+    batch = pa.record_batch([pa.array([[1.0, 2.0], [3.0, 4.0]])], names=[AUDIO_FIELD])
+
+    with pytest.raises(ValueError, match="fixed-shape tensor"):
+        _encode_preview_columns(batch, _SAMPLE_RATE, 128)
+
+
+def test__encode_preview_columns_row_failure_names_offending_row_index(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A row that fails to encode raises a ValueError naming that row's index.
+
+    The wrapper is the only place the offending row index is surfaced, and a valid shard never
+    trips it, so the failure is injected into the per-row encoder. The assertion is on the real
+    wrapped message, not the stub.
+
+    :param monkeypatch: Pytest fixture replacing the per-row MP3 encoder so the second row raises
+        mid-batch.
+    """
+    batch = pa.record_batch(
+        [pa.FixedShapeTensorArray.from_numpy_ndarray(_sine_rows())], names=[AUDIO_FIELD]
+    )
+    outcomes = iter([b"ok", RuntimeError("boom"), b"ok"])
+
+    def _encode_with_second_row_failing(*_args: object) -> bytes:
+        outcome = next(outcomes)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_preview_columns.encode_audio_to_mp3",
+        _encode_with_second_row_failing,
+    )
+
+    with pytest.raises(ValueError, match="row 1"):
+        _encode_preview_columns(batch, _SAMPLE_RATE, 128)
 
 
 def test_add_preview_columns_adds_binary_column_for_every_row(tmp_path: Path) -> None:
