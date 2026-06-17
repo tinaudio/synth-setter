@@ -5892,6 +5892,7 @@ dev = [
     { name = "click" },
     { name = "dask", extra = ["distributed"] },
     { name = "dtw-python" },
+    { name = "duckdb" },
     { name = "einops" },
     { name = "griffe-pydantic" },
     { name = "h5py" },
@@ -5970,6 +5971,7 @@ metrics = [
     { name = "pot" },
 ]
 notebooks = [
+    { name = "duckdb" },
     { name = "smoosense", extra = ["emb", "jupyter"] },
 ]
 runtime = [
@@ -6105,6 +6107,7 @@ dev = [
     { name = "click", specifier = "<8.2" },
     { name = "dask", extras = ["distributed"] },
     { name = "dtw-python", specifier = "==1.7.4" },
+    { name = "duckdb", specifier = ">=1.5.4" },
     { name = "einops" },
     { name = "griffe-pydantic" },
     { name = "h5py" },
@@ -6176,7 +6179,10 @@ metrics = [
     { name = "pesto-pitch", specifier = "==2.0.1" },
     { name = "pot" },
 ]
-notebooks = [{ name = "smoosense", extras = ["jupyter", "emb"] }]
+notebooks = [
+    { name = "duckdb", specifier = ">=1.5.4" },
+    { name = "smoosense", extras = ["jupyter", "emb"] },
+]
 runtime = [
     { name = "click", specifier = "<8.2" },
     { name = "dask", extras = ["distributed"] },

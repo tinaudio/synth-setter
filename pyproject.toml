@@ -179,6 +179,7 @@ metrics = [
   "einops",
 ]
 notebooks = [
+  "duckdb>=1.5.4",
   "smoosense[jupyter,emb]",
 ]
 util = [
