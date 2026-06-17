@@ -112,17 +112,16 @@ def _decode_mp3(payload: bytes) -> tuple[np.ndarray, int]:
         return f.read(f.frames), int(f.samplerate)
 
 
-def _read_mp3_blobs(uri: Path, indices: list[int]) -> list[bytes]:
-    """Read back ``audio_mp3`` blob cells as raw MP3 bytes via Lance's blob API.
+def _read_mp3_binary_values(uri: Path, indices: list[int]) -> list[bytes]:
+    """Read back ``audio_mp3`` cells as raw MP3 bytes through the normal Arrow path.
 
     :param uri: The ``.lance`` dataset directory.
     :param indices: Row indices to fetch, in the order returned.
     :returns: Per-row MP3 byte strings, in ``indices`` order.
     """
     dataset = lance.dataset(str(uri))
-    return [
-        blob.readall() for blob in dataset.take_blobs(blob_column=AUDIO_MP3_FIELD, indices=indices)
-    ]
+    table = dataset.take(indices, columns=[AUDIO_MP3_FIELD])
+    return table.column(AUDIO_MP3_FIELD).to_pylist()
 
 
 def test_encode_audio_to_mp3_contains_frame_sync() -> None:
@@ -268,8 +267,8 @@ def test_audio_uuid_matches_pinned_value_for_fixed_input() -> None:
     assert audio_uuid(np.zeros((1, 4), dtype=np.float16)) == "34ef8dee-3474-5863-85cf-d299a7827175"
 
 
-def test_add_preview_columns_adds_blob_column_for_every_row(tmp_path: Path) -> None:
-    """Every row gains a decodable ``audio_mp3`` blob cell; source columns and row count unchanged.
+def test_add_preview_columns_adds_binary_column_for_every_row(tmp_path: Path) -> None:
+    """Every row gains decodable ``audio_mp3`` bytes; source columns and row count unchanged.
 
     :param tmp_path: Pytest fixture providing a fresh test directory.
     """
@@ -282,9 +281,9 @@ def test_add_preview_columns_adds_blob_column_for_every_row(tmp_path: Path) -> N
     ds = lance.dataset(str(uri))
     for field in _SOURCE_FIELDS:
         assert ds.schema.field(field).type == before[field]
-    assert ds.schema.field(AUDIO_MP3_FIELD).type == lance.blob_field(AUDIO_MP3_FIELD).type
+    assert ds.schema.field(AUDIO_MP3_FIELD).type == pa.binary()
     assert ds.count_rows() == _ROWS
-    payloads = _read_mp3_blobs(uri, list(range(_ROWS)))
+    payloads = _read_mp3_binary_values(uri, list(range(_ROWS)))
     assert all(len(p) > 0 for p in payloads)
     # A decodable cell proves the batch_udf wrote a real MP3, not arbitrary bytes.
     samples, _ = _decode_mp3(payloads[0])
@@ -338,7 +337,7 @@ def test_add_preview_columns_uses_sample_rate_from_metadata(tmp_path: Path) -> N
 
     add_preview_columns(uri)
 
-    first = _read_mp3_blobs(uri, [0])[0]
+    first = _read_mp3_binary_values(uri, [0])[0]
     _, decoded_rate = _decode_mp3(first)
     assert decoded_rate == 16000
 

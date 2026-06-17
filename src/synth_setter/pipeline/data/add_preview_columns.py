@@ -5,8 +5,8 @@ Backfills two derived columns onto a dataset written by
 single Lance ``add_columns`` transaction:
 
 - ``audio_mp3`` — each row's ``audio`` tensor encoded to a CBR MP3 (pedalboard),
-  stored as a Lance blob v2 column tagged ``mime_type: audio/mpeg`` so Lance
-  viewers auto-play a per-row preview.
+  stored as an Arrow binary column tagged ``mime_type: audio/mpeg`` so viewers
+  can scan the table through DuckDB without Lance blob support.
 - ``audio_uuid`` — a deterministic UUIDv5 fingerprint of the same ``audio`` bytes,
   so the same rendered waveform always maps to the same id (content-addressed).
 
@@ -99,7 +99,7 @@ def _encode_preview_columns(
     :param batch: Record batch projecting the ``audio`` fixed-shape tensor column.
     :param sample_rate: Playback rate in Hz every row is encoded at.
     :param bitrate_kbps: Constant MP3 bitrate in kbps for every row.
-    :returns: A two-column batch (``audio_mp3`` blob array, ``audio_uuid`` string
+    :returns: A two-column batch (``audio_mp3`` binary array, ``audio_uuid`` string
         array), one cell per input row, in batch row order.
     :raises ValueError: The ``audio`` column is not a fixed-shape tensor column,
         or a row fails to encode (the message names the offending row index).
@@ -108,7 +108,7 @@ def _encode_preview_columns(
     if not isinstance(column, pa.FixedShapeTensorArray):
         raise ValueError(f"{AUDIO_FIELD!r} must be a fixed-shape tensor column, got {column.type}")
     rows = column.to_numpy_ndarray()
-    mp3_blobs = []
+    mp3_payloads = []
     uuids = []
     for row_index, row in enumerate(rows):
         try:
@@ -119,10 +119,10 @@ def _encode_preview_columns(
             ) from exc
         # Append as a pair only after the encode succeeds, so a failed row never
         # leaves the two columns at mismatched lengths.
-        mp3_blobs.append(mp3)
+        mp3_payloads.append(mp3)
         uuids.append(audio_uuid(row))
     return pa.record_batch(
-        [lance.blob_array(mp3_blobs), pa.array(uuids, type=pa.string())],
+        [pa.array(mp3_payloads, type=pa.binary()), pa.array(uuids, type=pa.string())],
         names=[AUDIO_MP3_FIELD, AUDIO_UUID_FIELD],
     )
 
@@ -156,13 +156,13 @@ def add_preview_columns(
     sample_rate = read_shard_metadata(dataset.schema).sample_rate
     preview_schema = pa.schema(
         [
-            lance.blob_field(AUDIO_MP3_FIELD).with_metadata(_MP3_FIELD_METADATA),
+            pa.field(AUDIO_MP3_FIELD, pa.binary()).with_metadata(_MP3_FIELD_METADATA),
             pa.field(AUDIO_UUID_FIELD, pa.string()),
         ]
     )
 
     # output_schema skips Lance's first-batch inference probe (avoids a double
-    # encode) and carries the blob type + mime metadata onto the new columns.
+    # encode) and carries the binary type + mime metadata onto the new columns.
     @lance.batch_udf(output_schema=preview_schema)
     def _to_preview(batch: pa.RecordBatch) -> pa.RecordBatch:
         return _encode_preview_columns(batch, sample_rate, bitrate_kbps)
