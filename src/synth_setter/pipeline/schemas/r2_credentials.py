@@ -195,7 +195,7 @@ class R2Credentials(BaseModel):
         missing = [key for key in SECRET_ENV_KEYS if resolved.get(key) is None]
         if missing:
             raise RuntimeError(
-                f"R2 credentials missing from process env: {', '.join(missing)}. "
+                f"R2 credentials missing from the resolved environment: {', '.join(missing)}. "
                 "Set RCLONE_CONFIG_R2_* (or R2_ACCOUNT_ID for endpoint derivation) first."
             )
 

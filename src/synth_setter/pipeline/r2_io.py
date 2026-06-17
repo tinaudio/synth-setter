@@ -79,10 +79,11 @@ def ensure_r2_env_loaded(env_file: Path | None = None) -> None:
     Three-step pre-flight that callers run once before invoking any other helper
     in this module:
 
-    1. If ``env_file`` is provided and exists on disk, mirror every
+    1. If ``env_file`` is provided and exists on disk, mirror every non-blank
        ``RCLONE_CONFIG_R2_`` key plus ``R2_ACCOUNT_ID`` from that dotenv file
-       into ``os.environ`` (every set value, matching the launcher's precedence
-       so the same view applies on every entry point).
+       into ``os.environ``. Blank/whitespace values are skipped (matching the
+       launcher's non-blank precedence) so a ``.env`` line ``KEY=`` never
+       clobbers a real process-env credential.
     2. Validate via :meth:`R2Credentials.from_env` — the single resolver: blank
        counts as missing, type/provider default in, and the endpoint is derived
        from ``R2_ACCOUNT_ID`` when unset. Raises ``RuntimeError`` if a required
@@ -104,12 +105,10 @@ def ensure_r2_env_loaded(env_file: Path | None = None) -> None:
     if env_file is not None and env_file.is_file():
         # R2_ACCOUNT_ID rides along so from_env can derive the endpoint from a
         # .env-only account id (rclone ignores it; the others it reads directly).
+        # Skip blanks so a `.env` line KEY= can't clobber a real process-env value.
         for key, value in dotenv_values(env_file).items():
-            if (
-                key
-                and (key.startswith("RCLONE_CONFIG_R2_") or key == ENV_ACCOUNT_ID)
-                and value is not None
-            ):
+            relevant = bool(key) and (key.startswith("RCLONE_CONFIG_R2_") or key == ENV_ACCOUNT_ID)
+            if relevant and value and value.strip():
                 os.environ[key] = value
 
     # Single resolver for validation (blank-aware, account-id derivation), so this

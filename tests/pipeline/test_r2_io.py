@@ -1093,6 +1093,32 @@ class TestEnsureR2EnvLoaded:
 
         assert captured["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "ak"
 
+    def test_blank_env_file_value_does_not_clobber_real_process_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A blank ``.env`` entry is skipped, so a real process-env credential survives.
+
+        :param tmp_path: Pytest tmp dir for the env_file.
+        :param monkeypatch: Pytest fixture used to set the process-env value.
+        """
+        import os
+
+        monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", "from-process-env")
+        monkeypatch.setenv("RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", "secret")
+        monkeypatch.setenv("RCLONE_CONFIG_R2_ENDPOINT", "https://stub.r2.cloudflarestorage.com")
+        env_file = tmp_path / ".env"
+        env_file.write_text("RCLONE_CONFIG_R2_ACCESS_KEY_ID=\n")  # blank — must not clobber
+        captured: dict[str, str] = {}
+
+        def _capture(*_a: object, **_kw: object) -> subprocess.CompletedProcess[str]:
+            captured.update(os.environ)
+            return subprocess.CompletedProcess(args=[], returncode=0)
+
+        with patch.object(r2_io.subprocess, "run", side_effect=_capture):
+            r2_io.ensure_r2_env_loaded(env_file)
+
+        assert captured["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "from-process-env"
+
     def test_auth_ping_failure_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Rclone non-zero exit on the auth ping → RuntimeError with stderr excerpt.
 
