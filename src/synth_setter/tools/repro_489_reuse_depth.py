@@ -260,13 +260,12 @@ def _load_render_config(spec_name: str) -> DictConfig:
     return merged
 
 
-def load_render_settings(spec_name: str) -> RenderSettings:
-    """Read render knobs from the merged ``configs/render/<spec_name>.yaml``.
+def _settings_from_cfg(cfg: DictConfig) -> RenderSettings:
+    """Project a merged render config onto the render knobs this tool needs.
 
-    :param spec_name: Param-spec registry key, also the render config stem.
+    :param cfg: A merged render config from :func:`_load_render_config`.
     :returns: The render settings the production pipeline uses for this spec.
     """
-    cfg = _load_render_config(spec_name)
     return RenderSettings(
         sample_rate=int(cfg.sample_rate),
         channels=int(cfg.channels),
@@ -274,6 +273,15 @@ def load_render_settings(spec_name: str) -> RenderSettings:
         duration_seconds=float(cfg.signal_duration_seconds),
         min_loudness_db=float(cfg.min_loudness),
     )
+
+
+def load_render_settings(spec_name: str) -> RenderSettings:
+    """Read render knobs from the merged ``configs/render/<spec_name>.yaml``.
+
+    :param spec_name: Param-spec registry key, also the render config stem.
+    :returns: The render settings the production pipeline uses for this spec.
+    """
+    return _settings_from_cfg(_load_render_config(spec_name))
 
 
 def integrated_loudness(audio: np.ndarray, sample_rate: int) -> float:
@@ -344,7 +352,7 @@ def resolve_patch(spec_name: str) -> PatchSpec:
     cfg = _load_render_config(spec_name)
     plugin_path = str(cfg.plugin_path)
     preset_path = str(cfg.preset_path)
-    settings = load_render_settings(spec_name)
+    settings = _settings_from_cfg(cfg)
     spec = param_specs[spec_name]
     for draw in range(_MAX_PATCH_DRAWS):
         synth_params, note_params = spec.sample()
