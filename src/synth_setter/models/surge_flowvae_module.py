@@ -58,16 +58,37 @@ class SurgeFlowVAEModule(LightningModule):
         losses, *_, vae_out = self.model_step(batch)
         x_hat = vae_out.x_hat
 
-        self.log("train/param_mean", x_hat.mean(), on_step=True, on_epoch=True)
-        self.log("train/param_std", x_hat.std(), on_step=True, on_epoch=True)
+        self.log(
+            "train/param_mean",
+            x_hat.mean(),
+            on_step=True,
+            on_epoch=True,
+            batch_size=batch["params"].shape[0],
+        )
+        self.log(
+            "train/param_std",
+            x_hat.std(),
+            on_step=True,
+            on_epoch=True,
+            batch_size=batch["params"].shape[0],
+        )
 
         beta = self.get_beta()
         loss = losses["reconstruction_loss"] + beta * losses["latent_loss"] + losses["param_loss"]
 
         losses_to_log = {f"train/{k}": v for k, v in losses.items()}
-        self.log("train/loss", loss, on_step=True, on_epoch=True, prog_bar=True)
+        self.log(
+            "train/loss",
+            loss,
+            on_step=True,
+            on_epoch=True,
+            prog_bar=True,
+            batch_size=batch["params"].shape[0],
+        )
         self.log_dict(losses_to_log, on_step=True, on_epoch=True)
-        self.log("train/beta", beta, on_step=True, prog_bar=True)
+        self.log(
+            "train/beta", beta, on_step=True, prog_bar=True, batch_size=batch["params"].shape[0]
+        )
 
         return loss
 
@@ -78,8 +99,20 @@ class SurgeFlowVAEModule(LightningModule):
         losses, *_, vae_out = self.model_step(batch)
         x_hat = vae_out.x_hat
 
-        self.log("val/param_mean", x_hat.mean(), on_step=False, on_epoch=True)
-        self.log("val/param_std", x_hat.std(), on_step=False, on_epoch=True)
+        self.log(
+            "val/param_mean",
+            x_hat.mean(),
+            on_step=False,
+            on_epoch=True,
+            batch_size=batch["params"].shape[0],
+        )
+        self.log(
+            "val/param_std",
+            x_hat.std(),
+            on_step=False,
+            on_epoch=True,
+            batch_size=batch["params"].shape[0],
+        )
 
         losses = {f"val/{k}": v for k, v in losses.items()}
         self.log_dict(losses, on_step=False, on_epoch=True, prog_bar=True)
