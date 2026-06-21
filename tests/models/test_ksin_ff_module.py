@@ -589,3 +589,62 @@ def test_overfit_single_batch_with_mse_loss(  # noqa: DOC101,DOC103
         f"failed to overfit single batch: loss did not decrease by 100x — "
         f"final_loss={final_loss:.4f}, initial_loss={initial_loss:.4f}"
     )
+
+
+# --------------------------------------------------------------------------- #
+# Section H — Explicit batch_size= in self.log() calls (Issue #600)
+# --------------------------------------------------------------------------- #
+
+
+def test_training_step_log_calls_include_explicit_batch_size(  # noqa: DOC101,DOC103
+    tiny_net: nn.Module,
+    opt_partial: Callable[..., torch.optim.Optimizer],
+    batch: tuple[torch.Tensor, torch.Tensor, Callable[[torch.Tensor], torch.Tensor]],
+) -> None:
+    """Every self.log() call in training_step passes explicit batch_size= (issue #600).
+
+    Without batch_size=, Lightning infers it from the batch structure and emits a UserWarning on
+    every run when the batch is a tuple or dict.
+    """
+    module = _make_module(net=tiny_net, optimizer=opt_partial)
+    log_mock = _patch_log(module)
+    module.training_step(batch, 0)  # type: ignore[arg-type]
+    assert log_mock.call_count > 0, "training_step made no self.log() calls"
+    for call in log_mock.call_args_list:
+        assert "batch_size" in call.kwargs, (
+            f"self.log() called without explicit batch_size=: {call}"
+        )
+
+
+def test_validation_step_log_calls_include_explicit_batch_size(  # noqa: DOC101,DOC103
+    tiny_net: nn.Module,
+    opt_partial: Callable[..., torch.optim.Optimizer],
+    batch: tuple[torch.Tensor, torch.Tensor, Callable[[torch.Tensor], torch.Tensor]],
+) -> None:
+    """Every self.log() call in validation_step passes explicit batch_size= (issue #600)."""
+    module = _make_module(net=tiny_net, optimizer=opt_partial)
+    mocks = _patch_metrics_and_log(module)
+    module.validation_step(batch, 0)  # type: ignore[arg-type]
+    log_mock = mocks["log"]
+    assert log_mock.call_count > 0, "validation_step made no self.log() calls"
+    for call in log_mock.call_args_list:
+        assert "batch_size" in call.kwargs, (
+            f"self.log() called without explicit batch_size=: {call}"
+        )
+
+
+def test_test_step_log_calls_include_explicit_batch_size(  # noqa: DOC101,DOC103
+    tiny_net: nn.Module,
+    opt_partial: Callable[..., torch.optim.Optimizer],
+    batch: tuple[torch.Tensor, torch.Tensor, Callable[[torch.Tensor], torch.Tensor]],
+) -> None:
+    """Every self.log() call in test_step passes explicit batch_size= (issue #600)."""
+    module = _make_module(net=tiny_net, optimizer=opt_partial)
+    mocks = _patch_metrics_and_log(module)
+    module.test_step(batch, 0)  # type: ignore[arg-type]
+    log_mock = mocks["log"]
+    assert log_mock.call_count > 0, "test_step made no self.log() calls"
+    for call in log_mock.call_args_list:
+        assert "batch_size" in call.kwargs, (
+            f"self.log() called without explicit batch_size=: {call}"
+        )
