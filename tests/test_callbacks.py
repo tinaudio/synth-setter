@@ -6,18 +6,26 @@ stand-ins that subclass the production ``WandbLogger`` / ``TensorBoardLogger``
 backend — no W&B auth prompt, no TensorBoard file writes. Only the leaf logger
 backends are faked; the production routing/rank-gating/argument wiring runs for
 real.
+
+Integration tests (marked ``slow``) spin up a real Lightning ``Trainer`` with a
+shrunk ``KSinFlowMatchingModule`` and verify that ``PlotLossPerTimestep`` writes
+artifacts to the logger's offline storage.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import cast
 
+import pytest
+from hydra import compose, initialize_config_module
 from lightning.pytorch import Trainer
 from lightning.pytorch.loggers import CSVLogger, TensorBoardLogger, WandbLogger
 from matplotlib.figure import Figure
+from omegaconf import open_dict
 
-from synth_setter.utils.callbacks import _log_figure
+from synth_setter.utils.callbacks import PlotLossPerTimestep, _log_figure
 
 
 class _RecordingWandbLogger(WandbLogger):
@@ -175,3 +183,101 @@ def test_log_figure_is_noop_on_non_zero_rank():
 
     assert wandb_logger.image_calls == []
     assert tb_logger.experiment.figure_calls == []
+
+
+# ---------------------------------------------------------------------------
+# Integration test — real trainer, offline W&B
+# ---------------------------------------------------------------------------
+
+
+def _build_ksin_module_and_datamodule():
+    """Instantiate a tiny ``KSinFlowMatchingModule`` + ``KSinDataModule`` via Hydra.
+
+    Uses the same ``datamodule=ksin, model=ffn`` overrides as the ``cfg_train``
+    fixture so the encoder/vector-field shapes are consistent with the data.
+
+    :returns: ``(pl_module, datamodule)`` ready for ``Trainer.fit``.
+    """
+    from hydra.core.global_hydra import GlobalHydra
+
+    GlobalHydra.instance().clear()
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            overrides=["datamodule=ksin", "model=flow", "trainer=cpu"],
+        )
+
+    with open_dict(cfg):
+        cfg.datamodule.train_val_test_sizes = [2, 2, 2]
+        cfg.datamodule.batch_size = 2
+        cfg.datamodule.num_workers = 0
+        cfg.datamodule.break_symmetry = True
+        cfg.model.compile = False
+
+    import hydra
+
+    datamodule = hydra.utils.instantiate(cfg.datamodule)
+    pl_module = hydra.utils.instantiate(cfg.model)
+    return pl_module, datamodule
+
+
+@pytest.mark.slow
+def test_plot_loss_per_timestep_logs_image_key_to_wandb_offline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``PlotLossPerTimestep`` writes a ``plot`` image into the offline W&B run directory.
+
+    Runs a full Lightning ``Trainer`` loop (``fast_dev_run=True``) with a real but
+    tiny ``KSinFlowMatchingModule`` and a ``WandbLogger`` in offline mode.  After the
+    run, asserts that:
+
+    - W&B created at least one PNG file whose name starts with ``plot_``, proving
+      that ``_log_figure`` reached the ``WandbLogger`` branch and ``log_image`` was
+      called with the correct key.
+    - The PNG file is non-empty (the figure was actually rendered and encoded).
+
+    :param tmp_path: Pytest-provided temporary directory for the offline W&B run.
+    :param monkeypatch: Used to set ``WANDB_MODE=offline`` for the duration of the test.
+    """
+    monkeypatch.setenv("WANDB_MODE", "offline")
+    # Prevent W&B from touching the home-directory default wandb/ folder.
+    monkeypatch.setenv("WANDB_DIR", str(tmp_path))
+
+    pl_module, datamodule = _build_ksin_module_and_datamodule()
+
+    wandb_logger = WandbLogger(
+        project="synth-setter-test",
+        save_dir=str(tmp_path),
+        offline=True,
+    )
+
+    callback = PlotLossPerTimestep(num_timesteps=3)
+
+    trainer = Trainer(
+        accelerator="cpu",
+        max_epochs=1,
+        logger=wandb_logger,
+        callbacks=[callback],
+        enable_checkpointing=False,
+        enable_model_summary=False,
+        num_sanity_val_steps=0,
+        log_every_n_steps=1,
+    )
+
+    trainer.fit(pl_module, datamodule=datamodule)
+
+    # W&B offline runs write images under:
+    #   <save_dir>/wandb/offline-run-<timestamp>-<id>/files/media/images/
+    # The filename is ``<key>_<idx>_<hash>.png`` — the key prefix is the
+    # assertion target, not the full name (which includes a content hash).
+    images_dir = next((tmp_path / "wandb").glob("offline-run-*/files/media/images"))
+    plot_pngs = list(images_dir.glob("plot_*.png"))
+
+    assert plot_pngs, (
+        f"No 'plot_*.png' found in {images_dir}; "
+        "expected PlotLossPerTimestep to log one image via WandbLogger.log_image"
+    )
+    assert all(p.stat().st_size > 0 for p in plot_pngs), (
+        "At least one 'plot_*.png' is empty — the figure was not rendered"
+    )
