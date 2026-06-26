@@ -67,7 +67,7 @@ class VSTFlowVAEModule(LightningModule):
             self.hparams.beta_max - self.hparams.beta_start
         )
 
-    def training_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int):
+    def training_step(self, batch: dict[str, torch.Tensor], batch_idx: int):
         losses, mel_spec, _, vae_out = self.model_step(batch)
         x_hat = vae_out.x_hat
         batch_size = mel_spec.shape[0]
@@ -94,7 +94,7 @@ class VSTFlowVAEModule(LightningModule):
     def on_train_epoch_end(self) -> None:
         pass
 
-    def validation_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int):
+    def validation_step(self, batch: dict[str, torch.Tensor], batch_idx: int):
         losses, mel_spec, _, vae_out = self.model_step(batch)
         x_hat = vae_out.x_hat
         batch_size = mel_spec.shape[0]
@@ -110,7 +110,7 @@ class VSTFlowVAEModule(LightningModule):
     def on_validation_epoch_end(self):
         pass
 
-    def test_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int):
+    def test_step(self, batch: dict[str, torch.Tensor], batch_idx: int):
         losses, mel_spec, *_ = self.model_step(batch)
         batch_size = mel_spec.shape[0]
         losses = {f"test/{k}": v for k, v in losses.items()}
@@ -119,7 +119,7 @@ class VSTFlowVAEModule(LightningModule):
     def on_test_epoch_end(self) -> None:
         pass
 
-    def predict_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int):
+    def predict_step(self, batch: dict[str, torch.Tensor], batch_idx: int):
         mel_spec = batch["mel_spec"]
         out = self.net(mel_spec)
 
