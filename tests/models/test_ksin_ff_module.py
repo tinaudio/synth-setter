@@ -452,6 +452,29 @@ def test_test_step_calls_lsd_chamfer_lad_and_logs_param_mse(  # noqa: DOC101,DOC
     assert torch.allclose(param_mse_call.args[1], expected_param_mse)
 
 
+def test_steps_log_metrics_with_explicit_batch_size(  # noqa: DOC101,DOC103
+    tiny_net: nn.Module,
+    opt_partial: Callable[..., torch.optim.Optimizer],
+    batch: tuple[torch.Tensor, torch.Tensor, Callable[[torch.Tensor], torch.Tensor]],
+    batch_size: int,
+) -> None:
+    """Train/val/test steps pass an explicit batch_size to every self.log call (#600)."""
+    module = _make_module(net=tiny_net, optimizer=opt_partial)
+    log_mock = _patch_metrics_and_log(module)["log"]
+
+    module.training_step(batch, 0)  # type: ignore[arg-type]
+    module.validation_step(batch, 0)  # type: ignore[arg-type]
+    module.test_step(batch, 0)  # type: ignore[arg-type]
+
+    assert log_mock.call_count > 0, "expected at least one self.log call across the steps"
+    for call in log_mock.call_args_list:
+        metric_name = call.args[0] if call.args else "<missing>"
+        assert call.kwargs.get("batch_size") == batch_size, (
+            f"self.log({metric_name!r}) passed batch_size="
+            f"{call.kwargs.get('batch_size')!r}, expected {batch_size}"
+        )
+
+
 def test_on_train_start_resets_val_metrics(  # noqa: DOC101,DOC103
     tiny_net: nn.Module,
     opt_partial: Callable[..., torch.optim.Optimizer],

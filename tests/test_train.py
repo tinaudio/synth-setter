@@ -8,6 +8,7 @@ that no private ``synth_setter.cli`` helper is imported here.
 """
 
 import os
+import warnings
 from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
@@ -76,6 +77,33 @@ def test_train_fast_dev_run_tiny_model_tiny_data(cfg_train: DictConfig) -> None:
     with open_dict(cfg_train):
         cfg_train.trainer.fast_dev_run = True
     train(cfg_train)
+
+
+def test_train_fast_dev_run_emits_no_batch_size_warning(cfg_train: DictConfig) -> None:
+    """A `fast_dev_run` run emits no Lightning ambiguous-`batch_size` warning (#600).
+
+    Every ``self.log`` call in the LightningModules now passes an explicit ``batch_size``,
+    so Lightning never falls back to inferring it from the (tuple/dict) batch. Warnings are
+    captured directly here because the suite's ``filterwarnings = ["ignore::UserWarning"]``
+    would otherwise hide the ``PossibleUserWarning`` this test guards against.
+
+    :param cfg_train: A DictConfig containing a valid training configuration.
+    """
+    HydraConfig().set_config(cfg_train)
+    with open_dict(cfg_train):
+        cfg_train.trainer.fast_dev_run = True
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        train(cfg_train)
+
+    # Match Lightning's specific message, not any "batch_size" substring, so an unrelated
+    # warning that happens to mention batch size cannot trip this test.
+    warning_fragment = "Trying to infer the `batch_size` from an ambiguous collection"
+    batch_size_warnings = [str(w.message) for w in caught if warning_fragment in str(w.message)]
+    assert not batch_size_warnings, (
+        f"training emitted batch_size-inference warning(s): {batch_size_warnings}"
+    )
 
 
 @pytest.mark.gpu

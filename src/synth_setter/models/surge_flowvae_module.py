@@ -67,48 +67,59 @@ class VSTFlowVAEModule(LightningModule):
             self.hparams.beta_max - self.hparams.beta_start
         )
 
-    def training_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int):
-        losses, *_, vae_out = self.model_step(batch)
+    def training_step(self, batch: dict[str, torch.Tensor], batch_idx: int):
+        losses, mel_spec, _, vae_out = self.model_step(batch)
         x_hat = vae_out.x_hat
+        batch_size = mel_spec.shape[0]
 
-        self.log("train/param_mean", x_hat.mean(), on_step=True, on_epoch=True)
-        self.log("train/param_std", x_hat.std(), on_step=True, on_epoch=True)
+        self.log(
+            "train/param_mean", x_hat.mean(), on_step=True, on_epoch=True, batch_size=batch_size
+        )
+        self.log(
+            "train/param_std", x_hat.std(), on_step=True, on_epoch=True, batch_size=batch_size
+        )
 
         beta = self.get_beta()
         loss = losses["reconstruction_loss"] + beta * losses["latent_loss"] + losses["param_loss"]
 
         losses_to_log = {f"train/{k}": v for k, v in losses.items()}
-        self.log("train/loss", loss, on_step=True, on_epoch=True, prog_bar=True)
-        self.log_dict(losses_to_log, on_step=True, on_epoch=True)
-        self.log("train/beta", beta, on_step=True, prog_bar=True)
+        self.log(
+            "train/loss", loss, on_step=True, on_epoch=True, prog_bar=True, batch_size=batch_size
+        )
+        self.log_dict(losses_to_log, on_step=True, on_epoch=True, batch_size=batch_size)
+        self.log("train/beta", beta, on_step=True, prog_bar=True, batch_size=batch_size)
 
         return loss
 
     def on_train_epoch_end(self) -> None:
         pass
 
-    def validation_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int):
-        losses, *_, vae_out = self.model_step(batch)
+    def validation_step(self, batch: dict[str, torch.Tensor], batch_idx: int):
+        losses, mel_spec, _, vae_out = self.model_step(batch)
         x_hat = vae_out.x_hat
+        batch_size = mel_spec.shape[0]
 
-        self.log("val/param_mean", x_hat.mean(), on_step=False, on_epoch=True)
-        self.log("val/param_std", x_hat.std(), on_step=False, on_epoch=True)
+        self.log(
+            "val/param_mean", x_hat.mean(), on_step=False, on_epoch=True, batch_size=batch_size
+        )
+        self.log("val/param_std", x_hat.std(), on_step=False, on_epoch=True, batch_size=batch_size)
 
         losses = {f"val/{k}": v for k, v in losses.items()}
-        self.log_dict(losses, on_step=False, on_epoch=True, prog_bar=True)
+        self.log_dict(losses, on_step=False, on_epoch=True, prog_bar=True, batch_size=batch_size)
 
     def on_validation_epoch_end(self):
         pass
 
-    def test_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int):
-        losses, *_ = self.model_step(batch)
+    def test_step(self, batch: dict[str, torch.Tensor], batch_idx: int):
+        losses, mel_spec, *_ = self.model_step(batch)
+        batch_size = mel_spec.shape[0]
         losses = {f"test/{k}": v for k, v in losses.items()}
-        self.log_dict(losses, on_step=False, on_epoch=True, prog_bar=True)
+        self.log_dict(losses, on_step=False, on_epoch=True, prog_bar=True, batch_size=batch_size)
 
     def on_test_epoch_end(self) -> None:
         pass
 
-    def predict_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int):
+    def predict_step(self, batch: dict[str, torch.Tensor], batch_idx: int):
         mel_spec = batch["mel_spec"]
         out = self.net(mel_spec)
 
