@@ -97,7 +97,10 @@ def test_train_fast_dev_run_emits_no_batch_size_warning(cfg_train: DictConfig) -
         warnings.simplefilter("always")
         train(cfg_train)
 
-    batch_size_warnings = [str(w.message) for w in caught if "batch_size" in str(w.message)]
+    # Match Lightning's specific message, not any "batch_size" substring, so an unrelated
+    # warning that happens to mention batch size cannot trip this test.
+    warning_fragment = "Trying to infer the `batch_size` from an ambiguous collection"
+    batch_size_warnings = [str(w.message) for w in caught if warning_fragment in str(w.message)]
     assert not batch_size_warnings, (
         f"training emitted batch_size-inference warning(s): {batch_size_warnings}"
     )
