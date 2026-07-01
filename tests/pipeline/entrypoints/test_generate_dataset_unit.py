@@ -35,7 +35,8 @@ import shutil
 import subprocess
 import sys
 import threading
-from collections.abc import Iterator
+from collections import deque
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -140,6 +141,26 @@ def _multi_shard_spec(tmp_path: Path, n: int = 3) -> DatasetSpec:
         train_val_test_sizes=[10000 * n, 0, 0],
     )
     return DatasetSpec(**kwargs)  # type: ignore[arg-type]
+
+
+class _ThreadSafeLogRecorder:
+    """Thread-safe stand-in for ``generate_dataset.logger`` in concurrent tests.
+
+    ``MagicMock`` records calls into ``call_args_list`` without documented
+    thread-safety, so worker threads emitting per-shard lines in the parallel
+    dispatch path would mutate it concurrently. ``deque.append`` is atomic in
+    CPython, so messages are collected lock-free; any accessed method name
+    (``info``, ``warning``, …) records its first positional arg.
+    """
+
+    def __init__(self) -> None:
+        self.messages: deque[str] = deque()
+
+    def _record(self, message: object = "", *_args: object, **_kwargs: object) -> None:
+        self.messages.append(str(message))
+
+    def __getattr__(self, _name: str) -> Callable[..., None]:
+        return self._record
 
 
 def test_build_generate_args_passes_shard_seed_as_base_seed(tmp_path: Path) -> None:
@@ -1071,19 +1092,133 @@ class TestRun:
                 thread_ids.add(threading.get_ident())
                 if len(thread_ids) >= 2:
                     two_threads_seen.set()
-            two_threads_seen.wait(timeout=5.0)
+            assert two_threads_seen.wait(timeout=5.0), "pool never scheduled 2 concurrent workers"
             _materialize_shard(args)
 
-        with patch(
+        # Plain-function patch (not a MagicMock) so concurrent worker-thread calls
+        # don't race on the mock's call_args_list / call_count.
+        monkeypatch.setattr(
             "synth_setter.cli.generate_dataset._check_call_streamed",
-            side_effect=_thread_recording_dispatcher,
-        ):
-            generate(spec, tmp_path, [])
+            _thread_recording_dispatcher,
+        )
+        generate(spec, tmp_path, [])
 
         assert len(thread_ids) >= 2
         bucket_prefix = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
         for shard in spec.shards:
             assert (bucket_prefix / shard.filename).is_file()
+
+    @patch("synth_setter.cli.generate_dataset.logger")
+    def test_serial_render_log_line_names_the_emitting_thread(
+        self,
+        mock_logger: MagicMock,
+        patched_subprocess: MagicMock,  # noqa: ARG002
+        tmp_path: Path,
+    ) -> None:
+        """Serial per-shard render lines carry ``thread=<caller thread>``.
+
+        The serial path runs every render on the thread that called
+        ``generate``, so the token names that thread — the observable half of
+        the parallel path's per-worker tagging.
+
+        :param mock_logger: Patched ``generate_dataset.logger`` for capturing
+            the per-shard render lines.
+        :param patched_subprocess: Fixture-activation only (renderer
+            materializes shards so rclone copies have a valid source).
+        :param tmp_path: Pytest tmp dir used by ``_multi_shard_spec``.
+        """
+        caller_thread = threading.current_thread().name
+        spec = _multi_shard_spec(tmp_path, n=2)
+
+        generate(spec, tmp_path, [])
+
+        info_messages = [str(c.args[0]) for c in mock_logger.info.call_args_list]
+        render_lines = [m for m in info_messages if m.startswith("rendering shard")]
+        assert len(render_lines) == 2
+        assert all(f"thread={caller_thread}" in m for m in render_lines)
+
+    @patch("synth_setter.cli.generate_dataset.logger")
+    def test_skip_path_log_line_names_the_emitting_thread(
+        self,
+        mock_logger: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The R2-skip branch also tags its per-shard line with the emitting thread.
+
+        Thread attribution covers every per-shard line, not just the render
+        branch: a shard already present in R2 is skipped, and that line must
+        carry ``thread=`` too so a resumed run's logs stay attributable.
+
+        :param mock_logger: Patched ``generate_dataset.logger`` for capturing
+            the skip lines.
+        :param tmp_path: Pytest tmp dir used by ``_multi_shard_spec``.
+        :param monkeypatch: Marks every shard already present so the skip branch runs.
+        """
+        caller_thread = threading.current_thread().name
+        spec = _multi_shard_spec(tmp_path, n=2)
+        monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda *_a, **_k: 9999)
+
+        generate(spec, tmp_path, [])
+
+        info_messages = [str(c.args[0]) for c in mock_logger.info.call_args_list]
+        skip_lines = [m for m in info_messages if m.startswith("skipping shard")]
+        assert len(skip_lines) == 2
+        assert all(f"thread={caller_thread}" in m for m in skip_lines)
+
+    def test_parallel_render_log_lines_name_distinct_worker_threads(
+        self,
+        fake_r2_remote: Path,  # noqa: ARG002
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Parallel per-shard render lines name ≥2 distinct worker threads, none the main.
+
+        Pins ``available_cpus`` to 8 so the pool resolves to 4 workers, then
+        blocks each render until a second thread is in-flight so the pool truly
+        parallelizes. The render lines must then name the worker threads that
+        emitted them — the log evidence that shards rendered concurrently.
+
+        :param fake_r2_remote: Local-typed R2 remote (fixture-activation only —
+            the dispatcher routes rclone copies to it via ``_REAL_CHECK_CALL``).
+        :param tmp_path: Pytest tmp dir used by ``_base_spec_kwargs``.
+        :param monkeypatch: Pins ``available_cpus`` and installs the thread-safe
+            logger recorder + blocking dispatcher.
+        """
+        monkeypatch.setattr("synth_setter.cli.generate_dataset.available_cpus", lambda: 8)
+        kwargs = _base_spec_kwargs(tmp_path, train_val_test_sizes=[40000, 0, 0])
+        kwargs["render"] = {**kwargs["render"], "parallel": True}  # type: ignore[dict-item]
+        spec = DatasetSpec(**kwargs)  # type: ignore[arg-type]
+        assert len(spec.shards) == 4
+        thread_ids: set[int] = set()
+        lock = threading.Lock()
+        two_threads_seen = threading.Event()
+
+        def _blocking_dispatcher(args: list[str]) -> None:
+            if args and args[0] == "rclone":
+                _REAL_CHECK_CALL(args)
+                return
+            with lock:
+                thread_ids.add(threading.get_ident())
+                if len(thread_ids) >= 2:
+                    two_threads_seen.set()
+            assert two_threads_seen.wait(timeout=5.0), "pool never scheduled 2 concurrent workers"
+            _materialize_shard(args)
+
+        # Recorder (not a MagicMock) captures logger.info from every worker thread
+        # without racing on call_args_list; plain-function dispatcher patch likewise.
+        recorder = _ThreadSafeLogRecorder()
+        monkeypatch.setattr("synth_setter.cli.generate_dataset.logger", recorder)
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset._check_call_streamed", _blocking_dispatcher
+        )
+        generate(spec, tmp_path, [])
+
+        render_lines = [m for m in recorder.messages if m.startswith("rendering shard")]
+        thread_names = {m.split("thread=")[1].split()[0] for m in render_lines}
+        assert len(render_lines) == 4
+        assert "MainThread" not in thread_names
+        assert len(thread_names) >= 2
 
     def test_parallel_render_propagates_subprocess_failure(
         self,
@@ -1123,12 +1258,11 @@ class TestRun:
                 raise subprocess.CalledProcessError(1, "generate_vst_dataset.py")
             _materialize_shard(args)
 
-        with patch(
-            "synth_setter.cli.generate_dataset._check_call_streamed",
-            side_effect=_one_failing,
-        ):
-            with pytest.raises(subprocess.CalledProcessError):
-                generate(spec, tmp_path, [])
+        # Plain-function patch (not a MagicMock) so concurrent worker-thread calls
+        # don't race on the mock's call_args_list / call_count.
+        monkeypatch.setattr("synth_setter.cli.generate_dataset._check_call_streamed", _one_failing)
+        with pytest.raises(subprocess.CalledProcessError):
+            generate(spec, tmp_path, [])
 
         bucket_prefix = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
         landed = sum(1 for shard in spec.shards if (bucket_prefix / shard.filename).is_file())

@@ -15,6 +15,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextlib import ExitStack
@@ -628,6 +629,9 @@ def _render_one_owned_shard(
     :returns: ``(rendered, skipped)`` — exactly one is ``True``.
     """
     shard = spec.shards[shard_id]
+    # Names the worker thread on every per-shard line so interleaved renders in
+    # the parallel dispatch path are attributable to their pool thread.
+    thread_name = threading.current_thread().name
     if spec.output_format.is_directory:
         # Probe the _versions/ manifest, not bare data/ files: a render that
         # crashed before commit leaves orphan fragments that must not be skipped.
@@ -637,7 +641,10 @@ def _render_one_owned_shard(
         existing_size = r2_io.object_size(spec.r2.shard_uri(shard)) or 0
         already_present = existing_size > 0
     if already_present:
-        logger.info(f"skipping shard {shard.shard_id} — already in R2: {shard.filename}")
+        logger.info(
+            f"skipping shard {shard.shard_id} — already in R2: {shard.filename} "
+            f"thread={thread_name}"
+        )
         _log_shard_metrics(loggers, shard_id, byte_size=existing_size, render_seconds=0.0)
         return False, True
     t0 = time.monotonic()
@@ -669,6 +676,9 @@ def _render_and_upload_shard(
         exhausting the retry budget.
     :raises RuntimeError: Renderer exited 0 without writing the expected shard file.
     """
+    # Names the worker thread on every per-shard line so interleaved renders in
+    # the parallel dispatch path are attributable to their pool thread.
+    thread_name = threading.current_thread().name
     # Zipped wheels extract the wrapper to a temp file that only lives while
     # ``as_file()`` is open; ``ExitStack`` keeps it on disk across the retry
     # loop, and skips materialization on non-Linux.
@@ -679,7 +689,7 @@ def _render_and_upload_shard(
         else:
             args = []
         args += build_generate_args(spec, shard, work_dir)
-        logger.info(f"rendering shard {shard.shard_id} -> {shard.filename}")
+        logger.info(f"rendering shard {shard.shard_id} -> {shard.filename} thread={thread_name}")
         max_attempts = spec.render.max_retries + 1
         for attempt in range(max_attempts):
             try:
@@ -690,7 +700,7 @@ def _render_and_upload_shard(
                     raise
                 logger.warning(
                     f"shard {shard.shard_id} render failed on attempt "
-                    f"{attempt + 1}/{max_attempts}; retrying"
+                    f"{attempt + 1}/{max_attempts}; retrying thread={thread_name}"
                 )
     shard_path = work_dir / shard.filename
     # Surface a generator that exited 0 without writing output here, not as a
@@ -702,7 +712,7 @@ def _render_and_upload_shard(
                 f"dataset: {shard_path}"
             )
         byte_size = sum(p.stat().st_size for p in shard_path.rglob("*") if p.is_file())
-        logger.info(f"shard rendered: {shard_path} ({byte_size} bytes)")
+        logger.info(f"shard rendered: {shard_path} ({byte_size} bytes) thread={thread_name}")
         # Upload data first, then the _versions/ manifest last (rclone copy has no
         # ordering guarantee). The resume skip-probe checks _versions/, so a crash
         # mid-upload must never leave a manifest whose data files are absent.
@@ -717,9 +727,9 @@ def _render_and_upload_shard(
             )
         byte_size = shard_path.stat().st_size
         dest = r2_dest_prefix
-        logger.info(f"shard rendered: {shard_path} ({byte_size} bytes)")
+        logger.info(f"shard rendered: {shard_path} ({byte_size} bytes) thread={thread_name}")
         _rclone_copy(str(shard_path), dest)
-    logger.info(f"shard uploaded: {shard.filename} -> {dest}")
+    logger.info(f"shard uploaded: {shard.filename} -> {dest} thread={thread_name}")
     return byte_size
 
 
