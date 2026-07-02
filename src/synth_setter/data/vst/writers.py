@@ -17,11 +17,15 @@ import h5py
 import numpy as np
 import webdataset as wds
 from loguru import logger
-from pedalboard import VST3Plugin
 from tqdm import trange
 
 from synth_setter.data.vst import param_specs
-from synth_setter.data.vst.core import load_plugin, load_preset, run_with_editor_held_open
+from synth_setter.data.vst.core import (
+    HostedPlugin,
+    load_plugin,
+    load_preset,
+    run_with_editor_held_open,
+)
 from synth_setter.data.vst.generate_vst_dataset import (
     SampleSeed,
     VSTDataSample,
@@ -221,7 +225,7 @@ def _render_in_batches(
 
     # plugin_reload_cadence="once": load + preset once per shard, reuse instance (#705).
     # "render" (default): cached_plugin stays None; each render reloads (#489 historical).
-    cached_plugin: VST3Plugin | None = None
+    cached_plugin: HostedPlugin | None = None
     if render_cfg.plugin_reload_cadence == "once":
         cached_plugin = load_plugin(render_cfg.plugin_path)
         load_preset(cached_plugin, render_cfg.preset_path)

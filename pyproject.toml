@@ -170,6 +170,8 @@ audio = [
   "pyloudnorm",
   "mido",
   "scipy>=1.14,<1.15",
+  "torchsynth>=1.0.2",
+  "synthax>=0.2.2",
 ]
 metrics = [
   "pesto-pitch==2.0.1",

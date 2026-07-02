@@ -86,8 +86,8 @@ def _validate_surge_dataset(path: Path, num_samples: int) -> None:
     """Assert the generated Surge XT dataset is structurally sound.
 
     Verifies the three required datasets exist with the expected shapes, that no NaN/Inf leaked in
-    from the VST/mel pipeline, and that every audio clip is above the silence floor — surface those
-    failures here rather than letting downstream training crash on opaque NaN losses.
+    from the VST/mel pipeline, and that every audio clip is above the silence floor — surface
+    those failures here rather than letting downstream training crash on opaque NaN losses.
     """
     with h5py.File(path, "r") as f:
         for name in ("audio", "mel_spec", "param_array"):
@@ -388,6 +388,40 @@ def cfg_dataset_obxf(tmp_path: Path) -> Iterator[DictConfig]:
         cfg = compose(
             config_name="dataset",
             overrides=["experiment=generate_dataset/smoke-shard", "render=obxf"],
+        )
+        with open_dict(cfg):
+            _set_workspace_root(cfg)
+            cfg.paths.output_dir = str(tmp_path)
+            cfg.paths.work_dir = str(tmp_path)
+            cfg.paths.log_dir = str(tmp_path)
+
+    yield cfg
+
+    GlobalHydra.instance().clear()
+
+
+@pytest.fixture(params=["torchsynth", "synthax"])
+def cfg_dataset_python_synth(
+    request: pytest.FixtureRequest, tmp_path: Path
+) -> Iterator[DictConfig]:
+    """Compose ``dataset.yaml`` with each Python synth render for entrypoint coverage.
+
+    Mirrors ``cfg_dataset_obxf`` (P31 entrypoint gate) for the Python
+    differentiable-synth backends dispatched by ``core.load_plugin``.
+
+    :param request: Parametrized with each Python synth backend name.
+    :param tmp_path: Per-test output/work/log root.
+
+    :yields DictConfig: ``render=<backend>`` cfg with ``tmp_path``-pinned paths;
+        teardown clears Hydra's global singleton.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="dataset",
+            overrides=[
+                "experiment=generate_dataset/smoke-shard",
+                f"render={request.param}",
+            ],
         )
         with open_dict(cfg):
             _set_workspace_root(cfg)

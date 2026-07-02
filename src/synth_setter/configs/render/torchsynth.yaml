@@ -1,0 +1,12 @@
+# Synth-identity overrides for the torchsynth Python backend; generic render
+# knobs inherit from surge_xt. No preset file — "" is the no-preset sentinel.
+# plugin_reload_cadence "once" keeps the Voice cached across a shard;
+# gui_toggle_cadence "never" because there is no editor to warm up.
+defaults:
+  - surge_xt
+plugin_path: "torchsynth"
+preset_path: ""
+param_spec_name: "torchsynth"
+renderer_version: "1.0.2"
+plugin_reload_cadence: "once"
+gui_toggle_cadence: "never"

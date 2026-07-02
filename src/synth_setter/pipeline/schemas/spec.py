@@ -253,12 +253,16 @@ class RenderConfig(BaseModel):
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
     plugin_path: str = Field(
-        description="Filesystem path to the VST3 plugin bundle the worker loads."
+        description=(
+            "Filesystem path to the VST3 plugin bundle the worker loads, or a bare "
+            "Python synth backend name (``torchsynth``/``synthax``) dispatched by "
+            "``core.load_plugin``."
+        )
     )
     preset_path: str = Field(
         description=(
             "Filesystem path to the ``.fxp``/``.vstpreset`` baseline preset loaded before "
-            "random parameter override."
+            'random parameter override; ``""`` means no preset (Python synth backends).'
         )
     )
     param_spec_name: str = Field(

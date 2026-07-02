@@ -136,6 +136,27 @@ def test_cfg_dataset_render_obxf_resolves_param_spec_through_spec_from_cfg(
     assert spec.num_params == 187
 
 
+def test_cfg_dataset_render_python_synth_resolves_param_spec_through_spec_from_cfg(
+    cfg_dataset_python_synth: DictConfig,
+) -> None:
+    """``render=torchsynth|synthax`` resolves its spec through the ``spec_from_cfg`` entrypoint path.
+
+    Same P31 entrypoint gate as the OB-Xf test above: a resolving ``num_params``
+    proves the launcher reaches each Python synth's registered spec, and the
+    bare-name ``plugin_path`` with the ``""`` no-preset sentinel survives
+    ``DatasetSpec`` validation.
+
+    :param cfg_dataset_python_synth: Function-scoped fixture composing ``dataset.yaml``
+        with the smoke-shard experiment, each Python synth render, and
+        ``tmp_path``-pinned paths.
+    """
+    spec = spec_from_cfg(cfg_dataset_python_synth)
+    assert spec.render.param_spec_name in ("torchsynth", "synthax")
+    assert spec.render.plugin_path == spec.render.param_spec_name
+    assert spec.render.preset_path == ""
+    assert spec.num_params == 79
+
+
 @pytest.mark.fake_vst
 @pytest.mark.parametrize(
     ("output_format", "shard_suffix"),

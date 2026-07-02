@@ -1,0 +1,56 @@
+# @package _global_
+
+# CPU smoke-train for the torchsynth Python backend. Consumes a dataset
+# produced by experiment=generate_dataset/torchsynth-smoke; point
+# datamodule.dataset_root at its finalized output. d_out=79 is
+# len(param_specs["torchsynth"]) — pinned by
+# tests/data/vst/test_python_synth_param_specs.py.
+
+defaults:
+  - override /model: surge_ffn
+  - override /datamodule: torchsynth
+  - override /trainer: cpu
+  - override /callbacks: [default_surge, eval_surge]
+  - _self_
+
+run_name: ffn
+experiment_name: torchsynth-smoke
+
+tags:
+  - torchsynth
+  - test
+
+logger: null
+test: false
+
+model:
+  compile: false
+  scheduler: null
+  net:
+    d_out: 79
+
+datamodule:
+  batch_size: 1
+  pin_memory: false
+  ot: false
+  # Requires sibling stats.npz; see #1002.
+  use_saved_mean_and_variance: true
+  num_workers: 0
+
+trainer:
+  devices: 1
+  precision: "32-true"
+  gradient_clip_val: 0.5
+  max_steps: 10
+  check_val_every_n_epoch: 1
+  val_check_interval: 1.0
+  log_every_n_steps: 1
+  enable_model_summary: false
+  limit_val_batches: 1.0
+  deterministic: true
+
+callbacks:
+  lr_monitor: null
+  plot_proj_ii: null
+  model_checkpoint:
+    save_last: true

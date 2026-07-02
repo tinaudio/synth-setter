@@ -11,6 +11,15 @@ from loguru import logger
 from pedalboard import VST3Plugin
 from pedalboard.io import AudioFile
 
+from synth_setter.data.vst.python_synth import (
+    PythonSynthPlugin,
+    is_python_synth,
+    load_python_synth,
+    python_synth_version,
+)
+
+HostedPlugin = VST3Plugin | PythonSynthPlugin
+
 # How long the editor stays open before we signal it to close.
 _EDITOR_INIT_DELAY_SECONDS = 0.5
 # Hard ceiling on how long ``run_with_editor_held_open`` waits for the render
@@ -35,15 +44,16 @@ class RenderWorkerLeaked(RuntimeError):
 
 
 def extract_renderer_version(plugin_path: Path) -> str:
-    """Extract the version string from a VST3 plugin bundle.
+    """Extract the version string from a VST3 plugin bundle or Python synth backend.
 
-    Tries the static-metadata files first (`Contents/moduleinfo.json` on Linux,
-    `Contents/Info.plist` on macOS), then falls back to loading the plugin via
-    pedalboard and reading `plugin.version`. The fallback requires a usable
-    X11 display, so callers in interpreter-only contexts (the SkyPilot
-    launcher) must avoid it — they pin `renderer_version` in the dataset
-    config that produces the spec and let the worker compare against this
-    function's output before rendering (see
+    Python synth names (``python_synth.PYTHON_SYNTH_NAMES``) report the installed
+    package version. For ``.vst3`` bundles, tries the static-metadata files first
+    (`Contents/moduleinfo.json` on Linux, `Contents/Info.plist` on macOS), then
+    falls back to loading the plugin via pedalboard and reading `plugin.version`.
+    The fallback requires a usable X11 display, so callers in interpreter-only
+    contexts (the SkyPilot launcher) must avoid it — they pin `renderer_version`
+    in the dataset config that produces the spec and let the worker compare
+    against this function's output before rendering (see
     `synth_setter.cli.generate_dataset.generate`).
 
     :raises FileNotFoundError: plugin_path does not exist.
@@ -51,6 +61,9 @@ def extract_renderer_version(plugin_path: Path) -> str:
     :raises json.JSONDecodeError: moduleinfo.json is malformed.
     :raises plistlib.InvalidFileException: Info.plist is malformed.
     """
+    if is_python_synth(str(plugin_path)):
+        return python_synth_version(str(plugin_path))
+
     if not plugin_path.exists():
         raise FileNotFoundError(f"Plugin path does not exist: {plugin_path}")
 
@@ -72,17 +85,22 @@ def extract_renderer_version(plugin_path: Path) -> str:
     return version
 
 
-def load_plugin(plugin_path: str, plugin_name: str | None = None) -> VST3Plugin:
-    """Load a VST3 plugin instance.
+def load_plugin(plugin_path: str, plugin_name: str | None = None) -> HostedPlugin:
+    """Load a VST3 plugin instance or a Python synth backend.
 
-    No warm-up — see ``warmup_plugin``.
+    No warm-up — see ``warmup_plugin``. Bare names in
+    ``python_synth.PYTHON_SYNTH_NAMES`` (e.g. ``"torchsynth"``) dispatch to the
+    Python-synth adapters; anything else is treated as a ``.vst3`` bundle path.
 
-    :param plugin_path: Path to the ``.vst3`` bundle.
+    :param plugin_path: Path to the ``.vst3`` bundle, or a Python synth name.
     :param plugin_name: Factory class to open from a multi-class bundle; ``None``
         opens the sole class, and pedalboard raises ``ValueError`` listing the
         classes when a bundle exposes more than one.
     :returns: The loaded plugin.
     """
+    if is_python_synth(plugin_path):
+        logger.info(f"Loading Python synth backend {plugin_path}")
+        return load_python_synth(plugin_path)
     logger.info(f"Loading plugin {plugin_path}")
     p = (
         VST3Plugin(plugin_path)
@@ -93,7 +111,7 @@ def load_plugin(plugin_path: str, plugin_name: str | None = None) -> VST3Plugin:
     return p
 
 
-def warmup_plugin(plugin: VST3Plugin) -> None:
+def warmup_plugin(plugin: HostedPlugin) -> None:
     """Run the ``show_editor`` warm-up to nudge the plugin's commit-handler state.
 
     Side-effect only; the plugin must already be loaded. Callers are responsible
@@ -115,7 +133,9 @@ def warmup_plugin(plugin: VST3Plugin) -> None:
         close_editor.set()  # defensive: ensure show_editor unblocks even if Timer fails
 
 
-def run_with_editor_held_open(plugin: VST3Plugin, body: Callable[[], _BodyResult]) -> _BodyResult:
+def run_with_editor_held_open(
+    plugin: HostedPlugin, body: Callable[[], _BodyResult]
+) -> _BodyResult:
     """Invoke ``body()`` on a worker thread while the caller blocks in ``plugin.show_editor``.
 
     Pedalboard 0.9.x requires ``show_editor`` to run on the process main
@@ -178,13 +198,13 @@ def run_with_editor_held_open(plugin: VST3Plugin, body: Callable[[], _BodyResult
     return result[0]
 
 
-def load_preset(plugin: VST3Plugin, preset_path: str) -> None:
+def load_preset(plugin: HostedPlugin, preset_path: str) -> None:
     logger.info(f"Loading preset {preset_path}")
     plugin.load_preset(preset_path)
     logger.info(f"Preset {preset_path} loaded")
 
 
-def set_params(plugin: VST3Plugin, params: dict[str, float]) -> None:
+def set_params(plugin: HostedPlugin, params: dict[str, float]) -> None:
     for k, v in params.items():
         plugin.parameters[k].raw_value = v
 
@@ -205,7 +225,7 @@ def render_params(
     channels: int,
     preset_path: str | None = None,
     *,
-    plugin: VST3Plugin | None = None,
+    plugin: HostedPlugin | None = None,
     warmup: bool = False,
 ) -> np.ndarray:
     """Render a single audio sample; reuse ``plugin`` if supplied, else load fresh.
@@ -215,6 +235,20 @@ def render_params(
     caller owns load + preset placement. When ``warmup`` is True, ``warmup_plugin``
     runs after loading (or directly on the supplied plugin) and before the flush
     sequence. See #705 for the load-once-per-shard motivation.
+
+    :param plugin_path: ``.vst3`` bundle path or Python synth name; ignored when
+        ``plugin`` is supplied.
+    :param params: Parameter name to raw host value in [0, 1], written before render.
+    :param midi_note: MIDI pitch of the rendered note.
+    :param velocity: MIDI velocity of the rendered note (0-127).
+    :param note_start_and_end: Note-on / note-off times in seconds.
+    :param signal_duration_seconds: Output buffer length in seconds.
+    :param sample_rate: Output sample rate in Hz.
+    :param channels: Output channel count.
+    :param preset_path: Baseline preset applied after load; ``None`` skips it.
+    :param plugin: Cached plugin instance to reuse (#705); ``None`` loads fresh.
+    :param warmup: Run the ``show_editor`` warm-up before the flush sequence.
+    :returns: Audio of shape ``(channels, signal_duration_seconds * sample_rate)``.
     """
     if plugin is None:
         plugin = load_plugin(plugin_path)

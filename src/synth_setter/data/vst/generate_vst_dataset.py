@@ -7,11 +7,10 @@ import hdf5plugin
 import librosa
 import numpy as np
 from loguru import logger
-from pedalboard import VST3Plugin
 from pydantic_settings import BaseSettings, CliApp, CliPositionalArg, SettingsConfigDict
 from pyloudnorm import Meter
 
-from synth_setter.data.vst.core import render_params
+from synth_setter.data.vst.core import HostedPlugin, render_params
 from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
 from synth_setter.data.vst.seeding import rng_for_sample
 from synth_setter.data.vst.shapes import (
@@ -106,7 +105,7 @@ def generate_sample(
     fixed_synth_params: dict[str, float] | None = None,
     fixed_note_params: NoteParams | None = None,
     *,
-    plugin: VST3Plugin | None = None,
+    plugin: HostedPlugin | None = None,
     warmup: bool = False,
     seed: SampleSeed | None = None,
 ) -> VSTDataSample:

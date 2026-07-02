@@ -200,6 +200,36 @@ symlinks the bundle under `plugins/`. Dataset generation resolves the plugin
 from the render config's `plugin_path`; `SYNTH_SETTER_PLUGIN_PATH` only sets the
 default for tools that don't take a render config (tests, the interactive CLIs).
 
+## Python differentiable synths (torchsynth, synthax)
+
+Not every synth is a `.vst3`. `torchsynth` (PyTorch) and `synthax` (JAX) are
+Python differentiable synths hosted behind the same plugin surface:
+`core.load_plugin` dispatches on the bare plugin-path names `torchsynth` /
+`synthax` to adapters in
+[`python_synth.py`](../../src/synth_setter/data/vst/python_synth.py) that
+duck-type `pedalboard.VST3Plugin`, so every render config, writer, and cadence
+works unchanged. Differences from a VST3 registration:
+
+- **No preset file** — `preset_path: ""` in the render config, and the registry
+  maps the name to `""` (`load_preset` is a no-op).
+- **`renderer_version`** is the installed pip package version, not a bundle
+  version (`extract_renderer_version` reads `importlib.metadata`).
+- **Param specs are regenerated, not hand-tuned** — every native parameter is
+  machine-normalized to [0, 1] already, so the spec is all full-range
+  `ContinuousParameter`s. After a library upgrade run
+  `python -m synth_setter.data.vst.python_synth` and commit the refreshed
+  `*_param_spec.py`; a sync test pins the spec against live introspection.
+
+Smoke the whole loop locally (no plugins, no X11):
+
+```bash
+synth-setter-generate-dataset experiment=generate_dataset/torchsynth-smoke
+python -m synth_setter.cli.train experiment=torchsynth/ffn_smoke \
+  datamodule.download_dataset_root_uri=r2://intermediate-data/data/torchsynth-smoke/<run-id>
+```
+
+(`synthax-smoke` / `synthax/ffn_smoke` are the JAX twins.)
+
 ## See also
 
 - [architecture](../architecture.md) — where the registry sits in the pipeline.

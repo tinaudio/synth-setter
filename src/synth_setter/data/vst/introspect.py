@@ -92,9 +92,9 @@ MAX_NUMERIC_CATEGORY_VALUES = 16
 
 # Note-conditioning defaults copied from the Surge specs; every spec needs a
 # pitch + note_start_and_end pair and these ranges are sane for most synths.
-_DEFAULT_PITCH_MIN = 48
-_DEFAULT_PITCH_MAX = 72
-_DEFAULT_MAX_NOTE_DURATION_SECONDS = 4.0
+DEFAULT_PITCH_MIN = 48
+DEFAULT_PITCH_MAX = 72
+DEFAULT_MAX_NOTE_DURATION_SECONDS = 4.0
 # Mirrors [tool.ruff] line-length; drift is caught by the emitted-draft
 # format-clean tests (test_rendered_module_is_ruff_format_clean).
 _MAX_LINE_LENGTH = 99
@@ -210,7 +210,7 @@ def render_param_spec_module(
         lines.append("    [],")
     pitch = (
         f'DiscreteLiteralParameter(name="pitch", '
-        f"min={_DEFAULT_PITCH_MIN}, max={_DEFAULT_PITCH_MAX})"
+        f"min={DEFAULT_PITCH_MIN}, max={DEFAULT_PITCH_MAX})"
     )
     lines.extend(
         [
@@ -218,7 +218,7 @@ def render_param_spec_module(
             f"        {pitch},",
             "        NoteDurationParameter(",
             '            name="note_start_and_end",',
-            f"            max_note_duration_seconds={_DEFAULT_MAX_NOTE_DURATION_SECONDS},",
+            f"            max_note_duration_seconds={DEFAULT_MAX_NOTE_DURATION_SECONDS},",
             "        ),",
             "    ],",
             ")",

@@ -1,0 +1,12 @@
+# Synth-identity overrides for the synthax (JAX) Python backend; generic render
+# knobs inherit from surge_xt. No preset file — "" is the no-preset sentinel.
+# plugin_reload_cadence "once" keeps the jitted Voice cached across a shard;
+# gui_toggle_cadence "never" because there is no editor to warm up.
+defaults:
+  - surge_xt
+plugin_path: "synthax"
+preset_path: ""
+param_spec_name: "synthax"
+renderer_version: "0.2.2"
+plugin_reload_cadence: "once"
+gui_toggle_cadence: "never"
