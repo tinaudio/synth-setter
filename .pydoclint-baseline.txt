@@ -49,9 +49,6 @@ src/synth_setter/data/vst/core.py
     DOC103: Function `extract_renderer_version`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [plugin_path: Path].
     DOC201: Function `extract_renderer_version` does not have a return section in docstring
     DOC503: Function `extract_renderer_version` exceptions in the "Raises" section in the docstring do not match those in the function body. Raised exceptions in the docstring: ['FileNotFoundError', 'RuntimeError', 'json.JSONDecodeError', 'plistlib.InvalidFileException']. Raised exceptions in the body: ['FileNotFoundError', 'RuntimeError'].
-    DOC101: Function `load_plugin`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `load_plugin`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [plugin_path: str].
-    DOC201: Function `load_plugin` does not have a return section in docstring
 --------------------
 src/synth_setter/data/vst/generate_vst_dataset.py
     DOC101: Function `make_spectrogram`: Docstring contains fewer arguments than in function signature.

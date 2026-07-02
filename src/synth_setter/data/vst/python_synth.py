@@ -20,6 +20,7 @@ render so importing this module stays cheap for VST-only workflows.
 
 from __future__ import annotations
 
+import abc
 import dataclasses
 import sys
 import threading
@@ -29,6 +30,12 @@ from importlib.metadata import version as _dist_version
 from typing import TYPE_CHECKING, NamedTuple, cast
 
 import numpy as np
+
+from synth_setter.data.vst.introspect import (
+    DEFAULT_MAX_NOTE_DURATION_SECONDS,
+    DEFAULT_PITCH_MAX,
+    DEFAULT_PITCH_MIN,
+)
 
 if TYPE_CHECKING:
     import jax
@@ -121,7 +128,7 @@ def _parse_note(
     return (note_on[0], note_on[1], float("inf"))
 
 
-class PythonSynthPlugin:
+class PythonSynthPlugin(abc.ABC):
     """Shared VST3-surface adapter for Python synth voices.
 
     Subclasses set ``_dist_name`` and implement ``_initial_param_values``
@@ -133,6 +140,7 @@ class PythonSynthPlugin:
     _dist_name: str
 
     def __init__(self) -> None:
+        """Defer parameter enumeration until first ``parameters`` access."""
         self._parameters: dict[str, _PluginParameter] | None = None
 
     @property
@@ -213,14 +221,14 @@ class PythonSynthPlugin:
             out[offset : offset + length] = mono[:length]
         return np.broadcast_to(out, (channels, num_samples)).copy()
 
+    @abc.abstractmethod
     def _initial_param_values(self) -> Iterable[tuple[str, float]]:
         """Enumerate ``(name, raw_value)`` for every exposed native parameter.
 
         :returns: One entry per parameter, in the synth's native order.
-        :raises NotImplementedError: Subclasses must implement.
         """
-        raise NotImplementedError
 
+    @abc.abstractmethod
     def _render_mono(
         self, pitch: int, note_duration: float, duration_seconds: float, sample_rate: float
     ) -> np.ndarray:
@@ -231,9 +239,7 @@ class PythonSynthPlugin:
         :param duration_seconds: Voice buffer length in seconds.
         :param sample_rate: Render sample rate in Hz.
         :returns: Mono float32 audio of ``duration_seconds * sample_rate`` samples.
-        :raises NotImplementedError: Subclasses must implement.
         """
-        raise NotImplementedError
 
 
 def _import_torchsynth() -> tuple[type, type]:
@@ -276,6 +282,7 @@ class TorchSynthPlugin(PythonSynthPlugin):
     _dist_name = "torchsynth"
 
     def __init__(self) -> None:
+        """Start with no voice; ``_voice_for`` builds one per render geometry."""
         super().__init__()
         self._voice: TorchSynthVoice | None = None
         self._voice_key: tuple[float, float] | None = None
@@ -404,7 +411,7 @@ def _leaf_names(module: str, param: str, shape: tuple[int, ...]) -> list[str]:
     ]
 
 
-def _iter_leaves(params: SynthaxTree) -> list[tuple[str, str, "jax.Array"]]:
+def _iter_leaves(params: SynthaxTree) -> list[tuple[str, str, jax.Array]]:
     """List ``(module, param, leaf)`` for every non-keyboard parameter leaf.
 
     :param params: The flax parameter tree from ``Voice.init``.
@@ -432,6 +439,7 @@ class SynthaxPlugin(PythonSynthPlugin):
     _dist_name = "synthax"
 
     def __init__(self) -> None:
+        """Start with no voice; ``_voice_for`` builds one per render geometry."""
         super().__init__()
         self._voice: SynthaxVoice | None = None
         self._apply: Callable[[SynthaxTree], jax.Array] | None = None
@@ -552,12 +560,6 @@ def render_param_spec_module(name: str) -> str:
     :param name: A member of ``PYTHON_SYNTH_NAMES``.
     :returns: Python source for the spec module.
     """
-    from synth_setter.data.vst.introspect import (
-        DEFAULT_MAX_NOTE_DURATION_SECONDS,
-        DEFAULT_PITCH_MAX,
-        DEFAULT_PITCH_MIN,
-    )
-
     plugin = load_python_synth(name)
     lines = [
         f'"""ParamSpec for {name} (v{plugin.version}), generated from live introspection.',

@@ -88,7 +88,10 @@ class TestExtractRendererVersion:
             extract_renderer_version(Path("plugins/DoesNotExist.vst3"))
 
 
-@pytest.fixture(scope="module", params=["torchsynth", "synthax"])
+@pytest.fixture(
+    scope="module",
+    params=["torchsynth", pytest.param("synthax", marks=pytest.mark.slow)],
+)
 def plugin(request: pytest.FixtureRequest) -> PythonSynthPlugin:
     """Provide one adapter per backend, shared across the surface tests.
 
@@ -148,6 +151,7 @@ class TestPluginSurface:
         )
         assert out.shape == (_CHANNELS, _NUM_SAMPLES)
         assert out.dtype == np.float32
+        assert np.all(np.isfinite(out))
         assert float(np.abs(out).max()) > 0.0
 
     def test_process_same_inputs_twice_identical_output(self, plugin: PythonSynthPlugin) -> None:
@@ -184,12 +188,17 @@ class TestPluginSurface:
         :param plugin: The backend adapter under test.
         """
         args = (_note_events(), _DURATION_S, _SAMPLE_RATE, _CHANNELS, _BLOCK_SIZE, True)
-        for param in plugin.parameters.values():
-            param.raw_value = 0.25
-        low = plugin.process(*args)
-        for param in plugin.parameters.values():
-            param.raw_value = 0.75
-        high = plugin.process(*args)
+        saved = {name: param.raw_value for name, param in plugin.parameters.items()}
+        try:
+            for param in plugin.parameters.values():
+                param.raw_value = 0.25
+            low = plugin.process(*args)
+            for param in plugin.parameters.values():
+                param.raw_value = 0.75
+            high = plugin.process(*args)
+        finally:
+            for name, param in plugin.parameters.items():
+                param.raw_value = saved[name]
         assert not np.array_equal(low, high)
 
     def test_load_preset_and_reset_are_noops(self, plugin: PythonSynthPlugin) -> None:

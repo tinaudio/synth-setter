@@ -66,7 +66,11 @@ class TestRegistry:
 
 
 @pytest.mark.parametrize(
-    ("name", "plugin_cls"), [("torchsynth", TorchSynthPlugin), ("synthax", SynthaxPlugin)]
+    ("name", "plugin_cls"),
+    [
+        ("torchsynth", TorchSynthPlugin),
+        pytest.param("synthax", SynthaxPlugin, marks=pytest.mark.slow),
+    ],
 )
 class TestSpecMatchesLiveLibrary:
     """The checked-in generated specs stay in sync with live library introspection."""
