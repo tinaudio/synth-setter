@@ -170,8 +170,11 @@ audio = [
   "pyloudnorm",
   "mido",
   "scipy>=1.14,<1.15",
-  "torchsynth>=1.0.2",
-  "synthax>=0.2.2",
+  # Pinned exactly: the checked-in *_param_spec.py modules and the render
+  # configs' renderer_version stamps are generated against these versions;
+  # bump all three together (see docs/guides/adding-a-new-synth.md).
+  "torchsynth==1.0.2",
+  "synthax==0.2.2",
 ]
 metrics = [
   "pesto-pitch==2.0.1",
