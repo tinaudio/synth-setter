@@ -61,12 +61,13 @@ def extract_renderer_version(plugin_path: Path) -> str:
     against this function's output before rendering (see
     `synth_setter.cli.generate_dataset.generate`).
 
+    Malformed metadata files propagate their parser errors
+    (``json.JSONDecodeError`` / ``plistlib.InvalidFileException``).
+
     :param plugin_path: ``.vst3`` bundle path, or a bare Python synth name.
     :returns: The version string the renderer reports.
     :raises FileNotFoundError: plugin_path does not exist.
     :raises RuntimeError: version cannot be extracted by any method.
-    :raises json.JSONDecodeError: moduleinfo.json is malformed.
-    :raises plistlib.InvalidFileException: Info.plist is malformed.
     """
     if str(plugin_path) in PYTHON_SYNTH_NAMES:
         from synth_setter.data.vst.python_synth import python_synth_version
