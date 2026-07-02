@@ -274,3 +274,18 @@ def test_core_imports_standalone_without_synth_setter_package() -> None:
     )
     assert result.returncode == 0, result.stderr
     assert "standalone-ok" in result.stdout
+
+
+def test_load_preset_empty_path_skips_host_call() -> None:
+    """``core.load_preset`` treats ``""`` as the no-preset sentinel and never hits the host.
+
+    An accidental empty path for a VST3 config would otherwise surface as an
+    opaque host error inside ``plugin.load_preset``.
+    """
+    from synth_setter.data.vst.core import load_preset
+
+    class _RejectingPlugin:
+        def load_preset(self, preset_path: str) -> None:
+            raise AssertionError("host load_preset must not be called for empty preset_path")
+
+    load_preset(_RejectingPlugin(), "")  # type: ignore[arg-type]

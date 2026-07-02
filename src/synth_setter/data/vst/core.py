@@ -211,6 +211,15 @@ def run_with_editor_held_open(
 
 
 def load_preset(plugin: HostedPlugin, preset_path: str) -> None:
+    """Load a baseline preset into the plugin; ``""`` means no preset and skips the host call.
+
+    :param plugin: A loaded plugin instance.
+    :param preset_path: ``.fxp``/``.vstpreset`` path, or ``""`` for backends
+        without preset files (Python synths).
+    """
+    if not preset_path:
+        logger.info("Empty preset_path — skipping preset load")
+        return
     logger.info(f"Loading preset {preset_path}")
     plugin.load_preset(preset_path)
     logger.info(f"Preset {preset_path} loaded")
