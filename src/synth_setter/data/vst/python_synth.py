@@ -211,7 +211,14 @@ class PythonSynthPlugin(abc.ABC):
             return np.zeros((channels, 0), dtype=np.float32)
         pitch, note_start, note_end = note
         num_samples = int(duration_seconds * sample_rate)
-        note_duration = min(note_end, duration_seconds) - note_start
+        # Clamp the note into the render window; a note that doesn't overlap
+        # it (start past the buffer, end before start, negative times) is
+        # silence, not a backend error.
+        note_start = min(max(note_start, 0.0), duration_seconds)
+        note_end = min(max(note_end, note_start), duration_seconds)
+        note_duration = note_end - note_start
+        if note_duration <= 0.0:
+            return np.zeros((channels, num_samples), dtype=np.float32)
         mono = self._render_mono(pitch, note_duration, duration_seconds, sample_rate)
         offset = int(note_start * sample_rate)
         out = np.zeros(num_samples, dtype=np.float32)

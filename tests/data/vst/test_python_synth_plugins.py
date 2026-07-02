@@ -201,6 +201,37 @@ class TestPluginSurface:
                 param.raw_value = saved[name]
         assert not np.array_equal(low, high)
 
+    def test_process_note_outside_buffer_returns_silence(
+        self, plugin: PythonSynthPlugin
+    ) -> None:
+        """A note that never overlaps the render window yields a full silent buffer.
+
+        :param plugin: The backend adapter under test.
+        """
+        out = plugin.process(
+            _note_events(start=_DURATION_S + 1.0, end=_DURATION_S + 2.0),
+            _DURATION_S,
+            _SAMPLE_RATE,
+            _CHANNELS,
+            _BLOCK_SIZE,
+            True,
+        )
+        assert out.shape == (_CHANNELS, _NUM_SAMPLES)
+        assert float(np.abs(out).max()) == 0.0
+
+    def test_process_inverted_note_times_returns_silence(
+        self, plugin: PythonSynthPlugin
+    ) -> None:
+        """``note_end < note_start`` clamps to a zero-length note — silence, no error.
+
+        :param plugin: The backend adapter under test.
+        """
+        out = plugin.process(
+            _note_events(start=0.5, end=0.1), _DURATION_S, _SAMPLE_RATE, _CHANNELS, _BLOCK_SIZE, True
+        )
+        assert out.shape == (_CHANNELS, _NUM_SAMPLES)
+        assert float(np.abs(out).max()) == 0.0
+
     def test_load_preset_and_reset_are_noops(self, plugin: PythonSynthPlugin) -> None:
         """``load_preset`` and ``reset`` accept calls without effect or error.
 
