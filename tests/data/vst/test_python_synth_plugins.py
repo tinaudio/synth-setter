@@ -217,3 +217,29 @@ class TestPluginSurface:
         close = threading.Event()
         close.set()
         plugin.show_editor(close)
+
+
+def test_core_imports_standalone_without_synth_setter_package() -> None:
+    """``core.py`` imports as a bare module with the ``synth_setter`` package blocked.
+
+    The Docker build's headless load-check copies ``core.py`` alone into the
+    image and runs ``from core import load_plugin`` before the package is
+    installed (docker/ubuntu22_04/Dockerfile, python-base stage) — so the
+    Python-synth dispatch must not add first-party module-level imports.
+    """
+    import subprocess
+    import sys
+
+    vst_dir = Path("src/synth_setter/data/vst").resolve()
+    code = (
+        "import sys\n"
+        f"sys.path.insert(0, {str(vst_dir)!r})\n"
+        "sys.modules['synth_setter'] = None\n"
+        "from core import load_plugin\n"
+        "print('standalone-ok')\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0, result.stderr
+    assert "standalone-ok" in result.stdout

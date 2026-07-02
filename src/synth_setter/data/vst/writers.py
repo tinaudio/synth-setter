@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import h5py
 import numpy as np
@@ -20,12 +20,10 @@ from loguru import logger
 from tqdm import trange
 
 from synth_setter.data.vst import param_specs
-from synth_setter.data.vst.core import (
-    HostedPlugin,
-    load_plugin,
-    load_preset,
-    run_with_editor_held_open,
-)
+from synth_setter.data.vst.core import load_plugin, load_preset, run_with_editor_held_open
+
+if TYPE_CHECKING:
+    from synth_setter.data.vst.core import HostedPlugin
 from synth_setter.data.vst.generate_vst_dataset import (
     SampleSeed,
     VSTDataSample,

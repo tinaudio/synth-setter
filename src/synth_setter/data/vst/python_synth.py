@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, NamedTuple, cast
 
 import numpy as np
 
+from synth_setter.data.vst.core import PYTHON_SYNTH_NAMES
 from synth_setter.data.vst.introspect import (
     DEFAULT_MAX_NOTE_DURATION_SECONDS,
     DEFAULT_PITCH_MAX,
@@ -46,8 +47,6 @@ if TYPE_CHECKING:
 
     # The flax parameter tree: {"params": {module_key: {param: leaf}}}.
     SynthaxTree = dict[str, dict[str, dict[str, "jax.Array"]]]
-
-PYTHON_SYNTH_NAMES = frozenset({"torchsynth", "synthax"})
 
 _MIDI_STATUS_MASK = 0xF0
 _MIDI_NOTE_ON_STATUS = 0x90

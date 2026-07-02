@@ -1,6 +1,7 @@
+from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import h5py
 import hdf5plugin
@@ -10,7 +11,7 @@ from loguru import logger
 from pydantic_settings import BaseSettings, CliApp, CliPositionalArg, SettingsConfigDict
 from pyloudnorm import Meter
 
-from synth_setter.data.vst.core import HostedPlugin, render_params
+from synth_setter.data.vst.core import render_params
 from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
 from synth_setter.data.vst.seeding import rng_for_sample
 from synth_setter.data.vst.shapes import (
@@ -25,6 +26,9 @@ from synth_setter.data.vst.shapes import (
     mel_n_fft,
     param_array_dataset_shape,
 )
+
+if TYPE_CHECKING:
+    from synth_setter.data.vst.core import HostedPlugin
 from synth_setter.pipeline.schemas.spec import (
     OutputFormat,
     RenderConfig,

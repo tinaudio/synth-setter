@@ -1,9 +1,11 @@
+from __future__ import annotations
+
 import json
 import plistlib
 import threading
 from collections.abc import Callable
 from pathlib import Path
-from typing import TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
 import mido
 import numpy as np
@@ -11,14 +13,17 @@ from loguru import logger
 from pedalboard import VST3Plugin
 from pedalboard.io import AudioFile
 
-from synth_setter.data.vst.python_synth import (
-    PythonSynthPlugin,
-    is_python_synth,
-    load_python_synth,
-    python_synth_version,
-)
+if TYPE_CHECKING:
+    from synth_setter.data.vst.python_synth import PythonSynthPlugin
 
-HostedPlugin = VST3Plugin | PythonSynthPlugin
+    HostedPlugin = VST3Plugin | PythonSynthPlugin
+
+# Python differentiable-synth backends dispatched by bare plugin-path name.
+# Defined here (not in python_synth) because the Docker build's headless
+# load-check imports this file standalone, before the synth_setter package
+# exists in the image — core.py must stay free of first-party module-level
+# imports (docker/ubuntu22_04/Dockerfile "python-base" stage).
+PYTHON_SYNTH_NAMES = frozenset({"torchsynth", "synthax"})
 
 # How long the editor stays open before we signal it to close.
 _EDITOR_INIT_DELAY_SECONDS = 0.5
@@ -61,7 +66,9 @@ def extract_renderer_version(plugin_path: Path) -> str:
     :raises json.JSONDecodeError: moduleinfo.json is malformed.
     :raises plistlib.InvalidFileException: Info.plist is malformed.
     """
-    if is_python_synth(str(plugin_path)):
+    if str(plugin_path) in PYTHON_SYNTH_NAMES:
+        from synth_setter.data.vst.python_synth import python_synth_version
+
         return python_synth_version(str(plugin_path))
 
     if not plugin_path.exists():
@@ -98,7 +105,9 @@ def load_plugin(plugin_path: str, plugin_name: str | None = None) -> HostedPlugi
         classes when a bundle exposes more than one.
     :returns: The loaded plugin.
     """
-    if is_python_synth(plugin_path):
+    if plugin_path in PYTHON_SYNTH_NAMES:
+        from synth_setter.data.vst.python_synth import load_python_synth
+
         logger.info(f"Loading Python synth backend {plugin_path}")
         return load_python_synth(plugin_path)
     logger.info(f"Loading plugin {plugin_path}")
