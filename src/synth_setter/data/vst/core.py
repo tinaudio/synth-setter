@@ -51,8 +51,8 @@ class RenderWorkerLeaked(RuntimeError):
 def extract_renderer_version(plugin_path: Path) -> str:
     """Extract the version string from a VST3 plugin bundle or Python synth backend.
 
-    Python synth names (``python_synth.PYTHON_SYNTH_NAMES``) report the installed
-    package version. For ``.vst3`` bundles, tries the static-metadata files first
+    Python synth names (``PYTHON_SYNTH_NAMES``) report the installed package
+    version. For ``.vst3`` bundles, tries the static-metadata files first
     (`Contents/moduleinfo.json` on Linux, `Contents/Info.plist` on macOS), then
     falls back to loading the plugin via pedalboard and reading `plugin.version`.
     The fallback requires a usable X11 display, so callers in interpreter-only
@@ -61,6 +61,8 @@ def extract_renderer_version(plugin_path: Path) -> str:
     against this function's output before rendering (see
     `synth_setter.cli.generate_dataset.generate`).
 
+    :param plugin_path: ``.vst3`` bundle path, or a bare Python synth name.
+    :returns: The version string the renderer reports.
     :raises FileNotFoundError: plugin_path does not exist.
     :raises RuntimeError: version cannot be extracted by any method.
     :raises json.JSONDecodeError: moduleinfo.json is malformed.
@@ -95,9 +97,9 @@ def extract_renderer_version(plugin_path: Path) -> str:
 def load_plugin(plugin_path: str, plugin_name: str | None = None) -> HostedPlugin:
     """Load a VST3 plugin instance or a Python synth backend.
 
-    No warm-up — see ``warmup_plugin``. Bare names in
-    ``python_synth.PYTHON_SYNTH_NAMES`` (e.g. ``"torchsynth"``) dispatch to the
-    Python-synth adapters; anything else is treated as a ``.vst3`` bundle path.
+    No warm-up — see ``warmup_plugin``. Bare names in ``PYTHON_SYNTH_NAMES``
+    (e.g. ``"torchsynth"``) dispatch to the Python-synth adapters; anything
+    else is treated as a ``.vst3`` bundle path.
 
     :param plugin_path: Path to the ``.vst3`` bundle, or a Python synth name.
     :param plugin_name: Factory class to open from a multi-class bundle; ``None``
