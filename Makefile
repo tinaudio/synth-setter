@@ -136,15 +136,15 @@ install-surge-xt: ## Download Surge XT VST3 into plugins/ (skipped if already pr
 	case "$$OS" in \
 		Linux) \
 			if [ "$$ARCH" != "x86_64" ]; then \
-				echo "ERROR: the Surge XT Linux release only ships an x86_64 build (detected: $$ARCH)."; \
-				echo "Install via your package manager (e.g. apt install surge-xt) or build from source,"; \
-				echo "then symlink it: ln -s /path/to/Surge XT.vst3 plugins/"; \
+				echo "ERROR: the Surge XT Linux release only ships an x86_64 build (detected: $$ARCH)." >&2; \
+				echo "Install via your package manager (e.g. apt install surge-xt) or build from source," >&2; \
+				echo "then symlink it: ln -s /path/to/Surge XT.vst3 plugins/" >&2; \
 				exit 1; \
 			fi; \
 			ASSET="$(SURGE_XT_LINUX_ASSET)"; EXPECTED_MD5="$(SURGE_XT_LINUX_MD5)" ;; \
 		Darwin) \
 			ASSET="$(SURGE_XT_MACOS_ASSET)"; EXPECTED_MD5="$(SURGE_XT_MACOS_MD5)" ;; \
-		*) echo "ERROR: Unsupported platform: $$OS"; exit 1 ;; \
+		*) echo "ERROR: Unsupported platform: $$OS" >&2; exit 1 ;; \
 	esac; \
 	mkdir -p "$(SURGE_XT_CACHE)" plugins; \
 	ARCHIVE="$(SURGE_XT_CACHE)/$$ASSET"; \
@@ -159,14 +159,14 @@ install-surge-xt: ## Download Surge XT VST3 into plugins/ (skipped if already pr
 	elif command -v md5 >/dev/null 2>&1; then \
 		ACTUAL_MD5=$$(md5 -q "$$ARCHIVE"); \
 	else \
-		echo "ERROR: neither 'md5sum' (Linux) nor 'md5' (macOS) is available — cannot verify checksum"; \
+		echo "ERROR: neither 'md5sum' (Linux) nor 'md5' (macOS) is available — cannot verify checksum" >&2; \
 		exit 1; \
 	fi; \
 	if [ "$$ACTUAL_MD5" != "$$EXPECTED_MD5" ]; then \
-		echo "ERROR: md5 mismatch for $$ARCHIVE"; \
-		echo "  expected: $$EXPECTED_MD5"; \
-		echo "  actual:   $$ACTUAL_MD5"; \
-		echo "Remove the cached file and retry: rm '$$ARCHIVE'"; \
+		echo "ERROR: md5 mismatch for $$ARCHIVE" >&2; \
+		echo "  expected: $$EXPECTED_MD5" >&2; \
+		echo "  actual:   $$ACTUAL_MD5" >&2; \
+		echo "Remove the cached file and retry: rm '$$ARCHIVE'" >&2; \
 		exit 1; \
 	fi; \
 	echo "md5 OK. Extracting Surge XT.vst3 into plugins/..."; \

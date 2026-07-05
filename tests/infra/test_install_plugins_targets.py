@@ -17,6 +17,7 @@ import platform
 import re
 import shutil
 import subprocess
+import tarfile
 import zipfile
 from collections.abc import Mapping
 from pathlib import Path
@@ -116,6 +117,31 @@ def _zip_containing(inner_dir: str) -> bytes:
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr(f"{inner_dir}/Contents/x86_64-linux/plugin.so", b"fake plugin binary")
     return buf.getvalue()
+
+
+def _targz_containing(inner_dir: str) -> bytes:
+    """Build an in-memory .tgz whose payload lives under ``inner_dir``.
+
+    :param inner_dir: archive-internal directory path, e.g. ``./Six Sines.vst3``.
+    :returns: the gzipped tarball's bytes.
+    """
+    payload = io.BytesIO(b"fake plugin binary")
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        info = tarfile.TarInfo(f"{inner_dir}/Contents/x86_64-linux/plugin.so")
+        info.size = len(payload.getvalue())
+        tf.addfile(info, payload)
+    return buf.getvalue()
+
+
+def _home_env(checkout: Path) -> tuple[Path, dict[str, str]]:
+    """Create a throwaway HOME under ``checkout`` and an env pointing at it.
+
+    :param checkout: test checkout the HOME directory nests under.
+    :returns: ``(home_path, env)`` for `_run_make` calls that must isolate the cache.
+    """
+    home = checkout / "home"
+    return home, {**os.environ, "HOME": str(home)}
 
 
 def _seed_cache(home: Path, asset_name: str, payload: bytes) -> str:
@@ -220,11 +246,10 @@ def test_install_dexed_cached_archive_verifies_and_installs_bundle(
 
     :param makefile_checkout: throwaway checkout holding the Makefile.
     """
-    home = makefile_checkout / "home"
+    home, env = _home_env(makefile_checkout)
     version = _makefile_var("DEXED_VERSION")
     payload = _zip_containing(f"dexed-{version}-lnx/Dexed.vst3")
     digest = _seed_cache(home, f"dexed-{version}-lnx.zip", payload)
-    env = {**os.environ, "HOME": str(home)}
 
     result = _run_make(makefile_checkout, "install-dexed", f"DEXED_SHA256={digest}", env=env)
 
@@ -235,6 +260,53 @@ def test_install_dexed_cached_archive_verifies_and_installs_bundle(
 
 
 @requires_x86_64_linux
+def test_install_six_sines_cached_targz_verifies_and_installs_bundle(
+    makefile_checkout: Path,
+) -> None:
+    """The .tgz extraction branch handles the space-containing Six Sines bundle name.
+
+    :param makefile_checkout: throwaway checkout holding the Makefile.
+    """
+    home, env = _home_env(makefile_checkout)
+    asset = _makefile_var("SIX_SINES_ASSET")
+    payload = _targz_containing("./Six Sines.vst3")
+    digest = _seed_cache(home, asset, payload)
+
+    result = _run_make(
+        makefile_checkout, "install-six-sines", f"SIX_SINES_SHA256={digest}", env=env
+    )
+
+    assert result.returncode == 0, result.stderr
+    installed = makefile_checkout / "plugins" / "Six Sines.vst3"
+    assert (installed / "Contents" / "x86_64-linux" / "plugin.so").is_file()
+
+
+@requires_x86_64_linux
+def test_install_plugins_mixed_presence_installs_only_missing_bundle(
+    makefile_checkout: Path,
+) -> None:
+    """The aggregate target skips present bundles and installs the missing one in one run.
+
+    :param makefile_checkout: throwaway checkout holding the Makefile.
+    """
+    home, env = _home_env(makefile_checkout)
+    plugins = makefile_checkout / "plugins"
+    plugins.mkdir()
+    for name in ("Surge XT.vst3", "OB-Xf.vst3", "Six Sines.vst3"):
+        (plugins / name).mkdir()
+    version = _makefile_var("DEXED_VERSION")
+    payload = _zip_containing(f"dexed-{version}-lnx/Dexed.vst3")
+    digest = _seed_cache(home, f"dexed-{version}-lnx.zip", payload)
+
+    result = _run_make(makefile_checkout, "install-plugins", f"DEXED_SHA256={digest}", env=env)
+
+    assert result.returncode == 0, result.stderr
+    assert "plugins/Surge XT.vst3 already exists" in result.stdout
+    assert "Installed plugins/Dexed.vst3" in result.stdout
+    assert (plugins / "Dexed.vst3" / "Contents" / "x86_64-linux" / "plugin.so").is_file()
+
+
+@requires_x86_64_linux
 def test_install_dexed_checksum_mismatch_fails_without_installing(
     makefile_checkout: Path,
 ) -> None:
@@ -242,10 +314,9 @@ def test_install_dexed_checksum_mismatch_fails_without_installing(
 
     :param makefile_checkout: throwaway checkout holding the Makefile.
     """
-    home = makefile_checkout / "home"
+    home, env = _home_env(makefile_checkout)
     version = _makefile_var("DEXED_VERSION")
     _seed_cache(home, f"dexed-{version}-lnx.zip", _zip_containing("x/Dexed.vst3"))
-    env = {**os.environ, "HOME": str(home)}
 
     result = _run_make(makefile_checkout, "install-dexed", f"DEXED_SHA256={'0' * 64}", env=env)
 
@@ -260,10 +331,9 @@ def test_install_six_sines_unsupported_archive_type_fails(makefile_checkout: Pat
 
     :param makefile_checkout: throwaway checkout holding the Makefile.
     """
-    home = makefile_checkout / "home"
+    home, env = _home_env(makefile_checkout)
     payload = b"not an archive"
     digest = _seed_cache(home, "six-sines.rar", payload)
-    env = {**os.environ, "HOME": str(home)}
 
     result = _run_make(
         makefile_checkout,
@@ -284,11 +354,10 @@ def test_install_dexed_archive_missing_bundle_fails(makefile_checkout: Path) -> 
 
     :param makefile_checkout: throwaway checkout holding the Makefile.
     """
-    home = makefile_checkout / "home"
+    home, env = _home_env(makefile_checkout)
     version = _makefile_var("DEXED_VERSION")
     payload = _zip_containing(f"dexed-{version}-lnx/NotThePlugin.vst3")
     digest = _seed_cache(home, f"dexed-{version}-lnx.zip", payload)
-    env = {**os.environ, "HOME": str(home)}
 
     result = _run_make(makefile_checkout, "install-dexed", f"DEXED_SHA256={digest}", env=env)
 
