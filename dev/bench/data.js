@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783289144398,
+  "lastUpdate": 1783289147412,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -13477,6 +13477,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.72182416200003,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7e758d79a18a80279891008c553c98b885669165",
+          "message": "chore(config): full-scale surge_simple + surge_xt Lance datagen configs (#1762)\n\n* chore(config): surge_simple + surge_xt production Lance datagen configs\n\nAdds two generate_dataset experiments writing Lance shards to the\nexperiments bucket: surge-simple-lance-440k-20k-20k (192 shards) and\nsurge-xt-lance-2m-40k-10k (820 shards). Both render shards in parallel\nwith max_retries=5, samples_per_shard=2500, and\nplugin_reload_cadence=once; everything else inherits group defaults.\n\nRegisters both in the DATASET_EXPERIMENTS allowlist so each composes,\nvalidates as DatasetSpec, and JSON round-trips in CI.\n\nRefs #1760\n\n* chore(config): document Lance datagen sizing and pin shard math\n\nAddresses the pre-PR review WARNs on the two new Lance experiment\nconfigs: adds the sibling-style sizing header (totals → shard count),\nmoves each render-tuning rationale next to the key it justifies, pins\nthe exact shard counts (192 / 820) in a dedicated test so a transposed\nsplit digit cannot slip through, and reconciles the config-naming\nconvention in data-pipeline.md with the {name}-lance-{train}-{val}-{test}\npattern the Lance configs actually use.\n\nRefs #1760\n\n* chore(config): pin per-split shard ranges and clarify bucket/seed intent\n\nSecond review pass on the Lance datagen configs: the shard-math test now\npins split_shard_ranges (176/8/8 and 800/16/4) so a same-total val/test\nswap fails, headers say \"Full-scale\" rather than \"Production\" to match\nthe deliberate experiments-bucket routing, and both configs document\nthat keeping the default base_seed repeats early shard seeds of the\nsmaller surge runs.\n\nRefs #1760\n\n* docs(data-pipeline): fix config-naming placeholder and format-neutral shard gloss\n\nCopilot review on #1762: the 480k in surge-simple-480k-10k is the\ntrain+val+test total, so the placeholder is {total_samples}, not\n{total_train_samples}; the Shard glossary entry now covers all three\ncontainer formats instead of describing shards as HDF5-only.\n\nRefs #1760\n\n* docs(data-pipeline): document experiments bucket and Lance shard shape\n\nApplies the doc-drift advisory for #1762: the Shard glossary entry now\nmatches §7.10 (Lance shards are dataset directories, not single R2\nobjects), a Lance glossary row joins the WebDataset one, the\nstorage-provenance spec §2 acknowledges the experiments bucket override,\nthe finalize artifact snippet derives the bucket from spec.r2.bucket,\nand doc-map's r2-group pattern points at configs/r2/ where the group\nactually lives.\n\nRefs #1760\n\n* docs(data-pipeline): drop superfluous bucket note from storage spec\n\nThe experiments-bucket override is already visible in the configs\nthemselves; the storage spec's canonical layout section stays scoped to\nthe prefix structure.\n\nRefs #1760\n\n* docs(data-pipeline): derive artifact reference from spec.r2.prefix\n\nCopilot on #1762: DatasetSpec has no dataset_config_id /\ndataset_wandb_run_id attributes; r2.prefix already materializes\ndata/{dataset_config_id}/{dataset_wandb_run_id}/ so the snippet now\nmatches the real schema without hard-coding the data/ segment.\n\nRefs #1760\n\n* docs(data-pipeline): map W&B artifact snippet to real DatasetSpec fields\n\nCopilot on #1762: dataset_config_id / dataset_wandb_run_id / param_spec /\ncode_version are metadata keys, not DatasetSpec attributes — source them\nfrom task_name, run_id, render.param_spec_name, and git_sha so the\nsnippet is runnable against the actual schema.\n\nRefs #1760",
+          "timestamp": "2026-07-05T20:32:32+01:00",
+          "tree_id": "9cff042ea26f68b72be35c34c00968f6cfe867b0",
+          "url": "https://github.com/tinaudio/synth-setter/commit/7e758d79a18a80279891008c553c98b885669165"
+        },
+        "date": 1783289146782,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.494987487792969,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 13.762107925862074,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.09779469668865204,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.0018985271453857422,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.2483887672424316,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 17.002114352599996,
             "unit": "seconds"
           }
         ]
