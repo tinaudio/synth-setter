@@ -213,6 +213,8 @@ if [ ! -f "$$ARCHIVE" ]; then \
 else \
 	echo "Using cached $$ARCHIVE"; \
 fi; \
+command -v sha256sum >/dev/null 2>&1 || { \
+	echo "ERROR: sha256sum not found — cannot verify checksum" >&2; exit 1; }; \
 echo "$(3)  $$ARCHIVE" | sha256sum -c - || { \
 	echo "Remove the cached file and retry: rm '$$ARCHIVE'" >&2; exit 1; }; \
 TMP="$$(mktemp -d)"; \
