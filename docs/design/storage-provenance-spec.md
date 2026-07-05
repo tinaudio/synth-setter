@@ -40,8 +40,6 @@ intermediate-data/
 
 The three prefixes (`data/`, `train/`, `eval/`) are the canonical per-run dataset footprint.
 
-`intermediate-data` is the default bucket (`src/synth_setter/configs/r2/default.yaml`); an experiment config may override `r2.bucket` — the experiment-scale and full-scale Lance datagen configs route to the `experiments` bucket — and the prefix layout above is identical inside whichever bucket is selected.
-
 ______________________________________________________________________
 
 ## 3. R2 Contents Per Workflow
