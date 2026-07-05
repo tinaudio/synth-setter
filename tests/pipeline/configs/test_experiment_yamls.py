@@ -88,21 +88,29 @@ def test_experiment_yaml_json_round_trips(experiment: str) -> None:
 
 
 @pytest.mark.parametrize(
-    ("experiment", "expected_num_shards"),
+    ("experiment", "expected_ranges"),
     [
-        ("generate_dataset/surge-simple-lance-440k-20k-20k", 192),
-        ("generate_dataset/surge-xt-lance-2m-40k-10k", 820),
+        (  # [440000, 20000, 20000] at samples_per_shard=2500 → 176/8/8 shards
+            "generate_dataset/surge-simple-lance-440k-20k-20k",
+            {"train": (0, 176), "val": (176, 184), "test": (184, 192)},
+        ),
+        (  # [2000000, 40000, 10000] at samples_per_shard=2500 → 800/16/4 shards
+            "generate_dataset/surge-xt-lance-2m-40k-10k",
+            {"train": (0, 800), "val": (800, 816), "test": (816, 820)},
+        ),
     ],
 )
-def test_production_lance_experiment_composes_expected_shard_count(
-    experiment: str, expected_num_shards: int
+def test_full_scale_lance_experiment_composes_expected_split_shard_ranges(
+    experiment: str, expected_ranges: dict[str, tuple[int, int]]
 ) -> None:
-    """Production Lance configs pin their exact shard math.
+    """Full-scale Lance configs pin their exact per-split shard math.
 
-    A transposed digit in ``train_val_test_sizes`` or ``samples_per_shard`` that
-    still divides evenly would pass the generic ``num_shards >= 1`` check above.
+    The generic ``num_shards >= 1`` check above accepts a transposed split
+    digit, and the shard total alone accepts a same-total val/test swap;
+    pinning ``split_shard_ranges`` catches both.
 
     :param experiment: Hydra experiment id under ``configs/experiment/generate_dataset/``.
-    :param expected_num_shards: Hand-computed ``sum(train_val_test_sizes) / samples_per_shard``.
+    :param expected_ranges: Hand-computed half-open shard-index ranges per split
+        (each span is ``split_size // samples_per_shard``).
     """
-    assert _compose_dataset_spec(experiment).num_shards == expected_num_shards
+    assert _compose_dataset_spec(experiment).split_shard_ranges == expected_ranges
