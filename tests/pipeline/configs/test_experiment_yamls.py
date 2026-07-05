@@ -85,3 +85,24 @@ def test_experiment_yaml_json_round_trips(experiment: str) -> None:
     spec = _compose_dataset_spec(experiment)
     restored = DatasetSpec.model_validate_json(spec.model_dump_json())
     assert restored == spec
+
+
+@pytest.mark.parametrize(
+    ("experiment", "expected_num_shards"),
+    [
+        ("generate_dataset/surge-simple-lance-440k-20k-20k", 192),
+        ("generate_dataset/surge-xt-lance-2m-40k-10k", 820),
+    ],
+)
+def test_production_lance_experiment_composes_expected_shard_count(
+    experiment: str, expected_num_shards: int
+) -> None:
+    """Production Lance configs pin their exact shard math.
+
+    A transposed digit in ``train_val_test_sizes`` or ``samples_per_shard`` that
+    still divides evenly would pass the generic ``num_shards >= 1`` check above.
+
+    :param experiment: Hydra experiment id under ``configs/experiment/generate_dataset/``.
+    :param expected_num_shards: Hand-computed ``sum(train_val_test_sizes) / samples_per_shard``.
+    """
+    assert _compose_dataset_spec(experiment).num_shards == expected_num_shards
