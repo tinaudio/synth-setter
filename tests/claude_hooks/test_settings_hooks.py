@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from tests.claude_hooks.conftest import GATE_MODE_ENV_VARS, scrub_gate_mode_env
+from tests.claude_hooks.conftest import GATE_OVERRIDE_ENV_VARS, scrub_gate_overrides
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SETTINGS_PATH = _REPO_ROOT / ".claude" / "settings.json"
@@ -123,46 +123,50 @@ def _run_hook_command_raw(command_body: str, raw_stdin: str) -> subprocess.Compl
     )
 
 
-def test_gate_mode_env_vars_after_autouse_scrub_absent_from_environ() -> None:
-    """No gate-mode override survives the autouse scrub into a test's environment.
+def test_gate_overrides_autouse_scrub_wired_and_environ_clean(
+    request: pytest.FixtureRequest,
+) -> None:
+    """The autouse scrub is in this test's fixture closure and left no override.
 
-    Canary for the ``_scrub_gate_mode_env`` autouse wiring — it can only fail
-    in a session that actually exports one of the vars (see the fixture for
-    why leakage matters); the removal logic itself is proven deterministically
-    by ``test_scrub_gate_mode_env_with_all_vars_set_removes_them``.
+    The fixture-closure assertion pins the ``autouse=True`` wiring even in
+    clean environments; the environ check can additionally fail only in a
+    session that actually exports one of the vars.
+
+    :param request: Exposes the active fixture names for the wiring check.
     """
-    leaked = {var: os.environ[var] for var in GATE_MODE_ENV_VARS if var in os.environ}
+    assert "_scrub_gate_overrides" in request.fixturenames
+    leaked = {var: os.environ[var] for var in GATE_OVERRIDE_ENV_VARS if var in os.environ}
     assert leaked == {}
 
 
-def test_scrub_gate_mode_env_with_all_vars_set_removes_them(
+def test_scrub_gate_overrides_with_all_vars_set_removes_them(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``scrub_gate_mode_env`` removes every var in its contracted set.
+    """``scrub_gate_overrides`` removes every var in its contracted set.
 
     Re-populates the vars after the autouse fixture already ran, so the outcome is independent of
     ambient session state.
 
     :param monkeypatch: Used to set the vars and handed to the scrubber.
     """
-    for var in GATE_MODE_ENV_VARS:
+    for var in GATE_OVERRIDE_ENV_VARS:
         monkeypatch.setenv(var, "warn")
 
-    scrub_gate_mode_env(monkeypatch)
+    scrub_gate_overrides(monkeypatch)
 
-    assert [var for var in GATE_MODE_ENV_VARS if var in os.environ] == []
+    assert [var for var in GATE_OVERRIDE_ENV_VARS if var in os.environ] == []
 
 
-def test_gate_mode_env_vars_bash_harness_list_matches_python_scrub_list() -> None:
+def test_gate_override_env_vars_bash_harness_list_matches_python_scrub_list() -> None:
     """``agent/hooks/test.sh`` unsets exactly the vars the pytest fixture scrubs.
 
     Drift guard: a gate var added to only one of the two lists would silently
     stop being scrubbed on the other surface.
     """
     harness = (_REPO_ROOT / "agent" / "hooks" / "test.sh").read_text()
-    match = re.search(r"GATE_MODE_ENV_VARS=\(([^)]*)\)", harness)
-    assert match, "GATE_MODE_ENV_VARS array not found in agent/hooks/test.sh"
-    assert tuple(match.group(1).split()) == GATE_MODE_ENV_VARS
+    match = re.search(r"GATE_OVERRIDE_ENV_VARS=\(([^)]*)\)", harness)
+    assert match, "GATE_OVERRIDE_ENV_VARS array not found in agent/hooks/test.sh"
+    assert tuple(match.group(1).split()) == GATE_OVERRIDE_ENV_VARS
 
 
 def test_no_if_at_matcher_entry_level() -> None:

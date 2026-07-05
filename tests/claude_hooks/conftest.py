@@ -4,29 +4,29 @@ from __future__ import annotations
 
 import pytest
 
-# Gate-mode knobs agent/hooks/* read with block/warn defaults; agent-session
-# overrides (e.g. REVIEW_COMMENT_GATE=warn) leak via os.environ and flip them.
-GATE_MODE_ENV_VARS = (
-    "REVIEW_COMMENT_GATE",
-    "REVIEW_BLOCK_GATE",
-    "PR_TITLE_GATE",
-    "WORKTREE_GUARD_MODE",
+# Gate knobs agent/hooks/* read with defaults (block/warn modes plus the
+# REVIEW_MAX_LAG threshold); agent-session overrides leak via os.environ.
+GATE_OVERRIDE_ENV_VARS = (
     "PR_READINESS_GATE",
+    "PR_TITLE_GATE",
+    "REVIEW_BLOCK_GATE",
+    "REVIEW_COMMENT_GATE",
     "REVIEW_MAX_LAG",
+    "WORKTREE_GUARD_MODE",
 )
 
 
-def scrub_gate_mode_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Delete every gate-mode override from ``os.environ``.
+def scrub_gate_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Delete every gate override from ``os.environ``.
 
     :param monkeypatch: Owns the deletions; restores them at its teardown.
     """
-    for var in GATE_MODE_ENV_VARS:
+    for var in GATE_OVERRIDE_ENV_VARS:
         monkeypatch.delenv(var, raising=False)
 
 
 @pytest.fixture(autouse=True)
-def _scrub_gate_mode_env(monkeypatch: pytest.MonkeyPatch) -> None:
+def _scrub_gate_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     """Run hooks with their documented default modes in every test here.
 
     Intentionally directory-wide: any test in this package may spawn a hook
@@ -35,4 +35,4 @@ def _scrub_gate_mode_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
     :param monkeypatch: Pytest fixture used to delete the env vars per-test.
     """
-    scrub_gate_mode_env(monkeypatch)
+    scrub_gate_overrides(monkeypatch)
