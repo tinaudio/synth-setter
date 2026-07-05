@@ -1,0 +1,22 @@
+# @package _global_
+
+defaults:
+  - override /datamodule: surge_simple
+  - override /render: surge_simple
+  - _self_
+
+task_name: surge-simple-lance-440k-20k-20k
+
+output_format: lance
+
+train_val_test_sizes: [440000, 20000, 20000]
+
+r2:
+  bucket: experiments
+
+render:
+  # Production tuning: reload once per shard to keep plugin-load overhead off the render path.
+  samples_per_shard: 2500
+  parallel: true
+  max_retries: 5
+  plugin_reload_cadence: once
