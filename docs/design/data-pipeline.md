@@ -1627,14 +1627,14 @@ run.summary["pipeline/errors_total"] = total_errors
 
 # Register dataset as artifact
 artifact = wandb.Artifact(
-    name=f"data-{spec.dataset_config_id}",  # name follows storage-provenance-spec.md §4
+    name=f"data-{spec.task_name}",  # name follows storage-provenance-spec.md §4
     type="dataset",
     metadata={
-        "dataset_config_id": spec.dataset_config_id,
-        "dataset_wandb_run_id": spec.dataset_wandb_run_id,
+        "dataset_config_id": spec.task_name,
+        "dataset_wandb_run_id": spec.run_id,
         "shard_count": spec.num_shards,
-        "param_spec": spec.param_spec,
-        "code_version": spec.code_version,
+        "param_spec": spec.render.param_spec_name,
+        "code_version": spec.git_sha,
         "total_samples": total_samples,
         "splits": card.splits,
     },
