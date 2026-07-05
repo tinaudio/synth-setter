@@ -90,6 +90,13 @@ have to re-extract (e.g. after `rm -rf plugins/`) skip the download. If
 `plugins/Surge XT.vst3` already exists, the target is a no-op — remove it
 first to reinstall.
 
+To mirror the full plugin set the runtime docker image ships — Surge XT plus
+Dexed, OB-Xf, and Six Sines — run `make install-plugins`. The three extra
+synths publish x86_64 Linux binaries only, matching the image; on other hosts
+those targets skip with a notice. Their version/SHA256 pins mirror the
+Dockerfile ARGs and are kept in sync by
+`tests/infra/test_install_plugins_targets.py`.
+
 > **Already have Surge XT installed system-wide?** Skip
 > `make install-surge-xt` and symlink your existing install into `plugins/`:
 >
