@@ -1,6 +1,130 @@
 # CHANGELOG
 
 
+## v8.40.0 (2026-07-05)
+
+### Chores
+
+- **config**: Full-scale surge_simple + surge_xt Lance datagen configs
+  ([#1762](https://github.com/tinaudio/synth-setter/pull/1762),
+  [`7e758d7`](https://github.com/tinaudio/synth-setter/commit/7e758d79a18a80279891008c553c98b885669165))
+
+* chore(config): surge_simple + surge_xt production Lance datagen configs
+
+Adds two generate_dataset experiments writing Lance shards to the experiments bucket:
+  surge-simple-lance-440k-20k-20k (192 shards) and surge-xt-lance-2m-40k-10k (820 shards). Both
+  render shards in parallel with max_retries=5, samples_per_shard=2500, and
+  plugin_reload_cadence=once; everything else inherits group defaults.
+
+Registers both in the DATASET_EXPERIMENTS allowlist so each composes, validates as DatasetSpec, and
+  JSON round-trips in CI.
+
+Refs #1760
+
+* chore(config): document Lance datagen sizing and pin shard math
+
+Addresses the pre-PR review WARNs on the two new Lance experiment configs: adds the sibling-style
+  sizing header (totals → shard count), moves each render-tuning rationale next to the key it
+  justifies, pins the exact shard counts (192 / 820) in a dedicated test so a transposed split digit
+  cannot slip through, and reconciles the config-naming convention in data-pipeline.md with the
+  {name}-lance-{train}-{val}-{test} pattern the Lance configs actually use.
+
+* chore(config): pin per-split shard ranges and clarify bucket/seed intent
+
+Second review pass on the Lance datagen configs: the shard-math test now pins split_shard_ranges
+  (176/8/8 and 800/16/4) so a same-total val/test swap fails, headers say "Full-scale" rather than
+  "Production" to match the deliberate experiments-bucket routing, and both configs document that
+  keeping the default base_seed repeats early shard seeds of the smaller surge runs.
+
+* docs(data-pipeline): fix config-naming placeholder and format-neutral shard gloss
+
+Copilot review on #1762: the 480k in surge-simple-480k-10k is the train+val+test total, so the
+  placeholder is {total_samples}, not {total_train_samples}; the Shard glossary entry now covers all
+  three container formats instead of describing shards as HDF5-only.
+
+* docs(data-pipeline): document experiments bucket and Lance shard shape
+
+Applies the doc-drift advisory for #1762: the Shard glossary entry now matches §7.10 (Lance shards
+  are dataset directories, not single R2 objects), a Lance glossary row joins the WebDataset one,
+  the storage-provenance spec §2 acknowledges the experiments bucket override, the finalize artifact
+  snippet derives the bucket from spec.r2.bucket, and doc-map's r2-group pattern points at
+  configs/r2/ where the group actually lives.
+
+* docs(data-pipeline): drop superfluous bucket note from storage spec
+
+The experiments-bucket override is already visible in the configs themselves; the storage spec's
+  canonical layout section stays scoped to the prefix structure.
+
+* docs(data-pipeline): derive artifact reference from spec.r2.prefix
+
+Copilot on #1762: DatasetSpec has no dataset_config_id / dataset_wandb_run_id attributes; r2.prefix
+  already materializes data/{dataset_config_id}/{dataset_wandb_run_id}/ so the snippet now matches
+  the real schema without hard-coding the data/ segment.
+
+* docs(data-pipeline): map W&B artifact snippet to real DatasetSpec fields
+
+Copilot on #1762: dataset_config_id / dataset_wandb_run_id / param_spec / code_version are metadata
+  keys, not DatasetSpec attributes — source them from task_name, run_id, render.param_spec_name, and
+  git_sha so the snippet is runnable against the actual schema.
+
+### Features
+
+- **data-pipeline**: Add spec-URI dataset generation CLI
+  ([#1759](https://github.com/tinaudio/synth-setter/pull/1759),
+  [`ca7b2fe`](https://github.com/tinaudio/synth-setter/commit/ca7b2fe576b7d557203190097429d8cb0b7b12b7))
+
+* feat(data-pipeline): accept a datasetspec URI in synth-setter-generate-dataset
+
+A single bare positional (local path, file://, r2://, or s3://) now loads an already-materialized
+  input_spec.json via the existing spec_io.load_spec_from_uri dispatcher and renders it in-process;
+  Hydra-override argv keeps flowing to the (renamed) hydra_main unchanged. The s3:// scheme reuses
+  r2_io.from_s3_uri — same object store, scheme rewrite only, no new storage IO.
+
+A real-network integration test (no fakes, no mocks, no stubbed renderer) uploads a smoke-shard spec
+  to R2, drives the real CLI subprocess with the r2:// URI (real Surge render + shard uploads + R2
+  size probes), then re-runs via s3:// asserting the resumability probe skips every extant shard. A
+  new PR-tier workflow runs it in the dev-snapshot Docker image with R2 secrets.
+
+* refactor(data-pipeline): split spec-URI mode into its own CLI
+
+Folding the URI form into synth-setter-generate-dataset forced an argv-shape dispatcher
+  (bare-positional sniffing, mixed-args errors) onto the Hydra entrypoint. Move run_from_spec_uri
+  into a dedicated synth-setter-generate-dataset-from-spec-uri console script (argparse, one
+  positional) and revert generate_dataset.py to its original shape — the dispatcher,
+  spec_uri_from_argv, and the hydra_main rename all disappear, along with their tests.
+
+### Testing
+
+- **training**: Cover Lance datamodule smoke parity
+  ([#1721](https://github.com/tinaudio/synth-setter/pull/1721),
+  [`712b3dc`](https://github.com/tinaudio/synth-setter/commit/712b3dcfdad9ebc7d77df605324c08260acf5d72))
+
+* test(training): cover lance datamodule smoke parity
+
+* test(training): address lance smoke review feedback
+
+* test(training): parametrize Surge smoke tests over h5 and Lance
+
+Replace the bespoke fake-VST Lance train/eval tests with a dataset-format parametrize axis so every
+  Surge smoke test drives both the h5 and Lance datamodules through the same body. A
+  Lance-datamodule regression can no longer hide behind h5-only coverage.
+
+- Real-VST tier: test_train_surge_xt, test_train_eval_surge_xt, and the eval shuffle-seed roundtrip
+  now run [h5, lance] x accelerator x experiment. generate_vst_dataset already dispatches the .lance
+  suffix, so the new surge_xt_smoke_lance_datasets fixture renders through the real Surge XT
+  subprocess (no fake-only shortcut). - Fake-VST tier: the three Lance train/eval tests gain a
+  symmetric h5 arm via a new cfg_surge_fake_train/eval pair, so the CPU inner loop covers both
+  formats too. - Shared _SurgeSmokeVariant descriptor and surge_smoke_variant fixture drive every
+  arm. The wandb checkpoint-resolution tests stay h5-only: their subject (${wandb:...} resolution)
+  is identical across dataset formats.
+
+Refs #1719
+
+---------
+
+Co-authored-by: khaledtin <khaledtin@users.noreply.github.com>
+
+
 ## v8.39.0 (2026-06-16)
 
 ### Features
