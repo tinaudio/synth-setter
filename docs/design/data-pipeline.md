@@ -1642,7 +1642,7 @@ artifact = wandb.Artifact(
 artifact.add_file(input_spec_path)        # input_spec.json
 artifact.add_file(card_path)        # dataset.json
 artifact.add_reference(
-    f"s3://{spec.r2.bucket}/data/{spec.dataset_config_id}/{spec.dataset_wandb_run_id}/"
+    f"s3://{spec.r2.bucket}/{spec.r2.prefix}"  # prefix is data/{dataset_config_id}/{dataset_wandb_run_id}/
 )  # R2 is S3-compatible; W&B resolves via S3 API (uses AWS_ENDPOINT_URL or WANDB_S3_ENDPOINT_URL; see storage-provenance-spec.md §11)
 run.log_artifact(artifact)
 run.finish()
