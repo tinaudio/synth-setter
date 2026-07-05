@@ -184,7 +184,7 @@ docs:
         covers: "Run ID format, shard ID format, prefix construction rules"
       - pattern: "src/synth_setter/pipeline/data/r2_report.py"
         covers: "R2 listing commands, shard status reporting, path parsing"
-      - pattern: "src/synth_setter/configs/dataset/*.yaml"
+      - pattern: "src/synth_setter/configs/r2/*.yaml"
         covers: "`r2` group (`bucket` + `prefix_root`) for the nested `R2Location` field on `DatasetSpec`"
       - pattern: "src/synth_setter/cli/generate_dataset.py"
         covers: "rclone upload of spec and shard files, R2 path construction"
