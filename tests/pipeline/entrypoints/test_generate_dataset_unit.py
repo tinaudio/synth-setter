@@ -244,6 +244,240 @@ class TestLoadSpecFromRoot:
         assert loaded.task_name == spec.task_name
 
 
+class TestSpecUriFromArgv:
+    """``spec_uri_from_argv`` splits the URI positional form from Hydra-override argv."""
+
+    @pytest.mark.parametrize(
+        ("argv", "expected"),
+        [
+            (["/abs/path/input_spec.json"], "/abs/path/input_spec.json"),
+            (["relative/input_spec.json"], "relative/input_spec.json"),
+            (["file:///data/run/input_spec.json"], "file:///data/run/input_spec.json"),
+            (["r2://bucket/prefix/input_spec.json"], "r2://bucket/prefix/input_spec.json"),
+            (["s3://bucket/prefix/input_spec.json"], "s3://bucket/prefix/input_spec.json"),
+        ],
+        ids=["abs_path", "relative_path", "file_uri", "r2_uri", "s3_uri"],
+    )
+    def test_single_bare_positional_is_the_spec_uri(self, argv: list[str], expected: str) -> None:
+        """One non-override positional argument is returned as the spec URI.
+
+        :param argv: argv tail (no program name).
+        :param expected: The URI the parser must return.
+        """
+        from synth_setter.cli.generate_dataset import spec_uri_from_argv
+
+        assert spec_uri_from_argv(argv) == expected
+
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            [],
+            ["experiment=generate_dataset/smoke-shard"],
+            ["experiment=generate_dataset/smoke-shard", "render.plugin_path=/x.vst3"],
+            ["+created_at=2026-01-01T00:00:00+00:00"],
+            ["--help"],
+            ["--config-name=dataset"],
+            ["~logger"],
+        ],
+        ids=["empty", "one_override", "two_overrides", "plus_override", "help", "flag", "tilde"],
+    )
+    def test_hydra_style_argv_returns_none(self, argv: list[str]) -> None:
+        """Override/flag/deletion argv forms fall through to the Hydra entrypoint.
+
+        :param argv: argv tail (no program name).
+        """
+        from synth_setter.cli.generate_dataset import spec_uri_from_argv
+
+        assert spec_uri_from_argv(argv) is None
+
+    def test_uri_mixed_with_overrides_is_rejected(self) -> None:
+        """A URI positional next to Hydra overrides fails loud instead of guessing."""
+        from synth_setter.cli.generate_dataset import spec_uri_from_argv
+
+        with pytest.raises(ValueError, match="cannot be combined with Hydra overrides"):
+            spec_uri_from_argv(["r2://bucket/input_spec.json", "experiment=smoke"])
+
+    def test_two_bare_positionals_are_rejected(self) -> None:
+        """Two bare positionals are ambiguous — rejected, not silently truncated."""
+        from synth_setter.cli.generate_dataset import spec_uri_from_argv
+
+        with pytest.raises(ValueError, match="exactly one"):
+            spec_uri_from_argv(["a/input_spec.json", "b/input_spec.json"])
+
+
+class TestRunFromSpecUri:
+    """``run_from_spec_uri`` — load a spec by URI, then render/upload its shards."""
+
+    @pytest.fixture(autouse=True)
+    def _single_worker_full_render(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Pin rank=0/world=1 and force every shard absent in R2 (full render path).
+
+        :param monkeypatch: Pytest fixture used to set env vars and patch
+            ``r2_io.object_size``.
+        """
+        monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+        monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+        monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda *_a, **_k: None)
+
+    @pytest.fixture()
+    def patched_env_and_subprocess(self, fake_r2_remote: Path) -> Iterator[MagicMock]:
+        """Patch the render/rclone seam and the R2 env pre-flight.
+
+        ``ensure_r2_env_loaded`` is stubbed (same isolation the ``main()``
+        tests use) because the fake local-typed remote has no creds to
+        validate; rclone copies still land on ``fake_r2_remote`` via the
+        passthrough dispatcher.
+
+        :param fake_r2_remote: Local-typed R2 remote root (chdirs into the
+            tmp dir, so relative work dirs also land there).
+        :yields MagicMock: Patched ``_check_call_streamed`` mock.
+        """
+        with patch("synth_setter.cli.generate_dataset.r2_io.ensure_r2_env_loaded"):
+            with patch(
+                "synth_setter.cli.generate_dataset._check_call_streamed",
+                side_effect=_materialize_or_passthrough_rclone,
+            ) as mock_check_call:
+                yield mock_check_call
+
+    def test_local_spec_path_renders_and_uploads_shards(
+        self,
+        patched_env_and_subprocess: MagicMock,
+        fake_r2_remote: Path,
+        spec: DatasetSpec,
+        tmp_path: Path,
+    ) -> None:
+        """A bare local spec path drives the full render → R2 upload flow.
+
+        :param patched_env_and_subprocess: Render/rclone dispatcher seam.
+        :param fake_r2_remote: Fake R2 root; uploaded shards materialize here.
+        :param spec: Fixture-provided single-shard ``DatasetSpec``.
+        :param tmp_path: Pytest tmp dir for the local spec JSON.
+        """
+        from synth_setter.cli.generate_dataset import run_from_spec_uri
+
+        spec_path = tmp_path / INPUT_SPEC_FILENAME
+        spec_path.write_text(spec.model_dump_json())
+
+        run_from_spec_uri(str(spec_path))
+
+        shard = spec.shards[0]
+        landed = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / shard.filename
+        assert landed.is_file()
+
+    def test_r2_spec_uri_downloads_spec_then_renders(
+        self,
+        patched_env_and_subprocess: MagicMock,
+        fake_r2_remote: Path,
+        spec: DatasetSpec,
+    ) -> None:
+        """An ``r2://`` spec URI is fetched from the remote before rendering.
+
+        The spec is placed in the fake remote via the production
+        ``spec_io.upload_spec`` path, then re-loaded through the URI the
+        launcher advertises to workers (``spec.r2.input_spec_uri()``).
+
+        :param patched_env_and_subprocess: Render/rclone dispatcher seam.
+        :param fake_r2_remote: Fake R2 root backing both spec and shards.
+        :param spec: Fixture-provided single-shard ``DatasetSpec``.
+        """
+        from synth_setter.cli.generate_dataset import run_from_spec_uri
+        from synth_setter.pipeline.spec_io import upload_spec
+
+        spec_uri = upload_spec(spec)
+
+        run_from_spec_uri(spec_uri)
+
+        shard = spec.shards[0]
+        landed = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / shard.filename
+        assert landed.is_file()
+
+    def test_work_dir_derives_from_run_id_under_cwd(
+        self,
+        patched_env_and_subprocess: MagicMock,
+        fake_r2_remote: Path,
+        spec: DatasetSpec,
+        tmp_path: Path,
+    ) -> None:
+        """Rendered shards persist under ``logs/generate_dataset/from_spec_uri/<run_id>/``.
+
+        :param patched_env_and_subprocess: Render/rclone dispatcher seam.
+        :param fake_r2_remote: Fake R2 root; the fixture chdirs into it, so the
+            relative work dir lands inside the test's tmp dir.
+        :param spec: Fixture-provided single-shard ``DatasetSpec``.
+        :param tmp_path: Pytest tmp dir for the local spec JSON.
+        """
+        from synth_setter.cli.generate_dataset import run_from_spec_uri
+
+        spec_path = tmp_path / INPUT_SPEC_FILENAME
+        spec_path.write_text(spec.model_dump_json())
+
+        run_from_spec_uri(str(spec_path))
+
+        work_dir = Path.cwd() / "logs" / "generate_dataset" / "from_spec_uri" / spec.run_id
+        assert (work_dir / spec.shards[0].filename).is_file()
+
+    def test_r2_env_preflight_runs_before_spec_fetch(
+        self,
+        fake_r2_remote: Path,
+        spec: DatasetSpec,
+    ) -> None:
+        """``ensure_r2_env_loaded`` gates the run — its failure aborts before any fetch.
+
+        :param fake_r2_remote: Fake R2 root (unused; activates rclone skip gate).
+        :param spec: Fixture-provided single-shard ``DatasetSpec`` (unused body).
+        """
+        from synth_setter.cli.generate_dataset import run_from_spec_uri
+
+        with patch(
+            "synth_setter.cli.generate_dataset.r2_io.ensure_r2_env_loaded",
+            side_effect=RuntimeError("no creds"),
+        ):
+            with pytest.raises(RuntimeError, match="no creds"):
+                run_from_spec_uri("r2://bucket/never-fetched/input_spec.json")
+
+
+class TestMainSpecUriDispatch:
+    """``main()`` routes a URI positional to spec-URI mode, everything else to Hydra."""
+
+    def test_uri_positional_dispatches_to_run_from_spec_uri(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``synth-setter-generate-dataset <uri>`` runs spec-URI mode, not Hydra.
+
+        :param monkeypatch: Used to pin ``sys.argv``.
+        """
+        import synth_setter.cli.generate_dataset as generate_dataset
+
+        monkeypatch.setattr(
+            sys, "argv", ["synth-setter-generate-dataset", "r2://bucket/run/input_spec.json"]
+        )
+        with patch.object(generate_dataset, "run_from_spec_uri") as mock_run:
+            with patch.object(generate_dataset, "hydra_main") as mock_hydra:
+                generate_dataset.main()
+
+        mock_run.assert_called_once_with("r2://bucket/run/input_spec.json")
+        mock_hydra.assert_not_called()
+
+    def test_override_argv_dispatches_to_hydra(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Hydra-style overrides keep flowing to the ``@hydra.main`` entrypoint.
+
+        :param monkeypatch: Used to pin ``sys.argv``.
+        """
+        import synth_setter.cli.generate_dataset as generate_dataset
+
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["synth-setter-generate-dataset", "experiment=generate_dataset/smoke-shard"],
+        )
+        with patch.object(generate_dataset, "run_from_spec_uri") as mock_run:
+            with patch.object(generate_dataset, "hydra_main") as mock_hydra:
+                generate_dataset.main()
+
+        mock_hydra.assert_called_once_with()
+        mock_run.assert_not_called()
+
+
 class TestRun:
     """Render → upload, per owned shard.
 

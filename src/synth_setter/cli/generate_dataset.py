@@ -2,9 +2,16 @@
 
 Two console-script surfaces:
 
-- ``synth-setter-generate-dataset`` → :func:`main` — operator entry; runs the
-  spec in-process or dispatches it to SkyPilot based on
-  ``cfg.skypilot_launch.compute_template``.
+- ``synth-setter-generate-dataset`` → :func:`main` — operator entry with two
+  argv forms:
+
+  - Hydra overrides (``experiment=... key=value``) → :func:`hydra_main`
+    composes the cfg, builds + uploads the spec, then runs it in-process or
+    dispatches it to SkyPilot based on ``cfg.skypilot_launch.compute_template``.
+  - a single spec URI positional (bare path, ``file://``, ``r2://``, or
+    ``s3://``) → :func:`run_from_spec_uri` loads the already-materialized
+    ``input_spec.json`` from that URI and renders it in-process.
+
 - ``synth-setter-generate-dataset-from-hydra`` → :func:`from_hydra` — worker
   entry; pure ``@hydra.main`` re-compose so launcher/worker share argv.
 """
@@ -47,6 +54,7 @@ from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig, ShardSpec
 from synth_setter.pipeline.spec_io import (
     load_spec_from_root,
+    load_spec_from_uri,
     upload_spec,
     write_spec_locally,
 )
@@ -841,8 +849,94 @@ def from_hydra(cfg: DictConfig) -> None:
     generate(spec, Path(cfg.paths.output_dir), loggers)
 
 
+def spec_uri_from_argv(argv: list[str]) -> str | None:
+    """Return the spec URI when ``argv`` is the single-positional URI form, else ``None``.
+
+    Every valid Hydra argv element is a ``key=value`` override (incl. ``+``/
+    ``++`` prefixes), a ``-``/``--`` flag, or a ``~key`` deletion — none of
+    which is a bare positional. So a bare positional (no ``=``, not ``-``/
+    ``~``-prefixed) unambiguously selects spec-URI mode, and it must be the
+    whole argv: mixing it with overrides has no defined semantics (the spec is
+    already frozen — see #1735 discussion of compose determinism).
+
+    :param argv: argv tail (without the program name), e.g. ``sys.argv[1:]``.
+    :returns: The spec URI for the single-positional form; ``None`` when the
+        argv is Hydra-style (empty, overrides, flags, or deletions).
+    :raises ValueError: a bare positional is mixed with other arguments.
+    """
+    positionals = [a for a in argv if "=" not in a and not a.startswith(("-", "~"))]
+    if not positionals:
+        return None
+    if len(argv) == 1:
+        return argv[0]
+    if len(positionals) > 1:
+        raise ValueError(
+            f"expected exactly one spec URI positional; got {positionals!r}. "
+            "Pass a single URI (bare path, file://, r2://, or s3://)."
+        )
+    raise ValueError(
+        f"a spec URI positional ({positionals[0]!r}) cannot be combined with Hydra "
+        "overrides — the spec at the URI is already frozen. Pass either one URI or "
+        "Hydra overrides, not both."
+    )
+
+
+def run_from_spec_uri(spec_uri: str) -> None:  # noqa: DOC502 — raises propagate from callees
+    """Load a materialized ``DatasetSpec`` from ``spec_uri`` and render it in-process.
+
+    The worker-shaped counterpart to :func:`hydra_main`: no Hydra compose, no
+    spec upload, no SkyPilot dispatch — the spec at the URI is the frozen
+    source of truth (typically written earlier by ``hydra_main`` via
+    ``spec_io.upload_spec``). R2 credentials are validated up front because
+    ``generate`` always uploads rendered shards to ``spec.r2``, wherever the
+    spec itself came from. Runs with no loggers — wandb tracking belongs to
+    the launcher that materialized the spec.
+
+    Invoke from the checkout root — the same contract as every other form
+    (the render subprocess script and any relative ``render.preset_path`` /
+    ``render.plugin_path`` in the spec resolve against the process CWD; the
+    SkyPilot worker changes directory to the checkout before exec for the
+    same reason). Shards are written under
+    ``logs/generate_dataset/from_spec_uri/<run_id>/`` relative to that CWD
+    (mirroring Hydra's CWD-relative ``logs/`` run-dir convention) before
+    their rclone upload; re-running the same URI reuses the dir and skips
+    shards already present in R2 (#750).
+
+    :param spec_uri: Bare local path, ``file://``, ``r2://``, or ``s3://`` URI
+        of an ``input_spec.json``.
+    :raises RuntimeError: R2 credentials are absent/invalid (from
+        ``r2_io.ensure_r2_env_loaded``), or a render subprocess exits zero
+        without writing its shard (from :func:`generate`).
+    :raises ValueError: ``spec_uri`` carries an unsupported scheme, or the
+        fetched JSON is not a valid ``DatasetSpec`` (``pydantic.ValidationError``).
+    """
+    # Creds gate both the r2://-spec fetch and the shard uploads generate()
+    # always performs, so validate them before touching the URI.
+    r2_io.ensure_r2_env_loaded()
+    spec = load_spec_from_uri(spec_uri)
+    logger.info(f"loaded spec {spec.run_id} from {spec_uri}")
+    work_dir = Path("logs") / "generate_dataset" / "from_spec_uri" / spec.run_id
+    generate(spec, work_dir, [])
+
+
+def main() -> None:  # noqa: DOC502 — ValueError propagates from spec_uri_from_argv
+    """Operator console entry: dispatch on argv shape.
+
+    A single bare positional (a spec URI) routes to :func:`run_from_spec_uri`;
+    anything else — including an empty argv — flows to :func:`hydra_main`,
+    which owns Hydra's own flag handling (``--help``, ``--multirun``, ...).
+
+    :raises ValueError: malformed argv (see :func:`spec_uri_from_argv`).
+    """
+    spec_uri = spec_uri_from_argv(sys.argv[1:])
+    if spec_uri is not None:
+        run_from_spec_uri(spec_uri)
+        return
+    hydra_main()
+
+
 @hydra.main(version_base="1.3", config_path="pkg://synth_setter.configs", config_name="dataset")
-def main(cfg: DictConfig) -> None:
+def hydra_main(cfg: DictConfig) -> None:
     """Operator CLI: run the composed dataset spec locally or dispatch to SkyPilot.
 
     Worker-side overrides are replayed verbatim under ``_build_worker_cmd`` so
