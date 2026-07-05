@@ -14,6 +14,12 @@
 # from the settings.json wiring perspective.
 set -euo pipefail
 
+# Ambient gate-mode overrides (agent sessions export e.g. REVIEW_COMMENT_GATE=warn)
+# would flip cases that assert the hooks' defaults; each case sets its own mode.
+readonly GATE_MODE_ENV_VARS=(REVIEW_COMMENT_GATE REVIEW_BLOCK_GATE PR_TITLE_GATE
+                             WORKTREE_GUARD_MODE PR_READINESS_GATE REVIEW_MAX_LAG)
+unset "${GATE_MODE_ENV_VARS[@]}"
+
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
@@ -180,6 +186,20 @@ assert() {
 last_exit_line() {
   printf '%s\n' "$1" | tail -1
 }
+
+# ===========================================================================
+# harness hermeticity
+# ===========================================================================
+
+T_harness_gate_mode_env_scrubbed() {
+  # Canary for the startup unset, not a hook test: it can only fail when the
+  # calling session actually exports an override (as agent sessions do).
+  local var
+  for var in "${GATE_MODE_ENV_VARS[@]}"; do
+    [[ -z "${!var:-}" ]] || { echo "ambient ${var}=${!var} leaked into the harness"; return 1; }
+  done
+}
+it "harness: ambient gate-mode env vars are scrubbed at startup" T_harness_gate_mode_env_scrubbed
 
 # ===========================================================================
 # doc-drift.sh
