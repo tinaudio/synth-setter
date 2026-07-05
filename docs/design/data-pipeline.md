@@ -1615,7 +1615,7 @@ import wandb
 run = wandb.init(
     project="synth-setter",
     job_type="data-generation",
-    id=spec.dataset_wandb_run_id,
+    id=spec.run_id,
 )
 
 # Log pipeline metrics to summary (final values, not time-series)
