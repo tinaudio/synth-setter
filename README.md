@@ -54,7 +54,8 @@ under the GPL-3.0 license.
 `make install-surge-xt` fetches the pinned Surge XT VST3 release — no need
 to install Surge XT yourself. `make install-plugins` additionally fetches the
 other VST3 synths the runtime docker image ships (Dexed, OB-Xf, Six Sines;
-x86_64 Linux only — the targets skip elsewhere).
+x86_64 Linux only — on other hosts those targets print a notice and exit 0,
+so the aggregate still succeeds with Surge XT alone).
 
 ## Installation
 

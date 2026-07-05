@@ -3,14 +3,22 @@
 The image (docker/ubuntu22_04/Dockerfile) installs Surge XT plus three SHA256-pinned prebuilt
 synths (Dexed, OB-Xf, Six Sines). The Makefile mirrors those pins for local installs; these tests
 fail when either side drifts.
+
+The download-path tests never touch the network: they seed the archive cache under a throwaway
+``HOME`` and pass the fixture's real sha256 as a command-line make-variable override.
 """
 
 from __future__ import annotations
 
+import hashlib
+import io
 import os
+import platform
 import re
 import shutil
 import subprocess
+import zipfile
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
@@ -27,6 +35,8 @@ _TIMEOUT_S = 60
 # Every VST3 bundle staged into the runtime image, by plugins/ basename.
 _IMAGE_BUNDLES = ("Surge XT.vst3", "Dexed.vst3", "OB-Xf.vst3", "Six Sines.vst3")
 
+_FETCHED_SYNTH_TARGETS = ("install-dexed", "install-obxf", "install-six-sines")
+
 # Pins that must stay identical between the Makefile and the Dockerfile ARGs.
 _SHARED_PINS = (
     "DEXED_VERSION",
@@ -36,6 +46,13 @@ _SHARED_PINS = (
     "SIX_SINES_VERSION",
     "SIX_SINES_ASSET",
     "SIX_SINES_SHA256",
+)
+
+# The fetch recipe itself gates on x86_64 Linux, so its download-path branches
+# are only reachable on such hosts.
+requires_x86_64_linux = pytest.mark.skipif(
+    platform.system() != "Linux" or platform.machine() != "x86_64",
+    reason="install_fetched_synth skips on non-x86_64 hosts",
 )
 
 if shutil.which("make") is None:
@@ -64,30 +81,62 @@ def _dockerfile_arg(name: str) -> str:
     return match.group(1)
 
 
-def _run_make(cwd: Path, target: str, env: dict[str, str] | None = None) -> str:
-    """Run a make target in ``cwd``, returning its stdout.
+def _run_make(
+    cwd: Path,
+    target: str,
+    *makevars: str,
+    env: Mapping[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run a make target in ``cwd`` without raising on failure.
 
     :param cwd: directory holding the Makefile under test.
     :param target: make target to invoke.
+    :param *makevars: ``NAME=value`` command-line overrides for Makefile variables.
     :param env: full environment for the subprocess; inherits os.environ when None.
-    :returns: the target's stdout.
+    :returns: the completed process, stdout/stderr captured as text.
     """
     return subprocess.run(  # noqa: S603 — fixed argv, no shell
-        ["make", target],  # noqa: S607 — make on PATH
+        ["make", target, *makevars],  # noqa: S607 — make on PATH
         cwd=cwd,
         env=env,
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
         timeout=_TIMEOUT_S,
-    ).stdout
+    )
+
+
+def _zip_containing(inner_dir: str) -> bytes:
+    """Build an in-memory .zip whose payload lives under ``inner_dir``.
+
+    :param inner_dir: archive-internal directory path, e.g. ``x-lnx/Dexed.vst3``.
+    :returns: the zip file's bytes.
+    """
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(f"{inner_dir}/Contents/x86_64-linux/plugin.so", b"fake plugin binary")
+    return buf.getvalue()
+
+
+def _seed_cache(home: Path, asset_name: str, payload: bytes) -> str:
+    """Place a fake cached archive under ``home`` and return its real sha256.
+
+    :param home: throwaway HOME whose ``.cache/synth-setter/`` receives the archive.
+    :param asset_name: archive filename the recipe will look for.
+    :param payload: archive bytes to write.
+    :returns: hex sha256 of ``payload``.
+    """
+    cache = home / ".cache" / "synth-setter"
+    cache.mkdir(parents=True, exist_ok=True)
+    (cache / asset_name).write_bytes(payload)
+    return hashlib.sha256(payload).hexdigest()
 
 
 @pytest.fixture
 def makefile_checkout(tmp_path: Path) -> Path:
     """Provide a throwaway directory holding only the project Makefile.
 
-    :param tmp_path: pytest-provided scratch directory.
+    :param tmp_path: pytest scratch dir that receives the Makefile copy.
     :returns: the directory, ready for `make <target>` runs against it.
     """
     shutil.copy(MAKEFILE, tmp_path / "Makefile")
@@ -98,7 +147,7 @@ def makefile_checkout(tmp_path: Path) -> Path:
 def test_makefile_pin_matches_dockerfile_arg(pin: str) -> None:
     """Each fetched-synth pin in the Makefile equals the Dockerfile ARG default.
 
-    :param pin: shared pin variable name.
+    :param pin: pin variable name present in both files.
     """
     assert _makefile_var(pin) == _dockerfile_arg(pin), (
         f"{pin} drifted between Makefile and {DOCKERFILE.relative_to(PROJECT_ROOT)}"
@@ -118,8 +167,8 @@ def test_install_plugins_all_bundles_present_skips_every_download(
 ) -> None:
     """`make install-plugins` covers every image bundle and is a no-op when all exist.
 
-    Pre-creating all four bundles proves the aggregate target visits each image plugin without
-    touching the network.
+    Pre-creating every bundle proves the aggregate target visits each image plugin without touching
+    the network.
 
     :param makefile_checkout: throwaway checkout holding the Makefile.
     """
@@ -128,18 +177,21 @@ def test_install_plugins_all_bundles_present_skips_every_download(
     for name in _IMAGE_BUNDLES:
         (plugins / name).mkdir()
 
-    stdout = _run_make(makefile_checkout, "install-plugins")
+    result = _run_make(makefile_checkout, "install-plugins")
 
+    assert result.returncode == 0, result.stderr
     for name in _IMAGE_BUNDLES:
-        assert f"plugins/{name} already exists" in stdout, f"{name} not visited"
+        assert f"plugins/{name} already exists" in result.stdout, f"{name} not visited"
 
 
+@pytest.mark.parametrize("target", _FETCHED_SYNTH_TARGETS)
 def test_fetched_synth_target_non_x86_64_skips_without_installing(
-    makefile_checkout: Path,
+    makefile_checkout: Path, target: str
 ) -> None:
-    """On a non-x86_64 host the fetched-synth targets skip, mirroring the image's amd64 gate.
+    """On a non-x86_64 host every fetched-synth target skips, mirroring the image's amd64 gate.
 
     :param makefile_checkout: throwaway checkout holding the Makefile.
+    :param target: fetched-synth make target under test.
     """
     bindir = makefile_checkout / "bin"
     bindir.mkdir()
@@ -150,7 +202,96 @@ def test_fetched_synth_target_non_x86_64_skips_without_installing(
     fake_uname.chmod(0o755)
     env = {**os.environ, "PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}"}
 
-    stdout = _run_make(makefile_checkout, "install-dexed", env=env)
+    result = _run_make(makefile_checkout, target, env=env)
 
-    assert "skipping Dexed" in stdout
+    assert result.returncode == 0, result.stderr
+    assert "skipping" in result.stdout
+    assert not (makefile_checkout / "plugins").exists()
+
+
+@requires_x86_64_linux
+def test_install_dexed_cached_archive_verifies_and_installs_bundle(
+    makefile_checkout: Path,
+) -> None:
+    """A cached archive with a matching sha256 is verified and extracted into plugins/.
+
+    Exercises the full verify → extract → move path plus the 'Using cached' reuse branch, with the
+    cache isolated under a throwaway HOME and the pin overridden to the fixture's real hash.
+
+    :param makefile_checkout: throwaway checkout holding the Makefile.
+    """
+    home = makefile_checkout / "home"
+    version = _makefile_var("DEXED_VERSION")
+    payload = _zip_containing(f"dexed-{version}-lnx/Dexed.vst3")
+    digest = _seed_cache(home, f"dexed-{version}-lnx.zip", payload)
+    env = {**os.environ, "HOME": str(home)}
+
+    result = _run_make(makefile_checkout, "install-dexed", f"DEXED_SHA256={digest}", env=env)
+
+    assert result.returncode == 0, result.stderr
+    assert "Using cached" in result.stdout
+    installed = makefile_checkout / "plugins" / "Dexed.vst3"
+    assert (installed / "Contents" / "x86_64-linux" / "plugin.so").is_file()
+
+
+@requires_x86_64_linux
+def test_install_dexed_checksum_mismatch_fails_without_installing(
+    makefile_checkout: Path,
+) -> None:
+    """A cached archive whose hash differs from the pin aborts before extraction.
+
+    :param makefile_checkout: throwaway checkout holding the Makefile.
+    """
+    home = makefile_checkout / "home"
+    version = _makefile_var("DEXED_VERSION")
+    _seed_cache(home, f"dexed-{version}-lnx.zip", _zip_containing("x/Dexed.vst3"))
+    env = {**os.environ, "HOME": str(home)}
+
+    result = _run_make(makefile_checkout, "install-dexed", f"DEXED_SHA256={'0' * 64}", env=env)
+
+    assert result.returncode != 0
+    assert "Remove the cached file and retry" in result.stderr
+    assert not (makefile_checkout / "plugins" / "Dexed.vst3").exists()
+
+
+@requires_x86_64_linux
+def test_install_six_sines_unsupported_archive_type_fails(makefile_checkout: Path) -> None:
+    """An asset name with an unknown extension fails after checksum, before extraction.
+
+    :param makefile_checkout: throwaway checkout holding the Makefile.
+    """
+    home = makefile_checkout / "home"
+    payload = b"not an archive"
+    digest = _seed_cache(home, "six-sines.rar", payload)
+    env = {**os.environ, "HOME": str(home)}
+
+    result = _run_make(
+        makefile_checkout,
+        "install-six-sines",
+        "SIX_SINES_ASSET=six-sines.rar",
+        f"SIX_SINES_SHA256={digest}",
+        env=env,
+    )
+
+    assert result.returncode != 0
+    assert "unsupported archive type" in result.stderr
+    assert not (makefile_checkout / "plugins" / "Six Sines.vst3").exists()
+
+
+@requires_x86_64_linux
+def test_install_dexed_archive_missing_bundle_fails(makefile_checkout: Path) -> None:
+    """An archive that lacks `<Bundle>.vst3` fails with a clear error and installs nothing.
+
+    :param makefile_checkout: throwaway checkout holding the Makefile.
+    """
+    home = makefile_checkout / "home"
+    version = _makefile_var("DEXED_VERSION")
+    payload = _zip_containing(f"dexed-{version}-lnx/NotThePlugin.vst3")
+    digest = _seed_cache(home, f"dexed-{version}-lnx.zip", payload)
+    env = {**os.environ, "HOME": str(home)}
+
+    result = _run_make(makefile_checkout, "install-dexed", f"DEXED_SHA256={digest}", env=env)
+
+    assert result.returncode != 0
+    assert "Dexed.vst3 not found" in result.stderr
     assert not (makefile_checkout / "plugins" / "Dexed.vst3").exists()

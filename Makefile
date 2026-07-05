@@ -186,11 +186,11 @@ SIX_SINES_VERSION := v1.1.0
 SIX_SINES_ASSET := six-sines-linux-2025-03-18-43d10b2.tgz
 SIX_SINES_SHA256 := fae7c1c325fde7ed49c978358397cb4bcf69012c4e6eefe2a5968fe6a36d0421
 
-# $(call install_fetched_synth,<Bundle>,<asset-url>,<sha256>): download the
-# x86_64 Linux release asset into ~/.cache/synth-setter/ (asset filenames embed
-# their version, so they never collide), verify its checksum, and extract
-# plugins/<Bundle>.vst3. Non-x86_64 hosts skip, matching the image's amd64-only
-# gating for these upstream binaries.
+# $(call install_fetched_synth,<Bundle>,<asset-url>,<sha256>): fetch the pinned asset,
+# verify its sha256, extract plugins/<Bundle>.vst3; non-x86_64 hosts skip (the image's amd64 gate).
+
+# Deliberately separate from install-surge-xt (per-OS assets, md5 upstream checksums there);
+# the cache is flat — no per-synth subdir — because asset filenames embed their version.
 define install_fetched_synth
 @set -e; \
 DEST="plugins/$(1).vst3"; \
@@ -200,7 +200,7 @@ if [ -e "$$DEST" ]; then \
 fi; \
 OS=$$(uname -s); ARCH=$$(uname -m); \
 if [ "$$OS" != "Linux" ] || [ "$$ARCH" != "x86_64" ]; then \
-	echo "skipping $(1): upstream ships an x86_64 Linux asset only (detected: $$OS/$$ARCH)."; \
+	echo "skipping $(1): x86_64 Linux asset only (host: $$OS/$$ARCH)."; \
 	exit 0; \
 fi; \
 CACHE="$(HOME)/.cache/synth-setter"; \
@@ -214,19 +214,19 @@ else \
 	echo "Using cached $$ARCHIVE"; \
 fi; \
 echo "$(3)  $$ARCHIVE" | sha256sum -c - || { \
-	echo "Remove the cached file and retry: rm '$$ARCHIVE'"; exit 1; }; \
+	echo "Remove the cached file and retry: rm '$$ARCHIVE'" >&2; exit 1; }; \
 TMP="$$(mktemp -d)"; \
+trap 'rm -rf "$$TMP"' EXIT; \
 case "$$ASSET" in \
 	*.zip) unzip -q "$$ARCHIVE" -d "$$TMP" ;; \
 	*.tgz|*.tar.gz) tar -xzf "$$ARCHIVE" -C "$$TMP" ;; \
-	*) echo "ERROR: unsupported archive type: $$ASSET"; rm -rf "$$TMP"; exit 1 ;; \
+	*) echo "ERROR: unsupported archive type: $$ASSET" >&2; exit 1 ;; \
 esac; \
 SRC="$$(find "$$TMP" -type d -name "$(1).vst3" | head -n 1)"; \
 if [ -z "$$SRC" ]; then \
-	echo "ERROR: $(1).vst3 not found in $$ASSET"; rm -rf "$$TMP"; exit 1; \
+	echo "ERROR: $(1).vst3 not found in $$ASSET" >&2; exit 1; \
 fi; \
 mv "$$SRC" "$$DEST"; \
-rm -rf "$$TMP"; \
 echo "Installed $$DEST"
 endef
 

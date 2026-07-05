@@ -93,7 +93,8 @@ first to reinstall.
 To mirror the full plugin set the runtime docker image ships — Surge XT plus
 Dexed, OB-Xf, and Six Sines — run `make install-plugins`. The three extra
 synths publish x86_64 Linux binaries only, matching the image; on other hosts
-those targets skip with a notice. Their version/SHA256 pins mirror the
+those targets print a notice and exit 0, so the aggregate still succeeds with
+just Surge XT installed. Their version/SHA256 pins mirror the
 Dockerfile ARGs and are kept in sync by
 `tests/infra/test_install_plugins_targets.py`.
 
