@@ -244,65 +244,36 @@ class TestLoadSpecFromRoot:
         assert loaded.task_name == spec.task_name
 
 
-class TestSpecUriFromArgv:
-    """``spec_uri_from_argv`` splits the URI positional form from Hydra-override argv."""
+class TestSpecUriCliMain:
+    """``generate_dataset_from_spec_uri.main`` — one positional, straight to the runner."""
 
-    @pytest.mark.parametrize(
-        ("argv", "expected"),
-        [
-            (["/abs/path/input_spec.json"], "/abs/path/input_spec.json"),
-            (["relative/input_spec.json"], "relative/input_spec.json"),
-            (["file:///data/run/input_spec.json"], "file:///data/run/input_spec.json"),
-            (["r2://bucket/prefix/input_spec.json"], "r2://bucket/prefix/input_spec.json"),
-            (["s3://bucket/prefix/input_spec.json"], "s3://bucket/prefix/input_spec.json"),
-        ],
-        ids=["abs_path", "relative_path", "file_uri", "r2_uri", "s3_uri"],
-    )
-    def test_single_bare_positional_is_the_spec_uri(self, argv: list[str], expected: str) -> None:
-        """One non-override positional argument is returned as the spec URI.
+    def test_single_positional_runs_that_spec_uri(self) -> None:
+        """The sole positional is handed verbatim to ``run_from_spec_uri``."""
+        import synth_setter.cli.generate_dataset_from_spec_uri as cli
 
-        :param argv: argv tail (no program name).
-        :param expected: The URI the parser must return.
-        """
-        from synth_setter.cli.generate_dataset import spec_uri_from_argv
+        with patch.object(cli, "run_from_spec_uri") as mock_run:
+            cli.main(["r2://bucket/run/input_spec.json"])
 
-        assert spec_uri_from_argv(argv) == expected
+        mock_run.assert_called_once_with("r2://bucket/run/input_spec.json")
 
     @pytest.mark.parametrize(
         "argv",
-        [
-            [],
-            ["experiment=generate_dataset/smoke-shard"],
-            ["experiment=generate_dataset/smoke-shard", "render.plugin_path=/x.vst3"],
-            ["+created_at=2026-01-01T00:00:00+00:00"],
-            ["--help"],
-            ["--config-name=dataset"],
-            ["~logger"],
-        ],
-        ids=["empty", "one_override", "two_overrides", "plus_override", "help", "flag", "tilde"],
+        [[], ["a/input_spec.json", "b/input_spec.json"]],
+        ids=["missing_uri", "two_uris"],
     )
-    def test_hydra_style_argv_returns_none(self, argv: list[str]) -> None:
-        """Override/flag/deletion argv forms fall through to the Hydra entrypoint.
+    def test_wrong_positional_count_exits_with_usage_error(self, argv: list[str]) -> None:
+        """Zero or two positionals exit via argparse's usage error (code 2).
 
         :param argv: argv tail (no program name).
         """
-        from synth_setter.cli.generate_dataset import spec_uri_from_argv
+        import synth_setter.cli.generate_dataset_from_spec_uri as cli
 
-        assert spec_uri_from_argv(argv) is None
+        with patch.object(cli, "run_from_spec_uri") as mock_run:
+            with pytest.raises(SystemExit) as excinfo:
+                cli.main(argv)
 
-    def test_uri_mixed_with_overrides_is_rejected(self) -> None:
-        """A URI positional next to Hydra overrides fails loud instead of guessing."""
-        from synth_setter.cli.generate_dataset import spec_uri_from_argv
-
-        with pytest.raises(ValueError, match="cannot be combined with Hydra overrides"):
-            spec_uri_from_argv(["r2://bucket/input_spec.json", "experiment=smoke"])
-
-    def test_two_bare_positionals_are_rejected(self) -> None:
-        """Two bare positionals are ambiguous — rejected, not silently truncated."""
-        from synth_setter.cli.generate_dataset import spec_uri_from_argv
-
-        with pytest.raises(ValueError, match="exactly one"):
-            spec_uri_from_argv(["a/input_spec.json", "b/input_spec.json"])
+        assert excinfo.value.code == 2
+        mock_run.assert_not_called()
 
 
 class TestRunFromSpecUri:
@@ -332,7 +303,7 @@ class TestRunFromSpecUri:
             tmp dir, so relative work dirs also land there).
         :yields MagicMock: Patched ``_check_call_streamed`` mock.
         """
-        with patch("synth_setter.cli.generate_dataset.r2_io.ensure_r2_env_loaded"):
+        with patch("synth_setter.pipeline.r2_io.ensure_r2_env_loaded"):
             with patch(
                 "synth_setter.cli.generate_dataset._check_call_streamed",
                 side_effect=_materialize_or_passthrough_rclone,
@@ -353,7 +324,7 @@ class TestRunFromSpecUri:
         :param spec: Fixture-provided single-shard ``DatasetSpec``.
         :param tmp_path: Pytest tmp dir for the local spec JSON.
         """
-        from synth_setter.cli.generate_dataset import run_from_spec_uri
+        from synth_setter.cli.generate_dataset_from_spec_uri import run_from_spec_uri
 
         spec_path = tmp_path / INPUT_SPEC_FILENAME
         spec_path.write_text(spec.model_dump_json())
@@ -380,7 +351,7 @@ class TestRunFromSpecUri:
         :param fake_r2_remote: Fake R2 root backing both spec and shards.
         :param spec: Fixture-provided single-shard ``DatasetSpec``.
         """
-        from synth_setter.cli.generate_dataset import run_from_spec_uri
+        from synth_setter.cli.generate_dataset_from_spec_uri import run_from_spec_uri
         from synth_setter.pipeline.spec_io import upload_spec
 
         spec_uri = upload_spec(spec)
@@ -406,7 +377,7 @@ class TestRunFromSpecUri:
         :param spec: Fixture-provided single-shard ``DatasetSpec``.
         :param tmp_path: Pytest tmp dir for the local spec JSON.
         """
-        from synth_setter.cli.generate_dataset import run_from_spec_uri
+        from synth_setter.cli.generate_dataset_from_spec_uri import run_from_spec_uri
 
         spec_path = tmp_path / INPUT_SPEC_FILENAME
         spec_path.write_text(spec.model_dump_json())
@@ -426,56 +397,14 @@ class TestRunFromSpecUri:
         :param fake_r2_remote: Fake R2 root (unused; activates rclone skip gate).
         :param spec: Fixture-provided single-shard ``DatasetSpec`` (unused body).
         """
-        from synth_setter.cli.generate_dataset import run_from_spec_uri
+        from synth_setter.cli.generate_dataset_from_spec_uri import run_from_spec_uri
 
         with patch(
-            "synth_setter.cli.generate_dataset.r2_io.ensure_r2_env_loaded",
+            "synth_setter.pipeline.r2_io.ensure_r2_env_loaded",
             side_effect=RuntimeError("no creds"),
         ):
             with pytest.raises(RuntimeError, match="no creds"):
                 run_from_spec_uri("r2://bucket/never-fetched/input_spec.json")
-
-
-class TestMainSpecUriDispatch:
-    """``main()`` routes a URI positional to spec-URI mode, everything else to Hydra."""
-
-    def test_uri_positional_dispatches_to_run_from_spec_uri(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """``synth-setter-generate-dataset <uri>`` runs spec-URI mode, not Hydra.
-
-        :param monkeypatch: Used to pin ``sys.argv``.
-        """
-        import synth_setter.cli.generate_dataset as generate_dataset
-
-        monkeypatch.setattr(
-            sys, "argv", ["synth-setter-generate-dataset", "r2://bucket/run/input_spec.json"]
-        )
-        with patch.object(generate_dataset, "run_from_spec_uri") as mock_run:
-            with patch.object(generate_dataset, "hydra_main") as mock_hydra:
-                generate_dataset.main()
-
-        mock_run.assert_called_once_with("r2://bucket/run/input_spec.json")
-        mock_hydra.assert_not_called()
-
-    def test_override_argv_dispatches_to_hydra(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Hydra-style overrides keep flowing to the ``@hydra.main`` entrypoint.
-
-        :param monkeypatch: Used to pin ``sys.argv``.
-        """
-        import synth_setter.cli.generate_dataset as generate_dataset
-
-        monkeypatch.setattr(
-            sys,
-            "argv",
-            ["synth-setter-generate-dataset", "experiment=generate_dataset/smoke-shard"],
-        )
-        with patch.object(generate_dataset, "run_from_spec_uri") as mock_run:
-            with patch.object(generate_dataset, "hydra_main") as mock_hydra:
-                generate_dataset.main()
-
-        mock_hydra.assert_called_once_with()
-        mock_run.assert_not_called()
 
 
 class TestRun:

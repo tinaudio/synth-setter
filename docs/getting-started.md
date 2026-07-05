@@ -618,11 +618,11 @@ ______________________________________________________________________
   experiments across different models and datasets.
 - **Data generation:** See `src/synth_setter/cli/generate_dataset.py` for the dataset
   generation entry point (Hydra; `src/synth_setter/configs/dataset.yaml` is the root config). The
-  `synth-setter-generate-dataset` console script is the canonical surface. Besides Hydra
-  overrides, it accepts a single spec-URI positional — a bare path, `file://`, `r2://`, or
-  `s3://` URI of an already-materialized `input_spec.json` — which loads that frozen spec and
-  renders it in-process
-  (e.g. `synth-setter-generate-dataset r2://bucket/data/<task>/<run>/input_spec.json`).
+  `synth-setter-generate-dataset` console script is the canonical surface. To render an
+  already-materialized `input_spec.json` instead of composing one, use
+  `synth-setter-generate-dataset-from-spec-uri <uri>` — the URI may be a bare path, `file://`,
+  `r2://`, or `s3://`
+  (e.g. `synth-setter-generate-dataset-from-spec-uri r2://bucket/data/<task>/<run>/input_spec.json`).
 - **Design docs:** Read `docs/design/data-pipeline.md` for the data pipeline
   architecture and `docs/design/training-pipeline.md` for the training pipeline.
 - **Configuration reference:**

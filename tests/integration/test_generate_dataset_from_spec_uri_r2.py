@@ -1,10 +1,10 @@
-"""End-to-end CLI test for ``synth-setter-generate-dataset <spec-uri>``.
+"""End-to-end CLI test for ``synth-setter-generate-dataset-from-spec-uri``.
 
-Exercises the spec-URI operator form on the 100% production path — no fakes,
+Exercises the spec-URI operator CLI on the 100% production path — no fakes,
 no mocks, no stubbed renderer:
 
 1. Compose the ``generate_dataset/smoke-shard`` experiment and materialize a
-   real ``DatasetSpec`` (the same construction ``hydra_main`` performs).
+   real ``DatasetSpec`` (the same construction the Hydra launcher performs).
 2. Upload it to real Cloudflare R2 via the production ``spec_io.upload_spec``.
 3. Invoke the real CLI subprocess with the spec's ``r2://`` URI as its only
    argument: the CLI downloads the spec over the network, renders every shard
@@ -148,7 +148,7 @@ def _run_cli_with_uri(spec_uri: str, timeout: int) -> subprocess.CompletedProces
     worktree_src = _CHECKOUT_ROOT / "src"
     env = {**os.environ, "PYTHONPATH": f"{worktree_src}:{os.environ.get('PYTHONPATH', '')}"}
     return subprocess.run(  # noqa: S603 — argv from validated spec URI + literals
-        [sys.executable, "-m", "synth_setter.cli.generate_dataset", spec_uri],
+        [sys.executable, "-m", "synth_setter.cli.generate_dataset_from_spec_uri", spec_uri],
         cwd=_CHECKOUT_ROOT,
         env=env,
         capture_output=True,
@@ -172,7 +172,7 @@ def _assert_cli_succeeded(result: subprocess.CompletedProcess[str], context: str
 
 
 def test_cli_renders_spec_fetched_from_r2_uri_end_to_end(uploaded_spec: DatasetSpec) -> None:
-    """``synth-setter-generate-dataset r2://…/input_spec.json`` renders + uploads for real.
+    """``synth-setter-generate-dataset-from-spec-uri r2://…`` renders + uploads for real.
 
     The subprocess downloads the spec from R2 over the network, renders all three smoke shards
     through the real Surge plugin, uploads them to R2, and retains them under the CWD-relative work
