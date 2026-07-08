@@ -65,7 +65,7 @@ def run_from_spec_uri(spec_uri: str, *, enable_wandb: bool = True) -> None:  # n
     rendered shards to ``spec.r2``, wherever the spec itself came from. By
     default this recovery path creates a new W&B run grouped under the original
     dataset run id, so concurrent repairs do not write into the same W&B run
-    history; pass ``enable_wandb=False`` for auth-free emergency repairs or CI.
+    history; pass ``enable_wandb=False`` to skip only W&B auth/logging, e.g. CI.
 
     Invoke from the checkout root — the same contract as the Hydra launcher
     (the render subprocess script and any relative ``render.preset_path`` /
