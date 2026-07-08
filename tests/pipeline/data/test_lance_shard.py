@@ -23,6 +23,7 @@ from synth_setter.data.vst.shapes import (
 )
 from synth_setter.pipeline.data.lance_shard import (
     LANCE_DATA_STORAGE_VERSION,
+    LANCE_MAX_BYTES_PER_FILE,
     commit_lance_dataset,
     iter_lance_column_rows,
     lance_fragment,
@@ -157,6 +158,32 @@ def test_write_lance_dataset_pins_data_storage_version(tmp_path: Path) -> None:
     )
 
     assert lance.dataset(str(shard)).data_storage_version == LANCE_DATA_STORAGE_VERSION
+
+
+def test_write_lance_dataset_bounds_data_file_size_for_multipart_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Split Lance data files before R2 multipart uploads can exceed S3's 10k-part ceiling.
+
+    :param monkeypatch: Pytest fixture used to spy on ``lance.write_dataset``.
+    """
+    captured: dict[str, object] = {}
+
+    def _spy(*args: object, **kwargs: object) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.setattr(lance, "write_dataset", _spy)
+    schema = lance_schema(_FIELD_SHAPES, _METADATA)
+
+    write_lance_dataset(
+        "s3://bucket/prefix/train.lance",
+        schema,
+        [record_batch_from_arrays(_arange_arrays(offset=0), schema)],
+        storage_options={"aws_endpoint": "https://acct.r2.cloudflarestorage.com"},
+    )
+
+    assert captured["max_bytes_per_file"] == LANCE_MAX_BYTES_PER_FILE
+    assert LANCE_MAX_BYTES_PER_FILE < 10_000 * 5 * 1024**2
 
 
 def test_lance_fragment_commit_round_trips_values_and_pins_version(tmp_path: Path) -> None:

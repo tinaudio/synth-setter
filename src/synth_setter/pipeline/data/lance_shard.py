@@ -19,6 +19,9 @@ SHARD_METADATA_SCHEMA_KEY = b"synth_setter.shard_metadata"
 # Pin the Lance on-disk format instead of floating with the pylance default;
 # "2.2" leads that default and needs a reader new enough to open it (#1714).
 LANCE_DATA_STORAGE_VERSION = "2.2"
+# Refs https://github.com/tinaudio/synth-setter/issues/1775: keep one data file
+# below S3's 10k multipart-part ceiling even at 5 MiB parts.
+LANCE_MAX_BYTES_PER_FILE = 32 * 1024**3
 
 
 def lance_schema(
@@ -108,6 +111,7 @@ def write_lance_dataset(
         str(uri),
         schema=schema,
         mode="overwrite",
+        max_bytes_per_file=LANCE_MAX_BYTES_PER_FILE,
         data_storage_version=LANCE_DATA_STORAGE_VERSION,
         storage_options=storage_options,
     )
