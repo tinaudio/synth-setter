@@ -52,7 +52,12 @@ under the GPL-3.0 license.
 
 `make install` handles uv, Python 3.11, and all dependencies for you.
 `make install-surge-xt` fetches the pinned Surge XT VST3 release — no need
-to install Surge XT yourself.
+to install Surge XT yourself. `make install-plugins` additionally fetches the
+other VST3 synths the runtime docker image ships (Dexed, OB-Xf, Six Sines;
+x86_64 Linux only — those targets print a notice and exit 0 elsewhere, so on
+macOS the aggregate still succeeds with Surge XT alone; on non-x86_64 Linux
+`install-surge-xt` itself fails first — see the symlink workaround in
+[docs/getting-started.md](docs/getting-started.md#2d-install-the-surge-xt-vst3)).
 
 ## Installation
 

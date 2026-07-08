@@ -136,15 +136,15 @@ install-surge-xt: ## Download Surge XT VST3 into plugins/ (skipped if already pr
 	case "$$OS" in \
 		Linux) \
 			if [ "$$ARCH" != "x86_64" ]; then \
-				echo "ERROR: the Surge XT Linux release only ships an x86_64 build (detected: $$ARCH)."; \
-				echo "Install via your package manager (e.g. apt install surge-xt) or build from source,"; \
-				echo "then symlink it: ln -s /path/to/Surge XT.vst3 plugins/"; \
+				echo "ERROR: the Surge XT Linux release only ships an x86_64 build (detected: $$ARCH)." >&2; \
+				echo "Install via your package manager (e.g. apt install surge-xt) or build from source," >&2; \
+				echo "then symlink it: ln -s /path/to/Surge XT.vst3 plugins/" >&2; \
 				exit 1; \
 			fi; \
 			ASSET="$(SURGE_XT_LINUX_ASSET)"; EXPECTED_MD5="$(SURGE_XT_LINUX_MD5)" ;; \
 		Darwin) \
 			ASSET="$(SURGE_XT_MACOS_ASSET)"; EXPECTED_MD5="$(SURGE_XT_MACOS_MD5)" ;; \
-		*) echo "ERROR: Unsupported platform: $$OS"; exit 1 ;; \
+		*) echo "ERROR: Unsupported platform: $$OS" >&2; exit 1 ;; \
 	esac; \
 	mkdir -p "$(SURGE_XT_CACHE)" plugins; \
 	ARCHIVE="$(SURGE_XT_CACHE)/$$ASSET"; \
@@ -159,14 +159,14 @@ install-surge-xt: ## Download Surge XT VST3 into plugins/ (skipped if already pr
 	elif command -v md5 >/dev/null 2>&1; then \
 		ACTUAL_MD5=$$(md5 -q "$$ARCHIVE"); \
 	else \
-		echo "ERROR: neither 'md5sum' (Linux) nor 'md5' (macOS) is available — cannot verify checksum"; \
+		echo "ERROR: neither 'md5sum' (Linux) nor 'md5' (macOS) is available — cannot verify checksum" >&2; \
 		exit 1; \
 	fi; \
 	if [ "$$ACTUAL_MD5" != "$$EXPECTED_MD5" ]; then \
-		echo "ERROR: md5 mismatch for $$ARCHIVE"; \
-		echo "  expected: $$EXPECTED_MD5"; \
-		echo "  actual:   $$ACTUAL_MD5"; \
-		echo "Remove the cached file and retry: rm '$$ARCHIVE'"; \
+		echo "ERROR: md5 mismatch for $$ARCHIVE" >&2; \
+		echo "  expected: $$EXPECTED_MD5" >&2; \
+		echo "  actual:   $$ACTUAL_MD5" >&2; \
+		echo "Remove the cached file and retry: rm '$$ARCHIVE'" >&2; \
 		exit 1; \
 	fi; \
 	echo "md5 OK. Extracting Surge XT.vst3 into plugins/..."; \
@@ -175,6 +175,73 @@ install-surge-xt: ## Download Surge XT VST3 into plugins/ (skipped if already pr
 		Darwin) unzip -q "$$ARCHIVE" "Surge XT.vst3/*" -d plugins/ ;; \
 	esac; \
 	echo "Installed $$DEST"
+
+# Fetched-synth pins mirror the ARGs in docker/ubuntu22_04/Dockerfile;
+# tests/infra/test_install_plugins_targets.py fails when either side drifts.
+DEXED_VERSION := 0.9.8
+DEXED_SHA256 := 5d026f53504f9303ae2a4a635cf6fdfc50ab9c947cbc0a20ecb5c8f323402dab
+OBXF_VERSION := v1.0.3
+OBXF_SHA256 := 72b60c83cf6426337031df744c34a047104a9d95f1feaf6cd048ecfa39f74c96
+SIX_SINES_VERSION := v1.1.0
+SIX_SINES_ASSET := six-sines-linux-2025-03-18-43d10b2.tgz
+SIX_SINES_SHA256 := fae7c1c325fde7ed49c978358397cb4bcf69012c4e6eefe2a5968fe6a36d0421
+
+# $(call install_fetched_synth,<Bundle>,<asset-url>,<sha256>): fetch the pinned asset,
+# verify its sha256, extract plugins/<Bundle>.vst3; non-x86_64 hosts skip (the image's amd64 gate).
+
+# Deliberately separate from install-surge-xt (per-OS assets, md5 upstream checksums there);
+# the cache is flat — no per-synth subdir — because asset filenames embed their version.
+define install_fetched_synth
+@set -e; \
+DEST="plugins/$(1).vst3"; \
+if [ -e "$$DEST" ]; then \
+	echo "$$DEST already exists — skipping. Remove it first to reinstall."; \
+	exit 0; \
+fi; \
+OS=$$(uname -s); ARCH=$$(uname -m); \
+if [ "$$OS" != "Linux" ] || [ "$$ARCH" != "x86_64" ]; then \
+	echo "skipping $(1): x86_64 Linux asset only (host: $$OS/$$ARCH)."; \
+	exit 0; \
+fi; \
+CACHE="$(HOME)/.cache/synth-setter"; \
+ASSET="$(notdir $(2))"; \
+mkdir -p "$$CACHE" plugins; \
+ARCHIVE="$$CACHE/$$ASSET"; \
+if [ ! -f "$$ARCHIVE" ]; then \
+	echo "Downloading $(2)"; \
+	curl -fSL -o "$$ARCHIVE" "$(2)"; \
+else \
+	echo "Using cached $$ARCHIVE"; \
+fi; \
+command -v sha256sum >/dev/null 2>&1 || { \
+	echo "ERROR: sha256sum not found — cannot verify checksum" >&2; exit 1; }; \
+echo "$(3)  $$ARCHIVE" | sha256sum -c - || { \
+	echo "Remove the cached file and retry: rm '$$ARCHIVE'" >&2; exit 1; }; \
+TMP="$$(mktemp -d)"; \
+trap 'rm -rf "$$TMP"' EXIT; \
+case "$$ASSET" in \
+	*.zip) unzip -q "$$ARCHIVE" -d "$$TMP" ;; \
+	*.tgz|*.tar.gz) tar -xzf "$$ARCHIVE" -C "$$TMP" ;; \
+	*) echo "ERROR: unsupported archive type: $$ASSET" >&2; exit 1 ;; \
+esac; \
+SRC="$$(find "$$TMP" -type d -name "$(1).vst3" | head -n 1)"; \
+if [ -z "$$SRC" ]; then \
+	echo "ERROR: $(1).vst3 not found in $$ASSET" >&2; exit 1; \
+fi; \
+mv "$$SRC" "$$DEST"; \
+echo "Installed $$DEST"
+endef
+
+install-dexed: ## Download Dexed VST3 into plugins/ (skipped if already present)
+	$(call install_fetched_synth,Dexed,https://github.com/asb2m10/dexed/releases/download/v$(DEXED_VERSION)/dexed-$(DEXED_VERSION)-lnx.zip,$(DEXED_SHA256))
+
+install-obxf: ## Download OB-Xf VST3 into plugins/ (skipped if already present)
+	$(call install_fetched_synth,OB-Xf,https://github.com/surge-synthesizer/OB-Xf/releases/download/$(OBXF_VERSION)/ob-xf-Linux-$(OBXF_VERSION).zip,$(OBXF_SHA256))
+
+install-six-sines: ## Download Six Sines VST3 into plugins/ (skipped if already present)
+	$(call install_fetched_synth,Six Sines,https://github.com/baconpaul/six-sines/releases/download/$(SIX_SINES_VERSION)/$(SIX_SINES_ASSET),$(SIX_SINES_SHA256))
+
+install-plugins: install-surge-xt install-dexed install-obxf install-six-sines ## Install every VST3 the runtime docker image ships (Surge XT, Dexed, OB-Xf, Six Sines)
 
 link-plugins: ## Mirror the primary checkout's plugins/ into the current worktree (no-op in primary)
 	@set -e; \

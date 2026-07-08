@@ -262,7 +262,7 @@ docs:
     description: Onboarding — local dev, Codespaces, and dev container flows
     sources:
       - pattern: "Makefile"
-        covers: "Local dev targets — install (uv + .venv + deps + pre-commit), install-surge-xt (download + md5 verify + extract Surge XT VST3), link-plugins (mirror primary's plugins/ into a worktree), link-thoughts (symlink a worktree's thoughts/ to the primary's central copy; no-op in primary), link-skills (project the installed skills marketplace into ~/.agents/skills for Gemini/Antigravity discovery), SURGE_XT_VERSION + related vars"
+        covers: "Local dev targets — install (uv + .venv + deps + pre-commit), install-surge-xt (download + md5 verify + extract Surge XT VST3), install-plugins (aggregate) + install-dexed/install-obxf/install-six-sines (sha256-pinned fetched synths mirroring the Dockerfile ARGs; x86_64 Linux only, exit-0 skip elsewhere), link-plugins (mirror primary's plugins/ into a worktree), link-thoughts (symlink a worktree's thoughts/ to the primary's central copy; no-op in primary), link-skills (project the installed skills marketplace into ~/.agents/skills for Gemini/Antigravity discovery), SURGE_XT_VERSION + DEXED_*/OBXF_*/SIX_SINES_* pin vars"
         scope: "local-dev"
       - pattern: ".devcontainer/cpu/devcontainer.json"
         covers: "CPU dev container config — remoteUser, mounts (bash-history named volume + per-user zellij-cache named volumes for dev and root + plugins/ anonymous overlay), --env-file .env, initializeCommand, postCreateCommand, VS Code terminal profile defaulting to zellij (tmux still selectable)"
@@ -359,7 +359,7 @@ docs:
       - pattern: "tests/_meta/**"
         covers: "AST-based meta-tests enforcing structural invariants on other test modules (e.g., no Hydra config-initializer imports in canonical entrypoint test files)"
       - pattern: "tests/infra/**"
-        covers: "Devcontainer + GHA invariant tests — attached-mode MODE=idle, gh-auth flow, no baked secrets, post-create budget, post-create agent full-auto seeding (Codex config + agy wrapper), act --list parse"
+        covers: "Devcontainer + GHA invariant tests — attached-mode MODE=idle, gh-auth flow, no baked secrets, post-create budget, post-create agent full-auto seeding (Codex config + agy wrapper), act --list parse, Makefile install-plugins targets + Dockerfile pin parity"
       - pattern: "tests/integration/**"
         covers: "Three classes of integration tests: (1) launcher-against-real-R2 round-trips with a stubbed VST renderer subprocess (`integration_r2` marker) — fast PR-tier alternative to the kind + dev-snapshot matrix in `test-dataset-generation.yml`, run by `test-local-launcher-roundtrip.yml` on same-repo PRs; (2) unmarked cross-platform shard-dispatch tests (`test_parallel_shard_dispatch.py`) that run in the default fast lane via `test.yml`; and (3) real-Surge parallel renders parametrized over cadence cells (`test_parallel_shard_render_linux.py`, `requires_vst`+`slow`) run by `test-vst-slow.yml` — the cadence coverage retired from `test-dataset-generation-render-matrix.yml`."
       - pattern: ".github/workflows/test-local-launcher-roundtrip.yml"

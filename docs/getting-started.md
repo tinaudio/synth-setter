@@ -83,12 +83,22 @@ make install-surge-xt
 ```
 
 This downloads the `pluginsonly` archive for your platform (Linux x86_64 or
-macOS universal) from the [Surge XT 1.3.4 release](https://github.com/surge-synthesizer/releases-xt/releases/tag/1.3.4),
-verifies its md5 checksum, and extracts `Surge XT.vst3` into `plugins/`. The
-archive is cached at `~/.cache/synth-setter/surge-xt-1.3.4/`, so re-runs that
+macOS universal) for the release pinned by `SURGE_XT_VERSION` in the
+[Makefile](../Makefile), verifies its md5 checksum, and extracts
+`Surge XT.vst3` into `plugins/`. The
+archive is cached at `~/.cache/synth-setter/surge-xt-<version>/`, so re-runs that
 have to re-extract (e.g. after `rm -rf plugins/`) skip the download. If
 `plugins/Surge XT.vst3` already exists, the target is a no-op — remove it
 first to reinstall.
+
+To mirror the full plugin set the runtime docker image ships — Surge XT plus
+Dexed, OB-Xf, and Six Sines — run `make install-plugins`. The three extra
+synths publish x86_64 Linux binaries only, matching the image; on other hosts
+those targets print a notice and exit 0, so on macOS the aggregate still
+succeeds with just Surge XT installed (on non-x86_64 Linux `install-surge-xt`
+itself fails first — see the arm64 note below). Their version/SHA256 pins mirror the
+Dockerfile ARGs and are kept in sync by
+`tests/infra/test_install_plugins_targets.py`.
 
 > **Already have Surge XT installed system-wide?** Skip
 > `make install-surge-xt` and symlink your existing install into `plugins/`:
