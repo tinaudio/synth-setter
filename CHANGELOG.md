@@ -1,6 +1,21 @@
 # CHANGELOG
 
 
+## v8.40.2 (2026-07-08)
+
+### Bug Fixes
+
+- **storage**: Pass R2 endpoint alias to Lance
+  ([#1769](https://github.com/tinaudio/synth-setter/pull/1769),
+  [`f7cf09e`](https://github.com/tinaudio/synth-setter/commit/f7cf09e6628ac1b191e281f895de65c54d135129))
+
+* fix(storage): pass R2 endpoint alias to Lance
+
+* test(storage): document R2 multipart threshold
+
+* fix(storage): trim R2 storage option values
+
+
 ## v8.40.1 (2026-07-08)
 
 ### Bug Fixes
