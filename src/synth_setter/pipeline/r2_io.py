@@ -71,8 +71,9 @@ def _default_env_file() -> Path:
     :returns: ``$SYNTH_SETTER_WORKSPACE/.env`` when set, otherwise the checkout
         marker root's ``.env`` or the current directory's ``.env`` fallback.
     """
-    if _WORKSPACE_ENV in os.environ:
-        return Path(os.environ[_WORKSPACE_ENV]).resolve() / ".env"
+    workspace = os.environ.get(_WORKSPACE_ENV, "").strip()
+    if workspace:
+        return Path(workspace).resolve() / ".env"
     for candidate in Path(__file__).resolve().parents:
         if (candidate / _CHECKOUT_MARKER).is_file():
             return candidate / ".env"
@@ -136,6 +137,15 @@ def _load_r2_env_file(env_file: Path) -> None:
             os.environ[key] = value
 
 
+def _env_value_is_set(key: str) -> bool:
+    """Return whether an env var is present with a non-blank value.
+
+    :param key: Environment variable name to inspect.
+    :returns: ``True`` when the key exists and is not empty/whitespace.
+    """
+    return bool(os.environ.get(key, "").strip())
+
+
 def ensure_r2_env_loaded(env_file: Path | None = None) -> None:
     """Load ``RCLONE_CONFIG_R2_*`` from dotenv/process env; validate access.
 
@@ -168,7 +178,7 @@ def ensure_r2_env_loaded(env_file: Path | None = None) -> None:
     for key, default in _R2_STRUCTURAL_DEFAULTS.items():
         os.environ.setdefault(key, default)
 
-    missing = [k for k in _SECRET_R2_ENV_KEYS if k not in os.environ]
+    missing = [k for k in _SECRET_R2_ENV_KEYS if not _env_value_is_set(k)]
     if missing:
         raise RuntimeError(
             f"R2 credentials missing from process env after dotenv load: {', '.join(missing)}. "
@@ -212,7 +222,7 @@ def is_r2_reachable() -> bool:
     _load_r2_env_file(_DEFAULT_ENV_FILE)
     for key, default in _R2_STRUCTURAL_DEFAULTS.items():
         os.environ.setdefault(key, default)
-    if not all(key in os.environ for key in _SECRET_R2_ENV_KEYS):
+    if not all(_env_value_is_set(key) for key in _SECRET_R2_ENV_KEYS):
         return False
     try:
         subprocess.run(  # noqa: S603 — args are literal strings

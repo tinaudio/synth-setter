@@ -505,13 +505,37 @@ class TestIsR2Reachable:
         )
         monkeypatch.setattr(r2_io, "_DEFAULT_ENV_FILE", default_env_file)
         monkeypatch.setattr(r2_io.shutil, "which", lambda name: f"/usr/bin/{name}")
-        for key in r2_io._SECRET_R2_ENV_KEYS:  # noqa: SLF001 — test asserts contract
+        for key in (
+            *r2_io._SECRET_R2_ENV_KEYS,  # noqa: SLF001 — test asserts contract
+            *r2_io._R2_STRUCTURAL_DEFAULTS,  # noqa: SLF001 — test asserts contract
+        ):
             monkeypatch.delenv(key, raising=False)
 
         with patch.object(r2_io.subprocess, "run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0)
             assert r2_io.is_r2_reachable() is True
         assert os.environ["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "id-from-default"
+
+    def test_returns_false_when_secret_env_keys_are_blank(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Blank R2 secret values do not satisfy the integration-test skip gate.
+
+        :param tmp_path: Pytest tmp dir used for an intentionally missing default dotenv.
+        :param monkeypatch: Pytest fixture used to isolate env and subprocess behavior.
+        """
+        monkeypatch.setattr(r2_io, "_DEFAULT_ENV_FILE", tmp_path / "missing.env")
+        monkeypatch.setattr(r2_io.shutil, "which", lambda name: f"/usr/bin/{name}")
+        monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", "   ")
+        monkeypatch.setenv("RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", "secret")
+        monkeypatch.setenv("RCLONE_CONFIG_R2_ENDPOINT", "endpoint")
+        monkeypatch.setattr(
+            r2_io.subprocess,
+            "run",
+            lambda *a, **kw: pytest.fail("subprocess.run should not be reached"),
+        )
+
+        assert r2_io.is_r2_reachable() is False
 
     def test_returns_false_when_rclone_lsd_exits_non_zero(
         self, monkeypatch: pytest.MonkeyPatch
@@ -897,8 +921,6 @@ class TestEnsureR2EnvLoaded:
 
         :param monkeypatch: Pytest fixture used to remove env vars.
         """
-        import os
-
         for key in list(os.environ):
             if key.startswith("RCLONE_CONFIG_R2_"):
                 monkeypatch.delenv(key, raising=False)
@@ -911,8 +933,6 @@ class TestEnsureR2EnvLoaded:
 
         :param tmp_path: Pytest tmp dir for the env_file.
         """
-        import os
-
         env_file = tmp_path / ".env"
         env_file.write_text(
             "RCLONE_CONFIG_R2_ACCESS_KEY_ID=id-from-file\n"
@@ -939,8 +959,6 @@ class TestEnsureR2EnvLoaded:
         :param monkeypatch: Pytest fixture used to point the workspace default at the test dotenv
             file.
         """
-        import os
-
         default_env_file = tmp_path / ".env"
         default_env_file.write_text(
             "RCLONE_CONFIG_R2_ACCESS_KEY_ID=id-from-default\n"
@@ -958,6 +976,45 @@ class TestEnsureR2EnvLoaded:
             r2_io.ensure_r2_env_loaded(env_file=None)
 
         assert captured["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "id-from-default"
+
+    def test_default_env_file_ignores_blank_workspace_override(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Whitespace ``SYNTH_SETTER_WORKSPACE`` falls back to checkout discovery.
+
+        :param tmp_path: Pytest tmp dir used as the cwd that must not be selected.
+        :param monkeypatch: Pytest fixture used to isolate env and cwd.
+        """
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("SYNTH_SETTER_WORKSPACE", "   ")
+
+        checkout_env = next(
+            parent / ".env"
+            for parent in Path(r2_io.__file__).resolve().parents
+            if (parent / ".project-root").is_file()
+        )
+
+        assert r2_io._default_env_file() == checkout_env  # noqa: SLF001
+
+    def test_blank_secret_keys_raise_actionable_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Blank R2 secret values are reported as missing before the auth ping.
+
+        :param tmp_path: Pytest tmp dir used for an intentionally missing default dotenv.
+        :param monkeypatch: Pytest fixture used to isolate env and subprocess behavior.
+        """
+        monkeypatch.setattr(r2_io, "_DEFAULT_ENV_FILE", tmp_path / "missing.env")
+        monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", "   ")
+        monkeypatch.setenv("RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", "secret")
+        monkeypatch.setenv("RCLONE_CONFIG_R2_ENDPOINT", "endpoint")
+
+        with patch.object(r2_io.subprocess, "run") as mock_run:
+            with pytest.raises(RuntimeError, match="R2 credentials missing") as excinfo:
+                r2_io.ensure_r2_env_loaded(env_file=None)
+
+        mock_run.assert_not_called()
+        assert "RCLONE_CONFIG_R2_ACCESS_KEY_ID" in str(excinfo.value)
 
     def test_missing_secret_keys_raises_actionable_error(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1053,8 +1110,6 @@ class TestEnsureR2EnvLoaded:
 
         :param monkeypatch: Pytest fixture used to populate secrets.
         """
-        import os
-
         _set_all_r2_secrets(monkeypatch)
         captured: dict[str, str] = {}
 
@@ -1079,8 +1134,6 @@ class TestEnsureR2EnvLoaded:
 
         :param monkeypatch: Pytest fixture used to populate env vars.
         """
-        import os
-
         _set_all_r2_secrets(monkeypatch)
         monkeypatch.setenv("RCLONE_CONFIG_R2_TYPE", "caller-type")
         monkeypatch.setenv("RCLONE_CONFIG_R2_PROVIDER", "caller-provider")
