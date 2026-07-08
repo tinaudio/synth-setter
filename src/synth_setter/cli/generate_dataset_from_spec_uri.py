@@ -13,14 +13,18 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from lightning.pytorch.loggers import Logger
 from loguru import logger
 
 from synth_setter.cli.generate_dataset import generate
 from synth_setter.pipeline import r2_io
-from synth_setter.pipeline.schemas.spec import DatasetSpec
 from synth_setter.pipeline.spec_io import load_spec_from_uri
+
+if TYPE_CHECKING:
+    from lightning.pytorch.loggers import Logger
+
+    from synth_setter.pipeline.schemas.spec import DatasetSpec
 
 _RESUME_WANDB_JOB_TYPE = "data-generation-resume"
 

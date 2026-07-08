@@ -79,7 +79,7 @@ TEST_PLUGIN_VERSION = "1.0.0-test"
 def _call_hydra_main(main_fn: Callable[..., object]) -> None:
     """Invoke a Hydra-decorated main whose static signature still names ``cfg``.
 
-    :param main_fn: Hydra-decorated main function to call with CLI argv.
+    :param main_fn: Hydra-decorated main function to call.
     """
     main_fn()
 
