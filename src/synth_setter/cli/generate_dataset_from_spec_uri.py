@@ -114,7 +114,7 @@ def main(argv: list[str] | None = None) -> None:
         "--no-wandb",
         dest="enable_wandb",
         action="store_false",
-        help="disable the default W&B logging resume",
+        help="disable W&B logging for spec-URI resume runs",
     )
     parser.add_argument(
         "spec_uri",

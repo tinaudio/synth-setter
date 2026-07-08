@@ -257,7 +257,7 @@ class TestSpecUriCliMain:
     """``generate_dataset_from_spec_uri.main`` — parse spec URI and W&B opt-out."""
 
     def test_single_positional_runs_that_spec_uri_with_wandb_enabled(self) -> None:
-        """The sole positional enables the default persistent W&B logging path."""
+        """The sole positional enables the default grouped W&B logging path."""
         import synth_setter.cli.generate_dataset_from_spec_uri as cli
 
         with patch.object(cli, "run_from_spec_uri") as mock_run:
