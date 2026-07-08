@@ -187,8 +187,9 @@ def resolve_worker_env(env_file: Path | None) -> dict[str, str]:
     `docker run -e KEY=VAL` and never touch a .env on disk.
     """
     file_env: dict[str, str] = {}
-    if env_file is not None and env_file.is_file():
-        file_env = load_worker_env(env_file)
+    resolved_env_file = env_file if env_file is not None else DEFAULT_ENV_FILE
+    if resolved_env_file.is_file():
+        file_env = load_worker_env(resolved_env_file)
 
     resolved: dict[str, str] = {}
     for key in _WORKER_ENV_KEYS:
@@ -574,7 +575,7 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
             "not sky_cfg.extra_envs."
         )
 
-    env_file_path = Path(sky_cfg.env_file).expanduser() if sky_cfg.env_file else None
+    env_file_path = Path(sky_cfg.env_file).expanduser() if sky_cfg.env_file else DEFAULT_ENV_FILE
     worker_env = resolve_worker_env(env_file_path)
     if not any(k in worker_env for k in _SECRET_WORKER_ENV_KEYS):
         raise ValueError(

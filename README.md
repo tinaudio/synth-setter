@@ -72,8 +72,8 @@ source .venv/bin/activate
 # 4. Download the Surge XT VST3 into plugins/
 make install-surge-xt
 
-# 5. Export environment variables (R2, W&B — see §4b in getting-started)
-set -a && source .env && set +a
+# 5. Create .env for R2 credentials — see §4b in getting-started.
+#    R2 preflight and SkyPilot workers read it automatically.
 ```
 
 > **Experiment tracking:** the default training run logs to W&B + CSV +

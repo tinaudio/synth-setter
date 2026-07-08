@@ -22,6 +22,7 @@ import pytest
 import sky
 import yaml
 
+import synth_setter.pipeline.skypilot_launch as skypilot_launch
 from synth_setter.pipeline.constants import WORKER_SPEC_URI_ENV
 from synth_setter.pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
@@ -157,6 +158,15 @@ class TestResolveWorkerEnvGitRefValidation:
     bash because the SHA is rendered into a ``git fetch + checkout`` invocation; rejecting a
     malformed value at the launcher gives a clear error before the job is ever submitted.
     """
+
+    @pytest.fixture(autouse=True)
+    def _ignore_default_env_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Keep git-ref tests independent from a developer checkout ``.env``.
+
+        :param tmp_path: Pytest fixture providing a missing dotenv path.
+        :param monkeypatch: Pytest fixture for env/attribute mocking.
+        """
+        monkeypatch.setattr(skypilot_launch, "DEFAULT_ENV_FILE", tmp_path / "missing.env")
 
     def test_unset_git_ref_is_accepted(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Empty/unset WORKER_GIT_REF is the common case (no PR-CI bake-lag bypass).
@@ -854,6 +864,7 @@ class TestDispatchViaSkypilot:
         """
         for key in _SECRET_WORKER_ENV_KEYS:
             monkeypatch.delenv(key, raising=False)
+        monkeypatch.setattr(skypilot_launch, "DEFAULT_ENV_FILE", tmp_path / "missing.env")
 
         template = _write_runpod_yaml(tmp_path)
         sky_cfg = SkypilotLaunchConfig(
@@ -912,6 +923,7 @@ class TestDispatchViaSkypilot:
         # Only the "missing-creds" case depends on env state; others trip on cfg shape.
         for key in _SECRET_WORKER_ENV_KEYS:
             monkeypatch.delenv(key, raising=False)
+        monkeypatch.setattr(skypilot_launch, "DEFAULT_ENV_FILE", tmp_path / "missing.env")
         monkeypatch.delenv(_SKYPILOT_API_SERVER_ENV, raising=False)
 
         template = _write_runpod_yaml(tmp_path)
@@ -989,6 +1001,36 @@ class TestDispatchViaSkypilot:
         mock_sky.Task.from_yaml_config.assert_called()
         passed_doc = mock_sky.Task.from_yaml_config.call_args.args[0]
         assert passed_doc["run"] == cmd
+
+    def test_dispatch_uses_default_env_file_when_unset(
+        self,
+        tmp_path: Path,
+        env_file: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        mock_sky: MagicMock,
+    ) -> None:
+        """Unset ``sky_cfg.env_file`` still forwards creds from the workspace ``.env``.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param env_file: Fixture-provided worker env file path.
+        :param monkeypatch: Pytest fixture used to point the default env path at
+            the fixture dotenv.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        """
+        monkeypatch.setattr(skypilot_launch, "DEFAULT_ENV_FILE", env_file)
+        template = _write_runpod_yaml(tmp_path)
+        sky_cfg = SkypilotLaunchConfig(
+            compute_template=str(template),
+            cmd="echo",
+            env_file=None,
+            job_name="default-env-file",
+        )
+
+        dispatch_via_skypilot(sky_cfg)
+
+        task = mock_sky.Task.from_yaml_config.return_value
+        worker_env = task.update_envs.call_args.args[0]
+        assert worker_env["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "key"
 
     def test_dispatch_failure_raises_runtime_error(
         self,
