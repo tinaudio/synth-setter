@@ -1,6 +1,16 @@
 # CHANGELOG
 
 
+## v8.40.1 (2026-07-08)
+
+### Bug Fixes
+
+- **pipeline**: Load workspace dotenv by default
+  ([`bfc4008`](https://github.com/tinaudio/synth-setter/commit/bfc40080284cf0e99bcb5483c2f5507d705e6238))
+
+Fixes #1768
+
+
 ## v8.40.0 (2026-07-05)
 
 ### Chores
