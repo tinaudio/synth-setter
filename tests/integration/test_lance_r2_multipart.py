@@ -18,6 +18,8 @@ pytestmark = [pytest.mark.integration_r2, pytest.mark.r2, pytest.mark.slow]
 
 _R2_BUCKET = "intermediate-data"
 _LANCE_UPLOAD_PART_BYTES = 5 * 1024 * 1024
+# Lance grows multipart part size after 100 parts unless it detects R2.
+# 103 one-row batches cross that boundary and reproduce R2 InvalidPart pre-fix.
 _MULTIPART_REGRESSION_ROWS = 103
 
 
