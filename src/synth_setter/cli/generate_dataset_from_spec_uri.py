@@ -13,7 +13,7 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal, cast
 
 from loguru import logger
 
@@ -27,6 +27,20 @@ if TYPE_CHECKING:
     from synth_setter.pipeline.schemas.spec import DatasetSpec
 
 _RESUME_WANDB_JOB_TYPE = "data-generation-resume"
+_WandbMode = Literal["online", "offline", "shared", "disabled", "dryrun", "run"]
+
+
+def _wandb_mode_override() -> _WandbMode | None:
+    """Select a W&B mode override only when the environment requires one.
+
+    :returns: Explicit W&B mode, or ``None`` to keep W&B's normal default.
+    """
+    wandb_mode = os.environ.get("WANDB_MODE")
+    if wandb_mode:
+        return cast("_WandbMode", wandb_mode)
+    elif not os.environ.get("WANDB_API_KEY"):
+        return "disabled"
+    return None
 
 
 def _resume_loggers(spec: DatasetSpec, work_dir: Path) -> list[Logger]:
@@ -39,6 +53,21 @@ def _resume_loggers(spec: DatasetSpec, work_dir: Path) -> list[Logger]:
     import wandb
     from lightning.pytorch.loggers.wandb import WandbLogger
 
+    wandb_mode = _wandb_mode_override()
+    settings = (
+        wandb.Settings(
+            code_dir=".",
+            console="wrap",
+            console_multipart=True,
+            mode=wandb_mode,
+        )
+        if wandb_mode
+        else wandb.Settings(
+            code_dir=".",
+            console="wrap",
+            console_multipart=True,
+        )
+    )
     return [
         WandbLogger(
             save_dir=str(work_dir),
@@ -49,11 +78,7 @@ def _resume_loggers(spec: DatasetSpec, work_dir: Path) -> list[Logger]:
             job_type=_RESUME_WANDB_JOB_TYPE,
             tags=["from-spec-uri", "resume", spec.task_name],
             log_model=False,
-            settings=wandb.Settings(
-                code_dir=".",
-                console="wrap",
-                console_multipart=True,
-            ),
+            settings=settings,
         )
     ]
 

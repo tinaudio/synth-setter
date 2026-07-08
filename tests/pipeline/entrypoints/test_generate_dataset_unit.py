@@ -294,6 +294,55 @@ class TestSpecUriCliMain:
         mock_run.assert_not_called()
 
 
+class TestSpecUriWandbSettings:
+    """``generate_dataset_from_spec_uri`` W&B settings defaults."""
+
+    def test_settings_disable_wandb_without_api_key_or_mode(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Missing W&B auth selects disabled mode instead of prompting.
+
+        :param monkeypatch: Clears W&B auth and mode environment variables.
+        """
+        from synth_setter.cli.generate_dataset_from_spec_uri import _wandb_mode_override
+
+        monkeypatch.delenv("WANDB_API_KEY", raising=False)
+        monkeypatch.delenv("WANDB_MODE", raising=False)
+
+        assert _wandb_mode_override() == "disabled"
+
+    def test_settings_preserve_explicit_wandb_mode(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Explicit ``WANDB_MODE`` overrides the no-auth disabled fallback.
+
+        :param monkeypatch: Sets W&B mode and clears W&B auth.
+        """
+        from synth_setter.cli.generate_dataset_from_spec_uri import _wandb_mode_override
+
+        monkeypatch.delenv("WANDB_API_KEY", raising=False)
+        monkeypatch.setenv("WANDB_MODE", "offline")
+
+        assert _wandb_mode_override() == "offline"
+
+    def test_settings_keep_default_mode_with_api_key(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Present W&B auth leaves mode unspecified for normal online logging.
+
+        :param monkeypatch: Sets W&B auth and clears W&B mode.
+        """
+        from synth_setter.cli.generate_dataset_from_spec_uri import _wandb_mode_override
+
+        monkeypatch.setenv("WANDB_API_KEY", "test-key")
+        monkeypatch.delenv("WANDB_MODE", raising=False)
+
+        assert _wandb_mode_override() is None
+
+
 class TestRunFromSpecUri:
     """``run_from_spec_uri`` — load a spec by URI, then render/upload its shards."""
 
@@ -449,6 +498,8 @@ class TestRunFromSpecUri:
 
         monkeypatch.setenv("WANDB_PROJECT", "")
         monkeypatch.delenv("WANDB_ENTITY", raising=False)
+        monkeypatch.delenv("WANDB_API_KEY", raising=False)
+        monkeypatch.delenv("WANDB_MODE", raising=False)
         spec_path = tmp_path / INPUT_SPEC_FILENAME
         spec_path.write_text(spec.model_dump_json())
         settings = MagicMock(name="settings")
@@ -468,6 +519,7 @@ class TestRunFromSpecUri:
             code_dir=".",
             console="wrap",
             console_multipart=True,
+            mode="disabled",
         )
         mock_wandb_logger.assert_called_once_with(
             save_dir=str(work_dir),
