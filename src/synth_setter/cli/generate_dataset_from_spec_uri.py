@@ -14,7 +14,7 @@ import argparse
 import os
 from importlib.util import find_spec
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Literal
 
 from loguru import logger
 
@@ -29,6 +29,14 @@ if TYPE_CHECKING:
 
 _RESUME_WANDB_JOB_TYPE = "data-generation-resume"
 _WandbMode = Literal["online", "offline", "shared", "disabled", "dryrun", "run"]
+_WANDB_MODES: dict[str, _WandbMode] = {
+    "online": "online",
+    "offline": "offline",
+    "shared": "shared",
+    "disabled": "disabled",
+    "dryrun": "dryrun",
+    "run": "run",
+}
 
 
 def _wandb_mode_override() -> _WandbMode | None:
@@ -38,8 +46,11 @@ def _wandb_mode_override() -> _WandbMode | None:
     """
     wandb_mode = os.environ.get("WANDB_MODE")
     if wandb_mode:
-        return cast("_WandbMode", wandb_mode)
-    elif not os.environ.get("WANDB_API_KEY"):
+        known_mode = _WANDB_MODES.get(wandb_mode)
+        if known_mode:
+            return known_mode
+        logger.warning(f"ignoring unsupported WANDB_MODE={wandb_mode!r}")
+    if not os.environ.get("WANDB_API_KEY"):
         return "disabled"
     return None
 

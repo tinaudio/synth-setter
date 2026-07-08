@@ -342,6 +342,36 @@ class TestSpecUriWandbSettings:
 
         assert _wandb_mode_override() is None
 
+    def test_settings_disable_wandb_for_invalid_mode_without_api_key(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Unsupported ``WANDB_MODE`` falls back to disabled mode without auth.
+
+        :param monkeypatch: Sets invalid W&B mode and clears W&B auth.
+        """
+        from synth_setter.cli.generate_dataset_from_spec_uri import _wandb_mode_override
+
+        monkeypatch.delenv("WANDB_API_KEY", raising=False)
+        monkeypatch.setenv("WANDB_MODE", "bogus")
+
+        assert _wandb_mode_override() == "disabled"
+
+    def test_settings_keep_default_for_invalid_mode_with_api_key(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Unsupported ``WANDB_MODE`` falls back to W&B's default with auth.
+
+        :param monkeypatch: Sets W&B auth and invalid W&B mode.
+        """
+        from synth_setter.cli.generate_dataset_from_spec_uri import _wandb_mode_override
+
+        monkeypatch.setenv("WANDB_API_KEY", "test-key")
+        monkeypatch.setenv("WANDB_MODE", "bogus")
+
+        assert _wandb_mode_override() is None
+
 
 class TestRunFromSpecUri:
     """``run_from_spec_uri`` — load a spec by URI, then render/upload its shards."""
