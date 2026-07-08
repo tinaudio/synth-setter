@@ -1,6 +1,65 @@
 # CHANGELOG
 
 
+## v8.40.3 (2026-07-08)
+
+### Bug Fixes
+
+- **data**: Log Lance finalize split progress
+  ([#1773](https://github.com/tinaudio/synth-setter/pull/1773),
+  [`08c0a08`](https://github.com/tinaudio/synth-setter/commit/08c0a08153fedf835fae983c424b2c02c66b85d2))
+
+- **storage**: Bound Lance R2 data file size
+  ([#1774](https://github.com/tinaudio/synth-setter/pull/1774),
+  [`c4bbf82`](https://github.com/tinaudio/synth-setter/commit/c4bbf82fd9c1dc58cb688255e656efb15ee8b526))
+
+### Build System
+
+- **make**: Install-plugins target for the docker image's full VST3 set
+  ([#1765](https://github.com/tinaudio/synth-setter/pull/1765),
+  [`d082dd6`](https://github.com/tinaudio/synth-setter/commit/d082dd6efa3ce3138b6b0c274a9a3faf05d8b08f))
+
+* build(make): add install-plugins target mirroring the docker image plugin set
+
+make install-plugins provisions every VST3 the runtime image ships: Surge XT (existing
+  install-surge-xt) plus new install-dexed / install-obxf / install-six-sines targets sharing one
+  fetch->sha256->extract canned recipe.
+
+The three fetched-synth pins mirror the Dockerfile ARGs verbatim. The ARG defaults must stay
+  self-contained (CI builds the image without the Makefile, and the fetch stage has no repo checkout
+  to read a shared pins file), so the duplication is irreducible;
+  tests/infra/test_install_plugins_targets.py asserts both sides stay equal and covers the
+  skip-if-present and non-x86_64 gating behavior.
+
+* test(make): cover install_fetched_synth download paths; fix review findings
+
+Address pre-PR review: add network-free tests for the verify->extract->move happy path (seeded cache
+  + HOME override + command-line sha pin), checksum mismatch, unsupported archive type, and
+  bundle-missing-in-archive; parametrize the non-x86_64 gate across all three fetched-synth targets.
+  Recipe cleanups: trap-based temp-dir cleanup on every exit path, diagnostics to stderr, tighter
+  header comments, and docs note that non-x86_64 hosts still exit 0.
+
+* test(make): exercise tgz extraction and mixed-presence aggregate; stderr diagnostics in
+  install-surge-xt
+
+Round-2 review warns: cover the tar branch with the space-containing 'Six Sines.vst3' bundle name,
+  prove install-plugins installs only the missing bundle when others exist, dedupe the
+  throwaway-HOME env setup into _home_env, and align install-surge-xt's error messages to stderr so
+  both fetch recipes diagnose on the same stream.
+
+* docs: sync doc-map and platform caveats for install-plugins
+
+Apply the doc-drift advisory: add the new targets and pin vars to the getting-started Makefile
+  covers entry, note the Makefile/pin-parity checks in the tests/infra doc-map entry and testing.md
+  row, correct the aggregate's non-x86_64 claim (arm64 Linux fails in install-surge-xt before any
+  skip), and de-inline the Surge version from getting-started's cache-path prose.
+
+* fix(make): fail with a clear error when sha256sum is missing
+
+Without the guard a missing sha256sum trips the generic checksum-failure branch and prints the
+  misleading remove-the-cached-file hint (Copilot review on #1765).
+
+
 ## v8.40.2 (2026-07-08)
 
 ### Bug Fixes
