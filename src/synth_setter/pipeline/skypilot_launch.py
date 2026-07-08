@@ -177,11 +177,12 @@ def load_worker_env(path: Path) -> dict[str, str]:
 def resolve_worker_env(env_file: Path | None) -> dict[str, str]:
     """Resolve the launcher's `_WORKER_ENV_KEYS` from .env and process env.
 
-    For each key in `_WORKER_ENV_KEYS`, the value is taken from `env_file` if
-    that file exists and the key is set there, else from the launcher's
-    process env if set, else skipped. Skipped keys keep the template's
-    default (typically the empty string) — `task.update_envs` only overrides
-    keys that are actually resolved here.
+    ``env_file=None`` reads ``DEFAULT_ENV_FILE``. For each key in
+    `_WORKER_ENV_KEYS`, the value is taken from the resolved dotenv file if
+    that file exists and the key is set there, else from the launcher's process
+    env if set, else skipped. Skipped keys keep the template's default
+    (typically the empty string) — `task.update_envs` only overrides keys that
+    are actually resolved here.
 
     `.env` is the local-dev source of truth; CI flows pass secrets via
     `docker run -e KEY=VAL` and never touch a .env on disk.

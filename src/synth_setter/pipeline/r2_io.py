@@ -154,8 +154,9 @@ def ensure_r2_env_loaded(env_file: Path | None = None) -> None:
 
     1. Mirror every key prefixed with ``RCLONE_CONFIG_R2_`` from ``env_file``
        into ``os.environ`` when that file exists. If ``env_file`` is ``None``,
-       use the operator workspace's ``.env``. Dotenv values overwrite process
-       env, matching the launcher's precedence.
+       use the default dotenv lookup: ``$SYNTH_SETTER_WORKSPACE/.env``, the
+       checkout marker root's ``.env``, then cwd ``.env``. Dotenv values
+       overwrite process env, matching the launcher's precedence.
     2. Default ``RCLONE_CONFIG_R2_TYPE=s3`` and ``RCLONE_CONFIG_R2_PROVIDER=Cloudflare``
        into ``os.environ`` if unset. rclone's env-override convention needs both to
        assemble a complete remote definition; without them ``rclone lsd r2:``
@@ -168,7 +169,7 @@ def ensure_r2_env_loaded(env_file: Path | None = None) -> None:
     + presence+auth checks still run against whatever ``os.environ`` already has.
 
     :param env_file: Optional dotenv file to merge into ``os.environ`` first.
-        ``None`` means ``<operator workspace>/.env``.
+        ``None`` means the resolved default dotenv path.
     :raises RuntimeError: A required secret key is unset after the load, or
         ``rclone lsd r2:`` exits non-zero (bad creds, network, etc.).
     """

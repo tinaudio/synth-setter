@@ -588,7 +588,10 @@ class TestIsR2Reachable:
         monkeypatch.setattr(
             "synth_setter.pipeline.r2_io.shutil.which", lambda name: f"/usr/bin/{name}"
         )
-        for key in r2_io._SECRET_R2_ENV_KEYS:  # noqa: SLF001 — test asserts contract
+        for key in (
+            *r2_io._SECRET_R2_ENV_KEYS,  # noqa: SLF001 — test asserts contract
+            *r2_io._R2_STRUCTURAL_DEFAULTS,  # noqa: SLF001 — test asserts contract
+        ):
             monkeypatch.delenv(key, raising=False)
         # subprocess.run must never be called — short-circuit on missing env.
         monkeypatch.setattr(
