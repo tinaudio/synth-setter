@@ -111,6 +111,11 @@ _SECRET_WORKER_ENV_KEYS: tuple[str, ...] = tuple(
     k for k in _WORKER_ENV_KEYS if k not in _R2_RCLONE_CONSTANTS
 )
 
+
+def _env_value_is_set(value: str | None) -> bool:
+    return value is not None and value.strip() != ""
+
+
 # sky.jobs.tail_logs(follow=True) rc: 0 = SUCCEEDED, 100 = non-SUCCEEDED terminal.
 _TAIL_LOGS_RC_SUCCESS = 0
 
@@ -580,7 +585,7 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
         Path(sky_cfg.env_file).expanduser() if sky_cfg.env_file is not None else DEFAULT_ENV_FILE
     )
     worker_env = resolve_worker_env(env_file_path)
-    if not any(k in worker_env for k in _SECRET_WORKER_ENV_KEYS):
+    if not any(_env_value_is_set(worker_env.get(k)) for k in _SECRET_WORKER_ENV_KEYS):
         raise ValueError(
             "No worker env vars resolved. Set the rclone-R2 keys in process env "
             f"(e.g. via `docker run -e RCLONE_CONFIG_R2_*=...`) or populate "

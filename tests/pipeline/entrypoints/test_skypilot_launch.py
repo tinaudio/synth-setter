@@ -875,6 +875,33 @@ class TestDispatchViaSkypilot:
         with pytest.raises(ValueError, match="No worker env vars resolved"):
             dispatch_via_skypilot(sky_cfg)
 
+    def test_blank_worker_env_raises_before_launch(
+        self,
+        tmp_path: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """Blank rclone creds fail as unresolved instead of launching with unusable auth.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        """
+        blank_env_file = tmp_path / ".env"
+        blank_env_file.write_text(
+            "RCLONE_CONFIG_R2_ACCESS_KEY_ID= \n"
+            "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=\t\n"
+            "RCLONE_CONFIG_R2_ENDPOINT=\n"
+        )
+
+        template = _write_runpod_yaml(tmp_path)
+        sky_cfg = SkypilotLaunchConfig(
+            compute_template=str(template),
+            cmd="exec synth-setter-generate-dataset-from-hydra experiment=foo",
+            env_file=str(blank_env_file),
+        )
+        with pytest.raises(ValueError, match="No worker env vars resolved"):
+            dispatch_via_skypilot(sky_cfg)
+        mock_sky.jobs.launch.assert_not_called()
+
     @pytest.mark.parametrize(
         "kwargs_overrides, match",
         [
