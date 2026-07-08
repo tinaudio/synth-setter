@@ -62,7 +62,10 @@ def test_lance_write_dataset_large_multipart_object_completes_on_real_r2() -> No
     payload size that crosses Lance's multipart part-growth boundary.
     """
     if not r2_io.is_r2_reachable():
-        pytest.skip("R2 not reachable (rclone not on PATH or rclone lsd r2: failed)")
+        pytest.skip(
+            "R2 not reachable (rclone missing, RCLONE_CONFIG_R2_* env vars missing, "
+            "or rclone lsd r2: failed)"
+        )
     r2_io.ensure_r2_env_loaded()
     previous_upload_size = os.environ.get("LANCE_INITIAL_UPLOAD_SIZE")
     os.environ["LANCE_INITIAL_UPLOAD_SIZE"] = str(_LANCE_UPLOAD_PART_BYTES)

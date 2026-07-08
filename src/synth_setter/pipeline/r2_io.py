@@ -197,16 +197,17 @@ def r2_storage_options() -> dict[str, str]:
     """
     # Treat empty/whitespace as missing: a blank env var would otherwise build a
     # partial dict that fails opaquely on the first S3/Lance call.
-    missing = [k for k in _SECRET_R2_ENV_KEYS if not os.environ.get(k, "").strip()]
+    values = {key: os.environ.get(key, "").strip() for key in _SECRET_R2_ENV_KEYS}
+    missing = [key for key, value in values.items() if not value]
     if missing:
         raise RuntimeError(
             f"R2 credentials missing from process env: {', '.join(missing)}. "
             "Call ensure_r2_env_loaded() or set RCLONE_CONFIG_R2_* first."
         )
-    endpoint = os.environ["RCLONE_CONFIG_R2_ENDPOINT"]
+    endpoint = values["RCLONE_CONFIG_R2_ENDPOINT"]
     return {
-        "access_key_id": os.environ["RCLONE_CONFIG_R2_ACCESS_KEY_ID"],
-        "secret_access_key": os.environ["RCLONE_CONFIG_R2_SECRET_ACCESS_KEY"],
+        "access_key_id": values["RCLONE_CONFIG_R2_ACCESS_KEY_ID"],
+        "secret_access_key": values["RCLONE_CONFIG_R2_SECRET_ACCESS_KEY"],
         "endpoint": endpoint,
         # Lance detects R2 multipart constraints through the AWS-prefixed alias.
         "aws_endpoint": endpoint,

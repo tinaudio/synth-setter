@@ -146,6 +146,22 @@ class TestR2StorageOptions:
             "region": "auto",
         }
 
+    def test_strips_secret_env_values_once(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Surrounding env whitespace is ignored before returning storage options.
+
+        :param monkeypatch: Pytest fixture used to set the R2 secret env vars.
+        """
+        monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", " ak ")
+        monkeypatch.setenv("RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", "\tsk\n")
+        monkeypatch.setenv("RCLONE_CONFIG_R2_ENDPOINT", " https://acct.r2.cloudflarestorage.com ")
+        assert r2_io.r2_storage_options() == {
+            "access_key_id": "ak",
+            "secret_access_key": "sk",
+            "endpoint": "https://acct.r2.cloudflarestorage.com",
+            "aws_endpoint": "https://acct.r2.cloudflarestorage.com",
+            "region": "auto",
+        }
+
     def test_raises_when_secret_env_keys_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A missing secret raises RuntimeError rather than emitting a partial dict.
 
