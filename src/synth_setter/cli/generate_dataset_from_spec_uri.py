@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import os
+from importlib.util import find_spec
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
@@ -50,6 +51,10 @@ def _resume_loggers(spec: DatasetSpec, work_dir: Path) -> list[Logger]:
     :param work_dir: Local shard/log directory for this resume attempt.
     :returns: A single ``WandbLogger`` grouped under the original dataset run id.
     """
+    if not find_spec("wandb"):
+        logger.warning("wandb is not installed; continuing without W&B logging")
+        return []
+
     import wandb
     from lightning.pytorch.loggers.wandb import WandbLogger
 

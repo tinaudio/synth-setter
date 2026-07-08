@@ -480,6 +480,31 @@ class TestRunFromSpecUri:
         work_dir = Path("logs") / "generate_dataset" / "from_spec_uri" / spec.run_id
         mock_generate.assert_called_once_with(spec, work_dir, loggers)
 
+    def test_wandb_enabled_uses_no_loggers_when_wandb_missing(
+        self,
+        fake_r2_remote: Path,
+        spec: DatasetSpec,
+        tmp_path: Path,
+    ) -> None:
+        """A wandb-free install still renders through the default CLI path.
+
+        :param fake_r2_remote: Fake R2 root (unused; activates rclone skip gate).
+        :param spec: Fixture-provided single-shard ``DatasetSpec``.
+        :param tmp_path: Pytest tmp dir for the local spec JSON.
+        """
+        import synth_setter.cli.generate_dataset_from_spec_uri as cli
+
+        spec_path = tmp_path / INPUT_SPEC_FILENAME
+        spec_path.write_text(spec.model_dump_json())
+
+        with patch("synth_setter.pipeline.r2_io.ensure_r2_env_loaded"):
+            with patch.object(cli, "find_spec", return_value=None):
+                with patch.object(cli, "generate") as mock_generate:
+                    cli.run_from_spec_uri(str(spec_path))
+
+        work_dir = Path("logs") / "generate_dataset" / "from_spec_uri" / spec.run_id
+        mock_generate.assert_called_once_with(spec, work_dir, [])
+
     def test_wandb_enabled_builds_grouped_repair_run(
         self,
         fake_r2_remote: Path,
