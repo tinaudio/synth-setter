@@ -114,15 +114,14 @@ first to reinstall.
 > lives elsewhere, set `SYNTH_SETTER_PLUGIN_PATH` to the absolute path of the
 > `.vst3` bundle before invoking pytest.
 
-### 2e. Export environment variables
+### 2e. Create `.env`
 
-The project reads R2 credentials, W&B keys, and other config from a `.env` file.
+R2 preflight and SkyPilot workers read R2 credentials from a `.env` file.
 After creating your `.env` (see [section 4b](#4b-rclone--cloudflare-r2) for the
-template), export the variables into your shell:
+template), those paths load the checkout's `.env` automatically.
 
-```bash
-set -a && source .env && set +a
-```
+Only source it manually for external tools or ad hoc shell commands that do not
+call synth-setter's R2 preflight.
 
 > Environment variable management is being consolidated under
 > [#563](https://github.com/tinaudio/synth-setter/issues/563).
