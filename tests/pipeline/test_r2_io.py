@@ -142,6 +142,7 @@ class TestR2StorageOptions:
             "access_key_id": "ak",
             "secret_access_key": "sk",
             "endpoint": "https://acct.r2.cloudflarestorage.com",
+            "aws_endpoint": "https://acct.r2.cloudflarestorage.com",
             "region": "auto",
         }
 

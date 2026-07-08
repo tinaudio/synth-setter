@@ -191,8 +191,8 @@ def r2_storage_options() -> dict[str, str]:
     Reads the same ``RCLONE_CONFIG_R2_*`` vars rclone uses (call
     :func:`ensure_r2_env_loaded` first); S3-compatible stores require both keys.
 
-    :returns: ``{access_key_id, secret_access_key, endpoint, region}`` for
-        ``lance.dataset`` / ``lance.write_dataset``.
+    :returns: ``{access_key_id, secret_access_key, endpoint, aws_endpoint, region}``
+        for ``lance.dataset`` / ``lance.write_dataset``.
     :raises RuntimeError: A required secret key is unset in ``os.environ``.
     """
     # Treat empty/whitespace as missing: a blank env var would otherwise build a
@@ -203,10 +203,13 @@ def r2_storage_options() -> dict[str, str]:
             f"R2 credentials missing from process env: {', '.join(missing)}. "
             "Call ensure_r2_env_loaded() or set RCLONE_CONFIG_R2_* first."
         )
+    endpoint = os.environ["RCLONE_CONFIG_R2_ENDPOINT"]
     return {
         "access_key_id": os.environ["RCLONE_CONFIG_R2_ACCESS_KEY_ID"],
         "secret_access_key": os.environ["RCLONE_CONFIG_R2_SECRET_ACCESS_KEY"],
-        "endpoint": os.environ["RCLONE_CONFIG_R2_ENDPOINT"],
+        "endpoint": endpoint,
+        # Lance detects R2 multipart constraints through the AWS-prefixed alias.
+        "aws_endpoint": endpoint,
         # R2 ignores region, but object-store requires it set for S3-compatible
         # stores; "auto" is R2's documented placeholder.
         "region": "auto",
