@@ -69,6 +69,16 @@ def clear_worker_env_from_process(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def isolate_default_env_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prevent developer-local dotenv files from affecting worker env resolution.
+
+    :param tmp_path: Pytest tmp dir used for the intentionally missing dotenv path.
+    :param monkeypatch: Pytest fixture used to isolate the module-level default.
+    """
+    monkeypatch.setattr(skypilot_launch, "DEFAULT_ENV_FILE", tmp_path / "missing.env")
+
+
+@pytest.fixture(autouse=True)
 def mock_cred_bootstrap(monkeypatch: pytest.MonkeyPatch) -> None:
     """No-op ``_run_cred_bootstrap`` by default.
 

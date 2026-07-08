@@ -529,6 +529,8 @@ class TestIsR2Reachable:
         monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", "   ")
         monkeypatch.setenv("RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", "secret")
         monkeypatch.setenv("RCLONE_CONFIG_R2_ENDPOINT", "endpoint")
+        for key in r2_io._R2_STRUCTURAL_DEFAULTS:  # noqa: SLF001 — test asserts contract
+            monkeypatch.delenv(key, raising=False)
         monkeypatch.setattr(
             r2_io.subprocess,
             "run",
