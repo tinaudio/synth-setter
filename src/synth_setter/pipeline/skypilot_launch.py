@@ -575,13 +575,15 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
             "not sky_cfg.extra_envs."
         )
 
-    env_file_path = Path(sky_cfg.env_file).expanduser() if sky_cfg.env_file else DEFAULT_ENV_FILE
+    env_file_path = (
+        Path(sky_cfg.env_file).expanduser() if sky_cfg.env_file is not None else DEFAULT_ENV_FILE
+    )
     worker_env = resolve_worker_env(env_file_path)
     if not any(k in worker_env for k in _SECRET_WORKER_ENV_KEYS):
         raise ValueError(
             "No worker env vars resolved. Set the rclone-R2 keys in process env "
             f"(e.g. via `docker run -e RCLONE_CONFIG_R2_*=...`) or populate "
-            f"{env_file_path if env_file_path is not None else '<env_file not set>'}. "
+            f"{env_file_path}. "
             f"Expected at least one of: {', '.join(_SECRET_WORKER_ENV_KEYS)}."
         )
     worker_env.update(sky_cfg.extra_envs)

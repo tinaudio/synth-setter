@@ -169,15 +169,6 @@ class TestResolveWorkerEnvGitRefValidation:
     malformed value at the launcher gives a clear error before the job is ever submitted.
     """
 
-    @pytest.fixture(autouse=True)
-    def _ignore_default_env_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Keep git-ref tests independent from a developer checkout ``.env``.
-
-        :param tmp_path: Pytest fixture providing a missing dotenv path.
-        :param monkeypatch: Pytest fixture for env/attribute mocking.
-        """
-        monkeypatch.setattr(skypilot_launch, "DEFAULT_ENV_FILE", tmp_path / "missing.env")
-
     def test_unset_git_ref_is_accepted(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Empty/unset WORKER_GIT_REF is the common case (no PR-CI bake-lag bypass).
 
@@ -874,7 +865,6 @@ class TestDispatchViaSkypilot:
         """
         for key in _SECRET_WORKER_ENV_KEYS:
             monkeypatch.delenv(key, raising=False)
-        monkeypatch.setattr(skypilot_launch, "DEFAULT_ENV_FILE", tmp_path / "missing.env")
 
         template = _write_runpod_yaml(tmp_path)
         sky_cfg = SkypilotLaunchConfig(
@@ -933,7 +923,6 @@ class TestDispatchViaSkypilot:
         # Only the "missing-creds" case depends on env state; others trip on cfg shape.
         for key in _SECRET_WORKER_ENV_KEYS:
             monkeypatch.delenv(key, raising=False)
-        monkeypatch.setattr(skypilot_launch, "DEFAULT_ENV_FILE", tmp_path / "missing.env")
         monkeypatch.delenv(_SKYPILOT_API_SERVER_ENV, raising=False)
 
         template = _write_runpod_yaml(tmp_path)
@@ -1265,8 +1254,9 @@ class TestDispatchViaSkypilot:
         [
             ("job_name", "has/slash", "job_name must match"),
             ("worker_image_tag", "bad tag", "worker_image_tag must match OCI"),
+            ("env_file", "   ", "env_file must be a non-empty path"),
         ],
-        ids=["job-name-with-slash", "image-tag-with-space"],
+        ids=["job-name-with-slash", "image-tag-with-space", "blank-env-file"],
     )
     def test_input_validation_raises_before_disk_or_network(
         self,
@@ -1294,9 +1284,8 @@ class TestDispatchViaSkypilot:
             "job_name": "ok-name",
             field: value,
         }
-        sky_cfg = SkypilotLaunchConfig(**kwargs)  # type: ignore[arg-type]
-
         with pytest.raises(ValueError, match=match):
+            sky_cfg = SkypilotLaunchConfig(**kwargs)  # type: ignore[arg-type]
             dispatch_via_skypilot(sky_cfg)
         mock_sky.jobs.launch.assert_not_called()
 

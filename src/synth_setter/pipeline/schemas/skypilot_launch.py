@@ -109,6 +109,21 @@ class SkypilotLaunchConfig(BaseModel):
             raise ValueError("api_server must be a non-empty URL when set")
         return v.strip()
 
+    @field_validator("env_file")
+    @classmethod
+    def env_file_must_be_non_blank(cls, v: str | None) -> str | None:
+        """Reject blank/whitespace-only env_file values; strip surrounding whitespace.
+
+        :param v: Candidate ``env_file`` value pre-validation (``None`` permitted).
+        :return: ``None`` when input is ``None``; else ``v`` with whitespace stripped.
+        :raises ValueError: ``v`` is a non-``None`` string that is blank/whitespace-only.
+        """
+        if v is None:
+            return v
+        if not v.strip():
+            raise ValueError("env_file must be a non-empty path when set")
+        return v.strip()
+
     @field_validator("extra_envs")
     @classmethod
     def extra_envs_keys_must_be_env_identifiers(cls, v: dict[str, str]) -> dict[str, str]:

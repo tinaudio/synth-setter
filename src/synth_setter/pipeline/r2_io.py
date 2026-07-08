@@ -119,8 +119,8 @@ def _resolve_env_file(env_file: Path | None) -> Path:
     """Resolve the dotenv file used by R2 preflight.
 
     :param env_file: Explicit dotenv path supplied by a caller, or ``None`` for
-        the operator workspace default.
-    :returns: The explicit path when provided, otherwise ``<workspace>/.env``.
+        the default dotenv lookup.
+    :returns: The explicit path when provided, otherwise the resolved default dotenv path.
     """
     return env_file if env_file is not None else _DEFAULT_ENV_FILE
 
@@ -213,8 +213,11 @@ def is_r2_reachable() -> bool:
     test then calls :func:`ensure_r2_env_loaded` and hits a hard
     ``RuntimeError`` instead of the intended auto-skip.
 
-    :returns: ``True`` when rclone is on PATH AND all three
-        ``_SECRET_R2_ENV_KEYS`` are present in ``os.environ`` AND a
+    Loads the default dotenv file and structural R2 defaults into process env
+    before checking secrets, matching the preflight mutation semantics.
+
+    :returns: ``True`` when rclone is on PATH AND all three ``_SECRET_R2_ENV_KEYS``
+        are present with non-blank values after default dotenv loading AND a
         credentialled ``rclone lsd r2:`` exits 0; ``False`` otherwise.
     """
     if shutil.which("rclone") is None:
