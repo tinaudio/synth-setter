@@ -266,7 +266,7 @@ class TestSpecUriCliMain:
         mock_run.assert_called_once_with("r2://bucket/run/input_spec.json", enable_wandb=True)
 
     def test_no_wandb_flag_disables_wandb_logging(self) -> None:
-        """``--no-wandb`` is the explicit escape hatch for auth-free repairs."""
+        """``--no-wandb`` skips only W&B auth/logging for repair runs."""
         import synth_setter.cli.generate_dataset_from_spec_uri as cli
 
         with patch.object(cli, "run_from_spec_uri") as mock_run:
