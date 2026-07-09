@@ -176,12 +176,14 @@ install-surge-xt: ## Download Surge XT VST3 into plugins/ (skipped if already pr
 	esac; \
 	echo "Installed $$DEST"
 
-# Fetched-synth pins mirror the ARGs in docker/ubuntu22_04/Dockerfile;
-# tests/infra/test_install_plugins_targets.py fails when either side drifts.
+# Docker-shipped pins mirror ARGs in docker/ubuntu22_04/Dockerfile; Resonarium
+# is local-only because its Linux binary requires glibc 2.38.
 DEXED_VERSION := 0.9.8
 DEXED_SHA256 := 5d026f53504f9303ae2a4a635cf6fdfc50ab9c947cbc0a20ecb5c8f323402dab
 OBXF_VERSION := v1.0.3
 OBXF_SHA256 := 72b60c83cf6426337031df744c34a047104a9d95f1feaf6cd048ecfa39f74c96
+RESONARIUM_VERSION := 0.0.11
+RESONARIUM_SHA256 := 2fb91903b989fe08fc2ac3a60b4dfba6fd22f692bc23ba398cef7625ed7f03b1
 SIX_SINES_VERSION := v1.1.0
 SIX_SINES_ASSET := six-sines-linux-2025-03-18-43d10b2.tgz
 SIX_SINES_SHA256 := fae7c1c325fde7ed49c978358397cb4bcf69012c4e6eefe2a5968fe6a36d0421
@@ -220,7 +222,7 @@ echo "$(3)  $$ARCHIVE" | sha256sum -c - || { \
 TMP="$$(mktemp -d)"; \
 trap 'rm -rf "$$TMP"' EXIT; \
 case "$$ASSET" in \
-	*.zip) unzip -q "$$ARCHIVE" -d "$$TMP" ;; \
+	*.zip) python3 -m zipfile -e "$$ARCHIVE" "$$TMP" ;; \
 	*.tgz|*.tar.gz) tar -xzf "$$ARCHIVE" -C "$$TMP" ;; \
 	*) echo "ERROR: unsupported archive type: $$ASSET" >&2; exit 1 ;; \
 esac; \
@@ -238,10 +240,13 @@ install-dexed: ## Download Dexed VST3 into plugins/ (skipped if already present)
 install-obxf: ## Download OB-Xf VST3 into plugins/ (skipped if already present)
 	$(call install_fetched_synth,OB-Xf,https://github.com/surge-synthesizer/OB-Xf/releases/download/$(OBXF_VERSION)/ob-xf-Linux-$(OBXF_VERSION).zip,$(OBXF_SHA256))
 
+install-resonarium: ## Download Resonarium VST3 into plugins/ (skipped if already present)
+	$(call install_fetched_synth,Resonarium,https://github.com/gabrielsoule/resonarium/releases/download/v$(RESONARIUM_VERSION)/Resonarium-Instrument-$(RESONARIUM_VERSION)-Linux.zip,$(RESONARIUM_SHA256))
+
 install-six-sines: ## Download Six Sines VST3 into plugins/ (skipped if already present)
 	$(call install_fetched_synth,Six Sines,https://github.com/baconpaul/six-sines/releases/download/$(SIX_SINES_VERSION)/$(SIX_SINES_ASSET),$(SIX_SINES_SHA256))
 
-install-plugins: install-surge-xt install-dexed install-obxf install-six-sines ## Install every VST3 the runtime docker image ships (Surge XT, Dexed, OB-Xf, Six Sines)
+install-plugins: install-surge-xt install-dexed install-obxf install-resonarium install-six-sines ## Install pinned local VST3 plugins into plugins/
 
 link-plugins: ## Mirror the primary checkout's plugins/ into the current worktree (no-op in primary)
 	@set -e; \
@@ -251,7 +256,7 @@ link-plugins: ## Mirror the primary checkout's plugins/ into the current worktre
 		echo "In primary checkout — nothing to link."; exit 0; \
 	fi; \
 	if [ ! -d "$$primary/plugins" ]; then \
-		echo "No $$primary/plugins to mirror — run 'make install-surge-xt' in the primary first."; exit 0; \
+		echo "No $$primary/plugins to mirror — run 'make install-surge-xt' or 'make install-plugins' in the primary first."; exit 0; \
 	fi; \
 	mkdir -p "$$here/plugins"; \
 	for entry in "$$primary"/plugins/*; do \

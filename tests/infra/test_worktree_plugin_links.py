@@ -148,7 +148,7 @@ def test_link_plugins_skips_when_primary_has_no_plugins(tmp_path: Path) -> None:
 
     stdout = _make_link_plugins(worktree)
 
-    assert "No" in stdout and "install-surge-xt" in stdout
+    assert "No" in stdout and "install-plugins" in stdout
     assert not (worktree / "plugins").exists()
 
 

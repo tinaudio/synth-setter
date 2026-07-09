@@ -418,10 +418,9 @@ RUN mkdir -p /home/build/synth-setter/plugins && \
 COPY --from=vst3-synths-fetch /plugins-staging/ /usr/lib/vst3/
 COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/scripts/load_vst3_check.py /artifacts/
 
-# Presence gate for the bundles the image must ship: Surge XT on every arch,
-# OB-Xf on amd64 only (the fetched synths are amd64-only). Load-validation follows.
+# Presence gate for required synth bundles. Load-validation follows.
 RUN for bundle in "Surge XT" "OB-Xf"; do \
-      if [[ "$bundle" == "OB-Xf" && "${TARGETARCH:-}" != "amd64" ]]; then \
+      if [[ "$bundle" != "Surge XT" && "${TARGETARCH:-}" != "amd64" ]]; then \
         echo "skipping ${bundle}.vst3 presence check on ${TARGETARCH:-<unset>}" >&2; continue; \
       fi; \
       [[ -d "/usr/lib/vst3/${bundle}.vst3" ]] \

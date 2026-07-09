@@ -1,8 +1,9 @@
-"""`make install-plugins` provisions every VST3 bundle the runtime docker image ships.
+"""`make install-plugins` provisions the pinned local VST3 bundle set.
 
-The image (docker/ubuntu22_04/Dockerfile) installs Surge XT plus three SHA256-pinned prebuilt
-synths (Dexed, OB-Xf, Six Sines). The Makefile mirrors those pins for local installs; these tests
-fail when either side drifts.
+The image (docker/ubuntu22_04/Dockerfile) installs Surge XT plus the compatible
+SHA256-pinned prebuilt synths. The Makefile mirrors Docker pins for shared
+bundles and keeps local-only installers where a binary is not compatible with
+the Ubuntu 22.04 image; these tests fail when either contract drifts.
 
 The download-path tests never touch the network: they seed the archive cache under a throwaway
 ``HOME`` and pass the fixture's real sha256 as a command-line make-variable override.
@@ -33,10 +34,21 @@ pytestmark = pytest.mark.infra
 # Bound subprocess calls so a hung make can't wedge the suite.
 _TIMEOUT_S = 60
 
-# Every VST3 bundle staged into the runtime image, by plugins/ basename.
-_IMAGE_BUNDLES = ("Surge XT.vst3", "Dexed.vst3", "OB-Xf.vst3", "Six Sines.vst3")
+# Every VST3 bundle reached by the aggregate install target, by plugins/ basename.
+_INSTALL_PLUGINS_BUNDLES = (
+    "Surge XT.vst3",
+    "Dexed.vst3",
+    "OB-Xf.vst3",
+    "Resonarium.vst3",
+    "Six Sines.vst3",
+)
 
-_FETCHED_SYNTH_TARGETS = ("install-dexed", "install-obxf", "install-six-sines")
+_FETCHED_SYNTH_TARGETS = (
+    "install-dexed",
+    "install-obxf",
+    "install-resonarium",
+    "install-six-sines",
+)
 
 # Pins that must stay identical between the Makefile and the Dockerfile ARGs.
 _SHARED_PINS = (
@@ -188,25 +200,31 @@ def test_surge_version_matches_dockerfile_prebuilt_package() -> None:
     )
 
 
+def test_resonarium_local_installer_is_pinned() -> None:
+    """The local-only Resonarium installer has a fixed version and SHA256 pin."""
+    assert _makefile_var("RESONARIUM_VERSION") == "0.0.11"
+    assert re.fullmatch(r"[0-9a-f]{64}", _makefile_var("RESONARIUM_SHA256"))
+
+
 def test_install_plugins_all_bundles_present_skips_every_download(
     makefile_checkout: Path,
 ) -> None:
-    """`make install-plugins` covers every image bundle and is a no-op when all exist.
+    """`make install-plugins` covers every aggregate bundle and no-ops when all exist.
 
-    Pre-creating every bundle proves the aggregate target visits each image plugin without touching
+    Pre-creating every bundle proves the aggregate target visits each local plugin without touching
     the network.
 
     :param makefile_checkout: throwaway checkout holding the Makefile.
     """
     plugins = makefile_checkout / "plugins"
     plugins.mkdir()
-    for name in _IMAGE_BUNDLES:
+    for name in _INSTALL_PLUGINS_BUNDLES:
         (plugins / name).mkdir()
 
     result = _run_make(makefile_checkout, "install-plugins")
 
     assert result.returncode == 0, result.stderr
-    for name in _IMAGE_BUNDLES:
+    for name in _INSTALL_PLUGINS_BUNDLES:
         assert f"plugins/{name} already exists" in result.stdout, f"{name} not visited"
 
 
@@ -292,7 +310,7 @@ def test_install_plugins_mixed_presence_installs_only_missing_bundle(
     home, env = _home_env(makefile_checkout)
     plugins = makefile_checkout / "plugins"
     plugins.mkdir()
-    for name in ("Surge XT.vst3", "OB-Xf.vst3", "Six Sines.vst3"):
+    for name in ("Surge XT.vst3", "OB-Xf.vst3", "Resonarium.vst3", "Six Sines.vst3"):
         (plugins / name).mkdir()
     version = _makefile_var("DEXED_VERSION")
     payload = _zip_containing(f"dexed-{version}-lnx/Dexed.vst3")
