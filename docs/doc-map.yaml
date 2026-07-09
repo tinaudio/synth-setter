@@ -123,7 +123,7 @@ docs:
 
   # ── Legacy output formats (HDF5 & WebDataset) ────────────────────
   - doc: docs/design/legacy/hdf5-wds-formats.md
-    description: Legacy HDF5/WDS format detail — staging/promotion, resharding, tar structure, resumability, copy_dataset_root_uri
+    description: How legacy HDF5/WebDataset outputs are staged, promoted, and resharded
     sources:
       - pattern: "src/synth_setter/pipeline/data/reshard.py"
         covers: "HDF5 resharding into train/val/test virtual datasets on the finalize machine"

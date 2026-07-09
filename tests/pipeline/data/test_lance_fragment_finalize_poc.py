@@ -26,6 +26,7 @@ from pathlib import Path
 
 import lance
 import numpy as np
+import pyarrow as pa
 import pytest
 
 from synth_setter.data.vst.shapes import (
@@ -52,6 +53,9 @@ _FIELD_SHAPES: dict[str, tuple[int, ...]] = {
     PARAM_ARRAY_FIELD: (2, 7),
 }
 _ROWS_PER_SHARD = _FIELD_SHAPES[PARAM_ARRAY_FIELD][0]
+# Offset stride between shards/attempts: keeps their element values disjoint
+# while the largest offset element stays under the float16-exact 2048 ceiling.
+_VALUE_STRIDE = 1000
 _METADATA = ShardMetadata(
     velocity=100,
     signal_duration_seconds=1.0,
@@ -78,7 +82,7 @@ def _arange_arrays(offset: int) -> dict[str, np.ndarray]:
 
 
 def _worker_writes_fragment(
-    split_uri: Path, schema: object, arrays: dict[str, np.ndarray], fragment_id: int
+    split_uri: Path, schema: pa.Schema, arrays: dict[str, np.ndarray], fragment_id: int
 ) -> tuple[lance.fragment.FragmentMetadata, str]:
     """Simulate a worker: write a fragment under ``split_uri`` and serialize it.
 
@@ -146,7 +150,7 @@ def test_duplicate_attempts_commit_winner_only_yields_single_shard_rows(
     schema = lance_schema(_FIELD_SHAPES, _METADATA)
     train_uri = tmp_path / "train.lance"
     winner_arrays = _arange_arrays(offset=0)
-    loser_arrays = _arange_arrays(offset=5000)
+    loser_arrays = _arange_arrays(offset=_VALUE_STRIDE)
 
     # Both attempts write real fragment data into the same split dir.
     winner, _ = _worker_writes_fragment(train_uri, schema, winner_arrays, fragment_id=0)
@@ -169,7 +173,7 @@ def test_winner_set_commits_atomically_as_one_manifest_version(tmp_path: Path) -
     schema = lance_schema(_FIELD_SHAPES, _METADATA)
     train_uri = tmp_path / "train.lance"
     winners = [
-        _worker_writes_fragment(train_uri, schema, _arange_arrays(i * 1000), i)[0]
+        _worker_writes_fragment(train_uri, schema, _arange_arrays(i * _VALUE_STRIDE), i)[0]
         for i in range(3)
     ]
 
@@ -200,8 +204,10 @@ def test_recommitting_winner_set_is_idempotent(tmp_path: Path) -> None:
 
 
 def test_fragment_not_colocated_with_dataset_fails_on_read(tmp_path: Path) -> None:
-    """A fragment whose file is not under the dataset is unreadable, though its
-    row count survives — so validation must read rows, not trust ``count_rows``.
+    """A dangling fragment commit fails on read even though ``count_rows`` passes.
+
+    The fragment's file lives under another dataset's ``data/`` dir; manifest
+    metadata still reports its rows, so validation must read rows, not counts.
 
     :param tmp_path: Pytest fixture providing a fresh test directory.
     """
@@ -216,5 +222,5 @@ def test_fragment_not_colocated_with_dataset_fails_on_read(tmp_path: Path) -> No
     # Manifest metadata reports rows even though the data file is absent...
     assert lance.dataset(str(train_uri)).count_rows() == _ROWS_PER_SHARD
     # ...but an actual read fails, proving the co-location requirement.
-    with pytest.raises(Exception, match="LanceError|Object at location"):
+    with pytest.raises(pa.ArrowInvalid, match="LanceError|Object at location"):
         list(iter_lance_column_rows(train_uri, PARAM_ARRAY_FIELD))
