@@ -278,6 +278,7 @@ ARG ULTRAMASTER_KR106_GIT_REF=bc15caee5843ab238a25d0969e68d57db2b1615f
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
+      build-essential \
       cmake \
       libasound2-dev \
       libcurl4-openssl-dev \
