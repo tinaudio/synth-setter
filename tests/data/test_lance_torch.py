@@ -7,16 +7,26 @@ fakes or mocks anywhere in this module.
 
 from __future__ import annotations
 
+import warnings
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
 import pyarrow as pa
 import pytest
 import torch
+import torch.distributed as dist
 from torch.multiprocessing.spawn import spawn
+from torch.utils.data import DataLoader
 
-from synth_setter.data.lance_torch import lance_iterable_dataloader, lance_map_dataloader
+from synth_setter.data.lance_torch import (
+    LanceMapDataset,
+    _batch_to_shaped_tensors,
+    lance_iterable_dataloader,
+    lance_map_dataloader,
+)
 from synth_setter.pipeline.data.lance_shard import write_lance_dataset
+from tests.helpers.lance_fixtures import write_lance_shard
 from tests.helpers.lance_torch_datasets import (
     NUM_PARAMS,
     ROWS,
@@ -72,6 +82,37 @@ def _assert_ranks_partition_param_rows(
     np.testing.assert_array_equal(np.sort(union, axis=0), np.sort(arrays["param_array"], axis=0))
 
 
+def _assert_first_batch_owns_writable_memory(loader: DataLoader) -> None:
+    """Assert a batch is safely writable — no tensor aliases Arrow's read-only buffers.
+
+    ``torch.from_numpy`` over a non-writable array emits a ``UserWarning`` (and
+    writing to the result is undefined behavior); escalating warnings to errors
+    while the batch is built pins the defensive copy in the Arrow decode.
+
+    :param loader: Loader whose first batch is checked.
+    """
+    with warnings.catch_warnings():
+        # torch.from_numpy's exact wording for a read-only source array.
+        warnings.filterwarnings("error", message=".*not writable.*", category=UserWarning)
+        batch = next(iter(loader))
+    batch["mel_spec"] += 1.0
+
+
+def _assert_short_final_batch(loader_factory: Callable[[Path], DataLoader], dest: Path) -> None:
+    """Assert a 10-row dataset yields full-then-ragged batches at ``batch_size=8``.
+
+    :param loader_factory: Builds the loader under test for a dataset directory.
+    :param dest: Directory to write the 10-row single-column dataset into.
+    """
+    values = np.arange(10 * NUM_PARAMS, dtype=np.float32).reshape(10, NUM_PARAMS)
+    write_lance_shard(dest, {"param_array": values})
+
+    batches = list(loader_factory(dest))
+
+    assert [len(batch["param_array"]) for batch in batches] == [8, 2]
+    np.testing.assert_array_equal(_concat_batches(batches, "param_array"), values)
+
+
 class TestMapDataloader:
     """Behavior of ``lance_map_dataloader`` over a real local dataset."""
 
@@ -80,7 +121,8 @@ class TestMapDataloader:
     ) -> None:
         """Un-shuffled iteration returns exactly the written tensors, shaped per schema.
 
-        :param lance_dataset: Shared dataset directory and its source arrays.
+        :param lance_dataset: Module-shared dataset; the source arrays are the round-trip ground
+            truth.
         """
         dest, arrays = lance_dataset
         loader = lance_map_dataloader(dest, batch_size=8, shuffle=False)
@@ -97,7 +139,8 @@ class TestMapDataloader:
     ) -> None:
         """The map-style dataset reports the dataset's row count.
 
-        :param lance_dataset: Shared dataset directory and its source arrays.
+        :param lance_dataset: Module-shared dataset; the source arrays are the round-trip ground
+            truth.
         """
         dest, _ = lance_dataset
         loader = lance_map_dataloader(dest, batch_size=8)
@@ -109,7 +152,8 @@ class TestMapDataloader:
     ) -> None:
         """Column projection restricts batches to the requested columns.
 
-        :param lance_dataset: Shared dataset directory and its source arrays.
+        :param lance_dataset: Module-shared dataset; the source arrays are the round-trip ground
+            truth.
         """
         dest, _ = lance_dataset
         loader = lance_map_dataloader(dest, batch_size=8, columns=["param_array"])
@@ -123,7 +167,7 @@ class TestMapDataloader:
     ) -> None:
         """Shuffled iteration is a permutation: every written row appears once.
 
-        :param lance_dataset: Shared dataset directory and its source arrays.
+        :param lance_dataset: Module-shared dataset; the source arrays are the round-trip ground truth.
         """
         dest, arrays = lance_dataset
         loader = lance_map_dataloader(dest, batch_size=8, shuffle=True)
@@ -140,14 +184,36 @@ class TestMapDataloader:
     ) -> None:
         """Batches own their memory: in-place writes must not hit Arrow's buffers.
 
-        :param lance_dataset: Shared dataset directory and its source arrays.
+        :param lance_dataset: Module-shared dataset; the source arrays are the round-trip ground truth.
         """
         dest, _ = lance_dataset
-        loader = lance_map_dataloader(dest, batch_size=8, shuffle=False)
 
-        batch = next(iter(loader))
+        _assert_first_batch_owns_writable_memory(lance_map_dataloader(dest, batch_size=8))
 
-        batch["mel_spec"] += 1.0  # would be undefined behavior on a read-only view
+    def test_single_item_indexing_returns_row_tensors(
+        self, lance_dataset: tuple[Path, dict[str, np.ndarray]]
+    ) -> None:
+        """``dataset[i]`` returns one row as per-column tensors matching the source.
+
+        :param lance_dataset: Module-shared dataset; the source arrays are the round-trip ground
+            truth.
+        """
+        dest, arrays = lance_dataset
+
+        item = LanceMapDataset(dest)[3]
+
+        assert item["mel_spec"].shape == (2, 128, 3)
+        np.testing.assert_array_equal(item["param_array"].numpy(), arrays["param_array"][3])
+
+    def test_short_final_batch_preserves_all_rows(self, tmp_path: Path) -> None:
+        """A row count not divisible by ``batch_size`` yields a ragged final batch.
+
+        :param tmp_path: Scratch dir for the 10-row dataset.
+        """
+        _assert_short_final_batch(
+            lambda dest: lance_map_dataloader(dest, batch_size=8, shuffle=False),
+            tmp_path / "short.lance",
+        )
 
     @pytest.mark.slow
     def test_spawn_workers_cover_all_rows(
@@ -155,7 +221,8 @@ class TestMapDataloader:
     ) -> None:
         """Multiprocessing workers (spawn) read the full dataset without fork hangs.
 
-        :param lance_dataset: Shared dataset directory and its source arrays.
+        :param lance_dataset: Module-shared dataset; the source arrays are the round-trip ground
+            truth.
         """
         dest, arrays = lance_dataset
         loader = lance_map_dataloader(
@@ -175,7 +242,8 @@ class TestIterableDataloader:
     ) -> None:
         """Scan order round-trips the written tensors with schema inner shapes intact.
 
-        :param lance_dataset: Shared dataset directory and its source arrays.
+        :param lance_dataset: Module-shared dataset; the source arrays are the round-trip ground
+            truth.
         """
         dest, arrays = lance_dataset
         loader = lance_iterable_dataloader(dest, batch_size=8)
@@ -192,7 +260,8 @@ class TestIterableDataloader:
     ) -> None:
         """Column projection restricts batches to the requested columns.
 
-        :param lance_dataset: Shared dataset directory and its source arrays.
+        :param lance_dataset: Module-shared dataset; the source arrays are the round-trip ground
+            truth.
         """
         dest, _ = lance_dataset
         loader = lance_iterable_dataloader(dest, batch_size=8, columns=["mel_spec"])
@@ -206,14 +275,49 @@ class TestIterableDataloader:
     ) -> None:
         """Batches own their memory: in-place writes must not hit Arrow's buffers.
 
-        :param lance_dataset: Shared dataset directory and its source arrays.
+        :param lance_dataset: Module-shared dataset; the source arrays are the round-trip ground truth.
         """
         dest, _ = lance_dataset
-        loader = lance_iterable_dataloader(dest, batch_size=8)
 
-        batch = next(iter(loader))
+        _assert_first_batch_owns_writable_memory(lance_iterable_dataloader(dest, batch_size=8))
 
-        batch["mel_spec"] += 1.0  # would be undefined behavior on a read-only view
+    def test_short_final_batch_preserves_all_rows(self, tmp_path: Path) -> None:
+        """A row count not divisible by ``batch_size`` yields a ragged final batch.
+
+        :param tmp_path: Scratch dir for the 10-row dataset.
+        """
+        _assert_short_final_batch(
+            lambda dest: lance_iterable_dataloader(dest, batch_size=8),
+            tmp_path / "short.lance",
+        )
+
+    def test_rank_without_world_size_raises_value_error(
+        self, lance_dataset: tuple[Path, dict[str, np.ndarray]]
+    ) -> None:
+        """Passing only one of ``rank``/``world_size`` is rejected up front.
+
+        :param lance_dataset: Module-shared dataset; the source arrays are the round-trip ground
+            truth.
+        """
+        dest, _ = lance_dataset
+
+        with pytest.raises(ValueError, match="rank and world_size"):
+            lance_iterable_dataloader(dest, batch_size=8, rank=0)
+
+    def test_unsupported_column_type_raises_type_error(self, tmp_path: Path) -> None:
+        """A column with no tensor representation (string) fails loudly, not silently.
+
+        :param tmp_path: Scratch dir for the single-column dataset.
+        """
+        schema = pa.schema([pa.field("label", pa.string(), nullable=False)])
+        batch = pa.record_batch([pa.array(["a", "b", "c"])], schema=schema)
+        dest = tmp_path / "labels.lance"
+        write_lance_dataset(dest, schema, [batch])
+
+        loader = lance_iterable_dataloader(dest, batch_size=2)
+
+        with pytest.raises(TypeError, match="no tensor representation"):
+            next(iter(loader))
 
     def test_fixed_size_list_column_reads_as_2d_tensor(self, tmp_path: Path) -> None:
         """Embedding-style fixed-size-list columns (e.g. ``clap``) load as ``(rows, dim)``.
@@ -242,7 +346,8 @@ class TestIterableDataloader:
     ) -> None:
         """Explicit ``rank``/``world_size`` split the dataset without overlap or loss.
 
-        :param lance_dataset: Shared dataset directory and its source arrays.
+        :param lance_dataset: Module-shared dataset; the source arrays are the round-trip ground
+            truth.
         """
         dest, arrays = lance_dataset
         per_rank = [
@@ -260,6 +365,17 @@ class TestIterableDataloader:
         _assert_ranks_partition_param_rows(per_rank, arrays)
 
 
+def test_blob_projected_dict_batch_raises_type_error() -> None:
+    """Lance hands blob-projected batches to ``to_tensor_fn`` as dicts; reject them loudly.
+
+    Direct call against the ``to_tensor_fn`` contract's dict shape — the only
+    way Lance produces one is a blob column projection, which the loaders do
+    not support.
+    """
+    with pytest.raises(TypeError, match="blob columns"):
+        _batch_to_shaped_tensors({"audio_mp3": [b"\x00"]})
+
+
 def _collect_ddp_rank_rows(rank: int, world_size: int, dataset_dir: str, out_dir: str) -> None:
     """Read one DDP rank's shard inside a real ``torch.distributed`` process group.
 
@@ -271,7 +387,6 @@ def _collect_ddp_rank_rows(rank: int, world_size: int, dataset_dir: str, out_dir
     :param dataset_dir: Lance dataset directory to read.
     :param out_dir: Directory receiving one ``rank<i>.npy`` result per rank.
     """
-    import torch.distributed as dist
 
     dist.init_process_group(
         "gloo",
@@ -293,7 +408,7 @@ def test_iterable_dataloader_autodetects_real_torch_distributed_shards(
 ) -> None:
     """Under a real 2-process gloo group each rank reads a disjoint half of the rows.
 
-    :param lance_dataset: Shared dataset directory and its source arrays.
+    :param lance_dataset: Module-shared dataset; the source arrays are the round-trip ground truth.
     :param tmp_path: Scratch dir for the gloo rendezvous file and rank outputs.
     """
     dest, arrays = lance_dataset

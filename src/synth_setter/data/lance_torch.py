@@ -9,6 +9,7 @@ object storage natively: pass ``storage_options`` (see
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,8 @@ import torch
 from lance.sampler import ShardedBatchSampler
 from lance.torch.data import LanceDataset, SafeLanceDataset, get_safe_loader
 from torch.utils.data import DataLoader
+
+logger = logging.getLogger(__name__)
 
 
 def _column_to_tensor(array: pa.Array | pa.ChunkedArray) -> torch.Tensor:
@@ -36,6 +39,8 @@ def _column_to_tensor(array: pa.Array | pa.ChunkedArray) -> torch.Tensor:
     if isinstance(array.type, pa.FixedShapeTensorType):
         values = array.to_numpy_ndarray()
     elif pa.types.is_fixed_size_list(array.type):
+        # Pipeline embedding columns (e.g. clap) are nullable=False; flatten()
+        # assumes no null rows, which nulls would silently misalign.
         values = array.flatten().to_numpy().reshape(len(array), array.type.list_size)
     else:
         raise TypeError(f"no tensor representation for column type {array.type}")
@@ -47,7 +52,7 @@ def _column_to_tensor(array: pa.Array | pa.ChunkedArray) -> torch.Tensor:
 def _batch_to_shaped_tensors(
     batch: pa.RecordBatch | dict[str, Any],
     *,
-    hf_converter: dict | None = None,
+    hf_converter: dict[str, Any] | None = None,
     use_blob_api: bool = False,
     **kwargs: Any,
 ) -> dict[str, torch.Tensor]:
@@ -131,7 +136,7 @@ def _prebatched_collate(batch: dict[str, torch.Tensor]) -> dict[str, torch.Tenso
     """Pass through a batch ``LanceMapDataset.__getitems__`` already collated.
 
     :param batch: Column dict built by the dataset's batched fetch.
-    :returns: ``batch`` unchanged.
+    :returns: The batch as-is — module-level (not a lambda) so spawn workers can pickle it.
     """
     return batch
 
@@ -161,6 +166,14 @@ def lance_map_dataloader(
     :returns: DataLoader yielding ``{column: (batch_size, *inner_shape) tensor}``.
     """
     dataset = LanceMapDataset(uri, columns=columns, storage_options=storage_options)
+    logger.info(
+        "lance map dataloader: uri=%s rows=%d columns=%s batch_size=%d num_workers=%d",
+        uri,
+        len(dataset),
+        columns,
+        batch_size,
+        num_workers,
+    )
     loader_kwargs.setdefault("collate_fn", _prebatched_collate)
     if num_workers == 0:
         # get_safe_loader's spawn context and persistent workers require
@@ -204,6 +217,14 @@ def lance_iterable_dataloader(
     sampler = None
     if rank is not None and world_size is not None:
         sampler = ShardedBatchSampler(rank, world_size)
+    logger.info(
+        "lance iterable dataloader: uri=%s columns=%s batch_size=%d rank=%s world_size=%s",
+        uri,
+        columns,
+        batch_size,
+        rank,
+        world_size,
+    )
     dataset = LanceDataset(
         str(uri),
         batch_size,
