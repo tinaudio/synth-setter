@@ -642,27 +642,39 @@ def validate_all_shards_from_r2(spec: DatasetSpec) -> list[str]:
 
 
 def _validate_all_lance_shards_from_r2(spec: DatasetSpec) -> list[str]:
-    """Validate every Lance shard by streaming it directly from R2 via ``storage_options``.
+    """Structurally validate every Lance shard's staged winner attempt (#1776).
+
+    Lance workers stage per-attempt fragments, not per-shard datasets, so this
+    checks each shard's would-be winner the same way finalize will: complete
+    attempt set present, sidecar round-trips through Lance, row count matches
+    spec and stats, fragment data files exist under the assigned split. Full
+    shape/value validation already ran worker-side against the local render —
+    re-reading rows here would decode data the design keeps untouched.
 
     :param spec: Dataset spec whose ``shards`` list drives the iteration.
     :returns: Aggregated error strings across all shards, each prefixed with the
         shard filename.
     """
-    import lance
+    from synth_setter.pipeline.data.lance_finalize import (
+        load_checked_winner,
+        select_winner,
+        staged_complete_attempts,
+    )
 
-    from synth_setter.pipeline import r2_io
-
-    storage_options = r2_io.r2_storage_options()
+    attempts = staged_complete_attempts(spec)
     errors: list[str] = []
     for shard in spec.shards:
-        s3_uri = r2_io.to_s3_uri(spec.r2.shard_uri(shard))
+        shard_attempts = attempts.get(shard.shard_id)
+        if not shard_attempts:
+            errors.append(
+                f"{shard.filename}: no staged-valid attempt under "
+                f"{spec.r2.shard_staging_dir_uri(shard.shard_id)}"
+            )
+            continue
         try:
-            dataset = lance.dataset(s3_uri, storage_options=storage_options)
-            shard_errors = _validate_lance_dataset(dataset, spec, base_seed=shard.seed)
-        except (OSError, ValueError, RuntimeError) as exc:
-            shard_errors = [f"path is not a valid Lance dataset: {s3_uri}: {exc}"]
-        for err in shard_errors:
-            errors.append(f"{shard.filename}: {err}")
+            load_checked_winner(spec, select_winner(shard_attempts))
+        except ValueError as exc:
+            errors.append(f"{shard.filename}: {exc}")
     return errors
 
 

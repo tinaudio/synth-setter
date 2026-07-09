@@ -33,14 +33,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 import h5py
-import lance
 import numpy as np
 import pytest
 from omegaconf import DictConfig, open_dict
 
 from synth_setter.cli.generate_dataset import from_hydra, spec_from_cfg
 from synth_setter.pipeline import r2_io
-from synth_setter.pipeline.data.lance_shard import LANCE_DATA_STORAGE_VERSION
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from tests.evaluation._oracle_helpers import ORACLE_AUDIO_METRIC_BOUNDS
 from tests.helpers.dummy_shards import stub_renderer
@@ -157,11 +155,11 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     skip-existing probe loop (#750) runs with no real plugin and no real R2.
     Parametrized over ``output_format`` so every format's config surface
     runs the same loop with its own shard suffix (#1600). Asserts
-    (1) ``smoke-shard`` partitions into one shard per split, (2) every shard
-    lands under its spec-derived R2 URI with the format's suffix, (3) the Lance
-    leg writes at the pinned ``LANCE_DATA_STORAGE_VERSION`` (#1714), and (4) a
-    second ``from_hydra`` pass renders nothing because the probe finds all
-    shards already present.
+    (1) ``smoke-shard`` partitions into one shard per split, (2) every hdf5/wds
+    shard lands under its spec-derived R2 URI while every Lance shard stages a
+    complete attempt (sidecar + stats + ``.valid``) with its fragment data
+    under the assigned split dataset (#1776), and (3) a second ``from_hydra``
+    pass renders nothing because the probe finds all shards already present.
 
     :param output_format: Dataset output format the run is pinned to.
     :param shard_suffix: File suffix the format's shards must carry.
@@ -185,30 +183,6 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
         # Disable the default wandb logger: generate() would call wandb.init() and block.
         cfg_dataset.logger = None
 
-    # Local rclone errors on a missing path; real R2 returns None. Wrap to bridge
-    # that gap so the skip probe sees the absent-object contract unchanged.
-    real_object_size = r2_io.object_size
-
-    def _fake_r2_object_size(r2_uri: str) -> int | None:
-        try:
-            return real_object_size(r2_uri)
-        except subprocess.CalledProcessError:
-            return None
-
-    monkeypatch.setattr(r2_io, "object_size", _fake_r2_object_size)
-
-    # Same local-vs-real bridge for the directory (Lance) skip-probe: a local
-    # rclone remote errors on an absent prefix where real R2 lists empty.
-    real_directory_exists = r2_io.r2_directory_exists
-
-    def _fake_r2_directory_exists(r2_uri: str) -> bool:
-        try:
-            return real_directory_exists(r2_uri)
-        except subprocess.CalledProcessError:
-            return False
-
-    monkeypatch.setattr(r2_io, "r2_directory_exists", _fake_r2_directory_exists)
-
     spec = spec_from_cfg(cfg_dataset)
     # smoke-shard partitions into one shard per split, so the stub covers train→val→test.
     assert spec.split_shard_ranges == {"train": (0, 1), "val": (1, 2), "test": (2, 3)}
@@ -220,22 +194,27 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     ):
         from_hydra(cfg_dataset)
 
+    # fake_r2_remote materializes r2://<bucket>/<key> at <root>/<bucket>/<key>.
+    run_root = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
+    split_of = {
+        shard_id: split
+        for split, (lo, hi) in spec.split_shard_ranges.items()
+        for shard_id in range(lo, hi)
+    }
     for shard in spec.shards:
         assert shard.filename.endswith(shard_suffix)
-        if spec.output_format.is_directory:
-            # Probe the committed manifest, mirroring the production skip-probe:
-            # asserts the shard landed AND was committed (not orphaned fragments).
-            assert r2_io.r2_directory_exists(f"{spec.r2.shard_uri(shard)}/_versions"), (
-                f"committed shard missing in fake R2: {shard.filename}"
+        if output_format == "lance":
+            # A Lance shard stages a complete attempt: sidecar + stats + .valid
+            # under the shard's staging dir, fragment data under its split (#1776).
+            staging = run_root / "metadata" / "workers" / "shards" / f"shard-{shard.shard_id:06d}"
+            for suffix in (".fragment.json", ".shard-stats.npz", ".valid", ".rendering"):
+                assert list(staging.glob(f"*{suffix}")), (
+                    f"staged attempt missing {suffix} for {shard.filename}"
+                )
+            split_data = run_root / f"{split_of[shard.shard_id]}.lance" / "data"
+            assert list(split_data.glob("*.lance")), (
+                f"no fragment data under {split_data} for {shard.filename}"
             )
-            if output_format == "lance":
-                # fake_r2_remote materializes r2://<bucket>/<key> at <root>/<bucket>/<key>.
-                shard_key = spec.r2.shard_uri(shard).removeprefix(r2_io.R2_URI_SCHEME)
-                shard_dir = fake_r2_remote / shard_key
-                assert (
-                    lance.dataset(str(shard_dir)).data_storage_version
-                    == LANCE_DATA_STORAGE_VERSION
-                ), f"shard {shard.filename} not written at pinned storage version"
         else:
             size = r2_io.object_size(spec.r2.shard_uri(shard))
             assert size is not None and size > 0, f"shard missing in fake R2: {shard.filename}"

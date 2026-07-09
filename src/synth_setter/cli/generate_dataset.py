@@ -16,6 +16,8 @@ instead of composing one.
 
 from __future__ import annotations
 
+import platform
+import re
 import shlex
 import subprocess
 import sys
@@ -25,6 +27,7 @@ from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import hydra
 import wandb
@@ -38,10 +41,16 @@ from pydantic import ValidationError
 from synth_setter.cli.finalize_dataset import finalize_from_spec
 from synth_setter.data.vst.core import extract_renderer_version
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.ci.validate_shard import validate_shard
 from synth_setter.pipeline.constants import (
     INPUT_SPEC_FILENAME,
     STATS_NPZ_FILENAME,
     WORKER_SPEC_URI_ENV,
+)
+from synth_setter.pipeline.data.lance_staging import (
+    shard_has_complete_attempt,
+    stage_lance_shard_attempt,
+    write_rendering_marker,
 )
 from synth_setter.pipeline.partitioning import (
     available_cpus,
@@ -49,7 +58,7 @@ from synth_setter.pipeline.partitioning import (
     read_rank_world_from_env,
 )
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
-from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig, ShardSpec
+from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat, RenderConfig, ShardSpec
 from synth_setter.pipeline.spec_io import (
     load_spec_from_root,
     upload_spec,
@@ -633,10 +642,10 @@ def _render_one_owned_shard(
     :returns: ``(rendered, skipped)`` — exactly one is ``True``.
     """
     shard = spec.shards[shard_id]
-    if spec.output_format.is_directory:
-        # Probe the _versions/ manifest, not bare data/ files: a render that
-        # crashed before commit leaves orphan fragments that must not be skipped.
-        already_present = r2_io.r2_directory_exists(f"{spec.r2.shard_uri(shard)}/_versions")
+    if spec.output_format is OutputFormat.LANCE:
+        # A Lance shard is staged iff a complete attempt set (sidecar + stats +
+        # .valid) exists; orphaned fragment data from a crash must not skip (#1776).
+        already_present = shard_has_complete_attempt(spec, shard.shard_id)
         existing_size = 0
     else:
         existing_size = r2_io.object_size(spec.r2.shard_uri(shard)) or 0
@@ -651,6 +660,18 @@ def _render_one_owned_shard(
         loggers, shard_id, byte_size=byte_size, render_seconds=time.monotonic() - t0
     )
     return True, False
+
+
+def _worker_id() -> str:
+    """Return this worker's staging identity, sanitized for object-key use.
+
+    The hostname (RunPod pod name locally unique per worker) identifies which
+    infrastructure produced an attempt; it appears only in staging filenames
+    and never in canonical paths (design §7.3).
+
+    :returns: Hostname with any character outside ``[A-Za-z0-9._-]`` replaced by ``-``.
+    """
+    return re.sub(r"[^A-Za-z0-9._-]", "-", platform.node() or "worker")
 
 
 def _render_and_upload_shard(
@@ -672,8 +693,17 @@ def _render_and_upload_shard(
         shards are retained at ``work_dir``.
     :raises subprocess.CalledProcessError: Renderer (or rclone) subprocess exited non-zero after
         exhausting the retry budget.
-    :raises RuntimeError: Renderer exited 0 without writing the expected shard file.
+    :raises RuntimeError: Renderer exited 0 without writing the expected shard
+        file, or a rendered Lance shard failed local validation.
     """
+    worker_id = _worker_id()
+    attempt_uuid = uuid4().hex
+    if spec.output_format is OutputFormat.LANCE:
+        # Attempt start marker — append-only; orphaned without a .valid it is
+        # the observable evidence of a crashed attempt (#1776).
+        write_rendering_marker(
+            spec, shard.shard_id, worker_id=worker_id, attempt_uuid=attempt_uuid
+        )
     # Zipped wheels extract the wrapper to a temp file that only lives while
     # ``as_file()`` is open; ``ExitStack`` keeps it on disk across the retry
     # loop, and skips materialization on non-Linux.
@@ -700,7 +730,7 @@ def _render_and_upload_shard(
     shard_path = work_dir / shard.filename
     # Surface a generator that exited 0 without writing output here, not as a
     # downstream rclone "source not found". Lance shards are directories.
-    if spec.output_format.is_directory:
+    if spec.output_format is OutputFormat.LANCE:
         if not shard_path.is_dir():
             raise RuntimeError(
                 "generate_vst_dataset.py exited 0 but did not write expected shard "
@@ -708,12 +738,17 @@ def _render_and_upload_shard(
             )
         byte_size = sum(p.stat().st_size for p in shard_path.rglob("*") if p.is_file())
         logger.info(f"shard rendered: {shard_path} ({byte_size} bytes)")
-        # Upload data first, then the _versions/ manifest last (rclone copy has no
-        # ordering guarantee). The resume skip-probe checks _versions/, so a crash
-        # mid-upload must never leave a manifest whose data files are absent.
-        dest = spec.r2.shard_uri(shard)
-        r2_io.upload_dir(shard_path, dest, exclude="_versions/**")
-        r2_io.upload_dir(shard_path / "_versions", f"{dest}/_versions")
+        # Worker-side validation gates staging — corrupt renders never earn a
+        # .valid marker (design §7.3 shard write protocol).
+        shard_errors = validate_shard(shard_path, spec)
+        if shard_errors:
+            raise RuntimeError(
+                f"shard {shard.filename} failed local validation: {'; '.join(shard_errors)}"
+            )
+        stage_lance_shard_attempt(
+            spec, shard, shard_path, worker_id=worker_id, attempt_uuid=attempt_uuid
+        )
+        dest = spec.r2.shard_staging_dir_uri(shard.shard_id)
     else:
         if not shard_path.is_file():
             raise RuntimeError(
