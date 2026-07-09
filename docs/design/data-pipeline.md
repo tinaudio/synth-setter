@@ -368,6 +368,8 @@ All structured files in the pipeline, in one place:
 | Completion marker             | `metadata/dataset.complete`                                             | JSON       | `finalize` (last step)          | `finalize` (idempotency check)     |
 | Stats                         | `stats.npz`                                                             | NumPy      | `finalize`                      | Training scripts                   |
 
+> The `metadata/dataset.{json,complete}` placements are the [#385](https://github.com/tinaudio/synth-setter/issues/385) future state; today finalize writes both at the run prefix root (`R2Location.dataset_card_uri()` / `dataset_complete_marker_uri()`).
+
 **Shard attempt lifecycle:** Each attempt produces a shard file and lifecycle markers in the shard's staging directory, all named `{worker_id}-{attempt_uuid}`:
 
 | File / Marker                        | Written by                                                               | Meaning                                                                                                                                                                                                                                                                      |
