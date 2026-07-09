@@ -40,7 +40,10 @@ pytestmark = pytest.mark.usefixtures("fake_r2_remote")
 
 
 def tiny_lance_spec() -> DatasetSpec:
-    """Build a 4-shard lance spec (train [0,2), val [2,3), test [3,4)) with tiny rows."""
+    """Build a 4-shard lance spec (train [0,2), val [2,3), test [3,4)) with tiny rows.
+
+    :returns: Frozen spec whose render config keeps every per-field array small.
+    """
     return DatasetSpec.model_validate(
         {
             "task_name": "lance-frag-test",
@@ -242,9 +245,7 @@ def test_stage_attempt_rejects_local_shard_with_wrong_row_count(
     spec = tiny_lance_spec()
     shard = spec.shards[0]
     render = spec.render.model_copy(update={"base_seed": shard.seed, "samples_per_shard": 3})
-    schema = lance_schema(
-        dataset_field_shapes(render, spec.num_params), render.shard_metadata()
-    )
+    schema = lance_schema(dataset_field_shapes(render, spec.num_params), render.shard_metadata())
     oversized = {
         field: np.repeat(shard_arrays(spec, 0)[field][:1], 3, axis=0)
         for field in DATASET_FIELD_NAMES

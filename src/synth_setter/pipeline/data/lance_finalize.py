@@ -49,7 +49,25 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class StagedLanceAttempt:
-    """One complete staged attempt discovered under a shard's staging directory."""
+    """One complete staged attempt discovered under a shard's staging directory.
+
+    .. attribute :: shard_id
+
+        Logical shard the attempt rendered (derived from the staging path).
+
+    .. attribute :: name
+
+        Attempt name (``{worker_id}-{attempt_uuid}``) from the staging filenames.
+
+    .. attribute :: valid_key
+
+        Full object key of the attempt's ``.valid`` marker — the selection
+        tie-breaker and the audit record's provenance pointer.
+
+    .. attribute :: valid_mtime
+
+        Storage-assigned ``LastModified`` of the ``.valid`` marker.
+    """
 
     shard_id: int
     name: str
@@ -59,7 +77,20 @@ class StagedLanceAttempt:
 
 @dataclass(frozen=True)
 class CheckedLanceWinner:
-    """A winning attempt after structural checks, ready to commit and reduce."""
+    """A winning attempt after structural checks, ready to commit and reduce.
+
+    .. attribute :: attempt
+
+        The selected staged attempt.
+
+    .. attribute :: fragment
+
+        Lance fragment metadata deserialized from the attempt's sidecar.
+
+    .. attribute :: welford
+
+        Welford ``(count, mean, m2)`` state from the attempt's stats sidecar.
+    """
 
     attempt: StagedLanceAttempt
     fragment: lance.fragment.FragmentMetadata
@@ -251,7 +282,7 @@ def _write_dataset_card(
     logger.info("uploaded dataset card to {}", spec.r2.dataset_card_uri())
 
 
-def finalize_lance_fragments(spec: DatasetSpec, work_dir: Path) -> None:
+def finalize_lance_fragments(spec: DatasetSpec, work_dir: Path) -> None:  # noqa: DOC502 — raises propagate from _select_checked_winners
     """Commit staged winner fragments into split datasets; reduce stats; write the card.
 
     Each split is one replace-semantics ``Overwrite`` commit over the full

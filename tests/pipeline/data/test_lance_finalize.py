@@ -18,6 +18,7 @@ from synth_setter.data.vst.shapes import DATASET_FIELD_NAMES, MEL_SPEC_FIELD
 from synth_setter.pipeline.data.lance_shard import iter_lance_column_rows
 from synth_setter.pipeline.data.lance_staging import stage_lance_shard_attempt
 from synth_setter.pipeline.schemas.lance_attempt import LanceDatasetCard
+from synth_setter.pipeline.schemas.spec import DatasetSpec
 from tests.pipeline.data.test_lance_staging import (
     shard_arrays,
     tiny_lance_spec,
@@ -27,7 +28,7 @@ from tests.pipeline.data.test_lance_staging import (
 pytestmark = pytest.mark.usefixtures("fake_r2_remote")
 
 
-def stage_all_shards(spec, tmp_path: Path, *, worker_id: str = "pod-a") -> None:
+def stage_all_shards(spec: DatasetSpec, tmp_path: Path, *, worker_id: str = "pod-a") -> None:
     """Stage a complete attempt for every shard in ``spec``.
 
     :param spec: Spec whose shards are staged.
@@ -41,7 +42,7 @@ def stage_all_shards(spec, tmp_path: Path, *, worker_id: str = "pod-a") -> None:
         )
 
 
-def split_dataset_path(fake_r2_remote: Path, spec, split: str) -> Path:
+def split_dataset_path(fake_r2_remote: Path, spec: DatasetSpec, split: str) -> Path:
     """Local path of a committed split dataset under the fake R2 root.
 
     :param fake_r2_remote: Root the ``r2:`` remote resolves to.
@@ -119,7 +120,7 @@ def test_finalize_stats_npz_matches_direct_recompute_over_train_mel_rows(
 
 
 def set_valid_marker_mtime(
-    fake_r2_remote: Path, spec, shard_id: int, name: str, epoch: float
+    fake_r2_remote: Path, spec: DatasetSpec, shard_id: int, name: str, epoch: float
 ) -> None:
     """Pin one staged attempt's ``.valid`` LastModified via the real storage state.
 
@@ -143,7 +144,7 @@ def set_valid_marker_mtime(
 
 
 def stage_duplicate_attempt(
-    spec, tmp_path: Path, shard_id: int, *, attempt_uuid: str, value_offset: int
+    spec: DatasetSpec, tmp_path: Path, shard_id: int, *, attempt_uuid: str, value_offset: int
 ) -> None:
     """Stage one more attempt for ``shard_id`` with distinguishable content.
 

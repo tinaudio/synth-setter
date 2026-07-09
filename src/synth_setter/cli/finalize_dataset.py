@@ -83,7 +83,7 @@ def _download_train_shards_one_at_a_time(spec: DatasetSpec, work_dir: Path) -> I
             local.unlink(missing_ok=True)
 
 
-def finalize_wds(spec: DatasetSpec, work_dir: Path) -> None:
+def finalize_wds(spec: DatasetSpec, work_dir: Path) -> None:  # noqa: DOC502 — ValueError propagates from _require_nonempty_train
     """Stream stats over the train shards and upload ``stats.npz``.
 
     Per-shard tar files stay in their original R2 location; only the
@@ -112,7 +112,7 @@ def finalize_wds(spec: DatasetSpec, work_dir: Path) -> None:
     logger.info("uploaded stats to {}", spec.r2.stats_uri())
 
 
-def finalize_hdf5(spec: DatasetSpec, work_dir: Path) -> None:
+def finalize_hdf5(spec: DatasetSpec, work_dir: Path) -> None:  # noqa: DOC503 — ValueError propagates from _require_nonempty_train
     """Download every shard, reshard into split files, compute stats, upload all artifacts.
 
     Writes ``work_dir/input_spec.json`` flat (via
@@ -168,7 +168,7 @@ def finalize_hdf5(spec: DatasetSpec, work_dir: Path) -> None:
     logger.info("uploaded stats to {}", spec.r2.stats_uri())
 
 
-def finalize_lance(spec: DatasetSpec, work_dir: Path) -> None:
+def finalize_lance(spec: DatasetSpec, work_dir: Path) -> None:  # noqa: DOC502 — ValueError propagates from _require_nonempty_train
     """Commit staged winner fragments into split datasets — no shard row is decoded.
 
     Delegates to
