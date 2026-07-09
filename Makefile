@@ -413,7 +413,7 @@ TARGETARCH ?= amd64
 DOCKER_TORCH_BACKEND ?= cu128
 DOCKER_BUILD_FLAGS ?=
 _INTERNAL_BUILD_FLAGS :=
-CURRENT_LOCAL_GIT_REF := $(strip $(shell git rev-parse HEAD))
+CURRENT_LOCAL_GIT_REF = $(strip $(shell git rev-parse HEAD))
 
 docker-build-dev-snapshot: ## Build self-contained image (requires GIT_REF)
 	@if [ -z "$(GIT_REF)" ]; then echo "ERROR: GIT_REF is required."; exit 1; fi
