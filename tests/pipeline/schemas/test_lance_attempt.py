@@ -28,6 +28,7 @@ def _card() -> LanceDatasetCard:
 
 
 def test_sidecar_rejects_unknown_fields() -> None:
+    """Extra keys fail the sidecar's ``extra=\"forbid\"`` boundary."""
     with pytest.raises(ValidationError, match="extra_forbidden"):
         LanceFragmentSidecar.model_validate(
             {"schema_version": 1, "fragment_json": "{}", "shard_id": 3}
@@ -35,27 +36,32 @@ def test_sidecar_rejects_unknown_fields() -> None:
 
 
 def test_sidecar_rejects_unknown_schema_version() -> None:
+    """Only the literal current schema version validates."""
     with pytest.raises(ValidationError, match="schema_version"):
         LanceFragmentSidecar.model_validate({"schema_version": 2, "fragment_json": "{}"})
 
 
 def test_sidecar_rejects_non_string_fragment_json_strictly() -> None:
+    """Strict mode rejects a non-string ``fragment_json`` (no int coercion)."""
     with pytest.raises(ValidationError, match="fragment_json"):
         LanceFragmentSidecar.model_validate({"schema_version": 1, "fragment_json": 42})
 
 
 def test_sidecar_is_frozen() -> None:
+    """Sidecar instances are immutable."""
     sidecar = LanceFragmentSidecar(schema_version=1, fragment_json="{}")
     with pytest.raises(ValidationError, match="frozen"):
         sidecar.fragment_json = "{...}"  # type: ignore[misc]
 
 
 def test_dataset_card_round_trips_through_json() -> None:
+    """The audit card survives the R2 JSON round trip unchanged."""
     card = _card()
     assert LanceDatasetCard.model_validate_json(card.model_dump_json()) == card
 
 
 def test_dataset_card_rejects_unknown_fields() -> None:
+    """Extra keys fail the card's ``extra=\"forbid\"`` boundary."""
     payload = _card().model_dump()
     payload["stats"] = {}
     with pytest.raises(ValidationError, match="extra_forbidden"):
@@ -63,6 +69,7 @@ def test_dataset_card_rejects_unknown_fields() -> None:
 
 
 def test_selected_attempt_rejects_unknown_fields() -> None:
+    """Extra keys fail the selected-attempt ``extra=\"forbid\"`` boundary."""
     with pytest.raises(ValidationError, match="extra_forbidden"):
         SelectedLanceAttempt.model_validate(
             {"shard_id": 0, "attempt": "a", "valid_key": "k", "split": "train"}

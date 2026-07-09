@@ -23,6 +23,7 @@ import numpy as np
 from loguru import logger
 from pydantic import ValidationError
 
+from synth_setter.data.vst.shapes import dataset_field_shapes
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.constants import (
     ATTEMPT_VALID_SUFFIX,
@@ -95,7 +96,7 @@ class CheckedLanceWinner:
 
     attempt: StagedLanceAttempt
     fragment: lance.fragment.FragmentMetadata
-    welford: tuple[int, Any, Any]
+    welford: tuple[int, np.ndarray, np.ndarray]
 
 
 def staged_complete_attempts(spec: DatasetSpec) -> dict[int, list[StagedLanceAttempt]]:
@@ -110,8 +111,10 @@ def staged_complete_attempts(spec: DatasetSpec) -> dict[int, list[StagedLanceAtt
     by_shard_dir: dict[str, dict[str, r2_io.RemoteEntry]] = {}
     for entry in entries:
         shard_dir, _, filename = entry.path.partition("/")
-        if filename:
-            by_shard_dir.setdefault(shard_dir, {})[filename] = entry
+        if not filename:
+            logger.warning("skipping stray top-level staging object: {}", entry.path)
+            continue
+        by_shard_dir.setdefault(shard_dir, {})[filename] = entry
     attempts: dict[int, list[StagedLanceAttempt]] = {}
     for shard_dir, files in by_shard_dir.items():
         # Tolerate non-shard entries (stray objects, a future quarantine/ dir):
@@ -139,6 +142,9 @@ def select_winner(attempts: list[StagedLanceAttempt]) -> StagedLanceAttempt:
     ``LastModified`` is storage-server-assigned, so the winner is stable — a
     straggler landing later has a strictly greater timestamp and can never
     displace an already-selected winner (what makes finalize re-run safe).
+    Timestamps may carry second granularity on S3-compatible stores; ties are
+    deterministic (lexicographic key) even though the key order carries no
+    completion-order meaning.
 
     :param attempts: Non-empty complete attempts for one shard.
     :returns: The winning attempt.
@@ -171,7 +177,13 @@ def load_checked_winner(spec: DatasetSpec, attempt: StagedLanceAttempt) -> Check
             raise ValueError(
                 f"shard {attempt.shard_id} attempt {attempt.name}: invalid fragment sidecar: {exc}"
             ) from exc
-    fragment = lance.fragment.FragmentMetadata.from_json(sidecar.fragment_json)
+    try:
+        fragment = lance.fragment.FragmentMetadata.from_json(sidecar.fragment_json)
+    except Exception as exc:  # noqa: BLE001 — lance raises varied types (KeyError observed) on malformed payloads
+        raise ValueError(
+            f"shard {attempt.shard_id} attempt {attempt.name}: fragment_json does not "
+            f"deserialize as Lance fragment metadata: {type(exc).__name__}: {exc}"
+        ) from exc
     with (
         r2_io.downloaded_to_tempfile(
             f"{staging_dir}{attempt.name}{LANCE_SHARD_STATS_SUFFIX}"
@@ -213,8 +225,6 @@ def _split_schema(spec: DatasetSpec, first_shard_id: int) -> pa.Schema:
     :param first_shard_id: The split's first shard, whose seed the metadata carries.
     :returns: Arrow schema for the split's ``Overwrite`` commit.
     """
-    from synth_setter.data.vst.shapes import dataset_field_shapes
-
     render = spec.render.model_copy(update={"base_seed": spec.shards[first_shard_id].seed})
     return lance_schema(dataset_field_shapes(render, spec.num_params), render.shard_metadata())
 
@@ -235,6 +245,8 @@ def _select_checked_winners(spec: DatasetSpec) -> dict[int, CheckedLanceWinner]:
             f"cannot finalize: {len(missing)}/{spec.num_shards} shards have no "
             f"staged-valid attempt: {names}"
         )
+    # Winners load serially (two small downloads + a HEAD per shard) — fine at
+    # current shard counts; parallelize here if runs grow to thousands.
     return {
         shard.shard_id: load_checked_winner(spec, select_winner(attempts[shard.shard_id]))
         for shard in spec.shards

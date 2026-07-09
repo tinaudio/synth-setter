@@ -22,6 +22,7 @@ from synth_setter.pipeline.schemas.lance_attempt import LanceDatasetCard
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from tests.pipeline.data.test_lance_staging import (
     shard_arrays,
+    staging_dir,
     tiny_lance_spec,
     write_local_shard,
 )
@@ -112,12 +113,13 @@ def test_finalize_stats_npz_matches_direct_recompute_over_train_mel_rows(
     finalize_from_spec(spec, tmp_path / "work")
 
     stats_path = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / "stats.npz"
-    stats = np.load(stats_path)
+    with np.load(stats_path) as stats:
+        stats_mean, stats_std = stats["mean"], stats["std"]
     train_mel = np.concatenate(
         [shard_arrays(spec, sid)[MEL_SPEC_FIELD] for sid in (0, 1)], axis=0
     ).astype(np.float64)
-    np.testing.assert_allclose(stats["mean"], train_mel.mean(axis=0), rtol=1e-9)
-    np.testing.assert_allclose(stats["std"], train_mel.std(axis=0), rtol=1e-6)
+    np.testing.assert_allclose(stats_mean, train_mel.mean(axis=0), rtol=1e-9)
+    np.testing.assert_allclose(stats_std, train_mel.std(axis=0), rtol=1e-6)
 
 
 def set_valid_marker_mtime(
@@ -131,16 +133,7 @@ def set_valid_marker_mtime(
     :param name: Attempt name (``{worker}-{attempt}``).
     :param epoch: POSIX timestamp to stamp on the marker.
     """
-    marker = (
-        fake_r2_remote
-        / spec.r2.bucket
-        / spec.r2.prefix
-        / "metadata"
-        / "workers"
-        / "shards"
-        / f"shard-{shard_id:06d}"
-        / f"{name}.valid"
-    )
+    marker = staging_dir(fake_r2_remote, spec, shard_id) / f"{name}.valid"
     os.utime(marker, (epoch, epoch))
 
 
@@ -305,16 +298,7 @@ def staging_file(fake_r2_remote: Path, spec: DatasetSpec, shard_id: int, filenam
     :param filename: Staged artifact filename (``{worker}-{attempt}{suffix}``).
     :returns: ``<root>/<bucket>/<prefix>metadata/workers/shards/shard-NNNNNN/<filename>``.
     """
-    return (
-        fake_r2_remote
-        / spec.r2.bucket
-        / spec.r2.prefix
-        / "metadata"
-        / "workers"
-        / "shards"
-        / f"shard-{shard_id:06d}"
-        / filename
-    )
+    return staging_dir(fake_r2_remote, spec, shard_id) / filename
 
 
 def test_finalize_rejects_sidecar_that_fails_strict_validation(
@@ -329,6 +313,43 @@ def test_finalize_rejects_sidecar_that_fails_strict_validation(
 
     with pytest.raises(ValueError, match="invalid fragment sidecar"):
         finalize_from_spec(spec, tmp_path / "work")
+
+
+def test_finalize_rejects_fragment_json_that_is_not_lance_metadata(
+    fake_r2_remote: Path, tmp_path: Path
+) -> None:
+    from synth_setter.cli.finalize_dataset import finalize_from_spec
+
+    spec = tiny_lance_spec()
+    stage_all_shards(spec, tmp_path)
+    sidecar = staging_file(fake_r2_remote, spec, 0, "pod-a-u0000.fragment.json")
+    # Passes the strict Pydantic parse (valid JSON string field) but is not a
+    # Lance fragment payload — lance raises KeyError, not ValueError.
+    sidecar.write_text('{"schema_version": 1, "fragment_json": "{\\"bogus\\": 1}"}')
+
+    with pytest.raises(ValueError, match="does not deserialize as Lance fragment metadata"):
+        finalize_from_spec(spec, tmp_path / "work")
+
+
+def test_finalize_skips_empty_split_and_still_completes(
+    fake_r2_remote: Path, tmp_path: Path
+) -> None:
+    from synth_setter.cli.finalize_dataset import finalize_from_spec
+
+    # train 4 + val 2 samples at 2/shard → 3 shards, test split empty. Rebuilt
+    # from a fresh dump so the frozen spec's cached computed fields re-derive.
+    spec = DatasetSpec.model_validate(
+        {**tiny_lance_spec().model_dump(mode="json"), "train_val_test_sizes": [4, 2, 0]}
+    )
+    stage_all_shards(spec, tmp_path)
+
+    finalize_from_spec(spec, tmp_path / "work")
+
+    run_root = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
+    assert (run_root / "train.lance" / "_versions").exists()
+    assert (run_root / "val.lance" / "_versions").exists()
+    assert not (run_root / "test.lance").exists()
+    assert (run_root / "dataset.complete").exists()
 
 
 def test_finalize_rejects_stats_sidecar_missing_welford_arrays(
@@ -436,11 +457,13 @@ def test_staged_discovery_skips_non_shard_entries_in_staging_root(
 
     spec = tiny_lance_spec()
     stage_all_shards(spec, tmp_path)
-    stray = (
+    staging_root = (
         fake_r2_remote / spec.r2.bucket / spec.r2.prefix / "metadata" / "workers" / "shards"
-    ) / "quarantine"
-    stray.mkdir()
-    (stray / "pod-x-dead.h5").write_bytes(b"x")
+    )
+    stray_dir = staging_root / "quarantine"
+    stray_dir.mkdir()
+    (stray_dir / "pod-x-dead.h5").write_bytes(b"x")
+    (staging_root / "stray-top-level.txt").write_bytes(b"x")
 
     attempts = staged_complete_attempts(spec)
 

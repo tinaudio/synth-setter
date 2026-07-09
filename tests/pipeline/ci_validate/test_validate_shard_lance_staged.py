@@ -21,6 +21,10 @@ pytestmark = pytest.mark.usefixtures("fake_r2_remote")
 def test_validate_all_lance_shards_passes_when_every_shard_has_a_staged_winner(
     tmp_path: Path,
 ) -> None:
+    """A fully staged run validates clean.
+
+    :param tmp_path: Scratch dir for the local shard datasets.
+    """
     spec = tiny_lance_spec()
     stage_all_shards(spec, tmp_path)
 
@@ -30,6 +34,11 @@ def test_validate_all_lance_shards_passes_when_every_shard_has_a_staged_winner(
 def test_validate_all_lance_shards_reports_shard_with_no_staged_attempt(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
+    """A shard whose ``.valid`` marker is gone reports as missing, prefixed by filename.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for the local shard datasets.
+    """
     spec = tiny_lance_spec()
     stage_all_shards(spec, tmp_path)
     staging_file(fake_r2_remote, spec, 1, "pod-a-u0001.valid").unlink()
@@ -43,6 +52,11 @@ def test_validate_all_lance_shards_reports_shard_with_no_staged_attempt(
 def test_validate_all_lance_shards_surfaces_structural_check_failures_per_shard(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
+    """One corrupt sidecar aggregates as that shard's error instead of crashing the run.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for the local shard datasets.
+    """
     spec = tiny_lance_spec()
     stage_all_shards(spec, tmp_path)
     sidecar = staging_file(fake_r2_remote, spec, 3, "pod-a-u0003.fragment.json")

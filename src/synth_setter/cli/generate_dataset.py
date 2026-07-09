@@ -646,6 +646,8 @@ def _render_one_owned_shard(
         # A Lance shard is staged iff a complete attempt set (sidecar + stats +
         # .valid) exists; orphaned fragment data from a crash must not skip (#1776).
         already_present = shard_has_complete_attempt(spec, shard.shard_id)
+        # Staged fragment size isn't probed on the skip path; the metrics row
+        # deliberately logs 0 bytes for an already-staged lance shard.
         existing_size = 0
     else:
         existing_size = r2_io.object_size(spec.r2.shard_uri(shard)) or 0

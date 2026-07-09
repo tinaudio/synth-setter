@@ -182,13 +182,13 @@ def test_stage_attempt_stats_sidecar_matches_direct_welford_over_written_mel_row
     )
 
     stats_path = staging_dir(fake_r2_remote, spec, 0) / "pod-a-a1b2.shard-stats.npz"
-    stats = np.load(stats_path)
-    mel_rows = shard_arrays(spec, 0)["mel_spec"].astype(np.float64)
-    assert int(stats["count"]) == spec.render.samples_per_shard
-    np.testing.assert_allclose(stats["mean"], mel_rows.mean(axis=0), rtol=1e-12)
-    np.testing.assert_allclose(
-        stats["m2"], ((mel_rows - mel_rows.mean(axis=0)) ** 2).sum(axis=0), rtol=1e-9
-    )
+    with np.load(stats_path) as stats:
+        mel_rows = shard_arrays(spec, 0)["mel_spec"].astype(np.float64)
+        assert int(stats["count"]) == spec.render.samples_per_shard
+        np.testing.assert_allclose(stats["mean"], mel_rows.mean(axis=0), rtol=1e-12)
+        np.testing.assert_allclose(
+            stats["m2"], ((mel_rows - mel_rows.mean(axis=0)) ** 2).sum(axis=0), rtol=1e-9
+        )
 
 
 def test_stage_attempt_writes_valid_marker_alongside_sidecars(
@@ -257,6 +257,25 @@ def test_stage_attempt_rejects_local_shard_with_wrong_row_count(
         stage_lance_shard_attempt(spec, shard, shard_path, worker_id="pod-a", attempt_uuid="a1b2")
 
     assert not (staging_dir(fake_r2_remote, spec, 0) / "pod-a-a1b2.valid").exists()
+
+
+def test_stage_attempt_rejects_shard_exceeding_single_data_file_bound(
+    fake_r2_remote: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = tiny_lance_spec()
+    local_shard = write_local_shard(spec, 0, tmp_path)
+    # Shrink the bound rather than materializing a >32 GiB shard; the guard's
+    # comparison is what's under test (#1775).
+    monkeypatch.setattr("synth_setter.pipeline.data.lance_shard.LANCE_MAX_BYTES_PER_FILE", 1024)
+
+    with pytest.raises(ValueError, match="multipart-part ceiling"):
+        stage_lance_shard_attempt(
+            spec, spec.shards[0], local_shard, worker_id="pod-a", attempt_uuid="a1b2"
+        )
+
+    assert not (staging_dir(fake_r2_remote, spec, 0) / "pod-a-a1b2.valid").exists()
+    train_data = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / "train.lance" / "data"
+    assert not train_data.exists()
 
 
 def test_staged_sidecar_survives_json_round_trip_from_disk(

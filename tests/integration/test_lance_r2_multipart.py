@@ -57,9 +57,11 @@ def _large_binary_batches(schema: pa.Schema) -> Iterator[pa.RecordBatch]:
 def test_lance_write_dataset_large_multipart_object_completes_on_real_r2() -> None:
     """A large Lance data file writes to real R2 without ``InvalidPart``.
 
-    Current production finalization writes split datasets through
-    ``write_lance_dataset``. This exercises that public path against R2 with a
-    payload size that crosses Lance's multipart part-growth boundary.
+    Exercises the pull-based ``write_lance_dataset`` writer against R2 with a
+    payload size that crosses Lance's multipart part-growth boundary. The
+    fragment path production staging uses (``lance_fragment``) has no
+    ``max_bytes_per_file`` knob; its bound is enforced up front by
+    ``stage_lance_shard_attempt``'s shard-size guard instead.
     """
     if not r2_io.is_r2_reachable():
         pytest.skip(

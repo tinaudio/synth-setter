@@ -106,13 +106,15 @@ def stage_lance_shard_attempt(
     :param local_shard_path: Local ``shard-NNNNNN.lance`` dataset directory.
     :param worker_id: Worker identifier for the staging filenames.
     :param attempt_uuid: Per-attempt UUID for the staging filenames.
-    :raises ValueError: The local shard's row count does not match the spec.
+    :raises ValueError: The local shard's row count does not match the spec, or
+        the shard's bytes would exceed the single-data-file bound
+        (``LANCE_MAX_BYTES_PER_FILE``) the fragment write cannot split.
     """
     # Function-local so importing this module (e.g. from the hdf5/wds worker
     # path) never pays the `lance` import cost.
     import lance
 
-    from synth_setter.pipeline.data.lance_shard import lance_fragment
+    from synth_setter.pipeline.data.lance_shard import LANCE_MAX_BYTES_PER_FILE, lance_fragment
     from synth_setter.pipeline.data.stats import fold_lance_shard_into_welford
 
     dataset = lance.dataset(str(local_shard_path))
@@ -122,6 +124,16 @@ def stage_lance_shard_attempt(
             f"local shard {local_shard_path.name} has {rows} rows; "
             f"spec expects {spec.render.samples_per_shard} per shard"
         )
+    # One shard = one fragment = one data file, and ``LanceFragment.create``
+    # has no ``max_bytes_per_file`` — enforce the S3 multipart bound here,
+    # loudly, instead of failing opaquely mid-upload (#1775).
+    shard_bytes = sum(p.stat().st_size for p in local_shard_path.rglob("*") if p.is_file())
+    if shard_bytes > LANCE_MAX_BYTES_PER_FILE:
+        raise ValueError(
+            f"local shard {local_shard_path.name} is {shard_bytes} bytes; a single "
+            f"fragment data file must stay under {LANCE_MAX_BYTES_PER_FILE} bytes "
+            f"(S3 multipart-part ceiling) — reduce render.samples_per_shard"
+        )
     split = split_for_shard(spec, shard.shard_id)
     split_target, storage_options = r2_io.lance_target(spec.r2.split_lance_uri(split))
     fragment = lance_fragment(
@@ -129,7 +141,9 @@ def stage_lance_shard_attempt(
         dataset.schema,
         dataset.to_batches(),
         # Unique among committed fragments: one winner per shard, one slot per
-        # split index. Duplicate attempts share the id but never both commit.
+        # split index. Duplicate attempts share the id but never both commit —
+        # the deliberate divergence from ``lance.fragment.write_fragments``
+        # (which assigns ids at commit) that makes retry collisions harmless.
         fragment_id=shard.shard_id - spec.split_shard_ranges[split][0],
         storage_options=storage_options,
     )

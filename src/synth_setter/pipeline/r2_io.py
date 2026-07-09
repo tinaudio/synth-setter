@@ -364,7 +364,8 @@ def list_entries(r2_uri: str, *, recursive: bool = False) -> list[RemoteEntry]: 
     :raises subprocess.CalledProcessError: rclone failed for a reason other
         than a missing directory (auth, network, config).
     """
-    args = ["rclone", "lsjson", "--files-only", *_PROBE_RELIABILITY_FLAGS]  # noqa: S607 — rclone resolved by image's PATH
+    # S607: rclone resolved by the image's PATH.
+    args = ["rclone", "lsjson", "--files-only", *_PROBE_RELIABILITY_FLAGS]  # noqa: S607
     if recursive:
         args.append("-R")
     args.append(_to_rclone_path(r2_uri))

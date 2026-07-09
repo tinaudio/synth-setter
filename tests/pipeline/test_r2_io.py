@@ -902,6 +902,33 @@ class TestListEntries:
 
         assert [entry.path for entry in entries] == ["top.valid"]
 
+    def test_listing_failure_other_than_missing_directory_propagates(self) -> None:
+        """A genuine rclone failure raises rather than reading as "no attempts staged"."""
+        completed = MagicMock(spec=subprocess.CompletedProcess)
+        completed.stdout = ""
+        completed.stderr = "Failed to lsjson: AccessDenied"
+        completed.returncode = 1
+        with patch.object(r2_io.subprocess, "run", return_value=completed):
+            with pytest.raises(subprocess.CalledProcessError):
+                r2_io.list_entries("r2://bucket/staging/", recursive=True)
+
+    def test_invokes_rclone_lsjson_with_reliability_flags(self) -> None:
+        """Argv pin: the listing probe carries the shared retry/contimeout flags."""
+        completed = MagicMock(spec=subprocess.CompletedProcess)
+        completed.stdout = "[]"
+        completed.returncode = 0
+        with patch.object(r2_io.subprocess, "run", return_value=completed) as mock_run:
+            r2_io.list_entries("r2://bucket/staging/", recursive=True)
+        assert mock_run.call_args[0][0] == [
+            "rclone",
+            "lsjson",
+            "--files-only",
+            "--retries=3",
+            "--contimeout=30s",
+            "-R",
+            "r2:bucket/staging/",
+        ]
+
 
 class TestLanceTarget:
     """Tests for lance_target — r2:// URI to Lance (uri, storage_options) resolution."""
