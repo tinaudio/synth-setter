@@ -204,13 +204,21 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     for shard in spec.shards:
         assert shard.filename.endswith(shard_suffix)
         if output_format == "lance":
-            # A Lance shard stages a complete attempt: sidecar + stats + .valid
-            # under the shard's staging dir, fragment data under its split (#1776).
+            # A Lance shard stages a complete attempt: ONE shared {worker}-{attempt}
+            # base carrying sidecar + stats + .valid (+ .rendering), fragment data
+            # under its split (#1776). Per-suffix globs alone could pass on a
+            # mismatched set drawn from different attempt names.
             staging = run_root / "metadata" / "workers" / "shards" / f"shard-{shard.shard_id:06d}"
-            for suffix in (".fragment.json", ".shard-stats.npz", ".valid", ".rendering"):
-                assert list(staging.glob(f"*{suffix}")), (
-                    f"staged attempt missing {suffix} for {shard.filename}"
-                )
+            staged_names = [p.name for p in staging.iterdir()]
+            bases_by_suffix = {
+                suffix: {n.removesuffix(suffix) for n in staged_names if n.endswith(suffix)}
+                for suffix in (".fragment.json", ".shard-stats.npz", ".valid", ".rendering")
+            }
+            shared_bases = set.intersection(*bases_by_suffix.values())
+            assert len(shared_bases) == 1, (
+                f"expected one complete staged attempt for {shard.filename}, "
+                f"got files: {sorted(staged_names)}"
+            )
             split_data = run_root / f"{split_of[shard.shard_id]}.lance" / "data"
             assert list(split_data.glob("*.lance")), (
                 f"no fragment data under {split_data} for {shard.filename}"
