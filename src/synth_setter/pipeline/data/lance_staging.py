@@ -124,9 +124,8 @@ def stage_lance_shard_attempt(
             f"local shard {local_shard_path.name} has {rows} rows; "
             f"spec expects {spec.render.samples_per_shard} per shard"
         )
-    # One shard = one fragment = one data file, and ``LanceFragment.create``
-    # has no ``max_bytes_per_file`` — enforce the S3 multipart bound here,
-    # loudly, instead of failing opaquely mid-upload (#1775).
+    # ``LanceFragment.create`` has no ``max_bytes_per_file`` — enforce the S3
+    # multipart bound loudly here, not opaquely mid-upload (#1775).
     shard_bytes = sum(p.stat().st_size for p in local_shard_path.rglob("*") if p.is_file())
     if shard_bytes > LANCE_MAX_BYTES_PER_FILE:
         raise ValueError(
@@ -140,10 +139,8 @@ def stage_lance_shard_attempt(
         split_target,
         dataset.schema,
         dataset.to_batches(),
-        # Unique among committed fragments: one winner per shard, one slot per
-        # split index. Duplicate attempts share the id but never both commit —
-        # the deliberate divergence from ``lance.fragment.write_fragments``
-        # (which assigns ids at commit) that makes retry collisions harmless.
+        # Stable per (shard, split index) — deliberately not ``write_fragments``'s
+        # commit-time ids: duplicate attempts collide harmlessly, one winner commits.
         fragment_id=shard.shard_id - spec.split_shard_ranges[split][0],
         storage_options=storage_options,
     )

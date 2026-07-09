@@ -946,14 +946,19 @@ class TestLanceTarget:
         assert target == str(fake_r2_remote / "bucket" / "run" / "train.lance")
         assert options is None
 
+    @pytest.mark.parametrize("remote_type", [None, "s3"])
     def test_s3_remote_resolves_to_s3_uri_with_storage_options(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, remote_type: str | None
     ) -> None:
-        """The default (S3) mode pairs the s3:// URI with the R2 credentials.
+        """Unset and explicit-``s3`` remote types both pair the s3:// URI with credentials.
 
         :param monkeypatch: Pins the R2 credential env vars the options read.
+        :param remote_type: ``RCLONE_CONFIG_R2_TYPE`` value; ``None`` leaves it unset.
         """
-        monkeypatch.delenv("RCLONE_CONFIG_R2_TYPE", raising=False)
+        if remote_type is None:
+            monkeypatch.delenv("RCLONE_CONFIG_R2_TYPE", raising=False)
+        else:
+            monkeypatch.setenv("RCLONE_CONFIG_R2_TYPE", remote_type)
         monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", "ak")
         monkeypatch.setenv("RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", "sk")
         monkeypatch.setenv("RCLONE_CONFIG_R2_ENDPOINT", "https://r2.example")

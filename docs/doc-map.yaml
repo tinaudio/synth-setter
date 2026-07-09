@@ -119,7 +119,7 @@ docs:
       - pattern: "src/synth_setter/pipeline/data/lance_finalize.py"
         covers: "Finalize-side Lance fragment commit: staged-attempt discovery, winner selection, structural checks, atomic per-split Overwrite commit, Welford stats reduction, and the dataset.json audit record"
       - pattern: "src/synth_setter/pipeline/schemas/lance_attempt.py"
-        covers: "Strict Pydantic contracts for the Lance staging/audit trust boundary — LanceFragmentSidecar ({schema_version, fragment_json}) and the dataset.json LanceDatasetCard / SelectedLanceAttempt audit models."
+        covers: "Strict Pydantic contracts for the Lance staging/audit trust boundary: the per-attempt fragment sidecar and the dataset.json audit card models"
       - pattern: "src/synth_setter/pipeline/data/add_embeddings.py"
         covers: "`synth-setter-add-embeddings` CLI — appends a `clap` (LAION-CLAP) `FixedSizeList<float32,512>` vector column (with an optional IVF_PQ index for `nearest=` search) and an `m2l` (music2latent) fixed-shape-tensor column to a finalized Lance dataset via `lance.batch_udf`, with injected/lazy-loaded encoders and row-count + dim + finiteness validation (post-finalize augmenter)."
       - pattern: "src/synth_setter/pipeline/data/add_mp3_audio.py"

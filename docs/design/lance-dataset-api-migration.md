@@ -104,15 +104,17 @@ after an rclone download. A review against the pinned library
 
 ### R2 layout
 
-- `shard-XXXXXX.lance` and `<split>.lance` are now directory prefixes, not
-  objects, keyed off `OutputFormat.is_directory`. The worker uploads each shard
-  tree with `r2_io.upload_dir` and skip-probes the committed dataset via
-  `r2_io.r2_directory_exists("<shard>/_versions")` (a crashed render leaves
-  orphan `data/` files with no manifest, so probing any object would strand an
-  unreadable shard); training download uses `download_dir_no_overwrite` (already
-  directory-recursive). `dataset.complete` marker and `stats.npz` are unchanged.
-  `OutputFormat.from_extension` still matches on the `.lance` name suffix of the
-  directory.
+- `<split>.lance` datasets are directory prefixes, not objects. Under the
+  fragment pipeline the worker no longer uploads per-shard dataset trees:
+  each shard stages one uncommitted fragment straight into its split's
+  `data/` directory plus a sidecar/stats/marker set under
+  `metadata/workers/shards/shard-XXXXXX/`, and the resume skip-probe asks
+  `shard_has_complete_attempt` against that staging prefix (a crashed render
+  leaves orphan `data/` files and an orphaned `.rendering` marker, never a
+  skippable attempt). Training download uses `download_dir_no_overwrite`
+  (already directory-recursive). `dataset.complete` marker and `stats.npz`
+  are unchanged. `OutputFormat.from_extension` still matches on the `.lance`
+  name suffix.
 
 ## Affected files
 

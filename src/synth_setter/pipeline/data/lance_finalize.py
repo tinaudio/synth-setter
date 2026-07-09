@@ -142,9 +142,9 @@ def select_winner(attempts: list[StagedLanceAttempt]) -> StagedLanceAttempt:
     ``LastModified`` is storage-server-assigned, so the winner is stable — a
     straggler landing later has a strictly greater timestamp and can never
     displace an already-selected winner (what makes finalize re-run safe).
-    Timestamps may carry second granularity on S3-compatible stores; ties are
-    deterministic (lexicographic key) even though the key order carries no
-    completion-order meaning.
+    Effective precision floors at microseconds (listing timestamps parse via
+    ``datetime.fromisoformat``) and S3-compatible stores may serve coarser;
+    ties resolve deterministically by key, which carries no completion order.
 
     :param attempts: Non-empty complete attempts for one shard.
     :returns: The winning attempt.
@@ -205,10 +205,11 @@ def load_checked_winner(spec: DatasetSpec, attempt: StagedLanceAttempt) -> Check
         )
     split_uri = spec.r2.split_lance_uri(split_for_shard(spec, attempt.shard_id))
     for data_file in fragment.files:
-        if r2_io.object_size(f"{split_uri}/data/{data_file.path}") is None:
+        # A zero-size object is a truncated upload, not data — treat as absent.
+        if not r2_io.object_size(f"{split_uri}/data/{data_file.path}"):
             raise ValueError(
                 f"shard {attempt.shard_id} attempt {attempt.name}: fragment data file "
-                f"{data_file.path} not found under {split_uri}/data/"
+                f"{data_file.path} missing or empty under {split_uri}/data/"
             )
     return CheckedLanceWinner(attempt=attempt, fragment=fragment, welford=welford)
 

@@ -183,8 +183,8 @@ def finalize_lance(spec: DatasetSpec, work_dir: Path) -> None:  # noqa: DOC502
 
     :param spec: Validated dataset spec (``output_format == "lance"``).
     :param work_dir: Scratch directory for the staged ``stats.npz`` / ``dataset.json``.
-    :raises ValueError: The train split is empty; stats cannot be reduced
-        without at least one train shard.
+    :raises ValueError: The train split is empty, a spec shard has no
+        staged-valid attempt, or a winner fails a structural check.
     """
     from synth_setter.pipeline.data.lance_finalize import finalize_lance_fragments
 

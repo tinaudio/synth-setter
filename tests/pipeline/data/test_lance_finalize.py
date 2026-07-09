@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 
 import lance
@@ -413,13 +414,26 @@ def test_finalize_rejects_winner_whose_fragment_data_file_is_absent(
     for fragment_file in val_data.iterdir():
         fragment_file.unlink()
 
-    with pytest.raises(ValueError, match="not found under"):
+    with pytest.raises(ValueError, match="missing or empty under"):
+        finalize_from_spec(spec, tmp_path / "work")
+
+
+def test_finalize_rejects_winner_whose_fragment_data_file_is_truncated_to_zero(
+    fake_r2_remote: Path, tmp_path: Path
+) -> None:
+    from synth_setter.cli.finalize_dataset import finalize_from_spec
+
+    spec = tiny_lance_spec()
+    stage_all_shards(spec, tmp_path)
+    val_data = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / "val.lance" / "data"
+    for fragment_file in val_data.iterdir():
+        fragment_file.write_bytes(b"")
+
+    with pytest.raises(ValueError, match="missing or empty under"):
         finalize_from_spec(spec, tmp_path / "work")
 
 
 def test_select_winner_prefers_earliest_valid_mtime() -> None:
-    from datetime import UTC, datetime
-
     from synth_setter.pipeline.data.lance_finalize import StagedLanceAttempt, select_winner
 
     early = StagedLanceAttempt(
@@ -439,8 +453,6 @@ def test_select_winner_prefers_earliest_valid_mtime() -> None:
 
 
 def test_select_winner_breaks_mtime_ties_by_lexicographic_key() -> None:
-    from datetime import UTC, datetime
-
     from synth_setter.pipeline.data.lance_finalize import StagedLanceAttempt, select_winner
 
     tied = datetime(2026, 1, 1, tzinfo=UTC)

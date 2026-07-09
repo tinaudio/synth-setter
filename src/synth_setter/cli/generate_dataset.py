@@ -653,7 +653,8 @@ def _render_one_owned_shard(
         existing_size = r2_io.object_size(spec.r2.shard_uri(shard)) or 0
         already_present = existing_size > 0
     if already_present:
-        logger.info(f"skipping shard {shard.shard_id} — already in R2: {shard.filename}")
+        state = "already staged" if spec.output_format is OutputFormat.LANCE else "already in R2"
+        logger.info(f"skipping shard {shard.shard_id} — {state}: {shard.filename}")
         _log_shard_metrics(loggers, shard_id, byte_size=existing_size, render_seconds=0.0)
         return False, True
     t0 = time.monotonic()

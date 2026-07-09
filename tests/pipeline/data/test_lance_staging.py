@@ -140,6 +140,12 @@ def test_split_for_shard_follows_spec_split_ranges() -> None:
     assert [split_for_shard(spec, i) for i in range(4)] == ["train", "train", "val", "test"]
 
 
+def test_split_for_shard_out_of_range_raises() -> None:
+    spec = tiny_lance_spec()
+    with pytest.raises(ValueError, match="shard_id 4 outside spec ranges"):
+        split_for_shard(spec, 4)
+
+
 def test_stage_attempt_writes_fragment_data_into_assigned_split_dataset_dir(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
