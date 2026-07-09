@@ -114,6 +114,10 @@ def staged_complete_attempts(spec: DatasetSpec) -> dict[int, list[StagedLanceAtt
         if not filename:
             logger.warning("skipping stray top-level staging object: {}", entry.path)
             continue
+        # Nested dirs under a shard (e.g. a future quarantine/) never hold
+        # staged attempts — only a shard dir's direct children count.
+        if "/" in filename:
+            continue
         by_shard_dir.setdefault(shard_dir, {})[filename] = entry
     attempts: dict[int, list[StagedLanceAttempt]] = {}
     for shard_dir, files in by_shard_dir.items():

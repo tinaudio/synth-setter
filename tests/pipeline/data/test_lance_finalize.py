@@ -515,10 +515,16 @@ def test_staged_discovery_skips_non_shard_entries_in_staging_root(
     stray_dir.mkdir()
     (stray_dir / "pod-x-dead.h5").write_bytes(b"x")
     (staging_root / "stray-top-level.txt").write_bytes(b"x")
+    # A full quarantined triple nested under a shard dir is not a staged attempt.
+    shard_quarantine = staging_dir(fake_r2_remote, spec, 0) / "quarantine"
+    shard_quarantine.mkdir()
+    for suffix in (".fragment.json", ".shard-stats.npz", ".valid"):
+        (shard_quarantine / f"pod-q-dead{suffix}").write_bytes(b"x")
 
     attempts = staged_complete_attempts(spec)
 
     assert sorted(attempts) == [0, 1, 2, 3]
+    assert [attempt.name for attempt in attempts[0]] == ["pod-a-u0000"]
 
 
 def test_finalize_with_missing_shard_reports_it_and_writes_no_marker(
