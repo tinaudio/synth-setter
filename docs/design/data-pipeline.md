@@ -216,7 +216,7 @@ What if reconciliation itself has a bug — e.g., it validates a corrupt shard a
 
 ## 5. Stage Definitions
 
-> **Implementation status — future state.** The two-stage `generate` → `finalize` model, the `metadata/workers/` staging prefix, the shard-lifecycle markers (`.rendering` / `.valid` / `.invalid` / `.promoted`), and the canonical-promotion step into `data/{dataset_config_id}/{dataset_wandb_run_id}/shards/` (see [storage-provenance-spec.md §3a](storage-provenance-spec.md#3a-data-generation) for the authoritative path) are all **planned design**, not current behavior. The MVP worker (`src/synth_setter/cli/generate_dataset.py`) writes shards directly to `data/<task_name>/<run_id>/` and there is no finalize stage. Tracked in [#406](https://github.com/tinaudio/synth-setter/issues/406) (CLAUDE.md / design-doc reconciliation) and [#72](https://github.com/tinaudio/synth-setter/issues/72) (Phase 5 Pipeline CLI). Treat the rest of this section, §6 R2 File Structure, and §7 Design Decisions as the target architecture.
+> **Implementation status.** The **Lance path implements this section** (#1776): workers stage per-attempt fragment sidecars, Welford stats, and `.rendering`/`.valid` markers under `metadata/workers/shards/shard-{id}/` (`pipeline/data/lance_staging.py`), and finalize selects winners and commits their fragments into the split manifests (`pipeline/data/lance_finalize.py`). Not yet implemented for Lance: `.invalid`/quarantine and `.promoted` markers, and worker reports. **HDF5/WDS remain the MVP direct-write path** — shards land at `data/<task_name>/<run_id>/` with no staging prefix; their staging/promotion migration is tracked in [#406](https://github.com/tinaudio/synth-setter/issues/406) and [#72](https://github.com/tinaudio/synth-setter/issues/72) (Phase 5 Pipeline CLI).
 
 The pipeline has two stages. Each is an independent command with well-defined inputs and outputs.
 
@@ -290,7 +290,7 @@ Each worker container runs with `MODE=generate-shards` — the entrypoint mode I
 
 ### R2 File Structure
 
-> **Future state — current workers write directly to `data/<task_name>/<run_id>/`; the `metadata/workers/` staging prefix and the `finalize`-driven promotion into `data/{dataset_config_id}/{dataset_wandb_run_id}/shards/` (see [storage-provenance-spec.md §3a](storage-provenance-spec.md#3a-data-generation) for the authoritative path) do not yet exist in code. See [#406](https://github.com/tinaudio/synth-setter/issues/406).**
+> **Implementation status — Lance workers stage attempts under `metadata/workers/shards/` and write fragment data under the split dataset `data/` directories (#1776). HDF5/WDS workers still write directly to `data/<task_name>/<run_id>/`; their `metadata/workers/` staging migration and the `finalize`-driven promotion into `data/{dataset_config_id}/{dataset_wandb_run_id}/shards/` (see [storage-provenance-spec.md §3a](storage-provenance-spec.md#3a-data-generation) for the authoritative path) are tracked in [#406](https://github.com/tinaudio/synth-setter/issues/406).**
 
 The canonical R2 bucket layout — root path, top-level prefixes, and per-workflow contents — is defined in [storage-provenance-spec.md §2](storage-provenance-spec.md#2-r2-bucket-layout) and [§3a](storage-provenance-spec.md#3a-data-generation). The data pipeline writes under `data/{dataset_config_id}/{dataset_wandb_run_id}/`: workers stage per-attempt artifacts under `metadata/workers/`. For HDF5 and WebDataset, `finalize` is the only writer to final training outputs. For Lance, workers may write uncommitted fragment data under split dataset `data/` directories, but only `finalize` writes Lance manifests, transactions, `stats.npz`, and `metadata/dataset.{json,complete}`. Datasets are immutable once `metadata/dataset.complete` exists; new versions require a new `dataset_wandb_run_id`.
 
@@ -397,7 +397,7 @@ $ rclone ls r2:bucket/{run_id}/metadata/workers/shards/shard-000042/
 
 ### 7.1 Storage as the Source of Truth
 
-> **Future state — current workers write shards directly to `data/<task_name>/<run_id>/` with no staging prefix and no finalize promotion step. See [#406](https://github.com/tinaudio/synth-setter/issues/406).**
+> **Implementation status — implemented for Lance (#1776): staging prefix, `.rendering`/`.valid` markers, and finalize's fragment commit. HDF5/WDS workers still write shards directly to `data/<task_name>/<run_id>/` with no staging prefix and no finalize promotion step — see [#406](https://github.com/tinaudio/synth-setter/issues/406).**
 
 The pipeline uses R2 as both the data layer and the coordination layer. Integrity is guaranteed by validation markers, format-specific structural checks, and content hashes where the format supports a stable object hash. Workers write shard-attempt metadata and markers to a **staging prefix** (`metadata/workers/shards/`). For HDF5, finalize validates staged shards and **promotes** them to the **canonical prefix** (`data/shards/`). For Lance, workers write uncommitted fragment data directly under the split dataset directories and finalize commits the selected fragment metadata into the dataset manifests. In both cases, finalized data is stable once `metadata/dataset.complete` is written.
 
@@ -626,7 +626,7 @@ Design target ([#103](https://github.com/tinaudio/synth-setter/issues/103)) adds
 
 ### 7.6 Finalize Workflow
 
-> **Future state — there is no finalize command in code today. The MVP worker writes shards directly to the canonical run prefix and does not promote, write `metadata/dataset.complete`, or compute `stats.npz` from R2 contents. Tracked in [#72](https://github.com/tinaudio/synth-setter/issues/72) (Phase 5 Pipeline CLI) and [#406](https://github.com/tinaudio/synth-setter/issues/406).**
+> **Implementation status — the Lance branch of `synth-setter-finalize-dataset` implements this workflow (#1776): completeness check over staged attempts, winner selection, structural checks, per-split fragment commit, stats reduction, the `dataset.json` audit record, W&B registration, and the completion marker. Still open for Lance: `.promoted` markers and the full §14.2 `DatasetCard` schema (`dataset.json` carries the selected attempts only). HDF5/WDS finalize reshards/streams rows from the canonical run prefix without staging or promotion — tracked in [#72](https://github.com/tinaudio/synth-setter/issues/72) and [#406](https://github.com/tinaudio/synth-setter/issues/406).**
 
 01. **Check for `metadata/dataset.complete`** — if present and all canonical outputs exist, print "already finalized" and exit 0
 02. **Read spec** from R2
