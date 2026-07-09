@@ -109,8 +109,9 @@ def _run_make(
     :param env: full environment for the subprocess; inherits os.environ when None.
     :returns: the completed process, stdout/stderr captured as text.
     """
+    git_ref_override = "CURRENT_LOCAL_GIT_REF=0000000000000000000000000000000000000000"
     return subprocess.run(  # noqa: S603 — fixed argv, no shell
-        ["make", target, *makevars],  # noqa: S607 — make on PATH
+        ["make", target, git_ref_override, *makevars],  # noqa: S607 — make on PATH
         cwd=cwd,
         env=env,
         check=False,
