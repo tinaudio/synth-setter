@@ -206,6 +206,31 @@ def update(existing, new):
     return count, mean, M2
 
 
+def merge_welford(
+    existing: tuple[int, Any, Any], other: tuple[int, Any, Any]
+) -> tuple[int, Any, Any]:
+    """Merge two Welford states (Chan et al. parallel combine).
+
+    Lets finalize reduce per-attempt ``(count, mean, m2)`` shard sidecars into
+    one dataset-level state without touching any rows. The zero state
+    ``(0, 0, 0)`` is the identity, so it seeds a fold.
+
+    :param existing: Welford state ``(count, mean, M2)`` accumulated so far.
+    :param other: Welford state to fold in.
+    :returns: Combined Welford state over both inputs' rows.
+    :rtype: tuple[int, Any, Any]
+    """
+    count_a, mean_a, m2_a = existing
+    count_b, mean_b, m2_b = other
+    count = count_a + count_b
+    if count == 0:
+        return existing
+    delta = mean_b - mean_a
+    mean = mean_a + delta * (count_b / count)
+    m2 = m2_a + m2_b + delta * delta * (count_a * count_b / count)
+    return count, mean, m2
+
+
 def finalize(existing, mask_degenerate: bool = False):
     count, mean, M2 = existing
     variance = M2 / count if count > 1 else 0
@@ -339,7 +364,7 @@ def stream_stats_wds(
     return finalize(existing, mask_degenerate=mask_degenerate)
 
 
-def _fold_lance_shard_into_welford(
+def fold_lance_shard_into_welford(
     existing: tuple[int, Any, Any],
     shard_uri: str | Path,
     *,
@@ -388,7 +413,7 @@ def stream_stats_lance(
     folded_any = False
     for shard_uri in shard_uris:
         logger.info(f"Processing {Path(str(shard_uri)).name}...")
-        existing = _fold_lance_shard_into_welford(
+        existing = fold_lance_shard_into_welford(
             existing, shard_uri, storage_options=storage_options
         )
         folded_any = True

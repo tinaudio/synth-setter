@@ -749,12 +749,10 @@ class TestShardUri:
 class TestObjectSize:
     """Tests for object_size — existence + size probe via `rclone lsf --format=s`.
 
-    Present and zero-size cases are state-based against the fake-local remote.
-    Absent and probe-failure cases stay mock-based: on R2 ``lsf`` returns empty
-    stdout for a missing key (the bucket exists, the key does not); on the
-    local backend the parent directory may not exist, so ``lsf`` exits non-zero
-    instead — a behavior divergence the fixture deliberately leaves outside
-    its coverage (see issue #1124's "Out of scope" note).
+    Present, zero-size, and missing-directory cases are state-based against the
+    fake-local remote. The R2-shaped absent case (empty stdout for a missing
+    key under an existing bucket) stays mock-based; both backends normalize to
+    ``None`` since #1776 made the local backend a first-class compute mode.
     """
 
     @staticmethod
@@ -795,10 +793,23 @@ class TestObjectSize:
         with patch.object(r2_io.subprocess, "run", return_value=self._mock_run("")):
             assert r2_io.object_size("r2://bucket/key.h5") is None
 
+    def test_absent_parent_directory_returns_none(self, fake_r2_remote: Path) -> None:
+        """A missing parent directory means the object is absent; return None.
+
+        The local backend errors "directory not found" where R2 lists empty —
+        both normalize to ``None`` so the local compute mode probes identically.
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        """
+        assert r2_io.object_size("r2://bucket/never/created/key.h5") is None
+
     def test_probe_failure_propagates(self) -> None:
-        """Non-zero rclone exit raises CalledProcessError — fail-fast on env issues."""
-        err = subprocess.CalledProcessError(returncode=1, cmd=["rclone"])
-        with patch.object(r2_io.subprocess, "run", side_effect=err):
+        """Non-zero rclone exit (not a missing dir) raises — fail-fast on env issues."""
+        completed = MagicMock(spec=subprocess.CompletedProcess)
+        completed.stdout = ""
+        completed.stderr = "Failed to lsf: AccessDenied"
+        completed.returncode = 1
+        with patch.object(r2_io.subprocess, "run", return_value=completed):
             with pytest.raises(subprocess.CalledProcessError):
                 r2_io.object_size("r2://bucket/key.h5")
 
@@ -828,7 +839,7 @@ class TestObjectSize:
         args = mock_run.call_args[0][0]
         assert args == ["rclone", "lsf", "--format=s", "r2:bucket/path/key.h5"]
         kwargs = mock_run.call_args[1]
-        assert kwargs.get("check") is True
+        assert kwargs.get("check") is False
         assert kwargs.get("capture_output") is True
         assert kwargs.get("text") is True
 
@@ -836,6 +847,87 @@ class TestObjectSize:
         """Local paths are rejected via _to_rclone_path."""
         with pytest.raises(ValueError, match="not an r2:// URI"):
             r2_io.object_size("local/key.h5")
+
+
+class TestListEntries:
+    """Tests for list_entries — mtime-carrying directory listing via `rclone lsjson`."""
+
+    def test_missing_directory_lists_empty(self, fake_r2_remote: Path) -> None:
+        """An absent staging directory is a normal reconciliation answer, not an error.
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        """
+        assert r2_io.list_entries("r2://bucket/never/created/") == []
+
+    def test_recursive_listing_returns_sorted_relative_paths_with_mtimes(
+        self, fake_r2_remote: Path
+    ) -> None:
+        """Nested files list with slash-joined relative paths, sorted, mtimes parsed.
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        """
+        root = fake_r2_remote / "bucket" / "staging"
+        (root / "shard-000001").mkdir(parents=True)
+        (root / "shard-000000").mkdir(parents=True)
+        (root / "shard-000001" / "b.valid").write_bytes(b"")
+        (root / "shard-000000" / "a.valid").write_bytes(b"xy")
+
+        entries = r2_io.list_entries("r2://bucket/staging/", recursive=True)
+
+        assert [entry.path for entry in entries] == [
+            "shard-000000/a.valid",
+            "shard-000001/b.valid",
+        ]
+        assert entries[0].size == 2
+        assert entries[0].mtime.tzinfo is not None
+
+    def test_non_recursive_listing_excludes_nested_files(self, fake_r2_remote: Path) -> None:
+        """Without ``recursive`` only the top level lists.
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        """
+        root = fake_r2_remote / "bucket" / "staging"
+        (root / "nested").mkdir(parents=True)
+        (root / "top.valid").write_bytes(b"")
+        (root / "nested" / "deep.valid").write_bytes(b"")
+
+        entries = r2_io.list_entries("r2://bucket/staging/")
+
+        assert [entry.path for entry in entries] == ["top.valid"]
+
+
+class TestLanceTarget:
+    """Tests for lance_target — r2:// URI to Lance (uri, storage_options) resolution."""
+
+    def test_local_remote_resolves_to_cwd_relative_path_without_options(
+        self, fake_r2_remote: Path
+    ) -> None:
+        """The local compute mode reads the same bytes rclone writes.
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir
+            (sets ``RCLONE_CONFIG_R2_TYPE=local`` and chdirs there).
+        """
+        target, options = r2_io.lance_target("r2://bucket/run/train.lance")
+
+        assert target == str(fake_r2_remote / "bucket" / "run" / "train.lance")
+        assert options is None
+
+    def test_s3_remote_resolves_to_s3_uri_with_storage_options(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The default (S3) mode pairs the s3:// URI with the R2 credentials.
+
+        :param monkeypatch: Pins the R2 credential env vars the options read.
+        """
+        monkeypatch.delenv("RCLONE_CONFIG_R2_TYPE", raising=False)
+        monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", "ak")
+        monkeypatch.setenv("RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", "sk")
+        monkeypatch.setenv("RCLONE_CONFIG_R2_ENDPOINT", "https://r2.example")
+
+        target, options = r2_io.lance_target("r2://bucket/run/train.lance")
+
+        assert target == "s3://bucket/run/train.lance"
+        assert options is not None and options["endpoint"] == "https://r2.example"
 
 
 class TestPurgePrefix:

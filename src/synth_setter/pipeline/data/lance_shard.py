@@ -120,20 +120,21 @@ def write_lance_dataset(
 def lance_fragment(
     uri: Path | str,
     schema: pa.Schema,
-    batch: pa.RecordBatch,
+    batch: pa.RecordBatch | Iterable[pa.RecordBatch],
     fragment_id: int,
     *,
     storage_options: dict[str, str] | None = None,
 ) -> lance.fragment.FragmentMetadata:
-    """Write one record batch as a Lance fragment under ``uri`` (push source).
+    """Write record batches as one Lance fragment under ``uri`` (push source).
 
     Writes the data file immediately and returns its metadata; collect the results
     for :func:`commit_lance_dataset`. Streams batches without buffering a shard.
 
     :param uri: Destination dataset directory (local path or ``s3://`` URI).
     :param schema: Arrow schema shared by every fragment.
-    :param batch: One record batch to persist as a fragment.
-    :param fragment_id: Zero-based fragment index, contiguous within the dataset.
+    :param batch: One record batch — or an iterable of them, streamed into a
+        single fragment — to persist.
+    :param fragment_id: Zero-based fragment index, unique within the committed dataset.
     :param storage_options: Object-store config for a cloud ``uri`` (see
         :func:`synth_setter.pipeline.r2_io.r2_storage_options`); ``None`` local.
     :returns: Fragment metadata for the commit.

@@ -315,15 +315,7 @@ def _shard_metadata_from_render(render_cfg: RenderConfig) -> ShardMetadata:
     :returns: Strict ``ShardMetadata`` with every render-derived field filled.
     :rtype: ShardMetadata
     """
-    return ShardMetadata(
-        velocity=render_cfg.velocity,
-        signal_duration_seconds=render_cfg.signal_duration_seconds,
-        sample_rate=render_cfg.sample_rate,
-        channels=render_cfg.channels,
-        min_loudness=render_cfg.min_loudness,
-        base_seed=render_cfg.base_seed,
-        attempts_per_sample=render_cfg.attempts_per_sample,
-    )
+    return render_cfg.shard_metadata()
 
 
 def make_hdf5_dataset(

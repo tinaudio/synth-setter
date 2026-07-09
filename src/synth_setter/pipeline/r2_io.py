@@ -9,12 +9,15 @@ when any of these functions runs; ``ensure_r2_env_loaded`` is the load + validat
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from dotenv import dotenv_values
@@ -23,6 +26,7 @@ from synth_setter.pipeline.constants import R2_URI_SCHEME, RCLONE_REMOTE
 
 __all__ = [
     "R2_URI_SCHEME",
+    "RemoteEntry",
     "download_dir_no_overwrite",
     "download_to_path",
     "downloaded_to_tempfile",
@@ -30,6 +34,8 @@ __all__ = [
     "from_s3_uri",
     "is_r2_reachable",
     "is_r2_uri",
+    "lance_target",
+    "list_entries",
     "object_size",
     "purge_prefix",
     "r2_directory_exists",
@@ -272,6 +278,86 @@ def r2_storage_options() -> dict[str, str]:
     }
 
 
+def lance_target(r2_uri: str) -> tuple[str, dict[str, str] | None]:
+    """Resolve an ``r2://`` URI to the ``(uri, storage_options)`` pair Lance opens.
+
+    Normally returns ``(s3://bucket/key, r2_storage_options())``. When the
+    ``r2:`` remote is env-configured as rclone's ``local`` backend (the local
+    compute mode dev/tests use — see ``fake_r2_remote``), Lance must read the
+    same bytes rclone writes, so the URI resolves to the cwd-relative
+    ``<bucket>/<key>`` path rclone's local backend uses, with no options.
+
+    :param r2_uri: Canonical ``r2://bucket/key`` URI string.
+    :returns: ``(uri_or_path, storage_options)`` for ``lance.dataset`` /
+        ``LanceFragment.create`` / ``LanceDataset.commit``.
+    """
+    if os.environ.get("RCLONE_CONFIG_R2_TYPE", "").strip().lower() == "local":
+        return str(Path.cwd() / r2_uri[len(R2_URI_SCHEME) :]), None
+    return to_s3_uri(r2_uri), r2_storage_options()
+
+
+@dataclass(frozen=True)
+class RemoteEntry:
+    """One object from a :func:`list_entries` listing.
+
+    .. attribute :: path
+
+        Object key relative to the listed directory (``/``-joined for nested
+        entries under a recursive listing).
+
+    .. attribute :: mtime
+
+        Storage-assigned last-modified timestamp (R2 ``LastModified``; local
+        backend: file mtime).
+
+    .. attribute :: size
+
+        Object size in bytes.
+    """
+
+    path: str
+    mtime: datetime
+    size: int
+
+
+def list_entries(r2_uri: str, *, recursive: bool = False) -> list[RemoteEntry]:
+    """List files under an ``r2://`` directory with storage-assigned mtimes.
+
+    Uses ``rclone lsjson --files-only`` so the mtime is the storage server's
+    ``LastModified`` — the single-authority timestamp winner selection trusts
+    (design doc §7.6). A missing directory lists as empty rather than raising:
+    absence of staged work is a normal reconciliation answer, not an error.
+
+    :param r2_uri: Directory ``r2://bucket/key/`` URI to list.
+    :param recursive: List nested entries (``-R``) instead of one level.
+    :returns: Entries sorted by ``path``; empty when the directory is absent.
+    :raises subprocess.CalledProcessError: rclone failed for a reason other
+        than a missing directory (auth, network, config).
+    """
+    args = ["rclone", "lsjson", "--files-only"]  # noqa: S607 — rclone resolved by image's PATH
+    if recursive:
+        args.append("-R")
+    args.append(_to_rclone_path(r2_uri))
+    result = subprocess.run(  # noqa: S603 — args from validated URI
+        args, check=False, capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        if "directory not found" in result.stderr:
+            return []
+        raise subprocess.CalledProcessError(
+            result.returncode, args, output=result.stdout, stderr=result.stderr
+        )
+    entries = [
+        RemoteEntry(
+            path=item["Path"],
+            mtime=datetime.fromisoformat(item["ModTime"]),
+            size=int(item["Size"]),
+        )
+        for item in json.loads(result.stdout)
+    ]
+    return sorted(entries, key=lambda entry: entry.path)
+
+
 def is_r2_uri(uri: str) -> bool:
     """Return True if `uri` is an `r2://bucket/key` URI."""
     return uri.startswith(R2_URI_SCHEME)
@@ -435,13 +521,15 @@ def object_size(r2_uri: str) -> int | None:
     """Return the size in bytes of the R2 object at ``r2_uri``, or ``None`` if it does not exist.
 
     Uses ``rclone lsf --format=s`` for a size-only single-line listing: integer stdout if the
-    object exists, empty stdout if it does not. A non-zero rclone exit (auth, network, etc.) raises
-    ``subprocess.CalledProcessError`` so callers fail fast on environmental issues rather than
-    silently masking them. ``--checksum`` does not apply to listings.
+    object exists, empty stdout if it does not. A missing parent directory also reads as absent —
+    S3 backends list it empty while the local backend (local compute mode) errors, so both
+    normalize to ``None``. ``--checksum`` does not apply to listings.
 
     A zero-size object exists and returns ``0``. Callers that want to treat zero-size as absent
     (e.g. defending against half-uploaded objects) test ``size and size > 0`` themselves.
 
+    :raises subprocess.CalledProcessError: rclone exited non-zero for a reason other than a
+        missing directory (auth, network, config) — callers fail fast on environmental issues.
     :raises RuntimeError: stdout is non-empty but not an integer; chained to the
         underlying ``ValueError`` so the probed URI survives the failure path.
     """
@@ -452,8 +540,16 @@ def object_size(r2_uri: str) -> int | None:
         _to_rclone_path(r2_uri),
     ]
     result = subprocess.run(  # noqa: S603 — args from validated URI
-        args, check=True, capture_output=True, text=True
+        args, check=False, capture_output=True, text=True
     )
+    if result.returncode != 0:
+        # S3 backends list a missing key as empty output; the local backend
+        # (local compute mode) errors instead — normalize both to "absent".
+        if "directory not found" in result.stderr:
+            return None
+        raise subprocess.CalledProcessError(
+            result.returncode, args, output=result.stdout, stderr=result.stderr
+        )
     out = result.stdout.strip()
     if not out:
         return None

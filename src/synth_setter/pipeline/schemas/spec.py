@@ -34,7 +34,10 @@ from synth_setter.pipeline.schemas.prefix import (
     make_r2_prefix,
 )
 from synth_setter.pipeline.schemas.r2_location import R2Location
-from synth_setter.pipeline.schemas.shard_metadata import DEFAULT_ATTEMPTS_PER_SAMPLE
+from synth_setter.pipeline.schemas.shard_metadata import (
+    DEFAULT_ATTEMPTS_PER_SAMPLE,
+    ShardMetadata,
+)
 
 if TYPE_CHECKING:
     from omegaconf import DictConfig
@@ -415,6 +418,25 @@ class RenderConfig(BaseModel):
                 'whole shard. Set plugin_reload_cadence="once" to opt in.'
             )
         return self
+
+    def shard_metadata(self) -> ShardMetadata:
+        """Project this config onto the per-shard sidecar metadata fields.
+
+        Single source of truth for the render-derived attrs the HDF5
+        ``audio.attrs`` sidecar, the wds ``metadata.json`` tar member, and the
+        Lance schema metadata expose — writers and finalize can never drift.
+
+        :returns: Strict ``ShardMetadata`` with every render-derived field filled.
+        """
+        return ShardMetadata(
+            velocity=self.velocity,
+            signal_duration_seconds=self.signal_duration_seconds,
+            sample_rate=self.sample_rate,
+            channels=self.channels,
+            min_loudness=self.min_loudness,
+            base_seed=self.base_seed,
+            attempts_per_sample=self.attempts_per_sample,
+        )
 
 
 # Names paired with ``train_val_test_sizes`` indices in error messages.

@@ -266,6 +266,24 @@ class R2Location(BaseModel):
         """
         return self._under_prefix(STATS_NPZ_FILENAME)
 
+    def workers_shards_root_uri(self) -> str:
+        """R2 URI of the per-shard staging root (``metadata/workers/shards/``).
+
+        Finalize lists this prefix recursively to reconcile every shard's
+        staged attempts in one pass (#1776).
+
+        :returns: ``r2://<bucket>/<prefix>metadata/workers/shards/`` URI string.
+        """
+        return self._under_prefix("metadata/workers/shards/")
+
+    def shard_staging_dir_uri(self, shard_id: int) -> str:
+        """R2 URI of one shard's staging directory under ``metadata/workers/shards/``.
+
+        :param shard_id: Logical shard id (rendered as ``shard-NNNNNN`` directory).
+        :returns: ``r2://<bucket>/<prefix>metadata/workers/shards/shard-NNNNNN/`` URI string.
+        """
+        return f"{self.workers_shards_root_uri()}shard-{shard_id:06d}/"
+
     def worker_staged_shard_uri(
         self,
         shard_id: int,
@@ -273,22 +291,20 @@ class R2Location(BaseModel):
         attempt_uuid: str,
         ext: str,
     ) -> str:
-        """R2 URI of a per-attempt staged shard under ``metadata/workers/shards/``.
+        """R2 URI of a per-attempt staged artifact under ``metadata/workers/shards/``.
 
-        Future state (#406): workers upload each shard attempt here before
-        finalize promotes one canonical copy to the run prefix root.
-        No current consumers; included so the staging code path can call
-        through this method when #406 lands.
+        Lance attempts (#1776) stage their sidecar set here — ``ext`` of
+        ``".fragment.json"`` / ``".shard-stats.npz"`` / ``".valid"`` /
+        ``".rendering"`` (see ``pipeline.constants``). HDF5/WDS staging (#406)
+        will reuse the same shape with payload extensions.
 
         :param shard_id: Logical shard id (rendered as ``shard-NNNNNN`` directory).
         :param worker_id: Worker identifier issued by the launcher.
         :param attempt_uuid: Per-attempt UUID distinguishing retries.
-        :param ext: File extension with leading dot (``".h5"`` or ``".tar"``).
-        :returns: ``r2://<bucket>/<prefix>metadata/workers/shards/shard-NNNNNN/<worker>-<attempt>.<ext>``.
+        :param ext: Filename suffix with leading dot (``".fragment.json"``, ``".h5"``, …).
+        :returns: ``r2://<bucket>/<prefix>metadata/workers/shards/shard-NNNNNN/<worker>-<attempt><ext>``.
         """
-        return self._under_prefix(
-            f"metadata/workers/shards/shard-{shard_id:06d}/{worker_id}-{attempt_uuid}{ext}"
-        )
+        return f"{self.shard_staging_dir_uri(shard_id)}{worker_id}-{attempt_uuid}{ext}"
 
     def worker_attempt_report_uri(self, worker_id: str, attempt_uuid: str) -> str:
         """R2 URI of a per-attempt worker report under ``metadata/workers/attempts/``.
