@@ -953,6 +953,14 @@ class TestLanceTarget:
         assert target == str(fake_r2_remote / "bucket" / "run" / "train.lance")
         assert options is None
 
+    def test_non_r2_uri_rejected_in_local_mode_too(self, fake_r2_remote: Path) -> None:
+        """A bare path fails fast instead of resolving to a nonsense cwd-relative target.
+
+        :param fake_r2_remote: Local-typed rclone remote (local-backend mode).
+        """
+        with pytest.raises(ValueError, match="not an r2:// URI"):
+            r2_io.lance_target("bucket/run/train.lance")
+
     @pytest.mark.parametrize("remote_type", [None, "s3"])
     def test_s3_remote_resolves_to_s3_uri_with_storage_options(
         self, monkeypatch: pytest.MonkeyPatch, remote_type: str | None

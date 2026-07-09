@@ -290,7 +290,11 @@ def lance_target(r2_uri: str) -> tuple[str, dict[str, str] | None]:
     :param r2_uri: Canonical ``r2://bucket/key`` URI string.
     :returns: ``(uri_or_path, storage_options)`` for ``lance.dataset`` /
         ``LanceFragment.create`` / ``LanceDataset.commit``.
+    :raises ValueError: ``r2_uri`` is not an ``r2://`` URI — fails fast on both
+        backends instead of resolving a nonsense cwd-relative local path.
     """
+    if not is_r2_uri(r2_uri):
+        raise ValueError(f"not an r2:// URI: {r2_uri!r}")
     if os.environ.get("RCLONE_CONFIG_R2_TYPE", "").strip().lower() == "local":
         return str(Path.cwd() / r2_uri[len(R2_URI_SCHEME) :]), None
     return to_s3_uri(r2_uri), r2_storage_options()
