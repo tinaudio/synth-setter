@@ -12,6 +12,7 @@ metadata into the split manifests — no row rewrite (design doc §7.2/§7.6).
 
 from __future__ import annotations
 
+import json
 import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -23,6 +24,7 @@ from synth_setter.pipeline.constants import (
     ATTEMPT_RENDERING_SUFFIX,
     ATTEMPT_VALID_SUFFIX,
     LANCE_FRAGMENT_SIDECAR_SUFFIX,
+    LANCE_SHARD_STATS_KEYS,
     LANCE_SHARD_STATS_SUFFIX,
 )
 from synth_setter.pipeline.schemas.lance_attempt import LanceFragmentSidecar
@@ -102,8 +104,8 @@ def stage_lance_shard_attempt(
     :param attempt_uuid: Per-attempt UUID for the staging filenames.
     :raises ValueError: The local shard's row count does not match the spec.
     """
-    import json
-
+    # Function-local so importing this module (e.g. from the hdf5/wds worker
+    # path) never pays the `lance` import cost.
     import lance
 
     from synth_setter.pipeline.data.lance_shard import lance_fragment
@@ -132,9 +134,10 @@ def stage_lance_shard_attempt(
     def _attempt_uri(suffix: str) -> str:
         return spec.r2.worker_staged_shard_uri(shard.shard_id, worker_id, attempt_uuid, suffix)
 
+    welford_arrays = dict(zip(LANCE_SHARD_STATS_KEYS, (np.int64(count), mean, m2), strict=True))
     with tempfile.TemporaryDirectory() as tmp:
         stats_path = Path(tmp) / "shard-stats.npz"
-        np.savez(stats_path, count=np.int64(count), mean=mean, m2=m2)
+        np.savez(stats_path, **welford_arrays)
         r2_io.upload(stats_path, _attempt_uri(LANCE_SHARD_STATS_SUFFIX))
         sidecar_path = Path(tmp) / "fragment.json"
         sidecar = LanceFragmentSidecar(

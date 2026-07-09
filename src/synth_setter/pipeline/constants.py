@@ -22,6 +22,10 @@ DATASET_CARD_FILENAME = "dataset.json"
 # staged-valid only when all of sidecar + stats + ``.valid`` exist (#1776).
 LANCE_FRAGMENT_SIDECAR_SUFFIX = ".fragment.json"
 LANCE_SHARD_STATS_SUFFIX = ".shard-stats.npz"
+
+# Welford state arrays a `.shard-stats.npz` sidecar must carry; finalize
+# reduces the winners' states into dataset-level stats.npz (#1776).
+LANCE_SHARD_STATS_KEYS = ("count", "mean", "m2")
 ATTEMPT_VALID_SUFFIX = ".valid"
 ATTEMPT_RENDERING_SUFFIX = ".rendering"
 

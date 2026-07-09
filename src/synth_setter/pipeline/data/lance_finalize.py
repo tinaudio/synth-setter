@@ -25,7 +25,9 @@ from pydantic import ValidationError
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.constants import (
     ATTEMPT_VALID_SUFFIX,
+    DATASET_CARD_FILENAME,
     LANCE_FRAGMENT_SIDECAR_SUFFIX,
+    LANCE_SHARD_STATS_KEYS,
     LANCE_SHARD_STATS_SUFFIX,
     STATS_NPZ_FILENAME,
 )
@@ -38,14 +40,11 @@ from synth_setter.pipeline.schemas.lance_attempt import (
     LanceFragmentSidecar,
     SelectedLanceAttempt,
 )
-from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 
 if TYPE_CHECKING:
     import pyarrow as pa
 
     from synth_setter.pipeline.schemas.spec import DatasetSpec
-
-_WELFORD_STATS_KEYS = ("count", "mean", "m2")
 
 
 @dataclass(frozen=True)
@@ -140,7 +139,7 @@ def load_checked_winner(spec: DatasetSpec, attempt: StagedLanceAttempt) -> Check
         f"{staging_dir}{attempt.name}{LANCE_SHARD_STATS_SUFFIX}"
     ) as stats_path:
         stats = np.load(stats_path)
-        missing_keys = [key for key in _WELFORD_STATS_KEYS if key not in stats]
+        missing_keys = [key for key in LANCE_SHARD_STATS_KEYS if key not in stats]
         if missing_keys:
             raise ValueError(
                 f"shard {attempt.shard_id} attempt {attempt.name}: shard-stats.npz "
@@ -178,9 +177,77 @@ def _split_schema(spec: DatasetSpec, first_shard_id: int) -> pa.Schema:
     from synth_setter.data.vst.shapes import dataset_field_shapes
 
     render = spec.render.model_copy(update={"base_seed": spec.shards[first_shard_id].seed})
-    return lance_schema(
-        dataset_field_shapes(render, spec.num_params), render.shard_metadata()
+    return lance_schema(dataset_field_shapes(render, spec.num_params), render.shard_metadata())
+
+
+def _select_checked_winners(spec: DatasetSpec) -> dict[int, CheckedLanceWinner]:
+    """Reconcile staging, pick one winner per shard, and structural-check each.
+
+    :param spec: Validated dataset spec.
+    :returns: Checked winner keyed by shard id, covering every spec shard.
+    :raises ValueError: Any spec shard has no staged-valid attempt, or a
+        winner fails a structural check.
+    """
+    attempts = staged_complete_attempts(spec)
+    missing = [shard.shard_id for shard in spec.shards if not attempts.get(shard.shard_id)]
+    if missing:
+        names = ", ".join(f"shard-{shard_id:06d}" for shard_id in missing)
+        raise ValueError(
+            f"cannot finalize: {len(missing)}/{spec.num_shards} shards have no "
+            f"staged-valid attempt: {names}"
+        )
+    return {
+        shard.shard_id: load_checked_winner(spec, select_winner(attempts[shard.shard_id]))
+        for shard in spec.shards
+    }
+
+
+def _reduce_and_upload_stats(
+    spec: DatasetSpec, winners: dict[int, CheckedLanceWinner], work_dir: Path
+) -> None:
+    """Reduce the train winners' Welford sidecars into ``stats.npz`` and upload it.
+
+    :param spec: Validated dataset spec.
+    :param winners: Checked winner per shard id.
+    :param work_dir: Scratch directory the ``stats.npz`` is staged in.
+    """
+    train_lo, train_hi = spec.split_shard_ranges["train"]
+    state: tuple[int, Any, Any] = (0, 0, 0)
+    for shard_id in range(train_lo, train_hi):
+        state = merge_welford(state, winners[shard_id].welford)
+    mean, std = finalize_welford(state, mask_degenerate=spec.mask_degenerate_bins)
+    stats_npz = work_dir / STATS_NPZ_FILENAME
+    np.savez(stats_npz, mean=mean, std=std)
+    r2_io.upload(stats_npz, spec.r2.stats_uri())
+    logger.info("uploaded stats to {}", spec.r2.stats_uri())
+
+
+def _write_dataset_card(
+    spec: DatasetSpec, winners: dict[int, CheckedLanceWinner], work_dir: Path
+) -> None:
+    """Record the selected attempts and their winning ``.valid`` keys in ``dataset.json``.
+
+    :param spec: Validated dataset spec.
+    :param winners: Checked winner per shard id.
+    :param work_dir: Scratch directory the card is staged in.
+    """
+    card = LanceDatasetCard(
+        schema_version=1,
+        run_id=spec.run_id,
+        finalized_at=datetime.now(UTC).isoformat(),
+        selected_attempts=tuple(
+            SelectedLanceAttempt(
+                shard_id=shard.shard_id,
+                attempt=winners[shard.shard_id].attempt.name,
+                valid_key=winners[shard.shard_id].attempt.valid_key,
+            )
+            for shard in spec.shards
+        ),
     )
+    card_path = work_dir / DATASET_CARD_FILENAME
+    card_path.write_text(card.model_dump_json(indent=2))
+    r2_io.upload(card_path, spec.r2.dataset_card_uri())
+    logger.info("uploaded dataset card to {}", spec.r2.dataset_card_uri())
 
 
 def finalize_lance_fragments(spec: DatasetSpec, work_dir: Path) -> None:
@@ -195,14 +262,6 @@ def finalize_lance_fragments(spec: DatasetSpec, work_dir: Path) -> None:
     :raises ValueError: Any spec shard has no staged-valid attempt, a winner
         fails a structural check, or the train split is empty.
     """
-    attempts = staged_complete_attempts(spec)
-    missing = [shard.shard_id for shard in spec.shards if not attempts.get(shard.shard_id)]
-    if missing:
-        names = ", ".join(f"shard-{shard_id:06d}" for shard_id in missing)
-        raise ValueError(
-            f"cannot finalize: {len(missing)}/{spec.num_shards} shards have no "
-            f"staged-valid attempt: {names}"
-        )
     train_lo, train_hi = spec.split_shard_ranges["train"]
     if train_lo >= train_hi:
         raise ValueError(
@@ -210,10 +269,7 @@ def finalize_lance_fragments(spec: DatasetSpec, work_dir: Path) -> None:
             f"{spec.split_shard_ranges['train']!r}); cannot compute stats "
             f"without at least one train shard."
         )
-    winners = {
-        shard.shard_id: load_checked_winner(spec, select_winner(attempts[shard.shard_id]))
-        for shard in spec.shards
-    }
+    winners = _select_checked_winners(spec)
 
     for split, (lo, hi) in spec.split_shard_ranges.items():
         if lo >= hi:
@@ -227,29 +283,5 @@ def finalize_lance_fragments(spec: DatasetSpec, work_dir: Path) -> None:
         )
         logger.info("committed {} winner fragments into {} split", hi - lo, split)
 
-    state: tuple[int, Any, Any] = (0, 0, 0)
-    for shard_id in range(train_lo, train_hi):
-        state = merge_welford(state, winners[shard_id].welford)
-    mean, std = finalize_welford(state, mask_degenerate=spec.mask_degenerate_bins)
-    stats_npz = work_dir / STATS_NPZ_FILENAME
-    np.savez(stats_npz, mean=mean, std=std)
-    r2_io.upload(stats_npz, spec.r2.stats_uri())
-    logger.info("uploaded stats to {}", spec.r2.stats_uri())
-
-    card = LanceDatasetCard(
-        schema_version=1,
-        run_id=spec.run_id,
-        finalized_at=datetime.now(UTC).isoformat(),
-        selected_attempts=tuple(
-            SelectedLanceAttempt(
-                shard_id=shard.shard_id,
-                attempt=winners[shard.shard_id].attempt.name,
-                valid_key=winners[shard.shard_id].attempt.valid_key,
-            )
-            for shard in spec.shards
-        ),
-    )
-    card_path = work_dir / "dataset.json"
-    card_path.write_text(card.model_dump_json(indent=2))
-    r2_io.upload(card_path, spec.r2.dataset_card_uri())
-    logger.info("uploaded dataset card to {}", spec.r2.dataset_card_uri())
+    _reduce_and_upload_stats(spec, winners, work_dir)
+    _write_dataset_card(spec, winners, work_dir)
