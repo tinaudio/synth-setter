@@ -89,11 +89,18 @@ after an rclone download. A review against the pinned library
 
 - `iter_lance_column_rows(uri, column, *, storage_options=None)` →
   `lance.dataset(uri, storage_options=...).to_batches(columns=[column])`.
-- `stats.stream_stats_lance(...)` threads `storage_options` through to the above.
-- `finalize_lance`: open each shard with `lance.dataset(s3_uri, storage_options)`,
-  stream `.to_batches()`, and `write_dataset` the split directly to its `s3://`
-  URI. Drops the per-shard download and the split upload.
-- `validate_shard._validate_lance_shard`: open via `lance.dataset(s3_uri, storage_options)`, validate `schema` (fixed-shape tensor types) + `count_rows`.
+- `stats.fold_lance_shard_into_welford(...)` threads `storage_options` through
+  to the above (the fragment pipeline superseded the original
+  `stream_stats_lance` wrapper — finalize now reduces staged Welford sidecars).
+- `finalize_lance` (historical row-streaming form): open each shard with
+  `lance.dataset(s3_uri, storage_options)`, stream `.to_batches()`, and
+  `write_dataset` the split directly to its `s3://` URI. Superseded by the
+  fragment-commit finalize in `pipeline/data/lance_finalize.py`, which commits
+  staged fragment metadata without decoding rows.
+- `validate_shard._validate_lance_shard`: open via `lance.dataset(...)`,
+  validate `schema` (fixed-shape tensor types) + `count_rows` — now the
+  worker-side local pre-staging check; the from-R2 path validates staged
+  winner attempts.
 
 ### R2 layout
 

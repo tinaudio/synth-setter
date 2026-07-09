@@ -12,6 +12,7 @@ winners' fragment metadata into each split dataset as one atomic
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -113,6 +114,11 @@ def staged_complete_attempts(spec: DatasetSpec) -> dict[int, list[StagedLanceAtt
             by_shard_dir.setdefault(shard_dir, {})[filename] = entry
     attempts: dict[int, list[StagedLanceAttempt]] = {}
     for shard_dir, files in by_shard_dir.items():
+        # Tolerate non-shard entries (stray objects, a future quarantine/ dir):
+        # discovery reports what it recognizes rather than aborting finalize.
+        if not re.fullmatch(r"shard-\d{6}", shard_dir):
+            logger.warning("skipping non-shard staging entry: {}", shard_dir)
+            continue
         shard_id = int(shard_dir.removeprefix("shard-"))
         for name in complete_attempt_names(list(files)):
             valid = files[f"{name}{ATTEMPT_VALID_SUFFIX}"]
@@ -166,11 +172,12 @@ def load_checked_winner(spec: DatasetSpec, attempt: StagedLanceAttempt) -> Check
                 f"shard {attempt.shard_id} attempt {attempt.name}: invalid fragment sidecar: {exc}"
             ) from exc
     fragment = lance.fragment.FragmentMetadata.from_json(sidecar.fragment_json)
-    fragment_meta = fragment.to_json()
-    with r2_io.downloaded_to_tempfile(
-        f"{staging_dir}{attempt.name}{LANCE_SHARD_STATS_SUFFIX}"
-    ) as stats_path:
-        stats = np.load(stats_path)
+    with (
+        r2_io.downloaded_to_tempfile(
+            f"{staging_dir}{attempt.name}{LANCE_SHARD_STATS_SUFFIX}"
+        ) as stats_path,
+        np.load(stats_path) as stats,
+    ):
         missing_keys = [key for key in LANCE_SHARD_STATS_KEYS if key not in stats]
         if missing_keys:
             raise ValueError(
@@ -178,18 +185,18 @@ def load_checked_winner(spec: DatasetSpec, attempt: StagedLanceAttempt) -> Check
                 f"missing arrays {missing_keys}"
             )
         welford = (int(stats["count"]), stats["mean"], stats["m2"])
-    rows = fragment_meta["physical_rows"]
+    rows = fragment.physical_rows
     if rows != spec.render.samples_per_shard or welford[0] != rows:
         raise ValueError(
             f"shard {attempt.shard_id} attempt {attempt.name}: fragment has {rows} rows, "
             f"stats count {welford[0]}; spec expects {spec.render.samples_per_shard}"
         )
     split_uri = spec.r2.split_lance_uri(split_for_shard(spec, attempt.shard_id))
-    for data_file in fragment_meta["files"]:
-        if r2_io.object_size(f"{split_uri}/data/{data_file['path']}") is None:
+    for data_file in fragment.files:
+        if r2_io.object_size(f"{split_uri}/data/{data_file.path}") is None:
             raise ValueError(
                 f"shard {attempt.shard_id} attempt {attempt.name}: fragment data file "
-                f"{data_file['path']} not found under {split_uri}/data/"
+                f"{data_file.path} not found under {split_uri}/data/"
             )
     return CheckedLanceWinner(attempt=attempt, fragment=fragment, welford=welford)
 
@@ -282,7 +289,8 @@ def _write_dataset_card(
     logger.info("uploaded dataset card to {}", spec.r2.dataset_card_uri())
 
 
-def finalize_lance_fragments(spec: DatasetSpec, work_dir: Path) -> None:  # noqa: DOC502 — raises propagate from _select_checked_winners
+# DOC502: the documented ValueErrors propagate from _select_checked_winners.
+def finalize_lance_fragments(spec: DatasetSpec, work_dir: Path) -> None:  # noqa: DOC502
     """Commit staged winner fragments into split datasets; reduce stats; write the card.
 
     Each split is one replace-semantics ``Overwrite`` commit over the full

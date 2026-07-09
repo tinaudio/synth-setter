@@ -320,7 +320,37 @@ class RemoteEntry:
     size: int
 
 
-def list_entries(r2_uri: str, *, recursive: bool = False) -> list[RemoteEntry]:
+# Listing probes share rclone's retry/contimeout reliability flags with the
+# transfer helpers; ``--checksum`` and ``--timeout`` don't apply to listings.
+_PROBE_RELIABILITY_FLAGS = ("--retries=3", "--contimeout=30s")
+
+
+def _run_listing_probe(args: list[str]) -> str | None:
+    """Run an rclone listing probe, normalizing a missing directory to absent.
+
+    S3 backends list a missing key/prefix as empty output; the local backend
+    (local compute mode) errors "directory not found" instead — callers get
+    ``None`` for both so probes behave identically across backends.
+
+    :param args: Full rclone argv for a listing subcommand (``lsf`` / ``lsjson``).
+    :returns: The probe's stdout, or ``None`` when the target does not exist.
+    :raises subprocess.CalledProcessError: rclone failed for a reason other
+        than a missing directory (auth, network, config).
+    """
+    result = subprocess.run(  # noqa: S603 — args from validated URIs
+        args, check=False, capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        if "directory not found" in result.stderr:
+            return None
+        raise subprocess.CalledProcessError(
+            result.returncode, args, output=result.stdout, stderr=result.stderr
+        )
+    return result.stdout
+
+
+# DOC502: the documented CalledProcessError propagates from _run_listing_probe.
+def list_entries(r2_uri: str, *, recursive: bool = False) -> list[RemoteEntry]:  # noqa: DOC502
     """List files under an ``r2://`` directory with storage-assigned mtimes.
 
     Uses ``rclone lsjson --files-only`` so the mtime is the storage server's
@@ -334,26 +364,20 @@ def list_entries(r2_uri: str, *, recursive: bool = False) -> list[RemoteEntry]:
     :raises subprocess.CalledProcessError: rclone failed for a reason other
         than a missing directory (auth, network, config).
     """
-    args = ["rclone", "lsjson", "--files-only"]  # noqa: S607 — rclone resolved by image's PATH
+    args = ["rclone", "lsjson", "--files-only", *_PROBE_RELIABILITY_FLAGS]  # noqa: S607 — rclone resolved by image's PATH
     if recursive:
         args.append("-R")
     args.append(_to_rclone_path(r2_uri))
-    result = subprocess.run(  # noqa: S603 — args from validated URI
-        args, check=False, capture_output=True, text=True
-    )
-    if result.returncode != 0:
-        if "directory not found" in result.stderr:
-            return []
-        raise subprocess.CalledProcessError(
-            result.returncode, args, output=result.stdout, stderr=result.stderr
-        )
+    stdout = _run_listing_probe(args)
+    if stdout is None:
+        return []
     entries = [
         RemoteEntry(
             path=item["Path"],
             mtime=datetime.fromisoformat(item["ModTime"]),
             size=int(item["Size"]),
         )
-        for item in json.loads(result.stdout)
+        for item in json.loads(stdout)
     ]
     return sorted(entries, key=lambda entry: entry.path)
 
@@ -517,7 +541,8 @@ def shard_uri(bucket: str, prefix: str, shard_filename: str) -> str:
     return f"{R2_URI_SCHEME}{bucket}/{prefix}{shard_filename}"
 
 
-def object_size(r2_uri: str) -> int | None:
+# DOC503: the documented CalledProcessError propagates from _run_listing_probe.
+def object_size(r2_uri: str) -> int | None:  # noqa: DOC503
     """Return the size in bytes of the R2 object at ``r2_uri``, or ``None`` if it does not exist.
 
     Uses ``rclone lsf --format=s`` for a size-only single-line listing: integer stdout if the
@@ -537,20 +562,13 @@ def object_size(r2_uri: str) -> int | None:
         "rclone",
         "lsf",
         "--format=s",
+        *_PROBE_RELIABILITY_FLAGS,
         _to_rclone_path(r2_uri),
     ]
-    result = subprocess.run(  # noqa: S603 — args from validated URI
-        args, check=False, capture_output=True, text=True
-    )
-    if result.returncode != 0:
-        # S3 backends list a missing key as empty output; the local backend
-        # (local compute mode) errors instead — normalize both to "absent".
-        if "directory not found" in result.stderr:
-            return None
-        raise subprocess.CalledProcessError(
-            result.returncode, args, output=result.stdout, stderr=result.stderr
-        )
-    out = result.stdout.strip()
+    stdout = _run_listing_probe(args)
+    if stdout is None:
+        return None
+    out = stdout.strip()
     if not out:
         return None
     try:

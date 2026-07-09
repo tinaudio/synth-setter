@@ -237,6 +237,78 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     )
 
 
+@pytest.mark.fake_vst
+def test_from_hydra_lance_render_failing_local_validation_never_stages_a_valid_marker(
+    cfg_dataset: DictConfig,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A corrupt render fails loudly before staging — no ``.valid`` ever lands (#1776).
+
+    Drives the real worker entrypoint with a stub renderer that writes a shard
+    holding double the spec's rows. Worker-side validation must reject it, the
+    run must fail, and the staging directory must hold no ``.valid`` marker or
+    sidecar (the shard stays "missing" for the next reconciliation pass).
+
+    :param cfg_dataset: Hydra cfg composed with the smoke-shard dataset.
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
+    :param monkeypatch: Pins the single-worker rank/world env and the
+        moduleinfo-only plugin so the renderer-version guard passes.
+    """
+    from synth_setter.pipeline.data.lance_shard import (
+        lance_schema,
+        record_batch_from_arrays,
+        write_lance_dataset,
+    )
+    from tests.helpers.subprocess_args import find_script_index
+
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    with open_dict(cfg_dataset):
+        cfg_dataset.output_format = "lance"
+        cfg_dataset.render.plugin_path = str(_TEST_PLUGIN_VST3)
+        cfg_dataset.render.renderer_version = _TEST_PLUGIN_VERSION
+        cfg_dataset.r2.prefix = "fake-r2/invalid-run/"
+        cfg_dataset.logger = None
+    spec = spec_from_cfg(cfg_dataset)
+
+    def _render_oversized_shard(args: list[str]) -> None:
+        from synth_setter.data.vst.shapes import (
+            DATASET_FIELD_DTYPES,
+            dataset_field_shapes,
+        )
+
+        output_file = Path(args[find_script_index(args) + 1])
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        oversized = spec.render.model_copy(
+            update={"samples_per_shard": spec.render.samples_per_shard * 2}
+        )
+        shapes = dataset_field_shapes(oversized, spec.num_params)
+        schema = lance_schema(shapes, oversized.shard_metadata())
+        arrays = {
+            field: np.zeros(shape, dtype=DATASET_FIELD_DTYPES[field])
+            for field, shape in shapes.items()
+        }
+        write_lance_dataset(output_file, schema, [record_batch_from_arrays(arrays, schema)])
+
+    with patch(
+        "synth_setter.cli.generate_dataset._check_call_streamed",
+        side_effect=_render_oversized_shard,
+    ):
+        with pytest.raises(RuntimeError, match="failed local validation"):
+            from_hydra(cfg_dataset)
+
+    staging_root = (
+        fake_r2_remote / spec.r2.bucket / spec.r2.prefix / "metadata" / "workers" / "shards"
+    )
+    staged = [p.name for p in staging_root.rglob("*") if p.is_file()]
+    assert not [name for name in staged if name.endswith((".valid", ".fragment.json"))], (
+        f"invalid render must not stage a complete attempt, found: {staged}"
+    )
+    # The attempt-start marker is the only allowed trace of the failed attempt.
+    assert all(name.endswith(".rendering") for name in staged)
+
+
 def test_from_hydra_passes_per_shard_base_seed_to_renderer(
     cfg_dataset: DictConfig,
     fake_r2_remote: Path,

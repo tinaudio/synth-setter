@@ -7,6 +7,7 @@ from the values the staging step wrote, never through the codec under test.
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -293,6 +294,157 @@ def test_finalize_records_selected_attempts_and_valid_keys_in_dataset_json(
     assert selected[0].valid_key == (
         f"{spec.r2.prefix}metadata/workers/shards/shard-000000/pod-b-zzzz.valid"
     )
+
+
+def staging_file(fake_r2_remote: Path, spec: DatasetSpec, shard_id: int, filename: str) -> Path:
+    """Local path of one staged artifact under the fake R2 root.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param spec: Spec whose R2 location shapes the staging prefix.
+    :param shard_id: Shard whose staging directory holds the artifact.
+    :param filename: Staged artifact filename (``{worker}-{attempt}{suffix}``).
+    :returns: ``<root>/<bucket>/<prefix>metadata/workers/shards/shard-NNNNNN/<filename>``.
+    """
+    return (
+        fake_r2_remote
+        / spec.r2.bucket
+        / spec.r2.prefix
+        / "metadata"
+        / "workers"
+        / "shards"
+        / f"shard-{shard_id:06d}"
+        / filename
+    )
+
+
+def test_finalize_rejects_sidecar_that_fails_strict_validation(
+    fake_r2_remote: Path, tmp_path: Path
+) -> None:
+    from synth_setter.cli.finalize_dataset import finalize_from_spec
+
+    spec = tiny_lance_spec()
+    stage_all_shards(spec, tmp_path)
+    sidecar = staging_file(fake_r2_remote, spec, 0, "pod-a-u0000.fragment.json")
+    sidecar.write_text('{"schema_version": 1, "fragment_json": 42}')
+
+    with pytest.raises(ValueError, match="invalid fragment sidecar"):
+        finalize_from_spec(spec, tmp_path / "work")
+
+
+def test_finalize_rejects_stats_sidecar_missing_welford_arrays(
+    fake_r2_remote: Path, tmp_path: Path
+) -> None:
+    from synth_setter.cli.finalize_dataset import finalize_from_spec
+
+    spec = tiny_lance_spec()
+    stage_all_shards(spec, tmp_path)
+    stats_path = staging_file(fake_r2_remote, spec, 0, "pod-a-u0000.shard-stats.npz")
+    np.savez(stats_path, count=np.int64(2))
+
+    with pytest.raises(ValueError, match=r"missing arrays \['mean', 'm2'\]"):
+        finalize_from_spec(spec, tmp_path / "work")
+
+
+def test_finalize_rejects_stats_count_disagreeing_with_fragment_rows(
+    fake_r2_remote: Path, tmp_path: Path
+) -> None:
+    from synth_setter.cli.finalize_dataset import finalize_from_spec
+
+    spec = tiny_lance_spec()
+    stage_all_shards(spec, tmp_path)
+    stats_path = staging_file(fake_r2_remote, spec, 0, "pod-a-u0000.shard-stats.npz")
+    with np.load(stats_path) as stats:
+        arrays = dict(stats)
+    arrays["count"] = np.int64(999)
+    np.savez(stats_path, **arrays)
+
+    with pytest.raises(ValueError, match="stats count 999"):
+        finalize_from_spec(spec, tmp_path / "work")
+
+
+def test_finalize_rejects_fragment_whose_rows_disagree_with_spec(
+    fake_r2_remote: Path, tmp_path: Path
+) -> None:
+    from synth_setter.cli.finalize_dataset import finalize_from_spec
+
+    spec = tiny_lance_spec()
+    stage_all_shards(spec, tmp_path)
+    sidecar_path = staging_file(fake_r2_remote, spec, 0, "pod-a-u0000.fragment.json")
+    payload = json.loads(sidecar_path.read_text())
+    fragment_meta = json.loads(payload["fragment_json"])
+    fragment_meta["physical_rows"] = 7
+    payload["fragment_json"] = json.dumps(fragment_meta)
+    sidecar_path.write_text(json.dumps(payload))
+
+    with pytest.raises(ValueError, match="fragment has 7 rows"):
+        finalize_from_spec(spec, tmp_path / "work")
+
+
+def test_finalize_rejects_winner_whose_fragment_data_file_is_absent(
+    fake_r2_remote: Path, tmp_path: Path
+) -> None:
+    from synth_setter.cli.finalize_dataset import finalize_from_spec
+
+    spec = tiny_lance_spec()
+    stage_all_shards(spec, tmp_path)
+    # Shard 2 is val's only shard, so its fragment file is val.lance's only data.
+    val_data = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / "val.lance" / "data"
+    for fragment_file in val_data.iterdir():
+        fragment_file.unlink()
+
+    with pytest.raises(ValueError, match="not found under"):
+        finalize_from_spec(spec, tmp_path / "work")
+
+
+def test_select_winner_prefers_earliest_valid_mtime() -> None:
+    from datetime import UTC, datetime
+
+    from synth_setter.pipeline.data.lance_finalize import StagedLanceAttempt, select_winner
+
+    early = StagedLanceAttempt(
+        shard_id=0,
+        name="pod-z-late-key",
+        valid_key="z/pod-z.valid",
+        valid_mtime=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    late = StagedLanceAttempt(
+        shard_id=0,
+        name="pod-a-early-key",
+        valid_key="a/pod-a.valid",
+        valid_mtime=datetime(2026, 1, 2, tzinfo=UTC),
+    )
+
+    assert select_winner([late, early]) is early
+
+
+def test_select_winner_breaks_mtime_ties_by_lexicographic_key() -> None:
+    from datetime import UTC, datetime
+
+    from synth_setter.pipeline.data.lance_finalize import StagedLanceAttempt, select_winner
+
+    tied = datetime(2026, 1, 1, tzinfo=UTC)
+    key_b = StagedLanceAttempt(shard_id=0, name="b", valid_key="dir/b.valid", valid_mtime=tied)
+    key_a = StagedLanceAttempt(shard_id=0, name="a", valid_key="dir/a.valid", valid_mtime=tied)
+
+    assert select_winner([key_b, key_a]) is key_a
+
+
+def test_staged_discovery_skips_non_shard_entries_in_staging_root(
+    fake_r2_remote: Path, tmp_path: Path
+) -> None:
+    from synth_setter.pipeline.data.lance_finalize import staged_complete_attempts
+
+    spec = tiny_lance_spec()
+    stage_all_shards(spec, tmp_path)
+    stray = (
+        fake_r2_remote / spec.r2.bucket / spec.r2.prefix / "metadata" / "workers" / "shards"
+    ) / "quarantine"
+    stray.mkdir()
+    (stray / "pod-x-dead.h5").write_bytes(b"x")
+
+    attempts = staged_complete_attempts(spec)
+
+    assert sorted(attempts) == [0, 1, 2, 3]
 
 
 def test_finalize_with_missing_shard_reports_it_and_writes_no_marker(

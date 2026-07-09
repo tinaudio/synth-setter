@@ -33,6 +33,7 @@ from synth_setter.pipeline.data.stats import get_stats_hdf5 as real_get_stats_hd
 from synth_setter.pipeline.data.stats import stream_stats_wds as real_stream_stats_wds
 from tests.helpers.finalize_shards import (
     build_hdf5_smoke_spec,
+    build_lance_smoke_spec,
     build_wds_smoke_spec,
     copy_shard_for_download,
     install_finalize_setup_stubs,
@@ -548,6 +549,21 @@ def test_finalize_wds_raises_on_empty_train_split(fake_r2_remote: Path, tmp_path
 
     with pytest.raises(ValueError, match="train split is empty"):
         finalize_dataset.finalize_wds(spec, tmp_path)
+
+    assert [p for p in fake_r2_remote.rglob("*") if p.is_file()] == []
+
+
+def test_finalize_lance_raises_on_empty_train_split(fake_r2_remote: Path, tmp_path: Path) -> None:
+    """The lance branch shares the empty-train guard and touches no storage.
+
+    :param fake_r2_remote: Local-typed rclone remote — asserted untouched because the empty-train
+        guard short-circuits before any I/O.
+    :param tmp_path: Pytest tmp dir used as finalize's local work_dir.
+    """
+    spec = build_lance_smoke_spec(task_name="empty-train-lance", train_val_test_sizes=(0, 4, 0))
+
+    with pytest.raises(ValueError, match="train split is empty"):
+        finalize_dataset.finalize_lance(spec, tmp_path)
 
     assert [p for p in fake_r2_remote.rglob("*") if p.is_file()] == []
 

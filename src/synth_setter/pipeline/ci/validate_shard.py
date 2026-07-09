@@ -15,16 +15,21 @@ to the HDF5 path (``.h5``), the wds tar path (``.tar``), or the Lance path
   as a numpy array whose trailing dims (``arr.shape[1:]``) match the same
   shape helpers; and the summed row count per field equals
   ``spec.render.samples_per_shard``.
-- Lance path: schema metadata parses as a strict ``ShardMetadata``; every
-  field is a fixed-shape tensor column whose dtype and inner shape match the
-  same shape helpers; and ``num_rows`` equals ``spec.render.samples_per_shard``.
+- Lance path (local shard, worker-side pre-staging check): schema metadata
+  parses as a strict ``ShardMetadata``; every field is a fixed-shape tensor
+  column whose dtype and inner shape match the same shape helpers; and
+  ``num_rows`` equals ``spec.render.samples_per_shard``.
+- Lance path (from R2): structural check of each shard's staged winner
+  attempt — sidecar + stats + ``.valid`` present, sidecar round-trips through
+  Lance, row counts agree, fragment data files exist under the assigned split.
+  No rows are decoded; full shape/value checks already ran worker-side.
 
 CLI usage:
     python3 -m synth_setter.pipeline.ci.validate_shard <spec.json|r2://bucket/spec.json>
 
-Iterates `spec.shards` from R2 (under
-`r2://{spec.r2.bucket}/{spec.r2.prefix}{shard.filename}`): HDF5/WDS shards
-download to a tempfile first, Lance shards stream directly from R2.
+Iterates `spec.shards` from R2: HDF5/WDS shards download to a tempfile from
+`r2://{spec.r2.bucket}/{spec.r2.prefix}{shard.filename}`; Lance shards are
+reconciled from the `metadata/workers/shards/` staging prefix.
 """
 
 from __future__ import annotations
@@ -442,7 +447,9 @@ def _validate_lance_dataset(
 ) -> list[str]:
     """Validate an open Lance shard dataset's schema, metadata, and row count.
 
-    Shared by the local-path and direct-from-R2 validators.
+    Local-path validation only (the worker's pre-staging check); the from-R2
+    path validates staged winner attempts instead — see
+    :func:`_validate_all_lance_shards_from_r2`.
 
     :param dataset: Open Lance dataset handle for one shard.
     :param spec: Dataset spec the shard is expected to conform to.

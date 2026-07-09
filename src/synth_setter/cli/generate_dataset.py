@@ -748,7 +748,9 @@ def _render_and_upload_shard(
         stage_lance_shard_attempt(
             spec, shard, shard_path, worker_id=worker_id, attempt_uuid=attempt_uuid
         )
-        dest = spec.r2.shard_staging_dir_uri(shard.shard_id)
+        logger.info(
+            f"shard staged: {shard.filename} -> {spec.r2.shard_staging_dir_uri(shard.shard_id)}"
+        )
     else:
         if not shard_path.is_file():
             raise RuntimeError(
@@ -756,10 +758,9 @@ def _render_and_upload_shard(
                 f"file: {shard_path}"
             )
         byte_size = shard_path.stat().st_size
-        dest = r2_dest_prefix
         logger.info(f"shard rendered: {shard_path} ({byte_size} bytes)")
-        _rclone_copy(str(shard_path), dest)
-    logger.info(f"shard uploaded: {shard.filename} -> {dest}")
+        _rclone_copy(str(shard_path), r2_dest_prefix)
+        logger.info(f"shard uploaded: {shard.filename} -> {r2_dest_prefix}")
     return byte_size
 
 

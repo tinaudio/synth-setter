@@ -393,35 +393,6 @@ def fold_lance_shard_into_welford(
     return existing
 
 
-def stream_stats_lance(
-    shard_uris: Iterable[str | Path],
-    mask_degenerate: bool = False,
-    *,
-    storage_options: dict[str, str] | None = None,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Stream Welford mean/std across an iterable of ``shard-*.lance`` datasets.
-
-    :param shard_uris: Iterable of Lance shard datasets in fold order (local
-        paths or ``s3://`` URIs).
-    :param mask_degenerate: See :func:`get_stats_wds`.
-    :param storage_options: Object-store config for cloud ``shard_uris``; ``None`` local.
-    :returns: ``(mean, std)`` arrays as produced by :func:`finalize`.
-    :rtype: tuple[np.ndarray, np.ndarray]
-    :raises FileNotFoundError: ``shard_uris`` yielded zero entries.
-    """
-    existing: tuple[int, Any, Any] = (0, 0, 0)
-    folded_any = False
-    for shard_uri in shard_uris:
-        logger.info(f"Processing {Path(str(shard_uri)).name}...")
-        existing = fold_lance_shard_into_welford(
-            existing, shard_uri, storage_options=storage_options
-        )
-        folded_any = True
-    if not folded_any:
-        raise FileNotFoundError("stream_stats_lance received no shard URIs")
-    return finalize(existing, mask_degenerate=mask_degenerate)
-
-
 def get_stats_wds(directory: str | Path, mask_degenerate: bool = False) -> None:
     """Compute mel-spec mean/std across all ``shard-*.tar`` in ``directory`` and write sibling
     ``stats.npz``.

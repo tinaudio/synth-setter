@@ -837,7 +837,14 @@ class TestObjectSize:
         with patch.object(r2_io.subprocess, "run", return_value=self._mock_run("42")) as mock_run:
             r2_io.object_size("r2://bucket/path/key.h5")
         args = mock_run.call_args[0][0]
-        assert args == ["rclone", "lsf", "--format=s", "r2:bucket/path/key.h5"]
+        assert args == [
+            "rclone",
+            "lsf",
+            "--format=s",
+            "--retries=3",
+            "--contimeout=30s",
+            "r2:bucket/path/key.h5",
+        ]
         kwargs = mock_run.call_args[1]
         assert kwargs.get("check") is False
         assert kwargs.get("capture_output") is True
