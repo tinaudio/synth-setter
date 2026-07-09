@@ -156,7 +156,9 @@ def test_stage_attempt_writes_fragment_data_into_assigned_split_dataset_dir(
     )
 
     val_data_dir = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / "val.lance" / "data"
-    assert [p.suffix for p in val_data_dir.iterdir()] == [".lance"]
+    fragment_files = list(val_data_dir.iterdir())
+    assert len(fragment_files) == 1
+    assert fragment_files[0].suffix == ".lance"
 
 
 def test_stage_attempt_sidecar_round_trips_fragment_metadata_with_shard_row_count(
