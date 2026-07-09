@@ -71,6 +71,19 @@ def _assert_first_batch_matches_schema(first: dict[str, torch.Tensor]) -> None:
     assert first["param_array"].dtype == torch.float32
 
 
+def _sort_rows(rows: np.ndarray) -> np.ndarray:
+    """Sort 2-D array rows lexicographically, keeping each row intact.
+
+    ``np.sort(..., axis=0)`` would sort each column independently and miss
+    cross-row scrambling; whole-row ordering makes multiset-of-rows
+    comparisons exact.
+
+    :param rows: ``(N, width)`` array.
+    :returns: The same rows in lexicographic order.
+    """
+    return rows[np.lexsort(rows.T[::-1])]
+
+
 def _assert_ranks_partition_param_rows(
     per_rank: list[np.ndarray], arrays: dict[str, np.ndarray]
 ) -> None:
@@ -81,7 +94,7 @@ def _assert_ranks_partition_param_rows(
     """
     assert per_rank[0].shape == per_rank[1].shape == (16, NUM_PARAMS)
     union = np.concatenate(per_rank)
-    np.testing.assert_array_equal(np.sort(union, axis=0), np.sort(arrays["param_array"], axis=0))
+    np.testing.assert_array_equal(_sort_rows(union), _sort_rows(arrays["param_array"]))
 
 
 def _assert_first_batch_owns_writable_memory(loader: DataLoader) -> None:
@@ -174,9 +187,7 @@ class TestMapDataloader:
         rows = _concat_batches(list(loader), "param_array")
 
         assert rows.shape == arrays["param_array"].shape
-        np.testing.assert_array_equal(
-            np.sort(rows, axis=0), np.sort(arrays["param_array"], axis=0)
-        )
+        np.testing.assert_array_equal(_sort_rows(rows), _sort_rows(arrays["param_array"]))
 
     def test_batch_tensors_are_writable(
         self, lance_dataset: tuple[Path, dict[str, np.ndarray]]
