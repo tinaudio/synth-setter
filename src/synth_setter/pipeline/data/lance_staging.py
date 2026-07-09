@@ -70,6 +70,10 @@ def write_rendering_marker(
 ) -> None:
     """Record the start of a shard attempt (``.rendering``, append-only).
 
+    Deliberately unconsumed by reconciliation — an orphaned ``.rendering``
+    with no sibling ``.valid`` is operator evidence of a crashed attempt
+    (design §7.2), read by humans via ``rclone ls``, not by code.
+
     :param spec: Validated dataset spec.
     :param shard_id: Logical shard the attempt renders.
     :param worker_id: Worker identifier for the staging filename.

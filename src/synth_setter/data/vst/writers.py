@@ -30,7 +30,6 @@ from synth_setter.data.vst.generate_vst_dataset import (
 )
 from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
 from synth_setter.data.vst.shapes import DATASET_FIELD_NAMES, dataset_field_shapes
-from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from synth_setter.pipeline.schemas.spec import RenderConfig
 
 
@@ -303,21 +302,6 @@ def _render_in_batches(
         _render_loop()
 
 
-def _shard_metadata_from_render(render_cfg: RenderConfig) -> ShardMetadata:
-    """Project a ``RenderConfig`` onto the per-shard sidecar metadata fields.
-
-    Single source of truth for the render-derived attrs the HDF5
-    ``audio.attrs`` sidecar, the wds ``metadata.json`` tar member, and the
-    Lance schema metadata expose. Keeping projection here means the writers
-    can never drift.
-
-    :param render_cfg: Per-shard renderer config from the dataset spec.
-    :returns: Strict ``ShardMetadata`` with every render-derived field filled.
-    :rtype: ShardMetadata
-    """
-    return render_cfg.shard_metadata()
-
-
 def make_hdf5_dataset(
     hdf5_file: Path | str,
     render_cfg: RenderConfig,
@@ -350,7 +334,7 @@ def make_hdf5_dataset(
         contract as ``fixed_synth_params_list``.
     """
     param_spec = param_specs[render_cfg.param_spec_name]
-    meta = _shard_metadata_from_render(render_cfg)
+    meta = render_cfg.shard_metadata()
     # Validate before opening the file so a bad fixed-params list (e.g. a copy
     # source whose row count != samples_per_shard) fails without leaving an
     # empty output shard on disk.
@@ -421,7 +405,7 @@ def make_wds_dataset(
         contract as ``fixed_synth_params_list``.
     """
     param_spec = param_specs[render_cfg.param_spec_name]
-    meta = _shard_metadata_from_render(render_cfg)
+    meta = render_cfg.shard_metadata()
     start_idx = 0
 
     _validate_fixed_params_lengths(
@@ -484,7 +468,7 @@ def make_lance_dataset(
     )
 
     param_spec = param_specs[render_cfg.param_spec_name]
-    meta = _shard_metadata_from_render(render_cfg)
+    meta = render_cfg.shard_metadata()
     start_idx = 0
 
     _validate_fixed_params_lengths(

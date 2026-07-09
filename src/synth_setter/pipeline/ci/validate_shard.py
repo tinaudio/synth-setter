@@ -620,8 +620,9 @@ def validate_all_shards_from_r2(spec: DatasetSpec) -> list[str]:
     """Validate every shard in ``spec.shards`` from R2.
 
     HDF5/WDS shards download to a tempfile before validating; Lance shards
-    short-circuit to :func:`_validate_all_lance_shards_from_r2`, which streams
-    each dataset directly from R2 (no local download).
+    short-circuit to :func:`_validate_all_lance_shards_from_r2`, which
+    structurally checks each shard's staged winner attempt (#1776) without
+    decoding any rows.
 
     :param spec: Dataset spec whose ``shards`` list drives the iteration; each
         listed shard lives under ``r2://{spec.r2.bucket}/{spec.r2.prefix}``.

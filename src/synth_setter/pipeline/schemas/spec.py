@@ -90,14 +90,6 @@ class OutputFormat(StrEnum):
         """Shard filename suffix for this format, leading dot included."""
         return _OUTPUT_FORMAT_EXTENSIONS[self]
 
-    @property
-    def is_directory(self) -> bool:
-        """Whether a shard is a directory tree (Lance dataset) rather than one file.
-
-        Drives directory-vs-file handling in the worker upload and existence probes.
-        """
-        return self is OutputFormat.LANCE
-
     @classmethod
     def from_extension(cls, suffix: str) -> OutputFormat | None:
         """Return the format whose shards carry ``suffix``, dispatching by file type.

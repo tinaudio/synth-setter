@@ -135,6 +135,7 @@ def load_checked_winner(spec: DatasetSpec, attempt: StagedLanceAttempt) -> Check
                 f"shard {attempt.shard_id} attempt {attempt.name}: invalid fragment sidecar: {exc}"
             ) from exc
     fragment = lance.fragment.FragmentMetadata.from_json(sidecar.fragment_json)
+    fragment_meta = fragment.to_json()
     with r2_io.downloaded_to_tempfile(
         f"{staging_dir}{attempt.name}{LANCE_SHARD_STATS_SUFFIX}"
     ) as stats_path:
@@ -146,14 +147,14 @@ def load_checked_winner(spec: DatasetSpec, attempt: StagedLanceAttempt) -> Check
                 f"missing arrays {missing_keys}"
             )
         welford = (int(stats["count"]), stats["mean"], stats["m2"])
-    rows = fragment.to_json()["physical_rows"]
+    rows = fragment_meta["physical_rows"]
     if rows != spec.render.samples_per_shard or welford[0] != rows:
         raise ValueError(
             f"shard {attempt.shard_id} attempt {attempt.name}: fragment has {rows} rows, "
             f"stats count {welford[0]}; spec expects {spec.render.samples_per_shard}"
         )
     split_uri = spec.r2.split_lance_uri(split_for_shard(spec, attempt.shard_id))
-    for data_file in fragment.to_json()["files"]:
+    for data_file in fragment_meta["files"]:
         if r2_io.object_size(f"{split_uri}/data/{data_file['path']}") is None:
             raise ValueError(
                 f"shard {attempt.shard_id} attempt {attempt.name}: fragment data file "
@@ -185,8 +186,8 @@ def _select_checked_winners(spec: DatasetSpec) -> dict[int, CheckedLanceWinner]:
 
     :param spec: Validated dataset spec.
     :returns: Checked winner keyed by shard id, covering every spec shard.
-    :raises ValueError: Any spec shard has no staged-valid attempt, or a
-        winner fails a structural check.
+    :raises ValueError: Any spec shard has no staged-valid attempt, or a winner fails a structural
+        check.
     """
     attempts = staged_complete_attempts(spec)
     missing = [shard.shard_id for shard in spec.shards if not attempts.get(shard.shard_id)]
@@ -255,20 +256,15 @@ def finalize_lance_fragments(spec: DatasetSpec, work_dir: Path) -> None:
 
     Each split is one replace-semantics ``Overwrite`` commit over the full
     winner set in shard order — a re-run rebuilds the identical manifest
-    instead of appending. Zero rows are decoded.
+    instead of appending. Zero rows are decoded. Precondition: the train
+    split is non-empty — the entrypoint (``finalize_dataset.finalize_lance``)
+    guards it before delegating.
 
     :param spec: Validated dataset spec (``output_format == "lance"``).
     :param work_dir: Scratch directory for the staged ``stats.npz`` / ``dataset.json``.
-    :raises ValueError: Any spec shard has no staged-valid attempt, a winner
-        fails a structural check, or the train split is empty.
+    :raises ValueError: Any spec shard has no staged-valid attempt, or a
+        winner fails a structural check.
     """
-    train_lo, train_hi = spec.split_shard_ranges["train"]
-    if train_lo >= train_hi:
-        raise ValueError(
-            f"train split is empty (split_shard_ranges['train']="
-            f"{spec.split_shard_ranges['train']!r}); cannot compute stats "
-            f"without at least one train shard."
-        )
     winners = _select_checked_winners(spec)
 
     for split, (lo, hi) in spec.split_shard_ranges.items():
