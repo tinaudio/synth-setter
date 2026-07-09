@@ -658,6 +658,9 @@ def _validate_all_lance_shards_from_r2(spec: DatasetSpec) -> list[str]:
     spec and stats, fragment data files exist under the assigned split. Full
     shape/value validation already ran worker-side against the local render —
     re-reading rows here would decode data the design keeps untouched.
+    Structural failures aggregate per shard; environmental failures (rclone
+    auth/network, surfacing as ``CalledProcessError``) propagate and abort per
+    ``r2_io``'s fail-fast contract, so an outage never reads as bad data.
 
     :param spec: Dataset spec whose ``shards`` list drives the iteration.
     :returns: Aggregated error strings across all shards, each prefixed with the

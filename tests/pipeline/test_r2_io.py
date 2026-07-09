@@ -188,11 +188,17 @@ class TestR2StorageOptions:
 class TestR2DirectoryExists:
     """Tests for r2_directory_exists — prefix existence probe via non-recursive ``rclone lsf``.
 
-    Present case is state-based against the fake-local remote. The absent case
-    stays mock-based: on R2 ``lsf`` returns empty stdout for a missing prefix,
-    while the local backend exits non-zero — the same divergence ``object_size``
-    documents.
+    Present and missing-prefix cases are state-based against the fake-local
+    remote; both backends normalize a missing prefix to ``False`` via the
+    shared listing probe.
     """
+
+    def test_missing_prefix_returns_false(self, fake_r2_remote: Path) -> None:
+        """A never-created prefix reads as absent on the local backend too.
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        """
+        assert r2_io.r2_directory_exists("r2://bucket/never/created") is False
 
     def test_present_prefix_returns_true(self, fake_r2_remote: Path) -> None:
         """A prefix containing at least one object returns ``True``.
@@ -209,6 +215,7 @@ class TestR2DirectoryExists:
         """Empty ``rclone lsf`` stdout (R2's missing-prefix shape) returns ``False``."""
         completed = MagicMock(spec=subprocess.CompletedProcess)
         completed.stdout = ""
+        completed.returncode = 0
         with patch("synth_setter.pipeline.r2_io.subprocess.run", return_value=completed):
             assert r2_io.r2_directory_exists("r2://bucket/missing.lance") is False
 

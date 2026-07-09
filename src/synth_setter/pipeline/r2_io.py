@@ -582,26 +582,28 @@ def object_size(r2_uri: str) -> int | None:  # noqa: DOC503
         ) from exc
 
 
-def r2_directory_exists(r2_uri: str) -> bool:
+# DOC502: the documented CalledProcessError propagates from _run_listing_probe.
+def r2_directory_exists(r2_uri: str) -> bool:  # noqa: DOC502
     """Return whether any object exists under the ``r2_uri`` prefix.
 
-    Directory counterpart of :func:`object_size`; a non-zero rclone exit (auth,
-    network) raises ``CalledProcessError`` so an outage isn't read as absent.
+    Directory counterpart of :func:`object_size` — a missing prefix reads as
+    ``False`` on both the S3 and local backends.
 
     :param r2_uri: Canonical ``r2://bucket/prefix`` URI of the directory.
     :returns: ``True`` if the prefix contains at least one object.
+    :raises subprocess.CalledProcessError: rclone exited non-zero for a reason
+        other than a missing directory (auth, network, config).
     """
     # rclone lsf is non-recursive by default, so this lists only the prefix's
     # immediate entries — an O(1) boolean probe, not a full-tree enumeration.
     args = [  # noqa: S607 — rclone resolved by image's PATH
         "rclone",
         "lsf",
+        *_PROBE_RELIABILITY_FLAGS,
         _to_rclone_path(r2_uri),
     ]
-    result = subprocess.run(  # noqa: S603 — args from validated URI
-        args, check=True, capture_output=True, text=True
-    )
-    return bool(result.stdout.strip())
+    stdout = _run_listing_probe(args)
+    return bool(stdout and stdout.strip())
 
 
 def purge_prefix(bucket: str, prefix: str) -> None:
