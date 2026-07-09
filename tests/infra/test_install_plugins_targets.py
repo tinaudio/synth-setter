@@ -66,7 +66,7 @@ _SHARED_PINS = (
 # only reachable on such hosts.
 requires_x86_64_linux = pytest.mark.skipif(
     platform.system() != "Linux" or platform.machine() != "x86_64",
-    reason="install_fetched_synth skips on non-x86_64 hosts",
+    reason="plugin install targets skip on non-x86_64 hosts",
 )
 
 if shutil.which("make") is None:
@@ -251,7 +251,7 @@ def test_linux_x86_64_plugin_target_non_x86_64_skips_without_installing(
     """On a non-x86_64 host every x86_64 plugin target skips, mirroring the image gate.
 
     :param makefile_checkout: throwaway checkout holding the Makefile.
-    :param target: fetched-synth make target under test.
+    :param target: plugin install make target under test.
     """
     bindir = makefile_checkout / "bin"
     bindir.mkdir()
@@ -343,6 +343,51 @@ def test_install_plugins_mixed_presence_installs_only_missing_bundle(
     assert "plugins/Surge XT.vst3 already exists" in result.stdout
     assert "Installed plugins/Dexed.vst3" in result.stdout
     assert (plugins / "Dexed.vst3" / "Contents" / "x86_64-linux" / "plugin.so").is_file()
+
+
+@requires_x86_64_linux
+def test_install_ultramaster_existing_cache_refreshes_pinned_ref(
+    makefile_checkout: Path,
+) -> None:
+    """An existing KR-106 cache still fetches and checks out the requested pin.
+
+    :param makefile_checkout: throwaway checkout holding the Makefile.
+    """
+    home, env = _home_env(makefile_checkout)
+    cache = home / ".cache" / "synth-setter" / "ultramaster-kr106-test"
+    (cache / "src" / ".git").mkdir(parents=True)
+
+    bindir = makefile_checkout / "bin"
+    bindir.mkdir()
+    log = makefile_checkout / "tool.log"
+    fake_git = bindir / "git"
+    fake_git.write_text('#!/bin/sh\nprintf "git %s\\n" "$*" >> "$TOOL_LOG"\n')
+    fake_git.chmod(0o755)
+    fake_cmake = bindir / "cmake"
+    fake_cmake.write_text(
+        "#!/bin/sh\n"
+        'printf "cmake %s\\n" "$*" >> "$TOOL_LOG"\n'
+        'if [ "$1" = "--build" ]; then\n'
+        '  mkdir -p "$2/KR106_artefacts/Release/VST3/Ultramaster KR-106.vst3/Contents"\n'
+        "fi\n"
+    )
+    fake_cmake.chmod(0o755)
+    env = {**env, "PATH": f"{bindir}{os.pathsep}{env['PATH']}", "TOOL_LOG": str(log)}
+
+    result = _run_make(
+        makefile_checkout,
+        "install-ultramaster-kr106",
+        "ULTRAMASTER_KR106_VERSION=test",
+        "ULTRAMASTER_KR106_GIT_REF=abc123",
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    tool_log = log.read_text()
+    assert "fetch --depth 1 origin abc123" in tool_log
+    assert "checkout --detach FETCH_HEAD" in tool_log
+    assert "reset --hard FETCH_HEAD" in tool_log
+    assert (makefile_checkout / "plugins" / "Ultramaster KR-106.vst3").is_dir()
 
 
 @requires_x86_64_linux

@@ -263,9 +263,11 @@ install-ultramaster-kr106: ## Build Ultramaster KR-106 VST3 into plugins/ (skipp
 		rm -rf "$$SRC" "$$BUILD"; mkdir -p "$$SRC"; \
 		git -C "$$SRC" init; \
 		git -C "$$SRC" remote add origin https://github.com/kayrockscreenprinting/ultramaster_kr106.git; \
-		git -C "$$SRC" fetch --depth 1 origin "$(ULTRAMASTER_KR106_GIT_REF)"; \
-		git -C "$$SRC" checkout --detach FETCH_HEAD; \
 	fi; \
+	git -C "$$SRC" remote set-url origin https://github.com/kayrockscreenprinting/ultramaster_kr106.git; \
+	git -C "$$SRC" fetch --depth 1 origin "$(ULTRAMASTER_KR106_GIT_REF)"; \
+	git -C "$$SRC" checkout --detach FETCH_HEAD; \
+	git -C "$$SRC" reset --hard FETCH_HEAD; \
 	git -C "$$SRC" submodule update --init --recursive --depth 1; \
 	cmake -S "$$SRC" -B "$$BUILD" -DCMAKE_BUILD_TYPE=Release -DKR106_COPY_AFTER_BUILD=OFF; \
 	MAKEFLAGS= cmake --build "$$BUILD" --config Release --target KR106_VST3 --parallel "$$(nproc)"; \
