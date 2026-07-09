@@ -112,7 +112,7 @@ python -m synth_setter.cli.generate_dataset experiment=generate_dataset/surge-si
 # → 48/48 valid. output_format: lance
 # → Committing winner fragments → train.lance/, val.lance/, test.lance/
 # → Stats reduced from shard sidecars. Dataset registered in W&B as data-surge-simple-480k-10k.
-# → metadata/dataset.complete written.
+# → dataset.complete written (relocates under metadata/ with #385).
 ```
 
 Make targets are thin aliases for convenience:

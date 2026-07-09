@@ -33,7 +33,6 @@ from synth_setter.pipeline.data.lance_staging import (
     write_rendering_marker,
 )
 from synth_setter.pipeline.schemas.lance_attempt import LanceFragmentSidecar
-from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 
 pytestmark = pytest.mark.usefixtures("fake_r2_remote")
