@@ -363,7 +363,7 @@ All structured files in the pipeline, in one place:
 | Debug log              | `metadata/workers/attempts/{worker_id}-{attempt}/debug.log`             | JSONL      | Workers (continuous)            | Humans (`jq`)                      |
 | Dataset card           | `metadata/dataset.json`                                                 | JSON       | `finalize`                      | Training scripts, humans           |
 | Completion marker      | `metadata/dataset.complete`                                             | JSON       | `finalize` (last step)          | `finalize` (idempotency check)     |
-| Stats                  | `data/stats.npz`                                                        | NumPy      | `finalize`                      | Training scripts                   |
+| Stats                  | `stats.npz`                                                             | NumPy      | `finalize`                      | Training scripts                   |
 
 **Shard attempt lifecycle:** Each attempt produces a shard file and lifecycle markers in the shard's staging directory, all named `{worker_id}-{attempt_uuid}`:
 
@@ -627,7 +627,7 @@ Design target ([#103](https://github.com/tinaudio/synth-setter/issues/103)) adds
 
 01. **Check for `dataset.complete`** — if present and all canonical outputs exist, print "already finalized" and exit 0
 02. **Read spec** from R2
-03. **Check completeness** — list staged shards, check for `.h5` + `.valid` marker per shard. If any missing, report which ones and exit 1
+03. **Check completeness** — list staged attempts, check for the format-specific attempt payload and `.valid` marker per shard. If any missing, report which ones and exit 1
 04. **Select winning attempts** — for each shard, if multiple staged attempts exist, select the one whose `.valid` marker has the earliest storage `LastModified`. Break ties by full marker key. This selects the first completed valid attempt without trusting worker clocks.
 05. **Structural-check selected attempts** — HDF5 opens the selected shard with `h5py` and verifies expected datasets and shapes. Lance parses the Pydantic `fragment.json`, deserializes Lance's fragment metadata with Lance, verifies the sidecar's shard/split/row count, and validates `shard-stats.npz`.
 06. **Produce training outputs** — format depends on `output_format` in the spec:

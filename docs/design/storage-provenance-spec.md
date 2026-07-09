@@ -65,9 +65,9 @@ data/{dataset_config_id}/{dataset_wandb_run_id}/
 │   ├── dataset.json         # Self-describing dataset card
 │   ├── dataset.complete     # Completion marker
 │   └── workers/             # Future state — worker staging area; current workers write shards directly to `data/{config_id}/{run_id}/`. #406
-│       ├── shards/{shard_id}/{worker_id}-{attempt_uuid}.*
-│       ├── shards/{shard_id}/{worker_id}-{attempt_uuid}.fragment.json
-│       ├── shards/{shard_id}/{worker_id}-{attempt_uuid}.shard-stats.npz
+│       ├── shards/shard-{id}/{worker_id}-{attempt_uuid}.*
+│       ├── shards/shard-{id}/{worker_id}-{attempt_uuid}.fragment.json
+│       ├── shards/shard-{id}/{worker_id}-{attempt_uuid}.shard-stats.npz
 │       └── attempts/{worker_id}-{attempt_uuid}/report.json
 ├── train.h5, val.h5, test.h5  # Split virtual datasets
 └── stats.npz                   # Normalization statistics
