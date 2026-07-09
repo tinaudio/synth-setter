@@ -633,7 +633,7 @@ Design target ([#103](https://github.com/tinaudio/synth-setter/issues/103)) adds
 06. **Produce training outputs** — format depends on `output_format` in the spec:
     - `hdf5`: Reshard into `train.h5`, `val.h5`, `test.h5` (HDF5 virtual datasets). Good for local single-GPU training.
     - `wds`: Transcode into `train-{shard}.tar`, `val-{shard}.tar`, `test-{shard}.tar` (WebDataset archives). Each `.tar` shard contains samples as `{sample_id}.audio.npy` + `{sample_id}.params.npy` + `{sample_id}.mel.npy`, plus a single `metadata.json` sidecar per shard (see the `ShardMetadata` model in `src/synth_setter/pipeline/schemas/shard_metadata.py`). Good for multi-GPU streaming from R2.
-    - `lance`: Commit the selected fragments into `train.lance/`, `val.lance/`, and `test.lance/` with Lance's dataset commit APIs. The winners' uncommitted fragment data already sits under each split's `data/` directory, so finalize writes only the manifests that reference it — no rows stream through the finalizer. Each split manifest is built by a single replace-semantics commit over the full winner set, never an incremental append, so a re-run rebuilds the identical manifest from the identical winners rather than double-committing rows.
+    - `lance`: Commit the selected fragments into `train.lance/`, `val.lance/`, and `test.lance/` with Lance's dataset commit APIs. The winners' uncommitted fragment data already sits under each split's `data/` directory (workers write it there — a fragment is only readable from the dataset whose `data/` dir physically holds its file, so finalize never copies or streams rows). Each split is one `LanceOperation.Overwrite` transaction over the full winner set: it lands as a single atomic manifest version (all winners visible together or none), and because it *replaces* rather than appends, a re-run rebuilds the identical manifest instead of double-committing rows. Idempotence comes from Overwrite-replace, not from `read_version` — Lance auto-rebases a stale-`read_version` append rather than rejecting it, so `read_version` is not a double-commit guard here. The whole model — fragment sidecar round-trip, atomic winner commit, duplicate-attempt dedup, idempotent re-commit, and the co-location requirement — is pinned by [`test_lance_fragment_finalize_poc.py`](../../tests/pipeline/data/test_lance_fragment_finalize_poc.py).
 07. **Compute or reduce normalization statistics** — HDF5/WDS compute stats from selected training data; Lance reduces selected training attempts' `.shard-stats.npz` files into dataset-level `stats.npz`.
 08. **Write `dataset.json`** — self-describing dataset card (includes output format, selected attempts, and shard manifest)
 09. **Register dataset in W&B** — log as artifact with spec, card, and metrics (§8)
@@ -1354,6 +1354,9 @@ This JSON is validated with Pydantic at the R2 trust boundary. The sidecar
 carries only what is not recoverable elsewhere: a schema version and Lance's own
 serialized fragment metadata, which stays an opaque Lance-owned string that
 finalize parses with Lance rather than treating as an untyped nested dictionary.
+Lance's `FragmentMetadata.to_json()` returns a dict, so `fragment_json` holds
+its `json.dumps(...)` string, which `FragmentMetadata.from_json(...)` re-parses
+(verified round-trip: [`test_lance_fragment_finalize_poc.py`](../../tests/pipeline/data/test_lance_fragment_finalize_poc.py)).
 
 ```python
 class LanceFragmentSidecar(BaseModel):
