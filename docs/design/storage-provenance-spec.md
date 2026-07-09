@@ -75,7 +75,7 @@ data/{dataset_config_id}/{dataset_wandb_run_id}/
 
 - Workers may write only per-attempt metadata under `metadata/workers/`, except Lance workers may also write uncommitted fragment data under `train.lance/data/`, `val.lance/data/`, or `test.lance/data/`. Workers never write final Lance manifests, transactions, `metadata/dataset.complete`, or dataset-level `stats.npz`. *(future state — current workers write directly to `data/{config_id}/{run_id}/`; see [#406](https://github.com/tinaudio/synth-setter/issues/406))*
 - `shards/` is written only by finalize *(future state — current workers write directly into the run prefix; finalize stage does not yet exist, see [#406](https://github.com/tinaudio/synth-setter/issues/406))*
-- Lance `fragment.json` sidecars store pipeline-owned identity fields plus Lance's exact serialized `FragmentMetadata.to_json()` payload. Per-shard normalization state is stored as `{attempt}.shard-stats.npz`; finalize reduces selected winners into dataset-level `stats.npz`.
+- Lance `fragment.json` sidecars store only a schema version and Lance's exact serialized `FragmentMetadata.to_json()` payload; logical identity (shard, split, worker, attempt) is derived from the path, filename, and spec, not stored. Per-shard normalization state is stored as `{attempt}.shard-stats.npz`; finalize reduces selected winners into dataset-level `stats.npz`.
 - All `rclone` operations use `--checksum`
 - Datasets are immutable once `metadata/dataset.complete` exists. New versions require a new `dataset_wandb_run_id`. *(future state — completion-marker handling lands with finalize, [#406](https://github.com/tinaudio/synth-setter/issues/406))*
 

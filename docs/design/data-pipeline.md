@@ -370,7 +370,7 @@ All structured files in the pipeline, in one place:
 | File / Marker                        | Written by                                                               | Meaning                                                                                                                                                                                                                                                                      |
 | ------------------------------------ | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `{worker}-{attempt}.h5`              | Worker (after local validation)                                          | The worker's validated HDF5 shard output. Sits alongside its lifecycle markers. Multiple attempts for the same shard are visible by name.                                                                                                                                    |
-| `{worker}-{attempt}.fragment.json`   | Worker (after Lance fragment creation)                                   | Strict Pydantic sidecar for a Lance attempt. Contains worker/shard identity plus Lance's serialized fragment metadata string.                                                                                                                                                |
+| `{worker}-{attempt}.fragment.json`   | Worker (after Lance fragment creation)                                   | Strict Pydantic sidecar for a Lance attempt: a schema version plus Lance's serialized fragment metadata string. Logical identity is derived from the path, filename, and spec, not stored ([§14.4](#144-lance-fragment-sidecar-schema)).                                     |
 | `{worker}-{attempt}.shard-stats.npz` | Worker (after Lance stats computation)                                   | Per-shard Welford state (`count`, `mean`, `m2`) for the Lance attempt. Finalize reduces only the winning attempts into dataset-level `stats.npz`.                                                                                                                            |
 | `{worker}-{attempt}.rendering`       | Worker (at start)                                                        | Attempt started. Append-only — not deleted when `.valid` is written. Orphaned `.rendering` without a `.valid` indicates a crashed attempt.                                                                                                                                   |
 | `{worker}-{attempt}.valid`           | Worker (last step of shard lifecycle)                                    | **Commit point for a staged attempt.** Written only after render, validation, upload, and bookkeeping are complete. `generate`/`status` uses this as the staging admission signal. Not sufficient for final dataset correctness — finalize validates again before promotion. |
@@ -604,7 +604,7 @@ Design target ([#103](https://github.com/tinaudio/synth-setter/issues/103)) adds
 **Structural check** — run by finalize before promoting or committing selected attempts:
 
 - Valid HDF5 file that opens with `h5py`, expected datasets present, shapes match spec.
-- Valid Lance sidecar that parses as a strict Pydantic model, points at the expected logical shard and split, has a matching row count, and contains Lance fragment metadata that round-trips through Lance's `FragmentMetadata.from_json(...)`.
+- Valid Lance sidecar that parses as a strict Pydantic model and contains Lance fragment metadata that round-trips through Lance's `FragmentMetadata.from_json(...)`. Finalize derives the shard from the staging path and the split from the spec, then cross-checks the fragment's row count against the sibling `.shard-stats.npz` `count` — the sidecar carries no shard/split/row fields to trust.
 - Valid Lance shard stats file with `count`, `mean`, and `m2` arrays of the expected shapes and dtypes. Finalize reduces only the selected winners' `.shard-stats.npz` files into dataset-level `stats.npz`.
 - This catches the only realistic failure between worker validation and finalize: transfer corruption or bit rot. Value-level corruption (NaN, wrong bounds) and row count mismatches were already caught by workers — re-checking would require loading all data from every shard, which is redundant.
 - If a staged shard fails the structural check, finalize writes `.invalid` for that attempt, reports the failure, and exits 1. The shard is treated as missing and regenerated on next `generate`.
@@ -628,12 +628,12 @@ Design target ([#103](https://github.com/tinaudio/synth-setter/issues/103)) adds
 01. **Check for `metadata/dataset.complete`** — if present and all canonical outputs exist, print "already finalized" and exit 0
 02. **Read spec** from R2
 03. **Check completeness** — list staged attempts, check for the format-specific attempt payload and `.valid` marker per shard. If any missing, report which ones and exit 1
-04. **Select winning attempts** — for each shard, if multiple staged attempts exist, select the one whose `.valid` marker has the earliest storage `LastModified`. Break ties by full marker key. This selects the first completed valid attempt without trusting worker clocks.
-05. **Structural-check selected attempts** — HDF5 opens the selected shard with `h5py` and verifies expected datasets and shapes. Lance parses the Pydantic `fragment.json`, deserializes Lance's fragment metadata with Lance, verifies the sidecar's shard/split/row count, and validates `shard-stats.npz`.
+04. **Select winning attempts** — for each shard, if multiple staged attempts exist, select the one whose `.valid` marker has the earliest storage `LastModified`, tie-broken by full marker key. `LastModified` is assigned server-side by R2 — a single authority, not a worker wall-clock — so it is safe to trust across workers, and it makes the winner *stable*: any attempt that lands later has a strictly greater timestamp and can never displace an already-selected winner. This monotonicity is what lets finalize re-run safely ([§11.2](#112-failure-modes--edge-cases))
+05. **Structural-check selected attempts** — HDF5 opens the selected shard with `h5py` and verifies expected datasets and shapes. Lance parses the Pydantic `fragment.json`, deserializes Lance's fragment metadata with Lance, cross-checks the fragment's row count against the sibling `shard-stats.npz` `count`, and confirms the fragment's data path falls under the split the spec assigns to this shard.
 06. **Produce training outputs** — format depends on `output_format` in the spec:
     - `hdf5`: Reshard into `train.h5`, `val.h5`, `test.h5` (HDF5 virtual datasets). Good for local single-GPU training.
     - `wds`: Transcode into `train-{shard}.tar`, `val-{shard}.tar`, `test-{shard}.tar` (WebDataset archives). Each `.tar` shard contains samples as `{sample_id}.audio.npy` + `{sample_id}.params.npy` + `{sample_id}.mel.npy`, plus a single `metadata.json` sidecar per shard (see the `ShardMetadata` model in `src/synth_setter/pipeline/schemas/shard_metadata.py`). Good for multi-GPU streaming from R2.
-    - `lance`: Commit the selected Lance fragments into `train.lance/`, `val.lance/`, and `test.lance/` with Lance's dataset commit APIs. Finalize does not stream rows through the finalizer for this path.
+    - `lance`: Commit the selected fragments into `train.lance/`, `val.lance/`, and `test.lance/` with Lance's dataset commit APIs. The winners' uncommitted fragment data already sits under each split's `data/` directory, so finalize writes only the manifests that reference it — no rows stream through the finalizer. Each split manifest is built by a single replace-semantics commit over the full winner set, never an incremental append, so a re-run rebuilds the identical manifest from the identical winners rather than double-committing rows.
 07. **Compute or reduce normalization statistics** — HDF5/WDS compute stats from selected training data; Lance reduces selected training attempts' `.shard-stats.npz` files into dataset-level `stats.npz`.
 08. **Write `dataset.json`** — self-describing dataset card (includes output format, selected attempts, and shard manifest)
 09. **Register dataset in W&B** — log as artifact with spec, card, and metrics (§8)
@@ -694,6 +694,8 @@ Both invocations read the staging prefix, both see the same missing shards, both
 **Scenario: concurrent `finalize` on the same run_id**
 
 Two finalize invocations both read the input spec, validate staged attempts, select winners, produce final outputs, and write `metadata/dataset.complete`. Both use the same deterministic winner rule and produce identical canonical outputs. `metadata/dataset.complete` does not provide mutex semantics — R2 has no atomic test-and-set. The marker's purpose is to let subsequent invocations skip finalization ("already finalized"), not to prevent concurrent finalization. **Result:** identical outputs, wasted compute.
+
+Three properties make this idempotence hold for a *sequential* re-run after a crash, not just concurrent invocations. Winner selection is monotonic (earliest `.valid` `LastModified`), each split is a replace-semantics commit over the full winner set (never an append), and `metadata/dataset.complete` is written last. A finalize that dies after committing `train.lance` but before the marker re-runs to the identical result: the winners are unchanged and the commit rebuilds the manifest rather than appending rows. A straggler attempt that lands after a completed finalize cannot change the outcome either — its later `LastModified` loses to the existing winner.
 
 **Scenario: accidentally-launched finalize while another finalize is running**
 
@@ -845,7 +847,7 @@ The pipeline supports three output formats, selected via `output_format` in the 
 
 - **HDF5** (`output_format: hdf5`): Virtual datasets (`train.h5`, `val.h5`, `test.h5`) that reference promoted shards. Good for local single-GPU training where the full dataset is downloaded to the training machine. Random access, fast local I/O.
 - **WebDataset** (`output_format: wds`): Sequential `.tar` archives (`train-{shard}.tar`, etc.) optimized for streaming. Each archive contains N samples as individual NumPy files. Good for multi-GPU training (B200s, many GPUs) where streaming from R2 avoids downloading the full dataset to every node.
-- **Lance** (`output_format: lance`): Lance **dataset directories** (`train.lance/`, `val.lance/`, `test.lance/`) committed from worker-produced fragments. Workers use Lance to write uncommitted fragment data and persist a strict Pydantic `fragment.json` sidecar whose `fragment_json` field is the exact Lance `FragmentMetadata.to_json()` payload. Lance owns Lance fragment IDs and physical data references; the pipeline stores logical identity (`shard_id`, `split`, `worker_id`, `attempt_uuid`) in the sidecar. Rows are Arrow fixed-shape-tensor columns (float16 `audio`, float32 `mel_spec` / `param_array`) with the `ShardMetadata` JSON embedded in the schema metadata and the on-disk format pinned to `data_storage_version="2.2"`. The columnar layout gives per-column projection, and finalize avoids rewriting rows by deserializing winning fragment metadata and committing the split manifests.
+- **Lance** (`output_format: lance`): Lance **dataset directories** (`train.lance/`, `val.lance/`, `test.lance/`) committed from worker-produced fragments. Workers use Lance to write uncommitted fragment data and persist a strict Pydantic `fragment.json` sidecar whose `fragment_json` field is the exact Lance `FragmentMetadata.to_json()` payload. Lance owns Lance fragment IDs and physical data references; the pipeline derives logical identity (`shard_id`, `split`, `worker_id`, `attempt_uuid`) from the staging path, filename, and spec rather than storing it in the sidecar ([§14.4](#144-lance-fragment-sidecar-schema)). Rows are Arrow fixed-shape-tensor columns (float16 `audio`, float32 `mel_spec` / `param_array`) with the `ShardMetadata` JSON embedded in the schema metadata and the on-disk format pinned to `data_storage_version="2.2"`. The columnar layout gives per-column projection, and finalize avoids rewriting rows by deserializing winning fragment metadata and committing the split manifests.
 
 **Why HDF5 is insufficient for multi-GPU training:**
 
@@ -1348,22 +1350,25 @@ class WorkerReport(BaseModel):
 
 Lance worker attempts store their reconciliation contract in
 `metadata/workers/shards/shard-{id}/{worker_id}-{attempt_uuid}.fragment.json`.
-This JSON is validated with Pydantic at the R2 trust boundary. Lance's own
-fragment metadata remains an opaque Lance-owned JSON string; finalize parses it
-with Lance rather than treating it as an untyped nested dictionary.
+This JSON is validated with Pydantic at the R2 trust boundary. The sidecar
+carries only what is not recoverable elsewhere: a schema version and Lance's own
+serialized fragment metadata, which stays an opaque Lance-owned string that
+finalize parses with Lance rather than treating as an untyped nested dictionary.
 
 ```python
 class LanceFragmentSidecar(BaseModel):
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
     schema_version: Literal[1]
-    worker_id: str
-    attempt_uuid: str
-    shard_id: int
-    split: Literal["train", "val", "test"]
-    rows: int
     fragment_json: str
 ```
+
+Logical identity is derived, not stored, so there is no field for it to
+contradict: `worker_id` and `attempt_uuid` come from the filename, `shard_id`
+from the staging path, `split` from the spec's deterministic split assignment,
+and the row count from Lance's fragment metadata (cross-checked against `count`
+in the sibling `.shard-stats.npz`). Storing any of these in the sidecar would
+create a second source of truth free to drift from the first.
 
 Per-shard Lance statistics are stored beside the sidecar as
 `{worker_id}-{attempt_uuid}.shard-stats.npz`, not JSON, to avoid serialization
