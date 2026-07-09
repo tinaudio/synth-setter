@@ -95,6 +95,20 @@ def _dockerfile_arg(name: str) -> str:
     return match.group(1)
 
 
+def _dockerfile_stage_text(stage_name: str) -> str:
+    """Return Dockerfile text from ``stage_name`` until the next stage.
+
+    :param stage_name: Docker stage alias.
+    :returns: the selected stage text.
+    """
+    text = DOCKERFILE.read_text()
+    match = re.search(rf"^FROM .+ AS {re.escape(stage_name)}\n", text, re.MULTILINE)
+    assert match, f"Dockerfile does not define stage {stage_name}"
+    next_stage = re.search(r"^FROM ", text[match.end() :], re.MULTILINE)
+    end = match.end() + next_stage.start() if next_stage else len(text)
+    return text[match.start() : end]
+
+
 def _run_make(
     cwd: Path,
     target: str,
@@ -200,6 +214,12 @@ def test_surge_version_matches_dockerfile_prebuilt_package() -> None:
     assert f"{version}/surge-xt-linux-x64-{version}.deb" in DOCKERFILE.read_text(), (
         f"Dockerfile prebuilt Surge package does not match Makefile SURGE_XT_VERSION={version}"
     )
+
+
+def test_runtime_image_installs_unzip_for_plugin_install_targets() -> None:
+    """The runtime image has the zip extractor that Makefile plugin targets invoke."""
+    stage = _dockerfile_stage_text("builder-install-synth-setter-deps")
+    assert re.search(r"apt-get install\b[\s\S]*\bunzip\b", stage)
 
 
 def test_install_plugins_all_bundles_present_skips_every_download(

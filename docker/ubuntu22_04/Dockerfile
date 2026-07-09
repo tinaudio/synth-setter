@@ -415,7 +415,8 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
       rclone \
       rsync \
       openssh-client \
-      python3-pip; \
+      python3-pip \
+      unzip; \
     apt-get clean; \
     rm -rf /var/lib/apt/lists/*
 
