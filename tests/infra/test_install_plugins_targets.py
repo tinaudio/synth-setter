@@ -1,8 +1,8 @@
 """`make install-plugins` provisions every VST3 bundle the runtime docker image ships.
 
 The image (docker/ubuntu22_04/Dockerfile) installs Surge XT plus three SHA256-pinned prebuilt
-synths (Dexed, OB-Xf, Six Sines). The Makefile mirrors those pins for local installs; these tests
-fail when either side drifts.
+synths (Dexed, OB-Xf, Six Sines) and source-builds Ultramaster KR-106. The Makefile mirrors those
+pins for local installs; these tests fail when either side drifts.
 
 The download-path tests never touch the network: they seed the archive cache under a throwaway
 ``HOME`` and pass the fixture's real sha256 as a command-line make-variable override.
@@ -34,9 +34,20 @@ pytestmark = pytest.mark.infra
 _TIMEOUT_S = 60
 
 # Every VST3 bundle staged into the runtime image, by plugins/ basename.
-_IMAGE_BUNDLES = ("Surge XT.vst3", "Dexed.vst3", "OB-Xf.vst3", "Six Sines.vst3")
+_IMAGE_BUNDLES = (
+    "Surge XT.vst3",
+    "Dexed.vst3",
+    "OB-Xf.vst3",
+    "Six Sines.vst3",
+    "Ultramaster KR-106.vst3",
+)
 
-_FETCHED_SYNTH_TARGETS = ("install-dexed", "install-obxf", "install-six-sines")
+_LINUX_X86_64_PLUGIN_TARGETS = (
+    "install-dexed",
+    "install-obxf",
+    "install-six-sines",
+    "install-ultramaster-kr106",
+)
 
 # Pins that must stay identical between the Makefile and the Dockerfile ARGs.
 _SHARED_PINS = (
@@ -47,10 +58,12 @@ _SHARED_PINS = (
     "SIX_SINES_VERSION",
     "SIX_SINES_ASSET",
     "SIX_SINES_SHA256",
+    "ULTRAMASTER_KR106_VERSION",
+    "ULTRAMASTER_KR106_GIT_REF",
 )
 
-# The fetch recipe itself gates on x86_64 Linux, so its download-path branches
-# are only reachable on such hosts.
+# The prebuilt fetch and source-build recipes gate on x86_64 Linux, so their install branches are
+# only reachable on such hosts.
 requires_x86_64_linux = pytest.mark.skipif(
     platform.system() != "Linux" or platform.machine() != "x86_64",
     reason="install_fetched_synth skips on non-x86_64 hosts",
@@ -210,11 +223,11 @@ def test_install_plugins_all_bundles_present_skips_every_download(
         assert f"plugins/{name} already exists" in result.stdout, f"{name} not visited"
 
 
-@pytest.mark.parametrize("target", _FETCHED_SYNTH_TARGETS)
-def test_fetched_synth_target_non_x86_64_skips_without_installing(
+@pytest.mark.parametrize("target", _LINUX_X86_64_PLUGIN_TARGETS)
+def test_linux_x86_64_plugin_target_non_x86_64_skips_without_installing(
     makefile_checkout: Path, target: str
 ) -> None:
-    """On a non-x86_64 host every fetched-synth target skips, mirroring the image's amd64 gate.
+    """On a non-x86_64 host every x86_64 plugin target skips, mirroring the image gate.
 
     :param makefile_checkout: throwaway checkout holding the Makefile.
     :param target: fetched-synth make target under test.
@@ -292,7 +305,12 @@ def test_install_plugins_mixed_presence_installs_only_missing_bundle(
     home, env = _home_env(makefile_checkout)
     plugins = makefile_checkout / "plugins"
     plugins.mkdir()
-    for name in ("Surge XT.vst3", "OB-Xf.vst3", "Six Sines.vst3"):
+    for name in (
+        "Surge XT.vst3",
+        "OB-Xf.vst3",
+        "Six Sines.vst3",
+        "Ultramaster KR-106.vst3",
+    ):
         (plugins / name).mkdir()
     version = _makefile_var("DEXED_VERSION")
     payload = _zip_containing(f"dexed-{version}-lnx/Dexed.vst3")
