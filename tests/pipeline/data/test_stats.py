@@ -68,6 +68,26 @@ def test_merge_welford_two_states_matches_single_pass_over_all_rows(
     np.testing.assert_allclose(merged[2], single_pass[2], rtol=1e-9)
 
 
+def test_merge_welford_chained_three_way_matches_single_pass(
+    stats_script: ModuleType,
+) -> None:
+    """Chained folds over three shards equal one pass over the union (associativity).
+
+    :param stats_script: Imported get_dataset_stats module (fixture).
+    """
+    rng = np.random.default_rng(2)
+    shards = [rng.normal(loc=i * 3.0, size=(5 + i, 2)) for i in range(3)]
+
+    chained = (0, 0, 0)
+    for shard in shards:
+        chained = stats_script.merge_welford(chained, _existing_from_samples(stats_script, shard))
+    single_pass = _existing_from_samples(stats_script, np.concatenate(shards))
+
+    assert chained[0] == single_pass[0]
+    np.testing.assert_allclose(chained[1], single_pass[1], rtol=1e-9)
+    np.testing.assert_allclose(chained[2], single_pass[2], rtol=1e-9)
+
+
 def test_merge_welford_zero_state_is_identity_seed(stats_script: ModuleType) -> None:
     """``(0, 0, 0)`` folds as identity on both sides and merges with itself.
 

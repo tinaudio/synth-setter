@@ -1,10 +1,12 @@
-"""Strict Pydantic contract for Lance shard-attempt sidecars staged on R2.
+"""Strict Pydantic contracts for the Lance staging/audit trust boundary.
 
-The sidecar carries only what is not recoverable elsewhere: a schema version
-and Lance's own serialized fragment metadata. Logical identity is derived, not
-stored — ``worker_id``/``attempt_uuid`` from the filename, ``shard_id`` from
-the staging path, ``split`` from the spec — so there is no field free to drift
-from the path-derived truth (design: ``docs/design/data-pipeline.md`` §14.4).
+Two contracts live here: the per-attempt fragment sidecar and the
+``dataset.json`` audit-card models. The sidecar carries only what is not
+recoverable elsewhere — a schema version and Lance's own serialized fragment
+metadata; logical identity is derived, not stored (``worker_id``/
+``attempt_uuid`` from the filename, ``shard_id`` from the staging path,
+``split`` from the spec), so no field can drift from the path-derived truth
+(design: ``docs/design/data-pipeline.md`` §14.4).
 """
 
 from __future__ import annotations

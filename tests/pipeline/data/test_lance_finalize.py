@@ -266,6 +266,45 @@ def test_finalize_interrupted_before_marker_rerun_rebuilds_without_doubled_rows(
     assert (run_root / "stats.npz").exists()
 
 
+@pytest.mark.parametrize("flag", [True, False])
+def test_finalize_forwards_mask_degenerate_bins_to_welford_finalize(
+    fake_r2_remote: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    flag: bool,
+) -> None:
+    """``spec.mask_degenerate_bins`` reaches the Welford finalize verbatim.
+
+    Pins the wire on both polarities, mirroring the hdf5/wds forwarding tests,
+    so a regression that hard-wires the kwarg fails here.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for the local shard datasets.
+    :param monkeypatch: Pytest fixture used to capture the forwarded kwarg.
+    :param flag: Parametrized polarity threaded through the spec field.
+    """
+    from synth_setter.pipeline.data import lance_finalize
+
+    spec = DatasetSpec.model_validate(
+        {**tiny_lance_spec().model_dump(mode="json"), "mask_degenerate_bins": flag}
+    )
+    stage_all_shards(spec, tmp_path)
+    captured: dict[str, bool] = {}
+    real_finalize = lance_finalize.finalize_welford
+
+    def capture_finalize(existing: object, mask_degenerate: bool = False) -> object:
+        captured["mask_degenerate"] = mask_degenerate
+        return real_finalize(existing, mask_degenerate=mask_degenerate)
+
+    monkeypatch.setattr(lance_finalize, "finalize_welford", capture_finalize)
+
+    from synth_setter.cli.finalize_dataset import finalize_from_spec
+
+    finalize_from_spec(spec, tmp_path / "work")
+
+    assert captured == {"mask_degenerate": flag}
+
+
 def test_finalize_records_selected_attempts_and_valid_keys_in_dataset_json(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:

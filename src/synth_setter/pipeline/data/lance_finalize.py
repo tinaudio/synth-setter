@@ -144,7 +144,8 @@ def select_winner(attempts: list[StagedLanceAttempt]) -> StagedLanceAttempt:
     displace an already-selected winner (what makes finalize re-run safe).
     Effective precision floors at microseconds (listing timestamps parse via
     ``datetime.fromisoformat``) and S3-compatible stores may serve coarser;
-    ties resolve deterministically by key, which carries no completion order.
+    ties resolve deterministically by key, which carries no completion order
+    — expect them routinely when workers finish within the same second.
 
     :param attempts: Non-empty complete attempts for one shard.
     :returns: The winning attempt.

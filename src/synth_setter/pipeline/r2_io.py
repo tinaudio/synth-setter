@@ -14,7 +14,7 @@ import os
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -325,7 +325,7 @@ class RemoteEntry:
 _PROBE_RELIABILITY_FLAGS = ("--retries=3", "--contimeout=30s")
 
 
-def _run_listing_probe(args: list[str]) -> str | None:
+def _run_listing_probe(args: Sequence[str]) -> str | None:
     """Run an rclone listing probe, normalizing a missing directory to absent.
 
     S3 backends list a missing key/prefix as empty output; the local backend
