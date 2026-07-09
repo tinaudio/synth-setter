@@ -77,7 +77,9 @@ code**. See
    experiment configs from datamodule, model, trainer, and callback configs.
    VST datasets load from HDF5 shards (`datamodule=surge`) or
    [Lance](https://github.com/lance-format/lance) shards (`datamodule=surge_lance`);
-   both serve training and evaluation. The datamodule class is
+   both serve training and evaluation. Native `lance.torch` dataloaders are also
+   available outside the datamodule configs — see
+   [training-pipeline.md §6.1](design/training-pipeline.md#61-dataset-access). The datamodule class is
    param-count-agnostic, though the `surge*` configs pin `param_spec_name`, so
    training a non-Surge dataset overrides `datamodule.param_spec_name=<name>`.
    Design: [training-pipeline.md](design/training-pipeline.md)
