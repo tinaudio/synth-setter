@@ -5,6 +5,12 @@ Thin factories over Lance's own PyTorch integration (``LanceDataset``,
 adapter in :mod:`synth_setter.data.lance_datamodule`. Both loaders stream
 object storage natively: pass ``storage_options`` (see
 :func:`synth_setter.pipeline.r2_io.r2_storage_options`) with an ``s3://`` URI.
+
+Typical usage::
+
+    loader = lance_map_dataloader("data/train.lance", batch_size=128, shuffle=True)
+    for batch in loader:  # {"mel_spec": (128, C, 128, F) tensor, ...}
+        ...
 """
 
 from __future__ import annotations
@@ -24,26 +30,28 @@ from torch.utils.data import DataLoader
 logger = logging.getLogger(__name__)
 
 
-def _column_to_tensor(array: pa.Array | pa.ChunkedArray) -> torch.Tensor:
+def _column_to_tensor(array: pa.Array | pa.ChunkedArray, name: str) -> torch.Tensor:
     """Convert one Arrow column to a writable tensor, keeping tensor inner shapes.
 
     Lance's default conversion flattens fixed-shape tensor columns to
     ``(rows, prod(shape))``; this keeps the schema's per-row shape.
 
     :param array: Column values for one batch.
+    :param name: Column name, for error messages.
     :returns: ``(rows, *inner_shape)`` tensor owning its memory.
     :raises TypeError: The column type has no tensor representation (e.g. blob).
+    :raises ValueError: The column contains nulls (pipeline columns are ``nullable=False``).
     """
     if isinstance(array, pa.ChunkedArray):
         array = array.combine_chunks()
+    if array.null_count:
+        raise ValueError(f"column {name!r} contains nulls; expected nullable=False data")
     if isinstance(array.type, pa.FixedShapeTensorType):
         values = array.to_numpy_ndarray()
     elif pa.types.is_fixed_size_list(array.type):
-        # Pipeline embedding columns (e.g. clap) are nullable=False; flatten()
-        # assumes no null rows, which nulls would silently misalign.
         values = array.flatten().to_numpy().reshape(len(array), array.type.list_size)
     else:
-        raise TypeError(f"no tensor representation for column type {array.type}")
+        raise TypeError(f"column {name!r} type {array.type} has no tensor representation")
     # Arrow buffers are read-only; torch.from_numpy over a read-only view is
     # undefined behavior on write, so copy unless numpy already owns the memory.
     return torch.from_numpy(values if values.flags.writeable else values.copy())
@@ -69,10 +77,10 @@ def _batch_to_shaped_tensors(
     del hf_converter, use_blob_api, kwargs
     if isinstance(batch, dict):
         raise TypeError("blob columns are not supported by the lance_torch dataloaders")
-    return {name: _column_to_tensor(batch[name]) for name in batch.column_names}
+    return {name: _column_to_tensor(batch[name], name) for name in batch.column_names}
 
 
-def _dataset_options(storage_options: dict[str, str] | None) -> dict[str, Any] | None:
+def _dataset_options(storage_options: dict[str, str] | None) -> dict[str, dict[str, str]] | None:
     """Wrap ``storage_options`` in the ``lance.dataset`` keyword mapping.
 
     :param storage_options: Object-store config for a cloud URI; ``None`` local.
@@ -121,7 +129,7 @@ class LanceMapDataset(SafeLanceDataset):
             # Worker-side first touch: reopen rather than reuse an inherited handle.
             self._ds = lance.dataset(self.uri, **self.dataset_options)
         table = self._ds.take(list(indices), columns=self._columns)
-        return {name: _column_to_tensor(table[name]) for name in table.column_names}
+        return {name: _column_to_tensor(table[name], name) for name in table.column_names}
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         """Fetch one row as a dict of per-row tensors.
@@ -163,7 +171,8 @@ def lance_map_dataloader(
         :func:`synth_setter.pipeline.r2_io.r2_storage_options`); ``None`` local.
     :param \\*\\*loader_kwargs: Extra ``torch.utils.data.DataLoader`` keywords
         (``shuffle``, ``sampler``, ``pin_memory``, ...).
-    :returns: DataLoader yielding ``{column: (batch_size, *inner_shape) tensor}``.
+    :returns: DataLoader yielding ``{column: (<=batch_size, *inner_shape) tensor}`` —
+        the final batch is shorter when the row count is not divisible by ``batch_size``.
     """
     dataset = LanceMapDataset(uri, columns=columns, storage_options=storage_options)
     logger.info(
@@ -209,13 +218,19 @@ def lance_iterable_dataloader(
         :func:`synth_setter.pipeline.r2_io.r2_storage_options`); ``None`` local.
     :param rank: Explicit shard index; requires ``world_size``.
     :param world_size: Explicit shard count; requires ``rank``.
-    :returns: DataLoader yielding ``{column: (batch_size, *inner_shape) tensor}``.
-    :raises ValueError: Exactly one of ``rank`` / ``world_size`` was provided.
+    :returns: DataLoader yielding ``{column: (<=batch_size, *inner_shape) tensor}`` —
+        the final batch is shorter when the row count is not divisible by ``batch_size``.
+    :raises ValueError: Exactly one of ``rank`` / ``world_size`` was provided, or
+        ``rank`` is outside ``[0, world_size)``.
     """
     if (rank is None) != (world_size is None):
         raise ValueError("rank and world_size must be provided together")
     sampler = None
     if rank is not None and world_size is not None:
+        if not 0 <= rank < world_size:
+            raise ValueError(
+                f"rank must be in [0, world_size); got rank={rank}, world_size={world_size}"
+            )
         sampler = ShardedBatchSampler(rank, world_size)
     logger.info(
         "lance iterable dataloader: uri=%s columns=%s batch_size=%d rank=%s world_size=%s",
