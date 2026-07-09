@@ -276,13 +276,13 @@ Each worker container runs with `MODE=generate-shards` — the entrypoint mode I
 │  make finalize RUN_ID=...      │        │                  │
 │  (local or cloud)              │        │                  │
 │                                │        │  data/           │
-│  1. Read spec            ◄─────┼────────┤   train.h5       │
-│  2. Validate attempts    ◄─────┼────────┤   train.lance/   │
+│  1. Read spec            ◄─────┼────────┤   train.*        │
+│  2. Validate attempts    ◄─────┼────────┤   val.*          │
 │  3. Select winners       ◄─────┼────────┤   stats.npz      │
-│  4. Promote/commit data  ──────┼───────►│   dataset.json   │
-│  5. Reduce stats              │         │   dataset.complete│
+│  4. Promote/commit data  ──────┼───────►│   metadata/       │
+│  5. Reduce stats              │         │   dataset.json   │
 │  6. Register in W&B           │         │                  │
-│  7. Write dataset.complete    │         │                  │
+│  7. Write dataset.complete    │         │   dataset.complete│
 └────────────────────────────────┘        └──────────────────┘
 ```
 
@@ -1371,7 +1371,7 @@ precision loss. The `.npz` contains Welford state:
 
 | Array   | Type      | Meaning                                   |
 | ------- | --------- | ----------------------------------------- |
-| `count` | `int64`   | Number of training rows represented       |
+| `count` | `int64`   | Number of rows represented                |
 | `mean`  | `float64` | Running mean for normalization statistics |
 | `m2`    | `float64` | Running sum of squared deviations         |
 
