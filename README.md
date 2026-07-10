@@ -167,7 +167,7 @@ src/synth_setter/models/components/residual_mlp.py      Residual MLP implementat
 src/synth_setter/models/components/cnn.py               CNN encoder implementations
 src/synth_setter/models/components/vae.py               VAE+RealNVP baseline implementation
 src/synth_setter/models/*_module.py                     LightningModule implementations
-src/synth_setter/data/vst/*                             Dataset generation
+src/synth_setter/data/vst/*                             Dataset generation + VST/CLAP parameter tooling
 src/synth_setter/data/vst/surge_xt_param_spec.py        Surge XT dataset sampling distributions
 src/synth_setter/data/ot.py                             Optimal transport minibatch coupling
 src/synth_setter/data/kosc_datamodule.py                k-osc task data module

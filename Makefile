@@ -57,6 +57,11 @@ test-full-mps: ## MPS + CPU tests (gpu excluded). Runs serially for exclusive MP
 test-vst-cpu: ## VST tests only (slow included; gpu/mps excluded). Linux: bootstraps Xvfb.
 	$(HEADLESS_WRAPPER) pytest -m "requires_vst and not gpu and not mps"
 
+# No marker deselection: this is the exhaustive lane for the sound-match
+# bridge (#1787) — slow, requires_vst, and subprocess contract tests all run.
+test-bridge: ## Sound-match bridge suite, exhaustive (slow + VST included). Linux: bootstraps Xvfb.
+	$(HEADLESS_WRAPPER) pytest tests/test_predict_capture.py tests/data/vst/test_clap_map.py tests/data/vst/test_clap_map_completeness.py tests/data/vst/test_clap_introspect.py tests/data/vst/test_build_clap_map.py -v
+
 # --confcutdir avoids loading tests/conftest.py (torch/h5py/Hydra imports),
 # so this target works on a minimal host with only the stdlib + pytest.
 test-infra: ## Devcontainer + GHA invariant tests — stdlib-only, no torch/Hydra.
