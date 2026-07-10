@@ -36,7 +36,7 @@ from synth_setter.data.vst.core import (
     make_midi_events,
     set_params,
 )
-from synth_setter.data.vst.param_spec import ParamSpec
+from synth_setter.data.vst.param_spec import ParamSpec, decode_model_output
 from synth_setter.data.vst.param_spec_registry import default_plugin_path
 from synth_setter.data.vst.writers import make_hdf5_dataset
 from synth_setter.pipeline.schemas.spec import RenderConfig
@@ -337,8 +337,7 @@ def decode_prediction_row(
 
     spec = param_specs[param_spec_name]
     row = pred_tensor[batch_idx].detach().cpu().float().numpy()
-    row_scaled = np.clip((row + 1) / 2, 0, 1)
-    synth_params, _ = spec.decode(row_scaled)
+    synth_params, _ = decode_model_output(row, spec)
     return synth_params
 
 

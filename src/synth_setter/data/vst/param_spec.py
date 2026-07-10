@@ -314,3 +314,21 @@ class ParamSpec:
     @property
     def names(self) -> list[str]:
         return self.synth_param_names + self.note_param_names
+
+
+def decode_model_output(row: np.ndarray, spec: ParamSpec) -> tuple[dict[str, float], NoteParams]:
+    """Invert the model-output scale and decode one prediction row.
+
+    Model prediction rows live in ``[-1, 1]``; the encoded param domain is
+    ``[0, 1]``, so the row is rescaled via ``(x + 1) / 2`` and clipped before
+    :meth:`ParamSpec.decode`. Single source of the inverse-scale contract for
+    ``predict_vst_audio``, ``surge_xt_interactive``, and ``predict_capture``.
+
+    :param row: One prediction row of shape ``(len(spec),)``, values in ``[-1, 1]``.
+    :param spec: Spec the model was trained against.
+    :returns: ``(synth_param_dict, note_params)``; synth values are
+        pedalboard-normalized ``[0, 1]``, note params are in their native
+        domains (pitch as int, note start/end in seconds).
+    """
+    scaled = np.clip((row + 1) / 2, 0, 1)
+    return spec.decode(scaled)
