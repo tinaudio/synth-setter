@@ -1,8 +1,7 @@
 # @package _global_
 
-# Predict-mode eval of a surge_4 FFN checkpoint: renders predictions through
-# Surge XT with the surge-mini preset and computes audio metrics. Compose with
-# eval.yaml and pass ckpt_path=<trained ffn_4 checkpoint>.
+# Predict-mode eval of a surge_4 FFN checkpoint: renders through Surge XT
+# with the surge-mini preset and computes audio metrics.
 
 defaults:
   - /experiment/surge/ffn_4

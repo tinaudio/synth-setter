@@ -10,8 +10,8 @@ defaults:
   - extras: default
   - hydra: default
   - callbacks: none
-  # Before `experiment` so experiment yamls may `override /render:` (Hydra only
-  # lets an experiment override groups declared ahead of it).
+  # `render` before `experiment` (matching train.yaml/dataset.yaml): Hydra only
+  # lets an experiment override groups declared ahead of it.
   - render: null
   - experiment: null
 

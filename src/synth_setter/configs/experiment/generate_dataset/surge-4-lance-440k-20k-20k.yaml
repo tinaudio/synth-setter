@@ -1,9 +1,7 @@
 # @package _global_
 
-# Full-scale surge_4 Lance dataset: inherits the surge-simple 440k/20k/20k
-# Lance pipeline (sizes, shard/parallel/retry settings, experiments bucket)
-# and swaps in the surge_4 (surge-mini preset) spec, finalizing inline so one
-# local CLI process yields dataset.complete.
+# Full-scale surge_4 Lance dataset: the surge-simple 440k/20k/20k pipeline
+# with the surge_4 (surge-mini preset) spec swapped in, finalized inline.
 
 defaults:
   - /experiment/generate_dataset/surge-simple-lance-440k-20k-20k@_global_

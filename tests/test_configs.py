@@ -1,5 +1,6 @@
 """Tests that Hydra config groups compose without errors."""
 
+from collections.abc import Sequence
 from typing import Any
 
 import hydra
@@ -183,7 +184,7 @@ def test_test_mps_yaml_matches_cfg_surge_xt_global(experiment: str, test_mps_yam
     )
 
 
-def _compose(config_name: str, overrides: list[str]) -> DictConfig:
+def _compose(config_name: str, overrides: Sequence[str]) -> DictConfig:
     """Compose a top-level config with overrides, clearing GlobalHydra around it.
 
     :param config_name: Top-level config to compose (``train.yaml``, ``eval.yaml``, ...).
@@ -191,10 +192,13 @@ def _compose(config_name: str, overrides: list[str]) -> DictConfig:
     :returns: The composed config.
     """
     GlobalHydra.instance().clear()
-    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
-        cfg = compose(config_name=config_name, return_hydra_config=False, overrides=overrides)
-    GlobalHydra.instance().clear()
-    return cfg
+    try:
+        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+            return compose(
+                config_name=config_name, return_hydra_config=False, overrides=list(overrides)
+            )
+    finally:
+        GlobalHydra.instance().clear()
 
 
 def test_surge_4_generate_dataset_experiment_composes_with_inline_finalize() -> None:
@@ -227,6 +231,9 @@ def test_surge_4_train_experiment_composes_with_surge_4_width() -> None:
     assert cfg.datamodule._target_ == "synth_setter.data.lance_datamodule.LanceVSTDataModule"
     assert cfg.model.net.d_out == 7
     assert cfg.callbacks.log_per_param_mse.param_spec == "surge_4"
+    # plot_proj_ii's projection plots don't apply to the surge_4 spec; the
+    # experiment disables it like its ffn_full/ffn_simple siblings.
+    assert cfg.callbacks.plot_proj_ii is None
 
 
 def test_surge_4_eval_experiment_composes_in_predict_mode() -> None:
@@ -243,7 +250,13 @@ def test_surge_4_eval_experiment_composes_in_predict_mode() -> None:
     assert cfg.model.net.d_out == 7
     assert cfg.evaluation.render_vst is True
     assert cfg.evaluation.compute_metrics is True
+    assert cfg.evaluation.rerender_target is False
     assert cfg.ckpt_path == "dummy.ckpt"
+    # eval.yaml defaults logger to null; the experiment must re-select the
+    # wandb group or base.yaml's logger.wandb fragment dangles.
+    assert cfg.logger.wandb._target_ == "lightning.pytorch.loggers.wandb.WandbLogger"
+    # eval_surge callbacks: the prediction writer must be present.
+    assert "prediction_writer" in cfg.callbacks
 
 
 def test_ffn_smoke_experiment_wires_surge_xt_fixture_source() -> None:
