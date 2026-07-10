@@ -369,6 +369,29 @@ def test_main_rerender_target_renders_pred_and_target_per_sample(
         assert bool(df["target"].notna().all())
 
 
+def test_main_rerender_target_accepts_float64_target_params(
+    runner: CliRunner, pred_dir: Path, out_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A float64 target-params tensor still decodes — the call site casts to float32.
+
+    :param runner: Parametrized ``runner`` value under test.
+    :param pred_dir: Parametrized ``pred_dir`` value under test.
+    :param out_dir: Parametrized ``out_dir`` value under test.
+    :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
+    """
+    monkeypatch.setattr(predict_vst_audio, "render_params", lambda *a, **k: _fake_render())
+
+    _write_batch(pred_dir, index=0, batch_size=1, with_target_params=True)
+    target_path = pred_dir / "target-params-0.pt"
+    torch.save(torch.load(target_path, weights_only=True).to(torch.float64), target_path)
+
+    result = _invoke_main(runner, pred_dir, out_dir, "--rerender_target", "--skip-spectrogram")
+
+    assert result.exit_code == 0, result.output
+    df = pd.read_csv(out_dir / "sample_0" / "params.csv", index_col=0)
+    assert bool(df["target"].notna().all())
+
+
 def test_main_target_params_on_disk_without_rerender_does_not_crash(
     runner: CliRunner, pred_dir: Path, out_dir: Path
 ) -> None:

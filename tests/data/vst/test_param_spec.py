@@ -83,7 +83,8 @@ class TestDecodeModelOutput:
         _, note_params = decode_model_output(row, _tiny_spec())
 
         assert note_params["pitch"] == 108
-        assert "note_start_and_end" in note_params
+        # 0.2 in [-1, 1] rescales to 0.6, then lerps onto the 4 s duration grid.
+        assert note_params["note_start_and_end"] == pytest.approx((2.4, 2.4))
 
     def test_input_row_is_not_mutated(self) -> None:
         """Decoding never mutates the caller's row (callers reuse prediction tensors)."""
@@ -116,8 +117,12 @@ class TestDecodeModelOutput:
 
         assert synth_params["cutoff"] == pytest.approx(0.5)
 
-    def test_rows_truncated_inside_a_categorical_fail_loudly(self) -> None:
-        """Current contract: truncation inside a onehot categorical raises ValueError."""
+    def test_rows_truncated_to_starve_a_scalar_param_fail_loudly(self) -> None:
+        """Current contract: truncation that empties a later scalar's slice raises ValueError.
+
+        The truncated-through categorical itself decodes silently (argmax of the
+        short slice); the loud failure is pitch's empty slice hitting .item().
+        """
         row = np.array(_ROW[:2], dtype=np.float32)
 
         with pytest.raises(ValueError):
