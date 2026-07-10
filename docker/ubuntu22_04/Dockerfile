@@ -487,7 +487,8 @@ RUN git init && \
 # deps are already in the venv; this step installs the package editable.
 RUN uv pip install --no-deps -e .
 
-# Run not-slow unit tests (mocked subprocess + LocalFakeUploader — no VST or R2 needed)
+# Run not-slow unit tests: no VST or R2 needed, but the infra-marked
+# install-plugins tests shell out to the real Makefile recipes (tar/unzip).
 RUN pytest -k "not slow" -v
 
 # No ENTRYPOINT: SkyPilot's RunPod backend launches the pod with
