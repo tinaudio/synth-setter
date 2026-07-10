@@ -1,5 +1,7 @@
 """Direct tests for :func:`decode_model_output`'s inverse-scale contract."""
 
+from __future__ import annotations
+
 import math
 
 import numpy as np
