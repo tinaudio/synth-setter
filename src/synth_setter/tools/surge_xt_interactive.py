@@ -328,7 +328,7 @@ def decode_prediction_row(
     :param batch_idx: Row index within the prediction tensor to decode. Must be
         in ``[0, batch_size)``.
     :param param_spec_name: Parameter spec name (key into ``param_specs``) used
-        to decode the rescaled row into raw VST parameter values.
+        to decode the row into raw VST parameter values.
     :returns: Dict mapping VST parameter name to its raw (decoded) value.
     :raises IndexError: when ``batch_idx`` is out of range for ``pred_tensor``.
     """

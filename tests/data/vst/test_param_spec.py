@@ -117,3 +117,10 @@ class TestDecodeModelOutput:
         synth_params, _ = decode_model_output(row, _tiny_spec())
 
         assert synth_params["cutoff"] == pytest.approx(0.5)
+
+    def test_under_long_rows_fail_loudly(self) -> None:
+        """Current contract: a too-short row raises rather than decoding partially."""
+        row = np.array(_ROW[:2], dtype=np.float32)
+
+        with pytest.raises(ValueError):
+            decode_model_output(row, _tiny_spec())

@@ -282,6 +282,14 @@ class ParamSpec:
         return np.concatenate((synth_params, note_params))
 
     def decode(self, params: np.ndarray) -> tuple[dict[str, float], NoteParams]:
+        """Decode one encoded row of ``len(self)`` values in ``[0, 1]``.
+
+        Raw model outputs live in ``[-1, 1]`` and must go through
+        :func:`decode_model_output` instead.
+
+        :param params: Encoded row (output of :meth:`encode`).
+        :returns: ``(synth_param_dict, note_params)``.
+        """
         synth_params_to_process = [(p, len(p)) for p in self.synth_params]
         note_params_to_process = [(p, len(p)) for p in self.note_params]
 
@@ -321,8 +329,7 @@ def decode_model_output(row: np.ndarray, spec: ParamSpec) -> tuple[dict[str, flo
 
     Model prediction rows live in ``[-1, 1]``; the encoded param domain is
     ``[0, 1]``, so the row is rescaled via ``(x + 1) / 2`` and clipped before
-    :meth:`ParamSpec.decode`. Every consumer that decodes prediction rows must
-    go through this single source of the inverse-scale contract.
+    :meth:`ParamSpec.decode`.
 
     :param row: One prediction row of shape ``(len(spec),)``, values in ``[-1, 1]``.
     :param spec: Spec the model was trained against.
