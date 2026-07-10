@@ -183,6 +183,69 @@ def test_test_mps_yaml_matches_cfg_surge_xt_global(experiment: str, test_mps_yam
     )
 
 
+def _compose(config_name: str, overrides: list[str]) -> DictConfig:
+    """Compose a top-level config with overrides, clearing GlobalHydra around it.
+
+    :param config_name: Top-level config to compose (``train.yaml``, ``eval.yaml``, ...).
+    :param overrides: Hydra CLI-style overrides.
+    :returns: The composed config.
+    """
+    GlobalHydra.instance().clear()
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(config_name=config_name, return_hydra_config=False, overrides=overrides)
+    GlobalHydra.instance().clear()
+    return cfg
+
+
+def test_surge_4_generate_dataset_experiment_composes_with_inline_finalize() -> None:
+    """``generate_dataset/surge-4-lance-440k-20k-20k`` wires surge_4 and inline finalize.
+
+    Pins the full-scale surge_4 Lance pipeline contract: the surge_4 render and
+    datamodule groups, Lance output, the 440k/20k/20k split, and the inline
+    finalize that writes ``dataset.complete`` in the same CLI process.
+    """
+    cfg = _compose("dataset.yaml", ["experiment=generate_dataset/surge-4-lance-440k-20k-20k"])
+
+    assert cfg.render.param_spec_name == "surge_4"
+    assert cfg.render.preset_path == "presets/surge-mini.vstpreset"
+    assert cfg.datamodule.param_spec_name == "surge_4"
+    assert cfg.output_format == "lance"
+    assert list(cfg.train_val_test_sizes) == [440000, 20000, 20000]
+    assert cfg.finalize_inline is True
+
+
+def test_surge_4_train_experiment_composes_with_surge_4_width() -> None:
+    """``surge/ffn_4`` trains the FFN at the surge_4 encoded width on Lance data.
+
+    Pins the surge_4 train contract: Lance datamodule keyed to the surge_4 spec,
+    ``d_out`` equal to the spec's encoded width (7), and per-param MSE logging
+    labeled with the surge_4 spec.
+    """
+    cfg = _compose("train.yaml", ["experiment=surge/ffn_4"])
+
+    assert cfg.datamodule.param_spec_name == "surge_4"
+    assert cfg.datamodule._target_ == "synth_setter.data.lance_datamodule.LanceVSTDataModule"
+    assert cfg.model.net.d_out == 7
+    assert cfg.callbacks.log_per_param_mse.param_spec == "surge_4"
+
+
+def test_surge_4_eval_experiment_composes_in_predict_mode() -> None:
+    """``surge/eval_ffn_4`` evaluates a surge_4 FFN checkpoint in predict mode.
+
+    Pins the surge_4 eval contract: predict mode with VST rendering and metrics,
+    the surge_4 render group, and a mandatory ``ckpt_path``.
+    """
+    cfg = _compose("eval.yaml", ["experiment=surge/eval_ffn_4", "ckpt_path=dummy.ckpt"])
+
+    assert cfg.mode == "predict"
+    assert cfg.render.param_spec_name == "surge_4"
+    assert cfg.datamodule.param_spec_name == "surge_4"
+    assert cfg.model.net.d_out == 7
+    assert cfg.evaluation.render_vst is True
+    assert cfg.evaluation.compute_metrics is True
+    assert cfg.ckpt_path == "dummy.ckpt"
+
+
 def test_ffn_smoke_experiment_wires_surge_xt_fixture_source() -> None:
     """``experiment=surge/ffn_smoke`` bakes in the R2 surge_xt fixture and smoke caps.
 
@@ -194,14 +257,7 @@ def test_ffn_smoke_experiment_wires_surge_xt_fixture_source() -> None:
     inherited from ``ffn_full``; and the disabled ``compile`` that keeps the
     fit + test setup from double-compiling.
     """
-    GlobalHydra.instance().clear()
-    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
-        cfg = compose(
-            config_name="train.yaml",
-            return_hydra_config=False,
-            overrides=["experiment=surge/ffn_smoke"],
-        )
-    GlobalHydra.instance().clear()
+    cfg = _compose("train.yaml", ["experiment=surge/ffn_smoke"])
 
     assert cfg.datamodule.download_dataset_root_uri == (
         "r2://intermediate-data/fixtures/smoke-shard-surge-xt-v1/"

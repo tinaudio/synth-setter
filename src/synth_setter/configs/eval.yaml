@@ -10,8 +10,10 @@ defaults:
   - extras: default
   - hydra: default
   - callbacks: none
-  - experiment: null
+  # Before `experiment` so experiment yamls may `override /render:` (Hydra only
+  # lets an experiment override groups declared ahead of it).
   - render: null
+  - experiment: null
 
 task_name: "eval"
 

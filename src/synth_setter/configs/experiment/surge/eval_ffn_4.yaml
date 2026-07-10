@@ -1,0 +1,29 @@
+# @package _global_
+
+# Predict-mode eval of a surge_4 FFN checkpoint: renders predictions through
+# Surge XT with the surge-mini preset and computes audio metrics. Compose with
+# eval.yaml and pass ckpt_path=<trained ffn_4 checkpoint>.
+
+defaults:
+  - /experiment/surge/ffn_4
+  - override /callbacks: eval_surge
+  # eval.yaml defaults logger to null; base.yaml's logger.wandb fragment needs
+  # the full wandb group underneath it.
+  - override /logger: wandb
+  - override /render: surge_4
+  - _self_
+
+run_name: ffn_eval
+experiment_name: surge-4-onehot-eval
+
+mode: predict
+
+datamodule:
+  batch_size: 1
+
+ckpt_path: ???
+
+evaluation:
+  render_vst: true
+  compute_metrics: true
+  rerender_target: false
