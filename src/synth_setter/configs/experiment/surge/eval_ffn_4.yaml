@@ -13,8 +13,7 @@ defaults:
   - _self_
 
 run_name: ffn_eval
-experiment_name: surge-4-onehot-eval
-
+experiment_name: surge-4-toy-eval
 mode: predict
 
 datamodule:
