@@ -321,8 +321,8 @@ def decode_model_output(row: np.ndarray, spec: ParamSpec) -> tuple[dict[str, flo
 
     Model prediction rows live in ``[-1, 1]``; the encoded param domain is
     ``[0, 1]``, so the row is rescaled via ``(x + 1) / 2`` and clipped before
-    :meth:`ParamSpec.decode`. Single source of the inverse-scale contract for
-    ``predict_vst_audio``, ``surge_xt_interactive``, and ``predict_capture``.
+    :meth:`ParamSpec.decode`. Every consumer that decodes prediction rows must
+    go through this single source of the inverse-scale contract.
 
     :param row: One prediction row of shape ``(len(spec),)``, values in ``[-1, 1]``.
     :param spec: Spec the model was trained against.
