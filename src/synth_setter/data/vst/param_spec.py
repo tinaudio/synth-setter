@@ -334,8 +334,8 @@ def decode_model_output(row: np.ndarray, spec: ParamSpec) -> tuple[dict[str, flo
     :param row: One prediction row of shape ``(len(spec),)``, values in ``[-1, 1]``.
     :param spec: Spec the model was trained against.
     :returns: ``(synth_param_dict, note_params)``; synth values are
-        pedalboard-normalized ``[0, 1]``, note params are in their native
-        domains (pitch as int, note start/end in seconds).
+        pedalboard-normalized raw values (conventionally ``[0, 1]``), note
+        params are in their native domains (pitch as int, start/end seconds).
     """
     scaled = np.clip((row + 1) / 2, 0, 1)
     return spec.decode(scaled)

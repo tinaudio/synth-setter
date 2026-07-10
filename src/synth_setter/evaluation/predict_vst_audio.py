@@ -196,7 +196,8 @@ def main(
 
             out_target = os.path.join(sample_dir, "target.wav")
             if rerender_target and target_params is not None:
-                target_params_ = target_params[j].numpy()
+                # .float() aligns the target path with the pred path's float32 contract.
+                target_params_ = target_params[j].float().numpy()
                 target_synth_params, target_note_params = decode_model_output(target_params_, spec)
 
                 new_target = render_params(

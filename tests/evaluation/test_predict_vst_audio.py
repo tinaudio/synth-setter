@@ -3,7 +3,9 @@
 Covers the three pure helpers (``make_spectrogram``, ``write_spectrograms``,
 ``params_to_csv``) and the click ``main`` entrypoint with the VST3 render call
 patched out — so the suite stays CPU-only and deterministic and runs under
-``make test-fast``.
+``make test-fast``. Exact decoded values are pinned by
+``tests/data/vst/test_param_spec.py``, not here — ``main`` tests assert only
+file shape and finiteness.
 """
 
 from __future__ import annotations

@@ -95,11 +95,9 @@ class TestDecodeModelOutput:
         assert np.array_equal(row, before)
 
     def test_nan_predictions_pass_through_undetected(self) -> None:
-        """Current contract: NaN survives the rescale/clip and reaches the decoded value.
+        """Current contract: NaN survives np.clip and decodes through unchanged.
 
-        np.clip does not sanitize NaN. Pinned so a future guard is a deliberate,
-        visible contract change; the bridge CLI independently rejects non-finite
-        values before serving them.
+        Pinned so adding a NaN guard is a deliberate contract change, not a regression.
         """
         row = np.array([math.nan, *_ROW[1:]], dtype=np.float32)
 
@@ -118,9 +116,21 @@ class TestDecodeModelOutput:
 
         assert synth_params["cutoff"] == pytest.approx(0.5)
 
-    def test_under_long_rows_fail_loudly(self) -> None:
-        """Current contract: a too-short row raises rather than decoding partially."""
+    def test_rows_truncated_inside_a_categorical_fail_loudly(self) -> None:
+        """Current contract: truncation inside a onehot categorical raises ValueError."""
         row = np.array(_ROW[:2], dtype=np.float32)
 
         with pytest.raises(ValueError):
             decode_model_output(row, _tiny_spec())
+
+    def test_tail_truncated_rows_corrupt_note_duration_silently(self) -> None:
+        """Current contract: a row missing only tail values decodes without raising.
+
+        The note-duration value comes back malformed (a 1-tuple) — pinned so a
+        future width guard is a deliberate contract change.
+        """
+        row = np.array(_ROW[:5], dtype=np.float32)
+
+        _, note_params = decode_model_output(row, _tiny_spec())
+
+        assert len(note_params["note_start_and_end"]) == 1
