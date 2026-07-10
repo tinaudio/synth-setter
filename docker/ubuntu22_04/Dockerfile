@@ -458,9 +458,11 @@ FROM builder-install-synth-setter-deps AS dev-base
 ARG SYNTH_PERMUTATIONS_GIT_REF
 ENV SYNTH_PERMUTATIONS_GIT_REF=${SYNTH_PERMUTATIONS_GIT_REF}
 
+# unzip: the in-image pytest run exercises the Makefile install-plugins
+# targets, whose recipes unpack cached .zip archives (#1789).
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends git ca-certificates jq
+    apt-get update && apt-get install -y --no-install-recommends git ca-certificates jq unzip
 
 WORKDIR /home/build/synth-setter
 
@@ -485,7 +487,8 @@ RUN git init && \
 # deps are already in the venv; this step installs the package editable.
 RUN uv pip install --no-deps -e .
 
-# Run not-slow unit tests (mocked subprocess + LocalFakeUploader — no VST or R2 needed)
+# Run not-slow unit tests: no VST or R2 needed, but the infra-marked
+# install-plugins tests shell out to the real Makefile recipes (tar/unzip).
 RUN pytest -k "not slow" -v
 
 # No ENTRYPOINT: SkyPilot's RunPod backend launches the pod with
