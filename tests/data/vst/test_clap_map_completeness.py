@@ -1,4 +1,4 @@
-"""Completeness and freshness tests for the committed Surge XT CLAP map (#1787 §4)."""
+"""Completeness and freshness tests for the committed Surge CLAP maps (#1787 §4)."""
 
 from pathlib import Path
 
@@ -13,9 +13,12 @@ from synth_setter.data.vst.clap_introspect import (
 from synth_setter.data.vst.clap_map import PluginFormatMap, load_clap_map
 from synth_setter.data.vst.param_spec import CategoricalParameter
 from synth_setter.data.vst.param_spec_registry import param_specs
-from synth_setter.resources import as_file, surge_xt_clap_map
+from synth_setter.resources import as_file, clap_map
 from synth_setter.tools.build_clap_map import main as build_clap_map_main
 from tests.data.vst._clap import SURGE_XT_CLAP_PARAM_COUNT
+
+# Every packaged per-spec map; each is checked against its own spec.
+_MAPPED_SPECS = ("surge_xt", "surge_simple", "surge_4")
 
 # Repo-tree artifact (deliberately not packaged): anchor on this file, not the cwd.
 _CLAP_INFO_PATH = (
@@ -23,36 +26,49 @@ _CLAP_INFO_PATH = (
 )
 
 
-@pytest.fixture(scope="module")
-def committed_map() -> PluginFormatMap:
-    """Load the packaged committed map once per module.
+@pytest.fixture(scope="module", params=_MAPPED_SPECS)
+def spec_name(request: pytest.FixtureRequest) -> str:
+    """Parameterize the module over every packaged spec map.
 
+    :param request: Pytest fixture request carrying the spec-name param.
+    :returns: ``param_specs`` registry key.
+    """
+    return request.param
+
+
+@pytest.fixture(scope="module")
+def committed_map(spec_name: str) -> PluginFormatMap:
+    """Load the packaged committed map for one spec once per module.
+
+    :param spec_name: ``param_specs`` registry key.
     :returns: The committed map.
     """
-    with as_file(surge_xt_clap_map()) as path:
+    with as_file(clap_map(spec_name)) as path:
         return load_clap_map(path)
 
 
 class TestCommittedMapCompleteness:
     """Issue #1787 §4 completeness checks over the committed map."""
 
-    def test_every_surge_xt_spec_param_has_an_entry(self, committed_map: PluginFormatMap):
+    def test_every_spec_param_has_an_entry(self, committed_map: PluginFormatMap, spec_name: str):
         """Every spec synth param is mapped.
 
         :param committed_map: Packaged committed map fixture.
+        :param spec_name: Registry key of the spec under test.
         """
-        spec_names = {p.name for p in param_specs["surge_xt"].synth_params}
+        spec_names = {p.name for p in param_specs[spec_name].synth_params}
 
         missing = spec_names - set(committed_map.params)
 
         assert missing == set(), f"unmapped spec params: {sorted(missing)}"
 
-    def test_map_carries_only_spec_params(self, committed_map: PluginFormatMap):
+    def test_map_carries_only_spec_params(self, committed_map: PluginFormatMap, spec_name: str):
         """The map has no entries beyond the spec.
 
         :param committed_map: Packaged committed map fixture.
+        :param spec_name: Registry key of the spec under test.
         """
-        spec_names = {p.name for p in param_specs["surge_xt"].synth_params}
+        spec_names = {p.name for p in param_specs[spec_name].synth_params}
 
         extra = set(committed_map.params) - spec_names
 
@@ -104,15 +120,16 @@ class TestCommittedMapCompleteness:
         assert len(ids) == len(set(ids))
 
     def test_stepped_entries_are_consistent_with_spec_categoricals(
-        self, committed_map: PluginFormatMap
+        self, committed_map: PluginFormatMap, spec_name: str
     ):
         """Stepped entries' raw_values lerp onto consecutive native steps.
 
         :param committed_map: Packaged committed map fixture.
+        :param spec_name: Registry key of the spec under test.
         """
         # The CLI maps stepped params via min_value + raw_values-position, so
         # raw_values must lerp onto consecutive native steps.
-        spec_params = {p.name: p for p in param_specs["surge_xt"].synth_params}
+        spec_params = {p.name: p for p in param_specs[spec_name].synth_params}
 
         violations = []
         for name, ref in committed_map.params.items():
@@ -162,7 +179,7 @@ class TestCommittedDumpCoherence:
 @pytest.mark.requires_vst
 @pytest.mark.slow
 def test_build_command_reproduces_committed_map(
-    tmp_path: Path, committed_map: PluginFormatMap
+    tmp_path: Path, committed_map: PluginFormatMap, spec_name: str
 ) -> None:
     """Real rebuild from the committed dump matches the committed map exactly.
 
@@ -172,12 +189,21 @@ def test_build_command_reproduces_committed_map(
 
     :param tmp_path: Pytest fixture providing a fresh test directory.
     :param committed_map: The committed map to compare against.
+    :param spec_name: Registry key of the spec under test.
     """
     out_path = tmp_path / "rebuilt_map.json"
 
     result = CliRunner().invoke(
         build_clap_map_main,
-        ["build", "--clap-info", str(_CLAP_INFO_PATH), "--out", str(out_path)],
+        [
+            "build",
+            "--clap-info",
+            str(_CLAP_INFO_PATH),
+            "--out",
+            str(out_path),
+            "--param-spec-name",
+            spec_name,
+        ],
         catch_exceptions=False,
     )
 

@@ -37,17 +37,21 @@ halves communicate **only** through the file contract below.
 
 `--checkpoint` defaults to a `# SET ME` deployment constant in
 `cli/predict_capture.py` — until it is set, every invocation must pass the
-flag. `--model-class {flow,ff}` selects the LightningModule; `--stats-file`
-applies the training run's saved mel mean/std and **must** be passed when the
-served checkpoint was trained with `use_saved_mean_and_variance`, or the model
-receives unnormalized input (the CLI warns when it is omitted). `--map`
-overrides the packaged CLAP param map.
+flag. The LightningModule class is detected from the checkpoint's state dict
+(`--model-class {flow,ff}` overrides); `--stats-file` applies the training
+run's saved mel mean/std and **must** be passed when the served checkpoint was
+trained with `use_saved_mean_and_variance`, or the model receives unnormalized
+input (the CLI warns when it is omitted). `--map` overrides the packaged CLAP
+param map, which otherwise follows `--param-spec-name`. Every run — crashes
+included — appends to `<log-dir>/<uuid>.log` (`--log-dir`, default set per
+deployment next to the checkpoint constant).
 
-## Regenerating the CLAP param map
+## Regenerating the CLAP param maps
 
-`src/synth_setter/data/vst/surge_xt_clap_map.json` (packaged, the CLI's `--map`
-default) maps every `SURGE_XT_PARAM_SPEC` pyname to its CLAP id/name/range. It
-is built from `surge_xt_clap_info.json`, a raw dump of the installed Surge XT
+`src/synth_setter/data/vst/<spec>_clap_map.json` (packaged per Surge spec —
+`surge_xt`, `surge_simple`, `surge_4` — and selected by the CLI's
+`--param-spec-name`) maps every spec pyname to its CLAP id/name/range. All are
+built from `surge_xt_clap_info.json`, a raw dump of the installed Surge XT
 CLAP taken by the first-party ctypes host in `data/vst/clap_introspect.py`.
 After a Surge upgrade:
 
@@ -55,10 +59,12 @@ After a Surge upgrade:
 # 1. Dump the installed CLAP (no display needed)
 python -m synth_setter.tools.build_clap_map dump
 
-# 2. Rebuild the map — loads the VST3 via pedalboard, so on Linux run under
-#    the headless wrapper
-src/synth_setter/scripts/run-linux-vst-headless.sh \
-  .venv/bin/python -m synth_setter.tools.build_clap_map build
+# 2. Rebuild each spec's map — loads the VST3 via pedalboard, so on Linux run
+#    under the headless wrapper
+for spec in surge_xt surge_simple surge_4; do
+  src/synth_setter/scripts/run-linux-vst-headless.sh \
+    .venv/bin/python -m synth_setter.tools.build_clap_map build --param-spec-name "$spec"
+done
 ```
 
 `build` joins the dump with pedalboard's base-preset view through the

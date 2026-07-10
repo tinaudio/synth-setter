@@ -296,7 +296,7 @@ namespaces = true
   "configs/**/*.yaml",
   "configs/**/*.yml",
   "scripts/*.sh",
-  "data/vst/surge_xt_clap_map.json",
+  "data/vst/*_clap_map.json",
 ]
 
 

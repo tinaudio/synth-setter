@@ -6,7 +6,7 @@ Two commands:
   host (:mod:`synth_setter.data.vst.clap_introspect`) and write the raw dump
   (``surge_xt_clap_info.json``).
 - ``build`` — join that dump with pedalboard's view of the VST3 loaded under
-  the base preset and emit ``surge_xt_clap_map.json``.
+  the spec's base preset and emit ``<param-spec-name>_clap_map.json``.
 
 The join is an exact index bridge, not a name heuristic: pedalboard's
 ``Parameter.index`` is patch-invariant and Surge enumerates params in the same
@@ -44,7 +44,6 @@ from synth_setter.data.vst.param_spec_registry import (
 
 _VST_DIR = Path(__file__).resolve().parent.parent / "data" / "vst"
 _DEFAULT_CLAP_INFO_PATH = _VST_DIR / "surge_xt_clap_info.json"
-_DEFAULT_MAP_PATH = _VST_DIR / "surge_xt_clap_map.json"
 
 
 def _stepped_grid_errors(param: CategoricalParameter, ref: ClapParamRef, pyname: str) -> list[str]:
@@ -269,9 +268,8 @@ def dump(plugin: Path, out: Path) -> None:
 @click.option(
     "--out",
     type=click.Path(path_type=Path),
-    default=_DEFAULT_MAP_PATH,
-    show_default=True,
-    help="Where to write the map JSON.",
+    default=None,
+    help="Where to write the map JSON [default: <param-spec-name>_clap_map.json in data/vst].",
 )
 @click.option("--param-spec-name", default="surge_xt", show_default=True)
 @click.option(
@@ -281,14 +279,16 @@ def dump(plugin: Path, out: Path) -> None:
     show_default=True,
     help="pyname → display-name cross-check table.",
 )
-def build(clap_info: Path, out: Path, param_spec_name: str, params_csv: Path) -> None:
-    """Build and validate the committed pyname → CLAP map.
+def build(clap_info: Path, out: Path | None, param_spec_name: str, params_csv: Path) -> None:
+    """Build and validate the committed pyname → CLAP map for one spec.
 
     :param clap_info: Dump file to join against.
-    :param out: Map destination.
+    :param out: Map destination; ``None`` resolves the spec's committed path.
     :param param_spec_name: Registry key of the spec to map.
     :param params_csv: Cross-check CSV path.
     """
+    if out is None:
+        out = _VST_DIR / f"{param_spec_name}_clap_map.json"
     info = ClapPluginInfo.model_validate_json(clap_info.read_text())
     plugin_path = default_plugin_path()
     _assert_init_order_matches(info, plugin_path)
