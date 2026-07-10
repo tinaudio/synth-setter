@@ -5480,7 +5480,7 @@ wheels = [
 
 [[package]]
 name = "synth-setter"
-version = "8.40.2"
+version = "8.40.3"
 source = { editable = "." }
 dependencies = [
     { name = "pydantic" },

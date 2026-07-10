@@ -223,6 +223,20 @@ docs:
         scope: "training"
 
   # ── Eval pipeline design doc ────────────────────────────────────
+  - doc: docs/guides/sound-match-bridge.md
+    description: Live sound-match bridge — predict-capture CLI contract and CLAP map rebuild
+    sources:
+      - pattern: "src/synth_setter/cli/predict_capture.py"
+        covers: "Bridge CLI contract: uuid from wav stem, pred-0.pt + atomic params.csv, absence-is-failure semantics, --stats-file normalization, SET ME default checkpoint"
+      - pattern: "src/synth_setter/tools/build_clap_map.py"
+        covers: "dump/build commands, patch-invariant index bridge, init-order + surge_params.csv validation, headless-wrapper requirement for build"
+      - pattern: "src/synth_setter/data/vst/clap_introspect.py"
+        covers: "First-party ctypes CLAP host used by the dump command"
+      - pattern: "src/synth_setter/data/vst/clap_map.py"
+        covers: "PluginFormatMap schema and native-domain CSV row conversion"
+      - pattern: "src/synth_setter/data/vst/surge_xt_clap_*.json"
+        covers: "Committed raw dump + packaged pyname->CLAP map the CLI loads by default"
+
   - doc: docs/design/eval-pipeline.md
     description: Evaluation pipeline design — predict, render, metrics, R2 integration
     sources:

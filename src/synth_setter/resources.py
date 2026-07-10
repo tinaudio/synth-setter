@@ -24,7 +24,7 @@ from __future__ import annotations
 from importlib.abc import Traversable
 from importlib.resources import as_file, files
 
-__all__ = ["as_file", "configs_dir", "vst_headless_wrapper"]
+__all__ = ["as_file", "configs_dir", "surge_xt_clap_map", "vst_headless_wrapper"]
 
 
 def configs_dir() -> Traversable:
@@ -38,6 +38,18 @@ def configs_dir() -> Traversable:
     :returns: Traversable pointing at the shipped Hydra config tree.
     """
     return files("synth_setter") / "configs"
+
+
+def surge_xt_clap_map() -> Traversable:
+    """Return the committed Surge XT CLAP param map for the sound-match bridge.
+
+    Built by ``synth_setter.tools.build_clap_map``; consumed as the default
+    ``--map`` of ``synth-setter-predict-capture``. Wrap in :func:`as_file`
+    when a real filesystem path is required.
+
+    :returns: Traversable pointing at ``surge_xt_clap_map.json``.
+    """
+    return files("synth_setter") / "data" / "vst" / "surge_xt_clap_map.json"
 
 
 def vst_headless_wrapper() -> Traversable:
