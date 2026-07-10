@@ -1,6 +1,39 @@
 # CHANGELOG
 
 
+## v8.40.4 (2026-07-10)
+
+### Bug Fixes
+
+- **docker**: Install unzip in the image test stage
+  ([#1790](https://github.com/tinaudio/synth-setter/pull/1790),
+  [`762904e`](https://github.com/tinaudio/synth-setter/commit/762904ecbe57087986fe469dd8527770299e0e24))
+
+* fix(docker): install unzip in the image test stage
+
+The dev-base stage runs pytest -k 'not slow', which exercises the Makefile install-plugins targets;
+  their recipes unpack cached .zip archives with unzip, which no ancestor stage installs. Every
+  docker-build-validation run since the targets landed (#1765) fails with '/bin/sh: 1: unzip: not
+  found' in the three dexed cache tests. Root-caused in #1789; tar-based recipes already pass
+  because tar ships in the base image.
+
+* fix(docker): correct stale no-subprocess claim on the in-image pytest run
+
+The comment predates #1765: the infra-marked install-plugins tests do shell out to the Makefile
+  recipes (tar/unzip), which is exactly why the test stage now installs unzip. Flagged by the pre-PR
+  review.
+
+### Code Style
+
+- **tests**: Apply ruff-format wrapping to vst test modules
+  ([#1791](https://github.com/tinaudio/synth-setter/pull/1791),
+  [`20c28fb`](https://github.com/tinaudio/synth-setter/commit/20c28fbc2a69efa49558e80f6d082552d6b3a81a))
+
+Reformat-only: line wrapping and import-group spacing that current ruff-format produces for five
+  tests/data/vst modules. All five files are AST-identical to their previous state. Extracted from
+  #1788 so the bridge PR touches only bridge concerns.
+
+
 ## v8.40.3 (2026-07-08)
 
 ### Bug Fixes
