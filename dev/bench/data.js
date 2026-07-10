@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783289147412,
+  "lastUpdate": 1783723467852,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -7806,6 +7806,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.048975467681884766,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9e71742910946a53e8537108b76452a0072b6bd8",
+          "message": "config: surge_4 dataset-pipeline, train, and eval experiments (#1794)\n\n* feat(training): surge_4 experiment set — generate shards, train, eval\n\nWire the surge_4 (surge-mini preset, 4 continuous params) spec into runnable\nexperiments: a render group (render/surge_4), a full-scale Lance dataset\npipeline with inline finalize (generate_dataset/surge-4-lance-440k-20k-20k,\ninheriting the surge-simple 440k/20k/20k settings), an FFN train experiment\nat the spec's encoded width (surge/ffn_4, d_out=7, Lance datamodule), and a\npredict-mode eval experiment (surge/eval_ffn_4) that renders predictions\nthrough Surge XT and computes audio metrics.\n\neval.yaml's defaults now declare the render group before experiment so eval\nexperiments can select a render group via override — previously only train\nand generate_dataset roots allowed this.\n\nValidated end-to-end with a local smoke (12-sample generate + inline\nfinalize against a local rclone backend, 2-step CPU train producing\nlast.ckpt, predict-mode eval computing mss/rms/sot/wmfcc metrics) and by\nconfig-composition tests pinning each experiment's contract.\n\n* internal-fix(training): address review warns on surge_4 experiment set\n\nTighten config header comments to the comment-hygiene cap, pin the\npreviously untested contracts (eval logger/wandb re-select, prediction\nwriter, rerender_target, plot_proj_ii disable), take Sequence in the\n_compose test helper, and clear GlobalHydra in a finally so a failing\nassertion cannot poison later tests.\n\nRefs #1793\n\n* docs: reflect surge_4's promotion from fixture to full experiment set\n\nRefs #1793\n\n* Potential fix for pull request finding\n\nCo-authored-by: Copilot Autofix powered by AI <175728472+Copilot@users.noreply.github.com>\n\n* Potential fix for pull request finding\n\nCo-authored-by: Copilot Autofix powered by AI <175728472+Copilot@users.noreply.github.com>\n\n---------\n\nCo-authored-by: khaledtin <dkb7wd5c92@privaterelay.appleid.com>\nCo-authored-by: Copilot Autofix powered by AI <175728472+Copilot@users.noreply.github.com>",
+          "timestamp": "2026-07-10T15:11:37-07:00",
+          "tree_id": "be1ac98f28998e69e40c1c19226bbde2641a6c8c",
+          "url": "https://github.com/tinaudio/synth-setter/commit/9e71742910946a53e8537108b76452a0072b6bd8"
+        },
+        "date": 1783723467030,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.6783132553100586,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.651127600576729,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.024886686354875565,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.027043938636779785,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.0911056995391846,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 14.265055370333338,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.662859916687012,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 7.0493635619059205,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.03373662382364273,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.04983639717102051,
             "unit": "1-cos"
           },
           {
