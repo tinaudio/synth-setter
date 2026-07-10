@@ -97,6 +97,10 @@ class KSinFlowMatchingModule(LightningModule):
         self.encoder = encoder
         self.vector_field = vector_field
 
+        # Cached in training_step so on_before_optimizer_step can log grad norms with an
+        # explicit batch_size; that hook receives no batch to infer it from.
+        self._batch_size: int | None = None
+
         self.val_lsd = LogSpectralDistance()
         self.val_chamfer = ChamferDistance(params_per_token)
         # self.val_lad = LinearAssignmentDistance()
@@ -369,12 +373,23 @@ class KSinFlowMatchingModule(LightningModule):
                 param.requires_grad = True
 
         loss, penalty = self._train_step(batch)
-        self.log("train/loss", loss, on_step=True, on_epoch=True, prog_bar=True)
+        batch_size = batch[0].shape[0]
+        self._batch_size = batch_size
+        self.log(
+            "train/loss", loss, on_step=True, on_epoch=True, prog_bar=True, batch_size=batch_size
+        )
 
         if penalty is not None:
-            self.log("train/penalty", penalty, on_step=True, on_epoch=True, prog_bar=True)
+            self.log(
+                "train/penalty",
+                penalty,
+                on_step=True,
+                on_epoch=True,
+                prog_bar=True,
+                batch_size=batch_size,
+            )
 
-        return loss + penalty
+        return loss if penalty is None else loss + penalty
 
     def on_train_epoch_end(self) -> None:
         pass
@@ -426,14 +441,30 @@ class KSinFlowMatchingModule(LightningModule):
             self.hparams.validation_cfg_strength,
         )
 
+        batch_size = inputs.shape[0]
+
         *_, synth_fn = batch
         # update and log metrics
         self.val_lsd(preds, inputs, synth_fn)
         self.val_chamfer(preds, targets)
         # self.val_lad(preds, targets)
 
-        self.log("val/lsd", self.val_lsd, on_step=False, on_epoch=True, prog_bar=True)
-        self.log("val/chamfer", self.val_chamfer, on_step=False, on_epoch=True, prog_bar=True)
+        self.log(
+            "val/lsd",
+            self.val_lsd,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            batch_size=batch_size,
+        )
+        self.log(
+            "val/chamfer",
+            self.val_chamfer,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            batch_size=batch_size,
+        )
         # self.log("val/lad", self.val_lad, on_step=False, on_epoch=True, prog_bar=True)
 
     def on_validation_epoch_end(self):
@@ -444,21 +475,45 @@ class KSinFlowMatchingModule(LightningModule):
             batch, self.hparams.test_sample_steps, self.hparams.test_cfg_strength
         )
 
+        batch_size = inputs.shape[0]
+
         *_, synth_fn = batch
         self.test_lsd(preds, inputs, synth_fn)
         self.test_chamfer(preds, targets)
         self.test_lad(preds, targets)
         param_mse = (preds - targets).square().mean()
-        self.log("test/param_mse", param_mse, on_step=False, on_epoch=True, prog_bar=True)
-        self.log("test/lsd", self.test_lsd, on_step=False, on_epoch=True, prog_bar=True)
+        self.log(
+            "test/param_mse",
+            param_mse,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            batch_size=batch_size,
+        )
+        self.log(
+            "test/lsd",
+            self.test_lsd,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            batch_size=batch_size,
+        )
         self.log(
             "test/chamfer",
             self.test_chamfer,
             on_step=False,
             on_epoch=True,
             prog_bar=True,
+            batch_size=batch_size,
         )
-        self.log("test/lad", self.test_lad, on_step=False, on_epoch=True, prog_bar=True)
+        self.log(
+            "test/lad",
+            self.test_lad,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            batch_size=batch_size,
+        )
 
     def on_test_epoch_end(self) -> None:
         # TODO: implement metrics
@@ -478,8 +533,8 @@ class KSinFlowMatchingModule(LightningModule):
         encoder_norms = {f"encoder/{k}": v for k, v in encoder_norms.items()}
         vf_norms = {f"vector_field/{k}": v for k, v in vf_norms.items()}
 
-        self.log_dict(encoder_norms, on_step=True, on_epoch=True)
-        self.log_dict(vf_norms, on_step=True, on_epoch=True)
+        self.log_dict(encoder_norms, on_step=True, on_epoch=True, batch_size=self._batch_size)
+        self.log_dict(vf_norms, on_step=True, on_epoch=True, batch_size=self._batch_size)
 
     def configure_optimizers(self) -> dict[str, Any]:
         optimizer = self.hparams.optimizer(params=self.trainer.model.parameters())
