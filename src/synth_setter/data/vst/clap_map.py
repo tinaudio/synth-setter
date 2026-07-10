@@ -50,7 +50,7 @@ def load_clap_map(path: Path) -> PluginFormatMap:  # noqa: DOC502
     :returns: The validated map.
     :raises pydantic.ValidationError: when the document does not match the schema.
     """
-    return PluginFormatMap.model_validate_json(path.read_text())
+    return PluginFormatMap.model_validate_json(path.read_text(encoding="utf-8"))
 
 
 @dataclass(frozen=True)

@@ -162,7 +162,7 @@ def write_params_csv(rows: Sequence[ClapCsvRow], dest: Path) -> None:  # noqa: D
 
     tmp_path = dest.with_suffix(".csv.tmp")
     try:
-        with tmp_path.open("w", newline="") as f:
+        with tmp_path.open("w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f, lineterminator="\n")
             writer.writerow(_CSV_HEADER)
             for row in rows:
