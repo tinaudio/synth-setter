@@ -63,7 +63,7 @@ def _plugin_info(params: list[ClapParamInfo]) -> ClapPluginInfo:
 class TestBuildFormatMap:
     """Pure map-assembly behavior of build_format_map."""
 
-    def test_maps_every_spec_param_through_its_preset_index(self):
+    def test_format_map_full_preset_indices_maps_every_spec_param(self):
         """Each spec param resolves through its preset index to the right CLAP entry."""
         clap_info = _plugin_info(
             [
@@ -190,15 +190,15 @@ def test_read_display_names_maps_pyname_to_name(tmp_path: Path) -> None:
     assert _read_display_names(csv_path) == {"a_x": "A X"}
 
 
-def test_read_display_names_missing_column_raises_key_error(tmp_path: Path) -> None:
-    """A CSV without the expected columns fails loudly rather than mapping nothing.
+def test_read_display_names_missing_column_raises_naming_it(tmp_path: Path) -> None:
+    """A CSV without the expected columns fails with a validation error naming them.
 
     :param tmp_path: Pytest fixture providing a fresh test directory.
     """
     csv_path = tmp_path / "params.csv"
     csv_path.write_text("a,b\n1,2\n")
 
-    with pytest.raises(KeyError):
+    with pytest.raises(ValueError, match="pyname"):
         _read_display_names(csv_path)
 
 

@@ -221,9 +221,14 @@ def _read_display_names(csv_path: Path) -> dict[str, str]:
 
     :param csv_path: CSV with ``pyname`` and ``name`` columns.
     :returns: pyname → init-state display name.
+    :raises ValueError: when the CSV lacks the ``pyname``/``name`` columns.
     """
-    with csv_path.open() as f:
-        return {row["pyname"]: row["name"] for row in csv.DictReader(f)}
+    with csv_path.open(encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        missing = {"pyname", "name"} - set(reader.fieldnames or ())
+        if missing:
+            raise ValueError(f"{csv_path} is missing column(s): {sorted(missing)}")
+        return {row["pyname"]: row["name"] for row in reader}
 
 
 @click.group()
@@ -253,7 +258,7 @@ def dump(plugin: Path, out: Path) -> None:
     :param out: Dump destination.
     """
     info = dump_clap_plugin(plugin)
-    out.write_text(info.model_dump_json(indent=2) + "\n")
+    out.write_text(info.model_dump_json(indent=2) + "\n", encoding="utf-8")
     click.echo(f"wrote {len(info.params)} params ({info.plugin_name} {info.version}) to {out}")
 
 
@@ -289,14 +294,14 @@ def build(clap_info: Path, out: Path | None, param_spec_name: str, params_csv: P
     """
     if out is None:
         out = _VST_DIR / f"{param_spec_name}_clap_map.json"
-    info = ClapPluginInfo.model_validate_json(clap_info.read_text())
+    info = ClapPluginInfo.model_validate_json(clap_info.read_text(encoding="utf-8"))
     plugin_path = default_plugin_path()
     _assert_init_order_matches(info, plugin_path)
     indices = _preset_param_indices(plugin_path, preset_paths[param_spec_name])
     format_map = build_format_map(
         info, indices, param_specs[param_spec_name], _read_display_names(params_csv)
     )
-    out.write_text(format_map.model_dump_json(indent=2) + "\n")
+    out.write_text(format_map.model_dump_json(indent=2) + "\n", encoding="utf-8")
     click.echo(f"wrote {len(format_map.params)} mapped params to {out}")
 
 

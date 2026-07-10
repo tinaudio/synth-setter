@@ -26,7 +26,12 @@ from synth_setter.cli.predict_capture import (
     write_params_csv,
 )
 from synth_setter.data.audio_datamodule import AudioFolderDataset
-from synth_setter.data.vst.clap_map import ClapParamRef, PluginFormatMap, load_clap_map
+from synth_setter.data.vst.clap_map import (
+    ClapCsvRow,
+    ClapParamRef,
+    PluginFormatMap,
+    load_clap_map,
+)
 from synth_setter.data.vst.param_spec import (
     CategoricalParameter,
     ContinuousParameter,
@@ -233,6 +238,8 @@ def _tiny_map() -> PluginFormatMap:
 class TestDetectModelClass:
     """State-dict-based model-class detection backing the --model-class default."""
 
+    # slow: the checkpoint fixtures spin up real Lightning Trainers.
+    @pytest.mark.slow
     def test_ff_checkpoint_detects_ff(self, ff_checkpoint: Path):
         """A real feed-forward checkpoint is recognized by its net.* prefix.
 
@@ -240,6 +247,7 @@ class TestDetectModelClass:
         """
         assert detect_model_class(ff_checkpoint) == "ff"
 
+    @pytest.mark.slow
     def test_flow_checkpoint_detects_flow(self, flow_checkpoint: Path):
         """A real flow checkpoint is recognized by its encoder.*/vector_field.* prefixes.
 
@@ -347,18 +355,45 @@ class TestWriteParamsCsv:
             "mode,Mode,/Global/,7,1\n"
         )
 
-    def test_non_finite_value_raises_instead_of_writing_nan(self, tmp_path: Path):
-        """A NaN clap_value is a hard error; params.csv is never written.
+    def test_fractional_values_serialize_float32_faithfully(self, tmp_path: Path):
+        """The %.9g format pins float32 fidelity without trailing noise digits.
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
         """
-        rows = decode_and_convert(
-            torch.tensor([[float("nan"), -1.0, 1.0, 0.0, 0.0, 0.0]]), _tiny_spec(), _tiny_map()
+        third = ClapCsvRow(
+            pb_name="cutoff",
+            clap_name="Cutoff",
+            clap_module_name="/Filter/",
+            clap_param_id=42,
+            clap_value=float(np.float32(1.0 / 3.0)),
+        )
+        dest = tmp_path / "params.csv"
+
+        write_params_csv([third], dest)
+
+        assert dest.read_text().splitlines()[1] == "cutoff,Cutoff,/Filter/,42,0.333333343"
+
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+    def test_non_finite_value_raises_instead_of_writing_it(self, bad: float, tmp_path: Path):
+        """Any non-finite clap_value is a hard error; params.csv is never written.
+
+        Rows are built directly: the decode path clips ±Inf into range, so only
+        the writer's own guard covers rows from other producers.
+
+        :param bad: The non-finite value under test.
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        row = ClapCsvRow(
+            pb_name="cutoff",
+            clap_name="Cutoff",
+            clap_module_name="/Filter/",
+            clap_param_id=42,
+            clap_value=bad,
         )
         dest = tmp_path / "params.csv"
 
         with pytest.raises(ValueError, match="cutoff"):
-            write_params_csv(rows, dest)
+            write_params_csv([row], dest)
         assert not dest.exists()
         assert not (tmp_path / "params.csv.tmp").exists()
 

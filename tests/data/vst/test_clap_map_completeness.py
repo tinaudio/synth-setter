@@ -74,7 +74,7 @@ class TestCommittedMapCompleteness:
 
         assert extra == set(), f"map entries with no spec param: {sorted(extra)}"
 
-    def test_version_and_plugin_are_populated(self, committed_map: PluginFormatMap):
+    def test_map_metadata_committed_map_is_populated(self, committed_map: PluginFormatMap):
         """Plugin name and version are populated.
 
         :param committed_map: Packaged committed map fixture.
@@ -110,7 +110,7 @@ class TestCommittedMapCompleteness:
 
         assert non_unit == []
 
-    def test_clap_param_ids_are_unique(self, committed_map: PluginFormatMap):
+    def test_clap_param_ids_committed_map_are_unique(self, committed_map: PluginFormatMap):
         """CLAP ids are unique across the map.
 
         :param committed_map: Packaged committed map fixture.
@@ -124,11 +124,12 @@ class TestCommittedMapCompleteness:
     ):
         """Stepped entries' raw_values lerp onto consecutive native steps.
 
+        The CLI converts stepped params via ``min_value`` + raw_values position,
+        which is only correct on that grid.
+
         :param committed_map: Packaged committed map fixture.
         :param spec_name: Registry key of the spec under test.
         """
-        # The CLI maps stepped params via min_value + raw_values-position, so
-        # raw_values must lerp onto consecutive native steps.
         spec_params = {p.name: p for p in param_specs[spec_name].synth_params}
 
         violations = []

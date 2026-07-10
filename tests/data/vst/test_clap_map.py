@@ -171,6 +171,28 @@ class TestSynthParamsToClapRows:
         # nearest raw_value is 2/3 -> index 2 -> 2.0 + 2.
         assert rows[0].clap_value == 4.0
 
+    def test_stepped_categorical_wide_ref_uses_index_not_lerp(self):
+        """Inputs where the two stepped formulas diverge pick the categorical index.
+
+        raw_value 0.75 over a [0, 10] ref: index gives 1.0, round(lerp) would give 8.0 — a mutant
+        collapsing the categorical branch fails here.
+        """
+        fmt = _map({"mode": _ref(clap_param_id=9, is_stepped=True, min_value=0.0, max_value=10.0)})
+        spec = _spec(
+            [
+                CategoricalParameter(
+                    name="mode",
+                    values=["Digital", "Analog"],
+                    raw_values=[0.25, 0.75],
+                    encoding="onehot",
+                )
+            ]
+        )
+
+        rows = synth_params_to_clap_rows({"mode": 0.75}, spec, fmt)
+
+        assert rows[0].clap_value == 1.0
+
     def test_stepped_param_with_continuous_spec_rounds_lerped_value(self):
         """A stepped ref without a categorical spec param rounds the lerped value."""
         fmt = _map(

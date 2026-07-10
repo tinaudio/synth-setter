@@ -45,6 +45,13 @@ _DEFAULT_CHECKPOINT = Path("checkpoints/sound-match-bridge.ckpt")
 # repo-relative); the C++ bridge passes no --log-dir (#1787).
 _DEFAULT_LOG_DIR = Path("logs/sound-match-bridge")
 
+# SET ME (optional): pin to "flow"/"ff" to skip the detection load of the
+# checkpoint — the C++ bridge passes no --model-class (#1787).
+_DEFAULT_MODEL_CLASS: str | None = None
+
+# Flow sampling draws noise; a fixed seed keeps serving and retries reproducible.
+_SERVING_SEED = 0
+
 _MODEL_CLASSES: dict[str, type[VSTFlowMatchingModule] | type[VSTFeedForwardModule]] = {
     "flow": VSTFlowMatchingModule,
     "ff": VSTFeedForwardModule,
@@ -223,9 +230,9 @@ def _predict_raw_params(
 @click.option(
     "--model-class",
     type=click.Choice(sorted(_MODEL_CLASSES)),
-    default=None,
+    default=_DEFAULT_MODEL_CLASS,
     help="LightningModule the checkpoint was trained with "
-    "[default: detected from the checkpoint's state dict].",
+    "[default: the deployment constant, else detected from the checkpoint's state dict].",
 )
 @click.option(
     "--stats-file",
@@ -370,6 +377,9 @@ def _run(
     mel_spec = compute_capture_mel(wav_path, stats_file)
     logger.info("mel computed: shape=%s", tuple(mel_spec.shape))
 
+    # The flow module's predict_step samples noise; without this the same
+    # capture yields a different patch on every spawn.
+    torch.manual_seed(_SERVING_SEED)
     prediction = _predict_raw_params(mel_spec, model)
     uuid_dir.mkdir(parents=True, exist_ok=True)
     torch.save(prediction, uuid_dir / "pred-0.pt")
