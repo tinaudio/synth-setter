@@ -66,7 +66,7 @@ def _open_run_logger(log_path: Path) -> logging.Logger:
     logger = logging.getLogger(f"synth_setter.cli.predict_capture.{log_path.stem}")
     logger.setLevel(logging.INFO)
     logger.propagate = False
-    handler = logging.FileHandler(log_path)
+    handler = logging.FileHandler(log_path, encoding="utf-8")
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     logger.addHandler(handler)
     return logger
