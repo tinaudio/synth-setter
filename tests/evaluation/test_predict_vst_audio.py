@@ -209,7 +209,7 @@ def _write_batch(
     :param with_target_params: When True, also write ``target-params-<index>.pt``.
     """
     rng = np.random.default_rng(index)
-    # ``main`` rescales pred params via ``(x + 1) / 2`` — so the fixture must live on [-1, 1].
+    # decode_model_output rescales pred params from [-1, 1] — the fixture must live on that range.
     encoded = (rng.random((batch_size, len(_PARAM_SPEC))) * 2 - 1).astype(np.float32)
     torch.save(torch.from_numpy(encoded), pred_dir / f"pred-{index}.pt")
 

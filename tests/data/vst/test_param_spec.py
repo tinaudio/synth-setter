@@ -1,5 +1,7 @@
 """Direct tests for :func:`decode_model_output`'s inverse-scale contract."""
 
+import math
+
 import numpy as np
 import pytest
 
@@ -7,6 +9,7 @@ from synth_setter.data.vst.param_spec import (
     CategoricalParameter,
     ContinuousParameter,
     DiscreteLiteralParameter,
+    NoteDurationParameter,
     ParamSpec,
     decode_model_output,
 )
@@ -23,49 +26,94 @@ def _tiny_spec() -> ParamSpec:
                 encoding="onehot",
             ),
         ],
-        [DiscreteLiteralParameter(name="pitch", min=21, max=108)],
+        [
+            DiscreteLiteralParameter(name="pitch", min=21, max=108),
+            NoteDurationParameter(name="note_start_and_end", max_note_duration_seconds=4.0),
+        ],
     )
+
+
+# Widths: cutoff 1, mode onehot 2, pitch 1, note duration 2 -> 6.
+_ROW = [0.0, -1.0, 1.0, 0.0, 0.2, 0.2]
 
 
 class TestDecodeModelOutput:
     """The rescale-then-clip contract, pinned independently of any caller."""
 
-    def test_midpoint_prediction_decodes_to_encoded_half(self):
+    def test_midpoint_prediction_decodes_to_encoded_half(self) -> None:
         """A 0.0 model output rescales to the encoded midpoint 0.5."""
-        row = np.array([0.0, -1.0, 1.0, 0.0], dtype=np.float32)
+        result = decode_model_output(np.array(_ROW, dtype=np.float32), _tiny_spec())
 
-        synth_params, _ = decode_model_output(row, _tiny_spec())
-
+        assert isinstance(result, tuple) and len(result) == 2
+        synth_params, _ = result
         assert synth_params["cutoff"] == pytest.approx(0.5)
 
-    def test_extreme_predictions_decode_to_unit_bounds(self):
+    def test_extreme_predictions_decode_to_unit_bounds(self) -> None:
         """Model outputs -1 and 1 rescale to the encoded bounds 0 and 1."""
-        low, _ = decode_model_output(np.array([-1.0, -1.0, 1.0, 0.0], np.float32), _tiny_spec())
-        high, _ = decode_model_output(np.array([1.0, -1.0, 1.0, 0.0], np.float32), _tiny_spec())
+        low_row = np.array([-1.0, *_ROW[1:]], dtype=np.float32)
+        high_row = np.array([1.0, *_ROW[1:]], dtype=np.float32)
+
+        low, _ = decode_model_output(low_row, _tiny_spec())
+        high, _ = decode_model_output(high_row, _tiny_spec())
 
         assert low["cutoff"] == pytest.approx(0.0)
         assert high["cutoff"] == pytest.approx(1.0)
 
-    def test_out_of_range_predictions_clip_to_unit_bounds(self):
+    def test_out_of_range_predictions_clip_to_unit_bounds(self) -> None:
         """Values outside [-1, 1] clip to the encoded bounds instead of overshooting."""
-        low, _ = decode_model_output(np.array([-7.5, -1.0, 1.0, 0.0], np.float32), _tiny_spec())
-        high, _ = decode_model_output(np.array([7.5, -1.0, 1.0, 0.0], np.float32), _tiny_spec())
+        low_row = np.array([-7.5, *_ROW[1:]], dtype=np.float32)
+        high_row = np.array([7.5, *_ROW[1:]], dtype=np.float32)
+
+        low, _ = decode_model_output(low_row, _tiny_spec())
+        high, _ = decode_model_output(high_row, _tiny_spec())
 
         assert low["cutoff"] == pytest.approx(0.0)
         assert high["cutoff"] == pytest.approx(1.0)
 
-    def test_categorical_logits_decode_to_nearest_raw_value(self):
+    def test_categorical_logits_decode_to_nearest_raw_value(self) -> None:
         """Onehot positions survive the rescale: the larger logit picks the raw_value."""
-        pick_analog = np.array([0.0, -1.0, 1.0, 0.0], dtype=np.float32)
-
-        synth_params, _ = decode_model_output(pick_analog, _tiny_spec())
+        synth_params, _ = decode_model_output(np.array(_ROW, dtype=np.float32), _tiny_spec())
 
         assert synth_params["mode"] == pytest.approx(0.75)
 
-    def test_note_params_decode_to_native_domain(self):
-        """Note params come back in their native domain, not the encoded [0, 1]."""
-        row = np.array([0.0, -1.0, 1.0, 1.0], dtype=np.float32)
+    def test_note_params_decode_to_native_domain(self) -> None:
+        """Note params come back in their native domains, not the encoded [0, 1]."""
+        row = np.array([*_ROW[:3], 1.0, 0.2, 0.2], dtype=np.float32)
 
         _, note_params = decode_model_output(row, _tiny_spec())
 
         assert note_params["pitch"] == 108
+        assert "note_start_and_end" in note_params
+
+    def test_input_row_is_not_mutated(self) -> None:
+        """Decoding never mutates the caller's row (callers reuse prediction tensors)."""
+        row = np.array([7.5, *_ROW[1:]], dtype=np.float32)
+        before = row.copy()
+
+        decode_model_output(row, _tiny_spec())
+
+        assert np.array_equal(row, before)
+
+    def test_nan_predictions_pass_through_undetected(self) -> None:
+        """Current contract: NaN survives the rescale/clip and reaches the decoded value.
+
+        np.clip does not sanitize NaN. Pinned so a future guard is a deliberate,
+        visible contract change; the bridge CLI independently rejects non-finite
+        values before serving them.
+        """
+        row = np.array([math.nan, *_ROW[1:]], dtype=np.float32)
+
+        synth_params, _ = decode_model_output(row, _tiny_spec())
+
+        assert math.isnan(synth_params["cutoff"])
+
+    def test_over_long_rows_are_silently_truncated(self) -> None:
+        """Current contract: extra trailing values are ignored by ParamSpec.decode.
+
+        Pinned so adding a width check is a deliberate, visible contract change.
+        """
+        row = np.array([*_ROW, 9.9, 9.9], dtype=np.float32)
+
+        synth_params, _ = decode_model_output(row, _tiny_spec())
+
+        assert synth_params["cutoff"] == pytest.approx(0.5)

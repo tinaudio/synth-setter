@@ -381,7 +381,7 @@ def load_prediction_synth_params(
 
     :param ref: Reference identifying the file path and row to decode.
     :param param_spec_name: Parameter spec name (key into ``param_specs``) used
-        to decode the rescaled row into raw VST parameter values.
+        to decode the row into raw VST parameter values.
     :returns: Dict mapping VST parameter name to its raw (decoded) value.
     :raises IndexError: when ``ref.batch_idx`` is out of range for the loaded tensor.
     """
