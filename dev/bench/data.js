@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783723467852,
+  "lastUpdate": 1783723469752,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -13620,6 +13620,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 17.002114352599996,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9e71742910946a53e8537108b76452a0072b6bd8",
+          "message": "config: surge_4 dataset-pipeline, train, and eval experiments (#1794)\n\n* feat(training): surge_4 experiment set — generate shards, train, eval\n\nWire the surge_4 (surge-mini preset, 4 continuous params) spec into runnable\nexperiments: a render group (render/surge_4), a full-scale Lance dataset\npipeline with inline finalize (generate_dataset/surge-4-lance-440k-20k-20k,\ninheriting the surge-simple 440k/20k/20k settings), an FFN train experiment\nat the spec's encoded width (surge/ffn_4, d_out=7, Lance datamodule), and a\npredict-mode eval experiment (surge/eval_ffn_4) that renders predictions\nthrough Surge XT and computes audio metrics.\n\neval.yaml's defaults now declare the render group before experiment so eval\nexperiments can select a render group via override — previously only train\nand generate_dataset roots allowed this.\n\nValidated end-to-end with a local smoke (12-sample generate + inline\nfinalize against a local rclone backend, 2-step CPU train producing\nlast.ckpt, predict-mode eval computing mss/rms/sot/wmfcc metrics) and by\nconfig-composition tests pinning each experiment's contract.\n\n* internal-fix(training): address review warns on surge_4 experiment set\n\nTighten config header comments to the comment-hygiene cap, pin the\npreviously untested contracts (eval logger/wandb re-select, prediction\nwriter, rerender_target, plot_proj_ii disable), take Sequence in the\n_compose test helper, and clear GlobalHydra in a finally so a failing\nassertion cannot poison later tests.\n\nRefs #1793\n\n* docs: reflect surge_4's promotion from fixture to full experiment set\n\nRefs #1793\n\n* Potential fix for pull request finding\n\nCo-authored-by: Copilot Autofix powered by AI <175728472+Copilot@users.noreply.github.com>\n\n* Potential fix for pull request finding\n\nCo-authored-by: Copilot Autofix powered by AI <175728472+Copilot@users.noreply.github.com>\n\n---------\n\nCo-authored-by: khaledtin <dkb7wd5c92@privaterelay.appleid.com>\nCo-authored-by: Copilot Autofix powered by AI <175728472+Copilot@users.noreply.github.com>",
+          "timestamp": "2026-07-10T15:11:37-07:00",
+          "tree_id": "be1ac98f28998e69e40c1c19226bbde2641a6c8c",
+          "url": "https://github.com/tinaudio/synth-setter/commit/9e71742910946a53e8537108b76452a0072b6bd8"
+        },
+        "date": 1783723469459,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 9.618464469909668,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 15.75513651713729,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.10120607167482376,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.0018283724784851074,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.4265787601470947,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 16.81716619850001,
             "unit": "seconds"
           }
         ]
