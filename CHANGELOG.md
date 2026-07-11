@@ -1,6 +1,118 @@
 # CHANGELOG
 
 
+## v8.42.0 (2026-07-11)
+
+### Documentation
+
+- Lance-first data pipeline design with proven fragment finalization
+  ([#1777](https://github.com/tinaudio/synth-setter/pull/1777),
+  [`444c8ea`](https://github.com/tinaudio/synth-setter/commit/444c8ea31b9fca032654906c2f9a364d8f9fcda9))
+
+* docs: design lance fragment finalization
+
+* docs: align lance finalize design details
+
+* docs: clarify lance output paths
+
+* docs: qualify dataset complete marker
+
+* docs: slim lance fragment sidecar to schema and metadata
+
+The fragment sidecar previously carried worker_id, attempt_uuid, shard_id, split, and rows alongside
+  Lance's serialized fragment metadata. Every one of those is recoverable elsewhere -- from the
+  filename, staging path, spec, or Lance's own fragment metadata -- so the sidecar was a second
+  source of truth free to drift from the first. Reduce it to schema_version + fragment_json and have
+  finalize derive identity instead.
+
+Also make the winner-selection and finalize-idempotence rationale explicit: earliest .valid
+  LastModified is a server-assigned single-authority timestamp that yields a stable winner (a later
+  straggler can never displace it), and each split is a replace-semantics commit over the full
+  winner set so a re-run rebuilds an identical manifest rather than double-committing rows.
+
+Refs #1776
+
+* test: prove lance fragment finalize model end to end
+
+Adds a real-Lance, real-filesystem, no-mock e2e proof of the fragment-based finalize model the
+  design relies on, and folds its verified findings into the design doc. The test drives the
+  production codec (lance_fragment -> sidecar json -> commit_lance_dataset ->
+  iter_lance_column_rows) to pin:
+
+- worker writes a fragment straight into {split}.lance/data/; finalize commits only its serialized
+  FragmentMetadata (no row rewrite); - the winner set commits as one atomic manifest version (all or
+  nothing); - committing one winner of duplicate attempts yields exactly that shard's rows; -
+  re-committing the winner set is idempotent (Overwrite replaces, never doubles); - a fragment is
+  unreadable unless its file sits under the target dataset's data dir, and count_rows() trusts
+  manifest metadata so it cannot catch a dangling fragment -- validation must read rows.
+
+Doc updates: FragmentMetadata.to_json() returns a dict (sidecar stores the json.dumps string);
+  finalize commits one Overwrite transaction per split over the in-place winner fragments;
+  idempotence comes from Overwrite-replace, not read_version (Lance auto-rebases a
+  stale-read_version append).
+
+* docs: restructure data pipeline design lance-first
+
+Lance is now the primary supported dataset format; the design doc narrative should read that way
+  instead of branching 'for HDF5... for Lance...' at every protocol step. Rewrite data-pipeline.md
+  Lance-first: format-status banner, lance-output workflow example, Lance rows first in the
+  stage/artifact tables, Lance-led structural-check and finalize steps, and a slimmed 7.10 that
+  states why Lance is primary (per-column projection, native object-store streaming, zero-row-decode
+  finalize).
+
+HDF5/WDS-specific detail (staging/promotion, resharding bottleneck, resumability,
+  copy_dataset_root_uri, wds tar structure, Sample transcode container) moves to
+  docs/design/legacy/hdf5-wds-formats.md with a legacy status banner -- kept visible because
+  existing R2 datasets use those layouts and the code paths stay supported for coverage.
+  storage-provenance-spec.md gets a format-status note and doc-map.yaml maps reshard.py to the
+  legacy doc.
+
+Refs #1779
+
+* test: tighten lance poc typing, offsets, and error pin
+
+Address the repo-review-full WARNs on the fragment-finalize POC:
+
+- annotate the fragment helper's schema param pa.Schema instead of object - pin the
+  dangling-fragment read failure to pa.ArrowInvalid (verified empirically) instead of bare
+  Exception, keeping the message match as a supplementary check - replace the raw 5000/1000 value
+  offsets with a _VALUE_STRIDE constant whose values all stay under the float16-exact 2048 ceiling,
+  making the module comment's exactness claim hold for every array built - single-line docstring
+  summary on the co-location test - condense the legacy-formats doc-map description to one clause
+  (C12)
+
+Declined: splitting the sidecar round-trip test in two -- the round trip and the committed read-back
+  are one end-to-end behavior; a split second test would just re-run the first.
+
+* Apply suggestions from code review
+
+Co-authored-by: Copilot Autofix powered by AI <175728472+Copilot@users.noreply.github.com>
+
+---------
+
+### Features
+
+- **data-pipeline**: Log spec-uri resume runs to wandb
+  ([#1770](https://github.com/tinaudio/synth-setter/pull/1770),
+  [`593884a`](https://github.com/tinaudio/synth-setter/commit/593884a1d09e58ba14f5476eff50e18f177bd0d7))
+
+* feat(data-pipeline): log spec-uri resume runs to wandb
+
+* fix(data-pipeline): address spec-uri review nits
+
+* fix(data-pipeline): clarify spec-uri wandb wording
+
+* fix(data-pipeline): clarify wandb opt-out scope
+
+* fix(data-pipeline): clarify wandb test wording
+
+* fix(data-pipeline): disable wandb without auth
+
+* fix(data-pipeline): tolerate missing wandb package
+
+* fix(data-pipeline): validate wandb mode override
+
+
 ## v8.41.0 (2026-07-10)
 
 ### Features
