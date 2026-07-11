@@ -15,8 +15,10 @@ name: Test Dataset Finalization
 # `finalize-dataset.yaml`), then a follow-up `verify-artifacts` job runs
 # `rclone ls` against the same prefix and pins:
 #   * `dataset.complete` + `stats.npz` for all formats.
-#   * `train.h5` for hdf5 and `train.lance` for lance (the smoke configs use
-#     `train_val_test_sizes=[12, 0, 0]`; val/test are pruned).
+#   * `train.h5` for hdf5 (merged split). lance is stats-only: it pins the
+#     per-shard `shard-*.lance/` dirs left in place and asserts no merged
+#     `train.lance/` (the smoke configs use `train_val_test_sizes=[12, 0, 0]`;
+#     val/test are pruned).
 #
 # Required secrets (forwarded through `secrets: inherit`):
 #   RCLONE_CONFIG_R2_ACCESS_KEY_ID, RCLONE_CONFIG_R2_SECRET_ACCESS_KEY,
@@ -175,11 +177,12 @@ jobs:
           echo "r2_bucket: ${R2_BUCKET}"
 
       # Operator ask on PR #1202: list the run prefix and assert finalize
-      # wrote `dataset.complete`, `stats.npz`, and the split for formats that
-      # finalize materializes (the `train.h5` file for hdf5, the `train.lance/`
-      # dataset directory for lance — checked via `rclone lsf` since `rclone ls`
-      # lists files only; val/test are pruned because the smoke configs ship
-      # train-only `train_val_test_sizes=[12, 0, 0]`).
+      # wrote `dataset.complete` + `stats.npz` (all formats) plus the
+      # format-specific payload. hdf5 materializes a merged `train.h5`; lance is
+      # stats-only, so it leaves the per-shard `shard-*.lance/` dataset dirs in
+      # place and must write no merged `train.lance/` (both checked via
+      # `rclone lsf` since `rclone ls` lists files only). val/test are pruned
+      # because the smoke configs ship train-only `train_val_test_sizes=[12, 0, 0]`.
       - name: rclone ls run prefix and pin required artifacts
         env:
           R2_BUCKET: ${{ steps.bucket.outputs.r2_bucket }}
@@ -199,8 +202,14 @@ jobs:
               missing="${missing} ${f}"
             fi
           done
-          if [[ "${OUTPUT_FORMAT}" == "lance" ]] && ! rclone lsf "${PREFIX}train.lance/" | grep -q .; then
-            missing="${missing} train.lance/"
+          if [[ "${OUTPUT_FORMAT}" == "lance" ]]; then
+            if ! rclone lsf "${PREFIX}" --dirs-only | grep -qE '^shard-[0-9]+\.lance/$'; then
+              missing="${missing} shard-*.lance/"
+            fi
+            if rclone lsf "${PREFIX}train.lance/" 2>/dev/null | grep -q .; then
+              echo "::error::stats-only finalize wrote an unexpected merged split at ${PREFIX}train.lance/"
+              exit 1
+            fi
           fi
           if [[ -n "${missing}" ]]; then
             echo "::error::missing finalize artifacts at ${PREFIX}:${missing}"
