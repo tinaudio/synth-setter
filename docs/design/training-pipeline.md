@@ -286,10 +286,13 @@ The best checkpoint is uploaded to R2 at train end and referenced by the `model-
 ### 6.1 Dataset Access
 
 Storage backend is selected by datamodule group: `datamodule=surge` reads `train/val/test.h5`
-via `VSTDataModule`; `datamodule=surge_lance` reads `train/val/test.lance` dataset directories —
-the format the data pipeline's finalize step emits — via `LanceVSTDataModule`
-(`src/synth_setter/data/lance_datamodule.py`), a subclass that overrides the `dataset_cls` /
-`shard_suffix` extension points. The shipped `src/synth_setter/configs/datamodule/surge*.yaml` default `dataset_root` to the per-run Hydra
+via `VSTDataModule`; `datamodule=surge_lance` reads `train/val/test.lance` dataset directories
+via `LanceVSTDataModule` (`src/synth_setter/data/lance_datamodule.py`), a subclass that
+overrides the `dataset_cls` / `shard_suffix` extension points; `datamodule=surge_lance_sharded`
+reads a Lance dataset **run directory** as the pipeline's generate + stats-only finalize leave
+it (`shard-*.lance` + `input_spec.json` + `stats.npz`, no merged splits) via
+`ShardedLanceVSTDataModule`, resolving each split's shard subset from the spec's
+`split_shard_ranges`. The shipped `src/synth_setter/configs/datamodule/surge*.yaml` default `dataset_root` to the per-run Hydra
 output dir; a fixed dataset is pinned by overriding to the storage-spec provenance layout:
 
 ```yaml
@@ -304,6 +307,20 @@ Behavior:
 - Local-only by default
 - If `download_dataset_root_uri` is specified, no-clobber-copy the dataset before training
 - No hidden default R2 fetch
+
+For sharded Lance runs (hundreds of GB), skip the up-front download by mounting the R2 run
+prefix with rclone's VFS cache and pointing `dataset_root` at the mount — training starts
+immediately, reads hit R2 on first touch, and repeat reads come from the local cache disk
+(the container must be launched with `--device /dev/fuse --cap-add SYS_ADMIN`):
+
+```bash
+rclone mount r2:experiments/data/{task_name}/{run_id}/ /mnt/lance-dataset \
+  --read-only --vfs-cache-mode full --vfs-cache-max-size 600G --vfs-cache-max-age 72h \
+  --cache-dir /path/to/fast/local/disk --daemon
+
+python -m synth_setter.cli.train experiment=surge/ffn_4 \
+  datamodule=surge_lance_sharded datamodule.dataset_root=/mnt/lance-dataset
+```
 
 ### 6.2 Checkpoint Durability via R2
 

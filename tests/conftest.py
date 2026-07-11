@@ -1561,34 +1561,24 @@ def _write_lance_smoke_split(path: Path, num_rows: int, *, seed: int) -> None:
     )
 
 
-@pytest.fixture
-def cfg_train_lance(tmp_path: Path) -> Iterator[DictConfig]:
-    """Compose a ``datamodule=surge_lance`` training cfg over a generated Lance dataset.
+def _compose_lance_train_cfg(
+    tmp_path: Path, dataset_root: Path, datamodule_group: str
+) -> DictConfig:
+    """Compose a CPU ``fast_dev_run`` training cfg over a Lance dataset directory.
 
-    Writes tiny ``train/val/test.lance`` splits + ``stats.npz`` under
-    ``tmp_path``, then composes the real ``train.yaml`` with
-    ``datamodule=surge_lance`` — the same Hydra path a user takes — shrinking
-    the AST net to a 1-layer toy so a ``fast_dev_run`` step stays CPU-cheap.
+    Composes the real ``train.yaml`` — the same Hydra path a user takes —
+    shrinking the AST net to a 1-layer toy so the step stays CPU-cheap.
 
-    :param tmp_path: Per-test tmpdir holding the dataset and output/log dirs.
-    :yields: Resolved DictConfig ready for ``train(cfg)``.
-    :ytype: DictConfig
+    :param tmp_path: Per-test tmpdir holding the output/log dirs.
+    :param dataset_root: Directory the datamodule reads (splits or a run dir).
+    :param datamodule_group: ``surge_lance`` or ``surge_lance_sharded``.
+    :returns: Resolved DictConfig ready for ``train(cfg)``.
     """
-    dataset_root = tmp_path / "lance-data"
-    dataset_root.mkdir()
-    for seed, split in enumerate(("train", "val", "test")):
-        _write_lance_smoke_split(dataset_root / f"{split}.lance", _LANCE_SMOKE_ROWS, seed=seed)
-    np.savez(
-        dataset_root / "stats.npz",
-        mean=np.zeros(_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
-        std=np.ones(_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
-    )
-
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="train.yaml",
             return_hydra_config=True,
-            overrides=["datamodule=surge_lance", "model=surge_ffn", "trainer=cpu"],
+            overrides=[f"datamodule={datamodule_group}", "model=surge_ffn", "trainer=cpu"],
         )
         with open_dict(cfg):
             cfg.paths.root_dir = str(operator_workspace())
@@ -1612,7 +1602,65 @@ def cfg_train_lance(tmp_path: Path) -> Iterator[DictConfig]:
             cfg.model.net.n_heads = 2
             cfg.model.net.n_layers = 1
             cfg.model.net.d_out = _LANCE_SMOKE_NUM_PARAMS
+    return cfg
 
-    yield cfg
+
+@pytest.fixture
+def cfg_train_lance(tmp_path: Path) -> Iterator[DictConfig]:
+    """Compose a ``datamodule=surge_lance`` training cfg over a generated Lance dataset.
+
+    Writes tiny ``train/val/test.lance`` splits + ``stats.npz`` under
+    ``tmp_path``, then delegates composition to :func:`_compose_lance_train_cfg`.
+
+    :param tmp_path: Per-test tmpdir holding the dataset and output/log dirs.
+    :yields: Resolved DictConfig ready for ``train(cfg)``.
+    :ytype: DictConfig
+    """
+    dataset_root = tmp_path / "lance-data"
+    dataset_root.mkdir()
+    for seed, split in enumerate(("train", "val", "test")):
+        _write_lance_smoke_split(dataset_root / f"{split}.lance", _LANCE_SMOKE_ROWS, seed=seed)
+    np.savez(
+        dataset_root / "stats.npz",
+        mean=np.zeros(_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
+        std=np.ones(_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
+    )
+
+    yield _compose_lance_train_cfg(tmp_path, dataset_root, "surge_lance")
+
+    GlobalHydra.instance().clear()
+
+
+@pytest.fixture
+def cfg_train_lance_sharded(tmp_path: Path) -> Iterator[DictConfig]:
+    """Compose a ``datamodule=surge_lance_sharded`` cfg over a sharded run directory.
+
+    Writes the layout the pipeline's generate + stats-only finalize leave under
+    the R2 run prefix (``shard-*.lance`` + ``input_spec.json`` + ``stats.npz``)
+    — what an ``rclone mount`` exposes locally — then delegates composition to
+    :func:`_compose_lance_train_cfg`.
+
+    :param tmp_path: Per-test tmpdir holding the run dir and output/log dirs.
+    :yields: Resolved DictConfig ready for ``train(cfg)``.
+    :ytype: DictConfig
+    """
+    from synth_setter.pipeline.spec_io import write_spec_to_path
+    from tests.helpers.finalize_shards import build_lance_smoke_spec
+
+    dataset_root = tmp_path / "lance-run"
+    dataset_root.mkdir()
+    spec = build_lance_smoke_spec(task_name="sharded-train-smoke", train_val_test_sizes=(8, 4, 4))
+    for seed, shard in enumerate(spec.shards):
+        _write_lance_smoke_split(
+            dataset_root / shard.filename, spec.render.samples_per_shard, seed=seed
+        )
+    write_spec_to_path(spec, dataset_root / "input_spec.json")
+    np.savez(
+        dataset_root / "stats.npz",
+        mean=np.zeros(_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
+        std=np.ones(_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
+    )
+
+    yield _compose_lance_train_cfg(tmp_path, dataset_root, "surge_lance_sharded")
 
     GlobalHydra.instance().clear()

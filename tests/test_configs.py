@@ -221,14 +221,17 @@ def test_surge_4_generate_dataset_experiment_composes_with_inline_finalize() -> 
 def test_surge_4_train_experiment_composes_with_surge_4_width() -> None:
     """``surge/ffn_4`` trains the FFN at the surge_4 encoded width on Lance data.
 
-    Pins the surge_4 train contract: Lance datamodule keyed to the surge_4 spec,
-    ``d_out`` equal to the spec's encoded width (7), and per-param MSE logging
-    labeled with the surge_4 spec.
+    Pins the surge_4 train contract: the sharded Lance datamodule (runs carry
+    per-shard datasets only after the stats-only finalize) keyed to the surge_4
+    spec, ``d_out`` equal to the spec's encoded width (7), and per-param MSE
+    logging labeled with the surge_4 spec.
     """
     cfg = _compose("train.yaml", ["experiment=surge/ffn_4"])
 
     assert cfg.datamodule.param_spec_name == "surge_4"
-    assert cfg.datamodule._target_ == "synth_setter.data.lance_datamodule.LanceVSTDataModule"
+    assert (
+        cfg.datamodule._target_ == "synth_setter.data.lance_datamodule.ShardedLanceVSTDataModule"
+    )
     assert cfg.model.net.d_out == 7
     assert cfg.callbacks.log_per_param_mse.param_spec == "surge_4"
     # plot_proj_ii's projection plots don't apply to the surge_4 spec; the

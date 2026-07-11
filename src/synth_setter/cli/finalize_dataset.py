@@ -8,16 +8,15 @@ and then writes the ``dataset.complete`` marker last per
 ``pipeline/CLAUDE.md``. The wds branch streams train shards through
 Welford row-by-row; the hdf5 branch downloads every shard, reshards into
 ``{train,val,test}.h5``, and computes ``stats.npz`` over the train split;
-the lance branch streams every shard directly from R2 (no local download),
-folds train shards through Welford for ``stats.npz``, and writes each split
-straight back to R2 as a ``{train,val,test}.lance`` dataset directory.
+the lance branch streams train shards directly from R2 (no local download)
+through Welford for ``stats.npz`` — shards stay in place under the run
+prefix for the sharded datamodule to read.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeAlias
 
 import hydra
 import numpy as np
@@ -36,19 +35,11 @@ from synth_setter.pipeline.constants import (
 from synth_setter.pipeline.data.reshard import reshard_dataset
 from synth_setter.pipeline.data.stats import get_stats_hdf5, stream_stats_wds
 from synth_setter.pipeline.schemas.prefix import assert_r2_prefix_matches
-from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat, ShardSpec, Split
+from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat
 from synth_setter.pipeline.spec_io import load_spec_from_root, write_spec_to_path
 from synth_setter.utils import pin_wandb_run_id
 from synth_setter.utils.instantiators import close_loggers, instantiate_loggers
 from synth_setter.workspace import operator_workspace
-
-if TYPE_CHECKING:
-    import pyarrow as pa
-
-    LanceBatchIterator: TypeAlias = Iterator[pa.RecordBatch]
-    LanceSplitBatches: TypeAlias = tuple[pa.Schema, LanceBatchIterator]
-else:
-    LanceSplitBatches: TypeAlias = tuple[object, Iterator[object]]
 
 # Resolve workspace at import so ``${oc.env:PROJECT_ROOT}`` in
 # ``configs/paths/default.yaml`` interpolates under any install layout.
@@ -174,50 +165,19 @@ def finalize_hdf5(spec: DatasetSpec, work_dir: Path) -> None:
     logger.info("uploaded stats to {}", spec.r2.stats_uri())
 
 
-def _lance_split_batches(
-    split: Split, shard_uris: list[str], storage_options: dict[str, str]
-) -> LanceSplitBatches:
-    """Return the schema and batch iterator for a finalized Lance split.
-
-    Reads shards directly from R2 (no local download) — one sequential pass per
-    shard, which Lance streams natively over object storage.
-
-    :param split: Finalized split receiving the shard stream.
-    :param shard_uris: Non-empty list of ``s3://`` shard dataset URIs in split order.
-    :param storage_options: Object-store config for the R2 bucket.
-    :returns: ``(schema, batches)`` for :func:`write_lance_dataset`.
-    """
-    import lance
-
-    schema = lance.dataset(shard_uris[0], storage_options=storage_options).schema
-
-    def _batches() -> LanceBatchIterator:
-        total = len(shard_uris)
-        for index, uri in enumerate(shard_uris, start=1):
-            logger.info(
-                "writing split {} shard {}/{}: {}",
-                split,
-                index,
-                total,
-                uri.rstrip("/").rsplit("/", 1)[-1],
-            )
-            yield from lance.dataset(uri, storage_options=storage_options).to_batches()
-
-    return schema, _batches()
-
-
 def finalize_lance(spec: DatasetSpec, work_dir: Path) -> None:
-    """Stream Lance shards from R2 into split datasets, compute stats, upload artifacts.
+    """Stream stats over the Lance train shards from R2 and upload ``stats.npz``.
 
-    Shards are read directly from R2 and each split dataset is written straight to
-    its R2 URI via Lance ``storage_options`` — no shard download or split upload.
-    Only ``stats.npz`` (a plain numpy archive) is staged locally and uploaded.
+    Shards are read directly from R2 via Lance ``storage_options`` (no local
+    download) and stay in place under the run prefix — training reads the
+    per-shard datasets through the sharded datamodule, so no merged
+    ``{train,val,test}.lance`` is written (the merge re-shipped the whole
+    dataset through the finalize host).
 
     :param spec: Validated dataset spec (``output_format == "lance"``).
     :param work_dir: Scratch directory for the finalized ``stats.npz``.
     :raises ValueError: The train split is empty.
     """
-    from synth_setter.pipeline.data.lance_shard import write_lance_dataset
     from synth_setter.pipeline.data.stats import stream_stats_lance
 
     train_lo, train_hi = spec.split_shard_ranges["train"]
@@ -228,27 +188,14 @@ def finalize_lance(spec: DatasetSpec, work_dir: Path) -> None:
             f"without at least one train shard."
         )
     storage_options = r2_io.r2_storage_options()
-
-    def _shard_s3_uri(shard: ShardSpec) -> str:
-        return r2_io.to_s3_uri(spec.r2.shard_uri(shard))
-
-    train_uris = [_shard_s3_uri(shard) for shard in spec.shards[train_lo:train_hi]]
+    train_uris = [
+        r2_io.to_s3_uri(spec.r2.shard_uri(shard)) for shard in spec.shards[train_lo:train_hi]
+    ]
     mean, std = stream_stats_lance(
         train_uris, mask_degenerate=spec.mask_degenerate_bins, storage_options=storage_options
     )
     stats_npz = work_dir / STATS_NPZ_FILENAME
     np.savez(stats_npz, mean=mean, std=std)
-
-    for split, (lo, hi) in spec.split_shard_ranges.items():
-        if lo >= hi:
-            continue
-        shard_uris = [_shard_s3_uri(shard) for shard in spec.shards[lo:hi]]
-        schema, batches = _lance_split_batches(split, shard_uris, storage_options)
-        split_uri = spec.r2.split_lance_uri(split)
-        write_lance_dataset(
-            r2_io.to_s3_uri(split_uri), schema, batches, storage_options=storage_options
-        )
-        logger.info("wrote {} split to {}", split, split_uri)
     r2_io.upload(stats_npz, spec.r2.stats_uri())
     logger.info("uploaded stats to {}", spec.r2.stats_uri())
 
@@ -301,9 +248,10 @@ def _finalized_reference_uris(spec: DatasetSpec) -> list[str]:
     """Return the R2 URIs of the objects finalize materialized for this run.
 
     hdf5 reshards into per-split ``.h5`` files, so each non-empty split plus
-    ``stats.npz`` is referenced. wds leaves shards in place under the run
-    prefix, so the prefix dir (carrying the tars) plus ``stats.npz`` is
-    referenced. Empty splits contribute nothing — finalize prunes them.
+    ``stats.npz`` is referenced. wds and lance leave shards in place under the
+    run prefix, so the prefix dir (carrying the tars / shard datasets) plus
+    ``stats.npz`` is referenced. Empty splits contribute nothing — finalize
+    prunes them.
 
     :param spec: Validated dataset spec.
     :returns: Canonical ``r2://`` URIs, splits/prefix first then ``stats.npz``.
@@ -311,13 +259,6 @@ def _finalized_reference_uris(spec: DatasetSpec) -> list[str]:
     if spec.output_format is OutputFormat.HDF5:
         split_uris = [
             spec.r2.split_h5_uri(split)
-            for split, (lo, hi) in spec.split_shard_ranges.items()
-            if lo < hi
-        ]
-        return [*split_uris, spec.r2.stats_uri()]
-    if spec.output_format is OutputFormat.LANCE:
-        split_uris = [
-            spec.r2.split_lance_uri(split)
             for split, (lo, hi) in spec.split_shard_ranges.items()
             if lo < hi
         ]

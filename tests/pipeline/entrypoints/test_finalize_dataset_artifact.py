@@ -123,3 +123,21 @@ def test_build_dataset_artifact_wds_references_run_prefix_and_stats(
         f"s3://{_BUCKET}/{_PREFIX}",
         f"s3://{_BUCKET}/{_PREFIX}stats.npz",
     }
+
+
+def test_build_dataset_artifact_lance_references_run_prefix_and_stats(
+    dataset_spec_factory: Callable[..., DatasetSpec],
+) -> None:
+    """Lance references the run prefix dir (carrying the shard datasets) plus ``stats.npz``.
+
+    Lance finalize leaves the per-shard datasets in place (no merged split
+    reupload), so its footprint matches wds: prefix dir + ``stats.npz``.
+
+    :param dataset_spec_factory: Shared ``conftest`` ``DatasetSpec`` factory.
+    """
+    artifact = build_dataset_artifact(_spec(dataset_spec_factory, output_format="lance"))
+    refs = {entry.ref for entry in artifact.manifest.entries.values()}
+    assert refs == {
+        f"s3://{_BUCKET}/{_PREFIX}",
+        f"s3://{_BUCKET}/{_PREFIX}stats.npz",
+    }

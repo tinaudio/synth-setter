@@ -159,15 +159,15 @@ def staged_lance_spec() -> Iterator[DatasetSpec]:
         )
 
 
-def test_finalize_lance_writes_split_and_stats_to_real_r2(
+def test_finalize_lance_uploads_stats_and_leaves_shards_in_place_on_real_r2(
     staged_lance_spec: DatasetSpec,
 ) -> None:
-    """``finalize_lance`` streams the R2 shard into a split dataset written back to R2.
+    """``finalize_lance`` streams the R2 shard for stats and writes no merged split.
 
     Exercises the direct-R2 path end-to-end: read shard from R2 via
-    ``storage_options`` → stream stats → write the train split dataset straight
-    to its ``s3://`` URI → upload ``stats.npz``. The split reads back with the
-    pinned on-disk version and the expected row count.
+    ``storage_options`` → stream stats → upload ``stats.npz``. The shard
+    dataset stays readable in place with the pinned on-disk version, and no
+    merged ``train.lance`` appears under the prefix.
 
     :param staged_lance_spec: Fixture-provided spec whose train shard dataset is on R2.
     """
@@ -178,9 +178,13 @@ def test_finalize_lance_writes_split_and_stats_to_real_r2(
     assert r2_io.object_size(spec.r2.stats_uri()) is not None, (
         f"expected stats.npz at {spec.r2.stats_uri()} after finalize"
     )
-    split_uri = spec.r2.split_lance_uri("train")
-    assert r2_io.r2_directory_exists(split_uri), f"expected split dataset at {split_uri}"
-    dataset = lance.dataset(r2_io.to_s3_uri(split_uri), storage_options=r2_io.r2_storage_options())
+    split_uri = spec.r2.uri(f"{spec.r2.prefix}train.lance")
+    assert not r2_io.r2_directory_exists(split_uri), (
+        f"stats-only finalize must not write a merged split at {split_uri}"
+    )
+    shard_uri = spec.r2.shard_uri(spec.shards[0])
+    assert r2_io.r2_directory_exists(shard_uri), f"expected shard left in place at {shard_uri}"
+    dataset = lance.dataset(r2_io.to_s3_uri(shard_uri), storage_options=r2_io.r2_storage_options())
     assert dataset.count_rows() == spec.render.samples_per_shard
     assert dataset.data_storage_version == LANCE_DATA_STORAGE_VERSION
 

@@ -18,12 +18,10 @@ from __future__ import annotations
 
 import inspect
 import shutil
-import sys
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, NoReturn, cast
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock
 
 import h5py
 import numpy as np
@@ -75,63 +73,6 @@ def _stage_for(uploads: dict[str, Path], destination_uri: str, tmp_path: Path) -
     staged = staged_root / f"{len(uploads):03d}_{destination_uri.rsplit('/', 1)[-1]}"
     uploads[destination_uri] = staged
     return staged
-
-
-def test_lance_split_batches_logs_shard_progress_when_iterator_is_consumed(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Progress logs are emitted by the lazy split writer iterator.
-
-    :param monkeypatch: Pytest fixture used to stub ``lance.dataset`` and the
-        module logger.
-    """
-    spec = build_lance_smoke_spec(
-        task_name="lance-split-progress",
-        train_val_test_sizes=(8, 0, 0),
-    )
-    shard_uris = [
-        r2_io.to_s3_uri(spec.r2.shard_uri(shard))
-        for shard in spec.shards[
-            spec.split_shard_ranges["train"][0] : spec.split_shard_ranges["train"][1]
-        ]
-    ]
-    schema = object()
-    calls: list[str] = []
-
-    class FakeDataset:
-        def __init__(self, uri: str) -> None:
-            self.schema = schema
-            self.uri = uri
-
-        def to_batches(self) -> Iterator[str]:
-            yield f"batch:{self.uri}"
-
-    def fake_dataset(uri: str, *, storage_options: dict[str, str]) -> FakeDataset:
-        assert storage_options == {"endpoint": "r2"}
-        calls.append(uri)
-        return FakeDataset(uri)
-
-    monkeypatch.setitem(sys.modules, "lance", SimpleNamespace(dataset=fake_dataset))
-    recording_logger = MagicMock(wraps=finalize_dataset.logger)
-    monkeypatch.setattr(finalize_dataset, "logger", recording_logger)
-
-    actual_schema, batches = finalize_dataset._lance_split_batches(
-        "train", shard_uris, {"endpoint": "r2"}
-    )
-
-    assert actual_schema is schema
-    assert calls == [shard_uris[0]]
-    recording_logger.info.assert_not_called()
-
-    assert next(batches) == f"batch:{shard_uris[0]}"
-
-    assert next(batches) == f"batch:{shard_uris[1]}"
-
-    assert recording_logger.info.call_args_list == [
-        call("writing split {} shard {}/{}: {}", "train", 1, 2, "shard-000000.lance"),
-        call("writing split {} shard {}/{}: {}", "train", 2, 2, "shard-000001.lance"),
-    ]
-    assert calls == [shard_uris[0], shard_uris[0], shard_uris[1]]
 
 
 def test_finalize_from_spec_uploads_stats_then_marker_at_canonical_uris(
@@ -592,9 +533,89 @@ def test_finalize_wds_downloads_every_train_shard_uri(
     assert uri_to_local_path(fake_r2_remote, spec.r2.stats_uri()).is_file()
 
 
-# The Lance finalize path streams shards directly from R2 (real S3), so it can't
-# run against the local-typed fake_r2_remote. Marker-last ordering is format-agnostic
-# (wds/hdf5 cases cover it); the Lance split is covered in test_finalize_dataset_r2.py.
+def _localize_lance_r2_reads(monkeypatch: pytest.MonkeyPatch, fake_r2_remote: Path) -> None:
+    """Route ``finalize_lance``'s direct-R2 Lance reads at the local fake remote.
+
+    Lance's object-store reads need real S3, which the local-typed
+    ``fake_r2_remote`` can't serve — so the two R2 boundary translators are
+    remapped (``to_s3_uri`` → the shard's local path, ``r2_storage_options`` →
+    ``None``) and everything downstream (the Welford fold over real Lance
+    shards, ``np.savez``, the rclone upload) runs for real.
+
+    :param monkeypatch: Pytest fixture used to install the two remaps.
+    :param fake_r2_remote: Root of the local-typed remote holding the shards.
+    """
+    monkeypatch.setattr(
+        "synth_setter.cli.finalize_dataset.r2_io.to_s3_uri",
+        lambda r2_uri: str(uri_to_local_path(fake_r2_remote, r2_uri)),
+    )
+    monkeypatch.setattr(
+        "synth_setter.cli.finalize_dataset.r2_io.r2_storage_options",
+        lambda: None,
+    )
+
+
+def test_finalize_lance_uploads_stats_only_and_leaves_shards_in_place(
+    fake_r2_remote: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``finalize_lance`` uploads ``stats.npz`` and writes no merged split datasets.
+
+    The merged ``train/val/test.lance`` reupload is gone (it re-shipped the
+    whole dataset through the finalize host); training reads the per-shard
+    datasets in place, so finalize's only artifact is ``stats.npz`` computed
+    over the train shards.
+
+    :param fake_r2_remote: Local-typed rclone remote seeded with real Lance shards.
+    :param tmp_path: Pytest tmp dir used as finalize's local work_dir.
+    :param monkeypatch: Used to localize the R2 boundary translators.
+    """
+    from synth_setter.pipeline.data.lance_shard import iter_lance_column_rows
+    from tests.helpers.finalize_shards import write_minimal_lance_shard
+
+    spec = build_lance_smoke_spec(task_name="lance-stats-only", train_val_test_sizes=(8, 4, 0))
+    for shard in spec.shards:
+        write_minimal_lance_shard(
+            uri_to_local_path(fake_r2_remote, spec.r2.shard_uri(shard)), spec
+        )
+    train_lo, train_hi = spec.split_shard_ranges["train"]
+    train_mels = [
+        np.stack(
+            list(
+                iter_lance_column_rows(
+                    uri_to_local_path(fake_r2_remote, spec.r2.shard_uri(shard)), "mel_spec"
+                )
+            )
+        )
+        for shard in spec.shards[train_lo:train_hi]
+    ]
+    _localize_lance_r2_reads(monkeypatch, fake_r2_remote)
+
+    finalize_dataset.finalize_lance(spec, tmp_path)
+
+    stats_local = uri_to_local_path(fake_r2_remote, spec.r2.stats_uri())
+    assert stats_local.is_file()
+    all_rows = np.concatenate(train_mels, axis=0)
+    with np.load(stats_local) as stats:
+        np.testing.assert_allclose(stats["mean"], all_rows.mean(axis=0), rtol=1e-5)
+        np.testing.assert_allclose(stats["std"], all_rows.std(axis=0), rtol=1e-5)
+    prefix_local = uri_to_local_path(fake_r2_remote, spec.r2.uri(spec.r2.prefix))
+    split_dirs = [p.name for p in prefix_local.iterdir() if not p.name.startswith("shard-")]
+    assert split_dirs == ["stats.npz"], f"unexpected non-shard artifacts: {split_dirs}"
+
+
+def test_finalize_lance_raises_on_empty_train_split(fake_r2_remote: Path, tmp_path: Path) -> None:
+    """An empty train split surfaces as a clear ValueError before any I/O.
+
+    :param fake_r2_remote: Local-typed rclone remote — asserted untouched because the empty-train
+        guard short-circuits before any read or upload.
+    :param tmp_path: Pytest tmp dir used as finalize's local work_dir.
+    """
+    spec = build_lance_smoke_spec(task_name="lance-empty-train", train_val_test_sizes=(0, 4, 0))
+
+    with pytest.raises(ValueError, match="train split is empty"):
+        finalize_dataset.finalize_lance(spec, tmp_path)
+
+    assert [p for p in fake_r2_remote.rglob("*") if p.is_file()] == []
 
 
 def test_finalize_wds_raises_on_empty_train_split(fake_r2_remote: Path, tmp_path: Path) -> None:

@@ -501,6 +501,30 @@ def test_train_fast_dev_run_lance_datamodule(cfg_train_lance: DictConfig) -> Non
     assert train_split.is_dir()
 
 
+def test_train_fast_dev_run_sharded_lance_datamodule(
+    cfg_train_lance_sharded: DictConfig,
+) -> None:
+    """Run 1 train, val, and test step reading batches from a sharded Lance run dir.
+
+    Exercises config wiring, ``ShardedLanceVSTDataModule`` setup (split
+    resolution via the sibling ``input_spec.json``), and real cross-shard
+    batch reads end-to-end through the in-process ``train(cfg)`` entrypoint —
+    the consumption path for stats-only-finalized Lance runs mounted from R2.
+
+    :param cfg_train_lance_sharded: Composed ``datamodule=surge_lance_sharded``
+        training config.
+    """
+    HydraConfig().set_config(cfg_train_lance_sharded)
+    _, object_dict = train(cfg_train_lance_sharded)
+
+    datamodule = object_dict["datamodule"]
+    # The train split spans both train shards of the run's 8/4/4 spec, and no
+    # merged train.lance exists to read from. (num_rows stays readable after
+    # the trainer's teardown closed the handle.)
+    assert datamodule.train_dataset.dataset_file.num_rows == 8
+    assert not (Path(datamodule.dataset_root) / "train.lance").exists()
+
+
 @pytest.mark.fake_vst
 @pytest.mark.parametrize("experiment_name", _SURGE_SMOKE_EXPERIMENTS, indirect=True)
 @pytest.mark.parametrize("surge_smoke_variant", FAKE_VST_VARIANTS, indirect=True)

@@ -3,7 +3,7 @@
 defaults:
   - /experiment/surge/base
   - override /model: surge_ffn
-  - override /datamodule: surge_lance
+  - override /datamodule: surge_lance_sharded
   - _self_
 
 run_name: ffn
