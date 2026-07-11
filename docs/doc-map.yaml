@@ -72,6 +72,21 @@ docs:
       - pattern: "src/synth_setter/utils/callbacks.py"
         covers: "W&B callback integrations, visualization uploads"
 
+  # ── W&B artifact & provenance reference ─────────────────────────
+  - doc: docs/reference/artifact-provenance-reference.md
+    description: W&B artifact patterns, lineage DAG, and ${wandb:…} resolver recipe
+    sources:
+      - pattern: "src/synth_setter/cli/finalize_dataset.py"
+        covers: "build_dataset_artifact / _log_dataset_artifact: data-{id} artifact, s3:// references, metadata (shard_count, n_samples, git_sha)"
+      - pattern: "src/synth_setter/cli/train.py"
+        covers: "build_model_artifact / _log_model_artifact: model-{config_id} artifact, opt-in upload_checkpoints_uri reference; _consumed_artifact_refs lineage edges"
+      - pattern: "src/synth_setter/cli/eval.py"
+        covers: "build_eval_results_artifact / _log_eval_results_artifact: eval-{id} artifact, output-dir reference, summary-metric metadata"
+      - pattern: "src/synth_setter/utils/logging_utils.py"
+        covers: "use_input_artifacts lineage edges; pin_wandb_run_id; log_wandb_provenance"
+      - pattern: "src/synth_setter/utils/utils.py"
+        covers: "${wandb:…} resolver (_resolve_wandb_checkpoint) and register_resolvers cache behavior"
+
   # ── Data pipeline design doc ────────────────────────────────────
   - doc: docs/design/data-pipeline.md
     description: Distributed data pipeline design (RunPod + R2)
@@ -120,6 +135,13 @@ docs:
         covers: "`synth-setter-add-mp3-audio` CLI — backfills an `audio_mp3` Lance blob v2 column (`lance.blob_field` / `lance.blob_array`, tagged `mime_type: audio/mpeg`) holding a CBR MP3 preview (via pedalboard) onto a Lance dataset via `lance.batch_udf` `add_columns`; a lossy auditioning preview, never a training input."
       - pattern: "src/synth_setter/pipeline/data/add_music2latent.py"
         covers: "`python -m synth_setter.pipeline.data.add_music2latent` CLI — adds a `music2latent` dataset to HDF5 shards via reader/writer multiprocessing around a GPU encode loop."
+
+  # ── Legacy output formats (HDF5 & WebDataset) ────────────────────
+  - doc: docs/design/legacy/hdf5-wds-formats.md
+    description: How legacy HDF5/WebDataset outputs are staged, promoted, and resharded
+    sources:
+      - pattern: "src/synth_setter/pipeline/data/reshard.py"
+        covers: "HDF5 resharding into train/val/test virtual datasets on the finalize machine"
 
   # ── Deterministic data-generation seeding design ─────────────────
   - doc: docs/design/deterministic-seeding.md
@@ -204,6 +226,8 @@ docs:
         covers: "Lightning module definitions, forward pass, loss computation, optimizer config"
       - pattern: "src/synth_setter/data/**"
         covers: "Data modules, dataset classes, VST rendering, data loading"
+      - pattern: "src/synth_setter/data/lance_torch.py"
+        covers: "Native lance.torch dataloader factories (lance_map_dataloader / lance_iterable_dataloader) — direct Lance→tensor loading, R2 streaming via storage_options, DDP sharding (§6.1)"
       - pattern: "src/synth_setter/configs/train.yaml"
         covers: "Top-level training config, Hydra defaults list, config groups"
       - pattern: "src/synth_setter/configs/trainer/**"
@@ -342,6 +366,8 @@ docs:
     sources:
       - pattern: "tests/conftest.py"
         covers: "Hydra cfg_train/cfg_train_lance/cfg_eval/cfg_dataset/cfg_surge_xt fixtures, accelerator parametrize, param_spec_name parametrize, experiment_name parametrize, _build_surge_xt_smoke_cfg, surge_xt_smoke_datasets, _validate_surge_dataset, Lance smoke helpers (_write_lance_smoke_split, fake_surge_smoke_lance_datasets, _LANCE_SMOKE_*), shared constants (NUM_FIXTURE_SAMPLES, VST_HEADLESS_WRAPPER)"
+      - pattern: "tests/claude_hooks/conftest.py"
+        covers: "Autouse gate-override env scrub (GATE_OVERRIDE_ENV_VARS) so hook subprocesses see their documented default modes"
       - pattern: "tests/_vst.py"
         covers: "PLUGIN_PATH, VST_AVAILABLE, VST_SUBPROCESS_TIMEOUT_SECONDS"
       - pattern: "tests/test_train.py"
@@ -349,7 +375,7 @@ docs:
       - pattern: "tests/test_eval.py"
         covers: "Train→eval round-trip reference implementation"
       - pattern: "tests/helpers/lance_fixtures.py"
-        covers: "Shared write_lance_shard writer backing the Lance datamodule fixtures"
+        covers: "Shared write_lance_shard writer backing the Lance datamodule fixtures and the lance_torch dataloader test datasets (tests/helpers/lance_torch_datasets.py)"
       - pattern: "tests/helpers/run_if.py"
         covers: "RunIf decorator (min_gpus, etc.)"
       - pattern: ".github/workflows/test.yml"
@@ -375,7 +401,7 @@ docs:
       - pattern: "tests/infra/**"
         covers: "Devcontainer + GHA invariant tests — attached-mode MODE=idle, gh-auth flow, no baked secrets, post-create budget, post-create agent full-auto seeding (Codex config + agy wrapper), act --list parse, Makefile install-plugins targets + Dockerfile pin parity"
       - pattern: "tests/integration/**"
-        covers: "Three classes of integration tests: (1) launcher-against-real-R2 round-trips with a stubbed VST renderer subprocess (`integration_r2` marker) — fast PR-tier alternative to the kind + dev-snapshot matrix in `test-dataset-generation.yml`, run by `test-local-launcher-roundtrip.yml` on same-repo PRs; (2) unmarked cross-platform shard-dispatch tests (`test_parallel_shard_dispatch.py`) that run in the default fast lane via `test.yml`; and (3) real-Surge parallel renders parametrized over cadence cells (`test_parallel_shard_render_linux.py`, `requires_vst`+`slow`) run by `test-vst-slow.yml` — the cadence coverage retired from `test-dataset-generation-render-matrix.yml`."
+        covers: "Four classes of integration tests: (1) launcher-against-real-R2 round-trips with a stubbed VST renderer subprocess — fast PR-tier alternative to the kind + dev-snapshot matrix in `test-dataset-generation.yml`, run by `test-local-launcher-roundtrip.yml` (path-scoped) on same-repo PRs; (2) unmarked cross-platform shard-dispatch tests (`test_parallel_shard_dispatch.py`) that run in the default fast lane via `test.yml`; (3) real-Surge parallel renders parametrized over cadence cells (`test_parallel_shard_render_linux.py`, `requires_vst`+`slow`) run by `test-vst-slow.yml` — the cadence coverage retired from `test-dataset-generation-render-matrix.yml`; and (4) real-R2 streaming round-trips for pipeline/dataloader reads (`test_lance_r2_multipart.py`, `test_lance_torch_r2.py`, `test_finalize_dataset_r2.py`, `test_add_embeddings_r2.py`; `integration_r2`+`r2`+`slow`) that run wherever R2 credentials are provisioned. The `integration_r2` marker spans classes 1 and 4 — it gates on credentials, it does not identify a class."
       - pattern: ".github/workflows/test-local-launcher-roundtrip.yml"
         covers: "Fast PR-tier (~8-10 min) lane for `tests/integration/`: invokes the `synth-setter-generate-dataset` CLI entrypoint (`cli.generate_dataset.main()`, which then calls `generate()` internally) end-to-end against real R2 with the VST renderer subprocess stubbed; no kind, no sky.launch, no dev-snapshot image pull. Gated on same-repo PRs (forks skipped). Unique per-run R2 prefix + best-effort rclone purge teardown. PR #1170; tracks #1164."
       - pattern: ".github/workflows/test-generate-dataset-from-spec-uri.yml"
@@ -401,8 +427,10 @@ docs:
         covers: "Pre-PR review-sentinel gate; CI backstop via test.yml + code-quality-pr.yaml + pr-metadata-gate.yaml"
       - pattern: "agent/hooks/pr-readiness-stop.sh"
         covers: "Stop-gate on red CI / non-mergeable; CI backstop via branch protection + required checks"
-      - pattern: "tests/claude_hooks/test_skill_discovery_parity.py"
-        covers: "Parity assertion that every agent/skills/* resolves via both the Claude and Codex globs"
+      - pattern: "agent/hooks/test.sh"
+        covers: "Bash hook test harness: registry/runner, sandbox stubs, startup gate-override env scrub (GATE_OVERRIDE_ENV_VARS)"
+      - pattern: "tests/claude_hooks/**"
+        covers: "Hook wiring + exit-contract tests (settings.json wiring, gate tests, skill-discovery parity) and the autouse gate-override env scrub conftest"
       - pattern: "tests/infra/test_agent_hooks_suite.py"
         covers: "Runs the full agent/hooks/test.sh bash suite in CI under a simulated Codex skill layout"
 

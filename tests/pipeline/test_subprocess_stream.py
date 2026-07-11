@@ -38,6 +38,7 @@ from synth_setter.pipeline.subprocess_stream import (
     _READ_CHUNK_BYTES,
     check_call_streamed,
     check_call_streamed_async,
+    scaled_timeout,
 )
 
 # Hard wedge backstop for every SUT invocation: no test scenario legitimately
@@ -801,3 +802,56 @@ class TestSyncFacade:
             out = future.result(timeout=_BACKSTOP_SECONDS)
 
         assert b"FROM_THREAD" in out
+
+
+class TestScaledTimeout:
+    """``scaled_timeout`` converts a per-item cost model into a wall-clock bound.
+
+    Problem: a flat per-call ceiling that ignores dataset size trips a spurious
+    ``TimeoutExpired`` once the dataset outgrows it. The fix scales the per-item
+    term so growth is absorbed, while a fixed overhead term still fails a true
+    startup hang fast at small N.
+    """
+
+    def test_formula_single_worker_returns_overhead_plus_per_sample_times_n(self) -> None:
+        """Single worker: budget is overhead + per_sample * num_samples."""
+        assert scaled_timeout(10, overhead_seconds=5.0, per_sample_seconds=2.0) == 25.0
+
+    def test_workers_divide_per_sample_term_ceil_not_floor(self) -> None:
+        """Workers divide the per-sample term by batch count, rounded up."""
+        # A flooring bug would drop the partial final batch and under-budget.
+        assert scaled_timeout(10, workers=4, overhead_seconds=5.0, per_sample_seconds=2.0) == 11.0
+
+    def test_zero_samples_returns_overhead_only(self) -> None:
+        """An empty dataset still gets the fixed startup overhead."""
+        assert scaled_timeout(0, overhead_seconds=7.0, per_sample_seconds=2.0) == 7.0
+
+    def test_workers_exceeding_samples_collapses_per_sample_to_one_batch(self) -> None:
+        """More workers than samples still costs one batch of per-sample time."""
+        assert scaled_timeout(3, workers=8, overhead_seconds=5.0, per_sample_seconds=2.0) == 7.0
+
+    def test_growing_dataset_increases_budget_monotonically(self) -> None:
+        """A larger sample count yields a strictly larger budget."""
+        small = scaled_timeout(100, overhead_seconds=30.0, per_sample_seconds=1.0)
+        large = scaled_timeout(1000, overhead_seconds=30.0, per_sample_seconds=1.0)
+        assert large > small
+
+    def test_negative_samples_raises_value_error(self) -> None:
+        """A negative sample count is rejected."""
+        with pytest.raises(ValueError, match="num_samples"):
+            scaled_timeout(-1, overhead_seconds=5.0, per_sample_seconds=2.0)
+
+    def test_zero_workers_raises_value_error(self) -> None:
+        """A worker count below one is rejected (division guard)."""
+        with pytest.raises(ValueError, match="workers"):
+            scaled_timeout(10, workers=0, overhead_seconds=5.0, per_sample_seconds=2.0)
+
+    def test_negative_overhead_raises_value_error(self) -> None:
+        """A negative overhead constant is rejected."""
+        with pytest.raises(ValueError, match="overhead_seconds"):
+            scaled_timeout(10, overhead_seconds=-1.0, per_sample_seconds=2.0)
+
+    def test_negative_per_sample_raises_value_error(self) -> None:
+        """A negative per-sample constant is rejected."""
+        with pytest.raises(ValueError, match="per_sample_seconds"):
+            scaled_timeout(10, overhead_seconds=5.0, per_sample_seconds=-1.0)

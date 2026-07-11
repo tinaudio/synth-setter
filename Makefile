@@ -181,7 +181,7 @@ install-surge-xt: ## Download Surge XT VST3 into plugins/ (skipped if already pr
 	esac; \
 	echo "Installed $$DEST"
 
-# Fetched-synth pins mirror the ARGs in docker/ubuntu22_04/Dockerfile;
+# Plugin pins mirror the ARGs in docker/ubuntu22_04/Dockerfile;
 # tests/infra/test_install_plugins_targets.py fails when either side drifts.
 DEXED_VERSION := 0.9.8
 DEXED_SHA256 := 5d026f53504f9303ae2a4a635cf6fdfc50ab9c947cbc0a20ecb5c8f323402dab
@@ -190,6 +190,8 @@ OBXF_SHA256 := 72b60c83cf6426337031df744c34a047104a9d95f1feaf6cd048ecfa39f74c96
 SIX_SINES_VERSION := v1.1.0
 SIX_SINES_ASSET := six-sines-linux-2025-03-18-43d10b2.tgz
 SIX_SINES_SHA256 := fae7c1c325fde7ed49c978358397cb4bcf69012c4e6eefe2a5968fe6a36d0421
+ULTRAMASTER_KR106_VERSION := v2.5.13
+ULTRAMASTER_KR106_GIT_REF := bc15caee5843ab238a25d0969e68d57db2b1615f
 
 # $(call install_fetched_synth,<Bundle>,<asset-url>,<sha256>): fetch the pinned asset,
 # verify its sha256, extract plugins/<Bundle>.vst3; non-x86_64 hosts skip (the image's amd64 gate).
@@ -246,7 +248,43 @@ install-obxf: ## Download OB-Xf VST3 into plugins/ (skipped if already present)
 install-six-sines: ## Download Six Sines VST3 into plugins/ (skipped if already present)
 	$(call install_fetched_synth,Six Sines,https://github.com/baconpaul/six-sines/releases/download/$(SIX_SINES_VERSION)/$(SIX_SINES_ASSET),$(SIX_SINES_SHA256))
 
-install-plugins: install-surge-xt install-dexed install-obxf install-six-sines ## Install every VST3 the runtime docker image ships (Surge XT, Dexed, OB-Xf, Six Sines)
+install-ultramaster-kr106: ## Build Ultramaster KR-106 VST3 into plugins/ (skipped if already present)
+	@set -e; \
+	DEST="plugins/Ultramaster KR-106.vst3"; \
+	if [ -e "$$DEST" ]; then \
+		echo "$$DEST already exists — skipping. Remove it first to reinstall."; \
+		exit 0; \
+	fi; \
+	OS=$$(uname -s); ARCH=$$(uname -m); \
+	if [ "$$OS" != "Linux" ] || [ "$$ARCH" != "x86_64" ]; then \
+		echo "skipping Ultramaster KR-106: x86_64 Linux source build only (host: $$OS/$$ARCH)."; \
+		exit 0; \
+	fi; \
+	command -v cmake >/dev/null 2>&1 || { echo "ERROR: cmake not found" >&2; exit 1; }; \
+	command -v git >/dev/null 2>&1 || { echo "ERROR: git not found" >&2; exit 1; }; \
+	CACHE="$(HOME)/.cache/synth-setter/ultramaster-kr106-$(ULTRAMASTER_KR106_VERSION)"; \
+	SRC="$$CACHE/src"; BUILD="$$CACHE/build"; \
+	if ! git -C "$$SRC" rev-parse --git-dir >/dev/null 2>&1; then \
+		rm -rf "$$SRC" "$$BUILD"; mkdir -p "$$SRC"; \
+		git -C "$$SRC" init; \
+		git -C "$$SRC" remote add origin https://github.com/kayrockscreenprinting/ultramaster_kr106.git; \
+	fi; \
+	git -C "$$SRC" remote set-url origin https://github.com/kayrockscreenprinting/ultramaster_kr106.git; \
+	git -C "$$SRC" fetch --depth 1 origin "$(ULTRAMASTER_KR106_GIT_REF)"; \
+	git -C "$$SRC" checkout --detach FETCH_HEAD; \
+	git -C "$$SRC" reset --hard FETCH_HEAD; \
+	git -C "$$SRC" submodule update --init --recursive --depth 1; \
+	cmake -S "$$SRC" -B "$$BUILD" -DCMAKE_BUILD_TYPE=Release -DKR106_COPY_AFTER_BUILD=OFF; \
+	MAKEFLAGS= cmake --build "$$BUILD" --config Release --target KR106_VST3 --parallel "$$(nproc)"; \
+	SRC_BUNDLE="$$BUILD/KR106_artefacts/Release/VST3/Ultramaster KR-106.vst3"; \
+	if [ ! -d "$$SRC_BUNDLE" ]; then \
+		echo "ERROR: $$SRC_BUNDLE not found after build" >&2; exit 1; \
+	fi; \
+	mkdir -p plugins; \
+	cp -a "$$SRC_BUNDLE" "$$DEST"; \
+	echo "Installed $$DEST"
+
+install-plugins: install-surge-xt install-dexed install-obxf install-six-sines install-ultramaster-kr106 ## Install every VST3 the runtime docker image ships (Surge XT, Dexed, OB-Xf, Six Sines, Ultramaster KR-106)
 
 link-plugins: ## Mirror the primary checkout's plugins/ into the current worktree (no-op in primary)
 	@set -e; \
@@ -382,7 +420,7 @@ TARGETARCH ?= amd64
 DOCKER_TORCH_BACKEND ?= cu128
 DOCKER_BUILD_FLAGS ?=
 _INTERNAL_BUILD_FLAGS :=
-CURRENT_LOCAL_GIT_REF := $(strip $(shell git rev-parse HEAD))
+CURRENT_LOCAL_GIT_REF = $(strip $(shell git rev-parse HEAD))
 
 docker-build-dev-snapshot: ## Build self-contained image (requires GIT_REF)
 	@if [ -z "$(GIT_REF)" ]; then echo "ERROR: GIT_REF is required."; exit 1; fi

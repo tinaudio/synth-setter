@@ -1,7 +1,7 @@
 defaults:
   - _self_
 
-_target_: synth_setter.models.surge_flowvae_module.VSTFlowVAEModule
+_target_: synth_setter.models.vst_flowvae_module.VSTFlowVAEModule
 
 net:
   _target_: synth_setter.models.components.vae.FlowVAE

@@ -2,7 +2,7 @@ defaults:
   - encoder: ast
   - _self_
 
-_target_: synth_setter.models.surge_flow_matching_module.VSTFlowMatchingModule
+_target_: synth_setter.models.vst_flow_matching_module.VSTFlowMatchingModule
 
 warmup_steps: 0
 scheduler:

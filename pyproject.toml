@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "synth-setter"
-version = "8.41.0"
+version = "8.44.0"
 description = "Studying the effect of permutation symmetry on audio synthesiser parameter inference."
 authors = [{name = "Khaled Tinubu"}, {name = "tinaudio"}]
 readme = "README.md"
@@ -65,6 +65,7 @@ synth-setter-add-mp3-audio = "synth_setter.pipeline.data.add_mp3_audio:main"
 synth-setter-introspect-plugin = "synth_setter.cli.introspect_plugin:main"
 synth-setter-predict-capture = "synth_setter.cli.predict_capture:main"
 synth-setter-spec-uri = "synth_setter.pipeline.ci.spec_uri:main"
+synth-setter-skypilot-launch = "synth_setter.pipeline.skypilot_launch:main"
 
 
 
@@ -180,6 +181,10 @@ metrics = [
   "POT",
   "einops",
 ]
+notebooks = [
+  "duckdb>=1.5.4",
+  "smoosense[jupyter]",
+]
 util = [
   "click<8.2",
   "structlog",
@@ -218,6 +223,7 @@ dev = [
   "rootutils",
   "ruff",
   { include-group = "docs" },
+  { include-group = "notebooks" },
   { include-group = "runtime" },
 ]
 
@@ -410,10 +416,10 @@ known-third-party = ["wandb"]
 "src/synth_setter/models/components/vae.py" = ["E402", "T201", "D102", "D103", "D107"]
 "src/synth_setter/models/components/vector_field.py" = ["D102", "D103", "D107"]
 "src/synth_setter/models/ksin_ff_module.py" = ["F821", "D102", "D103", "D107"]
-"src/synth_setter/models/surge_ff_module.py" = ["D102", "D103", "D107"]
+"src/synth_setter/models/vst_ff_module.py" = ["D102", "D103", "D107"]
 "src/synth_setter/models/ksin_flow_matching_module.py" = ["D102", "D103", "D107"]
-"src/synth_setter/models/surge_flow_matching_module.py" = ["D102", "D103", "D107"]
-"src/synth_setter/models/surge_flowvae_module.py" = ["D102", "D103", "D107"]
+"src/synth_setter/models/vst_flow_matching_module.py" = ["D102", "D103", "D107"]
+"src/synth_setter/models/vst_flowvae_module.py" = ["D102", "D103", "D107"]
 "src/synth_setter/cli/train.py" = ["E402", "D102", "D103", "D107"]
 "src/synth_setter/utils/__init__.py" = ["F401"]
 "src/synth_setter/utils/callbacks.py" = ["F821", "T201", "ANN001", "D102", "D103", "D107"]

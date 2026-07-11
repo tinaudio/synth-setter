@@ -197,7 +197,7 @@ ______________________________________________________________________
 - `src/synth_setter/cli/train.py` — minor fixes (resolver registration)
 - `src/synth_setter/utils/utils.py` — minor fixes
 - `src/synth_setter/data/ksin_datamodule.py` — pin_memory fix
-- `src/synth_setter/data/surge_datamodule.py` — fix
+- `src/synth_setter/data/vst_datamodule.py` — fix
 - `tests/conftest.py` — register resolvers, lr_monitor fix
 - `tests/helpers/package_available.py` — importlib.metadata migration
 - `tests/helpers/run_if.py` — fix

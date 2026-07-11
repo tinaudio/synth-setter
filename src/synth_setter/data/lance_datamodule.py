@@ -23,7 +23,7 @@ import lance
 import numpy as np
 import pyarrow as pa
 
-from synth_setter.data.surge_datamodule import ShardFile, VSTDataModule, VSTDataset
+from synth_setter.data.vst_datamodule import ShardFile, VSTDataModule, VSTDataset
 from synth_setter.pipeline.spec_io import load_spec_from_root
 
 if TYPE_CHECKING:
