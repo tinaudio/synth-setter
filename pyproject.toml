@@ -65,6 +65,7 @@ synth-setter-add-mp3-audio = "synth_setter.pipeline.data.add_mp3_audio:main"
 synth-setter-introspect-plugin = "synth_setter.cli.introspect_plugin:main"
 synth-setter-predict-capture = "synth_setter.cli.predict_capture:main"
 synth-setter-spec-uri = "synth_setter.pipeline.ci.spec_uri:main"
+synth-setter-skypilot-launch = "synth_setter.pipeline.skypilot_launch:main"
 
 
 
