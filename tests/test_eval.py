@@ -11,7 +11,6 @@ postprocessing argv in ``test_eval_postprocessing``, metric IO in
 import math
 import os
 import subprocess
-from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
 from typing import NamedTuple, cast
@@ -35,7 +34,7 @@ from tests.helpers.eval_fakes import (
     FAKE_METRICS_CSV,
     fake_postprocessing_subprocess,
 )
-from tests.helpers.run_if import RunIf as _RunIf
+from tests.helpers.run_if import RunIf
 from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
 
 
@@ -45,10 +44,11 @@ class _FakeOracleDataset(NamedTuple):
     datamodule_group: str | None
 
 
-def test_eval_torchsynth_experiment_validates_checkpoint(tmp_path: Path) -> None:
-    """Train and validate TorchSynth using audio rendered on the local machine.
+def _compose_torchsynth_overfit_cfg(tmp_path: Path) -> DictConfig:
+    """Compose the deterministic TorchSynth checkpoint smoke run.
 
-    :param tmp_path: Shared training, checkpoint, and evaluation directory.
+    :param tmp_path: Pinned Hydra output and log directory.
+    :returns: Ready-to-run training configuration.
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         train_cfg = compose(
@@ -60,6 +60,8 @@ def test_eval_torchsynth_experiment_validates_checkpoint(tmp_path: Path) -> None
                 "+trainer.max_epochs=10",
                 "+trainer.limit_train_batches=1",
                 "+trainer.limit_val_batches=1",
+                "trainer.val_check_interval=1.0",
+                "trainer.check_val_every_n_epoch=1",
                 "datamodule.train_val_test_sizes=[1,1,1]",
                 "datamodule.batch_size=1",
                 "datamodule.num_workers=0",
@@ -74,33 +76,34 @@ def test_eval_torchsynth_experiment_validates_checkpoint(tmp_path: Path) -> None
         train_cfg.paths.log_dir = str(tmp_path)
         train_cfg.test = False
         train_cfg.seed = 123
+    return train_cfg
+
+
+def _torchsynth_initial_loss(train_cfg: DictConfig) -> tuple[torch.Tensor, torch.Tensor, float]:
+    """Return the fixed overfit batch and its initial model loss.
+
+    :param train_cfg: TorchSynth training configuration.
+    :returns: Audio, parameters, and initial MSE for the fixed batch.
+    """
     baseline_datamodule = instantiate(train_cfg.datamodule)
     baseline_datamodule.setup("fit")
     baseline_audio, baseline_params, *_ = next(iter(baseline_datamodule.train_dataloader()))
     torch.manual_seed(train_cfg.seed)
     baseline_model = instantiate(train_cfg.model)
     with torch.no_grad():
-        initial_loss = torch.nn.functional.mse_loss(
-            baseline_model(baseline_audio), baseline_params
-        ).item()
-    HydraConfig().set_config(train_cfg)
-    try:
-        _, train_objects = train(train_cfg)
-    finally:
-        GlobalHydra.instance().clear()
+        loss = torch.nn.functional.mse_loss(baseline_model(baseline_audio), baseline_params).item()
+    return baseline_audio, baseline_params, loss
 
-    trained_model = train_objects["model"]
-    trained_model.eval()
-    with torch.no_grad():
-        overfit_loss = torch.nn.functional.mse_loss(
-            trained_model(baseline_audio), baseline_params
-        ).item()
-    assert overfit_loss < initial_loss
 
-    checkpoint = tmp_path / "checkpoints" / "last.ckpt"
-    assert checkpoint.is_file()
+def _compose_torchsynth_eval_cfg(tmp_path: Path, checkpoint: Path) -> DictConfig:
+    """Compose validation against the trained TorchSynth checkpoint.
+
+    :param tmp_path: Pinned Hydra output and log directory.
+    :param checkpoint: Trained checkpoint path.
+    :returns: Ready-to-run evaluation configuration.
+    """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
-        eval_cfg = compose(
+        cfg = compose(
             config_name="eval.yaml",
             return_hydra_config=True,
             overrides=[
@@ -111,11 +114,33 @@ def test_eval_torchsynth_experiment_validates_checkpoint(tmp_path: Path) -> None
                 "datamodule.num_workers=0",
             ],
         )
-    with open_dict(eval_cfg):
-        eval_cfg.paths.root_dir = str(operator_workspace())
-        eval_cfg.paths.output_dir = str(tmp_path)
-        eval_cfg.paths.log_dir = str(tmp_path)
-        eval_cfg.ckpt_path = str(checkpoint)
+    with open_dict(cfg):
+        cfg.paths.root_dir = str(operator_workspace())
+        cfg.paths.output_dir = str(tmp_path)
+        cfg.paths.log_dir = str(tmp_path)
+        cfg.ckpt_path = str(checkpoint)
+    return cfg
+
+
+def test_eval_torchsynth_experiment_validates_checkpoint(tmp_path: Path) -> None:
+    """Train and validate TorchSynth using audio rendered on the local machine.
+
+    :param tmp_path: Shared training, checkpoint, and evaluation directory.
+    """
+    train_cfg = _compose_torchsynth_overfit_cfg(tmp_path)
+    baseline_audio, baseline_params, initial_loss = _torchsynth_initial_loss(train_cfg)
+    HydraConfig().set_config(train_cfg)
+    try:
+        train_metrics, train_objects = train(train_cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    overfit_loss = train_metrics["train/loss_epoch"].item()
+    assert overfit_loss < min(initial_loss, 0.05)
+
+    checkpoint = Path(train_objects["trainer"].checkpoint_callback.best_model_path)
+    assert checkpoint.is_file()
+    eval_cfg = _compose_torchsynth_eval_cfg(tmp_path, checkpoint)
     HydraConfig().set_config(eval_cfg)
     try:
         metric_dict, eval_objects = evaluate(eval_cfg)
@@ -124,7 +149,7 @@ def test_eval_torchsynth_experiment_validates_checkpoint(tmp_path: Path) -> None
 
     val_loss = metric_dict["val/loss"]
     assert torch.isfinite(val_loss)
-    assert val_loss < 1 / 3  # Beats the zero predictor for uniform [0, 1] targets.
+    assert val_loss < 0.21  # Guards the deterministic held-out smoke baseline.
     eval_batch = next(iter(eval_objects["datamodule"].val_dataloader()))
     assert torch.isfinite(eval_batch[0]).all()
 
@@ -136,7 +161,6 @@ _FAKE_ORACLE_DATASETS = [
         id="lance",
     ),
 ]
-RunIf = cast(Callable[..., pytest.MarkDecorator], _RunIf)
 
 
 @pytest.mark.requires_vst

@@ -25,7 +25,7 @@ from tests.helpers.package_available import (
 )
 
 
-class RunIf:
+class _RunIf:
     """RunIf wrapper for conditional skipping of tests.
 
     Fully compatible with `@pytest.mark`.
@@ -143,3 +143,55 @@ class RunIf:
             reason=f"Requires: [{' + '.join(reasons)}]",
             **kwargs,
         )
+
+
+def RunIf(
+    min_gpus: int = 0,
+    min_torch: str | None = None,
+    max_torch: str | None = None,
+    min_python: str | None = None,
+    skip_windows: bool = False,
+    sh: bool = False,
+    tpu: bool = False,
+    fairscale: bool = False,
+    deepspeed: bool = False,
+    wandb: bool = False,
+    neptune: bool = False,
+    comet: bool = False,
+    mlflow: bool = False,
+    **kwargs: dict[Any, Any],
+) -> MarkDecorator:
+    r"""Return the typed conditional test marker implemented by ``_RunIf``.
+
+    :param min_gpus: Minimum GPU count.
+    :param min_torch: Minimum PyTorch version.
+    :param max_torch: Maximum PyTorch version.
+    :param min_python: Minimum Python version.
+    :param skip_windows: Whether to skip on Windows.
+    :param sh: Whether the ``sh`` package is required.
+    :param tpu: Whether a TPU is required.
+    :param fairscale: Whether FairScale is required.
+    :param deepspeed: Whether DeepSpeed is required.
+    :param wandb: Whether W&B is required.
+    :param neptune: Whether Neptune is required.
+    :param comet: Whether Comet is required.
+    :param mlflow: Whether MLflow is required.
+    :param \*\*kwargs: Additional ``pytest.mark.skipif`` arguments.
+    :returns: Conditional pytest marker.
+    """
+    return _RunIf(
+        min_gpus=min_gpus,
+        min_torch=min_torch,
+        max_torch=max_torch,
+        min_python=min_python,
+        skip_windows=skip_windows,
+        sh=sh,
+        tpu=tpu,
+        fairscale=fairscale,
+        deepspeed=deepspeed,
+        wandb=wandb,
+        neptune=neptune,
+        comet=comet,
+        mlflow=mlflow,
+        **kwargs,
+    )

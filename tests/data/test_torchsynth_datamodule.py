@@ -1,15 +1,11 @@
 """Focused contracts for online TorchSynth sampling and rendering."""
 
-from collections.abc import Callable
-from typing import cast
-
 import pytest
 import torch
 
 from synth_setter.data.torchsynth_datamodule import TorchSynthDataset, render_torchsynth
-from tests.helpers.run_if import RunIf as _RunIf
+from tests.helpers.run_if import RunIf
 
-RunIf = cast(Callable[..., pytest.MarkDecorator], _RunIf)
 _RENDER_KWARGS = {"sample_rate": 44_100, "signal_length": 4_410, "midi_pitch": 60}
 
 

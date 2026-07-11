@@ -7,6 +7,7 @@ audio batch on the training machine without materializing an audio dataset.
 from __future__ import annotations
 
 import sys
+import threading
 import types
 from collections.abc import Callable
 from functools import cache, partial
@@ -28,6 +29,7 @@ TorchSynthItem: TypeAlias = tuple[
 TorchSynthBatch: TypeAlias = tuple[
     torch.Tensor, torch.Tensor, torch.Tensor, Callable[[torch.Tensor], torch.Tensor]
 ]
+# The odd 64-bit golden-ratio multiplier diffuses nearby split seeds into distinct RNG streams.
 _SEED_MIXER = 0x9E3779B97F4A7C15
 
 
@@ -57,7 +59,7 @@ def _torchsynth_types() -> tuple[type, type]:
 @cache
 def _make_voice(
     sample_rate: int, signal_length: int, batch_size: int = 1, device: str = "cpu"
-) -> Voice:
+) -> tuple[Voice, threading.Lock]:
     synth_config, voice = _torchsynth_types()
     instance = voice(
         synthconfig=synth_config(
@@ -67,7 +69,7 @@ def _make_voice(
             reproducible=False,
         )
     )
-    return instance.to(torch.device(device))
+    return instance.to(torch.device(device)), threading.Lock()
 
 
 def _synth_parameters(voice: Voice) -> list[ModuleParameter]:
@@ -90,18 +92,22 @@ def render_torchsynth(
     :returns: Audio shaped ``(batch, signal_length)``.
     :raises ValueError: The parameter width or rendered audio violates the data contract.
     """
-    voice = _make_voice(sample_rate, signal_length, len(params), str(params.device))
-    all_parameters = voice.get_parameters()
-    native = _synth_parameters(voice)
-    if params.shape[1] != len(native):
-        raise ValueError(f"Expected {len(native)} TorchSynth parameters, got {params.shape[1]}")
-    for values, parameter in zip(params.T, native, strict=True):
-        parameter.data.copy_(values.nan_to_num(0.5).clamp(1e-4, 1 - 1e-4))
-    for name, value in (("midi_f0", float(midi_pitch)), ("duration", signal_length / sample_rate)):
-        keyboard = all_parameters[("keyboard", name)]
-        keyboard.to_0to1(torch.full((len(params),), value, device=params.device))
-    with torch.no_grad():
-        audio = voice.output()
+    voice, lock = _make_voice(sample_rate, signal_length, len(params), str(params.device))
+    with lock:
+        all_parameters = voice.get_parameters()
+        native = _synth_parameters(voice)
+        if params.shape[1] != len(native):
+            raise ValueError(f"Expected {len(native)} TorchSynth parameters, got {params.shape[1]}")
+        for values, parameter in zip(params.T, native, strict=True):
+            parameter.data.copy_(values.nan_to_num(0.5).clamp(1e-4, 1 - 1e-4))
+        for name, value in (
+            ("midi_f0", float(midi_pitch)),
+            ("duration", signal_length / sample_rate),
+        ):
+            keyboard = all_parameters[("keyboard", name)]
+            keyboard.to_0to1(torch.full((len(params),), value, device=params.device))
+        with torch.no_grad():
+            audio = voice.output()
     if not torch.isfinite(audio).all():
         raise ValueError("TorchSynth audio must be finite")
     return audio.clamp(-1, 1)
@@ -126,7 +132,8 @@ class TorchSynthDataset(Dataset[TorchSynthItem]):
         self.sample_rate = sample_rate
         self.signal_length = signal_length
         self.midi_pitch = midi_pitch
-        self.num_params = len(_synth_parameters(_make_voice(sample_rate, signal_length)))
+        voice, _ = _make_voice(sample_rate, signal_length)
+        self.num_params = len(_synth_parameters(voice))
 
     def __len__(self) -> int:
         """Return the logical number of online samples.
@@ -212,7 +219,8 @@ class TorchSynthDataModule(LightningDataModule):
             self.val = dataset(1)
         if stage in (None, "test", "predict"):
             self.test = dataset(2)
-        discovered = len(_synth_parameters(_make_voice(self.sample_rate, self.signal_length)))
+        voice, _ = _make_voice(self.sample_rate, self.signal_length)
+        discovered = len(_synth_parameters(voice))
         if self.num_params != discovered:
             raise ValueError(f"Configured num_params={self.num_params}, TorchSynth exposes {discovered}")
 
@@ -230,21 +238,21 @@ class TorchSynthDataModule(LightningDataModule):
             ),
         )
 
-    def train_dataloader(self) -> DataLoader:
+    def train_dataloader(self) -> DataLoader[TorchSynthBatch]:
         """Return the shuffled online training loader.
 
         :returns: Batched online training data.
         """
         return self._loader(self.train, shuffle=True)
 
-    def val_dataloader(self) -> DataLoader:
+    def val_dataloader(self) -> DataLoader[TorchSynthBatch]:
         """Return the deterministic online validation loader.
 
         :returns: Batched online validation data.
         """
         return self._loader(self.val)
 
-    def test_dataloader(self) -> DataLoader:
+    def test_dataloader(self) -> DataLoader[TorchSynthBatch]:
         """Return the deterministic online test loader.
 
         :returns: Batched online test data.

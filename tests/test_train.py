@@ -11,7 +11,6 @@ import os
 from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
-from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -20,6 +19,7 @@ import torch
 from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
+from hydra.utils import instantiate
 from omegaconf import DictConfig, open_dict
 
 from synth_setter.cli.eval import evaluate
@@ -42,7 +42,7 @@ from tests.helpers.eval_fakes import (
     fake_postprocessing_subprocess,
 )
 from tests.helpers.noise_capture import NoiseCaptureCallback
-from tests.helpers.run_if import RunIf as _RunIf
+from tests.helpers.run_if import RunIf
 from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
 
 # Experiments cycled through the Surge XT VST smoke tests below. Single source of truth so
@@ -51,7 +51,6 @@ _ORACLE_EXPERIMENT = "surge/fake_oracle"
 _SURGE_SMOKE_EXPERIMENTS = (_ORACLE_EXPERIMENT, "surge/ffn_full")
 _PREDICTION_PT_PREFIXES = ("pred", "target-audio", "target-params")
 _FAKE_METRICS_CSV = fake_metrics_csv(NUM_FIXTURE_SAMPLES)
-RunIf = cast(Callable[..., pytest.MarkDecorator], _RunIf)
 
 # TODO(#40): add @pytest.mark.ram gate for memory-intensive CPU tests test_train_fast_dev_run
 
@@ -83,10 +82,11 @@ def test_train_fast_dev_run_tiny_model_tiny_data(cfg_train: DictConfig) -> None:
     train(cfg_train)
 
 
-def test_train_torchsynth_experiment_renders_audio_online(tmp_path: Path) -> None:
-    """Run the TorchSynth experiment without a materialized audio dataset.
+def _compose_torchsynth_train_cfg(tmp_path: Path) -> DictConfig:
+    """Compose the CPU TorchSynth entrypoint smoke configuration.
 
     :param tmp_path: Pinned Hydra output and log directory.
+    :returns: Ready-to-run training configuration.
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
@@ -107,6 +107,15 @@ def test_train_torchsynth_experiment_renders_audio_online(tmp_path: Path) -> Non
         cfg.paths.root_dir = str(operator_workspace())
         cfg.paths.output_dir = str(tmp_path)
         cfg.paths.log_dir = str(tmp_path)
+    return cfg
+
+
+def test_train_torchsynth_experiment_renders_audio_online(tmp_path: Path) -> None:
+    """Run the TorchSynth experiment without a materialized audio dataset.
+
+    :param tmp_path: Pinned Hydra output and log directory.
+    """
+    cfg = _compose_torchsynth_train_cfg(tmp_path)
 
     HydraConfig().set_config(cfg)
     try:
@@ -120,7 +129,16 @@ def test_train_torchsynth_experiment_renders_audio_online(tmp_path: Path) -> Non
     assert audio.shape == (1, cfg.datamodule.signal_length)
     assert params.shape == (1, cfg.datamodule.num_params)
     assert torch.isfinite(audio).all()
-    datamodule = object_dict["datamodule"]
+
+
+def test_train_torchsynth_splits_have_distinct_first_parameters(tmp_path: Path) -> None:
+    """Keep split seed streams distinct at the first logical row.
+
+    :param tmp_path: Pinned Hydra output and log directory.
+    """
+    cfg = _compose_torchsynth_train_cfg(tmp_path)
+    datamodule = instantiate(cfg.datamodule)
+    datamodule.setup(None)
     split_params = [datamodule.train[0][1], datamodule.val[0][1], datamodule.test[0][1]]
     assert not torch.equal(split_params[0], split_params[1])
     assert not torch.equal(split_params[0], split_params[2])
