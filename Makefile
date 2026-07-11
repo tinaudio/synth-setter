@@ -264,7 +264,7 @@ install-ultramaster-kr106: ## Build Ultramaster KR-106 VST3 into plugins/ (skipp
 	command -v git >/dev/null 2>&1 || { echo "ERROR: git not found" >&2; exit 1; }; \
 	CACHE="$(HOME)/.cache/synth-setter/ultramaster-kr106-$(ULTRAMASTER_KR106_VERSION)"; \
 	SRC="$$CACHE/src"; BUILD="$$CACHE/build"; \
-	if [ ! -d "$$SRC/.git" ]; then \
+	if ! git -C "$$SRC" rev-parse --git-dir >/dev/null 2>&1; then \
 		rm -rf "$$SRC" "$$BUILD"; mkdir -p "$$SRC"; \
 		git -C "$$SRC" init; \
 		git -C "$$SRC" remote add origin https://github.com/kayrockscreenprinting/ultramaster_kr106.git; \

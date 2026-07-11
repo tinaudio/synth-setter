@@ -391,6 +391,65 @@ def test_install_ultramaster_existing_cache_refreshes_pinned_ref(
 
 
 @requires_x86_64_linux
+def test_install_ultramaster_invalid_cache_reinitializes_checkout(
+    makefile_checkout: Path,
+) -> None:
+    """A malformed KR-106 cache is discarded before fetching the pinned ref.
+
+    :param makefile_checkout: throwaway checkout holding the Makefile.
+    """
+    home, env = _home_env(makefile_checkout)
+    cache = home / ".cache" / "synth-setter" / "ultramaster-kr106-test"
+    (cache / "src" / ".git").mkdir(parents=True)
+
+    bindir = makefile_checkout / "bin"
+    bindir.mkdir()
+    log = makefile_checkout / "tool.log"
+    fake_git = bindir / "git"
+    fake_git.write_text(
+        "#!/bin/sh\n"
+        'workdir="$PWD"\n'
+        'if [ "$1" = "-C" ]; then workdir="$2"; shift 2; fi\n'
+        'printf "git -C %s %s\\n" "$workdir" "$*" >> "$TOOL_LOG"\n'
+        'case "$1 $2" in\n'
+        '  "rev-parse --git-dir") [ -f "$workdir/.git/valid" ]; exit $? ;;\n'
+        '  "remote set-url") [ -f "$workdir/.git/valid" ]; exit $? ;;\n'
+        "esac\n"
+        'if [ "$1" = "init" ]; then mkdir -p "$workdir/.git"; touch "$workdir/.git/valid"; fi\n'
+    )
+    fake_git.chmod(0o755)
+    fake_cmake = bindir / "cmake"
+    fake_cmake.write_text(
+        "#!/bin/sh\n"
+        'printf "cmake %s\\n" "$*" >> "$TOOL_LOG"\n'
+        'if [ "$1" = "--build" ]; then\n'
+        '  mkdir -p "$2/KR106_artefacts/Release/VST3/Ultramaster KR-106.vst3/Contents"\n'
+        "fi\n"
+    )
+    fake_cmake.chmod(0o755)
+    env = {**env, "PATH": f"{bindir}{os.pathsep}{env['PATH']}", "TOOL_LOG": str(log)}
+
+    result = _run_make(
+        makefile_checkout,
+        "install-ultramaster-kr106",
+        "ULTRAMASTER_KR106_VERSION=test",
+        "ULTRAMASTER_KR106_GIT_REF=abc123",
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    tool_log = log.read_text()
+    assert "rev-parse --git-dir" in tool_log
+    assert "init" in tool_log
+    assert (
+        "remote set-url origin https://github.com/kayrockscreenprinting/ultramaster_kr106.git"
+        in tool_log
+    )
+    assert "fetch --depth 1 origin abc123" in tool_log
+    assert (makefile_checkout / "plugins" / "Ultramaster KR-106.vst3").is_dir()
+
+
+@requires_x86_64_linux
 def test_install_dexed_checksum_mismatch_fails_without_installing(
     makefile_checkout: Path,
 ) -> None:
