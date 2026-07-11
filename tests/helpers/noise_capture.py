@@ -41,5 +41,6 @@ class NoiseCaptureCallback(Callback):  # noqa: DOC601, DOC603
         """
         noise = batch["noise"]
         assert noise is not None
-        # clone(): worker batches arrive in shared memory the loader may reuse.
-        NoiseCaptureCallback.captured.append(noise.detach().clone())
+        # clone(): worker batches arrive in shared memory the loader may reuse;
+        # cpu(): don't retain device tensors for the whole run under GPU tests.
+        NoiseCaptureCallback.captured.append(noise.detach().clone().cpu())
