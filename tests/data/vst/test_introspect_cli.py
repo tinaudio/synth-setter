@@ -288,7 +288,9 @@ def test_cli_force_keeps_existing_spec_when_capture_fails(
             """
 
     plugin = _CaptureFailsPlugin({"cutoff": IntrospectFakeParameter(float, [0.0, 1.0])})
-    monkeypatch.setattr("synth_setter.cli.introspect_plugin.load_plugin", lambda _path, _name=None: plugin)
+    monkeypatch.setattr(
+        "synth_setter.cli.introspect_plugin.load_plugin", lambda _path, _name=None: plugin
+    )
     monkeypatch.chdir(tmp_path)
     (tmp_path / "fake.vst3").touch()
     existing = tmp_path / "fake_synth_param_spec.py"
@@ -345,7 +347,14 @@ def test_cli_threads_plugin_name_to_the_loader(
         Path("fake.vst3").touch()
         result = runner.invoke(
             main,
-            ["--plugin-path", "fake.vst3", "--spec-name", "fake_synth", "--plugin-name", "Six Sines"],
+            [
+                "--plugin-path",
+                "fake.vst3",
+                "--spec-name",
+                "fake_synth",
+                "--plugin-name",
+                "Six Sines",
+            ],
             catch_exceptions=False,
         )
 

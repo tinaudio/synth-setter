@@ -1,5 +1,4 @@
 from pathlib import Path
-from typing import Optional, Union
 
 import librosa
 import numpy as np
@@ -35,21 +34,24 @@ class AudioFolderDataset(torch.utils.data.Dataset):
         self,
         root: str,
         segment_length_seconds: float = 4.0,
-        reference_stats_file: Optional[str] = None,
+        reference_stats_file: str | None = None,
         amp_scale: float = 0.5,
         sample_rate: float = 44100.0,
+        files: list[Path] | None = None,
     ):
         self.segment_length_seconds = segment_length_seconds
 
         self.root = Path(root)
-        self.files = list(self.root.glob("*.wav"))
+        # An explicit file list skips the folder glob — single-capture callers
+        # (cli/predict_capture.py) must not pay a scan of the whole capture dir.
+        self.files = list(files) if files is not None else list(self.root.glob("*.wav"))
 
         self.amp_scale = amp_scale
         self.sample_rate = sample_rate
 
         self._load_stats(reference_stats_file)
 
-    def _load_stats(self, reference_stats_file: Optional[str]):
+    def _load_stats(self, reference_stats_file: str | None):
         if reference_stats_file is None:
             self.mean = None
             self.std = None
@@ -80,7 +82,7 @@ class AudioFolderDataset(torch.utils.data.Dataset):
         # self.std = self.std / gamma
 
     @staticmethod
-    def get_stats_file_path(root: Union[str, Path]) -> Path:
+    def get_stats_file_path(root: str | Path) -> Path:
         data_dir = Path(root)
         return data_dir / "stats.npz"
 
@@ -140,7 +142,7 @@ class AudioDataModule(LightningDataModule):
         batch_size: int = 32,
         num_workers: int = 0,
         shuffle: bool = True,
-        stats_file: Optional[str] = None,
+        stats_file: str | None = None,
     ):
         super().__init__()
 
@@ -151,7 +153,7 @@ class AudioDataModule(LightningDataModule):
         self.shuffle = shuffle
         self.stats_file = stats_file
 
-    def setup(self, stage: Optional[str] = None):
+    def setup(self, stage: str | None = None):
         self.predict_dataset = AudioFolderDataset(
             self.root, self.segment_length_seconds, self.stats_file
         )

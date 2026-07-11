@@ -1,6 +1,458 @@
 # CHANGELOG
 
 
+## v8.43.0 (2026-07-11)
+
+### Build System
+
+- Skip KR-106 deps off amd64 ([#1796](https://github.com/tinaudio/synth-setter/pull/1796),
+  [`c938414`](https://github.com/tinaudio/synth-setter/commit/c938414ad365252e5dcc9d49b89937dc3cff77b7))
+
+### Documentation
+
+- **storage**: Add W&B artifact & provenance reference
+  ([#1569](https://github.com/tinaudio/synth-setter/pull/1569),
+  [`cd9869f`](https://github.com/tinaudio/synth-setter/commit/cd9869fc3f6ee384ee99e4f4e4ca26bc245d6e60))
+
+* docs(storage): add artifact-provenance-reference doc
+
+Write docs/reference/artifact-provenance-reference.md, the companion the storage-provenance spec §13
+  promised but never shipped. Documents the landed W&B artifact patterns (dataset/model/eval-results
+  builders, the s3:// checksum=False reference convention, artifact.metadata fields), the lineage
+  DAG with use_artifact producer/consumer recipes, and the ${wandb:…} resolver. Resolve the dangling
+  §13 reference link and register the doc in doc-map.yaml against its source modules.
+
+Refs #1565
+
+* docs(storage): correct run-id metadata claim and resolver syntax
+
+Address Copilot review on #1569: - The artifact builders do not copy {*_wandb_run_id} into
+  artifact.metadata; reword to state the name carries the config id and the run id is pinned on the
+  producing run via pin_wandb_run_id (spec §4 reserves the metadata slot but it is not yet wired). -
+  The bare `ckpt_path=wandb:…` form is passed through literally; require the `${wandb:…}`
+  interpolation in the resolver prose to match the yaml example.
+
+* docs(storage): mark :best/:production aliases as planned, not landed
+
+Address Copilot review on #1569: the landed code applies only :latest (W&B-automatic).
+  _log_model_artifact logs with no aliases=[…], and the promote workflow that would set :production
+  is not implemented (#1566). Add a Status column distinguishing the one landed alias from the two
+  spec-reserved planned ones, so the reference stops implying aliases exist that the current code
+  never sets.
+
+* docs(storage): note promote-workflow lineage tail is not yet landed
+
+Pre-empt the remaining landed-vs-spec ambiguity in the lineage DAG: the
+  data-generation/training/evaluation edges exist in code, but the [promote workflow] -> GitHub
+  Release tail is the spec's target shape and that workflow is not implemented (#1566). Annotate the
+  diagram so the reference does not imply a promotion edge that no code produces.
+
+* docs(storage): reconcile metadata-vs-metrics convention for eval-results
+
+Address Copilot review on #1569: the §3 intro said final metrics never belong in artifact.metadata,
+  contradicting the table (and the landed build_eval_results_artifact) that stores a scalar metric
+  summary there. Reword to state metrics live in wandb.summary, with eval-results as the documented
+  exception that also copies a scalar summary into metadata for filtering.
+
+* docs(storage): use landed :latest alias in resolver example
+
+Address Copilot review on #1569: the §5 resume example referenced `model-flow-simple:best`, but §6
+  documents that training does not log an :best alias today (only W&B-automatic :latest is applied).
+  Switch the example to :latest so it resolves against an alias the landed code actually sets.
+
+* docs(storage): refresh model-artifact reference for landed R2 checkpoint upload
+
+#1572 landed best-checkpoint→R2→W&B (closing #92) the day after this doc was written, so the
+  model-artifact sections predated it. Update §1/§3 to the landed default (derived
+  r2://.../model.ckpt URI or upload_checkpoints_uri override, referenced as s3:// checksum=False;
+  lineage-only only as a degrade path), fix the §4 build_model_artifact(cfg, ckpt_uri) signature,
+  and add the checkpoint upload symbols to the code map. The :best alias row stays "planned" — #1572
+  added no W&B alias.
+
+### Features
+
+- **ci-automation**: Add train and eval GitHub Actions workflows
+  ([#1594](https://github.com/tinaudio/synth-setter/pull/1594),
+  [`46558b2`](https://github.com/tinaudio/synth-setter/commit/46558b28fd2941450bcb39d5d684cbfb3f48efaa))
+
+* feat(ci-automation): add train and eval GitHub Actions workflows
+
+Add workflow_dispatch train.yml and eval.yml that run synth-setter-train / synth-setter-eval inside
+  the dev-snapshot image on gpu-x64, mirroring the Docker-on-GPU pattern in test-gpu.yml. Both
+  forward R2 + W&B credentials and export GITHUB_SHA into the run environment, satisfying the
+  storage-provenance spec §8 workflow table and the §12 github_sha invariant. Fill in the spec's
+  previously-TBD Training/Evaluation rows with the real files, runner, and inputs.
+
+Refs #1467, #122, #92 Closes #1567
+
+* feat(ci-automation): dispatch train and eval workflows via SkyPilot launch configs
+
+Review-driven redesign of #1594: instead of running synth-setter-train / synth-setter-eval in-place
+  on gpu-x64, the workflows now submit SkyPilot managed jobs, and their only input is the path to a
+  checked-in launch config.
+
+- Add synth-setter-skypilot-launch (skypilot_launch.main): loads a launch config YAML into the
+  strict SkypilotLaunchConfig and calls dispatch_via_skypilot. Workflows invoke it via python -m so
+  the mounted fresh checkout supplies the code regardless of image-baked entry points. - Add
+  configs/launch/{train,eval}-runpod.yaml baking the compute template, worker image tag, and worker
+  cmd (eval sources ckpt_path through the wandb_checkpoint overlay and the headless-VST wrapper). -
+  Inject IMAGE_TAG into every rank's env at the launcher so log_wandb_provenance records the real
+  tag on all SkyPilot workers (previously "unknown"); WORKER_GIT_REF pins the worker checkout for
+  github_sha provenance. - Rewrite train.yml / eval.yml as thin ubuntu-latest dispatchers mirroring
+  generate-dataset-shards.yaml's runpod row; update spec §8/§9 rows.
+
+* chore(deps): sync uv.lock to the 8.33.0 version bump
+
+The 8.33.0 release commit on main bumped pyproject.toml without regenerating the lock, so `uv lock
+  --check` fails on any branch that merges it. Records the new project version in uv.lock; no
+  dependency changes.
+
+* fix(ci-automation): surface YAML parse errors as clean launcher CLI errors
+
+Copilot review follow-ups on #1594: malformed YAML in a launch config now maps to a click error
+  instead of a raw traceback, and the checked-in launch-config test class docstring no longer
+  overclaims dispatch coverage.
+
+* Merge branch 'main' into feat/train-eval-workflows
+
+Resolve the uv.lock conflict by resyncing against the merged pyproject.toml (main's v8.42.0 release
+  bump + this branch's synth-setter-skypilot-launch console script).
+
+* internal-feat(ci-automation): add smoke launch configs for dispatch verification
+
+10-step train + 2-batch eval variants of the runpod launch configs, used to exercise the workflow ->
+  launcher -> SkyPilot worker path end to end (PR #1594 Level 1 verification) at minimal GPU cost.
+  Covered by the existing checked-in launch-config sweep in test_skypilot_launch.py.
+
+### Internal-Fix
+
+- **testing**: Scrub ambient gate overrides from hook tests
+  ([#1763](https://github.com/tinaudio/synth-setter/pull/1763),
+  [`e4f3c9b`](https://github.com/tinaudio/synth-setter/commit/e4f3c9bf71da5b5e5a6784d5131770a034d234d0))
+
+* internal-fix(testing): scrub ambient gate-mode env vars from hook test harnesses
+
+Agent sessions export gate-mode overrides (e.g. REVIEW_COMMENT_GATE=warn) that leak into the hook
+  subprocesses spawned by the tests, flipping pre-pr-review-gate.sh's default block mode to warn and
+  failing its default-mode assertions.
+
+agent/hooks/test.sh now unsets the six gate-mode knobs at startup (each case sets its own mode), and
+  tests/claude_hooks/conftest.py gains an autouse fixture that monkeypatch.delenv's the same set so
+  hook subprocesses inherit a clean environment. Pinning tests in both harnesses guard the
+  invariant. Hook defaults are unchanged.
+
+Fixes #1761
+
+* internal-fix(testing): address pre-PR review findings on gate-var scrub
+
+Rename GATE_MODE_ENV_VARS to GATE_OVERRIDE_ENV_VARS (REVIEW_MAX_LAG is a threshold, not a mode),
+  alphabetize the list on both surfaces, and pin the autouse fixture wiring deterministically via
+  request.fixturenames so the canary is meaningful in clean environments too.
+
+Refs #1761
+
+* docs(testing): document tests/claude_hooks conftest and map hook-harness sources
+
+Add the new gate-override scrub conftest to the testing primer's conftest enumeration, and close
+  doc-map coverage gaps flagged by doc-drift: map agent/hooks/test.sh and tests/claude_hooks/** to
+  agent-harness-parity.md and the conftest to testing.md.
+
+### Testing
+
+- **docker**: Cover the BUILD_MODE=source Docker image build path
+  ([#1679](https://github.com/tinaudio/synth-setter/pull/1679),
+  [`89cf177`](https://github.com/tinaudio/synth-setter/commit/89cf177249d1c15ff15efc4a2033b80e6aae8df0))
+
+* test(docker): cover BUILD_MODE=source build path (skipped by default)
+
+The published images and the docker-validate CI leg build BUILD_MODE=prebuilt, so the Dockerfile's
+  builder-install-surge-from-source stage — including the webkit2gtk fallback for the Jammy/Noble
+  source dependency set — is never exercised by CI. A real source build is a ~1h compile, too
+  expensive per-PR.
+
+Add an always-skipped test that builds the dev-snapshot target with BUILD_MODE=source through the
+  canonical Makefile target and asserts success. It is gated on SYNTH_SETTER_RUN_SOURCE_BUILD so it
+  never runs in CI but stays runnable on demand, pinning the source path against silent regressions.
+
+Refs #1659
+
+* test(docker): load source image into the daemon and gate on git
+
+Address Copilot review on #1679:
+
+- Pass DOCKER_BUILD_FLAGS=--load so buildx loads the image into the local daemon (skipped by default
+  on the docker-container driver), making the follow-up `docker run` reliable instead of failing or
+  hitting a stale image. - Pin DOCKER_IMAGE in the make call and derive _DEV_SNAPSHOT_TAG from it,
+  so a developer's DOCKER_IMAGE env can't desync the build tag from the run tag. - Add git to the
+  skip gate (the test shells out to `git rev-parse`), with an accurate skip reason.
+
+
+## v8.42.0 (2026-07-11)
+
+### Documentation
+
+- Lance-first data pipeline design with proven fragment finalization
+  ([#1777](https://github.com/tinaudio/synth-setter/pull/1777),
+  [`444c8ea`](https://github.com/tinaudio/synth-setter/commit/444c8ea31b9fca032654906c2f9a364d8f9fcda9))
+
+* docs: design lance fragment finalization
+
+* docs: align lance finalize design details
+
+* docs: clarify lance output paths
+
+* docs: qualify dataset complete marker
+
+* docs: slim lance fragment sidecar to schema and metadata
+
+The fragment sidecar previously carried worker_id, attempt_uuid, shard_id, split, and rows alongside
+  Lance's serialized fragment metadata. Every one of those is recoverable elsewhere -- from the
+  filename, staging path, spec, or Lance's own fragment metadata -- so the sidecar was a second
+  source of truth free to drift from the first. Reduce it to schema_version + fragment_json and have
+  finalize derive identity instead.
+
+Also make the winner-selection and finalize-idempotence rationale explicit: earliest .valid
+  LastModified is a server-assigned single-authority timestamp that yields a stable winner (a later
+  straggler can never displace it), and each split is a replace-semantics commit over the full
+  winner set so a re-run rebuilds an identical manifest rather than double-committing rows.
+
+Refs #1776
+
+* test: prove lance fragment finalize model end to end
+
+Adds a real-Lance, real-filesystem, no-mock e2e proof of the fragment-based finalize model the
+  design relies on, and folds its verified findings into the design doc. The test drives the
+  production codec (lance_fragment -> sidecar json -> commit_lance_dataset ->
+  iter_lance_column_rows) to pin:
+
+- worker writes a fragment straight into {split}.lance/data/; finalize commits only its serialized
+  FragmentMetadata (no row rewrite); - the winner set commits as one atomic manifest version (all or
+  nothing); - committing one winner of duplicate attempts yields exactly that shard's rows; -
+  re-committing the winner set is idempotent (Overwrite replaces, never doubles); - a fragment is
+  unreadable unless its file sits under the target dataset's data dir, and count_rows() trusts
+  manifest metadata so it cannot catch a dangling fragment -- validation must read rows.
+
+Doc updates: FragmentMetadata.to_json() returns a dict (sidecar stores the json.dumps string);
+  finalize commits one Overwrite transaction per split over the in-place winner fragments;
+  idempotence comes from Overwrite-replace, not read_version (Lance auto-rebases a
+  stale-read_version append).
+
+* docs: restructure data pipeline design lance-first
+
+Lance is now the primary supported dataset format; the design doc narrative should read that way
+  instead of branching 'for HDF5... for Lance...' at every protocol step. Rewrite data-pipeline.md
+  Lance-first: format-status banner, lance-output workflow example, Lance rows first in the
+  stage/artifact tables, Lance-led structural-check and finalize steps, and a slimmed 7.10 that
+  states why Lance is primary (per-column projection, native object-store streaming, zero-row-decode
+  finalize).
+
+HDF5/WDS-specific detail (staging/promotion, resharding bottleneck, resumability,
+  copy_dataset_root_uri, wds tar structure, Sample transcode container) moves to
+  docs/design/legacy/hdf5-wds-formats.md with a legacy status banner -- kept visible because
+  existing R2 datasets use those layouts and the code paths stay supported for coverage.
+  storage-provenance-spec.md gets a format-status note and doc-map.yaml maps reshard.py to the
+  legacy doc.
+
+Refs #1779
+
+* test: tighten lance poc typing, offsets, and error pin
+
+Address the repo-review-full WARNs on the fragment-finalize POC:
+
+- annotate the fragment helper's schema param pa.Schema instead of object - pin the
+  dangling-fragment read failure to pa.ArrowInvalid (verified empirically) instead of bare
+  Exception, keeping the message match as a supplementary check - replace the raw 5000/1000 value
+  offsets with a _VALUE_STRIDE constant whose values all stay under the float16-exact 2048 ceiling,
+  making the module comment's exactness claim hold for every array built - single-line docstring
+  summary on the co-location test - condense the legacy-formats doc-map description to one clause
+  (C12)
+
+Declined: splitting the sidecar round-trip test in two -- the round trip and the committed read-back
+  are one end-to-end behavior; a split second test would just re-run the first.
+
+* Apply suggestions from code review
+
+Co-authored-by: Copilot Autofix powered by AI <175728472+Copilot@users.noreply.github.com>
+
+---------
+
+### Features
+
+- **data-pipeline**: Log spec-uri resume runs to wandb
+  ([#1770](https://github.com/tinaudio/synth-setter/pull/1770),
+  [`593884a`](https://github.com/tinaudio/synth-setter/commit/593884a1d09e58ba14f5476eff50e18f177bd0d7))
+
+* feat(data-pipeline): log spec-uri resume runs to wandb
+
+* fix(data-pipeline): address spec-uri review nits
+
+* fix(data-pipeline): clarify spec-uri wandb wording
+
+* fix(data-pipeline): clarify wandb opt-out scope
+
+* fix(data-pipeline): clarify wandb test wording
+
+* fix(data-pipeline): disable wandb without auth
+
+* fix(data-pipeline): tolerate missing wandb package
+
+* fix(data-pipeline): validate wandb mode override
+
+
+## v8.41.0 (2026-07-10)
+
+### Features
+
+- **evaluation**: Predict-capture CLI + per-spec Surge CLAP param maps
+  ([#1788](https://github.com/tinaudio/synth-setter/pull/1788),
+  [`e94b09f`](https://github.com/tinaudio/synth-setter/commit/e94b09faa3856f27a7e8d489f323b7821597b3d8))
+
+* feat(evaluation): predict-capture CLI + Surge XT CLAP param map
+
+Python half of the live sound-match bridge (#1787): first-party ctypes CLAP introspector + committed
+  Surge XT 1.3.4 dump, the pyname -> CLAP index-bridge builder with elementwise revalidation,
+  strict-pydantic map models, and the synth-setter-predict-capture CLI implementing the cross-repo
+  file contract (atomic params.csv, pred-0.pt, absence-is-failure). Squash of the 14 commits
+  reviewed on PR #1788 through four Copilot rounds, rebased past the #1790/#1791/#1792 extractions.
+
+* internal-feat(evaluation): multi-spec maps, ckpt autodetect, run logging for the bridge
+
+- Per-spec CLAP maps: surge_simple (89/89) and surge_4 (4/4) built by the same index bridge with
+  zero exceptions; resources.clap_map(spec) replaces the surge_xt-only accessor and the CLI's --map
+  default follows --param-spec-name. Completeness and builder round-trip tests parameterize over all
+  three packaged specs. - --model-class now defaults to detection from the checkpoint's state-dict
+  prefixes (net.* vs encoder.*/vector_field.*), matching the C++ contract which passes no flag; the
+  subprocess contract test drops the flag. - Every run appends to <log-dir>/<uuid>.log (--log-dir),
+  file-handler-only so repeated in-process CliRunner invocations stay safe; crashes log the
+  traceback before the nonzero exit. - make test-bridge runs the bridge suite exhaustively (no
+  marker deselection, Xvfb bootstrap); new gap tests cover the flow-model subprocess contract, the
+  installed console script, and a mono 22.05 kHz capture.
+
+* test(evaluation): drop decode test module superseded by test_param_spec
+
+The #1792 extraction landed the exhaustive contract suite (tests/data/vst/test_param_spec.py); the
+  bridge branch's smaller module pinned a strict subset (midpoint, clip, linearity — implied by
+  midpoint + extremes).
+
+* build(lock): sync synth-setter 8.40.4 into uv.lock
+
+The 8.40.4 release commit bumped pyproject with [skip ci], leaving the lock one version behind; this
+  PR touches pyproject.toml, so lock-check runs and needs them in sync.
+
+* internal-fix(evaluation): pin UTF-8 on the bridge CSV write and map reads
+
+The #1787 contract specifies plain UTF-8; explicit encodings keep the artifacts locale-independent
+  (Copilot round on the rebased branch).
+
+* internal-fix(evaluation): pin UTF-8 on the run-log file handler
+
+Completes the encoding sweep from the previous round — the per-uuid log is operational diagnostics
+  and must not depend on the locale.
+
+* internal-fix(evaluation): address the multi-skill and Copilot review round
+
+- UTF-8 pinned on build_clap_map's CSV and JSON I/O, completing the encoding sweep. -
+  surge_params.csv columns validated with a clear error instead of a raw KeyError. - Serving is
+  seeded (flow sampling drew unseeded noise, so the same capture produced a different patch per
+  spawn) and a _DEFAULT_MODEL_CLASS deployment constant lets a pinned deployment skip the detection
+  load. - Test hardening: fractional %.9g pin, direct-row nan/inf/-inf writer guard coverage, a
+  stepped-conversion divergence case, slow marks on the checkpoint-fixture detection tests, three
+  convention renames, and a duplicated comment folded into its docstring.
+
+### Internal-Fix
+
+- **evaluation**: Dedupe model-output decode into param_spec
+  ([#1792](https://github.com/tinaudio/synth-setter/pull/1792),
+  [`a8f2331`](https://github.com/tinaudio/synth-setter/commit/a8f2331ccddaf8889754c1a489bb80bdf170b2ff))
+
+* internal-fix(evaluation): dedupe model-output decode into param_spec
+
+Three call sites (predict_vst_audio, surge_xt_interactive, and the upcoming predict-capture bridge
+  CLI in #1788) each hand-rolled the model-output inverse scale ((x + 1) / 2, clip to [0, 1]) before
+  ParamSpec.decode. Extract it as decode_model_output so the contract has one source.
+  Behavior-neutral; extracted from #1788 to land separately.
+
+* internal-fix(evaluation): pin decode_model_output contract, drop stale prose
+
+Pre-PR review round: a direct unit-test module pins the rescale/clip contract independently of any
+  caller; docstrings stop enumerating an out-of-tree caller and stop restating the inverse-scale
+  formula at the call sites, referencing decode_model_output instead.
+
+* internal-fix(evaluation): harden decode_model_output pins per review round two
+
+Pins the tuple shape, non-mutation, NaN passthrough, and over-long-row truncation as explicit
+  current-contract tests (guards stay a deliberate future change); the tiny spec now carries the
+  real NoteParams shape; remaining stale rescale attributions in test prose now reference
+  decode_model_output.
+
+* internal-fix(evaluation): close round-three review remnants on the decode pins
+
+The last stale 'rescaled row' phrase now says 'the row'; the helper docstring drops its
+  caller-mandate sentence; ParamSpec.decode gains the inverse cross-reference; the under-long-row
+  loud failure joins the pinned-contract suite.
+
+* internal-fix(evaluation): round-four polish on the decode extraction
+
+Tightens the NaN pin docstring to the two-line cap, narrows the loud-failure claim to categorical
+  truncation and pins the silent tail-truncation case beside it, softens the [0, 1] return claim to
+  the convention it is, aligns the target path's dtype with the pred path via .float(), and notes
+  where exact-value coverage lives.
+
+* internal-fix(evaluation): correct truncation-pin attribution, pin float64 target and duration
+  values
+
+Round five: the loud-failure pin now names the real mechanism (an empty scalar slice, not the
+  categorical it truncates through), the note-duration branch pins its exact decoded value, and a
+  float64 target-params regression test covers the call-site float32 cast.
+
+* docs(evaluation): point eval-pipeline decode prose at decode_model_output
+
+The render-stage bullet inlined the [-1, 1] -> [0, 1] transform; now that the scale has a canonical
+  named home, reference the symbol instead (doc-drift advisory for #1792).
+
+* docs(evaluation): state that decode width is unvalidated, per review
+
+Copilot flagged both decode docstrings for claiming a len(spec) width the implementations don't
+  enforce; the prose now names the unvalidated width and points at the pinned truncation behaviors.
+
+* test(evaluation): add future-annotations import to the decode contract module
+
+Aligns the new test module with the suite's prevailing convention, per review.
+
+
+## v8.40.4 (2026-07-10)
+
+### Bug Fixes
+
+- **docker**: Install unzip in the image test stage
+  ([#1790](https://github.com/tinaudio/synth-setter/pull/1790),
+  [`762904e`](https://github.com/tinaudio/synth-setter/commit/762904ecbe57087986fe469dd8527770299e0e24))
+
+* fix(docker): install unzip in the image test stage
+
+The dev-base stage runs pytest -k 'not slow', which exercises the Makefile install-plugins targets;
+  their recipes unpack cached .zip archives with unzip, which no ancestor stage installs. Every
+  docker-build-validation run since the targets landed (#1765) fails with '/bin/sh: 1: unzip: not
+  found' in the three dexed cache tests. Root-caused in #1789; tar-based recipes already pass
+  because tar ships in the base image.
+
+* fix(docker): correct stale no-subprocess claim on the in-image pytest run
+
+The comment predates #1765: the infra-marked install-plugins tests do shell out to the Makefile
+  recipes (tar/unzip), which is exactly why the test stage now installs unzip. Flagged by the pre-PR
+  review.
+
+### Code Style
+
+- **tests**: Apply ruff-format wrapping to vst test modules
+  ([#1791](https://github.com/tinaudio/synth-setter/pull/1791),
+  [`20c28fb`](https://github.com/tinaudio/synth-setter/commit/20c28fbc2a69efa49558e80f6d082552d6b3a81a))
+
+Reformat-only: line wrapping and import-group spacing that current ruff-format produces for five
+  tests/data/vst modules. All five files are AST-identical to their previous state. Extracted from
+  #1788 so the bridge PR touches only bridge concerns.
+
+
 ## v8.40.3 (2026-07-08)
 
 ### Bug Fixes

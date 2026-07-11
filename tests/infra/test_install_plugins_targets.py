@@ -1,8 +1,8 @@
 """`make install-plugins` provisions every VST3 bundle the runtime docker image ships.
 
 The image (docker/ubuntu22_04/Dockerfile) installs Surge XT plus three SHA256-pinned prebuilt
-synths (Dexed, OB-Xf, Six Sines). The Makefile mirrors those pins for local installs; these tests
-fail when either side drifts.
+synths (Dexed, OB-Xf, Six Sines) and source-builds Ultramaster KR-106. The Makefile mirrors those
+pins for local installs; these tests fail when either side drifts.
 
 The download-path tests never touch the network: they seed the archive cache under a throwaway
 ``HOME`` and pass the fixture's real sha256 as a command-line make-variable override.
@@ -34,9 +34,20 @@ pytestmark = pytest.mark.infra
 _TIMEOUT_S = 60
 
 # Every VST3 bundle staged into the runtime image, by plugins/ basename.
-_IMAGE_BUNDLES = ("Surge XT.vst3", "Dexed.vst3", "OB-Xf.vst3", "Six Sines.vst3")
+_IMAGE_BUNDLES = (
+    "Surge XT.vst3",
+    "Dexed.vst3",
+    "OB-Xf.vst3",
+    "Six Sines.vst3",
+    "Ultramaster KR-106.vst3",
+)
 
-_FETCHED_SYNTH_TARGETS = ("install-dexed", "install-obxf", "install-six-sines")
+_LINUX_X86_64_PLUGIN_TARGETS = (
+    "install-dexed",
+    "install-obxf",
+    "install-six-sines",
+    "install-ultramaster-kr106",
+)
 
 # Pins that must stay identical between the Makefile and the Dockerfile ARGs.
 _SHARED_PINS = (
@@ -47,13 +58,15 @@ _SHARED_PINS = (
     "SIX_SINES_VERSION",
     "SIX_SINES_ASSET",
     "SIX_SINES_SHA256",
+    "ULTRAMASTER_KR106_VERSION",
+    "ULTRAMASTER_KR106_GIT_REF",
 )
 
-# The fetch recipe itself gates on x86_64 Linux, so its download-path branches
-# are only reachable on such hosts.
+# The prebuilt fetch and source-build recipes gate on x86_64 Linux, so their install branches are
+# only reachable on such hosts.
 requires_x86_64_linux = pytest.mark.skipif(
     platform.system() != "Linux" or platform.machine() != "x86_64",
-    reason="install_fetched_synth skips on non-x86_64 hosts",
+    reason="plugin install targets skip on non-x86_64 hosts",
 )
 
 if shutil.which("make") is None:
@@ -82,6 +95,20 @@ def _dockerfile_arg(name: str) -> str:
     return match.group(1)
 
 
+def _dockerfile_stage_text(stage_name: str) -> str:
+    """Return Dockerfile text from ``stage_name`` until the next stage.
+
+    :param stage_name: Docker stage alias.
+    :returns: the selected stage text.
+    """
+    text = DOCKERFILE.read_text()
+    match = re.search(rf"^FROM .+ AS {re.escape(stage_name)}\n", text, re.MULTILINE)
+    assert match, f"Dockerfile does not define stage {stage_name}"
+    next_stage = re.search(r"^FROM ", text[match.end() :], re.MULTILINE)
+    end = match.end() + next_stage.start() if next_stage else len(text)
+    return text[match.start() : end]
+
+
 def _run_make(
     cwd: Path,
     target: str,
@@ -96,8 +123,9 @@ def _run_make(
     :param env: full environment for the subprocess; inherits os.environ when None.
     :returns: the completed process, stdout/stderr captured as text.
     """
+    git_ref_override = "CURRENT_LOCAL_GIT_REF=0000000000000000000000000000000000000000"
     return subprocess.run(  # noqa: S603 — fixed argv, no shell
-        ["make", target, *makevars],  # noqa: S607 — make on PATH
+        ["make", target, git_ref_override, *makevars],  # noqa: S607 — make on PATH
         cwd=cwd,
         env=env,
         check=False,
@@ -188,6 +216,72 @@ def test_surge_version_matches_dockerfile_prebuilt_package() -> None:
     )
 
 
+def test_runtime_image_installs_unzip_for_plugin_install_targets() -> None:
+    """The runtime image has the zip extractor that Makefile plugin targets invoke."""
+    stage = _dockerfile_stage_text("builder-install-synth-setter-deps")
+    assert re.search(r"apt-get install\b[\s\S]*\bunzip\b", stage)
+
+
+def test_ultramaster_docker_build_logs_version_with_git_ref() -> None:
+    """The KR-106 Docker build surfaces the version label with the pinned ref."""
+    stage = _dockerfile_stage_text("builder-build-ultramaster-kr106")
+    assert re.search(
+        r"echo\b.*\$\{ULTRAMASTER_KR106_VERSION\}.*\$\{ULTRAMASTER_KR106_GIT_REF\}",
+        stage,
+    )
+
+
+def test_ultramaster_docker_build_gates_dependencies_by_arch() -> None:
+    """The KR-106 Docker stage skips build dependencies before apt runs."""
+    stage = _dockerfile_stage_text("builder-build-ultramaster-kr106")
+    skip_idx = stage.find('if [ "${TARGETARCH:-}" != "amd64" ]')
+    apt_idx = stage.find("apt-get update")
+    assert skip_idx != -1, stage
+    assert apt_idx != -1, stage
+    assert skip_idx < apt_idx
+
+
+@pytest.mark.slow
+def test_ultramaster_docker_arm64_target_skips_source_build() -> None:
+    """BuildKit can execute the arm64 KR-106 stage without source-build deps."""
+    docker = shutil.which("docker")
+    if docker is None:
+        pytest.skip("docker binary not available")
+    info = subprocess.run(  # noqa: S603 — fixed argv, no shell
+        [docker, "info"],
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=15,
+        check=False,
+    )
+    if info.returncode != 0:
+        pytest.skip(
+            "Docker daemon unavailable for: docker buildx build --platform linux/arm64 "
+            "--target builder-build-ultramaster-kr106 -f docker/ubuntu22_04/Dockerfile ."
+        )
+    result = subprocess.run(  # noqa: S603 — fixed argv, no shell
+        [
+            docker,
+            "buildx",
+            "build",
+            "--platform",
+            "linux/arm64",
+            "--target",
+            "builder-build-ultramaster-kr106",
+            "-f",
+            str(DOCKERFILE),
+            ".",
+        ],
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=900,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_install_plugins_all_bundles_present_skips_every_download(
     makefile_checkout: Path,
 ) -> None:
@@ -210,14 +304,14 @@ def test_install_plugins_all_bundles_present_skips_every_download(
         assert f"plugins/{name} already exists" in result.stdout, f"{name} not visited"
 
 
-@pytest.mark.parametrize("target", _FETCHED_SYNTH_TARGETS)
-def test_fetched_synth_target_non_x86_64_skips_without_installing(
+@pytest.mark.parametrize("target", _LINUX_X86_64_PLUGIN_TARGETS)
+def test_linux_x86_64_plugin_target_non_x86_64_skips_without_installing(
     makefile_checkout: Path, target: str
 ) -> None:
-    """On a non-x86_64 host every fetched-synth target skips, mirroring the image's amd64 gate.
+    """On a non-x86_64 host every x86_64 plugin target skips, mirroring the image gate.
 
     :param makefile_checkout: throwaway checkout holding the Makefile.
-    :param target: fetched-synth make target under test.
+    :param target: plugin install make target under test.
     """
     bindir = makefile_checkout / "bin"
     bindir.mkdir()
@@ -292,7 +386,12 @@ def test_install_plugins_mixed_presence_installs_only_missing_bundle(
     home, env = _home_env(makefile_checkout)
     plugins = makefile_checkout / "plugins"
     plugins.mkdir()
-    for name in ("Surge XT.vst3", "OB-Xf.vst3", "Six Sines.vst3"):
+    for name in (
+        "Surge XT.vst3",
+        "OB-Xf.vst3",
+        "Six Sines.vst3",
+        "Ultramaster KR-106.vst3",
+    ):
         (plugins / name).mkdir()
     version = _makefile_var("DEXED_VERSION")
     payload = _zip_containing(f"dexed-{version}-lnx/Dexed.vst3")
@@ -304,6 +403,110 @@ def test_install_plugins_mixed_presence_installs_only_missing_bundle(
     assert "plugins/Surge XT.vst3 already exists" in result.stdout
     assert "Installed plugins/Dexed.vst3" in result.stdout
     assert (plugins / "Dexed.vst3" / "Contents" / "x86_64-linux" / "plugin.so").is_file()
+
+
+@requires_x86_64_linux
+def test_install_ultramaster_existing_cache_refreshes_pinned_ref(
+    makefile_checkout: Path,
+) -> None:
+    """An existing KR-106 cache still fetches and checks out the requested pin.
+
+    :param makefile_checkout: throwaway checkout holding the Makefile.
+    """
+    home, env = _home_env(makefile_checkout)
+    cache = home / ".cache" / "synth-setter" / "ultramaster-kr106-test"
+    (cache / "src" / ".git").mkdir(parents=True)
+
+    bindir = makefile_checkout / "bin"
+    bindir.mkdir()
+    log = makefile_checkout / "tool.log"
+    fake_git = bindir / "git"
+    fake_git.write_text('#!/bin/sh\nprintf "git %s\\n" "$*" >> "$TOOL_LOG"\n')
+    fake_git.chmod(0o755)
+    fake_cmake = bindir / "cmake"
+    fake_cmake.write_text(
+        "#!/bin/sh\n"
+        'printf "cmake %s\\n" "$*" >> "$TOOL_LOG"\n'
+        'if [ "$1" = "--build" ]; then\n'
+        '  mkdir -p "$2/KR106_artefacts/Release/VST3/Ultramaster KR-106.vst3/Contents"\n'
+        "fi\n"
+    )
+    fake_cmake.chmod(0o755)
+    env = {**env, "PATH": f"{bindir}{os.pathsep}{env['PATH']}", "TOOL_LOG": str(log)}
+
+    result = _run_make(
+        makefile_checkout,
+        "install-ultramaster-kr106",
+        "ULTRAMASTER_KR106_VERSION=test",
+        "ULTRAMASTER_KR106_GIT_REF=abc123",
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    tool_log = log.read_text()
+    assert "fetch --depth 1 origin abc123" in tool_log
+    assert "checkout --detach FETCH_HEAD" in tool_log
+    assert "reset --hard FETCH_HEAD" in tool_log
+    assert (makefile_checkout / "plugins" / "Ultramaster KR-106.vst3").is_dir()
+
+
+@requires_x86_64_linux
+def test_install_ultramaster_invalid_cache_reinitializes_checkout(
+    makefile_checkout: Path,
+) -> None:
+    """A malformed KR-106 cache is discarded before fetching the pinned ref.
+
+    :param makefile_checkout: throwaway checkout holding the Makefile.
+    """
+    home, env = _home_env(makefile_checkout)
+    cache = home / ".cache" / "synth-setter" / "ultramaster-kr106-test"
+    (cache / "src" / ".git").mkdir(parents=True)
+
+    bindir = makefile_checkout / "bin"
+    bindir.mkdir()
+    log = makefile_checkout / "tool.log"
+    fake_git = bindir / "git"
+    fake_git.write_text(
+        "#!/bin/sh\n"
+        'workdir="$PWD"\n'
+        'if [ "$1" = "-C" ]; then workdir="$2"; shift 2; fi\n'
+        'printf "git -C %s %s\\n" "$workdir" "$*" >> "$TOOL_LOG"\n'
+        'case "$1 $2" in\n'
+        '  "rev-parse --git-dir") [ -f "$workdir/.git/valid" ]; exit $? ;;\n'
+        '  "remote set-url") [ -f "$workdir/.git/valid" ]; exit $? ;;\n'
+        "esac\n"
+        'if [ "$1" = "init" ]; then mkdir -p "$workdir/.git"; touch "$workdir/.git/valid"; fi\n'
+    )
+    fake_git.chmod(0o755)
+    fake_cmake = bindir / "cmake"
+    fake_cmake.write_text(
+        "#!/bin/sh\n"
+        'printf "cmake %s\\n" "$*" >> "$TOOL_LOG"\n'
+        'if [ "$1" = "--build" ]; then\n'
+        '  mkdir -p "$2/KR106_artefacts/Release/VST3/Ultramaster KR-106.vst3/Contents"\n'
+        "fi\n"
+    )
+    fake_cmake.chmod(0o755)
+    env = {**env, "PATH": f"{bindir}{os.pathsep}{env['PATH']}", "TOOL_LOG": str(log)}
+
+    result = _run_make(
+        makefile_checkout,
+        "install-ultramaster-kr106",
+        "ULTRAMASTER_KR106_VERSION=test",
+        "ULTRAMASTER_KR106_GIT_REF=abc123",
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    tool_log = log.read_text()
+    assert "rev-parse --git-dir" in tool_log
+    assert "init" in tool_log
+    assert (
+        "remote set-url origin https://github.com/kayrockscreenprinting/ultramaster_kr106.git"
+        in tool_log
+    )
+    assert "fetch --depth 1 origin abc123" in tool_log
+    assert (makefile_checkout / "plugins" / "Ultramaster KR-106.vst3").is_dir()
 
 
 @requires_x86_64_linux

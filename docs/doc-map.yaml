@@ -72,6 +72,21 @@ docs:
       - pattern: "src/synth_setter/utils/callbacks.py"
         covers: "W&B callback integrations, visualization uploads"
 
+  # ── W&B artifact & provenance reference ─────────────────────────
+  - doc: docs/reference/artifact-provenance-reference.md
+    description: W&B artifact patterns, lineage DAG, and ${wandb:…} resolver recipe
+    sources:
+      - pattern: "src/synth_setter/cli/finalize_dataset.py"
+        covers: "build_dataset_artifact / _log_dataset_artifact: data-{id} artifact, s3:// references, metadata (shard_count, n_samples, git_sha)"
+      - pattern: "src/synth_setter/cli/train.py"
+        covers: "build_model_artifact / _log_model_artifact: model-{config_id} artifact, opt-in upload_checkpoints_uri reference; _consumed_artifact_refs lineage edges"
+      - pattern: "src/synth_setter/cli/eval.py"
+        covers: "build_eval_results_artifact / _log_eval_results_artifact: eval-{id} artifact, output-dir reference, summary-metric metadata"
+      - pattern: "src/synth_setter/utils/logging_utils.py"
+        covers: "use_input_artifacts lineage edges; pin_wandb_run_id; log_wandb_provenance"
+      - pattern: "src/synth_setter/utils/utils.py"
+        covers: "${wandb:…} resolver (_resolve_wandb_checkpoint) and register_resolvers cache behavior"
+
   # ── Data pipeline design doc ────────────────────────────────────
   - doc: docs/design/data-pipeline.md
     description: Distributed data pipeline design (RunPod + R2)
@@ -99,7 +114,7 @@ docs:
       - pattern: "src/synth_setter/pipeline/spec_io.py"
         covers: "`input_spec.json` read/write/upload/discover helpers (`load_spec_from_uri`, `load_spec_from_root`, `local_spec_path`, `write_spec_locally`, `upload_spec`, `find_input_specs`) — sole call site for writing the operator-side local mirror at `<cfg.paths.output_dir>/data/<task_name>/<run_id>/metadata/input_spec.json` (runner anchors at the Hydra per-run dir, same value `generate()` uses for shard scratch) and the R2 copy at `spec.r2.input_spec_uri()`; called from `cli/generate_dataset.py`'s `main()`. `load_spec_from_uri` is the thin wrapper around `read_spec_text` + `DatasetSpec.model_validate_json` used by `pipeline/data/reshard.py` so the reshard CLI parses specs without dragging Hydra into its import graph. `load_spec_from_root` joins `INPUT_SPEC_FILENAME` onto a run-prefix URI and delegates to `load_spec_from_uri`; it is the reader the finalize entrypoint (`cli/finalize_dataset.py`) uses. `find_input_specs` glob-discovers already-materialized specs under a local `data/` root and is added for future use by `cli/generate_dataset.py`; not yet wired."
       - pattern: "src/synth_setter/configs/render/**"
-        covers: "Render-group selected by experiment overrides (e.g. `override /render: surge_xt`); surge_xt.yaml is the base config (plugin path, preset, sample-rate, cadence, batch-size defaults surfaced for Hydra struct-mode overrides); surge_simple.yaml inherits from it"
+        covers: "Render-group selected by experiment overrides (e.g. `override /render: surge_xt`); surge_xt.yaml is the base config (plugin path, preset, sample-rate, cadence, batch-size defaults surfaced for Hydra struct-mode overrides); the other files in `configs/render/` inherit from it and pin a param spec + preset"
       - pattern: "src/synth_setter/pipeline/constants.py"
         covers: "Input spec filename, rclone remote name, and canonical `r2://` URI scheme constants"
       - pattern: "src/synth_setter/pipeline/schemas/r2_location.py"
@@ -120,6 +135,13 @@ docs:
         covers: "`synth-setter-add-mp3-audio` CLI — backfills an `audio_mp3` Lance blob v2 column (`lance.blob_field` / `lance.blob_array`, tagged `mime_type: audio/mpeg`) holding a CBR MP3 preview (via pedalboard) onto a Lance dataset via `lance.batch_udf` `add_columns`; a lossy auditioning preview, never a training input."
       - pattern: "src/synth_setter/pipeline/data/add_music2latent.py"
         covers: "`python -m synth_setter.pipeline.data.add_music2latent` CLI — adds a `music2latent` dataset to HDF5 shards via reader/writer multiprocessing around a GPU encode loop."
+
+  # ── Legacy output formats (HDF5 & WebDataset) ────────────────────
+  - doc: docs/design/legacy/hdf5-wds-formats.md
+    description: How legacy HDF5/WebDataset outputs are staged, promoted, and resharded
+    sources:
+      - pattern: "src/synth_setter/pipeline/data/reshard.py"
+        covers: "HDF5 resharding into train/val/test virtual datasets on the finalize machine"
 
   # ── Deterministic data-generation seeding design ─────────────────
   - doc: docs/design/deterministic-seeding.md
@@ -225,6 +247,20 @@ docs:
         scope: "training"
 
   # ── Eval pipeline design doc ────────────────────────────────────
+  - doc: docs/guides/sound-match-bridge.md
+    description: Live sound-match bridge — predict-capture CLI contract and CLAP map rebuild
+    sources:
+      - pattern: "src/synth_setter/cli/predict_capture.py"
+        covers: "Bridge CLI contract: uuid from wav stem, pred-0.pt + atomic params.csv, absence-is-failure semantics, --stats-file normalization, SET ME default checkpoint"
+      - pattern: "src/synth_setter/tools/build_clap_map.py"
+        covers: "dump/build commands, patch-invariant index bridge, init-order + surge_params.csv validation, headless-wrapper requirement for build"
+      - pattern: "src/synth_setter/data/vst/clap_introspect.py"
+        covers: "First-party ctypes CLAP host used by the dump command"
+      - pattern: "src/synth_setter/data/vst/clap_map.py"
+        covers: "PluginFormatMap schema and native-domain CSV row conversion"
+      - pattern: "src/synth_setter/data/vst/surge_xt_clap_*.json"
+        covers: "Committed raw dump + packaged pyname->CLAP map the CLI loads by default"
+
   - doc: docs/design/eval-pipeline.md
     description: Evaluation pipeline design — predict, render, metrics, R2 integration
     sources:
@@ -330,6 +366,8 @@ docs:
     sources:
       - pattern: "tests/conftest.py"
         covers: "Hydra cfg_train/cfg_train_lance/cfg_eval/cfg_dataset/cfg_surge_xt fixtures, accelerator parametrize, param_spec_name parametrize, experiment_name parametrize, _build_surge_xt_smoke_cfg, surge_xt_smoke_datasets, _validate_surge_dataset, Lance smoke helpers (_write_lance_smoke_split, fake_surge_smoke_lance_datasets, _LANCE_SMOKE_*), shared constants (NUM_FIXTURE_SAMPLES, VST_HEADLESS_WRAPPER)"
+      - pattern: "tests/claude_hooks/conftest.py"
+        covers: "Autouse gate-override env scrub (GATE_OVERRIDE_ENV_VARS) so hook subprocesses see their documented default modes"
       - pattern: "tests/_vst.py"
         covers: "PLUGIN_PATH, VST_AVAILABLE, VST_SUBPROCESS_TIMEOUT_SECONDS"
       - pattern: "tests/test_train.py"
@@ -389,8 +427,10 @@ docs:
         covers: "Pre-PR review-sentinel gate; CI backstop via test.yml + code-quality-pr.yaml + pr-metadata-gate.yaml"
       - pattern: "agent/hooks/pr-readiness-stop.sh"
         covers: "Stop-gate on red CI / non-mergeable; CI backstop via branch protection + required checks"
-      - pattern: "tests/claude_hooks/test_skill_discovery_parity.py"
-        covers: "Parity assertion that every agent/skills/* resolves via both the Claude and Codex globs"
+      - pattern: "agent/hooks/test.sh"
+        covers: "Bash hook test harness: registry/runner, sandbox stubs, startup gate-override env scrub (GATE_OVERRIDE_ENV_VARS)"
+      - pattern: "tests/claude_hooks/**"
+        covers: "Hook wiring + exit-contract tests (settings.json wiring, gate tests, skill-discovery parity) and the autouse gate-override env scrub conftest"
       - pattern: "tests/infra/test_agent_hooks_suite.py"
         covers: "Runs the full agent/hooks/test.sh bash suite in CI under a simulated Codex skill layout"
 
