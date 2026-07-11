@@ -257,7 +257,7 @@ repos:
     rev: 0.6.1
     hooks:
       - id: nbstripout
-        exclude: "^notebooks/(inpsect-models|add_embeddings_smoke|add_mp3_audio)\\.ipynb$"
+        exclude: "^notebooks/(inpsect-models|add_embeddings_smoke|add_preview_columns)\\.ipynb$"
 
   # C++ formatting and linting (no-op until .cpp/.h files are added)
   - repo: https://github.com/pre-commit/mirrors-clang-format
