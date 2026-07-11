@@ -21,6 +21,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextlib import ExitStack
 from pathlib import Path
@@ -982,4 +983,6 @@ def main(cfg: DictConfig) -> None:
 
 
 if __name__ == "__main__":
-    main()
+    # hydra.main types its wrapper as Any, so pyright sees the undecorated
+    # one-arg signature; the wrapper itself takes no positional args.
+    cast("Callable[[], None]", main)()
