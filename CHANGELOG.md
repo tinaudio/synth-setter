@@ -1,6 +1,192 @@
 # CHANGELOG
 
 
+## v8.43.0 (2026-07-11)
+
+### Build System
+
+- Skip KR-106 deps off amd64 ([#1796](https://github.com/tinaudio/synth-setter/pull/1796),
+  [`c938414`](https://github.com/tinaudio/synth-setter/commit/c938414ad365252e5dcc9d49b89937dc3cff77b7))
+
+### Documentation
+
+- **storage**: Add W&B artifact & provenance reference
+  ([#1569](https://github.com/tinaudio/synth-setter/pull/1569),
+  [`cd9869f`](https://github.com/tinaudio/synth-setter/commit/cd9869fc3f6ee384ee99e4f4e4ca26bc245d6e60))
+
+* docs(storage): add artifact-provenance-reference doc
+
+Write docs/reference/artifact-provenance-reference.md, the companion the storage-provenance spec §13
+  promised but never shipped. Documents the landed W&B artifact patterns (dataset/model/eval-results
+  builders, the s3:// checksum=False reference convention, artifact.metadata fields), the lineage
+  DAG with use_artifact producer/consumer recipes, and the ${wandb:…} resolver. Resolve the dangling
+  §13 reference link and register the doc in doc-map.yaml against its source modules.
+
+Refs #1565
+
+* docs(storage): correct run-id metadata claim and resolver syntax
+
+Address Copilot review on #1569: - The artifact builders do not copy {*_wandb_run_id} into
+  artifact.metadata; reword to state the name carries the config id and the run id is pinned on the
+  producing run via pin_wandb_run_id (spec §4 reserves the metadata slot but it is not yet wired). -
+  The bare `ckpt_path=wandb:…` form is passed through literally; require the `${wandb:…}`
+  interpolation in the resolver prose to match the yaml example.
+
+* docs(storage): mark :best/:production aliases as planned, not landed
+
+Address Copilot review on #1569: the landed code applies only :latest (W&B-automatic).
+  _log_model_artifact logs with no aliases=[…], and the promote workflow that would set :production
+  is not implemented (#1566). Add a Status column distinguishing the one landed alias from the two
+  spec-reserved planned ones, so the reference stops implying aliases exist that the current code
+  never sets.
+
+* docs(storage): note promote-workflow lineage tail is not yet landed
+
+Pre-empt the remaining landed-vs-spec ambiguity in the lineage DAG: the
+  data-generation/training/evaluation edges exist in code, but the [promote workflow] -> GitHub
+  Release tail is the spec's target shape and that workflow is not implemented (#1566). Annotate the
+  diagram so the reference does not imply a promotion edge that no code produces.
+
+* docs(storage): reconcile metadata-vs-metrics convention for eval-results
+
+Address Copilot review on #1569: the §3 intro said final metrics never belong in artifact.metadata,
+  contradicting the table (and the landed build_eval_results_artifact) that stores a scalar metric
+  summary there. Reword to state metrics live in wandb.summary, with eval-results as the documented
+  exception that also copies a scalar summary into metadata for filtering.
+
+* docs(storage): use landed :latest alias in resolver example
+
+Address Copilot review on #1569: the §5 resume example referenced `model-flow-simple:best`, but §6
+  documents that training does not log an :best alias today (only W&B-automatic :latest is applied).
+  Switch the example to :latest so it resolves against an alias the landed code actually sets.
+
+* docs(storage): refresh model-artifact reference for landed R2 checkpoint upload
+
+#1572 landed best-checkpoint→R2→W&B (closing #92) the day after this doc was written, so the
+  model-artifact sections predated it. Update §1/§3 to the landed default (derived
+  r2://.../model.ckpt URI or upload_checkpoints_uri override, referenced as s3:// checksum=False;
+  lineage-only only as a degrade path), fix the §4 build_model_artifact(cfg, ckpt_uri) signature,
+  and add the checkpoint upload symbols to the code map. The :best alias row stays "planned" — #1572
+  added no W&B alias.
+
+### Features
+
+- **ci-automation**: Add train and eval GitHub Actions workflows
+  ([#1594](https://github.com/tinaudio/synth-setter/pull/1594),
+  [`46558b2`](https://github.com/tinaudio/synth-setter/commit/46558b28fd2941450bcb39d5d684cbfb3f48efaa))
+
+* feat(ci-automation): add train and eval GitHub Actions workflows
+
+Add workflow_dispatch train.yml and eval.yml that run synth-setter-train / synth-setter-eval inside
+  the dev-snapshot image on gpu-x64, mirroring the Docker-on-GPU pattern in test-gpu.yml. Both
+  forward R2 + W&B credentials and export GITHUB_SHA into the run environment, satisfying the
+  storage-provenance spec §8 workflow table and the §12 github_sha invariant. Fill in the spec's
+  previously-TBD Training/Evaluation rows with the real files, runner, and inputs.
+
+Refs #1467, #122, #92 Closes #1567
+
+* feat(ci-automation): dispatch train and eval workflows via SkyPilot launch configs
+
+Review-driven redesign of #1594: instead of running synth-setter-train / synth-setter-eval in-place
+  on gpu-x64, the workflows now submit SkyPilot managed jobs, and their only input is the path to a
+  checked-in launch config.
+
+- Add synth-setter-skypilot-launch (skypilot_launch.main): loads a launch config YAML into the
+  strict SkypilotLaunchConfig and calls dispatch_via_skypilot. Workflows invoke it via python -m so
+  the mounted fresh checkout supplies the code regardless of image-baked entry points. - Add
+  configs/launch/{train,eval}-runpod.yaml baking the compute template, worker image tag, and worker
+  cmd (eval sources ckpt_path through the wandb_checkpoint overlay and the headless-VST wrapper). -
+  Inject IMAGE_TAG into every rank's env at the launcher so log_wandb_provenance records the real
+  tag on all SkyPilot workers (previously "unknown"); WORKER_GIT_REF pins the worker checkout for
+  github_sha provenance. - Rewrite train.yml / eval.yml as thin ubuntu-latest dispatchers mirroring
+  generate-dataset-shards.yaml's runpod row; update spec §8/§9 rows.
+
+* chore(deps): sync uv.lock to the 8.33.0 version bump
+
+The 8.33.0 release commit on main bumped pyproject.toml without regenerating the lock, so `uv lock
+  --check` fails on any branch that merges it. Records the new project version in uv.lock; no
+  dependency changes.
+
+* fix(ci-automation): surface YAML parse errors as clean launcher CLI errors
+
+Copilot review follow-ups on #1594: malformed YAML in a launch config now maps to a click error
+  instead of a raw traceback, and the checked-in launch-config test class docstring no longer
+  overclaims dispatch coverage.
+
+* Merge branch 'main' into feat/train-eval-workflows
+
+Resolve the uv.lock conflict by resyncing against the merged pyproject.toml (main's v8.42.0 release
+  bump + this branch's synth-setter-skypilot-launch console script).
+
+* internal-feat(ci-automation): add smoke launch configs for dispatch verification
+
+10-step train + 2-batch eval variants of the runpod launch configs, used to exercise the workflow ->
+  launcher -> SkyPilot worker path end to end (PR #1594 Level 1 verification) at minimal GPU cost.
+  Covered by the existing checked-in launch-config sweep in test_skypilot_launch.py.
+
+### Internal-Fix
+
+- **testing**: Scrub ambient gate overrides from hook tests
+  ([#1763](https://github.com/tinaudio/synth-setter/pull/1763),
+  [`e4f3c9b`](https://github.com/tinaudio/synth-setter/commit/e4f3c9bf71da5b5e5a6784d5131770a034d234d0))
+
+* internal-fix(testing): scrub ambient gate-mode env vars from hook test harnesses
+
+Agent sessions export gate-mode overrides (e.g. REVIEW_COMMENT_GATE=warn) that leak into the hook
+  subprocesses spawned by the tests, flipping pre-pr-review-gate.sh's default block mode to warn and
+  failing its default-mode assertions.
+
+agent/hooks/test.sh now unsets the six gate-mode knobs at startup (each case sets its own mode), and
+  tests/claude_hooks/conftest.py gains an autouse fixture that monkeypatch.delenv's the same set so
+  hook subprocesses inherit a clean environment. Pinning tests in both harnesses guard the
+  invariant. Hook defaults are unchanged.
+
+Fixes #1761
+
+* internal-fix(testing): address pre-PR review findings on gate-var scrub
+
+Rename GATE_MODE_ENV_VARS to GATE_OVERRIDE_ENV_VARS (REVIEW_MAX_LAG is a threshold, not a mode),
+  alphabetize the list on both surfaces, and pin the autouse fixture wiring deterministically via
+  request.fixturenames so the canary is meaningful in clean environments too.
+
+Refs #1761
+
+* docs(testing): document tests/claude_hooks conftest and map hook-harness sources
+
+Add the new gate-override scrub conftest to the testing primer's conftest enumeration, and close
+  doc-map coverage gaps flagged by doc-drift: map agent/hooks/test.sh and tests/claude_hooks/** to
+  agent-harness-parity.md and the conftest to testing.md.
+
+### Testing
+
+- **docker**: Cover the BUILD_MODE=source Docker image build path
+  ([#1679](https://github.com/tinaudio/synth-setter/pull/1679),
+  [`89cf177`](https://github.com/tinaudio/synth-setter/commit/89cf177249d1c15ff15efc4a2033b80e6aae8df0))
+
+* test(docker): cover BUILD_MODE=source build path (skipped by default)
+
+The published images and the docker-validate CI leg build BUILD_MODE=prebuilt, so the Dockerfile's
+  builder-install-surge-from-source stage — including the webkit2gtk fallback for the Jammy/Noble
+  source dependency set — is never exercised by CI. A real source build is a ~1h compile, too
+  expensive per-PR.
+
+Add an always-skipped test that builds the dev-snapshot target with BUILD_MODE=source through the
+  canonical Makefile target and asserts success. It is gated on SYNTH_SETTER_RUN_SOURCE_BUILD so it
+  never runs in CI but stays runnable on demand, pinning the source path against silent regressions.
+
+Refs #1659
+
+* test(docker): load source image into the daemon and gate on git
+
+Address Copilot review on #1679:
+
+- Pass DOCKER_BUILD_FLAGS=--load so buildx loads the image into the local daemon (skipped by default
+  on the docker-container driver), making the follow-up `docker run` reliable instead of failing or
+  hitting a stale image. - Pin DOCKER_IMAGE in the make call and derive _DEV_SNAPSHOT_TAG from it,
+  so a developer's DOCKER_IMAGE env can't desync the build tag from the run tag. - Add git to the
+  skip gate (the test shells out to `git rev-parse`), with an accurate skip reason.
+
+
 ## v8.42.0 (2026-07-11)
 
 ### Documentation
