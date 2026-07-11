@@ -35,6 +35,8 @@ def lance_schema(
     :returns: Arrow schema with fixed-shape tensor columns and shard metadata.
     """
     fields = []
+    # DuckDB scans reserve STANDARD_VECTOR_SIZE (2048) x flattened-width per fixed-shape-tensor
+    # column, so wide tensors (audio: 2.69 GiB) OOM SmooSense's 3 GB memory_limit (#1704).
     for field in DATASET_FIELD_NAMES:
         dtype = DATASET_FIELD_DTYPES[field]
         tensor_type = pa.fixed_shape_tensor(
