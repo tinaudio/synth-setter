@@ -14,7 +14,7 @@ from __future__ import annotations
 import pytest
 from hydra import compose, initialize_config_module
 
-from synth_setter.pipeline.schemas.spec import DatasetSpec
+from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 
 # Off-default values for each field surfaced in ``render/surge_xt.yaml``.  Each
 # value must differ from the YAML default so the assertion distinguishes "override
@@ -31,6 +31,24 @@ _SURFACED_RENDER_DEFAULTS: dict[str, object] = {
 # An experiment that sets none of ``_SURFACED_RENDER_DEFAULTS``, so a successful
 # plain override proves the key comes from the base render config, not the experiment.
 _NO_CADENCE_EXPERIMENT = "experiment=generate_dataset/ci-materialize-test"
+
+
+def test_render_config_names_plugin_state_path_as_the_pedalboard_state_input() -> None:
+    """Render configuration exposes the pedalboard state file as plugin_state_path."""
+    config = RenderConfig(
+        plugin_path="plugin.vst3",
+        plugin_state_path="state.vstpreset",
+        param_spec_name="surge_xt",
+        renderer_version="1.0.0",
+        sample_rate=44100,
+        channels=2,
+        velocity=100,
+        signal_duration_seconds=4.0,
+        min_loudness=-55.0,
+        samples_per_shard=1,
+    )
+
+    assert config.plugin_state_path == "state.vstpreset"
 
 
 def _spec_from_dataset_overrides(overrides: list[str]) -> DatasetSpec:
@@ -84,7 +102,7 @@ def test_render_obxf_composes_into_valid_render_config() -> None:
     assert spec.render.param_spec_name == "obxf"
     assert spec.render.renderer_version == "1.0.3"
     assert spec.render.plugin_path == "plugins/OB-Xf.vst3"
-    assert spec.render.preset_path == "presets/obxf-base.vstpreset"
+    assert spec.render.plugin_state_path == "presets/obxf-base.vstpreset"
     assert spec.num_params == 187
     # Inherited from the surge_xt base group, proving defaults: [surge_xt] is live.
     assert spec.render.plugin_reload_cadence == "render"

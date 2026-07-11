@@ -113,7 +113,7 @@ def _lance_embed_spec(prefix: str, rows: int = _SAMPLES_PER_SHARD) -> DatasetSpe
         "r2": {"bucket": "intermediate-data", "prefix": prefix},
         "render": {
             "plugin_path": PLUGIN_PATH,
-            "preset_path": TEST_PRESET_PATH,
+            "plugin_state_path": TEST_PRESET_PATH,
             "param_spec_name": TEST_PARAM_SPEC_NAME,
             "renderer_version": TEST_RENDERER_VERSION,
             "sample_rate": _SAMPLE_RATE,

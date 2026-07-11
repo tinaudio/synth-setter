@@ -36,7 +36,7 @@ training pairs that random sampling can't reach.
   set and non-empty, else `plugins/Surge XT.vst3` — satisfied by
   `make install-surge-xt`).
 - A base preset file. Selected automatically from
-  `preset_paths[param_spec_name]` in `src/synth_setter/data/vst/__init__.py`
+  `plugin_state_paths[param_spec_name]` in `src/synth_setter/data/vst/__init__.py`
   (keyed by the value passed to `--param-spec-name`).
 - A working audio output device. The tool opens a real-time audio
   stream via `pedalboard.io.AudioStream`; headless environments without
@@ -48,7 +48,7 @@ training pairs that random sampling can't reach.
 
 `--param-spec-name` is required in every invocation; it selects the
 parameter spec *and* the matching base preset (loaded by indexing
-`preset_paths` with the value passed to `--param-spec-name`).
+`plugin_state_paths` with the value passed to `--param-spec-name`).
 
 Bare audition — open the editor on the registry-selected base preset,
 no preloaded params:
@@ -114,7 +114,7 @@ raises `click.UsageError`.
 | `--plugin-path` / `-p`      | path               | `$SYNTH_SETTER_PLUGIN_PATH`, else `plugins/Surge XT.vst3` | Path to VST3 plugin. Defaults to `$SYNTH_SETTER_PLUGIN_PATH` or the in-repo bundle.                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `--pred`                    | `PATH:BATCH_IDX`   | unset                                                     | Prediction reference. When set, the predicted row is decoded and applied to the plugin before the editor opens. Example: `outputs/pred-0.pt:0`.                                                                                                                                                                                                                                                                                                                                                                 |
 | `--dataset-ref`             | `PATH:DATASET_IDX` | unset                                                     | Dataset reference. When set, the dataset row is decoded and applied to the plugin before the editor opens. Example: `outputs/test.h5:0`.                                                                                                                                                                                                                                                                                                                                                                        |
-| `--param-spec-name`         | choice             | required                                                  | Parameter spec name — one of the keys registered in `src/synth_setter/data/vst/__init__.py` (`param_specs`). Selects which synth params are decoded from prediction/dataset rows, captured into recorded patches, and which base preset is loaded (the script indexes `preset_paths` with this value). There is no `--preset-path` flag — spec and preset travel together.                                                                                                                                      |
+| `--param-spec-name`         | choice             | required                                                  | Parameter spec name — one of the keys registered in `src/synth_setter/data/vst/__init__.py` (`param_specs`). Selects which synth params are decoded from prediction/dataset rows, captured into recorded patches, and which base preset is loaded (the script indexes `plugin_state_paths` with this value). There is no `--plugin-state-path` flag — spec and preset travel together.                                                                                                                          |
 | `--output-dataset-dir-path` | path               | unset                                                     | Directory to create for the recorded patches. Must not already exist — `make_hdf5_dataset` writes fixed-size HDF5 datasets without `maxshape` and cannot append to existing files. After the editor is closed, patches captured via the keyboard loop (press `p` to record, `q` to quit) are rendered through the plugin and written to `train.h5` inside this directory via `synth_setter.data.vst.writers.make_hdf5_dataset` (plus `val.h5`/`test.h5`/`predict.h5` siblings when `--checkpoint-path` is set). |
 | `--checkpoint-path`         | path               | unset                                                     | Optional checkpoint path to run standalone eval on after rendering captured patches. When set, triggers the `eval_patches` pipeline (`src/synth_setter/cli/eval.py mode=predict` → `predict_vst_audio.py` → `compute_audio_metrics.py`); see [`docs/design/eval-pipeline.md`](../design/eval-pipeline.md) for the full pipeline and `_METRIC_COLUMNS` in the script for the metric series produced.                                                                                                             |
 | `--session-recording-path`  | path               | unset                                                     | Optional WAV file to render a deterministic test clip to. When set, the script renders a fixed `SESSION_RECORDING_DURATION_SECONDS` (10 s) WAV containing middle C from `NOTE_START` (2 s) to `NOTE_END` (4 s) through the loaded plugin and exits the audio thread. No live device output. Output depends only on plugin state (preset + `--pred` / `--dataset-ref` params) — same inputs always produce the same WAV. No-op when not set.                                                                     |
@@ -305,7 +305,7 @@ the top of the script.
 `plugin.parameters`. Likely causes: wrong `--param-spec-name` for the
 loaded plugin, or the preset put the plugin into a state where some
 params are hidden. Try `--param-spec-name surge_xt`; that key resolves
-to a base preset via `preset_paths` in `src/synth_setter/data/vst/__init__.py`.
+to a base preset via `plugin_state_paths` in `src/synth_setter/data/vst/__init__.py`.
 
 **Prediction tensor shape mismatch.** `--pred` requires the second
 dim of the loaded tensor to match `param_specs[--param-spec-name]` row

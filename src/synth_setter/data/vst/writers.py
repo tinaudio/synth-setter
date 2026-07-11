@@ -224,7 +224,7 @@ def _render_in_batches(
     cached_plugin: VST3Plugin | None = None
     if render_cfg.plugin_reload_cadence == "once":
         cached_plugin = load_plugin(render_cfg.plugin_path)
-        load_preset(cached_plugin, render_cfg.preset_path)
+        load_preset(cached_plugin, render_cfg.plugin_state_path)
 
     def _render_loop() -> None:
         sample_batch: list[VSTDataSample] = []
@@ -260,7 +260,7 @@ def _render_in_batches(
                 channels=render_cfg.channels,
                 min_loudness=render_cfg.min_loudness,
                 param_spec=param_spec,
-                preset_path=render_cfg.preset_path,
+                plugin_state_path=render_cfg.plugin_state_path,
                 fixed_synth_params=fixed_synth,
                 fixed_note_params=fixed_note,
                 plugin=cached_plugin,

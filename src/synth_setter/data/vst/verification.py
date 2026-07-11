@@ -236,10 +236,10 @@ def _check_runtime(root: Path, spec_name: str, report: VerificationReport) -> No
         f"""
         import json
 
-        from synth_setter.data.vst.param_spec_registry import param_specs, preset_paths
+        from synth_setter.data.vst.param_spec_registry import param_specs, plugin_state_paths
 
         spec = param_specs[{spec_name!r}]
-        assert {spec_name!r} in preset_paths, "missing preset_paths entry"
+        assert {spec_name!r} in plugin_state_paths, "missing plugin_state_paths entry"
         spec.sample()
 
         from hydra import compose, initialize_config_dir

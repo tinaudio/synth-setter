@@ -40,9 +40,10 @@ repos:
     hooks:
       - id: pyright
         name: pyright
-        entry: pyright
+        entry: uv run pyright
         language: system
         types: [python]
+        pass_filenames: false
         exclude: >-
           (?x)^(
             notebooks/|
