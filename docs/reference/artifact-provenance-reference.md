@@ -1,7 +1,7 @@
 # W&B Artifact & Provenance Reference
 
-> **Last Updated**: 2026-06-08
-> **Tracking**: #1565, #122
+> **Last Updated**: 2026-07-11
+> **Tracking**: #1565, #122, #1572
 
 Companion to [storage-provenance-spec.md](../design/storage-provenance-spec.md). The spec is authoritative for names, paths, and conventions; this reference shows the **landed code patterns** behind them — how each artifact is built, how lineage edges are recorded, and how a logged artifact is resolved back to a local checkpoint.
 
@@ -22,7 +22,7 @@ ______________________________________________________________________
 | Type           | Name pattern               | Built by                                         | R2 reference                             |
 | -------------- | -------------------------- | ------------------------------------------------ | ---------------------------------------- |
 | `dataset`      | `data-{dataset_config_id}` | `build_dataset_artifact` (`finalize_dataset.py`) | split `.h5` / shard prefix + `stats.npz` |
-| `model`        | `model-{train_config_id}`  | `build_model_artifact` (`train.py`)              | checkpoint prefix (opt-in, see §3)       |
+| `model`        | `model-{train_config_id}`  | `build_model_artifact` (`train.py`)              | best-checkpoint `model.ckpt` (see §3)    |
 | `eval-results` | `eval-{eval_config_id}`    | `build_eval_results_artifact` (`eval.py`)        | output-dir prefix                        |
 
 The `{*_config_id}` is the config filename stem, resolved via `resolve_run_config_id(cfg)` for train/eval and `spec.task_name` for datasets. The artifact name carries the config id, not the `{*_wandb_run_id}`; W&B auto-versions (`:v0`, `:v1`, …) so re-running the same config yields the next version, and the producing run — whose id is pinned via `pin_wandb_run_id` — is what W&B links the artifact to for lineage. (The builders below do **not** copy the run id into `artifact.metadata`; spec §4 reserves that, but it is not yet wired.)
@@ -53,7 +53,7 @@ ______________________________________________________________________
 | `model`        | `git_sha`                                                    |
 | `eval-results` | scalar summary metrics (`_eval_summary_metrics`) + `git_sha` |
 
-The `model` artifact carries only `git_sha` today; its checkpoint reference is opt-in via `training.upload_checkpoints_uri` (an `r2://` prefix or null). The null default logs a **lineage-only** artifact with no reference, because R2 checkpoint upload is not implemented yet ([#92](https://github.com/tinaudio/synth-setter/issues/92)).
+The `model` artifact carries only `git_sha`. At train end (rank-zero, with a `WandbLogger`) the best checkpoint uploads to a derived `r2://{r2.bucket}/checkpoints/{train_config_id}/model.ckpt` URI — overridable via `training.upload_checkpoints_uri` — and attaches to the artifact as an `s3://` reference ([#1572](https://github.com/tinaudio/synth-setter/pull/1572), closing [#92](https://github.com/tinaudio/synth-setter/issues/92)). It degrades to a **lineage-only** artifact (no reference) when no checkpoint was written (`fast_dev_run`), R2 is unreachable (local / CI), or the upload fails, so a completed run is never aborted by checkpoint persistence. The fixed `model.ckpt` basename lets the `${wandb:…}` resolver (§5) select the checkpoint unambiguously.
 
 ______________________________________________________________________
 
@@ -78,7 +78,7 @@ The data-generation, training, and evaluation edges are landed; the `[promote wo
 ```python
 for lg in loggers:
     if isinstance(lg, WandbLogger):
-        lg.experiment.log_artifact(build_model_artifact(cfg))
+        lg.experiment.log_artifact(build_model_artifact(cfg, ckpt_uri))
 ```
 
 **Consuming an input** — `use_input_artifacts` (`utils/logging_utils.py`) records each `(name, alias)` edge via `use_artifact`; it is `@rank_zero_only` so a DDP run records each edge once:
@@ -121,6 +121,7 @@ ______________________________________________________________________
 | -------------------------------- | ------------------------------------------------------------ | ------------------------------------------ |
 | Dataset artifact                 | `build_dataset_artifact` / `_log_dataset_artifact`           | `src/synth_setter/cli/finalize_dataset.py` |
 | Model artifact                   | `build_model_artifact` / `_log_model_artifact`               | `src/synth_setter/cli/train.py`            |
+| Best-checkpoint R2 upload        | `_upload_best_checkpoint` / `_derive_checkpoint_uri`         | `src/synth_setter/cli/train.py`            |
 | Eval-results artifact            | `build_eval_results_artifact` / `_log_eval_results_artifact` | `src/synth_setter/cli/eval.py`             |
 | Consumed-edge refs (training)    | `_consumed_artifact_refs`                                    | `src/synth_setter/cli/train.py`            |
 | Lineage edge recording           | `use_input_artifacts`                                        | `src/synth_setter/utils/logging_utils.py`  |
