@@ -22,11 +22,12 @@ from omegaconf import DictConfig, open_dict
 
 from synth_setter.data.vst import core, param_specs, preset_paths
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
+from synth_setter.pipeline.subprocess_stream import scaled_timeout
 from synth_setter.resources import vst_headless_wrapper
 from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
 from tests._baseline_worktree import worktree_for_ref  # noqa: F401 — pytest fixture re-export
-from tests._vst import PLUGIN_PATH, VST_AVAILABLE, VST_SUBPROCESS_TIMEOUT_SECONDS
+from tests._vst import PLUGIN_PATH, VST_AVAILABLE
 from tests.data.vst._fake_plugin import FakeVST3Plugin
 from tests.pipeline.conftest import fake_r2_remote  # noqa: F401 — pytest fixture re-export
 
@@ -48,6 +49,21 @@ _SURGE_MEL_SHAPE = (2, 128, 401)
 _SURGE_SILENCE_PEAK_THRESHOLD = 1e-4
 
 NUM_FIXTURE_SAMPLES = 5
+
+
+def _scaled_vst_subprocess_timeout(num_samples: int = NUM_FIXTURE_SAMPLES) -> float:
+    """Wall-clock budget for a fixture-building VST subprocess, scaled by sample count.
+
+    A flat ceiling silently under-budgets the day ``NUM_FIXTURE_SAMPLES`` is
+    raised; scaling on it keeps the budget honest as the fixture grows. Overhead
+    covers fixed startup (plugin load, imports); the per-sample term is loose
+    render margin.
+
+    :param num_samples: Sample count the subprocess renders or reads.
+    :returns: Timeout in seconds for the subprocess.
+    """
+    return scaled_timeout(num_samples, overhead_seconds=300.0, per_sample_seconds=60.0)
+
 
 # Probed from the env var, no network hit — AGENTS.md's `rclone lsd r2:` is for
 # interactive verification, not the skip criterion. VST presence lives in tests._vst.
@@ -151,13 +167,14 @@ def _write_smoke_stats_npz(train_h5: Path) -> None:
         str(train_h5),
         "--mask-degenerate-bins",
     ]
+    timeout = _scaled_vst_subprocess_timeout()
     try:
         result = subprocess.run(  # noqa: S603
-            stats_args, text=True, check=False, timeout=VST_SUBPROCESS_TIMEOUT_SECONDS
+            stats_args, text=True, check=False, timeout=timeout
         )
     except subprocess.TimeoutExpired:
         pytest.fail(
-            f"get_dataset_stats timed out after {VST_SUBPROCESS_TIMEOUT_SECONDS}s\n"
+            f"get_dataset_stats timed out after {timeout}s\n"
             f"command: {stats_args}\n"
             f"(child stdout/stderr printed above; rerun with `pytest -s` if captured)",
             pytrace=False,
@@ -706,16 +723,17 @@ def _render_smoke_train_subprocess(output_path: Path, param_spec_name: str) -> N
     # forever. Output flows to pytest's normal capture (visible with `-s` or on failure);
     # we lose `result.stdout/stderr` on the failure branch but keep the exit code, which
     # is what the failure branch needs to fail loud. See #695.
+    timeout = _scaled_vst_subprocess_timeout()
     try:
         result = subprocess.run(  # noqa: S603
             generate_dataset_args,
             text=True,
             check=False,
-            timeout=VST_SUBPROCESS_TIMEOUT_SECONDS,
+            timeout=timeout,
         )
     except subprocess.TimeoutExpired:
         pytest.fail(
-            f"generate_vst_dataset timed out after {VST_SUBPROCESS_TIMEOUT_SECONDS}s\n"
+            f"generate_vst_dataset timed out after {timeout}s\n"
             f"command: {generate_dataset_args}\n"
             f"(child stdout/stderr printed above; rerun with `pytest -s` if captured)",
             pytrace=False,

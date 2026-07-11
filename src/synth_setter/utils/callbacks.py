@@ -16,7 +16,7 @@ from synth_setter.models.components.transformer import (
     LearntProjection,
 )
 from synth_setter.models.ksin_flow_matching_module import KSinFlowMatchingModule
-from synth_setter.models.surge_flow_matching_module import VSTFlowMatchingModule
+from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 
 
 def _log_figure(trainer: Trainer, key: str, fig: Figure) -> None:

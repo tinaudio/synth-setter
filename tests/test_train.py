@@ -38,6 +38,7 @@ from tests.helpers.eval_fakes import (
     fake_metrics_csv,
     fake_postprocessing_subprocess,
 )
+from tests.helpers.noise_capture import NoiseCaptureCallback
 from tests.helpers.run_if import RunIf
 from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
 
@@ -284,7 +285,7 @@ def test_train_surge_xt(cfg_surge_real_train: DictConfig, experiment_name: str) 
     trainer = object_dict["trainer"]
     assert trainer.global_step >= 1, f"trainer did not advance: global_step={trainer.global_step}"
 
-    # `surge_ff_module` logs `train/loss` with `on_step=True, on_epoch=True`, which
+    # `vst_ff_module` logs `train/loss` with `on_step=True, on_epoch=True`, which
     # populates `train/loss_step` (and `train/loss_epoch` if an epoch boundary was
     # crossed) in `trainer.callback_metrics`. With `TRAINING_STEPS=1` only the
     # step-level key is guaranteed; assert whichever is present is finite.
@@ -499,6 +500,37 @@ def test_train_fast_dev_run_lance_datamodule(cfg_train_lance: DictConfig) -> Non
     # is a Lance dataset directory, not the legacy single ``.lance`` file.
     train_split = Path(object_dict["datamodule"].dataset_root) / "train.lance"
     assert train_split.is_dir()
+
+
+def test_train_same_seed_reproduces_noise_stream(cfg_train_lance: DictConfig) -> None:
+    """Two ``train(cfg)`` runs under one ``cfg.seed`` consume identical batch noise.
+
+    Pins the operator-facing seeding contract after the noise draw moved off
+    the global RNG onto a per-dataset generator: ``seed_everything(cfg.seed,
+    workers=True)`` must still govern the real-read noise path. Runs
+    ``num_workers=0`` because forking workers over Lance deadlocks on the
+    parent's tokio threadpool (worker-safe opening is #1740 Phase 2 scope);
+    the forked-worker re-seed is covered over HDF5 by
+    ``tests/data/test_surge_datamodule.py::TestNoiseGeneratorSeeding``.
+
+    :param cfg_train_lance: Composed ``datamodule=surge_lance`` training config.
+    """
+    HydraConfig().set_config(cfg_train_lance)
+    with open_dict(cfg_train_lance):
+        cfg_train_lance.seed = 1234
+        cfg_train_lance.callbacks.noise_capture = {
+            "_target_": "tests.helpers.noise_capture.NoiseCaptureCallback"
+        }
+    runs: list[list[torch.Tensor]] = []
+    for _ in range(2):
+        NoiseCaptureCallback.captured.clear()
+        train(cfg_train_lance)
+        assert NoiseCaptureCallback.captured, "callback captured no training batches"
+        runs.append(list(NoiseCaptureCallback.captured))
+    assert len(runs[0]) == len(runs[1])
+    for first, second in zip(runs[0], runs[1], strict=True):
+        # atol=rtol=0: the same cfg.seed must reproduce the noise draw bit-for-bit.
+        torch.testing.assert_close(first, second, atol=0.0, rtol=0.0)
 
 
 @pytest.mark.fake_vst
