@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783723469752,
+  "lastUpdate": 1783744454832,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -7890,6 +7890,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.04983639717102051,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "46558b28fd2941450bcb39d5d684cbfb3f48efaa",
+          "message": "feat(ci-automation): add train and eval GitHub Actions workflows (#1594)\n\n* feat(ci-automation): add train and eval GitHub Actions workflows\n\nAdd workflow_dispatch train.yml and eval.yml that run synth-setter-train /\nsynth-setter-eval inside the dev-snapshot image on gpu-x64, mirroring the\nDocker-on-GPU pattern in test-gpu.yml. Both forward R2 + W&B credentials and\nexport GITHUB_SHA into the run environment, satisfying the storage-provenance\nspec §8 workflow table and the §12 github_sha invariant. Fill in the spec's\npreviously-TBD Training/Evaluation rows with the real files, runner, and inputs.\n\nRefs #1467, #122, #92\nCloses #1567\n\n* feat(ci-automation): dispatch train and eval workflows via SkyPilot launch configs\n\nReview-driven redesign of #1594: instead of running synth-setter-train /\nsynth-setter-eval in-place on gpu-x64, the workflows now submit SkyPilot\nmanaged jobs, and their only input is the path to a checked-in launch\nconfig.\n\n- Add synth-setter-skypilot-launch (skypilot_launch.main): loads a launch\n  config YAML into the strict SkypilotLaunchConfig and calls\n  dispatch_via_skypilot. Workflows invoke it via python -m so the mounted\n  fresh checkout supplies the code regardless of image-baked entry points.\n- Add configs/launch/{train,eval}-runpod.yaml baking the compute template,\n  worker image tag, and worker cmd (eval sources ckpt_path through the\n  wandb_checkpoint overlay and the headless-VST wrapper).\n- Inject IMAGE_TAG into every rank's env at the launcher so\n  log_wandb_provenance records the real tag on all SkyPilot workers\n  (previously \"unknown\"); WORKER_GIT_REF pins the worker checkout for\n  github_sha provenance.\n- Rewrite train.yml / eval.yml as thin ubuntu-latest dispatchers mirroring\n  generate-dataset-shards.yaml's runpod row; update spec §8/§9 rows.\n\n* chore(deps): sync uv.lock to the 8.33.0 version bump\n\nThe 8.33.0 release commit on main bumped pyproject.toml without\nregenerating the lock, so `uv lock --check` fails on any branch that\nmerges it. Records the new project version in uv.lock; no dependency\nchanges.\n\n* fix(ci-automation): surface YAML parse errors as clean launcher CLI errors\n\nCopilot review follow-ups on #1594: malformed YAML in a launch config now\nmaps to a click error instead of a raw traceback, and the checked-in\nlaunch-config test class docstring no longer overclaims dispatch coverage.\n\n* Merge branch 'main' into feat/train-eval-workflows\n\nResolve the uv.lock conflict by resyncing against the merged\npyproject.toml (main's v8.42.0 release bump + this branch's\nsynth-setter-skypilot-launch console script).\n\n* internal-feat(ci-automation): add smoke launch configs for dispatch verification\n\n10-step train + 2-batch eval variants of the runpod launch configs, used\nto exercise the workflow -> launcher -> SkyPilot worker path end to end\n(PR #1594 Level 1 verification) at minimal GPU cost. Covered by the\nexisting checked-in launch-config sweep in test_skypilot_launch.py.",
+          "timestamp": "2026-07-10T21:02:03-07:00",
+          "tree_id": "4dfedd304ab5d6d0c93cd94c6cbe48b0ebe55a1c",
+          "url": "https://github.com/tinaudio/synth-setter/commit/46558b28fd2941450bcb39d5d684cbfb3f48efaa"
+        },
+        "date": 1783744453865,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.782992124557495,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.393819041450042,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.030228229239583015,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.031069040298461914,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.4305386543273926,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 13.769266081416674,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.542343616485596,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.7168854989577085,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.03513167425990105,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.04026669263839722,
             "unit": "1-cos"
           },
           {
