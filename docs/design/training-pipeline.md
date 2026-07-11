@@ -322,6 +322,9 @@ python -m synth_setter.cli.train experiment=surge/ffn_4 \
   datamodule=surge_lance_sharded datamodule.dataset_root=/mnt/lance-dataset
 ```
 
+`rclone mount` is exempt from the repo-wide `--checksum` rule (that rule governs
+copy/sync transfers; `--checksum` has no meaning for a live-read VFS mount).
+
 ### 6.2 Checkpoint Durability via R2
 
 `log_model: False` keeps checkpoint files out of W&B (5 GB total storage budget). At train end, on global-zero, `train.py` uploads the best checkpoint to R2 (`_upload_best_checkpoint`) at the auto-derived `r2://{r2.bucket}/checkpoints/{config_id}/model.ckpt` (`_derive_checkpoint_uri`), then the `model-{config_id}` artifact references that object as an `s3://` URI (`checksum=False`) — so W&B stores only a ~0-byte reference. `training.upload_checkpoints_uri` optionally overrides the target (null = auto-derive). Intermediate checkpoints are not synced.

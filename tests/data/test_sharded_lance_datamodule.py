@@ -169,6 +169,17 @@ class TestShardedLanceFile:
             sharded_file["param_array"][idx], _global_columns()["param_array"][idx]
         )
 
+    def test_duplicate_indices_in_one_read_are_each_returned(
+        self, sharded_file: ShardedLanceFile
+    ) -> None:
+        """Repeated indices (same and different shards) each materialize their row.
+
+        :param sharded_file: Fixture-provided 3-shard handle.
+        """
+        params = _global_columns()["param_array"]
+        requested = [3, 3, 7, 3]
+        np.testing.assert_array_equal(sharded_file["param_array"][requested], params[requested])
+
     def test_reads_return_writable_arrays(self, sharded_file: ShardedLanceFile) -> None:
         """Both read paths return writable arrays safe for ``torch.from_numpy``.
 
@@ -176,6 +187,14 @@ class TestShardedLanceFile:
         """
         assert sharded_file["mel_spec"][1:3].flags.writeable
         assert sharded_file["mel_spec"][[0, 5, 10]].flags.writeable
+
+    def test_negative_index_raises_index_error(self, sharded_file: ShardedLanceFile) -> None:
+        """A negative row index hits the lower-bound guard rather than wrapping.
+
+        :param sharded_file: Fixture-provided 3-shard handle.
+        """
+        with pytest.raises(IndexError, match="out of range"):
+            _ = sharded_file["param_array"][[-1, 0]]
 
     def test_negative_step_slice_raises_value_error(self, sharded_file: ShardedLanceFile) -> None:
         """A negative-step slice is rejected — the same contract h5py enforces.
