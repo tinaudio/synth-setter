@@ -86,9 +86,9 @@ def _worker_writes_fragment(
 ) -> tuple[lance.fragment.FragmentMetadata, str]:
     """Simulate a worker: write a fragment under ``split_uri`` and serialize it.
 
-    The returned string is exactly the ``fragment.json`` sidecar payload — a
-    ``json.dumps`` of Lance's ``FragmentMetadata.to_json()`` (which returns a
-    dict, so the sidecar must dump it; ``from_json`` re-parses the string).
+    The returned string is the Lance fragment-metadata JSON payload (the value
+    that will live in the sidecar's ``fragment_json`` field): a ``json.dumps`` of
+    Lance's ``FragmentMetadata.to_json()`` dict, which ``from_json`` re-parses.
 
     :param split_uri: Destination split dataset dir (``{split}.lance``).
     :param schema: Arrow schema shared by every fragment.
