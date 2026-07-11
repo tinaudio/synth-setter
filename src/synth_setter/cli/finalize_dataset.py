@@ -46,6 +46,27 @@ from synth_setter.workspace import operator_workspace
 operator_workspace()
 
 
+def _train_shard_range(spec: DatasetSpec) -> tuple[int, int]:
+    """Return the train split's shard range, rejecting an empty train split.
+
+    Shared guard for every finalize branch: stats cannot be computed without
+    at least one train shard, and failing here beats each branch's own
+    low-signal downstream error.
+
+    :param spec: Validated dataset spec.
+    :returns: ``(lo, hi)`` half-open range from ``spec.split_shard_ranges["train"]``.
+    :raises ValueError: The train split is empty (``lo >= hi``).
+    """
+    train_lo, train_hi = spec.split_shard_ranges["train"]
+    if train_lo >= train_hi:
+        raise ValueError(
+            f"train split is empty (split_shard_ranges['train']="
+            f"{spec.split_shard_ranges['train']!r}); cannot compute stats "
+            f"without at least one train shard."
+        )
+    return train_lo, train_hi
+
+
 def _download_train_shards_one_at_a_time(spec: DatasetSpec, work_dir: Path) -> Iterator[Path]:
     """Yield one downloaded train shard at a time, unlinking after the consumer is done.
 
@@ -86,13 +107,7 @@ def finalize_wds(spec: DatasetSpec, work_dir: Path) -> None:
         (``spec.split_shard_ranges["train"]`` has ``lo >= hi``); stats
         cannot be computed without at least one train shard.
     """
-    train_lo, train_hi = spec.split_shard_ranges["train"]
-    if train_lo >= train_hi:
-        raise ValueError(
-            f"train split is empty (split_shard_ranges['train']="
-            f"{spec.split_shard_ranges['train']!r}); cannot compute stats "
-            f"without at least one train shard."
-        )
+    train_lo, train_hi = _train_shard_range(spec)
     mean, std = stream_stats_wds(
         _download_train_shards_one_at_a_time(spec, work_dir),
         mask_degenerate=spec.mask_degenerate_bins,
@@ -134,13 +149,7 @@ def finalize_hdf5(spec: DatasetSpec, work_dir: Path) -> None:
     :raises FileNotFoundError: ``get_stats_hdf5`` returned without writing
         ``work_dir / "stats.npz"``, breaking the upload-source contract.
     """
-    train_lo, train_hi = spec.split_shard_ranges["train"]
-    if train_lo >= train_hi:
-        raise ValueError(
-            f"train split is empty (split_shard_ranges['train']="
-            f"{spec.split_shard_ranges['train']!r}); cannot compute stats "
-            f"without at least one train shard."
-        )
+    _train_shard_range(spec)
     for shard in spec.shards:
         r2_io.download_to_path(spec.r2.shard_uri(shard), work_dir / shard.filename)
     write_spec_to_path(spec, work_dir / INPUT_SPEC_FILENAME)
@@ -180,13 +189,7 @@ def finalize_lance(spec: DatasetSpec, work_dir: Path) -> None:
     """
     from synth_setter.pipeline.data.stats import stream_stats_lance
 
-    train_lo, train_hi = spec.split_shard_ranges["train"]
-    if train_lo >= train_hi:
-        raise ValueError(
-            f"train split is empty (split_shard_ranges['train']="
-            f"{spec.split_shard_ranges['train']!r}); cannot compute stats "
-            f"without at least one train shard."
-        )
+    train_lo, train_hi = _train_shard_range(spec)
     storage_options = r2_io.r2_storage_options()
     train_uris = [
         r2_io.to_s3_uri(spec.r2.shard_uri(shard)) for shard in spec.shards[train_lo:train_hi]

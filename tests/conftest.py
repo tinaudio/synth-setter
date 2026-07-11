@@ -1561,6 +1561,18 @@ def _write_lance_smoke_split(path: Path, num_rows: int, *, seed: int) -> None:
     )
 
 
+def _write_lance_smoke_stats(dataset_root: Path) -> None:
+    """Write identity mel stats (mean 0, std 1) beside the smoke Lance splits.
+
+    :param dataset_root: Directory receiving ``stats.npz``.
+    """
+    np.savez(
+        dataset_root / "stats.npz",
+        mean=np.zeros(_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
+        std=np.ones(_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
+    )
+
+
 def _compose_lance_train_cfg(
     tmp_path: Path, dataset_root: Path, datamodule_group: str
 ) -> DictConfig:
@@ -1620,11 +1632,7 @@ def cfg_train_lance(tmp_path: Path) -> Iterator[DictConfig]:
     dataset_root.mkdir()
     for seed, split in enumerate(("train", "val", "test")):
         _write_lance_smoke_split(dataset_root / f"{split}.lance", _LANCE_SMOKE_ROWS, seed=seed)
-    np.savez(
-        dataset_root / "stats.npz",
-        mean=np.zeros(_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
-        std=np.ones(_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
-    )
+    _write_lance_smoke_stats(dataset_root)
 
     yield _compose_lance_train_cfg(tmp_path, dataset_root, "surge_lance")
 
@@ -1655,11 +1663,7 @@ def cfg_train_lance_sharded(tmp_path: Path) -> Iterator[DictConfig]:
             dataset_root / shard.filename, spec.render.samples_per_shard, seed=seed
         )
     write_spec_to_path(spec, dataset_root / "input_spec.json")
-    np.savez(
-        dataset_root / "stats.npz",
-        mean=np.zeros(_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
-        std=np.ones(_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
-    )
+    _write_lance_smoke_stats(dataset_root)
 
     yield _compose_lance_train_cfg(tmp_path, dataset_root, "surge_lance_sharded")
 

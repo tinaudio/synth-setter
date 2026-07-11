@@ -1,16 +1,21 @@
 """Lance-backed dataloading for VST datasets.
 
-``LanceShardFile`` adapts a Lance dataset directory — the format the data
-pipeline's writer and finalize steps emit via
+``LanceShardFile`` adapts one Lance dataset directory — the format the data
+pipeline's writer emits via
 :func:`synth_setter.pipeline.data.lance_shard.write_lance_dataset` — to the
 minimal h5py-``File``-like read surface ``VSTDataset`` consumes, so the Lance
 subclasses inherit every batching / normalization / OT behavior unchanged.
+``ShardedLanceFile`` layers global row indexing over an ordered list of such
+directories, letting ``ShardedLanceVSTDataModule`` train straight off a
+dataset run directory (``shard-*.lance`` + ``input_spec.json`` +
+``stats.npz``) without any merged per-split datasets.
 """
 
 from __future__ import annotations
 
 import os
 from collections.abc import Sequence
+from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, cast
 
@@ -19,11 +24,25 @@ import numpy as np
 import pyarrow as pa
 
 from synth_setter.data.surge_datamodule import ShardFile, VSTDataModule, VSTDataset
-from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME
-from synth_setter.pipeline.schemas.spec import DatasetSpec
+from synth_setter.pipeline.spec_io import load_spec_from_root
 
 if TYPE_CHECKING:
-    from synth_setter.pipeline.schemas.spec import Split
+    from synth_setter.pipeline.schemas.spec import DatasetSpec, Split
+
+
+@lru_cache(maxsize=8)
+def _cached_run_spec(run_root: str) -> DatasetSpec:
+    """Load and cache the run directory's ``DatasetSpec``.
+
+    ``setup()`` opens four splits against the same run root, and each spec
+    validation is O(num_shards) (the shard list is materialized by a
+    whole-model validator) — caching parses the immutable per-run spec once
+    per process instead of once per split.
+
+    :param run_root: Run directory (or URI) holding ``input_spec.json``.
+    :returns: The parsed spec.
+    """
+    return load_spec_from_root(run_root)
 
 
 class LanceColumn:
@@ -225,10 +244,11 @@ class ShardedLanceColumn:
         """
         if indices.size == 0:
             raise ValueError("empty selection: no row indices given")
-        if (indices < 0).any() or (indices >= self._file.num_rows).any():
+        out_of_range = (indices < 0) | (indices >= self._file.num_rows)
+        if out_of_range.any():
             raise IndexError(
                 f"row indices out of range [0, {self._file.num_rows}): "
-                f"{indices[(indices < 0) | (indices >= self._file.num_rows)][:5].tolist()}"
+                f"{indices[out_of_range][:5].tolist()}"
             )
         rows = self._file.rows_per_shard
         shard_ids = indices // rows
@@ -277,7 +297,7 @@ class ShardedLanceFile:
         self._closed = False
         # All shards share the writer schema, so shard 0 answers column lookups
         # (and gets its row count verified) up front.
-        self._first = self.shard(0)
+        self.shard(0)
 
     def shard(self, index: int) -> LanceShardFile:
         """Return the open handle for shard ``index``, opening it on first use.
@@ -366,7 +386,7 @@ class ShardedLanceVSTDataset(VSTDataset):
     dataset directory is opened as-is (the ``predict_file`` escape hatch).
     """
 
-    def _open(self, dataset_file: str | Path) -> ShardFile:
+    def _open(self, dataset_file: str | Path) -> ShardFile:  # noqa: DOC502 — FileNotFoundError propagates from load_spec_from_root
         """Resolve and open the split's shards (or a literal dataset directory).
 
         :param dataset_file: ``<run_root>/<split>.lance`` virtual path, or a
@@ -380,13 +400,7 @@ class ShardedLanceVSTDataset(VSTDataset):
         path = Path(dataset_file)
         if path.is_dir():
             return LanceShardFile(path)
-        spec_path = path.parent / INPUT_SPEC_FILENAME
-        if not spec_path.is_file():
-            raise FileNotFoundError(
-                f"no Lance dataset at {path} and no sibling {INPUT_SPEC_FILENAME} "
-                f"to resolve the split's shards from"
-            )
-        spec = DatasetSpec.model_validate_json(spec_path.read_text())
+        spec = _cached_run_spec(str(path.parent))
         split = path.name.removesuffix(".lance")
         if split not in spec.split_shard_ranges:
             raise ValueError(

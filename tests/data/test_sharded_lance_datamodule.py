@@ -226,9 +226,8 @@ class TestShardedLanceFile:
     def test_shard_with_wrong_row_count_raises_on_first_touch(self, tmp_path: Path) -> None:
         """A shard whose actual rows differ from the declared geometry fails loudly.
 
-        Row geometry is spec-driven (workers validate it before upload); a
-        mismatched shard would silently misalign every global index, so the
-        lazy open verifies the count.
+        Row geometry is spec-driven (workers validate it before upload); a mismatched shard would
+        silently misalign every global index, so the lazy open verifies the count.
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
         """
@@ -258,19 +257,12 @@ def _run_columns(num_rows: int, mel_fill: float | None = None) -> dict[str, np.n
         the normalization test to make ``(mel - mean) / std`` predictable.
     :return: Mapping of column name to ``(num_rows, ...)`` array.
     """
-    mel = np.arange(num_rows * np.prod(_MEL_SHAPE), dtype=np.float32).reshape(
-        num_rows, *_MEL_SHAPE
-    )
+    columns = _global_columns(num_rows)
     if mel_fill is not None:
-        mel = np.full_like(mel, mel_fill)
-    return {
-        # float16 mirrors the pipeline's on-disk audio dtype.
-        "audio": np.ones((num_rows, *_AUDIO_SHAPE), dtype=np.float16),
-        "mel_spec": mel,
-        "param_array": np.arange(num_rows * _NUM_PARAMS, dtype=np.float32).reshape(
-            num_rows, _NUM_PARAMS
-        ),
-    }
+        columns["mel_spec"] = np.full_like(columns["mel_spec"], mel_fill)
+    # float16 mirrors the pipeline's on-disk audio dtype.
+    columns["audio"] = np.ones((num_rows, *_AUDIO_SHAPE), dtype=np.float16)
+    return columns
 
 
 def _write_run_root(
@@ -475,9 +467,7 @@ class TestShardedLanceVSTDataModule:
         finally:
             module.teardown()
 
-    def test_train_dataloader_yields_batches_across_shard_boundaries(
-        self, run_root: Path
-    ) -> None:
+    def test_train_dataloader_yields_batches_across_shard_boundaries(self, run_root: Path) -> None:
         """End-to-end smoke: the train loader iterates real sharded Lance reads.
 
         :param run_root: Fixture-provided run directory.
