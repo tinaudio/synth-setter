@@ -150,10 +150,14 @@ def test_same_render_config_yields_identical_params_and_seed_metadata(
     make_hdf5_dataset(hdf5_file=second, render_cfg=cfg)
 
     assert np.array_equal(_read_param_array(first), _read_param_array(second))
-    assert _read_seed_metadata(first) == _read_seed_metadata(second) == {
-        "base_seed": _BASE_SEED,
-        "attempts_per_sample": 3,
-    }
+    assert (
+        _read_seed_metadata(first)
+        == _read_seed_metadata(second)
+        == {
+            "base_seed": _BASE_SEED,
+            "attempts_per_sample": 3,
+        }
+    )
 
 
 @pytest.mark.fake_vst

@@ -10,8 +10,10 @@ defaults:
   - extras: default
   - hydra: default
   - callbacks: none
-  - experiment: null
+  # `render` before `experiment` (matching train.yaml/dataset.yaml): Hydra only
+  # lets an experiment override groups declared ahead of it.
   - render: null
+  - experiment: null
 
 task_name: "eval"
 

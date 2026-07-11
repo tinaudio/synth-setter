@@ -97,7 +97,8 @@ synth-setter/
 │   ├── cli/                #   @hydra.main / click entrypoints (published as synth-setter-* console scripts)
 │   │   ├── train.py        #     Training entrypoint
 │   │   ├── eval.py         #     Evaluation entrypoint
-│   │   └── generate_dataset.py  # Dataset-generation entrypoint
+│   │   ├── generate_dataset.py  # Dataset-generation entrypoint
+│   │   └── ...
 │   ├── metrics.py          #   Metric definitions
 │   ├── data/               #   DataModules (Surge, K-Sin, K-Osc, etc.)
 │   ├── models/             #   LightningModules (flow matching, FF, FlowVAE)
