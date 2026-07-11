@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "synth-setter"
-version = "8.34.0"
+version = "8.44.0"
 description = "Studying the effect of permutation symmetry on audio synthesiser parameter inference."
 authors = [{name = "Khaled Tinubu"}, {name = "tinaudio"}]
 readme = "README.md"
@@ -58,9 +58,14 @@ synth-setter-train = "synth_setter.cli.train:main"
 synth-setter-eval = "synth_setter.cli.eval:main"
 synth-setter-generate-dataset = "synth_setter.cli.generate_dataset:main"
 synth-setter-generate-dataset-from-hydra = "synth_setter.cli.generate_dataset:from_hydra"
+synth-setter-generate-dataset-from-spec-uri = "synth_setter.cli.generate_dataset_from_spec_uri:main"
 synth-setter-finalize-dataset = "synth_setter.cli.finalize_dataset:main"
+synth-setter-add-embeddings = "synth_setter.pipeline.data.add_embeddings:main"
+synth-setter-add-mp3-audio = "synth_setter.pipeline.data.add_mp3_audio:main"
 synth-setter-introspect-plugin = "synth_setter.cli.introspect_plugin:main"
+synth-setter-predict-capture = "synth_setter.cli.predict_capture:main"
 synth-setter-spec-uri = "synth_setter.pipeline.ci.spec_uri:main"
+synth-setter-skypilot-launch = "synth_setter.pipeline.skypilot_launch:main"
 
 
 
@@ -108,6 +113,11 @@ synth-setter-spec-uri = "synth_setter.pipeline.ci.spec_uri:main"
 
 
 
+
+
+
+
+
 [dependency-groups]
 docs = [
   "mkdocs",
@@ -124,6 +134,11 @@ torch = [
   "torchaudio>=2.0.0",
   "lightning>=2.6.0",
   "torchmetrics>=0.11.4",
+  # Audio-embedding encoders for the add_embeddings CLI (lazy-imported). CLAP
+  # rides on transformers (>=5: ClapProcessor takes `audio=`, not `audios=`);
+  # music2latent ships its own torch-backed encoder.
+  "transformers>=5.0.0",
+  "music2latent>=0.1.8",
 ]
 config = [
   "hydra-core==1.3.2",
@@ -282,6 +297,7 @@ namespaces = true
   "configs/**/*.yaml",
   "configs/**/*.yml",
   "scripts/*.sh",
+  "data/vst/*_clap_map.json",
 ]
 
 

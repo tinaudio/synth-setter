@@ -42,9 +42,6 @@ Architecture: [docs/architecture.md](docs/architecture.md).
   from R2, worker reports). Dataclasses for internal typed containers.
 - `structlog` in pipeline code; stdlib `logging` elsewhere.
 - All `rclone` operations use `--checksum`.
-- Add an import in the same edit as its first use, or add imports last —
-  ruff's `F401` autofix deletes an import that is momentarily unused if
-  `make format` runs before the using code lands, costing a re-add cycle.
 - Run `make format` before committing. Pre-commit (ruff, ruff-format,
   pydoclint, prettier, mdformat, gitlint) is authoritative; suppressing
   rules to make CI green is forbidden — see
@@ -180,10 +177,10 @@ unintended shell expansion. A `PreToolUse` hook
   `warn` / `off`).
 - **Always reply inline** on each open PR review comment (humans + Copilot),
   with a fix-commit SHA or justification. Use `/pr-review-resolver`.
-- **Advisory rewakes carry an origin-HEAD stamp.** The `pr-review-resolver`
-  and `doc-drift` PostToolUse hooks run their headless agents in detached
-  worktrees and re-enter the session via `asyncRewake` with a line like
-  `pr-review-resolver report for PR #N (branch X, origin HEAD <sha7>) at <path>`. Before acting on one, compare `<sha7>` to the first 7
+- **Advisory rewakes carry an origin-HEAD stamp.** The `doc-drift`
+  PostToolUse hook runs its headless agent in a detached worktree and
+  re-enters the session via `asyncRewake` with a line like
+  `doc-drift report for PR #N (branch X, origin HEAD <sha7>) at <path>`. Before acting on one, compare `<sha7>` to the first 7
   characters of `git rev-parse HEAD` (the advisory is the 7-char prefix).
   If they differ the advisory crossed sessions (it was queued by a prior
   agent's push/PR-create that finished after that session ended) — read

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import NewType
 
 from synth_setter.run_id import make_wandb_run_id
@@ -19,7 +19,7 @@ def _utc_now() -> datetime:
 
     :returns: A timezone-aware ``datetime`` in UTC.
     """
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def make_dataset_wandb_run_id(

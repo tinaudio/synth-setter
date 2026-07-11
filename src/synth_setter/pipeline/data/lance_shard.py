@@ -1,19 +1,27 @@
-"""Lance single-file shard helpers shared by writer, validator, and finalize."""
+"""Lance dataset-shard helpers shared by writer, validator, and finalize."""
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from pathlib import Path
 
+import lance
 import numpy as np
 import pyarrow as pa
-from lance.file import LanceFileReader, LanceFileWriter
+from lance.fragment import LanceFragment
 from pydantic import ValidationError
 
 from synth_setter.data.vst.shapes import DATASET_FIELD_DTYPES, DATASET_FIELD_NAMES
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 
 SHARD_METADATA_SCHEMA_KEY = b"synth_setter.shard_metadata"
+
+# Pin the Lance on-disk format instead of floating with the pylance default;
+# "2.2" leads that default and needs a reader new enough to open it (#1714).
+LANCE_DATA_STORAGE_VERSION = "2.2"
+# Refs https://github.com/tinaudio/synth-setter/issues/1775: keep one data file
+# below S3's 10k multipart-part ceiling even at 5 MiB parts.
+LANCE_MAX_BYTES_PER_FILE = 32 * 1024**3
 
 
 def lance_schema(
@@ -27,6 +35,8 @@ def lance_schema(
     :returns: Arrow schema with fixed-shape tensor columns and shard metadata.
     """
     fields = []
+    # DuckDB scans reserve STANDARD_VECTOR_SIZE (2048 rows) x flattened width for every
+    # fixed-shape-tensor column; audio and mel_spec can OOM SmooSense's 3 GB memory_limit (#1704).
     for field in DATASET_FIELD_NAMES:
         dtype = DATASET_FIELD_DTYPES[field]
         tensor_type = pa.fixed_shape_tensor(
@@ -68,7 +78,7 @@ def record_batch_from_arrays(
 
     :param arrays: Mapping with one ``(N, *inner)`` array per dataset field.
     :param schema: Schema returned by :func:`lance_schema`.
-    :returns: Arrow record batch ready for ``LanceFileWriter.write_batch``.
+    :returns: Arrow record batch for :func:`write_lance_dataset` / :func:`lance_fragment`.
     """
     columns = []
     for field in DATASET_FIELD_NAMES:
@@ -80,21 +90,83 @@ def record_batch_from_arrays(
     return pa.record_batch(columns, schema=schema)
 
 
-def write_lance_file(
-    path: Path | str, schema: pa.Schema, batches: Iterable[pa.RecordBatch]
+def write_lance_dataset(
+    uri: Path | str,
+    schema: pa.Schema,
+    batches: Iterable[pa.RecordBatch],
+    *,
+    storage_options: dict[str, str] | None = None,
 ) -> None:
-    """Write a single Lance file from pre-shaped Arrow record batches.
+    """Write a Lance dataset from a pull source of pre-shaped record batches.
 
-    :param path: Destination ``.lance`` file.
-    :param schema: Arrow schema for every batch.
-    :param batches: Record batches to append in row order.
+    Overwrites any dataset at ``uri`` (shards are immutable, never appended); the
+    push-based worker loop uses :func:`lance_fragment` + :func:`commit_lance_dataset`.
+
+    :param uri: Destination dataset directory (local path or ``s3://`` URI).
+    :param schema: Arrow schema shared by every batch.
+    :param batches: Record batches written in row order.
+    :param storage_options: Object-store config for a cloud ``uri`` (see
+        :func:`synth_setter.pipeline.r2_io.r2_storage_options`); ``None`` local.
     """
-    writer = LanceFileWriter(str(path), schema)
-    try:
-        for batch in batches:
-            writer.write_batch(batch)
-    finally:
-        writer.close()
+    lance.write_dataset(
+        iter(batches),
+        str(uri),
+        schema=schema,
+        mode="overwrite",
+        max_bytes_per_file=LANCE_MAX_BYTES_PER_FILE,
+        data_storage_version=LANCE_DATA_STORAGE_VERSION,
+        storage_options=storage_options,
+    )
+
+
+def lance_fragment(
+    uri: Path | str,
+    schema: pa.Schema,
+    batch: pa.RecordBatch,
+    fragment_id: int,
+    *,
+    storage_options: dict[str, str] | None = None,
+) -> lance.fragment.FragmentMetadata:
+    """Write one record batch as a Lance fragment under ``uri`` (push source).
+
+    Writes the data file immediately and returns its metadata; collect the results
+    for :func:`commit_lance_dataset`. Streams batches without buffering a shard.
+
+    :param uri: Destination dataset directory (local path or ``s3://`` URI).
+    :param schema: Arrow schema shared by every fragment.
+    :param batch: One record batch to persist as a fragment.
+    :param fragment_id: Zero-based fragment index, contiguous within the dataset.
+    :param storage_options: Object-store config for a cloud ``uri`` (see
+        :func:`synth_setter.pipeline.r2_io.r2_storage_options`); ``None`` local.
+    :returns: Fragment metadata for the commit.
+    """
+    return LanceFragment.create(
+        str(uri),
+        batch,
+        fragment_id=fragment_id,
+        schema=schema,
+        data_storage_version=LANCE_DATA_STORAGE_VERSION,
+        storage_options=storage_options,
+    )
+
+
+def commit_lance_dataset(
+    uri: Path | str,
+    schema: pa.Schema,
+    fragments: Sequence[lance.fragment.FragmentMetadata],
+    *,
+    storage_options: dict[str, str] | None = None,
+) -> None:
+    """Commit fragments from :func:`lance_fragment` as a fresh Lance dataset.
+
+    :param uri: Destination dataset directory (local path or ``s3://`` URI).
+    :param schema: Arrow schema the dataset is created with.
+    :param fragments: Fragment metadata from :func:`lance_fragment`, in row order.
+    :param storage_options: Object-store config for a cloud ``uri`` (see
+        :func:`synth_setter.pipeline.r2_io.r2_storage_options`); ``None`` local.
+    """
+    operation = lance.LanceOperation.Overwrite(schema, list(fragments))
+    lance.LanceDataset.commit(str(uri), operation, storage_options=storage_options)
 
 
 def read_shard_metadata(schema: pa.Schema) -> ShardMetadata:
@@ -113,14 +185,18 @@ def read_shard_metadata(schema: pa.Schema) -> ShardMetadata:
         raise ValueError(f"invalid ShardMetadata: {exc}") from exc
 
 
-def iter_lance_column_rows(path: Path, column: str) -> Iterator[np.ndarray]:
-    """Yield rows from one projected Lance tensor column.
+def iter_lance_column_rows(
+    uri: Path | str, column: str, *, storage_options: dict[str, str] | None = None
+) -> Iterator[np.ndarray]:
+    """Yield rows from one projected Lance tensor column (sequential scan).
 
-    :param path: Local ``.lance`` shard path.
-    :param column: Column to project from the Lance file.
+    :param uri: Shard dataset directory (local path or ``s3://`` URI).
+    :param column: Column to project from the dataset.
+    :param storage_options: Object-store config for a cloud ``uri`` (see
+        :func:`synth_setter.pipeline.r2_io.r2_storage_options`); ``None`` local.
     :yields: One ``(*inner_shape,)`` read-only view over Arrow's buffer — copy before mutating.
     :ytype: np.ndarray
     """
-    reader = LanceFileReader(str(path), columns=[column])
-    for batch in reader.read_all().to_batches():
+    dataset = lance.dataset(str(uri), storage_options=storage_options)
+    for batch in dataset.to_batches(columns=[column]):
         yield from batch.column(0).to_numpy_ndarray()

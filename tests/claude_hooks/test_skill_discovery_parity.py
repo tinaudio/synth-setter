@@ -1,7 +1,7 @@
 """Parity: every shipped skill resolves through both the Claude and Codex discovery globs.
 
-`agent/hooks/_lib.sh`'s ``has_skill`` is the single discovery point shared by the headless hooks
-(`pr-review-resolver`, `doc-drift`). #1558 taught it the Codex plugin-manifest layout alongside the
+`agent/hooks/_lib.sh`'s ``has_skill`` is the single discovery point used by the headless
+`doc-drift` hook. #1558 taught it the Codex plugin-manifest layout alongside the
 Claude one; this test pins that the two stay symmetric — for each ``agent/skills/<name>``, a skill
 installed only via the Claude marketplace glob and one installed only via the Codex plugin-manifest
 glob are both found. The repo-relative ``agent/skills/`` fallback is deliberately sidestepped by

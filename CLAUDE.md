@@ -29,7 +29,6 @@ Never run `make docker-*` or RunPod commands without asking — they spend money
 - Pydantic `BaseModel(strict=True)` at trust boundaries (config parsing, JSON from R2, worker reports); dataclasses for internal typed containers.
 - `structlog` in pipeline code; stdlib `logging` elsewhere.
 - All `rclone` operations use `--checksum`.
-- Add an import in the same edit as its first use, or add imports last — ruff's `F401` autofix deletes an import that is momentarily unused if `make format` runs before the using code lands, costing a re-add cycle.
 
 </important>
 
@@ -89,7 +88,7 @@ Grep ALL file types, not just `.py` — include `.yaml`/`.yml`, `.md`, `.json`, 
 - **Pre-PR gate:** run `/repo-review-full-no-comments` and address every BLOCK/WARN. A `PreToolUse` hook (`agent/hooks/pre-pr-review-gate.sh`) blocks `gh pr create` until the command carries `REVIEW_FULL=<path>` pointing at the rendered report (`.agent-reviews/repo-review-full-no-comments.<sha>.md`) — recommended as a trailing comment so other gh-pr-create hooks still fire: `gh pr create … # REVIEW_FULL=.agent-reviews/repo-review-full-no-comments.<sha>.md`. Pass the path bare (no quotes). The encoded SHA must be an ancestor of HEAD within `REVIEW_MAX_LAG` (default 2) first-parent commits. The gate also blocks while the sentinel still lists `[comment-hygiene:warn|block]` findings (`REVIEW_COMMENT_GATE`: `block` default / `warn` / `off`) — run `/fix-review-comments` to apply the rewrites, commit, and re-review in one pass — or any `[<skill>:block]` finding (`REVIEW_BLOCK_GATE`: `block` default / `warn` / `off`), which you resolve by fixing the underlying issue and re-running `/repo-review-full-no-comments`. It also blocks while the PR's inline `--title` is not a conventional commit (`PR_TITLE_GATE`: `block` default / `warn` / `off`) — best-effort and fails open on any uvx/network error, since the `pr-metadata-gate` workflow re-checks the title regardless.
 - **After every push, drive `/pr-readiness` until all four gates hold:** CI green ∧ `mergeable=MERGEABLE` ∧ every review comment has an inline reply ∧ no fresh Copilot findings. Full procedure: [docs/pr-readiness-loop.md](docs/pr-readiness-loop.md). A `Stop` hook (`agent/hooks/pr-readiness-stop.sh`, `PR_READINESS_GATE`: `block` default / `warn` / `off`) blocks ending the turn while gates 1-2 fail.
 - **Reply inline on every open review comment** (humans + Copilot) with a fix-commit SHA or justification, via `/pr-review-resolver`. Verification evidence goes through `/pr-checkbox`.
-- **Advisory rewakes carry an origin-HEAD stamp** — compare the `<sha7>` in a `pr-review-resolver` / `doc-drift` rewake to `git rev-parse HEAD`. If they differ the advisory crossed sessions: read it for context, but don't treat it as current-PR work.
+- **Advisory rewakes carry an origin-HEAD stamp** — compare the `<sha7>` in a `doc-drift` rewake to `git rev-parse HEAD`. If they differ the advisory crossed sessions: read it for context, but don't treat it as current-PR work.
 - **In chat**, use full markdown links for refs (`[#N](https://github.com/tinaudio/synth-setter/issues/N)`); in PR / issue bodies use bare `Fixes #N` so auto-close works.
 
 </important>

@@ -14,6 +14,8 @@ from typing import Any
 
 import pytest
 
+from tests.claude_hooks.conftest import GATE_OVERRIDE_ENV_VARS, scrub_gate_overrides
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SETTINGS_PATH = _REPO_ROOT / ".claude" / "settings.json"
 
@@ -121,6 +123,52 @@ def _run_hook_command_raw(command_body: str, raw_stdin: str) -> subprocess.Compl
     )
 
 
+def test_gate_overrides_autouse_scrub_wired_and_environ_clean(
+    request: pytest.FixtureRequest,
+) -> None:
+    """The autouse scrub is in this test's fixture closure and left no override.
+
+    The fixture-closure assertion pins the ``autouse=True`` wiring even in
+    clean environments; the environ check can additionally fail only in a
+    session that actually exports one of the vars.
+
+    :param request: Exposes the active fixture names for the wiring check.
+    """
+    assert "_scrub_gate_overrides" in request.fixturenames
+    leaked = {var: os.environ[var] for var in GATE_OVERRIDE_ENV_VARS if var in os.environ}
+    assert leaked == {}
+
+
+def test_scrub_gate_overrides_with_all_vars_set_removes_them(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``scrub_gate_overrides`` removes every var in its contracted set.
+
+    Re-populates the vars after the autouse fixture already ran, so the outcome is independent of
+    ambient session state.
+
+    :param monkeypatch: Used to set the vars and handed to the scrubber.
+    """
+    for var in GATE_OVERRIDE_ENV_VARS:
+        monkeypatch.setenv(var, "warn")
+
+    scrub_gate_overrides(monkeypatch)
+
+    assert [var for var in GATE_OVERRIDE_ENV_VARS if var in os.environ] == []
+
+
+def test_gate_override_env_vars_bash_harness_list_matches_python_scrub_list() -> None:
+    """``agent/hooks/test.sh`` unsets exactly the vars the pytest fixture scrubs.
+
+    Drift guard: a gate var added to only one of the two lists would silently
+    stop being scrubbed on the other surface.
+    """
+    harness = (_REPO_ROOT / "agent" / "hooks" / "test.sh").read_text()
+    match = re.search(r"GATE_OVERRIDE_ENV_VARS=\(([^)]*)\)", harness)
+    assert match, "GATE_OVERRIDE_ENV_VARS array not found in agent/hooks/test.sh"
+    assert tuple(match.group(1).split()) == GATE_OVERRIDE_ENV_VARS
+
+
 def test_no_if_at_matcher_entry_level() -> None:
     """Matcher-entry objects must not carry a top-level ``if:`` field.
 
@@ -172,7 +220,6 @@ _EXPECTED_HANDLER_SCOPES: tuple[tuple[str, str], ...] = (
     # ...` (git-level options before the subcommand); the wrapper defers to
     # the Python scanner, which re-scopes to actual commit invocations.
     ("Git-commit-trailer-check", "Bash(git*)"),
-    ("PR review resolver", "Bash(git push *)"),
     ("Pre-PR review gate", "Bash(gh pr create *)"),
 )
 
@@ -184,7 +231,6 @@ _EXPECTED_SHARED_HOOK_COMMANDS: tuple[tuple[str, str], ...] = (
     ("Git-commit-trailer-check", "bash agent/hooks/git-commit-trailer-check.sh"),
     ("No-baseline-additions", "bash agent/hooks/no-baseline-additions.sh"),
     ("No-yaml-run-comments", "bash agent/hooks/no-yaml-run-comments.sh"),
-    ("PR review resolver", "bash agent/hooks/pr-review-resolver.sh"),
     ("PR-readiness gate", "bash agent/hooks/pr-readiness-stop.sh"),
     ("Taxonomy verification", "bash agent/hooks/verify-gh-taxonomy.sh"),
     ("Worktree guard", "bash agent/hooks/worktree-guard.sh"),

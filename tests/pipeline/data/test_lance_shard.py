@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import lance
 import numpy as np
 import pyarrow as pa
 import pytest
@@ -21,11 +22,15 @@ from synth_setter.data.vst.shapes import (
     PARAM_ARRAY_FIELD,
 )
 from synth_setter.pipeline.data.lance_shard import (
+    LANCE_DATA_STORAGE_VERSION,
+    LANCE_MAX_BYTES_PER_FILE,
+    commit_lance_dataset,
     iter_lance_column_rows,
+    lance_fragment,
     lance_schema,
     record_batch_from_arrays,
     tensor_array,
-    write_lance_file,
+    write_lance_dataset,
 )
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 
@@ -44,6 +49,8 @@ _METADATA = ShardMetadata(
     sample_rate=100,
     channels=2,
     min_loudness=-55.0,
+    base_seed=42,
+    attempts_per_sample=100,
 )
 
 
@@ -76,7 +83,7 @@ def test_lance_round_trip_two_batches_preserves_values_and_row_order(
     schema = lance_schema(_FIELD_SHAPES, _METADATA)
     shard = tmp_path / "shard-000000.lance"
 
-    write_lance_file(
+    write_lance_dataset(
         shard,
         schema,
         [record_batch_from_arrays(first, schema), record_batch_from_arrays(second, schema)],
@@ -112,7 +119,7 @@ def test_lance_round_trip_noncontiguous_transposed_input_preserves_values(
     schema = lance_schema(_FIELD_SHAPES, _METADATA)
     shard = tmp_path / "shard-000000.lance"
 
-    write_lance_file(shard, schema, [record_batch_from_arrays(arrays, schema)])
+    write_lance_dataset(shard, schema, [record_batch_from_arrays(arrays, schema)])
 
     decoded = np.stack(list(iter_lance_column_rows(shard, MEL_SPEC_FIELD)), axis=0)
     np.testing.assert_array_equal(decoded, transposed_mel)
@@ -125,11 +132,82 @@ def test_iter_lance_column_rows_yields_read_only_views(tmp_path: Path) -> None:
     """
     schema = lance_schema(_FIELD_SHAPES, _METADATA)
     shard = tmp_path / "shard-000000.lance"
-    write_lance_file(shard, schema, [record_batch_from_arrays(_arange_arrays(offset=0), schema)])
+    write_lance_dataset(
+        shard, schema, [record_batch_from_arrays(_arange_arrays(offset=0), schema)]
+    )
 
     row = next(iter_lance_column_rows(shard, AUDIO_FIELD))
 
     assert not row.flags.writeable
+
+
+def test_lance_data_storage_version_constant_equals_pinned_literal() -> None:
+    """LANCE_DATA_STORAGE_VERSION must equal the literal "2.2", guarding a silent revert."""
+    assert LANCE_DATA_STORAGE_VERSION == "2.2"
+
+
+def test_write_lance_dataset_pins_data_storage_version(tmp_path: Path) -> None:
+    """The written dataset reports the pinned on-disk format version, not the library default.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    schema = lance_schema(_FIELD_SHAPES, _METADATA)
+    shard = tmp_path / "shard-000000.lance"
+    write_lance_dataset(
+        shard, schema, [record_batch_from_arrays(_arange_arrays(offset=0), schema)]
+    )
+
+    assert lance.dataset(str(shard)).data_storage_version == LANCE_DATA_STORAGE_VERSION
+
+
+def test_write_lance_dataset_bounds_data_file_size_for_multipart_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Split Lance data files before R2 multipart uploads can exceed S3's 10k-part ceiling.
+
+    :param monkeypatch: Pytest fixture used to spy on ``lance.write_dataset``.
+    """
+    captured: dict[str, object] = {}
+
+    def _spy(*args: object, **kwargs: object) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.setattr(lance, "write_dataset", _spy)
+    schema = lance_schema(_FIELD_SHAPES, _METADATA)
+
+    write_lance_dataset(
+        "s3://bucket/prefix/train.lance",
+        schema,
+        [record_batch_from_arrays(_arange_arrays(offset=0), schema)],
+        storage_options={"aws_endpoint": "https://acct.r2.cloudflarestorage.com"},
+    )
+
+    assert captured["max_bytes_per_file"] == LANCE_MAX_BYTES_PER_FILE
+    assert LANCE_MAX_BYTES_PER_FILE < 10_000 * 5 * 1024**2
+
+
+def test_lance_fragment_commit_round_trips_values_and_pins_version(tmp_path: Path) -> None:
+    """Push-path fragments commit into one dataset preserving rows, order, and the pinned version.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    first = _arange_arrays(offset=0)
+    second = _arange_arrays(offset=1000)
+    schema = lance_schema(_FIELD_SHAPES, _METADATA)
+    shard = tmp_path / "shard-000000.lance"
+
+    fragments = [
+        lance_fragment(shard, schema, record_batch_from_arrays(first, schema), 0),
+        lance_fragment(shard, schema, record_batch_from_arrays(second, schema), 1),
+    ]
+    commit_lance_dataset(shard, schema, fragments)
+
+    dataset = lance.dataset(str(shard))
+    assert dataset.count_rows() == 2 * _FIELD_SHAPES[AUDIO_FIELD][0]
+    assert dataset.data_storage_version == LANCE_DATA_STORAGE_VERSION
+    decoded = np.stack(list(iter_lance_column_rows(shard, MEL_SPEC_FIELD)), axis=0)
+    expected = np.concatenate([first[MEL_SPEC_FIELD], second[MEL_SPEC_FIELD]], axis=0)
+    np.testing.assert_array_equal(decoded, expected)
 
 
 def test_tensor_array_missing_row_axis_raises_value_error() -> None:

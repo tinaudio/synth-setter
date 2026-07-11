@@ -34,6 +34,7 @@ from synth_setter.pipeline.schemas.prefix import (
     make_r2_prefix,
 )
 from synth_setter.pipeline.schemas.r2_location import R2Location
+from synth_setter.pipeline.schemas.shard_metadata import DEFAULT_ATTEMPTS_PER_SAMPLE
 
 if TYPE_CHECKING:
     from omegaconf import DictConfig
@@ -74,7 +75,7 @@ class OutputFormat(StrEnum):
 
     .. attribute :: LANCE
 
-        Lance file container; shards are written as single ``.lance`` files.
+        Lance container; shards are written as ``.lance`` dataset directories.
     """
 
     HDF5 = "hdf5"
@@ -85,6 +86,14 @@ class OutputFormat(StrEnum):
     def extension(self) -> str:
         """Shard filename suffix for this format, leading dot included."""
         return _OUTPUT_FORMAT_EXTENSIONS[self]
+
+    @property
+    def is_directory(self) -> bool:
+        """Whether a shard is a directory tree (Lance dataset) rather than one file.
+
+        Drives directory-vs-file handling in the worker upload and existence probes.
+        """
+        return self is OutputFormat.LANCE
 
     @classmethod
     def from_extension(cls, suffix: str) -> OutputFormat | None:
@@ -230,6 +239,15 @@ class RenderConfig(BaseModel):
     parameter arrays for its assigned shard. ``param_spec_name`` is resolved
     against the in-process registry inside the writer (not at the launcher),
     so launcher-side construction stays interpreter-only.
+
+    .. attribute :: base_seed
+
+        Per-shard master seed; the launcher sets it to ``ShardSpec.seed`` so each
+        shard renders a distinct, reproducible per-sample stream (#884).
+
+    .. attribute :: attempts_per_sample
+
+        Loudness-gate retry budget per sampled row before the render fails loudly.
     """
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
@@ -276,6 +294,24 @@ class RenderConfig(BaseModel):
             "(CalledProcessError). 0 keeps strict fail-fast."
         ),
     )
+    base_seed: int = Field(
+        default=0,
+        description=(
+            "Per-shard master seed; the launcher sets it to ``ShardSpec.seed`` so each "
+            "shard renders a distinct stream. Row ``i`` draws from "
+            "``seed_for_sample(base_seed, i, attempt)``, making every sample reproducible "
+            "regardless of worker, order, or retry history (#884)."
+        ),
+    )
+    attempts_per_sample: int = Field(
+        default=DEFAULT_ATTEMPTS_PER_SAMPLE,
+        ge=1,
+        description=(
+            "Loudness-gate retry budget per sampled row before the render fails loudly. "
+            "Each attempt re-derives the seed from its attempt index, so the accepted "
+            "draw is deterministic given the silence threshold."
+        ),
+    )
     parallel: bool = Field(
         default=False,
         description=(
@@ -315,8 +351,9 @@ class RenderConfig(BaseModel):
             'draws a fresh patch for every sample; ``"shard"`` draws one patch (the '
             "first sample, via the normal loudness-gated path) and reuses it for the "
             "rest of the shard — one identical patch per shard, a probe for the "
-            "per-patch render variance tracked in #489. The patch is drawn fresh each "
-            "run (no seeding), so shard cadence is not reproducible across runs."
+            "per-patch render variance tracked in #489. The shared patch is the row-0 "
+            "seeded draw (``seed_for_sample(base_seed, 0, attempt)``), so shard cadence "
+            "is reproducible across runs (#884)."
         ),
     )
 
@@ -606,8 +643,10 @@ class DatasetSpec(BaseModel):
     train_val_test_seeds: tuple[int, int, int] | None = Field(
         default=None,
         description=(
-            "Reserved for per-sample seeding (#884); must be ``None`` until implemented — "
-            "any non-None value raises ``NotImplementedError`` at construction."
+            "Reserved for per-split independent seed streams (distinct train/val/test "
+            "masters); must be ``None`` until implemented — any non-None value raises "
+            "``NotImplementedError``. Per-sample reproducibility itself ships via "
+            "``base_seed`` → ``ShardSpec.seed`` → ``seed_for_sample`` (#884)."
         ),
     )
     base_seed: int = Field(
@@ -835,8 +874,9 @@ class DatasetSpec(BaseModel):
         """
         if isinstance(data, dict) and data.get("train_val_test_seeds") is not None:
             raise NotImplementedError(
-                "train_val_test_seeds is reserved for per-sample seeding (#884) "
-                "and is not yet implemented; omit the field"
+                "train_val_test_seeds is reserved for per-split independent seed streams "
+                "and is not yet implemented; omit the field. Per-sample reproducibility "
+                "ships via base_seed (#884)."
             )
         return data
 

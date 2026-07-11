@@ -26,8 +26,10 @@ from __future__ import annotations
 import contextlib
 import random
 import shutil
+import sys
 from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import h5py
@@ -37,6 +39,7 @@ import pytest
 import torch
 
 from synth_setter.data import vst_datamodule
+from synth_setter.data.ot import _hungarian_match
 from synth_setter.data.vst_datamodule import (
     ShiftedBatchSampler,
     ShuffledSampler,
@@ -104,19 +107,10 @@ def _set_up_module(**kwargs: object) -> Iterator[VSTDataModule]:
 
 
 def _unwrap(maybe_tensor: torch.Tensor | None) -> torch.Tensor:
-    """Assert ``maybe_tensor`` is non-None and return it as a ``torch.Tensor``.
-
-    The dataset's ``__getitem__`` returns a dict where every value is typed
-    ``Tensor | None`` (mel/audio/m2l really are optional depending on read
-    flags; params/noise are unconditionally populated but share the same
-    dict type). Tests that exercise the populated keys go through this
-    helper so pyright narrows the type once, instead of every test
-    inlining ``assert x is not None``.
+    """Assert ``maybe_tensor`` is non-None and narrow it for pyright.
 
     :param maybe_tensor: The dict value to narrow.
-
     :return: The same tensor, now typed as non-None.
-    :rtype: torch.Tensor
     """
     assert maybe_tensor is not None
     return maybe_tensor
@@ -225,11 +219,6 @@ def single_h5(tmp_path: Path) -> Path:
     return h5_path
 
 
-# --------------------------------------------------------------------------- #
-# VSTDataset — fake mode                                                      #
-# --------------------------------------------------------------------------- #
-
-
 class TestVSTDatasetFakeMode:
     """``fake=True`` skips HDF5 entirely and returns randomly-generated tensors."""
 
@@ -284,9 +273,8 @@ class TestVSTDatasetFakeMode:
 
     def test_fake_mode_rescale_params_maps_into_minus_one_to_one(self) -> None:
         """``rescale_params=True`` rescales ``torch.rand`` from [0, 1) into [-1, 1)."""
-        # read_mel=False + read_audio=False skips the ~190 MB mel/audio
-        # allocations that fake mode would otherwise build at batch_size=128;
-        # this test only inspects params.
+        # batch_size=128 with mel/audio enabled allocates ~190 MB; disable both
+        # since this test only inspects params.
         dataset = VSTDataset(
             "ignored",
             batch_size=128,
@@ -298,9 +286,8 @@ class TestVSTDatasetFakeMode:
         params = _unwrap(dataset[0]["params"])
         assert params.min().item() >= -1.0
         assert params.max().item() < 1.0
-        # With 128*num_params samples from rand()*2 - 1 we will reach into
-        # [-1, 0) and [0, 1) with vanishing probability of staying on one side —
-        # pin the rescaling behavior, not just the bounds.
+        # 128*num_params samples make staying on one side vanishingly unlikely;
+        # assert both to pin the rescaling, not just the bounds.
         assert params.min().item() < 0.0
         assert params.max().item() > 0.0
 
@@ -343,11 +330,6 @@ class TestVSTDatasetFakeMode:
         assert _unwrap(item["noise"]).shape == (2, 92)
 
 
-# --------------------------------------------------------------------------- #
-# VSTDataset — real HDF5 mode                                                 #
-# --------------------------------------------------------------------------- #
-
-
 class TestVSTDatasetH5Mode:
     """HDF5-backed path: indexing, type conversion, OT routing, normalization."""
 
@@ -357,6 +339,18 @@ class TestVSTDatasetH5Mode:
         :param single_h5: Fixture-provided single-shard HDF5 path.
         """
         dataset = VSTDataset(single_h5, batch_size=3, ot=False)
+        assert len(dataset) == 8 // 3
+
+    def test_len_counts_param_array_rows_without_audio_column(self, tmp_path: Path) -> None:
+        """``__len__`` counts rows off ``param_array`` so an audio-less shard still works.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        h5_path = tmp_path / "train.h5"
+        _write_h5_shard(h5_path, num_rows=8)
+        with h5py.File(h5_path, "a") as f:
+            del f["audio"]
+        dataset = VSTDataset(h5_path, batch_size=3, ot=False, use_saved_mean_and_variance=False)
         assert len(dataset) == 8 // 3
 
     def test_getitem_int_returns_batch_size_slice(self, single_h5: Path) -> None:
@@ -568,44 +562,6 @@ class TestVSTDatasetH5Mode:
             _ = dataset[0]
         mock_match.assert_not_called()
 
-    def test_ot_true_calls_hungarian_match_with_all_four_tensors(self, single_h5: Path) -> None:
-        """``ot=True`` routes through ``_hungarian_match(noise, params, mel_spec, audio)``.
-
-        :param single_h5: Fixture-provided single-shard HDF5 path.
-        """
-        with patch(
-            "synth_setter.data.vst_datamodule._hungarian_match",
-            side_effect=lambda noise, params, *args: (noise, params, *args),
-        ) as mock_match:
-            dataset = VSTDataset(
-                single_h5,
-                batch_size=2,
-                ot=True,
-                use_saved_mean_and_variance=False,
-                read_audio=True,
-            )
-            _ = dataset[0]
-        mock_match.assert_called_once()
-        positional = mock_match.call_args.args
-        assert len(positional) == 4
-        # Positional contract: (noise, params, mel_spec, audio). Pin each slot's
-        # shape so a regression that swaps positions is caught — bare arity does
-        # not distinguish `(noise, params, audio, mel_spec)` from the correct order.
-        noise, params, mel_spec, audio = positional
-        assert isinstance(noise, torch.Tensor) and noise.shape == (2, _NUM_PARAMS)
-        assert isinstance(params, torch.Tensor) and params.shape == (2, _NUM_PARAMS)
-        assert isinstance(mel_spec, torch.Tensor) and mel_spec.shape == (
-            2,
-            _MEL_CHANNELS,
-            _MEL_N_MELS,
-            _MEL_N_FRAMES,
-        )
-        assert isinstance(audio, torch.Tensor) and audio.shape == (
-            2,
-            _AUDIO_CHANNELS,
-            _AUDIO_SAMPLES,
-        )
-
     def test_ot_with_disabled_modalities_passes_none_through(self, single_h5: Path) -> None:
         """``_hungarian_match`` still receives ``None`` placeholders when modalities are off.
 
@@ -649,9 +605,236 @@ class TestVSTDatasetH5Mode:
         assert set(item.keys()) == set(_ALL_TENSOR_KEYS)
 
 
-# --------------------------------------------------------------------------- #
-# WithinChunkShuffledSampler                                                  #
-# --------------------------------------------------------------------------- #
+def _reference_getitem(
+    dataset: VSTDataset, idx: int | list[int] | tuple[int, int], *, seed: int
+) -> dict[str, torch.Tensor | None]:
+    """Apply the batch math against the same shard independently of ``__getitem__``.
+
+    Draws noise via ``torch.randn`` on a fresh generator seeded by ``seed``; a
+    same-seeded ``VSTDataset.generator`` reproduces this bit-for-bit (equivalence
+    guarded by ``test_noise_draw_apis_same_seed_bit_identical`` in
+    ``test_prepare_batch.py``), so a match proves the delegation is a no-op.
+    Deliberately white-box: it reads ``dataset.dataset_file`` and calls the
+    private ``_index_dataset`` so the golden mirrors the production read path —
+    renaming those members must update this helper in the same change.
+
+    :param dataset: Open HDF5-backed dataset to read columns from.
+    :param idx: Batch index, ``(start, stop)`` pair, or explicit row list.
+    :param seed: Seed for the golden's own noise generator.
+    :raises ValueError: If ``dataset`` has no open shard handle.
+    :returns: The batch dict ``__getitem__`` is expected to return.
+    """
+    shard = dataset.dataset_file
+    if shard is None:
+        raise ValueError("dataset has no open shard handle")
+    if dataset.read_audio:
+        audio = dataset._index_dataset(shard["audio"], idx)
+        audio = torch.from_numpy(audio).to(dtype=torch.float32)
+    else:
+        audio = None
+
+    if dataset.read_mel:
+        mel_spec = dataset._index_dataset(shard["mel_spec"], idx)
+        if dataset.mean is not None and dataset.std is not None:
+            mel_spec = (mel_spec - dataset.mean) / dataset.std
+        mel_spec = torch.from_numpy(mel_spec).to(dtype=torch.float32)
+    else:
+        mel_spec = None
+
+    if dataset.read_m2l:
+        m2l = dataset._index_dataset(shard["music2latent"], idx)
+        m2l = torch.from_numpy(m2l).to(dtype=torch.float32)
+    else:
+        m2l = None
+
+    param_array = dataset._index_dataset(shard["param_array"], idx)
+    if dataset.rescale_params:
+        param_array = param_array * 2 - 1
+    param_array = torch.from_numpy(param_array).to(dtype=torch.float32)
+    noise = torch.randn(param_array.shape, generator=torch.Generator().manual_seed(seed))
+    if dataset.ot:
+        noise, param_array, mel_spec, audio = _hungarian_match(noise, param_array, mel_spec, audio)
+
+    return dict(
+        mel_spec=mel_spec.contiguous() if mel_spec is not None else None,
+        m2l=m2l.contiguous() if m2l is not None else None,
+        params=param_array.contiguous(),
+        noise=noise.contiguous(),
+        audio=audio.contiguous() if audio is not None else None,
+    )
+
+
+class TestGetitemNoOpAfterExtraction:
+    """The post-extraction ``__getitem__`` matches the independent golden."""
+
+    @pytest.mark.parametrize("idx", [0, 1, [0, 2, 5, 7], (2, 6)])
+    def test_getitem_unchanged_after_extraction(
+        self, single_h5: Path, idx: int | list[int] | tuple[int, int]
+    ) -> None:
+        """Seeding ``dataset.generator`` reproduces the golden at each index form.
+
+        :param single_h5: Fixture-provided single-shard HDF5 path.
+        :param idx: Batch index, row list, or ``(start, stop)`` pair — every
+            index shape ``_index_dataset`` documents, so a regression in any
+            slicing branch (or an off-by-one past the first batch) surfaces.
+        """
+        seed = 0
+        dataset = VSTDataset(
+            single_h5,
+            batch_size=4,
+            ot=True,
+            use_saved_mean_and_variance=True,
+            read_audio=True,
+            read_mel=True,
+            read_m2l=True,
+        )
+        golden = _reference_getitem(dataset, idx, seed=seed)
+        dataset.generator.manual_seed(seed)
+        out = dataset[idx]
+        for key in _ALL_TENSOR_KEYS:
+            if golden[key] is None:
+                assert out[key] is None, key
+                continue
+            # atol=rtol=0: the extraction is a pure structural move, so output
+            # must be bit-identical under the matched seed.
+            torch.testing.assert_close(out[key], golden[key], atol=0.0, rtol=0.0)
+
+
+class TestNoiseGeneratorSeeding:
+    """Production seeding contract: the global seed governs the noise generator."""
+
+    def test_getitem_noise_same_global_seed_reproduces(self, single_h5: Path) -> None:
+        """Datasets built under the same global seed draw identical batch noise.
+
+        Pins that ``seed_everything(cfg.seed)`` governs the production noise
+        path (via the constructor's global-RNG draw) exactly as the
+        pre-refactor global-RNG ``randn_like`` did.
+
+        :param single_h5: Fixture-provided single-shard HDF5 path.
+        """
+        draws = []
+        for _ in range(2):
+            with torch.random.fork_rng():
+                torch.manual_seed(7)
+                dataset = VSTDataset(
+                    single_h5, batch_size=4, ot=False, use_saved_mean_and_variance=False
+                )
+                draws.append(dataset[0]["noise"])
+        torch.testing.assert_close(draws[0], draws[1], atol=0.0, rtol=0.0)
+
+    def test_fake_mode_construction_leaves_global_rng_untouched(self) -> None:
+        """Constructing a fake dataset must not consume from the global RNG.
+
+        Fake noise never uses ``self.generator``, so the constructor skips the
+        global-RNG seed draw in fake mode — otherwise fake-mode runs would see
+        a shifted global stream for no benefit.
+        """
+        with torch.random.fork_rng():
+            torch.manual_seed(3)
+            expected = torch.randn(4)
+        with torch.random.fork_rng():
+            torch.manual_seed(3)
+            VSTDataset("unused.h5", batch_size=2, fake=True)
+            actual = torch.randn(4)
+        torch.testing.assert_close(actual, expected, atol=0.0, rtol=0.0)
+
+    def test_generator_unseeded_constructions_get_distinct_seeds(self, single_h5: Path) -> None:
+        """Back-to-back real datasets without any seeding must not share a noise stream.
+
+        Guards the constructor against regressing to a bare ``torch.Generator()``,
+        whose fixed default seed would silently make every run's noise identical.
+
+        :param single_h5: Fixture-provided single-shard HDF5 path.
+        """
+        first = VSTDataset(single_h5, batch_size=2, ot=False, use_saved_mean_and_variance=False)
+        second = VSTDataset(single_h5, batch_size=2, ot=False, use_saved_mean_and_variance=False)
+        assert first.generator.initial_seed() != second.generator.initial_seed()
+
+    @pytest.mark.skipif(
+        sys.platform != "linux",
+        reason="needs forked workers: spawn (macOS default) would have to pickle the "
+        "open h5py handle; production multi-worker runs are Linux/fork",
+    )
+    def test_dataloader_two_workers_reproduce_and_decorrelate_noise(self, single_h5: Path) -> None:
+        """Real forked workers draw seed-reproducible yet per-worker-distinct noise.
+
+        Two epochs under one global seed must yield a bit-identical noise stream (the DataLoader
+        base seed derives from the global RNG), while batches from different workers must differ —
+        without the per-worker re-seed, every fork would inherit identical generator state and the
+        first batch of worker 0 and worker 1 would be bit-equal.
+
+        :param single_h5: Fixture-provided single-shard HDF5 path.
+        """
+
+        def collect_noise() -> list[torch.Tensor]:
+            with torch.random.fork_rng():
+                torch.manual_seed(11)
+                dataset = VSTDataset(
+                    single_h5, batch_size=2, ot=False, use_saved_mean_and_variance=False
+                )
+                loader = torch.utils.data.DataLoader(dataset, batch_size=None, num_workers=2)
+                draws = []
+                for batch in loader:
+                    noise = batch["noise"]
+                    assert noise is not None
+                    draws.append(noise.clone())
+                return draws
+
+        first_epoch = collect_noise()
+        second_epoch = collect_noise()
+        for ours, theirs in zip(first_epoch, second_epoch, strict=True):
+            torch.testing.assert_close(ours, theirs, atol=0.0, rtol=0.0)
+        # Sequential batches alternate workers round-robin, so index 0 vs 1 is
+        # worker 0's first draw vs worker 1's first draw.
+        assert not torch.equal(first_epoch[0], first_epoch[1])
+
+    def test_parent_read_before_fork_does_not_disarm_worker_reseed(
+        self, single_h5: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A parent-process read must not latch the once-per-worker re-seed flag.
+
+        If it did, workers forked afterwards would inherit the latched flag, skip re-seeding, and
+        draw correlated noise — e.g. after a debugging or preflight batch read in the parent before
+        the DataLoader forks.
+
+        :param single_h5: Fixture-provided single-shard HDF5 path.
+        :param monkeypatch: Pytest monkeypatch fixture.
+        """
+        dataset = VSTDataset(single_h5, batch_size=4, ot=False, use_saved_mean_and_variance=False)
+        dataset[0]  # parent read: get_worker_info() is genuinely None here
+        worker_info = SimpleNamespace(seed=777)
+        monkeypatch.setattr(torch.utils.data, "get_worker_info", lambda: worker_info)
+        noise = dataset[0]["noise"]
+        assert noise is not None
+        expected = torch.randn(noise.shape, generator=torch.Generator().manual_seed(777))
+        torch.testing.assert_close(noise, expected, atol=0.0, rtol=0.0)
+
+    def test_getitem_in_worker_reseeds_generator_once_from_worker_seed(
+        self, single_h5: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Inside a dataloader worker, the first read re-seeds the forked generator.
+
+        ``DataLoader`` hands each worker a distinct ``seed`` (``base_seed +
+        worker_id``); re-seeding from it on first access decorrelates the noise
+        the forked generator copies would otherwise draw identically. Later
+        reads must continue that stream, not re-pin it per batch.
+
+        :param single_h5: Fixture-provided single-shard HDF5 path.
+        :param monkeypatch: Pytest monkeypatch fixture.
+        """
+        dataset = VSTDataset(single_h5, batch_size=4, ot=False, use_saved_mean_and_variance=False)
+        worker_info = SimpleNamespace(seed=777)
+        monkeypatch.setattr(torch.utils.data, "get_worker_info", lambda: worker_info)
+        first = dataset[0]["noise"]
+        second = dataset[1]["noise"]
+        assert first is not None and second is not None
+        expected_stream = torch.Generator().manual_seed(777)
+        torch.testing.assert_close(
+            first, torch.randn(first.shape, generator=expected_stream), atol=0.0, rtol=0.0
+        )
+        torch.testing.assert_close(
+            second, torch.randn(second.shape, generator=expected_stream), atol=0.0, rtol=0.0
+        )
 
 
 class TestWithinChunkShuffledSampler:
@@ -711,11 +894,6 @@ class TestWithinChunkShuffledSampler:
         assert len(rows) == 5
 
 
-# --------------------------------------------------------------------------- #
-# ShuffledSampler                                                             #
-# --------------------------------------------------------------------------- #
-
-
 class TestShuffledSampler:
     """Global random permutation sampler — no locality guarantees."""
 
@@ -744,11 +922,6 @@ class TestShuffledSampler:
         sampler = ShuffledSampler(batch_size=batch_size, num_batches=num_batches)
         flat = [int(idx) for row in sampler for idx in row]
         assert sorted(flat) == list(range(batch_size * num_batches))
-
-
-# --------------------------------------------------------------------------- #
-# ShiftedBatchSampler                                                         #
-# --------------------------------------------------------------------------- #
 
 
 class TestShiftedBatchSampler:
@@ -787,9 +960,8 @@ class TestShiftedBatchSampler:
 
     def test_offset_can_vary_across_epochs(self) -> None:
         """A fresh ``iter()`` redraws the offset — over many epochs we see >1 distinct value."""
-        # Seed Python's random + numpy so the test is deterministic but still
-        # exercises the redraw. Save/restore the global states so other tests
-        # in the same pytest-xdist worker don't see a leaked seed.
+        # Seed global RNGs for determinism; save/restore so xdist workers don't
+        # see a leaked state.
         py_state = random.getstate()
         np_state = np.random.get_state()
         try:
@@ -814,11 +986,6 @@ class TestShiftedBatchSampler:
             for start, _ in ShiftedBatchSampler(batch_size=batch_size, num_batches=num_batches)
         )
         assert pair_indices == list(range(num_batches - 1))
-
-
-# --------------------------------------------------------------------------- #
-# VSTDataModule                                                               #
-# --------------------------------------------------------------------------- #
 
 
 class TestVSTDataModule:
@@ -1013,6 +1180,33 @@ class TestVSTDataModule:
             ):
                 assert loader.num_workers == 2
                 assert loader.pin_memory is True
+
+    def test_dataloaders_leave_worker_init_fn_unset_for_lightning(
+        self, dataset_root: Path
+    ) -> None:
+        """No split's DataLoader installs a custom ``worker_init_fn``.
+
+        Lightning's ``seed_everything(workers=True)`` auto-adds
+        ``pl_worker_init_function`` only while ``worker_init_fn is None``; a
+        custom hook here would silently displace it and de-seed worker global
+        RNGs (fake mode's noise). The dataset re-seeds its own generator lazily
+        in ``__getitem__`` instead.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        with _set_up_module(
+            dataset_root=dataset_root,
+            batch_size=2,
+            ot=False,
+            predict_file=str(dataset_root / "test.h5"),
+        ) as module:
+            for loader in (
+                module.train_dataloader(),
+                module.val_dataloader(),
+                module.test_dataloader(),
+                module.predict_dataloader(),
+            ):
+                assert loader.worker_init_fn is None
 
     def test_predict_dataloader_returns_dataloader_when_predict_file_set(
         self, dataset_root: Path

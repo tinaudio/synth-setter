@@ -7,6 +7,7 @@ under this old module name; the symbols now live in ``vst_datamodule``. See #166
 from __future__ import annotations
 
 from synth_setter.data.vst_datamodule import (
+    RawBatch,
     ShardColumn,
     ShardFile,
     ShiftedBatchSampler,
@@ -16,9 +17,11 @@ from synth_setter.data.vst_datamodule import (
     VSTDataModule,
     VSTDataset,
     WithinChunkShuffledSampler,
+    prepare_batch,
 )
 
 __all__ = [
+    "RawBatch",
     "ShardColumn",
     "ShardFile",
     "ShiftedBatchSampler",
@@ -28,4 +31,5 @@ __all__ = [
     "VSTDataModule",
     "VSTDataset",
     "WithinChunkShuffledSampler",
+    "prepare_batch",
 ]

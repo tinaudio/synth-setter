@@ -1,11 +1,12 @@
 """Tests that ``RenderConfig`` fields are surfaced in ``surge_xt.yaml`` and overridable.
 
-Verifies two contracts:
+Verifies that:
 - Plain ``render.<field>=...`` Hydra CLI overrides (no ``+``) are accepted when
   ``surge_xt.yaml`` surfaces the field — Hydra struct mode rejects unknown keys,
   so a passing compose proves the field is present in the composed tree (#489).
 - A no-override compose yields the values hard-coded in ``surge_xt.yaml`` on
   every platform (not the ``RenderConfig`` model's platform-dependent defaults).
+- ``render=obxf`` composes into a valid ``RenderConfig`` pinning OB-Xf's identity.
 """
 
 from __future__ import annotations
@@ -74,3 +75,16 @@ def test_base_render_config_surfaced_defaults_compose_correctly() -> None:
     assert spec.render.plugin_reload_cadence == "render"
     assert spec.render.gui_toggle_cadence == "once"
     assert spec.render.param_sample_cadence == "sample"
+
+
+def test_render_obxf_composes_into_valid_render_config() -> None:
+    """``render=obxf`` composes into a valid ``RenderConfig``; plugin_path stays repo-relative and num_params resolves without ``KeyError``."""
+    spec = _spec_from_dataset_overrides(["render=obxf"])
+
+    assert spec.render.param_spec_name == "obxf"
+    assert spec.render.renderer_version == "1.0.3"
+    assert spec.render.plugin_path == "plugins/OB-Xf.vst3"
+    assert spec.render.preset_path == "presets/obxf-base.vstpreset"
+    assert spec.num_params == 187
+    # Inherited from the surge_xt base group, proving defaults: [surge_xt] is live.
+    assert spec.render.plugin_reload_cadence == "render"

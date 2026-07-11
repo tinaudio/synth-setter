@@ -35,10 +35,11 @@ import shutil
 import subprocess
 import sys
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import MagicMock, patch
 
 import h5py
@@ -66,6 +67,20 @@ from tests.helpers.subprocess_args import find_script_index
 
 VST_HEADLESS_WRAPPER = str(vst_headless_wrapper())
 
+
+def _write_audio_h5(path: Path, num_samples: int) -> None:
+    """Write a minimal HDF5 split exposing ``audio`` with ``num_samples`` rows.
+
+    ``_run_oracle_eval_subprocess`` reads this row count to scale the eval
+    timeout, so only the leading dimension is load-bearing here.
+
+    :param path: Destination ``.h5`` file.
+    :param num_samples: Row count the ``audio`` dataset is given.
+    """
+    with h5py.File(path, "w") as f:
+        f.create_dataset("audio", data=np.zeros((num_samples, 1), dtype=np.float32))
+
+
 # Reusable VST3 bundle with a real Contents/moduleinfo.json so
 # extract_renderer_version (called by generate) returns a deterministic version
 # without loading any .so via pedalboard. Version inside is "1.0.0-test" — the
@@ -73,6 +88,14 @@ VST_HEADLESS_WRAPPER = str(vst_headless_wrapper())
 # constraint check passes.
 TEST_PLUGIN_VST3 = Path(__file__).resolve().parent.parent / "fixtures" / "TestPlugin.vst3"
 TEST_PLUGIN_VERSION = "1.0.0-test"
+
+
+def _call_hydra_main(main_fn: Callable[..., object]) -> None:
+    """Invoke a Hydra-decorated main whose static signature still names ``cfg``.
+
+    :param main_fn: Hydra-decorated main function to call.
+    """
+    main_fn()
 
 
 def _renderer_argv_lists(mock: MagicMock) -> list[list[str]]:
@@ -140,6 +163,24 @@ def _multi_shard_spec(tmp_path: Path, n: int = 3) -> DatasetSpec:
         train_val_test_sizes=[10000 * n, 0, 0],
     )
     return DatasetSpec(**kwargs)  # type: ignore[arg-type]
+
+
+def test_build_generate_args_passes_shard_seed_as_base_seed(tmp_path: Path) -> None:
+    """build_generate_args gives each shard its own ``--base_seed`` (#884).
+
+    Argv-shape contract pin, backed end-to-end by
+    ``test_distinct_shard_seeds_render_distinct_reproducible_rows``.
+
+    :param tmp_path: Output dir build_generate_args composes shard paths under.
+    """
+    spec = _multi_shard_spec(tmp_path, n=3)
+    passed_seeds = []
+    for shard in spec.shards:
+        args = build_generate_args(spec, shard, tmp_path)
+        idx = args.index("--base_seed")
+        passed_seeds.append(args[idx + 1])
+    assert len(passed_seeds) == 3
+    assert passed_seeds == ["42", "43", "44"]
 
 
 # ---------------------------------------------------------------------------
@@ -224,6 +265,362 @@ class TestLoadSpecFromRoot:
         loaded = load_spec_from_root(tmp_path.as_uri())
 
         assert loaded.task_name == spec.task_name
+
+
+class TestSpecUriCliMain:
+    """``generate_dataset_from_spec_uri.main`` — parse spec URI and W&B opt-out."""
+
+    def test_single_positional_runs_that_spec_uri_with_wandb_enabled(self) -> None:
+        """The sole positional enables the default grouped W&B logging path."""
+        import synth_setter.cli.generate_dataset_from_spec_uri as cli
+
+        with patch.object(cli, "run_from_spec_uri") as mock_run:
+            cli.main(["r2://bucket/run/input_spec.json"])
+
+        mock_run.assert_called_once_with("r2://bucket/run/input_spec.json", enable_wandb=True)
+
+    def test_no_wandb_flag_disables_wandb_logging(self) -> None:
+        """``--no-wandb`` skips only W&B auth/logging for repair runs."""
+        import synth_setter.cli.generate_dataset_from_spec_uri as cli
+
+        with patch.object(cli, "run_from_spec_uri") as mock_run:
+            cli.main(["--no-wandb", "r2://bucket/run/input_spec.json"])
+
+        mock_run.assert_called_once_with("r2://bucket/run/input_spec.json", enable_wandb=False)
+
+    @pytest.mark.parametrize(
+        "argv",
+        [[], ["a/input_spec.json", "b/input_spec.json"]],
+        ids=["missing_uri", "two_uris"],
+    )
+    def test_wrong_positional_count_exits_with_usage_error(self, argv: list[str]) -> None:
+        """Zero or two positionals exit via argparse's usage error (code 2).
+
+        :param argv: argv tail (no program name).
+        """
+        import synth_setter.cli.generate_dataset_from_spec_uri as cli
+
+        with patch.object(cli, "run_from_spec_uri") as mock_run:
+            with pytest.raises(SystemExit) as excinfo:
+                cli.main(argv)
+
+        assert excinfo.value.code == 2
+        mock_run.assert_not_called()
+
+
+class TestSpecUriWandbSettings:
+    """``generate_dataset_from_spec_uri`` W&B settings defaults."""
+
+    def test_settings_disable_wandb_without_api_key_or_mode(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Missing W&B auth selects disabled mode instead of prompting.
+
+        :param monkeypatch: Clears W&B auth and mode environment variables.
+        """
+        from synth_setter.cli.generate_dataset_from_spec_uri import _wandb_mode_override
+
+        monkeypatch.delenv("WANDB_API_KEY", raising=False)
+        monkeypatch.delenv("WANDB_MODE", raising=False)
+
+        assert _wandb_mode_override() == "disabled"
+
+    def test_settings_preserve_explicit_wandb_mode(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Explicit ``WANDB_MODE`` overrides the no-auth disabled fallback.
+
+        :param monkeypatch: Sets W&B mode and clears W&B auth.
+        """
+        from synth_setter.cli.generate_dataset_from_spec_uri import _wandb_mode_override
+
+        monkeypatch.delenv("WANDB_API_KEY", raising=False)
+        monkeypatch.setenv("WANDB_MODE", "offline")
+
+        assert _wandb_mode_override() == "offline"
+
+    def test_settings_keep_default_mode_with_api_key(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Present W&B auth leaves mode unspecified for normal online logging.
+
+        :param monkeypatch: Sets W&B auth and clears W&B mode.
+        """
+        from synth_setter.cli.generate_dataset_from_spec_uri import _wandb_mode_override
+
+        monkeypatch.setenv("WANDB_API_KEY", "test-key")
+        monkeypatch.delenv("WANDB_MODE", raising=False)
+
+        assert _wandb_mode_override() is None
+
+    def test_settings_disable_wandb_for_invalid_mode_without_api_key(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Unsupported ``WANDB_MODE`` falls back to disabled mode without auth.
+
+        :param monkeypatch: Sets invalid W&B mode and clears W&B auth.
+        """
+        from synth_setter.cli.generate_dataset_from_spec_uri import _wandb_mode_override
+
+        monkeypatch.delenv("WANDB_API_KEY", raising=False)
+        monkeypatch.setenv("WANDB_MODE", "bogus")
+
+        assert _wandb_mode_override() == "disabled"
+
+    def test_settings_keep_default_for_invalid_mode_with_api_key(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Unsupported ``WANDB_MODE`` falls back to W&B's default with auth.
+
+        :param monkeypatch: Sets W&B auth and invalid W&B mode.
+        """
+        from synth_setter.cli.generate_dataset_from_spec_uri import _wandb_mode_override
+
+        monkeypatch.setenv("WANDB_API_KEY", "test-key")
+        monkeypatch.setenv("WANDB_MODE", "bogus")
+
+        assert _wandb_mode_override() is None
+
+
+class TestRunFromSpecUri:
+    """``run_from_spec_uri`` — load a spec by URI, then render/upload its shards."""
+
+    @pytest.fixture(autouse=True)
+    def _single_worker_full_render(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Pin rank=0/world=1 and force every shard absent in R2 (full render path).
+
+        :param monkeypatch: Pytest fixture used to set env vars and patch
+            ``r2_io.object_size``.
+        """
+        monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+        monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+        monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda *_a, **_k: None)
+
+    @pytest.fixture()
+    def patched_env_and_subprocess(self, fake_r2_remote: Path) -> Iterator[MagicMock]:
+        """Patch the render/rclone seam and the R2 env pre-flight.
+
+        ``ensure_r2_env_loaded`` is stubbed (same isolation the ``main()``
+        tests use) because the fake local-typed remote has no creds to
+        validate; rclone copies still land on ``fake_r2_remote`` via the
+        passthrough dispatcher.
+
+        :param fake_r2_remote: Local-typed R2 remote root (chdirs into the
+            tmp dir, so relative work dirs also land there).
+        :yields MagicMock: Patched ``_check_call_streamed`` mock.
+        """
+        with patch("synth_setter.pipeline.r2_io.ensure_r2_env_loaded"):
+            with patch(
+                "synth_setter.cli.generate_dataset._check_call_streamed",
+                side_effect=_materialize_or_passthrough_rclone,
+            ) as mock_check_call:
+                yield mock_check_call
+
+    def test_local_spec_path_renders_and_uploads_shards(
+        self,
+        patched_env_and_subprocess: MagicMock,
+        fake_r2_remote: Path,
+        spec: DatasetSpec,
+        tmp_path: Path,
+    ) -> None:
+        """A bare local spec path drives the full render → R2 upload flow.
+
+        :param patched_env_and_subprocess: Render/rclone dispatcher seam.
+        :param fake_r2_remote: Fake R2 root; uploaded shards materialize here.
+        :param spec: Fixture-provided single-shard ``DatasetSpec``.
+        :param tmp_path: Pytest tmp dir for the local spec JSON.
+        """
+        from synth_setter.cli.generate_dataset_from_spec_uri import run_from_spec_uri
+
+        spec_path = tmp_path / INPUT_SPEC_FILENAME
+        spec_path.write_text(spec.model_dump_json())
+
+        run_from_spec_uri(str(spec_path), enable_wandb=False)
+
+        shard = spec.shards[0]
+        landed = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / shard.filename
+        assert landed.is_file()
+
+    def test_r2_spec_uri_downloads_spec_then_renders(
+        self,
+        patched_env_and_subprocess: MagicMock,
+        fake_r2_remote: Path,
+        spec: DatasetSpec,
+    ) -> None:
+        """An ``r2://`` spec URI is fetched from the remote before rendering.
+
+        The spec is placed in the fake remote via the production
+        ``spec_io.upload_spec`` path, then re-loaded through the URI the
+        launcher advertises to workers (``spec.r2.input_spec_uri()``).
+
+        :param patched_env_and_subprocess: Render/rclone dispatcher seam.
+        :param fake_r2_remote: Fake R2 root backing both spec and shards.
+        :param spec: Fixture-provided single-shard ``DatasetSpec``.
+        """
+        from synth_setter.cli.generate_dataset_from_spec_uri import run_from_spec_uri
+        from synth_setter.pipeline.spec_io import upload_spec
+
+        spec_uri = upload_spec(spec)
+
+        run_from_spec_uri(spec_uri, enable_wandb=False)
+
+        shard = spec.shards[0]
+        landed = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / shard.filename
+        assert landed.is_file()
+
+    def test_work_dir_derives_from_run_id_under_cwd(
+        self,
+        patched_env_and_subprocess: MagicMock,
+        fake_r2_remote: Path,
+        spec: DatasetSpec,
+        tmp_path: Path,
+    ) -> None:
+        """Rendered shards persist under ``logs/generate_dataset/from_spec_uri/<run_id>/``.
+
+        :param patched_env_and_subprocess: Render/rclone dispatcher seam.
+        :param fake_r2_remote: Fake R2 root; the fixture chdirs into it, so the
+            relative work dir lands inside the test's tmp dir.
+        :param spec: Fixture-provided single-shard ``DatasetSpec``.
+        :param tmp_path: Pytest tmp dir for the local spec JSON.
+        """
+        from synth_setter.cli.generate_dataset_from_spec_uri import run_from_spec_uri
+
+        spec_path = tmp_path / INPUT_SPEC_FILENAME
+        spec_path.write_text(spec.model_dump_json())
+
+        run_from_spec_uri(str(spec_path), enable_wandb=False)
+
+        work_dir = Path.cwd() / "logs" / "generate_dataset" / "from_spec_uri" / spec.run_id
+        assert (work_dir / spec.shards[0].filename).is_file()
+
+    def test_wandb_enabled_passes_resume_loggers_to_generate(
+        self,
+        fake_r2_remote: Path,
+        spec: DatasetSpec,
+        tmp_path: Path,
+    ) -> None:
+        """The default runner creates a W&B resume logger list for ``generate``.
+
+        :param fake_r2_remote: Fake R2 root (unused; activates rclone skip gate).
+        :param spec: Fixture-provided single-shard ``DatasetSpec``.
+        :param tmp_path: Pytest tmp dir for the local spec JSON.
+        """
+        import synth_setter.cli.generate_dataset_from_spec_uri as cli
+
+        spec_path = tmp_path / INPUT_SPEC_FILENAME
+        spec_path.write_text(spec.model_dump_json())
+        loggers = [MagicMock()]
+
+        with patch("synth_setter.pipeline.r2_io.ensure_r2_env_loaded"):
+            with patch.object(cli, "_resume_loggers", return_value=loggers):
+                with patch.object(cli, "generate") as mock_generate:
+                    cli.run_from_spec_uri(str(spec_path))
+
+        work_dir = Path("logs") / "generate_dataset" / "from_spec_uri" / spec.run_id
+        mock_generate.assert_called_once_with(spec, work_dir, loggers)
+
+    def test_wandb_enabled_uses_no_loggers_when_wandb_missing(
+        self,
+        fake_r2_remote: Path,
+        spec: DatasetSpec,
+        tmp_path: Path,
+    ) -> None:
+        """A wandb-free install still renders through the default CLI path.
+
+        :param fake_r2_remote: Fake R2 root (unused; activates rclone skip gate).
+        :param spec: Fixture-provided single-shard ``DatasetSpec``.
+        :param tmp_path: Pytest tmp dir for the local spec JSON.
+        """
+        import synth_setter.cli.generate_dataset_from_spec_uri as cli
+
+        spec_path = tmp_path / INPUT_SPEC_FILENAME
+        spec_path.write_text(spec.model_dump_json())
+
+        with patch("synth_setter.pipeline.r2_io.ensure_r2_env_loaded"):
+            with patch.object(cli, "find_spec", return_value=None):
+                with patch.object(cli, "generate") as mock_generate:
+                    cli.run_from_spec_uri(str(spec_path))
+
+        work_dir = Path("logs") / "generate_dataset" / "from_spec_uri" / spec.run_id
+        mock_generate.assert_called_once_with(spec, work_dir, [])
+
+    def test_wandb_enabled_builds_grouped_repair_run(
+        self,
+        fake_r2_remote: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        spec: DatasetSpec,
+        tmp_path: Path,
+    ) -> None:
+        """The default runner creates a grouped W&B run for the repair attempt.
+
+        :param fake_r2_remote: Fake R2 root (unused; activates rclone skip gate).
+        :param monkeypatch: Clears W&B env vars so defaults are hermetic.
+        :param spec: Fixture-provided single-shard ``DatasetSpec``.
+        :param tmp_path: Pytest tmp dir for the local spec JSON.
+        """
+        import synth_setter.cli.generate_dataset_from_spec_uri as cli
+
+        monkeypatch.setenv("WANDB_PROJECT", "")
+        monkeypatch.delenv("WANDB_ENTITY", raising=False)
+        monkeypatch.delenv("WANDB_API_KEY", raising=False)
+        monkeypatch.delenv("WANDB_MODE", raising=False)
+        spec_path = tmp_path / INPUT_SPEC_FILENAME
+        spec_path.write_text(spec.model_dump_json())
+        settings = MagicMock(name="settings")
+        wandb_logger = MagicMock(name="wandb_logger")
+
+        with patch("synth_setter.pipeline.r2_io.ensure_r2_env_loaded"):
+            with patch("wandb.Settings", return_value=settings) as mock_settings:
+                with patch(
+                    "lightning.pytorch.loggers.wandb.WandbLogger",
+                    return_value=wandb_logger,
+                ) as mock_wandb_logger:
+                    with patch.object(cli, "generate") as mock_generate:
+                        cli.run_from_spec_uri(str(spec_path))
+
+        work_dir = Path("logs") / "generate_dataset" / "from_spec_uri" / spec.run_id
+        mock_settings.assert_called_once_with(
+            code_dir=".",
+            console="wrap",
+            console_multipart=True,
+            mode="disabled",
+        )
+        mock_wandb_logger.assert_called_once_with(
+            save_dir=str(work_dir),
+            name=f"resume-{spec.task_name}-{spec.run_id}",
+            project="synth-setter",
+            entity=None,
+            group=spec.run_id,
+            job_type="data-generation-resume",
+            tags=["from-spec-uri", "resume", spec.task_name],
+            log_model=False,
+            settings=settings,
+        )
+        mock_generate.assert_called_once_with(spec, work_dir, [wandb_logger])
+
+    def test_r2_env_preflight_runs_before_spec_fetch(
+        self,
+        fake_r2_remote: Path,
+        spec: DatasetSpec,
+    ) -> None:
+        """``ensure_r2_env_loaded`` gates the run — its failure aborts before any fetch.
+
+        :param fake_r2_remote: Fake R2 root (unused; activates rclone skip gate).
+        :param spec: Fixture-provided single-shard ``DatasetSpec`` (unused body).
+        """
+        from synth_setter.cli.generate_dataset_from_spec_uri import run_from_spec_uri
+
+        with patch(
+            "synth_setter.pipeline.r2_io.ensure_r2_env_loaded",
+            side_effect=RuntimeError("no creds"),
+        ):
+            with pytest.raises(RuntimeError, match="no creds"):
+                run_from_spec_uri("r2://bucket/never-fetched/input_spec.json")
 
 
 class TestRun:
@@ -1509,7 +1906,7 @@ class TestMainDispatchBranches:
         monkeypatch.setattr(gd, "generate", _fake_run)
         monkeypatch.setattr(sl, "dispatch_via_skypilot", _dispatch_must_not_fire)
 
-        gd.main()
+        _call_hydra_main(gd.main)
 
         spec = recorded.get("spec")
         assert isinstance(spec, DatasetSpec)
@@ -1545,7 +1942,7 @@ class TestMainDispatchBranches:
 
         monkeypatch.setattr(gd, "generate", _fake_run)
 
-        gd.main()
+        _call_hydra_main(gd.main)
 
         output_dir = recorded["work_dir"]
         for artifact in ("tags.log", "config_tree.log"):
@@ -1590,7 +1987,7 @@ class TestMainDispatchBranches:
 
         monkeypatch.setattr(gd, "generate", _run_must_not_fire)
 
-        gd.main()
+        _call_hydra_main(gd.main)
 
         assert "sky_cfg" in recorded
         sky_cfg = recorded["sky_cfg"]
@@ -1639,7 +2036,7 @@ class TestMainDispatchBranches:
         monkeypatch.setattr(sl, "dispatch_via_skypilot", _dispatch_must_not_fire)
 
         with pytest.raises(ValueError, match="skypilot_launch.cmd is launcher-internal"):
-            gd.main()
+            _call_hydra_main(gd.main)
 
     def test_main_finalize_inline_true_invokes_finalize_from_spec(
         self,
@@ -1677,7 +2074,7 @@ class TestMainDispatchBranches:
         finalize_mock = MagicMock()
         monkeypatch.setattr(gd, "finalize_from_spec", finalize_mock)
 
-        gd.main()
+        _call_hydra_main(gd.main)
 
         finalize_mock.assert_called_once()
         called_spec, called_work_dir = finalize_mock.call_args[0]
@@ -1709,7 +2106,7 @@ class TestMainDispatchBranches:
         finalize_mock = MagicMock()
         monkeypatch.setattr(gd, "finalize_from_spec", finalize_mock)
 
-        gd.main()
+        _call_hydra_main(gd.main)
 
         finalize_mock.assert_not_called()
 
@@ -1756,7 +2153,7 @@ class TestMainDispatchBranches:
         finalize_mock = MagicMock()
         monkeypatch.setattr(gd, "finalize_from_spec", finalize_mock)
 
-        gd.main()
+        _call_hydra_main(gd.main)
 
         finalize_mock.assert_not_called()
         # State assertion above is the contract. The log check matches stable
@@ -1810,7 +2207,7 @@ class TestMainDispatchBranches:
 
         monkeypatch.setattr(gd, "spec_from_cfg", _capture_output_dir)
 
-        gd.main()
+        _call_hydra_main(gd.main)
 
         # One invocation per split.
         assert oracle_mock.call_count == 3
@@ -1876,7 +2273,7 @@ class TestMainDispatchBranches:
 
         dataset_root = tmp_path / "data"
         dataset_root.mkdir()
-        for name in ("train.h5", "val.h5", "test.h5", "stats.npz"):
+        for name in ("train.h5", "val.h5", "stats.npz"):
             (dataset_root / name).touch()
         run_dir = tmp_path / "oracle_eval" / "some-run-id"
         render = spec.render.model_copy(
@@ -1887,6 +2284,8 @@ class TestMainDispatchBranches:
             }
         )
         predict_file = dataset_root / "test.h5"
+        n_samples = 4
+        _write_audio_h5(predict_file, n_samples)
         gd._run_oracle_eval_subprocess(
             dataset_root,
             run_dir,
@@ -1897,9 +2296,10 @@ class TestMainDispatchBranches:
         )
 
         streamed_call_mock.assert_called_once()
-        # The timeout bound is the helper's only guard against an unbounded
-        # eval hang (#735); the hardcoded value catches a wrong constant too.
-        assert streamed_call_mock.call_args.kwargs["timeout"] == 600
+        # Hard-coded (not mirroring the module constants) so a wrong constant fails;
+        # the timeout bounds an otherwise-unbounded eval hang (#735) and now scales
+        # with the split: 600 overhead + 120/sample * 4 rows = 1080.
+        assert streamed_call_mock.call_args.kwargs["timeout"] == 1080.0
         called_argv = streamed_call_mock.call_args[0][0]
         assert "-m" in called_argv
         assert "synth_setter.cli.eval" in called_argv
@@ -1962,9 +2362,10 @@ class TestMainDispatchBranches:
 
         dataset_root = tmp_path / "data"
         dataset_root.mkdir()
-        for name in ("train.h5", "val.h5", "test.h5", "stats.npz"):
+        for name in ("val.h5", "test.h5", "stats.npz"):
             (dataset_root / name).touch()
         predict_file = dataset_root / "train.h5"
+        _write_audio_h5(predict_file, 4)
         gd._run_oracle_eval_subprocess(
             dataset_root,
             tmp_path / "oracle_eval" / "train" / "some-run-id",
@@ -1978,6 +2379,45 @@ class TestMainDispatchBranches:
         called_argv = streamed_call_mock.call_args[0][0]
         # ``+`` appends the key: it is absent from eval.yaml's evaluation group.
         assert "+evaluation.metric_prefix=train/" in called_argv
+
+    def test_run_oracle_eval_subprocess_timeout_grows_with_split_sample_count(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        spec: DatasetSpec,
+    ) -> None:
+        """A larger predict split yields a strictly larger eval timeout.
+
+        Pins the scaling itself (not just one formula point): a flat ceiling
+        would return the same budget for both splits and fail this.
+
+        :param monkeypatch: Patches ``_check_call_streamed`` to capture the timeout.
+        :param tmp_path: Roots the two distinct dataset roots.
+        :param spec: Source of a valid ``RenderConfig``.
+        """
+        import synth_setter.cli.generate_dataset as gd
+
+        def _timeout_for_split(root: Path, num_samples: int) -> float:
+            root.mkdir()
+            for name in ("train.h5", "val.h5", "stats.npz"):
+                (root / name).touch()
+            predict_file = root / "test.h5"
+            _write_audio_h5(predict_file, num_samples)
+            mock = MagicMock()
+            monkeypatch.setattr(gd, "_check_call_streamed", mock)
+            gd._run_oracle_eval_subprocess(
+                root,
+                root / "run",
+                "some-run-id",
+                render=spec.render,
+                num_workers=1,
+                predict_file=predict_file,
+            )
+            return mock.call_args.kwargs["timeout"]
+
+        small = _timeout_for_split(tmp_path / "small", 4)
+        large = _timeout_for_split(tmp_path / "large", 40)
+        assert large > small
 
     def test_run_oracle_eval_subprocess_missing_local_artifacts_raises(
         self,
@@ -2073,7 +2513,7 @@ class TestMainDispatchBranches:
         oracle_mock = MagicMock()
         monkeypatch.setattr(gd, "_run_oracle_eval_subprocess", oracle_mock)
 
-        gd.main()
+        _call_hydra_main(gd.main)
 
         oracle_mock.assert_not_called()
 
@@ -2104,7 +2544,7 @@ class TestMainDispatchBranches:
         generate_mock = MagicMock()
         monkeypatch.setattr(gd, "generate", generate_mock)
 
-        gd.main()
+        _call_hydra_main(gd.main)
 
         # Skipped before generation, with a warning (exact wording unpinned).
         generate_mock.assert_not_called()
@@ -2136,7 +2576,7 @@ class TestMainDispatchBranches:
         monkeypatch.setattr(gd, "_run_oracle_eval_subprocess", oracle_mock)
 
         with pytest.raises(ValueError, match="requires finalize_inline=true"):
-            gd.main()
+            _call_hydra_main(gd.main)
         generate_mock.assert_not_called()
         finalize_mock.assert_not_called()
         oracle_mock.assert_not_called()
@@ -2171,7 +2611,7 @@ class TestMainDispatchBranches:
         monkeypatch.setattr(gd, "_run_oracle_eval_subprocess", oracle_mock)
 
         with pytest.raises(ValueError, match="only supports output_format=hdf5"):
-            gd.main()
+            _call_hydra_main(gd.main)
         generate_mock.assert_not_called()
         finalize_mock.assert_not_called()
         oracle_mock.assert_not_called()
@@ -2210,7 +2650,7 @@ class TestMainDispatchBranches:
         monkeypatch.setattr(gd, "_run_oracle_eval_subprocess", oracle_mock)
 
         with pytest.raises(ValueError, match="train_val_test_sizes > 0"):
-            gd.main()
+            _call_hydra_main(gd.main)
         generate_mock.assert_not_called()
         finalize_mock.assert_not_called()
         oracle_mock.assert_not_called()
@@ -2256,7 +2696,7 @@ class TestMainDispatchBranches:
         oracle_mock = MagicMock()
         monkeypatch.setattr(gd, "_run_oracle_eval_subprocess", oracle_mock)
 
-        gd.main()
+        _call_hydra_main(gd.main)
 
         oracle_mock.assert_not_called()
         info_messages = [str(c.args[0]) for c in mock_logger.info.call_args_list]
@@ -2350,7 +2790,7 @@ class TestInlineOracleEvalVdsInPlaceRead:
         )
 
         assert dataset.dataset_file is not None
-        audio_ds = dataset.dataset_file["audio"]
+        audio_ds = cast(h5py.Dataset, dataset.dataset_file["audio"])
         assert isinstance(audio_ds, h5py.Dataset) and audio_ds.is_virtual, (
             "split must be a virtual dataset"
         )
@@ -2498,7 +2938,7 @@ class TestMainSpecPersistence:
         ]
         monkeypatch.setattr("sys.argv", argv)
 
-        gd.main()
+        _call_hydra_main(gd.main)
 
         gd.write_spec_locally.assert_called_once()  # type: ignore[attr-defined]
         called_spec, called_out = gd.write_spec_locally.call_args[0]  # type: ignore[attr-defined]
@@ -2522,7 +2962,7 @@ class TestMainSpecPersistence:
         ]
         monkeypatch.setattr("sys.argv", argv)
 
-        gd.main()
+        _call_hydra_main(gd.main)
 
         gd.upload_spec.assert_called_once()  # type: ignore[attr-defined]
         called_spec = gd.upload_spec.call_args[0][0]  # type: ignore[attr-defined]
@@ -2543,7 +2983,7 @@ class TestMainSpecPersistence:
         monkeypatch.setattr("sys.argv", self._dispatch_argv(template))
         monkeypatch.setattr(sl, "dispatch_via_skypilot", lambda *_a, **_k: None)
 
-        gd.main()
+        _call_hydra_main(gd.main)
 
         gd.upload_spec.assert_called_once()  # type: ignore[attr-defined]
         gd.write_spec_locally.assert_called_once()  # type: ignore[attr-defined]
@@ -2588,7 +3028,7 @@ class TestMainSpecPersistence:
 
         monkeypatch.setattr("synth_setter.cli.generate_dataset.upload_spec", _record_env)
 
-        gd.main()
+        _call_hydra_main(gd.main)
 
         assert creds_present_at_upload.get("present") is True
 
@@ -2618,7 +3058,7 @@ class TestMainSpecPersistence:
 
         monkeypatch.setattr(sl, "dispatch_via_skypilot", _fake_dispatch)
 
-        gd.main()
+        _call_hydra_main(gd.main)
 
         sky_cfg = recorded["sky_cfg"]
         spec = gd.write_spec_locally.call_args[0][0]  # type: ignore[attr-defined]
@@ -2646,7 +3086,7 @@ class TestMainSpecPersistence:
         monkeypatch.setattr("sys.argv", self._dispatch_argv(template))
         monkeypatch.setattr(sl, "dispatch_via_skypilot", lambda *_a, **_k: None)
 
-        gd.main()
+        _call_hydra_main(gd.main)
 
         assert "::synth-setter-spec-uri::" not in capsys.readouterr().out
 
@@ -2677,7 +3117,7 @@ class TestMainSpecPersistence:
 
         monkeypatch.setattr(sl, "dispatch_via_skypilot", _fake_dispatch)
 
-        gd.main()
+        _call_hydra_main(gd.main)
 
         sky_cfg = recorded["sky_cfg"]
         spec_call = gd.write_spec_locally.call_args[0][0]  # type: ignore[attr-defined]
@@ -2753,7 +3193,7 @@ class TestMainHydraOutputDir:
 
         monkeypatch.setattr(gd, "spec_from_cfg", _capture_then_build)
 
-        gd.main()
+        _call_hydra_main(gd.main)
 
         assert observed["output_dir"] == observed["runtime_output_dir"]
 

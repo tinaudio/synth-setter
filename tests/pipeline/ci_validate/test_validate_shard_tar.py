@@ -21,7 +21,7 @@ from __future__ import annotations
 import io
 import json
 import tarfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import h5py
@@ -41,6 +41,8 @@ _VALID_METADATA: dict[str, object] = {
     "sample_rate": 44100,
     "channels": _VALID_AUDIO_CHANNELS,
     "min_loudness": -55.0,
+    "base_seed": 42,
+    "attempts_per_sample": 100,
 }
 
 
@@ -59,7 +61,7 @@ def real_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> DatasetSpec:
     :returns: Spec whose render fields match the ``_VALID_*`` constants in this module.
     :rtype: DatasetSpec
     """
-    fixed_now = datetime(2026, 3, 28, 12, 0, 0, tzinfo=timezone.utc)
+    fixed_now = datetime(2026, 3, 28, 12, 0, 0, tzinfo=UTC)
     monkeypatch.setattr("synth_setter.pipeline.schemas.spec._get_git_sha", lambda: "a" * 40)
     monkeypatch.setattr("synth_setter.pipeline.schemas.spec._is_repo_dirty", lambda: False)
     monkeypatch.setattr("synth_setter.pipeline.schemas.spec._utc_now", lambda: fixed_now)
@@ -276,6 +278,79 @@ class TestTarShardValidation:
         errors = validate_shard(shard_path, real_spec)
 
         assert any("metadata.json" in err and "ShardMetadata" in err for err in errors)
+
+    def test_validate_shard_tar_accepts_legacy_metadata_without_seed_fields(
+        self, real_spec: DatasetSpec, tmp_path: Path
+    ) -> None:
+        """A legacy sidecar without seed provenance does not invent mismatch errors.
+
+        :param real_spec: Spec whose render config matches the canonical valid shapes.
+        :param tmp_path: pytest-provided temp directory for the shard file.
+        :returns: ``None``.
+        :rtype: None
+        """
+        shard_path = tmp_path / "shard-000000.tar"
+        members: dict[str, bytes] = {}
+        for field, arr in _valid_batch_arrays(real_spec.render.samples_per_shard).items():
+            members[f"00000000.{field}.npy"] = _npy_bytes(arr)
+        legacy_metadata = {
+            key: value
+            for key, value in _VALID_METADATA.items()
+            if key not in {"base_seed", "attempts_per_sample"}
+        }
+        members["metadata.json"] = json.dumps(legacy_metadata).encode("utf-8")
+        _make_tar_with(shard_path, members)
+
+        errors = validate_shard(shard_path, real_spec)
+
+        assert errors == []
+
+    def test_validate_shard_tar_rejects_base_seed_metadata_mismatch(
+        self, real_spec: DatasetSpec, tmp_path: Path
+    ) -> None:
+        """A sidecar whose seed differs from the spec is rejected before reuse.
+
+        :param real_spec: Spec whose render config matches the canonical valid shapes.
+        :param tmp_path: pytest-provided temp directory for the shard file.
+        :returns: ``None``.
+        :rtype: None
+        """
+        shard_path = tmp_path / "shard-000000.tar"
+        members: dict[str, bytes] = {}
+        for field, arr in _valid_batch_arrays(real_spec.render.samples_per_shard).items():
+            members[f"00000000.{field}.npy"] = _npy_bytes(arr)
+        bad_metadata = {**_VALID_METADATA, "base_seed": real_spec.render.base_seed + 1}
+        members["metadata.json"] = json.dumps(bad_metadata).encode("utf-8")
+        _make_tar_with(shard_path, members)
+
+        errors = validate_shard(shard_path, real_spec)
+
+        assert any("metadata.json" in err and "base_seed" in err for err in errors)
+
+    def test_validate_shard_tar_rejects_attempt_budget_metadata_mismatch(
+        self, real_spec: DatasetSpec, tmp_path: Path
+    ) -> None:
+        """A sidecar whose retry budget differs from the spec is rejected before reuse.
+
+        :param real_spec: Spec whose render config matches the canonical valid shapes.
+        :param tmp_path: pytest-provided temp directory for the shard file.
+        :returns: ``None``.
+        :rtype: None
+        """
+        shard_path = tmp_path / "shard-000000.tar"
+        members: dict[str, bytes] = {}
+        for field, arr in _valid_batch_arrays(real_spec.render.samples_per_shard).items():
+            members[f"00000000.{field}.npy"] = _npy_bytes(arr)
+        bad_metadata = {
+            **_VALID_METADATA,
+            "attempts_per_sample": real_spec.render.attempts_per_sample + 1,
+        }
+        members["metadata.json"] = json.dumps(bad_metadata).encode("utf-8")
+        _make_tar_with(shard_path, members)
+
+        errors = validate_shard(shard_path, real_spec)
+
+        assert any("metadata.json" in err and "attempts_per_sample" in err for err in errors)
 
     def test_validate_shard_tar_rejects_missing_field_npy(
         self, real_spec: DatasetSpec, tmp_path: Path

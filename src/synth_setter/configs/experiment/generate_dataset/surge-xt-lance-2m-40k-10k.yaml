@@ -1,0 +1,30 @@
+# @package _global_
+
+# Full-scale surge_xt Lance dataset: 2.05M total samples → 820 shards at
+# samples_per_shard=2500, written to the experiments bucket.
+# base_seed stays at the dataset.yaml default, so early shard seeds repeat those
+# of the smaller surge runs — harmless unless the datasets are ever combined.
+
+defaults:
+  - override /datamodule: surge
+  - override /render: surge_xt
+  - _self_
+
+task_name: surge-xt-lance-2m-40k-10k
+
+output_format: lance
+
+train_val_test_sizes: [2000000, 40000, 10000]
+
+r2:
+  bucket: experiments
+
+render:
+  # 2500-sample shards keep each parallel render+upload unit short and bound
+  # the work a retry repeats.
+  samples_per_shard: 2500
+  parallel: true
+  # Retry budget rides out transient renderer-subprocess crashes in a long unattended run.
+  max_retries: 5
+  # Load the plugin once per shard; reloading per render dominates wall-clock otherwise.
+  plugin_reload_cadence: once

@@ -175,9 +175,10 @@ jobs:
           echo "r2_bucket: ${R2_BUCKET}"
 
       # Operator ask on PR #1202: list the run prefix and assert finalize
-      # wrote `dataset.complete`, `stats.npz`, and split files for formats
-      # that finalize materializes (`train.h5` for hdf5, `train.lance` for lance;
-      # val.h5 / test.h5 are pruned because the smoke configs ship
+      # wrote `dataset.complete`, `stats.npz`, and the split for formats that
+      # finalize materializes (the `train.h5` file for hdf5, the `train.lance/`
+      # dataset directory for lance — checked via `rclone lsf` since `rclone ls`
+      # lists files only; val/test are pruned because the smoke configs ship
       # train-only `train_val_test_sizes=[12, 0, 0]`).
       - name: rclone ls run prefix and pin required artifacts
         env:
@@ -191,8 +192,6 @@ jobs:
           required="dataset.complete stats.npz"
           if [[ "${OUTPUT_FORMAT}" == "hdf5" ]]; then
             required="${required} train.h5"
-          elif [[ "${OUTPUT_FORMAT}" == "lance" ]]; then
-            required="${required} train.lance"
           fi
           missing=""
           for f in $required; do
@@ -200,6 +199,9 @@ jobs:
               missing="${missing} ${f}"
             fi
           done
+          if [[ "${OUTPUT_FORMAT}" == "lance" ]] && ! rclone lsf "${PREFIX}train.lance/" | grep -q .; then
+            missing="${missing} train.lance/"
+          fi
           if [[ -n "${missing}" ]]; then
             echo "::error::missing finalize artifacts at ${PREFIX}:${missing}"
             exit 1

@@ -38,6 +38,7 @@ from synth_setter.pipeline.subprocess_stream import (
     _READ_CHUNK_BYTES,
     check_call_streamed,
     check_call_streamed_async,
+    scaled_timeout,
 )
 
 # Hard wedge backstop for every SUT invocation: no test scenario legitimately
@@ -51,6 +52,9 @@ _PROMPT_SECONDS = 10.0
 # Timeout passed to the SUT where a test exercises the timeout path; leaves
 # the child interpreter startup margin on loaded CI runners.
 _POLICY_TIMEOUT_SECONDS = 2.0
+
+# Per-phase heartbeat-sweep window (seconds); must exceed the grandchild's write cadence.
+_SWEEP_SETTLE_SECONDS = 1.0
 
 
 def _streamed(
@@ -611,9 +615,9 @@ class TestTimeoutEscalation:
             _streamed(_child(script, leak_marker), timeout=_POLICY_TIMEOUT_SECONDS)
 
         _wait_for_file(heartbeat)
-        time.sleep(1.0)
+        time.sleep(_SWEEP_SETTLE_SECONDS)
         size_after_kill = heartbeat.stat().st_size
-        time.sleep(1.0)
+        time.sleep(_SWEEP_SETTLE_SECONDS)
         assert heartbeat.stat().st_size == size_after_kill, "grandchild still heartbeating"
 
 
@@ -644,35 +648,38 @@ def test_pid_alive_unreaped_zombie_reports_dead() -> None:
 class TestPostExitSweep:
     """Problem 4b: the unconditional post-exit in-group SIGTERM sweep."""
 
+    @pytest.mark.slow
     def test_clean_exit_sweep_reaps_ingroup_grandchild(
         self, tmp_path: Path, leak_marker: str
     ) -> None:
         """An in-group grandchild outliving a *successful* child is swept.
 
-        Nothing on the timeout path exercises this: the sweep after a clean
-        exit is the only thing standing between a daemonized descendant and
-        an infinite leak.
+        The post-exit sweep is the only guard against a daemonized in-group descendant leaking
+        forever — no timeout path exercises it.
 
-        :param tmp_path: Holds the grandchild pidfile.
+        :param tmp_path: Holds the grandchild heartbeat file.
         :param leak_marker: argv stamp from the autouse sweep fixture.
         """
-        pidfile = tmp_path / "grandchild.pid"
+        heartbeat = tmp_path / "heartbeat"
         script = (
             "import os, time\n"
             "if os.fork() == 0:\n"
-            f"    with open({str(pidfile)!r}, 'w') as f:\n"
-            "        f.write(str(os.getpid()))\n"
-            "    time.sleep(60)\n"
-            "    os._exit(0)\n"
+            "    while True:\n"
+            f"        with open({str(heartbeat)!r}, 'a') as f:\n"
+            "            f.write('x')\n"
+            "        time.sleep(0.2)\n"
         )
 
         _streamed(_child(script, leak_marker))
 
-        grandchild_pid = int(_wait_for_file(pidfile))
-        deadline = time.monotonic() + 3.0
-        while time.monotonic() < deadline and _pid_alive(grandchild_pid):
-            time.sleep(0.05)
-        assert not _pid_alive(grandchild_pid), "post-exit sweep missed the in-group grandchild"
+        # _streamed returns only after the SUT's finally runs, so the sweep has been dispatched.
+        _wait_for_file(heartbeat)
+        time.sleep(_SWEEP_SETTLE_SECONDS)
+        size_after_sweep = heartbeat.stat().st_size
+        time.sleep(_SWEEP_SETTLE_SECONDS)
+        assert heartbeat.stat().st_size == size_after_sweep, (
+            "post-exit sweep missed the in-group grandchild"
+        )
 
     @pytest.mark.slow
     @pytest.mark.xfail(
@@ -795,3 +802,56 @@ class TestSyncFacade:
             out = future.result(timeout=_BACKSTOP_SECONDS)
 
         assert b"FROM_THREAD" in out
+
+
+class TestScaledTimeout:
+    """``scaled_timeout`` converts a per-item cost model into a wall-clock bound.
+
+    Problem: a flat per-call ceiling that ignores dataset size trips a spurious
+    ``TimeoutExpired`` once the dataset outgrows it. The fix scales the per-item
+    term so growth is absorbed, while a fixed overhead term still fails a true
+    startup hang fast at small N.
+    """
+
+    def test_formula_single_worker_returns_overhead_plus_per_sample_times_n(self) -> None:
+        """Single worker: budget is overhead + per_sample * num_samples."""
+        assert scaled_timeout(10, overhead_seconds=5.0, per_sample_seconds=2.0) == 25.0
+
+    def test_workers_divide_per_sample_term_ceil_not_floor(self) -> None:
+        """Workers divide the per-sample term by batch count, rounded up."""
+        # A flooring bug would drop the partial final batch and under-budget.
+        assert scaled_timeout(10, workers=4, overhead_seconds=5.0, per_sample_seconds=2.0) == 11.0
+
+    def test_zero_samples_returns_overhead_only(self) -> None:
+        """An empty dataset still gets the fixed startup overhead."""
+        assert scaled_timeout(0, overhead_seconds=7.0, per_sample_seconds=2.0) == 7.0
+
+    def test_workers_exceeding_samples_collapses_per_sample_to_one_batch(self) -> None:
+        """More workers than samples still costs one batch of per-sample time."""
+        assert scaled_timeout(3, workers=8, overhead_seconds=5.0, per_sample_seconds=2.0) == 7.0
+
+    def test_growing_dataset_increases_budget_monotonically(self) -> None:
+        """A larger sample count yields a strictly larger budget."""
+        small = scaled_timeout(100, overhead_seconds=30.0, per_sample_seconds=1.0)
+        large = scaled_timeout(1000, overhead_seconds=30.0, per_sample_seconds=1.0)
+        assert large > small
+
+    def test_negative_samples_raises_value_error(self) -> None:
+        """A negative sample count is rejected."""
+        with pytest.raises(ValueError, match="num_samples"):
+            scaled_timeout(-1, overhead_seconds=5.0, per_sample_seconds=2.0)
+
+    def test_zero_workers_raises_value_error(self) -> None:
+        """A worker count below one is rejected (division guard)."""
+        with pytest.raises(ValueError, match="workers"):
+            scaled_timeout(10, workers=0, overhead_seconds=5.0, per_sample_seconds=2.0)
+
+    def test_negative_overhead_raises_value_error(self) -> None:
+        """A negative overhead constant is rejected."""
+        with pytest.raises(ValueError, match="overhead_seconds"):
+            scaled_timeout(10, overhead_seconds=-1.0, per_sample_seconds=2.0)
+
+    def test_negative_per_sample_raises_value_error(self) -> None:
+        """A negative per-sample constant is rejected."""
+        with pytest.raises(ValueError, match="per_sample_seconds"):
+            scaled_timeout(10, overhead_seconds=5.0, per_sample_seconds=-1.0)

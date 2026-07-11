@@ -69,22 +69,47 @@ Read the file list from Step 1. Map file types → relevant skills:
 | Any `*.{yml,yaml}` under `configs/`                                         | `comment-hygiene`                                       |
 | `docs/doc-map.yaml`                                                         | `comment-hygiene`                                       |
 | ML model / pipeline / training code under `src/synth_setter/`               | `ml-data-pipeline`, `ml-test`                           |
+| `*.py` that imports or calls Lance (content-detected — see below)           | `lance-review`                                          |
 | Diff renames or moves files (anything with `R` in `git diff --name-status`) | `tdd-refactor`                                          |
 
 Always run `code-health` and `synth-setter-project-standards`. Other skills opt in based on file extensions in the diff. `comment-hygiene` deduplicates: even if multiple rows above select it, fan out only one parallel agent per skill. Note which skills you selected; you'll launch one parallel agent per skill.
+
+`lance-review` opts in by **content, not extension** — a `*.py` file selects it
+only when the diff touches the Lance API. Grep the changed Python files:
+
+```bash
+mapfile -t changed_py < <(gh pr view <N> --repo "$(gh repo view --json nameWithOwner -q .nameWithOwner)" --json files -q '.files[].path' | grep '\.py$')
+# PR file lists include deleted paths; keep only files present in the checkout
+present=(); for f in "${changed_py[@]}"; do [[ -f $f ]] && present+=("$f"); done
+[[ ${#present[@]} -gt 0 ]] && grep -lE 'import lance|lancedb|lance\.[a-z]|Lance[A-Z]|FragmentMetadata|write_dataset|\.scanner\(|\.to_batches\(|\.take\(|add_columns|merge_columns' -- "${present[@]}"
+```
+
+This is the **same pattern** the skill itself uses to enumerate touch-points
+(`agent/skills/lance-review/SKILL.md` Step 2) — they are kept identical so the
+router never skips a file the skill would have findings for. If nothing matches,
+skip `lance-review`.
 
 ## Step 4: Launch parallel review agents
 
 Launch one `general-purpose` Agent per selected skill. **All agents in a single message** so they run concurrently (one message with N tool calls = N parallel agents). You are an orchestrator agent yourself, so these review agents are your sub-agents.
 
-If your harness does not let a sub-agent spawn its own sub-agents, fall back to running each selected skill sequentially in your own context — invoke each `tinaudio-synth-setter-skills:<skill-name>` via the Skill tool one at a time. The fallback must produce the *same* per-skill result as the parallel path: feed each skill the same inputs the sub-agent prompt would carry (PR number, repo, base/head SHA, file list) and capture its findings in the per-agent output contract below (BLOCK/WARN sections, each finding citing `<path>:<line>`), so Step 5 aggregation parses sequential and parallel output identically. Parallel fan-out is preferred; the sequential fallback preserves correctness when nesting is unavailable.
+If your harness does not let a sub-agent spawn its own sub-agents, fall back to running each selected skill sequentially in your own context — invoke each `tinaudio-synth-setter-skills:<skill-name>` via the Skill tool one at a time (with the same `lance-review` exception as the parallel path: invoke it bare, not under the `tinaudio-synth-setter-skills:` prefix — see the note below). The fallback must produce the *same* per-skill result as the parallel path: feed each skill the same inputs the sub-agent prompt would carry (PR number, repo, base/head SHA, file list) and capture its findings in the per-agent output contract below (BLOCK/WARN sections, each finding citing `<path>:<line>`), so Step 5 aggregation parses sequential and parallel output identically. Parallel fan-out is preferred; the sequential fallback preserves correctness when nesting is unavailable.
 
 Each agent's prompt MUST include:
 
 - The PR number, repo, base SHA, head SHA.
 - The full file list (with per-file line counts is helpful but optional).
-- The exact skill to invoke: `Invoke the tinaudio-synth-setter-skills:<skill-name> skill via the Skill tool and apply its checklist to this PR's diff.`
+- The exact skill to invoke: `Invoke the tinaudio-synth-setter-skills:<skill-name> skill via the Skill tool and apply its checklist to this PR's diff.` **Exception:** `lance-review` is repo-local, not a plugin skill — instruct its agent to invoke the bare `lance-review` skill (no `tinaudio-synth-setter-skills:` prefix), per the note just below. Do not emit the plugin-prefixed string for it.
 - The expected output shape (see below).
+
+`lance-review` is **repo-local**, not a plugin skill: its agent attempts the bare
+`lance-review` skill via the Skill tool first, and only if that call errors (the
+harness has not registered it) falls back to reading and applying
+`agent/skills/lance-review/SKILL.md` directly. The
+per-agent output contract below is unchanged. **Either path** requires web access
+(`WebFetch`/`WebSearch`): the skill's grounding rule only holds if the agent can
+fetch the live Lance docs, so spawn its sub-agent as `general-purpose` (which has
+both tools) regardless of which invocation path it takes.
 
 Each agent returns a Markdown report with `BLOCK` and `WARN` sections. Each finding cites `<path>:<line>`. Agents work independently — they should not coordinate.
 
@@ -109,12 +134,9 @@ Aim each agent at a 1500-word ceiling so reports stay scannable. The orchestrato
 
 ## Step 5: Aggregate findings
 
-Once every parallel agent returns, parse each report's BLOCK and WARN findings. **BLOCK and WARN are routed differently** so a flood of low-severity WARNs can't bury the BLOCKs:
+Once every parallel agent returns, parse each report's BLOCK and WARN findings. **Both severities become entries in the `findings` JSON array** (Step 6) — each posts as its own inline unresolved thread. Posting WARNs inline (rather than collapsing them into a body bullet list) is deliberate: a bullet inside a long review body is easy to scroll past, while an unresolved inline thread forces an explicit reply or resolution before the PR ships. The severity tag on the comment body lets reviewers filter or batch-resolve, and `post_review.py` already keeps every thread unresolved.
 
-- **BLOCK findings** become entries in the `findings` JSON array (Step 6) — each posts as its own inline unresolved thread.
-- **WARN findings** are *not* added to `findings`. They collapse into a single `## Advisory (WARN) findings` section appended to `review_body` (Step 6), one bullet each. This keeps the inline-thread list short enough that BLOCKs stay visible.
-
-Prefix each finding body (BLOCK comment or WARN bullet) with the `[<skill>:<severity>]` scheme so reviewers can see which checklist surfaced it — using the short-tag form from the table below (`[<short-tag>:block]` / `[<short-tag>:warn]`), not the full skill name.
+Prefix each finding body with the `[<skill>:<severity>]` scheme so reviewers can see which checklist surfaced it — using the short-tag form from the table below (`[<short-tag>:block]` / `[<short-tag>:warn]`), not the full skill name.
 
 Severity → severity tag:
 
@@ -135,49 +157,45 @@ Skill → tag (short form for comment body):
 | `tdd-refactor`                   | `tdd-refactor`    |
 | `ml-data-pipeline`               | `ml-pipeline`     |
 | `ml-test`                        | `ml-test`         |
+| `lance-review`                   | `lance`           |
 
-A BLOCK finding becomes one entry in the `findings` array:
+Each finding (BLOCK or WARN) becomes one entry in the `findings` array, with `<severity>` set to `block` or `warn`:
 
 ```json
 {
   "path": "<path>",
   "line": <line>,
-  "body": "**[<short-tag>:block]** <description>"
+  "body": "**[<short-tag>:<severity>]** <description>"
 }
 ```
 
-A WARN finding becomes one bullet in the `## Advisory (WARN) findings` section of `review_body` (built in Step 6), grouped by skill then by `path:line`:
+The shape is identical for both severities — only the tag changes. `post_review.py` anchors the entry, posts it as an inline review comment on the GitHub review, and leaves the thread unresolved.
 
-```
-- **[<short-tag>:warn]** <path>:<line> — <description>
-```
-
-Do NOT dedupe BLOCKs across skills (e.g. shell-style and synth-setter-project-standards both flagging a `[ ]` vs `[[ ]]` issue) — keep each BLOCK's signal independent, as its own inline thread.
-
-**Dedupe WARNs only.** WARNs are collapsed into one advisory list, so near-duplicates are pure noise there. If the same `path:line` plus a near-identical description is flagged by multiple skills, keep one bullet and append `(also: <other-tags>)` listing the other skills' short tags. For example, if both `shell-style` and `synth-setter` flag the same `[ ]` vs `[[ ]]` at `scripts/run.sh:42`, emit a single bullet `- **[shell-style:warn]** scripts/run.sh:42 — Use [[ ]] for the test (also: synth-setter)`. This dedupe applies to WARNs only; never collapse BLOCKs.
+Do NOT dedupe findings across skills (e.g. `shell-style` and `synth-setter-project-standards` both flagging the same `[ ]` vs `[[ ]]` issue at `scripts/run.sh:42`) — keep each finding's signal independent, as its own inline thread. Two short threads from two checklists tell the reviewer more than one merged thread that hides which checklist surfaced it; the cost of a near-duplicate inline comment is much smaller than the cost of misattributing a finding.
 
 ## Step 6: Build the findings JSON
 
-Same shape `post_review.py` consumes. The `findings` array holds **only BLOCK findings** (from Step 5) plus, indirectly, the PR-health BLOCKs folded into `review_body` below. **WARN findings do not appear in `findings`** — they live in the `## Advisory (WARN) findings` section of `review_body`.
+Same shape `post_review.py` consumes. The `findings` array holds **every BLOCK and every WARN** from Step 5; the PR-health BLOCKs from Step 2 are folded into `review_body` separately because they aren't anchored to diff lines.
 
-`review_body` carries up to two appended sections, in this order: `## PR health` (Step 2 BLOCKs), then `## Advisory (WARN) findings` (the collapsed WARNs from Step 5). Omit either section if it would be empty.
+`review_body` carries one optional appended section, `## PR health` (Step 2 BLOCKs). Omit it if Step 2 produced nothing.
 
 **Fold the Step 2 PR-health BLOCKs into `review_body`** (they aren't anchored to diff lines, so they can't be inline comments). Prepend a `## PR health` section listing every PR-health BLOCK; if Step 2 produced nothing, omit the section entirely.
 
 Transform each Step 2 BLOCK line into one bullet under `## PR health`: strip the `BLOCK: <PR> — ` prefix and prepend `- **[<calling-skill>:block]** `, leaving the `[pr-health] …` body unchanged. Substitute `<calling-skill>` with the calling skill's name (`repo-review-full` or `repo-review-full-no-comments`). For example, `BLOCK: 897 — [pr-health] Failing check: ci/test (FAILURE) — https://…` becomes `- **[repo-review-full:block]** [pr-health] Failing check: ci/test (FAILURE) — https://…` when called from `repo-review-full`.
 
-**Append the collapsed WARNs under `## Advisory (WARN) findings`.** Emit one bullet per (deduped) WARN from Step 5, grouped by skill then by `path:line`, using the `- **[<short-tag>:warn]** <path>:<line> — <description>` shape. If Step 5 produced no WARNs, omit the section entirely.
-
 ```json
 {
   "pr_number": <N>,
   "repo": "<owner>/<repo>",
-  "review_body": "Multi-skill review of PR #<N> — <K> parallel passes (<list of skills>). Each BLOCK posted below as an individual unresolved thread; WARNs are collapsed into the `## Advisory (WARN) findings` section to keep the inline-thread list short. Findings on files outside the diff are anchored to the line in the diff that *causes* the staleness or rolled into the review body.\n\n## PR health\n\n- **[<calling-skill>:block]** [pr-health] Merge conflict with base branch (mergeStateStatus=DIRTY). Rebase or merge base before review.\n- **[<calling-skill>:block]** [pr-health] Failing check: ci/test (FAILURE) — https://github.com/.../runs/123\n\n## Advisory (WARN) findings\n\n- **[code-health:warn]** src/foo.py:42 — Function exceeds the length budget; consider extracting a helper.\n- **[comment-hygiene:warn]** src/foo.py:7 — Docstring restates the signature; tighten to the contract.",
-  "findings": [ ... ]
+  "review_body": "Multi-skill review of PR #<N> — <K> parallel passes (<list of skills>). Each finding below (BLOCK or WARN) is posted as an individual unresolved inline thread so it can't be scrolled past without an explicit reply or resolution. Findings on files outside the diff are anchored to the line in the diff that *causes* the staleness or rolled into the review body.\n\n## PR health\n\n- **[<calling-skill>:block]** [pr-health] Merge conflict with base branch (mergeStateStatus=DIRTY). Rebase or merge base before review.\n- **[<calling-skill>:block]** [pr-health] Failing check: ci/test (FAILURE) — https://github.com/.../runs/123",
+  "findings": [
+    {"path": "src/foo.py", "line": 42, "body": "**[code-health:warn]** Function exceeds the length budget; consider extracting a helper."},
+    {"path": "src/foo.py", "line": 7,  "body": "**[comment-hygiene:warn]** Docstring restates the signature; tighten to the contract."}
+  ]
 }
 ```
 
-The `findings` array now holds only BLOCK items (each posts as its own inline unresolved thread); WARNs live in `review_body`. The exact wording of `review_body` is up to the calling skill — `repo-review-full` writes the "each BLOCK posted below as an individual unresolved thread" phrasing; `repo-review-full-no-comments` writes a variant that says nothing was posted. Both reuse the `## PR health` and `## Advisory (WARN) findings` section formats.
+The `findings` array carries every BLOCK and every WARN (each posts as its own inline unresolved thread). The exact wording of `review_body` is up to the calling skill — `repo-review-full` writes the "each finding posted below as an individual unresolved inline thread" phrasing; `repo-review-full-no-comments` writes a variant that says nothing was posted. Both reuse the same `## PR health` section format.
 
 When the calling skill submits via `post_review.py` (i.e. `repo-review-full`), add a top-level `"event"`: `REQUEST_CHANGES` if any finding is a BLOCK (any `[*:block]`, including the folded PR-health BLOCKs), else `COMMENT` if any WARN exists, else `APPROVE`. `repo-review-full-no-comments` renders to chat and never posts, so it omits `"event"`.
 
@@ -193,7 +211,7 @@ Return to your orchestrator brief's Step 7 for the final delivery step.
 
 ## Notes
 
-- Collapsing WARNs into a single advisory section (instead of one inline thread each) is intentional signal-preservation: posting every finding as its own thread trains reviewers to ignore the whole list, which buries the rare BLOCK that actually gates the merge.
+- WARN findings are posted inline (as their own unresolved threads) rather than collapsed into a body bullet list. The earlier collapse design optimized for keeping BLOCKs visible, but in practice body bullets were silently ignored — every review converged on `event=COMMENT` with zero inline threads, and the WARNs never got addressed. The inline form forces an explicit reply or resolution before merge under "Conversations must be resolved" branch protection, and the `[<short-tag>:<severity>]` prefix lets reviewers filter or batch-resolve.
 - This pipeline depends on the `tinaudio-synth-setter-skills` plugin being enabled. If a sub-skill invocation fails, surface the error — don't silently skip. Falling back to `repo-review` (MVP) is the user's call, not the skill's.
 - The structure is three-level and intentional: the main agent spawns one orchestrator agent (you), which fans out one *general-purpose* review sub-agent per skill; each review sub-agent invokes its plugin skill via the Skill tool. The orchestration is your contribution; each plugin skill's authoritative checklist is the source of truth for its domain.
 - For the concrete invocation pattern (parallel Agent tool calls in a single message, expected per-agent prompt shape), see the example trace recorded in PR #777's review history — that's the workflow this pipeline packages.

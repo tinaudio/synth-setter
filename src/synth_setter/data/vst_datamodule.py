@@ -1,7 +1,7 @@
 import random
 from collections.abc import Iterator, Sequence
 from pathlib import Path
-from typing import ClassVar, Literal, Protocol
+from typing import ClassVar, Literal, NotRequired, Protocol, TypedDict
 
 import h5py
 import hdf5plugin  # noqa: F401  # side-effect import: registers HDF5 blosc filters for shard I/O
@@ -17,6 +17,89 @@ from synth_setter.pipeline import r2_io
 # Registry key whose spec width sizes fake-mode batches and seeds the
 # datamodule default when no ``param_spec_name`` is configured.
 _DEFAULT_PARAM_SPEC_NAME = "surge_xt"
+
+
+# DOC601/DOC603: pydoclint can't read sphinx ``:ivar:`` docs, so TypedDict keys
+# are documented in the docstring body instead.
+class RawBatch(TypedDict):  # noqa: DOC601, DOC603
+    """One batch of read shard columns, the input to :func:`prepare_batch`.
+
+    Shapes are ``(batch, ...)``: ``param_array`` is ``(batch, num_params)`` and
+    always present; ``mel_spec`` is ``(batch, channels, n_mels, n_frames)``,
+    ``music2latent`` is ``(batch, latent_dim, n_frames)``, ``audio`` is
+    ``(batch, channels, samples)``. An optional key whose read flag is off may
+    be stored as ``None`` or omitted entirely; both read as unread.
+    """
+
+    param_array: np.ndarray
+    mel_spec: NotRequired[np.ndarray | None]
+    music2latent: NotRequired[np.ndarray | None]
+    audio: NotRequired[np.ndarray | None]
+
+
+def prepare_batch(
+    raw: RawBatch,
+    *,
+    mean: np.ndarray | None,
+    std: np.ndarray | None,
+    rescale_params: bool,
+    ot: bool,
+    generator: torch.Generator,
+) -> dict[str, torch.Tensor | None]:
+    """Turn one batch of read columns into model-ready tensors.
+
+    The single owner of per-batch semantics: mel normalization, param rescale,
+    seeded noise, and optional Hungarian matching, in that order. Pure — it
+    reads only ``raw`` and the passed args and never writes back into them, so a
+    fixed ``generator`` seed makes the whole batch reproducible. The h5 and Lance
+    read paths both route here so batch contents stay format-independent.
+
+    :param raw: Read shard columns; see :class:`RawBatch` for keys and shapes.
+        ``param_array`` ``(batch, num_params)`` is required; a missing or
+        ``None`` optional modality drops to ``None`` in the output.
+    :param mean: Mel mean to subtract, broadcasting over the batch axis, or
+        ``None`` to skip normalization.
+    :param std: Mel std to divide by, broadcasting over the batch axis, or
+        ``None`` to skip normalization.
+    :param rescale_params: Whether to map params from ``[0, 1]`` to ``[-1, 1]``.
+    :param ot: Whether to Hungarian-match noise to params (and permute the
+        conditioning rows to follow).
+    :param generator: RNG for the noise draw; seed it to pin the batch.
+    :returns: ``{"mel_spec", "m2l", "params", "noise", "audio"}`` with
+        ``float32`` contiguous tensors, ``None`` for unread modalities; ``params``
+        and ``noise`` are ``(batch, num_params)``.
+    """
+    audio_raw = raw.get("audio")
+    audio = torch.from_numpy(audio_raw).to(dtype=torch.float32) if audio_raw is not None else None
+
+    mel_raw = raw.get("mel_spec")
+    if mel_raw is not None:
+        if mean is not None and std is not None:
+            mel_raw = (mel_raw - mean) / std
+        mel_spec = torch.from_numpy(mel_raw).to(dtype=torch.float32)
+    else:
+        mel_spec = None
+
+    m2l_raw = raw.get("music2latent")
+    m2l = torch.from_numpy(m2l_raw).to(dtype=torch.float32) if m2l_raw is not None else None
+
+    param_array = raw["param_array"]
+    if rescale_params:
+        param_array = param_array * 2 - 1
+    params = torch.from_numpy(param_array).to(dtype=torch.float32)
+    # empty_like(params) matches params' device/dtype/shape and normal_ accepts
+    # the generator (randn_like does not), so noise can't land on a foreign device.
+    noise = torch.empty_like(params).normal_(generator=generator)
+    if ot:
+        noise, params, mel_spec, audio = _hungarian_match(noise, params, mel_spec, audio)
+
+    return {
+        "mel_spec": mel_spec.contiguous() if mel_spec is not None else None,
+        "m2l": m2l.contiguous() if m2l is not None else None,
+        "params": params.contiguous(),
+        "noise": noise.contiguous(),
+        "audio": audio.contiguous() if audio is not None else None,
+    }
 
 
 class ShardColumn(Protocol):
@@ -59,10 +142,8 @@ class ShardFile(Protocol):
         ...
 
 
-# DOC601/DOC603: pydoclint cannot see sphinx ``:ivar:`` class-attribute docs (the
-# underlying docstring_parser drops them from its attribute list), so a documented
-# class with class-level annotations is unavoidably flagged; mean/std/dataset_file are
-# described in the class docstring body instead.
+# DOC601/DOC603: pydoclint can't read sphinx ``:ivar:`` docs, so class-level
+# annotations are documented in the docstring body instead.
 class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
     """Batch-indexed dataset over one shard of VST renders (HDF5 by default).
 
@@ -71,7 +152,12 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
     ``ot`` is set). Fake mode synthesises
     random tensors of the configured width without opening any file. ``mean`` and ``std``
     hold the optional saved mel statistics applied during reads (``None`` when unloaded);
-    ``dataset_file`` is the open :class:`ShardFile` handle (``None`` in fake mode).
+    ``dataset_file`` is the open :class:`ShardFile` handle (``None`` in fake mode);
+    ``generator`` is the RNG threaded into :func:`prepare_batch` for the per-batch
+    noise draw — seeded from the global RNG at construction (so Lightning's
+    ``seed_everything`` governs it) and re-seeded once per dataloader worker from
+    the worker seed (seed it manually to pin a batch); fake mode leaves it at the
+    default seed because fake noise never uses it.
     Storage-format subclasses override ``_open`` to read non-HDF5 shards.
     """
 
@@ -110,6 +196,15 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
         """
         self.batch_size = batch_size
         self.ot = ot
+
+        # Seeded from a global-RNG draw so seed_everything governs noise (a bare
+        # Generator() repeats a fixed default seed); workers re-seed on first read.
+        # Fake mode never uses it, so it skips the draw to leave the global stream
+        # untouched.
+        self.generator = torch.Generator()
+        if not fake:
+            self.generator.manual_seed(int(torch.randint(2**63 - 1, (1,)).item()))
+        self._worker_reseed_done = False
 
         self.read_audio = read_audio
         self.read_mel = read_mel
@@ -177,10 +272,17 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
         if self.fake:
             return 10000
 
-        return self.dataset_file["audio"].shape[0] // self.batch_size
+        # param_array is the one always-present column; audio is optional on
+        # Lance shards, so counting rows off it would KeyError before any read.
+        return self.dataset_file["param_array"].shape[0] // self.batch_size
 
     def _get_fake_item(self) -> dict[str, torch.Tensor | None]:
         """Synthesise one random batch matching the configured feature flags.
+
+        Bypasses :func:`prepare_batch`: fake batches are already tensors and need
+        no normalization or OT. Fake noise deliberately draws from the global RNG,
+        not ``self.generator`` — under workers, Lightning's ``pl_worker_init_function``
+        re-seeds worker global RNGs, so both modes stay ``seed_everything``-reproducible.
 
         :returns: Mapping of feature names to random tensors (or ``None`` when unread).
         """
@@ -194,15 +296,17 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
 
         noise = torch.randn_like(param_array)
 
-        return dict(
-            mel_spec=mel_spec,
-            m2l=m2l,
-            params=param_array,
-            noise=noise,
-            audio=audio,
-        )
+        return {
+            "mel_spec": mel_spec,
+            "m2l": m2l,
+            "params": param_array,
+            "noise": noise,
+            "audio": audio,
+        }
 
-    def _index_dataset(self, ds: ShardColumn, idx: int | Sequence[int] | np.ndarray) -> np.ndarray:
+    def _index_dataset(
+        self, ds: ShardColumn, idx: int | tuple[int, int] | Sequence[int] | np.ndarray
+    ) -> np.ndarray:
         """Slice one batch out of a shard column for the given index.
 
         :param ds: Shard column to slice.
@@ -222,7 +326,29 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
 
         return ds[idx]
 
-    def __getitem__(self, idx: int | Sequence[int] | np.ndarray) -> dict[str, torch.Tensor | None]:
+    def _reseed_generator_in_worker(self) -> None:
+        """Re-seed ``generator`` once per dataloader worker, on first batch access.
+
+        Workers fork after ``__init__``, so every fork inherits identical
+        generator state and would draw correlated noise; the DataLoader-assigned
+        worker seed (``base_seed + worker_id``) is distinct per worker yet still
+        derived from the global RNG, keeping ``seed_everything`` in charge. Done
+        lazily instead of via ``worker_init_fn`` so Lightning's auto-added
+        ``pl_worker_init_function`` (gated on ``worker_init_fn is None``) stays.
+        """
+        if self._worker_reseed_done:
+            return
+        worker_info = torch.utils.data.get_worker_info()
+        # Latch only inside a worker: a parent-process read must not mark the
+        # flag, or forks made afterwards would inherit it and skip re-seeding.
+        if worker_info is None:
+            return
+        self._worker_reseed_done = True
+        self.generator.manual_seed(worker_info.seed)
+
+    def __getitem__(
+        self, idx: int | tuple[int, int] | Sequence[int] | np.ndarray
+    ) -> dict[str, torch.Tensor | None]:
         """Read one batch of features, params, and matched noise at ``idx``.
 
         :param idx: Batch index, or a ``(start, stop)`` pair, or a sequence of rows.
@@ -230,44 +356,38 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
         """
         if self.fake:
             return self._get_fake_item()
+        self._reseed_generator_in_worker()
 
-        if self.read_audio:
-            audio = self._index_dataset(self.dataset_file["audio"], idx)
-            audio = torch.from_numpy(audio).to(dtype=torch.float32)
-        else:
-            audio = None
-
-        if self.read_mel:
-            mel_spec = self._index_dataset(self.dataset_file["mel_spec"], idx)
-            if self.mean is not None and self.std is not None:
-                mel_spec = (mel_spec - self.mean) / self.std
-            mel_spec = torch.from_numpy(mel_spec).to(dtype=torch.float32)
-        else:
-            mel_spec = None
-
-        if self.read_m2l:
-            m2l = self._index_dataset(self.dataset_file["music2latent"], idx)
-            m2l = torch.from_numpy(m2l).to(dtype=torch.float32)
-        else:
-            m2l = None
-
-        param_array = self._index_dataset(self.dataset_file["param_array"], idx)
-        if self.rescale_params:
-            param_array = param_array * 2 - 1
-        param_array = torch.from_numpy(param_array).to(dtype=torch.float32)
-        noise = torch.randn_like(param_array)
-        if self.ot:
-            noise, param_array, mel_spec, audio = _hungarian_match(
-                noise, param_array, mel_spec, audio
-            )
-
-        return dict(
-            mel_spec=mel_spec.contiguous() if mel_spec is not None else None,
-            m2l=m2l.contiguous() if m2l is not None else None,
-            params=param_array.contiguous(),
-            noise=noise.contiguous(),
-            audio=audio.contiguous() if audio is not None else None,
+        # Every key is always present; an off read flag stores ``None`` rather
+        # than omitting the key, so prepare_batch never relies on key-absence.
+        raw: RawBatch = {
+            "param_array": self._index_dataset(self.dataset_file["param_array"], idx),
+            "audio": self._read_column("audio", idx, self.read_audio),
+            "mel_spec": self._read_column("mel_spec", idx, self.read_mel),
+            "music2latent": self._read_column("music2latent", idx, self.read_m2l),
+        }
+        return prepare_batch(
+            raw,
+            mean=self.mean,
+            std=self.std,
+            rescale_params=self.rescale_params,
+            ot=self.ot,
+            generator=self.generator,
         )
+
+    def _read_column(
+        self, name: str, idx: int | tuple[int, int] | Sequence[int] | np.ndarray, read: bool
+    ) -> np.ndarray | None:
+        """Slice one optional shard column, or skip it when its read flag is off.
+
+        :param name: Column name within the shard.
+        :param idx: Batch index, or a ``(start, stop)`` pair, or a sequence of rows.
+        :param read: Whether this column's modality is enabled.
+        :returns: The selected rows, or ``None`` when ``read`` is false.
+        """
+        if not read:
+            return None
+        return self._index_dataset(self.dataset_file[name], idx)
 
 
 class WithinChunkShuffledSampler(torch.utils.data.Sampler):
@@ -317,7 +437,6 @@ class WithinChunkShuffledSampler(torch.utils.data.Sampler):
 
         indices = np.concatenate(indices, axis=0)
 
-        # shuffle by rows
         np.random.shuffle(indices)
 
         for row in indices:

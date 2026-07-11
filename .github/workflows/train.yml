@@ -1,0 +1,87 @@
+name: Train
+
+# Manually-dispatched training: submits a SkyPilot managed job that runs
+# synth-setter-train on the provider named in the launch config (RunPod by
+# default). The launch config is the single input — experiment, compute
+# template, worker image tag, and worker cmd are all baked there. See
+# src/synth_setter/configs/launch/train-runpod.yaml and
+# storage-provenance-spec.md §8.
+#
+# The runner only dispatches: the launcher runs in the dev-snapshot container
+# (mirroring generate-dataset-shards.yaml's runpod row) and detaches once the
+# managed-jobs controller accepts the job unless the config sets tail=true.
+# WORKER_GIT_REF pins the worker checkout to the dispatched SHA so §12
+# github_sha provenance records the commit actually trained.
+on:
+  workflow_dispatch:
+    inputs:
+      launch_config:
+        description: "Repo-relative path to the SkyPilot launch config (see src/synth_setter/configs/launch/)"
+        required: true
+        type: string
+        default: src/synth_setter/configs/launch/train-runpod.yaml
+
+permissions:
+  contents: read
+
+jobs:
+  train:
+    name: Dispatch synth-setter-train via SkyPilot (${{ inputs.launch_config }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      IMAGE: tinaudio/synth-setter:dev-snapshot
+      LAUNCH_CONFIG: ${{ inputs.launch_config }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      # Exports RCLONE_CONFIG_R2_* for the docker run -e pass-through below;
+      # rclone itself runs on the SkyPilot worker, not the runner.
+      - name: Set up R2
+        uses: ./.github/actions/setup-r2
+        with:
+          access-key-id: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+          endpoint: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+
+      - name: Pull image
+        run: docker pull "$IMAGE"
+
+      # python -m (not the console script) so the launcher comes from the
+      # mounted fresh checkout via the image's editable install, independent
+      # of the entry-point shims baked at image-build time. LAUNCH_CONFIG
+      # passes through step env so a stray token cannot break out.
+      - name: Dispatch via SkyPilot
+        env:
+          SKYPILOT_API_SERVER_ENDPOINT: ${{ secrets.SKYPILOT_API_SERVER_ENDPOINT }}
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+          WORKER_GIT_REF: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "${{ github.workspace }}:/home/build/synth-setter" \
+            -e SKYPILOT_API_SERVER_ENDPOINT \
+            -e RUNPOD_API_KEY \
+            -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
+            -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
+            -e RCLONE_CONFIG_R2_ENDPOINT \
+            -e WANDB_API_KEY \
+            -e WORKER_GIT_REF \
+            -e LAUNCH_CONFIG \
+            "$IMAGE" \
+            bash -c '
+              set -euo pipefail
+              cd /home/build/synth-setter
+              python -m synth_setter.pipeline.skypilot_launch "$LAUNCH_CONFIG"
+            ' 2>&1 | tee train-dispatch.log
+
+      - name: Upload dispatch log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: train-dispatch-log
+          path: train-dispatch.log
+          if-no-files-found: warn
+          retention-days: 7

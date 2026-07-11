@@ -1,4 +1,5 @@
-import random
+"""Synth/note parameter definitions, sampling, and encoding for VST param specs."""
+
 from collections.abc import Mapping
 from typing import Any, Literal, TypedDict, cast
 
@@ -17,7 +18,7 @@ class Parameter:
     def __init__(self, name: str):
         self.name = name
 
-    def sample(self) -> float:
+    def sample(self, rng: np.random.Generator) -> Any:
         raise NotImplementedError
 
 
@@ -58,10 +59,10 @@ class CategoricalParameter(Parameter):
         else:
             return len(self.raw_values)
 
-    def sample(self) -> float:
+    def sample(self, rng: np.random.Generator) -> Any:
         p = np.array(self.weights)
         p /= p.sum()
-        return np.random.choice(self.raw_values, p=p)
+        return rng.choice(self.raw_values, p=p)
 
     def _encode_onehot(self, raw_value: float) -> np.ndarray:
         # find index of nearest raw value
@@ -118,8 +119,11 @@ class DiscreteLiteralParameter(Parameter):
         else:
             return self.max - self.min + 1
 
-    def sample(self) -> float:
-        return np.random.randint(self.min, self.max + 1)
+    def sample(self, rng: np.random.Generator) -> int:
+        # Native int, not np.int64: a sampled pitch flows into mido/pedalboard's
+        # MIDI parser, which rejects numpy scalars ("must be bytes or lists of
+        # byte values"). ``Generator.integers`` returns np.int64.
+        return int(rng.integers(self.min, self.max + 1))
 
     def _encode_onehot(self, raw_value: int) -> np.ndarray:
         onehot = np.zeros(self.max - self.min + 1)
@@ -178,11 +182,11 @@ class ContinuousParameter(Parameter):
     def __len__(self):
         return 1
 
-    def sample(self) -> float:
-        if self.constant_val_p > 0.0 and random.random() < self.constant_val_p:
+    def sample(self, rng: np.random.Generator) -> float:
+        if self.constant_val_p > 0.0 and rng.random() < self.constant_val_p:
             return self.constant_val
 
-        return random.uniform(self.min, self.max)
+        return rng.uniform(self.min, self.max)
 
     def encode(self, raw_value: float) -> np.ndarray:
         return (np.array([raw_value]) - self.min) / (self.max - self.min)
@@ -204,10 +208,8 @@ class NoteDurationParameter(Parameter):
     def __len__(self):
         return 2
 
-    def sample(self) -> tuple[float, float]:
-        start, end = np.sort(
-            np.random.uniform(0.0, self.max_note_duration_seconds, size=2)
-        ).tolist()
+    def sample(self, rng: np.random.Generator) -> tuple[float, float]:
+        start, end = np.sort(rng.uniform(0.0, self.max_note_duration_seconds, size=2)).tolist()
 
         return start, end
 
@@ -250,9 +252,19 @@ class ParamSpec:
     def __len__(self):
         return self.synth_param_length + self.note_param_length
 
-    def sample(self) -> tuple[dict[str, float], NoteParams]:
-        synth_param_dict = {p.name: p.sample() for p in self.synth_params}
-        note_param_dict = {p.name: p.sample() for p in self.note_params}
+    def sample(
+        self, rng: np.random.Generator | None = None
+    ) -> tuple[dict[str, float], NoteParams]:
+        """Draw one synth/note param set, every parameter drawing from ``rng``.
+
+        :param rng: Generator all parameters draw from; ``None`` uses a fresh
+            non-deterministic one (pass a seeded one for reproducible draws).
+        :returns: ``(synth_param_dict, note_params)``.
+        """
+        if rng is None:
+            rng = np.random.default_rng()
+        synth_param_dict = {p.name: p.sample(rng) for p in self.synth_params}
+        note_param_dict = {p.name: p.sample(rng) for p in self.note_params}
 
         # Keys come from runtime ``Parameter.name`` values, so the checker can't
         # prove the NoteParams key->type mapping; assert it at this one source.
@@ -270,6 +282,16 @@ class ParamSpec:
         return np.concatenate((synth_params, note_params))
 
     def decode(self, params: np.ndarray) -> tuple[dict[str, float], NoteParams]:
+        """Decode one encoded row of values in ``[0, 1]``.
+
+        Raw model outputs live in ``[-1, 1]`` and must go through
+        :func:`decode_model_output` instead. Width is not validated: the row
+        is consumed in per-parameter slices, so a wrong-width row truncates or
+        raises late (behavior pinned in ``tests/data/vst/test_param_spec.py``).
+
+        :param params: Encoded row (output of :meth:`encode`), nominally ``len(self)`` wide.
+        :returns: ``(synth_param_dict, note_params)``.
+        """
         synth_params_to_process = [(p, len(p)) for p in self.synth_params]
         note_params_to_process = [(p, len(p)) for p in self.note_params]
 
@@ -302,3 +324,21 @@ class ParamSpec:
     @property
     def names(self) -> list[str]:
         return self.synth_param_names + self.note_param_names
+
+
+def decode_model_output(row: np.ndarray, spec: ParamSpec) -> tuple[dict[str, float], NoteParams]:
+    """Invert the model-output scale and decode one prediction row.
+
+    Model prediction rows live in ``[-1, 1]``; the encoded param domain is
+    ``[0, 1]``, so the row is rescaled via ``(x + 1) / 2`` and clipped before
+    :meth:`ParamSpec.decode`.
+
+    :param row: One prediction row, nominally ``(len(spec),)`` wide, values in
+        ``[-1, 1]``; width is not enforced (see :meth:`ParamSpec.decode`).
+    :param spec: Spec the model was trained against.
+    :returns: ``(synth_param_dict, note_params)``; synth values are
+        pedalboard-normalized raw values (conventionally ``[0, 1]``), note
+        params are in their native domains (pitch as int, start/end seconds).
+    """
+    scaled = np.clip((row + 1) / 2, 0, 1)
+    return spec.decode(scaled)

@@ -110,12 +110,12 @@ def _load_param_array_from_hdf5(local_h5: Path) -> np.ndarray:
 
 
 def _load_param_array_from_lance(local_lance: Path) -> np.ndarray:
-    """Read the ``param_array`` column out of a finalized single-file Lance split.
+    """Read the ``param_array`` column out of a finalized Lance split.
 
     Reads through ``LanceShardFile`` — the adapter the train/eval dataloader
     uses — so the bytes match what a model would consume.
 
-    :param local_lance: Single-file ``train.lance`` split (not a Lance dataset dir).
+    :param local_lance: ``train.lance`` split as a downloaded Lance dataset directory.
     :returns: Float32 ``param_array`` of shape ``(N, P)``, rows in shard order.
     """
     from synth_setter.data.lance_datamodule import LanceShardFile
@@ -168,12 +168,18 @@ def _download_first_train_artifact(prefix: str, work_dir: Path) -> tuple[Path, s
         ``"lance"``, or ``"wds"``.
     :raises FileNotFoundError: No recognized finalize artifact under ``prefix``.
     """
-    for leaf, fmt in (("train.h5", "hdf5"), ("train.lance", "lance")):
-        split_uri = _prefix_to_r2_uri(prefix, leaf)
-        if r2_io.object_size(split_uri) is not None:
-            local = work_dir / leaf
-            r2_io.download_to_path(split_uri, local)
-            return local, fmt
+    h5_uri = _prefix_to_r2_uri(prefix, "train.h5")
+    if r2_io.object_size(h5_uri) is not None:
+        local = work_dir / "train.h5"
+        r2_io.download_to_path(h5_uri, local)
+        return local, "hdf5"
+
+    # Lance splits are dataset directories: probe + download the tree, not a file.
+    lance_uri = _prefix_to_r2_uri(prefix, "train.lance")
+    if r2_io.r2_directory_exists(lance_uri):
+        local = work_dir / "train.lance"
+        r2_io.download_dir_no_overwrite(lance_uri, local)
+        return local, "lance"
 
     listing = subprocess.run(  # noqa: S603
         ["rclone", "lsf", prefix, "--include", "shard-*.tar"],  # noqa: S607
