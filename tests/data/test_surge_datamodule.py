@@ -722,14 +722,32 @@ class TestNoiseGeneratorSeeding:
                 draws.append(dataset[0]["noise"])
         torch.testing.assert_close(draws[0], draws[1], atol=0.0, rtol=0.0)
 
-    def test_generator_unseeded_constructions_get_distinct_seeds(self) -> None:
-        """Back-to-back datasets without any seeding must not share a noise stream.
+    def test_fake_mode_construction_leaves_global_rng_untouched(self) -> None:
+        """Constructing a fake dataset must not consume from the global RNG.
+
+        Fake noise never uses ``self.generator``, so the constructor skips the
+        global-RNG seed draw in fake mode — otherwise fake-mode runs would see
+        a shifted global stream for no benefit.
+        """
+        with torch.random.fork_rng():
+            torch.manual_seed(3)
+            expected = torch.randn(4)
+        with torch.random.fork_rng():
+            torch.manual_seed(3)
+            VSTDataset("unused.h5", batch_size=2, fake=True)
+            actual = torch.randn(4)
+        torch.testing.assert_close(actual, expected, atol=0.0, rtol=0.0)
+
+    def test_generator_unseeded_constructions_get_distinct_seeds(self, single_h5: Path) -> None:
+        """Back-to-back real datasets without any seeding must not share a noise stream.
 
         Guards the constructor against regressing to a bare ``torch.Generator()``,
         whose fixed default seed would silently make every run's noise identical.
+
+        :param single_h5: Fixture-provided single-shard HDF5 path.
         """
-        first = VSTDataset("unused.h5", batch_size=2, fake=True)
-        second = VSTDataset("unused.h5", batch_size=2, fake=True)
+        first = VSTDataset(single_h5, batch_size=2, ot=False, use_saved_mean_and_variance=False)
+        second = VSTDataset(single_h5, batch_size=2, ot=False, use_saved_mean_and_variance=False)
         assert first.generator.initial_seed() != second.generator.initial_seed()
 
     @pytest.mark.skipif(

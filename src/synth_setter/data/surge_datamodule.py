@@ -27,8 +27,8 @@ class RawBatch(TypedDict):  # noqa: DOC601, DOC603
     Shapes are ``(batch, ...)``: ``param_array`` is ``(batch, num_params)`` and
     always present; ``mel_spec`` is ``(batch, channels, n_mels, n_frames)``,
     ``music2latent`` is ``(batch, latent_dim, n_frames)``, ``audio`` is
-    ``(batch, channels, samples)``. Each optional key is ``None`` when its read
-    flag is off.
+    ``(batch, channels, samples)``. An optional key whose read flag is off may
+    be stored as ``None`` or omitted entirely; both read as unread.
     """
 
     param_array: np.ndarray
@@ -156,7 +156,8 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
     ``generator`` is the RNG threaded into :func:`prepare_batch` for the per-batch
     noise draw — seeded from the global RNG at construction (so Lightning's
     ``seed_everything`` governs it) and re-seeded once per dataloader worker from
-    the worker seed (seed it manually to pin a batch).
+    the worker seed (seed it manually to pin a batch); fake mode leaves it at the
+    default seed because fake noise never uses it.
     Storage-format subclasses override ``_open`` to read non-HDF5 shards.
     """
 
@@ -198,8 +199,11 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
 
         # Seeded from a global-RNG draw so seed_everything governs noise (a bare
         # Generator() repeats a fixed default seed); workers re-seed on first read.
+        # Fake mode never uses it, so it skips the draw to leave the global stream
+        # untouched.
         self.generator = torch.Generator()
-        self.generator.manual_seed(int(torch.randint(2**63 - 1, (1,)).item()))
+        if not fake:
+            self.generator.manual_seed(int(torch.randint(2**63 - 1, (1,)).item()))
         self._worker_reseed_done = False
 
         self.read_audio = read_audio
@@ -300,7 +304,9 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
             "audio": audio,
         }
 
-    def _index_dataset(self, ds: ShardColumn, idx: int | Sequence[int] | np.ndarray) -> np.ndarray:
+    def _index_dataset(
+        self, ds: ShardColumn, idx: int | tuple[int, int] | Sequence[int] | np.ndarray
+    ) -> np.ndarray:
         """Slice one batch out of a shard column for the given index.
 
         :param ds: Shard column to slice.
@@ -340,7 +346,9 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
         self._worker_reseed_done = True
         self.generator.manual_seed(worker_info.seed)
 
-    def __getitem__(self, idx: int | Sequence[int] | np.ndarray) -> dict[str, torch.Tensor | None]:
+    def __getitem__(
+        self, idx: int | tuple[int, int] | Sequence[int] | np.ndarray
+    ) -> dict[str, torch.Tensor | None]:
         """Read one batch of features, params, and matched noise at ``idx``.
 
         :param idx: Batch index, or a ``(start, stop)`` pair, or a sequence of rows.
@@ -368,7 +376,7 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
         )
 
     def _read_column(
-        self, name: str, idx: int | Sequence[int] | np.ndarray, read: bool
+        self, name: str, idx: int | tuple[int, int] | Sequence[int] | np.ndarray, read: bool
     ) -> np.ndarray | None:
         """Slice one optional shard column, or skip it when its read flag is off.
 
