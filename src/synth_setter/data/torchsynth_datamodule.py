@@ -10,8 +10,9 @@ import sys
 import threading
 import types
 from collections.abc import Callable
+from dataclasses import dataclass
 from functools import cache, partial
-from typing import TYPE_CHECKING, NamedTuple, TypeAlias, cast
+from typing import TYPE_CHECKING, TypeAlias, cast
 
 import torch
 from lightning import LightningDataModule
@@ -56,7 +57,8 @@ def _torchsynth_types() -> tuple[type, type]:
     return SynthConfig, Voice
 
 
-class _Renderer(NamedTuple):
+@dataclass
+class _Renderer:
     """Own one mutable voice and serialize access to its parameter state.
 
     .. attribute :: voice
@@ -76,6 +78,14 @@ class _Renderer(NamedTuple):
 def _make_renderer(
     sample_rate: int, signal_length: int, batch_size: int = 1, device: str = "cpu"
 ) -> _Renderer:
+    """Return the process-local renderer for one audio geometry and device.
+
+    :param sample_rate: Audio sample rate in Hz.
+    :param signal_length: Number of output samples.
+    :param batch_size: Voice batch size.
+    :param device: Torch device string.
+    :returns: Cached voice and its mutation lock.
+    """
     synth_config, voice = _torchsynth_types()
     instance = voice(
         synthconfig=synth_config(
@@ -89,6 +99,11 @@ def _make_renderer(
 
 
 def _synth_parameters(voice: Voice) -> list[ModuleParameter]:
+    """Return the voice parameters inferred from audio, excluding keyboard controls.
+
+    :param voice: TorchSynth voice to inspect.
+    :returns: Ordered non-keyboard parameters.
+    """
     return [
         parameter
         for (module, _), parameter in voice.get_parameters().items()
@@ -248,6 +263,12 @@ class TorchSynthDataModule(LightningDataModule):
     def _loader(
         self, dataset: Dataset[TorchSynthItem], *, shuffle: bool = False
     ) -> DataLoader[TorchSynthBatch]:
+        """Wrap one online split with the shared tuple collator.
+
+        :param dataset: Online split to load.
+        :param shuffle: Whether to shuffle logical row indices.
+        :returns: Batched online data loader.
+        """
         return cast(
             DataLoader[TorchSynthBatch],
             DataLoader(
