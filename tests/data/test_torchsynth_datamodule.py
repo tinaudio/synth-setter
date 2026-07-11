@@ -1,7 +1,7 @@
 """Focused contracts for online TorchSynth sampling and rendering."""
 
-from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from typing import cast
 
 import pytest
@@ -65,7 +65,9 @@ def test_render_torchsynth_concurrent_calls_match_serial_results() -> None:
     parameter_rows = [torch.full((1, 76), value) for value in (0.25, 0.75)]
     expected = [render_torchsynth(row, **_RENDER_KWARGS) for row in parameter_rows]
     with ThreadPoolExecutor(max_workers=2) as executor:
-        actual = list(executor.map(lambda row: render_torchsynth(row, **_RENDER_KWARGS), parameter_rows))
+        actual = list(
+            executor.map(lambda row: render_torchsynth(row, **_RENDER_KWARGS), parameter_rows)
+        )
     for concurrent, serial in zip(actual, expected, strict=True):
         assert torch.equal(concurrent, serial)
 

@@ -9,10 +9,9 @@ from __future__ import annotations
 import sys
 import threading
 import types
-from dataclasses import dataclass
 from collections.abc import Callable
 from functools import cache, partial
-from typing import TYPE_CHECKING, TypeAlias, cast
+from typing import TYPE_CHECKING, NamedTuple, TypeAlias, cast
 
 import torch
 from lightning import LightningDataModule
@@ -57,13 +56,16 @@ def _torchsynth_types() -> tuple[type, type]:
     return SynthConfig, Voice
 
 
-@dataclass
-class _Renderer:
+class _Renderer(NamedTuple):
     """Own one mutable voice and serialize access to its parameter state.
 
     .. attribute :: voice
 
+       Mutated only while ``lock`` is held.
+
     .. attribute :: lock
+
+       Serializes callers sharing the cached voice.
     """
 
     voice: Voice
@@ -112,7 +114,9 @@ def render_torchsynth(
         all_parameters = voice.get_parameters()
         native = _synth_parameters(voice)
         if params.shape[1] != len(native):
-            raise ValueError(f"Expected {len(native)} TorchSynth parameters, got {params.shape[1]}")
+            raise ValueError(
+                f"Expected {len(native)} TorchSynth parameters, got {params.shape[1]}"
+            )
         for values, parameter in zip(params.T, native, strict=True):
             parameter.data.copy_(values.nan_to_num(0.5).clamp(1e-4, 1 - 1e-4))
         for name, value in (
@@ -157,9 +161,7 @@ class TorchSynthDataset(Dataset[TorchSynthItem]):
         """
         return self.num_samples
 
-    def __getitem__(
-        self, index: int
-    ) -> TorchSynthItem:
+    def __getitem__(self, index: int) -> TorchSynthItem:
         """Sample and render one deterministic parameter row.
 
         :param index: Logical row index.
@@ -239,7 +241,9 @@ class TorchSynthDataModule(LightningDataModule):
         renderer = _make_renderer(self.sample_rate, self.signal_length)
         discovered = len(_synth_parameters(renderer.voice))
         if self.num_params != discovered:
-            raise ValueError(f"Configured num_params={self.num_params}, TorchSynth exposes {discovered}")
+            raise ValueError(
+                f"Configured num_params={self.num_params}, TorchSynth exposes {discovered}"
+            )
 
     def _loader(
         self, dataset: Dataset[TorchSynthItem], *, shuffle: bool = False
