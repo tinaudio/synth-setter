@@ -322,6 +322,41 @@ def cfg_train(cfg_train_global: DictConfig, tmp_path: Path) -> DictConfig:
     GlobalHydra.instance().clear()
 
 
+@pytest.fixture
+def cfg_torchsynth_train(tmp_path: Path) -> Iterator[DictConfig]:
+    """Compose the CPU TorchSynth entrypoint smoke configuration.
+
+    Composes the production experiment through ``train.yaml``, then shrinks
+    the online splits and trainer loop so the entrypoint test stays CPU-cheap.
+    Keeping initialization here preserves the entrypoint test boundary.
+
+    :param tmp_path: Pinned Hydra output and log directory.
+    :yields: Ready-to-run training configuration.
+    :ytype: DictConfig
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            return_hydra_config=True,
+            overrides=[
+                "experiment=torchsynth/ffn",
+                "trainer=cpu",
+                "+trainer.fast_dev_run=true",
+                "datamodule.train_val_test_sizes=[2,2,2]",
+                "datamodule.batch_size=1",
+                "datamodule.num_workers=0",
+                "model.compile=false",
+                "logger=csv",
+            ],
+        )
+    with open_dict(cfg):
+        cfg.paths.root_dir = str(operator_workspace())
+        cfg.paths.output_dir = str(tmp_path)
+        cfg.paths.log_dir = str(tmp_path)
+    yield cfg
+    GlobalHydra.instance().clear()
+
+
 @pytest.fixture(scope="function")
 def cfg_eval(cfg_eval_global: DictConfig, tmp_path: Path) -> DictConfig:
     """Build on top of ``cfg_eval_global()`` and redirect logging into ``tmp_path``.

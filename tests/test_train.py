@@ -17,8 +17,6 @@ import numpy as np
 import pandas as pd
 import pytest
 import torch
-from hydra import compose, initialize_config_module
-from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, open_dict
 
@@ -83,52 +81,21 @@ def test_train_fast_dev_run_tiny_model_tiny_data(cfg_train: DictConfig) -> None:
     train(cfg_train)
 
 
-def _compose_torchsynth_train_cfg(tmp_path: Path) -> DictConfig:
-    """Compose the CPU TorchSynth entrypoint smoke configuration.
-
-    :param tmp_path: Pinned Hydra output and log directory.
-    :returns: Ready-to-run training configuration.
-    """
-    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
-        cfg = compose(
-            config_name="train.yaml",
-            return_hydra_config=True,
-            overrides=[
-                "experiment=torchsynth/ffn",
-                "trainer=cpu",
-                "+trainer.fast_dev_run=true",
-                "datamodule.train_val_test_sizes=[2,2,2]",
-                "datamodule.batch_size=1",
-                "datamodule.num_workers=0",
-                "model.compile=false",
-                "logger=csv",
-            ],
-        )
-    with open_dict(cfg):
-        cfg.paths.root_dir = str(operator_workspace())
-        cfg.paths.output_dir = str(tmp_path)
-        cfg.paths.log_dir = str(tmp_path)
-    return cfg
-
-
-def test_train_torchsynth_experiment_renders_audio_online(tmp_path: Path) -> None:
+def test_train_torchsynth_experiment_renders_audio_online(
+    cfg_torchsynth_train: DictConfig,
+) -> None:
     """Run the TorchSynth experiment without a materialized audio dataset.
 
-    :param tmp_path: Pinned Hydra output and log directory.
+    :param cfg_torchsynth_train: Composed CPU TorchSynth smoke configuration.
     """
-    cfg = _compose_torchsynth_train_cfg(tmp_path)
-
-    HydraConfig().set_config(cfg)
-    try:
-        metric_dict, object_dict = train(cfg)
-    finally:
-        GlobalHydra.instance().clear()
+    HydraConfig().set_config(cfg_torchsynth_train)
+    metric_dict, object_dict = train(cfg_torchsynth_train)
 
     assert "train/loss" in metric_dict
     batch = next(iter(object_dict["datamodule"].train_dataloader()))
     audio, params, *_ = batch
-    assert audio.shape == (1, cfg.datamodule.signal_length)
-    assert params.shape == (1, cfg.datamodule.num_params)
+    assert audio.shape == (1, cfg_torchsynth_train.datamodule.signal_length)
+    assert params.shape == (1, cfg_torchsynth_train.datamodule.num_params)
     assert torch.isfinite(audio).all()
 
 
