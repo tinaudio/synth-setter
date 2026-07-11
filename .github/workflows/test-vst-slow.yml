@@ -9,7 +9,8 @@ name: VST Slow Tests
 # waiting for Xvfb to start" intermittently — see the failing run at
 # https://github.com/tinaudio/synth-setter/actions/runs/25026506440 — which
 # is why this lives in its own Docker-only workflow rather than as another
-# step in ``test-expensive.yml``.
+# step in ``test-expensive.yml``. The host ``runs-on:`` label is independent —
+# Xvfb runs inside the container regardless of runner size.
 #
 # Also publishes per-run audio-similarity metrics to the ``gh-pages``
 # benchmark chart (Issue #703) on push-to-main, or on dispatch when the
@@ -76,14 +77,34 @@ permissions:
 
 jobs:
   run_vst_slow_tests:
-    name: VST slow tests (Docker)
-    runs-on: ubuntu-latest-4core
+    name: VST slow tests (Docker, ${{ matrix.synth }})
+    # Standard 2-core/7 GB `ubuntu-latest`: pytest runs serially in the Docker image (which supplies Xvfb),
+    # so per-test peak is the only OOM risk; an exit-137 OOM means re-pin to `ubuntu-latest-4core`.
+    runs-on: ubuntu-latest
     timeout-minutes: 120
 
-    # Job-level grant so only this job can push to ``gh-pages`` for the
-    # benchmark history. Workflow-level default is ``contents: read``.
-    permissions:
-      contents: write
+    # No write grant here: both matrix cells stay at the workflow-default
+    # ``contents: read``. Pushing to ``gh-pages`` is scoped to the separate
+    # ``publish_benchmarks`` job, so a compromised test/run step in either
+    # synth cell can't reach the repo's contents (#703).
+
+    # One cell per synth (``fail-fast: false`` so neither masks the other);
+    # only ``surge_xt`` runs the full suite and publishes benchmarks (see #703).
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - synth: surge_xt
+            plugin_path: /usr/lib/vst3/Surge XT.vst3
+            pytest_targets: >-
+              tests/data/vst/test_generate_vst_dataset.py
+              tests/data/vst/test_always_on_integration.py
+              tests/data/vst/test_run_with_editor_held_open_real_plugin.py
+              tests/data/vst/test_pedalboard_threading_contract.py
+              tests/integration/test_parallel_shard_render_linux.py
+          - synth: obxf
+            plugin_path: /usr/lib/vst3/OB-Xf.vst3
+            pytest_targets: tests/data/vst/test_generate_vst_dataset.py::test_make_dataset
 
     env:
       IMAGE: tinaudio/synth-setter:${{ inputs.image_tag || 'dev-snapshot' }}
@@ -96,20 +117,23 @@ jobs:
         run: docker pull "$IMAGE"
 
       # Mirrors the headless plugin-load smoke check in
-      # ``docker/ubuntu22_04/Dockerfile:312-314`` (and the local-runner version
+      # ``docker/ubuntu22_04/Dockerfile`` (and the local-runner version
       # in ``cpu-slow.yml``) — fails fast if the plugin / image / mount layout
       # is broken before the much-longer pytest run.
-      - name: Smoke-test Surge XT plugin load
+      - name: Smoke-test ${{ matrix.synth }} plugin load
+        env:
+          PLUGIN_PATH: ${{ matrix.plugin_path }}
         run: |
           docker run --rm \
-            -v ${{ github.workspace }}:/home/build/synth-setter \
+            -v "${{ github.workspace }}:/home/build/synth-setter" \
+            -e "PLUGIN_PATH=$PLUGIN_PATH" \
             "$IMAGE" \
             bash -c '
               set -euo pipefail
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
               src/synth_setter/scripts/run-linux-vst-headless.sh \
-                python -X faulthandler -c "from synth_setter.data.vst.core import load_plugin; load_plugin(\"/usr/lib/vst3/Surge XT.vst3\")"
+                python -X faulthandler -c "import os; from synth_setter.data.vst.core import load_plugin; load_plugin(os.environ[\"PLUGIN_PATH\"])"
             '
 
       - name: Run VST slow tests in Docker
@@ -125,27 +149,33 @@ jobs:
         # imports load the VST host which needs a live X display, so the
         # headless wrapper has to apply at the pytest level (not the
         # entire container).
+        #
+        # ``matrix.pytest_targets`` is a space-separated node list split into a
+        # bash array (``read -ra``); node IDs here carry no spaces or globs.
+        env:
+          PLUGIN_PATH: ${{ matrix.plugin_path }}
+          TEST_SYNTH: ${{ matrix.synth }}
+          PYTEST_TARGETS: ${{ matrix.pytest_targets }}
         run: |
           mkdir -p /tmp/bench
           docker run --rm \
-            -v ${{ github.workspace }}:/home/build/synth-setter \
+            -v "${{ github.workspace }}:/home/build/synth-setter" \
             -v /tmp/bench:/bench \
             -e BENCHMARK_OUTPUT_DIR=/bench \
             -e HYDRA_FULL_ERROR=1 \
-            -e "SYNTH_SETTER_PLUGIN_PATH=/usr/lib/vst3/Surge XT.vst3" \
+            -e "SYNTH_SETTER_PLUGIN_PATH=$PLUGIN_PATH" \
+            -e "SYNTH_SETTER_TEST_SYNTH=$TEST_SYNTH" \
+            -e "PYTEST_TARGETS=$PYTEST_TARGETS" \
             "$IMAGE" \
             bash -c '
               set -euo pipefail
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
+              read -ra targets <<< "$PYTEST_TARGETS"
               src/synth_setter/scripts/run-linux-vst-headless.sh \
                 pytest -vv -s \
                   --cov=src --cov-branch --cov-report=xml --cov-report=term \
-                  tests/data/vst/test_generate_vst_dataset.py \
-                  tests/data/vst/test_always_on_integration.py \
-                  tests/data/vst/test_run_with_editor_held_open_real_plugin.py \
-                  tests/data/vst/test_pedalboard_threading_contract.py \
-                  tests/integration/test_parallel_shard_render_linux.py
+                  "${targets[@]}"
             '
 
       # coverage.xml is written inside the container at the workspace mount,
@@ -154,7 +184,7 @@ jobs:
         if: always() && hashFiles('coverage.xml') != ''
         uses: ./.github/actions/upload-coverage
         with:
-          flags: vst
+          flags: vst-${{ matrix.synth }}
           token: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Surface per-bucket bench JSON files on the runner
@@ -163,8 +193,9 @@ jobs:
         # ``<prefix>.json`` out of the host-mounted volume to where the
         # publish steps expect it. Each prefix maps 1:1 to a chart bucket.
         # Skipped cleanly if a file is missing (test deselected, xfailed
-        # before emit, etc).
-        if: always()
+        # before emit, etc). Surge-only: the benchmark buckets (Issue #703)
+        # track Surge's noise floor; the obxf cell renders but never publishes.
+        if: always() && matrix.synth == 'surge_xt'
         run: |
           for f in vst-noise-floor-1-preset-n-renders.json vst-noise-floor-random-preset-replay.json; do
             if [ -f "/tmp/bench/$f" ]; then
@@ -175,18 +206,57 @@ jobs:
             fi
           done
 
+      # Hand the bench JSON to the ``publish_benchmarks`` job, which holds the
+      # ``contents: write`` grant. Surge-only: only this cell produces the
+      # benchmark buckets (#703). ``if-no-files-found: ignore`` keeps a
+      # deselected/xfailed run from failing the upload.
+      - name: Upload benchmark JSON for the publish job
+        if: always() && matrix.synth == 'surge_xt'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vst-benchmark-json
+          path: |
+            ${{ github.workspace }}/vst-noise-floor-1-preset-n-renders.json
+            ${{ github.workspace }}/vst-noise-floor-random-preset-replay.json
+          if-no-files-found: ignore
+          retention-days: 1
+
+  publish_benchmarks:
+    name: Publish VST benchmarks to gh-pages
+    needs: run_vst_slow_tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # The only job that pushes to ``gh-pages`` (Issue #703), so the
+    # ``contents: write`` grant lives here alone — the matrix test cells run
+    # untrusted plugin/render code at ``contents: read``. Push-to-main always
+    # publishes; manual dispatch requires the ``publish_metrics`` opt-in. PRs
+    # never reach this job.
+    permissions:
+      contents: write
+    if: |
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/test/vst-roundtrip-xfail-tests')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish_metrics == true)
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      # Pulls the Surge bench JSON surfaced by ``run_vst_slow_tests`` into the
+      # workspace where ``benchmark-action`` and the ``hashFiles`` guards
+      # expect it.
+      - name: Download benchmark JSON
+        uses: actions/download-artifact@v4
+        with:
+          name: vst-benchmark-json
+          path: ${{ github.workspace }}
+
       - name: Publish "1 preset N renders" metrics to benchmark history
         # Bucket 1: same hardcoded patch rendered ``num_samples`` times across
         # both stages, exposing the every-other-render variance described in
         # bug #489. See ``docs/reference/audio-similarity-benchmarks.md``.
-        # Push-to-main always publishes; manual dispatch requires the
-        # ``publish_metrics`` opt-in. ``hashFiles`` skips the step cleanly if
-        # the file is missing.
-        if: |
-          hashFiles('vst-noise-floor-1-preset-n-renders.json') != '' && (
-            (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/test/vst-roundtrip-xfail-tests')) ||
-            (github.event_name == 'workflow_dispatch' && inputs.publish_metrics == true)
-          )
+        # ``hashFiles`` skips the step cleanly if the file is missing.
+        if: hashFiles('vst-noise-floor-1-preset-n-renders.json') != ''
         uses: benchmark-action/github-action-benchmark@a60cea5bc7b49e15c1f58f411161f99e0df48372 # v1.22.0
         with:
           name: VST noise floor (1 preset N renders)
@@ -208,11 +278,7 @@ jobs:
         # only (no all-pairs), so it tracks the API-level round-trip
         # invariant rather than the every-other-render bug. See
         # ``docs/reference/audio-similarity-benchmarks.md``.
-        if: |
-          hashFiles('vst-noise-floor-random-preset-replay.json') != '' && (
-            (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/test/vst-roundtrip-xfail-tests')) ||
-            (github.event_name == 'workflow_dispatch' && inputs.publish_metrics == true)
-          )
+        if: hashFiles('vst-noise-floor-random-preset-replay.json') != ''
         uses: benchmark-action/github-action-benchmark@a60cea5bc7b49e15c1f58f411161f99e0df48372 # v1.22.0
         with:
           name: VST noise floor (random preset replay)

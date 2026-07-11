@@ -14,7 +14,7 @@ from tqdm import tqdm, trange
 
 from synth_setter.data.vst import param_specs
 from synth_setter.data.vst.core import render_params
-from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
+from synth_setter.data.vst.param_spec import NoteParams, ParamSpec, decode_model_output
 from synth_setter.data.vst.param_spec_registry import default_plugin_path, preset_paths
 
 
@@ -108,7 +108,7 @@ def resolve_preset_path(preset_path: str | None, param_spec: str) -> str:
     :param param_spec: Registry key naming the spec whose default preset to use.
     :returns: Resolved preset path.
     """
-    return preset_paths[param_spec] if preset_path is None else preset_path
+    return preset_path if preset_path is not None else preset_paths[param_spec]
 
 
 @click.command()
@@ -137,7 +137,7 @@ def main(
     rerender_target: bool = False,
     no_params: bool = False,
     skip_spectrogram: bool = False,
-):
+) -> None:
     preset_path = resolve_preset_path(preset_path, param_spec)
     spec = param_specs[param_spec]
     os.makedirs(output_dir, exist_ok=True)
@@ -177,9 +177,7 @@ def main(
             os.makedirs(sample_dir, exist_ok=True)
 
             row_params = pred_params[j].float().numpy()
-            row_params_scaled = (row_params + 1) / 2
-            row_params_scaled = np.clip(row_params_scaled, 0, 1)
-            synth_params, note_params = spec.decode(row_params_scaled)
+            synth_params, note_params = decode_model_output(row_params, spec)
 
             pred_audio = render_params(
                 plugin_path,
@@ -198,10 +196,9 @@ def main(
 
             out_target = os.path.join(sample_dir, "target.wav")
             if rerender_target and target_params is not None:
-                target_params_ = target_params[j].numpy()
-                target_params_ = (target_params_ + 1) / 2
-                target_params_ = np.clip(target_params_, 0, 1)
-                target_synth_params, target_note_params = spec.decode(target_params_)
+                # .float() aligns the target path with the pred path's float32 contract.
+                target_params_ = target_params[j].float().numpy()
+                target_synth_params, target_note_params = decode_model_output(target_params_, spec)
 
                 new_target = render_params(
                     plugin_path,

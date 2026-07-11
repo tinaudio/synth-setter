@@ -10,7 +10,7 @@ For detailed internal standards (aimed at AI-assisted development), see
 
 ### Prerequisites
 
-- **Python 3.10+**
+- **Python 3.11+**
 - **[uv](https://github.com/astral-sh/uv)** (fast pip replacement) or plain pip
 - **make** (GNU Make)
 - **pre-commit** (`pip install pre-commit`)

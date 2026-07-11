@@ -60,7 +60,6 @@ def _make_module() -> VSTFakeOracleModule:
     """Build a fresh :class:`VSTFakeOracleModule` with a partial Adam optimizer.
 
     :return: Module ready for direct step-method calls (no Trainer attached).
-    :rtype: VSTFakeOracleModule
     """
     net = FakeOracleNet(d_out=_NUM_PARAMS)
     optimizer = partial(torch.optim.Adam, lr=1e-4)

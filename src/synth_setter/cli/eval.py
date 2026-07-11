@@ -40,6 +40,7 @@ _SUBPROCESS_TIMEOUT_SECONDS = 600
 _AGGREGATED_METRICS_FILENAME = "aggregated_metrics.csv"
 _METRICS_FILENAME = "metrics.csv"
 _AGGREGATED_METRICS_SHUFFLED_FILENAME = "aggregated_metrics_shuffled.csv"
+_SHUFFLE_PERMUTATION_FILENAME = "shuffle_permutation.csv"
 _AGGREGATED_METRICS_STATS: tuple[str, ...] = ("mean", "std")
 
 # Resolve workspace at import so ``${oc.env:PROJECT_ROOT}`` in
@@ -137,6 +138,33 @@ def _log_metrics_csv_to_wandb(metrics_dir: Path, prefix: str = "") -> None:
     except Exception as exc:
         log.warning(
             f"per-sample metrics table logging failed with {type(exc).__name__}: {exc}; skipped."
+        )
+
+
+def _log_shuffle_permutation_to_wandb(metrics_dir: Path, prefix: str = "") -> None:
+    """Log the probe permutation to wandb as a Table; no-op when ``wandb.run`` is unset.
+
+    Silently skips when ``shuffle_permutation.csv`` is absent — the probe writes it only
+    for uniform-params (oracle) datasets, so its absence is the common case. Swallows wandb
+    errors so a logging failure never aborts the evaluation run.
+
+    :param metrics_dir: Directory produced by
+        :mod:`synth_setter.evaluation.compute_audio_metrics`; ``shuffle_permutation.csv``
+        is read from it when present.
+    :param prefix: Prepended to the ``shuffle/permutation`` Table key so per-split runs
+        (one wandb run shared across splits) stay distinct.
+    """
+    if wandb.run is None:
+        return
+    csv_path = metrics_dir / _SHUFFLE_PERMUTATION_FILENAME
+    if not csv_path.is_file():
+        return
+    try:
+        df = pd.read_csv(csv_path)
+        wandb.run.log({f"{prefix}shuffle/permutation": wandb.Table(dataframe=df)})
+    except Exception as exc:
+        log.warning(
+            f"shuffle permutation table logging failed with {type(exc).__name__}: {exc}; skipped."
         )
 
 
@@ -250,6 +278,7 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
             audio_metrics = {f"{prefix}{key}": value for key, value in audio_metrics.items()}
         _log_audio_metrics_to_wandb(audio_metrics)
         _log_metrics_csv_to_wandb(metrics_dir, prefix)
+        _log_shuffle_permutation_to_wandb(metrics_dir, prefix)
         return audio_metrics
 
     return {}

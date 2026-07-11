@@ -117,6 +117,11 @@ _SECRET_WORKER_ENV_KEYS: tuple[str, ...] = tuple(
     k for k in _WORKER_ENV_KEYS if k not in _R2_RCLONE_CONSTANTS
 )
 
+
+def _env_value_is_set(value: str | None) -> bool:
+    return value is not None and value.strip() != ""
+
+
 # sky.jobs.tail_logs(follow=True) rc: 0 = SUCCEEDED, 100 = non-SUCCEEDED terminal.
 _TAIL_LOGS_RC_SUCCESS = 0
 
@@ -183,18 +188,20 @@ def load_worker_env(path: Path) -> dict[str, str]:
 def resolve_worker_env(env_file: Path | None) -> dict[str, str]:
     """Resolve the launcher's `_WORKER_ENV_KEYS` from .env and process env.
 
-    For each key in `_WORKER_ENV_KEYS`, the value is taken from `env_file` if
-    that file exists and the key is set there, else from the launcher's
-    process env if set, else skipped. Skipped keys keep the template's
-    default (typically the empty string) — `task.update_envs` only overrides
-    keys that are actually resolved here.
+    ``env_file=None`` reads ``DEFAULT_ENV_FILE``. For each key in
+    `_WORKER_ENV_KEYS`, the value is taken from the resolved dotenv file if
+    that file exists and the key is set there, else from the launcher's process
+    env if set, else skipped. Skipped keys keep the template's default
+    (typically the empty string) — `task.update_envs` only overrides keys that
+    are actually resolved here.
 
     `.env` is the local-dev source of truth; CI flows pass secrets via
     `docker run -e KEY=VAL` and never touch a .env on disk.
     """
     file_env: dict[str, str] = {}
-    if env_file is not None and env_file.is_file():
-        file_env = load_worker_env(env_file)
+    resolved_env_file = env_file if env_file is not None else DEFAULT_ENV_FILE
+    if resolved_env_file.is_file():
+        file_env = load_worker_env(resolved_env_file)
 
     resolved: dict[str, str] = {}
     for key in _WORKER_ENV_KEYS:
@@ -581,13 +588,15 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
             "not sky_cfg.extra_envs."
         )
 
-    env_file_path = Path(sky_cfg.env_file).expanduser() if sky_cfg.env_file else None
+    env_file_path = (
+        Path(sky_cfg.env_file).expanduser() if sky_cfg.env_file is not None else DEFAULT_ENV_FILE
+    )
     worker_env = resolve_worker_env(env_file_path)
-    if not any(k in worker_env for k in _SECRET_WORKER_ENV_KEYS):
+    if not any(_env_value_is_set(worker_env.get(k)) for k in _SECRET_WORKER_ENV_KEYS):
         raise ValueError(
             "No worker env vars resolved. Set the rclone-R2 keys in process env "
             f"(e.g. via `docker run -e RCLONE_CONFIG_R2_*=...`) or populate "
-            f"{env_file_path if env_file_path is not None else '<env_file not set>'}. "
+            f"{env_file_path}. "
             f"Expected at least one of: {', '.join(_SECRET_WORKER_ENV_KEYS)}."
         )
     worker_env.update(sky_cfg.extra_envs)

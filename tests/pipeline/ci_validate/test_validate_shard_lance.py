@@ -5,9 +5,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from pathlib import Path
 
+import lance
 import numpy as np
 import pyarrow as pa
-from lance.file import LanceFileReader
 
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
@@ -22,9 +22,9 @@ from synth_setter.pipeline.data.lance_shard import (
     lance_schema,
     record_batch_from_arrays,
     tensor_array,
-    tensor_chunk_to_numpy,
-    write_lance_file,
+    write_lance_dataset,
 )
+from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from tests.helpers.finalize_shards import (
     build_lance_smoke_spec,
@@ -57,6 +57,16 @@ def _zero_arrays(shapes: Mapping[str, tuple[int, ...]]) -> dict[str, np.ndarray]
     }
 
 
+def _first_shard_metadata(spec: DatasetSpec) -> ShardMetadata:
+    """Return metadata matching the first shard's launcher-injected seed.
+
+    :param spec: One-shard Lance smoke spec.
+    :returns: Shard metadata carrying ``spec.shards[0].seed``.
+    """
+    render = spec.render.model_copy(update={"base_seed": spec.shards[0].seed})
+    return smoke_shard_metadata(render)
+
+
 def test_validate_lance_shard_accepts_valid_file(tmp_path: Path) -> None:
     """A structurally valid Lance shard returns no validation errors.
 
@@ -76,7 +86,7 @@ def test_lance_record_batch_preserves_transposed_tensor_shape(tmp_path: Path) ->
     """
     spec = build_lance_smoke_spec()
     shapes = _one_row_shapes(spec)
-    schema = lance_schema(shapes, smoke_shard_metadata(spec.render))
+    schema = lance_schema(shapes, _first_shard_metadata(spec))
     n, channels, n_mels, n_frames = shapes[MEL_SPEC_FIELD]
     arrays = _zero_arrays(shapes)
     arrays[MEL_SPEC_FIELD] = np.zeros((n, n_mels, channels, n_frames), dtype=np.float32).transpose(
@@ -84,13 +94,13 @@ def test_lance_record_batch_preserves_transposed_tensor_shape(tmp_path: Path) ->
     )
     shard = tmp_path / spec.shards[0].filename
 
-    write_lance_file(shard, schema, [record_batch_from_arrays(arrays, schema)])
+    write_lance_dataset(shard, schema, [record_batch_from_arrays(arrays, schema)])
 
-    reader = LanceFileReader(str(shard), columns=[MEL_SPEC_FIELD])
-    field = reader.metadata().schema.field(MEL_SPEC_FIELD)
+    dataset = lance.dataset(str(shard))
+    field = dataset.schema.field(MEL_SPEC_FIELD)
     assert tuple(field.type.shape) == shapes[MEL_SPEC_FIELD][1:]
-    batch = next(reader.read_all().to_batches())
-    decoded = tensor_chunk_to_numpy(batch.column(0), shapes[MEL_SPEC_FIELD][1:])
+    batch = next(dataset.to_batches(columns=[MEL_SPEC_FIELD]))
+    decoded = batch.column(0).to_numpy_ndarray()
     assert decoded.shape == shapes[MEL_SPEC_FIELD]
 
 
@@ -106,7 +116,7 @@ def test_validate_lance_shard_rejects_bad_suffix_payload(tmp_path: Path) -> None
     errors = validate_shard(shard, spec)
 
     assert errors
-    assert "valid Lance file" in errors[0]
+    assert "valid Lance dataset" in errors[0]
 
 
 def test_validate_lance_shard_reports_row_count_mismatch(tmp_path: Path) -> None:
@@ -117,13 +127,13 @@ def test_validate_lance_shard_reports_row_count_mismatch(tmp_path: Path) -> None
     spec = build_lance_smoke_spec()
     # A one-row shard disagrees with the spec's samples_per_shard.
     shapes = _one_row_shapes(spec)
-    schema = lance_schema(shapes, smoke_shard_metadata(spec.render))
+    schema = lance_schema(shapes, _first_shard_metadata(spec))
     shard = tmp_path / spec.shards[0].filename
-    write_lance_file(shard, schema, [record_batch_from_arrays(_zero_arrays(shapes), schema)])
+    write_lance_dataset(shard, schema, [record_batch_from_arrays(_zero_arrays(shapes), schema)])
 
     errors = validate_shard(shard, spec)
 
-    row_count_error = f"file has 1 rows, expected {spec.render.samples_per_shard}"
+    row_count_error = f"dataset has 1 rows, expected {spec.render.samples_per_shard}"
     assert any(row_count_error in error for error in errors)
 
 
@@ -136,9 +146,9 @@ def test_validate_lance_shard_reports_inner_shape_mismatch(tmp_path: Path) -> No
     expected_shapes = dataset_field_shapes(spec.render, spec.num_params)
     n, channels, n_mels, n_frames = expected_shapes[MEL_SPEC_FIELD]
     shapes = {**expected_shapes, MEL_SPEC_FIELD: (n, channels, n_mels + 1, n_frames)}
-    schema = lance_schema(shapes, smoke_shard_metadata(spec.render))
+    schema = lance_schema(shapes, _first_shard_metadata(spec))
     shard = tmp_path / spec.shards[0].filename
-    write_lance_file(shard, schema, [record_batch_from_arrays(_zero_arrays(shapes), schema)])
+    write_lance_dataset(shard, schema, [record_batch_from_arrays(_zero_arrays(shapes), schema)])
 
     errors = validate_shard(shard, spec)
 
@@ -158,7 +168,7 @@ def test_validate_lance_shard_reports_value_dtype_mismatch(tmp_path: Path) -> No
     """
     spec = build_lance_smoke_spec()
     shapes = dataset_field_shapes(spec.render, spec.num_params)
-    schema = lance_schema(shapes, smoke_shard_metadata(spec.render))
+    schema = lance_schema(shapes, _first_shard_metadata(spec))
     float32_audio = pa.field(
         AUDIO_FIELD,
         pa.fixed_shape_tensor(pa.float32(), shapes[AUDIO_FIELD][1:]),
@@ -173,7 +183,7 @@ def test_validate_lance_shard_reports_value_dtype_mismatch(tmp_path: Path) -> No
         for field in DATASET_FIELD_NAMES
     ]
     shard = tmp_path / spec.shards[0].filename
-    write_lance_file(shard, schema, [pa.record_batch(columns, schema=schema)])
+    write_lance_dataset(shard, schema, [pa.record_batch(columns, schema=schema)])
 
     errors = validate_shard(shard, spec)
 
@@ -190,13 +200,51 @@ def test_validate_lance_shard_reports_missing_schema_metadata(tmp_path: Path) ->
     """
     spec = build_lance_smoke_spec()
     shapes = dataset_field_shapes(spec.render, spec.num_params)
-    schema = lance_schema(shapes, smoke_shard_metadata(spec.render)).remove_metadata()
+    schema = lance_schema(shapes, _first_shard_metadata(spec)).remove_metadata()
     shard = tmp_path / spec.shards[0].filename
-    write_lance_file(shard, schema, [record_batch_from_arrays(_zero_arrays(shapes), schema)])
+    write_lance_dataset(shard, schema, [record_batch_from_arrays(_zero_arrays(shapes), schema)])
 
     errors = validate_shard(shard, spec)
 
     assert any("missing schema metadata key" in error for error in errors)
+
+
+def test_validate_lance_shard_reports_base_seed_metadata_mismatch(tmp_path: Path) -> None:
+    """A Lance shard whose embedded seed differs from the spec is rejected.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    spec = build_lance_smoke_spec()
+    shapes = dataset_field_shapes(spec.render, spec.num_params)
+    metadata = _first_shard_metadata(spec).model_copy(
+        update={"base_seed": spec.render.base_seed + 1}
+    )
+    schema = lance_schema(shapes, metadata)
+    shard = tmp_path / spec.shards[0].filename
+    write_lance_dataset(shard, schema, [record_batch_from_arrays(_zero_arrays(shapes), schema)])
+
+    errors = validate_shard(shard, spec)
+
+    assert any("base_seed" in error for error in errors)
+
+
+def test_validate_lance_shard_reports_attempt_budget_metadata_mismatch(tmp_path: Path) -> None:
+    """A Lance shard whose embedded retry budget differs from the spec is rejected.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    spec = build_lance_smoke_spec()
+    shapes = dataset_field_shapes(spec.render, spec.num_params)
+    metadata = _first_shard_metadata(spec).model_copy(
+        update={"attempts_per_sample": spec.render.attempts_per_sample + 1}
+    )
+    schema = lance_schema(shapes, metadata)
+    shard = tmp_path / spec.shards[0].filename
+    write_lance_dataset(shard, schema, [record_batch_from_arrays(_zero_arrays(shapes), schema)])
+
+    errors = validate_shard(shard, spec)
+
+    assert any("attempts_per_sample" in error for error in errors)
 
 
 def test_validate_lance_shard_reports_missing_column(tmp_path: Path) -> None:
@@ -206,7 +254,7 @@ def test_validate_lance_shard_reports_missing_column(tmp_path: Path) -> None:
     """
     spec = build_lance_smoke_spec()
     shapes = dataset_field_shapes(spec.render, spec.num_params)
-    full_schema = lance_schema(shapes, smoke_shard_metadata(spec.render))
+    full_schema = lance_schema(shapes, _first_shard_metadata(spec))
     schema = full_schema.remove(full_schema.get_field_index(PARAM_ARRAY_FIELD))
     columns = [
         tensor_array(
@@ -217,7 +265,7 @@ def test_validate_lance_shard_reports_missing_column(tmp_path: Path) -> None:
         for field in (AUDIO_FIELD, MEL_SPEC_FIELD)
     ]
     shard = tmp_path / spec.shards[0].filename
-    write_lance_file(shard, schema, [pa.record_batch(columns, schema=schema)])
+    write_lance_dataset(shard, schema, [pa.record_batch(columns, schema=schema)])
 
     errors = validate_shard(shard, spec)
 

@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +13,7 @@ from pyloudnorm import Meter
 
 from synth_setter.data.vst.core import render_params
 from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
+from synth_setter.data.vst.seeding import rng_for_sample
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
     MEL_N_MELS,
@@ -29,7 +30,33 @@ from synth_setter.pipeline.schemas.spec import (
     OutputFormat,
     RenderConfig,
 )
+from synth_setter.pipeline.schemas.shard_metadata import DEFAULT_ATTEMPTS_PER_SAMPLE
 from synth_setter.pipeline.spec_io import join_uri, localized_uri
+
+# Loudness-gate retry ceiling when a caller does not override it (#884).
+DEFAULT_MAX_ATTEMPTS = DEFAULT_ATTEMPTS_PER_SAMPLE
+
+
+@dataclass(frozen=True)
+class SampleSeed:
+    """Per-sample seeding inputs for ``generate_sample`` (#884).
+
+    .. attribute :: master_seed
+
+        Per-shard master seed (``ShardSpec.seed``), folded into every draw.
+
+    .. attribute :: sample_idx
+
+        Absolute row index, folded into the per-sample seed.
+
+    .. attribute :: max_attempts
+
+        Loudness-gate retry budget before the row fails loudly.
+    """
+
+    master_seed: int
+    sample_idx: int = 0
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS
 
 
 @dataclass
@@ -44,9 +71,11 @@ class VSTDataSample:
 
     audio: np.ndarray
     mel_spec: np.ndarray
-    param_array: np.ndarray = None
+    param_array: np.ndarray = field(init=False)
+    # Loudness-gate attempt the accepted draw came from (#884).
+    attempt: int = 0
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.param_array = self.param_spec.encode(self.synth_params, self.note_params)
 
 
@@ -79,8 +108,9 @@ def generate_sample(
     *,
     plugin: VST3Plugin | None = None,
     warmup: bool = False,
+    seed: SampleSeed | None = None,
 ) -> VSTDataSample:
-    """Render a single VST sample.
+    """Render a single VST sample, retrying silent draws up to the attempt budget.
 
     When ``fixed_synth_params`` and/or ``fixed_note_params`` are supplied, they take
     precedence over the values drawn from ``param_spec.sample()`` for deterministic
@@ -88,8 +118,13 @@ def generate_sample(
     ``fixed_note_params``), the function raises ``ValueError`` on loudness fail
     rather than retrying — the synth patch is the dominant determinant of loudness,
     so re-sampling note params alone almost never lifts a silent patch above
-    ``min_loudness`` and the loop would run forever. When only ``fixed_note_params``
-    is supplied, the synth is re-sampled each retry and the loop remains meaningful.
+    ``min_loudness``. When only ``fixed_note_params`` (or nothing) is supplied, the
+    synth is re-sampled per attempt and the loop is meaningful.
+
+    With ``seed`` set, sampling draws from
+    ``rng_for_sample(seed.master_seed, seed.sample_idx, attempt)`` so a given row is
+    reproducible regardless of worker/order/retry history (#884); ``seed=None`` draws
+    from a fresh non-deterministic generator and uses the default attempt budget.
 
     :param plugin: Forwarded to ``render_params``; when set, the renderer
         skips ``load_plugin``/``load_preset``.
@@ -98,11 +133,24 @@ def generate_sample(
         Applied at most once per ``generate_sample`` call — the loudness-gate
         retry loop drops ``warmup`` to ``False`` after the first attempt so a
         retrying sample never exceeds the per-shard cadence budget (#714).
+    :param seed: Per-sample seeding inputs; ``None`` samples non-deterministically.
+    :returns: The accepted sample, with ``attempt`` set to the winning retry.
+    :raises ValueError: If the attempt budget is nonpositive, or a
+        ``fixed_synth_params`` render fell below ``min_loudness``.
+    :raises RuntimeError: The sampling path stayed silent for the whole attempt budget.
     """
-    while True:
+    max_attempts = seed.max_attempts if seed is not None else DEFAULT_MAX_ATTEMPTS
+    if max_attempts < 1:
+        raise ValueError(f"max_attempts must be >= 1, got {max_attempts}")
+    for attempt in range(max_attempts):
         if fixed_synth_params is None or fixed_note_params is None:
             logger.debug("sampling params")
-            sampled_synth, sampled_note = param_spec.sample()
+            rng = (
+                rng_for_sample(seed.master_seed, seed.sample_idx, attempt)
+                if seed is not None
+                else None
+            )
+            sampled_synth, sampled_note = param_spec.sample(rng)
             synth_params = fixed_synth_params if fixed_synth_params is not None else sampled_synth
             note_params = fixed_note_params if fixed_note_params is not None else sampled_note
         else:
@@ -141,19 +189,29 @@ def generate_sample(
             logger.debug("loudness too low, skipping")
             continue
 
-        break
+        logger.debug("making spectrogram")
+        spectrogram = make_spectrogram(output, sample_rate)
+        return VSTDataSample(
+            synth_params=synth_params,
+            note_params=note_params,
+            audio=output.T,
+            mel_spec=spectrogram,
+            sample_rate=sample_rate,
+            channels=channels,
+            param_spec=param_spec,
+            attempt=attempt,
+        )
 
-    logger.debug("making spectrogram")
-    spectrogram = make_spectrogram(output, sample_rate)
-
-    return VSTDataSample(
-        synth_params=synth_params,
-        note_params=note_params,
-        audio=output.T,
-        mel_spec=spectrogram,
-        sample_rate=sample_rate,
-        channels=channels,
-        param_spec=param_spec,
+    failed_idx = str(seed.sample_idx) if seed is not None else "<unseeded>"
+    seed_hint = (
+        "Production callers should pass SampleSeed/base_seed for reproducibility; "
+        if seed is None
+        else ""
+    )
+    raise RuntimeError(
+        f"sample {failed_idx} stayed below min_loudness {min_loudness:.2f} dB "
+        f"after {max_attempts} attempts. {seed_hint}Raise the per-sample attempt budget "
+        f"(``attempts_per_sample`` / ``SampleSeed.max_attempts``) or lower min_loudness."
     )
 
 

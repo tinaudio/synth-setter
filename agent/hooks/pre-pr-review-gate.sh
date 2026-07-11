@@ -61,7 +61,7 @@
 #   PreToolUse hook on Bash. The handler-level `if: "Bash(gh pr create *)"`
 #   guard is unreliable for PreToolUse hooks (see PR #1090 history), so this
 #   script re-validates the command itself — same defensive pattern
-#   doc-drift.sh / pr-review-resolver.sh use. Non-matching commands exit 0
+#   doc-drift.sh uses. Non-matching commands exit 0
 #   silently.
 # =============================================================================
 set -euo pipefail

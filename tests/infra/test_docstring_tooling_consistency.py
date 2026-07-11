@@ -11,15 +11,10 @@ fails fast if either side drifts back into the conflicting combination.
 
 from __future__ import annotations
 
-import sys
+import tomllib
 from pathlib import Path
 
 import pytest
-
-if sys.version_info >= (3, 11):
-    import tomllib
-else:
-    import tomli as tomllib
 
 
 def _longest_prefix_len(code: str, selectors: list[str]) -> int:

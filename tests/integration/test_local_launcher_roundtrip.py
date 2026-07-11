@@ -28,7 +28,7 @@ import subprocess
 import sys
 import uuid
 from collections.abc import Iterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -122,6 +122,7 @@ def ci_r2_prefix() -> Iterator[str]:
     [
         "generate_dataset/smoke-shard",
         "generate_dataset/smoke-shard-wds",
+        "generate_dataset/smoke-shard-lance",
     ],
 )
 def test_launcher_roundtrip_with_stubbed_renderer(
@@ -137,8 +138,8 @@ def test_launcher_roundtrip_with_stubbed_renderer(
     upload, and finally the existing ``pipeline.ci`` validators downloading
     everything back from R2 and confirming structural correctness.
 
-    :param experiment: Hydra experiment id (parametrized to cover both
-        ``hdf5`` and ``wds`` formats).
+    :param experiment: Hydra experiment id (parametrized to cover the ``hdf5``,
+        ``wds``, and ``lance`` formats).
     :param ci_r2_prefix: Unique R2 prefix per CI run; finalizer purges it.
     :param monkeypatch: Pytest fixture used to set env vars and patch
         ``sys.argv`` for the ``main()`` invocation.
@@ -160,7 +161,7 @@ def test_launcher_roundtrip_with_stubbed_renderer(
     #   - created_at → fixed timestamp for determinism (``+`` because the key
     #     is not in ``configs/dataset.yaml``; matches how the production
     #     launcher pins it on the worker side in ``_build_worker_cmd``).
-    fixed_created_at = datetime(2026, 5, 19, 0, 0, 0, tzinfo=timezone.utc).isoformat()
+    fixed_created_at = datetime(2026, 5, 19, 0, 0, 0, tzinfo=UTC).isoformat()
     argv = [
         "synth-setter-generate-dataset",
         f"experiment={experiment}",
@@ -255,7 +256,7 @@ def test_subprocess_writes_spec_under_hydra_output_dir(
 
     import synth_setter.cli.generate_dataset as gd
 
-    fixed_created_at = datetime(2026, 5, 19, 0, 0, 0, tzinfo=timezone.utc).isoformat()
+    fixed_created_at = datetime(2026, 5, 19, 0, 0, 0, tzinfo=UTC).isoformat()
     hydra_run_dir = tmp_path / "run"
     overrides = [
         "experiment=generate_dataset/smoke-shard",

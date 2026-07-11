@@ -32,6 +32,8 @@ __all__ = [
     "is_r2_uri",
     "object_size",
     "purge_prefix",
+    "r2_directory_exists",
+    "r2_storage_options",
     "shard_uri",
     "to_rclone_path",
     "to_s3_uri",
@@ -58,6 +60,27 @@ _R2_STRUCTURAL_DEFAULTS: dict[str, str] = {
     "RCLONE_CONFIG_R2_TYPE": "s3",
     "RCLONE_CONFIG_R2_PROVIDER": "Cloudflare",
 }
+
+_CHECKOUT_MARKER = ".project-root"
+_WORKSPACE_ENV = "SYNTH_SETTER_WORKSPACE"
+
+
+def _default_env_file() -> Path:
+    """Resolve the workspace dotenv path without importing optional launcher deps.
+
+    :returns: ``$SYNTH_SETTER_WORKSPACE/.env`` when set, otherwise the checkout
+        marker root's ``.env`` or the current directory's ``.env`` fallback.
+    """
+    workspace = os.environ.get(_WORKSPACE_ENV, "").strip()
+    if workspace:
+        return Path(workspace).resolve() / ".env"
+    for candidate in Path(__file__).resolve().parents:
+        if (candidate / _CHECKOUT_MARKER).is_file():
+            return candidate / ".env"
+    return Path.cwd().resolve() / ".env"
+
+
+_DEFAULT_ENV_FILE = _default_env_file()
 
 # rclone ``--timeout`` is the IO idle timeout, not a wall-clock cap. A whole eval
 # run dir — rendered audio, predictions, metrics — can stream far longer than a
@@ -92,16 +115,48 @@ def _rclone_argv(verb: str, *operands: str, timeout: str = "300s") -> list[str]:
     ]
 
 
+def _resolve_env_file(env_file: Path | None) -> Path:
+    """Resolve the dotenv file used by R2 preflight.
+
+    :param env_file: Explicit dotenv path supplied by a caller, or ``None`` for
+        the default dotenv lookup.
+    :returns: The explicit path when provided, otherwise the resolved default dotenv path.
+    """
+    return env_file if env_file is not None else _DEFAULT_ENV_FILE
+
+
+def _load_r2_env_file(env_file: Path) -> None:
+    """Mirror RCLONE_CONFIG_R2_* keys from an existing dotenv file into process env.
+
+    :param env_file: Resolved dotenv path; missing files are intentionally ignored.
+    """
+    if not env_file.is_file():
+        return
+    for key, value in dotenv_values(env_file).items():
+        if key and key.startswith("RCLONE_CONFIG_R2_") and value is not None:
+            os.environ[key] = value
+
+
+def _env_value_is_set(key: str) -> bool:
+    """Return whether an env var is present with a non-blank value.
+
+    :param key: Environment variable name to inspect.
+    :returns: ``True`` when the key exists and is not empty/whitespace.
+    """
+    return bool(os.environ.get(key, "").strip())
+
+
 def ensure_r2_env_loaded(env_file: Path | None = None) -> None:
-    """Load ``RCLONE_CONFIG_R2_*`` from ``env_file`` into ``os.environ``; validate.
+    """Load ``RCLONE_CONFIG_R2_*`` from dotenv/process env; validate access.
 
     Three-step pre-flight that callers run once before invoking any other helper
     in this module:
 
-    1. If ``env_file`` is provided and exists on disk, mirror every key
-       prefixed with ``RCLONE_CONFIG_R2_`` from that dotenv file into
-       ``os.environ`` (dotenv values overwrite — matches the launcher's
-       precedence so the same view applies on every entry point).
+    1. Mirror every key prefixed with ``RCLONE_CONFIG_R2_`` from ``env_file``
+       into ``os.environ`` when that file exists. If ``env_file`` is ``None``,
+       use the default dotenv lookup: ``$SYNTH_SETTER_WORKSPACE/.env``, the
+       checkout marker root's ``.env``, then cwd ``.env``. Dotenv values
+       overwrite process env, matching the launcher's precedence.
     2. Default ``RCLONE_CONFIG_R2_TYPE=s3`` and ``RCLONE_CONFIG_R2_PROVIDER=Cloudflare``
        into ``os.environ`` if unset. rclone's env-override convention needs both to
        assemble a complete remote definition; without them ``rclone lsd r2:``
@@ -110,30 +165,26 @@ def ensure_r2_env_loaded(env_file: Path | None = None) -> None:
        process env, then run ``rclone lsd r2:`` as an auth ping. Either check
        failing raises ``RuntimeError`` with an actionable message.
 
-    No-op on the dotenv step if ``env_file`` is ``None`` or doesn't exist; the
-    defaulting + presence+auth checks still run against whatever ``os.environ``
-    already has.
+    No-op on the dotenv step if the resolved file doesn't exist; the defaulting
+    + presence+auth checks still run against whatever ``os.environ`` already has.
 
-    :param env_file: Optional dotenv file to merge into ``os.environ`` first
-        (typically ``sky_cfg.env_file``).
+    :param env_file: Optional dotenv file to merge into ``os.environ`` first.
+        ``None`` means the resolved default dotenv path.
     :raises RuntimeError: A required secret key is unset after the load, or
         ``rclone lsd r2:`` exits non-zero (bad creds, network, etc.).
     """
-    if env_file is not None and env_file.is_file():
-        for key, value in dotenv_values(env_file).items():
-            if key and key.startswith("RCLONE_CONFIG_R2_") and value is not None:
-                os.environ[key] = value
+    resolved_env_file = _resolve_env_file(env_file)
+    _load_r2_env_file(resolved_env_file)
 
     for key, default in _R2_STRUCTURAL_DEFAULTS.items():
         os.environ.setdefault(key, default)
 
-    missing = [k for k in _SECRET_R2_ENV_KEYS if k not in os.environ]
+    missing = [k for k in _SECRET_R2_ENV_KEYS if not _env_value_is_set(k)]
     if missing:
-        where = str(env_file) if env_file is not None else "<env_file not set>"
         raise RuntimeError(
             f"R2 credentials missing from process env after dotenv load: {', '.join(missing)}. "
             f"Set RCLONE_CONFIG_R2_* in process env (e.g. `docker run -e ...=...`) "
-            f"or populate {where}."
+            f"or populate {resolved_env_file}."
         )
 
     # Auth ping — fail fast on bad creds instead of letting the first real
@@ -163,13 +214,19 @@ def is_r2_reachable() -> bool:
     test then calls :func:`ensure_r2_env_loaded` and hits a hard
     ``RuntimeError`` instead of the intended auto-skip.
 
-    :returns: ``True`` when rclone is on PATH AND all three
-        ``_SECRET_R2_ENV_KEYS`` are present in ``os.environ`` AND a
+    Loads the default dotenv file and structural R2 defaults into process env
+    before checking secrets, matching the preflight mutation semantics.
+
+    :returns: ``True`` when rclone is on PATH AND all three ``_SECRET_R2_ENV_KEYS``
+        are present with non-blank values after default dotenv loading AND a
         credentialled ``rclone lsd r2:`` exits 0; ``False`` otherwise.
     """
     if shutil.which("rclone") is None:
         return False
-    if not all(key in os.environ for key in _SECRET_R2_ENV_KEYS):
+    _load_r2_env_file(_DEFAULT_ENV_FILE)
+    for key, default in _R2_STRUCTURAL_DEFAULTS.items():
+        os.environ.setdefault(key, default)
+    if not all(_env_value_is_set(key) for key in _SECRET_R2_ENV_KEYS):
         return False
     try:
         subprocess.run(  # noqa: S603 — args are literal strings
@@ -181,6 +238,38 @@ def is_r2_reachable() -> bool:
     except (subprocess.CalledProcessError, FileNotFoundError):
         return False
     return True
+
+
+def r2_storage_options() -> dict[str, str]:
+    """Build Lance's object-store ``storage_options`` for the R2 bucket from env.
+
+    Reads the same ``RCLONE_CONFIG_R2_*`` vars rclone uses (call
+    :func:`ensure_r2_env_loaded` first); S3-compatible stores require both keys.
+
+    :returns: ``{access_key_id, secret_access_key, endpoint, aws_endpoint, region}``
+        for ``lance.dataset`` / ``lance.write_dataset``.
+    :raises RuntimeError: A required secret key is unset in ``os.environ``.
+    """
+    # Treat empty/whitespace as missing: a blank env var would otherwise build a
+    # partial dict that fails opaquely on the first S3/Lance call.
+    values = {key: os.environ.get(key, "").strip() for key in _SECRET_R2_ENV_KEYS}
+    missing = [key for key, value in values.items() if not value]
+    if missing:
+        raise RuntimeError(
+            f"R2 credentials missing from process env: {', '.join(missing)}. "
+            "Call ensure_r2_env_loaded() or set RCLONE_CONFIG_R2_* first."
+        )
+    endpoint = values["RCLONE_CONFIG_R2_ENDPOINT"]
+    return {
+        "access_key_id": values["RCLONE_CONFIG_R2_ACCESS_KEY_ID"],
+        "secret_access_key": values["RCLONE_CONFIG_R2_SECRET_ACCESS_KEY"],
+        "endpoint": endpoint,
+        # Lance detects R2 multipart constraints through the AWS-prefixed alias.
+        "aws_endpoint": endpoint,
+        # R2 ignores region, but object-store requires it set for S3-compatible
+        # stores; "auto" is R2's documented placeholder.
+        "region": "auto",
+    }
 
 
 def is_r2_uri(uri: str) -> bool:
@@ -280,7 +369,7 @@ def upload_to_uri(local_path: Path, r2_uri: str) -> None:
     subprocess.check_call(args)  # noqa: S603 — args from validated URI
 
 
-def upload_dir(local_dir: Path, r2_uri: str) -> None:
+def upload_dir(local_dir: Path, r2_uri: str, exclude: str | None = None) -> None:
     """Copy a local directory tree into an R2 prefix (upload mirror of the dir download).
 
     ``rclone copy`` walks ``local_dir`` and writes each file under ``r2_uri``,
@@ -295,10 +384,12 @@ def upload_dir(local_dir: Path, r2_uri: str) -> None:
     :param local_dir: Local directory whose contents land directly under
         ``r2_uri`` (the directory itself is not nested under its own name).
     :param r2_uri: ``r2://`` destination prefix; created implicitly by rclone.
+    :param exclude: Optional rclone ``--exclude`` glob; lets a caller stage a
+        subtree last by excluding it from a first pass.
     """
-    args = _rclone_argv(
-        "copy", str(local_dir), _to_rclone_path(r2_uri), timeout=_UPLOAD_DIR_TIMEOUT
-    )
+    operands = [f"--exclude={exclude}"] if exclude is not None else []
+    operands += [str(local_dir), _to_rclone_path(r2_uri)]
+    args = _rclone_argv("copy", *operands, timeout=_UPLOAD_DIR_TIMEOUT)
     subprocess.check_call(args)  # noqa: S603 — args from validated URI
 
 
@@ -374,6 +465,28 @@ def object_size(r2_uri: str) -> int | None:
         raise RuntimeError(
             f"rclone lsf --format=s returned unparsable size {out!r} for {r2_uri}"
         ) from exc
+
+
+def r2_directory_exists(r2_uri: str) -> bool:
+    """Return whether any object exists under the ``r2_uri`` prefix.
+
+    Directory counterpart of :func:`object_size`; a non-zero rclone exit (auth,
+    network) raises ``CalledProcessError`` so an outage isn't read as absent.
+
+    :param r2_uri: Canonical ``r2://bucket/prefix`` URI of the directory.
+    :returns: ``True`` if the prefix contains at least one object.
+    """
+    # rclone lsf is non-recursive by default, so this lists only the prefix's
+    # immediate entries — an O(1) boolean probe, not a full-tree enumeration.
+    args = [  # noqa: S607 — rclone resolved by image's PATH
+        "rclone",
+        "lsf",
+        _to_rclone_path(r2_uri),
+    ]
+    result = subprocess.run(  # noqa: S603 — args from validated URI
+        args, check=True, capture_output=True, text=True
+    )
+    return bool(result.stdout.strip())
 
 
 def purge_prefix(bucket: str, prefix: str) -> None:

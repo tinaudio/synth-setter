@@ -30,10 +30,10 @@ readonly SCRIPT_DIR
 # `in_headless_context` reports whether this turn belongs to a headless runner
 # whose Stop must never block. Three independent signals, any one suffices:
 #   - PR_READINESS_HEADLESS — exported by _lib.sh's run_agent_prompt, the single
-#     chokepoint the pr-review-resolver/doc-drift hooks spawn agents through.
+#     chokepoint the doc-drift hook spawns its agent through.
 #   - CI — set by GitHub Actions and most CI runners.
-#   - cwd under .agent-reviews/worktrees/ — the detached worktree those headless
-#     agents run in, a fallback for runners that bypass run_agent_prompt.
+#   - cwd under .agent-reviews/worktrees/ — the detached worktree that headless
+#     agent runs in, a fallback for runners that bypass run_agent_prompt.
 in_headless_context() {
   [[ -n "${PR_READINESS_HEADLESS:-}" ]] && return 0
   [[ -n "${CI:-}" ]] && return 0

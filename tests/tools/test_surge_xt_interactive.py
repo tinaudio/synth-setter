@@ -1,9 +1,12 @@
 """Tests for src/synth_setter/tools/surge_xt_interactive.py prediction decoding helpers."""
 
 import importlib
+import os
 import queue
 import threading
 from pathlib import Path
+from typing import NoReturn
+from unittest import mock
 
 import click
 import h5py
@@ -11,6 +14,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import torch
+from click.testing import CliRunner
 from pedalboard.io import AudioFile
 
 from synth_setter.data.vst import param_specs
@@ -1652,3 +1656,41 @@ class TestKeyboardLoopE2E:
             assert isinstance(value, float)
             assert np.isfinite(value), f"{name} = {value} is not finite"
         assert stop_event.is_set()
+
+
+class _StopBeforeGuiError(Exception):
+    """Sentinel raised from a patched ``load_plugin``; carries the resolved plugin path."""
+
+
+def _raise_stop(plugin_path: str) -> NoReturn:
+    raise _StopBeforeGuiError(plugin_path)
+
+
+class TestMainPluginPathDefault:
+    """``main``'s ``--plugin-path`` default flows through the env-aware registry resolver.
+
+    ``load_plugin`` is patched to capture its argument and abort: once the guard
+    clauses pass it is the first call that consumes the resolved ``--plugin-path``,
+    so the captured path is exactly what the resolver produced.
+    """
+
+    def test_env_var_overrides_default_plugin_path(self) -> None:
+        """``$SYNTH_SETTER_PLUGIN_PATH`` reaches ``load_plugin`` when no flag is passed."""
+        sxi = importlib.import_module("synth_setter.tools.surge_xt_interactive")
+        with mock.patch.object(sxi, "load_plugin", _raise_stop):
+            result = CliRunner().invoke(
+                sxi.main,
+                ["--param-spec-name", "surge_xt"],
+                env={"SYNTH_SETTER_PLUGIN_PATH": "env-plugin.vst3"},
+            )
+        assert isinstance(result.exception, _StopBeforeGuiError)
+        assert result.exception.args[0] == "env-plugin.vst3"
+
+    def test_unset_env_falls_back_to_bundle(self) -> None:
+        """With no override, ``--plugin-path`` resolves to the in-repo bundle default."""
+        sxi = importlib.import_module("synth_setter.tools.surge_xt_interactive")
+        with mock.patch.dict(os.environ), mock.patch.object(sxi, "load_plugin", _raise_stop):
+            os.environ.pop("SYNTH_SETTER_PLUGIN_PATH", None)
+            result = CliRunner().invoke(sxi.main, ["--param-spec-name", "surge_xt"])
+        assert isinstance(result.exception, _StopBeforeGuiError)
+        assert result.exception.args[0] == "plugins/Surge XT.vst3"

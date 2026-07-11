@@ -1,0 +1,32 @@
+# @package _global_
+
+# GPU smoke-test for surge_ffn against the immutable surge_xt fixture in R2
+# (fixtures/smoke-shard-surge-xt-v1, a 20/20/20-sample shard). prepare_data()
+# no-clobber-copies the fixture into dataset_root before fit, so no local data
+# needs staging. Inherits ffn_full for the surge_xt wiring (d_out=300,
+# LogPerParamMSE on surge_xt).
+
+defaults:
+  - /experiment/surge/ffn_full
+  - _self_
+
+experiment_name: surge-smoke-fixture
+run_name: ffn
+
+model:
+  # surge_ff_module.setup() recompiles net on every stage; with fit + test that
+  # double-compiles and raises. Smoke runs don't need the compiled path anyway.
+  compile: false
+
+datamodule:
+  # No-clobber-copied by prepare_data() before fit; opt-in R2 source.
+  download_dataset_root_uri: r2://intermediate-data/fixtures/smoke-shard-surge-xt-v1/
+  # The fixture's train split holds 20 samples; a larger batch yields zero batches.
+  batch_size: 4
+  # Single-process loading for the 20-sample fixture, matching surge/test*.yaml.
+  num_workers: 0
+
+trainer:
+  max_steps: 10
+  # Smoke run: drop the surge-default 1M floor so the run stops at max_steps.
+  min_steps: null

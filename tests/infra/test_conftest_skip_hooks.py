@@ -42,7 +42,7 @@ def test_requires_vst_item_skipped_when_vst_absent(monkeypatch: pytest.MonkeyPat
     item = _FakeItem({"requires_vst": pytest.mark.requires_vst})
     conftest_module.pytest_collection_modifyitems(items=cast(list[pytest.Item], [item]))
     assert len(item.added_markers) == 1
-    assert "Surge XT VST not found" in item.added_markers[0].kwargs["reason"]
+    assert "VST plugin not found" in item.added_markers[0].kwargs["reason"]
 
 
 @pytest.mark.infra

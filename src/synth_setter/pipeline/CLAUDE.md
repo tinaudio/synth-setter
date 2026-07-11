@@ -21,7 +21,8 @@ this file is the imperative rule sheet.
 ## Validation tiers
 
 - **Workers** run the full 4-check shard validation before upload:
-  - Structural — opens as HDF5.
+  - Structural — opens in the shard's container format (HDF5 file, WebDataset
+    tar, or Lance dataset directory).
   - Shape — datasets match the expected shape.
   - Value — values are finite and within bounds.
   - Row count — sample count matches `render.samples_per_shard`.

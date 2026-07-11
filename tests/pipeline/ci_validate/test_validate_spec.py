@@ -46,6 +46,8 @@ def _make_valid_spec(*, output_format: str = "hdf5", **overrides: object) -> dic
             "samples_per_render_batch": 32,
             "samples_per_shard": 32,
             "max_retries": 0,
+            "base_seed": 0,
+            "attempts_per_sample": 100,
             "parallel": False,
             "plugin_reload_cadence": "render",
             "gui_toggle_cadence": "never",

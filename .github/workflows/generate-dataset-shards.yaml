@@ -332,7 +332,7 @@ jobs:
         if: ${{ inputs.provider == 'skypilot-local' }}
         uses: actions/setup-python@v6
         with:
-          python-version: "3.10"
+          python-version: "3.11"
 
       - name: Install uv (skypilot-local row)
         if: ${{ inputs.provider == 'skypilot-local' }}
@@ -362,9 +362,9 @@ jobs:
           # hashFiles('uv.lock', 'pyproject.toml') is the cache invalidator —
           # any pin change there busts the key. Literal version tokens removed
           # so the key cannot drift from the actual pin set.
-          key: launcher-uv-${{ runner.os }}-py310-${{ hashFiles('uv.lock', 'pyproject.toml') }}
+          key: launcher-uv-${{ runner.os }}-py311-${{ hashFiles('uv.lock', 'pyproject.toml') }}
           restore-keys: |
-            launcher-uv-${{ runner.os }}-py310-
+            launcher-uv-${{ runner.os }}-py311-
 
       # Idempotent on cache hit; the `kubernetes` extra of skypilot lives in
       # [project.dependencies], so `--extra cpu` + the default dev group covers

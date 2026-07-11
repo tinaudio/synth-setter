@@ -33,20 +33,20 @@ Project terminology for synth-setter. Grouped by domain.
 
 ## Data Pipeline
 
-| Term                  | Definition                                                                                                                                                                                       |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Shard**             | An HDF5 file containing a batch of training samples (audio, mel spectrograms, parameter arrays). Typically 1k--10k samples per shard. Named by logical index (e.g., `shard-000042.h5`).          |
-| **Shard ID**          | Logical index for a shard (`shard-000042`). Deterministic, defined at run creation, independent of which worker computes it.                                                                     |
-| **Input spec**        | JSON file (`input_spec.json`) freezing all generation parameters for a run: per-shard seeds, shapes, splits, renderer version. Written once, never modified.                                     |
-| **Finalize**          | The pipeline stage that downloads all validated shards, reshards into train/val/test splits, computes normalization statistics, registers the dataset in W&B, and writes `dataset.complete`.     |
-| **Reconciliation**    | Comparing desired state (the spec) against actual state (validated shards in R2) to determine what work remains. The pipeline's coordination mechanism -- no message queues or databases needed. |
-| **Worker**            | A cloud compute instance that generates shards. On RunPod, this is a single Docker container ("pod") with assigned shard work.                                                                   |
-| **dataset.complete**  | Marker file written by finalize as the very last step. Signals that finalization is done. Contains run_id and timestamp. Once present, the dataset is immutable.                                 |
-| **Lifecycle marker**  | Empty file in worker metadata tracking shard state: `.rendering` (started), `.valid` (committed), `.promoted` (canonical), `.invalid` (failed). Presence is the state -- no content to parse.    |
-| **Quarantined shard** | A corrupt shard uploaded to a quarantine path on validation failure. Preserves evidence for debugging.                                                                                           |
-| **Virtual dataset**   | HDF5 feature that creates a logical view over multiple files without copying data. Used by finalize to compose train/val/test splits from individual shards.                                     |
-| **WebDataset**        | [WebDataset](https://github.com/webdataset/webdataset) format for streaming training data. Sequential `.tar` archives optimized for HTTP/S3 streaming, used for multi-GPU training.              |
-| **Dataset card**      | JSON file (`dataset.json`) describing the finalized dataset: provenance, structure, stats. References the spec by SHA-256.                                                                       |
+| Term                  | Definition                                                                                                                                                                                                                         |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Shard**             | An HDF5 file containing a batch of training samples (audio, mel spectrograms, parameter arrays). Typically 1k--10k samples per shard. Named by logical index (e.g., `shard-000042.h5`).                                            |
+| **Shard ID**          | Logical index for a shard (`shard-000042`). Deterministic, defined at run creation, independent of which worker computes it.                                                                                                       |
+| **Input spec**        | JSON file (`input_spec.json`) freezing all generation parameters for a run: per-shard seeds, shapes, splits, renderer version. Written once, never modified. See [Deterministic Dataset Seeding](design/deterministic-seeding.md). |
+| **Finalize**          | The pipeline stage that downloads all validated shards, reshards into train/val/test splits, computes normalization statistics, registers the dataset in W&B, and writes `dataset.complete`.                                       |
+| **Reconciliation**    | Comparing desired state (the spec) against actual state (validated shards in R2) to determine what work remains. The pipeline's coordination mechanism -- no message queues or databases needed.                                   |
+| **Worker**            | A cloud compute instance that generates shards. On RunPod, this is a single Docker container ("pod") with assigned shard work.                                                                                                     |
+| **dataset.complete**  | Marker file written by finalize as the very last step. Signals that finalization is done. Contains run_id and timestamp. Once present, the dataset is immutable.                                                                   |
+| **Lifecycle marker**  | Empty file in worker metadata tracking shard state: `.rendering` (started), `.valid` (committed), `.promoted` (canonical), `.invalid` (failed). Presence is the state -- no content to parse.                                      |
+| **Quarantined shard** | A corrupt shard uploaded to a quarantine path on validation failure. Preserves evidence for debugging.                                                                                                                             |
+| **Virtual dataset**   | HDF5 feature that creates a logical view over multiple files without copying data. Used by finalize to compose train/val/test splits from individual shards.                                                                       |
+| **WebDataset**        | [WebDataset](https://github.com/webdataset/webdataset) format for streaming training data. Sequential `.tar` archives optimized for HTTP/S3 streaming, used for multi-GPU training.                                                |
+| **Dataset card**      | JSON file (`dataset.json`) describing the finalized dataset: provenance, structure, stats. References the spec by SHA-256.                                                                                                         |
 
 ## Evaluation Pipeline
 

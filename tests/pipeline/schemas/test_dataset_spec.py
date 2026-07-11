@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -19,7 +19,7 @@ from synth_setter.pipeline.schemas.spec import (
     ShardSpec,
 )
 
-FIXED_NOW = datetime(2026, 3, 28, 12, 0, 0, tzinfo=timezone.utc)
+FIXED_NOW = datetime(2026, 3, 28, 12, 0, 0, tzinfo=UTC)
 
 
 def _valid_render_kwargs(plugin_path: str = "/fake/Plugin.vst3") -> dict[str, Any]:
@@ -516,9 +516,6 @@ class TestDatasetSpecValidators:
     def test_output_format_serializes_as_plain_token(self, patch_runtime_io: None) -> None:
         """JSON serialization emits the bare token, not the enum repr (R2 / Hydra contract).
 
-        The reason ``OutputFormat`` subclasses ``str``: the materialized
-        ``input_spec.json`` on R2 must round-trip as ``"wds"``, not ``"OutputFormat.WDS"``.
-
         :param patch_runtime_io: Fixture stubbing git/clock runtime fields.
         """
         spec = DatasetSpec(**_valid_spec_kwargs(output_format="wds"))
@@ -563,7 +560,7 @@ class TestDatasetSpecValidators:
         self, patch_runtime_io: None, bad_value: Any
     ) -> None:
         """Setting train_val_test_seeds raises NotImplementedError — reserved for #884."""
-        with pytest.raises(NotImplementedError, match="reserved for per-sample seeding"):
+        with pytest.raises(NotImplementedError, match="reserved for per-split independent seed"):
             DatasetSpec(**_valid_spec_kwargs(train_val_test_seeds=bad_value))
 
     def test_train_val_test_seeds_defaults_to_none(self, patch_runtime_io: None) -> None:
@@ -576,6 +573,21 @@ class TestDatasetSpecValidators:
         spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_seeds=None))
         assert spec.train_val_test_seeds is None
 
+    @pytest.mark.parametrize("bad_attempts", [0, -1])
+    def test_render_config_rejects_non_positive_attempts_per_sample(
+        self, patch_runtime_io: None, bad_attempts: int
+    ) -> None:
+        """attempts_per_sample must be positive at the DatasetSpec trust boundary.
+
+        :param patch_runtime_io: Fixture stubbing git/clock runtime fields.
+        :param bad_attempts: Invalid retry budget value.
+        """
+        kwargs = _valid_spec_kwargs()
+        kwargs["render"] = {**kwargs["render"], "attempts_per_sample": bad_attempts}
+
+        with pytest.raises(ValidationError):
+            DatasetSpec(**kwargs)
+
     def test_explicit_empty_r2_prefix_raises(self, patch_runtime_io: None) -> None:
         """Empty ``r2.prefix`` raises via the ``_prefix_must_end_with_slash`` validator.
 
@@ -585,10 +597,10 @@ class TestDatasetSpecValidators:
             DatasetSpec(**_valid_spec_kwargs(r2={"bucket": "intermediate-data", "prefix": ""}))
 
     def test_z_suffixed_created_at_string_parses(self, patch_runtime_io: None) -> None:
-        """``model_dump_json``'s ``Z``-suffixed UTC timestamps round-trip on Python 3.10.
+        """``model_dump_json``'s ``Z``-suffixed UTC timestamps round-trip through validation.
 
-        ``datetime.fromisoformat`` rejects the ``Z`` offset on 3.10 (accepts on 3.11+); the
-        ``_parse_iso_datetime`` validator normalizes it before strict-mode validation runs.
+        The ``_parse_iso_datetime`` validator normalizes the trailing ``Z`` to an explicit
+        ``+00:00`` offset before strict-mode validation runs.
         """
         payload = {**_valid_spec_kwargs(), "created_at": "2026-03-28T12:00:00Z"}
         spec = DatasetSpec(**payload)

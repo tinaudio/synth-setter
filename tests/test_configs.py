@@ -1,5 +1,6 @@
 """Tests that Hydra config groups compose without errors."""
 
+from collections.abc import Sequence
 from typing import Any
 
 import hydra
@@ -181,3 +182,104 @@ def test_test_mps_yaml_matches_cfg_surge_xt_global(experiment: str, test_mps_yam
         f"{test_mps_yaml}.yaml drifted from "
         f"cfg_surge_xt_global(mps, surge_4, {experiment!r}):\n" + "\n".join(diffs)
     )
+
+
+def _compose(config_name: str, overrides: Sequence[str]) -> DictConfig:
+    """Compose a top-level config with overrides, clearing GlobalHydra around it.
+
+    :param config_name: Top-level config to compose (``train.yaml``, ``eval.yaml``, ...).
+    :param overrides: Hydra CLI-style overrides.
+    :returns: The composed config.
+    """
+    GlobalHydra.instance().clear()
+    try:
+        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+            return compose(
+                config_name=config_name, return_hydra_config=False, overrides=list(overrides)
+            )
+    finally:
+        GlobalHydra.instance().clear()
+
+
+def test_surge_4_generate_dataset_experiment_composes_with_inline_finalize() -> None:
+    """``generate_dataset/surge-4-lance-440k-20k-20k`` wires surge_4 and inline finalize.
+
+    Pins the full-scale surge_4 Lance pipeline contract: the surge_4 render and
+    datamodule groups, Lance output, the 440k/20k/20k split, and the inline
+    finalize that writes ``dataset.complete`` in the same CLI process.
+    """
+    cfg = _compose("dataset.yaml", ["experiment=generate_dataset/surge-4-lance-440k-20k-20k"])
+
+    assert cfg.render.param_spec_name == "surge_4"
+    assert cfg.render.preset_path == "presets/surge-mini.vstpreset"
+    assert cfg.datamodule.param_spec_name == "surge_4"
+    assert cfg.output_format == "lance"
+    assert list(cfg.train_val_test_sizes) == [440000, 20000, 20000]
+    assert cfg.finalize_inline is True
+
+
+def test_surge_4_train_experiment_composes_with_surge_4_width() -> None:
+    """``surge/ffn_4`` trains the FFN at the surge_4 encoded width on Lance data.
+
+    Pins the surge_4 train contract: Lance datamodule keyed to the surge_4 spec,
+    ``d_out`` equal to the spec's encoded width (7), and per-param MSE logging
+    labeled with the surge_4 spec.
+    """
+    cfg = _compose("train.yaml", ["experiment=surge/ffn_4"])
+
+    assert cfg.datamodule.param_spec_name == "surge_4"
+    assert cfg.datamodule._target_ == "synth_setter.data.lance_datamodule.LanceVSTDataModule"
+    assert cfg.model.net.d_out == 7
+    assert cfg.callbacks.log_per_param_mse.param_spec == "surge_4"
+    # plot_proj_ii's projection plots don't apply to the surge_4 spec; the
+    # experiment disables it like its ffn_full/ffn_simple siblings.
+    assert cfg.callbacks.plot_proj_ii is None
+
+
+def test_surge_4_eval_experiment_composes_in_predict_mode() -> None:
+    """``surge/eval_ffn_4`` evaluates a surge_4 FFN checkpoint in predict mode.
+
+    Pins the surge_4 eval contract: predict mode with VST rendering and metrics,
+    the surge_4 render group, and a mandatory ``ckpt_path``.
+    """
+    cfg = _compose("eval.yaml", ["experiment=surge/eval_ffn_4", "ckpt_path=dummy.ckpt"])
+
+    assert cfg.mode == "predict"
+    assert cfg.render.param_spec_name == "surge_4"
+    assert cfg.datamodule.param_spec_name == "surge_4"
+    assert cfg.model.net.d_out == 7
+    assert cfg.evaluation.render_vst is True
+    assert cfg.evaluation.compute_metrics is True
+    assert cfg.evaluation.rerender_target is False
+    assert cfg.ckpt_path == "dummy.ckpt"
+    # eval.yaml defaults logger to null; the experiment must re-select the
+    # wandb group or base.yaml's logger.wandb fragment dangles.
+    assert cfg.logger.wandb._target_ == "lightning.pytorch.loggers.wandb.WandbLogger"
+    # eval_surge callbacks: the prediction writer must be present.
+    assert "prediction_writer" in cfg.callbacks
+
+
+def test_ffn_smoke_experiment_wires_surge_xt_fixture_source() -> None:
+    """``experiment=surge/ffn_smoke`` bakes in the R2 surge_xt fixture and smoke caps.
+
+    Pins the contract that lets the experiment run end-to-end with no pre-staged
+    local data: the opt-in R2 download URI; the batch size and single-process
+    loading that the 20-sample train split forces; the 10-step cap with the
+    surge-default 1M ``min_steps`` floor dropped; the surge_xt spec wiring
+    (datamodule param spec + LogPerParamMSE callback) and the output width
+    inherited from ``ffn_full``; and the disabled ``compile`` that keeps the
+    fit + test setup from double-compiling.
+    """
+    cfg = _compose("train.yaml", ["experiment=surge/ffn_smoke"])
+
+    assert cfg.datamodule.download_dataset_root_uri == (
+        "r2://intermediate-data/fixtures/smoke-shard-surge-xt-v1/"
+    )
+    assert cfg.datamodule.batch_size == 4
+    assert cfg.datamodule.num_workers == 0
+    assert cfg.datamodule.param_spec_name == "surge_xt"
+    assert cfg.callbacks.log_per_param_mse.param_spec == "surge_xt"
+    assert cfg.trainer.max_steps == 10
+    assert cfg.trainer.min_steps is None
+    assert cfg.model.net.d_out == 300
+    assert cfg.model.compile is False

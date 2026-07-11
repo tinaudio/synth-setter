@@ -164,7 +164,7 @@ When `synth-setter-eval mode=predict evaluation.compute_metrics=true` runs and a
 | `audio/rms_std`            | Same, standard deviation                                                                                                    |
 | `audio/per_sample_metrics` | Per-sample metrics from `metrics.csv` as a `wandb.Table`; columns match `compute_audio_metrics` output (one row per sample) |
 
-When the auto-shuffle probe ran (uniform params, ≥ 2 sample dirs), a parallel set of `shuffled_audio/<metric>_{mean,std}` keys is also logged from `aggregated_metrics_shuffled.csv`. `_log_metrics_csv_to_wandb` (`src/synth_setter/cli/eval.py`) is a no-op when `metrics.csv` is absent or `wandb.run` is unset; wandb errors are swallowed so a logging failure never aborts the run.
+When the auto-shuffle probe ran (uniform params, ≥ 2 sample dirs), a parallel set of `shuffled_audio/<metric>_{mean,std}` keys is also logged from `aggregated_metrics_shuffled.csv`, and the drawn permutation is logged as a `shuffle/permutation` `wandb.Table` from `shuffle_permutation.csv` via `_log_shuffle_permutation_to_wandb` (`src/synth_setter/cli/eval.py`) — skipped when `shuffle_permutation.csv` is absent or `wandb.run` is unset, with wandb errors swallowed. `_log_metrics_csv_to_wandb` (`src/synth_setter/cli/eval.py`) is a no-op when `metrics.csv` is absent or `wandb.run` is unset; wandb errors are swallowed so a logging failure never aborts the run.
 
 The aggregated scalar metrics dict is also merged into the dict returned by `evaluate()` alongside Lightning's `trainer.callback_metrics`; the `audio/per_sample_metrics` Table is W&B-only and is not included in that dict. See [eval-pipeline.md §5.1](../design/eval-pipeline.md) for the surrounding subprocess chain.
 
@@ -280,7 +280,7 @@ split so they don't overwrite each other's run summary: `test` keeps the bare
 `audio/*` key, while `train`/`val` are logged under `train/audio/*` and
 `val/audio/*` (via `+evaluation.metric_prefix=<split>/`). The prefix applies to
 every metric key, so the `shuffled_audio/*` keys (§2) become `train/shuffled_audio/*`
-etc. too. The eval subprocess
+and the `shuffle/permutation` Table becomes `train/shuffle/permutation`, etc. too. The eval subprocess
 inherits `WANDB_MODE` from the launcher, so its offline/online posture follows
 the parent's. Console logs survive the split-by-split resumes via
 `console_multipart=True`: each session uploads its own `logs/output_*.log`

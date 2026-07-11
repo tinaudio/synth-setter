@@ -181,7 +181,7 @@ async def check_call_streamed_async(
     try:
         try:
             returncode = await asyncio.wait_for(_wait_exit(proc), timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             # wait_for(timeout=None) cannot time out, so timeout is a float here.
             timed_out_after = cast(float, timeout)
             _signal_group(pgid, signal.SIGTERM)
@@ -189,7 +189,7 @@ async def check_call_streamed_async(
                 returncode = await asyncio.wait_for(
                     _wait_exit(proc), timeout=_TERM_TO_KILL_GRACE_SECONDS
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 _LOG.warning(
                     "subprocess_term_to_kill_escalation",
                     cmd=cmd[0],
@@ -200,7 +200,7 @@ async def check_call_streamed_async(
 
         try:
             await asyncio.wait_for(pump_task, timeout=_POST_EXIT_DRAIN_SECONDS)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             # A pipe-holding survivor must not stall completion; abandon the tail.
             _LOG.warning(
                 "subprocess_output_drain_abandoned",

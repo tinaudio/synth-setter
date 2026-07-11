@@ -22,6 +22,7 @@ from synth_setter.cli.eval import (
     _PREDICT_VST_AUDIO_MODULE,
     _log_audio_metrics_to_wandb,
     _log_metrics_csv_to_wandb,
+    _log_shuffle_permutation_to_wandb,
     _run_predict_postprocessing,
 )
 
@@ -904,3 +905,178 @@ def test_log_metrics_csv_to_wandb_log_exception_is_swallowed(
         _log_metrics_csv_to_wandb(tmp_path)
 
     assert any("RuntimeError" in r.message for r in caplog.records)
+
+
+_SHUFFLE_PERMUTATION_CSV = "dest_idx,src_idx\n0,1\n1,0\n"
+
+
+class _RecordingWandbRun:
+    """Spy stand-in for ``wandb.run`` that appends every ``log`` payload to ``payloads``."""
+
+    def __init__(self) -> None:
+        self.payloads: list[dict[str, object]] = []
+
+    def log(self, payload: dict[str, object]) -> None:
+        """Record one ``wandb.run.log`` call's argument.
+
+        :param payload: The dict passed to ``wandb.run.log``.
+        """
+        self.payloads.append(payload)
+
+
+@pytest.fixture
+def wandb_log_spy(monkeypatch: pytest.MonkeyPatch) -> _RecordingWandbRun:
+    """Pin ``wandb.run`` to a fresh recording spy for the test's duration.
+
+    :param monkeypatch: Applies and reverts the ``eval_mod.wandb.run`` patch.
+    :returns: The installed spy, whose ``payloads`` collects every logged dict.
+    """
+    spy = _RecordingWandbRun()
+    monkeypatch.setattr(eval_mod.wandb, "run", spy)
+    return spy
+
+
+def test_log_shuffle_permutation_to_wandb_logs_table_to_active_run(
+    wandb_log_spy: _RecordingWandbRun,
+    tmp_path: Path,
+) -> None:
+    """An active run plus a present ``shuffle_permutation.csv`` logs exactly one Table.
+
+    :param wandb_log_spy: Recording spy pinned to ``wandb.run``.
+    :param tmp_path: Scratch metrics dir seeded with a minimal ``shuffle_permutation.csv``.
+    """
+    (tmp_path / "shuffle_permutation.csv").write_text(_SHUFFLE_PERMUTATION_CSV)
+
+    _log_shuffle_permutation_to_wandb(tmp_path)
+
+    assert len(wandb_log_spy.payloads) == 1
+    table = wandb_log_spy.payloads[0]["shuffle/permutation"]
+    assert isinstance(table, wandb.Table)
+    assert table.columns == ["dest_idx", "src_idx"]
+    # Rows must round-trip the CSV verbatim, not just carry the right header.
+    assert table.data == [[0, 1], [1, 0]]
+
+
+def test_log_shuffle_permutation_to_wandb_prepends_prefix_to_table_key(
+    wandb_log_spy: _RecordingWandbRun,
+    tmp_path: Path,
+) -> None:
+    """A non-empty ``prefix`` namespaces the Table key so per-split runs stay distinct.
+
+    :param wandb_log_spy: Recording spy pinned to ``wandb.run``.
+    :param tmp_path: Scratch metrics dir seeded with a minimal ``shuffle_permutation.csv``.
+    """
+    (tmp_path / "shuffle_permutation.csv").write_text(_SHUFFLE_PERMUTATION_CSV)
+
+    _log_shuffle_permutation_to_wandb(tmp_path, prefix="train/")
+
+    assert len(wandb_log_spy.payloads) == 1
+    assert isinstance(wandb_log_spy.payloads[0]["train/shuffle/permutation"], wandb.Table)
+
+
+def test_log_shuffle_permutation_to_wandb_noop_when_no_run(
+    wandb_log_spy: _RecordingWandbRun,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """``wandb.run is None`` → returns without raising or logging, even with the CSV present.
+
+    Overriding the spy with ``None`` exercises the early-exit guard: removing it would
+    dereference ``None.log`` and raise instead of logging nothing.
+
+    :param wandb_log_spy: Recording spy whose ``payloads`` must stay empty.
+    :param monkeypatch: Overrides ``wandb.run`` with ``None`` after the fixture installs the spy.
+    :param tmp_path: Scratch dir — ``shuffle_permutation.csv`` is present but must not be read.
+    """
+    (tmp_path / "shuffle_permutation.csv").write_text(_SHUFFLE_PERMUTATION_CSV)
+    monkeypatch.setattr(eval_mod.wandb, "run", None)
+
+    _log_shuffle_permutation_to_wandb(tmp_path)
+
+    assert wandb_log_spy.payloads == []
+
+
+def test_log_shuffle_permutation_to_wandb_missing_file_is_silent(
+    wandb_log_spy: _RecordingWandbRun,
+    tmp_path: Path,
+) -> None:
+    """A missing ``shuffle_permutation.csv`` is skipped; nothing is logged.
+
+    The probe writes the file only for uniform-params datasets, so its absence is the
+    common non-oracle case and must not raise.
+
+    :param wandb_log_spy: Recording spy pinned to ``wandb.run``.
+    :param tmp_path: Empty scratch dir — no ``shuffle_permutation.csv`` present.
+    """
+    _log_shuffle_permutation_to_wandb(tmp_path)
+
+    assert wandb_log_spy.payloads == []
+
+
+def test_log_shuffle_permutation_to_wandb_log_exception_is_swallowed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An exception from ``wandb.run.log`` is swallowed and a warning is emitted.
+
+    :param monkeypatch: Pins ``wandb.run`` to a fake whose ``.log`` raises ``RuntimeError``.
+    :param tmp_path: Scratch metrics dir seeded with a minimal ``shuffle_permutation.csv``.
+    :param caplog: Captures log output to verify the warning is emitted.
+    """
+    (tmp_path / "shuffle_permutation.csv").write_text(_SHUFFLE_PERMUTATION_CSV)
+
+    class _RaisingRun:
+        """Stand-in for ``wandb.run`` whose ``log`` always raises to simulate a backend failure."""
+
+        def log(self, _payload: object) -> None:
+            """Simulate a failing wandb backend.
+
+            :param _payload: The would-be log dict; discarded before raising.
+            :raises RuntimeError: Always, to simulate a wandb backend failure.
+            """
+            raise RuntimeError("wandb backend unavailable")
+
+    monkeypatch.setattr(eval_mod.wandb, "run", _RaisingRun())
+
+    with caplog.at_level(logging.WARNING):
+        _log_shuffle_permutation_to_wandb(tmp_path)
+
+    assert any("RuntimeError" in r.message for r in caplog.records)
+
+
+def test_postprocessing_logs_shuffle_permutation_table_when_subprocess_writes_csv(
+    wandb_log_spy: _RecordingWandbRun,
+    predictions_tree: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The probe permutation Table reaches ``wandb.run.log`` end-to-end through postprocessing.
+
+    Wires the producer→consumer contract: when the metrics subprocess writes
+    ``shuffle_permutation.csv``, ``_run_predict_postprocessing`` logs it as a Table under
+    the ``shuffle/permutation`` key. Deleting the log call would fail this test.
+
+    :param wandb_log_spy: Recording spy pinned to ``wandb.run``.
+    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created.
+    :param monkeypatch: Replaces ``subprocess.run`` with a fake that writes the aggregated
+        metrics CSV and the permutation CSV.
+    """
+    metrics_dir = predictions_tree / "metrics"
+
+    def _writes_metrics_and_permutation(args: list[str], **_kwargs: object) -> None:
+        if _COMPUTE_AUDIO_METRICS_MODULE not in args:
+            return
+        metrics_dir.mkdir(parents=True, exist_ok=True)
+        (metrics_dir / "aggregated_metrics.csv").write_text(_AGGREGATED_METRICS_CSV)
+        (metrics_dir / "shuffle_permutation.csv").write_text(_SHUFFLE_PERMUTATION_CSV)
+
+    monkeypatch.setattr(eval_mod.subprocess, "run", _writes_metrics_and_permutation)
+    cfg = _build_postprocess_cfg(predictions_tree, render_vst=False, compute_metrics=True)
+
+    _run_predict_postprocessing(cfg)
+
+    permutation_payloads = [p for p in wandb_log_spy.payloads if "shuffle/permutation" in p]
+    assert len(permutation_payloads) == 1
+    table = permutation_payloads[0]["shuffle/permutation"]
+    assert isinstance(table, wandb.Table)
+    assert table.columns == ["dest_idx", "src_idx"]

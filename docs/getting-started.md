@@ -16,7 +16,7 @@ ______________________________________________________________________
   are available but significantly slower.
 
 `make install` installs [uv](https://docs.astral.sh/uv/) and a managed
-Python 3.10 interpreter for you — you do not need to install Python
+Python 3.11 interpreter for you — you do not need to install Python
 yourself. If you prefer to manage the interpreter and venv manually, see
 [Appendix A](#appendix-a-manual-environment-setup).
 
@@ -36,7 +36,7 @@ cd synth-setter
 `make install` is the canonical end-to-end install. It:
 
 1. Installs [uv](https://docs.astral.sh/uv/) if it is not already on your PATH.
-2. Creates `.venv/` using a managed Python 3.10 interpreter (downloaded by uv
+2. Creates `.venv/` using a managed Python 3.11 interpreter (downloaded by uv
    if you do not have one locally). The venv prompt label is `synth-setter`.
 3. Installs the project itself in editable mode together with its `dev`
    dependency-group (⊇ `runtime`) from `pyproject.toml`
@@ -52,7 +52,7 @@ make install
 ```
 
 Re-running `make install` is safe: it reuses `.venv/` if it already exists and
-is Python 3.10, and refreshes the installed packages. If `.venv/` exists with a
+is Python 3.11, and refreshes the installed packages. If `.venv/` exists with a
 different Python version, `make install` errors and asks you to remove it
 first.
 
@@ -83,12 +83,22 @@ make install-surge-xt
 ```
 
 This downloads the `pluginsonly` archive for your platform (Linux x86_64 or
-macOS universal) from the [Surge XT 1.3.4 release](https://github.com/surge-synthesizer/releases-xt/releases/tag/1.3.4),
-verifies its md5 checksum, and extracts `Surge XT.vst3` into `plugins/`. The
-archive is cached at `~/.cache/synth-setter/surge-xt-1.3.4/`, so re-runs that
+macOS universal) for the release pinned by `SURGE_XT_VERSION` in the
+[Makefile](../Makefile), verifies its md5 checksum, and extracts
+`Surge XT.vst3` into `plugins/`. The
+archive is cached at `~/.cache/synth-setter/surge-xt-<version>/`, so re-runs that
 have to re-extract (e.g. after `rm -rf plugins/`) skip the download. If
 `plugins/Surge XT.vst3` already exists, the target is a no-op — remove it
 first to reinstall.
+
+To mirror the full plugin set the runtime docker image ships — Surge XT plus
+Dexed, OB-Xf, and Six Sines — run `make install-plugins`. The three extra
+synths publish x86_64 Linux binaries only, matching the image; on other hosts
+those targets print a notice and exit 0, so on macOS the aggregate still
+succeeds with just Surge XT installed (on non-x86_64 Linux `install-surge-xt`
+itself fails first — see the arm64 note below). Their version/SHA256 pins mirror the
+Dockerfile ARGs and are kept in sync by
+`tests/infra/test_install_plugins_targets.py`.
 
 > **Already have Surge XT installed system-wide?** Skip
 > `make install-surge-xt` and symlink your existing install into `plugins/`:
@@ -114,15 +124,14 @@ first to reinstall.
 > lives elsewhere, set `SYNTH_SETTER_PLUGIN_PATH` to the absolute path of the
 > `.vst3` bundle before invoking pytest.
 
-### 2e. Export environment variables
+### 2e. Create `.env`
 
-The project reads R2 credentials, W&B keys, and other config from a `.env` file.
+R2 preflight and SkyPilot workers read R2 credentials from a `.env` file.
 After creating your `.env` (see [section 4b](#4b-rclone--cloudflare-r2) for the
-template), export the variables into your shell:
+template), those paths load the checkout's `.env` automatically.
 
-```bash
-set -a && source .env && set +a
-```
+Only source it manually for external tools or ad hoc shell commands that do not
+call synth-setter's R2 preflight.
 
 > Environment variable management is being consolidated under
 > [#563](https://github.com/tinaudio/synth-setter/issues/563).
@@ -618,7 +627,11 @@ ______________________________________________________________________
   experiments across different models and datasets.
 - **Data generation:** See `src/synth_setter/cli/generate_dataset.py` for the dataset
   generation entry point (Hydra; `src/synth_setter/configs/dataset.yaml` is the root config). The
-  `synth-setter-generate-dataset` console script is the canonical surface.
+  `synth-setter-generate-dataset` console script is the canonical surface. To render an
+  already-materialized `input_spec.json` instead of composing one, use
+  `synth-setter-generate-dataset-from-spec-uri <uri>` — the URI may be a bare path, `file://`,
+  `r2://`, or `s3://`
+  (e.g. `synth-setter-generate-dataset-from-spec-uri r2://bucket/data/<task>/<run>/input_spec.json`).
 - **Design docs:** Read `docs/design/data-pipeline.md` for the data pipeline
   architecture and `docs/design/training-pipeline.md` for the training pipeline.
 - **Configuration reference:**
@@ -631,18 +644,18 @@ ______________________________________________________________________
 ## Appendix A: Manual environment setup
 
 `make install` is the canonical path for most users — it installs uv, a
-managed Python 3.10 interpreter, the venv, dependencies, and pre-commit.
+managed Python 3.11 interpreter, the venv, dependencies, and pre-commit.
 This appendix is for users who want to manage Python and the environment
 themselves (pip, conda, pyenv, system Python, etc.).
 
 **Requirement:** see the `requires-python` field in `pyproject.toml`
-(currently `>=3.10,<3.14`; `pip` enforces this).
+(currently `>=3.11,<3.14`; `pip` enforces this).
 
 ### A.1. Plain pip + venv
 
 ```bash
-# Use any Python 3.10+ interpreter
-python3.10 -m venv .venv
+# Use any Python 3.11+ interpreter
+python3.11 -m venv .venv
 source .venv/bin/activate
 
 # The heavy runtime lives in PEP 735 dependency-groups (see #1139), which plain
@@ -657,7 +670,7 @@ Drop `-e` for a non-editable install.
 ### A.2. conda
 
 ```bash
-conda create -n synth-setter python=3.10
+conda create -n synth-setter python=3.11
 conda activate synth-setter
 
 # conda owns the torch stack; uv pulls the rest of the runtime + dev tooling
@@ -677,7 +690,7 @@ If you want to drive uv directly (e.g., to point at a specific interpreter
 you manage yourself):
 
 ```bash
-uv venv --python 3.10 --prompt synth-setter .venv
+uv venv --python 3.11 --prompt synth-setter .venv
 source .venv/bin/activate
 uv pip install --group dev -e .
 pre-commit install
@@ -832,7 +845,7 @@ the failure surfaces immediately rather than partway through `post-create`.
 ### B.3. macOS VM (Tart)
 
 If you want full dev parity on Apple Silicon inside a throwaway, mostly
-reproducible VM — Python 3.10 venv, Surge XT (native .vst3 via cask), Claude
+reproducible VM — Python 3.11 venv, Surge XT (native .vst3 via cask), Claude
 Code installed, auto-activated venv — pull the prebuilt Tart image published
 at `registry-1.docker.io/tinaudio/synth-setter-macos`. Rebuilds from the template are not
 fully pinned: Homebrew formulas/casks may resolve to newer versions over time,
@@ -877,7 +890,7 @@ base image, updated `uv`, updated Surge XT, etc.), the Packer template at
 See the bottom of the file for the full publishing workflow to Docker Hub.
 The template's `variable` blocks are the authoritative source for supported
 overrides. User-overridable packer vars: `synth_setter_git_ref` (default
-`main`), `python_version` (default `3.10`), `vm_name` (default
+`main`), `python_version` (default `3.11`), `vm_name` (default
 `synth-setter-macos`), `codex_version` (default `latest`),
 `base_image_digest`, `uv_version`, and `surge_xt_version`.
 

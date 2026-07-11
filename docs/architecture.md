@@ -8,9 +8,17 @@ individual design docs linked throughout.
 synth-setter is a collection of tools for **synthesizer inversion** (predicting
 synthesizer parameters from audio), **sound matching**, and **preset
 exploration**. The system generates large-scale audio datasets by rendering
-random synthesizer configurations through a VST plugin (Surge XT), trains neural
-networks on these datasets, and evaluates how well the models recover the
-original parameters.
+random synthesizer configurations through a VST3 synth, trains neural networks
+on these datasets, and evaluates how well the models recover the original
+parameters.
+
+The pipeline is **synth-agnostic**: rendering, storage, features, distributed
+workers, and the models are all driven by a `ParamSpec` (parameter schema) and a
+`RenderConfig` (plugin path, preset, spec name) looked up from a registry by
+name. Surge XT is the default; OB-Xf is registered as a second synth, and any
+VST3 plugin can be onboarded with **no edits to core pipeline, storage, or model
+code**. See
+[Adding a new synth](guides/adding-a-new-synth.md).
 
 ## System Diagram
 
@@ -23,7 +31,7 @@ original parameters.
  │  │          │    │          │    │          │    │                  │  │
  │  │ Render   │    │ Reshard  │    │ Flow     │    │ Predict → Render │  │
  │  │ audio via│    │ into     │    │ matching │    │ → Metrics        │  │
- │  │ Surge XT │    │ splits   │    │ model    │    │                  │  │
+ │  │ VST synth│    │ splits   │    │ model    │    │                  │  │
  │  └────┬─────┘    └────┬─────┘    └────┬─────┘    └────────┬─────────┘  │
  │       │               │               │                   │            │
  │       ▼               ▼               ▼                   ▼            │
@@ -42,11 +50,15 @@ original parameters.
 ## Data Flow
 
 1. **Configure** -- Define a dataset in `src/synth_setter/configs/experiment/generate_dataset/*.yaml` (synth, sample
-   count, shard size, parameter spec). Hydra composes the experiment against
-   `src/synth_setter/configs/dataset.yaml` and `spec_from_cfg(cfg)` builds the unified
-   `DatasetSpec` (post-#887 unification, post-#917 Hydra-only construction).
+   count, shard size, parameter spec). The synth is selected by a `render`
+   group override (e.g. `render=surge_xt` or `render=obxf`); each render config
+   names the registered `param_spec_name`, preset, and plugin path. Hydra
+   composes the experiment against
+   `src/synth_setter/configs/dataset.yaml` and `spec_from_cfg(cfg)` (in
+   `src/synth_setter/cli/generate_dataset.py`) builds the unified `DatasetSpec`.
 
-2. **Generate** -- Workers render audio samples through Surge XT, producing HDF5
+2. **Generate** -- Workers render audio samples through the configured VST3
+   synth, producing HDF5
    shards uploaded to R2. Each shard contains audio waveforms, mel spectrograms,
    and ground-truth parameter arrays. Workers are fully parallel with no shared
    state.
@@ -63,13 +75,16 @@ original parameters.
    checkpoint is uploaded to R2 and referenced by the `model-{config_id}` W&B
    artifact (`log_model: False`, so no checkpoint files go to W&B). Hydra composes
    experiment configs from datamodule, model, trainer, and callback configs.
-   Surge datasets load from HDF5 shards (`datamodule=surge`) or
+   VST datasets load from HDF5 shards (`datamodule=surge`) or
    [Lance](https://github.com/lance-format/lance) shards (`datamodule=surge_lance`);
-   both serve training and evaluation.
+   both serve training and evaluation. The datamodule class is
+   param-count-agnostic, though the `surge*` configs pin `param_spec_name`, so
+   training a non-Surge dataset overrides `datamodule.param_spec_name=<name>`.
    Design: [training-pipeline.md](design/training-pipeline.md)
 
 5. **Evaluate** -- Three stages: **predict** (model inference on test data),
-   **render** (synthesize audio from predicted parameters via Surge XT), and
+   **render** (synthesize audio from predicted parameters via the same VST3
+   synth that generated the dataset), and
    **metrics** (spectral and transport-based distance metrics). Results upload to
    R2.
    Design: [eval-pipeline.md](design/eval-pipeline.md)
@@ -79,10 +94,11 @@ original parameters.
 ```
 synth-setter/
 ├── src/synth_setter/       # PEP src-layout package (#784)
-│   ├── cli/                #   @hydra.main entrypoints (published as synth-setter-* console scripts)
+│   ├── cli/                #   @hydra.main / click entrypoints (published as synth-setter-* console scripts)
 │   │   ├── train.py        #     Training entrypoint
 │   │   ├── eval.py         #     Evaluation entrypoint
-│   │   └── generate_dataset.py  # Dataset-generation entrypoint
+│   │   ├── generate_dataset.py  # Dataset-generation entrypoint
+│   │   └── ...
 │   ├── metrics.py          #   Metric definitions
 │   ├── data/               #   DataModules (Surge, K-Sin, K-Osc, etc.)
 │   ├── models/             #   LightningModules (flow matching, FF, FlowVAE)
@@ -116,6 +132,18 @@ synth-setter/
 ```
 
 ## Key Design Decisions
+
+**Synth-agnostic core, registry as the contract.** A synth is fully described
+by three registered artifacts — a `ParamSpec` (`param_specs[name]`), a baseline
+preset (`preset_paths[name]`), and a `RenderConfig`
+(`src/synth_setter/configs/render/<name>.yaml`)
+— keyed by name in `src/synth_setter/data/vst/param_spec_registry.py`. The
+rendering, HDF5/Lance storage, mel features, distributed workers, and models all
+read width and behavior from the resolved spec, never from a synth literal.
+Onboarding a new VST3 synth is additive: scaffold a spec with
+`synth-setter-introspect-plugin`, hand-tune it, register it, and write a render
+config — no core edits. See
+[Adding a new synth](guides/adding-a-new-synth.md).
 
 **R2 as source of truth.** Pipeline state is determined by file existence and
 validation in R2, not by metadata databases or coordination services. One piece
@@ -154,3 +182,4 @@ the same R2 path structure and ID conventions defined in
 | [training-pipeline.md](design/training-pipeline.md)             | Training orchestration, checkpoint durability, resume             |
 | [eval-pipeline.md](design/eval-pipeline.md)                     | Evaluation pipeline (predict, render, metrics) and R2 integration |
 | [storage-provenance-spec.md](design/storage-provenance-spec.md) | Authoritative R2 paths, W&B artifacts, ID conventions             |
+| [guides/adding-a-new-synth.md](guides/adding-a-new-synth.md)    | Onboard a new VST3 synth: introspect, tune, register, generate    |

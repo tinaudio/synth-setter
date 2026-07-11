@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import h5py
@@ -130,7 +130,7 @@ def _build_real_surge_spec(
     kwargs: dict[str, object] = {
         "task_name": task_name,
         "run_id": run_id,
-        "created_at": datetime(2026, 5, 20, 0, 0, 0, tzinfo=timezone.utc),
+        "created_at": datetime(2026, 5, 20, 0, 0, 0, tzinfo=UTC),
         "git_sha": "0" * 40,
         "is_repo_dirty": False,
         "output_format": "hdf5",

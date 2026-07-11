@@ -1,17 +1,40 @@
-"""Single source of truth for Surge XT VST plugin discovery in tests.
+"""Single source of truth for VST plugin discovery in tests.
 
-The plugin path is overridable via ``SYNTH_SETTER_PLUGIN_PATH`` (set by CI and the
-devcontainer); absent or empty, it falls back to the in-repo bundle. Importers use
-``PLUGIN_PATH`` for the path and ``VST_AVAILABLE`` for the presence check that
-``conftest.pytest_collection_modifyitems`` consults when auto-skipping
-``requires_vst`` tests.
+``SYNTH_SETTER_TEST_SYNTH`` (a ``preset_paths`` key, default ``surge_xt``)
+drives ``TEST_SYNTH`` / ``TEST_PARAM_SPEC_NAME`` / ``TEST_PRESET_PATH`` /
+``TEST_RENDERER_VERSION`` so a CI cell can target a second synth without
+hardcoding. The plugin binary resolves
+separately via ``SYNTH_SETTER_PLUGIN_PATH`` (``PLUGIN_PATH`` / ``VST_AVAILABLE``);
+``conftest.pytest_collection_modifyitems`` consults ``VST_AVAILABLE`` to
+auto-skip ``requires_vst`` tests.
 """
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
-from synth_setter.data.vst.param_spec_registry import default_plugin_path
+from synth_setter.data.vst.param_spec_registry import default_plugin_path, preset_paths
+
+# ``or`` (not a ``get`` default) so an empty override also falls back to Surge XT.
+TEST_SYNTH = os.environ.get("SYNTH_SETTER_TEST_SYNTH") or "surge_xt"
+# Registry key doubles as the render CLI's ``--param_spec_name``.
+TEST_PARAM_SPEC_NAME = TEST_SYNTH
+
+# Eager lookup so an unregistered TEST_SYNTH raises KeyError at import rather
+# than letting a downstream render test skip or fail opaquely.
+TEST_PRESET_PATH = preset_paths[TEST_SYNTH]
+
+# Per-synth renderer pin mirroring ``configs/render/<synth>.yaml`` (the value
+# ``generate_dataset`` cross-checks against the plugin), so the synth-agnostic
+# dataset test labels provenance for the selected synth, not always Surge XT's.
+# The Surge family shares one plugin binary, hence one version.
+TEST_RENDERER_VERSION = {
+    "surge_xt": "1.3.4",
+    "surge_simple": "1.3.4",
+    "surge_4": "1.3.4",
+    "obxf": "1.0.3",
+}[TEST_SYNTH]
 
 PLUGIN_PATH = default_plugin_path()
 

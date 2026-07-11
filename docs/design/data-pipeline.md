@@ -2,9 +2,11 @@
 
 > **Status**: Draft
 > **Author**: ktinubu@
-> **Last Updated**: 2026-03-20
+> **Last Updated**: 2026-07-09
 > **Tracking**: #74
 > **Storage conventions**: [storage-provenance-spec.md](storage-provenance-spec.md)
+
+> **Format status:** **Lance is the primary output format** for active development — this doc's narrative describes the Lance fragment path as the pipeline. HDF5 and WebDataset remain supported for coverage but are second-class: selectable, tested, and documented in [legacy/hdf5-wds-formats.md](legacy/hdf5-wds-formats.md), not the target of new features. The config default flip (`output_format: lance`) is tracked in [#1779](https://github.com/tinaudio/synth-setter/issues/1779).
 
 ______________________________________________________________________
 
@@ -36,7 +38,7 @@ Topline goal: Get massive dataset generation working reliably enough, and know w
 
 **synth-setter** is a collection of tools for synthesizer inversion, sound matching and preset exploration.
 
-Training models for these tasks requires large-scale datasets: 500k–15M audio samples, each rendered through a real VST synthesizer plugin (Surge XT) with random parameter configurations. Each sample produces an audio waveform, mel spectrogram, and ground-truth parameter array, stored as an HDF5 shard. This rendering is CPU-bound — each sample requires a real-time audio render through the plugin — and takes hours to days on a single machine.
+Training models for these tasks requires large-scale datasets: 500k–15M audio samples, each rendered through a real VST synthesizer plugin (Surge XT) with random parameter configurations. Each sample produces an audio waveform, mel spectrogram, and ground-truth parameter array, stored as a dataset shard (Lance today; HDF5 historically). This rendering is CPU-bound — each sample requires a real-time audio render through the plugin — and takes hours to days on a single machine.
 
 ### Prior Work
 
@@ -61,7 +63,7 @@ At research scale (500k–15M samples), the single-machine approach breaks down.
 > distributed/parallel pipeline described below — CLI, backends, reconciliation,
 > and finalize stages — is the design target and not yet built.
 
-The distributed data pipeline solves this by splitting generation across N cloud workers on **[RunPod](https://www.runpod.io/)** (a GPU/CPU cloud marketplace offering cheap on-demand compute), each independently producing shards in parallel. Workers write shards to **[Cloudflare R2](https://developers.cloudflare.com/r2/)** (an S3-compatible object storage service with free egress), which serves as both the data store and the coordination layer. A separate finalize step downloads all shards, reshards them into train/val/test splits, computes normalization statistics, registers the dataset as a **[Weights & Biases](https://wandb.ai/)** (W&B) artifact, and uploads the final dataset.
+The distributed data pipeline solves this by splitting generation across N cloud workers on **[RunPod](https://www.runpod.io/)** (a GPU/CPU cloud marketplace offering cheap on-demand compute), each independently producing shards in parallel. Workers write shards to **[Cloudflare R2](https://developers.cloudflare.com/r2/)** (an S3-compatible object storage service with free egress), which serves as both the data store and the coordination layer. A separate finalize step commits the winning shard attempts into train/val/test split datasets (for Lance, a metadata-only fragment commit — no shard download or row rewrite), reduces normalization statistics, and registers the dataset as a **[Weights & Biases](https://wandb.ai/)** (W&B) artifact.
 
 The pipeline is designed for datasets that scale to multi-terabyte sizes while keeping costs minimal — cheap compute, free egress, no infrastructure to manage.
 
@@ -107,10 +109,10 @@ python -m synth_setter.cli.generate_dataset experiment=generate_dataset/surge-si
 # → 4 shards missing, launching 1 worker
 #
 # python -m synth_setter.pipeline finalize --run-id surge-simple-480k-10k-20260313T100000123Z
-# → 48/48 valid. output_format: hdf5
-# → Resharding → train.h5, val.h5, test.h5  (or .tar shards if wds)
-# → Stats computed. Dataset registered in W&B as data-surge-simple-480k-10k.
-# → dataset.complete written.
+# → 48/48 valid. output_format: lance
+# → Committing winner fragments → train.lance/, val.lance/, test.lance/
+# → Stats reduced from shard sidecars. Dataset registered in W&B as data-surge-simple-480k-10k.
+# → metadata/dataset.complete written.
 ```
 
 Make targets are thin aliases for convenience:
@@ -127,7 +129,7 @@ make finalize ARGS="--run-id surge-simple-480k-10k-20260313T100000123Z"
 
 ### Goals
 
-- **Reproducible pipeline with full provenance.** The input spec freezes all generation parameters — per-shard seeds, shapes, renderer version. Re-running from the same spec on the same hardware and Docker image produces an identical dataset. This is a *controlled-conditions* guarantee, not an absolute one: VST plugin floating-point behavior may vary across CPU architectures, and Docker base image updates could change system libraries. The pipeline records enough provenance to detect and diagnose these differences (git commit, `is_repo_dirty: bool`, renderer version, per-shard content hashes), but does not claim bit-identical output across arbitrary hardware. Provenance matters because this is ML research: when a model behaves unexpectedly, you need to trace from the trained model back to the exact dataset, the exact code that generated it, and which worker attempt produced each shard. Per-shard provenance is tracked via lifecycle markers and content hashes in worker reports.
+- **Reproducible pipeline with full provenance.** The input spec freezes all generation parameters: seeds, shapes, splits, and renderer version. Re-running from the same spec on the same hardware and Docker image produces an identical dataset. This is a *controlled-conditions* guarantee, not an absolute one: VST plugin floating-point behavior may vary across CPU architectures, and Docker base image updates could change system libraries. The pipeline records enough provenance to detect and diagnose these differences (git commit, `is_repo_dirty: bool`, renderer version, per-shard content hashes), but does not claim bit-identical output across arbitrary hardware. Provenance matters because this is ML research: when a model behaves unexpectedly, you need to trace from the trained model back to the exact dataset, the exact code that generated it, and which worker attempt produced each shard. Per-shard provenance is tracked via lifecycle markers and content hashes in worker reports. See [Deterministic Dataset Seeding](deterministic-seeding.md) for the seed contract.
 - **Minimal hand-holding.** Two commands, no babysitting. Launch generation, come back later, run finalize. No monitoring dashboards to watch, no coordination services to keep alive, no manual intervention between steps.
 - **Debugability.** When something fails, the failure is easy to find and understand. Per-shard error tracking, structured debug logs that survive crashes, reconciliation reports that show exactly which shards are missing and why. No need to dig through cloud provider consoles.
 - **Low cost.** Cheap GPUs, free egress, no infrastructure to manage. A full dataset generation run costs ~$2. Monthly compute at 1-2 runs/week is ~$8-16. R2 storage accumulates but free egress makes it far cheaper than S3 for frequently-downloaded datasets.
@@ -192,14 +194,14 @@ make finalize ARGS="--run-id surge-simple-480k-10k-20260313T100000123Z"
 
 The pipeline is a batch-oriented, fully parallel data generation system built on a **reconciliation model**: inspect storage, determine what work is missing, launch only that work.
 
-A CLI running on the user's local machine reads a spec (desired state), lists existing validated shards in R2 (actual state), computes the difference, and launches N workers to produce the missing shards. Each worker independently renders audio samples through a VST plugin and writes HDF5 shards to R2. When all shards are present, a separate finalize command reshards into train/val/test splits, computes normalization statistics, registers the dataset in W&B, and writes a completion marker.
+A CLI running on the user's local machine reads a spec (desired state), lists existing validated shards in R2 (actual state), computes the difference, and launches N workers to produce the missing shards. Each worker independently renders audio samples through a VST plugin and writes shard attempts to R2 — uncommitted Lance fragments for the primary format. When all shards are present, a separate finalize command commits the winning fragments into train/val/test split datasets, reduces normalization statistics, registers the dataset in W&B, and writes a completion marker.
 
 R2 serves as both the **data plane** and the **control plane**:
 
-| Plane             | What flows through it  | Examples                                             |
-| ----------------- | ---------------------- | ---------------------------------------------------- |
-| **Data plane**    | Actual dataset content | HDF5 shards, virtual datasets, stats.npz             |
-| **Control plane** | Coordination metadata  | Spec, worker reports, debug logs, `dataset.complete` |
+| Plane             | What flows through it  | Examples                                                                  |
+| ----------------- | ---------------------- | ------------------------------------------------------------------------- |
+| **Data plane**    | Actual dataset content | Lance fragment data + split datasets, stats.npz (legacy: HDF5/WDS shards) |
+| **Control plane** | Coordination metadata  | Spec, worker reports, debug logs, `metadata/dataset.complete`             |
 
 Both planes use R2. There is no separate database, message queue, or coordination service. This means one piece of infrastructure to manage, one set of credentials, one failure mode to reason about. The trade-off: R2 has no atomic test-and-set, so mutual exclusion is not possible. This is acceptable because all operations are idempotent and produce deterministic outputs ([§7.7](#77-concurrency-semantics)).
 
@@ -218,17 +220,18 @@ What if reconciliation itself has a bug — e.g., it validates a corrupt shard a
 
 The pipeline has two stages. Each is an independent command with well-defined inputs and outputs.
 
-| Stage        | Command                 | Input                                     | Output                                                                        | Compute                        |
-| ------------ | ----------------------- | ----------------------------------------- | ----------------------------------------------------------------------------- | ------------------------------ |
-| **Generate** | `pipeline.cli generate` | Config YAML (first run) or spec (retries) | HDF5 shards in staging                                                        | CPU — VST audio rendering      |
-| **Finalize** | `pipeline.cli finalize` | Validated staged shards in R2             | Format-dependent (see below), `stats.npz`, `dataset.json`, `dataset.complete` | CPU — download, reshard, stats |
+| Stage        | Command                 | Input                                     | Output                                                                                 | Compute                               |
+| ------------ | ----------------------- | ----------------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------- |
+| **Generate** | `pipeline.cli generate` | Config YAML (first run) or spec (retries) | Format-specific shard attempts in R2                                                   | CPU — VST audio rendering             |
+| **Finalize** | `pipeline.cli finalize` | Validated shard attempts in R2            | Format-dependent (see below), `stats.npz`, `dataset.json`, `metadata/dataset.complete` | CPU — validate, commit/reshard, stats |
 
 Finalize output depends on `output_format` in the spec:
 
 | `output_format` | Finalize outputs                                                                 | Training access pattern            |
 | --------------- | -------------------------------------------------------------------------------- | ---------------------------------- |
-| `hdf5`          | `train.h5`, `val.h5`, `test.h5` (HDF5 virtual datasets)                          | Local random access                |
-| `wds`           | `train-{shard}.tar`, `val-{shard}.tar`, `test-{shard}.tar` (WebDataset archives) | Sequential streaming (local or R2) |
+| `lance`         | `train.lance/`, `val.lance/`, `test.lance/` committed from worker fragments      | Columnar random access / streaming |
+| `hdf5` (legacy) | `train.h5`, `val.h5`, `test.h5` (HDF5 virtual datasets)                          | Local random access                |
+| `wds` (legacy)  | `train-{shard}.tar`, `val-{shard}.tar`, `test-{shard}.tar` (WebDataset archives) | Sequential streaming (local or R2) |
 
 Each worker container runs with `MODE=generate-shards` — the entrypoint mode IS the worker. Scoped and validated on the `experiment` branch; pending port to main ([#407](https://github.com/tinaudio/synth-setter/issues/407)).
 
@@ -275,15 +278,13 @@ Each worker container runs with `MODE=generate-shards` — the entrypoint mode I
 │  make finalize RUN_ID=...      │        │                  │
 │  (local or cloud)              │        │                  │
 │                                │        │  data/           │
-│  1. Read spec            ◄─────┼────────┤   train.h5       │
-│  2. Validate staged      ◄─────┼────────┤   val.h5         │
-│  3. Promote to data/shards ────┼───────►│   test.h5        │
-│  4. Download canonical shards  │        │   stats.npz      │
-│  5. Reshard → train/val/test   │        │   dataset.json   │
-│  6. Compute stats              │        │   dataset.complete│
-│  7. Register in W&B            │        │                  │
-│  8. Upload finalized     ──────┼───────►│                  │
-│  9. Write dataset.complete     │        │                  │
+│  1. Read spec            ◄─────┼────────┤   train.*        │
+│  2. Validate attempts    ◄─────┼────────┤   val.*          │
+│  3. Select winners       ◄─────┼────────┤   stats.npz      │
+│  4. Promote/commit data  ──────┼───────►│   metadata/       │
+│  5. Reduce stats              │         │   dataset.json   │
+│  6. Register in W&B           │         │                  │
+│  7. Write completion marker │         │   metadata/dataset.complete │
 └────────────────────────────────┘        └──────────────────┘
 ```
 
@@ -291,7 +292,7 @@ Each worker container runs with `MODE=generate-shards` — the entrypoint mode I
 
 > **Future state — current workers write directly to `data/<task_name>/<run_id>/`; the `metadata/workers/` staging prefix and the `finalize`-driven promotion into `data/{dataset_config_id}/{dataset_wandb_run_id}/shards/` (see [storage-provenance-spec.md §3a](storage-provenance-spec.md#3a-data-generation) for the authoritative path) do not yet exist in code. See [#406](https://github.com/tinaudio/synth-setter/issues/406).**
 
-The canonical R2 bucket layout — root path, top-level prefixes, and per-workflow contents — is defined in [storage-provenance-spec.md §2](storage-provenance-spec.md#2-r2-bucket-layout) and [§3a](storage-provenance-spec.md#3a-data-generation). The data pipeline writes under `data/{dataset_config_id}/{dataset_wandb_run_id}/`: workers stage shards and per-attempt artifacts under `metadata/workers/`, and `finalize` is the only writer to `shards/`, `train.h5`/`val.h5`/`test.h5` (or `*.tar` for WebDataset), `stats.npz`, and `metadata/dataset.{json,complete}`. Datasets are immutable once `metadata/dataset.complete` exists; new versions require a new `dataset_wandb_run_id`.
+The canonical R2 bucket layout — root path, top-level prefixes, and per-workflow contents — is defined in [storage-provenance-spec.md §2](storage-provenance-spec.md#2-r2-bucket-layout) and [§3a](storage-provenance-spec.md#3a-data-generation). The data pipeline writes under `data/{dataset_config_id}/{dataset_wandb_run_id}/`: workers stage per-attempt artifacts under `metadata/workers/`. For HDF5 and WebDataset, `finalize` is the only writer to final training outputs. For Lance, workers may write uncommitted fragment data under split dataset `data/` directories, but only `finalize` writes Lance manifests, transactions, `stats.npz`, and `metadata/dataset.{json,complete}`. Datasets are immutable once `metadata/dataset.complete` exists; new versions require a new `dataset_wandb_run_id`.
 
 Pipeline-specific staging conventions (per-attempt shard filenames, lifecycle markers, quarantine layout) are additive detail — see [Artifact Taxonomy](#artifact-taxonomy) below.
 
@@ -319,9 +320,9 @@ All structured files in the pipeline, in one place:
               ┌──────────────┼──────────────────────┐
               │              │                      │
        ┌──────▼────────┐  ┌──▼──────────┐  ┌────────▼───────┐
-       │ {w}-{a}.h5    │  │ report.json │  │ debug.log      │
-       │ (staged       │  │ (worker     │  │ (worker        │
-       │  shard)       │  │  summary)   │  │  debug log)    │
+       │ {w}-{a}.*     │  │ report.json │  │ debug.log      │
+       │ (attempt      │  │ (worker     │  │ (worker        │
+       │  payload)     │  │  summary)   │  │  debug log)    │
        └──────┬────────┘  └─────────────┘  └────────────────┘
               │
        ┌──────▼────────┐  All worker output → metadata/workers/
@@ -331,47 +332,53 @@ All structured files in the pipeline, in one place:
        │ (lifecycle)   │
        └──────┬────────┘
 
-     pipeline.cli finalize  ← validates + promotes staged shards
+     pipeline.cli finalize  ← validates + commits (or promotes) attempts
               │
-       ┌──────▼────────┐
-       │ shard-{id}.h5 │ ─── Promoted to data/shards/ (canonical)
-       │ (finalized)   │     Written ONLY by finalize
-       └──────┬────────┘
+       ┌──────▼──────────┐
+       │ {split}.lance   │ ─── Winner fragments committed per split
+       │ manifests       │     Written ONLY by finalize
+       │ (finalized)     │     (legacy hdf5: promote to data/shards/)
+       └──────┬──────────┘
               │
        ┌──────▼────────┐
        │ dataset.json  │ ─── Output record (dataset card)
        │ (output)      │     What was produced, how to use it
        └──────┬────────┘
               │
-       ┌──────▼─────────┐
-       │dataset.complete│ ─── Completion marker
-       │ (marker)       │     "Finalization is done"
-       └────────────────┘
+       ┌──────▼───────────────────┐
+       │ metadata/dataset.complete │ ─── Completion marker
+       │ (marker)                  │     "Finalization is done"
+       └───────────────────────────┘
 ```
 
-| Artifact          | Path                                                                  | Format     | Produced By                     | Consumed By                        |
-| ----------------- | --------------------------------------------------------------------- | ---------- | ------------------------------- | ---------------------------------- |
-| Config            | `metadata/config.yaml`                                                | YAML       | User                            | `generate`                         |
-| Input spec        | `metadata/input_spec.json`                                            | JSON       | `generate` (first run)          | `generate`, `status`, `finalize`   |
-| Staged shard      | `metadata/workers/shards/shard-{id}/{worker}-{attempt}.h5`            | HDF5       | Workers                         | `finalize` (promotes to canonical) |
-| Canonical shard   | `data/shards/shard-{id}.h5`                                           | HDF5       | `finalize` (copy from staging)  | Training scripts                   |
-| Lifecycle marker  | `metadata/workers/shards/shard-{id}/{worker}-{attempt}.{state}`       | Empty file | Workers / Finalize              | `status`, humans                   |
-| Quarantined shard | `metadata/workers/shards/shard-{id}/quarantine/{worker}-{attempt}.h5` | HDF5       | Workers (on validation failure) | Humans (debugging)                 |
-| Worker report     | `metadata/workers/attempts/{worker_id}-{attempt}/report.json`         | JSON       | Workers (at exit)               | `status`                           |
-| Debug log         | `metadata/workers/attempts/{worker_id}-{attempt}/debug.log`           | JSONL      | Workers (continuous)            | Humans (`jq`)                      |
-| Dataset card      | `metadata/dataset.json`                                               | JSON       | `finalize`                      | Training scripts, humans           |
-| Completion marker | `metadata/dataset.complete`                                           | JSON       | `finalize` (last step)          | `finalize` (idempotency check)     |
-| Stats             | `data/stats.npz`                                                      | NumPy      | `finalize`                      | Training scripts                   |
+| Artifact                      | Path                                                                    | Format     | Produced By                     | Consumed By                        |
+| ----------------------------- | ----------------------------------------------------------------------- | ---------- | ------------------------------- | ---------------------------------- |
+| Config                        | `metadata/config.yaml`                                                  | YAML       | User                            | `generate`                         |
+| Input spec                    | `metadata/input_spec.json`                                              | JSON       | `generate` (first run)          | `generate`, `status`, `finalize`   |
+| Lance fragment sidecar        | `metadata/workers/shards/shard-{id}/{worker}-{attempt}.fragment.json`   | JSON       | Workers                         | `finalize` (commits fragment)      |
+| Lance shard stats             | `metadata/workers/shards/shard-{id}/{worker}-{attempt}.shard-stats.npz` | NumPy      | Workers                         | `finalize` (stats reduction)       |
+| Lance fragment data           | `train.lance/data/*`, `val.lance/data/*`, `test.lance/data/*`           | Lance      | Workers                         | `finalize` (manifest commit)       |
+| HDF5 staged shard (legacy)    | `metadata/workers/shards/shard-{id}/{worker}-{attempt}.h5`              | HDF5       | Workers                         | `finalize` (promotes to canonical) |
+| Canonical HDF5 shard (legacy) | `data/shards/shard-{id}.h5`                                             | HDF5       | `finalize` (copy from staging)  | Training scripts                   |
+| Lifecycle marker              | `metadata/workers/shards/shard-{id}/{worker}-{attempt}.{state}`         | Empty file | Workers / Finalize              | `status`, humans                   |
+| Quarantined shard             | `metadata/workers/shards/shard-{id}/quarantine/{worker}-{attempt}.h5`   | HDF5       | Workers (on validation failure) | Humans (debugging)                 |
+| Worker report                 | `metadata/workers/attempts/{worker_id}-{attempt}/report.json`           | JSON       | Workers (at exit)               | `status`                           |
+| Debug log                     | `metadata/workers/attempts/{worker_id}-{attempt}/debug.log`             | JSONL      | Workers (continuous)            | Humans (`jq`)                      |
+| Dataset card                  | `metadata/dataset.json`                                                 | JSON       | `finalize`                      | Training scripts, humans           |
+| Completion marker             | `metadata/dataset.complete`                                             | JSON       | `finalize` (last step)          | `finalize` (idempotency check)     |
+| Stats                         | `stats.npz`                                                             | NumPy      | `finalize`                      | Training scripts                   |
 
 **Shard attempt lifecycle:** Each attempt produces a shard file and lifecycle markers in the shard's staging directory, all named `{worker_id}-{attempt_uuid}`:
 
-| File / Marker                  | Written by                                                               | Meaning                                                                                                                                                                                                                                                                    |
-| ------------------------------ | ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `{worker}-{attempt}.h5`        | Worker (after local validation)                                          | The worker's validated shard output. Sits alongside its lifecycle markers. Multiple attempts for the same shard are visible by name.                                                                                                                                       |
-| `{worker}-{attempt}.rendering` | Worker (at start)                                                        | Attempt started. Append-only — not deleted when `.valid` is written. Orphaned `.rendering` without a `.valid` indicates a crashed attempt.                                                                                                                                 |
-| `{worker}-{attempt}.valid`     | Worker (last step of shard lifecycle)                                    | **Commit point for staged shard.** Written only after render, validation, upload, and bookkeeping are complete. `generate`/`status` uses this as the staging admission signal. Not sufficient for final dataset correctness — finalize structural-checks before promoting. |
-| `{worker}-{attempt}.invalid`   | Worker (on validation failure) or Finalize (on structural check failure) | Shard failed validation. Corrupt shard uploaded to `quarantine/` for debugging.                                                                                                                                                                                            |
-| `{worker}-{attempt}.promoted`  | Finalize                                                                 | Staged shard was structural-checked and promoted to `data/shards/shard-{id}.h5`. Content hash recorded in `dataset.json`.                                                                                                                                                  |
+| File / Marker                        | Written by                                                               | Meaning                                                                                                                                                                                                                                                                      |
+| ------------------------------------ | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `{worker}-{attempt}.h5`              | Worker (after local validation)                                          | The worker's validated HDF5 shard output. Sits alongside its lifecycle markers. Multiple attempts for the same shard are visible by name.                                                                                                                                    |
+| `{worker}-{attempt}.fragment.json`   | Worker (after Lance fragment creation)                                   | Strict Pydantic sidecar for a Lance attempt: a schema version plus Lance's serialized fragment metadata string. Logical identity is derived from the path, filename, and spec, not stored ([§14.4](#144-lance-fragment-sidecar-schema)).                                     |
+| `{worker}-{attempt}.shard-stats.npz` | Worker (after Lance stats computation)                                   | Per-shard Welford state (`count`, `mean`, `m2`) for the Lance attempt. Finalize reduces only the winning attempts into dataset-level `stats.npz`.                                                                                                                            |
+| `{worker}-{attempt}.rendering`       | Worker (at start)                                                        | Attempt started. Append-only — not deleted when `.valid` is written. Orphaned `.rendering` without a `.valid` indicates a crashed attempt.                                                                                                                                   |
+| `{worker}-{attempt}.valid`           | Worker (last step of shard lifecycle)                                    | **Commit point for a staged attempt.** Written only after render, validation, upload, and bookkeeping are complete. `generate`/`status` uses this as the staging admission signal. Not sufficient for final dataset correctness — finalize validates again before promotion. |
+| `{worker}-{attempt}.invalid`         | Worker (on validation failure) or Finalize (on structural check failure) | Shard failed validation. Corrupt shard uploaded to `quarantine/` for debugging.                                                                                                                                                                                              |
+| `{worker}-{attempt}.promoted`        | Finalize                                                                 | Staged attempt was structural-checked and included in the finalized output. HDF5 attempts are copied to `data/shards/`; Lance attempts are committed into split dataset manifests.                                                                                           |
 
 Listing a shard's staging directory shows the full history — shard files, lifecycle markers, and quarantined attempts — at a glance:
 
@@ -381,10 +388,10 @@ $ rclone ls r2:bucket/{run_id}/metadata/workers/shards/shard-000042/
   67108864  pod-def456-e5f6a7b8.h5          # second attempt's shard
          0  pod-def456-e5f6a7b8.rendering   # second attempt started
          0  pod-def456-e5f6a7b8.valid       # second attempt committed (staged-valid)
-         0  pod-def456-e5f6a7b8.promoted    # promoted to data/shards/ by finalize
+         0  pod-def456-e5f6a7b8.promoted    # selected by finalize
 ```
 
-**Naming conventions:** Config is YAML (human-authored). Everything machine-generated is JSON. Debug logs are JSONL (one event per line). Data is HDF5. All worker-produced files live under `metadata/workers/` — shards and markers grouped by shard ID (`metadata/workers/shards/shard-{id}/`), worker artifacts grouped by attempt (`metadata/workers/attempts/{worker_id}-{attempt_uuid}/`). The `data/` prefix is written only by finalize. Lifecycle markers are empty files — presence is the state, no content to parse.
+**Naming conventions:** Config is YAML (human-authored). Machine-generated control-plane records are JSON validated with Pydantic. Debug logs are JSONL (one event per line). Numeric stats are NumPy `.npz` files to avoid JSON precision loss. Worker metadata lives under `metadata/workers/` — shard-attempt records and markers are grouped by shard ID (`metadata/workers/shards/shard-{id}/`), worker artifacts are grouped by attempt (`metadata/workers/attempts/{worker_id}-{attempt_uuid}/`). For Lance, workers may also write uncommitted fragment data under split dataset `data/` directories; finalize remains the only writer of committed dataset manifests and completion markers. Lifecycle markers are empty files — presence is the state, no content to parse.
 
 ## 7. Design Decisions
 
@@ -392,7 +399,7 @@ $ rclone ls r2:bucket/{run_id}/metadata/workers/shards/shard-000042/
 
 > **Future state — current workers write shards directly to `data/<task_name>/<run_id>/` with no staging prefix and no finalize promotion step. See [#406](https://github.com/tinaudio/synth-setter/issues/406).**
 
-The pipeline uses R2 as both the data layer and the coordination layer. Integrity is guaranteed by content hashes. Workers write shard files and markers to a **staging prefix** (`metadata/workers/shards/`). Finalize validates staged shards and **promotes** them to the **canonical prefix** (`data/shards/`). This separation ensures workers never write to the canonical data path, and finalized data is stable once promoted.
+The pipeline uses R2 as both the data layer and the coordination layer. Integrity is guaranteed by validation markers, format-specific structural checks, and content hashes where the format supports a stable object hash. Workers write shard-attempt metadata and markers to a **staging prefix** (`metadata/workers/shards/`). For HDF5, finalize validates staged shards and **promotes** them to the **canonical prefix** (`data/shards/`). For Lance, workers write uncommitted fragment data directly under the split dataset directories and finalize commits the selected fragment metadata into the dataset manifests. In both cases, finalized data is stable once `metadata/dataset.complete` is written.
 
 **Why R2 for coordination and not a database or queue:**
 
@@ -400,7 +407,7 @@ Object storage lacks atomic compare-and-set, locking, and transactions. A tradit
 
 The pipeline doesn't need what coordination systems provide:
 
-- **No atomic compare-and-set** — workers write to per-attempt filenames in a staging prefix, so concurrent writes never collide. Finalize is the only writer to canonical paths ([§7.7](#77-concurrency-semantics)).
+- **No atomic compare-and-set** — workers write to per-attempt metadata filenames, and Lance fragment object names are owned by Lance. Concurrent attempts for the same logical shard never decide canonical membership themselves; finalize selects the winners ([§7.7](#77-concurrency-semantics)).
 - **No locking** — each shard is assigned to one worker per invocation. The assignment is a simple partition of the missing set. No lock acquisition needed.
 - **No transactions** — stages are independent. There is no multi-shard operation that must succeed or fail atomically.
 - **No queue** — work discovery is reconciliation (compare spec against storage). A queue would be a second source of truth for "what work remains" — and a less reliable one than the files themselves.
@@ -431,7 +438,7 @@ The patterns that make R2-as-coordination safe despite no atomicity:
 
 1. **Spec** — desired state: which shards should exist
 2. **Staging prefix** (`metadata/workers/shards/`) — which shards workers have produced and validated. This is where `generate` and `status` look.
-3. **Canonical prefix** (`data/shards/`) — which shards finalize has promoted. Written only by finalize. Once promoted, zombie worker uploads to staging cannot affect the finalized data.
+3. **Canonical outputs** (`data/shards/` for HDF5, split datasets for Lance) — which shards finalize has promoted or committed. Once finalized, zombie worker uploads cannot affect the selected output set.
 4. **Worker metadata** (reports, logs) — debugging hints, never authoritative, never block completion
 
 This separation eliminates an entire class of edge cases:
@@ -443,7 +450,7 @@ This separation eliminates an entire class of edge cases:
 
 ### 7.2 Shard Lifecycle
 
-> **Completeness rule:** A shard is **staged-valid** (ready for finalization) if both a `.h5` file and a `.valid` marker exist in `metadata/workers/shards/shard-{id}/`. The `.valid` marker is the **commit point** for a staged shard — it means the worker completed rendering, validation, upload, and bookkeeping successfully. It is authoritative for staging admission but not for final dataset correctness; finalize remains the gate before promotion ([§7.5](#75-shard-validation)). A shard is **finalized** if it has been promoted to `data/shards/shard-{id}.h5` by finalize.
+> **Completeness rule:** A shard is **staged-valid** (ready for finalization) when a complete format-specific attempt and its `.valid` marker exist in `metadata/workers/shards/shard-{id}/`. For HDF5 that means `{attempt}.h5` + `{attempt}.valid`. For Lance that means `{attempt}.fragment.json` + `{attempt}.shard-stats.npz` + `{attempt}.valid`, with fragment data referenced by Lance's serialized metadata. The `.valid` marker is the **commit point** for a staged attempt — it means the worker completed rendering, validation, upload, and bookkeeping successfully. It is authoritative for staging admission but not for final dataset correctness; finalize remains the gate before promotion or commit ([§7.5](#75-shard-validation)). A shard is **finalized** when finalize includes the selected attempt in the output dataset and writes `metadata/dataset.complete`.
 
 The lifecycle has three commit points — each marks the completion of a distinct phase:
 
@@ -459,13 +466,13 @@ missing → rendering → staged-valid → finalized (canonical)
             invalid (quarantined)
 ```
 
-| State            | How it's determined                                                                                                            | Where it lives                                                                   |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
-| **missing**      | Shard is in the input spec but no `.valid` marker exists for any attempt                                                       | Implicit (absence). May have orphaned `.rendering` markers from crashed attempts |
-| **rendering**    | `.rendering` marker exists but no `.valid` marker yet — attempt is in progress                                                 | `.rendering` marker in `metadata/workers/shards/shard-{id}/`                     |
-| **staged-valid** | `.h5` + `.valid` exist. Worker completed full lifecycle (render, validate, upload, bookkeeping). Ready for finalize to promote | `metadata/workers/shards/shard-{id}/{worker_id}-{attempt}.h5` + `.valid` marker  |
-| **invalid**      | Worker validation failed. Corrupt file uploaded to `quarantine/` for debugging                                                 | `.invalid` marker + `quarantine/{worker_id}-{attempt}.h5`                        |
-| **finalized**    | Finalize structural-checked and promoted the shard to `data/shards/shard-{id}.h5`. Dataset is sealed                           | `data/shards/shard-{id}.h5` + `.promoted` marker + `dataset.complete`            |
+| State            | How it's determined                                                                                                                                                | Where it lives                                                                   |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
+| **missing**      | Shard is in the input spec but no `.valid` marker exists for any attempt                                                                                           | Implicit (absence). May have orphaned `.rendering` markers from crashed attempts |
+| **rendering**    | `.rendering` marker exists but no `.valid` marker yet — attempt is in progress                                                                                     | `.rendering` marker in `metadata/workers/shards/shard-{id}/`                     |
+| **staged-valid** | Format-specific attempt payload + `.valid` exist. Worker completed full lifecycle (render, validate, upload, bookkeeping). Ready for finalize to promote or commit | `metadata/workers/shards/shard-{id}/{worker_id}-{attempt}.*` + `.valid` marker   |
+| **invalid**      | Worker validation failed. Corrupt file uploaded to `quarantine/` for debugging                                                                                     | `.invalid` marker + `quarantine/{worker_id}-{attempt}.h5`                        |
+| **finalized**    | Finalize structural-checked and promoted or committed the selected attempt. Dataset is sealed                                                                      | Format-specific final output + `.promoted` marker + `metadata/dataset.complete`  |
 
 **Transitions:**
 
@@ -473,22 +480,22 @@ missing → rendering → staged-valid → finalized (canonical)
 - **rendering → staged-valid:** Worker validates locally (full validation — 4-check design target: structural, shape, value, row count — [#103](https://github.com/tinaudio/synth-setter/issues/103); current implementation: 3-check), uploads `.h5` to staging, writes worker report, then writes `.valid` marker as the **last step**. The `.valid` marker is the commit point — it signals that the worker completed the full shard lifecycle (render, validate, upload, bookkeeping). The `.rendering` marker is not deleted — both remain visible, preserving the full timeline.
 - **rendering → invalid:** Worker validates locally and the shard fails. Worker uploads the corrupt shard to `quarantine/` and writes `.invalid` marker, preserving the evidence for debugging. The shard is treated as missing on next `generate`.
 - **rendering → missing:** Worker crashes before writing `.valid`. The `.rendering` marker is orphaned — observable evidence of the crashed attempt. Any `.h5` uploaded before the crash exists but without `.valid` is not considered staged-valid.
-- **staged-valid → finalized:** Finalize structural-checks the staged shard, copies it to `data/shards/shard-{id}.h5`, writes `.promoted` marker, records content hash in `dataset.json`, and writes `dataset.complete` after all shards are promoted. Staged files remain in place (append-only — no deletion).
+- **staged-valid → finalized:** Finalize selects one valid attempt per logical shard, structural-checks the selected attempt, and promotes or commits it to the final output. HDF5 copies the selected `.h5` to `data/shards/shard-{id}.h5`. Lance deserializes the selected `fragment.json`, lets Lance own fragment identity, and commits those fragments into the split dataset manifests. Finalize writes `.promoted` markers and `metadata/dataset.complete` after all outputs are complete. Staged files remain in place (append-only — no deletion).
 
 **Key properties:**
 
 - **`.valid` is authoritative for staging admission, not for final correctness.** `generate`/`status` trusts `.valid` markers for cheap reconciliation. Finalize does a structural check before promoting — it is the gate for canonical data. Canonical truth lives in `data/shards/`, not in `.valid` markers.
-- **Multiple attempts are visible.** A shard's staging directory might contain `pod-abc.rendering` (crashed, no `.valid`), `pod-def.h5` + `pod-def.valid` (committed), and `pod-def.promoted` (finalized) — the full history is one `rclone ls` away.
-- **Workers and finalize write to separate prefixes.** Workers only write under `metadata/workers/`. Finalize only writes to `data/` (plus `.promoted` markers). A zombie worker uploading after finalize cannot overwrite canonical data.
-- **The finalized state is per-shard and dataset-level.** Per-shard: `data/shards/shard-{id}.h5` + `.promoted` marker. Dataset-level: `dataset.complete` marker and content hashes in `dataset.json`.
+- **Multiple attempts are visible.** A shard's staging directory might contain `pod-abc.rendering` (crashed, no `.valid`), `pod-def.h5` + `pod-def.valid` or `pod-def.fragment.json` + `pod-def.shard-stats.npz` + `pod-def.valid` (committed), and `pod-def.promoted` (finalized) — the full history is one `rclone ls` away.
+- **Workers and finalize have separate authority.** Workers own per-attempt metadata and uncommitted payloads. Finalize owns canonical membership: HDF5 promoted shards, Lance manifests, dataset stats, and completion markers. A zombie worker uploading after finalize cannot change the committed dataset.
+- **The finalized state is per-shard and dataset-level.** Per-shard: selected final output membership + `.promoted` marker. Dataset-level: `metadata/dataset.complete` marker and selected-attempt manifest in `dataset.json`.
 
 ### 7.3 Deterministic Shard Identities
 
-Shard IDs are logical and deterministic: `shard-000000.h5` through `shard-000479.h5`. Defined at run creation, independent of which worker computes them.
+Shard IDs are logical and deterministic: `shard-000000` through `shard-000479`, with a format-specific payload suffix or sidecar set. Defined at run creation, independent of which worker computes them.
 
 - **Any worker can compute any shard** — retries simply recompute the same logical shard
 - **Resumability is a set difference:** `spec_shards - validated_shards = work_remaining`
-- **No naming collisions** — each worker attempt writes to a unique filename (`{worker_id}-{attempt_uuid}.h5`), and the canonical path (`data/shards/shard-{id}.h5`) is written only by finalize
+- **No naming collisions** — each worker attempt writes unique sidecar filenames (`{worker_id}-{attempt_uuid}.*`), and canonical membership is decided only by finalize
 - **Infrastructure details** (worker IDs) appear in staging filenames and metadata, not in canonical shard paths
 
 **Work assignment:** The CLI partitions shards across N workers. Worker 1 gets shards 0-47, Worker 2 gets shards 48-95, etc. But the shard's identity is independent of which worker computes it. If Worker 1 fails and its shards are reassigned to Worker 3, output paths are unchanged.
@@ -497,9 +504,11 @@ Shard IDs are logical and deterministic: `shard-000000.h5` through `shard-000479
 
 1. Write `.rendering` marker: `metadata/workers/shards/shard-{id}/{worker_id}-{attempt_uuid}.rendering`
 2. Render shard to a local temp file
-3. **Validate locally** — basic 3-check validation (opens as HDF5, expected datasets exist, row count matches `render.samples_per_shard`). The design target is 4-check validation adding shape and value checks ([#103](https://github.com/tinaudio/synth-setter/issues/103)). This is the primary defense against corrupt data.
+3. **Validate locally** — format-specific structural checks plus row count. The design target is 4-check validation adding shape and value checks ([#103](https://github.com/tinaudio/synth-setter/issues/103)). This is the primary defense against corrupt data.
 4. **If validation passes:**
-   - Upload shard to staging: `metadata/workers/shards/shard-{id}/{worker_id}-{attempt_uuid}.h5`
+   - Write format-specific attempt payload:
+     - HDF5: upload `metadata/workers/shards/shard-{id}/{worker_id}-{attempt_uuid}.h5`
+     - Lance: write uncommitted fragment data through Lance, upload `metadata/workers/shards/shard-{id}/{worker_id}-{attempt_uuid}.fragment.json`, and upload `metadata/workers/shards/shard-{id}/{worker_id}-{attempt_uuid}.shard-stats.npz`
    - Write worker report (content hash, timing, per-shard results): `metadata/workers/attempts/{worker_id}-{attempt_uuid}/report.json`
    - **Write `.valid` marker** (last step — the commit point): `metadata/workers/shards/shard-{id}/{worker_id}-{attempt_uuid}.valid`
 5. **If validation fails:**
@@ -510,7 +519,7 @@ Shard IDs are logical and deterministic: `shard-000000.h5` through `shard-000479
 
 The `.valid` marker is written **only after** the worker has completed rendering, validation, upload, and bookkeeping. It is the commit point for a staged shard. Worker reports and debug logs are auxiliary metadata — they are not part of the shard admission protocol.
 
-Workers never write to `data/shards/`. The canonical path `data/shards/shard-{id}.h5` is written only by finalize during promotion ([§7.6](#76-finalize-workflow)).
+Workers never decide canonical membership. The canonical HDF5 path `data/shards/shard-{id}.h5` is written only by finalize during promotion; Lance workers may write uncommitted fragment data under split dataset `data/` directories, but only finalize writes Lance manifests and transactions ([§7.6](#76-finalize-workflow)).
 
 > **Invariant:** Only worker-validated shards reach the staging path, and only committed shards (with `.valid` markers) are visible to `generate`/`status`. Corrupt renders are uploaded directly to quarantine, preserving the evidence for debugging while keeping the staging area clean.
 
@@ -521,7 +530,7 @@ Instead of tracking worker state or polling provider APIs, the pipeline determin
 **`generate` reconciliation:**
 
 1. Read spec from R2 (or create if first run)
-2. List staged shards in `metadata/workers/shards/` — check for `.h5` + `.valid` marker per shard (no data loading, no re-validation — [§7.5](#75-shard-validation))
+2. List staged attempts in `metadata/workers/shards/` — check for format-specific payload + `.valid` marker per shard (no data loading, no re-validation — [§7.5](#75-shard-validation))
 3. Compute `missing = spec_shards - staged_valid_shards`
 4. If nothing missing → "generation complete", exit 0
 5. Partition missing shards across N workers
@@ -530,12 +539,12 @@ Instead of tracking worker state or polling provider APIs, the pipeline determin
 **`finalize` reconciliation:**
 
 1. Read spec from R2
-2. Check for `dataset.complete` — if present and all canonical outputs exist, exit 0 ("already finalized")
-3. List staged shards — check for `.h5` + `.valid` marker per shard
+2. Check for `metadata/dataset.complete` — if present and all canonical outputs exist, exit 0 ("already finalized")
+3. List staged attempts — check for format-specific payload + `.valid` marker per shard
 4. If any shards missing → report which ones, exit 1
-5. Structural-check each staged shard (valid HDF5, datasets present, shapes match — [§7.5](#75-shard-validation))
-6. Promote validated staged shards to `data/shards/`, write `.promoted` marker per shard
-7. Download canonical shards, reshard, compute stats, register in W&B, upload, write `dataset.complete`
+5. Select exactly one winning attempt per shard: earliest `.valid` storage `LastModified`, tie-broken by full marker key
+6. Structural-check each selected attempt (format-specific checks — [§7.5](#75-shard-validation))
+7. Promote HDF5 shards or commit Lance fragments, reduce stats, register in W&B, upload final metadata, write `metadata/dataset.complete`
 
 **Key properties:**
 
@@ -545,7 +554,7 @@ Instead of tracking worker state or polling provider APIs, the pipeline determin
 
 **`make status` — reconciliation report:**
 
-`make status` runs the same reconciliation logic as `generate` but only prints the result. It checks for `.h5` + `.valid` marker existence — no data loading or re-validation. It does not query RunPod, check worker health, or monitor live tasks. The output is fully determined by storage contents — running it from any machine, at any time, produces the same result.
+`make status` runs the same reconciliation logic as `generate` but only prints the result. It checks for format-specific attempt payload + `.valid` marker existence — no data loading or re-validation. It does not query RunPod, check worker health, or monitor live tasks. The output is fully determined by storage contents — running it from any machine, at any time, produces the same result.
 
 ```
 $ python -m synth_setter.pipeline status --run-id surge-simple-480k-10k-20260313T100000123Z
@@ -591,21 +600,23 @@ Design target ([#103](https://github.com/tinaudio/synth-setter/issues/103)) adds
 
 **Existence check** — run by `generate`/`status` during reconciliation:
 
-- Check for `.h5` + `.valid` marker in staging directory. No data loading.
+- Check for format-specific attempt payload + `.valid` marker in the staging directory. HDF5 requires `.h5`; Lance requires `.fragment.json` and `.shard-stats.npz`. No data loading.
 - The `.valid` marker is authoritative for staging admission: it means a worker completed the full shard lifecycle and committed the result ([§7.2](#72-shard-lifecycle)). It is not sufficient for final dataset correctness — finalize remains the gate before promotion.
 - The trust chain justifies this: workers do 3-check validation (4-check design target — [#103](https://github.com/tinaudio/synth-setter/issues/103)) before upload, `rclone --checksum` verifies transfer integrity, and R2 PUTs are atomic (the object either exists completely or not). Re-validating hundreds of shards to find a few missing ones is wasted work.
 
-**Structural check** — run by finalize before promoting staged shards to `data/shards/`:
+**Structural check** — run by finalize before promoting or committing selected attempts:
 
-- Valid HDF5 file that opens with `h5py`, expected datasets present, shapes match spec.
+- Valid Lance sidecar that parses as a strict Pydantic model and contains Lance fragment metadata that round-trips through Lance's `FragmentMetadata.from_json(...)`. Finalize derives the shard from the staging path and the split from the spec, then cross-checks the fragment's row count against the sibling `.shard-stats.npz` `count` — the sidecar carries no shard/split/row fields to trust.
+- Valid Lance shard stats file with `count`, `mean`, and `m2` arrays of the expected shapes and dtypes. Finalize reduces only the selected winners' `.shard-stats.npz` files into dataset-level `stats.npz`.
+- Legacy HDF5: valid file that opens with `h5py`, expected datasets present, shapes match spec.
 - This catches the only realistic failure between worker validation and finalize: transfer corruption or bit rot. Value-level corruption (NaN, wrong bounds) and row count mismatches were already caught by workers — re-checking would require loading all data from every shard, which is redundant.
 - If a staged shard fails the structural check, finalize writes `.invalid` for that attempt, reports the failure, and exits 1. The shard is treated as missing and regenerated on next `generate`.
 
 | Stage               | Validation                                                                                                                                                  | Cost                                   | Why                                                                       |
 | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------- |
 | **Worker**          | 3-check: valid HDF5, expected datasets, row count. 4-check design target adds shape/value/NaN ([#103](https://github.com/tinaudio/synth-setter/issues/103)) | Moderate (opens file, checks metadata) | Primary defense — catches corrupt HDF5, missing datasets, wrong row count |
-| **Generate/status** | Existence (`.h5` + `.valid` marker)                                                                                                                         | Cheap (file listing)                   | Workers already validated; re-validation is redundant                     |
-| **Finalize**        | Structural (valid HDF5, datasets present, shapes match)                                                                                                     | Moderate (opens file, no data loading) | Catches transfer corruption; last checkpoint before sealing dataset       |
+| **Generate/status** | Existence (format-specific attempt payload + `.valid` marker)                                                                                               | Cheap (file listing)                   | Workers already validated; re-validation is redundant                     |
+| **Finalize**        | Structural (valid Lance sidecars/fragments/stats; legacy: valid HDF5 data)                                                                                  | Moderate (metadata checks)             | Catches transfer corruption; last checkpoint before sealing dataset       |
 
 **Content hashes** (SHA-256 over the full HDF5 file) are recorded in worker reports for provenance and divergence detection. They are not used as acceptance criteria. If two workers produce different hashes for the same shard, the content hashes surface the divergence for investigation.
 
@@ -615,42 +626,42 @@ Design target ([#103](https://github.com/tinaudio/synth-setter/issues/103)) adds
 
 ### 7.6 Finalize Workflow
 
-> **Future state — there is no finalize command in code today. The MVP worker writes shards directly to the canonical run prefix and does not promote, write `dataset.complete`, or compute `stats.npz` from R2 contents. Tracked in [#72](https://github.com/tinaudio/synth-setter/issues/72) (Phase 5 Pipeline CLI) and [#406](https://github.com/tinaudio/synth-setter/issues/406).**
+> **Future state — there is no finalize command in code today. The MVP worker writes shards directly to the canonical run prefix and does not promote, write `metadata/dataset.complete`, or compute `stats.npz` from R2 contents. Tracked in [#72](https://github.com/tinaudio/synth-setter/issues/72) (Phase 5 Pipeline CLI) and [#406](https://github.com/tinaudio/synth-setter/issues/406).**
 
-01. **Check for `dataset.complete`** — if present and all canonical outputs exist, print "already finalized" and exit 0
+01. **Check for `metadata/dataset.complete`** — if present and all canonical outputs exist, print "already finalized" and exit 0
 02. **Read spec** from R2
-03. **Check completeness** — list staged shards, check for `.h5` + `.valid` marker per shard. If any missing, report which ones and exit 1
-04. **Select and structural-check staged shards** — for each shard, if multiple staged attempts exist, select the one with the lexicographically smallest `{worker_id}-{attempt_uuid}` filename. Deterministic selection avoids dependence on clock accuracy or storage timestamp behavior. Open each selected shard with `h5py`, verify expected datasets present and shapes match spec. No data loading. If any fail, write `.invalid` marker, report the failure, and exit 1 (shard is treated as missing on next `generate`)
-05. **Promote staged shards** — copy each selected shard from `metadata/workers/shards/shard-{id}/{worker}-{attempt}.h5` to `data/shards/shard-{id}.h5`. Write `.promoted` marker for each. Staged files are not deleted (append-only)
-06. **Download canonical shards** from `data/shards/` to local storage
-07. **Compute normalization statistics** (mean, std across training set)
-08. **Produce training outputs** — format depends on `output_format` in the spec:
-    - `hdf5`: Reshard into `train.h5`, `val.h5`, `test.h5` (HDF5 virtual datasets). Good for local single-GPU training.
-    - `wds`: Transcode into `train-{shard}.tar`, `val-{shard}.tar`, `test-{shard}.tar` (WebDataset archives). Each `.tar` shard contains samples as `{sample_id}.audio.npy` + `{sample_id}.params.npy` + `{sample_id}.mel.npy`, plus a single `metadata.json` sidecar per shard (see the `ShardMetadata` model in `src/synth_setter/pipeline/schemas/shard_metadata.py`). Good for multi-GPU streaming from R2.
-09. **Write `dataset.json`** — self-describing dataset card (includes content hashes, output format, shard manifest)
-10. **Register dataset in W&B** — log as artifact with spec, card, and metrics (§8)
-11. **Upload finalized dataset** to R2
-12. **Write `dataset.complete`** — completion marker (last step)
+03. **Check completeness** — list staged attempts, check for the format-specific attempt payload and `.valid` marker per shard. If any missing, report which ones and exit 1
+04. **Select winning attempts** — for each shard, if multiple staged attempts exist, select the one whose `.valid` marker has the earliest storage `LastModified`, tie-broken by full marker key. `LastModified` is assigned server-side by R2 — a single authority, not a worker wall-clock — so it is safe to trust across workers, and it makes the winner *stable*: any attempt that lands later has a strictly greater timestamp and can never displace an already-selected winner. This monotonicity is what lets finalize re-run safely ([§11.2](#112-failure-modes--edge-cases))
+05. **Structural-check selected attempts** — Lance parses the Pydantic `fragment.json`, deserializes Lance's fragment metadata with Lance, cross-checks the fragment's row count against the sibling `shard-stats.npz` `count`, and confirms the fragment's data path falls under the split the spec assigns to this shard. Legacy HDF5 opens the selected shard with `h5py` and verifies expected datasets and shapes.
+06. **Produce training outputs** — format depends on `output_format` in the spec:
+    - `lance`: Commit the selected fragments into `train.lance/`, `val.lance/`, and `test.lance/` with Lance's dataset commit APIs. The winners' uncommitted fragment data already sits under each split's `data/` directory (workers write it there — a fragment is only readable from the dataset whose `data/` dir physically holds its file, so finalize never copies or streams rows). Each split is one `LanceOperation.Overwrite` transaction over the full winner set: it lands as a single atomic manifest version (all winners visible together or none), and because it *replaces* rather than appends, a re-run rebuilds the identical manifest instead of double-committing rows. Idempotence comes from Overwrite-replace, not from `read_version` — Lance auto-rebases a stale-`read_version` append rather than rejecting it, so `read_version` is not a double-commit guard here. The whole model — fragment sidecar round-trip, atomic winner commit, duplicate-attempt dedup, idempotent re-commit, and the co-location requirement — is pinned by [`test_lance_fragment_finalize_poc.py`](../../tests/pipeline/data/test_lance_fragment_finalize_poc.py).
+    - `hdf5` (legacy): Reshard into `train.h5`, `val.h5`, `test.h5` virtual datasets. Detail: [legacy/hdf5-wds-formats.md](legacy/hdf5-wds-formats.md).
+    - `wds` (legacy): Transcode into `train-{shard}.tar`, `val-{shard}.tar`, `test-{shard}.tar` WebDataset archives. Detail: [legacy/hdf5-wds-formats.md](legacy/hdf5-wds-formats.md).
+07. **Compute or reduce normalization statistics** — Lance reduces selected training attempts' `.shard-stats.npz` files into dataset-level `stats.npz`; legacy HDF5/WDS compute stats from selected training data.
+08. **Write `dataset.json`** — self-describing dataset card (includes output format, selected attempts, and shard manifest)
+09. **Register dataset in W&B** — log as artifact with spec, card, and metrics (§8)
+10. **Upload finalized dataset** to R2
+11. **Write `metadata/dataset.complete`** — completion marker (last step)
 
 The finalize step runs with `MODE=finalize-shards`. Scoped and validated on the `experiment` branch ([#408](https://github.com/tinaudio/synth-setter/issues/408)).
 
-**`dataset.complete` semantics:**
+**`metadata/dataset.complete` semantics:**
 
-`dataset.complete` means **finalization is done**. It is not a mutex, not an in-progress marker, and does not provide mutual exclusion.
+`metadata/dataset.complete` means **finalization is done**. It is not a mutex, not an in-progress marker, and does not provide mutual exclusion.
 
 - Written as the very last step, after all outputs are uploaded and verified
 - Contains: `run_id` and finalization timestamp
-- If `dataset.complete` exists and all outputs validate → dataset is ready for training
-- If `dataset.complete` exists but outputs are missing → stale marker from a crashed finalize, cleaned up on next run
-- Two concurrent finalize processes both write `dataset.complete` — this is fine, they produce identical outputs ([§7.7](#77-concurrency-semantics))
+- If `metadata/dataset.complete` exists and all outputs validate → dataset is ready for training
+- If `metadata/dataset.complete` exists but outputs are missing → stale marker from a crashed finalize, cleaned up on next run
+- Two concurrent finalize processes both write `metadata/dataset.complete` — this is fine, they produce identical outputs ([§7.7](#77-concurrency-semantics))
 
-**Why `dataset.complete` and not `dataset.lock`:** The file is a completion marker, not a lock. Calling it `.lock` implies mutex semantics that don't exist and can't exist (R2 has no atomic test-and-set). The name should communicate what it means: finalization is complete.
+**Why `metadata/dataset.complete` and not `dataset.lock`:** The file is a completion marker, not a lock. Calling it `.lock` implies mutex semantics that don't exist and can't exist (R2 has no atomic test-and-set). The name should communicate what it means: finalization is complete.
 
-**Finalize idempotency:** Finalize reruns from scratch unless `dataset.complete` plus all finalized outputs are present and valid. No partial checkpoints — if finalize crashes after `train.h5` but before `stats.npz`, the next run starts over. This is simple and correct: finalize processes data already in R2, so reruns are cheap (minutes).
+**Finalize idempotency:** Finalize reruns from scratch unless `metadata/dataset.complete` plus all finalized outputs are present and valid. No partial checkpoints — if finalize crashes after `train.h5` but before `stats.npz`, the next run starts over. This is simple and correct: finalize processes data already in R2, so reruns are cheap (minutes).
 
-**Canonical data immutability:** After finalize writes `dataset.complete`, the contents of `data/shards/` and the finalized outputs are considered immutable. The pipeline does not enforce this at the storage level (R2 has no object locking), but no pipeline command modifies canonical data after finalization. Manual modification of `data/shards/` after finalize invalidates the dataset hash and provenance chain.
+**Canonical data immutability:** After finalize writes `metadata/dataset.complete`, the contents of `data/shards/` and the finalized outputs are considered immutable. The pipeline does not enforce this at the storage level (R2 has no object locking), but no pipeline command modifies canonical data after finalization. Manual modification of `data/shards/` after finalize invalidates the dataset hash and provenance chain.
 
-**Quarantine cleanup:** Quarantined shards accumulate across retries. After `dataset.complete` is written, finalize can optionally delete `quarantine/` contents for completed shards (`--keep-quarantine-days` controls retention). Default: keep all quarantined files.
+**Quarantine cleanup:** Quarantined shards accumulate across retries. After `metadata/dataset.complete` is written, finalize can optionally delete `quarantine/` contents for completed shards (`--keep-quarantine-days` controls retention). Default: keep all quarantined files.
 
 **`dataset.json` — dataset card:**
 
@@ -668,30 +679,32 @@ This is a single-user research pipeline running 1-2x/week. It is not designed fo
 
 **Why concurrent operations can't corrupt data:**
 
-1. **Workers write to per-attempt filenames.** Each attempt uploads to `{worker_id}-{attempt_uuid}.h5` — unique per invocation. Two workers computing the same shard write to different files in the same staging directory. No overwrites, no races.
-2. **Finalize is the only writer to canonical paths.** `data/shards/shard-{id}.h5` is written only by finalize, which picks a single validated staged shard to promote. Zombie workers uploading to staging after finalize has run cannot affect the canonical data.
+1. **Workers write to per-attempt filenames.** Each attempt uploads metadata to `{worker_id}-{attempt_uuid}.*` — unique per invocation. Two workers computing the same shard write to different sidecars in the same staging directory. No metadata overwrites, no races.
+2. **Finalize is the only writer of canonical membership.** `data/shards/shard-{id}.h5` is written only by finalize for HDF5. Lance manifests and transactions are written only by finalize for Lance. Zombie workers uploading after finalize has run cannot affect the committed data.
 3. **Deterministic outputs within the same execution environment.** Two workers computing the same shard (same seed, same config, same Docker image, same CPU architecture) produce identical content. Non-determinism across hardware is detectable via content hashes.
 
 **Scenario: `generate` run on the same run_id multiple times in quick succession**
 
 Both invocations read the staging prefix, both see the same missing shards, both launch workers for the same shards. Two workers both generate shard-042:
 
-1. Worker A uploads `metadata/workers/shards/shard-000042/pod-abc-uuid1.h5`
-2. Worker B uploads `metadata/workers/shards/shard-000042/pod-def-uuid2.h5`
-3. Both files coexist — different filenames, no overwrite
-4. **Result:** two valid staged shards, wasted compute. Finalize picks the lexicographically smallest filename to promote.
+1. Worker A uploads `metadata/workers/shards/shard-000042/pod-abc-uuid1.*`
+2. Worker B uploads `metadata/workers/shards/shard-000042/pod-def-uuid2.*`
+3. Both attempts coexist — different filenames, no overwrite
+4. **Result:** two valid staged attempts, wasted compute. Finalize picks the earliest completed `.valid` marker, tie-broken by marker key.
 
 **Skip-if-valid optimization:** Workers check the staging directory for an existing valid shard before uploading. If one exists, the worker skips the upload and moves to the next shard. This is an optimization, not a correctness requirement — the staging model is safe even without it.
 
 **Scenario: concurrent `finalize` on the same run_id**
 
-Two finalize invocations both read the input spec, validate staged shards, promote to `data/shards/`, download, reshard, upload, and write `dataset.complete`. Both pick the same staged shards (or equivalent valid ones) and produce identical canonical outputs. `dataset.complete` does not provide mutex semantics — R2 has no atomic test-and-set. The marker's purpose is to let subsequent invocations skip finalization ("already finalized"), not to prevent concurrent finalization. **Result:** identical outputs, wasted compute.
+Two finalize invocations both read the input spec, validate staged attempts, select winners, produce final outputs, and write `metadata/dataset.complete`. Both use the same deterministic winner rule and produce identical canonical outputs. `metadata/dataset.complete` does not provide mutex semantics — R2 has no atomic test-and-set. The marker's purpose is to let subsequent invocations skip finalization ("already finalized"), not to prevent concurrent finalization. **Result:** identical outputs, wasted compute.
+
+Three properties make this idempotence hold for a *sequential* re-run after a crash, not just concurrent invocations. Winner selection is monotonic (earliest `.valid` `LastModified`), each split is a replace-semantics commit over the full winner set (never an append), and `metadata/dataset.complete` is written last. A finalize that dies after committing `train.lance` but before the marker re-runs to the identical result: the winners are unchanged and the commit rebuilds the manifest rather than appending rows. A straggler attempt that lands after a completed finalize cannot change the outcome either — its later `LastModified` loses to the existing winner.
 
 **Scenario: accidentally-launched finalize while another finalize is running**
 
 Same as above. Both produce identical outputs. The second finalize either:
 
-- Sees `dataset.complete` from the first (if it finished) → exits with "already finalized"
+- Sees `metadata/dataset.complete` from the first (if it finished) → exits with "already finalized"
 - Doesn't see it yet → runs to completion independently, produces identical outputs
 
 No data corruption either way.
@@ -710,7 +723,7 @@ A worker from a previous `generate` invocation hangs for hours, then finally upl
 
 **What this system does NOT protect against:**
 
-- **Non-deterministic outputs across hardware.** If floating-point non-determinism across different CPU architectures produces different audio for the same seed, multiple staged shards for the same shard ID may differ. Finalize picks the lexicographically smallest attempt — the selection is deterministic, but content may vary across heterogeneous environments. Content hashes and `cpu_arch` in worker reports detect this divergence. The mitigation is to fix non-determinism in the renderer or constrain the execution environment.
+- **Non-deterministic outputs across hardware.** If floating-point non-determinism across different CPU architectures produces different audio for the same seed, multiple staged attempts for the same shard ID may differ. Finalize picks the earliest completed valid attempt, tie-broken by marker key — the selection is deterministic for a fixed R2 state, but content may vary across heterogeneous environments. Content hashes and `cpu_arch` in worker reports detect this divergence. The mitigation is to fix non-determinism in the renderer or constrain the execution environment.
 - **Concurrent spec modification.** The spec is written once and never modified. If something modifies it after creation, correctness guarantees do not hold.
 
 > **Scope of concurrency safety:** The safety arguments in this section assume deterministic rendering within the execution environment (same Docker image + CPU architecture). The pipeline does not enforce homogeneous worker hardware — it detects but does not prevent architectural divergence. Workers record `cpu_arch` and `os_info` in their reports; when content hashes diverge across attempts, these fields identify the source. `dataset.json` records all unique worker architectures encountered (`worker_architectures`); if multiple architectures appear, finalize logs a warning. For bit-reproducible runs, pin RunPod instance types to a consistent CPU architecture. The mitigation for divergence is to fix the renderer or constrain the environment, not to add locking.
@@ -737,7 +750,7 @@ Regardless of how a shard was lost (crash, timeout, upload failure, corrupt outp
 **Error tracking artifacts:**
 Each worker invocation produces three artifacts, all with unique filenames keyed by `{worker_id}-{attempt_uuid}`:
 
-- **Staged shard + lifecycle markers** (`workers/shards/shard-{id}/{worker_id}-{attempt}.h5` / `.rendering` / `.valid`) — shard file and empty markers tracking attempt state. Orphaned `.rendering` without `.valid` = crashed attempt.
+- **Staged attempt payload + lifecycle markers** (`workers/shards/shard-{id}/{worker_id}-{attempt}.*` / `.rendering` / `.valid`) — format-specific attempt payload (Lance `fragment.json` + `shard-stats.npz`; legacy HDF5 `.h5`) and empty markers tracking attempt state. Orphaned `.rendering` without `.valid` = crashed attempt.
 - **Worker report** (`workers/attempts/{worker_id}-{attempt}/report.json`, JSON) — derived summary with content hashes, written at end of execution, missing if worker crashed
 - **Debug log** (`workers/attempts/{worker_id}-{attempt}/debug.log`, JSONL) — append-only narrative, uploaded by EXIT trap, survives crashes
 
@@ -751,7 +764,6 @@ All worker artifacts live under `metadata/workers/`. Unique filenames per attemp
 
 ```python
 import multiprocessing
-import random
 
 _spawn_ctx = multiprocessing.get_context("spawn")
 
@@ -761,11 +773,7 @@ def _render_shard(shard_spec, shard_path):
     Under spawn, the child is a fresh Python interpreter with no inherited state.
     The import happens here, in the child, so the VST plugin loads cleanly.
     """
-    import numpy as np
     from synth_setter.data.vst.writers import make_hdf5_dataset
-    # P3 (post-launch): seed both RNGs for reproducibility — see #100
-    # random.seed(shard_spec.seed)
-    # np.random.seed(shard_spec.seed)
     make_hdf5_dataset(shard_path, shard_spec)
 
 # In the parent worker:
@@ -793,26 +801,20 @@ else:
 
 **Why not direct function call (`make_hdf5_dataset()` in-process):** A direct call is simpler and avoids per-shard process overhead, but a SIGSEGV in the plugin kills the entire worker process. Per-shard try/except cannot catch OS-level signals. The bash EXIT trap (Layer 2) would upload logs, and reconciliation (Layer 3) would detect the missing shards — but all in-progress shards on that worker are lost, not just the crashing one. For a 48-shard worker, losing all shards to one bad shard is unacceptable.
 
-**Why not `subprocess.run` calling `generate_vst_dataset.py`:** Same crash isolation as `multiprocessing.Process`, but requires adding a `--seed` CLI parameter to `generate_vst_dataset.py` (which doesn't exist). The subprocess approach also makes testing harder — you'd need to mock the subprocess, which couples tests to CLI argument construction. With `multiprocessing.Process`, the child imports `make_hdf5_dataset` directly and receives only simple data (`shard_spec`, `shard_path`) as args. For tests, `LocalBackend` runs in-process (no spawn) so test fixtures can inject a fake generate function directly.
+**Why not `subprocess.run` calling `generate_vst_dataset.py`:** Same crash isolation as `multiprocessing.Process`, but makes tests couple to CLI argument construction. With `multiprocessing.Process`, the child imports `make_hdf5_dataset` directly and receives only simple data (`shard_spec`, `shard_path`) as args. For tests, `LocalBackend` runs in-process (no spawn) so test fixtures can inject a fake generate function directly.
 
-**P3 — Dual-RNG seeding (post-launch, [#100](https://github.com/tinaudio/synth-setter/issues/100)):** The existing VST parameter sampling code (`param_spec.py`) uses both `random` (stdlib) and `np.random` for parameter generation. For v1, shards generate without seeding (current behavior — non-reproducible but correct). The seeding lines in `_render_shard` above are commented out until this is implemented. Post-launch, uncomment and seed both RNGs from `shard_spec.seed`:
-
-```python
-import numpy as np
-random.seed(shard_spec.seed)
-np.random.seed(shard_spec.seed)
-```
-
-Without dual seeding, parameters sampled via `np.random.choice` / `np.random.uniform` / `np.random.randint` in `param_spec.py` still use OS entropy. Required for debugging and exact dataset recreation, but not for generating a correct dataset.
+**Seeding design:** See
+[Deterministic Dataset Seeding](deterministic-seeding.md) for the canonical
+seed flow, guarantees, current status, and tracked follow-up work.
 
 **Trade-off summary:**
 
-| Approach                    | Crash isolation             | Seed passing             | Per-shard timeout   | Plugin state                       | Testability                        |
-| --------------------------- | --------------------------- | ------------------------ | ------------------- | ---------------------------------- | ---------------------------------- |
-| Direct function call        | None (SIGSEGV kills worker) | `random.seed()`          | Manual timer        | Shared (unsafe if mutable)         | Inject fake `generate_fn`          |
-| `multiprocessing` fork      | OS process boundary         | Python arg               | `join(timeout)`     | Inherited via COW (unsafe for VST) | Inject fake `generate_fn`          |
-| **`multiprocessing` spawn** | **OS process boundary**     | **Python arg**           | **`join(timeout)`** | **Fresh load (clean)**             | **LocalBackend in-process inject** |
-| `subprocess.run`            | OS process boundary         | Needs `--seed` CLI param | `timeout=` kwarg    | Fresh load (clean)                 | Must mock subprocess               |
+| Approach                    | Crash isolation             | Seed passing   | Per-shard timeout   | Plugin state                       | Testability                        |
+| --------------------------- | --------------------------- | -------------- | ------------------- | ---------------------------------- | ---------------------------------- |
+| Direct function call        | None (SIGSEGV kills worker) | Python arg     | Manual timer        | Shared (unsafe if mutable)         | Inject fake `generate_fn`          |
+| `multiprocessing` fork      | OS process boundary         | Python arg     | `join(timeout)`     | Inherited via COW (unsafe for VST) | Inject fake `generate_fn`          |
+| **`multiprocessing` spawn** | **OS process boundary**     | **Python arg** | **`join(timeout)`** | **Fresh load (clean)**             | **LocalBackend in-process inject** |
+| `subprocess.run`            | OS process boundary         | CLI args       | `timeout=` kwarg    | Fresh load (clean)                 | Must mock subprocess               |
 
 **Cost:** Per-shard process startup (~0.5-1s) plus fresh plugin load (~1-3s for Surge XT). Shard renders take minutes, so this is negligible — roughly 1-3% overhead.
 
@@ -840,45 +842,20 @@ No `check_tasks` method exists. Provider APIs answer the wrong question ("is the
 
 **RunPod instance tagging:** The CLI tags all RunPod instances with the `run_id` at launch. A `pipeline.cli cleanup --run-id <id>` command queries the RunPod API for any pods matching that `run_id` and terminates them — a safety net for orphaned pods if the CLI crashes after launching workers but before logging pod IDs locally.
 
-### 7.10 Output Format: HDF5, WebDataset, or Lance
+### 7.10 Output Format: Lance (primary), HDF5 & WebDataset (legacy)
 
-The pipeline supports three output formats, selected via `output_format` in the config and frozen in the spec. The format determines both what the worker emits and how training consumes the data — the renderer CLI dispatches on the shard's filename suffix (`.h5` → `make_hdf5_dataset`, `.tar` → `make_wds_dataset`, `.lance` → `make_lance_dataset`) via `OutputFormat.from_extension`.
+The pipeline's primary output format is **Lance**, selected via `output_format` in the config and frozen in the spec. HDF5 and WebDataset remain selectable for coverage; their format-specific detail (staging/promotion, resharding, tar structure, resumability, `copy_dataset_root_uri`) lives in [legacy/hdf5-wds-formats.md](legacy/hdf5-wds-formats.md). The format determines both what the worker emits and how training consumes the data — the renderer CLI dispatches on the shard's filename suffix (`.h5` → `make_hdf5_dataset`, `.tar` → `make_wds_dataset`, `.lance` → `make_lance_dataset`) via `OutputFormat.from_extension`.
 
-**Why three formats:**
+**Lance** (`output_format: lance`): Lance **dataset directories** (`train.lance/`, `val.lance/`, `test.lance/`) committed from worker-produced fragments. Workers use Lance to write uncommitted fragment data and persist a strict Pydantic `fragment.json` sidecar whose `fragment_json` field is the exact Lance `FragmentMetadata.to_json()` payload. Lance owns Lance fragment IDs and physical data references; the pipeline derives logical identity (`shard_id`, `split`, `worker_id`, `attempt_uuid`) from the staging path, filename, and spec rather than storing it in the sidecar ([§14.4](#144-lance-fragment-sidecar-schema)). Rows are Arrow fixed-shape-tensor columns (float16 `audio`, float32 `mel_spec` / `param_array`) with the `ShardMetadata` JSON embedded in the schema metadata and the on-disk format pinned to `data_storage_version="2.2"`.
 
-- **HDF5** (`output_format: hdf5`): Virtual datasets (`train.h5`, `val.h5`, `test.h5`) that reference promoted shards. Good for local single-GPU training where the full dataset is downloaded to the training machine. Random access, fast local I/O.
-- **WebDataset** (`output_format: wds`): Sequential `.tar` archives (`train-{shard}.tar`, etc.) optimized for streaming. Each archive contains N samples as individual NumPy files. Good for multi-GPU training (B200s, many GPUs) where streaming from R2 avoids downloading the full dataset to every node.
-- **Lance** (`output_format: lance`): Single-file Lance shards (`shard-000000.lance`) using the Lance *file* format — each shard stays one R2 object. Rows are Arrow fixed-shape-tensor columns (float16 `audio`, float32 `mel_spec` / `param_array`) with the `ShardMetadata` JSON embedded in the schema metadata. The columnar layout gives per-column projection (stats streaming reads only `mel_spec`); finalize concatenates each split's shards into `train.lance` / `val.lance` / `test.lance`.
+**Why Lance is primary:** the columnar layout gives per-column projection (train on `mel_spec` + `param_array` without decoding `audio`), the dataset streams natively from object storage for both random-access and sequential loaders, and fragment-based finalize commits winning fragment metadata instead of rewriting rows — so finalize decodes zero audio rows and never becomes a single-machine bottleneck ([§12](#12-open-questions-risks--limitations)). One format serves both the local single-GPU case (HDF5's niche) and the multi-GPU streaming case (WDS's niche).
 
-**Why HDF5 is insufficient for multi-GPU training:**
+**Lance shard attempts are not resumable:** a crashed lance worker re-renders the whole shard attempt (HDF5's mid-shard resume is a legacy-format property — see [legacy/hdf5-wds-formats.md](legacy/hdf5-wds-formats.md)). The staging/finalize split is unaffected by output format.
 
-HDF5 is random-access oriented. Multi-GPU DataLoaders need to stream shards sequentially without coordinating seeks across workers. Streaming HDF5 virtual datasets from R2 during training creates heavy seek traffic and GPU idle time. Downloading the full dataset to every training node wastes storage and time at scale. WebDataset solves both — each `.tar` shard is a sequential stream that can be read over HTTP with near-zero overhead.
+**Legacy formats in one line each** ([full detail](legacy/hdf5-wds-formats.md)):
 
-**HDF5 is resumable; WDS and Lance are not:**
-
-`make_hdf5_dataset` is resumable — a partially-written file picks up at the first all-zero row, so a crashed worker can re-run with the same render config and only the missing tail is regenerated, except under `render.param_sample_cadence="shard"`, where a partially-written shard is re-rendered from row 0 (a mid-shard resume can't preserve the one-patch-per-shard invariant). `make_wds_dataset` and `make_lance_dataset` are not resumable today (the tar writer and `LanceFileWriter` both overwrite the destination on open); a crashed wds or lance worker re-renders the whole shard. The staging/canonical split is unaffected by output format.
-
-**Copying an existing dataset:** when `copy_dataset_root_uri` is set on the spec, generation re-renders the parameters of an existing dataset instead of sampling fresh ones. The root URI may be a bare path, `file://` URI, or `r2://` URI. The launcher forwards `--copy_dataset_root_uri` to the renderer subprocess, which resolves `<copy_dataset_root_uri>/<shard.filename>` to a local file (downloading it from R2 to a tempfile when the root is an `r2://` URI), reads the source shard's `param_array`, decodes each row into fixed synth/note params via `fixed_params_from_dataset` (`param_spec.decode`), and renders those. This is hdf5-only — the source is read as an HDF5 `param_array` of the same shard filename, so a non-hdf5 output with `--copy_dataset_root_uri` raises `SystemExit`. The source must share the target's `render.param_spec_name` (same encoding width) and have row count equal to `samples_per_shard`. Fixed params are indexed by absolute row, so resume re-renders only the missing tail from the matching source rows. Before any render, `generate` preflights the copy against the source's persisted spec: it loads `<copy_dataset_root_uri>/input_spec.json` (which sits beside the shards at the dataset prefix root) and asserts the source matches the target on every copy-relevant value — `param_spec_name`, `samples_per_shard`, `train_val_test_sizes`, and the full shard-filename set (source of truth: `DatasetSpec.validate_copy_source`) — failing once at launch (with all mismatches aggregated) rather than per-shard mid-render. A missing source `input_spec.json` is itself a launch error. `input_spec.json` files materialized before the dataset-copy source became a root URI still load: a `mode="before"` shim promotes the pre-rename flat `copy_dataset_root: …` and the older nested `datasetsrc: {copy_dataset_root: …}` shape (and drops `datasetsrc: null`) to `copy_dataset_root_uri`.
-
-**WebDataset shard structure:**
-
-Each `.tar` shard groups rows into per-batch tar entries. The tar key is the batch's first logical row index zero-padded to 8 digits (`f"{start_idx:08d}"`) and advances by `samples_per_render_batch`; each `<key>.<field>.npy` member holds the whole batch stacked along axis 0 — not one sample per file. The per-row field names come from `synth_setter.data.vst.shapes.DATASET_FIELD_NAMES` (`audio`, `mel_spec`, `param_array`):
-
-```
-train-000000.tar
-├── 00000000.audio.npy      # shape (samples_per_render_batch, ...)
-├── 00000000.mel_spec.npy
-├── 00000000.param_array.npy
-├── 00000064.audio.npy      # next batch — key advances by samples_per_render_batch
-├── 00000064.mel_spec.npy
-├── 00000064.param_array.npy
-├── ...
-└── metadata.json          # ShardMetadata sidecar — see src/synth_setter/pipeline/schemas/shard_metadata.py
-```
-
-Shard count is tuned for GPU worker count — one shard per GPU worker per epoch is ideal; exact sizing depends on batch size and network bandwidth.
-
-**Training integration:** The `webdataset` Python library provides streaming, shuffling, batching, and multi-worker support out of the box. R2 free egress makes streaming from object storage practical. Each GPU worker gets a disjoint subset of `.tar` shards — no coordination needed. Training code must use WebDataset's built-in shuffle (or `shardshuffle`) — finalize writes shards in deterministic order for reproducibility; shuffling is the training loader's responsibility.
+- **HDF5** (`output_format: hdf5`, legacy): promoted per-shard `.h5` files resharded into `train.h5`/`val.h5`/`test.h5` virtual datasets; local random access, single-GPU training.
+- **WebDataset** (`output_format: wds`, legacy): sequential `.tar` archives for multi-GPU HTTP/R2 streaming.
 
 ## 8. Experiment Tracking (Weights & Biases)
 
@@ -898,15 +875,15 @@ The finalize stage initializes W&B with `wandb.init(project="synth-setter", job_
 
 **Pipeline metrics** (written to `wandb.summary` by `finalize`):
 
-| Metric                             | Type  | Description                                           |
-| ---------------------------------- | ----- | ----------------------------------------------------- |
-| `pipeline/shards_total`            | int   | Total shards in spec                                  |
-| `pipeline/shards_valid`            | int   | Shards that passed validation                         |
-| `pipeline/shards_quarantined`      | int   | Shards copied to quarantine                           |
-| `pipeline/total_samples`           | int   | Total samples across all shards                       |
-| `pipeline/generation_time_seconds` | float | Wall clock: spec created_at → last shard uploaded     |
-| `pipeline/finalize_time_seconds`   | float | Wall clock: finalize start → dataset.complete written |
-| `pipeline/errors_total`            | int   | Total errors across all worker reports                |
+| Metric                             | Type  | Description                                                    |
+| ---------------------------------- | ----- | -------------------------------------------------------------- |
+| `pipeline/shards_total`            | int   | Total shards in spec                                           |
+| `pipeline/shards_valid`            | int   | Shards that passed validation                                  |
+| `pipeline/shards_quarantined`      | int   | Shards copied to quarantine                                    |
+| `pipeline/total_samples`           | int   | Total samples across all shards                                |
+| `pipeline/generation_time_seconds` | float | Wall clock: spec created_at → last shard uploaded              |
+| `pipeline/finalize_time_seconds`   | float | Wall clock: finalize start → metadata/dataset.complete written |
+| `pipeline/errors_total`            | int   | Total errors across all worker reports                         |
 
 **Dataset artifact** (logged by `finalize`):
 
@@ -1096,29 +1073,29 @@ A worker uploads `shard-042.h5` successfully but crashes before writing `worker-
 Local disk corruption between render and upload, or network corruption during transfer, produces a shard in R2 that differs from what the worker intended. **Consequence:** Corrupt shard passes filename checks but contains wrong data. **Mitigation:** All rclone operations use `--checksum`, which verifies content hashes after transfer. If a checksum mismatch is detected, the worker must delete the local shard, re-generate, and re-upload. Storage-layer bit rot within R2 is handled by R2 internally (server-side object checksums).
 
 **Slow worker overtaken by retry:**
-Worker A is assigned shard-042. Worker A is slow. User runs `generate` again, reconciliation sees shard-042 as missing (no valid staged shard), assigns to Worker B. Worker B completes first, uploads `pod-B-uuid2.h5` with `.valid` marker. Worker A completes later, uploads `pod-A-uuid1.h5` with `.valid` marker. **Consequence:** Two valid staged shards exist for shard-042. Finalize picks one to promote to `data/shards/shard-000042.h5`. If both workers ran on the same hardware, the shards are identical. If on different hardware, the shards may differ at the floating-point level — finalize picks arbitrarily but the result is valid. **Mitigation:** Content hashes in worker reports detect divergence. Hard timeout on workers prevents long-running zombies.
+Worker A is assigned shard-042. Worker A is slow. User runs `generate` again, reconciliation sees shard-042 as missing (no valid staged attempt), assigns it to Worker B. Worker B completes first and writes its `.valid` marker. Worker A completes later and writes a second `.valid` marker. **Consequence:** Two valid staged attempts exist for shard-042. Finalize picks the earliest completed `.valid` marker, tie-broken by marker key. If both workers ran on the same hardware, the attempts are identical. If on different hardware, the attempts may differ at the floating-point level — finalize still picks one deterministic winner for the observed R2 state. **Mitigation:** Content hashes in worker reports detect divergence. Hard timeout on workers prevents long-running zombies.
 
 **Zombie worker uploads after finalize:**
-Worker A hangs for 12 hours, then completes and uploads shard-042 to the staging prefix. Meanwhile, Worker B already uploaded shard-042, finalize promoted it to `data/shards/shard-000042.h5`, and the dataset is in use for training. **Consequence:** Worker A's upload lands in `metadata/workers/shards/shard-000042/pod-A-uuid1.h5` — a new file in the staging directory. The canonical `data/shards/shard-000042.h5` is unaffected. The finalized dataset hash is stable. **Mitigation:** The staging/canonical separation ensures zombie uploads cannot corrupt finalized data. Hard timeout on workers and RunPod auto-stop prevent zombies in the first place. Re-running finalize would re-validate staging and re-promote, but would pick the same (or equivalent) shard — the canonical output is stable.
+Worker A hangs for 12 hours, then completes and uploads shard-042 attempt metadata. Meanwhile, Worker B already uploaded shard-042, finalize selected it, and the dataset is in use for training. **Consequence:** Worker A's upload lands in `metadata/workers/shards/shard-000042/pod-A-uuid1.*` — a new attempt in the staging directory. The committed output is unaffected. The finalized dataset hash is stable. **Mitigation:** Finalize-owned membership ensures zombie uploads cannot corrupt finalized data. Hard timeout on workers and RunPod auto-stop prevent zombies in the first place. Re-running finalize would re-validate staging and pick the same winner unless the original completion marker is missing or stale.
 
 **Spec deleted after generation starts:**
 Workers receive shard assignments via environment variables at launch. If the spec is deleted from R2 after launch, workers continue fine but subsequent `status`/`generate` fail. **Consequence:** Orphaned run. **Mitigation:** Spec is immutable, should never be deleted.
 
-**`dataset.complete` exists but outputs are corrupt:**
-Finalize wrote `dataset.complete` but outputs were later corrupted. **Mitigation:** Finalize validates outputs when `dataset.complete` exists. If missing/corrupt, deletes stale marker and reruns.
+**`metadata/dataset.complete` exists but outputs are corrupt:**
+Finalize wrote `metadata/dataset.complete` but outputs were later corrupted. **Mitigation:** Finalize validates outputs when `metadata/dataset.complete` exists. If missing/corrupt, deletes stale marker and reruns.
 
-**Stale `dataset.complete` after re-generation:**
-User runs `generate` after finalization (e.g., to replace a quarantined shard). `dataset.complete` from old finalize still exists. **Mitigation:** Finalize re-validates outputs against current spec. Mismatches trigger stale marker deletion and rerun.
+**Stale `metadata/dataset.complete` after re-generation:**
+User runs `generate` after finalization (e.g., to replace a quarantined shard). `metadata/dataset.complete` from old finalize still exists. **Mitigation:** Finalize re-validates outputs against current spec. Mismatches trigger stale marker deletion and rerun.
 
 ## 12. Open Questions, Risks & Limitations
 
 ### Known Limitations
 
-1. **Single-machine finalize bottleneck.** Finalize downloads all shards to one machine. A 10k-sample shard is typically 50-100MB depending on audio length and spectrogram resolution. At 480 shards (~30GB), this takes minutes on a laptop. Current architecture scales to ~100-200GB datasets on a laptop. Beyond that, finalize should run on a cloud worker (same Docker image, same `ComputeBackend` protocol — add a `--finalize-on-cloud` flag that reuses the worker entrypoint). Incremental statistics (reservoir sampling or one-pass mean/std sketches) would eliminate the need to download all shards for stats computation.
+1. **Single-machine finalize bottleneck for row-rewrite formats.** HDF5 and WebDataset finalization may download or rewrite all selected shards on one machine. A 10k-sample shard is typically 50-100MB depending on audio length and spectrogram resolution. At 480 shards (~30GB), this takes minutes on a laptop. Current architecture scales to ~100-200GB datasets on a laptop. Beyond that, finalize should run on a cloud worker (same Docker image, same `ComputeBackend` protocol — add a `--finalize-on-cloud` flag that reuses the worker entrypoint). Lance avoids this bottleneck by committing worker-produced fragments and reducing per-shard stats sidecars instead of streaming every row through finalize.
 
 2. **No incremental finalization.** Crashes during finalize restart from scratch. Acceptable because finalize processes existing data and is fast to retry.
 
-3. **Reproducibility is controlled-conditions, not absolute.** The pipeline guarantees that the same spec + same Docker image + same hardware = identical dataset. But VST plugin floating-point behavior can vary across CPU architectures (x86 vs ARM, SSE vs AVX), and Docker base image updates change system libraries. Content hashes in worker reports detect when this happens, but the pipeline does not enforce cross-hardware bit-identity. If multiple workers produce different output for the same shard on different hardware, finalize picks the lexicographically smallest attempt — the selection is deterministic but the content may vary across heterogeneous environments.
+3. **Reproducibility is controlled-conditions, not absolute.** The pipeline guarantees that the same spec + same Docker image + same hardware = identical dataset. But VST plugin floating-point behavior can vary across CPU architectures (x86 vs ARM, SSE vs AVX), and Docker base image updates change system libraries. Content hashes in worker reports detect when this happens, but the pipeline does not enforce cross-hardware bit-identity. If multiple workers produce different output for the same shard on different hardware, finalize picks the earliest completed valid attempt — the selection is deterministic for a fixed R2 state but the content may vary across heterogeneous environments.
 
 4. **R2 listing at scale.** Reconciliation lists staged shard objects (1000/page). At 480 shards: 1 API call. At 48,000: 48 calls — still fast. A future optimization could write a `metadata/shards.manifest` file listing all promoted shard IDs after finalize, allowing subsequent operations to read a single file instead of listing the prefix. Not needed at current scale.
 
@@ -1152,18 +1129,25 @@ The following are of interest for next steps but are out of scope for this docum
 
 Additional stages could follow the same contract (§5) without modifying existing stages:
 
-| Stage              | Input        | Output                 | Compute |
-| ------------------ | ------------ | ---------------------- | ------- |
-| **augment-reverb** | raw shards   | augmented shards       | CPU     |
-| **add-captions**   | audio shards | shards + text column   | GPU     |
-| **add-embeddings** | audio shards | shards + latent column | GPU     |
-| **render-presets** | preset bank  | audio shards           | CPU     |
+| Stage              | Input        | Output               | Compute |
+| ------------------ | ------------ | -------------------- | ------- |
+| **augment-reverb** | raw shards   | augmented shards     | CPU     |
+| **add-captions**   | audio shards | shards + text column | GPU     |
+| **render-presets** | preset bank  | audio shards         | CPU     |
+
+`add-embeddings` is now implemented as the `synth-setter-add-embeddings` CLI: it
+augments a finalized Lance dataset in place with a `clap` (LAION-CLAP)
+`FixedSizeList<float32, 512>` vector column — optionally IVF_PQ-indexed for
+`nearest=` vector search — and an `m2l` (music2latent) fixed-shape-tensor
+latent column, both derived from the audio column.
+
+`synth-setter-add-mp3-audio` (`pipeline/data/add_mp3_audio.py`) follows the same contract: it takes Lance audio shards and adds an `audio_mp3` preview column (CPU), without modifying existing stages.
 
 Stage order would remain static and explicit — user runs commands in sequence. If the number of stages grows to 4-6 and manual commands become unwieldy, adopt Prefect rather than building a homegrown orchestrator.
 
 ### Data Format Abstraction
 
-The pipeline supports HDF5, WebDataset, and Lance output formats ([§7.10](#710-output-format-hdf5-webdataset-or-lance)). Lance landed as a third enum branch on `OutputFormat` rather than a general `ShardWriter` protocol; extract a writer protocol only if a further format makes the dispatch unwieldy, not speculatively. Training-side reads are already format-pluggable (`ShardFile` protocol in `src/synth_setter/data/surge_datamodule.py`, with a Lance backend in `lance_datamodule.py`).
+The pipeline supports Lance (primary), HDF5, and WebDataset output formats ([§7.10](#710-output-format-lance-primary-hdf5--webdataset-legacy)). Lance landed as a third enum branch on `OutputFormat` rather than a general `ShardWriter` protocol; extract a writer protocol only if a further format makes the dispatch unwieldy, not speculatively. Training-side reads are already format-pluggable (`ShardFile` protocol in `src/synth_setter/data/surge_datamodule.py`, with a Lance backend in `lance_datamodule.py`).
 
 ### Content-Addressable Outputs
 
@@ -1215,6 +1199,7 @@ class RenderConfig(BaseModel):
     min_loudness: float
     samples_per_render_batch: int = 32
     samples_per_shard: int
+    attempts_per_sample: int = 100
     max_retries: int = 0        # per-shard retry budget for transient renderer failures
     parallel: bool = False      # dispatch shard renders concurrently (ThreadPoolExecutor)
     plugin_reload_cadence: Literal["once", "render"] = "render"
@@ -1242,7 +1227,7 @@ class DatasetSpec(BaseModel):
     task_name: str
     output_format: Literal["hdf5", "wds"]
     train_val_test_sizes: tuple[int, int, int]
-    train_val_test_seeds: tuple[int, int, int]
+    train_val_test_seeds: tuple[int, int, int] | None = None
     base_seed: int
     # Sub-models
     render: RenderConfig
@@ -1270,7 +1255,10 @@ class DatasetSpec(BaseModel):
 
 All three models (`DatasetSpec`, `RenderConfig`, `ShardSpec`) use Pydantic strict mode at the trust boundary. JSON-mode coercions (`list→tuple` for `train_val_test_sizes` / `train_val_test_seeds`, `str→datetime` for `created_at`) are handled by explicit per-field validators on `DatasetSpec`; `extra="forbid"` plus those validators keep the boundary tight without relaxing strict. `frozen=True` makes specs immutable at the type level.
 
-**Seed derivation:** Per-shard seeds are computed deterministically during spec materialization: `seed = base_seed + shard_id`, where `base_seed` is derived from the run config. This means the same config always produces the same spec (and therefore the same seeds). Reproducibility comes from re-running with the same frozen spec — the spec is the reproducibility unit, not the config.
+**Seed derivation:** `DatasetSpec` stores `base_seed`, each `ShardSpec` stores
+the derived shard seed, and row-level retries derive per-sample RNGs from that
+shard seed. See [Deterministic Dataset Seeding](deterministic-seeding.md) for
+the canonical seeding design.
 
 **Why JSON for specs and reports:** Machine-generated, stored in R2, read back by the CLI. JSON is the simplest correct format — Pydantic has native JSON methods (`.model_dump_json()` / `.model_validate_json()`), it's human-readable (`rclone cat` + `jq`), and handles nested structures natively. Config files use YAML because they're human-authored.
 
@@ -1336,35 +1324,64 @@ class WorkerReport(BaseModel):
     os_info: str             # e.g. "Linux 5.15.0-generic"
 ```
 
-### 14.4 Sample Type
+### 14.4 Lance Fragment Sidecar Schema
 
-A typed container for individual training samples during finalize's transcode step (HDF5 → WebDataset). This is a `dataclass`, not a Pydantic model — the data is already validated NumPy arrays at this point, so Pydantic's serialization validation is unnecessary overhead (see validation boundaries below).
+Lance worker attempts store their reconciliation contract in
+`metadata/workers/shards/shard-{id}/{worker_id}-{attempt_uuid}.fragment.json`.
+This JSON is validated with Pydantic at the R2 trust boundary. The sidecar
+carries only what is not recoverable elsewhere: a schema version and Lance's own
+serialized fragment metadata, which stays an opaque Lance-owned string that
+finalize parses with Lance rather than treating as an untyped nested dictionary.
+Lance's `FragmentMetadata.to_json()` returns a dict, so `fragment_json` holds
+its `json.dumps(...)` string, which `FragmentMetadata.from_json(...)` re-parses
+(verified round-trip: [`test_lance_fragment_finalize_poc.py`](../../tests/pipeline/data/test_lance_fragment_finalize_poc.py)).
 
 ```python
-@dataclass(frozen=True, slots=True)
-class Sample:
-    sample_id: int
-    audio: np.ndarray       # shape: (channels, samples)
-    mel_spec: np.ndarray    # shape: (mels, frames)
-    params: np.ndarray      # shape: (num_params,)
+class LanceFragmentSidecar(BaseModel):
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
+
+    schema_version: Literal[1]
+    fragment_json: str
 ```
 
-The `Sample` type ensures the transcode loop reads and writes the correct fields — a bug that drops `mel_spec` or swaps `audio` and `params` is caught by type hints rather than silently producing a broken `.tar` archive. `frozen=True` prevents accidental mutation during transcoding.
+Logical identity is derived, not stored, so there is no field for it to
+contradict: `worker_id` and `attempt_uuid` come from the filename, `shard_id`
+from the staging path, `split` from the spec's deterministic split assignment,
+and the row count from Lance's fragment metadata (cross-checked against `count`
+in the sibling `.shard-stats.npz`). Storing any of these in the sidecar would
+create a second source of truth free to drift from the first.
+
+Per-shard Lance statistics are stored beside the sidecar as
+`{worker_id}-{attempt_uuid}.shard-stats.npz`, not JSON, to avoid serialization
+precision loss. The `.npz` contains Welford state:
+
+| Array   | Type      | Meaning                                   |
+| ------- | --------- | ----------------------------------------- |
+| `count` | `int64`   | Number of rows represented                |
+| `mean`  | `float64` | Running mean for normalization statistics |
+| `m2`    | `float64` | Running sum of squared deviations         |
+
+Finalize reduces only the selected winners' `.shard-stats.npz` files into
+dataset-level `stats.npz`.
+
+### 14.5 Validation Boundaries
+
+(The `Sample` dataclass used by the legacy HDF5 → WebDataset transcode moved to [legacy/hdf5-wds-formats.md](legacy/hdf5-wds-formats.md).)
 
 **Validation boundaries — when to use what:**
 
 The pipeline uses different validation tools depending on where data crosses a trust boundary:
 
-| Boundary                        | Tool                | Why                                                                                     |
-| ------------------------------- | ------------------- | --------------------------------------------------------------------------------------- |
-| External input (config YAML)    | Pydantic (strict)   | Untrusted human input — catch type errors, missing fields, invalid values at parse time |
-| Serialization (spec, reports)   | Pydantic (strict)   | JSON crossing process boundaries (R2 ↔ CLI ↔ workers) — enforce schema on every read    |
-| Shard data (HDF5 arrays)        | Validation function | NumPy arrays inside HDF5 — Pydantic can't validate `ndarray`; custom checks required    |
-| Internal transform (HDF5 → WDS) | `dataclass` (above) | Data already validated — typed container prevents field mixups during transcoding       |
+| Boundary                               | Tool                                                             | Why                                                                                          |
+| -------------------------------------- | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| External input (config YAML)           | Pydantic (strict)                                                | Untrusted human input — catch type errors, missing fields, invalid values at parse time      |
+| Serialization (spec, reports)          | Pydantic (strict)                                                | JSON crossing process boundaries (R2 ↔ CLI ↔ workers) — enforce schema on every read         |
+| Shard data (array payloads)            | Validation function                                              | NumPy/Arrow arrays inside shards — Pydantic can't validate `ndarray`; custom checks required |
+| Internal transform (legacy HDF5 → WDS) | `dataclass` ([`Sample`](legacy/hdf5-wds-formats.md#sample-type)) | Data already validated — typed container prevents field mixups during transcoding            |
 
 Pydantic is for trust boundaries — where data enters the system from an external source (user config, JSON from R2, worker reports from other processes). Dataclasses are for internal contracts — where data has already been validated and you just need a typed container to prevent programming errors. No runtime validation overhead on 480k samples.
 
-### 14.5 Config Materialization
+### 14.6 Config Materialization
 
 A run starts from a Hydra experiment YAML composed against `src/synth_setter/configs/dataset.yaml`:
 
@@ -1411,7 +1428,7 @@ On first `generate` (`python -m synth_setter.cli.generate_dataset experiment=<id
 | Config ID + ISO timestamp | `dataset_wandb_run_id`                             | `surge-simple-480k-10k-20260312T143022500Z`                             |
 | R2 root path              | `data/{dataset_config_id}/{dataset_wandb_run_id}/` | `data/surge-simple-480k-10k/surge-simple-480k-10k-20260312T143022500Z/` |
 
-Config filenames live in `src/synth_setter/configs/experiment/generate_dataset/`. Production training configs follow the pattern `{name}-{total_train_samples}-{shard_size}.yaml` (e.g. `surge-simple-480k-10k.yaml`); CI smoke and partitioner-exercise configs use shorter, role-descriptive names (e.g. `smoke-shard.yaml`, `10-1k-shards.yaml`). The filename without extension is the `dataset_config_id` — choose names that read clearly in R2 paths and W&B run IDs.
+Config filenames live in `src/synth_setter/configs/experiment/generate_dataset/`. Production training configs follow the pattern `{name}-{total_samples}-{shard_size}.yaml` (e.g. `surge-simple-480k-10k.yaml`, where 480k is the train+val+test total); Lance experiment configs instead encode the split sizes as `{name}-lance-{train}-{val}-{test}.yaml` (e.g. `surge-xt-lance-10k-2k-1k.yaml`); CI smoke and partitioner-exercise configs use shorter, role-descriptive names (e.g. `smoke-shard.yaml`, `10-1k-shards.yaml`). The filename without extension is the `dataset_config_id` — choose names that read clearly in R2 paths and W&B run IDs.
 
 ### 14.7 CLI & Directory Structure
 
@@ -1495,32 +1512,33 @@ src/synth_setter/configs/
 
 ## Appendix A: Glossary
 
-| Term                       | Definition                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **R2**                     | [Cloudflare R2](https://developers.cloudflare.com/r2/), an S3-compatible object storage service. Key feature: free egress (no cost to download data). Used for shard storage and pipeline coordination. [Consistency model](https://developers.cloudflare.com/r2/reference/consistency/): strong read-after-write.                                                                                                                                                                                       |
-| **RunPod**                 | [RunPod](https://www.runpod.io/), a cloud compute marketplace offering on-demand GPU and CPU instances ("pods"). Used for running data generation workers. Pods are ephemeral — they run a Docker container and terminate.                                                                                                                                                                                                                                                                               |
-| **Worker**                 | A cloud compute instance that generates shards. On RunPod, a worker is a "pod" — a single Docker container with assigned shard work. The design uses "worker" to stay infrastructure-agnostic.                                                                                                                                                                                                                                                                                                           |
-| **Shard**                  | An HDF5 file containing a batch of training samples (audio, mel spectrograms, parameter arrays). Typically 1k-10k samples per shard. Named by logical index (`shard-000042.h5`).                                                                                                                                                                                                                                                                                                                         |
-| **W&B (Weights & Biases)** | [Weights & Biases](https://wandb.ai/), an experiment tracking platform. Used here as a lightweight observability layer: pipeline metrics, dataset artifact registry, and lineage tracking from dataset → training run.                                                                                                                                                                                                                                                                                   |
-| **Virtual dataset**        | HDF5 feature that creates a logical view over multiple files without copying data. Used by finalize to compose train/val/test splits from individual shards.                                                                                                                                                                                                                                                                                                                                             |
-| **Input spec**             | JSON file (`input_spec.json`) defining the frozen input specification for a run — shard specs, seeds, shapes, splits, renderer version. Written once on first `generate`, never modified.                                                                                                                                                                                                                                                                                                                |
-| **dataset_config_id**      | Stable identifier for a dataset configuration, derived from the config filename (without extension). Production training configs follow `{name}-{total_train_samples}-{shard_size}` (example: `surge-simple-480k-10k`); CI smoke and partitioner-exercise configs use role-descriptive names. The legacy flat YAML's `shard_size` becomes `render.samples_per_shard` on the resulting `DatasetSpec` via `load_dataset_spec_yaml`. See [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids). |
-| **dataset_wandb_run_id**   | Unique identifier for a pipeline execution. Format: `{dataset_config_id}-{YYYYMMDDTHHMMSSsssZ}` (millisecond precision). Example: `surge-simple-480k-10k-20260312T143022500Z`. See [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids).                                                                                                                                                                                                                                                    |
-| **Shard ID**               | Logical index for a shard (`shard-000042`). Deterministic, defined at run creation, independent of which worker computes it.                                                                                                                                                                                                                                                                                                                                                                             |
-| **worker_id**              | Infrastructure identifier (e.g., RunPod's `RUNPOD_POD_ID`). Appears only in metadata, not in shard paths.                                                                                                                                                                                                                                                                                                                                                                                                |
-| **Reconciliation**         | Comparing desired state (spec) against actual state (validated shards in R2) to determine what work remains.                                                                                                                                                                                                                                                                                                                                                                                             |
-| **dataset.complete**       | Marker file written by finalize as the very last step. Means "finalization is done" — not a mutex or lock. Contains run_id and timestamp.                                                                                                                                                                                                                                                                                                                                                                |
-| **Debug log**              | JSONL file (`metadata/workers/attempts/{worker_id}-{attempt}/debug.log`) of structured events from a worker. Append-only, uploaded by EXIT trap, survives crashes.                                                                                                                                                                                                                                                                                                                                       |
-| **Worker report**          | JSON summary (`metadata/workers/attempts/{worker_id}-{attempt}/report.json`) of a worker's results, including content hashes for provenance. Written at exit, missing if worker crashed.                                                                                                                                                                                                                                                                                                                 |
-| **Lifecycle marker**       | Empty file in `metadata/workers/shards/shard-{id}/` named `{worker_id}-{attempt}.{state}`. Three commit points: `.rendering` (attempt started), `.valid` (staged shard committed), `.promoted` (canonical shard committed). Plus `.invalid` (validation failed). Presence is the state — no content to parse.                                                                                                                                                                                            |
-| **Quarantined shard**      | A corrupt shard uploaded by the worker to `metadata/workers/shards/shard-{id}/quarantine/` on validation failure. Preserves the evidence for debugging alongside lifecycle markers.                                                                                                                                                                                                                                                                                                                      |
-| **Dataset card**           | JSON file (`dataset.json`) describing the finalized dataset: provenance, structure, stats. References the spec by SHA-256.                                                                                                                                                                                                                                                                                                                                                                               |
-| **param_spec**             | Configuration selecting which synthesizer parameters to vary. Determines prediction task dimensionality. Registered specs live in `param_specs` in [`src/synth_setter/data/vst/__init__.py`](../../src/synth_setter/data/vst/__init__.py); see also the [glossary entry](../glossary.md).                                                                                                                                                                                                                |
-| **VST**                    | Virtual Studio Technology — plugin format for audio synthesizers. Surge XT is the VST used for rendering.                                                                                                                                                                                                                                                                                                                                                                                                |
-| **Mel spectrogram**        | Frequency-domain audio representation used as neural network input. 128 mels, ~100 frames/sec.                                                                                                                                                                                                                                                                                                                                                                                                           |
-| **Fully parallel**         | Workload where tasks are completely independent — no communication or shared state between workers.                                                                                                                                                                                                                                                                                                                                                                                                      |
-| **rclone**                 | CLI tool for syncing files to cloud storage. Used as the R2 upload/download mechanism.                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| **WebDataset**             | [WebDataset](https://github.com/webdataset/webdataset), a PyTorch-compatible format for streaming training data. Stores samples in sequential `.tar` archives optimized for HTTP/S3 streaming. Used as the `wds` output format for multi-GPU training.                                                                                                                                                                                                                                                   |
+| Term                          | Definition                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **R2**                        | [Cloudflare R2](https://developers.cloudflare.com/r2/), an S3-compatible object storage service. Key feature: free egress (no cost to download data). Used for shard storage and pipeline coordination. [Consistency model](https://developers.cloudflare.com/r2/reference/consistency/): strong read-after-write.                                                                                                                                                                                                                                                                                                                                                               |
+| **RunPod**                    | [RunPod](https://www.runpod.io/), a cloud compute marketplace offering on-demand GPU and CPU instances ("pods"). Used for running data generation workers. Pods are ephemeral — they run a Docker container and terminate.                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| **Worker**                    | A cloud compute instance that generates shards. On RunPod, a worker is a "pod" — a single Docker container with assigned shard work. The design uses "worker" to stay infrastructure-agnostic.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| **Shard**                     | A batch of training samples (audio, mel spectrograms, parameter arrays) in the run's `output_format` — an HDF5 file, a WebDataset tar, or a Lance dataset directory (§7.10). Typically 1k-10k samples per shard. Named by logical index plus the format suffix (`shard-000042.h5` / `.tar` / `.lance/`).                                                                                                                                                                                                                                                                                                                                                                         |
+| **W&B (Weights & Biases)**    | [Weights & Biases](https://wandb.ai/), an experiment tracking platform. Used here as a lightweight observability layer: pipeline metrics, dataset artifact registry, and lineage tracking from dataset → training run.                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| **Virtual dataset**           | HDF5 feature that creates a logical view over multiple files without copying data. Used by finalize to compose train/val/test splits from individual shards.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| **Input spec**                | JSON file (`input_spec.json`) defining the frozen input specification for a run — shard specs, seeds, shapes, splits, renderer version. Written once on first `generate`, never modified.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| **dataset_config_id**         | Stable identifier for a dataset configuration, derived from the config filename (without extension). Production training configs follow `{name}-{total_samples}-{shard_size}` (example: `surge-simple-480k-10k`, where 480k is the train+val+test total); Lance experiment configs instead encode the split sizes as `{name}-lance-{train}-{val}-{test}` (example: `surge-xt-lance-10k-2k-1k`); CI smoke and partitioner-exercise configs use role-descriptive names. The legacy flat YAML's `shard_size` becomes `render.samples_per_shard` on the resulting `DatasetSpec` via `load_dataset_spec_yaml`. See [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids). |
+| **dataset_wandb_run_id**      | Unique identifier for a pipeline execution. Format: `{dataset_config_id}-{YYYYMMDDTHHMMSSsssZ}` (millisecond precision). Example: `surge-simple-480k-10k-20260312T143022500Z`. See [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids).                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| **Shard ID**                  | Logical index for a shard (`shard-000042`). Deterministic, defined at run creation, independent of which worker computes it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| **worker_id**                 | Infrastructure identifier (e.g., RunPod's `RUNPOD_POD_ID`). Appears only in metadata, not in shard paths.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| **Reconciliation**            | Comparing desired state (spec) against actual state (validated shards in R2) to determine what work remains.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| **metadata/dataset.complete** | Marker file written by finalize as the very last step. Means "finalization is done" — not a mutex or lock. Contains run_id and timestamp.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| **Debug log**                 | JSONL file (`metadata/workers/attempts/{worker_id}-{attempt}/debug.log`) of structured events from a worker. Append-only, uploaded by EXIT trap, survives crashes.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| **Worker report**             | JSON summary (`metadata/workers/attempts/{worker_id}-{attempt}/report.json`) of a worker's results, including content hashes for provenance. Written at exit, missing if worker crashed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| **Lifecycle marker**          | Empty file in `metadata/workers/shards/shard-{id}/` named `{worker_id}-{attempt}.{state}`. Three commit points: `.rendering` (attempt started), `.valid` (staged attempt committed), `.promoted` (attempt included in finalized output). Plus `.invalid` (validation failed). Presence is the state — no content to parse.                                                                                                                                                                                                                                                                                                                                                       |
+| **Quarantined shard**         | A corrupt shard uploaded by the worker to `metadata/workers/shards/shard-{id}/quarantine/` on validation failure. Preserves the evidence for debugging alongside lifecycle markers.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| **Dataset card**              | JSON file (`dataset.json`) describing the finalized dataset: provenance, structure, stats. References the spec by SHA-256.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| **param_spec**                | Configuration selecting which synthesizer parameters to vary. Determines prediction task dimensionality. Registered specs live in `param_specs` in [`src/synth_setter/data/vst/__init__.py`](../../src/synth_setter/data/vst/__init__.py); see also the [glossary entry](../glossary.md).                                                                                                                                                                                                                                                                                                                                                                                        |
+| **VST**                       | Virtual Studio Technology — plugin format for audio synthesizers. Surge XT is the VST used for rendering.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| **Mel spectrogram**           | Frequency-domain audio representation used as neural network input. 128 mels, ~100 frames/sec.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| **Fully parallel**            | Workload where tasks are completely independent — no communication or shared state between workers.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| **rclone**                    | CLI tool for syncing files to cloud storage. Used as the R2 upload/download mechanism.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| **Lance**                     | [Lance](https://github.com/lance-format/lance), a columnar data format for ML datasets. Stores samples as Arrow fixed-shape-tensor columns in versioned dataset directories with per-column projection (§7.10). Used as the `lance` output format.                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| **WebDataset**                | [WebDataset](https://github.com/webdataset/webdataset), a PyTorch-compatible format for streaming training data. Stores samples in sequential `.tar` archives optimized for HTTP/S3 streaming. Used as the `wds` output format for multi-GPU training.                                                                                                                                                                                                                                                                                                                                                                                                                           |
 
 ## Appendix B: Tech Stack
 
@@ -1626,14 +1644,14 @@ run.summary["pipeline/errors_total"] = total_errors
 
 # Register dataset as artifact
 artifact = wandb.Artifact(
-    name=f"data-{spec.dataset_config_id}",  # name follows storage-provenance-spec.md §4
+    name=f"data-{spec.task_name}",  # name follows storage-provenance-spec.md §4
     type="dataset",
     metadata={
-        "dataset_config_id": spec.dataset_config_id,
-        "dataset_wandb_run_id": spec.dataset_wandb_run_id,
+        "dataset_config_id": spec.task_name,
+        "dataset_wandb_run_id": spec.run_id,
         "shard_count": spec.num_shards,
-        "param_spec": spec.param_spec,
-        "code_version": spec.code_version,
+        "param_spec": spec.render.param_spec_name,
+        "code_version": spec.git_sha,
         "total_samples": total_samples,
         "splits": card.splits,
     },
@@ -1641,7 +1659,7 @@ artifact = wandb.Artifact(
 artifact.add_file(input_spec_path)        # input_spec.json
 artifact.add_file(card_path)        # dataset.json
 artifact.add_reference(
-    f"s3://intermediate-data/data/{spec.dataset_config_id}/{spec.dataset_wandb_run_id}/"
+    f"s3://{spec.r2.bucket}/{spec.r2.prefix}"  # prefix is data/{dataset_config_id}/{dataset_wandb_run_id}/
 )  # R2 is S3-compatible; W&B resolves via S3 API (uses AWS_ENDPOINT_URL or WANDB_S3_ENDPOINT_URL; see storage-provenance-spec.md §11)
 run.log_artifact(artifact)
 run.finish()

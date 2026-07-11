@@ -71,6 +71,10 @@ _SOURCE_EXPERIMENT = "generate_dataset/smoke-shard"
 # CLI default dataset size: the full #489 run.
 DEFAULT_SIZE = 40
 
+# surge_simple params under the surge-base (xt) preset render deterministically to ~-55.6 dB, just
+# under the default -55.0 floor; probe 7 alone drops its floor so its fixed-param cells clear (#489).
+SIMPLE_XT_PRESET_MIN_LOUDNESS_DB = -60.0
+
 
 def surge_xt_reference_copy_uri() -> str:
     """Return the R2 run-root URI of the copy-source dataset under the current ``PREFIX_ROOT``.
@@ -248,6 +252,7 @@ def sweeps(n: int) -> list[dict[str, Any]]:
                 simple_spec,
                 xt_preset,
                 simple_copy_uri,
+                f"render.min_loudness={SIMPLE_XT_PRESET_MIN_LOUDNESS_DB}",
             ),
             grid={
                 "render.plugin_reload_cadence": ["once", "render"],

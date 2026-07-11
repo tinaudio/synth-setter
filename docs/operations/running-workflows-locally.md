@@ -29,8 +29,8 @@ The repo ships an [`.actrc`](../../.actrc) at the root that maps the runner
 labels used by our workflows to the medium [`catthehacker/ubuntu:act-*`](https://github.com/catthehacker/docker_images)
 images. `act` picks it up automatically when run from inside the repo, so you
 don't need to create a per-user `~/.config/act/actrc`. The committed mappings
-cover `ubuntu-latest`, `ubuntu-latest-4core` (used by `cpu-slow`,
-`docker-build-validation`, `test-vst-slow`), `ubuntu-22.04`, and
+cover `ubuntu-latest`, `ubuntu-latest-4core` (used by `docker-build-validation`,
+`test-generate-dataset-shards`, `nightly-parallel-datagen`), `ubuntu-22.04`, and
 `ubuntu-20.04`. Without that mapping, `act` prompts on first run for a
 default image size and dies on EOF in a non-TTY (CI containers, dev
 container `bash -c`, ssh-without-tty).

@@ -105,7 +105,7 @@
     ],
     "Stop": [
       {
-        "description": "PR-readiness gate: on Stop, if there's an open PR for the current branch whose readiness gates don't hold, blocks the turn from ending (exit 2) so the agent keeps driving the loop instead of treating 'I pushed the fix' as 'the PR is ready'. Checks gate 1 (CI green via `gh pr checks`) and gate 2 (`mergeable=MERGEABLE`) deterministically; the block message points to /pr-readiness + docs/pr-readiness-loop.md for gate 3 (every review comment answered) and gate 4 (no fresh Copilot findings). No-op outside a repo, in the primary checkout, with no PR, or in a headless/CI context (PR_READINESS_HEADLESS — exported by _lib.sh's run_agent_prompt — / CI / a .agent-reviews/worktrees/ cwd) so the pr-review-resolver and doc-drift detached-worktree agents never deadlock. Escape hatch PR_READINESS_GATE: block default / warn (loud stderr, exit 0) / off (no-op).",
+        "description": "PR-readiness gate: on Stop, if there's an open PR for the current branch whose readiness gates don't hold, blocks the turn from ending (exit 2) so the agent keeps driving the loop instead of treating 'I pushed the fix' as 'the PR is ready'. Checks gate 1 (CI green via `gh pr checks`) and gate 2 (`mergeable=MERGEABLE`) deterministically; the block message points to /pr-readiness + docs/pr-readiness-loop.md for gate 3 (every review comment answered) and gate 4 (no fresh Copilot findings). No-op outside a repo, in the primary checkout, with no PR, or in a headless/CI context (PR_READINESS_HEADLESS — exported by _lib.sh's run_agent_prompt — / CI / a .agent-reviews/worktrees/ cwd) so the doc-drift detached-worktree agent never deadlocks. Escape hatch PR_READINESS_GATE: block default / warn (loud stderr, exit 0) / off (no-op).",
         "hooks": [
           {
             "type": "command",
@@ -183,20 +183,6 @@
             "timeout": 900,
             "statusMessage": "doc-drift reviewing PR...",
             "command": "bash agent/hooks/doc-drift.sh"
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "description": "PR review resolver: on git push (excluding main/master), resolves the branch's PR up front (exits early if none), then waits RESOLVER_SLEEP_SECS (default 360s) for CI and reviewers to settle and runs the pr-review-resolver skill (or inline fallback) headlessly. The headless agent runs in a detached worktree pinned to the captured HEAD so it cannot mutate the user's primary checkout, and is bounded by AGENT_TIMEOUT_SECS (default 800s, plus --kill-after=10; fits inside the harness 1200s ceiling after the 360s sleep). Per-branch lockfile dedupes stacked pushes (last push wins). Reports land in .agent-reviews/pr-review-resolver-<uuid>.md in the main repo; rewake stderr stamps origin HEAD so receivers can detect cross-session leaks (see AGENTS.md). On headless agent failure, writes a verbose error report and still wakes the session. The `if` guard scopes the hook to git push at the handler level; pr-review-resolver.sh re-validates the command itself. Advisory only — does not block.",
-        "hooks": [
-          {
-            "type": "command",
-            "if": "Bash(git push *)",
-            "asyncRewake": true,
-            "timeout": 1200,
-            "statusMessage": "pr-review-resolver scheduled (6 min delay)...",
-            "command": "bash agent/hooks/pr-review-resolver.sh"
           }
         ]
       }

@@ -286,7 +286,7 @@ The best checkpoint is uploaded to R2 at train end and referenced by the `model-
 ### 6.1 Dataset Access
 
 Storage backend is selected by datamodule group: `datamodule=surge` reads `train/val/test.h5`
-via `VSTDataModule`; `datamodule=surge_lance` reads single-file `train/val/test.lance` shards —
+via `VSTDataModule`; `datamodule=surge_lance` reads `train/val/test.lance` dataset directories —
 the format the data pipeline's finalize step emits — via `LanceVSTDataModule`
 (`src/synth_setter/data/lance_datamodule.py`), a subclass that overrides the `dataset_cls` /
 `shard_suffix` extension points. The shipped `src/synth_setter/configs/datamodule/surge*.yaml` default `dataset_root` to the per-run Hydra

@@ -18,10 +18,12 @@ from __future__ import annotations
 
 import inspect
 import shutil
-from collections.abc import Callable
+import sys
+from collections.abc import Callable, Iterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, NoReturn, cast
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
 import h5py
 import numpy as np
@@ -41,7 +43,6 @@ from tests.helpers.finalize_shards import (
     seed_train_shards,
     stub_get_stats_hdf5,
     uri_to_local_path,
-    write_minimal_lance_shard,
     write_minimal_wds_shard,
 )
 
@@ -74,6 +75,63 @@ def _stage_for(uploads: dict[str, Path], destination_uri: str, tmp_path: Path) -
     staged = staged_root / f"{len(uploads):03d}_{destination_uri.rsplit('/', 1)[-1]}"
     uploads[destination_uri] = staged
     return staged
+
+
+def test_lance_split_batches_logs_shard_progress_when_iterator_is_consumed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Progress logs are emitted by the lazy split writer iterator.
+
+    :param monkeypatch: Pytest fixture used to stub ``lance.dataset`` and the
+        module logger.
+    """
+    spec = build_lance_smoke_spec(
+        task_name="lance-split-progress",
+        train_val_test_sizes=(8, 0, 0),
+    )
+    shard_uris = [
+        r2_io.to_s3_uri(spec.r2.shard_uri(shard))
+        for shard in spec.shards[
+            spec.split_shard_ranges["train"][0] : spec.split_shard_ranges["train"][1]
+        ]
+    ]
+    schema = object()
+    calls: list[str] = []
+
+    class FakeDataset:
+        def __init__(self, uri: str) -> None:
+            self.schema = schema
+            self.uri = uri
+
+        def to_batches(self) -> Iterator[str]:
+            yield f"batch:{self.uri}"
+
+    def fake_dataset(uri: str, *, storage_options: dict[str, str]) -> FakeDataset:
+        assert storage_options == {"endpoint": "r2"}
+        calls.append(uri)
+        return FakeDataset(uri)
+
+    monkeypatch.setitem(sys.modules, "lance", SimpleNamespace(dataset=fake_dataset))
+    recording_logger = MagicMock(wraps=finalize_dataset.logger)
+    monkeypatch.setattr(finalize_dataset, "logger", recording_logger)
+
+    actual_schema, batches = finalize_dataset._lance_split_batches(
+        "train", shard_uris, {"endpoint": "r2"}
+    )
+
+    assert actual_schema is schema
+    assert calls == [shard_uris[0]]
+    recording_logger.info.assert_not_called()
+
+    assert next(batches) == f"batch:{shard_uris[0]}"
+
+    assert next(batches) == f"batch:{shard_uris[1]}"
+
+    assert recording_logger.info.call_args_list == [
+        call("writing split {} shard {}/{}: {}", "train", 1, 2, "shard-000000.lance"),
+        call("writing split {} shard {}/{}: {}", "train", 2, 2, "shard-000001.lance"),
+    ]
+    assert calls == [shard_uris[0], shard_uris[0], shard_uris[1]]
 
 
 def test_finalize_from_spec_uploads_stats_then_marker_at_canonical_uris(
@@ -534,51 +592,9 @@ def test_finalize_wds_downloads_every_train_shard_uri(
     assert uri_to_local_path(fake_r2_remote, spec.r2.stats_uri()).is_file()
 
 
-def test_finalize_lance_writes_split_files_stats_and_marker_last(
-    fake_r2_remote: Path,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001
-) -> None:
-    """``finalize_from_spec`` handles Lance splits and uploads the marker last.
-
-    :param fake_r2_remote: Local-typed rclone remote where train shards are seeded.
-    :param tmp_path: Pytest tmp dir; hosts finalize scratch files.
-    :param monkeypatch: Pytest fixture used to spy on upload order.
-    :param stub_finalize_setup: Fixture-activation only.
-    """
-    spec = build_lance_smoke_spec(
-        task_name="finalize-lance-marker-last",
-        train_val_test_sizes=(4, 4, 0),
-    )
-    seed_train_shards(fake_r2_remote, spec)
-    for shard in spec.shards[1:2]:
-        write_minimal_lance_shard(
-            uri_to_local_path(fake_r2_remote, spec.r2.shard_uri(shard)), spec
-        )
-    work_dir = tmp_path / "work"
-    work_dir.mkdir()
-
-    real_upload = r2_io.upload
-    upload_order: list[str] = []
-
-    def spy_upload(src: str | Path, dst: str) -> None:
-        upload_order.append(dst)
-        real_upload(src, dst)
-
-    monkeypatch.setattr("synth_setter.pipeline.r2_io.upload", spy_upload)
-
-    finalize_dataset.finalize_from_spec(spec, work_dir)
-
-    assert uri_to_local_path(fake_r2_remote, spec.r2.split_lance_uri("train")).is_file()
-    assert uri_to_local_path(fake_r2_remote, spec.r2.split_lance_uri("val")).is_file()
-    assert not uri_to_local_path(fake_r2_remote, spec.r2.split_lance_uri("test")).exists()
-    assert uri_to_local_path(fake_r2_remote, spec.r2.stats_uri()).is_file()
-    assert uri_to_local_path(fake_r2_remote, spec.r2.dataset_complete_marker_uri()).is_file()
-    assert upload_order[-1] == spec.r2.dataset_complete_marker_uri()
-    assert upload_order.index(spec.r2.stats_uri()) < upload_order.index(
-        spec.r2.dataset_complete_marker_uri()
-    )
+# The Lance finalize path streams shards directly from R2 (real S3), so it can't
+# run against the local-typed fake_r2_remote. Marker-last ordering is format-agnostic
+# (wds/hdf5 cases cover it); the Lance split is covered in test_finalize_dataset_r2.py.
 
 
 def test_finalize_wds_raises_on_empty_train_split(fake_r2_remote: Path, tmp_path: Path) -> None:

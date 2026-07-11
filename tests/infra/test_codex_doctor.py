@@ -17,6 +17,7 @@ REQUIRED_PLUGIN_SKILLS = (
     "simplify",
     "tdd-implementation",
 )
+MARKETPLACE_CODEX_REL = ".claude/plugins/marketplaces/tinaudio-skills/codex/synth-setter-skills"
 
 
 def _write_fake_codex(bin_dir: Path) -> None:
@@ -41,8 +42,19 @@ def _write_user_skill(home: Path, name: str) -> None:
     (skill_dir / "SKILL.md").write_text(f"---\nname: {name}\n---\n")
 
 
+def _write_claude_marketplace_skill(home: Path, name: str) -> None:
+    """Create a fake skill in Claude's installed marketplace Codex projection.
+
+    :param home: Isolated HOME root so the doctor cannot read the real cache.
+    :param name: Required skill identifier that ``codex-doctor`` must discover.
+    """
+    skill_dir = home / MARKETPLACE_CODEX_REL / name
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(f"---\nname: {name}\n---\n")
+
+
 def _run_doctor(tmp_path: Path) -> subprocess.CompletedProcess[str]:
-    """Run the doctor with an isolated home and PATH.
+    """Run the doctor with an isolated home, PATH, and git repository.
 
     :param tmp_path: Temporary test root.
     :returns: Completed process for assertions.
@@ -52,14 +64,41 @@ def _run_doctor(tmp_path: Path) -> subprocess.CompletedProcess[str]:
     home.mkdir(exist_ok=True)
     _write_fake_codex(bin_dir)
 
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo_dir, check=True)  # noqa: S603, S607
+
+    (repo_dir / "agent" / "skills").mkdir(parents=True)
+    (repo_dir / "scripts" / "dev").mkdir(parents=True)
+
+    (repo_dir / "scripts" / "dev" / "codex-doctor.sh").symlink_to(
+        REPO_ROOT / "scripts" / "dev" / "codex-doctor.sh"
+    )
+    (repo_dir / "scripts" / "dev" / "link-skills.sh").symlink_to(
+        REPO_ROOT / "scripts" / "dev" / "link-skills.sh"
+    )
+    (repo_dir / "agent" / "hooks").symlink_to(REPO_ROOT / "agent" / "hooks")
+    (repo_dir / "agent" / "_shared").symlink_to(REPO_ROOT / "agent" / "_shared")
+
+    (repo_dir / ".agents" / "plugins").mkdir(parents=True)
+    (repo_dir / ".agents" / "plugins" / "marketplace.json").symlink_to(
+        REPO_ROOT / ".agents" / "plugins" / "marketplace.json"
+    )
+    (repo_dir / ".agents" / "skills").symlink_to("../agent/skills")
+
+    (repo_dir / "agent" / "skills" / "pr-readiness").symlink_to(
+        REPO_ROOT / "agent" / "skills" / "pr-readiness"
+    )
+
     env = {
         **os.environ,
         "HOME": str(home),
         "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        "SYNTH_SETTER_REPO_ROOT": str(repo_dir),
     }
     return subprocess.run(  # noqa: S603
-        ["bash", str(DOCTOR)],  # noqa: S607 - bash is required for shell doctor coverage
-        cwd=REPO_ROOT,
+        ["bash", str(repo_dir / "scripts" / "dev" / "codex-doctor.sh")],  # noqa: S607 - bash is required for shell doctor coverage
+        cwd=repo_dir,
         env=env,
         text=True,
         capture_output=True,
@@ -80,6 +119,24 @@ def test_codex_doctor_with_required_plugin_skills_passes(tmp_path: Path) -> None
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "Codex setup looks ready." in result.stdout
+
+
+def test_codex_doctor_projects_claude_marketplace_before_checking(
+    tmp_path: Path,
+) -> None:
+    """Doctor self-heals from Claude's marketplace cache before skill checks.
+
+    :param tmp_path: Isolated filesystem root that starts without ``~/.agents`` links.
+    """
+    home = tmp_path / "home"
+    for skill in REQUIRED_PLUGIN_SKILLS:
+        _write_claude_marketplace_skill(home, skill)
+
+    result = _run_doctor(tmp_path)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Codex setup looks ready." in result.stdout
+    assert (home / ".agents" / "skills" / "code-health").is_symlink()
 
 
 def test_codex_doctor_missing_plugin_skills_prints_install_command(

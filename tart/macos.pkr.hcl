@@ -43,7 +43,7 @@ variable "synth_setter_git_ref" {
 
 variable "python_version" {
   type        = string
-  default     = "3.10"
+  default     = "3.11"
   description = "Python interpreter version installed and pinned via uv."
 }
 

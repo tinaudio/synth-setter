@@ -15,11 +15,6 @@ from synth_setter.schemas._types import StrictAllowExtraModel
 __all__ = ["ExtrasConfig"]
 
 
-# Restated in the Literal annotation below because Literal[*tuple] unpacking
-# needs Python 3.11+ and the project pins ``python_requires = ">=3.10"``.
-_FLOAT32_MATMUL_PRECISIONS: tuple[str, ...] = ("highest", "high", "medium")
-
-
 class ExtrasConfig(StrictAllowExtraModel):
     """Startup toggles consumed by ``synth_setter.utils.extras(cfg)``.
 

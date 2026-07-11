@@ -8,9 +8,9 @@ and then writes the ``dataset.complete`` marker last per
 ``pipeline/CLAUDE.md``. The wds branch streams train shards through
 Welford row-by-row; the hdf5 branch downloads every shard, reshards into
 ``{train,val,test}.h5``, and computes ``stats.npz`` over the train split;
-the lance branch downloads every shard, streams train shards through
-Welford for ``stats.npz``, and concatenates each split's shards into
-``{train,val,test}.lance``.
+the lance branch streams every shard directly from R2 (no local download),
+folds train shards through Welford for ``stats.npz``, and writes each split
+straight back to R2 as a ``{train,val,test}.lance`` dataset directory.
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ from synth_setter.pipeline.constants import (
 from synth_setter.pipeline.data.reshard import reshard_dataset
 from synth_setter.pipeline.data.stats import get_stats_hdf5, stream_stats_wds
 from synth_setter.pipeline.schemas.prefix import assert_r2_prefix_matches
-from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat
+from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat, ShardSpec, Split
 from synth_setter.pipeline.spec_io import load_spec_from_root, write_spec_to_path
 from synth_setter.utils import pin_wandb_run_id
 from synth_setter.utils.instantiators import close_loggers, instantiate_loggers
@@ -174,34 +174,50 @@ def finalize_hdf5(spec: DatasetSpec, work_dir: Path) -> None:
     logger.info("uploaded stats to {}", spec.r2.stats_uri())
 
 
-def _lance_split_batches(shard_paths: list[Path]) -> LanceSplitBatches:
+def _lance_split_batches(
+    split: Split, shard_uris: list[str], storage_options: dict[str, str]
+) -> LanceSplitBatches:
     """Return the schema and batch iterator for a finalized Lance split.
 
-    :param shard_paths: Non-empty list of local shard files in split order.
-    :returns: ``(schema, batches)`` for :func:`write_lance_file`.
-    :rtype: LanceSplitBatches
-    """
-    from lance.file import LanceFileReader
+    Reads shards directly from R2 (no local download) — one sequential pass per
+    shard, which Lance streams natively over object storage.
 
-    first_reader = LanceFileReader(str(shard_paths[0]))
-    schema = first_reader.metadata().schema
+    :param split: Finalized split receiving the shard stream.
+    :param shard_uris: Non-empty list of ``s3://`` shard dataset URIs in split order.
+    :param storage_options: Object-store config for the R2 bucket.
+    :returns: ``(schema, batches)`` for :func:`write_lance_dataset`.
+    """
+    import lance
+
+    schema = lance.dataset(shard_uris[0], storage_options=storage_options).schema
 
     def _batches() -> LanceBatchIterator:
-        for shard_path in shard_paths:
-            reader = LanceFileReader(str(shard_path))
-            yield from reader.read_all().to_batches()
+        total = len(shard_uris)
+        for index, uri in enumerate(shard_uris, start=1):
+            logger.info(
+                "writing split {} shard {}/{}: {}",
+                split,
+                index,
+                total,
+                uri.rstrip("/").rsplit("/", 1)[-1],
+            )
+            yield from lance.dataset(uri, storage_options=storage_options).to_batches()
 
     return schema, _batches()
 
 
 def finalize_lance(spec: DatasetSpec, work_dir: Path) -> None:
-    """Download Lance shards, write split Lance files, compute stats, and upload artifacts.
+    """Stream Lance shards from R2 into split datasets, compute stats, upload artifacts.
+
+    Shards are read directly from R2 and each split dataset is written straight to
+    its R2 URI via Lance ``storage_options`` — no shard download or split upload.
+    Only ``stats.npz`` (a plain numpy archive) is staged locally and uploaded.
 
     :param spec: Validated dataset spec (``output_format == "lance"``).
-    :param work_dir: Scratch directory for downloaded shards and finalized outputs.
+    :param work_dir: Scratch directory for the finalized ``stats.npz``.
     :raises ValueError: The train split is empty.
     """
-    from synth_setter.pipeline.data.lance_shard import write_lance_file
+    from synth_setter.pipeline.data.lance_shard import write_lance_dataset
     from synth_setter.pipeline.data.stats import stream_stats_lance
 
     train_lo, train_hi = spec.split_shard_ranges["train"]
@@ -211,24 +227,28 @@ def finalize_lance(spec: DatasetSpec, work_dir: Path) -> None:
             f"{spec.split_shard_ranges['train']!r}); cannot compute stats "
             f"without at least one train shard."
         )
-    for shard in spec.shards:
-        r2_io.download_to_path(spec.r2.shard_uri(shard), work_dir / shard.filename)
+    storage_options = r2_io.r2_storage_options()
 
-    train_paths = [work_dir / shard.filename for shard in spec.shards[train_lo:train_hi]]
-    mean, std = stream_stats_lance(train_paths, mask_degenerate=spec.mask_degenerate_bins)
+    def _shard_s3_uri(shard: ShardSpec) -> str:
+        return r2_io.to_s3_uri(spec.r2.shard_uri(shard))
+
+    train_uris = [_shard_s3_uri(shard) for shard in spec.shards[train_lo:train_hi]]
+    mean, std = stream_stats_lance(
+        train_uris, mask_degenerate=spec.mask_degenerate_bins, storage_options=storage_options
+    )
     stats_npz = work_dir / STATS_NPZ_FILENAME
     np.savez(stats_npz, mean=mean, std=std)
 
     for split, (lo, hi) in spec.split_shard_ranges.items():
         if lo >= hi:
             continue
-        split_path = work_dir / f"{split}.lance"
-        shard_paths = [work_dir / shard.filename for shard in spec.shards[lo:hi]]
-        schema, batches = _lance_split_batches(shard_paths)
-        write_lance_file(split_path, schema, batches)
+        shard_uris = [_shard_s3_uri(shard) for shard in spec.shards[lo:hi]]
+        schema, batches = _lance_split_batches(split, shard_uris, storage_options)
         split_uri = spec.r2.split_lance_uri(split)
-        r2_io.upload(split_path, split_uri)
-        logger.info("uploaded {} to {}", split_path.name, split_uri)
+        write_lance_dataset(
+            r2_io.to_s3_uri(split_uri), schema, batches, storage_options=storage_options
+        )
+        logger.info("wrote {} split to {}", split, split_uri)
     r2_io.upload(stats_npz, spec.r2.stats_uri())
     logger.info("uploaded stats to {}", spec.r2.stats_uri())
 
@@ -275,23 +295,6 @@ def finalize_from_spec(spec: DatasetSpec, work_dir: Path) -> None:
     marker_local.touch()
     r2_io.upload(marker_local, marker_uri)
     logger.info("wrote dataset.complete to {}", marker_uri)
-
-
-def _r2_to_s3_uri(r2_uri: str) -> str:
-    """Rewrite an ``r2://`` URI to the ``s3://`` scheme W&B references record.
-
-    R2 exposes an S3-compatible API; only the scheme differs, so the
-    bucket/key path is preserved verbatim. ``storage-provenance-spec.md`` §4
-    logs dataset references as ``s3://``.
-
-    :param r2_uri: An ``r2://<bucket>/<key>`` URI (e.g. from ``R2Location``).
-    :returns: The same location as ``s3://<bucket>/<key>``.
-    :raises ValueError: ``r2_uri`` does not start with the ``r2://`` scheme.
-    """
-    scheme = "r2://"
-    if not r2_uri.startswith(scheme):
-        raise ValueError(f"expected an r2:// URI, got {r2_uri!r}")
-    return f"s3://{r2_uri[len(scheme) :]}"
 
 
 def _finalized_reference_uris(spec: DatasetSpec) -> list[str]:
@@ -347,7 +350,7 @@ def build_dataset_artifact(spec: DatasetSpec) -> wandb.Artifact:
         },
     )
     for r2_uri in _finalized_reference_uris(spec):
-        artifact.add_reference(_r2_to_s3_uri(r2_uri), checksum=False)
+        artifact.add_reference(r2_io.to_s3_uri(r2_uri), checksum=False)
     return artifact
 
 

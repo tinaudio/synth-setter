@@ -192,16 +192,21 @@ class TestLanceShardFile:
         out = shard["mel_spec"][2:5]
         assert out.shape == (3, _MEL_CHANNELS, _MEL_N_MELS, _MEL_N_FRAMES)
         assert out.dtype == columns["mel_spec"].dtype
-        np.testing.assert_allclose(out, columns["mel_spec"][2:5])
+        np.testing.assert_array_equal(out, columns["mel_spec"][2:5])
 
     def test_column_reads_return_writable_arrays(self, tmp_path: Path) -> None:
-        """Reads are copied out of Arrow's read-only buffer before reaching torch.
+        """Every decode path copies out of Arrow's read-only buffer.
+
+        ``to_numpy_ndarray`` returns a read-only view, and torch.from_numpy over
+        one is undefined behavior on write, so every read must hit ``.copy()``.
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
         """
         _write_seeded_lance_shard(tmp_path / "train.lance", num_rows=8)
         shard = LanceShardFile(tmp_path / "train.lance")
         assert shard["audio"][0:2].flags.writeable
+        assert shard["audio"][[0, 3, 5]].flags.writeable
+        assert shard["audio"][0:8:2].flags.writeable
 
     def test_column_open_ended_slice_reads_from_row_zero(self, tmp_path: Path) -> None:
         """``file[name][:k]`` (no explicit start) reads the first ``k`` rows.
@@ -210,7 +215,7 @@ class TestLanceShardFile:
         """
         columns = _write_seeded_lance_shard(tmp_path / "train.lance", num_rows=8)
         shard = LanceShardFile(tmp_path / "train.lance")
-        np.testing.assert_allclose(shard["param_array"][:3], columns["param_array"][:3])
+        np.testing.assert_array_equal(shard["param_array"][:3], columns["param_array"][:3])
 
     def test_column_fancy_index_read_selects_rows(self, tmp_path: Path) -> None:
         """``file[name][[i, j, k]]`` gathers exactly those rows.
@@ -219,7 +224,7 @@ class TestLanceShardFile:
         """
         columns = _write_seeded_lance_shard(tmp_path / "train.lance", num_rows=8)
         shard = LanceShardFile(tmp_path / "train.lance")
-        np.testing.assert_allclose(shard["audio"][[0, 3, 6]], columns["audio"][[0, 3, 6]])
+        np.testing.assert_array_equal(shard["audio"][[0, 3, 6]], columns["audio"][[0, 3, 6]])
 
     def test_column_numpy_int_indices_are_accepted(self, tmp_path: Path) -> None:
         """Samplers yield numpy integer arrays — the column accepts them directly.
@@ -229,7 +234,7 @@ class TestLanceShardFile:
         columns = _write_seeded_lance_shard(tmp_path / "train.lance", num_rows=8)
         shard = LanceShardFile(tmp_path / "train.lance")
         idx = np.array([1, 2, 4], dtype=np.int64)
-        np.testing.assert_allclose(shard["param_array"][idx], columns["param_array"][idx])
+        np.testing.assert_array_equal(shard["param_array"][idx], columns["param_array"][idx])
 
     def test_column_shape_reports_rows_and_tensor_dims(self, tmp_path: Path) -> None:
         """``file[name].shape`` mirrors h5py: ``(num_rows, *tensor_shape)``.
@@ -285,7 +290,7 @@ class TestLanceShardFile:
         with pytest.raises(KeyError, match="no-such-column"):
             _ = shard["no-such-column"]
 
-    def test_missing_shard_file_raises_value_error(self, tmp_path: Path) -> None:
+    def test_missing_shard_dataset_raises_value_error(self, tmp_path: Path) -> None:
         """Opening a nonexistent ``.lance`` path errors at construction, not first read.
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
@@ -293,15 +298,15 @@ class TestLanceShardFile:
         with pytest.raises(ValueError, match="does-not-exist"):
             LanceShardFile(tmp_path / "does-not-exist.lance")
 
-    def test_directory_path_raises_value_error(self, tmp_path: Path) -> None:
-        """A ``.lance`` *directory* (the Lance dataset format) is rejected — shards are files.
+    def test_single_file_path_raises_value_error(self, tmp_path: Path) -> None:
+        """A single-file ``.lance`` (the legacy shard format) is rejected — shards are directories.
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
         """
-        dataset_dir = tmp_path / "old-format.lance"
-        dataset_dir.mkdir()
-        with pytest.raises(ValueError, match="directory"):
-            LanceShardFile(dataset_dir)
+        legacy_file = tmp_path / "old-format.lance"
+        legacy_file.write_bytes(b"legacy single-file lance shard")
+        with pytest.raises(ValueError, match="file"):
+            LanceShardFile(legacy_file)
 
     def test_column_step_slice_reads_strided_rows(self, tmp_path: Path) -> None:
         """``file[name][a:b:s]`` with a step gathers exactly the strided rows.
@@ -310,7 +315,7 @@ class TestLanceShardFile:
         """
         columns = _write_seeded_lance_shard(tmp_path / "train.lance", num_rows=8)
         shard = LanceShardFile(tmp_path / "train.lance")
-        np.testing.assert_allclose(shard["param_array"][1:8:3], columns["param_array"][1:8:3])
+        np.testing.assert_array_equal(shard["param_array"][1:8:3], columns["param_array"][1:8:3])
 
     def test_column_negative_step_slice_raises_value_error(self, tmp_path: Path) -> None:
         """A negative-step slice is rejected — the same contract h5py enforces.
@@ -322,15 +327,16 @@ class TestLanceShardFile:
         with pytest.raises(ValueError, match="step"):
             _ = shard["param_array"][::-1]
 
-    def test_column_unsorted_fancy_index_raises_value_error(self, tmp_path: Path) -> None:
-        """Fancy indices must be ascending — the same contract h5py enforces; samplers sort.
+    def test_column_unsorted_fancy_index_preserves_requested_order(self, tmp_path: Path) -> None:
+        """Unsorted fancy indices return rows in the requested order (LanceDataset.take).
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
         """
         _write_seeded_lance_shard(tmp_path / "train.lance", num_rows=8)
         shard = LanceShardFile(tmp_path / "train.lance")
-        with pytest.raises(ValueError, match="ascending"):
-            _ = shard["param_array"][[4, 1]]
+        rows = shard["param_array"][0:8]
+        unsorted = shard["param_array"][[4, 1]]
+        np.testing.assert_array_equal(unsorted, np.stack([rows[4], rows[1]]))
 
 
 class TestLanceVSTDataset:
@@ -374,7 +380,7 @@ class TestLanceVSTDataset:
             use_saved_mean_and_variance=False,
             rescale_params=False,
         )
-        np.testing.assert_allclose(
+        np.testing.assert_array_equal(
             _unwrap(dataset[1]["params"]).numpy(), columns["param_array"][2:4]
         )
 
@@ -395,7 +401,7 @@ class TestLanceVSTDataset:
             rescale_params=False,
         )
         item = dataset[(1, 5)]
-        np.testing.assert_allclose(_unwrap(item["params"]).numpy(), columns["param_array"][1:5])
+        np.testing.assert_array_equal(_unwrap(item["params"]).numpy(), columns["param_array"][1:5])
 
     def test_getitem_sequence_falls_through_to_fancy_indexing(self, single_shard: Path) -> None:
         """A non-int / non-2-tuple index gathers exactly those rows.
@@ -440,6 +446,27 @@ class TestLanceVSTDataset:
         for key in _ALL_TENSOR_KEYS:
             assert _unwrap(item[key]).dtype == torch.float32, key
             assert _unwrap(item[key]).is_contiguous(), f"{key} not contiguous"
+
+    def test_getitem_returns_writable_tensors_through_decode_path(
+        self, single_shard: Path
+    ) -> None:
+        """End-to-end: dataset tensors are writable out of the Lance decode path.
+
+        The column decode yields a read-only Arrow view; only the ``.copy()``
+        guard makes it safe for ``torch.from_numpy`` (writable iff its buffer is).
+
+        :param single_shard: Fixture-provided single-shard Lance path.
+        """
+        dataset = LanceVSTDataset(
+            single_shard,
+            batch_size=2,
+            ot=False,
+            use_saved_mean_and_variance=False,
+            read_audio=True,
+            read_mel=True,
+        )
+        item = dataset[0]
+        assert _unwrap(item["audio"]).numpy().flags.writeable
 
     def test_read_flags_route_modalities(self, single_shard: Path) -> None:
         """``read_audio`` / ``read_mel`` / ``read_m2l`` toggle their dict slots.
@@ -713,7 +740,7 @@ class TestPipelineWriterCompatibility:
     """Shards from the pipeline's Lance writer are readable by the datamodule classes."""
 
     def test_shard_file_reads_pipeline_written_shard(self, tmp_path: Path) -> None:
-        """A shard written via the production ``lance_schema``/``write_lance_file`` path reads back.
+        """A shard written via the production ``lance_schema``/``write_lance_dataset`` path reads back.
 
         ``write_minimal_lance_shard`` fills ``mel_spec`` with ``np.arange`` and
         stores ``audio`` as float16, so this pins values, dtype, and the

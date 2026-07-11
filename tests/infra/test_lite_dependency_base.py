@@ -13,15 +13,10 @@ Rationale: docs/reference/dependency-management.md.
 from __future__ import annotations
 
 import re
-import sys
+import tomllib
 from pathlib import Path
 
 import pytest
-
-if sys.version_info >= (3, 11):
-    import tomllib
-else:
-    import tomli as tomllib
 
 # Names a `Requirement` line may carry before its version/extra/marker suffix.
 _NAME_DELIMS = "<>=!~[; "

@@ -354,7 +354,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.10"
+          python-version: "3.11"
 
       # Pin matches the repo's other click CLIs (job-queue-validate) — click >=8.2
       # has shifted CliRunner/Choice behavior the linter and its tests rely on.

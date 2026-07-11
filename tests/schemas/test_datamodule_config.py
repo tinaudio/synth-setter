@@ -71,6 +71,12 @@ class TestSurgeDatamoduleOverlays:
         assert subtree["param_spec_name"] == "surge_simple"
         assert subtree["_target_"].endswith("VSTDataModule")
 
+    def test_surge_inherits_vst_base_with_default_spec(self) -> None:
+        """The plain ``surge`` overlay adds no overrides, so it keeps the ``vst`` base verbatim."""
+        subtree = compose_subtree("datamodule", "surge")
+        assert subtree["param_spec_name"] == "surge_xt"
+        assert subtree["_target_"].endswith("VSTDataModule")
+
     def test_surge_debug_sets_repeat_first_batch_and_keeps_default_spec(self) -> None:
         """``surge_debug`` flips ``repeat_first_batch`` and keeps the ``vst`` default spec."""
         subtree = compose_subtree("datamodule", "surge_debug")
