@@ -45,6 +45,10 @@ class _FakeOracleDataset(NamedTuple):
     datamodule_group: str | None
 
 
+_TORCHSYNTH_OVERFIT_LOSS_MAX = 0.05
+_TORCHSYNTH_HELD_OUT_LOSS_MAX = 0.21
+
+
 def _compose_torchsynth_overfit_cfg(tmp_path: Path) -> DictConfig:
     """Compose the deterministic TorchSynth checkpoint smoke run.
 
@@ -137,7 +141,7 @@ def test_eval_torchsynth_experiment_validates_checkpoint(tmp_path: Path) -> None
         GlobalHydra.instance().clear()
 
     overfit_loss = train_metrics["train/loss_epoch"].item()
-    assert overfit_loss < min(initial_loss, 0.05)
+    assert overfit_loss < min(initial_loss, _TORCHSYNTH_OVERFIT_LOSS_MAX)
 
     checkpoint = Path(train_objects["trainer"].checkpoint_callback.best_model_path)
     assert checkpoint.is_file()
@@ -150,7 +154,7 @@ def test_eval_torchsynth_experiment_validates_checkpoint(tmp_path: Path) -> None
 
     val_loss = metric_dict["val/loss"]
     assert torch.isfinite(val_loss)
-    assert val_loss < 0.21  # Guards the deterministic held-out smoke baseline.
+    assert val_loss < _TORCHSYNTH_HELD_OUT_LOSS_MAX
     eval_batch = next(iter(eval_objects["datamodule"].val_dataloader()))
     assert torch.isfinite(eval_batch[0]).all()
 

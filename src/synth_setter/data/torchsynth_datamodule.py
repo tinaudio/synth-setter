@@ -63,11 +63,7 @@ class _Renderer:
 
     .. attribute :: voice
 
-       Cached TorchSynth voice.
-
     .. attribute :: lock
-
-       Guards parameter mutation and rendering.
     """
 
     voice: Voice
