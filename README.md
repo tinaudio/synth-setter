@@ -52,7 +52,12 @@ under the GPL-3.0 license.
 
 `make install` handles uv, Python 3.11, and all dependencies for you.
 `make install-surge-xt` fetches the pinned Surge XT VST3 release — no need
-to install Surge XT yourself.
+to install Surge XT yourself. `make install-plugins` additionally fetches the
+other VST3 synths the runtime docker image ships (Dexed, OB-Xf, Six Sines;
+x86_64 Linux only — those targets print a notice and exit 0 elsewhere, so on
+macOS the aggregate still succeeds with Surge XT alone; on non-x86_64 Linux
+`install-surge-xt` itself fails first — see the symlink workaround in
+[docs/getting-started.md](docs/getting-started.md#2d-install-the-surge-xt-vst3)).
 
 ## Installation
 
@@ -72,8 +77,8 @@ source .venv/bin/activate
 # 4. Download the Surge XT VST3 into plugins/
 make install-surge-xt
 
-# 5. Export environment variables (R2, W&B — see §4b in getting-started)
-set -a && source .env && set +a
+# 5. Create .env for R2 credentials — see §4b in getting-started.
+#    R2 preflight and SkyPilot workers read it automatically.
 ```
 
 > **Experiment tracking:** the default training run logs to W&B + CSV +
@@ -162,7 +167,7 @@ src/synth_setter/models/components/residual_mlp.py      Residual MLP implementat
 src/synth_setter/models/components/cnn.py               CNN encoder implementations
 src/synth_setter/models/components/vae.py               VAE+RealNVP baseline implementation
 src/synth_setter/models/*_module.py                     LightningModule implementations
-src/synth_setter/data/vst/*                             Dataset generation
+src/synth_setter/data/vst/*                             Dataset generation + VST/CLAP parameter tooling
 src/synth_setter/data/vst/surge_xt_param_spec.py        Surge XT dataset sampling distributions
 src/synth_setter/data/ot.py                             Optimal transport minibatch coupling
 src/synth_setter/data/kosc_datamodule.py                k-osc task data module
