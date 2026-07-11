@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783747318326,
+  "lastUpdate": 1783749271710,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -8058,6 +8058,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.018320143222808838,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "cf38165b1a18ab7bae23bc20888e015b1e0e571c",
+          "message": "refactor(data-pipeline): rename surge_*.py model/data modules to vst_* (#1680)\n\n* refactor(data-pipeline): rename surge_*.py model/data modules to vst_*\n\nFollow-up to #1602, which renamed the Surge* dataset/datamodule/model classes\nto VST* but left the module filenames as surge_*. Renames the five module files\nto vst_* so paths match their class names, and migrates the path-keyed lint\nexclusion entries (ruff per-file-ignores, pyright excludes, pre-commit pyright/\ninterrogate excludes, pydoclint baseline) to the new paths — the grandfathered\nerrors stay suppressed under vst_* rather than being un-exempted by the rename.\n\nThin re-export shims remain at each old surge_* path so archived W&B run-config\n_target_s (e.g. surge_ff_module.SurgeFeedForwardModule) keep resolving;\ntest_vst_module_aliases.py now pins both the shim resolution and the Surge*->VST*\nalias identity across the rename.\n\nCloses #1664\n\n* chore(comments): apply comment-hygiene fixes from pre-PR review\n\n* chore(comments): drop commented-out sampler/monitor alternatives in moved modules\n\n* refactor(data-pipeline): update vst_ff_module reference in merged ffn_smoke config\n\n* chore(deps): refresh uv.lock project version to released 8.34.0\n\n* chore: untrack stray metrics/metrics.json test artifact\n\n* refactor(data-pipeline): make renamed vst_* module docstrings synth-neutral\n\nThe canonical vst_* Lightning modules carried over Surge XT-specific\nmodule and class docstrings from their surge_* origins. Reword them to\nVST-neutral phrasing to match the synth-neutral file/class names.\n\nRefs #1664\n\n* style(data-pipeline): adopt datetime.UTC alias in renamed-import test\n\nRuff UP017 surfaced on the test after merging the Python 3.11 floor (#1692);\nthe file is in this PR's diff because the rename repoints its VSTDataset\nimport, so the fix lands here to keep the changed-files pre-commit gate green.\n\n* fix(data-pipeline): annotate vst_* step batches as dict not tuple\n\nThe Lightning step hooks in the renamed vst_ff/vst_flowvae/vst_flow_matching\nmodules index batch as a dict (batch[\"mel_spec\"], batch[\"params\"]) but were\nannotated batch: tuple[torch.Tensor, torch.Tensor], carried over verbatim from\nthe pre-rename modules. VSTDataset.__getitem__ yields dict[str, torch.Tensor],\nand sibling model_step/predict_step already use the dict annotation. Correct\nthe step-hook annotations to dict[str, torch.Tensor] so they match the real\ndataloader contract. Annotation-only; no runtime behavior change.\n\nRefs #1664\n\n* chore(data-pipeline): re-trigger CI for unrelated macOS timing flake\n\nrun_tests_macos failed on tests/pipeline/test_subprocess_stream.py\nTestPipeDrain::test_large_interleaved_output_no_deadlock_capture_is_bounded_tail\nwith assert 10.09 < 10.0 — a 0.09s overshoot of the 10s drain budget under\nmacOS-runner load. Unrelated to this annotation-only change (the diff does not\ntouch subprocess_stream); the prior commit fffa137 passed this job. Empty\ncommit to re-run the suite.\n\nRefs #1664",
+          "timestamp": "2026-07-10T22:04:18-07:00",
+          "tree_id": "9b6a16b80afb1d9f736f3944292ccaa52224fd66",
+          "url": "https://github.com/tinaudio/synth-setter/commit/cf38165b1a18ab7bae23bc20888e015b1e0e571c"
+        },
+        "date": 1783749270936,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.448514699935913,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 5.5742487955582325,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.02140783704817295,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.017815113067626953,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.331336259841919,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 13.951309339083329,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 3.7476444244384766,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.600995173351839,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.02225922979414463,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.018073558807373047,
             "unit": "1-cos"
           },
           {
