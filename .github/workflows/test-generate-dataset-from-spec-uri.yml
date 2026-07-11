@@ -76,7 +76,6 @@ jobs:
             -v "${{ github.workspace }}:/home/build/synth-setter" \
             -e HYDRA_FULL_ERROR=1 \
             -e SYNTH_SETTER_STORAGE_PROVIDER \
-            -e SYNTH_SETTER_STORAGE_RCLONE_REMOTE \
             -e SYNTH_SETTER_STORAGE_ACCESS_KEY_ID \
             -e SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY \
             -e SYNTH_SETTER_STORAGE_ENDPOINT_URL \

@@ -18,7 +18,6 @@ from synth_setter.pipeline.schemas.object_storage import (
     ENV_STORAGE_ACCESS_KEY_ID,
     ENV_STORAGE_ENDPOINT_URL,
     ENV_STORAGE_PROVIDER,
-    ENV_STORAGE_RCLONE_REMOTE,
     ENV_STORAGE_SECRET_ACCESS_KEY,
     RCLONE_REQUIRED_ENV_KEYS,
     RCLONE_STRUCTURAL_DEFAULTS,
@@ -44,7 +43,6 @@ STORAGE_SECRET_EXPORTS: dict[str, str] = {
 
 STORAGE_STRUCTURAL_EXPORTS: dict[str, str] = {
     ENV_STORAGE_PROVIDER: ObjectStoreProvider.R2.value,
-    ENV_STORAGE_RCLONE_REMOTE: "r2",
 }
 
 

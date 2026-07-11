@@ -34,7 +34,6 @@ _VALID_ENV = {
     "SYNTH_SETTER_STORAGE_ENDPOINT_URL": _ENDPOINT,
     "SYNTH_SETTER_STORAGE_PROVIDER": "r2",
     "SYNTH_SETTER_STORAGE_DEFAULT_BUCKET": "bucket",
-    "SYNTH_SETTER_STORAGE_RCLONE_REMOTE": "r2",
     "SYNTH_SETTER_STORAGE_RCLONE_TYPE": "s3",
 }
 
@@ -76,7 +75,6 @@ class TestStorageSettings:
         assert settings.endpoint_url == _ENDPOINT
         assert settings.provider is ObjectStoreProvider.R2
         assert settings.default_bucket == "bucket"
-        assert settings.rclone_remote == "r2"
         assert settings.rclone_type == "s3"
 
     def test_ignores_legacy_rclone_env_names(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -157,17 +155,34 @@ class TestStorageConfig:
             "region": "auto",
         }
 
-    def test_rclone_env_projects_current_rclone_remote(self) -> None:
-        """The rclone projection derives env names from the configured remote."""
-        config = _config(rclone_remote="object_store")
-
-        assert config.rclone_env() == {
-            "RCLONE_CONFIG_OBJECT_STORE_TYPE": "s3",
-            "RCLONE_CONFIG_OBJECT_STORE_PROVIDER": "Cloudflare",
-            "RCLONE_CONFIG_OBJECT_STORE_ACCESS_KEY_ID": "ak",
-            "RCLONE_CONFIG_OBJECT_STORE_SECRET_ACCESS_KEY": "sk",
-            "RCLONE_CONFIG_OBJECT_STORE_ENDPOINT": _ENDPOINT,
+    def test_rclone_env_uses_pinned_r2_remote_keys(self) -> None:
+        """The rclone projection always targets the pipeline's ``r2`` remote."""
+        assert _config().rclone_env() == {
+            "RCLONE_CONFIG_R2_TYPE": "s3",
+            "RCLONE_CONFIG_R2_PROVIDER": "Cloudflare",
+            "RCLONE_CONFIG_R2_ACCESS_KEY_ID": "ak",
+            "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY": "sk",
+            "RCLONE_CONFIG_R2_ENDPOINT": _ENDPOINT,
         }
+
+    def test_storage_env_round_trips_canonical_settings(self) -> None:
+        """The canonical projection reproduces the settings' own env surface."""
+        assert _config().storage_env() == {
+            "SYNTH_SETTER_STORAGE_PROVIDER": "r2",
+            "SYNTH_SETTER_STORAGE_ACCESS_KEY_ID": "ak",
+            "SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY": "sk",
+            "SYNTH_SETTER_STORAGE_ENDPOINT_URL": _ENDPOINT,
+            "SYNTH_SETTER_STORAGE_REGION": "auto",
+            "SYNTH_SETTER_STORAGE_RCLONE_TYPE": "s3",
+            "SYNTH_SETTER_STORAGE_DEFAULT_BUCKET": "bucket",
+        }
+
+    def test_storage_env_omits_unset_default_bucket(self) -> None:
+        """An unset optional bucket does not project a blank env entry."""
+        config = StorageConfig.model_validate(
+            {k: v for k, v in _VALID_FIELDS.items() if k != "default_bucket"}
+        )
+        assert "SYNTH_SETTER_STORAGE_DEFAULT_BUCKET" not in config.storage_env()
 
     def test_rclone_env_projects_current_rclone_type(self) -> None:
         """The rclone projection derives backend type from storage config."""
@@ -187,11 +202,6 @@ class TestStorageConfig:
         """Strict config rejects a misspelled or obsolete field."""
         with pytest.raises(ValidationError):
             StorageConfig.model_validate({**_VALID_FIELDS, "bucket": "oops"})
-
-    def test_rejects_rclone_remote_that_cannot_map_to_env_keys(self) -> None:
-        """Rclone remote names must produce deterministic env keys."""
-        with pytest.raises(ValidationError):
-            _config(rclone_remote="object-store")
 
     def test_is_frozen(self) -> None:
         """Constructed config values cannot be mutated in place."""

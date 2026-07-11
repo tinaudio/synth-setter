@@ -39,7 +39,6 @@ runs:
         set -euo pipefail
         {
           echo "SYNTH_SETTER_STORAGE_PROVIDER=r2"
-          echo "SYNTH_SETTER_STORAGE_RCLONE_REMOTE=r2"
           echo "SYNTH_SETTER_STORAGE_ACCESS_KEY_ID=${ACCESS_KEY_ID}"
           echo "SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY=${SECRET_ACCESS_KEY}"
           echo "SYNTH_SETTER_STORAGE_ENDPOINT_URL=${ENDPOINT}"

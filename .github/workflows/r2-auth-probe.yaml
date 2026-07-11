@@ -51,7 +51,6 @@ jobs:
       SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
       SYNTH_SETTER_STORAGE_ENDPOINT_URL: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
       SYNTH_SETTER_STORAGE_PROVIDER: r2
-      SYNTH_SETTER_STORAGE_RCLONE_REMOTE: r2
     steps:
       - name: Checkout
         uses: actions/checkout@v6

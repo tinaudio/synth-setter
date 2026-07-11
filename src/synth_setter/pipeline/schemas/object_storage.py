@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import re
 import subprocess
 from collections.abc import Mapping
 from enum import StrEnum
@@ -16,13 +15,14 @@ from dotenv import dotenv_values
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from synth_setter.pipeline.constants import RCLONE_REMOTE
+
 __all__ = [
     "ENV_STORAGE_ACCESS_KEY_ID",
     "ENV_STORAGE_DEFAULT_BUCKET",
     "ENV_STORAGE_ENDPOINT_URL",
     "ENV_STORAGE_PROVIDER",
     "ENV_STORAGE_REGION",
-    "ENV_STORAGE_RCLONE_REMOTE",
     "ENV_STORAGE_RCLONE_TYPE",
     "ENV_STORAGE_SECRET_ACCESS_KEY",
     "ObjectStoreProvider",
@@ -43,7 +43,6 @@ ENV_STORAGE_ENDPOINT_URL: Final = "SYNTH_SETTER_STORAGE_ENDPOINT_URL"
 ENV_STORAGE_REGION: Final = "SYNTH_SETTER_STORAGE_REGION"
 ENV_STORAGE_PROVIDER: Final = "SYNTH_SETTER_STORAGE_PROVIDER"
 ENV_STORAGE_DEFAULT_BUCKET: Final = "SYNTH_SETTER_STORAGE_DEFAULT_BUCKET"
-ENV_STORAGE_RCLONE_REMOTE: Final = "SYNTH_SETTER_STORAGE_RCLONE_REMOTE"
 ENV_STORAGE_RCLONE_TYPE: Final = "SYNTH_SETTER_STORAGE_RCLONE_TYPE"
 
 STORAGE_REQUIRED_ENV_KEYS: Final[tuple[str, ...]] = (
@@ -72,9 +71,6 @@ RCLONE_ENV_KEYS: Final[tuple[str, ...]] = (
     *RCLONE_REQUIRED_ENV_KEYS,
 )
 
-_DEFAULT_RCLONE_REMOTE: Final = "r2"
-_RCLONE_REMOTE_RE: Final = re.compile(r"^[A-Za-z0-9_]+$")
-
 
 def _clean(value: str | None) -> str | None:
     if value is None:
@@ -93,7 +89,6 @@ def _settings_kwargs_from_sources(env_file: Path | None) -> dict[str, str]:
         ENV_STORAGE_SECRET_ACCESS_KEY: "secret_access_key",
         ENV_STORAGE_ENDPOINT_URL: "endpoint_url",
         ENV_STORAGE_PROVIDER: "provider",
-        ENV_STORAGE_RCLONE_REMOTE: "rclone_remote",
         ENV_STORAGE_RCLONE_TYPE: "rclone_type",
         ENV_STORAGE_REGION: "region",
     }
@@ -158,10 +153,6 @@ class StorageConfig(BaseModel):
 
         Optional bucket used by callers that accept a bucket-less shorthand.
 
-    .. attribute :: rclone_remote
-
-        rclone remote section name used by the current backend adapter.
-
     .. attribute :: rclone_type
 
         rclone backend type used by the current backend adapter.
@@ -175,7 +166,6 @@ class StorageConfig(BaseModel):
     endpoint_url: str
     region: str = Field(default="auto")
     default_bucket: str | None = None
-    rclone_remote: str = Field(default=_DEFAULT_RCLONE_REMOTE)
     rclone_type: str = Field(default=RCLONE_STRUCTURAL_DEFAULTS[_RCLONE_ENV_TYPE])
 
     @field_validator("access_key_id", "secret_access_key")
@@ -185,7 +175,7 @@ class StorageConfig(BaseModel):
             raise ValueError("must be non-blank")
         return value
 
-    @field_validator("endpoint_url", "region", "rclone_remote", "rclone_type")
+    @field_validator("endpoint_url", "region", "rclone_type")
     @classmethod
     def _string_is_nonblank(cls, value: str) -> str:
         stripped = value.strip()
@@ -202,13 +192,6 @@ class StorageConfig(BaseModel):
         if not stripped:
             raise ValueError("must be non-blank when set")
         return stripped
-
-    @field_validator("rclone_remote")
-    @classmethod
-    def _rclone_remote_is_env_safe(cls, value: str) -> str:
-        if not _RCLONE_REMOTE_RE.match(value):
-            raise ValueError("must contain only letters, numbers, or underscores")
-        return value
 
     def lance_storage_options(self) -> dict[str, str]:
         """Return Lance/object-store storage options for S3-compatible storage.
@@ -229,14 +212,31 @@ class StorageConfig(BaseModel):
 
         :returns: Environment variables using rclone's per-remote naming convention.
         """
-        prefix = f"RCLONE_CONFIG_{self.rclone_remote.upper()}_"
         return {
-            f"{prefix}TYPE": self.rclone_type,
-            f"{prefix}PROVIDER": RCLONE_STRUCTURAL_DEFAULTS[_RCLONE_ENV_PROVIDER],
-            f"{prefix}ACCESS_KEY_ID": self.access_key_id.get_secret_value(),
-            f"{prefix}SECRET_ACCESS_KEY": self.secret_access_key.get_secret_value(),
-            f"{prefix}ENDPOINT": self.endpoint_url,
+            _RCLONE_ENV_TYPE: self.rclone_type,
+            _RCLONE_ENV_PROVIDER: RCLONE_STRUCTURAL_DEFAULTS[_RCLONE_ENV_PROVIDER],
+            _RCLONE_ENV_ACCESS_KEY_ID: self.access_key_id.get_secret_value(),
+            _RCLONE_ENV_SECRET_ACCESS_KEY: self.secret_access_key.get_secret_value(),
+            _RCLONE_ENV_ENDPOINT: self.endpoint_url,
         }
+
+    def storage_env(self) -> dict[str, str]:
+        """Return the canonical ``SYNTH_SETTER_STORAGE_*`` env projection.
+
+        :returns: Environment variables that reproduce this config when re-read
+            by :class:`StorageSettings`; the optional bucket is omitted when unset.
+        """
+        env = {
+            ENV_STORAGE_PROVIDER: self.provider.value,
+            ENV_STORAGE_ACCESS_KEY_ID: self.access_key_id.get_secret_value(),
+            ENV_STORAGE_SECRET_ACCESS_KEY: self.secret_access_key.get_secret_value(),
+            ENV_STORAGE_ENDPOINT_URL: self.endpoint_url,
+            ENV_STORAGE_REGION: self.region,
+            ENV_STORAGE_RCLONE_TYPE: self.rclone_type,
+        }
+        if self.default_bucket is not None:
+            env[ENV_STORAGE_DEFAULT_BUCKET] = self.default_bucket
+        return env
 
 
 class StorageSettings(BaseSettings):
@@ -270,10 +270,6 @@ class StorageSettings(BaseSettings):
 
         Optional bucket used by callers that accept a bucket-less shorthand.
 
-    .. attribute :: rclone_remote
-
-        rclone remote section name used by the current backend adapter.
-
     .. attribute :: rclone_type
 
         rclone backend type used by the current backend adapter.
@@ -293,7 +289,6 @@ class StorageSettings(BaseSettings):
     provider: ObjectStoreProvider = ObjectStoreProvider.R2
     region: str = "auto"
     default_bucket: str | None = None
-    rclone_remote: str = _DEFAULT_RCLONE_REMOTE
     rclone_type: str = RCLONE_STRUCTURAL_DEFAULTS[_RCLONE_ENV_TYPE]
 
     @field_validator("access_key_id", "secret_access_key")
@@ -303,7 +298,7 @@ class StorageSettings(BaseSettings):
             raise ValueError("must be non-blank")
         return value
 
-    @field_validator("endpoint_url", "region", "rclone_remote", "rclone_type")
+    @field_validator("endpoint_url", "region", "rclone_type")
     @classmethod
     def _string_is_nonblank(cls, value: str) -> str:
         stripped = value.strip()
@@ -321,13 +316,6 @@ class StorageSettings(BaseSettings):
             raise ValueError("must be non-blank when set")
         return stripped
 
-    @field_validator("rclone_remote")
-    @classmethod
-    def _rclone_remote_is_env_safe(cls, value: str) -> str:
-        if not _RCLONE_REMOTE_RE.match(value):
-            raise ValueError("must contain only letters, numbers, or underscores")
-        return value
-
     def to_config(self) -> StorageConfig:
         """Return an env-free storage config value.
 
@@ -340,7 +328,6 @@ class StorageSettings(BaseSettings):
             endpoint_url=self.endpoint_url,
             region=self.region,
             default_bucket=self.default_bucket,
-            rclone_remote=self.rclone_remote,
             rclone_type=self.rclone_type,
         )
 
@@ -404,8 +391,8 @@ def _join_key(location: ObjectLocation, *parts: str) -> ObjectLocation:
     return ObjectLocation(bucket=location.bucket, key=f"{location.key.rstrip('/')}/{suffix}")
 
 
-def _to_rclone_path(location: ObjectLocation, *, remote: str) -> str:
-    return f"{remote}:{location.bucket}/{location.key}"
+def _to_rclone_path(location: ObjectLocation) -> str:
+    return f"{RCLONE_REMOTE}:{location.bucket}/{location.key}"
 
 
 class ObjectStorage(BaseModel):
@@ -436,7 +423,7 @@ class ObjectStorage(BaseModel):
                 "rclone",
                 "copyto",
                 str(local_path),
-                _to_rclone_path(destination, remote=self.config.rclone_remote),
+                _to_rclone_path(destination),
                 "--checksum",
             ],
             env=env,
@@ -453,7 +440,7 @@ class ObjectStorage(BaseModel):
             [  # noqa: S607
                 "rclone",
                 "copyto",
-                _to_rclone_path(source, remote=self.config.rclone_remote),
+                _to_rclone_path(source),
                 str(local_path),
                 "--checksum",
             ],

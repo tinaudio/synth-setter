@@ -122,9 +122,11 @@ def ensure_r2_env_loaded(env_file: Path | None = None) -> None:
        line ``KEY=`` never clobbers a real process-env credential.
     2. Validate the provider-neutral settings and build an env-free
        :class:`StorageConfig`.
-    3. Write the rclone projection (:meth:`StorageConfig.rclone_env`) back into
-       ``os.environ`` so the auth ping and later transfers use the normalized
-       values. A non-zero ping exit also raises.
+    3. Write the canonical projection (:meth:`StorageConfig.storage_env`) and
+       the rclone projection (:meth:`StorageConfig.rclone_env`) back into
+       ``os.environ`` so later env-only readers (e.g. :func:`r2_storage_options`
+       with no arguments) and the auth ping both see the normalized values.
+       A non-zero ping exit also raises.
 
     No-op on the dotenv step if the resolved file doesn't exist; the
     resolution + normalization + auth checks still run against whatever
@@ -137,7 +139,7 @@ def ensure_r2_env_loaded(env_file: Path | None = None) -> None:
         ``rclone lsd r2:`` exits non-zero (bad creds, network, etc.).
     """
     config = _storage_config_from_sources(env_file)
-    os.environ.update(config.rclone_env())
+    os.environ.update({**config.storage_env(), **config.rclone_env()})
 
     # Auth ping — fail fast on bad creds instead of several seconds into the first
     # real operation. Cheap (<1 RTT): `rclone lsd r2:` lists visible buckets.
@@ -174,15 +176,18 @@ def is_r2_reachable() -> bool:
     if shutil.which("rclone") is None:
         return False
     try:
-        _storage_config_from_sources()
+        config = _storage_config_from_sources()
     except RuntimeError:
         return False
     try:
+        # Project the resolved settings into the probe env so a developer's
+        # ambient rclone config can't make the gate pass with wrong settings.
         subprocess.run(  # noqa: S603 — args are literal strings
             ["rclone", "lsd", "r2:", "--contimeout=10s", "--timeout=30s"],  # noqa: S607
             capture_output=True,
             text=True,
             check=True,
+            env={**os.environ, **config.rclone_env()},
         )
     except (subprocess.CalledProcessError, FileNotFoundError):
         return False

@@ -577,6 +577,39 @@ class TestIsR2Reachable:
             mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0)
             assert r2_io.is_r2_reachable() is True
 
+    def test_probe_subprocess_receives_projected_rclone_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The auth ping runs with the resolved settings, not just ambient rclone config.
+
+        Without the projection a developer's local rclone remote could make the
+        probe pass while the canonical settings are wrong, so the gate would
+        disagree with :func:`ensure_r2_env_loaded`.
+
+        :param tmp_path: Pytest tmp dir for the default dotenv file.
+        :param monkeypatch: Pytest fixture used to isolate env and subprocess behavior.
+        """
+        default_env_file = tmp_path / ".env"
+        default_env_file.write_text(
+            "SYNTH_SETTER_STORAGE_ACCESS_KEY_ID=id-from-default\n"
+            "SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY=secret-from-default\n"
+            "SYNTH_SETTER_STORAGE_ENDPOINT_URL=endpoint-from-default\n"
+        )
+        monkeypatch.setattr(r2_io, "_DEFAULT_ENV_FILE", default_env_file)
+        monkeypatch.setattr(r2_io.shutil, "which", lambda name: f"/usr/bin/{name}")
+        captured: dict[str, object] = {}
+
+        def _capture(*_a: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+            captured.update(kwargs)
+            return subprocess.CompletedProcess(args=[], returncode=0)
+
+        with patch.object(r2_io.subprocess, "run", side_effect=_capture):
+            assert r2_io.is_r2_reachable() is True
+
+        env = captured["env"]
+        assert isinstance(env, dict)
+        assert env["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "id-from-default"
+
     def test_returns_false_when_secret_env_keys_are_blank(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1013,6 +1046,29 @@ class TestEnsureR2EnvLoaded:
 
         assert captured["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "id-from-file"
         assert captured["RCLONE_CONFIG_R2_ENDPOINT"] == "endpoint-from-file"
+
+    def test_dotenv_settings_persist_for_later_canonical_readers(self, tmp_path: Path) -> None:
+        """Settings loaded from an explicit env_file survive into later env-only reads.
+
+        A common local-dev sequence is ``ensure_r2_env_loaded(<.env>)`` followed by
+        ``r2_storage_options()`` with no arguments; the preflight must leave the
+        canonical keys in ``os.environ`` for that second resolution to succeed.
+
+        :param tmp_path: Pytest tmp dir for the env_file.
+        """
+        env_file = tmp_path / "custom.env"
+        env_file.write_text(
+            "SYNTH_SETTER_STORAGE_ACCESS_KEY_ID=id-from-file\n"
+            "SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY=secret-from-file\n"
+            "SYNTH_SETTER_STORAGE_ENDPOINT_URL=endpoint-from-file\n"
+        )
+
+        with patch.object(r2_io.subprocess, "run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0)
+            r2_io.ensure_r2_env_loaded(env_file)
+
+        assert os.environ["SYNTH_SETTER_STORAGE_ACCESS_KEY_ID"] == "id-from-file"
+        assert r2_io.r2_storage_options()["access_key_id"] == "id-from-file"
 
     def test_no_env_file_loads_workspace_dotenv_by_default(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
