@@ -10,7 +10,7 @@ name: R2 Auth Probe
 # on `workflow_dispatch` for manual probes.
 #
 # Required secrets (same set as `test-dataset-generation.yml` /
-# `validate-dataset-shards.yaml`):
+# `validate-dataset-shards.yaml`, mapped into SYNTH_SETTER_STORAGE_* below):
 #   RCLONE_CONFIG_R2_ACCESS_KEY_ID, RCLONE_CONFIG_R2_SECRET_ACCESS_KEY,
 #   RCLONE_CONFIG_R2_ENDPOINT.
 #
@@ -47,9 +47,10 @@ jobs:
     # runner minutes. Same gating pattern as `test-skypilot-local.yml`.
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository }}
     env:
-      RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
-      RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
-      RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+      SYNTH_SETTER_STORAGE_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+      SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+      SYNTH_SETTER_STORAGE_ENDPOINT_URL: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+      SYNTH_SETTER_STORAGE_PROVIDER: r2
     steps:
       - name: Checkout
         uses: actions/checkout@v6

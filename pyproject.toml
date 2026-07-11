@@ -18,6 +18,7 @@ requires-python = ">=3.11,<3.14"
 # tests/infra/test_lite_dependency_base.py — see docs/reference/dependency-management.md (#1139).
 dependencies = [
   "pydantic>=2",
+  "pydantic-settings>=2",
   "python-dotenv",
   "pyyaml",
 ]

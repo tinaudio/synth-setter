@@ -35,18 +35,31 @@ def _upload_cfg(output_dir: Path, upload_output_dir_uri: str | None) -> DictConf
 
 
 @pytest.fixture()
-def r2_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Set the three secret keys :func:`r2_io.ensure_r2_env_loaded` requires present.
+def storage_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Set canonical storage credentials for helpers that ping object storage.
 
-    Paired with ``fake_r2_remote`` (which sets ``RCLONE_CONFIG_R2_TYPE=local``),
-    these dummy values satisfy the presence check and let the real ``rclone lsd
-    r2:`` auth ping resolve the local backend instead of dialing Cloudflare.
+    The dummy values satisfy the presence check while rclone resolves the local backend instead of
+    dialing Cloudflare.
 
     :param monkeypatch: Sets the secret env vars for the test's duration.
     """
-    monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", "test-access-key")
-    monkeypatch.setenv("RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", "test-secret-key")
-    monkeypatch.setenv("RCLONE_CONFIG_R2_ENDPOINT", "http://localhost:0")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ACCESS_KEY_ID", "test-access-key")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY", "test-secret-key")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ENDPOINT_URL", "http://localhost:0")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_RCLONE_TYPE", "local")
+
+
+def _storage_env() -> dict[str, str]:
+    """Return dummy canonical storage env for subprocess CLI tests.
+
+    :returns: Environment variables that select the local rclone backend.
+    """
+    return {
+        "SYNTH_SETTER_STORAGE_ACCESS_KEY_ID": "stub",
+        "SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY": "stub",
+        "SYNTH_SETTER_STORAGE_ENDPOINT_URL": "http://localhost:0",
+        "SYNTH_SETTER_STORAGE_RCLONE_TYPE": "local",
+    }
 
 
 def _write_output_tree(output_dir: Path) -> None:
@@ -97,12 +110,12 @@ def test_maybe_upload_output_dir_skips_non_global_zero_rank(
 
 
 def test_maybe_upload_output_dir_mirrors_tree_when_uri_set(
-    fake_r2_remote: Path, r2_credentials: None, tmp_path: Path
+    fake_r2_remote: Path, storage_credentials: None, tmp_path: Path
 ) -> None:
     """A set URI mirrors the whole output dir beneath the destination prefix.
 
     :param fake_r2_remote: Local-backed ``r2:`` remote where the mirror lands.
-    :param r2_credentials: Dummy secrets so the real credential check passes.
+    :param storage_credentials: Dummy secrets so the real credential check passes.
     :param tmp_path: Holds the output dir copied to R2.
     """
     output_dir = tmp_path / "run"
@@ -166,10 +179,7 @@ def test_eval_cli_downloads_dataset_from_r2_then_scores_oracle(
 
     env = {
         **os.environ,
-        "RCLONE_CONFIG_R2_TYPE": "local",
-        "RCLONE_CONFIG_R2_ACCESS_KEY_ID": "stub",
-        "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY": "stub",
-        "RCLONE_CONFIG_R2_ENDPOINT": "stub",
+        **_storage_env(),
     }
     proc = subprocess.run(  # noqa: S603 — controlled argv
         [
@@ -232,10 +242,7 @@ def test_eval_cli_uploads_output_dir_to_r2(tmp_path: Path, surge_xt_smoke_datase
 
     env = {
         **os.environ,
-        "RCLONE_CONFIG_R2_TYPE": "local",
-        "RCLONE_CONFIG_R2_ACCESS_KEY_ID": "stub",
-        "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY": "stub",
-        "RCLONE_CONFIG_R2_ENDPOINT": "stub",
+        **_storage_env(),
     }
     proc = subprocess.run(  # noqa: S603 — controlled argv
         [

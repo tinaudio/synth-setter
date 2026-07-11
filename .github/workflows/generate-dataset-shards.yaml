@@ -601,6 +601,10 @@ jobs:
             -e OCI_API_KEY_PEM \
             -e CONFIG_PATH \
             -e WORKER_GIT_REF \
+            -e SYNTH_SETTER_STORAGE_PROVIDER \
+            -e SYNTH_SETTER_STORAGE_ACCESS_KEY_ID \
+            -e SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY \
+            -e SYNTH_SETTER_STORAGE_ENDPOINT_URL \
             -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
             -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
             -e RCLONE_CONFIG_R2_ENDPOINT \
@@ -716,6 +720,10 @@ jobs:
           set -euo pipefail
           docker run --rm \
             -v "${{ github.workspace }}:/home/build/synth-setter:ro" \
+            -e SYNTH_SETTER_STORAGE_PROVIDER \
+            -e SYNTH_SETTER_STORAGE_ACCESS_KEY_ID \
+            -e SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY \
+            -e SYNTH_SETTER_STORAGE_ENDPOINT_URL \
             -e RCLONE_CONFIG_R2_TYPE \
             -e RCLONE_CONFIG_R2_PROVIDER \
             -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \

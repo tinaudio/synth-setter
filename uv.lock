@@ -5766,6 +5766,7 @@ version = "8.44.0"
 source = { editable = "." }
 dependencies = [
     { name = "pydantic" },
+    { name = "pydantic-settings" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
 ]
@@ -5986,6 +5987,7 @@ util = [
 [package.metadata]
 requires-dist = [
     { name = "pydantic", specifier = ">=2" },
+    { name = "pydantic-settings", specifier = ">=2" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
     { name = "torch", marker = "(sys_platform == 'linux' and extra == 'cpu') or (sys_platform == 'win32' and extra == 'cpu')", specifier = ">=2.0.0", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "synth-setter", extra = "cpu" } },
