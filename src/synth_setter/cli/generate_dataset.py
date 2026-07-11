@@ -7,6 +7,11 @@ Two console-script surfaces:
   ``cfg.skypilot_launch.compute_template``.
 - ``synth-setter-generate-dataset-from-hydra`` → :func:`from_hydra` — worker
   entry; pure ``@hydra.main`` re-compose so launcher/worker share argv.
+
+``synth-setter-generate-dataset-from-spec-uri`` (see
+:mod:`synth_setter.cli.generate_dataset_from_spec_uri`) is the spec-first
+counterpart: it renders an already-materialized ``input_spec.json`` by URI
+instead of composing one.
 """
 
 from __future__ import annotations

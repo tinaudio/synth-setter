@@ -36,7 +36,7 @@ from synth_setter.pipeline.constants import (
 from synth_setter.pipeline.data.reshard import reshard_dataset
 from synth_setter.pipeline.data.stats import get_stats_hdf5, stream_stats_wds
 from synth_setter.pipeline.schemas.prefix import assert_r2_prefix_matches
-from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat, ShardSpec
+from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat, ShardSpec, Split
 from synth_setter.pipeline.spec_io import load_spec_from_root, write_spec_to_path
 from synth_setter.utils import pin_wandb_run_id
 from synth_setter.utils.instantiators import close_loggers, instantiate_loggers
@@ -175,13 +175,14 @@ def finalize_hdf5(spec: DatasetSpec, work_dir: Path) -> None:
 
 
 def _lance_split_batches(
-    shard_uris: list[str], storage_options: dict[str, str]
+    split: Split, shard_uris: list[str], storage_options: dict[str, str]
 ) -> LanceSplitBatches:
     """Return the schema and batch iterator for a finalized Lance split.
 
     Reads shards directly from R2 (no local download) — one sequential pass per
     shard, which Lance streams natively over object storage.
 
+    :param split: Finalized split receiving the shard stream.
     :param shard_uris: Non-empty list of ``s3://`` shard dataset URIs in split order.
     :param storage_options: Object-store config for the R2 bucket.
     :returns: ``(schema, batches)`` for :func:`write_lance_dataset`.
@@ -191,7 +192,15 @@ def _lance_split_batches(
     schema = lance.dataset(shard_uris[0], storage_options=storage_options).schema
 
     def _batches() -> LanceBatchIterator:
-        for uri in shard_uris:
+        total = len(shard_uris)
+        for index, uri in enumerate(shard_uris, start=1):
+            logger.info(
+                "writing split {} shard {}/{}: {}",
+                split,
+                index,
+                total,
+                uri.rstrip("/").rsplit("/", 1)[-1],
+            )
             yield from lance.dataset(uri, storage_options=storage_options).to_batches()
 
     return schema, _batches()
@@ -234,7 +243,7 @@ def finalize_lance(spec: DatasetSpec, work_dir: Path) -> None:
         if lo >= hi:
             continue
         shard_uris = [_shard_s3_uri(shard) for shard in spec.shards[lo:hi]]
-        schema, batches = _lance_split_batches(shard_uris, storage_options)
+        schema, batches = _lance_split_batches(split, shard_uris, storage_options)
         split_uri = spec.r2.split_lance_uri(split)
         write_lance_dataset(
             r2_io.to_s3_uri(split_uri), schema, batches, storage_options=storage_options

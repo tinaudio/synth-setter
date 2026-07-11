@@ -36,7 +36,7 @@ from synth_setter.data.vst.core import (
     make_midi_events,
     set_params,
 )
-from synth_setter.data.vst.param_spec import ParamSpec
+from synth_setter.data.vst.param_spec import ParamSpec, decode_model_output
 from synth_setter.data.vst.param_spec_registry import default_plugin_path
 from synth_setter.data.vst.writers import make_hdf5_dataset
 from synth_setter.pipeline.schemas.spec import RenderConfig
@@ -306,10 +306,11 @@ def _load_pred_tensor(pred_path: Path) -> torch.Tensor:
     """Load a prediction tensor from disk (imperative shell — does I/O only).
 
     :param pred_path: Path to a ``pred-*.pt`` file produced by ``predict_vst_audio.py``.
-    :returns: A float tensor of shape ``(batch_size, num_params)`` with values in
-        the model output range ``[-1, 1]`` (the inverse of the ``(x + 1) / 2``
-        scale used by ``predict_vst_audio.py``). Loaded with
-        ``weights_only=True`` since predictions are plain tensors.
+    :returns: A float tensor of shape ``(batch_size, num_params)`` with values
+        in the model output range ``[-1, 1]`` (see
+        :func:`~synth_setter.data.vst.param_spec.decode_model_output` for the
+        inverse scale). Loaded with ``weights_only=True`` since predictions are
+        plain tensors.
     """
     return torch.load(pred_path, map_location="cpu", weights_only=True)
 
@@ -322,13 +323,12 @@ def decode_prediction_row(
     """Decode a single predicted row into raw VST synth params (functional core — pure transform).
 
     :param pred_tensor: Float tensor of shape ``(batch_size, num_params)`` with
-        values in ``[-1, 1]`` (inverse of the ``(x + 1) / 2`` scale used by
-        ``predict_vst_audio.py``). Out-of-range values are clipped to ``[0, 1]``
-        after rescaling.
+        values in ``[-1, 1]``; rows are decoded through
+        :func:`~synth_setter.data.vst.param_spec.decode_model_output`.
     :param batch_idx: Row index within the prediction tensor to decode. Must be
         in ``[0, batch_size)``.
     :param param_spec_name: Parameter spec name (key into ``param_specs``) used
-        to decode the rescaled row into raw VST parameter values.
+        to decode the row into raw VST parameter values.
     :returns: Dict mapping VST parameter name to its raw (decoded) value.
     :raises IndexError: when ``batch_idx`` is out of range for ``pred_tensor``.
     """
@@ -337,8 +337,7 @@ def decode_prediction_row(
 
     spec = param_specs[param_spec_name]
     row = pred_tensor[batch_idx].detach().cpu().float().numpy()
-    row_scaled = np.clip((row + 1) / 2, 0, 1)
-    synth_params, _ = spec.decode(row_scaled)
+    synth_params, _ = decode_model_output(row, spec)
     return synth_params
 
 
@@ -349,8 +348,8 @@ def load_dataset_synth_params(
     """Load a single row from an h5 dataset's ``param_array`` and decode it into synth params.
 
     Unlike prediction tensors, h5 dataset rows are already in encoded form
-    (output of :meth:`ParamSpec.encode`, values in ``[0, 1]``), so no
-    ``(x + 1) / 2`` rescaling is applied.
+    (output of :meth:`ParamSpec.encode`, values in ``[0, 1]``), so they decode
+    directly without the model-output inverse scale.
 
     :param ref: Reference identifying the h5 file path and row to decode.
     :param param_spec_name: Parameter spec name (key into ``param_specs``) used
@@ -382,11 +381,8 @@ def load_prediction_synth_params(
 
     :param ref: Reference identifying the file path and row to decode.
     :param param_spec_name: Parameter spec name (key into ``param_specs``) used
-        to decode the rescaled row into raw VST parameter values.
-    :returns: Dict mapping VST parameter name to its raw (decoded) value. The
-        underlying tensor has shape ``(batch_size, num_params)`` and dtype
-        float, with values in ``[-1, 1]`` (the inverse of the ``(x + 1) / 2``
-        scale used by ``predict_vst_audio.py``).
+        to decode the row into raw VST parameter values.
+    :returns: Dict mapping VST parameter name to its raw (decoded) value.
     :raises IndexError: when ``ref.batch_idx`` is out of range for the loaded tensor.
     """
     pred_tensor = _load_pred_tensor(ref.path)
