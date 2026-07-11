@@ -699,9 +699,11 @@ def _render_and_upload_shard(
     :raises RuntimeError: Renderer exited 0 without writing the expected shard
         file, or a rendered Lance shard failed local validation.
     """
-    worker_id = _worker_id()
-    attempt_uuid = uuid4().hex
     if spec.output_format is OutputFormat.LANCE:
+        # One identity threads the start marker and the staged attempt below;
+        # compute once here (HDF5/WDS never stage, so they skip this work).
+        worker_id = _worker_id()
+        attempt_uuid = uuid4().hex
         # Attempt start marker — append-only; orphaned without a .valid it is
         # the observable evidence of a crashed attempt (#1776).
         write_rendering_marker(
