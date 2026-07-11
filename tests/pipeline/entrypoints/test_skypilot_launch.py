@@ -4,8 +4,9 @@ Covers ``src/synth_setter/pipeline/skypilot_launch.py``. Mock-based: no real Sky
 calls. The ``mock_sky`` fixture replaces the launcher's module-level ``sky`` reference with a
 ``MagicMock`` so dispatch-side assertions can read submission shape without provisioning.
 
-``dispatch_via_skypilot(sky_cfg)`` is the only public surface; the tests exercise the validation
-funnel, the per-rank fan-out, and the uuid-stem job-name fallback.
+``dispatch_via_skypilot(sky_cfg)`` and the ``synth-setter-skypilot-launch`` CLI (``main`` +
+``load_launch_config``) are the public surfaces; the tests exercise the validation funnel, the
+per-rank fan-out, the uuid-stem job-name fallback, and the checked-in ``configs/launch/*.yaml``.
 """
 
 from __future__ import annotations
@@ -21,7 +22,10 @@ import click
 import pytest
 import sky
 import yaml
+from click.testing import CliRunner
+from pydantic import ValidationError
 
+import synth_setter.pipeline.skypilot_launch as skypilot_launch
 from synth_setter.pipeline.constants import WORKER_SPEC_URI_ENV
 from synth_setter.pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
@@ -29,10 +33,14 @@ from synth_setter.pipeline.skypilot_launch import (
     _SECRET_WORKER_ENV_KEYS,
     _SKYPILOT_API_SERVER_ENV,
     _WORKER_ENV_KEYS,
+    _detect_provider_from_doc,
     _ensure_ci_sky_config,
+    _load_compute_template_with_cmd,
     _override_image_id,
     dispatch_via_skypilot,
+    load_launch_config,
     load_worker_env,
+    main,
     resolve_worker_env,
 )
 from synth_setter.pipeline.skypilot_launch import (
@@ -65,6 +73,16 @@ def clear_worker_env_from_process(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     for key in _WORKER_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def isolate_default_env_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prevent developer-local dotenv files from affecting worker env resolution.
+
+    :param tmp_path: Pytest tmp dir used for the intentionally missing dotenv path.
+    :param monkeypatch: Pytest fixture used to isolate the module-level default.
+    """
+    monkeypatch.setattr(skypilot_launch, "DEFAULT_ENV_FILE", tmp_path / "missing.env")
 
 
 @pytest.fixture(autouse=True)
@@ -645,7 +663,6 @@ class TestLoadComputeTemplateWithCmd:
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
         """
-        from synth_setter.pipeline.skypilot_launch import _load_compute_template_with_cmd
 
         template = _write_runpod_yaml(tmp_path, include_run=False)
         doc = _load_compute_template_with_cmd(template, "echo hello")
@@ -656,7 +673,6 @@ class TestLoadComputeTemplateWithCmd:
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
         """
-        from synth_setter.pipeline.skypilot_launch import _load_compute_template_with_cmd
 
         template = _write_runpod_yaml(tmp_path, include_run=True)
         with pytest.raises(ValueError, match="has a non-empty `run:` block"):
@@ -667,7 +683,6 @@ class TestLoadComputeTemplateWithCmd:
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
         """
-        from synth_setter.pipeline.skypilot_launch import _load_compute_template_with_cmd
 
         template = _write_runpod_yaml(
             tmp_path,
@@ -685,7 +700,6 @@ class TestLoadComputeTemplateWithCmd:
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
         """
-        from synth_setter.pipeline.skypilot_launch import _load_compute_template_with_cmd
 
         path = tmp_path / "bad_run.yaml"
         path.write_text("resources:\n  cloud: runpod\nrun:\n  - echo\n  - bad\n")
@@ -697,7 +711,6 @@ class TestLoadComputeTemplateWithCmd:
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
         """
-        from synth_setter.pipeline.skypilot_launch import _load_compute_template_with_cmd
 
         with pytest.raises(FileNotFoundError):
             _load_compute_template_with_cmd(tmp_path / "missing.yaml", "x")
@@ -707,7 +720,6 @@ class TestLoadComputeTemplateWithCmd:
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
         """
-        from synth_setter.pipeline.skypilot_launch import _load_compute_template_with_cmd
 
         path = tmp_path / "bad.yaml"
         path.write_text("- not\n- a\n- mapping\n")
@@ -741,7 +753,6 @@ class TestDetectProviderFromDoc:
         :param doc: Parametrized parsed-YAML mapping under test.
         :param expected_provider: Parametrized expected provider name.
         """
-        from synth_setter.pipeline.skypilot_launch import _detect_provider_from_doc
 
         assert _detect_provider_from_doc(doc, source=tmp_path / "x.yaml") == expected_provider
 
@@ -750,7 +761,6 @@ class TestDetectProviderFromDoc:
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
         """
-        from synth_setter.pipeline.skypilot_launch import _detect_provider_from_doc
 
         doc: dict[str, object] = {"resources": {"cloud": "aws"}}
         with pytest.raises(ValueError, match="Unsupported cloud"):
@@ -863,6 +873,33 @@ class TestDispatchViaSkypilot:
         )
         with pytest.raises(ValueError, match="No worker env vars resolved"):
             dispatch_via_skypilot(sky_cfg)
+
+    def test_blank_worker_env_raises_before_launch(
+        self,
+        tmp_path: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """Blank rclone creds fail as unresolved instead of launching with unusable auth.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        """
+        blank_env_file = tmp_path / ".env"
+        blank_env_file.write_text(
+            "RCLONE_CONFIG_R2_ACCESS_KEY_ID= \n"
+            "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=\t\n"
+            "RCLONE_CONFIG_R2_ENDPOINT=\n"
+        )
+
+        template = _write_runpod_yaml(tmp_path)
+        sky_cfg = SkypilotLaunchConfig(
+            compute_template=str(template),
+            cmd="exec synth-setter-generate-dataset-from-hydra experiment=foo",
+            env_file=str(blank_env_file),
+        )
+        with pytest.raises(ValueError, match="No worker env vars resolved"):
+            dispatch_via_skypilot(sky_cfg)
+        mock_sky.jobs.launch.assert_not_called()
 
     @pytest.mark.parametrize(
         "kwargs_overrides, match",
@@ -990,6 +1027,36 @@ class TestDispatchViaSkypilot:
         passed_doc = mock_sky.Task.from_yaml_config.call_args.args[0]
         assert passed_doc["run"] == cmd
 
+    def test_dispatch_uses_default_env_file_when_unset(
+        self,
+        tmp_path: Path,
+        env_file: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        mock_sky: MagicMock,
+    ) -> None:
+        """Unset ``sky_cfg.env_file`` still forwards creds from the workspace ``.env``.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param env_file: Fixture-provided worker env file path.
+        :param monkeypatch: Pytest fixture used to point the default env path at
+            the fixture dotenv.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        """
+        monkeypatch.setattr(skypilot_launch, "DEFAULT_ENV_FILE", env_file)
+        template = _write_runpod_yaml(tmp_path)
+        sky_cfg = SkypilotLaunchConfig(
+            compute_template=str(template),
+            cmd="echo",
+            env_file=None,
+            job_name="default-env-file",
+        )
+
+        dispatch_via_skypilot(sky_cfg)
+
+        task = mock_sky.Task.from_yaml_config.return_value
+        worker_env = task.update_envs.call_args.args[0]
+        assert worker_env["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "key"
+
     def test_dispatch_failure_raises_runtime_error(
         self,
         tmp_path: Path,
@@ -1083,6 +1150,37 @@ class TestDispatchViaSkypilot:
             injected = call.args[0]
             assert injected["FOO"] == "bar"
             assert injected[NUM_WORKERS_ENV_VAR] == "2"
+
+    def test_worker_image_and_image_tag_injected_into_rank_env(
+        self,
+        tmp_path: Path,
+        env_file: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """Every rank receives WORKER_IMAGE and the bare IMAGE_TAG for wandb provenance.
+
+        ``log_wandb_provenance`` reads ``IMAGE_TAG`` on the worker
+        (storage-provenance-spec.md §12); injecting it centrally means no
+        launch config or worker cmd has to derive it from ``WORKER_IMAGE``.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param env_file: Fixture-provided worker env file path.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        """
+        template = _write_runpod_yaml(tmp_path)
+        sky_cfg = SkypilotLaunchConfig(
+            compute_template=str(template),
+            cmd="echo",
+            env_file=str(env_file),
+            job_name="provenance",
+            worker_image_tag="dev-snapshot-abc123",
+        )
+
+        dispatch_via_skypilot(sky_cfg)
+
+        injected = mock_sky.Task.from_yaml_config.return_value.update_envs.call_args.args[0]
+        assert injected["WORKER_IMAGE"] == "tinaudio/synth-setter:dev-snapshot-abc123"
+        assert injected["IMAGE_TAG"] == "dev-snapshot-abc123"
 
     def test_rank_world_envs_override_caller_extra_envs(
         self,
@@ -1213,8 +1311,9 @@ class TestDispatchViaSkypilot:
         [
             ("job_name", "has/slash", "job_name must match"),
             ("worker_image_tag", "bad tag", "worker_image_tag must match OCI"),
+            ("env_file", "   ", "env_file must be a non-empty path"),
         ],
-        ids=["job-name-with-slash", "image-tag-with-space"],
+        ids=["job-name-with-slash", "image-tag-with-space", "blank-env-file"],
     )
     def test_input_validation_raises_before_disk_or_network(
         self,
@@ -1242,9 +1341,8 @@ class TestDispatchViaSkypilot:
             "job_name": "ok-name",
             field: value,
         }
-        sky_cfg = SkypilotLaunchConfig(**kwargs)  # type: ignore[arg-type]
-
         with pytest.raises(ValueError, match=match):
+            sky_cfg = SkypilotLaunchConfig(**kwargs)  # type: ignore[arg-type]
             dispatch_via_skypilot(sky_cfg)
         mock_sky.jobs.launch.assert_not_called()
 
@@ -1301,3 +1399,198 @@ class TestDispatchViaSkypilot:
         mock_sky.jobs.launch.assert_called_once()
         submitted = mock_sky.jobs.launch.call_args.kwargs["name"]
         assert re.fullmatch(r"synth-setter-[0-9a-f]{8}", submitted), submitted
+
+
+# ---------------------------------------------------------------------------
+# load_launch_config + synth-setter-skypilot-launch CLI
+# ---------------------------------------------------------------------------
+
+
+def _write_launch_yaml(tmp_path: Path, **fields: object) -> Path:
+    """Write a launch-config YAML composed of ``fields`` and return its path.
+
+    :param tmp_path: Directory under which ``launch.yaml`` is written.
+    :param **fields: Top-level launch-config keys serialized verbatim.
+    :return: Path to the written ``launch.yaml``.
+    """
+    path = tmp_path / "launch.yaml"
+    path.write_text(yaml.safe_dump(fields), encoding="utf-8")
+    return path
+
+
+class TestLoadLaunchConfig:
+    """``load_launch_config`` is the YAML→``SkypilotLaunchConfig`` trust boundary."""
+
+    def test_valid_mapping_returns_validated_config(self, tmp_path: Path) -> None:
+        """A well-formed mapping round-trips into a validated launcher config.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        path = _write_launch_yaml(
+            tmp_path,
+            compute_template="configs/compute/runpod-template.yaml",
+            cmd="exec synth-setter-train experiment=surge/ffn_simple",
+            worker_image_tag="dev-snapshot",
+            tail=True,
+        )
+
+        cfg = load_launch_config(path)
+
+        assert cfg.compute_template == "configs/compute/runpod-template.yaml"
+        assert cfg.cmd == "exec synth-setter-train experiment=surge/ffn_simple"
+        assert cfg.worker_image_tag == "dev-snapshot"
+        assert cfg.tail is True
+
+    @pytest.mark.parametrize(
+        "yaml_text",
+        ["- a\n- b\n", "just-a-scalar\n", ""],
+        ids=["list", "scalar", "empty"],
+    )
+    def test_non_mapping_yaml_raises_value_error(self, tmp_path: Path, yaml_text: str) -> None:
+        """Top-level YAML that is not a mapping is rejected with the offending path named.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param yaml_text: Non-mapping YAML document body.
+        """
+        path = tmp_path / "launch.yaml"
+        path.write_text(yaml_text, encoding="utf-8")
+
+        with pytest.raises(ValueError, match="must be a YAML mapping"):
+            load_launch_config(path)
+
+    def test_unknown_key_raises_validation_error(self, tmp_path: Path) -> None:
+        """``extra="forbid"`` surfaces typos in checked-in configs instead of ignoring them.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        path = _write_launch_yaml(tmp_path, cmd="echo hi", compute_templat="typo.yaml")
+
+        with pytest.raises(ValidationError, match="compute_templat"):
+            load_launch_config(path)
+
+    def test_missing_file_raises_file_not_found(self, tmp_path: Path) -> None:
+        """A nonexistent config path fails loudly rather than dispatching defaults.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        with pytest.raises(FileNotFoundError):
+            load_launch_config(tmp_path / "absent.yaml")
+
+
+class TestSkypilotLaunchCli:
+    """``synth-setter-skypilot-launch`` drives load → dispatch from one config-path argument."""
+
+    @pytest.fixture(autouse=True)
+    def _inline_executor(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Run the launcher's per-rank fan-out inline so mock recording is deterministic.
+
+        :param monkeypatch: Pytest fixture for attribute patching.
+        """
+        monkeypatch.setattr(
+            "synth_setter.pipeline.skypilot_launch.ThreadPoolExecutor", _InlineExecutor
+        )
+
+    def test_config_file_dispatches_submits_managed_job(
+        self,
+        tmp_path: Path,
+        env_file: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """A real config file flows through the full validation funnel to a job submission.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param env_file: Fixture-provided worker env file path.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        """
+        template = _write_runpod_yaml(tmp_path)
+        cmd = "cd /home/build/synth-setter && exec synth-setter-train experiment=surge/ffn_simple"
+        cfg_path = _write_launch_yaml(
+            tmp_path,
+            compute_template=str(template),
+            cmd=cmd,
+            env_file=str(env_file),
+        )
+
+        result = CliRunner().invoke(main, [str(cfg_path)])
+
+        assert result.exit_code == 0, result.output
+        mock_sky.jobs.launch.assert_called_once()
+        task_doc = mock_sky.Task.from_yaml_config.call_args.args[0]
+        assert task_doc["run"] == cmd
+
+    def test_missing_config_path_exits_nonzero(self, tmp_path: Path) -> None:
+        """A nonexistent path is a usage error, not a dispatch attempt.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        result = CliRunner().invoke(main, [str(tmp_path / "absent.yaml")])
+
+        assert result.exit_code != 0
+
+    def test_non_mapping_config_exits_nonzero_with_message(self, tmp_path: Path) -> None:
+        """A malformed config maps to a clean CLI error naming the problem.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        path = tmp_path / "launch.yaml"
+        path.write_text("- not\n- a\n- mapping\n", encoding="utf-8")
+
+        result = CliRunner().invoke(main, [str(path)])
+
+        assert result.exit_code != 0
+        assert "must be a YAML mapping" in result.output
+
+    def test_unparseable_yaml_exits_nonzero_with_clean_error(self, tmp_path: Path) -> None:
+        """Invalid YAML syntax maps to a clean CLI error, not a raw traceback.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        path = tmp_path / "launch.yaml"
+        path.write_text("cmd: [unclosed\n", encoding="utf-8")
+
+        result = CliRunner().invoke(main, [str(path)])
+
+        assert result.exit_code != 0
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+        assert "Error" in result.output
+
+
+class TestCheckedInLaunchConfigs:
+    """Every shipped ``configs/launch/*.yaml`` must load, validate, and compose with its template.
+
+    Dispatch itself (cloud submission) is out of scope here — it needs provider creds and is
+    covered against a mocked SDK in ``TestSkypilotLaunchCli`` / ``TestDispatchViaSkypilot``.
+    """
+
+    _LAUNCH_DIR = Path(str(configs_dir() / "launch"))
+    _REPO_ROOT = Path(str(configs_dir())).parents[2]
+
+    def test_launch_dir_ships_train_and_eval_runpod_configs(self) -> None:
+        """The workflows' default ``launch_config`` inputs must exist in the package."""
+        assert (self._LAUNCH_DIR / "train-runpod.yaml").is_file()
+        assert (self._LAUNCH_DIR / "eval-runpod.yaml").is_file()
+
+    @pytest.mark.parametrize(
+        "name", ["train-runpod.yaml", "eval-runpod.yaml"], ids=["train", "eval"]
+    )
+    def test_shipped_config_loads_and_composes_with_its_template(self, name: str) -> None:
+        """A shipped config validates, names a real template, and its cmd injects cleanly.
+
+        :param name: Launch-config filename under ``configs/launch/``.
+        """
+        cfg = load_launch_config(self._LAUNCH_DIR / name)
+
+        assert cfg.cmd, "shipped launch configs must bake the worker cmd"
+        assert cfg.compute_template, "shipped launch configs must name a compute template"
+        template = self._REPO_ROOT / cfg.compute_template
+        assert template.is_file(), f"compute_template does not exist at {template}"
+        doc = _load_compute_template_with_cmd(template, cfg.cmd)
+        assert cfg.cmd in str(doc["run"])
+        assert _detect_provider_from_doc(doc, source=template) == "runpod"
+
+    def test_every_shipped_launch_config_validates(self) -> None:
+        """Future configs added to ``configs/launch/`` stay loadable without test edits."""
+        shipped = sorted(self._LAUNCH_DIR.glob("*.yaml"))
+        assert shipped, f"no launch configs found under {self._LAUNCH_DIR}"
+        for path in shipped:
+            load_launch_config(path)

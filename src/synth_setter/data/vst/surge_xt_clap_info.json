@@ -1,0 +1,7759 @@
+{
+  "plugin_id": "org.surge-synth-team.surge-xt",
+  "plugin_name": "Surge XT",
+  "vendor": "Surge Synth Team",
+  "version": "1.3.4",
+  "clap_version": "1.2.0",
+  "params": [
+    {
+      "id": 825615485,
+      "name": "M1: -",
+      "module": "/Macros/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 825615486,
+      "name": "M2: -",
+      "module": "/Macros/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 825615487,
+      "name": "M3: -",
+      "module": "/Macros/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 825615488,
+      "name": "M4: -",
+      "module": "/Macros/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 825615489,
+      "name": "M5: -",
+      "module": "/Macros/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 825615490,
+      "name": "M6: -",
+      "module": "/Macros/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 825615491,
+      "name": "M7: -",
+      "module": "/Macros/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 825615492,
+      "name": "M8: -",
+      "module": "/Macros/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2742684410,
+      "name": "Send FX 1 Return",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2742684411,
+      "name": "Send FX 2 Return",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2742684412,
+      "name": "Send FX 3 Return",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2742684413,
+      "name": "Send FX 4 Return",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3484083994,
+      "name": "Global Volume",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 1746267673,
+      "name": "Active Scene",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 1730096175,
+      "name": "Scene Mode",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 2368369925,
+      "name": "Split Point",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3313820795,
+      "name": "FX Disable",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 240235375,
+      "name": "Polyphony Limit",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 341421301,
+      "name": "FX Chain Bypass",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 2293392858,
+      "name": "FX A1 FX Type",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3032550496,
+      "name": "FX A1 Param 1",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032550497,
+      "name": "FX A1 Param 2",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032550498,
+      "name": "FX A1 Param 3",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032550499,
+      "name": "FX A1 Param 4",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032550500,
+      "name": "FX A1 Param 5",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032550501,
+      "name": "FX A1 Param 6",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032550502,
+      "name": "FX A1 Param 7",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032550503,
+      "name": "FX A1 Param 8",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032550504,
+      "name": "FX A1 Param 9",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032550505,
+      "name": "FX A1 Param 10",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3814752239,
+      "name": "FX A1 Param 11",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3814752240,
+      "name": "FX A1 Param 12",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2322022009,
+      "name": "FX A2 FX Type",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3032580287,
+      "name": "FX A2 Param 1",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032580288,
+      "name": "FX A2 Param 2",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032580289,
+      "name": "FX A2 Param 3",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032580290,
+      "name": "FX A2 Param 4",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032580291,
+      "name": "FX A2 Param 5",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032580292,
+      "name": "FX A2 Param 6",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032580293,
+      "name": "FX A2 Param 7",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032580294,
+      "name": "FX A2 Param 8",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032580295,
+      "name": "FX A2 Param 9",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032580296,
+      "name": "FX A2 Param 10",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3815675760,
+      "name": "FX A2 Param 11",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3815675761,
+      "name": "FX A2 Param 12",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2350651160,
+      "name": "FX B1 FX Type",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3032610078,
+      "name": "FX B1 Param 1",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032610079,
+      "name": "FX B1 Param 2",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032610080,
+      "name": "FX B1 Param 3",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032610081,
+      "name": "FX B1 Param 4",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032610082,
+      "name": "FX B1 Param 5",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032610083,
+      "name": "FX B1 Param 6",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032610084,
+      "name": "FX B1 Param 7",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032610085,
+      "name": "FX B1 Param 8",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032610086,
+      "name": "FX B1 Param 9",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032610087,
+      "name": "FX B1 Param 10",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3816599281,
+      "name": "FX B1 Param 11",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3816599282,
+      "name": "FX B1 Param 12",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2379280311,
+      "name": "FX B2 FX Type",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3032639869,
+      "name": "FX B2 Param 1",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032639870,
+      "name": "FX B2 Param 2",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032639871,
+      "name": "FX B2 Param 3",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032639872,
+      "name": "FX B2 Param 4",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032639873,
+      "name": "FX B2 Param 5",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032639874,
+      "name": "FX B2 Param 6",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032639875,
+      "name": "FX B2 Param 7",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032639876,
+      "name": "FX B2 Param 8",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032639877,
+      "name": "FX B2 Param 9",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032639878,
+      "name": "FX B2 Param 10",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3817522802,
+      "name": "FX B2 Param 11",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3817522803,
+      "name": "FX B2 Param 12",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2407909462,
+      "name": "FX S1 FX Type",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3032669660,
+      "name": "FX S1 Param 1",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032669661,
+      "name": "FX S1 Param 2",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032669662,
+      "name": "FX S1 Param 3",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032669663,
+      "name": "FX S1 Param 4",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032669664,
+      "name": "FX S1 Param 5",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032669665,
+      "name": "FX S1 Param 6",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032669666,
+      "name": "FX S1 Param 7",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032669667,
+      "name": "FX S1 Param 8",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032669668,
+      "name": "FX S1 Param 9",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032669669,
+      "name": "FX S1 Param 10",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3818446323,
+      "name": "FX S1 Param 11",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3818446324,
+      "name": "FX S1 Param 12",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2436538613,
+      "name": "FX S2 FX Type",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3032699451,
+      "name": "FX S2 Param 1",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032699452,
+      "name": "FX S2 Param 2",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032699453,
+      "name": "FX S2 Param 3",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032699454,
+      "name": "FX S2 Param 4",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032699455,
+      "name": "FX S2 Param 5",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032699456,
+      "name": "FX S2 Param 6",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032699457,
+      "name": "FX S2 Param 7",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032699458,
+      "name": "FX S2 Param 8",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032699459,
+      "name": "FX S2 Param 9",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032699460,
+      "name": "FX S2 Param 10",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3819369844,
+      "name": "FX S2 Param 11",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3819369845,
+      "name": "FX S2 Param 12",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2465167764,
+      "name": "FX G1 FX Type",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3032729242,
+      "name": "FX G1 Param 1",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032729243,
+      "name": "FX G1 Param 2",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032729244,
+      "name": "FX G1 Param 3",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032729245,
+      "name": "FX G1 Param 4",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032729246,
+      "name": "FX G1 Param 5",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032729247,
+      "name": "FX G1 Param 6",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032729248,
+      "name": "FX G1 Param 7",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032729249,
+      "name": "FX G1 Param 8",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032729250,
+      "name": "FX G1 Param 9",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032729251,
+      "name": "FX G1 Param 10",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3820293365,
+      "name": "FX G1 Param 11",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3820293366,
+      "name": "FX G1 Param 12",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2493796915,
+      "name": "FX G2 FX Type",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3032759033,
+      "name": "FX G2 Param 1",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032759034,
+      "name": "FX G2 Param 2",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032759035,
+      "name": "FX G2 Param 3",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032759036,
+      "name": "FX G2 Param 4",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032759037,
+      "name": "FX G2 Param 5",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032759038,
+      "name": "FX G2 Param 6",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032759039,
+      "name": "FX G2 Param 7",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032759040,
+      "name": "FX G2 Param 8",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032759041,
+      "name": "FX G2 Param 9",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032759042,
+      "name": "FX G2 Param 10",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3821216886,
+      "name": "FX G2 Param 11",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3821216887,
+      "name": "FX G2 Param 12",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2522426066,
+      "name": "FX A3 FX Type",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3032788824,
+      "name": "FX A3 Param 1",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032788825,
+      "name": "FX A3 Param 2",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032788826,
+      "name": "FX A3 Param 3",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032788827,
+      "name": "FX A3 Param 4",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032788828,
+      "name": "FX A3 Param 5",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032788829,
+      "name": "FX A3 Param 6",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032788830,
+      "name": "FX A3 Param 7",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032788831,
+      "name": "FX A3 Param 8",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032788832,
+      "name": "FX A3 Param 9",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3032788833,
+      "name": "FX A3 Param 10",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3822140407,
+      "name": "FX A3 Param 11",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3822140408,
+      "name": "FX A3 Param 12",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 1010597960,
+      "name": "FX A4 FX Type",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3813337678,
+      "name": "FX A4 Param 1",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813337679,
+      "name": "FX A4 Param 2",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813337680,
+      "name": "FX A4 Param 3",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813337681,
+      "name": "FX A4 Param 4",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813337682,
+      "name": "FX A4 Param 5",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813337683,
+      "name": "FX A4 Param 6",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813337684,
+      "name": "FX A4 Param 7",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813337685,
+      "name": "FX A4 Param 8",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813337686,
+      "name": "FX A4 Param 9",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813337687,
+      "name": "FX A4 Param 10",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2249351105,
+      "name": "FX A4 Param 11",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2249351106,
+      "name": "FX A4 Param 12",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 1039227111,
+      "name": "FX B3 FX Type",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3813367469,
+      "name": "FX B3 Param 1",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813367470,
+      "name": "FX B3 Param 2",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813367471,
+      "name": "FX B3 Param 3",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813367472,
+      "name": "FX B3 Param 4",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813367473,
+      "name": "FX B3 Param 5",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813367474,
+      "name": "FX B3 Param 6",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813367475,
+      "name": "FX B3 Param 7",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813367476,
+      "name": "FX B3 Param 8",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813367477,
+      "name": "FX B3 Param 9",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813367478,
+      "name": "FX B3 Param 10",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2250274626,
+      "name": "FX B3 Param 11",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2250274627,
+      "name": "FX B3 Param 12",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 1067856262,
+      "name": "FX B4 FX Type",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3813397260,
+      "name": "FX B4 Param 1",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813397261,
+      "name": "FX B4 Param 2",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813397262,
+      "name": "FX B4 Param 3",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813397263,
+      "name": "FX B4 Param 4",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813397264,
+      "name": "FX B4 Param 5",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813397265,
+      "name": "FX B4 Param 6",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813397266,
+      "name": "FX B4 Param 7",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813397267,
+      "name": "FX B4 Param 8",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813397268,
+      "name": "FX B4 Param 9",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813397269,
+      "name": "FX B4 Param 10",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2251198147,
+      "name": "FX B4 Param 11",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2251198148,
+      "name": "FX B4 Param 12",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 1096485413,
+      "name": "FX S3 FX Type",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3813427051,
+      "name": "FX S3 Param 1",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813427052,
+      "name": "FX S3 Param 2",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813427053,
+      "name": "FX S3 Param 3",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813427054,
+      "name": "FX S3 Param 4",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813427055,
+      "name": "FX S3 Param 5",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813427056,
+      "name": "FX S3 Param 6",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813427057,
+      "name": "FX S3 Param 7",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813427058,
+      "name": "FX S3 Param 8",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813427059,
+      "name": "FX S3 Param 9",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813427060,
+      "name": "FX S3 Param 10",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2252121668,
+      "name": "FX S3 Param 11",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2252121669,
+      "name": "FX S3 Param 12",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 1125114564,
+      "name": "FX S4 FX Type",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3813456842,
+      "name": "FX S4 Param 1",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813456843,
+      "name": "FX S4 Param 2",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813456844,
+      "name": "FX S4 Param 3",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813456845,
+      "name": "FX S4 Param 4",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813456846,
+      "name": "FX S4 Param 5",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813456847,
+      "name": "FX S4 Param 6",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813456848,
+      "name": "FX S4 Param 7",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813456849,
+      "name": "FX S4 Param 8",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813456850,
+      "name": "FX S4 Param 9",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813456851,
+      "name": "FX S4 Param 10",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2253045189,
+      "name": "FX S4 Param 11",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2253045190,
+      "name": "FX S4 Param 12",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 1153743715,
+      "name": "FX G3 FX Type",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3813486633,
+      "name": "FX G3 Param 1",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813486634,
+      "name": "FX G3 Param 2",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813486635,
+      "name": "FX G3 Param 3",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813486636,
+      "name": "FX G3 Param 4",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813486637,
+      "name": "FX G3 Param 5",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813486638,
+      "name": "FX G3 Param 6",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813486639,
+      "name": "FX G3 Param 7",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813486640,
+      "name": "FX G3 Param 8",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813486641,
+      "name": "FX G3 Param 9",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813486642,
+      "name": "FX G3 Param 10",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2253968710,
+      "name": "FX G3 Param 11",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2253968711,
+      "name": "FX G3 Param 12",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 1182372866,
+      "name": "FX G4 FX Type",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3813516424,
+      "name": "FX G4 Param 1",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813516425,
+      "name": "FX G4 Param 2",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813516426,
+      "name": "FX G4 Param 3",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813516427,
+      "name": "FX G4 Param 4",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813516428,
+      "name": "FX G4 Param 5",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813516429,
+      "name": "FX G4 Param 6",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813516430,
+      "name": "FX G4 Param 7",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813516431,
+      "name": "FX G4 Param 8",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813516432,
+      "name": "FX G4 Param 9",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3813516433,
+      "name": "FX G4 Param 10",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2254892231,
+      "name": "FX G4 Param 11",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2254892232,
+      "name": "FX G4 Param 12",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 1564195625,
+      "name": "Character",
+      "module": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3235198798,
+      "name": "A Octave",
+      "module": "/A Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3014957538,
+      "name": "A Pitch",
+      "module": "/A Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 994712943,
+      "name": "A Portamento",
+      "module": "/A Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3065518477,
+      "name": "A Play Mode",
+      "module": "/A Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3430465358,
+      "name": "A FM Routing",
+      "module": "/A Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 650467177,
+      "name": "A FM Depth",
+      "module": "/A Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3004132939,
+      "name": "A Osc Drift",
+      "module": "/A Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3783187012,
+      "name": "A Noise Color",
+      "module": "/A Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3242947426,
+      "name": "A Keytrack Root Key",
+      "module": "/A Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3446465720,
+      "name": "A Volume",
+      "module": "/A Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 92522431,
+      "name": "A Pan",
+      "module": "/A Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2868195411,
+      "name": "A Width",
+      "module": "/A Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 326778877,
+      "name": "A Send FX 1 Level",
+      "module": "/A Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 326778878,
+      "name": "A Send FX 2 Level",
+      "module": "/A Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 326778879,
+      "name": "A Send FX 3 Level",
+      "module": "/A Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 326778880,
+      "name": "A Send FX 4 Level",
+      "module": "/A Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3700707181,
+      "name": "A Pitch Bend Up Range",
+      "module": "/A Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3700706652,
+      "name": "A Pitch Bend Down Range",
+      "module": "/A Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 1224911995,
+      "name": "A VCA Gain",
+      "module": "/A Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1285869018,
+      "name": "A Velocity > VCA Gain",
+      "module": "/A Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2312042915,
+      "name": "A Feedback",
+      "module": "/A Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 974101959,
+      "name": "A Filter Configuration",
+      "module": "/A Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 2642740645,
+      "name": "A Filter Balance",
+      "module": "/A Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3160484876,
+      "name": "A Highpass",
+      "module": "/A Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 456251615,
+      "name": "A Waveshaper Type",
+      "module": "/A Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 1243907205,
+      "name": "A Waveshaper Drive",
+      "module": "/A Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2244922721,
+      "name": "A Filter 2 Offset Mode",
+      "module": "/A Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 1109929470,
+      "name": "A Link Resonance",
+      "module": "/A Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3553863657,
+      "name": "A Osc 1 Type",
+      "module": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 600629919,
+      "name": "A Osc 1 Octave",
+      "module": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 2791424113,
+      "name": "A Osc 1 Pitch",
+      "module": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 627352114,
+      "name": "A Osc 1 Shape",
+      "module": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 627352115,
+      "name": "A Osc 1 Width 1",
+      "module": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 627352116,
+      "name": "A Osc 1 Width 2",
+      "module": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 627352117,
+      "name": "A Osc 1 Sub Mix",
+      "module": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 627352118,
+      "name": "A Osc 1 Sync",
+      "module": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 627352119,
+      "name": "A Osc 1 Unison Detune",
+      "module": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 627352120,
+      "name": "A Osc 1 Unison Voices",
+      "module": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 939040635,
+      "name": "A Osc 1 Keytrack",
+      "module": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3365237974,
+      "name": "A Osc 1 Retrigger",
+      "module": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3582492808,
+      "name": "A Osc 2 Type",
+      "module": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 2343440254,
+      "name": "A Osc 2 Octave",
+      "module": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3678927794,
+      "name": "A Osc 2 Pitch",
+      "module": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2370162449,
+      "name": "A Osc 2 Shape",
+      "module": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2370162450,
+      "name": "A Osc 2 Width 1",
+      "module": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2370162451,
+      "name": "A Osc 2 Width 2",
+      "module": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2370162452,
+      "name": "A Osc 2 Sub Mix",
+      "module": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2370162453,
+      "name": "A Osc 2 Sync",
+      "module": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2370162454,
+      "name": "A Osc 2 Unison Detune",
+      "module": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2370162455,
+      "name": "A Osc 2 Unison Voices",
+      "module": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 742527130,
+      "name": "A Osc 2 Keytrack",
+      "module": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 1568286615,
+      "name": "A Osc 2 Retrigger",
+      "module": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3611121959,
+      "name": "A Osc 3 Type",
+      "module": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 4086250589,
+      "name": "A Osc 3 Octave",
+      "module": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 271464179,
+      "name": "A Osc 3 Pitch",
+      "module": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 4112972784,
+      "name": "A Osc 3 Shape",
+      "module": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 4112972785,
+      "name": "A Osc 3 Width 1",
+      "module": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 4112972786,
+      "name": "A Osc 3 Width 2",
+      "module": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 4112972787,
+      "name": "A Osc 3 Sub Mix",
+      "module": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 4112972788,
+      "name": "A Osc 3 Sync",
+      "module": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 4112972789,
+      "name": "A Osc 3 Unison Detune",
+      "module": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 4112972790,
+      "name": "A Osc 3 Unison Voices",
+      "module": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 546013625,
+      "name": "A Osc 3 Keytrack",
+      "module": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 4066302552,
+      "name": "A Osc 3 Retrigger",
+      "module": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 371918427,
+      "name": "A Osc 1 Volume",
+      "module": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 247329706,
+      "name": "A Osc 1 Mute",
+      "module": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 1098519332,
+      "name": "A Osc 1 Solo",
+      "module": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 2508963190,
+      "name": "A Osc 1 Route",
+      "module": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 371918428,
+      "name": "A Osc 2 Volume",
+      "module": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 247329707,
+      "name": "A Osc 2 Mute",
+      "module": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 1098519333,
+      "name": "A Osc 2 Solo",
+      "module": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 2508963191,
+      "name": "A Osc 2 Route",
+      "module": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 371918429,
+      "name": "A Osc 3 Volume",
+      "module": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 247329708,
+      "name": "A Osc 3 Mute",
+      "module": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 1098519334,
+      "name": "A Osc 3 Solo",
+      "module": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 2508963192,
+      "name": "A Osc 3 Route",
+      "module": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 1788975242,
+      "name": "A Ring Modulation 1x2 Volume",
+      "module": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3662628441,
+      "name": "A Ring Modulation 1x2 Mute",
+      "module": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 177936595,
+      "name": "A Ring Modulation 1x2 Solo",
+      "module": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 1313557029,
+      "name": "A Ring Modulation 1x2 Route",
+      "module": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 1788975274,
+      "name": "A Ring Modulation 2x3 Volume",
+      "module": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3662628473,
+      "name": "A Ring Modulation 2x3 Mute",
+      "module": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 177936627,
+      "name": "A Ring Modulation 2x3 Solo",
+      "module": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 1313557061,
+      "name": "A Ring Modulation 2x3 Route",
+      "module": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3102230465,
+      "name": "A Noise Volume",
+      "module": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2331386898,
+      "name": "A Noise Mute",
+      "module": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 2634619480,
+      "name": "A Noise Solo",
+      "module": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3502536390,
+      "name": "A Noise Route",
+      "module": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 2939539352,
+      "name": "A Pre-Filter Gain",
+      "module": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1537728286,
+      "name": "A Filter 1 Type",
+      "module": "/A Filters/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3622773526,
+      "name": "A Filter 1 Subtype",
+      "module": "/A Filters/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 4092842705,
+      "name": "A Filter 1 Cutoff",
+      "module": "/A Filters/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 8095466,
+      "name": "A Filter 1 Resonance",
+      "module": "/A Filters/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 4143694297,
+      "name": "A Filter 1 FEG Mod Amount",
+      "module": "/A Filters/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3217306672,
+      "name": "A Filter 1 Keytrack",
+      "module": "/A Filters/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1566357437,
+      "name": "A Filter 2 Type",
+      "module": "/A Filters/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 1815319063,
+      "name": "A Filter 2 Subtype",
+      "module": "/A Filters/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 1540685744,
+      "name": "A Filter 2 Cutoff",
+      "module": "/A Filters/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2506111403,
+      "name": "A Filter 2 Resonance",
+      "module": "/A Filters/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1591537336,
+      "name": "A Filter 2 FEG Mod Amount",
+      "module": "/A Filters/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3020793167,
+      "name": "A Filter 2 Keytrack",
+      "module": "/A Filters/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2005836581,
+      "name": "A Amp EG Attack",
+      "module": "/A Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 4205880839,
+      "name": "A Amp EG Attack Shape",
+      "module": "/A Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3946337085,
+      "name": "A Amp EG Decay",
+      "module": "/A Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2313937951,
+      "name": "A Amp EG Decay Shape",
+      "module": "/A Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 874858726,
+      "name": "A Amp EG Sustain",
+      "module": "/A Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3817344714,
+      "name": "A Amp EG Release",
+      "module": "/A Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 454164972,
+      "name": "A Amp EG Release Shape",
+      "module": "/A Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 4006904256,
+      "name": "A Amp EG Envelope Mode",
+      "module": "/A Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3748646916,
+      "name": "A Filter EG Attack",
+      "module": "/A Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3700322214,
+      "name": "A Filter EG Attack Shape",
+      "module": "/A Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 538873470,
+      "name": "A Filter EG Decay",
+      "module": "/A Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2020534944,
+      "name": "A Filter EG Decay Shape",
+      "module": "/A Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3362371559,
+      "name": "A Filter EG Sustain",
+      "module": "/A Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2009890251,
+      "name": "A Filter EG Release",
+      "module": "/A Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1961716781,
+      "name": "A Filter EG Release Shape",
+      "module": "/A Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 4035533407,
+      "name": "A Filter EG Envelope Mode",
+      "module": "/A Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3957142939,
+      "name": "A LFO 1 Type",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 1235992486,
+      "name": "A LFO 1 Rate",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3954372469,
+      "name": "A LFO 1 Phase",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2456464138,
+      "name": "A LFO 1 Amplitude",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1980287499,
+      "name": "A LFO 1 Deform",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1231937413,
+      "name": "A LFO 1 Trigger Mode",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3728068628,
+      "name": "A LFO 1 Unipolar",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3943210877,
+      "name": "A LFO 1 Delay",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1908656014,
+      "name": "A LFO 1 Attack",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1235707781,
+      "name": "A LFO 1 Hold",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3943202228,
+      "name": "A LFO 1 Decay",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2157228445,
+      "name": "A LFO 1 Sustain",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 804747137,
+      "name": "A LFO 1 Release",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 549679324,
+      "name": "A LFO 2 Type",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 1264621637,
+      "name": "A LFO 2 Rate",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 546908854,
+      "name": "A LFO 2 Phase",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 659512779,
+      "name": "A LFO 2 Amplitude",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3723097834,
+      "name": "A LFO 2 Deform",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1035423908,
+      "name": "A LFO 2 Trigger Mode",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3531555123,
+      "name": "A LFO 2 Unipolar",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 535747262,
+      "name": "A LFO 2 Delay",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3651466349,
+      "name": "A LFO 2 Attack",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1264336932,
+      "name": "A LFO 2 Hold",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 535738613,
+      "name": "A LFO 2 Decay",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 349773982,
+      "name": "A LFO 2 Sustain",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3292259970,
+      "name": "A LFO 2 Release",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1437183005,
+      "name": "A LFO 3 Type",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 1293250788,
+      "name": "A LFO 3 Rate",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1434412535,
+      "name": "A LFO 3 Phase",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3157528716,
+      "name": "A LFO 3 Amplitude",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1170940873,
+      "name": "A LFO 3 Deform",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 838910403,
+      "name": "A LFO 3 Trigger Mode",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3335041618,
+      "name": "A LFO 3 Unipolar",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 1423250943,
+      "name": "A LFO 3 Delay",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1099309388,
+      "name": "A LFO 3 Attack",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1292966083,
+      "name": "A LFO 3 Hold",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1423242294,
+      "name": "A LFO 3 Decay",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2837286815,
+      "name": "A LFO 3 Sustain",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1484805507,
+      "name": "A LFO 3 Release",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2324686686,
+      "name": "A LFO 4 Type",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 1321879939,
+      "name": "A LFO 4 Rate",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2321916216,
+      "name": "A LFO 4 Phase",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1360577357,
+      "name": "A LFO 4 Amplitude",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2913751208,
+      "name": "A LFO 4 Deform",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 642396898,
+      "name": "A LFO 4 Trigger Mode",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3138528113,
+      "name": "A LFO 4 Unipolar",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 2310754624,
+      "name": "A LFO 4 Delay",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2842119723,
+      "name": "A LFO 4 Attack",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1321595234,
+      "name": "A LFO 4 Hold",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2310745975,
+      "name": "A LFO 4 Decay",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1029832352,
+      "name": "A LFO 4 Sustain",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3972318340,
+      "name": "A LFO 4 Release",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3212190367,
+      "name": "A LFO 5 Type",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 1350509090,
+      "name": "A LFO 5 Rate",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3209419897,
+      "name": "A LFO 5 Phase",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3858593294,
+      "name": "A LFO 5 Amplitude",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 361594247,
+      "name": "A LFO 5 Deform",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 445883393,
+      "name": "A LFO 5 Trigger Mode",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 2942014608,
+      "name": "A LFO 5 Unipolar",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3198258305,
+      "name": "A LFO 5 Delay",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 289962762,
+      "name": "A LFO 5 Attack",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1350224385,
+      "name": "A LFO 5 Hold",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3198249656,
+      "name": "A LFO 5 Decay",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3517345185,
+      "name": "A LFO 5 Sustain",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2164863877,
+      "name": "A LFO 5 Release",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 4099694048,
+      "name": "A LFO 6 Type",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 1379138241,
+      "name": "A LFO 6 Rate",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 4096923578,
+      "name": "A LFO 6 Phase",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2061641935,
+      "name": "A LFO 6 Amplitude",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2104404582,
+      "name": "A LFO 6 Deform",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 249369888,
+      "name": "A LFO 6 Trigger Mode",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 2745501103,
+      "name": "A LFO 6 Unipolar",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 4085761986,
+      "name": "A LFO 6 Delay",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2032773097,
+      "name": "A LFO 6 Attack",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1378853536,
+      "name": "A LFO 6 Hold",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 4085753337,
+      "name": "A LFO 6 Decay",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1709890722,
+      "name": "A LFO 6 Sustain",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 357409414,
+      "name": "A LFO 6 Release",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 692230433,
+      "name": "A Scene LFO 1 Type",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 1407767392,
+      "name": "A Scene LFO 1 Rate",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 689459963,
+      "name": "A Scene LFO 1 Phase",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 264690576,
+      "name": "A Scene LFO 1 Amplitude",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3847214917,
+      "name": "A Scene LFO 1 Deform",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 52856383,
+      "name": "A Scene LFO 1 Trigger Mode",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 2548987598,
+      "name": "A Scene LFO 1 Unipolar",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 678298371,
+      "name": "A Scene LFO 1 Delay",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3775583432,
+      "name": "A Scene LFO 1 Attack",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 1407482687,
+      "name": "A Scene LFO 1 Hold",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 678289722,
+      "name": "A Scene LFO 1 Decay",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 4197403555,
+      "name": "A Scene LFO 1 Sustain",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2844922247,
+      "name": "A Scene LFO 1 Release",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 1579734114,
+      "name": "A Scene LFO 2 Type",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 1436396543,
+      "name": "A Scene LFO 2 Rate",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 1576963644,
+      "name": "A Scene LFO 2 Phase",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2762706513,
+      "name": "A Scene LFO 2 Amplitude",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 1295057956,
+      "name": "A Scene LFO 2 Deform",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 4151310174,
+      "name": "A Scene LFO 2 Trigger Mode",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 2352474093,
+      "name": "A Scene LFO 2 Unipolar",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 1565802052,
+      "name": "A Scene LFO 2 Delay",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 1223426471,
+      "name": "A Scene LFO 2 Attack",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 1436111838,
+      "name": "A Scene LFO 2 Hold",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 1565793403,
+      "name": "A Scene LFO 2 Decay",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2389949092,
+      "name": "A Scene LFO 2 Sustain",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 1037467784,
+      "name": "A Scene LFO 2 Release",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2467237795,
+      "name": "A Scene LFO 3 Type",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 1465025694,
+      "name": "A Scene LFO 3 Rate",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2464467325,
+      "name": "A Scene LFO 3 Phase",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 965755154,
+      "name": "A Scene LFO 3 Amplitude",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3037868291,
+      "name": "A Scene LFO 3 Deform",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3954796669,
+      "name": "A Scene LFO 3 Trigger Mode",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 2155960588,
+      "name": "A Scene LFO 3 Unipolar",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 2453305733,
+      "name": "A Scene LFO 3 Delay",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2966236806,
+      "name": "A Scene LFO 3 Attack",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 1464740989,
+      "name": "A Scene LFO 3 Hold",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2453297084,
+      "name": "A Scene LFO 3 Decay",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 582494629,
+      "name": "A Scene LFO 3 Sustain",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3524980617,
+      "name": "A Scene LFO 3 Release",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3354741476,
+      "name": "A Scene LFO 4 Type",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 1493654845,
+      "name": "A Scene LFO 4 Rate",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3351971006,
+      "name": "A Scene LFO 4 Phase",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3463771091,
+      "name": "A Scene LFO 4 Amplitude",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 485711330,
+      "name": "A Scene LFO 4 Deform",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3758283164,
+      "name": "A Scene LFO 4 Trigger Mode",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 1959447083,
+      "name": "A Scene LFO 4 Unipolar",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3340809414,
+      "name": "A Scene LFO 4 Delay",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 414079845,
+      "name": "A Scene LFO 4 Attack",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 1493370140,
+      "name": "A Scene LFO 4 Hold",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3340800765,
+      "name": "A Scene LFO 4 Decay",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3070007462,
+      "name": "A Scene LFO 4 Sustain",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 1717526154,
+      "name": "A Scene LFO 4 Release",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 534960088,
+      "name": "A Scene LFO 5 Type",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3480904137,
+      "name": "A Scene LFO 5 Rate",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 532189618,
+      "name": "A Scene LFO 5 Phase",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 707454663,
+      "name": "A Scene LFO 5 Amplitude",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3266801518,
+      "name": "A Scene LFO 5 Deform",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 621328424,
+      "name": "A Scene LFO 5 Trigger Mode",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3117459639,
+      "name": "A Scene LFO 5 Unipolar",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 521028026,
+      "name": "A Scene LFO 5 Delay",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3195170033,
+      "name": "A Scene LFO 5 Attack",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3480619432,
+      "name": "A Scene LFO 5 Hold",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 521019377,
+      "name": "A Scene LFO 5 Decay",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3384457370,
+      "name": "A Scene LFO 5 Sustain",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2031976062,
+      "name": "A Scene LFO 5 Release",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 1422463769,
+      "name": "A Scene LFO 6 Type",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3509533288,
+      "name": "A Scene LFO 6 Rate",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 1419693299,
+      "name": "A Scene LFO 6 Phase",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3205470600,
+      "name": "A Scene LFO 6 Amplitude",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 714644557,
+      "name": "A Scene LFO 6 Deform",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 424814919,
+      "name": "A Scene LFO 6 Trigger Mode",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 2920946134,
+      "name": "A Scene LFO 6 Unipolar",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 1408531707,
+      "name": "A Scene LFO 6 Delay",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 643013072,
+      "name": "A Scene LFO 6 Attack",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3509248583,
+      "name": "A Scene LFO 6 Hold",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 1408523058,
+      "name": "A Scene LFO 6 Decay",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 1577002907,
+      "name": "A Scene LFO 6 Sustain",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 224521599,
+      "name": "A Scene LFO 6 Release",
+      "module": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 683041837,
+      "name": "B Octave",
+      "module": "/B Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3902461219,
+      "name": "B Pitch",
+      "module": "/B Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1123795662,
+      "name": "B Portamento",
+      "module": "/B Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2869004972,
+      "name": "B Play Mode",
+      "module": "/B Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 1633513999,
+      "name": "B FM Routing",
+      "module": "/B Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 453953672,
+      "name": "B FM Depth",
+      "module": "/B Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3891636620,
+      "name": "B Osc Drift",
+      "module": "/B Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3586673507,
+      "name": "B Noise Color",
+      "module": "/B Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3046433921,
+      "name": "B Keytrack Root Key",
+      "module": "/B Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 894308759,
+      "name": "B Volume",
+      "module": "/B Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 93445952,
+      "name": "B Pan",
+      "module": "/B Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2896824562,
+      "name": "B Width",
+      "module": "/B Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2824794814,
+      "name": "B Send FX 1 Level",
+      "module": "/B Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2824794815,
+      "name": "B Send FX 2 Level",
+      "module": "/B Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2824794816,
+      "name": "B Send FX 3 Level",
+      "module": "/B Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2824794817,
+      "name": "B Send FX 4 Level",
+      "module": "/B Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3829789900,
+      "name": "B Pitch Bend Up Range",
+      "module": "/B Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3829789371,
+      "name": "B Pitch Bend Down Range",
+      "module": "/B Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3722927932,
+      "name": "B VCA Gain",
+      "module": "/B Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 780310393,
+      "name": "B Velocity > VCA Gain",
+      "module": "/B Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2115529410,
+      "name": "B Feedback",
+      "module": "/B Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3472117896,
+      "name": "B Filter Configuration",
+      "module": "/B Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 845789286,
+      "name": "B Filter Balance",
+      "module": "/B Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 608327915,
+      "name": "B Highpass",
+      "module": "/B Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2943764448,
+      "name": "B Waveshaper Type",
+      "module": "/B Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 1047393700,
+      "name": "B Waveshaper Drive",
+      "module": "/B Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3598232418,
+      "name": "B Filter 2 Offset Mode",
+      "module": "/B Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 265457599,
+      "name": "B Link Resonance",
+      "module": "/B Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 1756912298,
+      "name": "B Osc 1 Type",
+      "module": "/B Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 307226912,
+      "name": "B Osc 1 Octave",
+      "module": "/B Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 2920506832,
+      "name": "B Osc 1 Pitch",
+      "module": "/B Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 333949107,
+      "name": "B Osc 1 Shape",
+      "module": "/B Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 333949108,
+      "name": "B Osc 1 Width 1",
+      "module": "/B Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 333949109,
+      "name": "B Osc 1 Width 2",
+      "module": "/B Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 333949110,
+      "name": "B Osc 1 Sub Mix",
+      "module": "/B Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 333949111,
+      "name": "B Osc 1 Sync",
+      "module": "/B Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 333949112,
+      "name": "B Osc 1 Unison Detune",
+      "module": "/B Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 333949113,
+      "name": "B Osc 1 Unison Voices",
+      "module": "/B Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 2446592444,
+      "name": "B Osc 1 Keytrack",
+      "module": "/B Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 2854703797,
+      "name": "B Osc 1 Retrigger",
+      "module": "/B Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 1785541449,
+      "name": "B Osc 2 Type",
+      "module": "/B Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 2050037247,
+      "name": "B Osc 2 Octave",
+      "module": "/B Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3808010513,
+      "name": "B Osc 2 Pitch",
+      "module": "/B Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2076759442,
+      "name": "B Osc 2 Shape",
+      "module": "/B Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2076759443,
+      "name": "B Osc 2 Width 1",
+      "module": "/B Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2076759444,
+      "name": "B Osc 2 Width 2",
+      "module": "/B Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2076759445,
+      "name": "B Osc 2 Sub Mix",
+      "module": "/B Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2076759446,
+      "name": "B Osc 2 Sync",
+      "module": "/B Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2076759447,
+      "name": "B Osc 2 Unison Detune",
+      "module": "/B Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2076759448,
+      "name": "B Osc 2 Unison Voices",
+      "module": "/B Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 2250078939,
+      "name": "B Osc 2 Keytrack",
+      "module": "/B Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 1057752438,
+      "name": "B Osc 2 Retrigger",
+      "module": "/B Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 1814170600,
+      "name": "B Osc 3 Type",
+      "module": "/B Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3792847582,
+      "name": "B Osc 3 Octave",
+      "module": "/B Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 400546898,
+      "name": "B Osc 3 Pitch",
+      "module": "/B Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3819569777,
+      "name": "B Osc 3 Shape",
+      "module": "/B Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3819569778,
+      "name": "B Osc 3 Width 1",
+      "module": "/B Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3819569779,
+      "name": "B Osc 3 Width 2",
+      "module": "/B Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3819569780,
+      "name": "B Osc 3 Sub Mix",
+      "module": "/B Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3819569781,
+      "name": "B Osc 3 Sync",
+      "module": "/B Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3819569782,
+      "name": "B Osc 3 Unison Detune",
+      "module": "/B Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3819569783,
+      "name": "B Osc 3 Unison Voices",
+      "module": "/B Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 2053565434,
+      "name": "B Osc 3 Keytrack",
+      "module": "/B Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3555768375,
+      "name": "B Osc 3 Retrigger",
+      "module": "/B Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 175404922,
+      "name": "B Osc 1 Volume",
+      "module": "/B Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2734842539,
+      "name": "B Osc 1 Mute",
+      "module": "/B Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3586032165,
+      "name": "B Osc 1 Solo",
+      "module": "/B Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 2312449685,
+      "name": "B Osc 1 Route",
+      "module": "/B Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 175404923,
+      "name": "B Osc 2 Volume",
+      "module": "/B Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2734842540,
+      "name": "B Osc 2 Mute",
+      "module": "/B Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3586032166,
+      "name": "B Osc 2 Solo",
+      "module": "/B Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 2312449686,
+      "name": "B Osc 2 Route",
+      "module": "/B Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 175404924,
+      "name": "B Osc 3 Volume",
+      "module": "/B Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2734842541,
+      "name": "B Osc 3 Mute",
+      "module": "/B Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3586032167,
+      "name": "B Osc 3 Solo",
+      "module": "/B Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 2312449687,
+      "name": "B Osc 3 Route",
+      "module": "/B Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 1283416617,
+      "name": "B Ring Modulation 1x2 Volume",
+      "module": "/B Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3369225434,
+      "name": "B Ring Modulation 1x2 Mute",
+      "module": "/B Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 4179500884,
+      "name": "B Ring Modulation 1x2 Solo",
+      "module": "/B Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 807998404,
+      "name": "B Ring Modulation 1x2 Route",
+      "module": "/B Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 1283416649,
+      "name": "B Ring Modulation 2x3 Volume",
+      "module": "/B Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3369225466,
+      "name": "B Ring Modulation 2x3 Mute",
+      "module": "/B Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 4179500916,
+      "name": "B Ring Modulation 2x3 Solo",
+      "module": "/B Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 807998436,
+      "name": "B Ring Modulation 2x3 Route",
+      "module": "/B Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 2808827458,
+      "name": "B Noise Volume",
+      "module": "/B Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2460469617,
+      "name": "B Noise Mute",
+      "module": "/B Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 2763702199,
+      "name": "B Noise Solo",
+      "module": "/B Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3209133383,
+      "name": "B Noise Route",
+      "module": "/B Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 1142587993,
+      "name": "B Pre-Filter Gain",
+      "module": "/B Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1032169661,
+      "name": "B Filter 1 Type",
+      "module": "/B Filters/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 681115927,
+      "name": "B Filter 1 Subtype",
+      "module": "/B Filters/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3582308528,
+      "name": "B Filter 1 Cutoff",
+      "module": "/B Filters/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3458590891,
+      "name": "B Filter 1 Resonance",
+      "module": "/B Filters/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3633160120,
+      "name": "B Filter 1 FEG Mod Amount",
+      "module": "/B Filters/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2220234319,
+      "name": "B Filter 1 Keytrack",
+      "module": "/B Filters/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1060798812,
+      "name": "B Filter 2 Type",
+      "module": "/B Filters/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3168628760,
+      "name": "B Filter 2 Subtype",
+      "module": "/B Filters/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 1030151567,
+      "name": "B Filter 2 Cutoff",
+      "module": "/B Filters/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1661639532,
+      "name": "B Filter 2 Resonance",
+      "module": "/B Filters/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1081003159,
+      "name": "B Filter 2 FEG Mod Amount",
+      "module": "/B Filters/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2023720814,
+      "name": "B Filter 2 Keytrack",
+      "module": "/B Filters/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1712433574,
+      "name": "B Amp EG Attack",
+      "module": "/B Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3361408968,
+      "name": "B Amp EG Attack Shape",
+      "module": "/B Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 4075419804,
+      "name": "B Amp EG Decay",
+      "module": "/B Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1316865598,
+      "name": "B Amp EG Decay Shape",
+      "module": "/B Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 369300101,
+      "name": "B Amp EG Sustain",
+      "module": "/B Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3311786089,
+      "name": "B Amp EG Release",
+      "module": "/B Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 45340747,
+      "name": "B Amp EG Release Shape",
+      "module": "/B Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 2209952897,
+      "name": "B Amp EG Envelope Mode",
+      "module": "/B Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3455243909,
+      "name": "B Filter EG Attack",
+      "module": "/B Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2855850343,
+      "name": "B Filter EG Attack Shape",
+      "module": "/B Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 667956189,
+      "name": "B Filter EG Decay",
+      "module": "/B Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1023462591,
+      "name": "B Filter EG Decay Shape",
+      "module": "/B Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 2856812934,
+      "name": "B Filter EG Sustain",
+      "module": "/B Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1504331626,
+      "name": "B Filter EG Release",
+      "module": "/B Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1552892556,
+      "name": "B Filter EG Release Shape",
+      "module": "/B Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 2238582048,
+      "name": "B Filter EG Envelope Mode",
+      "module": "/B Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 4086225658,
+      "name": "B LFO 1 Type",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3734008423,
+      "name": "B LFO 1 Rate",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 4083455188,
+      "name": "B LFO 1 Phase",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1945929961,
+      "name": "B LFO 1 Amplitude",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1686884492,
+      "name": "B LFO 1 Deform",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2739489222,
+      "name": "B LFO 1 Trigger Mode",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 940653141,
+      "name": "B LFO 1 Unipolar",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 4072293596,
+      "name": "B LFO 1 Delay",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1615253007,
+      "name": "B LFO 1 Attack",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3733723718,
+      "name": "B LFO 1 Hold",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 4072284947,
+      "name": "B LFO 1 Decay",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1651669820,
+      "name": "B LFO 1 Sustain",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 299188512,
+      "name": "B LFO 1 Release",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 678762043,
+      "name": "B LFO 2 Type",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3762637574,
+      "name": "B LFO 2 Rate",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 675991573,
+      "name": "B LFO 2 Phase",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 148978602,
+      "name": "B LFO 2 Amplitude",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3429694827,
+      "name": "B LFO 2 Deform",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2542975717,
+      "name": "B LFO 2 Trigger Mode",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 744139636,
+      "name": "B LFO 2 Unipolar",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 664829981,
+      "name": "B LFO 2 Delay",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3358063342,
+      "name": "B LFO 2 Attack",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3762352869,
+      "name": "B LFO 2 Hold",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 664821332,
+      "name": "B LFO 2 Decay",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 4139182653,
+      "name": "B LFO 2 Sustain",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2786701345,
+      "name": "B LFO 2 Release",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1566265724,
+      "name": "B LFO 3 Type",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3791266725,
+      "name": "B LFO 3 Rate",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1563495254,
+      "name": "B LFO 3 Phase",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2646994539,
+      "name": "B LFO 3 Amplitude",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 877537866,
+      "name": "B LFO 3 Deform",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2346462212,
+      "name": "B LFO 3 Trigger Mode",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 547626131,
+      "name": "B LFO 3 Unipolar",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 1552333662,
+      "name": "B LFO 3 Delay",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 805906381,
+      "name": "B LFO 3 Attack",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3790982020,
+      "name": "B LFO 3 Hold",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1552325013,
+      "name": "B LFO 3 Decay",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2331728190,
+      "name": "B LFO 3 Sustain",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 979246882,
+      "name": "B LFO 3 Release",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2453769405,
+      "name": "B LFO 4 Type",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3819895876,
+      "name": "B LFO 4 Rate",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2450998935,
+      "name": "B LFO 4 Phase",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 850043180,
+      "name": "B LFO 4 Amplitude",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2620348201,
+      "name": "B LFO 4 Deform",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2149948707,
+      "name": "B LFO 4 Trigger Mode",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 351112626,
+      "name": "B LFO 4 Unipolar",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 2439837343,
+      "name": "B LFO 4 Delay",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2548716716,
+      "name": "B LFO 4 Attack",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3819611171,
+      "name": "B LFO 4 Hold",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 2439828694,
+      "name": "B LFO 4 Decay",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 524273727,
+      "name": "B LFO 4 Sustain",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3466759715,
+      "name": "B LFO 4 Release",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3341273086,
+      "name": "B LFO 5 Type",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3848525027,
+      "name": "B LFO 5 Rate",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3338502616,
+      "name": "B LFO 5 Phase",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3348059117,
+      "name": "B LFO 5 Amplitude",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 68191240,
+      "name": "B LFO 5 Deform",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1953435202,
+      "name": "B LFO 5 Trigger Mode",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 154599121,
+      "name": "B LFO 5 Unipolar",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3327341024,
+      "name": "B LFO 5 Delay",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 4291527051,
+      "name": "B LFO 5 Attack",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3848240322,
+      "name": "B LFO 5 Hold",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3327332375,
+      "name": "B LFO 5 Decay",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3011786560,
+      "name": "B LFO 5 Sustain",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1659305252,
+      "name": "B LFO 5 Release",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 4228776767,
+      "name": "B LFO 6 Type",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3877154178,
+      "name": "B LFO 6 Rate",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 4226006297,
+      "name": "B LFO 6 Phase",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1551107758,
+      "name": "B LFO 6 Amplitude",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1811001575,
+      "name": "B LFO 6 Deform",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1756921697,
+      "name": "B LFO 6 Trigger Mode",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 4253052912,
+      "name": "B LFO 6 Unipolar",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 4214844705,
+      "name": "B LFO 6 Delay",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1739370090,
+      "name": "B LFO 6 Attack",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 3876869473,
+      "name": "B LFO 6 Hold",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 4214836056,
+      "name": "B LFO 6 Decay",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 1204332097,
+      "name": "B LFO 6 Sustain",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 4146818085,
+      "name": "B LFO 6 Release",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 31776,
+      "is_stepped": false
+    },
+    {
+      "id": 821313152,
+      "name": "B Scene LFO 1 Type",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3905783329,
+      "name": "B Scene LFO 1 Rate",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 818542682,
+      "name": "B Scene LFO 1 Phase",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 4049123695,
+      "name": "B Scene LFO 1 Amplitude",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3553811910,
+      "name": "B Scene LFO 1 Deform",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 1560408192,
+      "name": "B Scene LFO 1 Trigger Mode",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 4056539407,
+      "name": "B Scene LFO 1 Unipolar",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 807381090,
+      "name": "B Scene LFO 1 Delay",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3482180425,
+      "name": "B Scene LFO 1 Attack",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3905498624,
+      "name": "B Scene LFO 1 Hold",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 807372441,
+      "name": "B Scene LFO 1 Decay",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3691844930,
+      "name": "B Scene LFO 1 Sustain",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2339363622,
+      "name": "B Scene LFO 1 Release",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 1708816833,
+      "name": "B Scene LFO 2 Type",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3934412480,
+      "name": "B Scene LFO 2 Rate",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 1706046363,
+      "name": "B Scene LFO 2 Phase",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2252172336,
+      "name": "B Scene LFO 2 Amplitude",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 1001654949,
+      "name": "B Scene LFO 2 Deform",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 1363894687,
+      "name": "B Scene LFO 2 Trigger Mode",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3860025902,
+      "name": "B Scene LFO 2 Unipolar",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 1694884771,
+      "name": "B Scene LFO 2 Delay",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 930023464,
+      "name": "B Scene LFO 2 Attack",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3934127775,
+      "name": "B Scene LFO 2 Hold",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 1694876122,
+      "name": "B Scene LFO 2 Decay",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 1884390467,
+      "name": "B Scene LFO 2 Sustain",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 531909159,
+      "name": "B Scene LFO 2 Release",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2596320514,
+      "name": "B Scene LFO 3 Type",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3963041631,
+      "name": "B Scene LFO 3 Rate",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2593550044,
+      "name": "B Scene LFO 3 Phase",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 455220977,
+      "name": "B Scene LFO 3 Amplitude",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2744465284,
+      "name": "B Scene LFO 3 Deform",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 1167381182,
+      "name": "B Scene LFO 3 Trigger Mode",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3663512397,
+      "name": "B Scene LFO 3 Unipolar",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 2582388452,
+      "name": "B Scene LFO 3 Delay",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2672833799,
+      "name": "B Scene LFO 3 Attack",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3962756926,
+      "name": "B Scene LFO 3 Hold",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2582379803,
+      "name": "B Scene LFO 3 Decay",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 76936004,
+      "name": "B Scene LFO 3 Sustain",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3019421992,
+      "name": "B Scene LFO 3 Release",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3483824195,
+      "name": "B Scene LFO 4 Type",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3991670782,
+      "name": "B Scene LFO 4 Rate",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3481053725,
+      "name": "B Scene LFO 4 Phase",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2953236914,
+      "name": "B Scene LFO 4 Amplitude",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 192308323,
+      "name": "B Scene LFO 4 Deform",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 970867677,
+      "name": "B Scene LFO 4 Trigger Mode",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3466998892,
+      "name": "B Scene LFO 4 Unipolar",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3469892133,
+      "name": "B Scene LFO 4 Delay",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 120676838,
+      "name": "B Scene LFO 4 Attack",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3991386077,
+      "name": "B Scene LFO 4 Hold",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3469883484,
+      "name": "B Scene LFO 4 Decay",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2564448837,
+      "name": "B Scene LFO 4 Sustain",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 1211967529,
+      "name": "B Scene LFO 4 Release",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 241557081,
+      "name": "B Scene LFO 5 Type",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3609986856,
+      "name": "B Scene LFO 5 Rate",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 238786611,
+      "name": "B Scene LFO 5 Phase",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2060764360,
+      "name": "B Scene LFO 5 Amplitude",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2761242893,
+      "name": "B Scene LFO 5 Deform",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 110794247,
+      "name": "B Scene LFO 5 Trigger Mode",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 2606925462,
+      "name": "B Scene LFO 5 Unipolar",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 227625019,
+      "name": "B Scene LFO 5 Delay",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 2689611408,
+      "name": "B Scene LFO 5 Attack",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3609702151,
+      "name": "B Scene LFO 5 Hold",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 227616370,
+      "name": "B Scene LFO 5 Decay",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 597041883,
+      "name": "B Scene LFO 5 Sustain",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3539527871,
+      "name": "B Scene LFO 5 Release",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 1129060762,
+      "name": "B Scene LFO 6 Type",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 3638616007,
+      "name": "B Scene LFO 6 Rate",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 1126290292,
+      "name": "B Scene LFO 6 Phase",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 263813001,
+      "name": "B Scene LFO 6 Amplitude",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 209085932,
+      "name": "B Scene LFO 6 Deform",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 4209248038,
+      "name": "B Scene LFO 6 Trigger Mode",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 2410411957,
+      "name": "B Scene LFO 6 Unipolar",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 32,
+      "is_stepped": false
+    },
+    {
+      "id": 1115128700,
+      "name": "B Scene LFO 6 Delay",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 137454447,
+      "name": "B Scene LFO 6 Attack",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3638331302,
+      "name": "B Scene LFO 6 Hold",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 1115120051,
+      "name": "B Scene LFO 6 Decay",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3084554716,
+      "name": "B Scene LFO 6 Sustain",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 1732073408,
+      "name": "B Scene LFO 6 Release",
+      "module": "/B LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 1056,
+      "is_stepped": false
+    },
+    {
+      "id": 3142185323,
+      "name": "Bypass Surge XT",
+      "module": "",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "default_value": 0.0,
+      "flags": 0,
+      "is_stepped": false
+    }
+  ]
+}
