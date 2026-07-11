@@ -568,7 +568,7 @@ Using `uv`:
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 source ~/.zshrc   # or ~/.bashrc on Linux
-uv tool install --python 3.11 --with pip "skypilot-nightly"
+uv tool install --python 3.12 --with pip "skypilot-nightly"
 sky --version
 ```
 
@@ -1054,7 +1054,7 @@ kubectl exec -n $NAMESPACE $POD -c skypilot-api -- sky check
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 source ~/.zshrc
-uv tool install --python 3.11 --with pip "skypilot-nightly"
+uv tool install --python 3.12 --with pip "skypilot-nightly"
 
 curl -i -u "skypilot:YOUR_PASSWORD" https://sky.yourdomain.com/api/health
 

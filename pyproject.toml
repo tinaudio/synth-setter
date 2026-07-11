@@ -12,7 +12,7 @@ version = "8.48.0"
 description = "Studying the effect of permutation symmetry on audio synthesiser parameter inference."
 authors = [{name = "Khaled Tinubu"}, {name = "tinaudio"}]
 readme = "README.md"
-requires-python = ">=3.11,<3.14"
+requires-python = ">=3.12,<3.14"
 # Lite import closure for the lite CI sites (validate_spec, ensure_r2_env_loaded,
 # load_image_config); heavy runtime is in [dependency-groups]. Pinned by
 # tests/infra/test_lite_dependency_base.py — see docs/reference/dependency-management.md (#1139).
