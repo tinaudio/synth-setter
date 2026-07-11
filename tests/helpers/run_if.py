@@ -4,6 +4,7 @@ https://github.com/PyTorchLightning/pytorch-lightning/blob/master/tests/helpers/
 """
 
 import sys
+from collections.abc import Callable
 from importlib.metadata import version as get_version
 from typing import Any
 
@@ -25,7 +26,7 @@ from tests.helpers.package_available import (
 )
 
 
-class RunIf:
+class _RunIf:
     """RunIf wrapper for conditional skipping of tests.
 
     Fully compatible with `@pytest.mark`.
@@ -143,3 +144,6 @@ class RunIf:
             reason=f"Requires: [{' + '.join(reasons)}]",
             **kwargs,
         )
+
+
+RunIf: Callable[..., MarkDecorator] = _RunIf

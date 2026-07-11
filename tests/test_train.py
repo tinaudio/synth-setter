@@ -16,11 +16,14 @@ import numpy as np
 import pandas as pd
 import pytest
 import torch
+from hydra import compose, initialize_config_module
+from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, open_dict
 
 from synth_setter.cli.eval import evaluate
 from synth_setter.cli.train import train
+from synth_setter.data.torchsynth_datamodule import render_torchsynth
 from synth_setter.data.vst import param_specs
 from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
@@ -77,6 +80,60 @@ def test_train_fast_dev_run_tiny_model_tiny_data(cfg_train: DictConfig) -> None:
     with open_dict(cfg_train):
         cfg_train.trainer.fast_dev_run = True
     train(cfg_train)
+
+
+def test_train_torchsynth_experiment_renders_audio_online(tmp_path: Path) -> None:
+    """Run the TorchSynth experiment without a materialized audio dataset.
+
+    :param tmp_path: Pinned Hydra output and log directory.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            return_hydra_config=True,
+            overrides=[
+                "experiment=torchsynth/ffn",
+                "trainer=cpu",
+                "+trainer.fast_dev_run=true",
+                "datamodule.train_val_test_sizes=[2,2,2]",
+                "datamodule.batch_size=1",
+                "datamodule.num_workers=0",
+                "model.compile=false",
+                "logger=csv",
+            ],
+        )
+    with open_dict(cfg):
+        cfg.paths.root_dir = str(operator_workspace())
+        cfg.paths.output_dir = str(tmp_path)
+        cfg.paths.log_dir = str(tmp_path)
+
+    HydraConfig().set_config(cfg)
+    try:
+        metric_dict, object_dict = train(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert "train/loss" in metric_dict
+    batch = next(iter(object_dict["datamodule"].train_dataloader()))
+    audio, params, *_ = batch
+    assert audio.shape == (1, cfg.datamodule.signal_length)
+    assert params.shape == (1, cfg.datamodule.num_params)
+    assert torch.isfinite(audio).all()
+    datamodule = object_dict["datamodule"]
+    split_params = [datamodule.train[0][1], datamodule.val[0][1], datamodule.test[0][1]]
+    assert not torch.equal(split_params[0], split_params[1])
+    assert not torch.equal(split_params[0], split_params[2])
+    assert not torch.equal(split_params[1], split_params[2])
+
+
+@pytest.mark.gpu
+@RunIf(min_gpus=1)
+def test_torchsynth_render_preserves_gpu_device() -> None:
+    """Render a prediction batch on the device used by the default GPU experiment."""
+    params = torch.rand((2, 76), device="cuda")
+    audio = render_torchsynth(params, sample_rate=44_100, signal_length=4_410)
+    assert audio.device == params.device
+    assert torch.isfinite(audio).all()
 
 
 @pytest.mark.gpu

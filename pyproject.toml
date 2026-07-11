@@ -171,6 +171,7 @@ data = [
 audio = [
   "librosa",
   "pedalboard",
+  "torchsynth==1.0.2",
   "pyloudnorm",
   "mido",
   "scipy>=1.14,<1.15",

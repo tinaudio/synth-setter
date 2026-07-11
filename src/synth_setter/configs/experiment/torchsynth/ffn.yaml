@@ -1,0 +1,24 @@
+# @package _global_
+
+defaults:
+  - override /datamodule: torchsynth
+  - override /model: ffn
+  - override /callbacks: default
+  - override /trainer: gpu
+  - _self_
+
+experiment_name: torchsynth
+run_name: ffn
+tags: [torchsynth]
+
+callbacks:
+  model_checkpoint:
+    monitor: val/loss
+  early_stopping: null
+
+model:
+  params_per_token: 1
+  loss_fn: mse
+  net:
+    in_dim: ${datamodule.signal_length}
+    out_dim: ${datamodule.num_params}

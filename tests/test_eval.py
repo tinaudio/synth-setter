@@ -13,7 +13,7 @@ import os
 import subprocess
 from contextlib import nullcontext
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, cast
 
 import pytest
 import torch
@@ -41,6 +41,68 @@ class _FakeOracleDataset(NamedTuple):
     name: str
     fixture: str
     datamodule_group: str | None
+
+
+def test_eval_torchsynth_experiment_validates_checkpoint(tmp_path: Path) -> None:
+    """Train and validate TorchSynth using audio rendered on the local machine.
+
+    :param tmp_path: Shared training, checkpoint, and evaluation directory.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        train_cfg = compose(
+            config_name="train.yaml",
+            return_hydra_config=True,
+            overrides=[
+                "experiment=torchsynth/ffn",
+                "trainer=cpu",
+                "+trainer.max_epochs=1",
+                "+trainer.limit_train_batches=1",
+                "+trainer.limit_val_batches=1",
+                "datamodule.train_val_test_sizes=[2,2,2]",
+                "datamodule.batch_size=1",
+                "datamodule.num_workers=0",
+                "model.compile=false",
+                "logger=csv",
+            ],
+        )
+    with open_dict(train_cfg):
+        train_cfg.paths.root_dir = str(operator_workspace())
+        train_cfg.paths.output_dir = str(tmp_path)
+        train_cfg.paths.log_dir = str(tmp_path)
+        train_cfg.test = False
+    HydraConfig().set_config(train_cfg)
+    try:
+        _, train_objects = train(train_cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    checkpoint = tmp_path / "checkpoints" / "last.ckpt"
+    assert checkpoint.is_file()
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        eval_cfg = compose(
+            config_name="eval.yaml",
+            return_hydra_config=True,
+            overrides=[
+                "experiment=torchsynth/eval_ffn",
+                "trainer=cpu",
+                "datamodule.train_val_test_sizes=[2,2,2]",
+                "datamodule.batch_size=1",
+                "datamodule.num_workers=0",
+            ],
+        )
+    with open_dict(eval_cfg):
+        eval_cfg.paths.root_dir = str(operator_workspace())
+        eval_cfg.paths.output_dir = str(tmp_path)
+        eval_cfg.paths.log_dir = str(tmp_path)
+        eval_cfg.ckpt_path = str(checkpoint)
+    HydraConfig().set_config(eval_cfg)
+    try:
+        metric_dict, eval_objects = evaluate(eval_cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert torch.isfinite(metric_dict["val/loss"])
+    assert type(eval_objects["datamodule"]) is type(train_objects["datamodule"])
 
 
 _FAKE_ORACLE_DATASETS = [
@@ -488,7 +550,7 @@ def test_evaluate_predict_mode_logs_shuffle_permutation_table_to_wandb(
 
     table_payloads = [p for p in logged if "shuffle/permutation" in p]
     assert len(table_payloads) == 1
-    table = table_payloads[0]["shuffle/permutation"]
+    table = cast(wandb.Table, table_payloads[0]["shuffle/permutation"])
     assert isinstance(table, wandb.Table)
     assert table.columns == ["dest_idx", "src_idx"]
     assert table.data == [[0, 1], [1, 0]]
