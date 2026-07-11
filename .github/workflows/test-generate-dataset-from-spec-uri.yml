@@ -59,20 +59,28 @@ jobs:
       - name: Pull image
         run: docker pull "$IMAGE"
 
-      # Real network, real R2, real VST: the test needs all three; the
-      # ``RCLONE_CONFIG_R2_*`` env assembles the same rclone remote the
-      # setup-r2 composite action exports on bare runners.
+      # setup-r2 exports canonical storage env plus the current rclone projection.
+      - name: Set up R2
+        uses: ./.github/actions/setup-r2
+        with:
+          access-key-id: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+          endpoint: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+
+      # Real network, real R2, real VST: the test needs all three; the Python
+      # test reads canonical storage settings and the container's rclone reads
+      # the projected remote env.
       - name: Run spec-URI e2e in Docker
-        env:
-          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
-          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
-          RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
         run: |
           docker run --rm \
             -v "${{ github.workspace }}:/home/build/synth-setter" \
             -e HYDRA_FULL_ERROR=1 \
-            -e RCLONE_CONFIG_R2_TYPE=s3 \
-            -e RCLONE_CONFIG_R2_PROVIDER=Cloudflare \
+            -e SYNTH_SETTER_STORAGE_PROVIDER \
+            -e SYNTH_SETTER_STORAGE_ACCESS_KEY_ID \
+            -e SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY \
+            -e SYNTH_SETTER_STORAGE_ENDPOINT_URL \
+            -e RCLONE_CONFIG_R2_TYPE \
+            -e RCLONE_CONFIG_R2_PROVIDER \
             -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
             -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
             -e RCLONE_CONFIG_R2_ENDPOINT \

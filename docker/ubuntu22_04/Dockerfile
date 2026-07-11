@@ -400,6 +400,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # toolchain SkyPilot's RunPod backend needs to provision and stage file_mounts
 # over SSH (rsync, openssh-client) plus a system pip3 (sky shells out to `pip3`
 # directly, which the uv-managed venv at /venv/main does not expose).
+# fuse (2.x) enables `rclone mount`: the pinned rclone 1.53 execs the bare
+# `fusermount` binary, which `fuse` ships but `fuse3` does not (only
+# `fusermount3`); the two packages are mutually exclusive (fuse3 Breaks fuse)
+# on 22.04, so install only `fuse`. The launch path must also grant
+# --device=/dev/fuse --cap-add=SYS_ADMIN.
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
     apt-get update; \
@@ -415,6 +420,7 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
       x11-utils \
       x11-xserver-utils \
       rclone \
+      fuse \
       rsync \
       openssh-client \
       python3-pip \

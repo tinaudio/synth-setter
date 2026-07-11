@@ -1,6 +1,238 @@
 # CHANGELOG
 
 
+## v8.45.0 (2026-07-11)
+
+### Documentation
+
+- **data-pipeline**: Browse add_embeddings/add_mp3 outputs in SmooSense
+  ([#1746](https://github.com/tinaudio/synth-setter/pull/1746),
+  [`0196506`](https://github.com/tinaudio/synth-setter/commit/0196506b7a6117039be9a8cd22492c330ba7db7c))
+
+* docs(data-pipeline): browse add_embeddings / add_mp3 outputs in SmooSense
+
+Add a "Browse in SmooSense" section to the add_embeddings_smoke and add_mp3_audio walkthroughs: a
+  narrow, scalar-only projection rendered with `Sense(df)`, plus the executed run output
+  (DataFrames, schemas, and a static snapshot of the rendered SmooSense grid) so the results are
+  visible on GitHub.
+
+The projection deliberately drops the audio / mel / m2l fixed-shape tensors, the 512-d clap vector,
+  and the audio_mp3 blob: SmooSense eagerly materializes every column, so those would OOM the viewer
+  (#1704). Browse scalar summaries (param values, embedding shape / L2 norm, MP3 size) instead.
+
+nbstripout would otherwise clear the committed outputs, so both notebooks join inpsect-models.ipynb
+  on its exclude list — the existing mechanism for notebooks that ship with their run output.
+
+Refs #1704 Refs #1681
+
+* docs(data-pipeline): cap SmooSense preview rows with .head(64)
+
+Address review: the projection was column-narrow but not row-capped while the prose called it
+  "row-capped". SmooSense renders every row it is handed, so cap with `.head(64)` (a no-op on the 4
+  smoke rows) and say so in both the markdown and the cell comment. Outputs / screenshots refreshed.
+
+Refs #1704
+
+* docs(data-pipeline): correct SmooSense install-note rationale
+
+Doc-drift: the note claimed SmooSense needs Python ≥3.11 "above this repo's floor", but the floor is
+  now `>=3.11,<3.14` (pyproject.toml), so SmooSense sits at the floor, not above it. Replace the
+  stale version-conflict rationale (from #1681, written when the floor was 3.10) with the real
+  reason — it's an optional in-notebook viewer, not a pipeline dependency.
+
+Refs #1681
+
+* docs(data-pipeline): add SmooSense notebook dependency
+
+* internal-fix(deps): add duckdb to notebook group
+
+* docs(data-pipeline): open SmooSense on Lance table
+
+* docs(data-pipeline): remove notebook patch-version metadata
+
+* internal-fix(deps): keep SmooSense notebook deps light
+
+- **data-pipeline**: Fix wandb.init run-id and sync Shard glossary
+  ([#1766](https://github.com/tinaudio/synth-setter/pull/1766),
+  [`d782049`](https://github.com/tinaudio/synth-setter/commit/d782049df286b2accd778252c1280f1744fafbd6))
+
+* docs(data-pipeline): use spec.run_id in the W&B init snippet
+
+Copilot on #1762: last remaining reference to the non-existent dataset_wandb_run_id attribute;
+  run_id is the real DatasetSpec field. Verified no other stale spec attributes remain in the doc.
+
+Refs #1760
+
+* docs(data-pipeline): spell out per-format shard filename examples
+
+Copilot on #1766: bare .tar / .lance/ suffixes read like literal filenames; both Shard glossary rows
+  now show a full example name per format.
+
+- **data-pipeline**: Note DuckDB tensor-scan reservation in lance_schema
+  ([#1799](https://github.com/tinaudio/synth-setter/pull/1799),
+  [`bd7e887`](https://github.com/tinaudio/synth-setter/commit/bd7e887c4d943443bff14bf29bfe79b120dc74b1))
+
+* docs(data-pipeline): note DuckDB tensor-scan reservation in lance_schema
+
+* chore(comments): apply comment-hygiene fixes from pre-PR review
+
+### Features
+
+- **data-pipeline**: Add audio_uuid column to preview-columns CLI
+  ([#1750](https://github.com/tinaudio/synth-setter/pull/1750),
+  [`e3f44f8`](https://github.com/tinaudio/synth-setter/commit/e3f44f854b8b4f55f650908eb6ed207bd522641d))
+
+* feat(data-pipeline): add audio_uuid column and rename CLI to add-preview-columns
+
+Extend the post-write Lance augmenter (formerly synth-setter-add-mp3-audio) to backfill a second
+  derived column alongside the MP3 preview, and rename it to synth-setter-add-preview-columns so the
+  name reflects both outputs.
+
+- audio_uuid: a deterministic UUIDv5 fingerprint of each row's audio tensor bytes, under a
+  project-scoped namespace, so the same rendered waveform always maps to the same id
+  (content-addressed, stable across re-runs). - Both columns are committed in a single
+  lance.batch_udf add_columns transaction, so an interrupted run leaves the dataset on its prior
+  version.
+
+Module add_mp3_audio.py -> add_preview_columns.py, function add_mp3_audio_column ->
+  add_preview_columns; notebook, doc-map, and design doc renamed/updated to match.
+
+* internal-fix(data-pipeline): address pre-PR review on add-preview-columns
+
+- Emit a structlog added_preview_columns event (pipeline code must use structlog; mirrors
+  add_embeddings) instead of relying on click.echo alone. - Correct the audio_uuid comment: uuid5
+  accepts a bytes name only on Python >= 3.12 (repo floor 3.11), and hashing the hex string is
+  load-bearing for content-addressing — switching to raw bytes would change every id. - Harden
+  _encode_preview_columns to append the mp3/uuid pair only after the encode succeeds, so a failed
+  row can't desync the two columns. - Add tests: a pinned-value uuid (namespace/format contract),
+  the partial half-add guard (audio_uuid-only dataset), a stronger frame-sync assertion in the dtype
+  test, and a non-empty decoded-length check. - Tighten comments/docstrings flagged by
+  comment-hygiene (module + doc-map).
+
+* internal-fix(data-pipeline): tighten comments flagged by comment-hygiene
+
+Condense the module docstring's column summary, trim the audio_uuid and _sine_rows comments to the
+  load-bearing constraint, make main's bitrate_kbps param a cross-reference instead of echoing the
+  Click help, simplify the doc-map covers entry, and de-duplicate the notebook step-2 prose.
+
+* docs(reference): list synth-setter-add-preview-columns in docker console scripts
+
+The console-script enumeration in docker.md mirrors pyproject's [project.scripts] but omitted the
+  new add-preview-columns entry point. Flagged by the doc-drift advisory on this PR.
+
+* internal-fix(data-pipeline): sharpen audio_uuid docstring and byte-order comment
+
+Address Copilot's low-confidence precision notes: tobytes() encodes element order and count, not
+  array shape, so the docstring no longer claims shape is included; make the C ordering explicit
+  with tobytes(order="C"); and reword the comment so hex() is described as a lossless str encoding
+  (the name type uuid5 needs on 3.11), not a byte-order change.
+
+* internal-fix(data-pipeline): store mp3 preview as binary (#1751)
+
+* test(data-pipeline): cover _encode_preview_columns error branches
+
+Pin the two error paths in `_encode_preview_columns` that a real Lance round-trip can't reach (the
+  projection always yields a FixedShapeTensorArray and every sine row encodes), per review on #1750:
+
+- non-tensor `audio` column rejected before any encode (comment #3429220318) - per-row encode
+  failure surfaces the offending row index (comment #3429220338)
+
+The row-failure test injects a mid-batch failure via `monkeypatch` (the repo's mocking convention;
+  `mocker`/pytest-mock is not a dependency) and asserts on the real wrapped message, not the stub.
+
+* internal-fix(data-pipeline): point nbstripout exclude at renamed notebook
+
+#1746 added notebooks/add_mp3_audio.ipynb to the nbstripout exclude so its committed SmooSense
+  outputs survive; this branch renames that notebook to add_preview_columns.ipynb, so the exclude
+  entry moves with it.
+
+---------
+
+Co-authored-by: khaledtin <khaledtin@users.noreply.github.com>
+
+### Internal-Fix
+
+- **pipeline**: Scale subprocess timeouts by sample count
+  ([#1749](https://github.com/tinaudio/synth-setter/pull/1749),
+  [`6cdb1b8`](https://github.com/tinaudio/synth-setter/commit/6cdb1b862e851d5989d5326a91df75c2958e9fd6))
+
+Flat per-call ceilings (eval render/metrics, inline oracle eval, fixture-building VST subprocesses)
+  tripped a spurious TimeoutExpired once the dataset outgrew the constant, conflating fixed startup
+  cost with variable batch size.
+
+Add scaled_timeout(num_samples, *, workers, overhead_seconds, per_sample_seconds) = overhead +
+  per_sample * ceil(num_samples / workers): a fixed overhead term that still fails a true startup
+  hang fast at small N, plus a per-item term that absorbs dataset growth, divided across concurrent
+  workers. Margins fold into the caller's two constants.
+
+Wire it at every dataset-scaled call site, deriving the exact sample count locally: eval render from
+  pred-*.pt count * batch_size (VSTDataset floors len to whole batches), eval metrics from the audio
+  subdir count over num_workers, the inline oracle eval from the predict split's audio rows, and the
+  fixture subprocesses from NUM_FIXTURE_SAMPLES. The single-shot VST load check keeps its flat
+  ceiling (no per-sample work).
+
+### Refactoring
+
+- **data-pipeline**: Rename surge_*.py model/data modules to vst_*
+  ([#1680](https://github.com/tinaudio/synth-setter/pull/1680),
+  [`cf38165`](https://github.com/tinaudio/synth-setter/commit/cf38165b1a18ab7bae23bc20888e015b1e0e571c))
+
+* refactor(data-pipeline): rename surge_*.py model/data modules to vst_*
+
+Follow-up to #1602, which renamed the Surge* dataset/datamodule/model classes to VST* but left the
+  module filenames as surge_*. Renames the five module files to vst_* so paths match their class
+  names, and migrates the path-keyed lint exclusion entries (ruff per-file-ignores, pyright
+  excludes, pre-commit pyright/ interrogate excludes, pydoclint baseline) to the new paths — the
+  grandfathered errors stay suppressed under vst_* rather than being un-exempted by the rename.
+
+Thin re-export shims remain at each old surge_* path so archived W&B run-config _target_s (e.g.
+  surge_ff_module.SurgeFeedForwardModule) keep resolving; test_vst_module_aliases.py now pins both
+  the shim resolution and the Surge*->VST* alias identity across the rename.
+
+Closes #1664
+
+* chore(comments): apply comment-hygiene fixes from pre-PR review
+
+* chore(comments): drop commented-out sampler/monitor alternatives in moved modules
+
+* refactor(data-pipeline): update vst_ff_module reference in merged ffn_smoke config
+
+* chore(deps): refresh uv.lock project version to released 8.34.0
+
+* chore: untrack stray metrics/metrics.json test artifact
+
+* refactor(data-pipeline): make renamed vst_* module docstrings synth-neutral
+
+The canonical vst_* Lightning modules carried over Surge XT-specific module and class docstrings
+  from their surge_* origins. Reword them to VST-neutral phrasing to match the synth-neutral
+  file/class names.
+
+Refs #1664
+
+* style(data-pipeline): adopt datetime.UTC alias in renamed-import test
+
+Ruff UP017 surfaced on the test after merging the Python 3.11 floor (#1692); the file is in this
+  PR's diff because the rename repoints its VSTDataset import, so the fix lands here to keep the
+  changed-files pre-commit gate green.
+
+* fix(data-pipeline): annotate vst_* step batches as dict not tuple
+
+The Lightning step hooks in the renamed vst_ff/vst_flowvae/vst_flow_matching modules index batch as
+  a dict (batch["mel_spec"], batch["params"]) but were annotated batch: tuple[torch.Tensor,
+  torch.Tensor], carried over verbatim from the pre-rename modules. VSTDataset.__getitem__ yields
+  dict[str, torch.Tensor], and sibling model_step/predict_step already use the dict annotation.
+  Correct the step-hook annotations to dict[str, torch.Tensor] so they match the real dataloader
+  contract. Annotation-only; no runtime behavior change.
+
+* chore(data-pipeline): re-trigger CI for unrelated macOS timing flake
+
+run_tests_macos failed on tests/pipeline/test_subprocess_stream.py
+  TestPipeDrain::test_large_interleaved_output_no_deadlock_capture_is_bounded_tail with assert 10.09
+  < 10.0 — a 0.09s overshoot of the 10s drain budget under macOS-runner load. Unrelated to this
+  annotation-only change (the diff does not touch subprocess_stream); the prior commit fffa137
+  passed this job. Empty commit to re-run the suite.
+
+
 ## v8.44.0 (2026-07-11)
 
 ### Features

@@ -232,6 +232,43 @@ docker run --rm synth-setter:dev-snapshot \
   python -c "import torch; print(torch.cuda.is_available())"
 ```
 
+### FUSE mounts (`rclone mount`)
+
+The image ships `fuse` (2.x) — the pinned rclone 1.53 execs the bare
+`fusermount` binary, which `fuse` provides and `fuse3` does not (and the two
+conflict on Ubuntu 22.04) — but FUSE also needs the launch path to grant the
+device and the mount capability:
+
+```bash
+docker run --rm -it --device /dev/fuse --cap-add SYS_ADMIN \
+  --env-file .env synth-setter:dev-snapshot bash
+```
+
+The devcontainer variants pass `--device=/dev/fuse --cap-add=SYS_ADMIN` via
+`runArgs` (pinned by `tests/infra/test_fuse_support.py`); the OCI compute
+template already runs `--privileged`, which is a superset. RunPod pods cannot
+express these flags — SkyPilot creates them via `runpod.create_pod`, which
+has no device/capability parameters — so `rclone mount` does not work on
+RunPod workers; use `rclone copy`/`sync` there instead.
+
+Security trade-off: `SYS_ADMIN` is a broad, near-root capability, and the
+`runArgs` grant is default-on for every devcontainer session — opting out
+means removing both flags from the variant's `devcontainer.json`. On hardened
+hosts Docker's seccomp/AppArmor profile can still block `mount(2)` despite
+the flags; add `--security-opt apparmor:unconfined` if the mount fails.
+
+Inside a container launched with the flags:
+
+```bash
+mkdir -p /mnt/r2
+rclone mount r2:<bucket>/<prefix> /mnt/r2 --read-only --vfs-cache-mode full --daemon
+ls /mnt/r2
+```
+
+The repo-wide `--checksum` rule applies to transfer/compare verbs
+(`copy`/`sync`/`check`); `mount` takes no such flag — VFS reads verify
+integrity per-request.
+
 ### `generate_dataset` — VST dataset generation
 
 Generates one or more VST dataset shards (looping over `spec.shards`) via

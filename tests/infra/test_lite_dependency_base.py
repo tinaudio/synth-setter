@@ -21,9 +21,9 @@ import pytest
 # Names a `Requirement` line may carry before its version/extra/marker suffix.
 _NAME_DELIMS = "<>=!~[; "
 
-# The lite union closure: validate_spec (pydantic + python-dotenv via r2_io) and
-# load_image_config (pydantic + pyyaml). r2_io alone needs only python-dotenv.
-LITE_CLOSURE = {"pydantic", "python-dotenv", "pyyaml"}
+# The lite union closure: validate_spec, r2_io.ensure_r2_env_loaded, and
+# load_image_config. r2_io now parses canonical storage env with BaseSettings.
+LITE_CLOSURE = {"pydantic", "pydantic-settings", "python-dotenv", "pyyaml"}
 
 # Heavy deps that must never reappear in the base; the lite env must import the
 # three entrypoints without any of these.
