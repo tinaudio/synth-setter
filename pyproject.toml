@@ -181,6 +181,10 @@ metrics = [
   "POT",
   "einops",
 ]
+notebooks = [
+  "duckdb>=1.5.4",
+  "smoosense[jupyter]",
+]
 util = [
   "click<8.2",
   "structlog",
@@ -219,6 +223,7 @@ dev = [
   "rootutils",
   "ruff",
   { include-group = "docs" },
+  { include-group = "notebooks" },
   { include-group = "runtime" },
 ]
 
