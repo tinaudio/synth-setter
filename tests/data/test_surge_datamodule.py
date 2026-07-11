@@ -741,9 +741,9 @@ class TestNoiseGeneratorSeeding:
         """Real forked workers draw seed-reproducible yet per-worker-distinct noise.
 
         Two epochs under one global seed must yield a bit-identical noise stream (the DataLoader
-        base seed derives from the global RNG), while batches from different workers must differ
-        — without the per-worker re-seed, every fork would inherit identical generator state and
-        the first batch of worker 0 and worker 1 would be bit-equal.
+        base seed derives from the global RNG), while batches from different workers must differ —
+        without the per-worker re-seed, every fork would inherit identical generator state and the
+        first batch of worker 0 and worker 1 would be bit-equal.
 
         :param single_h5: Fixture-provided single-shard HDF5 path.
         """
@@ -769,6 +769,27 @@ class TestNoiseGeneratorSeeding:
         # Sequential batches alternate workers round-robin, so index 0 vs 1 is
         # worker 0's first draw vs worker 1's first draw.
         assert not torch.equal(first_epoch[0], first_epoch[1])
+
+    def test_parent_read_before_fork_does_not_disarm_worker_reseed(
+        self, single_h5: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A parent-process read must not latch the once-per-worker re-seed flag.
+
+        If it did, workers forked afterwards would inherit the latched flag, skip re-seeding, and
+        draw correlated noise — e.g. after a debugging or preflight batch read in the parent before
+        the DataLoader forks.
+
+        :param single_h5: Fixture-provided single-shard HDF5 path.
+        :param monkeypatch: Pytest monkeypatch fixture.
+        """
+        dataset = VSTDataset(single_h5, batch_size=4, ot=False, use_saved_mean_and_variance=False)
+        dataset[0]  # parent read: get_worker_info() is genuinely None here
+        worker_info = SimpleNamespace(seed=777)
+        monkeypatch.setattr(torch.utils.data, "get_worker_info", lambda: worker_info)
+        noise = dataset[0]["noise"]
+        assert noise is not None
+        expected = torch.randn(noise.shape, generator=torch.Generator().manual_seed(777))
+        torch.testing.assert_close(noise, expected, atol=0.0, rtol=0.0)
 
     def test_getitem_in_worker_reseeds_generator_once_from_worker_seed(
         self, single_h5: Path, monkeypatch: pytest.MonkeyPatch

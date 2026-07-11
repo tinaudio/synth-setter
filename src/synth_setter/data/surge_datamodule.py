@@ -332,10 +332,13 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
         """
         if self._worker_reseed_done:
             return
-        self._worker_reseed_done = True
         worker_info = torch.utils.data.get_worker_info()
-        if worker_info is not None:
-            self.generator.manual_seed(worker_info.seed)
+        # Latch only inside a worker: a parent-process read must not mark the
+        # flag, or forks made afterwards would inherit it and skip re-seeding.
+        if worker_info is None:
+            return
+        self._worker_reseed_done = True
+        self.generator.manual_seed(worker_info.seed)
 
     def __getitem__(self, idx: int | Sequence[int] | np.ndarray) -> dict[str, torch.Tensor | None]:
         """Read one batch of features, params, and matched noise at ``idx``.
