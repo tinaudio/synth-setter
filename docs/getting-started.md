@@ -83,12 +83,22 @@ make install-surge-xt
 ```
 
 This downloads the `pluginsonly` archive for your platform (Linux x86_64 or
-macOS universal) from the [Surge XT 1.3.4 release](https://github.com/surge-synthesizer/releases-xt/releases/tag/1.3.4),
-verifies its md5 checksum, and extracts `Surge XT.vst3` into `plugins/`. The
-archive is cached at `~/.cache/synth-setter/surge-xt-1.3.4/`, so re-runs that
+macOS universal) for the release pinned by `SURGE_XT_VERSION` in the
+[Makefile](../Makefile), verifies its md5 checksum, and extracts
+`Surge XT.vst3` into `plugins/`. The
+archive is cached at `~/.cache/synth-setter/surge-xt-<version>/`, so re-runs that
 have to re-extract (e.g. after `rm -rf plugins/`) skip the download. If
 `plugins/Surge XT.vst3` already exists, the target is a no-op — remove it
 first to reinstall.
+
+To mirror the full plugin set the runtime docker image ships — Surge XT plus
+Dexed, OB-Xf, and Six Sines — run `make install-plugins`. The three extra
+synths publish x86_64 Linux binaries only, matching the image; on other hosts
+those targets print a notice and exit 0, so on macOS the aggregate still
+succeeds with just Surge XT installed (on non-x86_64 Linux `install-surge-xt`
+itself fails first — see the arm64 note below). Their version/SHA256 pins mirror the
+Dockerfile ARGs and are kept in sync by
+`tests/infra/test_install_plugins_targets.py`.
 
 > **Already have Surge XT installed system-wide?** Skip
 > `make install-surge-xt` and symlink your existing install into `plugins/`:
@@ -114,15 +124,14 @@ first to reinstall.
 > lives elsewhere, set `SYNTH_SETTER_PLUGIN_PATH` to the absolute path of the
 > `.vst3` bundle before invoking pytest.
 
-### 2e. Export environment variables
+### 2e. Create `.env`
 
-The project reads R2 credentials, W&B keys, and other config from a `.env` file.
+R2 preflight and SkyPilot workers read R2 credentials from a `.env` file.
 After creating your `.env` (see [section 4b](#4b-rclone--cloudflare-r2) for the
-template), export the variables into your shell:
+template), those paths load the checkout's `.env` automatically.
 
-```bash
-set -a && source .env && set +a
-```
+Only source it manually for external tools or ad hoc shell commands that do not
+call synth-setter's R2 preflight.
 
 > Environment variable management is being consolidated under
 > [#563](https://github.com/tinaudio/synth-setter/issues/563).
@@ -618,7 +627,11 @@ ______________________________________________________________________
   experiments across different models and datasets.
 - **Data generation:** See `src/synth_setter/cli/generate_dataset.py` for the dataset
   generation entry point (Hydra; `src/synth_setter/configs/dataset.yaml` is the root config). The
-  `synth-setter-generate-dataset` console script is the canonical surface.
+  `synth-setter-generate-dataset` console script is the canonical surface. To render an
+  already-materialized `input_spec.json` instead of composing one, use
+  `synth-setter-generate-dataset-from-spec-uri <uri>` — the URI may be a bare path, `file://`,
+  `r2://`, or `s3://`
+  (e.g. `synth-setter-generate-dataset-from-spec-uri r2://bucket/data/<task>/<run>/input_spec.json`).
 - **Design docs:** Read `docs/design/data-pipeline.md` for the data pipeline
   architecture and `docs/design/training-pipeline.md` for the training pipeline.
 - **Configuration reference:**

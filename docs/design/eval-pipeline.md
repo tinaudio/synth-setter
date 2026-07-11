@@ -272,7 +272,7 @@ When `evaluation.compute_metrics` runs, the aggregated values from `aggregated_m
 | **Compute**  | CPU — VST audio rendering via pedalboard                                                                                 |
 | **Requires** | Display server (Xvfb on headless Linux, native on macOS)                                                                 |
 
-The render stage loads each predicted parameter tensor, decodes it using the `ParamSpec`, and renders audio through the Surge XT VST plugin via pedalboard. It also renders the ground-truth target audio for comparison.
+The render stage loads each predicted parameter tensor, decodes it via `decode_model_output` (`src/synth_setter/data/vst/param_spec.py`), and renders audio through the Surge XT VST plugin via pedalboard. It also renders the ground-truth target audio for comparison.
 
 **Key behaviors:**
 
@@ -281,7 +281,7 @@ The render stage loads each predicted parameter tensor, decodes it using the `Pa
 - On headless Linux: launches Xvfb, sets `DISPLAY`, runs script, kills Xvfb
 - Plugin path default: `$SYNTH_SETTER_PLUGIN_PATH` when set and non-empty, else `plugins/Surge XT.vst3` (overridable via `--plugin_path`)
 - Preset path default: the registry preset for the selected spec, `preset_paths[param_spec]` — `presets/surge-base.vstpreset` for the default `surge_xt` (overridable via `--preset_path`)
-- Parameters are denormalized from `[-1, 1]` → `[0, 1]` before decoding
+- Parameters are denormalized from the model-output range via `decode_model_output` before rendering
 
 ### 5.3 Metrics
 

@@ -8,6 +8,8 @@ that no private ``synth_setter.cli`` helper is imported here.
 """
 
 import os
+from collections.abc import Callable
+from contextlib import nullcontext
 from pathlib import Path
 
 import numpy as np
@@ -23,11 +25,19 @@ from synth_setter.data.vst import param_specs
 from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
 from tests.conftest import (
+    FAKE_VST_VARIANTS,
     NUM_FIXTURE_SAMPLES,
+    REAL_VST_VARIANTS,
     _build_surge_xt_smoke_cfg,
+    _SurgeSmokeVariant,
     build_fake_train_cfg,
 )
 from tests.evaluation._oracle_helpers import ORACLE_AUDIO_METRIC_BOUNDS
+from tests.helpers.eval_fakes import (
+    FAKE_AGGREGATED_METRICS_CSV,
+    fake_metrics_csv,
+    fake_postprocessing_subprocess,
+)
 from tests.helpers.noise_capture import NoiseCaptureCallback
 from tests.helpers.run_if import RunIf
 from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
@@ -36,8 +46,22 @@ from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
 # the parametrize lists on the two ``test_train_*_surge_xt`` tests cannot drift apart.
 _ORACLE_EXPERIMENT = "surge/fake_oracle"
 _SURGE_SMOKE_EXPERIMENTS = (_ORACLE_EXPERIMENT, "surge/ffn_full")
+_PREDICTION_PT_PREFIXES = ("pred", "target-audio", "target-params")
+_FAKE_METRICS_CSV = fake_metrics_csv(NUM_FIXTURE_SAMPLES)
 
 # TODO(#40): add @pytest.mark.ram gate for memory-intensive CPU tests test_train_fast_dev_run
+
+
+def _smoke_eval_postprocessing_fake() -> Callable[[list[str]], None]:
+    """Return fake eval postprocessing that materializes the fake-plugin smoke outputs.
+
+    :returns: ``subprocess.run``-compatible callable.
+    """
+    return fake_postprocessing_subprocess(
+        audio_metrics_csv=FAKE_AGGREGATED_METRICS_CSV,
+        per_sample_metrics_csv=_FAKE_METRICS_CSV,
+        render_sample_count=NUM_FIXTURE_SAMPLES,
+    )
 
 
 def test_train_fast_dev_run_tiny_model_tiny_data(cfg_train: DictConfig) -> None:
@@ -238,22 +262,25 @@ def test_train_fake_mode_nondefault_spec_sizes_batches_from_registry(tmp_path: P
 @pytest.mark.requires_vst
 @pytest.mark.slow
 @pytest.mark.parametrize("experiment_name", _SURGE_SMOKE_EXPERIMENTS, indirect=True)
-def test_train_surge_xt(cfg_surge_xt: DictConfig, experiment_name: str) -> None:
-    """Run training of the Surge XT model on the smoke test fixture, across both experiments.
+@pytest.mark.parametrize("surge_smoke_variant", REAL_VST_VARIANTS, indirect=True)
+def test_train_surge_xt(cfg_surge_real_train: DictConfig, experiment_name: str) -> None:
+    """Run training of the Surge XT model on the smoke test fixture, across both experiments and dataset formats.
 
     Asserts the trainer advanced and produced a finite ``train/loss`` — catches silent
     no-op trainers and NaN/Inf regressions that a bare ``train()`` call would not. The
     ``surge/fake_oracle`` leg additionally pins ``train/loss`` to exactly zero (the
     oracle constructs its loss as ``0.0 * net(mel_spec).sum()`` — any drift means the
     oracle stopped being an oracle); meaningful loss-progression coverage comes from
-    the ``surge/ffn_full`` leg.
+    the ``surge/ffn_full`` leg. Parametrized over h5 and Lance so both datamodules train
+    through the real Surge XT render.
 
-    :param cfg_surge_xt: Surge XT training config (parametrized over experiment).
+    :param cfg_surge_real_train: Surge XT training config (parametrized over experiment and
+        dataset format).
     :param experiment_name: Hydra experiment override the cfg was built from — drives
         the oracle-specific tight bound below.
     """
-    HydraConfig().set_config(cfg_surge_xt)
-    metric_dict, object_dict = train(cfg_surge_xt)
+    HydraConfig().set_config(cfg_surge_real_train)
+    metric_dict, object_dict = train(cfg_surge_real_train)
 
     trainer = object_dict["trainer"]
     assert trainer.global_step >= 1, f"trainer did not advance: global_step={trainer.global_step}"
@@ -277,18 +304,19 @@ def test_train_surge_xt(cfg_surge_xt: DictConfig, experiment_name: str) -> None:
 @pytest.mark.requires_vst
 @pytest.mark.slow
 @pytest.mark.parametrize("experiment_name", _SURGE_SMOKE_EXPERIMENTS, indirect=True)
+@pytest.mark.parametrize("surge_smoke_variant", REAL_VST_VARIANTS, indirect=True)
 def test_train_eval_surge_xt(
     tmp_path: Path,
-    cfg_surge_xt: DictConfig,
-    cfg_surge_xt_eval: DictConfig,
+    cfg_surge_real_train: DictConfig,
+    cfg_surge_real_eval: DictConfig,
     param_spec_name: str,
     experiment_name: str,
 ) -> None:
-    """End-to-end smoke test: train Surge XT briefly on a small fixture dataset, then run standalone eval on the saved checkpoint.
+    """End-to-end smoke test: train Surge XT briefly on a small fixture dataset, then run standalone eval on the saved checkpoint, for both dataset formats.
 
     :param tmp_path: The temporary logging path.
-    :param cfg_surge_xt: Surge XT smoke-test training config.
-    :param cfg_surge_xt_eval: Matching smoke-test eval config (ckpt_path set by this test).
+    :param cfg_surge_real_train: Surge XT smoke-test training config (h5 or Lance arm).
+    :param cfg_surge_real_eval: Matching smoke-test eval config (ckpt_path set by this test).
     :param param_spec_name: Param spec the fixtures (and therefore the trained model) are
         wired for — passed to ``predict_vst_audio.py`` so the script's decode layout matches
         the predicted tensor's encoding (mismatched specs go off-the-end and crash with
@@ -310,15 +338,15 @@ def test_train_eval_surge_xt(
         },
     }
 
-    HydraConfig().set_config(cfg_surge_xt)
-    train(cfg_surge_xt)
+    HydraConfig().set_config(cfg_surge_real_train)
+    train(cfg_surge_real_train)
 
-    # `cfg_surge_xt_eval.ckpt_path` is pre-pointed at this same `tmp_path` by the
+    # `cfg_surge_real_eval.ckpt_path` is pre-pointed at this same `tmp_path` by the
     # fixture; assert the train step actually produced the file before eval reads it.
-    assert Path(cfg_surge_xt_eval.ckpt_path).exists()
+    assert Path(cfg_surge_real_eval.ckpt_path).exists()
 
-    HydraConfig().set_config(cfg_surge_xt_eval)
-    evaluate(cfg_surge_xt_eval)
+    HydraConfig().set_config(cfg_surge_real_eval)
+    evaluate(cfg_surge_real_eval)
 
     # `PredictionWriter` (in `src/synth_setter/utils/callbacks.py`) with `write_interval=batch` saves three
     # tensors per predict batch: `pred-{i}.pt`, `target-audio-{i}.pt`, `target-params-{i}.pt`.
@@ -503,3 +531,193 @@ def test_train_same_seed_reproduces_noise_stream(cfg_train_lance: DictConfig) ->
     for first, second in zip(runs[0], runs[1], strict=True):
         # atol=rtol=0: the same cfg.seed must reproduce the noise draw bit-for-bit.
         torch.testing.assert_close(first, second, atol=0.0, rtol=0.0)
+
+
+@pytest.mark.fake_vst
+@pytest.mark.parametrize("experiment_name", _SURGE_SMOKE_EXPERIMENTS, indirect=True)
+@pytest.mark.parametrize("surge_smoke_variant", FAKE_VST_VARIANTS, indirect=True)
+def test_train_surge_fake(
+    cfg_surge_fake_train: DictConfig,
+    surge_smoke_variant: _SurgeSmokeVariant,
+    experiment_name: str,
+) -> None:
+    """Run the Surge smoke training matrix over fake-plugin h5 and Lance splits.
+
+    :param cfg_surge_fake_train: CPU training config for the dataset-format arm under test.
+    :param surge_smoke_variant: Dataset-format arm (h5 or Lance) the cfg was built from.
+    :param experiment_name: Hydra experiment override the cfg was built from.
+    """
+    HydraConfig().set_config(cfg_surge_fake_train)
+    metric_dict, object_dict = train(cfg_surge_fake_train)
+
+    trainer = object_dict["trainer"]
+    assert trainer.global_step >= 1, f"trainer did not advance: global_step={trainer.global_step}"
+
+    train_split = (
+        Path(object_dict["datamodule"].dataset_root) / f"train{surge_smoke_variant.split_ext}"
+    )
+    assert train_split.exists()
+
+    loss_keys = [key for key in metric_dict if key.startswith("train/loss")]
+    assert loss_keys, f"no train/loss* key in metric_dict: {sorted(metric_dict)}"
+    for key in loss_keys:
+        loss = metric_dict[key]
+        assert torch.isfinite(loss).all(), f"{key} is not finite: {loss}"
+
+    if experiment_name == _ORACLE_EXPERIMENT:
+        for key in loss_keys:
+            loss_value = metric_dict[key].item()
+            assert loss_value == 0.0, f"oracle {key} not exactly zero: {loss_value}"
+
+
+@pytest.mark.fake_vst
+@pytest.mark.parametrize("experiment_name", _SURGE_SMOKE_EXPERIMENTS, indirect=True)
+@pytest.mark.parametrize("surge_smoke_variant", FAKE_VST_VARIANTS, indirect=True)
+def test_train_eval_surge_fake(
+    tmp_path: Path,
+    cfg_surge_fake_train: DictConfig,
+    cfg_surge_fake_eval: DictConfig,
+    surge_smoke_variant: _SurgeSmokeVariant,
+    monkeypatch: pytest.MonkeyPatch,
+    experiment_name: str,
+) -> None:
+    """Train on a fake-plugin arm, then verify prediction tensors from checkpoint eval.
+
+    :param tmp_path: The temporary logging path.
+    :param cfg_surge_fake_train: CPU training config for the dataset-format arm under test.
+    :param cfg_surge_fake_eval: Matching eval config pinned to ``last.ckpt``.
+    :param surge_smoke_variant: Dataset-format arm (h5 or Lance) under test.
+    :param monkeypatch: Stubs render/metrics subprocesses so no real VST host launches.
+    :param experiment_name: Hydra experiment override the cfg was built from.
+    """
+    metric_dict, object_dict = _evaluate_surge_fake_checkpoint(
+        cfg_surge_fake_train, cfg_surge_fake_eval, monkeypatch
+    )
+
+    _assert_surge_fake_eval_basics(metric_dict, object_dict, surge_smoke_variant)
+
+    predictions_dir = tmp_path / "predictions"
+    assert predictions_dir.is_dir()
+    assert sorted(path.name for path in predictions_dir.iterdir()) == _prediction_file_names()
+
+    for sample_idx in range(NUM_FIXTURE_SAMPLES):
+        pred = torch.load(predictions_dir / f"pred-{sample_idx}.pt", weights_only=True)
+        assert torch.isfinite(pred).all(), f"pred-{sample_idx}.pt contains NaN/Inf"
+
+        if experiment_name == _ORACLE_EXPERIMENT:
+            target_params = torch.load(
+                predictions_dir / f"target-params-{sample_idx}.pt", weights_only=True
+            )
+            assert torch.equal(pred, target_params), (
+                f"oracle pred-{sample_idx}.pt != target-params-{sample_idx}.pt"
+            )
+
+
+@pytest.mark.fake_vst
+@pytest.mark.parametrize("experiment_name", _SURGE_SMOKE_EXPERIMENTS, indirect=True)
+@pytest.mark.parametrize("surge_smoke_variant", FAKE_VST_VARIANTS, indirect=True)
+def test_train_eval_surge_fake_writes_audio_and_metrics_outputs(
+    tmp_path: Path,
+    cfg_surge_fake_train: DictConfig,
+    cfg_surge_fake_eval: DictConfig,
+    surge_smoke_variant: _SurgeSmokeVariant,
+    monkeypatch: pytest.MonkeyPatch,
+    experiment_name: str,
+) -> None:
+    """Train on a fake-plugin arm, then verify fake render and metrics outputs.
+
+    :param tmp_path: The temporary logging path.
+    :param cfg_surge_fake_train: CPU training config for the dataset-format arm under test.
+    :param cfg_surge_fake_eval: Matching eval config pinned to ``last.ckpt``.
+    :param surge_smoke_variant: Dataset-format arm (h5 or Lance) under test.
+    :param monkeypatch: Stubs render/metrics subprocesses so no real VST host launches.
+    :param experiment_name: Hydra experiment override; parametrizes the train/eval run.
+    """
+    metric_dict, object_dict = _evaluate_surge_fake_checkpoint(
+        cfg_surge_fake_train, cfg_surge_fake_eval, monkeypatch
+    )
+
+    _assert_surge_fake_eval_basics(metric_dict, object_dict, surge_smoke_variant)
+
+    audio_dir = tmp_path / "audio"
+    sample_dirs = sorted(path for path in audio_dir.iterdir() if path.is_dir())
+    assert [path.name for path in sample_dirs] == [
+        f"sample_{sample_idx}" for sample_idx in range(NUM_FIXTURE_SAMPLES)
+    ]
+    for sample_dir in sample_dirs:
+        assert (sample_dir / "target.wav").is_file()
+        assert (sample_dir / "pred.wav").is_file()
+        assert (sample_dir / "spec.png").is_file()
+        assert (sample_dir / "params.csv").is_file()
+
+    metrics_dir = tmp_path / "metrics"
+    for metrics_file, expected_rows in {
+        "aggregated_metrics.csv": 4,
+        "metrics.csv": NUM_FIXTURE_SAMPLES,
+    }.items():
+        assert (metrics_dir / metrics_file).is_file(), f"{metrics_file} not found"
+        metrics_df = pd.read_csv(metrics_dir / metrics_file)
+        assert len(metrics_df) == expected_rows
+        numeric = metrics_df.select_dtypes(include=[np.number]).to_numpy()
+        assert np.isfinite(numeric).all(), f"{metrics_file} contains NaN/Inf:\n{metrics_df}"
+
+
+def _evaluate_surge_fake_checkpoint(
+    cfg_train: DictConfig,
+    cfg_eval: DictConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Run the fake-plugin train-to-predict smoke path with faked postprocessing.
+
+    :param cfg_train: CPU training config for the dataset-format arm under test.
+    :param cfg_eval: Matching eval config pinned to ``last.ckpt``.
+    :param monkeypatch: Stubs postprocessing subprocess dependencies.
+    :returns: ``evaluate`` metric and object dictionaries.
+    """
+    HydraConfig().set_config(cfg_train)
+    train(cfg_train)
+
+    assert Path(cfg_eval.ckpt_path).exists()
+
+    monkeypatch.setattr("synth_setter.cli.eval.subprocess.run", _smoke_eval_postprocessing_fake())
+    monkeypatch.setattr("synth_setter.cli.eval.vst_headless_wrapper", lambda: object())
+    monkeypatch.setattr(
+        "synth_setter.cli.eval.as_file",
+        lambda _traversable: nullcontext(Path("/fake/headless-wrapper")),
+    )
+
+    HydraConfig().set_config(cfg_eval)
+    return evaluate(cfg_eval)
+
+
+def _assert_surge_fake_eval_basics(
+    metric_dict: dict[str, object],
+    object_dict: dict[str, object],
+    variant: _SurgeSmokeVariant,
+) -> None:
+    """Assert the shared fake-plugin predict-mode eval invariants.
+
+    :param metric_dict: Metrics returned by ``evaluate``.
+    :param object_dict: Objects returned by ``evaluate``.
+    :param variant: Dataset-format arm selecting the predicted split's suffix.
+    """
+    assert metric_dict["audio/mss_mean"] == pytest.approx(0.5)
+    assert metric_dict["audio/rms_std"] == pytest.approx(0.01)
+
+    dataset_root = getattr(object_dict["datamodule"], "dataset_root")
+    assert isinstance(dataset_root, str | os.PathLike)
+
+    test_split = Path(dataset_root) / f"test{variant.split_ext}"
+    assert test_split.exists()
+
+
+def _prediction_file_names() -> list[str]:
+    """Return the per-batch files ``PredictionWriter`` writes for the smoke split.
+
+    :returns: Sorted expected prediction filenames.
+    """
+    return sorted(
+        f"{prefix}-{sample_idx}.pt"
+        for prefix in _PREDICTION_PT_PREFIXES
+        for sample_idx in range(NUM_FIXTURE_SAMPLES)
+    )

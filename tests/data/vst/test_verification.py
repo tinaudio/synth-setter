@@ -16,7 +16,6 @@ from synth_setter.data.vst.verification import (
     check_spec_text,
     registered_artifacts,
 )
-
 from tests.data.vst._introspect_fakes import IntrospectFakeParameter, IntrospectFakePlugin
 
 

@@ -266,6 +266,49 @@ RUN if [ "${TARGETARCH:-}" != "amd64" ]; then echo "skipping Six Sines: x86_64-o
     rm /tmp/six-sines.tgz
 
 # ==========================================
+# KR106 source build: upstream release ZIPs require glibc 2.38, so build the
+# VST3 from source on Ubuntu 22.04 and stage the resulting bundle.
+# License: Ultramaster KR-106 is GPL-3.0.
+# ==========================================
+FROM builder-base AS builder-build-ultramaster-kr106
+SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
+ARG TARGETARCH
+ARG ULTRAMASTER_KR106_VERSION=v2.5.13
+ARG ULTRAMASTER_KR106_GIT_REF=bc15caee5843ab238a25d0969e68d57db2b1615f
+RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+      build-essential \
+      cmake \
+      libasound2-dev \
+      libcurl4-openssl-dev \
+      libfontconfig1-dev \
+      libfreetype-dev \
+      libgl-dev \
+      libgl1-mesa-dev \
+      libgtk-3-dev \
+      libwebkit2gtk-4.0-dev \
+      libx11-dev \
+      libxcursor-dev \
+      libxinerama-dev \
+      libxrandr-dev \
+      mesa-common-dev \
+      pkg-config
+WORKDIR /home/build/ultramaster-kr106
+RUN mkdir -p /plugins-staging
+RUN if [ "${TARGETARCH:-}" != "amd64" ]; then echo "skipping Ultramaster KR-106 source build on ${TARGETARCH:-<unset>}" >&2; exit 0; fi; \
+    echo "Building Ultramaster KR-106 ${ULTRAMASTER_KR106_VERSION} from git ref ${ULTRAMASTER_KR106_GIT_REF}" && \
+    git init && \
+    git remote add origin https://github.com/kayrockscreenprinting/ultramaster_kr106.git && \
+    git fetch --depth 1 origin "${ULTRAMASTER_KR106_GIT_REF}" && \
+    git checkout --detach FETCH_HEAD && \
+    git submodule update --init --recursive --depth 1 && \
+    cmake -B build -DCMAKE_BUILD_TYPE=Release -DKR106_COPY_AFTER_BUILD=OFF && \
+    cmake --build build --config Release --target KR106_VST3 --parallel "$(nproc)" && \
+    mkdir -p /plugins-staging && \
+    cp -a "build/KR106_artefacts/Release/VST3/Ultramaster KR-106.vst3" /plugins-staging/
+
+# ==========================================
 # Source stage: download synth-setter at a specific git ref via tarball.
 # Uses GitHub archive endpoint — no full clone, no .git metadata.
 # ==========================================
@@ -373,7 +416,8 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
       rclone \
       rsync \
       openssh-client \
-      python3-pip; \
+      python3-pip \
+      unzip; \
     apt-get clean; \
     rm -rf /var/lib/apt/lists/*
 
@@ -416,24 +460,25 @@ RUN mkdir -p /home/build/synth-setter/plugins && \
     ln -s "/usr/lib/vst3/Surge XT.vst3" "/home/build/synth-setter/plugins/Surge XT.vst3"
 
 COPY --from=vst3-synths-fetch /plugins-staging/ /usr/lib/vst3/
+COPY --from=builder-build-ultramaster-kr106 /plugins-staging/ /usr/lib/vst3/
 COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/scripts/load_vst3_check.py /artifacts/
 
 # Presence gate for the bundles the image must ship: Surge XT on every arch,
-# OB-Xf on amd64 only (the fetched synths are amd64-only). Load-validation follows.
-RUN for bundle in "Surge XT" "OB-Xf"; do \
-      if [[ "$bundle" == "OB-Xf" && "${TARGETARCH:-}" != "amd64" ]]; then \
+# bundled plugin synths on amd64 only. Load-validation follows.
+RUN for bundle in "Surge XT" "Dexed" "OB-Xf" "Six Sines" "Ultramaster KR-106"; do \
+      if [[ "$bundle" != "Surge XT" && "${TARGETARCH:-}" != "amd64" ]]; then \
         echo "skipping ${bundle}.vst3 presence check on ${TARGETARCH:-<unset>}" >&2; continue; \
       fi; \
       [[ -d "/usr/lib/vst3/${bundle}.vst3" ]] \
         || { echo "ERROR: ${bundle}.vst3 not found in /usr/lib/vst3/" >&2; exit 1; }; \
     done
 
-# Validate each fetched synth loads under headless X11 — one wrapper run per
+# Validate each bundled synth loads under headless X11 — one wrapper run per
 # plugin, since sequential in-process loads crash order-dependently (#1649) —
 # then symlink it into plugins/ like Surge XT above. No-op on non-amd64.
 # Entries are "bundle|plugin_name" (the "|" is required; empty name = sole plugin).
 RUN if [ "${TARGETARCH:-}" != "amd64" ]; then echo "skipping VST3 synth validation on ${TARGETARCH:-<unset>}" >&2; exit 0; fi; \
-    for entry in "Dexed|" "OB-Xf|" "Six Sines|Six Sines"; do \
+    for entry in "Dexed|" "OB-Xf|" "Six Sines|Six Sines" "Ultramaster KR-106|Ultramaster KR-106"; do \
       name="${entry%%|*}"; \
       ./run-linux-vst-headless.sh \
         python -X faulthandler load_vst3_check.py "/usr/lib/vst3/${name}.vst3" "${entry#*|}" && \
@@ -458,9 +503,11 @@ FROM builder-install-synth-setter-deps AS dev-base
 ARG SYNTH_PERMUTATIONS_GIT_REF
 ENV SYNTH_PERMUTATIONS_GIT_REF=${SYNTH_PERMUTATIONS_GIT_REF}
 
+# unzip: the in-image pytest run exercises the Makefile install-plugins
+# targets, whose recipes unpack cached .zip archives (#1789).
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends git ca-certificates jq
+    apt-get update && apt-get install -y --no-install-recommends git ca-certificates jq unzip
 
 WORKDIR /home/build/synth-setter
 
@@ -485,7 +532,8 @@ RUN git init && \
 # deps are already in the venv; this step installs the package editable.
 RUN uv pip install --no-deps -e .
 
-# Run not-slow unit tests (mocked subprocess + LocalFakeUploader — no VST or R2 needed)
+# Run not-slow unit tests: no VST or R2 needed, but the infra-marked
+# install-plugins tests shell out to the real Makefile recipes (tar/unzip).
 RUN pytest -k "not slow" -v
 
 # No ENTRYPOINT: SkyPilot's RunPod backend launches the pod with
