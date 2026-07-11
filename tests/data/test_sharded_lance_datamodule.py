@@ -1,7 +1,6 @@
-"""Behavioral tests for the sharded Lance reading layer in
-:mod:`synth_setter.data.lance_datamodule`.
+"""Behavioral tests for the sharded Lance reading layer.
 
-Covers:
+Covers :mod:`synth_setter.data.lance_datamodule`'s sharded classes:
 
 * :class:`ShardedLanceFile` — one h5py-``File``-like read surface over an
   ordered list of ``shard-*.lance`` dataset directories (global row indexing,
@@ -343,7 +342,9 @@ class TestShardedLanceVSTDataset:
             rescale_params=False,
         )
         params = _run_columns(_RUN_ROWS)["param_array"]
-        np.testing.assert_array_equal(dataset[(2, 6)]["params"].numpy(), params[2:6])
+        got = dataset[(2, 6)]["params"]
+        assert got is not None
+        np.testing.assert_array_equal(got.numpy(), params[2:6])
 
     def test_val_split_reads_rows_after_train_shards(self, run_root: Path) -> None:
         """The val split's first batch is the run's global rows 8:10, not rows 0:2.
@@ -358,7 +359,9 @@ class TestShardedLanceVSTDataset:
             rescale_params=False,
         )
         params = _run_columns(_RUN_ROWS)["param_array"]
-        np.testing.assert_array_equal(dataset[0]["params"].numpy(), params[8:10])
+        got = dataset[0]["params"]
+        assert got is not None
+        np.testing.assert_array_equal(got.numpy(), params[8:10])
 
     def test_existing_lance_dir_opens_as_single_shard(self, run_root: Path) -> None:
         """A path to a real ``.lance`` dataset directory bypasses the spec (predict_file path).

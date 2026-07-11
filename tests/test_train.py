@@ -518,9 +518,7 @@ def test_train_fast_dev_run_sharded_lance_datamodule(
     _, object_dict = train(cfg_train_lance_sharded)
 
     datamodule = object_dict["datamodule"]
-    # The train split spans both train shards of the run's 8/4/4 spec, and no
-    # merged train.lance exists to read from. (num_rows stays readable after
-    # the trainer's teardown closed the handle.)
+    # num_rows survives the trainer's teardown close(), unlike a read.
     assert datamodule.train_dataset.dataset_file.num_rows == 8
     assert not (Path(datamodule.dataset_root) / "train.lance").exists()
 

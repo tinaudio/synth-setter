@@ -560,10 +560,8 @@ def test_finalize_lance_uploads_stats_only_and_leaves_shards_in_place(
 ) -> None:
     """``finalize_lance`` uploads ``stats.npz`` and writes no merged split datasets.
 
-    The merged ``train/val/test.lance`` reupload is gone (it re-shipped the
-    whole dataset through the finalize host); training reads the per-shard
-    datasets in place, so finalize's only artifact is ``stats.npz`` computed
-    over the train shards.
+    Finalize's only artifact is ``stats.npz`` computed over the train shards;
+    the per-shard datasets stay in place for the sharded datamodule to read.
 
     :param fake_r2_remote: Local-typed rclone remote seeded with real Lance shards.
     :param tmp_path: Pytest tmp dir used as finalize's local work_dir.

@@ -37,7 +37,10 @@ def _cached_run_spec(run_root: str) -> DatasetSpec:
     ``setup()`` opens four splits against the same run root, and each spec
     validation is O(num_shards) (the shard list is materialized by a
     whole-model validator) — caching parses the immutable per-run spec once
-    per process instead of once per split.
+    per process instead of once per split. Keyed on ``run_root`` alone: this
+    assumes a given path names one run for the process lifetime, which holds
+    under one-run-per-process training; a sweep that remounts the same path to
+    different content would need an explicit ``cache_clear()``.
 
     :param run_root: Run directory (or URI) holding ``input_spec.json``.
     :returns: The parsed spec.
@@ -386,7 +389,7 @@ class ShardedLanceVSTDataset(VSTDataset):
     dataset directory is opened as-is (the ``predict_file`` escape hatch).
     """
 
-    def _open(self, dataset_file: str | Path) -> ShardFile:  # noqa: DOC502 — FileNotFoundError propagates from load_spec_from_root
+    def _open(self, dataset_file: str | Path) -> ShardFile:  # noqa: DOC503 — FileNotFoundError propagates from load_spec_from_root
         """Resolve and open the split's shards (or a literal dataset directory).
 
         :param dataset_file: ``<run_root>/<split>.lance`` virtual path, or a
