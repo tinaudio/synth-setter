@@ -1,6 +1,125 @@
 # CHANGELOG
 
 
+## v8.44.0 (2026-07-11)
+
+### Features
+
+- **data**: Native lance.torch dataloaders (map + iterable, R2, DDP)
+  ([#1783](https://github.com/tinaudio/synth-setter/pull/1783),
+  [`301e025`](https://github.com/tinaudio/synth-setter/commit/301e025472c8f7daeb34af7c8885272376cf0a25))
+
+* feat(data): native lance.torch dataloaders (map-style + iterable)
+
+Add src/synth_setter/data/lance_torch.py: thin factories over Lance's own PyTorch integration
+  instead of the h5py-shaped adapter, so training-side reads get Lance's native scanner, fork-safe
+  multiprocessing, object-store streaming, and DDP sharding for free.
+
+- lance_map_dataloader: LanceMapDataset (SafeLanceDataset subclass) decodes Arrow batches straight
+  to shaped torch tensors in one take() per batch; spawn-context workers via lance's
+  get_safe_loader. - lance_iterable_dataloader: lance.torch.data.LanceDataset with a
+  shape-preserving to_tensor_fn (the default flattens fixed-shape tensor columns) and batch-granular
+  sharding — fragment-granular starves ranks on the pipeline's few-fragment splits. Rank/world_size
+  auto-detected from an initialized torch.distributed group, or passed explicitly. - Both loaders
+  stream from R2 natively via storage_options with s3:// URIs.
+
+E2E tests write real Lance datasets through the pipeline writer (no fakes, no mocks): value
+  round-trips, column projection, spawn workers, 2-rank disjoint-and-complete sharding, a real
+  2-process gloo group, and R2-gated streaming tests for both loaders. Existing dataloaders are
+  untouched.
+
+* test(data): address pre-PR review findings on lance_torch loaders
+
+Assert the Arrow-copy pin via warning escalation instead of a no-op write; cover the
+  unsupported-column and blob-dict TypeErrors, asymmetric rank/world_size ValueError, single-item
+  indexing, and ragged final batches; hoist the dist import; log loader opens; parameterize
+  hf_converter's type and document the fixed-size-list null assumption.
+
+* test(data): address second-round review warnings on lance_torch loaders
+
+Null rows in embedding columns now fail by column name instead of an opaque reshape error;
+  rank/world_size gets a range check; TypeErrors name the offending column. Cover zero-row datasets,
+  hand-built batch conversion, null rejection, and all four invalid rank/world_size combos; document
+  usage in the module docstring and the ragged final batch in the factory contracts.
+
+* docs: register lance_torch dataloaders in design docs and doc-map
+
+Qualify the lance-dataset-api-migration streaming decision (the adapter stays rclone local-first;
+  the native loaders may stream), add the loaders to training-pipeline §6.1 / architecture step 4 /
+  the testing table, and re-classify tests/integration in doc-map now that integration_r2 spans
+  launcher round-trips and streaming suites.
+
+* test(data): compare row multisets lexicographically in shard/shuffle asserts
+
+Per-column np.sort could pass on cross-row element scrambling; sorting whole rows makes the
+  disjoint-and-complete and permutation checks exact. Addresses both Copilot review comments on PR
+  #1783.
+
+### Internal-Feat
+
+- **training**: Extract pure prepare_batch from VSTDataset
+  ([#1745](https://github.com/tinaudio/synth-setter/pull/1745),
+  [`8bdb2ce`](https://github.com/tinaudio/synth-setter/commit/8bdb2ce062d140b472fc6569c12a7213f4fcfd60))
+
+* refactor(training): extract pure prepare_batch from VSTDataset.__getitem__
+
+Pull the per-batch math (mel normalization, param rescale, seeded noise, optional Hungarian
+  matching) out of VSTDataset.__getitem__ into a pure module-level prepare_batch keyed by a RawBatch
+  TypedDict, and rewire __getitem__ to assemble the raw column dict and delegate. Thread an explicit
+  torch.Generator (held on the dataset, .seed()-randomized) through the noise draw so randomness is
+  reproducible and pinnable.
+
+This is a no-op refactor: batch semantics are byte-identical under a fixed seed. A seeded
+  torch.Generator reproduces the pre-refactor global randn_like bit-for-bit, so the extraction is
+  pinned by goldens captured from an independent reference of the batch math. The h5 and Lance read
+  paths now both route through prepare_batch, freezing batch contents for the rest of the epic.
+
+Also count __len__ rows off the always-present param_array column so an audio-less Lance shard
+  works, and document that fake mode intentionally bypasses prepare_batch. Samplers,
+  batch_size=None, fake mode, and repeat_first_batch are otherwise untouched.
+
+Part of #1738 Closes #1739
+
+* internal-fix(training): restore seeded, worker-safe batch noise draw
+
+The prepare_batch extraction moved the noise draw onto a per-dataset torch.Generator seeded from OS
+  entropy, which took cfg.seed (seed_everything) out of the loop and left forked dataloader workers
+  drawing correlated noise. Seed the generator from a global-RNG draw in __init__ and re-seed once
+  per worker from the DataLoader worker seed on first read — lazily rather than via worker_init_fn
+  so Lightning's auto-added pl_worker_init_function keeps governing worker global RNGs.
+
+Review-round fixes (PR #1745, review 4516955603):
+
+- goldens draw noise via a seeded Generator; new three-way RNG bit-equivalence guard test replaces
+  the undocumented assumption - mel normalization test parametrized over mixed mean/std combinations
+  - __getitem__ golden pinned across list and (start, stop) index forms - white-box coupling
+  documented in _reference_getitem; mock-based Hungarian arity test retired as redundant with the
+  goldens - dict literals for the prepare_batch/_get_fake_item returns - new e2e train leg captures
+  the noise stream of two same-seed runs (num_workers=0: Lance + forked workers deadlocks on the
+  parent tokio threadpool, worker-safe opening is #1740 scope); real 2-worker DataLoader test over
+  HDF5 pins fork re-seed and decorrelation
+
+* internal-fix(training): latch worker re-seed flag only inside workers
+
+A parent-process __getitem__ before the DataLoader forks would have set _worker_reseed_done, and
+  forked workers inheriting the latched flag would skip re-seeding and draw correlated noise. Check
+  get_worker_info first and latch only in a worker; parent reads keep the check armed.
+  Regression-pinned by a parent-read-then-fork test.
+
+* internal-fix(training): fake mode skips seed draw; widen idx annotations
+
+Copilot round-2 findings: fake-mode construction consumed a global-RNG draw for a generator fake
+  noise never uses, shifting the global stream for no benefit — skip it (pinned by a fork_rng
+  equality test). RawBatch docs now state optional keys may be omitted or None, and the idx
+  annotations spell out the (start, stop) tuple form _index_dataset documents.
+
+* internal-fix(training): move captured noise tensors to CPU in test helper
+
+Keeps NoiseCaptureCallback memory-safe if reused under a GPU training test: retaining device tensors
+  on the class-level list for a whole run would grow device memory; the bit-equality comparisons are
+  unaffected.
+
+
 ## v8.43.0 (2026-07-11)
 
 ### Build System
