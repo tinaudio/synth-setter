@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783747316396,
+  "lastUpdate": 1783747318326,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -13906,6 +13906,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 16.592109286699998,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0196506b7a6117039be9a8cd22492c330ba7db7c",
+          "message": "docs(data-pipeline): browse add_embeddings/add_mp3 outputs in SmooSense (#1746)\n\n* docs(data-pipeline): browse add_embeddings / add_mp3 outputs in SmooSense\n\nAdd a \"Browse in SmooSense\" section to the add_embeddings_smoke and\nadd_mp3_audio walkthroughs: a narrow, scalar-only projection rendered with\n`Sense(df)`, plus the executed run output (DataFrames, schemas, and a static\nsnapshot of the rendered SmooSense grid) so the results are visible on GitHub.\n\nThe projection deliberately drops the audio / mel / m2l fixed-shape tensors,\nthe 512-d clap vector, and the audio_mp3 blob: SmooSense eagerly materializes\nevery column, so those would OOM the viewer (#1704). Browse scalar summaries\n(param values, embedding shape / L2 norm, MP3 size) instead.\n\nnbstripout would otherwise clear the committed outputs, so both notebooks join\ninpsect-models.ipynb on its exclude list — the existing mechanism for\nnotebooks that ship with their run output.\n\nRefs #1704\nRefs #1681\n\n* docs(data-pipeline): cap SmooSense preview rows with .head(64)\n\nAddress review: the projection was column-narrow but not row-capped while the\nprose called it \"row-capped\". SmooSense renders every row it is handed, so cap\nwith `.head(64)` (a no-op on the 4 smoke rows) and say so in both the markdown\nand the cell comment. Outputs / screenshots refreshed.\n\nRefs #1704\n\n* docs(data-pipeline): correct SmooSense install-note rationale\n\nDoc-drift: the note claimed SmooSense needs Python ≥3.11 \"above this repo's\nfloor\", but the floor is now `>=3.11,<3.14` (pyproject.toml), so SmooSense sits\nat the floor, not above it. Replace the stale version-conflict rationale (from\n#1681, written when the floor was 3.10) with the real reason — it's an optional\nin-notebook viewer, not a pipeline dependency.\n\nRefs #1681\n\n* docs(data-pipeline): add SmooSense notebook dependency\n\n* internal-fix(deps): add duckdb to notebook group\n\n* docs(data-pipeline): open SmooSense on Lance table\n\n* docs(data-pipeline): remove notebook patch-version metadata\n\n* internal-fix(deps): keep SmooSense notebook deps light",
+          "timestamp": "2026-07-10T21:49:32-07:00",
+          "tree_id": "f848d940a7ffa37ef63d66e77caf7ad90462e5cf",
+          "url": "https://github.com/tinaudio/synth-setter/commit/0196506b7a6117039be9a8cd22492c330ba7db7c"
+        },
+        "date": 1783747318023,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 9.306021690368652,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 13.39455006070435,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.11781032383441925,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.001965463161468506,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.2849173545837402,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 16.62899374279998,
             "unit": "seconds"
           }
         ]
