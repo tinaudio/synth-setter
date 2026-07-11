@@ -1,6 +1,7 @@
 """Tests for deterministic per-sample seed derivation (#884)."""
 
 import numpy as np
+
 from synth_setter.data.vst.seeding import rng_for_sample, seed_for_sample
 
 

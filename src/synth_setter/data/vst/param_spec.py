@@ -282,6 +282,16 @@ class ParamSpec:
         return np.concatenate((synth_params, note_params))
 
     def decode(self, params: np.ndarray) -> tuple[dict[str, float], NoteParams]:
+        """Decode one encoded row of values in ``[0, 1]``.
+
+        Raw model outputs live in ``[-1, 1]`` and must go through
+        :func:`decode_model_output` instead. Width is not validated: the row
+        is consumed in per-parameter slices, so a wrong-width row truncates or
+        raises late (behavior pinned in ``tests/data/vst/test_param_spec.py``).
+
+        :param params: Encoded row (output of :meth:`encode`), nominally ``len(self)`` wide.
+        :returns: ``(synth_param_dict, note_params)``.
+        """
         synth_params_to_process = [(p, len(p)) for p in self.synth_params]
         note_params_to_process = [(p, len(p)) for p in self.note_params]
 
@@ -314,3 +324,21 @@ class ParamSpec:
     @property
     def names(self) -> list[str]:
         return self.synth_param_names + self.note_param_names
+
+
+def decode_model_output(row: np.ndarray, spec: ParamSpec) -> tuple[dict[str, float], NoteParams]:
+    """Invert the model-output scale and decode one prediction row.
+
+    Model prediction rows live in ``[-1, 1]``; the encoded param domain is
+    ``[0, 1]``, so the row is rescaled via ``(x + 1) / 2`` and clipped before
+    :meth:`ParamSpec.decode`.
+
+    :param row: One prediction row, nominally ``(len(spec),)`` wide, values in
+        ``[-1, 1]``; width is not enforced (see :meth:`ParamSpec.decode`).
+    :param spec: Spec the model was trained against.
+    :returns: ``(synth_param_dict, note_params)``; synth values are
+        pedalboard-normalized raw values (conventionally ``[0, 1]``), note
+        params are in their native domains (pitch as int, start/end seconds).
+    """
+    scaled = np.clip((row + 1) / 2, 0, 1)
+    return spec.decode(scaled)
