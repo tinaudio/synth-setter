@@ -31,6 +31,7 @@ TorchSynthBatch: TypeAlias = tuple[
 ]
 # The odd 64-bit golden-ratio multiplier diffuses nearby split seeds into distinct RNG streams.
 _SEED_MIXER = 0x9E3779B97F4A7C15
+_NON_INFERABLE_MODULES = frozenset({"keyboard"})
 
 
 @cache
@@ -116,7 +117,7 @@ def render_torchsynth(
         native = [
             parameter
             for (module, _), parameter in voice.get_parameters().items()
-            if module != "keyboard"
+            if module not in _NON_INFERABLE_MODULES
         ]
         if params.shape[1] != len(native):
             raise ValueError(
@@ -158,7 +159,7 @@ class TorchSynthDataset(Dataset[TorchSynthItem]):
         self.midi_pitch = midi_pitch
         renderer = _make_renderer(sample_rate, signal_length)
         self.num_params = sum(
-            module != "keyboard" for module, _ in renderer.voice.get_parameters()
+            module not in _NON_INFERABLE_MODULES for module, _ in renderer.voice.get_parameters()
         )
 
     def __len__(self) -> int:
@@ -247,7 +248,7 @@ class TorchSynthDataModule(LightningDataModule):
             self.test = dataset(test_size, test_seed)
         renderer = _make_renderer(self.sample_rate, self.signal_length)
         discovered = sum(
-            module != "keyboard" for module, _ in renderer.voice.get_parameters()
+            module not in _NON_INFERABLE_MODULES for module, _ in renderer.voice.get_parameters()
         )
         if self.num_params != discovered:
             raise ValueError(
