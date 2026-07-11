@@ -9,6 +9,7 @@ from __future__ import annotations
 import sys
 import threading
 import types
+from dataclasses import dataclass
 from collections.abc import Callable
 from functools import cache, partial
 from typing import TYPE_CHECKING, TypeAlias, cast
@@ -56,10 +57,27 @@ def _torchsynth_types() -> tuple[type, type]:
     return SynthConfig, Voice
 
 
+@dataclass
+class _Renderer:
+    """Own one mutable voice and serialize access to its parameter state.
+
+    .. attribute :: voice
+
+       Cached TorchSynth voice.
+
+    .. attribute :: lock
+
+       Guards parameter mutation and rendering.
+    """
+
+    voice: Voice
+    lock: threading.Lock
+
+
 @cache
-def _make_voice(
+def _make_renderer(
     sample_rate: int, signal_length: int, batch_size: int = 1, device: str = "cpu"
-) -> tuple[Voice, threading.Lock]:
+) -> _Renderer:
     synth_config, voice = _torchsynth_types()
     instance = voice(
         synthconfig=synth_config(
@@ -69,7 +87,7 @@ def _make_voice(
             reproducible=False,
         )
     )
-    return instance.to(torch.device(device)), threading.Lock()
+    return _Renderer(instance.to(torch.device(device)), threading.Lock())
 
 
 def _synth_parameters(voice: Voice) -> list[ModuleParameter]:
@@ -92,8 +110,9 @@ def render_torchsynth(
     :returns: Audio shaped ``(batch, signal_length)``.
     :raises ValueError: The parameter width or rendered audio violates the data contract.
     """
-    voice, lock = _make_voice(sample_rate, signal_length, len(params), str(params.device))
-    with lock:
+    renderer = _make_renderer(sample_rate, signal_length, len(params), str(params.device))
+    voice = renderer.voice
+    with renderer.lock:
         all_parameters = voice.get_parameters()
         native = _synth_parameters(voice)
         if params.shape[1] != len(native):
@@ -132,8 +151,8 @@ class TorchSynthDataset(Dataset[TorchSynthItem]):
         self.sample_rate = sample_rate
         self.signal_length = signal_length
         self.midi_pitch = midi_pitch
-        voice, _ = _make_voice(sample_rate, signal_length)
-        self.num_params = len(_synth_parameters(voice))
+        renderer = _make_renderer(sample_rate, signal_length)
+        self.num_params = len(_synth_parameters(renderer.voice))
 
     def __len__(self) -> int:
         """Return the logical number of online samples.
@@ -204,23 +223,25 @@ class TorchSynthDataModule(LightningDataModule):
         :raises ValueError: Configured parameter width differs from TorchSynth.
         """
 
-        def dataset(index: int) -> TorchSynthDataset:
+        def dataset(size: int, seed: int) -> TorchSynthDataset:
             return TorchSynthDataset(
-                self.train_val_test_sizes[index],
-                self.train_val_test_seeds[index],
+                size,
+                seed,
                 self.sample_rate,
                 self.signal_length,
                 self.midi_pitch,
             )
 
+        train_size, val_size, test_size = self.train_val_test_sizes
+        train_seed, val_seed, test_seed = self.train_val_test_seeds
         if stage in (None, "fit"):
-            self.train, self.val = dataset(0), dataset(1)
+            self.train, self.val = dataset(train_size, train_seed), dataset(val_size, val_seed)
         elif stage == "validate":
-            self.val = dataset(1)
+            self.val = dataset(val_size, val_seed)
         if stage in (None, "test", "predict"):
-            self.test = dataset(2)
-        voice, _ = _make_voice(self.sample_rate, self.signal_length)
-        discovered = len(_synth_parameters(voice))
+            self.test = dataset(test_size, test_seed)
+        renderer = _make_renderer(self.sample_rate, self.signal_length)
+        discovered = len(_synth_parameters(renderer.voice))
         if self.num_params != discovered:
             raise ValueError(f"Configured num_params={self.num_params}, TorchSynth exposes {discovered}")
 

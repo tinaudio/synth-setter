@@ -11,6 +11,7 @@ postprocessing argv in ``test_eval_postprocessing``, metric IO in
 import math
 import os
 import subprocess
+from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
 from typing import NamedTuple, cast
@@ -34,7 +35,7 @@ from tests.helpers.eval_fakes import (
     FAKE_METRICS_CSV,
     fake_postprocessing_subprocess,
 )
-from tests.helpers.run_if import RunIf
+from tests.helpers.run_if import RunIf as _RunIf
 from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
 
 
@@ -79,11 +80,11 @@ def _compose_torchsynth_overfit_cfg(tmp_path: Path) -> DictConfig:
     return train_cfg
 
 
-def _torchsynth_initial_loss(train_cfg: DictConfig) -> tuple[torch.Tensor, torch.Tensor, float]:
-    """Return the fixed overfit batch and its initial model loss.
+def _torchsynth_initial_loss(train_cfg: DictConfig) -> float:
+    """Return the fixed overfit batch's initial model loss.
 
     :param train_cfg: TorchSynth training configuration.
-    :returns: Audio, parameters, and initial MSE for the fixed batch.
+    :returns: Initial MSE for the fixed batch.
     """
     baseline_datamodule = instantiate(train_cfg.datamodule)
     baseline_datamodule.setup("fit")
@@ -92,7 +93,7 @@ def _torchsynth_initial_loss(train_cfg: DictConfig) -> tuple[torch.Tensor, torch
     baseline_model = instantiate(train_cfg.model)
     with torch.no_grad():
         loss = torch.nn.functional.mse_loss(baseline_model(baseline_audio), baseline_params).item()
-    return baseline_audio, baseline_params, loss
+    return loss
 
 
 def _compose_torchsynth_eval_cfg(tmp_path: Path, checkpoint: Path) -> DictConfig:
@@ -128,7 +129,7 @@ def test_eval_torchsynth_experiment_validates_checkpoint(tmp_path: Path) -> None
     :param tmp_path: Shared training, checkpoint, and evaluation directory.
     """
     train_cfg = _compose_torchsynth_overfit_cfg(tmp_path)
-    baseline_audio, baseline_params, initial_loss = _torchsynth_initial_loss(train_cfg)
+    initial_loss = _torchsynth_initial_loss(train_cfg)
     HydraConfig().set_config(train_cfg)
     try:
         train_metrics, train_objects = train(train_cfg)
@@ -161,6 +162,7 @@ _FAKE_ORACLE_DATASETS = [
         id="lance",
     ),
 ]
+RunIf = cast(Callable[..., pytest.MarkDecorator], _RunIf)
 
 
 @pytest.mark.requires_vst
