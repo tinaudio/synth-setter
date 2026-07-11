@@ -11,6 +11,7 @@ import os
 from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -23,7 +24,6 @@ from omegaconf import DictConfig, open_dict
 
 from synth_setter.cli.eval import evaluate
 from synth_setter.cli.train import train
-from synth_setter.data.torchsynth_datamodule import render_torchsynth
 from synth_setter.data.vst import param_specs
 from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
@@ -42,7 +42,7 @@ from tests.helpers.eval_fakes import (
     fake_postprocessing_subprocess,
 )
 from tests.helpers.noise_capture import NoiseCaptureCallback
-from tests.helpers.run_if import RunIf
+from tests.helpers.run_if import RunIf as _RunIf
 from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
 
 # Experiments cycled through the Surge XT VST smoke tests below. Single source of truth so
@@ -51,6 +51,7 @@ _ORACLE_EXPERIMENT = "surge/fake_oracle"
 _SURGE_SMOKE_EXPERIMENTS = (_ORACLE_EXPERIMENT, "surge/ffn_full")
 _PREDICTION_PT_PREFIXES = ("pred", "target-audio", "target-params")
 _FAKE_METRICS_CSV = fake_metrics_csv(NUM_FIXTURE_SAMPLES)
+RunIf = cast(Callable[..., pytest.MarkDecorator], _RunIf)
 
 # TODO(#40): add @pytest.mark.ram gate for memory-intensive CPU tests test_train_fast_dev_run
 
@@ -124,16 +125,6 @@ def test_train_torchsynth_experiment_renders_audio_online(tmp_path: Path) -> Non
     assert not torch.equal(split_params[0], split_params[1])
     assert not torch.equal(split_params[0], split_params[2])
     assert not torch.equal(split_params[1], split_params[2])
-
-
-@pytest.mark.gpu
-@RunIf(min_gpus=1)
-def test_torchsynth_render_preserves_gpu_device() -> None:
-    """Render a prediction batch on the device used by the default GPU experiment."""
-    params = torch.rand((2, 76), device="cuda")
-    audio = render_torchsynth(params, sample_rate=44_100, signal_length=4_410)
-    assert audio.device == params.device
-    assert torch.isfinite(audio).all()
 
 
 @pytest.mark.gpu

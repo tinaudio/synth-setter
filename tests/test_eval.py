@@ -11,6 +11,7 @@ postprocessing argv in ``test_eval_postprocessing``, metric IO in
 import math
 import os
 import subprocess
+from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
 from typing import NamedTuple, cast
@@ -21,6 +22,7 @@ import wandb
 from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
+from hydra.utils import instantiate
 from omegaconf import DictConfig, open_dict
 
 from synth_setter.cli.eval import evaluate
@@ -33,7 +35,7 @@ from tests.helpers.eval_fakes import (
     FAKE_METRICS_CSV,
     fake_postprocessing_subprocess,
 )
-from tests.helpers.run_if import RunIf
+from tests.helpers.run_if import RunIf as _RunIf
 from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
 
 
@@ -55,13 +57,14 @@ def test_eval_torchsynth_experiment_validates_checkpoint(tmp_path: Path) -> None
             overrides=[
                 "experiment=torchsynth/ffn",
                 "trainer=cpu",
-                "+trainer.max_epochs=1",
+                "+trainer.max_epochs=10",
                 "+trainer.limit_train_batches=1",
                 "+trainer.limit_val_batches=1",
-                "datamodule.train_val_test_sizes=[2,2,2]",
+                "datamodule.train_val_test_sizes=[1,1,1]",
                 "datamodule.batch_size=1",
                 "datamodule.num_workers=0",
                 "model.compile=false",
+                "model.optimizer.lr=0.0001",
                 "logger=csv",
             ],
         )
@@ -70,11 +73,29 @@ def test_eval_torchsynth_experiment_validates_checkpoint(tmp_path: Path) -> None
         train_cfg.paths.output_dir = str(tmp_path)
         train_cfg.paths.log_dir = str(tmp_path)
         train_cfg.test = False
+        train_cfg.seed = 123
+    baseline_datamodule = instantiate(train_cfg.datamodule)
+    baseline_datamodule.setup("fit")
+    baseline_audio, baseline_params, *_ = next(iter(baseline_datamodule.train_dataloader()))
+    torch.manual_seed(train_cfg.seed)
+    baseline_model = instantiate(train_cfg.model)
+    with torch.no_grad():
+        initial_loss = torch.nn.functional.mse_loss(
+            baseline_model(baseline_audio), baseline_params
+        ).item()
     HydraConfig().set_config(train_cfg)
     try:
         _, train_objects = train(train_cfg)
     finally:
         GlobalHydra.instance().clear()
+
+    trained_model = train_objects["model"]
+    trained_model.eval()
+    with torch.no_grad():
+        overfit_loss = torch.nn.functional.mse_loss(
+            trained_model(baseline_audio), baseline_params
+        ).item()
+    assert overfit_loss < initial_loss
 
     checkpoint = tmp_path / "checkpoints" / "last.ckpt"
     assert checkpoint.is_file()
@@ -101,8 +122,11 @@ def test_eval_torchsynth_experiment_validates_checkpoint(tmp_path: Path) -> None
     finally:
         GlobalHydra.instance().clear()
 
-    assert torch.isfinite(metric_dict["val/loss"])
-    assert type(eval_objects["datamodule"]) is type(train_objects["datamodule"])
+    val_loss = metric_dict["val/loss"]
+    assert torch.isfinite(val_loss)
+    assert val_loss < 1 / 3  # Beats the zero predictor for uniform [0, 1] targets.
+    eval_batch = next(iter(eval_objects["datamodule"].val_dataloader()))
+    assert torch.isfinite(eval_batch[0]).all()
 
 
 _FAKE_ORACLE_DATASETS = [
@@ -112,6 +136,7 @@ _FAKE_ORACLE_DATASETS = [
         id="lance",
     ),
 ]
+RunIf = cast(Callable[..., pytest.MarkDecorator], _RunIf)
 
 
 @pytest.mark.requires_vst

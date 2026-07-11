@@ -170,11 +170,11 @@ data = [
 # torch / librosa / kymatio during lock resolution. See #1247.
 audio = [
   "librosa",
-  "pedalboard",
-  "torchsynth==1.0.2",
-  "pyloudnorm",
   "mido",
+  "pedalboard",
+  "pyloudnorm",
   "scipy>=1.14,<1.15",
+  "torchsynth==1.0.2",
 ]
 metrics = [
   "pesto-pitch==2.0.1",
