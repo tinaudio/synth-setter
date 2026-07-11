@@ -121,6 +121,13 @@ docs:
       - pattern: "src/synth_setter/pipeline/data/add_music2latent.py"
         covers: "`python -m synth_setter.pipeline.data.add_music2latent` CLI — adds a `music2latent` dataset to HDF5 shards via reader/writer multiprocessing around a GPU encode loop."
 
+  # ── Legacy output formats (HDF5 & WebDataset) ────────────────────
+  - doc: docs/design/legacy/hdf5-wds-formats.md
+    description: How legacy HDF5/WebDataset outputs are staged, promoted, and resharded
+    sources:
+      - pattern: "src/synth_setter/pipeline/data/reshard.py"
+        covers: "HDF5 resharding into train/val/test virtual datasets on the finalize machine"
+
   # ── Deterministic data-generation seeding design ─────────────────
   - doc: docs/design/deterministic-seeding.md
     description: Canonical data-generation seed flow, guarantees, current status, and tracked follow-up work
