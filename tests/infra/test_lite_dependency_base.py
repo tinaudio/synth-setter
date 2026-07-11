@@ -99,3 +99,22 @@ def test_project_dependencies_exclude_heavy_runtime(project_dependency_names: se
     """
     leaked = project_dependency_names & HEAVY_DEPS
     assert not leaked, f"heavy deps leaked into [project.dependencies]: {sorted(leaked)}"
+
+
+def test_smoosense_viewer_deps_are_notebook_only(project_root: Path) -> None:
+    """SmooSense viewer deps stay out of the pipeline runtime and base install.
+
+    :param project_root: Repo root holding ``pyproject.toml`` (from conftest).
+    """
+    with (project_root / "pyproject.toml").open("rb") as fh:
+        pyproject = tomllib.load(fh)
+
+    dependency_groups = pyproject["dependency-groups"]
+
+    assert "smoosense[jupyter]" in dependency_groups["notebooks"]
+    assert "duckdb>=1.5.4" in dependency_groups["notebooks"]
+    assert {"include-group": "notebooks"} in dependency_groups["dev"]
+    assert all("smoosense" not in str(dep) for dep in pyproject["project"]["dependencies"])
+    assert all("duckdb" not in str(dep) for dep in pyproject["project"]["dependencies"])
+    assert all("smoosense" not in str(dep) for dep in dependency_groups["runtime"])
+    assert all("duckdb" not in str(dep) for dep in dependency_groups["runtime"])
