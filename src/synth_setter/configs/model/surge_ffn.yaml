@@ -1,7 +1,7 @@
 defaults:
   - _self_
 
-_target_: synth_setter.models.surge_ff_module.VSTFeedForwardModule
+_target_: synth_setter.models.vst_ff_module.VSTFeedForwardModule
 
 net:
   _target_: synth_setter.models.components.transformer.ASTWithProjectionHead

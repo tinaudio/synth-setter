@@ -13,7 +13,7 @@ import numpy as np
 from dask.distributed import Client, progress
 
 from synth_setter.data.audio_datamodule import AudioFolderDataset
-from synth_setter.data.surge_datamodule import VSTDataset
+from synth_setter.data.vst_datamodule import VSTDataset
 from synth_setter.data.vst.shapes import MEL_SPEC_FIELD
 
 logger = logging.getLogger(__name__)
