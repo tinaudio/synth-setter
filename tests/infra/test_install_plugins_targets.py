@@ -231,6 +231,57 @@ def test_ultramaster_docker_build_logs_version_with_git_ref() -> None:
     )
 
 
+def test_ultramaster_docker_build_gates_dependencies_by_arch() -> None:
+    """The KR-106 Docker stage skips build dependencies before apt runs."""
+    stage = _dockerfile_stage_text("builder-build-ultramaster-kr106")
+    skip_idx = stage.find('if [ "${TARGETARCH:-}" != "amd64" ]')
+    apt_idx = stage.find("apt-get update")
+    assert skip_idx != -1, stage
+    assert apt_idx != -1, stage
+    assert skip_idx < apt_idx
+
+
+@pytest.mark.slow
+def test_ultramaster_docker_arm64_target_skips_source_build() -> None:
+    """BuildKit can execute the arm64 KR-106 stage without source-build deps."""
+    docker = shutil.which("docker")
+    if docker is None:
+        pytest.skip("docker binary not available")
+    info = subprocess.run(  # noqa: S603 — fixed argv, no shell
+        [docker, "info"],
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=15,
+        check=False,
+    )
+    if info.returncode != 0:
+        pytest.skip(
+            "Docker daemon unavailable for: docker buildx build --platform linux/arm64 "
+            "--target builder-build-ultramaster-kr106 -f docker/ubuntu22_04/Dockerfile ."
+        )
+    result = subprocess.run(  # noqa: S603 — fixed argv, no shell
+        [
+            docker,
+            "buildx",
+            "build",
+            "--platform",
+            "linux/arm64",
+            "--target",
+            "builder-build-ultramaster-kr106",
+            "-f",
+            str(DOCKERFILE),
+            ".",
+        ],
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=900,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_install_plugins_all_bundles_present_skips_every_download(
     makefile_checkout: Path,
 ) -> None:
