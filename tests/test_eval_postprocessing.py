@@ -55,6 +55,7 @@ def _build_postprocess_cfg(
     shuffle_seed: int = 0,
     metric_prefix: str = "",
     render: dict[str, Any] | None = None,
+    batch_size: int = 1,
 ) -> DictConfig:
     """Build a minimal cfg accepted by ``_run_predict_postprocessing``.
 
@@ -68,6 +69,8 @@ def _build_postprocess_cfg(
     :param metric_prefix: Drives ``cfg.evaluation.metric_prefix``; prepended to
         every returned audio metric key.
     :param render: Drives ``cfg.render``; pass ``None`` to test the unset-render branch.
+    :param batch_size: Drives ``cfg.datamodule.batch_size``; the render timeout
+        scales with ``pred-*.pt`` count times this.
     :returns: Minimal :class:`DictConfig` shaped the way the helper reads it.
     """
     return OmegaConf.create(  # type: ignore[no-any-return]
@@ -81,6 +84,7 @@ def _build_postprocess_cfg(
                 "shuffle_seed": shuffle_seed,
                 "metric_prefix": metric_prefix,
             },
+            "datamodule": {"batch_size": batch_size},
             "render": render,
         }
     )
@@ -1080,3 +1084,100 @@ def test_postprocessing_logs_shuffle_permutation_table_when_subprocess_writes_cs
     table = permutation_payloads[0]["shuffle/permutation"]
     assert isinstance(table, wandb.Table)
     assert table.columns == ["dest_idx", "src_idx"]
+
+
+@pytest.fixture
+def captured_timeouts(monkeypatch: pytest.MonkeyPatch) -> dict[str, float]:
+    """Capture each postprocessing subprocess's ``timeout`` keyed by module.
+
+    Like :func:`captured_argv` but records the ``timeout`` kwarg so the
+    sample-count scaling can be asserted; still materializes the aggregated CSV
+    so the metrics branch's load step succeeds.
+
+    :param monkeypatch: Stubs ``subprocess.run``, ``as_file``, and
+        ``vst_headless_wrapper`` so no real subprocess or package data is touched.
+    :returns: ``{module: timeout}`` populated one entry per intercepted call.
+    """
+    timeouts: dict[str, float] = {}
+
+    def _fake_run(args: list[str], *, timeout: float, **_kwargs: Any) -> None:
+        # Self-diagnosing if a call path ever drops the kwarg, vs an opaque TypeError.
+        assert isinstance(timeout, float), timeout
+        module = (
+            _COMPUTE_AUDIO_METRICS_MODULE
+            if _COMPUTE_AUDIO_METRICS_MODULE in args
+            else _PREDICT_VST_AUDIO_MODULE
+        )
+        timeouts[module] = timeout
+        if _COMPUTE_AUDIO_METRICS_MODULE not in args:
+            return
+        metrics_dir = Path(args[args.index(_COMPUTE_AUDIO_METRICS_MODULE) + 2])
+        metrics_dir.mkdir(parents=True, exist_ok=True)
+        (metrics_dir / "aggregated_metrics.csv").write_text(_AGGREGATED_METRICS_CSV)
+
+    monkeypatch.setattr(eval_mod.subprocess, "run", _fake_run)
+
+    @contextmanager
+    def _fake_as_file(_traversable: Any) -> Any:
+        yield Path(_FAKE_WRAPPER)
+
+    monkeypatch.setattr(eval_mod, "as_file", _fake_as_file)
+    monkeypatch.setattr(eval_mod, "vst_headless_wrapper", lambda: object())
+    return timeouts
+
+
+def test_render_timeout_scales_with_prediction_sample_count(
+    monkeypatch: pytest.MonkeyPatch,
+    predictions_tree: Path,
+    captured_timeouts: dict[str, float],
+) -> None:
+    """Render timeout grows as overhead + per_sample * (pred files * batch_size).
+
+    A flat ceiling tripped a spurious TimeoutExpired once the split outgrew it;
+    scaling on the rendered sample count is the fix.
+
+    :param monkeypatch: Pins ``sys.platform`` to ``darwin`` (no wrapper prefix).
+    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/``.
+    :param captured_timeouts: ``{module: timeout}`` populated by the fixture.
+    """
+    monkeypatch.setattr(eval_mod.sys, "platform", "darwin")
+    for i in range(3):
+        (predictions_tree / "predictions" / f"pred-{i}.pt").write_bytes(b"")
+    cfg = _build_postprocess_cfg(
+        predictions_tree,
+        compute_metrics=False,
+        rerender_target=False,
+        batch_size=4,
+        render={"param_spec_name": "surge/fake_oracle", "preset_path": "preset.fxp"},
+    )
+
+    _run_predict_postprocessing(cfg)
+
+    # Hard-coded (not mirroring the module constants) so a wrong constant fails:
+    # 300 overhead + 60/sample * (3 pred files * batch_size 4) = 1020.
+    assert captured_timeouts[_PREDICT_VST_AUDIO_MODULE] == 1020.0
+
+
+def test_metrics_timeout_scales_with_audio_subdir_count_over_workers(
+    monkeypatch: pytest.MonkeyPatch,
+    predictions_tree: Path,
+    captured_timeouts: dict[str, float],
+) -> None:
+    """Metrics timeout grows as overhead + per_sample * ceil(audio subdirs / workers).
+
+    :param monkeypatch: Pins ``sys.platform`` to ``darwin`` (no wrapper prefix).
+    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/``.
+    :param captured_timeouts: ``{module: timeout}`` populated by the fixture.
+    """
+    monkeypatch.setattr(eval_mod.sys, "platform", "darwin")
+    for i in range(7):
+        (predictions_tree / "audio" / f"sample-{i}").mkdir()
+    cfg = _build_postprocess_cfg(
+        predictions_tree, render_vst=False, compute_metrics=True, num_workers=2
+    )
+
+    _run_predict_postprocessing(cfg)
+
+    # Hard-coded (not mirroring the module constants) so a wrong constant fails:
+    # 180 overhead + 30/sample * ceil(7 subdirs / 2 workers)=4 = 300.
+    assert captured_timeouts[_COMPUTE_AUDIO_METRICS_MODULE] == 300.0

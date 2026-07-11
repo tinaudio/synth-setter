@@ -42,11 +42,15 @@ def fake_postprocessing_subprocess(
     :returns: Callable compatible with ``subprocess.run``.
     """
 
-    def _fake_run(args: list[str], **_kwargs: object) -> None:
+    def _fake_run(args: list[str], *, timeout: object = None, **_kwargs: object) -> None:
         is_render = any(PREDICT_VST_AUDIO_FRAGMENT in arg for arg in args)
         is_metrics = any(COMPUTE_AUDIO_METRICS_FRAGMENT in arg for arg in args)
         if not (is_render or is_metrics):
             return
+        # Both subprocess timeouts are now sample-count-scaled; assert a positive
+        # float reaches the call so a dropped/None timeout fails here too (exact
+        # values are pinned in tests/test_eval_postprocessing.py).
+        assert isinstance(timeout, float) and timeout > 0, timeout
 
         output_dir = Path(args[args.index("-m") + 3])
         output_dir.mkdir(parents=True, exist_ok=True)
