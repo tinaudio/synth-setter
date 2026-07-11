@@ -1,7 +1,7 @@
 # Design Note: Provider-Neutral Object Storage Contracts
 
 > **Status**: Draft
-> **Last Updated**: 2026-06-17
+> **Last Updated**: 2026-07-11
 
 ## Context
 
@@ -43,29 +43,34 @@ tool details from dataset, training, evaluation, and CLI logic.
 
 ### `StorageSettings`
 
-`StorageSettings` is the only type that reads environment variables or `.env`
-files. It should use `pydantic_settings.BaseSettings` because loading settings
-is ambient process-boundary behavior.
+`StorageSettings` is the only type that reads environment variables, and
+`storage_settings_from_sources(env_file)` is the loading entry point: it reads
+the dotenv file (when it exists) with non-blank dotenv values taking precedence
+over process env, then validates. It uses `pydantic_settings.BaseSettings`
+because loading settings is ambient process-boundary behavior.
 
 ```python
 class StorageSettings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="SYNTH_SETTER_STORAGE_",
-        env_file=".env",
+        env_ignore_empty=True,
         extra="ignore",
         frozen=True,
+        str_strip_whitespace=True,
     )
 
-    provider: ObjectStoreProvider = ObjectStoreProvider.R2
-    endpoint_url: str | None = None
-    region: str = "auto"
     access_key_id: SecretStr
     secret_access_key: SecretStr
+    endpoint_url: str
+    provider: ObjectStoreProvider = ObjectStoreProvider.R2
+    region: str = "auto"
     default_bucket: str | None = None
-    rclone_remote: str = "r2"  # current backend remote name; not app model
     rclone_type: str = "s3"  # current backend type; tests may use "local"
 
     def to_config(self) -> StorageConfig: ...
+
+
+def storage_settings_from_sources(env_file: Path | None = None) -> StorageSettings: ...
 ```
 
 Expected environment shape:
@@ -77,9 +82,13 @@ SYNTH_SETTER_STORAGE_REGION=auto
 SYNTH_SETTER_STORAGE_ACCESS_KEY_ID=...
 SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY=...
 SYNTH_SETTER_STORAGE_DEFAULT_BUCKET=intermediate-data
-SYNTH_SETTER_STORAGE_RCLONE_REMOTE=r2
 SYNTH_SETTER_STORAGE_RCLONE_TYPE=s3
 ```
+
+The rclone remote name is not configurable: every current consumer (worker
+templates, workflow env forwarding, `rclone lsd r2:` probes, `r2://` URI
+translation) speaks the pinned `r2` remote dialect, so the projection always
+emits `RCLONE_CONFIG_R2_*` keys.
 
 ### `StorageConfig`
 
@@ -92,20 +101,21 @@ class StorageConfig(BaseModel):
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
     provider: ObjectStoreProvider
-    endpoint_url: str | None
+    endpoint_url: str
     region: str
     access_key_id: SecretStr
     secret_access_key: SecretStr
     default_bucket: str | None
-    rclone_remote: str
     rclone_type: str
 
     def lance_storage_options(self) -> dict[str, str]: ...
     def rclone_env(self) -> dict[str, str]: ...
+    def storage_env(self) -> dict[str, str]: ...
 ```
 
-The important invariant: rclone env vars and Lance storage options are both
-projections from this object. Neither is canonical.
+The important invariant: rclone env vars, Lance storage options, and the
+canonical `SYNTH_SETTER_STORAGE_*` env block are all projections from this
+object. None of the env dialects is canonical.
 
 ### `ObjectLocation`
 
@@ -119,11 +129,12 @@ class ObjectLocation(BaseModel):
     bucket: str
     key: str
 
-    def as_s3_uri(self) -> str: ...
+    @property
+    def uri(self) -> str: ...
 ```
 
-`as_s3_uri()` is an adapter output for Lance and W&B. Callers should prefer the
-storage facade methods over calling it directly.
+The `uri` property is an adapter output for Lance and W&B. Callers should
+prefer the storage facade methods over reading it directly.
 
 Slash-safe key joining should live in a private helper used by
 `DatasetStorageLayout` and backend adapters, not on the public `ObjectLocation`

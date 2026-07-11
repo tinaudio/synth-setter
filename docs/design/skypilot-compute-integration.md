@@ -2,7 +2,7 @@
 
 > **Status**: Draft
 > **Author**: ktinubu@
-> **Last Updated**: 2026-04-13
+> **Last Updated**: 2026-07-11
 > **Tracking**: [#534](https://github.com/tinaudio/synth-setter/issues/534), [#105](https://github.com/tinaudio/synth-setter/issues/105) (Task 4.2: Compute Backend & Worker), [#106](https://github.com/tinaudio/synth-setter/issues/106) (Task 6.1: RunPod Backend & E2E)
 
 ## 1. Context
@@ -112,7 +112,7 @@ The launcher reads `sky_cfg.tail` (a `SkypilotLaunchConfig` field, default `Fals
 
 ### 4.2 Env-var resolution: launcher → worker
 
-The SkyPilot launcher (`synth_setter.pipeline.skypilot_launch`) needs to forward a small fixed set of secrets and configuration values from the operator's environment into the worker pod's environment. The contract is deliberately narrow — only the keys the worker actually reads — and the resolution is per-key so local dev and CI can share the same launcher code without special cases.
+The SkyPilot launcher (`synth_setter.pipeline.skypilot_launch`) needs to forward a small fixed set of secrets and configuration values from the operator's environment into the worker pod's environment. The contract is deliberately narrow — only the keys the worker actually reads — and local dev and CI share the same launcher code without special cases: storage settings resolve as one unit and project the rclone env block, while the remaining keys resolve individually.
 
 #### The forwarded set
 
@@ -120,17 +120,26 @@ Defined as `_WORKER_ENV_KEYS` in `src/synth_setter/pipeline/skypilot_launch.py`.
 
 Anything outside the tuple is *not* forwarded to the worker, even if it's set in the launcher's environment. Adding a key requires adding it both to `_WORKER_ENV_KEYS` and to the `envs:` block.
 
-#### Resolution order (per key)
+#### Resolution order
 
-For each key in `_WORKER_ENV_KEYS`, the launcher takes the first **non-blank** value it finds:
+The storage credentials resolve **as a unit**, not per key: the launcher loads
+canonical `SYNTH_SETTER_STORAGE_*` settings via `storage_settings_from_sources`
+(dotenv values win over process env; the dotenv file is `sky_cfg.env_file`,
+default the workspace `.env`) and projects the whole `RCLONE_CONFIG_R2_*` block
+from the resulting `StorageConfig`. If the settings don't validate (a required
+setting missing or blank everywhere), no rclone credentials are forwarded —
+only the structural TYPE/PROVIDER defaults — and `dispatch_via_skypilot` raises
+its "No object storage settings resolved" error before submitting anything.
 
-1. The `.env` file at `sky_cfg.env_file` (default `<repo_root>/.env`), if the file sets the key to a non-blank value.
-2. The launcher's process env (`os.environ`), if the key is set non-blank.
-3. Otherwise: skipped — the key keeps the SkyPilot template's default (typically `""`). If the worker actually needs it, rclone fails downstream with an actionable error.
+The two non-storage keys (`WANDB_API_KEY`, `WORKER_GIT_REF`) still resolve
+per key: first non-blank value from the `.env` file, then the launcher's
+process env, else skipped so the key keeps the SkyPilot template's default
+(typically `""`).
 
-A blank/whitespace value (a `.env` line `KEY=`) counts as absent and falls through — matching `StorageSettings` resolution — so an empty `.env` line never forwards an empty credential and a stale blank can't shadow a real process-env value. Resolved values are stripped.
-
-This is per-key, not all-or-nothing — `.env` can resolve some keys and process env can resolve others in the same run.
+In both paths a blank/whitespace value (a `.env` line `KEY=`) counts as absent
+and falls through — matching `StorageSettings` resolution — so an empty `.env`
+line never forwards an empty credential and a stale blank can't shadow a real
+process-env value. Resolved values are stripped.
 
 #### Local dev story
 
