@@ -72,6 +72,21 @@ docs:
       - pattern: "src/synth_setter/utils/callbacks.py"
         covers: "W&B callback integrations, visualization uploads"
 
+  # ── W&B artifact & provenance reference ─────────────────────────
+  - doc: docs/reference/artifact-provenance-reference.md
+    description: W&B artifact patterns, lineage DAG, and ${wandb:…} resolver recipe
+    sources:
+      - pattern: "src/synth_setter/cli/finalize_dataset.py"
+        covers: "build_dataset_artifact / _log_dataset_artifact: data-{id} artifact, s3:// references, metadata (shard_count, n_samples, git_sha)"
+      - pattern: "src/synth_setter/cli/train.py"
+        covers: "build_model_artifact / _log_model_artifact: model-{config_id} artifact, opt-in upload_checkpoints_uri reference; _consumed_artifact_refs lineage edges"
+      - pattern: "src/synth_setter/cli/eval.py"
+        covers: "build_eval_results_artifact / _log_eval_results_artifact: eval-{id} artifact, output-dir reference, summary-metric metadata"
+      - pattern: "src/synth_setter/utils/logging_utils.py"
+        covers: "use_input_artifacts lineage edges; pin_wandb_run_id; log_wandb_provenance"
+      - pattern: "src/synth_setter/utils/utils.py"
+        covers: "${wandb:…} resolver (_resolve_wandb_checkpoint) and register_resolvers cache behavior"
+
   # ── Data pipeline design doc ────────────────────────────────────
   - doc: docs/design/data-pipeline.md
     description: Distributed data pipeline design (RunPod + R2)
