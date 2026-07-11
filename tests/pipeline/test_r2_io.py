@@ -10,6 +10,7 @@ flag set on ``upload_to_uri`` and the ``lsf --format=s`` shape on
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -134,13 +135,15 @@ class TestR2StorageOptions:
     """Tests for r2_storage_options — Lance object-store config from R2 env vars."""
 
     @pytest.fixture(autouse=True)
-    def _clear_r2_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Drop stray storage env so tests do not read a developer shell.
+    def _clear_r2_env(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Drop stray storage env and the workspace dotenv so tests do not read a developer shell.
 
+        :param tmp_path: Pytest tmp dir used for an intentionally missing default dotenv.
         :param monkeypatch: Pytest fixture used to remove env vars.
         """
         import os
 
+        monkeypatch.setattr(r2_io, "_DEFAULT_ENV_FILE", tmp_path / "missing.env")
         for key in list(os.environ):
             if key.startswith(("SYNTH_SETTER_STORAGE_", "RCLONE_CONFIG_R2_")):
                 monkeypatch.delenv(key, raising=False)
@@ -159,6 +162,25 @@ class TestR2StorageOptions:
             "access_key_id": "ak",
             "secret_access_key": "sk",
             "endpoint": "https://acct.r2.cloudflarestorage.com",
+            "aws_endpoint": "https://acct.r2.cloudflarestorage.com",
+            "region": "auto",
+        }
+
+    def test_strips_secret_env_values_once(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Surrounding env whitespace is ignored before returning storage options.
+
+        :param monkeypatch: Pytest fixture used to set the R2 secret env vars.
+        """
+        monkeypatch.setenv("SYNTH_SETTER_STORAGE_ACCESS_KEY_ID", " ak ")
+        monkeypatch.setenv("SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY", "\tsk\n")
+        monkeypatch.setenv(
+            "SYNTH_SETTER_STORAGE_ENDPOINT_URL", " https://acct.r2.cloudflarestorage.com "
+        )
+        assert r2_io.r2_storage_options() == {
+            "access_key_id": "ak",
+            "secret_access_key": "sk",
+            "endpoint": "https://acct.r2.cloudflarestorage.com",
+            "aws_endpoint": "https://acct.r2.cloudflarestorage.com",
             "region": "auto",
         }
 
@@ -500,13 +522,15 @@ class TestIsR2Reachable:
     """Tests for ``is_r2_reachable`` — boolean auth-probe used as a test-skip gate."""
 
     @pytest.fixture(autouse=True)
-    def _clear_r2_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Drop stray storage env for a clean unreachable baseline.
+    def _clear_r2_env(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Drop stray storage env and the workspace dotenv for a clean unreachable baseline.
 
+        :param tmp_path: Pytest tmp dir used for an intentionally missing default dotenv.
         :param monkeypatch: Pytest fixture used to remove env vars.
         """
         import os
 
+        monkeypatch.setattr(r2_io, "_DEFAULT_ENV_FILE", tmp_path / "missing.env")
         for key in list(os.environ):
             if key.startswith(("SYNTH_SETTER_STORAGE_", "RCLONE_CONFIG_R2_")):
                 monkeypatch.delenv(key, raising=False)
@@ -531,6 +555,48 @@ class TestIsR2Reachable:
 
         monkeypatch.setattr("synth_setter.pipeline.r2_io.subprocess.run", lambda *a, **kw: _OK())
         assert r2_io.is_r2_reachable() is True
+
+    def test_returns_true_when_default_dotenv_has_credentials(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Default workspace dotenv credentials satisfy the integration-test skip gate.
+
+        :param tmp_path: Pytest tmp dir for the default dotenv file.
+        :param monkeypatch: Pytest fixture used to isolate env and subprocess behavior.
+        """
+        default_env_file = tmp_path / ".env"
+        default_env_file.write_text(
+            "SYNTH_SETTER_STORAGE_ACCESS_KEY_ID=id-from-default\n"
+            "SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY=secret-from-default\n"
+            "SYNTH_SETTER_STORAGE_ENDPOINT_URL=endpoint-from-default\n"
+        )
+        monkeypatch.setattr(r2_io, "_DEFAULT_ENV_FILE", default_env_file)
+        monkeypatch.setattr(r2_io.shutil, "which", lambda name: f"/usr/bin/{name}")
+
+        with patch.object(r2_io.subprocess, "run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0)
+            assert r2_io.is_r2_reachable() is True
+
+    def test_returns_false_when_secret_env_keys_are_blank(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Blank storage secret values do not satisfy the integration-test skip gate.
+
+        :param tmp_path: Pytest tmp dir used for an intentionally missing default dotenv.
+        :param monkeypatch: Pytest fixture used to isolate env and subprocess behavior.
+        """
+        monkeypatch.setattr(r2_io, "_DEFAULT_ENV_FILE", tmp_path / "missing.env")
+        monkeypatch.setattr(r2_io.shutil, "which", lambda name: f"/usr/bin/{name}")
+        monkeypatch.setenv("SYNTH_SETTER_STORAGE_ACCESS_KEY_ID", "   ")
+        monkeypatch.setenv("SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY", "secret")
+        monkeypatch.setenv("SYNTH_SETTER_STORAGE_ENDPOINT_URL", "endpoint")
+        monkeypatch.setattr(
+            r2_io.subprocess,
+            "run",
+            lambda *a, **kw: pytest.fail("subprocess.run should not be reached"),
+        )
+
+        assert r2_io.is_r2_reachable() is False
 
     def test_returns_false_when_rclone_lsd_exits_non_zero(
         self, monkeypatch: pytest.MonkeyPatch
@@ -566,7 +632,7 @@ class TestIsR2Reachable:
         assert r2_io.is_r2_reachable() is False
 
     def test_returns_false_when_secret_env_keys_missing(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Rclone-on-PATH + working local config but no env keys → skip, not hard-fail later.
 
@@ -574,8 +640,10 @@ class TestIsR2Reachable:
         gates on ``is_r2_reachable`` doesn't pass the gate and then crash
         on ``RuntimeError`` from the env-key check downstream.
 
+        :param tmp_path: Pytest tmp dir used for an intentionally missing default dotenv.
         :param monkeypatch: Pytest fixture used to clear env + stub the probe.
         """
+        monkeypatch.setattr(r2_io, "_DEFAULT_ENV_FILE", tmp_path / "missing.env")
         monkeypatch.setattr(
             "synth_setter.pipeline.r2_io.shutil.which", lambda name: f"/usr/bin/{name}"
         )
@@ -909,13 +977,13 @@ class TestEnsureR2EnvLoaded:
     """
 
     @pytest.fixture(autouse=True)
-    def _clear_r2_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Drop storage/rclone env so each test starts from a known state.
+    def _clear_r2_env(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Drop storage/rclone env and the workspace dotenv so each test starts from a known state.
 
+        :param tmp_path: Pytest tmp dir used for an intentionally missing default dotenv.
         :param monkeypatch: Pytest fixture used to remove env vars.
         """
-        import os
-
+        monkeypatch.setattr(r2_io, "_DEFAULT_ENV_FILE", tmp_path / "missing.env")
         for key in list(os.environ):
             if key.startswith(("SYNTH_SETTER_STORAGE_", "RCLONE_CONFIG_R2_")):
                 monkeypatch.delenv(key, raising=False)
@@ -928,8 +996,6 @@ class TestEnsureR2EnvLoaded:
 
         :param tmp_path: Pytest tmp dir for the env_file.
         """
-        import os
-
         env_file = tmp_path / ".env"
         env_file.write_text(
             "SYNTH_SETTER_STORAGE_ACCESS_KEY_ID=id-from-file\n"
@@ -948,11 +1014,57 @@ class TestEnsureR2EnvLoaded:
         assert captured["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "id-from-file"
         assert captured["RCLONE_CONFIG_R2_ENDPOINT"] == "endpoint-from-file"
 
+    def test_no_env_file_loads_workspace_dotenv_by_default(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``env_file=None`` reads the operator workspace ``.env`` automatically.
+
+        :param tmp_path: Pytest tmp dir for the default dotenv file.
+        :param monkeypatch: Pytest fixture used to point the workspace default at the test dotenv
+            file.
+        """
+        default_env_file = tmp_path / ".env"
+        default_env_file.write_text(
+            "SYNTH_SETTER_STORAGE_ACCESS_KEY_ID=id-from-default\n"
+            "SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY=secret-from-default\n"
+            "SYNTH_SETTER_STORAGE_ENDPOINT_URL=endpoint-from-default\n"
+        )
+        monkeypatch.setattr(r2_io, "_DEFAULT_ENV_FILE", default_env_file)
+        captured: dict[str, str] = {}
+
+        def _capture(*_a: object, **_kw: object) -> subprocess.CompletedProcess[str]:
+            captured.update(os.environ)
+            return subprocess.CompletedProcess(args=[], returncode=0)
+
+        with patch.object(r2_io.subprocess, "run", side_effect=_capture):
+            r2_io.ensure_r2_env_loaded(env_file=None)
+
+        assert captured["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "id-from-default"
+
+    def test_default_env_file_ignores_blank_workspace_override(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Whitespace ``SYNTH_SETTER_WORKSPACE`` falls back to checkout discovery.
+
+        :param tmp_path: Pytest tmp dir used as the cwd that must not be selected.
+        :param monkeypatch: Pytest fixture used to isolate env and cwd.
+        """
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("SYNTH_SETTER_WORKSPACE", "   ")
+
+        checkout_env = next(
+            parent / ".env"
+            for parent in Path(r2_io.__file__).resolve().parents
+            if (parent / ".project-root").is_file()
+        )
+
+        assert r2_io._default_env_file() == checkout_env  # noqa: SLF001
+
     def test_missing_secret_keys_raises_actionable_error(self) -> None:
         """Missing storage settings raise an actionable RuntimeError.
 
-        No env_file and no ``SYNTH_SETTER_STORAGE_*`` in os.environ → the function
-        names all three missing keys in its error message.
+        No readable dotenv and no ``SYNTH_SETTER_STORAGE_*`` in os.environ → the
+        function names all three missing keys in its error message.
         """
         with pytest.raises(RuntimeError, match="Object storage settings unresolved") as excinfo:
             r2_io.ensure_r2_env_loaded(env_file=None)
@@ -1122,8 +1234,6 @@ class TestEnsureR2EnvLoaded:
 
         :param monkeypatch: Pytest fixture used to populate secrets.
         """
-        import os
-
         _set_all_r2_secrets(monkeypatch)
         captured: dict[str, str] = {}
 
@@ -1144,8 +1254,6 @@ class TestEnsureR2EnvLoaded:
 
         :param monkeypatch: Pytest fixture used to populate env vars.
         """
-        import os
-
         _set_all_r2_secrets(monkeypatch)
         monkeypatch.setenv("RCLONE_CONFIG_R2_TYPE", "caller-type")
         monkeypatch.setenv("RCLONE_CONFIG_R2_PROVIDER", "caller-provider")

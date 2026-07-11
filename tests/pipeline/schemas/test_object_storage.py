@@ -153,6 +153,7 @@ class TestStorageConfig:
             "access_key_id": "ak",
             "secret_access_key": "sk",
             "endpoint": _ENDPOINT,
+            "aws_endpoint": _ENDPOINT,
             "region": "auto",
         }
 

@@ -219,6 +219,8 @@ class StorageConfig(BaseModel):
             "access_key_id": self.access_key_id.get_secret_value(),
             "secret_access_key": self.secret_access_key.get_secret_value(),
             "endpoint": self.endpoint_url,
+            # Lance detects R2 multipart constraints through the AWS-prefixed alias.
+            "aws_endpoint": self.endpoint_url,
             "region": self.region,
         }
 

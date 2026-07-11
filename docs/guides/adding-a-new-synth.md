@@ -96,12 +96,12 @@ learns only meaningful dimensions. Curated widths vary widely across the
 registered specs — from a 4-parameter toy spec to the full 162-parameter Surge
 patch:
 
-| Synth               | `synth_params` | encoded width |
-| ------------------- | -------------- | ------------- |
-| `surge_4` (fixture) | 4              | 7             |
-| `surge_simple`      | 89             | 92            |
-| `obxf`              | 94             | 187           |
-| `surge_xt`          | 162            | 300           |
+| Synth                        | `synth_params` | encoded width |
+| ---------------------------- | -------------- | ------------- |
+| `surge_4` (4-param toy spec) | 4              | 7             |
+| `surge_simple`               | 89             | 92            |
+| `obxf`                       | 94             | 187           |
+| `surge_xt`                   | 162            | 300           |
 
 The encoded width (`len(param_specs[name])`, the `num_params` the shard writer
 and models use) exceeds the curated count (`len(spec.synth_params)`) because

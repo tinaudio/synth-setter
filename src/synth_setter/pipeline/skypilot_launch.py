@@ -103,6 +103,11 @@ _RCLONE_STRUCTURAL_CONSTANTS: Mapping[str, str] = RCLONE_STRUCTURAL_DEFAULTS
 # subset is what signals whether any creds were actually resolved.
 _SECRET_WORKER_ENV_KEYS: tuple[str, ...] = RCLONE_REQUIRED_ENV_KEYS
 
+
+def _env_value_is_set(value: str | None) -> bool:
+    return value is not None and value.strip() != ""
+
+
 # sky.jobs.tail_logs(follow=True) rc: 0 = SUCCEEDED, 100 = non-SUCCEEDED terminal.
 _TAIL_LOGS_RC_SUCCESS = 0
 
@@ -169,22 +174,26 @@ def load_worker_env(path: Path) -> dict[str, str]:
 def resolve_worker_env(env_file: Path | None) -> dict[str, str]:
     """Resolve the launcher's `_WORKER_ENV_KEYS` from .env and process env.
 
-    Storage settings are loaded from canonical ``SYNTH_SETTER_STORAGE_*`` keys
-    and projected into the ``RCLONE_CONFIG_R2_*`` keys the current worker
-    templates consume. Blank/whitespace counts as absent, so a `.env` line
-    `KEY=` never forwards an empty credential to a worker. Missing storage
-    credentials leave only the structural rclone defaults, letting
-    ``dispatch_via_skypilot`` produce the user-facing "no worker env" error.
+    ``env_file=None`` reads ``DEFAULT_ENV_FILE``. Storage settings are loaded
+    from canonical ``SYNTH_SETTER_STORAGE_*`` keys and projected into the
+    ``RCLONE_CONFIG_R2_*`` keys the current worker templates consume.
+    Blank/whitespace counts as absent, so a `.env` line `KEY=` never forwards
+    an empty credential to a worker. Missing storage credentials leave only
+    the structural rclone defaults, letting ``dispatch_via_skypilot`` produce
+    the user-facing "no object storage settings" error.
 
     `.env` is the local-dev source of truth; CI flows pass secrets via
     `docker run -e KEY=VAL` and never touch a .env on disk.
     """
     file_env: dict[str, str] = {}
-    if env_file is not None and env_file.is_file():
-        file_env = load_worker_env(env_file)
+    resolved_env_file = env_file if env_file is not None else DEFAULT_ENV_FILE
+    if resolved_env_file.is_file():
+        file_env = load_worker_env(resolved_env_file)
 
     try:
-        resolved: dict[str, str] = storage_settings_from_sources(env_file).to_config().rclone_env()
+        resolved: dict[str, str] = (
+            storage_settings_from_sources(resolved_env_file).to_config().rclone_env()
+        )
     except ValidationError:
         resolved = dict(_RCLONE_STRUCTURAL_CONSTANTS)
 
@@ -572,13 +581,15 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
             "not sky_cfg.extra_envs."
         )
 
-    env_file_path = Path(sky_cfg.env_file).expanduser() if sky_cfg.env_file else None
+    env_file_path = (
+        Path(sky_cfg.env_file).expanduser() if sky_cfg.env_file is not None else DEFAULT_ENV_FILE
+    )
     worker_env = resolve_worker_env(env_file_path)
-    if not any(k in worker_env for k in _SECRET_WORKER_ENV_KEYS):
+    if not any(_env_value_is_set(worker_env.get(k)) for k in _SECRET_WORKER_ENV_KEYS):
         raise ValueError(
             "No object storage settings resolved. Set SYNTH_SETTER_STORAGE_* in process env "
             f"(e.g. via `docker run -e SYNTH_SETTER_STORAGE_*=...`) or populate "
-            f"{env_file_path if env_file_path is not None else '<env_file not set>'}. "
+            f"{env_file_path}. "
             "Expected access key id, secret access key, and endpoint URL."
         )
     worker_env.update(sky_cfg.extra_envs)

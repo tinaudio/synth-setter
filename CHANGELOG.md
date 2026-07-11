@@ -1,6 +1,480 @@
 # CHANGELOG
 
 
+## v8.42.0 (2026-07-11)
+
+### Documentation
+
+- Lance-first data pipeline design with proven fragment finalization
+  ([#1777](https://github.com/tinaudio/synth-setter/pull/1777),
+  [`444c8ea`](https://github.com/tinaudio/synth-setter/commit/444c8ea31b9fca032654906c2f9a364d8f9fcda9))
+
+* docs: design lance fragment finalization
+
+* docs: align lance finalize design details
+
+* docs: clarify lance output paths
+
+* docs: qualify dataset complete marker
+
+* docs: slim lance fragment sidecar to schema and metadata
+
+The fragment sidecar previously carried worker_id, attempt_uuid, shard_id, split, and rows alongside
+  Lance's serialized fragment metadata. Every one of those is recoverable elsewhere -- from the
+  filename, staging path, spec, or Lance's own fragment metadata -- so the sidecar was a second
+  source of truth free to drift from the first. Reduce it to schema_version + fragment_json and have
+  finalize derive identity instead.
+
+Also make the winner-selection and finalize-idempotence rationale explicit: earliest .valid
+  LastModified is a server-assigned single-authority timestamp that yields a stable winner (a later
+  straggler can never displace it), and each split is a replace-semantics commit over the full
+  winner set so a re-run rebuilds an identical manifest rather than double-committing rows.
+
+Refs #1776
+
+* test: prove lance fragment finalize model end to end
+
+Adds a real-Lance, real-filesystem, no-mock e2e proof of the fragment-based finalize model the
+  design relies on, and folds its verified findings into the design doc. The test drives the
+  production codec (lance_fragment -> sidecar json -> commit_lance_dataset ->
+  iter_lance_column_rows) to pin:
+
+- worker writes a fragment straight into {split}.lance/data/; finalize commits only its serialized
+  FragmentMetadata (no row rewrite); - the winner set commits as one atomic manifest version (all or
+  nothing); - committing one winner of duplicate attempts yields exactly that shard's rows; -
+  re-committing the winner set is idempotent (Overwrite replaces, never doubles); - a fragment is
+  unreadable unless its file sits under the target dataset's data dir, and count_rows() trusts
+  manifest metadata so it cannot catch a dangling fragment -- validation must read rows.
+
+Doc updates: FragmentMetadata.to_json() returns a dict (sidecar stores the json.dumps string);
+  finalize commits one Overwrite transaction per split over the in-place winner fragments;
+  idempotence comes from Overwrite-replace, not read_version (Lance auto-rebases a
+  stale-read_version append).
+
+* docs: restructure data pipeline design lance-first
+
+Lance is now the primary supported dataset format; the design doc narrative should read that way
+  instead of branching 'for HDF5... for Lance...' at every protocol step. Rewrite data-pipeline.md
+  Lance-first: format-status banner, lance-output workflow example, Lance rows first in the
+  stage/artifact tables, Lance-led structural-check and finalize steps, and a slimmed 7.10 that
+  states why Lance is primary (per-column projection, native object-store streaming, zero-row-decode
+  finalize).
+
+HDF5/WDS-specific detail (staging/promotion, resharding bottleneck, resumability,
+  copy_dataset_root_uri, wds tar structure, Sample transcode container) moves to
+  docs/design/legacy/hdf5-wds-formats.md with a legacy status banner -- kept visible because
+  existing R2 datasets use those layouts and the code paths stay supported for coverage.
+  storage-provenance-spec.md gets a format-status note and doc-map.yaml maps reshard.py to the
+  legacy doc.
+
+Refs #1779
+
+* test: tighten lance poc typing, offsets, and error pin
+
+Address the repo-review-full WARNs on the fragment-finalize POC:
+
+- annotate the fragment helper's schema param pa.Schema instead of object - pin the
+  dangling-fragment read failure to pa.ArrowInvalid (verified empirically) instead of bare
+  Exception, keeping the message match as a supplementary check - replace the raw 5000/1000 value
+  offsets with a _VALUE_STRIDE constant whose values all stay under the float16-exact 2048 ceiling,
+  making the module comment's exactness claim hold for every array built - single-line docstring
+  summary on the co-location test - condense the legacy-formats doc-map description to one clause
+  (C12)
+
+Declined: splitting the sidecar round-trip test in two -- the round trip and the committed read-back
+  are one end-to-end behavior; a split second test would just re-run the first.
+
+* Apply suggestions from code review
+
+Co-authored-by: Copilot Autofix powered by AI <175728472+Copilot@users.noreply.github.com>
+
+---------
+
+### Features
+
+- **data-pipeline**: Log spec-uri resume runs to wandb
+  ([#1770](https://github.com/tinaudio/synth-setter/pull/1770),
+  [`593884a`](https://github.com/tinaudio/synth-setter/commit/593884a1d09e58ba14f5476eff50e18f177bd0d7))
+
+* feat(data-pipeline): log spec-uri resume runs to wandb
+
+* fix(data-pipeline): address spec-uri review nits
+
+* fix(data-pipeline): clarify spec-uri wandb wording
+
+* fix(data-pipeline): clarify wandb opt-out scope
+
+* fix(data-pipeline): clarify wandb test wording
+
+* fix(data-pipeline): disable wandb without auth
+
+* fix(data-pipeline): tolerate missing wandb package
+
+* fix(data-pipeline): validate wandb mode override
+
+
+## v8.41.0 (2026-07-10)
+
+### Features
+
+- **evaluation**: Predict-capture CLI + per-spec Surge CLAP param maps
+  ([#1788](https://github.com/tinaudio/synth-setter/pull/1788),
+  [`e94b09f`](https://github.com/tinaudio/synth-setter/commit/e94b09faa3856f27a7e8d489f323b7821597b3d8))
+
+* feat(evaluation): predict-capture CLI + Surge XT CLAP param map
+
+Python half of the live sound-match bridge (#1787): first-party ctypes CLAP introspector + committed
+  Surge XT 1.3.4 dump, the pyname -> CLAP index-bridge builder with elementwise revalidation,
+  strict-pydantic map models, and the synth-setter-predict-capture CLI implementing the cross-repo
+  file contract (atomic params.csv, pred-0.pt, absence-is-failure). Squash of the 14 commits
+  reviewed on PR #1788 through four Copilot rounds, rebased past the #1790/#1791/#1792 extractions.
+
+* internal-feat(evaluation): multi-spec maps, ckpt autodetect, run logging for the bridge
+
+- Per-spec CLAP maps: surge_simple (89/89) and surge_4 (4/4) built by the same index bridge with
+  zero exceptions; resources.clap_map(spec) replaces the surge_xt-only accessor and the CLI's --map
+  default follows --param-spec-name. Completeness and builder round-trip tests parameterize over all
+  three packaged specs. - --model-class now defaults to detection from the checkpoint's state-dict
+  prefixes (net.* vs encoder.*/vector_field.*), matching the C++ contract which passes no flag; the
+  subprocess contract test drops the flag. - Every run appends to <log-dir>/<uuid>.log (--log-dir),
+  file-handler-only so repeated in-process CliRunner invocations stay safe; crashes log the
+  traceback before the nonzero exit. - make test-bridge runs the bridge suite exhaustively (no
+  marker deselection, Xvfb bootstrap); new gap tests cover the flow-model subprocess contract, the
+  installed console script, and a mono 22.05 kHz capture.
+
+* test(evaluation): drop decode test module superseded by test_param_spec
+
+The #1792 extraction landed the exhaustive contract suite (tests/data/vst/test_param_spec.py); the
+  bridge branch's smaller module pinned a strict subset (midpoint, clip, linearity — implied by
+  midpoint + extremes).
+
+* build(lock): sync synth-setter 8.40.4 into uv.lock
+
+The 8.40.4 release commit bumped pyproject with [skip ci], leaving the lock one version behind; this
+  PR touches pyproject.toml, so lock-check runs and needs them in sync.
+
+* internal-fix(evaluation): pin UTF-8 on the bridge CSV write and map reads
+
+The #1787 contract specifies plain UTF-8; explicit encodings keep the artifacts locale-independent
+  (Copilot round on the rebased branch).
+
+* internal-fix(evaluation): pin UTF-8 on the run-log file handler
+
+Completes the encoding sweep from the previous round — the per-uuid log is operational diagnostics
+  and must not depend on the locale.
+
+* internal-fix(evaluation): address the multi-skill and Copilot review round
+
+- UTF-8 pinned on build_clap_map's CSV and JSON I/O, completing the encoding sweep. -
+  surge_params.csv columns validated with a clear error instead of a raw KeyError. - Serving is
+  seeded (flow sampling drew unseeded noise, so the same capture produced a different patch per
+  spawn) and a _DEFAULT_MODEL_CLASS deployment constant lets a pinned deployment skip the detection
+  load. - Test hardening: fractional %.9g pin, direct-row nan/inf/-inf writer guard coverage, a
+  stepped-conversion divergence case, slow marks on the checkpoint-fixture detection tests, three
+  convention renames, and a duplicated comment folded into its docstring.
+
+### Internal-Fix
+
+- **evaluation**: Dedupe model-output decode into param_spec
+  ([#1792](https://github.com/tinaudio/synth-setter/pull/1792),
+  [`a8f2331`](https://github.com/tinaudio/synth-setter/commit/a8f2331ccddaf8889754c1a489bb80bdf170b2ff))
+
+* internal-fix(evaluation): dedupe model-output decode into param_spec
+
+Three call sites (predict_vst_audio, surge_xt_interactive, and the upcoming predict-capture bridge
+  CLI in #1788) each hand-rolled the model-output inverse scale ((x + 1) / 2, clip to [0, 1]) before
+  ParamSpec.decode. Extract it as decode_model_output so the contract has one source.
+  Behavior-neutral; extracted from #1788 to land separately.
+
+* internal-fix(evaluation): pin decode_model_output contract, drop stale prose
+
+Pre-PR review round: a direct unit-test module pins the rescale/clip contract independently of any
+  caller; docstrings stop enumerating an out-of-tree caller and stop restating the inverse-scale
+  formula at the call sites, referencing decode_model_output instead.
+
+* internal-fix(evaluation): harden decode_model_output pins per review round two
+
+Pins the tuple shape, non-mutation, NaN passthrough, and over-long-row truncation as explicit
+  current-contract tests (guards stay a deliberate future change); the tiny spec now carries the
+  real NoteParams shape; remaining stale rescale attributions in test prose now reference
+  decode_model_output.
+
+* internal-fix(evaluation): close round-three review remnants on the decode pins
+
+The last stale 'rescaled row' phrase now says 'the row'; the helper docstring drops its
+  caller-mandate sentence; ParamSpec.decode gains the inverse cross-reference; the under-long-row
+  loud failure joins the pinned-contract suite.
+
+* internal-fix(evaluation): round-four polish on the decode extraction
+
+Tightens the NaN pin docstring to the two-line cap, narrows the loud-failure claim to categorical
+  truncation and pins the silent tail-truncation case beside it, softens the [0, 1] return claim to
+  the convention it is, aligns the target path's dtype with the pred path via .float(), and notes
+  where exact-value coverage lives.
+
+* internal-fix(evaluation): correct truncation-pin attribution, pin float64 target and duration
+  values
+
+Round five: the loud-failure pin now names the real mechanism (an empty scalar slice, not the
+  categorical it truncates through), the note-duration branch pins its exact decoded value, and a
+  float64 target-params regression test covers the call-site float32 cast.
+
+* docs(evaluation): point eval-pipeline decode prose at decode_model_output
+
+The render-stage bullet inlined the [-1, 1] -> [0, 1] transform; now that the scale has a canonical
+  named home, reference the symbol instead (doc-drift advisory for #1792).
+
+* docs(evaluation): state that decode width is unvalidated, per review
+
+Copilot flagged both decode docstrings for claiming a len(spec) width the implementations don't
+  enforce; the prose now names the unvalidated width and points at the pinned truncation behaviors.
+
+* test(evaluation): add future-annotations import to the decode contract module
+
+Aligns the new test module with the suite's prevailing convention, per review.
+
+
+## v8.40.4 (2026-07-10)
+
+### Bug Fixes
+
+- **docker**: Install unzip in the image test stage
+  ([#1790](https://github.com/tinaudio/synth-setter/pull/1790),
+  [`762904e`](https://github.com/tinaudio/synth-setter/commit/762904ecbe57087986fe469dd8527770299e0e24))
+
+* fix(docker): install unzip in the image test stage
+
+The dev-base stage runs pytest -k 'not slow', which exercises the Makefile install-plugins targets;
+  their recipes unpack cached .zip archives with unzip, which no ancestor stage installs. Every
+  docker-build-validation run since the targets landed (#1765) fails with '/bin/sh: 1: unzip: not
+  found' in the three dexed cache tests. Root-caused in #1789; tar-based recipes already pass
+  because tar ships in the base image.
+
+* fix(docker): correct stale no-subprocess claim on the in-image pytest run
+
+The comment predates #1765: the infra-marked install-plugins tests do shell out to the Makefile
+  recipes (tar/unzip), which is exactly why the test stage now installs unzip. Flagged by the pre-PR
+  review.
+
+### Code Style
+
+- **tests**: Apply ruff-format wrapping to vst test modules
+  ([#1791](https://github.com/tinaudio/synth-setter/pull/1791),
+  [`20c28fb`](https://github.com/tinaudio/synth-setter/commit/20c28fbc2a69efa49558e80f6d082552d6b3a81a))
+
+Reformat-only: line wrapping and import-group spacing that current ruff-format produces for five
+  tests/data/vst modules. All five files are AST-identical to their previous state. Extracted from
+  #1788 so the bridge PR touches only bridge concerns.
+
+
+## v8.40.3 (2026-07-08)
+
+### Bug Fixes
+
+- **data**: Log Lance finalize split progress
+  ([#1773](https://github.com/tinaudio/synth-setter/pull/1773),
+  [`08c0a08`](https://github.com/tinaudio/synth-setter/commit/08c0a08153fedf835fae983c424b2c02c66b85d2))
+
+- **storage**: Bound Lance R2 data file size
+  ([#1774](https://github.com/tinaudio/synth-setter/pull/1774),
+  [`c4bbf82`](https://github.com/tinaudio/synth-setter/commit/c4bbf82fd9c1dc58cb688255e656efb15ee8b526))
+
+### Build System
+
+- **make**: Install-plugins target for the docker image's full VST3 set
+  ([#1765](https://github.com/tinaudio/synth-setter/pull/1765),
+  [`d082dd6`](https://github.com/tinaudio/synth-setter/commit/d082dd6efa3ce3138b6b0c274a9a3faf05d8b08f))
+
+* build(make): add install-plugins target mirroring the docker image plugin set
+
+make install-plugins provisions every VST3 the runtime image ships: Surge XT (existing
+  install-surge-xt) plus new install-dexed / install-obxf / install-six-sines targets sharing one
+  fetch->sha256->extract canned recipe.
+
+The three fetched-synth pins mirror the Dockerfile ARGs verbatim. The ARG defaults must stay
+  self-contained (CI builds the image without the Makefile, and the fetch stage has no repo checkout
+  to read a shared pins file), so the duplication is irreducible;
+  tests/infra/test_install_plugins_targets.py asserts both sides stay equal and covers the
+  skip-if-present and non-x86_64 gating behavior.
+
+* test(make): cover install_fetched_synth download paths; fix review findings
+
+Address pre-PR review: add network-free tests for the verify->extract->move happy path (seeded cache
+  + HOME override + command-line sha pin), checksum mismatch, unsupported archive type, and
+  bundle-missing-in-archive; parametrize the non-x86_64 gate across all three fetched-synth targets.
+  Recipe cleanups: trap-based temp-dir cleanup on every exit path, diagnostics to stderr, tighter
+  header comments, and docs note that non-x86_64 hosts still exit 0.
+
+* test(make): exercise tgz extraction and mixed-presence aggregate; stderr diagnostics in
+  install-surge-xt
+
+Round-2 review warns: cover the tar branch with the space-containing 'Six Sines.vst3' bundle name,
+  prove install-plugins installs only the missing bundle when others exist, dedupe the
+  throwaway-HOME env setup into _home_env, and align install-surge-xt's error messages to stderr so
+  both fetch recipes diagnose on the same stream.
+
+* docs: sync doc-map and platform caveats for install-plugins
+
+Apply the doc-drift advisory: add the new targets and pin vars to the getting-started Makefile
+  covers entry, note the Makefile/pin-parity checks in the tests/infra doc-map entry and testing.md
+  row, correct the aggregate's non-x86_64 claim (arm64 Linux fails in install-surge-xt before any
+  skip), and de-inline the Surge version from getting-started's cache-path prose.
+
+* fix(make): fail with a clear error when sha256sum is missing
+
+Without the guard a missing sha256sum trips the generic checksum-failure branch and prints the
+  misleading remove-the-cached-file hint (Copilot review on #1765).
+
+
+## v8.40.2 (2026-07-08)
+
+### Bug Fixes
+
+- **storage**: Pass R2 endpoint alias to Lance
+  ([#1769](https://github.com/tinaudio/synth-setter/pull/1769),
+  [`f7cf09e`](https://github.com/tinaudio/synth-setter/commit/f7cf09e6628ac1b191e281f895de65c54d135129))
+
+* fix(storage): pass R2 endpoint alias to Lance
+
+* test(storage): document R2 multipart threshold
+
+* fix(storage): trim R2 storage option values
+
+
+## v8.40.1 (2026-07-08)
+
+### Bug Fixes
+
+- **pipeline**: Load workspace dotenv by default
+  ([`bfc4008`](https://github.com/tinaudio/synth-setter/commit/bfc40080284cf0e99bcb5483c2f5507d705e6238))
+
+Fixes #1768
+
+
+## v8.40.0 (2026-07-05)
+
+### Chores
+
+- **config**: Full-scale surge_simple + surge_xt Lance datagen configs
+  ([#1762](https://github.com/tinaudio/synth-setter/pull/1762),
+  [`7e758d7`](https://github.com/tinaudio/synth-setter/commit/7e758d79a18a80279891008c553c98b885669165))
+
+* chore(config): surge_simple + surge_xt production Lance datagen configs
+
+Adds two generate_dataset experiments writing Lance shards to the experiments bucket:
+  surge-simple-lance-440k-20k-20k (192 shards) and surge-xt-lance-2m-40k-10k (820 shards). Both
+  render shards in parallel with max_retries=5, samples_per_shard=2500, and
+  plugin_reload_cadence=once; everything else inherits group defaults.
+
+Registers both in the DATASET_EXPERIMENTS allowlist so each composes, validates as DatasetSpec, and
+  JSON round-trips in CI.
+
+Refs #1760
+
+* chore(config): document Lance datagen sizing and pin shard math
+
+Addresses the pre-PR review WARNs on the two new Lance experiment configs: adds the sibling-style
+  sizing header (totals → shard count), moves each render-tuning rationale next to the key it
+  justifies, pins the exact shard counts (192 / 820) in a dedicated test so a transposed split digit
+  cannot slip through, and reconciles the config-naming convention in data-pipeline.md with the
+  {name}-lance-{train}-{val}-{test} pattern the Lance configs actually use.
+
+* chore(config): pin per-split shard ranges and clarify bucket/seed intent
+
+Second review pass on the Lance datagen configs: the shard-math test now pins split_shard_ranges
+  (176/8/8 and 800/16/4) so a same-total val/test swap fails, headers say "Full-scale" rather than
+  "Production" to match the deliberate experiments-bucket routing, and both configs document that
+  keeping the default base_seed repeats early shard seeds of the smaller surge runs.
+
+* docs(data-pipeline): fix config-naming placeholder and format-neutral shard gloss
+
+Copilot review on #1762: the 480k in surge-simple-480k-10k is the train+val+test total, so the
+  placeholder is {total_samples}, not {total_train_samples}; the Shard glossary entry now covers all
+  three container formats instead of describing shards as HDF5-only.
+
+* docs(data-pipeline): document experiments bucket and Lance shard shape
+
+Applies the doc-drift advisory for #1762: the Shard glossary entry now matches §7.10 (Lance shards
+  are dataset directories, not single R2 objects), a Lance glossary row joins the WebDataset one,
+  the storage-provenance spec §2 acknowledges the experiments bucket override, the finalize artifact
+  snippet derives the bucket from spec.r2.bucket, and doc-map's r2-group pattern points at
+  configs/r2/ where the group actually lives.
+
+* docs(data-pipeline): drop superfluous bucket note from storage spec
+
+The experiments-bucket override is already visible in the configs themselves; the storage spec's
+  canonical layout section stays scoped to the prefix structure.
+
+* docs(data-pipeline): derive artifact reference from spec.r2.prefix
+
+Copilot on #1762: DatasetSpec has no dataset_config_id / dataset_wandb_run_id attributes; r2.prefix
+  already materializes data/{dataset_config_id}/{dataset_wandb_run_id}/ so the snippet now matches
+  the real schema without hard-coding the data/ segment.
+
+* docs(data-pipeline): map W&B artifact snippet to real DatasetSpec fields
+
+Copilot on #1762: dataset_config_id / dataset_wandb_run_id / param_spec / code_version are metadata
+  keys, not DatasetSpec attributes — source them from task_name, run_id, render.param_spec_name, and
+  git_sha so the snippet is runnable against the actual schema.
+
+### Features
+
+- **data-pipeline**: Add spec-URI dataset generation CLI
+  ([#1759](https://github.com/tinaudio/synth-setter/pull/1759),
+  [`ca7b2fe`](https://github.com/tinaudio/synth-setter/commit/ca7b2fe576b7d557203190097429d8cb0b7b12b7))
+
+* feat(data-pipeline): accept a datasetspec URI in synth-setter-generate-dataset
+
+A single bare positional (local path, file://, r2://, or s3://) now loads an already-materialized
+  input_spec.json via the existing spec_io.load_spec_from_uri dispatcher and renders it in-process;
+  Hydra-override argv keeps flowing to the (renamed) hydra_main unchanged. The s3:// scheme reuses
+  r2_io.from_s3_uri — same object store, scheme rewrite only, no new storage IO.
+
+A real-network integration test (no fakes, no mocks, no stubbed renderer) uploads a smoke-shard spec
+  to R2, drives the real CLI subprocess with the r2:// URI (real Surge render + shard uploads + R2
+  size probes), then re-runs via s3:// asserting the resumability probe skips every extant shard. A
+  new PR-tier workflow runs it in the dev-snapshot Docker image with R2 secrets.
+
+* refactor(data-pipeline): split spec-URI mode into its own CLI
+
+Folding the URI form into synth-setter-generate-dataset forced an argv-shape dispatcher
+  (bare-positional sniffing, mixed-args errors) onto the Hydra entrypoint. Move run_from_spec_uri
+  into a dedicated synth-setter-generate-dataset-from-spec-uri console script (argparse, one
+  positional) and revert generate_dataset.py to its original shape — the dispatcher,
+  spec_uri_from_argv, and the hydra_main rename all disappear, along with their tests.
+
+### Testing
+
+- **training**: Cover Lance datamodule smoke parity
+  ([#1721](https://github.com/tinaudio/synth-setter/pull/1721),
+  [`712b3dc`](https://github.com/tinaudio/synth-setter/commit/712b3dcfdad9ebc7d77df605324c08260acf5d72))
+
+* test(training): cover lance datamodule smoke parity
+
+* test(training): address lance smoke review feedback
+
+* test(training): parametrize Surge smoke tests over h5 and Lance
+
+Replace the bespoke fake-VST Lance train/eval tests with a dataset-format parametrize axis so every
+  Surge smoke test drives both the h5 and Lance datamodules through the same body. A
+  Lance-datamodule regression can no longer hide behind h5-only coverage.
+
+- Real-VST tier: test_train_surge_xt, test_train_eval_surge_xt, and the eval shuffle-seed roundtrip
+  now run [h5, lance] x accelerator x experiment. generate_vst_dataset already dispatches the .lance
+  suffix, so the new surge_xt_smoke_lance_datasets fixture renders through the real Surge XT
+  subprocess (no fake-only shortcut). - Fake-VST tier: the three Lance train/eval tests gain a
+  symmetric h5 arm via a new cfg_surge_fake_train/eval pair, so the CPU inner loop covers both
+  formats too. - Shared _SurgeSmokeVariant descriptor and surge_smoke_variant fixture drive every
+  arm. The wandb checkpoint-resolution tests stay h5-only: their subject (${wandb:...} resolution)
+  is identical across dataset formats.
+
+Refs #1719
+
+---------
+
+Co-authored-by: khaledtin <khaledtin@users.noreply.github.com>
+
+
 ## v8.39.0 (2026-06-16)
 
 ### Features

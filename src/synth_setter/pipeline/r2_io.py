@@ -46,17 +46,38 @@ __all__ = [
     "upload_to_uri",
 ]
 
+_CHECKOUT_MARKER = ".project-root"
+_WORKSPACE_ENV = "SYNTH_SETTER_WORKSPACE"
+
+
+def _default_env_file() -> Path:
+    """Resolve the workspace dotenv path without importing optional launcher deps.
+
+    :returns: ``$SYNTH_SETTER_WORKSPACE/.env`` when set, otherwise the checkout
+        marker root's ``.env`` or the current directory's ``.env`` fallback.
+    """
+    workspace = os.environ.get(_WORKSPACE_ENV, "").strip()
+    if workspace:
+        return Path(workspace).resolve() / ".env"
+    for candidate in Path(__file__).resolve().parents:
+        if (candidate / _CHECKOUT_MARKER).is_file():
+            return candidate / ".env"
+    return Path.cwd().resolve() / ".env"
+
+
+_DEFAULT_ENV_FILE = _default_env_file()
+
 # IO idle timeout (not wall-clock); directory uploads need more than the 300s per-file default.
 _UPLOAD_DIR_TIMEOUT = "3h"
 
 
 def _storage_config_from_sources(env_file: Path | None = None) -> StorageConfig:
+    resolved_env_file = env_file if env_file is not None else _DEFAULT_ENV_FILE
     try:
-        return storage_settings_from_sources(env_file).to_config()
+        return storage_settings_from_sources(resolved_env_file).to_config()
     except ValidationError as exc:
-        where = str(env_file) if env_file is not None else "<env_file not set>"
         raise RuntimeError(
-            f"Object storage settings unresolved after dotenv load ({where}). "
+            f"Object storage settings unresolved after dotenv load ({resolved_env_file}). "
             f"Expected: {', '.join(STORAGE_REQUIRED_ENV_KEYS)}."
         ) from exc
 
@@ -88,27 +109,30 @@ def _rclone_argv(verb: str, *operands: str, timeout: str = "300s") -> list[str]:
 
 
 def ensure_r2_env_loaded(env_file: Path | None = None) -> None:
-    """Load storage settings from ``env_file`` into rclone env; validate.
+    """Load storage settings from dotenv/process env into rclone env; validate.
 
     Three-step pre-flight that callers run once before invoking any other helper
     in this module:
 
-    1. If ``env_file`` is provided and exists on disk, mirror every non-blank
-       ``SYNTH_SETTER_STORAGE_*`` key from that dotenv file into the storage
-       settings view. Blank/whitespace values are skipped so a ``.env`` line
-       ``KEY=`` never clobbers a real process-env credential.
+    1. If the resolved dotenv file exists on disk, mirror every non-blank
+       ``SYNTH_SETTER_STORAGE_*`` key from it into the storage settings view.
+       ``env_file=None`` means the default dotenv lookup:
+       ``$SYNTH_SETTER_WORKSPACE/.env``, the checkout marker root's ``.env``,
+       then cwd ``.env``. Blank/whitespace values are skipped so a ``.env``
+       line ``KEY=`` never clobbers a real process-env credential.
     2. Validate the provider-neutral settings and build an env-free
        :class:`StorageConfig`.
     3. Write the rclone projection (:meth:`StorageConfig.rclone_env`) back into
        ``os.environ`` so the auth ping and later transfers use the normalized
        values. A non-zero ping exit also raises.
 
-    No-op on the dotenv step if ``env_file`` is ``None`` or doesn't exist; the
+    No-op on the dotenv step if the resolved file doesn't exist; the
     resolution + normalization + auth checks still run against whatever
     ``os.environ`` already has.
 
     :param env_file: Optional dotenv file to merge into ``os.environ`` first
-        (typically ``sky_cfg.env_file``).
+        (typically ``sky_cfg.env_file``). ``None`` means the resolved default
+        dotenv path.
     :raises RuntimeError: A required setting is unset/blank after the load, or
         ``rclone lsd r2:`` exits non-zero (bad creds, network, etc.).
     """
@@ -141,6 +165,9 @@ def is_r2_reachable() -> bool:
     test then calls :func:`ensure_r2_env_loaded` and hits a hard
     ``RuntimeError`` instead of the intended auto-skip.
 
+    Settings resolve from the default dotenv file and process env, matching
+    the preflight's sources.
+
     :returns: ``True`` when rclone is on PATH, storage settings resolve, and a
         credentialled ``rclone lsd r2:`` exits 0; ``False`` otherwise.
     """
@@ -168,8 +195,8 @@ def r2_storage_options() -> dict[str, str]:
     Reads ``SYNTH_SETTER_STORAGE_*`` and raises ``RuntimeError`` if a required
     setting is unset or blank.
 
-    :returns: ``{access_key_id, secret_access_key, endpoint, region}`` for
-        ``lance.dataset`` / ``lance.write_dataset``.
+    :returns: ``{access_key_id, secret_access_key, endpoint, aws_endpoint, region}``
+        for ``lance.dataset`` / ``lance.write_dataset``.
     """
     return _storage_config_from_sources().lance_storage_options()
 

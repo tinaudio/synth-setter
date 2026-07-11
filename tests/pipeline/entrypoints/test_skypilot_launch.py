@@ -22,6 +22,7 @@ import pytest
 import sky
 import yaml
 
+import synth_setter.pipeline.skypilot_launch as skypilot_launch
 from synth_setter.pipeline.constants import WORKER_SPEC_URI_ENV
 from synth_setter.pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
 from synth_setter.pipeline.schemas.object_storage import RCLONE_ENV_KEYS
@@ -67,6 +68,16 @@ def clear_worker_env_from_process(monkeypatch: pytest.MonkeyPatch) -> None:
     for key in list(os.environ):
         if key.startswith("SYNTH_SETTER_STORAGE_"):
             monkeypatch.delenv(key, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def isolate_default_env_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prevent developer-local dotenv files from affecting worker env resolution.
+
+    :param tmp_path: Pytest tmp dir used for the intentionally missing dotenv path.
+    :param monkeypatch: Pytest fixture used to isolate the module-level default.
+    """
+    monkeypatch.setattr(skypilot_launch, "DEFAULT_ENV_FILE", tmp_path / "missing.env")
 
 
 @pytest.fixture(autouse=True)
@@ -930,6 +941,33 @@ class TestDispatchViaSkypilot:
         with pytest.raises(ValueError, match="No object storage settings resolved"):
             dispatch_via_skypilot(sky_cfg)
 
+    def test_blank_worker_env_raises_before_launch(
+        self,
+        tmp_path: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """Blank storage creds fail as unresolved instead of launching with unusable auth.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        """
+        blank_env_file = tmp_path / ".env"
+        blank_env_file.write_text(
+            "SYNTH_SETTER_STORAGE_ACCESS_KEY_ID= \n"
+            "SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY=\t\n"
+            "SYNTH_SETTER_STORAGE_ENDPOINT_URL=\n"
+        )
+
+        template = _write_runpod_yaml(tmp_path)
+        sky_cfg = SkypilotLaunchConfig(
+            compute_template=str(template),
+            cmd="exec synth-setter-generate-dataset-from-hydra experiment=foo",
+            env_file=str(blank_env_file),
+        )
+        with pytest.raises(ValueError, match="No object storage settings resolved"):
+            dispatch_via_skypilot(sky_cfg)
+        mock_sky.jobs.launch.assert_not_called()
+
     @pytest.mark.parametrize(
         "kwargs_overrides, match",
         [
@@ -1055,6 +1093,36 @@ class TestDispatchViaSkypilot:
         mock_sky.Task.from_yaml_config.assert_called()
         passed_doc = mock_sky.Task.from_yaml_config.call_args.args[0]
         assert passed_doc["run"] == cmd
+
+    def test_dispatch_uses_default_env_file_when_unset(
+        self,
+        tmp_path: Path,
+        env_file: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        mock_sky: MagicMock,
+    ) -> None:
+        """Unset ``sky_cfg.env_file`` still forwards creds from the workspace ``.env``.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param env_file: Fixture-provided worker env file path.
+        :param monkeypatch: Pytest fixture used to point the default env path at
+            the fixture dotenv.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        """
+        monkeypatch.setattr(skypilot_launch, "DEFAULT_ENV_FILE", env_file)
+        template = _write_runpod_yaml(tmp_path)
+        sky_cfg = SkypilotLaunchConfig(
+            compute_template=str(template),
+            cmd="echo",
+            env_file=None,
+            job_name="default-env-file",
+        )
+
+        dispatch_via_skypilot(sky_cfg)
+
+        task = mock_sky.Task.from_yaml_config.return_value
+        worker_env = task.update_envs.call_args.args[0]
+        assert worker_env["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "key"
 
     def test_dispatch_failure_raises_runtime_error(
         self,
@@ -1279,8 +1347,9 @@ class TestDispatchViaSkypilot:
         [
             ("job_name", "has/slash", "job_name must match"),
             ("worker_image_tag", "bad tag", "worker_image_tag must match OCI"),
+            ("env_file", "   ", "env_file must be a non-empty path"),
         ],
-        ids=["job-name-with-slash", "image-tag-with-space"],
+        ids=["job-name-with-slash", "image-tag-with-space", "blank-env-file"],
     )
     def test_input_validation_raises_before_disk_or_network(
         self,
@@ -1308,9 +1377,8 @@ class TestDispatchViaSkypilot:
             "job_name": "ok-name",
             field: value,
         }
-        sky_cfg = SkypilotLaunchConfig(**kwargs)  # type: ignore[arg-type]
-
         with pytest.raises(ValueError, match=match):
+            sky_cfg = SkypilotLaunchConfig(**kwargs)  # type: ignore[arg-type]
             dispatch_via_skypilot(sky_cfg)
         mock_sky.jobs.launch.assert_not_called()
 
