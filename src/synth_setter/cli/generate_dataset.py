@@ -827,9 +827,23 @@ def _build_worker_cmd(overrides: list[str], spec: DatasetSpec) -> str:
     """
     pinned_overrides = [f"+created_at={spec.created_at.isoformat()}"]
     all_overrides = list(overrides) + pinned_overrides
+    repair_python = (
+        'venv_dir="${VIRTUAL_ENV:-/venv/main}"; '
+        'venv_python="$venv_dir/bin/python"; '
+        'if [[ ! -x "$venv_python" ]] || '
+        "! \"$venv_python\" -c 'import sys; raise SystemExit(sys.version_info[:2] != (3, 12))'; "
+        "then "
+        'echo "Recreating $venv_dir with Python 3.12"; '
+        'rm -rf "$venv_dir"; '
+        'uv venv --python 3.12 "$venv_dir"; '
+        'export VIRTUAL_ENV="$venv_dir"; '
+        'export PATH="$venv_dir/bin:$PATH"; '
+        "fi"
+    )
     parts = [
         f"cd {shlex.quote(_WORKER_REPO_ROOT)}",
         "bash scripts/sync_worker_checkout.sh",
+        repair_python,
         "exec synth-setter-generate-dataset-from-hydra "
         + " ".join(shlex.quote(o) for o in all_overrides),
     ]

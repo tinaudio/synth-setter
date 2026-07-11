@@ -45,6 +45,20 @@ def test_docker_runtime_uses_python_312(project_root: Path) -> None:
     assert "sys.version_info[:2] == (3, 12)" in dockerfile
 
 
+def test_worker_checkout_recreates_stale_python_venv(project_root: Path) -> None:
+    """PR workers repair stale dev-snapshot images after checkout.
+
+    :param project_root: Repository root fixture.
+    """
+    script = (project_root / "scripts/sync_worker_checkout.sh").read_text()
+
+    assert 'venv_python="$venv_dir/bin/python"' in script
+    assert "sys.version_info[:2] != (3, 12)" in script
+    assert 'venv_dir="${VIRTUAL_ENV:-/venv/main}"' in script
+    assert 'rm -rf "$venv_dir"' in script
+    assert 'uv venv --python 3.12 "$venv_dir"' in script
+
+
 def test_tart_default_python_version_is_python_312(project_root: Path) -> None:
     """The macOS Tart image defaults to Python 3.12.
 
