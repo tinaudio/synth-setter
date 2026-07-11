@@ -25,9 +25,11 @@ after an rclone download. A review against the pinned library
   A shard / split becomes a Lance *dataset directory* (`<name>.lance/` with
   `data/`, `_versions/`, `_transactions/`), not a single file.
 - **#2 → direct R2 streaming for sequential paths only.** finalize, stats, and
-  validate read directly from R2 via `storage_options`; the training dataloader
-  keeps rclone local-first (random per-batch reads across epochs must not hit
-  the network).
+  validate read directly from R2 via `storage_options`; the h5py-shaped adapter
+  (`data/lance_datamodule.py`) keeps rclone local-first (random per-batch reads
+  across epochs must not hit the network). The later native `lance.torch`
+  dataloaders (`data/lance_torch.py`) can additionally stream R2 directly via
+  `r2_io.r2_storage_options()` when local staging is not an option.
 - **#3 → pin `data_storage_version="2.2"`** on every `write_dataset` call.
   `"2.2"` is one format ahead of the pylance default / stable anchor (`"2.1"`);
   it writes without the unstable-format warning (`"2.3"` does not) but requires
