@@ -107,7 +107,7 @@ jobs:
           private-key: ${{ secrets.APPROVAL_BOT_PRIVATE_KEY }}
 
       # Condition 2 excludes GitHub's managed Copilot review suite via a null-safe
-      # allowlist of its known names — its stuck check-runs can't be re-run (#1024, #1805).
+      # allowlist of its known names — its stuck check-runs can't be re-run (#1033, #1805).
       - name: Check all conditions
         id: conditions
         env:
