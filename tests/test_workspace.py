@@ -59,6 +59,30 @@ def test_env_override_wins(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     assert resolved.is_absolute()
 
 
+def test_blank_env_override_uses_checkout_root(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Whitespace-only ``$SYNTH_SETTER_WORKSPACE`` falls back to checkout discovery.
+
+    :param monkeypatch: Pytest fixture for env-var setup.
+    """
+    monkeypatch.setenv("SYNTH_SETTER_WORKSPACE", "   ")
+    expected = Path(workspace.__file__).resolve().parents[2]
+    resolved = workspace.operator_workspace()
+    assert resolved == expected
+
+
+def test_env_override_strips_surrounding_whitespace(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Surrounding whitespace on ``$SYNTH_SETTER_WORKSPACE`` is ignored.
+
+    :param monkeypatch: Pytest fixture for env-var setup.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    monkeypatch.setenv("SYNTH_SETTER_WORKSPACE", f"  {tmp_path}  ")
+    resolved = workspace.operator_workspace()
+    assert resolved == tmp_path.resolve()
+
+
 def test_checkout_root_detected_from_marker(monkeypatch: pytest.MonkeyPatch) -> None:
     """With no env override, the parents-walk lands on the test file's checkout root.
 

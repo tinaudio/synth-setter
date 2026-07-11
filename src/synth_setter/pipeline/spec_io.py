@@ -31,7 +31,7 @@ from urllib.parse import urlparse
 
 from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME
 from synth_setter.pipeline.file_uri import file_uri_to_path
-from synth_setter.pipeline.r2_io import downloaded_to_tempfile, upload_to_uri
+from synth_setter.pipeline.r2_io import downloaded_to_tempfile, from_s3_uri, upload_to_uri
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 
 __all__ = [
@@ -72,29 +72,34 @@ _LOCAL_DATA_DIRNAME = "data"
 # Schemes ``read_spec_text`` knows how to fetch. Bare arguments (no scheme,
 # e.g. ``./data/spec.json`` or ``/abs/spec.json``) are treated as local paths
 # and read against the process CWD — matching the convention used by rclone,
-# fsspec, and similar libraries.
+# fsspec, and similar libraries. ``s3://`` names the same S3-compatible
+# object store as ``r2://`` (only the scheme differs — see
+# ``r2_io.from_s3_uri``), so both fetch through the one rclone remote.
 _LOCAL_FILESYSTEM_SCHEMES: frozenset[str] = frozenset({"", "file"})
-_REMOTE_OBJECT_SCHEMES: frozenset[str] = frozenset({"r2"})
+_REMOTE_OBJECT_SCHEMES: frozenset[str] = frozenset({"r2", "s3"})
 
 
 @contextmanager
 def localized_uri(uri: str) -> Iterator[Path]:  # noqa: DOC502
-    """Yield a local filesystem path for a bare path, ``file://`` URI, or ``r2://`` URI.
+    """Yield a local filesystem path for a bare path, ``file://``, ``r2://``, or ``s3://`` URI.
 
     Front-of-pipeline dispatcher: parses the scheme via :func:`urllib.parse.urlparse`
     and routes to the matching backend. Bare paths and ``file://`` URIs yield
     the resolved path in place (no copy; relative paths resolve against the
-    process CWD, same as ``rclone`` / ``fsspec`` / Arrow). An ``r2://`` URI is
-    downloaded to a tempfile that is removed when the context exits, so binary
-    readers (e.g. ``h5py``) can open a remote object as a local file.
+    process CWD, same as ``rclone`` / ``fsspec`` / Arrow). An ``r2://`` or
+    ``s3://`` URI is downloaded to a tempfile that is removed when the context
+    exits, so binary readers (e.g. ``h5py``) can open a remote object as a
+    local file; ``s3://bucket/key`` is the S3-scheme spelling of the same
+    object ``r2://bucket/key`` names (see ``r2_io.from_s3_uri``), so both
+    fetch through the one configured rclone remote.
 
-    :param uri: Local filesystem path, ``file://`` URI, or ``r2://`` URI.
+    :param uri: Local filesystem path, ``file://``, ``r2://``, or ``s3://`` URI.
     :yields Path: A local path readable for the duration of the context.
     :raises FileNotFoundError: a bare or ``file://`` ``uri`` resolves to a path
-        that does not exist (the ``r2://`` branch already fails in the fetch).
-    :raises ValueError: ``uri`` carries a scheme other than ``file://`` or
-        ``r2://``, or is a malformed ``file://`` URI (propagated from
-        :func:`~synth_setter.pipeline.file_uri.file_uri_to_path`).
+        that does not exist (the remote branch already fails in the fetch).
+    :raises ValueError: ``uri`` carries a scheme other than ``file://``,
+        ``r2://``, or ``s3://``, or is a malformed ``file://`` URI (propagated
+        from :func:`~synth_setter.pipeline.file_uri.file_uri_to_path`).
     """
     scheme = urlparse(uri).scheme
     if scheme in _LOCAL_FILESYSTEM_SCHEMES:
@@ -105,41 +110,42 @@ def localized_uri(uri: str) -> Iterator[Path]:  # noqa: DOC502
             raise FileNotFoundError(f"no file at {uri!r} (resolved to {local})")
         yield local
     elif scheme in _REMOTE_OBJECT_SCHEMES:
-        with downloaded_to_tempfile(uri) as fetched:
+        with downloaded_to_tempfile(from_s3_uri(uri) if scheme == "s3" else uri) as fetched:
             yield fetched
     else:
         raise ValueError(
             f"unsupported URI scheme {scheme!r}: {uri!r}. "
-            f"Supported: bare local paths, ``file://``, ``r2://``."
+            f"Supported: bare local paths, ``file://``, ``r2://``, ``s3://``."
         )
 
 
 def read_spec_text(spec_uri: str) -> str:  # noqa: DOC502
-    """Read spec JSON text from a bare path, ``file://`` URI, or ``r2://`` URI.
+    """Read spec JSON text from a bare path, ``file://``, ``r2://``, or ``s3://`` URI.
 
     Thin wrapper over :func:`localized_uri` that reads the localized file's
-    text; a typo (e.g. ``s3://``) fails loudly there instead of being silently
+    text; a typo (e.g. ``gs://``) fails loudly there instead of being silently
     passed to :class:`~pathlib.Path`.
 
-    :param spec_uri: Local filesystem path, ``file://`` URI, or ``r2://`` URI.
+    :param spec_uri: Local filesystem path, ``file://``, ``r2://``, or
+        ``s3://`` URI.
     :returns: The JSON text content of the spec file.
-    :raises ValueError: ``spec_uri`` carries a scheme other than ``file://``
-        or ``r2://``, or is a malformed ``file://`` URI (propagated from
-        :func:`localized_uri`).
+    :raises ValueError: ``spec_uri`` carries an unsupported scheme, or is a
+        malformed ``file://`` URI (propagated from :func:`localized_uri`).
     """
     with localized_uri(spec_uri) as local_path:
         return local_path.read_text()
 
 
 def load_spec_from_uri(spec_uri: str) -> DatasetSpec:  # noqa: DOC502
-    """Load a ``DatasetSpec`` from a local path, ``file://`` URI, or ``r2://`` URI.
+    """Load a ``DatasetSpec`` from a local path, ``file://``, ``r2://``, or ``s3://`` URI.
 
     Thin wrapper that composes :func:`read_spec_text` with
     :meth:`DatasetSpec.model_validate_json` so callers don't have to pull
     in the cli runner (and its Hydra/workspace bootstrap) just to parse a
     spec.
 
-    :param spec_uri: Local filesystem path, ``file://`` URI, or ``r2://`` URI.
+    :param spec_uri: Local filesystem path, ``file://``, ``r2://``, or
+        ``s3://`` URI.
     :returns: The parsed spec.
     :raises ValueError: ``spec_uri`` carries an unsupported scheme (propagated
         from :func:`read_spec_text`); also the base class of

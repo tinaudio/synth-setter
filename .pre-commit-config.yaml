@@ -57,7 +57,7 @@ repos:
             src/synth_setter/data/fm_datamodule\.py|
             src/synth_setter/data/kosc_datamodule\.py|
             src/synth_setter/data/ot\.py|
-            src/synth_setter/data/surge_datamodule\.py|
+            src/synth_setter/data/vst_datamodule\.py|
             src/synth_setter/data/vst/core\.py|
             src/synth_setter/data/vst/generate_vst_dataset\.py|
             src/synth_setter/data/vst/param_spec\.py|
@@ -69,9 +69,9 @@ repos:
             src/synth_setter/models/components/vector_field\.py|
             src/synth_setter/models/ksin_ff_module\.py|
             src/synth_setter/models/ksin_flow_matching_module\.py|
-            src/synth_setter/models/surge_ff_module\.py|
-            src/synth_setter/models/surge_flow_matching_module\.py|
-            src/synth_setter/models/surge_flowvae_module\.py|
+            src/synth_setter/models/vst_ff_module\.py|
+            src/synth_setter/models/vst_flow_matching_module\.py|
+            src/synth_setter/models/vst_flowvae_module\.py|
             src/synth_setter/cli/train\.py|
             src/synth_setter/utils/callbacks\.py|
             src/synth_setter/utils/logging_utils\.py|
@@ -142,7 +142,7 @@ repos:
             src/synth_setter/data/kosc_datamodule\.py|
             src/synth_setter/data/ksin_datamodule\.py|
             src/synth_setter/data/ot\.py|
-            src/synth_setter/data/surge_datamodule\.py|
+            src/synth_setter/data/vst_datamodule\.py|
             src/synth_setter/data/vst/core\.py|
             src/synth_setter/data/vst/generate_vst_dataset\.py|
             src/synth_setter/data/vst/param_spec\.py|
@@ -157,9 +157,9 @@ repos:
             src/synth_setter/models/components/vector_field\.py|
             src/synth_setter/models/ksin_ff_module\.py|
             src/synth_setter/models/ksin_flow_matching_module\.py|
-            src/synth_setter/models/surge_ff_module\.py|
-            src/synth_setter/models/surge_flow_matching_module\.py|
-            src/synth_setter/models/surge_flowvae_module\.py|
+            src/synth_setter/models/vst_ff_module\.py|
+            src/synth_setter/models/vst_flow_matching_module\.py|
+            src/synth_setter/models/vst_flowvae_module\.py|
             src/synth_setter/utils/callbacks\.py
           )$
 
@@ -257,7 +257,7 @@ repos:
     rev: 0.6.1
     hooks:
       - id: nbstripout
-        exclude: "^notebooks/inpsect-models\\.ipynb$"
+        exclude: "^notebooks/(inpsect-models|add_embeddings_smoke|add_preview_columns)\\.ipynb$"
 
   # C++ formatting and linting (no-op until .cpp/.h files are added)
   - repo: https://github.com/pre-commit/mirrors-clang-format

@@ -17,6 +17,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import _get_git_sha
+from synth_setter.pipeline.subprocess_stream import scaled_timeout
 from synth_setter.resources import as_file, vst_headless_wrapper
 from synth_setter.run_id import make_wandb_run_id
 from synth_setter.utils import (
@@ -36,7 +37,12 @@ from synth_setter.workspace import operator_workspace
 
 _PREDICT_VST_AUDIO_MODULE = "synth_setter.evaluation.predict_vst_audio"
 _COMPUTE_AUDIO_METRICS_MODULE = "synth_setter.evaluation.compute_audio_metrics"
-_SUBPROCESS_TIMEOUT_SECONDS = 600
+# Postprocessing subprocess timeouts scale with sample count so a larger eval
+# split can't spuriously time out; overhead covers fixed startup. See scaled_timeout.
+_RENDER_TIMEOUT_OVERHEAD_SECONDS = 300.0
+_RENDER_TIMEOUT_PER_SAMPLE_SECONDS = 60.0
+_METRICS_TIMEOUT_OVERHEAD_SECONDS = 180.0
+_METRICS_TIMEOUT_PER_SAMPLE_SECONDS = 30.0
 _AGGREGATED_METRICS_FILENAME = "aggregated_metrics.csv"
 _METRICS_FILENAME = "metrics.csv"
 _AGGREGATED_METRICS_SHUFFLED_FILENAME = "aggregated_metrics_shuffled.csv"
@@ -187,8 +193,8 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
     :raises ValueError: if ``evaluation.render_vst`` is enabled but ``cfg.render`` is
         unset, or the expected input directory for a stage is missing.
     :raises subprocess.CalledProcessError: propagated from a non-zero subprocess exit.
-    :raises subprocess.TimeoutExpired: propagated when a subprocess exceeds
-        :data:`_SUBPROCESS_TIMEOUT_SECONDS`.
+    :raises subprocess.TimeoutExpired: propagated when a subprocess exceeds its
+        sample-count-scaled budget (see :func:`scaled_timeout`).
     """
     output_dir = Path(cfg.paths.output_dir)
     predictions_dir = output_dir / "predictions"
@@ -239,11 +245,22 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
                     args += [flag, str(value)]
             if cfg.evaluation.rerender_target:
                 args.append("-t")
+            # Budget scales with the sample count predict_vst_audio will render:
+            # one pred-*.pt per batch, and VSTDataset drops the partial tail batch,
+            # so files * batch_size matches the rendered count.
+            n_render_samples = (
+                sum(1 for f in predictions_dir.glob("pred-*.pt") if f.is_file())
+                * cfg.datamodule.batch_size
+            )
             log.info(f"Rendering predicted audio: {args}")
             subprocess.run(  # noqa: S603
                 args,
                 check=True,
-                timeout=_SUBPROCESS_TIMEOUT_SECONDS,
+                timeout=scaled_timeout(
+                    n_render_samples,
+                    overhead_seconds=_RENDER_TIMEOUT_OVERHEAD_SECONDS,
+                    per_sample_seconds=_RENDER_TIMEOUT_PER_SAMPLE_SECONDS,
+                ),
             )
 
     if cfg.evaluation.compute_metrics:
@@ -264,11 +281,22 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
             "-w",
             str(cfg.evaluation.num_workers),
         ]
+        # Upper-bounds the sample count compute_audio_metrics scores (it skips
+        # subdirs lacking both wavs); the surplus only loosens the budget.
+        n_metric_samples = sum(1 for d in audio_dir.glob("*") if d.is_dir())
+        # num_workers=0 is a valid config (Darwin runs in-process), i.e. one
+        # effective worker — clamp so it means that, not a scaled_timeout error.
+        metric_workers = max(cfg.evaluation.num_workers, 1)
         log.info(f"Computing audio metrics: {args}")
         subprocess.run(  # noqa: S603
             args,
             check=True,
-            timeout=_SUBPROCESS_TIMEOUT_SECONDS,
+            timeout=scaled_timeout(
+                n_metric_samples,
+                workers=metric_workers,
+                overhead_seconds=_METRICS_TIMEOUT_OVERHEAD_SECONDS,
+                per_sample_seconds=_METRICS_TIMEOUT_PER_SAMPLE_SECONDS,
+            ),
         )
         audio_metrics = _load_audio_metrics(metrics_dir)
         # Namespace every key (audio/* and shuffled_audio/*) per caller — e.g. one

@@ -1,0 +1,1302 @@
+{
+  "plugin": "Surge XT",
+  "version": "1.3.4",
+  "params": {
+    "a_amp_eg_attack": {
+      "clap_param_id": 2005836581,
+      "clap_name": "A Amp EG Attack",
+      "clap_module_name": "/A Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_amp_eg_decay": {
+      "clap_param_id": 3946337085,
+      "clap_name": "A Amp EG Decay",
+      "clap_module_name": "/A Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_amp_eg_sustain": {
+      "clap_param_id": 874858726,
+      "clap_name": "A Amp EG Sustain",
+      "clap_module_name": "/A Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_amp_eg_release": {
+      "clap_param_id": 3817344714,
+      "clap_name": "A Amp EG Release",
+      "clap_module_name": "/A Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_amp_eg_envelope_mode": {
+      "clap_param_id": 4006904256,
+      "clap_name": "A Amp EG Envelope Mode",
+      "clap_module_name": "/A Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_filter_eg_attack": {
+      "clap_param_id": 3748646916,
+      "clap_name": "A Filter EG Attack",
+      "clap_module_name": "/A Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_filter_eg_decay": {
+      "clap_param_id": 538873470,
+      "clap_name": "A Filter EG Decay",
+      "clap_module_name": "/A Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_filter_eg_sustain": {
+      "clap_param_id": 3362371559,
+      "clap_name": "A Filter EG Sustain",
+      "clap_module_name": "/A Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_filter_eg_release": {
+      "clap_param_id": 2009890251,
+      "clap_name": "A Filter EG Release",
+      "clap_module_name": "/A Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_filter_eg_envelope_mode": {
+      "clap_param_id": 4035533407,
+      "clap_name": "A Filter EG Envelope Mode",
+      "clap_module_name": "/A Envelopes/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_feedback": {
+      "clap_param_id": 2312042915,
+      "clap_name": "A Feedback",
+      "clap_module_name": "/A Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_filter_balance": {
+      "clap_param_id": 2642740645,
+      "clap_name": "A Filter Balance",
+      "clap_module_name": "/A Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_filter_configuration": {
+      "clap_param_id": 974101959,
+      "clap_name": "A Filter Configuration",
+      "clap_module_name": "/A Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_highpass": {
+      "clap_param_id": 3160484876,
+      "clap_name": "A Highpass",
+      "clap_module_name": "/A Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_filter_1_cutoff": {
+      "clap_param_id": 4092842705,
+      "clap_name": "A Filter 1 Cutoff",
+      "clap_module_name": "/A Filters/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_filter_1_feg_mod_amount": {
+      "clap_param_id": 4143694297,
+      "clap_name": "A Filter 1 FEG Mod Amount",
+      "clap_module_name": "/A Filters/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_filter_1_resonance": {
+      "clap_param_id": 8095466,
+      "clap_name": "A Filter 1 Resonance",
+      "clap_module_name": "/A Filters/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_filter_1_type": {
+      "clap_param_id": 1537728286,
+      "clap_name": "A Filter 1 Type",
+      "clap_module_name": "/A Filters/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_filter_2_cutoff": {
+      "clap_param_id": 1540685744,
+      "clap_name": "A Filter 2 Cutoff",
+      "clap_module_name": "/A Filters/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_filter_2_feg_mod_amount": {
+      "clap_param_id": 1591537336,
+      "clap_name": "A Filter 2 FEG Mod Amount",
+      "clap_module_name": "/A Filters/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_filter_2_resonance": {
+      "clap_param_id": 2506111403,
+      "clap_name": "A Filter 2 Resonance",
+      "clap_module_name": "/A Filters/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_filter_2_type": {
+      "clap_param_id": 1566357437,
+      "clap_name": "A Filter 2 Type",
+      "clap_module_name": "/A Filters/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_waveshaper_drive": {
+      "clap_param_id": 1243907205,
+      "clap_name": "A Waveshaper Drive",
+      "clap_module_name": "/A Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_waveshaper_type": {
+      "clap_param_id": 456251615,
+      "clap_name": "A Waveshaper Type",
+      "clap_module_name": "/A Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_osc_1_mute": {
+      "clap_param_id": 247329706,
+      "clap_name": "A Osc 1 Mute",
+      "clap_module_name": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_osc_1_octave": {
+      "clap_param_id": 600629919,
+      "clap_name": "A Osc 1 Octave",
+      "clap_module_name": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_osc_1_pitch": {
+      "clap_param_id": 2791424113,
+      "clap_name": "A Osc 1 Pitch",
+      "clap_module_name": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_osc_1_route": {
+      "clap_param_id": 2508963190,
+      "clap_name": "A Osc 1 Route",
+      "clap_module_name": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_osc_1_sawtooth": {
+      "clap_param_id": 627352114,
+      "clap_name": "A Osc 1 Shape",
+      "clap_module_name": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_osc_1_width": {
+      "clap_param_id": 627352117,
+      "clap_name": "A Osc 1 Sub Mix",
+      "clap_module_name": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_osc_1_sync": {
+      "clap_param_id": 627352118,
+      "clap_name": "A Osc 1 Sync",
+      "clap_module_name": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_osc_1_unison_detune": {
+      "clap_param_id": 627352119,
+      "clap_name": "A Osc 1 Unison Detune",
+      "clap_module_name": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_osc_1_unison_voices": {
+      "clap_param_id": 627352120,
+      "clap_name": "A Osc 1 Unison Voices",
+      "clap_module_name": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_osc_1_volume": {
+      "clap_param_id": 371918427,
+      "clap_name": "A Osc 1 Volume",
+      "clap_module_name": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_osc_1_pulse": {
+      "clap_param_id": 627352115,
+      "clap_name": "A Osc 1 Width 1",
+      "clap_module_name": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_osc_1_triangle": {
+      "clap_param_id": 627352116,
+      "clap_name": "A Osc 1 Width 2",
+      "clap_module_name": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_osc_2_mute": {
+      "clap_param_id": 247329707,
+      "clap_name": "A Osc 2 Mute",
+      "clap_module_name": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_osc_2_octave": {
+      "clap_param_id": 2343440254,
+      "clap_name": "A Osc 2 Octave",
+      "clap_module_name": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_osc_2_pitch": {
+      "clap_param_id": 3678927794,
+      "clap_name": "A Osc 2 Pitch",
+      "clap_module_name": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_osc_2_route": {
+      "clap_param_id": 2508963191,
+      "clap_name": "A Osc 2 Route",
+      "clap_module_name": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_osc_2_sawtooth": {
+      "clap_param_id": 2370162449,
+      "clap_name": "A Osc 2 Shape",
+      "clap_module_name": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_osc_2_width": {
+      "clap_param_id": 2370162452,
+      "clap_name": "A Osc 2 Sub Mix",
+      "clap_module_name": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_osc_2_sync": {
+      "clap_param_id": 2370162453,
+      "clap_name": "A Osc 2 Sync",
+      "clap_module_name": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_osc_2_unison_detune": {
+      "clap_param_id": 2370162454,
+      "clap_name": "A Osc 2 Unison Detune",
+      "clap_module_name": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_osc_2_unison_voices": {
+      "clap_param_id": 2370162455,
+      "clap_name": "A Osc 2 Unison Voices",
+      "clap_module_name": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_osc_2_volume": {
+      "clap_param_id": 371918428,
+      "clap_name": "A Osc 2 Volume",
+      "clap_module_name": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_osc_2_pulse": {
+      "clap_param_id": 2370162450,
+      "clap_name": "A Osc 2 Width 1",
+      "clap_module_name": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_osc_2_triangle": {
+      "clap_param_id": 2370162451,
+      "clap_name": "A Osc 2 Width 2",
+      "clap_module_name": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_osc_3_mute": {
+      "clap_param_id": 247329708,
+      "clap_name": "A Osc 3 Mute",
+      "clap_module_name": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_osc_3_octave": {
+      "clap_param_id": 4086250589,
+      "clap_name": "A Osc 3 Octave",
+      "clap_module_name": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_osc_3_pitch": {
+      "clap_param_id": 271464179,
+      "clap_name": "A Osc 3 Pitch",
+      "clap_module_name": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_osc_3_route": {
+      "clap_param_id": 2508963192,
+      "clap_name": "A Osc 3 Route",
+      "clap_module_name": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_osc_3_sawtooth": {
+      "clap_param_id": 4112972784,
+      "clap_name": "A Osc 3 Shape",
+      "clap_module_name": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_osc_3_width": {
+      "clap_param_id": 4112972787,
+      "clap_name": "A Osc 3 Sub Mix",
+      "clap_module_name": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_osc_3_sync": {
+      "clap_param_id": 4112972788,
+      "clap_name": "A Osc 3 Sync",
+      "clap_module_name": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_osc_3_unison_detune": {
+      "clap_param_id": 4112972789,
+      "clap_name": "A Osc 3 Unison Detune",
+      "clap_module_name": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_osc_3_unison_voices": {
+      "clap_param_id": 4112972790,
+      "clap_name": "A Osc 3 Unison Voices",
+      "clap_module_name": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_osc_3_volume": {
+      "clap_param_id": 371918429,
+      "clap_name": "A Osc 3 Volume",
+      "clap_module_name": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_osc_3_pulse": {
+      "clap_param_id": 4112972785,
+      "clap_name": "A Osc 3 Width 1",
+      "clap_module_name": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_osc_3_triangle": {
+      "clap_param_id": 4112972786,
+      "clap_name": "A Osc 3 Width 2",
+      "clap_module_name": "/A Oscillators/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_osc_drift": {
+      "clap_param_id": 3004132939,
+      "clap_name": "A Osc Drift",
+      "clap_module_name": "/A Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_fm_depth": {
+      "clap_param_id": 650467177,
+      "clap_name": "A FM Depth",
+      "clap_module_name": "/A Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_fm_routing": {
+      "clap_param_id": 3430465358,
+      "clap_name": "A FM Routing",
+      "clap_module_name": "/A Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_1_amplitude": {
+      "clap_param_id": 2456464138,
+      "clap_name": "A LFO 1 Amplitude",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_1_attack": {
+      "clap_param_id": 1908656014,
+      "clap_name": "A LFO 1 Attack",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_1_decay": {
+      "clap_param_id": 3943202228,
+      "clap_name": "A LFO 1 Decay",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_1_deform": {
+      "clap_param_id": 1980287499,
+      "clap_name": "A LFO 1 Deform",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_1_hold": {
+      "clap_param_id": 1235707781,
+      "clap_name": "A LFO 1 Hold",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_1_phase": {
+      "clap_param_id": 3954372469,
+      "clap_name": "A LFO 1 Phase",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_1_rate": {
+      "clap_param_id": 1235992486,
+      "clap_name": "A LFO 1 Rate",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_1_release": {
+      "clap_param_id": 804747137,
+      "clap_name": "A LFO 1 Release",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_1_sustain": {
+      "clap_param_id": 2157228445,
+      "clap_name": "A LFO 1 Sustain",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_1_type": {
+      "clap_param_id": 3957142939,
+      "clap_name": "A LFO 1 Type",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_2_amplitude": {
+      "clap_param_id": 659512779,
+      "clap_name": "A LFO 2 Amplitude",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_2_attack": {
+      "clap_param_id": 3651466349,
+      "clap_name": "A LFO 2 Attack",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_2_decay": {
+      "clap_param_id": 535738613,
+      "clap_name": "A LFO 2 Decay",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_2_deform": {
+      "clap_param_id": 3723097834,
+      "clap_name": "A LFO 2 Deform",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_2_hold": {
+      "clap_param_id": 1264336932,
+      "clap_name": "A LFO 2 Hold",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_2_phase": {
+      "clap_param_id": 546908854,
+      "clap_name": "A LFO 2 Phase",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_2_rate": {
+      "clap_param_id": 1264621637,
+      "clap_name": "A LFO 2 Rate",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_2_release": {
+      "clap_param_id": 3292259970,
+      "clap_name": "A LFO 2 Release",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_2_sustain": {
+      "clap_param_id": 349773982,
+      "clap_name": "A LFO 2 Sustain",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_2_type": {
+      "clap_param_id": 549679324,
+      "clap_name": "A LFO 2 Type",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_3_amplitude": {
+      "clap_param_id": 3157528716,
+      "clap_name": "A LFO 3 Amplitude",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_3_attack": {
+      "clap_param_id": 1099309388,
+      "clap_name": "A LFO 3 Attack",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_3_decay": {
+      "clap_param_id": 1423242294,
+      "clap_name": "A LFO 3 Decay",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_3_deform": {
+      "clap_param_id": 1170940873,
+      "clap_name": "A LFO 3 Deform",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_3_hold": {
+      "clap_param_id": 1292966083,
+      "clap_name": "A LFO 3 Hold",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_3_phase": {
+      "clap_param_id": 1434412535,
+      "clap_name": "A LFO 3 Phase",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_3_rate": {
+      "clap_param_id": 1293250788,
+      "clap_name": "A LFO 3 Rate",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_3_release": {
+      "clap_param_id": 1484805507,
+      "clap_name": "A LFO 3 Release",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_3_sustain": {
+      "clap_param_id": 2837286815,
+      "clap_name": "A LFO 3 Sustain",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_3_type": {
+      "clap_param_id": 1437183005,
+      "clap_name": "A LFO 3 Type",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_4_amplitude": {
+      "clap_param_id": 1360577357,
+      "clap_name": "A LFO 4 Amplitude",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_4_attack": {
+      "clap_param_id": 2842119723,
+      "clap_name": "A LFO 4 Attack",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_4_decay": {
+      "clap_param_id": 2310745975,
+      "clap_name": "A LFO 4 Decay",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_4_deform": {
+      "clap_param_id": 2913751208,
+      "clap_name": "A LFO 4 Deform",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_4_hold": {
+      "clap_param_id": 1321595234,
+      "clap_name": "A LFO 4 Hold",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_4_phase": {
+      "clap_param_id": 2321916216,
+      "clap_name": "A LFO 4 Phase",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_4_rate": {
+      "clap_param_id": 1321879939,
+      "clap_name": "A LFO 4 Rate",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_4_release": {
+      "clap_param_id": 3972318340,
+      "clap_name": "A LFO 4 Release",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_4_sustain": {
+      "clap_param_id": 1029832352,
+      "clap_name": "A LFO 4 Sustain",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_4_type": {
+      "clap_param_id": 2324686686,
+      "clap_name": "A LFO 4 Type",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_5_amplitude": {
+      "clap_param_id": 3858593294,
+      "clap_name": "A LFO 5 Amplitude",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_5_attack": {
+      "clap_param_id": 289962762,
+      "clap_name": "A LFO 5 Attack",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_5_decay": {
+      "clap_param_id": 3198249656,
+      "clap_name": "A LFO 5 Decay",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_5_deform": {
+      "clap_param_id": 361594247,
+      "clap_name": "A LFO 5 Deform",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_5_hold": {
+      "clap_param_id": 1350224385,
+      "clap_name": "A LFO 5 Hold",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_5_phase": {
+      "clap_param_id": 3209419897,
+      "clap_name": "A LFO 5 Phase",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_5_rate": {
+      "clap_param_id": 1350509090,
+      "clap_name": "A LFO 5 Rate",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_5_release": {
+      "clap_param_id": 2164863877,
+      "clap_name": "A LFO 5 Release",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_5_sustain": {
+      "clap_param_id": 3517345185,
+      "clap_name": "A LFO 5 Sustain",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_5_type": {
+      "clap_param_id": 3212190367,
+      "clap_name": "A LFO 5 Type",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_6_amplitude": {
+      "clap_param_id": 2061641935,
+      "clap_name": "A LFO 6 Amplitude",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_6_attack": {
+      "clap_param_id": 2032773097,
+      "clap_name": "A LFO 6 Attack",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_6_decay": {
+      "clap_param_id": 4085753337,
+      "clap_name": "A LFO 6 Decay",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_6_deform": {
+      "clap_param_id": 2104404582,
+      "clap_name": "A LFO 6 Deform",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_6_hold": {
+      "clap_param_id": 1378853536,
+      "clap_name": "A LFO 6 Hold",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_6_release": {
+      "clap_param_id": 357409414,
+      "clap_name": "A LFO 6 Release",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_lfo_6_sustain": {
+      "clap_param_id": 1709890722,
+      "clap_name": "A LFO 6 Sustain",
+      "clap_module_name": "/A LFOs/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_noise_color": {
+      "clap_param_id": 3783187012,
+      "clap_name": "A Noise Color",
+      "clap_module_name": "/A Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_noise_mute": {
+      "clap_param_id": 2331386898,
+      "clap_name": "A Noise Mute",
+      "clap_module_name": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_noise_route": {
+      "clap_param_id": 3502536390,
+      "clap_name": "A Noise Route",
+      "clap_module_name": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_noise_volume": {
+      "clap_param_id": 3102230465,
+      "clap_name": "A Noise Volume",
+      "clap_module_name": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_pan": {
+      "clap_param_id": 92522431,
+      "clap_name": "A Pan",
+      "clap_module_name": "/A Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_ring_modulation_1x2_mute": {
+      "clap_param_id": 3662628441,
+      "clap_name": "A Ring Modulation 1x2 Mute",
+      "clap_module_name": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_ring_modulation_1x2_route": {
+      "clap_param_id": 1313557029,
+      "clap_name": "A Ring Modulation 1x2 Route",
+      "clap_module_name": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_ring_modulation_1x2_volume": {
+      "clap_param_id": 1788975242,
+      "clap_name": "A Ring Modulation 1x2 Volume",
+      "clap_module_name": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_ring_modulation_2x3_mute": {
+      "clap_param_id": 3662628473,
+      "clap_name": "A Ring Modulation 2x3 Mute",
+      "clap_module_name": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_ring_modulation_2x3_route": {
+      "clap_param_id": 1313557061,
+      "clap_name": "A Ring Modulation 2x3 Route",
+      "clap_module_name": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_ring_modulation_2x3_volume": {
+      "clap_param_id": 1788975274,
+      "clap_name": "A Ring Modulation 2x3 Volume",
+      "clap_module_name": "/A Mixer/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_vca_gain": {
+      "clap_param_id": 1224911995,
+      "clap_name": "A VCA Gain",
+      "clap_module_name": "/A Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "a_width": {
+      "clap_param_id": 2868195411,
+      "clap_name": "A Width",
+      "clap_module_name": "/A Common/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "fx_a1_delay_time": {
+      "clap_param_id": 3032550496,
+      "clap_name": "FX A1 Param 1",
+      "clap_module_name": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "fx_a1_modulation_rate": {
+      "clap_param_id": 3032550497,
+      "clap_name": "FX A1 Param 2",
+      "clap_module_name": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "fx_a1_modulation_depth": {
+      "clap_param_id": 3032550498,
+      "clap_name": "FX A1 Param 3",
+      "clap_module_name": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "fx_a1_delay_feedback": {
+      "clap_param_id": 3032550499,
+      "clap_name": "FX A1 Param 4",
+      "clap_module_name": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "fx_a1_eq_low_cut": {
+      "clap_param_id": 3032550500,
+      "clap_name": "FX A1 Param 5",
+      "clap_module_name": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "fx_a1_eq_high_cut": {
+      "clap_param_id": 3032550501,
+      "clap_name": "FX A1 Param 6",
+      "clap_module_name": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "fx_a1_output_mix": {
+      "clap_param_id": 3032550502,
+      "clap_name": "FX A1 Param 7",
+      "clap_module_name": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "fx_a1_output_width": {
+      "clap_param_id": 3032550503,
+      "clap_name": "FX A1 Param 8",
+      "clap_module_name": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "fx_a2_delay_time_left": {
+      "clap_param_id": 3032580287,
+      "clap_name": "FX A2 Param 1",
+      "clap_module_name": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "fx_a2_delay_time_right": {
+      "clap_param_id": 3032580288,
+      "clap_name": "FX A2 Param 2",
+      "clap_module_name": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "fx_a2_feedback_eq_feedback": {
+      "clap_param_id": 3032580289,
+      "clap_name": "FX A2 Param 3",
+      "clap_module_name": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "fx_a2_feedback_eq_crossfeed": {
+      "clap_param_id": 3032580290,
+      "clap_name": "FX A2 Param 4",
+      "clap_module_name": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "fx_a2_feedback_eq_low_cut": {
+      "clap_param_id": 3032580291,
+      "clap_name": "FX A2 Param 5",
+      "clap_module_name": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "fx_a2_feedback_eq_high_cut": {
+      "clap_param_id": 3032580292,
+      "clap_name": "FX A2 Param 6",
+      "clap_module_name": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "fx_a2_modulation_rate": {
+      "clap_param_id": 3032580293,
+      "clap_name": "FX A2 Param 7",
+      "clap_module_name": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "fx_a2_modulation_depth": {
+      "clap_param_id": 3032580294,
+      "clap_name": "FX A2 Param 8",
+      "clap_module_name": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "fx_a2_input_channel": {
+      "clap_param_id": 3032580295,
+      "clap_name": "FX A2 Param 9",
+      "clap_module_name": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "fx_a2_output_mix": {
+      "clap_param_id": 3815675760,
+      "clap_name": "FX A2 Param 11",
+      "clap_module_name": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "fx_a2_output_width": {
+      "clap_param_id": 3815675761,
+      "clap_name": "FX A2 Param 12",
+      "clap_module_name": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "fx_a3_pre_delay_pre_delay": {
+      "clap_param_id": 3032788824,
+      "clap_name": "FX A3 Param 1",
+      "clap_module_name": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "fx_a3_reverb_room_size": {
+      "clap_param_id": 3032788825,
+      "clap_name": "FX A3 Param 2",
+      "clap_module_name": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "fx_a3_reverb_decay_time": {
+      "clap_param_id": 3032788826,
+      "clap_name": "FX A3 Param 3",
+      "clap_module_name": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "fx_a3_reverb_diffusion": {
+      "clap_param_id": 3032788827,
+      "clap_name": "FX A3 Param 4",
+      "clap_module_name": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "fx_a3_reverb_buildup": {
+      "clap_param_id": 3032788828,
+      "clap_name": "FX A3 Param 5",
+      "clap_module_name": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "fx_a3_reverb_modulation": {
+      "clap_param_id": 3032788829,
+      "clap_name": "FX A3 Param 6",
+      "clap_module_name": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "fx_a3_eq_lf_damping": {
+      "clap_param_id": 3032788830,
+      "clap_name": "FX A3 Param 7",
+      "clap_module_name": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "fx_a3_eq_hf_damping": {
+      "clap_param_id": 3032788831,
+      "clap_name": "FX A3 Param 8",
+      "clap_module_name": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "fx_a3_output_width": {
+      "clap_param_id": 3032788832,
+      "clap_name": "FX A3 Param 9",
+      "clap_module_name": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    },
+    "fx_a3_output_mix": {
+      "clap_param_id": 3032788833,
+      "clap_name": "FX A3 Param 10",
+      "clap_module_name": "/Global & FX/",
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "is_stepped": false
+    }
+  }
+}

@@ -3,7 +3,9 @@
 Covers the three pure helpers (``make_spectrogram``, ``write_spectrograms``,
 ``params_to_csv``) and the click ``main`` entrypoint with the VST3 render call
 patched out — so the suite stays CPU-only and deterministic and runs under
-``make test-fast``.
+``make test-fast``. Exact decoded values are pinned by
+``tests/data/vst/test_param_spec.py``, not here — ``main`` tests assert only
+file shape and finiteness.
 """
 
 from __future__ import annotations
@@ -209,7 +211,7 @@ def _write_batch(
     :param with_target_params: When True, also write ``target-params-<index>.pt``.
     """
     rng = np.random.default_rng(index)
-    # ``main`` rescales pred params via ``(x + 1) / 2`` — so the fixture must live on [-1, 1].
+    # decode_model_output rescales pred params from [-1, 1] — the fixture must live on that range.
     encoded = (rng.random((batch_size, len(_PARAM_SPEC))) * 2 - 1).astype(np.float32)
     torch.save(torch.from_numpy(encoded), pred_dir / f"pred-{index}.pt")
 
@@ -365,6 +367,29 @@ def test_main_rerender_target_renders_pred_and_target_per_sample(
         df = pd.read_csv(out_dir / f"sample_{j}" / "params.csv", index_col=0)
         assert bool(df["pred"].notna().all())
         assert bool(df["target"].notna().all())
+
+
+def test_main_rerender_target_accepts_float64_target_params(
+    runner: CliRunner, pred_dir: Path, out_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A float64 target-params tensor still decodes — the call site casts to float32.
+
+    :param runner: Parametrized ``runner`` value under test.
+    :param pred_dir: Parametrized ``pred_dir`` value under test.
+    :param out_dir: Parametrized ``out_dir`` value under test.
+    :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
+    """
+    monkeypatch.setattr(predict_vst_audio, "render_params", lambda *a, **k: _fake_render())
+
+    _write_batch(pred_dir, index=0, batch_size=1, with_target_params=True)
+    target_path = pred_dir / "target-params-0.pt"
+    torch.save(torch.load(target_path, weights_only=True).to(torch.float64), target_path)
+
+    result = _invoke_main(runner, pred_dir, out_dir, "--rerender_target", "--skip-spectrogram")
+
+    assert result.exit_code == 0, result.output
+    df = pd.read_csv(out_dir / "sample_0" / "params.csv", index_col=0)
+    assert bool(df["target"].notna().all())
 
 
 def test_main_target_params_on_disk_without_rerender_does_not_crash(

@@ -1,0 +1,23 @@
+# Smoke variant of train-runpod.yaml: a 10-step junk run that exercises the
+# full dispatch path (workflow → launcher → SkyPilot worker → checkpoint
+# upload → model-ffn_simple W&B artifact) at minimal GPU cost.
+#
+# every_n_train_steps=5 guarantees a checkpoint file exists at step 10 even
+# though no epoch completes; the published model-ffn_simple:latest is junk —
+# do not evaluate it for quality.
+
+compute_template: src/synth_setter/configs/compute/runpod-template.yaml
+worker_image_tag: dev-snapshot
+env_file: .env
+# tail=true keeps the dispatcher attached so the Actions job reflects the
+# worker run end-to-end.
+tail: true
+cmd: >-
+  cd /home/build/synth-setter &&
+  bash scripts/sync_worker_checkout.sh &&
+  exec synth-setter-train
+  experiment=surge/ffn_simple
+  trainer.min_steps=10
+  trainer.max_steps=10
+  callbacks.model_checkpoint.every_n_train_steps=5
+  hydra.run.dir=/home/build/synth-setter/train-run
