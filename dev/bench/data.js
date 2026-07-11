@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783754793462,
+  "lastUpdate": 1783754795730,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -14192,6 +14192,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 16.579220784300013,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e3f44f854b8b4f55f650908eb6ed207bd522641d",
+          "message": "feat(data-pipeline): add audio_uuid column to preview-columns CLI (#1750)\n\n* feat(data-pipeline): add audio_uuid column and rename CLI to add-preview-columns\n\nExtend the post-write Lance augmenter (formerly synth-setter-add-mp3-audio)\nto backfill a second derived column alongside the MP3 preview, and rename it\nto synth-setter-add-preview-columns so the name reflects both outputs.\n\n- audio_uuid: a deterministic UUIDv5 fingerprint of each row's audio tensor\n  bytes, under a project-scoped namespace, so the same rendered waveform always\n  maps to the same id (content-addressed, stable across re-runs).\n- Both columns are committed in a single lance.batch_udf add_columns\n  transaction, so an interrupted run leaves the dataset on its prior version.\n\nModule add_mp3_audio.py -> add_preview_columns.py, function\nadd_mp3_audio_column -> add_preview_columns; notebook, doc-map, and design\ndoc renamed/updated to match.\n\n* internal-fix(data-pipeline): address pre-PR review on add-preview-columns\n\n- Emit a structlog added_preview_columns event (pipeline code must use\n  structlog; mirrors add_embeddings) instead of relying on click.echo alone.\n- Correct the audio_uuid comment: uuid5 accepts a bytes name only on Python\n  >= 3.12 (repo floor 3.11), and hashing the hex string is load-bearing for\n  content-addressing — switching to raw bytes would change every id.\n- Harden _encode_preview_columns to append the mp3/uuid pair only after the\n  encode succeeds, so a failed row can't desync the two columns.\n- Add tests: a pinned-value uuid (namespace/format contract), the partial\n  half-add guard (audio_uuid-only dataset), a stronger frame-sync assertion in\n  the dtype test, and a non-empty decoded-length check.\n- Tighten comments/docstrings flagged by comment-hygiene (module + doc-map).\n\n* internal-fix(data-pipeline): tighten comments flagged by comment-hygiene\n\nCondense the module docstring's column summary, trim the audio_uuid and\n_sine_rows comments to the load-bearing constraint, make main's bitrate_kbps\nparam a cross-reference instead of echoing the Click help, simplify the\ndoc-map covers entry, and de-duplicate the notebook step-2 prose.\n\n* docs(reference): list synth-setter-add-preview-columns in docker console scripts\n\nThe console-script enumeration in docker.md mirrors pyproject's\n[project.scripts] but omitted the new add-preview-columns entry point.\nFlagged by the doc-drift advisory on this PR.\n\n* internal-fix(data-pipeline): sharpen audio_uuid docstring and byte-order comment\n\nAddress Copilot's low-confidence precision notes: tobytes() encodes element\norder and count, not array shape, so the docstring no longer claims shape is\nincluded; make the C ordering explicit with tobytes(order=\"C\"); and reword the\ncomment so hex() is described as a lossless str encoding (the name type uuid5\nneeds on 3.11), not a byte-order change.\n\n* internal-fix(data-pipeline): store mp3 preview as binary (#1751)\n\n* test(data-pipeline): cover _encode_preview_columns error branches\n\nPin the two error paths in `_encode_preview_columns` that a real Lance\nround-trip can't reach (the projection always yields a FixedShapeTensorArray\nand every sine row encodes), per review on #1750:\n\n- non-tensor `audio` column rejected before any encode (comment #3429220318)\n- per-row encode failure surfaces the offending row index (comment #3429220338)\n\nThe row-failure test injects a mid-batch failure via `monkeypatch` (the repo's\nmocking convention; `mocker`/pytest-mock is not a dependency) and asserts on\nthe real wrapped message, not the stub.\n\n* internal-fix(data-pipeline): point nbstripout exclude at renamed notebook\n\n#1746 added notebooks/add_mp3_audio.ipynb to the nbstripout exclude so\nits committed SmooSense outputs survive; this branch renames that\nnotebook to add_preview_columns.ipynb, so the exclude entry moves with\nit.\n\n---------\n\nCo-authored-by: khaledtin <khaledtin@users.noreply.github.com>",
+          "timestamp": "2026-07-10T23:53:53-07:00",
+          "tree_id": "c1f4e8a7b233ca4367c1d4b73e72d87deaa6cdd3",
+          "url": "https://github.com/tinaudio/synth-setter/commit/e3f44f854b8b4f55f650908eb6ed207bd522641d"
+        },
+        "date": 1783754795471,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.808605194091797,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 14.17420577287674,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.11813602596521378,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.002555668354034424,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.190676212310791,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 16.597103196199992,
             "unit": "seconds"
           }
         ]
