@@ -231,6 +231,14 @@ def test_ultramaster_docker_build_logs_version_with_git_ref() -> None:
     )
 
 
+def test_ultramaster_docker_build_gates_dependencies_by_arch() -> None:
+    """The KR-106 Docker stage skips build dependencies before apt runs."""
+    stage = _dockerfile_stage_text("builder-build-ultramaster-kr106")
+    skip_idx = stage.index('if [ "${TARGETARCH:-}" != "amd64" ]')
+    apt_idx = stage.index("apt-get update")
+    assert skip_idx < apt_idx
+
+
 def test_install_plugins_all_bundles_present_skips_every_download(
     makefile_checkout: Path,
 ) -> None:

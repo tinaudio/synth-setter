@@ -277,6 +277,8 @@ ARG ULTRAMASTER_KR106_VERSION=v2.5.13
 ARG ULTRAMASTER_KR106_GIT_REF=bc15caee5843ab238a25d0969e68d57db2b1615f
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
+    mkdir -p /plugins-staging && \
+    if [ "${TARGETARCH:-}" != "amd64" ]; then echo "skipping Ultramaster KR-106 build dependencies on ${TARGETARCH:-<unset>}" >&2; exit 0; fi; \
     apt-get update && apt-get install -y --no-install-recommends \
       build-essential \
       cmake \
@@ -295,7 +297,6 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
       mesa-common-dev \
       pkg-config
 WORKDIR /home/build/ultramaster-kr106
-RUN mkdir -p /plugins-staging
 RUN if [ "${TARGETARCH:-}" != "amd64" ]; then echo "skipping Ultramaster KR-106 source build on ${TARGETARCH:-<unset>}" >&2; exit 0; fi; \
     echo "Building Ultramaster KR-106 ${ULTRAMASTER_KR106_VERSION} from git ref ${ULTRAMASTER_KR106_GIT_REF}" && \
     git init && \
