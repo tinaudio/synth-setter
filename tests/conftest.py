@@ -324,7 +324,7 @@ def cfg_train(cfg_train_global: DictConfig, tmp_path: Path) -> DictConfig:
 
 @pytest.fixture
 def cfg_torchsynth_train(tmp_path: Path) -> Iterator[DictConfig]:
-    """Compose the CPU TorchSynth entrypoint smoke configuration.
+    """Compose a CPU-cheap production TorchSynth config at the entrypoint boundary.
 
     Composes the production experiment through ``train.yaml``, then shrinks
     the online splits and trainer loop so the entrypoint test stays CPU-cheap.
