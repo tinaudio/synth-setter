@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783754795730,
+  "lastUpdate": 1783756808196,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -8226,6 +8226,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.04386162757873535,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "eb4e5b8447cc8766bc006ae10a7dc64920d5a6cd",
+          "message": "refactor(storage): centralize object storage settings (#1747)\n\n* refactor(pipeline): centralize R2 credential resolution in R2Credentials\n\nR2's one logical secret (access key / secret / endpoint) was materialized\nunder several env-var vocabularies, and the RCLONE_CONFIG_R2_* key list was\ncopy-pasted across r2_io, skypilot_launch, tests, and GHA workflows. The\ntype/provider structural constants were defined in two modules.\n\nAdd a strict, frozen R2Credentials model (pipeline/schemas/r2_credentials.py)\nas the single source of truth: it owns the canonical env-var names and\nstructural defaults (a read-only MappingProxyType so aliasing modules cannot\nmutate it), derives the endpoint from R2_ACCOUNT_ID when the explicit endpoint\nvar is absent, and projects the Lance object-store dialect via\nlance_storage_options(). The two access secrets are SecretStr so a stray\nrepr/log cannot leak them. from_env() is the imperative shell (accepts\ndotenv-style str | None mappings); the model and projection are a pure core.\n\nRoute every credential-validation path through from_env() so \"present and\nnon-blank\" has one definition:\n- r2_io.r2_storage_options() delegates to from_env().lance_storage_options();\n  ensure_r2_env_loaded() and is_r2_reachable() delegate their validation to\n  from_env() too, so the prior presence-only check (which let a blank KEY=\n  through) is gone and account-id endpoint derivation applies uniformly.\n  ensure_r2_env_loaded() also loads R2_ACCOUNT_ID from the .env and persists a\n  derived endpoint back to os.environ so the rclone remote sees it.\n- skypilot_launch._WORKER_ENV_KEYS is composed from RCLONE_ENV_KEYS and\n  _R2_RCLONE_CONSTANTS shares STRUCTURAL_DEFAULTS; the duplicated tuple and the\n  second copy of the constants are deleted. resolve_worker_env() resolves the\n  first non-blank candidate (.env over process env), so a `.env` line KEY= or\n  KEY=\"   \" never forwards an empty credential to a worker.\n- Tests that re-spelled the key list import the canonical constants.\n\nPublic helpers keep their contracts, so the existing r2_io and launcher suites\npass as-is. Adds docs/design/r2-credential-centralization.md documenting the\ndesign and the out-of-scope follow-ups (AWS_*/WANDB_* projections, GHA dedup, a\nstorage-env lint gate).\n\n* ci: re-trigger smoke after kind ran out of disk on the lance row\n\nThe lance generate+finalize smoke failed on the infra step \"Load\ndev-snapshot image into kind\" with \"no space left on device\" while\nextracting an image layer — not a code failure (the hdf5/wds rows run the\nidentical credential path and passed, and the rclone env resolved correctly\nin the job log). Empty commit to re-run on a fresh runner.\n\n* internal-fix(pipeline): skip blank dotenv values; neutral from_env error wording\n\nAddresses Copilot re-review of the credential refactor:\n- ensure_r2_env_loaded's dotenv mirror now skips blank/whitespace values, so a\n  .env line KEY= can't clobber a real process-env credential (blank-as-absent,\n  matching the launcher and from_env). Adds a regression test.\n- R2Credentials.from_env's missing-secret error drops the process-env-specific\n  wording (it accepts an explicit mapping in tests).\n\n* ci: re-trigger after run_tests_ubuntu eval-subprocess flake\n\nrun_tests_ubuntu failed on tests/test_eval.py::...predict_mode_logs_shuffle_permutation_table_to_wandb[h5] with 'get_dataset_stats failed (exit 1)' — a transient eval-e2e subprocess flake (passes locally; touches none of the credential modules). Every other job (incl. the lance/wds/hdf5 smokes + run_tests/macos/conda) is green. Empty commit to re-roll the flaked job.\n\n* ci: re-roll smoke jobs (recurring kind image-load disk flake)\n\nhdf5 smoke failed at 'Load dev-snapshot image into kind' with no-space-left —\nthe same intermittent kind-runner disk flake that hit lance earlier; the smokes\npassed on the prior d83d7834 and adab0047 runs. No code change since d83d7834\n(which carries the final fixes). Re-rolling for a clean board.\n\n* docs(storage): document provider-neutral object storage contracts\n\n* internal-refactor(storage): align credential model with object storage\n\n* internal-fix(storage): expose settings dependency to lite installs\n\n* ci(storage): forward canonical storage env to containers\n\n* internal-fix(storage): support local rclone projection\n\n* internal-fix(storage): pin rclone remote and persist canonical env in preflight\n\nAddress the open Copilot review findings on #1747:\n\n- Drop SYNTH_SETTER_STORAGE_RCLONE_REMOTE: every consumer (worker\n  templates, workflow env forwarding, rclone probes, r2:// translation)\n  speaks the pinned r2 remote, so a configurable name could only produce\n  silently broken projections. rclone_type stays configurable because\n  tests point it at rclone's local backend.\n- ensure_r2_env_loaded writes StorageConfig.storage_env() alongside the\n  rclone projection so a later env-only r2_storage_options() call sees\n  settings that only lived in the loaded dotenv file.\n- is_r2_reachable injects the projected rclone env into its auth ping so\n  a developer's ambient rclone config cannot make the gate disagree with\n  ensure_r2_env_loaded.\n\nRefs #138\n\n* docs(design): align storage design docs with implemented contracts\n\n- object-storage-contracts.md: StorageSettings snippet matches the shipped\n  model (required endpoint_url, storage_settings_from_sources dotenv\n  precedence, no env_file in model_config); ObjectLocation shows the uri\n  property instead of as_s3_uri(); StorageConfig lists storage_env().\n- skypilot-compute-integration.md 4.2: storage settings resolve as a unit\n  and project the rclone env block; only WANDB_API_KEY / WORKER_GIT_REF\n  resolve per key.\n- r2-credential-centralization.md: the remote name is pinned to r2;\n  only rclone_type remains an adapter setting.\n\nRefs #138",
+          "timestamp": "2026-07-10T23:54:59-07:00",
+          "tree_id": "0bca5d26c3d8f4670f88567eb80203efeacd3b5e",
+          "url": "https://github.com/tinaudio/synth-setter/commit/eb4e5b8447cc8766bc006ae10a7dc64920d5a6cd"
+        },
+        "date": 1783756807075,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.4357402324676514,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 5.910556283544284,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.022440044209361076,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.010547935962677002,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 2.880706310272217,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 14.688269833166657,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.334212779998779,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 7.015027941304143,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.032270725816488266,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.036595284938812256,
             "unit": "1-cos"
           },
           {
