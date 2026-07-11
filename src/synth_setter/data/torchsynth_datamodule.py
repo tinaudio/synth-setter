@@ -21,7 +21,6 @@ from torch.utils.data import DataLoader, Dataset
 from synth_setter.data.ot import regular_collate_fn
 
 if TYPE_CHECKING:
-    from torchsynth.parameter import ModuleParameter
     from torchsynth.synth import Voice
 
 TorchSynthItem: TypeAlias = tuple[
@@ -98,19 +97,6 @@ def _make_renderer(
     return _Renderer(instance.to(torch.device(device)), threading.Lock())
 
 
-def _synth_parameters(voice: Voice) -> list[ModuleParameter]:
-    """Return the voice parameters inferred from audio, excluding keyboard controls.
-
-    :param voice: TorchSynth voice to inspect.
-    :returns: Ordered non-keyboard parameters.
-    """
-    return [
-        parameter
-        for (module, _), parameter in voice.get_parameters().items()
-        if module != "keyboard"
-    ]
-
-
 def render_torchsynth(
     params: torch.Tensor, *, sample_rate: int, signal_length: int, midi_pitch: int
 ) -> torch.Tensor:
@@ -127,7 +113,11 @@ def render_torchsynth(
     voice = renderer.voice
     with renderer.lock:
         all_parameters = voice.get_parameters()
-        native = _synth_parameters(voice)
+        native = [
+            parameter
+            for (module, _), parameter in voice.get_parameters().items()
+            if module != "keyboard"
+        ]
         if params.shape[1] != len(native):
             raise ValueError(
                 f"Expected {len(native)} TorchSynth parameters, got {params.shape[1]}"
@@ -167,7 +157,9 @@ class TorchSynthDataset(Dataset[TorchSynthItem]):
         self.signal_length = signal_length
         self.midi_pitch = midi_pitch
         renderer = _make_renderer(sample_rate, signal_length)
-        self.num_params = len(_synth_parameters(renderer.voice))
+        self.num_params = sum(
+            module != "keyboard" for module, _ in renderer.voice.get_parameters()
+        )
 
     def __len__(self) -> int:
         """Return the logical number of online samples.
@@ -254,7 +246,9 @@ class TorchSynthDataModule(LightningDataModule):
         if stage in (None, "test", "predict"):
             self.test = dataset(test_size, test_seed)
         renderer = _make_renderer(self.sample_rate, self.signal_length)
-        discovered = len(_synth_parameters(renderer.voice))
+        discovered = sum(
+            module != "keyboard" for module, _ in renderer.voice.get_parameters()
+        )
         if self.num_params != discovered:
             raise ValueError(
                 f"Configured num_params={self.num_params}, TorchSynth exposes {discovered}"
