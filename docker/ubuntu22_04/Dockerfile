@@ -297,6 +297,7 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
 WORKDIR /home/build/ultramaster-kr106
 RUN mkdir -p /plugins-staging
 RUN if [ "${TARGETARCH:-}" != "amd64" ]; then echo "skipping Ultramaster KR-106 source build on ${TARGETARCH:-<unset>}" >&2; exit 0; fi; \
+    echo "Building Ultramaster KR-106 ${ULTRAMASTER_KR106_VERSION} from git ref ${ULTRAMASTER_KR106_GIT_REF}" && \
     git init && \
     git remote add origin https://github.com/kayrockscreenprinting/ultramaster_kr106.git && \
     git fetch --depth 1 origin "${ULTRAMASTER_KR106_GIT_REF}" && \

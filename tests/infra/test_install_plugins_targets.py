@@ -222,6 +222,15 @@ def test_runtime_image_installs_unzip_for_plugin_install_targets() -> None:
     assert re.search(r"apt-get install\b[\s\S]*\bunzip\b", stage)
 
 
+def test_ultramaster_docker_build_logs_version_with_git_ref() -> None:
+    """The KR-106 Docker build surfaces the version label with the pinned ref."""
+    stage = _dockerfile_stage_text("builder-build-ultramaster-kr106")
+    assert re.search(
+        r"echo\b.*\$\{ULTRAMASTER_KR106_VERSION\}.*\$\{ULTRAMASTER_KR106_GIT_REF\}",
+        stage,
+    )
+
+
 def test_install_plugins_all_bundles_present_skips_every_download(
     makefile_checkout: Path,
 ) -> None:
