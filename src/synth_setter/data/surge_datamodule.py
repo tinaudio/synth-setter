@@ -93,13 +93,13 @@ def prepare_batch(
     if ot:
         noise, params, mel_spec, audio = _hungarian_match(noise, params, mel_spec, audio)
 
-    return dict(
-        mel_spec=mel_spec.contiguous() if mel_spec is not None else None,
-        m2l=m2l.contiguous() if m2l is not None else None,
-        params=params.contiguous(),
-        noise=noise.contiguous(),
-        audio=audio.contiguous() if audio is not None else None,
-    )
+    return {
+        "mel_spec": mel_spec.contiguous() if mel_spec is not None else None,
+        "m2l": m2l.contiguous() if m2l is not None else None,
+        "params": params.contiguous(),
+        "noise": noise.contiguous(),
+        "audio": audio.contiguous() if audio is not None else None,
+    }
 
 
 class ShardColumn(Protocol):
@@ -153,8 +153,10 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
     random tensors of the configured width without opening any file. ``mean`` and ``std``
     hold the optional saved mel statistics applied during reads (``None`` when unloaded);
     ``dataset_file`` is the open :class:`ShardFile` handle (``None`` in fake mode);
-    ``generator`` is the entropy-seeded RNG threaded into :func:`prepare_batch` for the
-    per-batch noise draw (seed it to pin a batch).
+    ``generator`` is the RNG threaded into :func:`prepare_batch` for the per-batch
+    noise draw — seeded from the global RNG at construction (so Lightning's
+    ``seed_everything`` governs it) and re-seeded once per dataloader worker from
+    the worker seed (seed it manually to pin a batch).
     Storage-format subclasses override ``_open`` to read non-HDF5 shards.
     """
 
@@ -194,12 +196,11 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
         self.batch_size = batch_size
         self.ot = ot
 
-        # A bare torch.Generator() has a fixed default seed, so .seed() is needed
-        # to actually randomize production noise across runs; tests call
-        # generator.manual_seed(...) to pin a batch. num_workers>0 forks share
-        # this state and draw correlated noise; per-worker re-seed is Phase 2.
+        # Seeded from a global-RNG draw so seed_everything governs noise (a bare
+        # Generator() repeats a fixed default seed); workers re-seed on first read.
         self.generator = torch.Generator()
-        self.generator.seed()
+        self.generator.manual_seed(int(torch.randint(2**63 - 1, (1,)).item()))
+        self._worker_reseed_done = False
 
         self.read_audio = read_audio
         self.read_mel = read_mel
@@ -275,7 +276,9 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
         """Synthesise one random batch matching the configured feature flags.
 
         Bypasses :func:`prepare_batch`: fake batches are already tensors and need
-        no normalization or OT, and their noise is intentionally unseeded.
+        no normalization or OT. Fake noise deliberately draws from the global RNG,
+        not ``self.generator`` — under workers, Lightning's ``pl_worker_init_function``
+        re-seeds worker global RNGs, so both modes stay ``seed_everything``-reproducible.
 
         :returns: Mapping of feature names to random tensors (or ``None`` when unread).
         """
@@ -289,13 +292,13 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
 
         noise = torch.randn_like(param_array)
 
-        return dict(
-            mel_spec=mel_spec,
-            m2l=m2l,
-            params=param_array,
-            noise=noise,
-            audio=audio,
-        )
+        return {
+            "mel_spec": mel_spec,
+            "m2l": m2l,
+            "params": param_array,
+            "noise": noise,
+            "audio": audio,
+        }
 
     def _index_dataset(self, ds: ShardColumn, idx: int | Sequence[int] | np.ndarray) -> np.ndarray:
         """Slice one batch out of a shard column for the given index.
@@ -317,6 +320,23 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
 
         return ds[idx]
 
+    def _reseed_generator_in_worker(self) -> None:
+        """Re-seed ``generator`` once per dataloader worker, on first batch access.
+
+        Workers fork after ``__init__``, so every fork inherits identical
+        generator state and would draw correlated noise; the DataLoader-assigned
+        worker seed (``base_seed + worker_id``) is distinct per worker yet still
+        derived from the global RNG, keeping ``seed_everything`` in charge. Done
+        lazily instead of via ``worker_init_fn`` so Lightning's auto-added
+        ``pl_worker_init_function`` (gated on ``worker_init_fn is None``) stays.
+        """
+        if self._worker_reseed_done:
+            return
+        self._worker_reseed_done = True
+        worker_info = torch.utils.data.get_worker_info()
+        if worker_info is not None:
+            self.generator.manual_seed(worker_info.seed)
+
     def __getitem__(self, idx: int | Sequence[int] | np.ndarray) -> dict[str, torch.Tensor | None]:
         """Read one batch of features, params, and matched noise at ``idx``.
 
@@ -325,6 +345,7 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
         """
         if self.fake:
             return self._get_fake_item()
+        self._reseed_generator_in_worker()
 
         # Every key is always present; an off read flag stores ``None`` rather
         # than omitting the key, so prepare_batch never relies on key-absence.

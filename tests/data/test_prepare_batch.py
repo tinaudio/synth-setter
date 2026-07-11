@@ -2,10 +2,11 @@
 
 Each test compares against :func:`_reference_prepare_batch`, an independent
 golden that applies the batch math (mel norm, param rescale, seeded noise,
-Hungarian match) drawing noise from the global RNG via ``torch.manual_seed``. A
-seeded ``torch.Generator`` reproduces the seeded global RNG bit-for-bit on CPU
-(true for current PyTorch; the equivalence is the comparison's only cross-version
-assumption), so the golden and ``prepare_batch`` are directly comparable.
+Hungarian match) drawing noise via ``torch.randn`` on its own seeded
+``torch.Generator``. ``prepare_batch`` draws via ``empty_like().normal_()``;
+the two APIs (and the seeded global RNG) are bit-identical on CPU, and
+:func:`test_noise_draw_apis_same_seed_bit_identical` guards that equivalence
+loudly so a PyTorch upgrade that breaks it fails one test, not every golden.
 """
 
 from __future__ import annotations
@@ -58,15 +59,16 @@ def _reference_prepare_batch(
 ) -> dict[str, torch.Tensor | None]:
     """Apply the batch math independently of ``prepare_batch`` as the golden.
 
-    Draws noise from the global RNG seeded by ``seed``; a seeded
-    ``torch.Generator`` in ``prepare_batch`` reproduces this bit-for-bit on CPU.
+    Draws noise via ``torch.randn`` on a fresh generator seeded by ``seed``;
+    ``prepare_batch`` under a same-seeded generator reproduces this bit-for-bit
+    (equivalence guarded by :func:`test_noise_draw_apis_same_seed_bit_identical`).
 
     :param raw: Read shard columns; see :class:`RawBatch`.
     :param mean: Mel mean, or ``None`` to skip normalization.
     :param std: Mel std, or ``None`` to skip normalization.
     :param rescale_params: Whether to map params ``[0, 1] -> [-1, 1]``.
     :param ot: Whether to Hungarian-match noise to params.
-    :param seed: Global-RNG seed for the noise draw.
+    :param seed: Seed for the golden's own noise generator.
     :returns: ``{"mel_spec", "m2l", "params", "noise", "audio"}`` tensors.
     """
     audio_raw = raw.get("audio")
@@ -94,9 +96,7 @@ def _reference_prepare_batch(
     if rescale_params:
         param_raw = param_raw * 2 - 1
     param_array = torch.from_numpy(param_raw).to(dtype=torch.float32)
-    with torch.random.fork_rng():
-        torch.manual_seed(seed)
-        noise = torch.randn_like(param_array)
+    noise = torch.randn(param_array.shape, generator=torch.Generator().manual_seed(seed))
     if ot:
         noise, param_array, mel_spec, audio = _hungarian_match(noise, param_array, mel_spec, audio)
 
@@ -247,34 +247,36 @@ def test_prepare_batch_modality_slots_match_read_flags(
     assert _unwrap(out["noise"]).shape == (_BATCH, _NUM_PARAMS)
 
 
-def test_prepare_batch_normalizes_mel_only_when_mean_and_std_set() -> None:
-    """Mel normalization applies iff both ``mean`` and ``std`` are provided."""
+@pytest.mark.parametrize(
+    ("mean_set", "std_set"),
+    [(True, True), (True, False), (False, True), (False, False)],
+)
+def test_prepare_batch_normalizes_mel_only_when_mean_and_std_set(
+    mean_set: bool, std_set: bool
+) -> None:
+    """Mel normalization applies iff both ``mean`` and ``std`` are provided.
+
+    The mixed cases pin the guard's ``and`` semantics: one-sided stats must
+    leave the mel untouched, not half-normalize or raise.
+
+    :param mean_set: Whether to pass a mel mean.
+    :param std_set: Whether to pass a mel std.
+    """
     raw = _make_raw(read_mel=True)
     raw["mel_spec"] = np.full(_MEL_SHAPE, 3.0, dtype=np.float32)
 
-    normalized = _unwrap(
+    out = _unwrap(
         prepare_batch(
             raw,
-            mean=np.full((2, 4, 6), 1.0, dtype=np.float32),
-            std=np.full((2, 4, 6), 2.0, dtype=np.float32),
+            mean=np.full((2, 4, 6), 1.0, dtype=np.float32) if mean_set else None,
+            std=np.full((2, 4, 6), 2.0, dtype=np.float32) if std_set else None,
             rescale_params=False,
             ot=False,
             generator=torch.Generator().manual_seed(0),
         )["mel_spec"]
     )
-    assert torch.allclose(normalized, torch.full_like(normalized, (3.0 - 1.0) / 2.0))
-
-    untouched = _unwrap(
-        prepare_batch(
-            raw,
-            mean=None,
-            std=None,
-            rescale_params=False,
-            ot=False,
-            generator=torch.Generator().manual_seed(0),
-        )["mel_spec"]
-    )
-    assert torch.allclose(untouched, torch.full_like(untouched, 3.0))
+    expected = (3.0 - 1.0) / 2.0 if (mean_set and std_set) else 3.0
+    assert torch.allclose(out, torch.full_like(out, expected))
 
 
 def test_prepare_batch_rescale_toggle() -> None:
@@ -350,10 +352,32 @@ def test_prepare_batch_ot_false_passes_through_unpermuted() -> None:
     torch.testing.assert_close(out["params"], expected_params, atol=0.0, rtol=0.0)
     torch.testing.assert_close(out["mel_spec"], expected_mel, atol=0.0, rtol=0.0)
     torch.testing.assert_close(out["audio"], expected_audio, atol=0.0, rtol=0.0)
+    # randn here vs empty_like().normal_() in production: bit-equality is
+    # guarded by test_noise_draw_apis_same_seed_bit_identical.
     expected_noise = torch.randn(
         expected_params.shape, generator=torch.Generator().manual_seed(seed)
     )
     torch.testing.assert_close(out["noise"], expected_noise, atol=0.0, rtol=0.0)
+
+
+def test_noise_draw_apis_same_seed_bit_identical() -> None:
+    """The three normal-draw APIs agree bit-for-bit under one seed on CPU.
+
+    The goldens draw via ``torch.randn(generator=...)``, production draws via
+    ``empty_like().normal_(generator=...)``, and the pre-refactor code drew from
+    the seeded global RNG. All ``atol=rtol=0`` pinning in this module rests on
+    these being the same stream; this test makes a PyTorch upgrade that breaks
+    the equivalence fail here loudly instead of as a confusing mass golden diff.
+    """
+    seed = 1234
+    shape = (_BATCH, _NUM_PARAMS)
+    via_randn = torch.randn(shape, generator=torch.Generator().manual_seed(seed))
+    via_normal_inplace = torch.empty(shape).normal_(generator=torch.Generator().manual_seed(seed))
+    with torch.random.fork_rng():
+        torch.manual_seed(seed)
+        via_global_rng = torch.randn(shape)
+    torch.testing.assert_close(via_randn, via_normal_inplace, atol=0.0, rtol=0.0)
+    torch.testing.assert_close(via_randn, via_global_rng, atol=0.0, rtol=0.0)
 
 
 def test_prepare_batch_missing_param_array_raises_key_error() -> None:
