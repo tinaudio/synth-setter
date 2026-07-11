@@ -153,14 +153,40 @@ def _load_param_array_from_wds_tar(local_tar: Path) -> np.ndarray:
     return np.concatenate(rows, axis=0) if rows else np.zeros((0, 0), dtype=np.float32)
 
 
-def _download_first_train_artifact(prefix: str, work_dir: Path) -> tuple[Path, str]:
-    """Probe the finalized prefix for a ``train`` split file or the lowest-shard tar.
+def _lowest_shard_leaf(prefix: str, pattern: str, *, dirs_only: bool) -> str | None:
+    """Return the lowest-sorted ``shard-*`` leaf under ``prefix`` matching ``pattern``.
 
-    Tries the per-split files finalize writes — ``train.h5`` (hdf5) then
-    ``train.lance`` (lance) — and falls back to listing the prefix for the first
-    ``shard-*.tar`` (wds, which leaves shards in place). Returns the local
-    download path plus the format tag so the caller can branch on how to read
-    params.
+    ``--dirs-only`` / ``--files-only`` keeps the two shard shapes from
+    colliding: an ``rclone lsf --include shard-*.tar`` without ``--files-only``
+    also lists ``shard-*.lance/`` directories (rclone surfaces any dir that
+    could contain a match), so the wds probe would otherwise pick a Lance dir.
+
+    :param prefix: Rclone-form prefix; must end with ``/``.
+    :param pattern: rclone ``--include`` glob (e.g. ``shard-*.lance/``).
+    :param dirs_only: List directories only when ``True``, files only otherwise.
+    :returns: Lowest-sorted matching leaf (trailing slash preserved for dirs),
+        or ``None`` when nothing matches.
+    """
+    scope = "--dirs-only" if dirs_only else "--files-only"
+    listing = subprocess.run(  # noqa: S603
+        ["rclone", "lsf", prefix, scope, "--include", pattern],  # noqa: S607
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+    candidates = sorted(line.strip() for line in listing.stdout.splitlines() if line.strip())
+    return candidates[0] if candidates else None
+
+
+def _download_first_train_artifact(prefix: str, work_dir: Path) -> tuple[Path, str]:
+    """Probe the finalized prefix for a train split file or the lowest in-place shard.
+
+    Branches by format: ``train.h5`` (hdf5, a merged split file) then the
+    lowest-index ``shard-*.lance/`` directory (lance — stats-only finalize
+    writes no merged ``train.lance``, leaving the per-shard datasets in place)
+    then the lowest-index ``shard-*.tar`` (wds, which likewise leaves shards in
+    place). Returns the local download path plus the format tag so the caller
+    can branch on how to read params.
 
     :param prefix: Rclone-form prefix; must end with ``/``.
     :param work_dir: Local scratch dir for the download.
@@ -174,27 +200,19 @@ def _download_first_train_artifact(prefix: str, work_dir: Path) -> tuple[Path, s
         r2_io.download_to_path(h5_uri, local)
         return local, "hdf5"
 
-    # Lance splits are dataset directories: probe + download the tree, not a file.
-    lance_uri = _prefix_to_r2_uri(prefix, "train.lance")
-    if r2_io.r2_directory_exists(lance_uri):
-        local = work_dir / "train.lance"
-        r2_io.download_dir_no_overwrite(lance_uri, local)
+    lance_leaf = _lowest_shard_leaf(prefix, "shard-*.lance/", dirs_only=True)
+    if lance_leaf is not None:
+        local = work_dir / lance_leaf.rstrip("/")
+        r2_io.download_dir_no_overwrite(_prefix_to_r2_uri(prefix, lance_leaf), local)
         return local, "lance"
 
-    listing = subprocess.run(  # noqa: S603
-        ["rclone", "lsf", prefix, "--include", "shard-*.tar"],  # noqa: S607
-        capture_output=True,
-        check=True,
-        text=True,
-    )
-    candidates = sorted(line.strip() for line in listing.stdout.splitlines() if line.strip())
-    if not candidates:
+    wds_leaf = _lowest_shard_leaf(prefix, "shard-*.tar", dirs_only=False)
+    if wds_leaf is None:
         raise FileNotFoundError(
-            f"no finalize artifact under {prefix}: expected train.h5, train.lance, or shard-*.tar"
+            f"no finalize artifact under {prefix}: expected train.h5, shard-*.lance/, or shard-*.tar"
         )
-    leaf = candidates[0]
-    local = work_dir / leaf
-    r2_io.download_to_path(_prefix_to_r2_uri(prefix, leaf), local)
+    local = work_dir / wds_leaf
+    r2_io.download_to_path(_prefix_to_r2_uri(prefix, wds_leaf), local)
     return local, "wds"
 
 
@@ -202,8 +220,9 @@ def test_finalize_train_split_passes_fake_oracle_invariants() -> None:
     """``surge/fake_oracle`` predict_step returns finalized params verbatim.
 
     Downloads the first finalize-written train artifact at
-    ``$FINALIZE_RUN_PREFIX`` (``train.h5`` for hdf5, ``train.lance`` for lance,
-    the lowest-index ``shard-*.tar`` for wds), runs the oracle's
+    ``$FINALIZE_RUN_PREFIX`` (``train.h5`` for hdf5, the lowest-index
+    ``shard-*.lance/`` for lance, the lowest-index ``shard-*.tar`` for wds),
+    runs the oracle's
     ``predict_step`` / eval step over the loaded ``param_array``, and pins three
     invariants the oracle leg of ``tests/test_train.py`` already requires:
 
