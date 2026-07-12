@@ -1,43 +1,18 @@
 name: Nightly VST Marker Sweep
 
-# Nightly safety net that runs EVERY ``requires_vst`` test by marker, not by a
-# hand-maintained file allowlist. ``test-vst-slow.yml`` (per-synth) and
-# ``docker-build-validation.yml`` (single smoke file) only run curated file
-# lists, so a newly added ``requires_vst`` test that nobody registers runs
-# nowhere in CI — exactly how ``tests/data/vst/test_dawdreamer_dataset_e2e.py``
-# was committed broken (Hydra config error) and never ran. This workflow
-# discovers the ``requires_vst`` set at run time via ``pytest --collect-only
-# -m`` and shards
-# it, so future VST tests are auto-included with zero maintenance.
-#
-# Runs inside the ``tinaudio/synth-setter:dev-snapshot`` image (baked plugins
-# at ``/usr/lib/vst3/`` + the Xvfb/xsettingsd/dbus stack) behind
-# ``run-linux-vst-headless.sh`` — the same proven container invocation as
-# ``test-vst-slow.yml``. Bare ``ubuntu-latest`` runners hit "Timeout waiting
-# for Xvfb", which is why the VST suites live in Docker-only workflows.
-#
-# Non-VST coverage is intentionally out of scope: ``nightly.yml`` already runs
-# ``make test-ci-nightly`` (every non-gpu/non-mps/non-``requires_vst`` test), so
-# this workflow is the missing ``requires_vst`` half rather than a second
-# run-everything net.
-#
-# Sharding: ``pytest-split`` is not a project dependency and is absent from the
-# pre-built ``dev-snapshot`` image (installing it at run time would add a
-# network fetch to the safety net), and ``pytest-xdist`` is unsafe here — the
-# image bootstraps a single Xvfb display and concurrent VST-host loads are the
-# very thing under stress-test (``test_parallel_shard_render_linux``,
-# ``test_pedalboard_threading_contract``), so ``test-vst-slow.yml`` runs
-# serially too. A per-synth split doesn't fit a synth-agnostic marker sweep.
-# The chosen primitive is a ``--collect-only`` file-distribution matrix: the
-# ``discover`` job collects the ``requires_vst`` file set fresh each run and
-# round-robins it across ``SHARD_TOTAL`` cells, each of which runs pytest
-# serially. New files join a shard automatically; every plugin is baked into
-# the image so any shard can run any test.
+# Nightly safety net: runs every ``requires_vst`` test by marker, not by the
+# hand-maintained file allowlists the sibling VST workflows use — so a newly
+# added VST test can't run nowhere in CI, as
+# ``tests/data/vst/test_dawdreamer_dataset_e2e.py`` did (#1825). Runs in the
+# ``dev-snapshot`` image under ``run-linux-vst-headless.sh`` (baked plugins +
+# Xvfb), same as ``test-vst-slow.yml``. Sharded via a ``--collect-only`` file
+# matrix, not ``pytest-split`` (absent from the image) or ``pytest-xdist``
+# (unsafe: one Xvfb display, VST-host loads must stay serial). ``nightly.yml``
+# already covers the non-VST suite.
 
 on:
-  # 04:00 UTC daily — offset from nightly.yml (06:00) and
-  # nightly-parallel-datagen.yml (05:00) so the three nightly runners don't
-  # contend for the shared Docker pull / GH-hosted queue.
+  # 04:00 UTC — offset from nightly.yml (06:00) and nightly-parallel-datagen.yml
+  # (05:00) to avoid Docker-pull / runner-queue contention.
   schedule:
     - cron: "0 4 * * *"
   workflow_dispatch:
@@ -56,8 +31,8 @@ permissions:
 
 env:
   IMAGE: tinaudio/synth-setter:${{ inputs.image_tag || 'dev-snapshot' }}
-  # Single source of the marker expression for both the discover collect and
-  # the per-shard run, so the two can't drift. Mirrors ``make test-vst-cpu``.
+  # Single source of the marker for both the discover collect and the per-shard
+  # run, so they can't drift. Mirrors ``make test-vst-cpu``.
   VST_MARKER: "requires_vst and not gpu and not mps"
   SHARD_TOTAL: "4"
 
@@ -76,8 +51,8 @@ jobs:
       - name: Pull image
         run: docker pull "$IMAGE"
 
-      # Fail fast if the plugin / image / mount layout is broken before the
-      # fan-out. Covers the two primary synths the marker sweep exercises.
+      # Fail fast on a broken plugin / image / mount layout before the fan-out.
+      # Covers the two primary synths the marker sweep exercises.
       - name: Smoke-test Surge XT and OB-Xf plugin load
         run: |
           docker run --rm \
@@ -95,10 +70,8 @@ jobs:
               "
             '
 
-      # Collect the ``requires_vst`` node IDs by marker inside the image and
-      # write them to a host file. ``--collect-only`` is import-only, so no
-      # plugin load happens, but the headless wrapper is kept so a future
-      # import-time VST-host touch can't break collection.
+      # --collect-only is import-only (no plugin load); keep the headless wrapper
+      # so a future import-time VST-host touch can't break collection.
       - name: Collect requires_vst node IDs
         run: |
           docker run --rm \
@@ -113,10 +86,8 @@ jobs:
                 pytest --collect-only -q -p no:cacheprovider -m "$VST_MARKER"
             ' | tee "${{ runner.temp }}/collected.txt"
 
-      # Reduce node IDs to unique test files and round-robin them into
-      # SHARD_TOTAL cells. Refuse an empty matrix — 0 collected tests means the
-      # marker or image is broken, and a silently-green net is the failure mode
-      # this workflow exists to prevent.
+      # Round-robin unique test files into SHARD_TOTAL cells; refuse an empty
+      # matrix — 0 collected tests would ship a silently-green net.
       - name: Build shard matrix
         id: shard
         env:
@@ -173,14 +144,11 @@ jobs:
       - name: Pull image
         run: docker pull "$IMAGE"
 
-      # Mount THIS ref's src + tests into the image and run the shard's files
-      # under the headless wrapper (pedalboard's VST-host import needs a live X
-      # display, so the wrapper applies at the pytest level). Every baked
-      # ``/usr/lib/vst3/*.vst3`` is symlinked into ``plugins/`` because the
-      # render configs reference relative paths (``plugins/Surge XT.vst3``,
-      # ``plugins/OB-Xf.vst3``), and the ``-v`` mount overlays the image's
-      # pre-seeded ``plugins/`` symlinks. ``matrix.files`` is a space-separated
-      # path list split with ``read -ra``; collected test paths carry no spaces.
+      # Mount THIS ref's src+tests and run the shard's files under the headless
+      # wrapper (pedalboard's VST-host import needs a live X display). Baked
+      # ``/usr/lib/vst3/*.vst3`` are symlinked into ``plugins/`` because the
+      # render configs use relative paths (e.g. ``plugins/OB-Xf.vst3``);
+      # ``matrix.files`` carries no spaces, so ``read -ra`` splits it safely.
       - name: Run VST sweep shard in Docker
         env:
           SHARD_FILES: ${{ matrix.files }}
@@ -208,19 +176,25 @@ jobs:
                   "${shard_files[@]}"
             '
 
+      # Name the failing shard in the run log + job summary. A red run is the
+      # signal; auto-filing a ticket is left to nightly.yml's lighter pattern.
       - name: Annotate shard failure
         if: failure()
         env:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SHARD: ${{ matrix.shard }}
           SHARD_FILES: ${{ matrix.files }}
         run: |
+          set -euo pipefail
+          echo "::error::VST sweep shard ${SHARD} failed — the failing node ID is in the pytest log"
+          read -ra shard_files <<< "$SHARD_FILES"
           {
-            echo "### VST sweep shard ${{ matrix.shard }} failed"
+            echo "### VST sweep shard ${SHARD} failed"
             echo ""
             echo "Files in this shard:"
-            for f in $SHARD_FILES; do echo "- \`$f\`"; done
+            for f in "${shard_files[@]}"; do echo "- \`${f}\`"; done
             echo ""
-            echo "See the pytest log above for the failing node ID: ${RUN_URL}"
+            echo "Failing node ID is in the pytest log: ${RUN_URL}"
           } >> "$GITHUB_STEP_SUMMARY"
 
       # coverage.xml is written inside the container at the workspace mount, so
@@ -231,106 +205,3 @@ jobs:
         with:
           flags: vst-nightly-shard-${{ matrix.shard }}
           token: ${{ secrets.CODECOV_TOKEN }}
-
-  report:
-    name: File a ticket on scheduled failure
-    needs: [discover, vst_sweep]
-    if: always() && github.event_name == 'schedule' && (needs.discover.result == 'failure' || needs.vst_sweep.result == 'failure')
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-
-    # ``issues: write`` is needed by the auto-file step. Workflow default is
-    # ``contents: read``; widening here keeps the elevated scope job-local.
-    permissions:
-      contents: read
-      issues: write
-
-    steps:
-      # Auto-file one Bug ticket for the whole run so a nightly VST regression
-      # doesn't go silently stale. Mirrors ``cpu-slow.yml`` /
-      # ``nightly-parallel-datagen.yml``: dedupe on a title fragment, comment on
-      # a repeat, otherwise open a fresh issue with type=Bug + parent=Phase 1
-      # (#150). GraphQL mutations are best-effort — a failure still leaves an
-      # issue with label + milestone + assignee, enough for triage.
-      - name: Auto-file failure ticket
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-
-          dedupe_search='nightly-vst-sweep scheduled failure'
-          existing=$(gh issue list \
-            --repo "${GITHUB_REPOSITORY}" \
-            --label ci-automation \
-            --state open \
-            --search "${dedupe_search} in:title" \
-            --json number,title \
-            --jq '.[0].number // empty')
-
-          comment_body=$(printf '%s\n\n%s\n' \
-            "Another nightly-vst-sweep scheduled failure." \
-            "Failed run: ${RUN_URL}")
-
-          if [ -n "${existing}" ]; then
-            echo "Dedup hit: commenting on existing issue #${existing}"
-            gh issue comment "${existing}" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --body "${comment_body}"
-            exit 0
-          fi
-
-          title="bug(ci-automation): nightly-vst-sweep scheduled failure"
-          body=$(printf '%s\n\n%s\n%s\n' \
-            "The nightly-vst-sweep workflow failed on its scheduled cron. Auto-opened by .github/workflows/nightly-vst-sweep.yml so a requires_vst regression (a broken or newly-added VST test) does not go silently stale." \
-            "- Failed run: ${RUN_URL}" \
-            "- Refs #1825 (the workflow that owns this net)")
-
-          new_issue_url=$(gh issue create \
-            --repo "${GITHUB_REPOSITORY}" \
-            --title "${title}" \
-            --body "${body}" \
-            --label ci-automation \
-            --assignee ktinubu \
-            --milestone "ci-automation v1.0.0")
-          echo "Filed: ${new_issue_url}"
-
-          new_issue_number="${new_issue_url##*/}"
-
-          new_node_id=$(gh api graphql \
-            -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){issue(number:$number){id}}}' \
-            -f owner="${GITHUB_REPOSITORY%/*}" \
-            -f repo="${GITHUB_REPOSITORY#*/}" \
-            -F number="${new_issue_number}" \
-            --jq '.data.repository.issue.id')
-
-          bug_type_id=$(gh api graphql \
-            -f query='query($owner:String!,$repo:String!){repository(owner:$owner,name:$repo){issueTypes(first:20){nodes{id name}}}}' \
-            -f owner="${GITHUB_REPOSITORY%/*}" \
-            -f repo="${GITHUB_REPOSITORY#*/}" \
-            --jq '.data.repository.issueTypes.nodes[]|select(.name=="Bug")|.id')
-
-          if [ -n "${bug_type_id}" ] && [ -n "${new_node_id}" ]; then
-            gh api graphql \
-              -f query='mutation($issueId:ID!,$issueTypeId:ID!){updateIssueIssueType(input:{issueId:$issueId,issueTypeId:$issueTypeId}){issue{number}}}' \
-              -f issueId="${new_node_id}" \
-              -f issueTypeId="${bug_type_id}" \
-              || echo "WARN: failed to set issue type=Bug; triage manually"
-          else
-            echo "WARN: missing node_id or bug_type_id; skipping issue-type set"
-          fi
-
-          phase_node_id=$(gh api graphql \
-            -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){issue(number:$number){id}}}' \
-            -f owner="${GITHUB_REPOSITORY%/*}" \
-            -f repo="${GITHUB_REPOSITORY#*/}" \
-            -F number=150 \
-            --jq '.data.repository.issue.id')
-
-          if [ -n "${phase_node_id}" ] && [ -n "${new_node_id}" ]; then
-            gh api graphql \
-              -f query='mutation($parentId:ID!,$childId:ID!){addSubIssue(input:{issueId:$parentId,subIssueId:$childId}){subIssue{number}}}' \
-              -f parentId="${phase_node_id}" \
-              -f childId="${new_node_id}" \
-              || echo "WARN: failed to parent under Phase 1 (#150); reparent manually"
-          fi

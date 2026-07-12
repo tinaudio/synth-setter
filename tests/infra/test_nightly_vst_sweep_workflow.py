@@ -1,116 +1,98 @@
-"""Pin the invariants that make ``nightly-vst-sweep.yml`` a durable VST net.
+"""Pin the invariants that keep ``nightly-vst-sweep.yml`` a marker-driven VST net.
 
-The sibling VST workflows (``test-vst-slow.yml``, ``docker-build-validation.yml``)
-run hand-maintained file allowlists, so a newly added ``requires_vst`` test that
-nobody registers runs nowhere — the fall-through that let
-``test_dawdreamer_dataset_e2e.py`` ship broken (#1825). This workflow's whole
-value is that its selection is marker-driven and its shard matrix is discovered
-at run time, so these tests fail if a future edit reintroduces a static
-allowlist or drops the marker filter.
+The sibling VST workflows run hand-maintained file allowlists, so a newly added
+``requires_vst`` test that nobody registers runs nowhere — the fall-through that
+shipped ``test_dawdreamer_dataset_e2e.py`` broken (#1825). These tests fail if a
+future edit drops the marker filter or replaces the discovered matrix with a
+static list.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
+import yaml
 
-from tests.infra.workflow_fixtures import WORKFLOWS_DIR, load_workflow
-
-WORKFLOW = "nightly-vst-sweep.yml"
+_WORKFLOW = "nightly-vst-sweep.yml"
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_WORKFLOW_PATH = _PROJECT_ROOT / ".github" / "workflows" / _WORKFLOW
+_WORKFLOW_TEXT = _WORKFLOW_PATH.read_text(encoding="utf-8")
+_WORKFLOW_YAML: dict[str, Any] = yaml.safe_load(_WORKFLOW_TEXT)
 
 # The canonical marker: every ``requires_vst`` test on CPU, gpu/mps excluded.
-CANONICAL_MARKER = "requires_vst and not gpu and not mps"
+_CANONICAL_MARKER = "requires_vst and not gpu and not mps"
 
 
-@pytest.fixture(scope="module")
-def workflow_text(project_root: Path) -> str:
-    """Raw text of the nightly VST sweep workflow.
+def _step_run(job: str, step_name: str) -> str:
+    """Return the ``run`` body of the named step in the named job.
 
-    :param project_root: session fixture from ``tests/infra/conftest.py``.
-    :returns: the workflow file contents.
+    :param job: job key under ``jobs:``.
+    :param step_name: the step's ``name:`` value.
+    :returns: the step's ``run:`` script (empty string if it has none).
+    :raises AssertionError: if no step in ``job`` has that name.
     """
-    return (project_root / WORKFLOWS_DIR / WORKFLOW).read_text()
+    for step in _WORKFLOW_YAML["jobs"][job]["steps"]:
+        if step.get("name") == step_name:
+            return step.get("run", "")
+    raise AssertionError(f"{_WORKFLOW}: job {job!r} has no step named {step_name!r}")
 
 
 @pytest.mark.infra
-def test_marker_is_the_single_canonical_requires_vst_filter(workflow_text: str) -> None:
-    """``VST_MARKER`` carries the canonical filter and drives selection.
-
-    :param workflow_text: raw workflow YAML.
-    """
-    assert f'VST_MARKER: "{CANONICAL_MARKER}"' in workflow_text, (
-        "the sweep must select tests via the canonical requires_vst marker"
-    )
-    assert workflow_text.count('-m "$VST_MARKER"') >= 2, (
-        "both the discover collect and the per-shard run must select by "
-        "$VST_MARKER so they can't drift"
-    )
+def test_marker_env_carries_canonical_requires_vst_filter() -> None:
+    """The workflow-level ``VST_MARKER`` env holds the canonical filter."""
+    assert f'VST_MARKER: "{_CANONICAL_MARKER}"' in _WORKFLOW_TEXT
 
 
 @pytest.mark.infra
-def test_selection_is_marker_driven_not_a_static_allowlist(project_root: Path) -> None:
-    """The shard matrix is discovered at run time, never a hard-coded file list.
+def test_discover_and_run_both_select_via_the_shared_marker() -> None:
+    """Collection and the per-shard run both filter by ``$VST_MARKER``, not a copy."""
+    collect = _step_run("discover", "Collect requires_vst node IDs")
+    run = _step_run("vst_sweep", "Run VST sweep shard in Docker")
+    assert "--collect-only" in collect and '-m "$VST_MARKER"' in collect
+    assert '-m "$VST_MARKER"' in run
 
-    :param project_root: session fixture from ``tests/infra/conftest.py``.
-    """
-    workflow = load_workflow(project_root, WORKFLOW)
-    sweep = workflow["jobs"]["vst_sweep"]
-    assert sweep["needs"] == "discover", "the run job must consume the discover matrix"
+
+@pytest.mark.infra
+def test_matrix_is_discovered_at_runtime_not_a_static_allowlist() -> None:
+    """The run matrix is the discover job's output, never a literal file list."""
+    sweep = _WORKFLOW_YAML["jobs"]["vst_sweep"]
+    assert sweep["needs"] == "discover"
     assert sweep["strategy"]["matrix"] == "${{ fromJSON(needs.discover.outputs.matrix) }}", (
-        "the matrix must be the discover job's collected output, not a literal "
-        "file list — a static allowlist is the fall-through this net prevents (#1825)"
+        "a static allowlist is the #1825 fall-through this net prevents"
     )
-    assert sweep["strategy"]["fail-fast"] is False, (
-        "fail-fast must be false so one failing shard can't mask another"
-    )
+    assert sweep["strategy"]["fail-fast"] is False
 
 
 @pytest.mark.infra
-def test_discover_collects_by_marker_and_refuses_empty_matrix(project_root: Path) -> None:
-    """Discover collects ``requires_vst`` by marker and errors on an empty set.
-
-    :param project_root: session fixture from ``tests/infra/conftest.py``.
-    """
-    workflow = load_workflow(project_root, WORKFLOW)
-    discover = workflow["jobs"]["discover"]
-    steps = " ".join(step.get("run", "") for step in discover["steps"])
-    assert "--collect-only" in steps and '-m "$VST_MARKER"' in steps, (
-        "discover must enumerate the requires_vst set via `pytest --collect-only -m`"
-    )
-    assert "refusing to" in steps, (
-        "discover must fail on a 0-test collection rather than emit a silently-green empty matrix"
-    )
+def test_build_shard_matrix_derives_files_from_collected_output() -> None:
+    """The matrix step builds ``files`` from the collected node IDs, not a constant."""
+    build = _step_run("discover", "Build shard matrix")
+    assert 'os.environ["COLLECTED"]' in build
 
 
 @pytest.mark.infra
-def test_runs_in_dev_snapshot_image_under_headless_wrapper(workflow_text: str) -> None:
-    """The suite runs inside the dev-snapshot image behind the Xvfb wrapper.
-
-    :param workflow_text: raw workflow YAML.
-    """
-    assert "tinaudio/synth-setter:${{ inputs.image_tag || 'dev-snapshot' }}" in workflow_text
-    assert "src/synth_setter/scripts/run-linux-vst-headless.sh" in workflow_text, (
-        "pedalboard's VST-host import needs a live X display; pytest must run "
-        "under the headless wrapper"
-    )
+def test_build_shard_matrix_refuses_an_empty_selection() -> None:
+    """A 0-test collection errors instead of emitting a silently-green matrix."""
+    build = _step_run("discover", "Build shard matrix")
+    assert "refusing to" in build
 
 
 @pytest.mark.infra
-def test_is_nightly_schedule_plus_dispatch_only(workflow_text: str) -> None:
-    """The workflow triggers on a cron schedule and manual dispatch only.
+def test_runs_in_dev_snapshot_image_under_headless_wrapper() -> None:
+    """The suite runs inside the dev-snapshot image behind the Xvfb wrapper."""
+    assert "tinaudio/synth-setter:${{ inputs.image_tag || 'dev-snapshot' }}" in _WORKFLOW_TEXT
+    assert "src/synth_setter/scripts/run-linux-vst-headless.sh" in _WORKFLOW_TEXT
 
-    A nightly net must not gate PRs, so ``push`` / ``pull_request`` triggers are
-    forbidden. Asserted on raw text because PyYAML parses the bare ``on:`` key
-    as the boolean ``True``.
 
-    :param workflow_text: raw workflow YAML.
+@pytest.mark.infra
+def test_triggers_on_schedule_and_dispatch_only() -> None:
+    """A nightly net triggers on cron + manual dispatch, never on push/PR.
+
+    Asserted on raw text because PyYAML parses the bare ``on:`` key as ``True``.
     """
-    assert "\n  schedule:\n" in workflow_text and "cron:" in workflow_text, (
-        "a nightly workflow needs a cron schedule"
-    )
-    assert "\n  workflow_dispatch:\n" in workflow_text, "manual dispatch must stay available"
+    assert "\n  schedule:\n" in _WORKFLOW_TEXT and "cron:" in _WORKFLOW_TEXT
+    assert "\n  workflow_dispatch:\n" in _WORKFLOW_TEXT
     for pr_trigger in ("\n  push:\n", "\n  pull_request:\n"):
-        assert pr_trigger not in workflow_text, (
-            "a nightly net must not gate PRs: schedule + workflow_dispatch only"
-        )
+        assert pr_trigger not in _WORKFLOW_TEXT
