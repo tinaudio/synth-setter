@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import re
+from importlib import import_module
 from pathlib import Path
+from typing import Any, cast
 
 import click
 from pydantic import BaseModel, ConfigDict
@@ -182,7 +184,7 @@ def dump_pedalboard(plugin: Path, preset: Path, preset_resource: str, out: Path)
 
     from synth_setter.data.vst.core import load_plugin, load_preset
 
-    loaded = load_plugin(str(plugin))
+    loaded = cast(Any, load_plugin(str(plugin)))
     load_preset(loaded, str(preset))
     loaded.process([], 32.0, 44100.0, 2, 2048, True)
     loaded.reset()
@@ -225,8 +227,7 @@ def dump_dawdreamer(
     """
     import hashlib
 
-    import dawdreamer
-
+    dawdreamer = import_module("dawdreamer")
     engine = dawdreamer.RenderEngine(44100, 2048)
     loaded = engine.make_plugin_processor("synth", str(plugin.resolve()))
     loaded.load_vst3_preset(str(preset.resolve()))

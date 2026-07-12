@@ -172,7 +172,7 @@ def test_postprocessing_linux_argv_has_wrapper_prefix(
         predictions_tree,
         compute_metrics=False,
         rerender_target=False,
-        render={"param_spec_name": "surge/fake_oracle", "preset_path": "preset.fxp"},
+        render={"param_spec_name": "surge/fake_oracle", "plugin_state_path": "preset.fxp"},
     )
 
     _run_predict_postprocessing(cfg)
@@ -200,7 +200,7 @@ def test_postprocessing_non_linux_argv_omits_wrapper(
         predictions_tree,
         compute_metrics=False,
         rerender_target=False,
-        render={"param_spec_name": "surge/fake_oracle", "preset_path": "preset.fxp"},
+        render={"param_spec_name": "surge/fake_oracle", "plugin_state_path": "preset.fxp"},
     )
 
     _run_predict_postprocessing(cfg)
@@ -233,7 +233,7 @@ def test_postprocessing_plugin_path_gate(
         rerender_target=False,
         render={
             "param_spec_name": "surge/fake_oracle",
-            "preset_path": "preset.fxp",
+            "plugin_state_path": "preset.fxp",
             "plugin_path": plugin_path,
         },
     )
@@ -269,7 +269,7 @@ def test_postprocessing_forwards_render_audio_fields(
         rerender_target=False,
         render={
             "param_spec_name": "surge/fake_oracle",
-            "preset_path": "preset.fxp",
+            "plugin_state_path": "preset.fxp",
             "sample_rate": 22050,
             "channels": 1,
             "velocity": 64,
@@ -302,7 +302,7 @@ def test_postprocessing_rerender_target_gate(
     :param captured_argv: Captured argv list populated by the fixture.
     """
     monkeypatch.setattr(eval_mod.sys, "platform", "darwin")
-    render = {"param_spec_name": "surge/fake_oracle", "preset_path": "preset.fxp"}
+    render = {"param_spec_name": "surge/fake_oracle", "plugin_state_path": "preset.fxp"}
 
     _run_predict_postprocessing(
         _build_postprocess_cfg(
@@ -469,7 +469,7 @@ def test_postprocessing_render_requires_predictions_dir(
     cfg = _build_postprocess_cfg(
         tmp_path,
         compute_metrics=False,
-        render={"param_spec_name": "surge/fake_oracle", "preset_path": "preset.fxp"},
+        render={"param_spec_name": "surge/fake_oracle", "plugin_state_path": "preset.fxp"},
     )
 
     with pytest.raises(ValueError, match="PredictionWriter"):
@@ -643,7 +643,7 @@ def test_postprocessing_render_subprocess_nonzero_exit_raises(
         predictions_tree,
         compute_metrics=False,
         rerender_target=False,
-        render={"param_spec_name": "surge/fake_oracle", "preset_path": "preset.fxp"},
+        render={"param_spec_name": "surge/fake_oracle", "plugin_state_path": "preset.fxp"},
     )
 
     with pytest.raises(subprocess.CalledProcessError):
@@ -678,7 +678,7 @@ def test_postprocessing_metrics_subprocess_timeout_raises(
         predictions_tree,
         compute_metrics=True,
         rerender_target=False,
-        render={"param_spec_name": "surge/fake_oracle", "preset_path": "preset.fxp"},
+        render={"param_spec_name": "surge/fake_oracle", "plugin_state_path": "preset.fxp"},
     )
 
     with pytest.raises(subprocess.TimeoutExpired):
@@ -1148,7 +1148,7 @@ def test_render_timeout_scales_with_prediction_sample_count(
         compute_metrics=False,
         rerender_target=False,
         batch_size=4,
-        render={"param_spec_name": "surge/fake_oracle", "preset_path": "preset.fxp"},
+        render={"param_spec_name": "surge/fake_oracle", "plugin_state_path": "preset.fxp"},
     )
 
     _run_predict_postprocessing(cfg)

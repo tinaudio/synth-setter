@@ -26,7 +26,7 @@ from synth_setter.pipeline.schemas.spec import RenderConfig
 def _smoke_render_cfg(**overrides: object) -> RenderConfig:
     """Build a syntactically-valid ``RenderConfig`` for CPU-only tests.
 
-    No I/O happens against ``plugin_path`` or ``preset_path`` in these tests
+    No I/O happens against ``plugin_path`` or ``plugin_state_path`` in these tests
     — they only need to be non-blank strings.
 
     :param \\*\\*overrides: Per-call overrides merged into the default kwargs.
@@ -34,7 +34,7 @@ def _smoke_render_cfg(**overrides: object) -> RenderConfig:
     """
     kwargs: dict[str, object] = {
         "plugin_path": "plugins/Surge XT.vst3",
-        "preset_path": "presets/surge-base.vstpreset",
+        "plugin_state_path": "presets/surge-base.vstpreset",
         "param_spec_name": "surge_simple",
         "renderer_version": "1.3.4",
         "sample_rate": 44100,
@@ -121,7 +121,7 @@ def _cli_argv(data_file: str) -> list[str]:
         data_file,
         "--plugin_path",
         "plugins/Surge XT.vst3",
-        "--preset_path",
+        "--plugin_state_path",
         "presets/surge-base.vstpreset",
         "--param_spec_name",
         "surge_simple",

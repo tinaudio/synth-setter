@@ -34,7 +34,7 @@ def test_introspect_cli_surge_xt_emits_usable_spec_and_vstpreset(tmp_path: Path)
     :param tmp_path: Pytest fixture providing a fresh test directory.
     """
     spec_path = tmp_path / "draft_param_spec.py"
-    preset_path = tmp_path / "draft-base.vstpreset"
+    plugin_state_path = tmp_path / "draft-base.vstpreset"
 
     result = CliRunner().invoke(
         main,
@@ -46,7 +46,7 @@ def test_introspect_cli_surge_xt_emits_usable_spec_and_vstpreset(tmp_path: Path)
             "--out-spec",
             str(spec_path),
             "--out-preset",
-            str(preset_path),
+            str(plugin_state_path),
             "--out-csv",
             str(tmp_path / "draft_params.csv"),
         ],
@@ -55,8 +55,8 @@ def test_introspect_cli_surge_xt_emits_usable_spec_and_vstpreset(tmp_path: Path)
 
     assert result.exit_code == 0
     # The captured baseline must round-trip through the pipeline's real consumer.
-    assert preset_path.read_bytes().startswith(b"VST3")
-    load_preset(load_plugin(PLUGIN_PATH), str(preset_path))
+    assert plugin_state_path.read_bytes().startswith(b"VST3")
+    load_preset(load_plugin(PLUGIN_PATH), str(plugin_state_path))
 
     spec_text = spec_path.read_text()
     assert_ruff_format_clean(spec_text)

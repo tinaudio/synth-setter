@@ -142,7 +142,7 @@ def _build_real_surge_spec(
         },
         "render": {
             "plugin_path": PLUGIN_PATH,
-            "preset_path": PRESET_PATH,
+            "plugin_state_path": PRESET_PATH,
             "param_spec_name": "surge_simple",
             "renderer_version": renderer_version,
             "sample_rate": 44100,

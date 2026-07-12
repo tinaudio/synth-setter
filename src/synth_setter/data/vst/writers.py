@@ -200,7 +200,7 @@ def _make_renderer(render_cfg: RenderConfig, plugin: VST3Plugin | None = None) -
         render_cfg.sample_rate,
         render_cfg.channels,
         render_cfg.signal_duration_seconds,
-        render_cfg.preset_path,
+        render_cfg.plugin_state_path,
     )
     if render_cfg.renderer_backend == "dawdreamer":
         from synth_setter.data.vst.param_map import load_param_map
@@ -251,7 +251,7 @@ def _render_in_batches(
     if render_cfg.plugin_reload_cadence == "once":
         if render_cfg.renderer_backend == "pedalboard":
             cached_plugin = load_plugin(render_cfg.plugin_path)
-            load_preset(cached_plugin, render_cfg.preset_path)
+            load_preset(cached_plugin, render_cfg.plugin_state_path)
         cached_renderer = _make_renderer(render_cfg, cached_plugin)
 
     def _render_loop() -> None:

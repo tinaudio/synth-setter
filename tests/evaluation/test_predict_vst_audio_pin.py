@@ -59,7 +59,7 @@ def _fake_render(
     :param signal_duration_seconds: Render length in seconds.
     :param sample_rate: Render sample rate in Hz.
     :param channels: Number of audio channels.
-    :param \\*\\*_kwargs: Ignored; absorbs ``preset_path`` and any future kwargs.
+    :param \\*\\*_kwargs: Ignored; absorbs ``plugin_state_path`` and any future kwargs.
     :return: ``(channels, int(sample_rate * signal_duration_seconds))`` float32 audio.
     """
     num_samples = int(sample_rate * signal_duration_seconds)

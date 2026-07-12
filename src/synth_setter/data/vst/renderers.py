@@ -35,7 +35,7 @@ class AudioRenderer(ABC):
 
        Duration of each rendered sample.
 
-    .. attribute :: preset_path
+    .. attribute :: plugin_state_path
 
        Optional baseline preset path.
     """
@@ -44,7 +44,7 @@ class AudioRenderer(ABC):
     sample_rate: float
     channels: int
     signal_duration_seconds: float
-    preset_path: str | None = None
+    plugin_state_path: str | None = None
 
     @abstractmethod
     def render(
@@ -107,7 +107,7 @@ class PedalboardRenderer(AudioRenderer):
             self.signal_duration_seconds,
             self.sample_rate,
             self.channels,
-            preset_path=self.preset_path,
+            plugin_state_path=self.plugin_state_path,
             plugin=self.plugin,
             warmup=warmup,
         )
@@ -144,8 +144,8 @@ class DawDreamerRenderer(AudioRenderer):
     def __post_init__(self) -> None:
         """Create the DawDreamer engine and load the plugin graph."""
         self.plugin_path = str(Path(self.plugin_path).expanduser().resolve())
-        if self.preset_path is not None:
-            self.preset_path = str(Path(self.preset_path).expanduser().resolve())
+        if self.plugin_state_path is not None:
+            self.plugin_state_path = str(Path(self.plugin_state_path).expanduser().resolve())
         self._daw = import_module("dawdreamer")
         self._create_graph()
         self._load_preset()
@@ -172,11 +172,11 @@ class DawDreamerRenderer(AudioRenderer):
         version = extract_renderer_version(Path(self.plugin_path)) if snapshot.plugin_version else ""
         if snapshot.plugin_version and version != snapshot.plugin_version:
             raise ValueError(f"plugin version {version!r} != map {snapshot.plugin_version!r}")
-        if self.parameter_map.preset_sha256 and self.preset_path is None:
+        if self.parameter_map.preset_sha256 and self.plugin_state_path is None:
             raise ValueError("DawDreamer rendering requires the mapped preset")
         digest = (
-            hashlib.sha256(Path(self.preset_path).read_bytes()).hexdigest()
-            if self.parameter_map.preset_sha256 and self.preset_path
+            hashlib.sha256(Path(self.plugin_state_path).read_bytes()).hexdigest()
+            if self.parameter_map.preset_sha256 and self.plugin_state_path
             else ""
         )
         if self.parameter_map.preset_sha256 and digest != self.parameter_map.preset_sha256:
@@ -263,9 +263,9 @@ class DawDreamerRenderer(AudioRenderer):
 
     def _load_preset(self) -> None:
         """Load the configured preset into the current fresh plugin instance."""
-        if self.preset_path is None:
+        if self.plugin_state_path is None:
             return
-        if self.preset_path.endswith(".vstpreset"):
-            self.plugin.load_vst3_preset(self.preset_path)
+        if self.plugin_state_path.endswith(".vstpreset"):
+            self.plugin.load_vst3_preset(self.plugin_state_path)
         else:
-            self.plugin.load_preset(self.preset_path)
+            self.plugin.load_preset(self.plugin_state_path)

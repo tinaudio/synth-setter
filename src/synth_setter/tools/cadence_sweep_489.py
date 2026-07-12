@@ -36,7 +36,7 @@ import wandb
 import wandb.env
 from loguru import logger
 
-from synth_setter.data.vst import preset_paths
+from synth_setter.data.vst import plugin_state_paths
 from synth_setter.pipeline.schemas.prefix import DEFAULT_R2_PREFIX_ROOT, make_r2_prefix
 
 # Temporary personal pin: the ``tinaudio`` W&B entity does not exist yet (sweep
@@ -53,8 +53,8 @@ _GENERATE_MODULE = "synth_setter.cli.generate_dataset"
 
 SURGE_XT = "surge_xt"
 SURGE_SIMPLE = "surge_simple"
-SURGE_XT_PRESET = preset_paths[SURGE_XT]
-SURGE_SIMPLE_PRESET = preset_paths[SURGE_SIMPLE]
+SURGE_XT_PRESET = plugin_state_paths[SURGE_XT]
+SURGE_SIMPLE_PRESET = plugin_state_paths[SURGE_SIMPLE]
 
 UUID_SIFFIX = f"-{uuid.uuid4().hex[:4]}"
 # Fixed reference run identity -> stable copy-source URI the copy probes replay.
@@ -153,9 +153,9 @@ def sweeps(n: int) -> list[dict[str, Any]]:
     splits = f"train_val_test_sizes=[{n},{n},{n}]"
     samples_per_shard = f"render.samples_per_shard={n}"
     xt_spec = f"render.param_spec_name={SURGE_XT}"
-    xt_preset = f"render.preset_path={SURGE_XT_PRESET}"
+    xt_preset = f"render.plugin_state_path={SURGE_XT_PRESET}"
     simple_spec = f"render.param_spec_name={SURGE_SIMPLE}"
-    simple_preset = f"render.preset_path={SURGE_SIMPLE_PRESET}"
+    simple_preset = f"render.plugin_state_path={SURGE_SIMPLE_PRESET}"
     xt_copy_uri = f"copy_dataset_root_uri={surge_xt_reference_copy_uri()}"
     simple_copy_uri = f"copy_dataset_root_uri={surge_simple_reference_copy_uri()}"
 
@@ -324,13 +324,13 @@ def run(n: int) -> None:
         f"task_name={SURGE_XT_REFERENCE_TASK}",
         f"run_id={SURGE_XT_REFERENCE_RUN_ID}",
         f"render.param_spec_name={SURGE_XT}",
-        f"render.preset_path={SURGE_XT_PRESET}",
+        f"render.plugin_state_path={SURGE_XT_PRESET}",
     ]
     simple_overrides = copy_src_overrides + [
         f"task_name={SURGE_SIMPLE_REFERENCE_TASK}",
         f"run_id={SURGE_SIMPLE_REFERENCE_RUN_ID}",
         f"render.param_spec_name={SURGE_SIMPLE}",
-        f"render.preset_path={SURGE_SIMPLE_PRESET}",
+        f"render.plugin_state_path={SURGE_SIMPLE_PRESET}",
     ]
     logger.info(f"generating copy source -> {surge_xt_reference_copy_uri()}")
     _run_generate(xt_overrides)

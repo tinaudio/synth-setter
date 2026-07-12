@@ -45,7 +45,7 @@ def _dawdreamer_experiment_config() -> RenderConfig:
             overrides=[
                 "experiment=generate_dataset/surge-xt-dawdreamer-smoke",
                 f"render.plugin_path={PLUGIN_PATH}",
-                f"render.preset_path={TEST_PRESET_PATH}",
+                f"render.plugin_state_path={TEST_PRESET_PATH}",
                 f"render.param_spec_name={TEST_PARAM_SPEC_NAME}",
                 f"render.renderer_version={TEST_RENDERER_VERSION}",
             ],

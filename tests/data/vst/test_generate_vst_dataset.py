@@ -90,7 +90,7 @@ def _render_cfg(
     """
     return RenderConfig(
         plugin_path=PLUGIN_PATH,
-        preset_path=_PRESET_PATH,
+        plugin_state_path=_PRESET_PATH,
         param_spec_name=_SPEC_NAME,
         renderer_version=_RENDERER_VERSION,
         sample_rate=int(_SAMPLE_RATE),
@@ -997,7 +997,7 @@ def test_show_editor_warmup_does_not_change_rendered_audio() -> None:
                 _DURATION,
                 _SAMPLE_RATE,
                 _CHANNELS,
-                preset_path=_PRESET_PATH,
+                plugin_state_path=_PRESET_PATH,
             )
             for _ in range(n)
         ]
@@ -1042,7 +1042,7 @@ def test_reload_per_render_matches_cached_plugin() -> None:
                 _DURATION,
                 _SAMPLE_RATE,
                 _CHANNELS,
-                preset_path=_PRESET_PATH,
+                plugin_state_path=_PRESET_PATH,
             )
             for _ in range(n_renders)
         ]
@@ -1060,7 +1060,7 @@ def test_reload_per_render_matches_cached_plugin() -> None:
                 _DURATION,
                 _SAMPLE_RATE,
                 _CHANNELS,
-                preset_path=_PRESET_PATH,
+                plugin_state_path=_PRESET_PATH,
                 plugin=plugin,
             )
             for _ in range(n_renders)

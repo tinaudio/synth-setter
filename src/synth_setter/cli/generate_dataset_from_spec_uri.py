@@ -109,7 +109,7 @@ def run_from_spec_uri(spec_uri: str, *, enable_wandb: bool = True) -> None:  # n
     history; pass ``enable_wandb=False`` to skip only W&B auth/logging, e.g. CI.
 
     Invoke from the checkout root — the same contract as the Hydra launcher
-    (the render subprocess script and any relative ``render.preset_path`` /
+    (the render subprocess script and any relative ``render.plugin_state_path`` /
     ``render.plugin_path`` in the spec resolve against the process CWD; the
     SkyPilot worker changes directory to the checkout before exec for the
     same reason). Shards are written under

@@ -49,7 +49,7 @@ def _smoke_spec() -> DatasetSpec:
     """A minimal ``DatasetSpec`` for round-trip tests — no I/O, no plugin required."""
     render_cfg = RenderConfig(
         plugin_path="plugins/Surge XT.vst3",
-        preset_path="presets/surge-base.vstpreset",
+        plugin_state_path="presets/surge-base.vstpreset",
         param_spec_name="surge_simple",
         renderer_version="1.3.4",
         sample_rate=44100,

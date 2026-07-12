@@ -129,7 +129,7 @@ splits:
   test: 2
 
 # Generation params (needed by generate_vst_dataset)
-preset_path: presets/surge-simple.vstpreset
+plugin_state_path: presets/surge-simple.vstpreset
 channels: 2
 velocity: 100
 signal_duration_seconds: 4.0
@@ -273,7 +273,7 @@ Sub-issues: [#18](https://github.com/tinaudio/synth-setter/issues/18) (config-dr
 - `DatasetPipelineSpec` (frozen, strict): `run_id`,
   `r2` (nested `R2Location`), `created_at`, `code_version`, `is_repo_dirty`,
   `param_spec`, `renderer_version`, `output_format` (`"hdf5"` or `"wds"`), `sample_rate`,
-  `shard_size`, `base_seed`, `num_params`, `splits`, `plugin_path`, `preset_path`,
+  `shard_size`, `base_seed`, `num_params`, `splits`, `plugin_path`, `plugin_state_path`,
   `channels`, `velocity`, `signal_duration_seconds`, `min_loudness`,
   `samples_per_render_batch`, `shards` (tuple of `ShardSpec`).
   **Note:** `num_shards` is a derived property (not a stored field).
@@ -314,7 +314,7 @@ Sub-issues: [#18](https://github.com/tinaudio/synth-setter/issues/18) (config-dr
 
 - `ValidationSummary` class not defined in design doc (referenced in `DatasetCard` §14.2)
 - ~~`base_seed` not in `DatasetPipelineSpec` schema §14.1~~ (fixed: added to spec)
-- ~~Generation params (preset_path, channels, etc.) not in `DatasetPipelineSpec` schema §14.1~~ (fixed: added to spec)
+- ~~Generation params (plugin_state_path, channels, etc.) not in `DatasetPipelineSpec` schema §14.1~~ (fixed: added to spec)
 - `shard_manifest` not in `DatasetCard` schema §14.2 (mentioned in §7.6 prose)
 
 **Unit tests (write first):**
@@ -1020,5 +1020,5 @@ Several fields in the design doc §14 schemas need updating to match the impleme
 
 - `ValidationSummary` class not defined in design doc (referenced in `DatasetCard`)
 - `base_seed` not in `DatasetPipelineSpec` schema (referenced in §14.1 text)
-- Generation params (preset_path, channels, etc.) not in `DatasetPipelineSpec` schema
+- Generation params (plugin_state_path, channels, etc.) not in `DatasetPipelineSpec` schema
 - `shard_manifest` not in `DatasetCard` schema (mentioned in §7.6 prose)
