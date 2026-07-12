@@ -39,7 +39,7 @@ from synth_setter.data.vst.param_spec import CategoricalParameter, ParamSpec
 from synth_setter.data.vst.param_spec_registry import (
     default_plugin_path,
     param_specs,
-    preset_paths,
+    plugin_state_paths,
 )
 
 _VST_DIR = Path(__file__).resolve().parent.parent / "data" / "vst"
@@ -149,22 +149,22 @@ class _IndexedPlugin(Protocol):
         ...
 
 
-def _flushed_plugin(plugin_path: str, preset_path: str | None) -> _IndexedPlugin:
+def _flushed_plugin(plugin_path: str, plugin_state_path: str | None) -> _IndexedPlugin:
     """Load the VST3 (optionally with a preset) and flush once so names settle.
 
     Surge only refreshes preset-driven FX/osc param names after an audio pass,
     mirroring ``render_params``'s post-load flush.
 
     :param plugin_path: ``.vst3`` bundle path.
-    :param preset_path: ``.vstpreset`` to apply, or ``None`` for the init state.
+    :param plugin_state_path: ``.vstpreset`` to apply, or ``None`` for the init state.
     :returns: The flushed pedalboard plugin.
     """
     # Deferred: core imports pedalboard; the dump command must work without it.
     from synth_setter.data.vst.core import load_plugin, load_preset
 
     plugin = load_plugin(plugin_path)
-    if preset_path is not None:
-        load_preset(plugin, preset_path)
+    if plugin_state_path is not None:
+        load_preset(plugin, plugin_state_path)
     plugin.process([], 32.0, 44100.0, 2, 2048, True)
     plugin.reset()
     return cast(_IndexedPlugin, plugin)
@@ -205,14 +205,14 @@ def _assert_init_order_matches(clap_info: ClapPluginInfo, plugin_path: str) -> N
         )
 
 
-def _preset_param_indices(plugin_path: str, preset_path: str) -> dict[str, int]:
+def _preset_param_indices(plugin_path: str, plugin_state_path: str) -> dict[str, int]:
     """Read pyname → patch-invariant parameter index under the base preset.
 
     :param plugin_path: ``.vst3`` bundle path.
-    :param preset_path: The spec's base ``.vstpreset``.
+    :param plugin_state_path: The spec's base ``.vstpreset``.
     :returns: One entry per parameter pedalboard exposes in the preset state.
     """
-    plugin = _flushed_plugin(plugin_path, preset_path)
+    plugin = _flushed_plugin(plugin_path, plugin_state_path)
     return {pyname: param.index for pyname, param in plugin.parameters.items()}
 
 
@@ -297,7 +297,7 @@ def build(clap_info: Path, out: Path | None, param_spec_name: str, params_csv: P
     info = ClapPluginInfo.model_validate_json(clap_info.read_text(encoding="utf-8"))
     plugin_path = default_plugin_path()
     _assert_init_order_matches(info, plugin_path)
-    indices = _preset_param_indices(plugin_path, preset_paths[param_spec_name])
+    indices = _preset_param_indices(plugin_path, plugin_state_paths[param_spec_name])
     format_map = build_format_map(
         info, indices, param_specs[param_spec_name], _read_display_names(params_csv)
     )

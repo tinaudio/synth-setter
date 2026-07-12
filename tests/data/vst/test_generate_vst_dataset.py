@@ -89,7 +89,7 @@ def _render_cfg(
     """
     return RenderConfig(
         plugin_path=PLUGIN_PATH,
-        preset_path=_PRESET_PATH,
+        plugin_state_path=_PRESET_PATH,
         param_spec_name=_SPEC_NAME,
         renderer_version=_RENDERER_VERSION,
         sample_rate=int(_SAMPLE_RATE),
@@ -996,7 +996,7 @@ def test_show_editor_warmup_does_not_change_rendered_audio() -> None:
                 _DURATION,
                 _SAMPLE_RATE,
                 _CHANNELS,
-                preset_path=_PRESET_PATH,
+                plugin_state_path=_PRESET_PATH,
             )
             for _ in range(n)
         ]
@@ -1041,7 +1041,7 @@ def test_reload_per_render_matches_cached_plugin() -> None:
                 _DURATION,
                 _SAMPLE_RATE,
                 _CHANNELS,
-                preset_path=_PRESET_PATH,
+                plugin_state_path=_PRESET_PATH,
             )
             for _ in range(n_renders)
         ]
@@ -1059,7 +1059,7 @@ def test_reload_per_render_matches_cached_plugin() -> None:
                 _DURATION,
                 _SAMPLE_RATE,
                 _CHANNELS,
-                preset_path=_PRESET_PATH,
+                plugin_state_path=_PRESET_PATH,
                 plugin=plugin,
             )
             for _ in range(n_renders)
@@ -1153,7 +1153,7 @@ def test_generate_sample_raises_when_fixed_synth_params_renders_silent(
             channels=_CHANNELS,
             min_loudness=_MIN_LOUDNESS,
             param_spec=spec,
-            preset_path=_PRESET_PATH,
+            plugin_state_path=_PRESET_PATH,
             fixed_synth_params=_HARDCODED_SYNTH_PARAMS,
             fixed_note_params=None,
         )
@@ -1177,7 +1177,7 @@ def test_generate_sample_raises_when_both_fixed_renders_silent(
             channels=_CHANNELS,
             min_loudness=_MIN_LOUDNESS,
             param_spec=spec,
-            preset_path=_PRESET_PATH,
+            plugin_state_path=_PRESET_PATH,
             fixed_synth_params=_HARDCODED_SYNTH_PARAMS,
             fixed_note_params=_HARDCODED_NOTE_PARAMS,
         )
@@ -1219,7 +1219,7 @@ def test_generate_sample_retries_when_only_fixed_note_params(
         channels=_CHANNELS,
         min_loudness=_MIN_LOUDNESS,
         param_spec=spec,
-        preset_path=_PRESET_PATH,
+        plugin_state_path=_PRESET_PATH,
         fixed_synth_params=None,
         fixed_note_params=_HARDCODED_NOTE_PARAMS,
     )
@@ -1296,7 +1296,7 @@ def test_generate_sample_warmups_once_regardless_of_retries(
         channels=_CHANNELS,
         min_loudness=_MIN_LOUDNESS,
         param_spec=spec,
-        preset_path=_PRESET_PATH,
+        plugin_state_path=_PRESET_PATH,
         fixed_synth_params=None,
         fixed_note_params=_HARDCODED_NOTE_PARAMS,
         warmup=True,
@@ -1330,7 +1330,7 @@ def test_generate_sample_with_warmup_false_never_warms_across_retries(
         channels=_CHANNELS,
         min_loudness=_MIN_LOUDNESS,
         param_spec=spec,
-        preset_path=_PRESET_PATH,
+        plugin_state_path=_PRESET_PATH,
         fixed_synth_params=None,
         fixed_note_params=_HARDCODED_NOTE_PARAMS,
         warmup=False,
@@ -1363,7 +1363,7 @@ def test_generate_sample_with_warmup_true_no_retries_warms_exactly_once(
         channels=_CHANNELS,
         min_loudness=_MIN_LOUDNESS,
         param_spec=spec,
-        preset_path=_PRESET_PATH,
+        plugin_state_path=_PRESET_PATH,
         fixed_synth_params=None,
         fixed_note_params=_HARDCODED_NOTE_PARAMS,
         warmup=True,

@@ -73,7 +73,7 @@ def build_wds_smoke_spec(
         "r2": {"bucket": "intermediate-data"},
         "render": {
             "plugin_path": "/fake/Plugin.vst3",
-            "preset_path": "presets/surge-base.vstpreset",
+            "plugin_state_path": "presets/surge-base.vstpreset",
             "param_spec_name": "surge_simple",
             "renderer_version": "1.0.0-test",
             "sample_rate": 44100,
@@ -92,7 +92,7 @@ def build_wds_smoke_spec(
 # sample_rate=100 keeps the mel front end at its minimum hop so shards stay tiny.
 _LANCE_SMOKE_RENDER: dict[str, str | int | float] = {
     "plugin_path": "/fake/Plugin.vst3",
-    "preset_path": "presets/surge-base.vstpreset",
+    "plugin_state_path": "presets/surge-base.vstpreset",
     "param_spec_name": "surge_simple",
     "renderer_version": "1.0.0-test",
     "sample_rate": 100,
@@ -161,7 +161,7 @@ def build_hdf5_smoke_spec(
         "r2": {"bucket": "intermediate-data"},
         "render": {
             "plugin_path": "/fake/Plugin.vst3",
-            "preset_path": "presets/surge-base.vstpreset",
+            "plugin_state_path": "presets/surge-base.vstpreset",
             "param_spec_name": "surge_simple",
             "renderer_version": "1.0.0-test",
             "sample_rate": 44100,

@@ -226,8 +226,8 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
                 str(audio_dir),
                 "--param_spec",
                 cfg.render.param_spec_name,
-                "--preset_path",
-                cfg.render.preset_path,
+                "--plugin_state_path",
+                cfg.render.plugin_state_path,
             ]
             if cfg.render.get("plugin_path"):
                 args += ["--plugin_path", cfg.render.plugin_path]

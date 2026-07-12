@@ -96,7 +96,7 @@ def real_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> DatasetSpec:
         r2={"bucket": "intermediate-data"},  # type: ignore[arg-type]
         render={
             "plugin_path": str(tmp_path / "FakePlugin.vst3"),
-            "preset_path": "presets/surge-base.vstpreset",
+            "plugin_state_path": "presets/surge-base.vstpreset",
             "param_spec_name": "surge_simple",
             "renderer_version": "1.3.4",
             "sample_rate": 44100,

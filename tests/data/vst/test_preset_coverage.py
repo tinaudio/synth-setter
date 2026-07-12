@@ -54,16 +54,19 @@ def _read_all_params(plugin: VST3Plugin) -> dict[str, float]:
 
 
 @pytest.mark.parametrize(
-    "preset_path",
+    "plugin_state_path",
     sorted(p.as_posix() for p in _PRESET_DIR.glob("*.vstpreset")),
 )
 @pytest.mark.slow
 @requires_vst
 @skip_darwin
-def test_flush_pattern_matches_show_editor_pattern(preset_path: str) -> None:
-    """Flush pattern in render_params is sufficient to commit Surge XT preset state."""
+def test_flush_pattern_matches_show_editor_pattern(plugin_state_path: str) -> None:
+    """Flush pattern in render_params is sufficient to commit Surge XT preset state.
+
+    :param plugin_state_path: Path to the plugin-state file under test.
+    """
     p_no = VST3Plugin(PLUGIN_PATH)
-    p_no.load_preset(preset_path)
+    p_no.load_preset(plugin_state_path)
     _flush(p_no)
     no_editor_state = _read_all_params(p_no)
 
@@ -71,7 +74,7 @@ def test_flush_pattern_matches_show_editor_pattern(preset_path: str) -> None:
     # Production's editor warm-up (spotify/pedalboard#394): show_editor closes via
     # the threading.Event the editor exposes, not a test-local wall-clock sleep.
     warmup_plugin(p_we)
-    p_we.load_preset(preset_path)
+    p_we.load_preset(plugin_state_path)
     _flush(p_we)
     with_editor_state = _read_all_params(p_we)
 

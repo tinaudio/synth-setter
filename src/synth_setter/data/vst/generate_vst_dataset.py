@@ -102,7 +102,7 @@ def generate_sample(
     channels: int,
     min_loudness: float,
     param_spec: ParamSpec,
-    preset_path: str,
+    plugin_state_path: str,
     fixed_synth_params: dict[str, float] | None = None,
     fixed_note_params: NoteParams | None = None,
     *,
@@ -126,6 +126,16 @@ def generate_sample(
     reproducible regardless of worker/order/retry history (#884); ``seed=None`` draws
     from a fresh non-deterministic generator and uses the default attempt budget.
 
+    :param plugin_path: Filesystem path to the VST3 plugin.
+    :param velocity: MIDI velocity used for rendering.
+    :param signal_duration_seconds: Duration of each rendered signal in seconds.
+    :param sample_rate: Audio sample rate in Hz.
+    :param channels: Number of output channels.
+    :param min_loudness: Minimum accepted loudness in dB.
+    :param param_spec: Parameter specification used to sample and encode the patch.
+    :param plugin_state_path: Filesystem path to the baseline plugin state.
+    :param fixed_synth_params: Optional fixed synth parameter values.
+    :param fixed_note_params: Optional fixed note parameter values.
     :param plugin: Forwarded to ``render_params``; when set, the renderer
         skips ``load_plugin``/``load_preset``.
     :param warmup: Forwarded to ``render_params``; runs the ``show_editor``
@@ -166,7 +176,7 @@ def generate_sample(
             signal_duration_seconds,
             sample_rate,
             channels,
-            preset_path=preset_path,
+            plugin_state_path=plugin_state_path,
             plugin=plugin,
             warmup=warmup,
         )

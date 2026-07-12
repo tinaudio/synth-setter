@@ -1,6 +1,6 @@
 """Single source of truth for VST plugin discovery in tests.
 
-``SYNTH_SETTER_TEST_SYNTH`` (a ``preset_paths`` key, default ``surge_xt``)
+``SYNTH_SETTER_TEST_SYNTH`` (a ``plugin_state_paths`` key, default ``surge_xt``)
 drives ``TEST_SYNTH`` / ``TEST_PARAM_SPEC_NAME`` / ``TEST_PRESET_PATH`` /
 ``TEST_RENDERER_VERSION`` so a CI cell can target a second synth without
 hardcoding. The plugin binary resolves
@@ -14,7 +14,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from synth_setter.data.vst.param_spec_registry import default_plugin_path, preset_paths
+from synth_setter.data.vst.param_spec_registry import default_plugin_path, plugin_state_paths
 
 # ``or`` (not a ``get`` default) so an empty override also falls back to Surge XT.
 TEST_SYNTH = os.environ.get("SYNTH_SETTER_TEST_SYNTH") or "surge_xt"
@@ -23,7 +23,7 @@ TEST_PARAM_SPEC_NAME = TEST_SYNTH
 
 # Eager lookup so an unregistered TEST_SYNTH raises KeyError at import rather
 # than letting a downstream render test skip or fail opaquely.
-TEST_PRESET_PATH = preset_paths[TEST_SYNTH]
+TEST_PRESET_PATH = plugin_state_paths[TEST_SYNTH]
 
 # Per-synth renderer pin mirroring ``configs/render/<synth>.yaml`` (the value
 # ``generate_dataset`` cross-checks against the plugin), so the synth-agnostic

@@ -153,7 +153,7 @@ def test_register_render_config_pins_relative_plugin_path_and_version(
     cfg = OmegaConf.load(checkout / "src/synth_setter/configs/render/fake_synth.yaml")
     assert cfg.plugin_path == "plugins/fake.vst3"
     assert cfg.param_spec_name == "fake_synth"
-    assert cfg.preset_path == "presets/fake_synth-base.vstpreset"
+    assert cfg.plugin_state_path == "presets/fake_synth-base.vstpreset"
     assert cfg.renderer_version == "9.9.9"
 
 
@@ -475,14 +475,14 @@ def test_register_end_to_end_wires_a_runnable_synth_into_a_full_checkout_copy(
     probe = textwrap.dedent(
         """
         import json
-        from synth_setter.data.vst.param_spec_registry import param_specs, preset_paths
+        from synth_setter.data.vst.param_spec_registry import param_specs, plugin_state_paths
 
         spec = param_specs["fake_synth"]
         synth_params, note_params = spec.sample()
         print(
             json.dumps(
                 {
-                    "preset_path": preset_paths["fake_synth"],
+                    "plugin_state_path": plugin_state_paths["fake_synth"],
                     "encoded_width": len(spec),
                     "sampled_synth_params": sorted(synth_params),
                     "sampled_note_params": sorted(note_params),
@@ -497,7 +497,7 @@ def test_register_end_to_end_wires_a_runnable_synth_into_a_full_checkout_copy(
     )
     assert proc.returncode == 0, proc.stderr
     report = json.loads(proc.stdout)
-    assert report["preset_path"] == "presets/fake_synth-base.vstpreset"
+    assert report["plugin_state_path"] == "presets/fake_synth-base.vstpreset"
 
     spec_source = (root / "src/synth_setter/data/vst/fake_synth_param_spec.py").read_text()
     expected_width = len(exec_module(spec_source)["FAKE_SYNTH_PARAM_SPEC"])
@@ -514,5 +514,5 @@ def test_register_end_to_end_wires_a_runnable_synth_into_a_full_checkout_copy(
     render = RenderConfig(**{k: v for k, v in raw.items() if isinstance(k, str)})
     assert render.param_spec_name == "fake_synth"
     assert render.plugin_path == "plugins/fake.vst3"
-    assert render.preset_path == "presets/fake_synth-base.vstpreset"
+    assert render.plugin_state_path == "presets/fake_synth-base.vstpreset"
     assert render.renderer_version == "9.9.9"
