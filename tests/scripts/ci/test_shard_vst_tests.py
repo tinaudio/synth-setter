@@ -10,7 +10,11 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import tempfile
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -72,21 +76,16 @@ def test_build_matrix_raises_on_non_positive_splits() -> None:
         build_matrix(["tests/a.py"], splits=0)
 
 
-def test_main_writes_matrix_to_github_output(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """``main`` appends a ``matrix=<json>`` line to ``$GITHUB_OUTPUT`` and exits 0.
-
-    :param monkeypatch: sets ``GITHUB_OUTPUT`` and feeds collected IDs on stdin.
-    :param tmp_path: holds the fake ``GITHUB_OUTPUT`` file.
-    """
-    output = tmp_path / "gh_output"
-    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
-    monkeypatch.setattr("sys.stdin", io.StringIO(_COLLECTED))
-
-    assert main(["--splits", "2"]) == 0
-
-    line = output.read_text(encoding="utf-8").strip()
+def test_main_appends_matrix_line_to_github_output_file() -> None:
+    """With ``$GITHUB_OUTPUT`` set, ``main`` appends the ``matrix=`` line and returns 0."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_path = os.path.join(tmpdir, "gh_output")
+        with (
+            patch.dict(os.environ, {"GITHUB_OUTPUT": output_path}),
+            patch("sys.stdin", io.StringIO(_COLLECTED)),
+        ):
+            assert main(["--splits", "2"]) == 0
+        line = Path(output_path).read_text(encoding="utf-8").strip()
     assert line.startswith("matrix=")
     matrix = json.loads(line[len("matrix=") :])
     files_across_shards = " ".join(cell["files"] for cell in matrix["include"])
@@ -94,15 +93,20 @@ def test_main_writes_matrix_to_github_output(
     assert "tests/tools/test_c.py" in files_across_shards
 
 
-def test_main_exits_nonzero_when_no_tests_collected(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """A collection with no ``requires_vst`` node IDs fails ``main`` with exit 1.
+def test_main_prints_matrix_to_stdout_when_github_output_unset() -> None:
+    """Without ``$GITHUB_OUTPUT``, ``main`` prints the ``matrix=`` line to stdout."""
+    env_without_output = {k: v for k, v in os.environ.items() if k != "GITHUB_OUTPUT"}
+    captured = io.StringIO()
+    with (
+        patch.dict(os.environ, env_without_output, clear=True),
+        patch("sys.stdin", io.StringIO(_COLLECTED)),
+        redirect_stdout(captured),
+    ):
+        assert main(["--splits", "2"]) == 0
+    assert captured.getvalue().strip().startswith("matrix=")
 
-    :param monkeypatch: sets ``GITHUB_OUTPUT`` and feeds an empty collection.
-    :param tmp_path: holds the fake ``GITHUB_OUTPUT`` file.
-    """
-    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "gh_output"))
-    monkeypatch.setattr("sys.stdin", io.StringIO("0 tests collected\n"))
 
-    assert main(["--splits", "4"]) == 1
+def test_main_returns_one_when_no_tests_collected() -> None:
+    """A collection with no ``requires_vst`` node IDs makes ``main`` return 1."""
+    with patch("sys.stdin", io.StringIO("0 tests collected\n")):
+        assert main(["--splits", "4"]) == 1

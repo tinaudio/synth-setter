@@ -18,6 +18,10 @@ import argparse
 import json
 import os
 import sys
+from typing import TypeAlias
+
+#: A GitHub Actions matrix object: ``{"include": [{"shard": n, "files": str}]}``.
+Matrix: TypeAlias = dict[str, list[dict[str, object]]]
 
 
 def collect_test_files(collected: str) -> list[str]:
@@ -36,11 +40,15 @@ def collect_test_files(collected: str) -> list[str]:
     )
 
 
-def build_matrix(files: list[str], splits: int) -> dict[str, list[dict[str, object]]]:
+def build_matrix(files: list[str], splits: int) -> Matrix:
     """Round-robin ``files`` into ``splits`` shards as a GHA matrix object.
 
+    Shard files are space-joined and split back with ``read -ra`` in the
+    workflow, so a path containing a space would corrupt the shard; test paths
+    never contain spaces.
+
     :param files: test files to distribute (order preserved within a shard).
-    :param splits: number of shards to spread the files across.
+    :param splits: shard count; must be >= 1.
     :returns: ``{"include": [{"shard": n, "files": "a.py b.py"}, ...]}``; shards
         left empty (fewer files than splits) are omitted.
     :raises ValueError: if ``splits`` < 1, or ``files`` is empty — an empty
@@ -59,10 +67,10 @@ def build_matrix(files: list[str], splits: int) -> dict[str, list[dict[str, obje
     return {"include": include}
 
 
-def _emit_matrix(matrix: dict[str, list[dict[str, object]]]) -> None:
+def _emit_matrix(matrix: Matrix) -> None:
     """Write ``matrix=<json>`` to ``$GITHUB_OUTPUT`` when set, else to stdout.
 
-    :param matrix: the GHA matrix object to serialize.
+    :param matrix: matrix to serialize under the ``matrix`` step-output key.
     """
     payload = "matrix=" + json.dumps(matrix)
     output_path = os.environ.get("GITHUB_OUTPUT")

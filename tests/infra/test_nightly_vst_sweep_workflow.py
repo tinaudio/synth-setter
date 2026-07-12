@@ -18,7 +18,8 @@ _WORKFLOW_PATH = _PROJECT_ROOT / ".github" / "workflows" / _WORKFLOW
 _WORKFLOW_TEXT = _WORKFLOW_PATH.read_text(encoding="utf-8")
 _WORKFLOW_YAML = load_workflow(_PROJECT_ROOT, _WORKFLOW)
 
-# The canonical marker: every ``requires_vst`` test on CPU, gpu/mps excluded.
+# Kept in sync with ``make test-vst-cpu`` by
+# test_marker_env_matches_the_makefile_source_of_truth below.
 _CANONICAL_MARKER = "requires_vst and not gpu and not mps"
 
 
@@ -75,7 +76,8 @@ def test_matrix_is_built_from_collected_ids_by_the_shard_script() -> None:
     """The matrix step delegates to the tested shard builder, not inline logic."""
     build = _step_run("discover", "Build shard matrix")
     assert "scripts/ci/shard_vst_tests.py" in build
-    assert "COLLECTED" in build
+    assert '--splits "$SHARD_TOTAL"' in build
+    assert '"$COLLECTED"' in build
 
 
 @pytest.mark.infra
