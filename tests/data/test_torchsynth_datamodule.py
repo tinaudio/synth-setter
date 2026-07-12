@@ -182,6 +182,25 @@ def test_render_torchsynth_concurrent_calls_match_serial_results() -> None:
         assert torch.equal(concurrent, serial)
 
 
+def test_render_torchsynth_non_finite_params_raise() -> None:
+    """NaN or Inf parameter values are contract violations, not silently coerced."""
+    for bad_value in (float("nan"), float("inf"), float("-inf")):
+        params = torch.full((1, 76), 0.5)
+        params[0, 3] = bad_value
+        with pytest.raises(ValueError, match="params must be finite"):
+            render_torchsynth(params, **_RENDER_KWARGS)
+
+
+def test_render_torchsynth_out_of_range_params_clamp_to_valid_domain() -> None:
+    """Finite out-of-range params (raw model predictions) render as their clamped equivalents."""
+    wild = torch.full((1, 76), 1.5)
+    wild[0, ::2] = -0.5
+    clamped = wild.clamp(1e-4, 1 - 1e-4)
+    assert torch.equal(
+        render_torchsynth(wild, **_RENDER_KWARGS), render_torchsynth(clamped, **_RENDER_KWARGS)
+    )
+
+
 def test_render_torchsynth_wrong_parameter_width_raises() -> None:
     """Reject parameter rows that do not match the native TorchSynth voice."""
     with pytest.raises(ValueError, match="Expected 76 TorchSynth parameters"):

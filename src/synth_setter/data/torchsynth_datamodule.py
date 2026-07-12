@@ -32,9 +32,9 @@ TorchSynthBatch: TypeAlias = tuple[
 ]
 # The odd 64-bit golden-ratio multiplier diffuses nearby split seeds into distinct RNG streams.
 _SEED_MIXER = 0x9E3779B97F4A7C15
-# Params must stay strictly inside the open interval (0, 1): NaNs collapse to the
-# midpoint and every value is clamped away from the endpoints before rendering.
-_NAN_PARAM_FILL = 0.5
+# Params must stay strictly inside the open interval (0, 1). Finite out-of-range
+# values are expected (raw model predictions are unconstrained) and clamp away from
+# the endpoints; NaN/Inf signal divergence or a pipeline bug and raise instead.
 _PARAM_CLAMP_EPS = 1e-4
 
 
@@ -301,13 +301,17 @@ def render_torchsynth(
 ) -> torch.Tensor:
     """Render normalized TorchSynth parameters into a mono audio batch.
 
-    :param params: Normalized parameter rows in TorchSynth's native order.
+    :param params: Finite parameter rows in TorchSynth's native order; values are
+        clamped strictly inside ``(0, 1)``.
     :param sample_rate: Audio sample rate in Hz.
     :param signal_length: Number of output samples.
     :param midi_pitch: Fixed MIDI note rendered for every parameter row.
     :returns: Audio shaped ``(batch, signal_length)``.
-    :raises ValueError: The parameter width or rendered audio violates the data contract.
+    :raises ValueError: The parameter width, a non-finite parameter, or the rendered
+        audio violates the data contract.
     """
+    if not torch.isfinite(params).all():
+        raise ValueError("TorchSynth params must be finite")
     renderer = _make_renderer(sample_rate, signal_length, len(params), str(params.device))
     voice = renderer.voice
     with renderer.lock:
@@ -318,9 +322,7 @@ def render_torchsynth(
             )
         native = [all_parameters[(spec.module, spec.name)] for spec in INFERABLE_SPEC]
         for values, parameter in zip(params.T, native, strict=True):
-            parameter.data.copy_(
-                values.nan_to_num(_NAN_PARAM_FILL).clamp(_PARAM_CLAMP_EPS, 1 - _PARAM_CLAMP_EPS)
-            )
+            parameter.data.copy_(values.clamp(_PARAM_CLAMP_EPS, 1 - _PARAM_CLAMP_EPS))
         for name, value in (
             ("midi_f0", float(midi_pitch)),
             ("duration", signal_length / sample_rate),
