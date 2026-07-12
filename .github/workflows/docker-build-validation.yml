@@ -44,9 +44,8 @@ on:
       - "pyproject.toml"
       - "tests/docker/**"
 
-# Supersede queued/running builds when a PR is force-pushed — these builds run
-# 30-60 min and duplicates clog the runner queue. Push/dispatch runs keep a
-# unique group (run_id) so main builds are never cancelled mid-push.
+# Force-push cancels the PR's stale build (30-60 min each, would otherwise queue);
+# push/dispatch runs get a unique run_id group so main builds are never cancelled.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -79,7 +78,7 @@ jobs:
           df -h /
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
             /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
-          sudo docker image prune --all --force
+          sudo docker image prune --all --force || true
           df -h /
           free -h
           nproc
@@ -196,7 +195,7 @@ jobs:
           df -h /
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
             /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
-          sudo docker image prune --all --force
+          sudo docker image prune --all --force || true
           df -h /
           free -h
           nproc
