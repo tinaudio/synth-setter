@@ -100,8 +100,7 @@ def _params_in_order(loader: torch.utils.data.DataLoader) -> np.ndarray:
 
 
 class TestPrepareBatchCollate:
-    """The collate owns per-batch semantics for the map path: it must be a
-    faithful, picklable bridge into ``prepare_batch``."""
+    """The map path's per-batch semantics owner: a picklable bridge into ``prepare_batch``."""
 
     def _raw_batch(self, num_rows: int = 4) -> dict[str, torch.Tensor]:
         """Build the pre-collated tensor dict ``LanceMapDataset.__getitems__`` yields.
@@ -147,9 +146,7 @@ class TestPrepareBatchCollate:
     def test_collate_rescale_params_centers_to_minus_one_one(self) -> None:
         """``rescale_params=True`` applies ``p * 2 - 1`` element-wise."""
         raw = self._raw_batch()
-        plain = PrepareBatchCollate(mean=None, std=None, rescale_params=False, ot=False)(
-            dict(raw)
-        )
+        plain = PrepareBatchCollate(mean=None, std=None, rescale_params=False, ot=False)(dict(raw))
         rescaled = PrepareBatchCollate(mean=None, std=None, rescale_params=True, ot=False)(
             dict(raw)
         )
@@ -172,7 +169,9 @@ class TestPrepareBatchCollate:
         """Spawn workers pickle the collate; it must survive even after first use."""
         collate = PrepareBatchCollate(mean=None, std=None, rescale_params=False, ot=False)
         collate(self._raw_batch())  # materialize the lazy generator before pickling
-        clone = pickle.loads(pickle.dumps(collate))
+        # S301: round-trips a trusted in-process object to pin spawn-worker
+        # pickling; no untrusted data is deserialized.
+        clone = pickle.loads(pickle.dumps(collate))  # noqa: S301
         batch = clone(self._raw_batch())
         assert _unwrap(batch["noise"]).shape == (4, NUM_PARAMS)
 
@@ -244,6 +243,34 @@ class TestLanceMapDataModuleSetup:
         with pytest.raises(FileNotFoundError, match="stats.npz"):
             module.setup()
 
+    def test_map_unregistered_param_spec_raises_at_setup(self, dataset_root: Path) -> None:
+        """Legacy parity: an unregistered ``param_spec_name`` fails fast at setup.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        module = LanceVSTDataModule(
+            dataset_root=dataset_root, batch_size=2, loader="map", param_spec_name="no-such-spec"
+        )
+        with pytest.raises(KeyError, match="no-such-spec"):
+            module.setup()
+
+    def test_map_teardown_then_setup_serves_batches_again(self, dataset_root: Path) -> None:
+        """A teardown/setup cycle rebuilds working splits (Lightning reuses modules).
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        module = LanceVSTDataModule(
+            dataset_root=dataset_root, batch_size=2, loader="map", num_workers=0, pin_memory=False
+        )
+        module.setup()
+        module.teardown()
+        module.setup()
+        try:
+            batch = next(iter(module.val_dataloader()))
+            assert _unwrap(batch["params"]).shape == (2, NUM_PARAMS)
+        finally:
+            module.teardown()
+
 
 class TestLanceMapDataModuleFlows:
     """Dataloader semantics per Lightning flow: train / val / test / predict."""
@@ -253,8 +280,7 @@ class TestLanceMapDataModuleFlows:
     ) -> None:
         """Sequential val iteration returns exactly the written rows, tail included.
 
-        The map path keeps the ragged final batch (6 rows, batch 4 -> [4, 2]) instead of legacy's
-        floor-divide drop.
+        The map path keeps the ragged final batch instead of legacy's floor-divide drop.
 
         :param dataset_root: Fixture-provided dataset-root directory.
         """
@@ -339,6 +365,29 @@ class TestLanceMapDataModuleFlows:
             mel = _unwrap(next(iter(module.val_dataloader()))["mel_spec"])
         assert torch.allclose(mel, torch.full_like(mel, 1.0))
 
+    def test_predict_file_outside_root_uses_its_own_stats(self, tmp_path: Path) -> None:
+        """A ``predict_file`` in another directory normalizes with that directory's stats.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        root = tmp_path / "data"
+        root.mkdir()
+        for split in ("train", "val", "test"):
+            write_seeded_lance_shard(root / f"{split}.lance", num_rows=4)
+        write_mel_stats(root, mean=0.0, std=1.0)
+        predict_dir = tmp_path / "capture"
+        predict_dir.mkdir()
+        write_seeded_lance_shard(predict_dir / "predict.lance", num_rows=4, mel_fill=3.0)
+        write_mel_stats(predict_dir, mean=1.0, std=2.0)
+        with _set_up_map_module(
+            dataset_root=root,
+            batch_size=2,
+            ot=False,
+            predict_file=predict_dir / "predict.lance",
+        ) as module:
+            mel = _unwrap(next(iter(module.predict_dataloader()))["mel_spec"])
+        assert torch.allclose(mel, torch.full_like(mel, 1.0))
+
     def test_batches_are_float32_contiguous_and_writable(self, dataset_root: Path) -> None:
         """Model-batch tensors own writable memory out of the Arrow decode path.
 
@@ -384,6 +433,41 @@ class TestLanceMapDataModuleModes:
         assert len(batches) == 4
         for batch in batches:
             np.testing.assert_array_equal(_unwrap(batch["params"]).numpy(), first_rows)
+
+    def test_repeat_first_batch_drops_ragged_tail(self, dataset_root: Path) -> None:
+        """A row count not divisible by ``batch_size`` never yields a truncated repeat.
+
+        Legacy floor-divides the row count, so the repeated batch must always
+        be the full first ``batch_size`` rows — a 16-row split at batch 5 gives
+        three full batches, not ``[5, 5, 5, 1]``.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        first_rows = make_shard_columns(16, seed=1)["param_array"][:5] * 2 - 1
+        with _set_up_map_module(
+            dataset_root=dataset_root, batch_size=5, ot=False, repeat_first_batch=True
+        ) as module:
+            batches = list(module.train_dataloader())
+        assert [len(_unwrap(b["params"])) for b in batches] == [5, 5, 5]
+        for batch in batches:
+            np.testing.assert_array_equal(_unwrap(batch["params"]).numpy(), first_rows)
+
+    def test_repeat_first_batch_folds_val_but_never_predict(self, dataset_root: Path) -> None:
+        """Eval splits repeat the first batch like legacy; predict stays unfolded.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        val_first = make_shard_columns(6, seed=2)["param_array"][:3] * 2 - 1
+        test_source = make_shard_columns(6, seed=3)["param_array"] * 2 - 1
+        with _set_up_map_module(
+            dataset_root=dataset_root, batch_size=3, ot=False, repeat_first_batch=True
+        ) as module:
+            for batch in module.val_dataloader():
+                np.testing.assert_array_equal(_unwrap(batch["params"]).numpy(), val_first)
+            # predict defaults to the test split; unfolded means source order.
+            np.testing.assert_array_equal(
+                _params_in_order(module.predict_dataloader()), test_source
+            )
 
     @pytest.mark.slow
     def test_val_loader_spawn_workers_match_in_process(self, dataset_root: Path) -> None:
@@ -485,8 +569,7 @@ class _FlowProbe(LightningModule):
 
 
 class TestTrainerFlowsAcrossParamSpecs:
-    """Fit / validate / test / predict through a real Lightning Trainer, one
-    run per registered synth param spec."""
+    """Fit/validate/test/predict through a real Trainer, one run per registered param spec."""
 
     @pytest.mark.parametrize("param_spec_name", sorted(param_specs))
     def test_all_trainer_flows_run_on_map_loader(
@@ -501,7 +584,9 @@ class TestTrainerFlowsAcrossParamSpecs:
         root = tmp_path / "data"
         root.mkdir()
         for seed, split in enumerate(("train", "val", "test")):
-            write_seeded_lance_shard(root / f"{split}.lance", num_rows=4, num_params=num_params, seed=seed)
+            write_seeded_lance_shard(
+                root / f"{split}.lance", num_rows=4, num_params=num_params, seed=seed
+            )
         write_mel_stats(root)
 
         with _set_up_map_module(

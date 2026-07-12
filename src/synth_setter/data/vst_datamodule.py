@@ -1,4 +1,5 @@
-import random
+"""VST shard dataloading: batch-indexed datasets, samplers, and the shared ``prepare_batch``."""
+
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import ClassVar, Literal, NotRequired, Protocol, TypedDict
@@ -149,7 +150,7 @@ class ShardFile(Protocol):
         ...
 
     def __bool__(self) -> bool:
-        """True while open, False after ``close`` — the teardown tests' contract.
+        """Report True while open, False after ``close`` — the teardown tests' contract.
 
         :return: Whether the shard is still open.
         """
@@ -509,7 +510,9 @@ class ShiftedBatchSampler(torch.utils.data.BatchSampler):
         :yield: A ``(start, stop)`` index pair for one batch.
         :ytype: tuple[int, int]
         """
-        offset = random.randint(0, self.batch_size - 1)
+        # np.random (not the random module): consistent with the permutation
+        # below, and seed_everything seeds NumPy the same way.
+        offset = int(np.random.randint(0, self.batch_size))
         perm = np.random.permutation(self.num_batches - 1)
         for i in perm:
             yield (i * self.batch_size + offset, (i + 1) * self.batch_size + offset)

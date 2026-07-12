@@ -27,6 +27,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from synth_setter.data.lance_torch import LanceMapDataset, map_dataloader_over
+from synth_setter.data.vst.param_spec_registry import param_specs
 from synth_setter.data.vst_datamodule import (
     RawBatch,
     VSTDataModule,
@@ -253,36 +254,37 @@ class PrepareBatchCollate:
 
 
 class _RepeatFirstBatchSampler(torch.utils.data.Sampler):
-    """Yield every row index folded into ``[0, batch_size)``, keeping the epoch length.
+    """Yield row indices folded into ``[0, batch_size)``, in full batches only.
 
     Sample-indexed re-expression of ``repeat_first_batch``: under the loader's
     sequential batching, every yielded batch is exactly rows ``[0, batch_size)``
-    in order, preserving the legacy overfit-one-batch debugging intent without
-    any shuffle coupling in the dataloader methods.
+    in order. The index count is floored to a multiple of ``batch_size`` —
+    legacy floor-divides the row count, so the repeated batch is never a
+    truncated tail. Debug-only (overfit-one-batch); not DDP-aware.
     """
 
     def __init__(self, num_rows: int, batch_size: int) -> None:
         """Fix the epoch geometry the sampler folds.
 
-        :param num_rows: Dataset row count — the number of indices per epoch.
+        :param num_rows: Dataset row count; floored to full batches.
         :param batch_size: Row modulus every index is folded into.
         """
-        self._num_rows = num_rows
+        self._num_indices = num_rows - num_rows % batch_size
         self._batch_size = batch_size
 
     def __len__(self) -> int:
-        """Return the number of indices per epoch (the full row count).
+        """Return the number of indices per epoch.
 
-        :returns: Dataset row count.
+        :returns: Row count floored to a multiple of the batch size.
         """
-        return self._num_rows
+        return self._num_indices
 
     def __iter__(self) -> Iterator[int]:
         """Yield the folded index sequence for one epoch.
 
         :yields int: The next row index, always within ``[0, batch_size)``.
         """
-        for i in range(self._num_rows):
+        for i in range(self._num_indices):
             yield i % self._batch_size
 
 
@@ -302,9 +304,9 @@ class LanceVSTDataModule(VSTDataModule):
     ``loader`` selects the read path: ``"legacy"`` keeps the batch-indexed
     ``LanceVSTDataset`` adapter; ``"map"`` builds a sample-indexed
     :class:`LanceMapDataset` per split behind standard ``DataLoader``
-    semantics (``shuffle`` on train, ragged final batch kept, DDP via
-    Lightning's ``DistributedSampler`` injection). Fake mode always uses the
-    legacy path — it synthesizes batches in memory and never touches Lance.
+    semantics (``shuffle`` on train, ragged final batch kept). Fake mode
+    always uses the legacy path — it synthesizes batches in memory and never
+    touches Lance.
 
     .. attribute :: dataset_cls
 
@@ -329,9 +331,9 @@ class LanceVSTDataModule(VSTDataModule):
         :param \\*\\*kwargs: Keyword ``VSTDataModule`` arguments.
         :raises ValueError: If ``loader`` names an unknown read path.
         """
-        super().__init__(*args, **kwargs)
         if loader not in ("legacy", "map"):
             raise ValueError(f"loader must be 'legacy' or 'map', got {loader!r}")
+        super().__init__(*args, **kwargs)
         self.loader = loader
         self._map_splits: dict[str, _MapSplit] = {}
 
@@ -374,10 +376,15 @@ class LanceVSTDataModule(VSTDataModule):
 
         :param stage: Lightning stage hint; unused because every split is constructed eagerly
             (matching the legacy path).
+        :raises KeyError: If ``param_spec_name`` is not in the registry.
         """
         if not self._map_mode:
             super().setup(stage)
             return
+        # Legacy-parity fail-fast: an unregistered param_spec_name must error
+        # at setup, not surface later as a silent width mismatch.
+        if self.param_spec_name not in param_specs:
+            raise KeyError(f"unregistered param_spec_name: {self.param_spec_name!r}")
         train_shard = self.dataset_root / f"train{self.shard_suffix}"
         split_stats = predict_stats = None
         if self.use_saved_mean_and_variance:
