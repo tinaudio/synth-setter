@@ -183,11 +183,13 @@ most-severe first.
 | 8   | **Ignored failures** | Return code / error result discarded where failure must stop the flow        | BLOCK    |
 | 9   | **Concurrency**      | Race / non-atomic read-modify-write on shared state; bad ordering assumption | BLOCK    |
 | 10  | **Broken contract**  | Change violates an invariant a caller depends on (type/units/order/raises)   | BLOCK    |
-| 11  | **Reachability**     | BLOCK only if the trigger is reachable today; else WARN (latent)             | WARN     |
-| 12  | **Scenario cited**   | Every finding names concrete inputs → wrong result; unscenario'd → dropped   | BLOCK    |
 
-BLOCK = must fix before merge · WARN = advisory. This reviewer defaults to
-BLOCK for any genuine correctness defect.
+Each row is a correctness-defect class and defaults to **BLOCK** — this reviewer
+does not downgrade a genuine defect to WARN. Two cross-cutting disciplines from
+the steps above govern how a row's severity is finally set: a defect is BLOCK
+only when its trigger is **reachable today** (else WARN — latent; Step 3.4), and
+**every** finding must cite a concrete failure scenario or it is dropped
+(Step 2 / the Posture section). BLOCK = must fix before merge · WARN = advisory.
 
 ## Notes
 
