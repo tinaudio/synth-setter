@@ -561,6 +561,7 @@ FROM dev-base AS devcontainer-tools
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
+      bubblewrap \
       curl \
       tmux \
   && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
@@ -569,16 +570,17 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
       > /etc/apt/sources.list.d/github-cli.list \
   && apt-get update && apt-get install -y --no-install-recommends gh
 
-# --- Node.js (system-wide) ---
-# CLI agents (claude-code, codex) install per-user below: a root-owned /usr/local/bin
-# copy would shadow dev's auto-updated ~/.npm-global copy in PATH, pinning the version.
+# Install Node.js and the system Codex CLI.
+ARG CODEX_VERSION=latest
 COPY --from=node:20-bullseye-slim /usr/local/bin/node /usr/local/bin/node
 COPY --from=node:20-bullseye-slim /usr/local/lib/node_modules /usr/local/lib/node_modules
 
 RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
  && ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
  && node --version \
- && npm --version
+ && npm --version \
+ && npm install -g "@openai/codex@${CODEX_VERSION}" \
+ && codex --version
 
 # Zellij terminal multiplexer (https://github.com/zellij-org/zellij) — not in
 # the Ubuntu 22.04 apt repos, so install the upstream static musl binary,
@@ -636,11 +638,11 @@ ENV WANDB_DATA_DIR="/home/${USERNAME}/.cache/wandb"
 # claude-code in place. $HOME is unset after USER, so export it per-RUN (not ENV —
 # that leaks to root sessions).
 ARG CLAUDE_CODE_VERSION=latest
-ARG CODEX_VERSION=latest
 RUN export HOME="/home/${USERNAME}" \
  && npm config set prefix "/home/${USERNAME}/.npm-global" \
  && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
- && npm install -g "@openai/codex@${CODEX_VERSION}" \
+ && mkdir -p "/home/${USERNAME}/.npm-global/bin" \
+ && ln -sfn /usr/local/bin/codex "/home/${USERNAME}/.npm-global/bin/codex" \
  && npm cache clean --force \
  && claude --version \
  && codex --version

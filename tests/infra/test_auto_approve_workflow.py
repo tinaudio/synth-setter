@@ -20,11 +20,11 @@ def test_cancelled_checks_keep_auto_approve_status_neutral(project_root: Path) -
     )
 
     result = subprocess.run(  # noqa: S603 — workflow shell is the behavior under test.
-        [
-            "/usr/bin/bash",
+        [  # noqa: S607 — PATH lookup is required on macOS runners.
+            "bash",
             "-c",
             f'{pending_line}\n{failed_line}\nprintf "%s %s\\n" "$PENDING" "$FAILED"',
-        ],  # noqa: S607 — fixed system binary.
+        ],
         env={"CHECK_DATA": "completed cancelled VST slow tests"},
         capture_output=True,
         check=True,
