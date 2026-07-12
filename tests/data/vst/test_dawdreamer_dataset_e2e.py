@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal, cast
+from typing import cast
 
 import h5py
 import numpy as np
 import pytest
+from hydra import compose, initialize_config_module
+from omegaconf import OmegaConf
 
 from synth_setter.data.vst.writers import make_hdf5_dataset
 from synth_setter.data.vst.renderers import DawDreamerRenderer, PedalboardRenderer
@@ -17,25 +19,25 @@ from tests.data.vst.test_generate_vst_dataset import _HARDCODED_NOTE_PARAMS, _HA
 from tests._vst import PLUGIN_PATH, TEST_PARAM_SPEC_NAME, TEST_PRESET_PATH, TEST_RENDERER_VERSION, TEST_SYNTH
 
 
-def _config(backend: Literal["pedalboard", "dawdreamer"]) -> RenderConfig:
-    return RenderConfig(
-        plugin_path=PLUGIN_PATH,
-        preset_path=TEST_PRESET_PATH,
-        param_spec_name=TEST_PARAM_SPEC_NAME,
-        renderer_version=TEST_RENDERER_VERSION,
-        renderer_backend=backend,
-        sample_rate=44100,
-        channels=2,
-        velocity=100,
-        signal_duration_seconds=4.0,
-        min_loudness=-55.0,
-        samples_per_render_batch=1,
-        samples_per_shard=1,
-        base_seed=1808,
-        attempts_per_sample=1,
-        plugin_reload_cadence="once",
-        gui_toggle_cadence="never",
-    )
+def _dawdreamer_experiment_config() -> RenderConfig:
+    """Compose the DawDreamer smoke experiment with the test plugin paths.
+
+    :returns: Render configuration selected by the experiment.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="dataset",
+            overrides=[
+                "experiment=generate_dataset/surge-xt-dawdreamer-smoke",
+                f"render.plugin_path={PLUGIN_PATH}",
+                f"render.preset_path={TEST_PRESET_PATH}",
+                f"render.param_spec_name={TEST_PARAM_SPEC_NAME}",
+                f"render.renderer_version={TEST_RENDERER_VERSION}",
+                "render.base_seed=1808",
+                "render.attempts_per_sample=1",
+            ],
+        )
+    return RenderConfig.model_validate(OmegaConf.to_container(cfg.render, resolve=True))
 
 
 @pytest.mark.slow
@@ -48,19 +50,21 @@ def test_dawdreamer_dataset_audio_is_similar_to_pedalboard(tmp_path: Path) -> No
     if TEST_SYNTH != "surge_xt":
         pytest.skip("DawDreamer comparison fixture uses the Surge XT parameter map")
 
+    dawdreamer_config = _dawdreamer_experiment_config()
+    pedalboard_config = dawdreamer_config.model_copy(update={"renderer_backend": "pedalboard"})
     pedalboard_path = tmp_path / "pedalboard.h5"
     dawdreamer_path = tmp_path / "dawdreamer.h5"
     fixed_synth = [_HARDCODED_SYNTH_PARAMS]
     fixed_note = [_HARDCODED_NOTE_PARAMS]
     make_hdf5_dataset(
         pedalboard_path,
-        _config("pedalboard"),
+        pedalboard_config,
         fixed_synth_params_list=fixed_synth,
         fixed_note_params_list=fixed_note,
     )
     make_hdf5_dataset(
         dawdreamer_path,
-        _config("dawdreamer"),
+        dawdreamer_config,
         fixed_synth_params_list=fixed_synth,
         fixed_note_params_list=fixed_note,
     )
@@ -79,11 +83,24 @@ def test_dawdreamer_dataset_audio_is_similar_to_pedalboard(tmp_path: Path) -> No
 
     plugin_path = str(Path(PLUGIN_PATH).resolve())
     preset_path = str(Path(TEST_PRESET_PATH).resolve())
-    pedalboard_audio = PedalboardRenderer(plugin_path, 44100, 2, 4.0, preset_path).render(
-        {}, _HARDCODED_NOTE_PARAMS["pitch"], 100, _HARDCODED_NOTE_PARAMS["note_start_and_end"]
+    renderer_args = (
+        plugin_path,
+        dawdreamer_config.sample_rate,
+        dawdreamer_config.channels,
+        dawdreamer_config.signal_duration_seconds,
+        preset_path,
     )
-    dawdreamer_audio = DawDreamerRenderer(plugin_path, 44100, 2, 4.0, preset_path).render(
-        {}, _HARDCODED_NOTE_PARAMS["pitch"], 100, _HARDCODED_NOTE_PARAMS["note_start_and_end"]
+    pedalboard_audio = PedalboardRenderer(*renderer_args).render(
+        {},
+        _HARDCODED_NOTE_PARAMS["pitch"],
+        dawdreamer_config.velocity,
+        _HARDCODED_NOTE_PARAMS["note_start_and_end"],
+    )
+    dawdreamer_audio = DawDreamerRenderer(*renderer_args).render(
+        {},
+        _HARDCODED_NOTE_PARAMS["pitch"],
+        dawdreamer_config.velocity,
+        _HARDCODED_NOTE_PARAMS["note_start_and_end"],
     )
     assert compute_mss(pedalboard_audio, dawdreamer_audio) < 10.0
     assert compute_wmfcc(pedalboard_audio, dawdreamer_audio) < 18.0
