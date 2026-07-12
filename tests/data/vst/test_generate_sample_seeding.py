@@ -10,6 +10,7 @@ import pytest
 
 from synth_setter.data.vst import generate_vst_dataset, param_specs
 from synth_setter.data.vst.generate_vst_dataset import SampleSeed
+from synth_setter.data.vst.renderers import PedalboardRenderer
 from synth_setter.data.vst.seeding import rng_for_sample
 
 _SPEC_NAME = "surge_xt"
@@ -37,7 +38,15 @@ def _loud_audio() -> np.ndarray:
 
 def _patch_render(monkeypatch: pytest.MonkeyPatch, outputs: list[np.ndarray]) -> None:
     stream = iter(outputs)
-    monkeypatch.setattr(generate_vst_dataset, "render_params", lambda *a, **kw: next(stream))
+    monkeypatch.setattr("synth_setter.data.vst.core.render_params", lambda *a, **kw: next(stream))
+
+
+def _renderer() -> PedalboardRenderer:
+    """Build a renderer backed by the patched core seam.
+
+    :returns: Pedalboard renderer for the test fixture.
+    """
+    return PedalboardRenderer(_PLUGIN_PATH, _SAMPLE_RATE, _CHANNELS, _DURATION, _PRESET_PATH)
 
 
 def _generate(
@@ -52,14 +61,10 @@ def _generate(
         else None
     )
     return generate_vst_dataset.generate_sample(
-        plugin_path=_PLUGIN_PATH,
+        renderer=_renderer(),
         velocity=_VELOCITY,
-        signal_duration_seconds=_DURATION,
-        sample_rate=_SAMPLE_RATE,
-        channels=_CHANNELS,
         min_loudness=_MIN_LOUDNESS,
         param_spec=param_specs[_SPEC_NAME],
-        preset_path=_PRESET_PATH,
         seed=seed,
     )
 

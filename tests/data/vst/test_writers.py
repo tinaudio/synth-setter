@@ -279,7 +279,7 @@ def _stub_render_dependencies(
     def _fake_load_preset(plugin: object, preset: str) -> None:
         load_preset_calls.append({"plugin": plugin, "preset": preset})
 
-    def _fake_generate_sample(_plugin_path: str, **kwargs: object) -> _FakeVSTDataSample:
+    def _fake_generate_sample(**kwargs: object) -> _FakeVSTDataSample:
         captured.append(dict(kwargs))
         return _FakeVSTDataSample()
 
@@ -310,7 +310,7 @@ def test_render_in_batches_shard_cadence_reuses_first_sample_params(
     returned: list[MagicMock] = []
     captured: list[dict[str, object]] = []
 
-    def _fake_generate_sample(_plugin_path: str, **kwargs: object) -> MagicMock:
+    def _fake_generate_sample(**kwargs: object) -> MagicMock:
         captured.append(dict(kwargs))
         sample = MagicMock(name=f"sample_{len(returned)}")
         returned.append(sample)
@@ -381,7 +381,7 @@ def test_render_in_batches_shard_cadence_seeds_single_patch_from_caller_row_zero
     )
     captured: list[dict[str, object]] = []
 
-    def _fake_generate_sample(_plugin_path: str, **kwargs: object) -> MagicMock:
+    def _fake_generate_sample(**kwargs: object) -> MagicMock:
         captured.append(dict(kwargs))
         sample = MagicMock(name=f"sample_{len(captured)}")
         # Mirror the real renderer: the sample reports the params it rendered with, so shard
@@ -512,7 +512,7 @@ def test_render_in_batches_caches_plugin_when_reload_cadence_is_once(
     assert len(captured) == n
     cached = cached_plugin_holder[0]
     for call_kwargs in captured:
-        assert call_kwargs["plugin"] is cached
+        assert getattr(call_kwargs["renderer"], "plugin") is cached
     assert sum(len(batch) for batch, _ in flushed) == n
 
 
@@ -552,7 +552,7 @@ def test_render_in_batches_reloads_plugin_per_render_when_reload_cadence_is_rend
     assert load_preset_calls == []
     assert len(captured) == n
     for call_kwargs in captured:
-        assert call_kwargs["plugin"] is None
+        assert getattr(call_kwargs["renderer"], "plugin") is None
         assert call_kwargs["warmup"] is False
 
 
@@ -825,7 +825,7 @@ def test_render_in_batches_once_once_warms_once_and_caches_plugin(
     cached = cached_plugin_holder[0]
     assert sum(1 for c in captured if c["warmup"] is True) == 1
     for call_kwargs in captured:
-        assert call_kwargs["plugin"] is cached
+        assert getattr(call_kwargs["renderer"], "plugin") is cached
 
 
 def test_render_in_batches_once_render_warms_every_render_with_cached_plugin(
@@ -866,7 +866,7 @@ def test_render_in_batches_once_render_warms_every_render_with_cached_plugin(
     cached = cached_plugin_holder[0]
     assert sum(1 for c in captured if c["warmup"] is True) == n
     for call_kwargs in captured:
-        assert call_kwargs["plugin"] is cached
+        assert getattr(call_kwargs["renderer"], "plugin") is cached
 
 
 # Writer-level cross-cut: the previous tests stub ``generate_sample`` itself,
@@ -952,7 +952,7 @@ def _install_writer_level_fakes(
     fake_spec.sample.return_value = fake_spec_payload
     fake_spec.encode.return_value = np.zeros((4,), dtype=np.float32)
 
-    monkeypatch.setattr(generate_vst_dataset, "render_params", _fake_render_params)
+    monkeypatch.setattr("synth_setter.data.vst.core.render_params", _fake_render_params)
     monkeypatch.setattr(
         generate_vst_dataset,
         "make_spectrogram",

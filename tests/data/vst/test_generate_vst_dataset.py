@@ -24,6 +24,7 @@ from synth_setter.data.vst import param_specs
 from synth_setter.data.vst.core import load_plugin, load_preset, render_params
 from synth_setter.data.vst.generate_vst_dataset import fixed_params_from_dataset
 from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
+from synth_setter.data.vst.renderers import PedalboardRenderer
 from synth_setter.data.vst.shapes import PARAM_ARRAY_FIELD
 from synth_setter.data.vst.writers import make_hdf5_dataset
 from synth_setter.evaluation.compute_audio_metrics import (
@@ -1129,6 +1130,14 @@ def _loud_audio() -> np.ndarray:
     return np.stack([sine, sine], axis=0)
 
 
+def _pedalboard_renderer() -> PedalboardRenderer:
+    """Build a renderer backed by the patched core seam.
+
+    :returns: Pedalboard renderer for the test fixture.
+    """
+    return PedalboardRenderer(PLUGIN_PATH, _SAMPLE_RATE, _CHANNELS, _DURATION, _PRESET_PATH)
+
+
 def test_generate_sample_raises_when_fixed_synth_params_renders_silent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1142,18 +1151,14 @@ def test_generate_sample_raises_when_fixed_synth_params_renders_silent(
     from synth_setter.data.vst import generate_vst_dataset
 
     spec = param_specs[_SPEC_NAME]
-    monkeypatch.setattr(generate_vst_dataset, "render_params", lambda *a, **kw: _silent_audio())
+    monkeypatch.setattr("synth_setter.data.vst.core.render_params", lambda *a, **kw: _silent_audio())
 
     with pytest.raises(ValueError, match="fixed_synth_params render produced loudness"):
         generate_vst_dataset.generate_sample(
-            plugin_path=PLUGIN_PATH,
+            renderer=_pedalboard_renderer(),
             velocity=_VELOCITY,
-            signal_duration_seconds=_DURATION,
-            sample_rate=_SAMPLE_RATE,
-            channels=_CHANNELS,
             min_loudness=_MIN_LOUDNESS,
             param_spec=spec,
-            preset_path=_PRESET_PATH,
             fixed_synth_params=_HARDCODED_SYNTH_PARAMS,
             fixed_note_params=None,
         )
@@ -1166,18 +1171,14 @@ def test_generate_sample_raises_when_both_fixed_renders_silent(
     from synth_setter.data.vst import generate_vst_dataset
 
     spec = param_specs[_SPEC_NAME]
-    monkeypatch.setattr(generate_vst_dataset, "render_params", lambda *a, **kw: _silent_audio())
+    monkeypatch.setattr("synth_setter.data.vst.core.render_params", lambda *a, **kw: _silent_audio())
 
     with pytest.raises(ValueError, match="fixed_synth_params render produced loudness"):
         generate_vst_dataset.generate_sample(
-            plugin_path=PLUGIN_PATH,
+            renderer=_pedalboard_renderer(),
             velocity=_VELOCITY,
-            signal_duration_seconds=_DURATION,
-            sample_rate=_SAMPLE_RATE,
-            channels=_CHANNELS,
             min_loudness=_MIN_LOUDNESS,
             param_spec=spec,
-            preset_path=_PRESET_PATH,
             fixed_synth_params=_HARDCODED_SYNTH_PARAMS,
             fixed_note_params=_HARDCODED_NOTE_PARAMS,
         )
@@ -1198,9 +1199,7 @@ def test_generate_sample_retries_when_only_fixed_note_params(
 
     render_outputs = iter([_silent_audio(), _loud_audio()])
     monkeypatch.setattr(
-        generate_vst_dataset,
-        "render_params",
-        lambda *a, **kw: next(render_outputs),
+        "synth_setter.data.vst.core.render_params", lambda *a, **kw: next(render_outputs)
     )
 
     sample_returns = iter(
@@ -1212,14 +1211,10 @@ def test_generate_sample_retries_when_only_fixed_note_params(
     monkeypatch.setattr(spec, "sample", lambda rng=None: next(sample_returns))
 
     sample = generate_vst_dataset.generate_sample(
-        plugin_path=PLUGIN_PATH,
+        renderer=_pedalboard_renderer(),
         velocity=_VELOCITY,
-        signal_duration_seconds=_DURATION,
-        sample_rate=_SAMPLE_RATE,
-        channels=_CHANNELS,
         min_loudness=_MIN_LOUDNESS,
         param_spec=spec,
-        preset_path=_PRESET_PATH,
         fixed_synth_params=None,
         fixed_note_params=_HARDCODED_NOTE_PARAMS,
     )
@@ -1260,7 +1255,7 @@ def _install_fake_render_params(
             warmup_mock()
         return next(render_outputs)
 
-    monkeypatch.setattr(generate_vst_dataset, "render_params", _fake_render_params)
+    monkeypatch.setattr("synth_setter.data.vst.core.render_params", _fake_render_params)
 
     sample_returns = iter([(_HARDCODED_SYNTH_PARAMS, _HARDCODED_NOTE_PARAMS)] * (num_retries + 1))
     monkeypatch.setattr(spec, "sample", lambda rng=None: next(sample_returns))
@@ -1289,14 +1284,10 @@ def test_generate_sample_warmups_once_regardless_of_retries(
     warmup_mock = _install_fake_render_params(monkeypatch, spec, num_retries=num_retries)
 
     generate_vst_dataset.generate_sample(
-        plugin_path=PLUGIN_PATH,
+        renderer=_pedalboard_renderer(),
         velocity=_VELOCITY,
-        signal_duration_seconds=_DURATION,
-        sample_rate=_SAMPLE_RATE,
-        channels=_CHANNELS,
         min_loudness=_MIN_LOUDNESS,
         param_spec=spec,
-        preset_path=_PRESET_PATH,
         fixed_synth_params=None,
         fixed_note_params=_HARDCODED_NOTE_PARAMS,
         warmup=True,
@@ -1323,14 +1314,10 @@ def test_generate_sample_with_warmup_false_never_warms_across_retries(
     warmup_mock = _install_fake_render_params(monkeypatch, spec, num_retries=num_retries)
 
     generate_vst_dataset.generate_sample(
-        plugin_path=PLUGIN_PATH,
+        renderer=_pedalboard_renderer(),
         velocity=_VELOCITY,
-        signal_duration_seconds=_DURATION,
-        sample_rate=_SAMPLE_RATE,
-        channels=_CHANNELS,
         min_loudness=_MIN_LOUDNESS,
         param_spec=spec,
-        preset_path=_PRESET_PATH,
         fixed_synth_params=None,
         fixed_note_params=_HARDCODED_NOTE_PARAMS,
         warmup=False,
@@ -1356,14 +1343,10 @@ def test_generate_sample_with_warmup_true_no_retries_warms_exactly_once(
     warmup_mock = _install_fake_render_params(monkeypatch, spec, num_retries=0)
 
     generate_vst_dataset.generate_sample(
-        plugin_path=PLUGIN_PATH,
+        renderer=_pedalboard_renderer(),
         velocity=_VELOCITY,
-        signal_duration_seconds=_DURATION,
-        sample_rate=_SAMPLE_RATE,
-        channels=_CHANNELS,
         min_loudness=_MIN_LOUDNESS,
         param_spec=spec,
-        preset_path=_PRESET_PATH,
         fixed_synth_params=None,
         fixed_note_params=_HARDCODED_NOTE_PARAMS,
         warmup=True,
@@ -1866,7 +1849,7 @@ def test_make_hdf5_resume_indexes_fixed_params_by_absolute_row(
         seen_synth.append(dict(synth_params))
         return _loud_audio()
 
-    monkeypatch.setattr(generate_vst_dataset, "render_params", _capture_render)
+    monkeypatch.setattr("synth_setter.data.vst.core.render_params", _capture_render)
 
     make_hdf5_dataset(
         hdf5_file=out,
@@ -2057,14 +2040,14 @@ def test_make_hdf5_resume_indexes_note_params_by_absolute_row(
 
     seen_pitch: list[int] = []
 
-    # pitch is the third positional arg generate_sample passes to render_params.
+    # PedalboardRenderer passes pitch as render_params' third positional argument.
     def _capture_render(
         plugin_path: str, synth_params: dict[str, float], pitch: int, *a: object, **kw: object
     ) -> np.ndarray:
         seen_pitch.append(pitch)
         return _loud_audio()
 
-    monkeypatch.setattr(generate_vst_dataset, "render_params", _capture_render)
+    monkeypatch.setattr("synth_setter.data.vst.core.render_params", _capture_render)
 
     make_hdf5_dataset(
         hdf5_file=out,
@@ -2110,7 +2093,7 @@ def test_make_hdf5_resume_preserves_already_written_rows(
         mel_fill=head_mel_fill,
     )
 
-    monkeypatch.setattr(generate_vst_dataset, "render_params", lambda *a, **kw: _loud_audio())
+    monkeypatch.setattr("synth_setter.data.vst.core.render_params", lambda *a, **kw: _loud_audio())
 
     make_hdf5_dataset(hdf5_file=out, render_cfg=_render_cfg(num_samples))
 
@@ -2153,7 +2136,7 @@ def test_make_hdf5_crash_then_resume_copy_reproduces_single_shot_param_array(
     render_cfg = _render_cfg(num_samples, samples_per_render_batch=1)
 
     single_shot = tmp_path / "single_shot.h5"
-    monkeypatch.setattr(generate_vst_dataset, "render_params", lambda *a, **kw: _loud_audio())
+    monkeypatch.setattr("synth_setter.data.vst.core.render_params", lambda *a, **kw: _loud_audio())
     make_hdf5_dataset(
         hdf5_file=single_shot,
         render_cfg=render_cfg,
@@ -2172,7 +2155,7 @@ def test_make_hdf5_crash_then_resume_copy_reproduces_single_shot_param_array(
         return _loud_audio()
 
     resumed = tmp_path / "resumed.h5"
-    monkeypatch.setattr(generate_vst_dataset, "render_params", _crash_after_start_idx)
+    monkeypatch.setattr("synth_setter.data.vst.core.render_params", _crash_after_start_idx)
     with pytest.raises(RuntimeError, match="simulated renderer crash"):
         make_hdf5_dataset(
             hdf5_file=resumed,
@@ -2187,7 +2170,7 @@ def test_make_hdf5_crash_then_resume_copy_reproduces_single_shot_param_array(
         assert isinstance(crashed_param_ds, h5py.Dataset)
         assert generate_vst_dataset.get_first_unwritten_idx(crashed_param_ds) == start_idx
 
-    monkeypatch.setattr(generate_vst_dataset, "render_params", lambda *a, **kw: _loud_audio())
+    monkeypatch.setattr("synth_setter.data.vst.core.render_params", lambda *a, **kw: _loud_audio())
     make_hdf5_dataset(
         hdf5_file=resumed,
         render_cfg=render_cfg,
@@ -2228,7 +2211,7 @@ def test_make_hdf5_rerun_on_complete_shard_renders_nothing(
     def _fail_if_called(*a: object, **kw: object) -> NoReturn:
         raise AssertionError("render_params called on a complete shard")
 
-    monkeypatch.setattr(generate_vst_dataset, "render_params", _fail_if_called)
+    monkeypatch.setattr("synth_setter.data.vst.core.render_params", _fail_if_called)
 
     make_hdf5_dataset(
         hdf5_file=out,
@@ -2268,7 +2251,7 @@ def test_make_hdf5_resume_across_batch_boundary_indexes_by_absolute_row(
     out = tmp_path / "resume_batched.h5"
     _prewrite_resumable_head(out, spec, num_samples, start_idx, full_params[:start_idx])
 
-    monkeypatch.setattr(generate_vst_dataset, "render_params", lambda *a, **kw: _loud_audio())
+    monkeypatch.setattr("synth_setter.data.vst.core.render_params", lambda *a, **kw: _loud_audio())
 
     make_hdf5_dataset(
         hdf5_file=out,
