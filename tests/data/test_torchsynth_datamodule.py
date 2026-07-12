@@ -1,5 +1,6 @@
 """Focused contracts for online TorchSynth sampling and rendering."""
 
+import dataclasses
 import hashlib
 import subprocess
 import sys
@@ -11,14 +12,37 @@ import pytest
 import torch
 
 from synth_setter.data.torchsynth_datamodule import (
+    PARAM_SPEC,
     TorchSynthDataModule,
     TorchSynthDataset,
+    _make_renderer,
+    _spec_from_voice,
+    _verify_voice_matches_spec,
     render_torchsynth,
 )
 from tests.helpers.run_if import RunIf as _RunIf
 
 _RENDER_KWARGS = {"sample_rate": 44_100, "signal_length": 4_410, "midi_pitch": 60}
 RunIf = cast(Callable[..., pytest.MarkDecorator], _RunIf)
+
+
+def test_param_spec_matches_live_voice() -> None:
+    """The checked-in ``PARAM_SPEC`` snapshot equals the spec extracted from a live voice.
+
+    This is the drift test: a torchsynth upgrade that adds, renames, reorders, or
+    re-ranges any voice parameter fails here (and in ``setup()``) instead of silently
+    mislabeling the model's positional targets.
+    """
+    voice = _make_renderer(_RENDER_KWARGS["sample_rate"], _RENDER_KWARGS["signal_length"]).voice
+    assert _spec_from_voice(voice) == PARAM_SPEC
+
+
+def test_verify_voice_against_perturbed_spec_raises_naming_param() -> None:
+    """Verification against a spec with one drifted range fails and names the parameter."""
+    voice = _make_renderer(_RENDER_KWARGS["sample_rate"], _RENDER_KWARGS["signal_length"]).voice
+    perturbed = (dataclasses.replace(PARAM_SPEC[0], maximum=99.0), *PARAM_SPEC[1:])
+    with pytest.raises(ValueError, match="adsr_1"):
+        _verify_voice_matches_spec(voice, spec=perturbed)
 
 
 def test_dataset_same_index_deterministic_different_index_distinct() -> None:
