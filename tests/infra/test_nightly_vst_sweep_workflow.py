@@ -37,15 +37,23 @@ def _step_run(job: str, step_name: str) -> str:
 
 
 @pytest.mark.infra
-def test_marker_env_carries_canonical_requires_vst_filter() -> None:
-    """The workflow-level ``VST_MARKER`` env holds the canonical filter."""
+def test_marker_env_matches_the_makefile_source_of_truth() -> None:
+    """``VST_MARKER`` equals the ``make test-vst-cpu`` marker, so they can't drift.
+
+    Guards the #1353 bug class: the workflow re-spells the marker, so if the Makefile's canonical
+    expression changes this fails until they're re-synced.
+    """
     assert f'VST_MARKER: "{_CANONICAL_MARKER}"' in _WORKFLOW_TEXT
+    makefile = (_PROJECT_ROOT / "Makefile").read_text(encoding="utf-8")
+    assert f'pytest -m "{_CANONICAL_MARKER}"' in makefile, (
+        "workflow VST_MARKER drifted from `make test-vst-cpu`"
+    )
 
 
 @pytest.mark.infra
 def test_discover_and_run_both_select_via_the_shared_marker() -> None:
     """Collection and the per-shard run both filter by ``$VST_MARKER``, not a copy."""
-    collect = _step_run("discover", "Collect requires_vst node IDs")
+    collect = _step_run("discover", "Smoke-test plugins and collect requires_vst tests")
     run = _step_run("vst_sweep", "Run VST sweep shard in Docker")
     assert "--collect-only" in collect and '-m "$VST_MARKER"' in collect
     assert '-m "$VST_MARKER"' in run
@@ -63,17 +71,11 @@ def test_matrix_is_discovered_at_runtime_not_a_static_allowlist() -> None:
 
 
 @pytest.mark.infra
-def test_build_shard_matrix_derives_files_from_collected_output() -> None:
-    """The matrix step builds ``files`` from the collected node IDs, not a constant."""
+def test_matrix_is_built_from_collected_ids_by_the_shard_script() -> None:
+    """The matrix step delegates to the tested shard builder, not inline logic."""
     build = _step_run("discover", "Build shard matrix")
-    assert 'os.environ["COLLECTED"]' in build
-
-
-@pytest.mark.infra
-def test_build_shard_matrix_refuses_an_empty_selection() -> None:
-    """A 0-test collection errors instead of emitting a silently-green matrix."""
-    build = _step_run("discover", "Build shard matrix")
-    assert "refusing to" in build
+    assert "scripts/ci/shard_vst_tests.py" in build
+    assert "COLLECTED" in build
 
 
 @pytest.mark.infra

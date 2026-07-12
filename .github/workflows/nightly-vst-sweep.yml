@@ -42,27 +42,16 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Pull image
-        run: docker pull "$IMAGE"
-
-      # Fail fast on a broken plugin / image / mount layout. Single-line
-      # ``python -c`` — a multi-line body keeps its YAML indent (IndentationError).
-      - name: Smoke-test Surge XT and OB-Xf plugin load
         run: |
-          docker run --rm \
-            -v "${{ github.workspace }}:/home/build/synth-setter" \
-            "$IMAGE" \
-            bash -c '
-              set -euo pipefail
-              cd /home/build/synth-setter
-              git config --global --add safe.directory /home/build/synth-setter
-              src/synth_setter/scripts/run-linux-vst-headless.sh \
-                python -X faulthandler -c "from synth_setter.data.vst.core import load_plugin; load_plugin(\"/usr/lib/vst3/Surge XT.vst3\"); load_plugin(\"/usr/lib/vst3/OB-Xf.vst3\")"
-            '
+          set -euo pipefail
+          docker pull "$IMAGE"
 
-      # --collect-only is import-only (no plugin load); keep the headless wrapper
-      # so a future import-time VST-host touch can't break collection.
-      - name: Collect requires_vst node IDs
+      # Smoke-test the two primary plugins then collect the requires_vst node IDs
+      # in one container (avoids a third docker-run); smoke output goes to stderr
+      # so only node IDs reach the tee. --collect-only is import-only.
+      - name: Smoke-test plugins and collect requires_vst tests
         run: |
+          set -euo pipefail
           docker run --rm \
             -v "${{ github.workspace }}:/home/build/synth-setter" \
             -e "VST_MARKER=$VST_MARKER" \
@@ -71,49 +60,20 @@ jobs:
               set -euo pipefail
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
-              src/synth_setter/scripts/run-linux-vst-headless.sh \
-                pytest --collect-only -q -p no:cacheprovider -m "$VST_MARKER"
+              wrapper=src/synth_setter/scripts/run-linux-vst-headless.sh
+              "$wrapper" python -X faulthandler -c "from synth_setter.data.vst.core import load_plugin; load_plugin(\"/usr/lib/vst3/Surge XT.vst3\"); load_plugin(\"/usr/lib/vst3/OB-Xf.vst3\")" >&2
+              "$wrapper" pytest --collect-only -q -p no:cacheprovider -m "$VST_MARKER"
             ' | tee "${{ runner.temp }}/collected.txt"
 
-      # Round-robin unique test files into SHARD_TOTAL cells; refuse an empty
-      # matrix — 0 collected tests would ship a silently-green net.
+      # scripts/ci/shard_vst_tests.py round-robins the collected files into
+      # SHARD_TOTAL shards and exits non-zero on a 0-test selection.
       - name: Build shard matrix
         id: shard
         env:
           COLLECTED: ${{ runner.temp }}/collected.txt
         run: |
-          python3 - <<'PY'
-          import json, os
-
-          total = int(os.environ["SHARD_TOTAL"])
-          files = sorted(
-              {
-                  line.split("::", 1)[0]
-                  for line in open(os.environ["COLLECTED"], encoding="utf-8")
-                  if line.startswith("tests/") and "::" in line
-              }
-          )
-          if not files:
-              raise SystemExit(
-                  "::error::marker selected 0 requires_vst tests — refusing to "
-                  "emit an empty (silently-green) matrix"
-              )
-
-          buckets: list[list[str]] = [[] for _ in range(total)]
-          for i, path in enumerate(files):
-              buckets[i % total].append(path)
-          include = [
-              {"shard": i + 1, "files": " ".join(bucket)}
-              for i, bucket in enumerate(buckets)
-              if bucket
-          ]
-          matrix = {"include": include}
-
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
-              fh.write("matrix=" + json.dumps(matrix) + "\n")
-          print(f"discovered {len(files)} files across {len(include)} shards")
-          print(json.dumps(matrix, indent=2))
-          PY
+          set -euo pipefail
+          python3 scripts/ci/shard_vst_tests.py --splits "$SHARD_TOTAL" < "$COLLECTED"
 
   vst_sweep:
     name: VST sweep shard ${{ matrix.shard }}
