@@ -18,6 +18,7 @@ import argparse
 import json
 import os
 import sys
+from collections.abc import Sequence
 from typing import TypeAlias
 
 #: A GitHub Actions matrix object: ``{"include": [{"shard": n, "files": str}]}``.
@@ -40,7 +41,7 @@ def collect_test_files(collected: str) -> list[str]:
     )
 
 
-def build_matrix(files: list[str], splits: int) -> Matrix:
+def build_matrix(files: Sequence[str], splits: int) -> Matrix:
     """Round-robin ``files`` into ``splits`` shards as a GHA matrix object.
 
     Shard files are space-joined and split back with ``read -ra`` in the
@@ -59,9 +60,11 @@ def build_matrix(files: list[str], splits: int) -> Matrix:
         raise ValueError(f"splits must be >= 1, got {splits}")
     if not files:
         raise ValueError("no requires_vst tests collected — refusing an empty matrix")
-    spaced = [path for path in files if any(char.isspace() for char in path)]
-    if spaced:
-        raise ValueError(f"test paths must not contain whitespace (breaks read -ra): {spaced}")
+    paths_with_whitespace = [path for path in files if any(char.isspace() for char in path)]
+    if paths_with_whitespace:
+        raise ValueError(
+            f"test paths must not contain whitespace (breaks read -ra): {paths_with_whitespace}"
+        )
     buckets: list[list[str]] = [[] for _ in range(splits)]
     for index, path in enumerate(files):
         buckets[index % splits].append(path)
@@ -71,7 +74,7 @@ def build_matrix(files: list[str], splits: int) -> Matrix:
     return {"include": include}
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     """Build the shard matrix from stdin node IDs and emit ``matrix=<json>``.
 
     Writes the matrix line to ``$GITHUB_OUTPUT`` when set, else to stdout.
