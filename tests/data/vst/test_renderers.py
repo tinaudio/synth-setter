@@ -13,6 +13,8 @@ from synth_setter.data.vst.renderers import (
     DawDreamerRenderer,
     PedalboardRenderer,
 )
+from synth_setter.data.vst.generate_vst_dataset import generate_sample
+from synth_setter.data.vst.param_spec import ContinuousParameter, NoteDurationParameter, ParamSpec
 
 
 def test_audio_renderer_is_an_abstract_dataclass() -> None:
@@ -21,6 +23,34 @@ def test_audio_renderer_is_an_abstract_dataclass() -> None:
     assert fields(AudioRenderer)
     with pytest.raises(TypeError):
         AudioRenderer("plugin.vst3", 44100, 2, 1.0)  # pyright: ignore[reportAbstractUsage]
+
+
+def test_generate_sample_uses_common_renderer_backend() -> None:
+    """Dataset sample generation forwards note and params through an injected backend."""
+    class Renderer:
+        def render(self, params, midi_note, velocity, note_start_and_end, *, warmup=False):
+            assert params == {"cutoff": 0.5}
+            assert (midi_note, velocity, note_start_and_end, warmup) == (60, 100, (0.0, 0.25), False)
+            return np.ones((2, 44100), dtype=np.float32)
+
+    sample = generate_sample(
+        "plugin.vst3",
+        100,
+        0.1,
+        44100,
+        2,
+        -100.0,
+        ParamSpec(
+            [ContinuousParameter("cutoff", 0.0, 1.0)],
+            [NoteDurationParameter("note_start_and_end", 1.0)],
+        ),
+        "preset.vstpreset",
+        fixed_synth_params={"cutoff": 0.5},
+        fixed_note_params={"pitch": 60, "note_start_and_end": (0.0, 0.25)},
+        renderer=Renderer(),  # type: ignore[arg-type]
+    )
+
+    assert sample.audio.shape == (44100, 2)
 
 
 def test_pedalboard_renderer_uses_common_render_contract(monkeypatch: pytest.MonkeyPatch) -> None:

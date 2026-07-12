@@ -29,6 +29,7 @@ from synth_setter.data.vst.generate_vst_dataset import (
     generate_sample,
 )
 from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
+from synth_setter.data.vst.renderers import AudioRenderer, DawDreamerRenderer
 from synth_setter.data.vst.shapes import DATASET_FIELD_NAMES, dataset_field_shapes
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from synth_setter.pipeline.schemas.spec import RenderConfig
@@ -222,9 +223,19 @@ def _render_in_batches(
     # plugin_reload_cadence="once": load + preset once per shard, reuse instance (#705).
     # "render" (default): cached_plugin stays None; each render reloads (#489 historical).
     cached_plugin: VST3Plugin | None = None
+    cached_renderer: AudioRenderer | None = None
     if render_cfg.plugin_reload_cadence == "once":
-        cached_plugin = load_plugin(render_cfg.plugin_path)
-        load_preset(cached_plugin, render_cfg.preset_path)
+        if render_cfg.renderer_backend == "pedalboard":
+            cached_plugin = load_plugin(render_cfg.plugin_path)
+            load_preset(cached_plugin, render_cfg.preset_path)
+        else:
+            cached_renderer = DawDreamerRenderer(
+                render_cfg.plugin_path,
+                render_cfg.sample_rate,
+                render_cfg.channels,
+                render_cfg.signal_duration_seconds,
+                render_cfg.preset_path,
+            )
 
     def _render_loop() -> None:
         sample_batch: list[VSTDataSample] = []
@@ -252,6 +263,15 @@ def _render_in_batches(
                 fixed_note = (
                     fixed_note_params_list[i] if fixed_note_params_list is not None else None
                 )
+            renderer = cached_renderer
+            if render_cfg.renderer_backend == "dawdreamer" and renderer is None:
+                renderer = DawDreamerRenderer(
+                    render_cfg.plugin_path,
+                    render_cfg.sample_rate,
+                    render_cfg.channels,
+                    render_cfg.signal_duration_seconds,
+                    render_cfg.preset_path,
+                )
             sample = generate_sample(
                 render_cfg.plugin_path,
                 velocity=render_cfg.velocity,
@@ -264,6 +284,7 @@ def _render_in_batches(
                 fixed_synth_params=fixed_synth,
                 fixed_note_params=fixed_note,
                 plugin=cached_plugin,
+                renderer=renderer,
                 warmup=warmup_this_render,
                 # sample_idx is the absolute row index (the seed key); resumability
                 # must preserve it or per-row seed isolation breaks (#884).

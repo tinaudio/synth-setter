@@ -10,6 +10,8 @@ from typing import Any
 
 import numpy as np
 
+from synth_setter.data.vst.dawdreamer_map import dawdreamer_parameter_key
+
 
 @dataclass
 class AudioRenderer(ABC):
@@ -141,10 +143,16 @@ class DawDreamerRenderer(AudioRenderer):
         self.engine = daw.RenderEngine(self.sample_rate, self.block_size)
         self.plugin = self.engine.make_plugin_processor("synth", self.plugin_path)
         self.engine.load_graph([(self.plugin, [])])
-        self._parameter_indices = {
-            description["name"]: description["index"]
-            for description in self.plugin.get_parameters_description()
-        }
+        self._parameter_indices = {}
+        for description in self.plugin.get_parameters_description():
+            key = dawdreamer_parameter_key(description["name"])
+            index = description["index"]
+            self._parameter_indices[key] = index
+            if key.endswith("_shape"):
+                for waveform in ("sawtooth", "pulse", "triangle"):
+                    self._parameter_indices[key.removesuffix("shape") + waveform] = index
+            if key.endswith("_width_1"):
+                self._parameter_indices[key.removesuffix("_1")] = index
 
     def render(
         self,
@@ -169,7 +177,9 @@ class DawDreamerRenderer(AudioRenderer):
         self.plugin.clear_midi()
         try:
             for name, value in params.items():
-                self.plugin.set_parameter(self._parameter_indices[name], value)
+                index = self._parameter_indices.get(name)
+                if index is not None:
+                    self.plugin.set_parameter(index, value)
             start, end = note_start_and_end
             self.plugin.add_midi_note(midi_note, velocity, start, end - start)
             self.engine.render(self.signal_duration_seconds)

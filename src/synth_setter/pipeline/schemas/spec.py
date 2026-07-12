@@ -232,7 +232,7 @@ class ShardSpec(BaseModel):
     seed: int = Field(description="Per-shard RNG seed, derived as ``base_seed + shard_id``.")
 
 
-class RenderConfig(BaseModel):
+class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Pydantic Fields.
     """Renderer-specific configuration nested as ``DatasetSpec.render``.
 
     Carries every parameter the per-shard writer needs to produce audio +
@@ -269,6 +269,10 @@ class RenderConfig(BaseModel):
     )
     renderer_version: str = Field(
         description="Renderer code-path version stamp recorded in shard provenance."
+    )
+    renderer_backend: Literal["pedalboard", "dawdreamer"] = Field(
+        default="pedalboard",
+        description="Audio host used to render each sample.",
     )
     sample_rate: int = Field(description="Audio sample rate in Hz.")
     channels: int = Field(description="Audio channel count.")

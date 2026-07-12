@@ -12,6 +12,7 @@ from pydantic_settings import BaseSettings, CliApp, CliPositionalArg, SettingsCo
 from pyloudnorm import Meter
 
 from synth_setter.data.vst.core import render_params
+from synth_setter.data.vst.renderers import AudioRenderer
 from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
 from synth_setter.data.vst.seeding import rng_for_sample
 from synth_setter.data.vst.shapes import (
@@ -107,6 +108,7 @@ def generate_sample(
     fixed_note_params: NoteParams | None = None,
     *,
     plugin: VST3Plugin | None = None,
+    renderer: AudioRenderer | None = None,
     warmup: bool = False,
     seed: SampleSeed | None = None,
 ) -> VSTDataSample:
@@ -128,6 +130,8 @@ def generate_sample(
 
     :param plugin: Forwarded to ``render_params``; when set, the renderer
         skips ``load_plugin``/``load_preset``.
+    :param renderer: Optional common renderer backend. When supplied, it replaces
+        the legacy pedalboard call and receives the same note and parameter values.
     :param warmup: Forwarded to ``render_params``; runs the ``show_editor``
         warm-up on the plugin used for this render (newly loaded or cached).
         Applied at most once per ``generate_sample`` call — the loudness-gate
@@ -157,19 +161,28 @@ def generate_sample(
             synth_params = fixed_synth_params
             note_params = fixed_note_params
 
-        output = render_params(
-            plugin_path,
-            synth_params,
-            note_params["pitch"],
-            velocity,
-            note_params["note_start_and_end"],
-            signal_duration_seconds,
-            sample_rate,
-            channels,
-            preset_path=preset_path,
-            plugin=plugin,
-            warmup=warmup,
-        )
+        if renderer is None:
+            output = render_params(
+                plugin_path,
+                synth_params,
+                note_params["pitch"],
+                velocity,
+                note_params["note_start_and_end"],
+                signal_duration_seconds,
+                sample_rate,
+                channels,
+                preset_path=preset_path,
+                plugin=plugin,
+                warmup=warmup,
+            )
+        else:
+            output = renderer.render(
+                synth_params,
+                note_params["pitch"],
+                velocity,
+                note_params["note_start_and_end"],
+                warmup=warmup,
+            )
         warmup = False
 
         meter = Meter(sample_rate)
