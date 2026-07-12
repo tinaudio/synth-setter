@@ -47,7 +47,8 @@ jobs:
           docker pull "$IMAGE"
 
       # Re-sync the branch's locked deps into the image venv before collection so
-      # a PR-added dep isn't missing (cu128 flags mirror the Dockerfile: keep torch).
+      # a PR-added dep isn't missing (cu128 flags mirror the Dockerfile: keep
+      # torch); the pip install re-adds the editable project the exact sync prunes.
       - name: Smoke-test plugins and collect requires_vst tests
         run: |
           set -euo pipefail
@@ -61,6 +62,7 @@ jobs:
               git config --global --add safe.directory /home/build/synth-setter
               UV_PROJECT_ENVIRONMENT="$VIRTUAL_ENV" \
                 uv sync --frozen --extra cu128 --no-default-groups --group dev --no-install-project
+              uv pip install --no-deps -e .
               wrapper=src/synth_setter/scripts/run-linux-vst-headless.sh
               "$wrapper" python -X faulthandler -c "from synth_setter.data.vst.core import load_plugin; load_plugin(\"/usr/lib/vst3/Surge XT.vst3\"); load_plugin(\"/usr/lib/vst3/OB-Xf.vst3\")" >&2
               "$wrapper" pytest --collect-only -q -p no:cacheprovider -m "$VST_MARKER"
@@ -97,7 +99,8 @@ jobs:
           docker pull "$IMAGE"
 
       # Re-sync the branch's locked deps before pytest so a PR-added dep isn't
-      # missing (cu128 flags mirror the Dockerfile: keep torch), then run the shard.
+      # missing (cu128 flags mirror the Dockerfile: keep torch); the pip install
+      # re-adds the editable project the exact sync prunes (subprocess entrypoints).
       - name: Run VST sweep shard in Docker
         env:
           SHARD_FILES: ${{ matrix.files }}
@@ -116,6 +119,7 @@ jobs:
               git config --global --add safe.directory /home/build/synth-setter
               UV_PROJECT_ENVIRONMENT="$VIRTUAL_ENV" \
                 uv sync --frozen --extra cu128 --no-default-groups --group dev --no-install-project
+              uv pip install --no-deps -e .
               mkdir -p plugins
               for plugin in /usr/lib/vst3/*.vst3; do
                 ln -sf "$plugin" "plugins/$(basename "$plugin")"
