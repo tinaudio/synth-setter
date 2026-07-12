@@ -33,80 +33,15 @@ from synth_setter.data.lance_datamodule import (
     PrepareBatchCollate,
 )
 from synth_setter.data.vst.param_spec_registry import param_specs
-from tests.helpers.lance_fixtures import write_lance_shard
-
-_AUDIO_CHANNELS = 2
-_AUDIO_SAMPLES = 16
-_MEL_CHANNELS = 2
-_MEL_N_MELS = 4
-_MEL_N_FRAMES = 5
-_M2L_DIM_1 = 6
-_M2L_DIM_2 = 7
-_NUM_PARAMS = 11
-
-_MEL_SHAPE = (_MEL_CHANNELS, _MEL_N_MELS, _MEL_N_FRAMES)
-
-
-def _make_columns(
-    num_rows: int, *, num_params: int = _NUM_PARAMS, seed: int = 0
-) -> dict[str, np.ndarray]:
-    """Build the column arrays a Lance shard carries.
-
-    :param num_rows: Number of rows along the first axis of every column.
-    :param num_params: Width of the ``param_array`` column.
-    :param seed: Seed for all columns so splits get distinguishable values.
-    :return: Mapping of column name to ``(num_rows, ...)`` array.
-    """
-    rng = np.random.default_rng(seed)
-    return {
-        # float16 mirrors the pipeline's on-disk audio dtype (DATASET_FIELD_DTYPES).
-        "audio": rng.standard_normal((num_rows, _AUDIO_CHANNELS, _AUDIO_SAMPLES)).astype(
-            np.float16
-        ),
-        "mel_spec": rng.standard_normal((num_rows, *_MEL_SHAPE)).astype(np.float32),
-        "music2latent": rng.standard_normal((num_rows, _M2L_DIM_1, _M2L_DIM_2)).astype(np.float32),
-        # params in [0, 1) so the rescale_params=True branch lands in [-1, 1).
-        "param_array": rng.random((num_rows, num_params)).astype(np.float32),
-    }
-
-
-def _write_split(
-    path: Path,
-    num_rows: int,
-    *,
-    num_params: int = _NUM_PARAMS,
-    seed: int = 0,
-    mel_fill: float | None = None,
-) -> dict[str, np.ndarray]:
-    """Write a tiny Lance shard and return its source arrays for assertions.
-
-    :param path: Output ``.lance`` dataset directory.
-    :param num_rows: Number of rows along the first axis of every column.
-    :param num_params: Width of the ``param_array`` column.
-    :param seed: Seed for the per-row arrays.
-    :param mel_fill: When set, fill ``mel_spec`` with this constant so the
-        normalization test can pin ``(mel - mean) / std`` exactly.
-    :return: The column arrays that were written.
-    """
-    columns = _make_columns(num_rows, num_params=num_params, seed=seed)
-    if mel_fill is not None:
-        columns["mel_spec"] = np.full_like(columns["mel_spec"], mel_fill)
-    write_lance_shard(path, columns)
-    return columns
-
-
-def _write_stats(dataset_dir: Path, *, mean: float = 0.0, std: float = 1.0) -> None:
-    """Write a sibling ``stats.npz`` whose mean/std broadcast against ``mel_spec``.
-
-    :param dataset_dir: Directory holding the ``*.lance`` splits.
-    :param mean: Scalar mean broadcast against every mel-spec element.
-    :param std: Scalar std broadcast against every mel-spec element.
-    """
-    np.savez(
-        dataset_dir / "stats.npz",
-        mean=np.full(_MEL_SHAPE, mean, dtype=np.float32),
-        std=np.full(_MEL_SHAPE, std, dtype=np.float32),
-    )
+from tests.helpers.lance_fixtures import (
+    AUDIO_CHANNELS,
+    AUDIO_SAMPLES,
+    MEL_SHAPE,
+    NUM_PARAMS,
+    make_shard_columns,
+    write_mel_stats,
+    write_seeded_lance_shard,
+)
 
 
 @pytest.fixture
@@ -118,10 +53,10 @@ def dataset_root(tmp_path: Path) -> Path:
     """
     root = tmp_path / "data"
     root.mkdir()
-    _write_split(root / "train.lance", num_rows=16, seed=1)
-    _write_split(root / "val.lance", num_rows=6, seed=2)
-    _write_split(root / "test.lance", num_rows=6, seed=3)
-    _write_stats(root)
+    write_seeded_lance_shard(root / "train.lance", num_rows=16, seed=1)
+    write_seeded_lance_shard(root / "val.lance", num_rows=6, seed=2)
+    write_seeded_lance_shard(root / "test.lance", num_rows=6, seed=3)
+    write_mel_stats(root)
     return root
 
 
@@ -174,15 +109,15 @@ class TestPrepareBatchCollate:
         :param num_rows: Batch size of the synthetic batch.
         :return: Column-name-to-tensor mapping matching the shard schema.
         """
-        columns = _make_columns(num_rows, seed=7)
+        columns = make_shard_columns(num_rows, seed=7)
         return {name: torch.from_numpy(values) for name, values in columns.items()}
 
     def test_collate_returns_float32_model_batch_with_noise(self) -> None:
         """The collate emits the ``prepare_batch`` contract: float32 tensors + noise."""
         collate = PrepareBatchCollate(mean=None, std=None, rescale_params=False, ot=False)
         batch = collate(self._raw_batch(num_rows=4))
-        assert _unwrap(batch["params"]).shape == (4, _NUM_PARAMS)
-        assert _unwrap(batch["noise"]).shape == (4, _NUM_PARAMS)
+        assert _unwrap(batch["params"]).shape == (4, NUM_PARAMS)
+        assert _unwrap(batch["noise"]).shape == (4, NUM_PARAMS)
         for key in ("mel_spec", "m2l", "params", "noise", "audio"):
             assert _unwrap(batch[key]).dtype == torch.float32, key
 
@@ -194,18 +129,18 @@ class TestPrepareBatchCollate:
         batch = collate(raw)
         assert batch["audio"] is None
         assert batch["m2l"] is None
-        assert _unwrap(batch["mel_spec"]).shape == (4, *_MEL_SHAPE)
+        assert _unwrap(batch["mel_spec"]).shape == (4, *MEL_SHAPE)
 
     def test_collate_normalizes_mel_with_mean_and_std(self) -> None:
         """``(mel - mean) / std`` is applied when stats are provided."""
         collate = PrepareBatchCollate(
-            mean=np.full(_MEL_SHAPE, 1.0, dtype=np.float32),
-            std=np.full(_MEL_SHAPE, 2.0, dtype=np.float32),
+            mean=np.full(MEL_SHAPE, 1.0, dtype=np.float32),
+            std=np.full(MEL_SHAPE, 2.0, dtype=np.float32),
             rescale_params=False,
             ot=False,
         )
         raw = self._raw_batch()
-        raw["mel_spec"] = torch.full((4, *_MEL_SHAPE), 3.0)
+        raw["mel_spec"] = torch.full((4, *MEL_SHAPE), 3.0)
         mel = _unwrap(collate(raw)["mel_spec"])
         assert torch.allclose(mel, torch.full_like(mel, 1.0))
 
@@ -239,7 +174,7 @@ class TestPrepareBatchCollate:
         collate(self._raw_batch())  # materialize the lazy generator before pickling
         clone = pickle.loads(pickle.dumps(collate))
         batch = clone(self._raw_batch())
-        assert _unwrap(batch["noise"]).shape == (4, _NUM_PARAMS)
+        assert _unwrap(batch["noise"]).shape == (4, NUM_PARAMS)
 
     def test_collate_same_global_seed_reproduces_noise(self) -> None:
         """Construction draws its seed from the global RNG, so ``seed_everything`` governs."""
@@ -304,7 +239,7 @@ class TestLanceMapDataModuleSetup:
         root = tmp_path / "data"
         root.mkdir()
         for split in ("train", "val", "test"):
-            _write_split(root / f"{split}.lance", num_rows=4)
+            write_seeded_lance_shard(root / f"{split}.lance", num_rows=4)
         module = LanceVSTDataModule(dataset_root=root, batch_size=2, loader="map")
         with pytest.raises(FileNotFoundError, match="stats.npz"):
             module.setup()
@@ -323,7 +258,7 @@ class TestLanceMapDataModuleFlows:
 
         :param dataset_root: Fixture-provided dataset-root directory.
         """
-        source = _make_columns(6, seed=2)["param_array"] * 2 - 1
+        source = make_shard_columns(6, seed=2)["param_array"] * 2 - 1
         with _set_up_map_module(dataset_root=dataset_root, batch_size=4, ot=False) as module:
             batches = list(module.val_dataloader())
             assert [len(_unwrap(b["params"])) for b in batches] == [4, 2]
@@ -337,7 +272,7 @@ class TestLanceMapDataModuleFlows:
         :param dataset_root: Fixture-provided dataset-root directory.
         """
         torch.manual_seed(0)
-        source = _make_columns(16, seed=1)["param_array"] * 2 - 1
+        source = make_shard_columns(16, seed=1)["param_array"] * 2 - 1
         with _set_up_map_module(dataset_root=dataset_root, batch_size=4, ot=False) as module:
             epoch = _params_in_order(module.train_dataloader())
         assert epoch.shape == source.shape
@@ -357,11 +292,11 @@ class TestLanceMapDataModuleFlows:
         with _set_up_map_module(dataset_root=dataset_root, batch_size=3, ot=True) as module:
             np.testing.assert_array_equal(
                 _params_in_order(module.val_dataloader()),
-                _make_columns(6, seed=2)["param_array"] * 2 - 1,
+                make_shard_columns(6, seed=2)["param_array"] * 2 - 1,
             )
             np.testing.assert_array_equal(
                 _params_in_order(module.test_dataloader()),
-                _make_columns(6, seed=3)["param_array"] * 2 - 1,
+                make_shard_columns(6, seed=3)["param_array"] * 2 - 1,
             )
 
     def test_predict_loader_reads_audio_eval_loaders_do_not(self, dataset_root: Path) -> None:
@@ -373,7 +308,7 @@ class TestLanceMapDataModuleFlows:
             val_batch = next(iter(module.val_dataloader()))
             predict_batch = next(iter(module.predict_dataloader()))
         assert val_batch["audio"] is None
-        assert _unwrap(predict_batch["audio"]).shape == (2, _AUDIO_CHANNELS, _AUDIO_SAMPLES)
+        assert _unwrap(predict_batch["audio"]).shape == (2, AUDIO_CHANNELS, AUDIO_SAMPLES)
         assert _unwrap(predict_batch["audio"]).dtype == torch.float32
 
     def test_m2l_conditioning_swaps_mel_for_music2latent(self, dataset_root: Path) -> None:
@@ -387,7 +322,7 @@ class TestLanceMapDataModuleFlows:
             batch = next(iter(module.val_dataloader()))
         assert batch["mel_spec"] is None
         np.testing.assert_array_equal(
-            _unwrap(batch["m2l"]).numpy(), _make_columns(6, seed=2)["music2latent"][:2]
+            _unwrap(batch["m2l"]).numpy(), make_shard_columns(6, seed=2)["music2latent"][:2]
         )
 
     def test_mel_normalized_with_saved_stats(self, tmp_path: Path) -> None:
@@ -398,8 +333,8 @@ class TestLanceMapDataModuleFlows:
         root = tmp_path / "data"
         root.mkdir()
         for split in ("train", "val", "test"):
-            _write_split(root / f"{split}.lance", num_rows=4, mel_fill=3.0)
-        _write_stats(root, mean=1.0, std=2.0)
+            write_seeded_lance_shard(root / f"{split}.lance", num_rows=4, mel_fill=3.0)
+        write_mel_stats(root, mean=1.0, std=2.0)
         with _set_up_map_module(dataset_root=root, batch_size=2, ot=False) as module:
             mel = _unwrap(next(iter(module.val_dataloader()))["mel_spec"])
         assert torch.allclose(mel, torch.full_like(mel, 1.0))
@@ -441,7 +376,7 @@ class TestLanceMapDataModuleModes:
 
         :param dataset_root: Fixture-provided dataset-root directory.
         """
-        first_rows = _make_columns(16, seed=1)["param_array"][:4] * 2 - 1
+        first_rows = make_shard_columns(16, seed=1)["param_array"][:4] * 2 - 1
         with _set_up_map_module(
             dataset_root=dataset_root, batch_size=4, ot=False, repeat_first_batch=True
         ) as module:
@@ -566,8 +501,8 @@ class TestTrainerFlowsAcrossParamSpecs:
         root = tmp_path / "data"
         root.mkdir()
         for seed, split in enumerate(("train", "val", "test")):
-            _write_split(root / f"{split}.lance", num_rows=4, num_params=num_params, seed=seed)
-        _write_stats(root)
+            write_seeded_lance_shard(root / f"{split}.lance", num_rows=4, num_params=num_params, seed=seed)
+        write_mel_stats(root)
 
         with _set_up_map_module(
             dataset_root=root, batch_size=2, ot=True, param_spec_name=param_spec_name

@@ -15,7 +15,7 @@ into :func:`synth_setter.data.vst_datamodule.prepare_batch`.
 from __future__ import annotations
 
 import os
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, Literal, cast
@@ -252,45 +252,38 @@ class PrepareBatchCollate:
         )
 
 
-class _RepeatFirstRows(torch.utils.data.Dataset):
-    """Map every row index onto the first ``batch_size`` rows of the wrapped dataset.
+class _RepeatFirstBatchSampler(torch.utils.data.Sampler):
+    """Yield every row index folded into ``[0, batch_size)``, keeping the epoch length.
 
-    Sample-indexed re-expression of ``repeat_first_batch``: with a sequential
-    sampler, every yielded batch is exactly rows ``[0, batch_size)`` in order,
-    preserving the legacy overfit-one-batch debugging intent.
+    Sample-indexed re-expression of ``repeat_first_batch``: under the loader's
+    sequential batching, every yielded batch is exactly rows ``[0, batch_size)``
+    in order, preserving the legacy overfit-one-batch debugging intent without
+    any shuffle coupling in the dataloader methods.
     """
 
-    def __init__(self, dataset: LanceMapDataset, batch_size: int) -> None:
-        """Wrap ``dataset`` so reads cycle within its first ``batch_size`` rows.
+    def __init__(self, num_rows: int, batch_size: int) -> None:
+        """Fix the epoch geometry the sampler folds.
 
-        :param dataset: Sample-indexed dataset to wrap.
+        :param num_rows: Dataset row count — the number of indices per epoch.
         :param batch_size: Row modulus every index is folded into.
         """
-        self._dataset = dataset
+        self._num_rows = num_rows
         self._batch_size = batch_size
 
     def __len__(self) -> int:
-        """Return the wrapped dataset's full row count (epoch length is unchanged).
+        """Return the number of indices per epoch (the full row count).
 
-        :returns: Row count of the wrapped dataset.
+        :returns: Dataset row count.
         """
-        return len(self._dataset)
+        return self._num_rows
 
-    def __getitems__(self, indices: Sequence[int]) -> dict[str, torch.Tensor]:
-        """Fetch the batch with every index folded into the first-batch rows.
+    def __iter__(self) -> Iterator[int]:
+        """Yield the folded index sequence for one epoch.
 
-        :param indices: Row indices as drawn by the sampler.
-        :returns: One ``(len(indices), *inner_shape)`` tensor per column.
+        :yields int: The next row index, always within ``[0, batch_size)``.
         """
-        return self._dataset.__getitems__([i % self._batch_size for i in indices])
-
-    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
-        """Fetch one row, folded into the first-batch rows.
-
-        :param idx: Row index as drawn by the sampler.
-        :returns: One ``(*inner_shape,)`` tensor per column.
-        """
-        return self._dataset[idx % self._batch_size]
+        for i in range(self._num_rows):
+            yield i % self._batch_size
 
 
 # DOC601/DOC603: pydoclint can't read sphinx ``:ivar:`` docs, so dataclass
@@ -299,7 +292,7 @@ class _RepeatFirstRows(torch.utils.data.Dataset):
 class _MapSplit:  # noqa: DOC601, DOC603
     """One split's map-path pieces: the sample-indexed ``dataset`` and its ``collate``."""
 
-    dataset: LanceMapDataset | _RepeatFirstRows
+    dataset: LanceMapDataset
     collate: PrepareBatchCollate
 
 
@@ -352,26 +345,27 @@ class LanceVSTDataModule(VSTDataModule):
         return self.loader == "map" and not self.fake
 
     def _build_map_split(
-        self, shard_path: Path, *, ot: bool, read_audio: bool, repeat_first_batch: bool
+        self,
+        shard_path: Path,
+        *,
+        ot: bool,
+        read_audio: bool,
+        stats: tuple[np.ndarray, np.ndarray] | None,
     ) -> _MapSplit:
         """Build one split's map dataset and collate.
 
         :param shard_path: ``.lance`` dataset directory of the split.
         :param ot: Whether this split Hungarian-matches noise to params.
         :param read_audio: Whether to project the ``audio`` column.
-        :param repeat_first_batch: Whether reads cycle within the first batch.
+        :param stats: Mel ``(mean, std)`` to normalize with, or ``None`` to skip.
         :returns: The split's dataset/collate pair.
         """
         columns = ["param_array"]
         columns.append("mel_spec" if self.conditioning == "mel" else "music2latent")
         if read_audio:
             columns.append("audio")
-        dataset: LanceMapDataset | _RepeatFirstRows = LanceMapDataset(shard_path, columns=columns)
-        if repeat_first_batch:
-            dataset = _RepeatFirstRows(dataset, self.batch_size)
-        mean = std = None
-        if self.use_saved_mean_and_variance:
-            mean, std = load_dataset_statistics(shard_path)
+        dataset = LanceMapDataset(shard_path, columns=columns)
+        mean, std = stats if stats is not None else (None, None)
         collate = PrepareBatchCollate(mean=mean, std=std, rescale_params=True, ot=ot)
         return _MapSplit(dataset=dataset, collate=collate)
 
@@ -384,28 +378,35 @@ class LanceVSTDataModule(VSTDataModule):
         if not self._map_mode:
             super().setup(stage)
             return
+        train_shard = self.dataset_root / f"train{self.shard_suffix}"
+        split_stats = predict_stats = None
+        if self.use_saved_mean_and_variance:
+            # train/val/test share the root's stats.npz; only a predict_file
+            # outside the root carries its own.
+            split_stats = load_dataset_statistics(train_shard)
+            predict_stats = (
+                split_stats
+                if self.predict_file.parent == self.dataset_root
+                else load_dataset_statistics(self.predict_file)
+            )
         self._map_splits = {
             "train": self._build_map_split(
-                self.dataset_root / f"train{self.shard_suffix}",
-                ot=self.ot,
-                read_audio=False,
-                repeat_first_batch=self.repeat_first_batch,
+                train_shard, ot=self.ot, read_audio=False, stats=split_stats
             ),
             "val": self._build_map_split(
                 self.dataset_root / f"val{self.shard_suffix}",
                 ot=False,
                 read_audio=False,
-                repeat_first_batch=self.repeat_first_batch,
+                stats=split_stats,
             ),
             "test": self._build_map_split(
                 self.dataset_root / f"test{self.shard_suffix}",
                 ot=False,
                 read_audio=False,
-                repeat_first_batch=self.repeat_first_batch,
+                stats=split_stats,
             ),
-            # Predict deliberately skips repeat_first_batch, matching legacy setup.
             "predict": self._build_map_split(
-                self.predict_file, ot=False, read_audio=True, repeat_first_batch=False
+                self.predict_file, ot=False, read_audio=True, stats=predict_stats
             ),
         }
 
@@ -417,13 +418,18 @@ class LanceVSTDataModule(VSTDataModule):
         :returns: DataLoader yielding ``prepare_batch`` model batches.
         """
         pieces = self._map_splits[split]
+        sampling: dict[str, Any] = {"shuffle": shuffle}
+        # Legacy parity: train/val/test repeat the first batch when configured;
+        # predict never does. The sampler replaces (and overrides) shuffling.
+        if self.repeat_first_batch and split != "predict":
+            sampling = {"sampler": _RepeatFirstBatchSampler(len(pieces.dataset), self.batch_size)}
         return map_dataloader_over(
             pieces.dataset,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
-            shuffle=shuffle,
             collate_fn=pieces.collate,
             pin_memory=self.pin_memory,
+            **sampling,
         )
 
     def train_dataloader(self) -> DataLoader:
@@ -433,9 +439,7 @@ class LanceVSTDataModule(VSTDataModule):
         """
         if not self._map_mode:
             return super().train_dataloader()
-        # repeat_first_batch needs sequential order so every batch is exactly
-        # rows [0, batch_size) — shuffling would draw random multisets of them.
-        return self._map_dataloader("train", shuffle=not self.repeat_first_batch)
+        return self._map_dataloader("train", shuffle=True)
 
     def val_dataloader(self) -> DataLoader:
         """Return the validation dataloader for the selected loader path.
