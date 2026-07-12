@@ -10,7 +10,7 @@ import pytest
 from synth_setter.data.vst.param_spec_registry import (
     default_plugin_path,
     param_specs,
-    preset_paths,
+    plugin_state_paths,
 )
 
 _ENV_VAR = "SYNTH_SETTER_PLUGIN_PATH"
@@ -73,16 +73,16 @@ def test_param_spec_widths_match_known_values() -> None:
     assert len(param_specs["obxf"]) == 187
 
 
-def test_every_param_spec_has_a_preset_path() -> None:
-    """``param_specs`` and ``preset_paths`` cover the same keys — no spec lacks a preset."""
-    assert set(param_specs) == set(preset_paths)
+def test_every_param_spec_has_a_plugin_state_path() -> None:
+    """``param_specs`` and ``plugin_state_paths`` cover the same keys — no spec lacks a preset."""
+    assert set(param_specs) == set(plugin_state_paths)
 
 
 def test_obxf_is_registered_with_an_existing_preset() -> None:
     """``obxf`` is keyed in both registry dicts and its preset file is in the tree."""
     assert "obxf" in param_specs
-    assert "obxf" in preset_paths
-    assert (_REPO_ROOT / preset_paths["obxf"]).is_file()
+    assert "obxf" in plugin_state_paths
+    assert (_REPO_ROOT / plugin_state_paths["obxf"]).is_file()
 
 
 def test_obxf_spec_encode_decode_round_trip_preserves_values_and_shape() -> None:

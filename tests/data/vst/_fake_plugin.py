@@ -55,10 +55,10 @@ class FakeVST3Plugin:
         """
         close_event.wait()
 
-    def load_preset(self, preset_path: str) -> None:
+    def load_preset(self, plugin_state_path: str) -> None:
         """Accept the preset path; the fake has no preset state to apply.
 
-        :param preset_path: Filesystem path the production code requested; ignored.
+        :param plugin_state_path: Filesystem path the production code requested; ignored.
         """
 
     def reset(self) -> None:

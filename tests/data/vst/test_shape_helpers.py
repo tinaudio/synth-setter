@@ -112,7 +112,7 @@ def test_dataset_field_shapes_maps_every_field_to_full_writer_shape() -> None:
     """``dataset_field_shapes`` returns the full writer-emitted shape for every dataset field."""
     render = RenderConfig(
         plugin_path="/fake/Plugin.vst3",
-        preset_path="presets/fake.vstpreset",
+        plugin_state_path="presets/fake.vstpreset",
         param_spec_name="surge_simple",
         renderer_version="1.0.0-test",
         sample_rate=44100,

@@ -137,7 +137,7 @@ synth-setter/
 
 **Synth-agnostic core, registry as the contract.** A synth is fully described
 by three registered artifacts — a `ParamSpec` (`param_specs[name]`), a baseline
-preset (`preset_paths[name]`), and a `RenderConfig`
+preset (`plugin_state_paths[name]`), and a `RenderConfig`
 (`src/synth_setter/configs/render/<name>.yaml`)
 — keyed by name in `src/synth_setter/data/vst/param_spec_registry.py`. The
 rendering, HDF5/Lance storage, mel features, distributed workers, and models all

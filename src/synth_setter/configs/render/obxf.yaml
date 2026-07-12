@@ -3,6 +3,6 @@ defaults:
   - surge_xt
 
 plugin_path: "plugins/OB-Xf.vst3"
-preset_path: "presets/obxf-base.vstpreset"
+plugin_state_path: "presets/obxf-base.vstpreset"
 param_spec_name: "obxf"
 renderer_version: "1.0.3"

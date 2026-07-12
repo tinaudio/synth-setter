@@ -161,7 +161,7 @@ def _run_oracle_eval_subprocess(
         # the round-trip matches it exactly (not the group / CLI defaults).
         "render=surge_simple",
         f"render.param_spec_name={render.param_spec_name}",
-        f"render.preset_path={render.preset_path}",
+        f"render.plugin_state_path={render.plugin_state_path}",
         f"render.plugin_path={render.plugin_path}",
         f"render.sample_rate={render.sample_rate}",
         f"render.channels={render.channels}",

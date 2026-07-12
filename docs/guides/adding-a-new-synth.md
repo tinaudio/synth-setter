@@ -13,11 +13,11 @@ registered `ParamSpec` and `RenderConfig`, never from a synth literal (see
 **additive** — no edits to core pipeline, storage, or model code. A synth is
 fully described by three registered artifacts:
 
-| Artifact        | Where it lives                                   | Registry key                |
-| --------------- | ------------------------------------------------ | --------------------------- |
-| `ParamSpec`     | `src/synth_setter/data/vst/<name>_param_spec.py` | `param_specs["<name>"]`     |
-| Baseline preset | `presets/<name>-base.vstpreset`                  | `preset_paths["<name>"]`    |
-| `RenderConfig`  | `src/synth_setter/configs/render/<name>.yaml`    | selected by `render=<name>` |
+| Artifact        | Where it lives                                   | Registry key                   |
+| --------------- | ------------------------------------------------ | ------------------------------ |
+| `ParamSpec`     | `src/synth_setter/data/vst/<name>_param_spec.py` | `param_specs["<name>"]`        |
+| Baseline preset | `presets/<name>-base.vstpreset`                  | `plugin_state_paths["<name>"]` |
+| `RenderConfig`  | `src/synth_setter/configs/render/<name>.yaml`    | selected by `render=<name>`    |
 
 All three are keyed by the synth name (`<name>`, a Python identifier) in
 [`src/synth_setter/data/vst/param_spec_registry.py`](../../src/synth_setter/data/vst/param_spec_registry.py).
@@ -58,7 +58,7 @@ Useful flags (`synth-setter-introspect-plugin --help` for the full list):
 
 - `--plugin-name` — factory class to open from a multi-class bundle (e.g.
   `'Six Sines'`); omit for single-class bundles.
-- `--preset-path` — a starting `.vstpreset` to apply before capture, so the
+- `--plugin-state-path` — a starting `.vstpreset` to apply before capture, so the
   baseline reflects a sensible patch rather than the plugin's cold default.
 - `--load-timeout` — seconds to wait for plugin init (default `600`);
   multi-minute loads are normal for some synths.
@@ -125,7 +125,7 @@ synth-setter-introspect-plugin \
 
 `--register` writes the spec module, preset, and CSV to their conventional
 paths, generates `src/synth_setter/configs/render/mysynth.yaml`, and inserts the
-import + `param_specs` + `preset_paths` entries into the registry. `--verify`
+import + `param_specs` + `plugin_state_paths` entries into the registry. `--verify`
 then runs the post-draft battery (pre-commit gates, registry import + sample,
 Hydra compose, classifier audit), writes `verify-mysynth.md` at the checkout
 root, and exits non-zero on any BLOCK. Read that report to see what to fix
@@ -143,7 +143,7 @@ param_specs: dict[str, ParamSpec] = {
     "mysynth": MYSYNTH_PARAM_SPEC,
 }
 
-preset_paths: dict[str, str] = {
+plugin_state_paths: dict[str, str] = {
     # ...
     "mysynth": "presets/mysynth-base.vstpreset",
 }
@@ -159,7 +159,7 @@ defaults:
   - surge_xt
 
 plugin_path: "plugins/MySynth.vst3"
-preset_path: "presets/mysynth-base.vstpreset"
+plugin_state_path: "presets/mysynth-base.vstpreset"
 param_spec_name: "mysynth"
 renderer_version: "1.2.3"
 ```

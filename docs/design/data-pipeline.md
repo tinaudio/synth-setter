@@ -1189,7 +1189,7 @@ class RenderConfig(BaseModel):
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
     plugin_path: str
-    preset_path: str
+    plugin_state_path: str
     param_spec_name: str
     renderer_version: str
     sample_rate: int

@@ -248,6 +248,11 @@ class RenderConfig(BaseModel):
     .. attribute :: attempts_per_sample
 
         Loudness-gate retry budget per sampled row before the render fails loudly.
+
+    .. attribute :: plugin_state_path
+
+        Filesystem path to the baseline plugin state.
+        :type: str
     """
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
@@ -255,7 +260,7 @@ class RenderConfig(BaseModel):
     plugin_path: str = Field(
         description="Filesystem path to the VST3 plugin bundle the worker loads."
     )
-    preset_path: str = Field(
+    plugin_state_path: str = Field(
         description=(
             "Filesystem path to the ``.fxp``/``.vstpreset`` baseline preset loaded before "
             "random parameter override."

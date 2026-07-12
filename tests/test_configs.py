@@ -211,7 +211,7 @@ def test_surge_4_generate_dataset_experiment_composes_with_inline_finalize() -> 
     cfg = _compose("dataset.yaml", ["experiment=generate_dataset/surge-4-lance-440k-20k-20k"])
 
     assert cfg.render.param_spec_name == "surge_4"
-    assert cfg.render.preset_path == "presets/surge-mini.vstpreset"
+    assert cfg.render.plugin_state_path == "presets/surge-mini.vstpreset"
     assert cfg.datamodule.param_spec_name == "surge_4"
     assert cfg.output_format == "lance"
     assert list(cfg.train_val_test_sizes) == [440000, 20000, 20000]

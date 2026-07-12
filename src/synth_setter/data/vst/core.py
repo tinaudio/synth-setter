@@ -178,10 +178,10 @@ def run_with_editor_held_open(plugin: VST3Plugin, body: Callable[[], _BodyResult
     return result[0]
 
 
-def load_preset(plugin: VST3Plugin, preset_path: str) -> None:
-    logger.info(f"Loading preset {preset_path}")
-    plugin.load_preset(preset_path)
-    logger.info(f"Preset {preset_path} loaded")
+def load_preset(plugin: VST3Plugin, plugin_state_path: str) -> None:
+    logger.info(f"Loading preset {plugin_state_path}")
+    plugin.load_preset(plugin_state_path)
+    logger.info(f"Preset {plugin_state_path} loaded")
 
 
 def set_params(plugin: VST3Plugin, params: dict[str, float]) -> None:
@@ -203,7 +203,7 @@ def render_params(
     signal_duration_seconds: float,
     sample_rate: float,
     channels: int,
-    preset_path: str | None = None,
+    plugin_state_path: str | None = None,
     *,
     plugin: VST3Plugin | None = None,
     warmup: bool = False,
@@ -211,15 +211,28 @@ def render_params(
     """Render a single audio sample; reuse ``plugin`` if supplied, else load fresh.
 
     The flush sequence runs every call (preset-state determinism, #489). When
-    ``plugin`` is supplied, ``plugin_path`` / ``preset_path`` are ignored; the
+    ``plugin`` is supplied, ``plugin_path`` / ``plugin_state_path`` are ignored; the
     caller owns load + preset placement. When ``warmup`` is True, ``warmup_plugin``
     runs after loading (or directly on the supplied plugin) and before the flush
     sequence. See #705 for the load-once-per-shard motivation.
+
+    :param plugin_path: Filesystem path to the VST3 plugin.
+    :param params: Synthesizer parameter values to apply before rendering.
+    :param midi_note: MIDI note number to render.
+    :param velocity: MIDI note velocity.
+    :param note_start_and_end: Note-on and note-off times in seconds.
+    :param signal_duration_seconds: Duration of the rendered signal in seconds.
+    :param sample_rate: Audio sample rate in Hz.
+    :param channels: Number of output channels.
+    :param plugin_state_path: Optional pedalboard plugin-state file to load.
+    :param plugin: Existing plugin instance to reuse.
+    :param warmup: Whether to run the plugin warm-up sequence.
+    :returns: Rendered audio as a channel-first NumPy array.
     """
     if plugin is None:
         plugin = load_plugin(plugin_path)
-        if preset_path is not None:
-            load_preset(plugin, preset_path)
+        if plugin_state_path is not None:
+            load_preset(plugin, plugin_state_path)
 
     if warmup:
         warmup_plugin(plugin)

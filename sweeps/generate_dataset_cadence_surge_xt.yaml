@@ -10,7 +10,7 @@ command:
   - ${program}
   - experiment=generate_dataset/smoke-shard-with-oracle-eval
   - render.param_spec_name=surge_xt
-  - render.preset_path=presets/surge-base.vstpreset
+  - render.plugin_state_path=presets/surge-base.vstpreset
   - ${args_no_hyphens}
 name: generate_dataset_cadence_surge_xt
 method: grid
