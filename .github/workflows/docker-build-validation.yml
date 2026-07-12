@@ -44,6 +44,13 @@ on:
       - "pyproject.toml"
       - "tests/docker/**"
 
+# Supersede queued/running builds when a PR is force-pushed — these builds run
+# 30-60 min and duplicates clog the runner queue. Push/dispatch runs keep a
+# unique group (run_id) so main builds are never cancelled mid-push.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # PR-only validation: build the image with `push: false` to prove the
   # Dockerfile + build args still compose. Held to `contents: read` so a
@@ -52,7 +59,9 @@ jobs:
   docker-validate:
     name: Validate Docker image build
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest-4core
+    # Standard runner: on this public repo it is 4 vCPU / 16 GiB RAM — same
+    # CPU/RAM as the retired paid `ubuntu-latest-4core` label (#1724).
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
       contents: read
@@ -61,6 +70,19 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.pull_request.head.sha }}
+
+      # Standard runners ship ~25 GiB of unused toolchains; the cu128 torch
+      # layers need that disk. Logs RAM/CPU/disk for exit-137 (OOM) triage.
+      - name: Free runner disk space
+        run: |
+          set -euo pipefail
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          df -h /
+          free -h
+          nproc
 
       - name: Resolve checked-out commit SHA
         id: source
@@ -97,8 +119,14 @@ jobs:
             --github-sha '${{ steps.source.outputs.sha }}' \
             --issue-number '${{ github.event.pull_request.number }}'
 
+      # max-parallelism 2: BuildKit otherwise runs independent Dockerfile
+      # stages concurrently, stacking their RAM peaks past the 16 GiB runner.
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          buildkitd-config-inline: |
+            [worker.oci]
+              max-parallelism = 2
 
       - name: Build Docker image (validation only — no push)
         uses: docker/build-push-action@v6
@@ -143,7 +171,9 @@ jobs:
   docker-push:
     name: Build and push Docker image
     if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest-4core
+    # Standard runner: on this public repo it is 4 vCPU / 16 GiB RAM — same
+    # CPU/RAM as the retired paid `ubuntu-latest-4core` label (#1724).
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
       contents: read
@@ -157,6 +187,19 @@ jobs:
           # don't cause one run to build a later main commit (and skip the
           # immutable dev-snapshot-<sha> tag for the triggering one).
           ref: ${{ github.event.inputs.git_ref || github.sha }}
+
+      # This job additionally `load:`s the built image for the smoke tests, so
+      # it needs the reclaimed disk even more than docker-validate does.
+      - name: Free runner disk space
+        run: |
+          set -euo pipefail
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          df -h /
+          free -h
+          nproc
 
       # Emits three outputs:
       #   sha         — 40-char commit SHA, baked into the image
@@ -280,8 +323,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # max-parallelism 2: BuildKit otherwise runs independent Dockerfile
+      # stages concurrently, stacking their RAM peaks past the 16 GiB runner.
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          buildkitd-config-inline: |
+            [worker.oci]
+              max-parallelism = 2
 
       - name: Verify Docker Hub push access
         env:
