@@ -11,7 +11,6 @@ from typing import Any
 
 import numpy as np
 
-from synth_setter.data.vst.core import extract_renderer_version
 from synth_setter.data.vst.param_map import SynthParamMap
 
 
@@ -169,7 +168,12 @@ class DawDreamerRenderer(AudioRenderer):
             raise ValueError(
                 f"DawDreamer parameter count {len(descriptions)} != map {snapshot.parameter_count}"
             )
-        version = extract_renderer_version(Path(self.plugin_path)) if snapshot.plugin_version else ""
+        if snapshot.plugin_version:
+            from synth_setter.data.vst.core import extract_renderer_version
+
+            version = extract_renderer_version(Path(self.plugin_path))
+        else:
+            version = ""
         if snapshot.plugin_version and version != snapshot.plugin_version:
             raise ValueError(f"plugin version {version!r} != map {snapshot.plugin_version!r}")
         if self.parameter_map.preset_sha256 and self.plugin_state_path is None:

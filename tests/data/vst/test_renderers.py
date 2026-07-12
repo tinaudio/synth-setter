@@ -25,6 +25,12 @@ from synth_setter.data.vst.renderers import (
 
 
 def _test_param_map(params: dict[str, tuple[int, str]], count: int) -> SynthParamMap:
+    """Build an explicit immutable map for a fake host.
+
+    :param params: Repository keys mapped to fake index and display name pairs.
+    :param count: Full fake host parameter count.
+    :returns: Strict test parameter map.
+    """
     snapshot = BackendSnapshot(plugin_version="", parameter_count=count)
     return SynthParamMap(
         plugin="test",
@@ -57,10 +63,38 @@ def test_generate_sample_uses_common_renderer_backend() -> None:
     """Dataset sample generation forwards note and params through an injected backend."""
 
     class Renderer:
+        """Minimal injected renderer for sample-generation coverage.
+
+        .. attribute :: sample_rate
+
+           Fake sample rate.
+
+        .. attribute :: channels
+
+           Fake output channel count.
+        """
+
         sample_rate = 44100
         channels = 2
 
-        def render(self, params, midi_note, velocity, note_start_and_end, *, warmup=False):
+        def render(
+            self,
+            params: dict[str, float],
+            midi_note: int,
+            velocity: int,
+            note_start_and_end: tuple[float, float],
+            *,
+            warmup: bool = False,
+        ) -> np.ndarray:
+            """Validate forwarded values and return audible fake audio.
+
+            :param params: Synth parameter values.
+            :param midi_note: MIDI note number.
+            :param velocity: MIDI velocity.
+            :param note_start_and_end: Note time bounds.
+            :param warmup: Whether warm-up was requested.
+            :returns: Audible stereo buffer.
+            """
             assert params == {"cutoff": 0.5}
             assert (midi_note, velocity, note_start_and_end, warmup) == (
                 60,
@@ -115,7 +149,7 @@ def test_pedalboard_renderer_uses_common_render_contract(monkeypatch: pytest.Mon
             44100,
             2,
         ),
-        "kwargs": {"preset_path": "preset.vstpreset", "plugin": None, "warmup": False},
+        "kwargs": {"plugin_state_path": "preset.vstpreset", "plugin": None, "warmup": False},
     }
 
 
@@ -285,24 +319,52 @@ def test_dawdreamer_renderer_rejects_invalid_parameter_dispatch_before_render(
     """
 
     class FakeProcessor:
+        """Expose one mapped parameter and MIDI cleanup."""
+
         def get_parameters_description(self) -> list[dict[str, object]]:
+            """Return the fake host enumeration.
+
+            :returns: One parameter description.
+            """
             return [{"index": 7, "name": "Cutoff"}]
 
         def clear_midi(self) -> None:
+            """Accept MIDI cleanup."""
             pass
 
     class FakeEngine:
+        """Track whether audio rendering begins."""
+
         def __init__(self, sample_rate: float, block_size: int) -> None:
+            """Create the fake processor.
+
+            :param sample_rate: Render sample rate.
+            :param block_size: Render block size.
+            """
             self.processor = FakeProcessor()
             self.render_calls = 0
 
         def make_plugin_processor(self, name: str, path: str) -> FakeProcessor:
+            """Return the fake processor.
+
+            :param name: Graph processor name.
+            :param path: Plugin path.
+            :returns: Fake processor.
+            """
             return self.processor
 
         def load_graph(self, graph: object) -> None:
+            """Accept a fake graph.
+
+            :param graph: Graph definition.
+            """
             pass
 
         def render(self, duration: float) -> None:
+            """Record a render attempt.
+
+            :param duration: Render duration.
+            """
             self.render_calls += 1
 
     monkeypatch.setitem(sys.modules, "dawdreamer", types.SimpleNamespace(RenderEngine=FakeEngine))
@@ -330,17 +392,40 @@ def test_dawdreamer_renderer_uses_explicit_surge_map_for_runtime_names(
     ]
 
     class FakeProcessor:
+        """Expose the preset-specific fake enumeration."""
+
         def get_parameters_description(self) -> list[dict[str, object]]:
+            """Return the fake host enumeration.
+
+            :returns: Parameter descriptions.
+            """
             return descriptions
 
     class FakeEngine:
+        """Provide the fake processor to the renderer."""
+
         def __init__(self, sample_rate: float, block_size: int) -> None:
+            """Create the processor.
+
+            :param sample_rate: Render sample rate.
+            :param block_size: Render block size.
+            """
             self.processor = FakeProcessor()
 
         def make_plugin_processor(self, name: str, path: str) -> FakeProcessor:
+            """Return the fake processor.
+
+            :param name: Graph processor name.
+            :param path: Plugin path.
+            :returns: Fake processor.
+            """
             return self.processor
 
         def load_graph(self, graph: object) -> None:
+            """Accept a fake graph.
+
+            :param graph: Graph definition.
+            """
             pass
 
     monkeypatch.setitem(sys.modules, "dawdreamer", types.SimpleNamespace(RenderEngine=FakeEngine))
