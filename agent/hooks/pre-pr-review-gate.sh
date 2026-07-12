@@ -91,26 +91,46 @@ COMMAND=$(jq -r '.tool_input.command // empty' 2>/dev/null <<<"$INPUT" || true)
 shell_wrapper_runs_pr_create() {
   COMMAND="$1" python3 - <<'PY' 2>/dev/null
 import os
-import re
 import shlex
 
 shells = {"sh", "bash", "dash", "ksh", "zsh"}
-pr_create = re.compile(r"\bgh\s+pr\s+create\b")
 
 
-def shell_arguments(tokens: list[str]) -> list[str]:
+def command_segments(command: str) -> list[list[str]]:
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=";|&()")
+    lexer.whitespace_split = True
+    lexer.commenters = "#"
+    segments: list[list[str]] = [[]]
+    for token in lexer:
+        if all(char in ";|&()" for char in token):
+            segments.append([])
+        else:
+            segments[-1].append(token)
+    return segments
+
+
+def executable_index(tokens: list[str]) -> int:
     index = 0
     while index < len(tokens) and "=" in tokens[index] and not tokens[index].startswith("="):
         index += 1
-    if index < len(tokens) and os.path.basename(tokens[index]) == "env":
+    while index < len(tokens) and tokens[index] in {"command", "env", "exec", "nice", "sudo", "time"}:
+        prefix = tokens[index]
         index += 1
-        while index < len(tokens) and (
-            tokens[index].startswith("-") or "=" in tokens[index]
-        ):
+        while index < len(tokens) and (tokens[index].startswith("-") or "=" in tokens[index]):
             index += 1
-    if index < len(tokens) and os.path.basename(tokens[index]) in shells:
-        return tokens[index + 1 :]
-    return []
+        if prefix == "env":
+            continue
+    while index < len(tokens) and tokens[index] in {"then", "do"}:
+        index += 1
+    return index
+
+
+def runs_pr_create(command: str) -> bool:
+    for tokens in command_segments(command):
+        index = executable_index(tokens)
+        if tokens[index : index + 3] == ["gh", "pr", "create"]:
+            return True
+    return False
 
 
 try:
@@ -118,19 +138,22 @@ try:
 except ValueError:
     raise SystemExit(0)
 
-arguments = shell_arguments(outer)
-if len(arguments) >= 2:
-    for index, token in enumerate(arguments[:-1]):
+for tokens in command_segments(os.environ["COMMAND"]):
+    index = executable_index(tokens)
+    if index >= len(tokens) or os.path.basename(tokens[index]) not in shells:
+        continue
+    arguments = tokens[index + 1 :]
+    for option_index, token in enumerate(arguments[:-1]):
         if token == "--command" or (token.startswith("-") and "c" in token[1:]):
-            raise SystemExit(0 if pr_create.search(arguments[index + 1]) else 1)
-raise SystemExit(1)
+            if runs_pr_create(arguments[option_index + 1]):
+                print("wrapped")
+                raise SystemExit(0)
+print("direct" if runs_pr_create(os.environ["COMMAND"]) else "")
 PY
 }
 
-# Here-string (not `echo |`) so SIGPIPE under pipefail can't fail-open. Allow
-# leading whitespace at line start so `  gh pr create` is still gated.
-if ! grep -qE '(^[[:space:]]*|[;|&`(][[:space:]]*)gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)' <<<"$COMMAND" \
-  && ! shell_wrapper_runs_pr_create "$COMMAND"; then
+PR_CREATE_MODE=$(shell_wrapper_runs_pr_create "$COMMAND")
+if [[ "$PR_CREATE_MODE" != "direct" && "$PR_CREATE_MODE" != "wrapped" ]]; then
   exit 0
 fi
 
@@ -235,6 +258,10 @@ block() {
   printf 'BLOCKED: %s\n\n%s\n' "$reason" "$help" >&2
   exit 2
 }
+
+if [[ "$PR_CREATE_MODE" == "wrapped" ]]; then
+  block "gh pr create must run directly, not through a shell wrapper"
+fi
 
 if [[ ! "$REVIEW_MAX_LAG" =~ ^[0-9]+$ ]]; then
   block "REVIEW_MAX_LAG must be a non-negative integer, got: ${REVIEW_MAX_LAG}"
