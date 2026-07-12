@@ -95,21 +95,22 @@ import re
 import shlex
 
 shells = {"sh", "bash", "dash", "ksh", "zsh"}
+pr_create = re.compile(r"\bgh\s+pr\s+create\b")
 
 
-def invokes_pr_create(command: str) -> bool:
-    direct_invocation = re.compile(
-        r"(?:^|[;|&`(]\s*)(?:exec\s+)?gh\s+pr\s+create(?:\s|$)"
-    )
-    if direct_invocation.search(command):
-        return True
-    try:
-        tokens = shlex.split(command, comments=True)
-    except ValueError:
-        return False
-    if tokens[:1] == ["exec"]:
-        tokens = tokens[1:]
-    return len(tokens) >= 3 and tokens[:3] == ["gh", "pr", "create"]
+def shell_arguments(tokens: list[str]) -> list[str]:
+    index = 0
+    while index < len(tokens) and "=" in tokens[index] and not tokens[index].startswith("="):
+        index += 1
+    if index < len(tokens) and os.path.basename(tokens[index]) == "env":
+        index += 1
+        while index < len(tokens) and (
+            tokens[index].startswith("-") or "=" in tokens[index]
+        ):
+            index += 1
+    if index < len(tokens) and os.path.basename(tokens[index]) in shells:
+        return tokens[index + 1 :]
+    return []
 
 
 try:
@@ -117,10 +118,11 @@ try:
 except ValueError:
     raise SystemExit(0)
 
-if len(outer) >= 3 and os.path.basename(outer[0]) in shells:
-    for index, token in enumerate(outer[:-1]):
+arguments = shell_arguments(outer)
+if len(arguments) >= 2:
+    for index, token in enumerate(arguments[:-1]):
         if token == "--command" or (token.startswith("-") and "c" in token[1:]):
-            raise SystemExit(0 if invokes_pr_create(outer[index + 1]) else 1)
+            raise SystemExit(0 if pr_create.search(arguments[index + 1]) else 1)
 raise SystemExit(1)
 PY
 }
