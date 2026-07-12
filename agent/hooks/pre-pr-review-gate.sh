@@ -86,9 +86,41 @@ PR_TITLE_GATE="${PR_TITLE_GATE:-block}"
 INPUT=$(cat)
 COMMAND=$(jq -r '.tool_input.command // empty' 2>/dev/null <<<"$INPUT" || true)
 
+# Shell wrappers hide invocations in one quoted ``-c`` argument; inspect that
+# string without mistaking prose such as ``echo 'gh pr create'`` for a command.
+shell_wrapper_runs_pr_create() {
+  COMMAND="$1" python3 - <<'PY' 2>/dev/null
+import os
+import shlex
+
+shells = {"sh", "bash", "dash", "ksh", "zsh"}
+
+
+def invokes_pr_create(command: str) -> bool:
+    try:
+        tokens = shlex.split(command, comments=True)
+    except ValueError:
+        return False
+    return len(tokens) >= 3 and tokens[:3] == ["gh", "pr", "create"]
+
+
+try:
+    outer = shlex.split(os.environ["COMMAND"], comments=True)
+except ValueError:
+    raise SystemExit(0)
+
+if len(outer) >= 3 and os.path.basename(outer[0]) in shells:
+    for index, token in enumerate(outer[:-1]):
+        if token in ("-c", "--command"):
+            raise SystemExit(0 if invokes_pr_create(outer[index + 1]) else 1)
+raise SystemExit(1)
+PY
+}
+
 # Here-string (not `echo |`) so SIGPIPE under pipefail can't fail-open. Allow
 # leading whitespace at line start so `  gh pr create` is still gated.
-if ! grep -qE '(^[[:space:]]*|[;|&`(][[:space:]]*)gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)' <<<"$COMMAND"; then
+if ! grep -qE '(^[[:space:]]*|[;|&`(][[:space:]]*)gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)' <<<"$COMMAND" \
+  && ! shell_wrapper_runs_pr_create "$COMMAND"; then
   exit 0
 fi
 

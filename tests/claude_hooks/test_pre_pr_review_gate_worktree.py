@@ -229,3 +229,15 @@ def test_gate_with_unresolvable_head_stays_strict(tmp_path: Path) -> None:
     result = _run_gate(primary, command)
     assert result.returncode == 2, (result.returncode, result.stdout)
     assert "does not point at a file" in result.stderr
+
+
+def test_gate_blocks_pr_create_wrapped_by_bash_without_review_path(tmp_path: Path) -> None:
+    """A shell wrapper cannot skip review-file validation (exit 2).
+
+    :param tmp_path: Pytest temporary directory used for the hermetic repository.
+    """
+    primary, _worktree, _tip = _make_repo_with_worktree(tmp_path)
+    result = _run_gate(primary, "bash -c 'gh pr create --title x --body y'")
+
+    assert result.returncode == 2, (result.returncode, result.stderr)
+    assert "REVIEW_FULL=" in result.stderr
