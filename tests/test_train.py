@@ -481,19 +481,25 @@ def test_train_resumes_from_wandb_resolved_checkpoint(
     )
 
 
-def test_train_fast_dev_run_lance_datamodule(cfg_train_lance: DictConfig) -> None:
+@pytest.mark.parametrize("loader", ["legacy", "map"])
+def test_train_fast_dev_run_lance_datamodule(cfg_train_lance: DictConfig, loader: str) -> None:
     """Run 1 train, val, and test step on CPU reading batches from Lance shards.
 
     Exercises config wiring, ``LanceVSTDataModule`` setup, and real Lance batch
     reads end-to-end through the in-process ``train(cfg)`` entrypoint; the Hydra
-    composition path lives on the ``cfg_train_lance`` fixture. Also pins the
+    composition path lives on the ``cfg_train_lance`` fixture. Parametrized over
+    the datamodule's ``loader`` switch so the legacy batch-indexed path and the
+    sample-indexed ``lance.torch`` map path both train. Also pins the
     Dataset-API migration's two e2e-visible contracts on the live datamodule:
     splits open as directory datasets, and a column accepts unsorted fancy
     indices returning rows in the requested order.
 
     :param cfg_train_lance: Composed ``datamodule=surge_lance`` training config.
+    :param loader: Datamodule read path under test (``legacy`` or ``map``).
     """
     HydraConfig().set_config(cfg_train_lance)
+    with open_dict(cfg_train_lance):
+        cfg_train_lance.datamodule.loader = loader
     _, object_dict = train(cfg_train_lance)
 
     # Pin the Dataset-API migration e2e: the split the datamodule trained over
@@ -502,11 +508,13 @@ def test_train_fast_dev_run_lance_datamodule(cfg_train_lance: DictConfig) -> Non
     assert train_split.is_dir()
 
 
-def test_train_same_seed_reproduces_noise_stream(cfg_train_lance: DictConfig) -> None:
+@pytest.mark.parametrize("loader", ["legacy", "map"])
+def test_train_same_seed_reproduces_noise_stream(cfg_train_lance: DictConfig, loader: str) -> None:
     """Two ``train(cfg)`` runs under one ``cfg.seed`` consume identical batch noise.
 
     Pins the operator-facing seeding contract after the noise draw moved off
-    the global RNG onto a per-dataset generator: ``seed_everything(cfg.seed,
+    the global RNG onto a per-dataset generator (legacy path) and onto
+    ``PrepareBatchCollate`` (map path): ``seed_everything(cfg.seed,
     workers=True)`` must still govern the real-read noise path. Runs
     ``num_workers=0`` because forking workers over Lance deadlocks on the
     parent's tokio threadpool (worker-safe opening is #1740 Phase 2 scope);
@@ -514,9 +522,11 @@ def test_train_same_seed_reproduces_noise_stream(cfg_train_lance: DictConfig) ->
     ``tests/data/test_surge_datamodule.py::TestNoiseGeneratorSeeding``.
 
     :param cfg_train_lance: Composed ``datamodule=surge_lance`` training config.
+    :param loader: Datamodule read path under test (``legacy`` or ``map``).
     """
     HydraConfig().set_config(cfg_train_lance)
     with open_dict(cfg_train_lance):
+        cfg_train_lance.datamodule.loader = loader
         cfg_train_lance.seed = 1234
         cfg_train_lance.callbacks.noise_capture = {
             "_target_": "tests.helpers.noise_capture.NoiseCaptureCallback"

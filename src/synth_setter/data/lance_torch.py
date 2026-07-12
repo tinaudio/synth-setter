@@ -149,6 +149,37 @@ def _prebatched_collate(batch: dict[str, torch.Tensor]) -> dict[str, torch.Tenso
     return batch
 
 
+def map_dataloader_over(
+    dataset: torch.utils.data.Dataset,
+    *,
+    batch_size: int,
+    num_workers: int = 0,
+    **loader_kwargs: Any,
+) -> DataLoader:
+    """Wrap an existing map-style dataset in a (spawn-safe) DataLoader.
+
+    Worker processes use Lance's ``get_safe_loader`` (spawn context — Lance
+    datasets are not fork-safe), so ``dataset`` and every ``loader_kwargs``
+    callable must be picklable when ``num_workers > 0``.
+
+    :param dataset: Map-style dataset whose ``__getitems__`` pre-collates a
+        batch (:class:`LanceMapDataset` or a wrapper over one).
+    :param batch_size: Rows per yielded batch.
+    :param num_workers: DataLoader worker processes; ``0`` loads in-process.
+    :param \\*\\*loader_kwargs: Extra ``torch.utils.data.DataLoader`` keywords
+        (``shuffle``, ``sampler``, ``collate_fn``, ``pin_memory``, ...).
+    :returns: DataLoader over ``dataset``.
+    """
+    loader_kwargs.setdefault("collate_fn", _prebatched_collate)
+    if num_workers == 0:
+        # get_safe_loader's spawn context and persistent workers require
+        # num_workers > 0; in-process loading is a plain DataLoader.
+        return DataLoader(dataset, batch_size=batch_size, **loader_kwargs)
+    return get_safe_loader(
+        dataset, batch_size=batch_size, num_workers=num_workers, **loader_kwargs
+    )
+
+
 def lance_map_dataloader(
     uri: str | Path,
     *,
@@ -159,9 +190,6 @@ def lance_map_dataloader(
     **loader_kwargs: Any,
 ) -> DataLoader:
     """Build a map-style DataLoader (random access, shuffling, DDP-samplable).
-
-    Worker processes use Lance's ``get_safe_loader`` (spawn context —
-    Lance datasets are not fork-safe).
 
     :param uri: Dataset directory (local path or ``s3://`` URI).
     :param batch_size: Rows per yielded batch.
@@ -183,12 +211,7 @@ def lance_map_dataloader(
         batch_size,
         num_workers,
     )
-    loader_kwargs.setdefault("collate_fn", _prebatched_collate)
-    if num_workers == 0:
-        # get_safe_loader's spawn context and persistent workers require
-        # num_workers > 0; in-process loading is a plain DataLoader.
-        return DataLoader(dataset, batch_size=batch_size, **loader_kwargs)
-    return get_safe_loader(
+    return map_dataloader_over(
         dataset, batch_size=batch_size, num_workers=num_workers, **loader_kwargs
     )
 

@@ -1,0 +1,592 @@
+"""Behavioral tests for the ``loader="map"`` path of ``LanceVSTDataModule``.
+
+Covers the sample-indexed cutover behind the config switch (#1740):
+
+* :class:`PrepareBatchCollate` — the picklable collate that turns
+  ``LanceMapDataset.__getitems__``'s pre-collated tensor dict into
+  :func:`prepare_batch` model batches.
+* ``LanceVSTDataModule(loader="map")`` — Lightning ``setup`` / dataloader /
+  ``teardown`` wiring over per-split :class:`LanceMapDataset` instances.
+
+Every test drives real Lance datasets written through the pipeline writer —
+no fakes or mocks of the storage layer anywhere in this module. Fixtures are
+tiny (a handful of rows, ~10-element mel/audio axes): the goal is contract
+coverage on shapes, flags, values, and flow routing, mirroring
+``tests/data/test_lance_datamodule.py``.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import pickle
+from collections.abc import Iterator
+from pathlib import Path
+
+import numpy as np
+import pytest
+import torch
+from lightning import LightningModule, Trainer
+
+from synth_setter.data.lance_datamodule import (
+    LanceVSTDataModule,
+    LanceVSTDataset,
+    PrepareBatchCollate,
+)
+from synth_setter.data.vst.param_spec_registry import param_specs
+from tests.helpers.lance_fixtures import write_lance_shard
+
+_AUDIO_CHANNELS = 2
+_AUDIO_SAMPLES = 16
+_MEL_CHANNELS = 2
+_MEL_N_MELS = 4
+_MEL_N_FRAMES = 5
+_M2L_DIM_1 = 6
+_M2L_DIM_2 = 7
+_NUM_PARAMS = 11
+
+_MEL_SHAPE = (_MEL_CHANNELS, _MEL_N_MELS, _MEL_N_FRAMES)
+
+
+def _make_columns(
+    num_rows: int, *, num_params: int = _NUM_PARAMS, seed: int = 0
+) -> dict[str, np.ndarray]:
+    """Build the column arrays a Lance shard carries.
+
+    :param num_rows: Number of rows along the first axis of every column.
+    :param num_params: Width of the ``param_array`` column.
+    :param seed: Seed for all columns so splits get distinguishable values.
+    :return: Mapping of column name to ``(num_rows, ...)`` array.
+    """
+    rng = np.random.default_rng(seed)
+    return {
+        # float16 mirrors the pipeline's on-disk audio dtype (DATASET_FIELD_DTYPES).
+        "audio": rng.standard_normal((num_rows, _AUDIO_CHANNELS, _AUDIO_SAMPLES)).astype(
+            np.float16
+        ),
+        "mel_spec": rng.standard_normal((num_rows, *_MEL_SHAPE)).astype(np.float32),
+        "music2latent": rng.standard_normal((num_rows, _M2L_DIM_1, _M2L_DIM_2)).astype(np.float32),
+        # params in [0, 1) so the rescale_params=True branch lands in [-1, 1).
+        "param_array": rng.random((num_rows, num_params)).astype(np.float32),
+    }
+
+
+def _write_split(
+    path: Path,
+    num_rows: int,
+    *,
+    num_params: int = _NUM_PARAMS,
+    seed: int = 0,
+    mel_fill: float | None = None,
+) -> dict[str, np.ndarray]:
+    """Write a tiny Lance shard and return its source arrays for assertions.
+
+    :param path: Output ``.lance`` dataset directory.
+    :param num_rows: Number of rows along the first axis of every column.
+    :param num_params: Width of the ``param_array`` column.
+    :param seed: Seed for the per-row arrays.
+    :param mel_fill: When set, fill ``mel_spec`` with this constant so the
+        normalization test can pin ``(mel - mean) / std`` exactly.
+    :return: The column arrays that were written.
+    """
+    columns = _make_columns(num_rows, num_params=num_params, seed=seed)
+    if mel_fill is not None:
+        columns["mel_spec"] = np.full_like(columns["mel_spec"], mel_fill)
+    write_lance_shard(path, columns)
+    return columns
+
+
+def _write_stats(dataset_dir: Path, *, mean: float = 0.0, std: float = 1.0) -> None:
+    """Write a sibling ``stats.npz`` whose mean/std broadcast against ``mel_spec``.
+
+    :param dataset_dir: Directory holding the ``*.lance`` splits.
+    :param mean: Scalar mean broadcast against every mel-spec element.
+    :param std: Scalar std broadcast against every mel-spec element.
+    """
+    np.savez(
+        dataset_dir / "stats.npz",
+        mean=np.full(_MEL_SHAPE, mean, dtype=np.float32),
+        std=np.full(_MEL_SHAPE, std, dtype=np.float32),
+    )
+
+
+@pytest.fixture
+def dataset_root(tmp_path: Path) -> Path:
+    """Build a dataset root with ``train/val/test.lance`` + identity ``stats.npz``.
+
+    :param tmp_path: Per-test tmpdir.
+    :return: Path to the populated dataset root directory.
+    """
+    root = tmp_path / "data"
+    root.mkdir()
+    _write_split(root / "train.lance", num_rows=16, seed=1)
+    _write_split(root / "val.lance", num_rows=6, seed=2)
+    _write_split(root / "test.lance", num_rows=6, seed=3)
+    _write_stats(root)
+    return root
+
+
+@contextlib.contextmanager
+def _set_up_map_module(**kwargs: object) -> Iterator[LanceVSTDataModule]:
+    """Construct a ``loader="map"`` datamodule, ``setup``, yield, ``teardown``.
+
+    :param \\*\\*kwargs: Forwarded to ``LanceVSTDataModule``; ``loader`` and
+        cheap loader defaults (no workers, no pinning) are pre-set.
+    :yields: The set-up datamodule for assertion work inside the ``with`` block.
+    :ytype: LanceVSTDataModule
+    """
+    kwargs.setdefault("loader", "map")
+    kwargs.setdefault("num_workers", 0)
+    kwargs.setdefault("pin_memory", False)
+    module = LanceVSTDataModule(**kwargs)  # type: ignore[arg-type]
+    module.setup()
+    try:
+        yield module
+    finally:
+        module.teardown()
+
+
+def _unwrap(maybe_tensor: torch.Tensor | None) -> torch.Tensor:
+    """Assert ``maybe_tensor`` is non-None and return it narrowed.
+
+    :param maybe_tensor: The batch value to narrow.
+    :return: The same tensor, now typed as non-None.
+    """
+    assert maybe_tensor is not None
+    return maybe_tensor
+
+
+def _params_in_order(loader: torch.utils.data.DataLoader) -> np.ndarray:
+    """Concatenate ``params`` across all yielded batches in iteration order.
+
+    :param loader: Loader whose epoch is materialized.
+    :return: ``(total_rows, num_params)`` array.
+    """
+    return torch.cat([_unwrap(batch["params"]) for batch in loader]).numpy()
+
+
+class TestPrepareBatchCollate:
+    """The collate owns per-batch semantics for the map path: it must be a
+    faithful, picklable bridge into ``prepare_batch``."""
+
+    def _raw_batch(self, num_rows: int = 4) -> dict[str, torch.Tensor]:
+        """Build the pre-collated tensor dict ``LanceMapDataset.__getitems__`` yields.
+
+        :param num_rows: Batch size of the synthetic batch.
+        :return: Column-name-to-tensor mapping matching the shard schema.
+        """
+        columns = _make_columns(num_rows, seed=7)
+        return {name: torch.from_numpy(values) for name, values in columns.items()}
+
+    def test_collate_returns_float32_model_batch_with_noise(self) -> None:
+        """The collate emits the ``prepare_batch`` contract: float32 tensors + noise."""
+        collate = PrepareBatchCollate(mean=None, std=None, rescale_params=False, ot=False)
+        batch = collate(self._raw_batch(num_rows=4))
+        assert _unwrap(batch["params"]).shape == (4, _NUM_PARAMS)
+        assert _unwrap(batch["noise"]).shape == (4, _NUM_PARAMS)
+        for key in ("mel_spec", "m2l", "params", "noise", "audio"):
+            assert _unwrap(batch[key]).dtype == torch.float32, key
+
+    def test_collate_missing_optional_columns_map_to_none(self) -> None:
+        """A projected-out modality is absent from the raw dict and lands as ``None``."""
+        collate = PrepareBatchCollate(mean=None, std=None, rescale_params=False, ot=False)
+        raw = self._raw_batch()
+        del raw["audio"], raw["music2latent"]
+        batch = collate(raw)
+        assert batch["audio"] is None
+        assert batch["m2l"] is None
+        assert _unwrap(batch["mel_spec"]).shape == (4, *_MEL_SHAPE)
+
+    def test_collate_normalizes_mel_with_mean_and_std(self) -> None:
+        """``(mel - mean) / std`` is applied when stats are provided."""
+        collate = PrepareBatchCollate(
+            mean=np.full(_MEL_SHAPE, 1.0, dtype=np.float32),
+            std=np.full(_MEL_SHAPE, 2.0, dtype=np.float32),
+            rescale_params=False,
+            ot=False,
+        )
+        raw = self._raw_batch()
+        raw["mel_spec"] = torch.full((4, *_MEL_SHAPE), 3.0)
+        mel = _unwrap(collate(raw)["mel_spec"])
+        assert torch.allclose(mel, torch.full_like(mel, 1.0))
+
+    def test_collate_rescale_params_centers_to_minus_one_one(self) -> None:
+        """``rescale_params=True`` applies ``p * 2 - 1`` element-wise."""
+        raw = self._raw_batch()
+        plain = PrepareBatchCollate(mean=None, std=None, rescale_params=False, ot=False)(
+            dict(raw)
+        )
+        rescaled = PrepareBatchCollate(mean=None, std=None, rescale_params=True, ot=False)(
+            dict(raw)
+        )
+        assert torch.allclose(_unwrap(rescaled["params"]), _unwrap(plain["params"]) * 2 - 1)
+
+    def test_collate_ot_true_permutes_rows_bijectively(self) -> None:
+        """``ot=True`` may only reorder rows — sorted rows match the ``ot=False`` batch."""
+        raw = self._raw_batch()
+        plain = PrepareBatchCollate(mean=None, std=None, rescale_params=False, ot=False)(
+            dict(raw)
+        )["params"]
+        matched = PrepareBatchCollate(mean=None, std=None, rescale_params=False, ot=True)(
+            dict(raw)
+        )["params"]
+        plain_sorted = _unwrap(plain)[torch.argsort(_unwrap(plain)[:, 0])]
+        matched_sorted = _unwrap(matched)[torch.argsort(_unwrap(matched)[:, 0])]
+        assert torch.allclose(matched_sorted, plain_sorted)
+
+    def test_collate_round_trips_through_pickle_for_spawn_workers(self) -> None:
+        """Spawn workers pickle the collate; it must survive even after first use."""
+        collate = PrepareBatchCollate(mean=None, std=None, rescale_params=False, ot=False)
+        collate(self._raw_batch())  # materialize the lazy generator before pickling
+        clone = pickle.loads(pickle.dumps(collate))
+        batch = clone(self._raw_batch())
+        assert _unwrap(batch["noise"]).shape == (4, _NUM_PARAMS)
+
+    def test_collate_same_global_seed_reproduces_noise(self) -> None:
+        """Construction draws its seed from the global RNG, so ``seed_everything`` governs."""
+
+        def noise_after_seed() -> torch.Tensor:
+            torch.manual_seed(1234)
+            collate = PrepareBatchCollate(mean=None, std=None, rescale_params=False, ot=False)
+            return _unwrap(collate(self._raw_batch())["noise"])
+
+        assert torch.equal(noise_after_seed(), noise_after_seed())
+
+
+class TestLanceMapDataModuleSetup:
+    """``loader`` routing at construction and ``setup`` time."""
+
+    def test_default_loader_stays_legacy(self, dataset_root: Path) -> None:
+        """No ``loader`` argument keeps the batch-indexed ``LanceVSTDataset`` path.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        module = LanceVSTDataModule(dataset_root=dataset_root, batch_size=2, ot=False)
+        module.setup()
+        try:
+            assert isinstance(module.train_dataset, LanceVSTDataset)
+        finally:
+            module.teardown()
+
+    def test_map_loaders_are_sample_indexed(self, dataset_root: Path) -> None:
+        """``loader="map"`` loaders carry sample semantics: row-count datasets, real batch size.
+
+        The legacy path is batch-indexed (``batch_size=None``, dataset length in
+        batches) — this pins the cutover Lightning sees.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        with _set_up_map_module(dataset_root=dataset_root, batch_size=2, ot=False) as module:
+            loaders = {
+                "train": (module.train_dataloader(), 16),
+                "val": (module.val_dataloader(), 6),
+                "test": (module.test_dataloader(), 6),
+                "predict": (module.predict_dataloader(), 6),
+            }
+            for name, (loader, num_rows) in loaders.items():
+                assert loader.batch_size == 2, name
+                assert len(loader.dataset) == num_rows, name  # type: ignore[arg-type]
+
+    def test_unknown_loader_raises_value_error(self, dataset_root: Path) -> None:
+        """An unregistered ``loader`` value fails at construction, not mid-training.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        with pytest.raises(ValueError, match="loader"):
+            # Hydra configs pass arbitrary strings at runtime, so the guard is
+            # the trust boundary the Literal annotation cannot enforce.
+            LanceVSTDataModule(dataset_root=dataset_root, batch_size=2, loader="iterable")  # type: ignore[arg-type]
+
+    def test_map_missing_stats_raises_file_not_found(self, tmp_path: Path) -> None:
+        """``use_saved_mean_and_variance=True`` with no ``stats.npz`` errors at setup.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        root = tmp_path / "data"
+        root.mkdir()
+        for split in ("train", "val", "test"):
+            _write_split(root / f"{split}.lance", num_rows=4)
+        module = LanceVSTDataModule(dataset_root=root, batch_size=2, loader="map")
+        with pytest.raises(FileNotFoundError, match="stats.npz"):
+            module.setup()
+
+
+class TestLanceMapDataModuleFlows:
+    """Dataloader semantics per Lightning flow: train / val / test / predict."""
+
+    def test_val_loader_yields_source_rows_in_order_with_ragged_tail(
+        self, dataset_root: Path
+    ) -> None:
+        """Sequential val iteration returns exactly the written rows, tail included.
+
+        The map path keeps the ragged final batch (6 rows, batch 4 -> [4, 2]) instead of legacy's
+        floor-divide drop.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        source = _make_columns(6, seed=2)["param_array"] * 2 - 1
+        with _set_up_map_module(dataset_root=dataset_root, batch_size=4, ot=False) as module:
+            batches = list(module.val_dataloader())
+            assert [len(_unwrap(b["params"])) for b in batches] == [4, 2]
+            np.testing.assert_array_equal(
+                torch.cat([_unwrap(b["params"]) for b in batches]).numpy(), source
+            )
+
+    def test_train_loader_shuffles_and_covers_every_row(self, dataset_root: Path) -> None:
+        """One train epoch is a row permutation: full coverage, non-sequential order.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        torch.manual_seed(0)
+        source = _make_columns(16, seed=1)["param_array"] * 2 - 1
+        with _set_up_map_module(dataset_root=dataset_root, batch_size=4, ot=False) as module:
+            epoch = _params_in_order(module.train_dataloader())
+        assert epoch.shape == source.shape
+        assert not np.array_equal(epoch, source), "train epoch came back unshuffled"
+        order = np.lexsort(epoch.T[::-1])
+        source_order = np.lexsort(source.T[::-1])
+        np.testing.assert_array_equal(epoch[order], source[source_order])
+
+    def test_val_and_test_loaders_do_not_shuffle_or_ot(self, dataset_root: Path) -> None:
+        """Eval splits keep source row order even when the module trains with OT.
+
+        In-order equality is only possible if neither shuffling nor the OT row permutation touched
+        the eval loaders.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        with _set_up_map_module(dataset_root=dataset_root, batch_size=3, ot=True) as module:
+            np.testing.assert_array_equal(
+                _params_in_order(module.val_dataloader()),
+                _make_columns(6, seed=2)["param_array"] * 2 - 1,
+            )
+            np.testing.assert_array_equal(
+                _params_in_order(module.test_dataloader()),
+                _make_columns(6, seed=3)["param_array"] * 2 - 1,
+            )
+
+    def test_predict_loader_reads_audio_eval_loaders_do_not(self, dataset_root: Path) -> None:
+        """Only the predict flow pays for the audio column.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        with _set_up_map_module(dataset_root=dataset_root, batch_size=2, ot=False) as module:
+            val_batch = next(iter(module.val_dataloader()))
+            predict_batch = next(iter(module.predict_dataloader()))
+        assert val_batch["audio"] is None
+        assert _unwrap(predict_batch["audio"]).shape == (2, _AUDIO_CHANNELS, _AUDIO_SAMPLES)
+        assert _unwrap(predict_batch["audio"]).dtype == torch.float32
+
+    def test_m2l_conditioning_swaps_mel_for_music2latent(self, dataset_root: Path) -> None:
+        """``conditioning="m2l"`` projects ``music2latent`` and drops ``mel_spec``.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        with _set_up_map_module(
+            dataset_root=dataset_root, batch_size=2, ot=False, conditioning="m2l"
+        ) as module:
+            batch = next(iter(module.val_dataloader()))
+        assert batch["mel_spec"] is None
+        np.testing.assert_array_equal(
+            _unwrap(batch["m2l"]).numpy(), _make_columns(6, seed=2)["music2latent"][:2]
+        )
+
+    def test_mel_normalized_with_saved_stats(self, tmp_path: Path) -> None:
+        """Loaded ``stats.npz`` mean/std are applied as ``(mel - mean) / std``.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        root = tmp_path / "data"
+        root.mkdir()
+        for split in ("train", "val", "test"):
+            _write_split(root / f"{split}.lance", num_rows=4, mel_fill=3.0)
+        _write_stats(root, mean=1.0, std=2.0)
+        with _set_up_map_module(dataset_root=root, batch_size=2, ot=False) as module:
+            mel = _unwrap(next(iter(module.val_dataloader()))["mel_spec"])
+        assert torch.allclose(mel, torch.full_like(mel, 1.0))
+
+    def test_batches_are_float32_contiguous_and_writable(self, dataset_root: Path) -> None:
+        """Model-batch tensors own writable memory out of the Arrow decode path.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        with _set_up_map_module(dataset_root=dataset_root, batch_size=2, ot=False) as module:
+            batch = next(iter(module.predict_dataloader()))
+        for key in ("mel_spec", "params", "noise", "audio"):
+            tensor = _unwrap(batch[key])
+            assert tensor.dtype == torch.float32, key
+            assert tensor.is_contiguous(), key
+            assert tensor.numpy().flags.writeable, key
+
+
+class TestLanceMapDataModuleModes:
+    """Fake mode, ``repeat_first_batch``, and worker-process parity."""
+
+    def test_fake_mode_synthesizes_batches_without_files(self, tmp_path: Path) -> None:
+        """``fake=True`` under ``loader="map"`` never touches Lance — an empty root works.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        with _set_up_map_module(
+            dataset_root=tmp_path,
+            batch_size=2,
+            ot=False,
+            fake=True,
+            use_saved_mean_and_variance=False,
+        ) as module:
+            batch = next(iter(module.val_dataloader()))
+        assert _unwrap(batch["params"]).shape == (2, len(param_specs["surge_xt"]))
+
+    def test_repeat_first_batch_every_train_batch_is_the_first(self, dataset_root: Path) -> None:
+        """``repeat_first_batch=True`` yields rows ``[0, batch_size)`` for every batch.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        first_rows = _make_columns(16, seed=1)["param_array"][:4] * 2 - 1
+        with _set_up_map_module(
+            dataset_root=dataset_root, batch_size=4, ot=False, repeat_first_batch=True
+        ) as module:
+            batches = list(module.train_dataloader())
+        assert len(batches) == 4
+        for batch in batches:
+            np.testing.assert_array_equal(_unwrap(batch["params"]).numpy(), first_rows)
+
+    @pytest.mark.slow
+    def test_val_loader_spawn_workers_match_in_process(self, dataset_root: Path) -> None:
+        """``num_workers=2`` spawn workers read the same rows as in-process loading.
+
+        The map path pickles the dataset and collate into spawned workers (Lance is not fork-safe)
+        — parity proves both survive the round-trip.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+
+        def collect(num_workers: int) -> np.ndarray:
+            with _set_up_map_module(
+                dataset_root=dataset_root, batch_size=2, ot=False, num_workers=num_workers
+            ) as module:
+                return _params_in_order(module.val_dataloader())
+
+        np.testing.assert_array_equal(collect(num_workers=2), collect(num_workers=0))
+
+
+class _FlowProbe(LightningModule):
+    """Minimal Lightning module recording the batches each flow received.
+
+    The datamodule is the system under test; this probe only pins the batch contract (param width,
+    conditioning present, matched noise) at every Lightning entrypoint and gives the trainer a real
+    optimizable parameter.
+    """
+
+    def __init__(self, num_params: int) -> None:
+        """Size the probe for one param spec.
+
+        :param num_params: Expected ``params`` width per batch.
+        """
+        super().__init__()
+        self.num_params = num_params
+        self.head = torch.nn.Linear(num_params, 1)
+        self.flows_seen: set[str] = set()
+
+    def _check_batch(self, batch: dict[str, torch.Tensor | None], flow: str) -> torch.Tensor:
+        """Assert one batch carries the model contract and return a loss.
+
+        :param batch: Model batch as produced by ``prepare_batch``.
+        :param flow: Lightning flow name being recorded.
+        :returns: Scalar loss over the params head.
+        """
+        params = batch["params"]
+        noise = batch["noise"]
+        mel = batch["mel_spec"]
+        assert params is not None and params.shape[1] == self.num_params
+        assert noise is not None and noise.shape == params.shape
+        assert mel is not None and mel.shape[0] == params.shape[0]
+        self.flows_seen.add(flow)
+        return self.head(params).mean()
+
+    def training_step(self, batch: dict[str, torch.Tensor | None], batch_idx: int) -> torch.Tensor:
+        """Record the train flow.
+
+        :param batch: Model batch as produced by ``prepare_batch``.
+        :param batch_idx: Lightning batch index; unused.
+        :returns: Scalar loss.
+        """
+        return self._check_batch(batch, "fit")
+
+    def validation_step(self, batch: dict[str, torch.Tensor | None], batch_idx: int) -> None:
+        """Record the validation flow.
+
+        :param batch: Model batch as produced by ``prepare_batch``.
+        :param batch_idx: Lightning batch index; unused.
+        """
+        self._check_batch(batch, "validate")
+
+    def test_step(self, batch: dict[str, torch.Tensor | None], batch_idx: int) -> None:
+        """Record the test flow.
+
+        :param batch: Model batch as produced by ``prepare_batch``.
+        :param batch_idx: Lightning batch index; unused.
+        """
+        self._check_batch(batch, "test")
+
+    def predict_step(self, batch: dict[str, torch.Tensor | None], batch_idx: int) -> torch.Tensor:
+        """Record the predict flow; predict batches must also carry audio.
+
+        :param batch: Model batch as produced by ``prepare_batch``.
+        :param batch_idx: Lightning batch index; unused.
+        :returns: The params tensor, echoing the oracle predict contract.
+        """
+        assert batch["audio"] is not None
+        self._check_batch(batch, "predict")
+        params = batch["params"]
+        assert params is not None
+        return params
+
+    def configure_optimizers(self) -> torch.optim.Optimizer:
+        """Give the trainer a real optimizer over the probe head.
+
+        :returns: SGD over the head parameters.
+        """
+        return torch.optim.SGD(self.parameters(), lr=1e-3)
+
+
+class TestTrainerFlowsAcrossParamSpecs:
+    """Fit / validate / test / predict through a real Lightning Trainer, one
+    run per registered synth param spec."""
+
+    @pytest.mark.parametrize("param_spec_name", sorted(param_specs))
+    def test_all_trainer_flows_run_on_map_loader(
+        self, tmp_path: Path, param_spec_name: str
+    ) -> None:
+        """Every Lightning flow round-trips map-loader batches at the spec's width.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param param_spec_name: Registry key of the param spec under test.
+        """
+        num_params = len(param_specs[param_spec_name])
+        root = tmp_path / "data"
+        root.mkdir()
+        for seed, split in enumerate(("train", "val", "test")):
+            _write_split(root / f"{split}.lance", num_rows=4, num_params=num_params, seed=seed)
+        _write_stats(root)
+
+        with _set_up_map_module(
+            dataset_root=root, batch_size=2, ot=True, param_spec_name=param_spec_name
+        ) as module:
+            probe = _FlowProbe(num_params)
+            trainer = Trainer(
+                accelerator="cpu",
+                max_epochs=1,
+                limit_train_batches=1,
+                limit_val_batches=1,
+                limit_test_batches=1,
+                limit_predict_batches=1,
+                logger=False,
+                enable_checkpointing=False,
+                enable_progress_bar=False,
+                enable_model_summary=False,
+            )
+            trainer.fit(probe, datamodule=module)
+            trainer.test(probe, datamodule=module, verbose=False)
+            trainer.predict(probe, datamodule=module)
+
+        assert probe.flows_seen == {"fit", "validate", "test", "predict"}

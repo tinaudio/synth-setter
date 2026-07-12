@@ -102,6 +102,24 @@ def prepare_batch(
     }
 
 
+def load_dataset_statistics(dataset_file: str | Path) -> tuple[np.ndarray, np.ndarray]:
+    """Load the mel mean and std saved beside the shard.
+
+    :param dataset_file: Shard path whose parent directory holds ``stats.npz``.
+    :returns: ``(mean, std)`` arrays broadcasting against ``mel_spec`` rows.
+    :raises FileNotFoundError: If the expected ``stats.npz`` is missing.
+    """
+    stats_file = VSTDataset.get_stats_file_path(dataset_file)
+    if not stats_file.exists():
+        raise FileNotFoundError(
+            f"Could not find statistics file {stats_file}. \n"
+            "Make sure to first run `src/synth_setter/pipeline/data/stats.py`."
+        )
+
+    with np.load(stats_file) as stats:
+        return stats["mean"], stats["std"]
+
+
 class ShardColumn(Protocol):
     """One named array column of a shard — the read surface of ``h5py.Dataset``."""
 
@@ -240,18 +258,8 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
         """Load the mel mean and std saved alongside the shard.
 
         :param dataset_file: Shard path used to locate the sibling ``stats.npz``.
-        :raises FileNotFoundError: If the expected ``stats.npz`` is missing.
         """
-        stats_file = VSTDataset.get_stats_file_path(dataset_file)
-        if not stats_file.exists():
-            raise FileNotFoundError(
-                f"Could not find statistics file {stats_file}. \n"
-                "Make sure to first run `src/synth_setter/pipeline/data/stats.py`."
-            )
-
-        with np.load(stats_file) as stats:
-            self.mean = stats["mean"]
-            self.std = stats["std"]
+        self.mean, self.std = load_dataset_statistics(dataset_file)
 
     @staticmethod
     def get_stats_file_path(dataset_file: str | Path) -> Path:
