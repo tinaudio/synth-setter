@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 from pydantic import BaseModel, ConfigDict
-from typing import cast
 
 
 def dawdreamer_parameter_key(name: str) -> str:
@@ -39,17 +39,28 @@ class DawDreamerPluginMap(BaseModel):  # noqa: DOC601, DOC603 — Pydantic field
     params: dict[str, DawDreamerParamRef]
 
 
-def build_dawdreamer_map(plugin_path: Path, descriptions: list[dict[str, object]]) -> DawDreamerPluginMap:
+def build_dawdreamer_map(
+    plugin_path: Path, descriptions: list[dict[str, object]]
+) -> DawDreamerPluginMap:
     """Build a name-keyed map from ``PluginProcessor.get_parameters_description`` output.
 
     :param plugin_path: Loaded plugin bundle path.
     :param descriptions: DawDreamer's parameter description dictionaries.
     :returns: Strict, JSON-serializable parameter map.
+    :raises ValueError: If two display names normalize to the same parameter key.
     """
-    params = {
-        dawdreamer_parameter_key(str(description["name"])): DawDreamerParamRef(
+    params: dict[str, DawDreamerParamRef] = {}
+    for description in descriptions:
+        name = str(description["name"])
+        key = dawdreamer_parameter_key(name)
+        if key in params and params[key].name != name:
+            previous_name = params[key].name
+            raise ValueError(
+                f"DawDreamer parameter key {key!r} is shared by {previous_name!r} and {name!r}"
+            )
+        params[key] = DawDreamerParamRef(
             index=cast(int, description["index"]),
-            name=str(description["name"]),
+            name=name,
             label=str(description.get("label", "")),
             category=str(description.get("category", "unknown")),
             default_value=cast(float, description.get("defaultValue", 0.0)),
@@ -57,8 +68,6 @@ def build_dawdreamer_map(plugin_path: Path, descriptions: list[dict[str, object]
                 str(value) for value in cast(list[object], description.get("valueStrings", []))
             ),
         )
-        for description in descriptions
-    }
     return DawDreamerPluginMap(plugin=str(plugin_path), params=params)
 
 
