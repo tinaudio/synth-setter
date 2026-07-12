@@ -350,6 +350,9 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     python3 python3-dev
 COPY --from=ghcr.io/astral-sh/uv:0.11.2 /uv /uvx /usr/local/bin/
 ENV VIRTUAL_ENV=/venv/main
+# Keep the managed interpreter outside root's home so the non-root runtime
+# users can read its standard library after the venv is created.
+ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python
 # HYDRA_FULL_ERROR=1 — full Python traceback instead of Hydra's trimmed output
 # PYTHONDONTWRITEBYTECODE=1 — no .pyc files written in the image
 # PYTHONFAULTHANDLER=1 — C/CUDA segfault traceback (pairs with HYDRA_FULL_ERROR)
