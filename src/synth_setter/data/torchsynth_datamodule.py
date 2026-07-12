@@ -9,7 +9,7 @@ from __future__ import annotations
 import sys
 import threading
 import types
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from functools import cache, partial
 from typing import TYPE_CHECKING, TypeAlias, cast
@@ -32,6 +32,28 @@ TorchSynthBatch: TypeAlias = tuple[
 # The odd 64-bit golden-ratio multiplier diffuses nearby split seeds into distinct RNG streams.
 _SEED_MIXER = 0x9E3779B97F4A7C15
 _NON_INFERABLE_MODULES = frozenset({"keyboard"})
+# Params must stay strictly inside the open interval (0, 1): NaNs collapse to the
+# midpoint and every value is clamped away from the endpoints before rendering.
+_NAN_PARAM_FILL = 0.5
+_PARAM_CLAMP_EPS = 1e-4
+
+
+def _inferable_params(
+    parameters: Mapping[tuple[str, str], torch.nn.Parameter],
+) -> list[torch.nn.Parameter]:
+    """Select the parameters the model infers, in TorchSynth's native order.
+
+    ``_NON_INFERABLE_MODULES`` (the keyboard note and duration) are fixed by the
+    renderer rather than predicted, so they are excluded from the model's target.
+
+    :param parameters: TorchSynth's ``(module, name) -> parameter`` mapping.
+    :returns: Inferable parameter tensors in native order.
+    """
+    return [
+        parameter
+        for (module, _), parameter in parameters.items()
+        if module not in _NON_INFERABLE_MODULES
+    ]
 
 
 @cache
@@ -49,6 +71,8 @@ def _torchsynth_types() -> tuple[type, type]:
         import pytorch_lightning
 
         shim = types.ModuleType("pytorch_lightning.core.lightning")
+        # setattr (not ``shim.LightningModule = ...``) so pyright doesn't flag the
+        # attribute as unknown on a dynamically created ModuleType.
         setattr(shim, "LightningModule", pytorch_lightning.LightningModule)
         sys.modules["pytorch_lightning.core.lightning"] = shim
     from torchsynth.config import SynthConfig
@@ -114,17 +138,15 @@ def render_torchsynth(
     voice = renderer.voice
     with renderer.lock:
         all_parameters = voice.get_parameters()
-        native = [
-            parameter
-            for (module, _), parameter in voice.get_parameters().items()
-            if module not in _NON_INFERABLE_MODULES
-        ]
+        native = _inferable_params(all_parameters)
         if params.shape[1] != len(native):
             raise ValueError(
                 f"Expected {len(native)} TorchSynth parameters, got {params.shape[1]}"
             )
         for values, parameter in zip(params.T, native, strict=True):
-            parameter.data.copy_(values.nan_to_num(0.5).clamp(1e-4, 1 - 1e-4))
+            parameter.data.copy_(
+                values.nan_to_num(_NAN_PARAM_FILL).clamp(_PARAM_CLAMP_EPS, 1 - _PARAM_CLAMP_EPS)
+            )
         for name, value in (
             ("midi_f0", float(midi_pitch)),
             ("duration", signal_length / sample_rate),
@@ -158,9 +180,7 @@ class TorchSynthDataset(Dataset[TorchSynthItem]):
         self.signal_length = signal_length
         self.midi_pitch = midi_pitch
         renderer = _make_renderer(sample_rate, signal_length)
-        self.num_params = sum(
-            module not in _NON_INFERABLE_MODULES for module, _ in renderer.voice.get_parameters()
-        )
+        self.num_params = len(_inferable_params(renderer.voice.get_parameters()))
 
     def __len__(self) -> int:
         """Return the logical number of online samples.
@@ -247,9 +267,7 @@ class TorchSynthDataModule(LightningDataModule):
         if stage in (None, "test", "predict"):
             self.test = dataset(test_size, test_seed)
         renderer = _make_renderer(self.sample_rate, self.signal_length)
-        discovered = sum(
-            module not in _NON_INFERABLE_MODULES for module, _ in renderer.voice.get_parameters()
-        )
+        discovered = len(_inferable_params(renderer.voice.get_parameters()))
         if self.num_params != discovered:
             raise ValueError(
                 f"Configured num_params={self.num_params}, TorchSynth exposes {discovered}"

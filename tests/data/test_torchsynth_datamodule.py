@@ -33,25 +33,39 @@ def test_dataset_same_index_deterministic_different_index_distinct() -> None:
     assert torch.all((-1 <= audio_a) & (audio_a <= 1))
 
 
-def test_datamodule_split_seeds_produce_distinct_first_parameters() -> None:
-    """Keep train, validation, and test seed streams disjoint at index zero."""
+def test_datamodule_split_seeds_produce_distinct_parameters_across_indices() -> None:
+    """Keep train, validation, and test parameter streams disjoint across several indices."""
     datamodule = TorchSynthDataModule(
         sample_rate=44_100,
         signal_length=4_410,
         midi_pitch=60,
-        train_val_test_sizes=(1, 1, 1),
+        train_val_test_sizes=(2, 2, 2),
         num_workers=0,
     )
     datamodule.setup(None)
-    split_params = [datamodule.train[0][1], datamodule.val[0][1], datamodule.test[0][1]]
-    assert not torch.equal(split_params[0], split_params[1])
-    assert not torch.equal(split_params[0], split_params[2])
-    assert not torch.equal(split_params[1], split_params[2])
+    rows = [
+        tuple(split[index][1].flatten().tolist())
+        for split in (datamodule.train, datamodule.val, datamodule.test)
+        for index in range(2)
+    ]
+    assert len(set(rows)) == len(rows)
+
+
+def test_datamodule_setup_num_params_mismatch_raises() -> None:
+    """A configured ``num_params`` disagreeing with the live voice fails fast in ``setup``."""
+    datamodule = TorchSynthDataModule(
+        signal_length=4_410,
+        num_params=1,
+        train_val_test_sizes=(1, 1, 1),
+        num_workers=0,
+    )
+    with pytest.raises(ValueError, match="Configured num_params=1, TorchSynth exposes 76"):
+        datamodule.setup(None)
 
 
 def test_render_torchsynth_multirow_preserves_shape_and_bounds() -> None:
     """A multi-row renderer call preserves batch shape and numeric contracts."""
-    params = torch.rand((3, 76))
+    params = torch.rand((3, 76), generator=torch.Generator().manual_seed(0))
     audio = render_torchsynth(params, **_RENDER_KWARGS)
 
     assert audio.shape == (3, _RENDER_KWARGS["signal_length"])
