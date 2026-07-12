@@ -33,11 +33,12 @@ def _dawdreamer_experiment_config() -> RenderConfig:
                 f"render.preset_path={TEST_PRESET_PATH}",
                 f"render.param_spec_name={TEST_PARAM_SPEC_NAME}",
                 f"render.renderer_version={TEST_RENDERER_VERSION}",
-                "render.base_seed=1808",
-                "render.attempts_per_sample=1",
             ],
         )
-    return RenderConfig.model_validate(OmegaConf.to_container(cfg.render, resolve=True))
+    config = RenderConfig.model_validate(OmegaConf.to_container(cfg.render, resolve=True))
+    # base_seed / attempts_per_sample are RenderConfig fields, not render-group keys,
+    # so pin them post-validation the way the launcher injects the per-shard seed.
+    return config.model_copy(update={"base_seed": 1808, "attempts_per_sample": 1})
 
 
 @pytest.mark.slow

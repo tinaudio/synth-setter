@@ -98,6 +98,7 @@ jobs:
             plugin_path: /usr/lib/vst3/Surge XT.vst3
             pytest_targets: >-
               tests/data/vst/test_generate_vst_dataset.py
+              tests/data/vst/test_dawdreamer_dataset_e2e.py
               tests/data/vst/test_always_on_integration.py
               tests/data/vst/test_run_with_editor_held_open_real_plugin.py
               tests/data/vst/test_pedalboard_threading_contract.py
