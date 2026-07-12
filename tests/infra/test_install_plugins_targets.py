@@ -222,6 +222,13 @@ def test_runtime_image_installs_unzip_for_plugin_install_targets() -> None:
     assert re.search(r"apt-get install\b[\s\S]*\bunzip\b", stage)
 
 
+def test_builder_base_configures_timezone_without_debconf_pipe() -> None:
+    """The shared image base uses Docker-safe noninteractive timezone setup."""
+    stage = _dockerfile_stage_text("builder-base")
+    assert "ENV TZ=Etc/UTC" in stage
+    assert "debconf-set-selections" not in stage
+
+
 def test_ultramaster_docker_build_logs_version_with_git_ref() -> None:
     """The KR-106 Docker build surfaces the version label with the pinned ref."""
     stage = _dockerfile_stage_text("builder-build-ultramaster-kr106")
@@ -247,6 +254,7 @@ def test_ultramaster_docker_arm64_target_skips_source_build() -> None:
     docker = shutil.which("docker")
     if docker is None:
         pytest.skip("docker binary not available")
+    assert docker is not None
     info = subprocess.run(  # noqa: S603 — fixed argv, no shell
         [docker, "info"],
         cwd=PROJECT_ROOT,

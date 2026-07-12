@@ -58,10 +58,9 @@ WORKDIR /home/build/
 ENV LANG=C.UTF-8
 SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
 
-# Non-interactive configuration of tzdata
+# Keep Debian package configuration noninteractive in every derived builder stage.
 ENV DEBIAN_FRONTEND=noninteractive
-ENV DEBCONF_NONINTERACTIVE_SEEN=true
-RUN { echo 'tzdata tzdata/Areas select Etc'; echo 'tzdata tzdata/Zones/Etc select UTC'; } | debconf-set-selections
+ENV TZ=Etc/UTC
 
 ARG TARGETARCH
 ARG BUILD_MODE
