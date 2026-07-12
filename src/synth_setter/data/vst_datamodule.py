@@ -17,7 +17,7 @@ from synth_setter.pipeline import r2_io
 
 # Registry key whose spec width sizes fake-mode batches and seeds the
 # datamodule default when no ``param_spec_name`` is configured.
-_DEFAULT_PARAM_SPEC_NAME = "surge_xt"
+DEFAULT_PARAM_SPEC_NAME = "surge_xt"
 
 
 # DOC601/DOC603: pydoclint can't read sphinx ``:ivar:`` docs, so TypedDict keys
@@ -101,6 +101,17 @@ def prepare_batch(
         "noise": noise.contiguous(),
         "audio": audio.contiguous() if audio is not None else None,
     }
+
+
+def draw_generator_seed() -> int:
+    """Draw a noise-generator seed from the global RNG, so ``seed_everything`` governs it.
+
+    A bare ``torch.Generator()`` would repeat a fixed default seed; drawing
+    from the global stream keeps operator seeding in charge.
+
+    :returns: Seed for ``torch.Generator.manual_seed``.
+    """
+    return int(torch.randint(2**63 - 1, (1,)).item())
 
 
 def load_dataset_statistics(dataset_file: str | Path) -> tuple[np.ndarray, np.ndarray]:
@@ -216,13 +227,11 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
         self.batch_size = batch_size
         self.ot = ot
 
-        # Seeded from a global-RNG draw so seed_everything governs noise (a bare
-        # Generator() repeats a fixed default seed); workers re-seed on first read.
-        # Fake mode never uses it, so it skips the draw to leave the global stream
-        # untouched.
+        # Workers re-seed on first read. Fake mode never uses the generator,
+        # so it skips the draw to leave the global stream untouched.
         self.generator = torch.Generator()
         if not fake:
-            self.generator.manual_seed(int(torch.randint(2**63 - 1, (1,)).item()))
+            self.generator.manual_seed(draw_generator_seed())
         self._worker_reseed_done = False
 
         self.read_audio = read_audio
@@ -234,7 +243,7 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
         self.fake = fake
         # Fake-mode width only; real mode reads the width from the shard's param_array.
         self.num_params = (
-            num_params if num_params is not None else len(param_specs[_DEFAULT_PARAM_SPEC_NAME])
+            num_params if num_params is not None else len(param_specs[DEFAULT_PARAM_SPEC_NAME])
         )
         if fake:
             self.dataset_file = None
@@ -549,7 +558,7 @@ class VSTDataModule(LightningDataModule):
         predict_file: str | Path | None = None,
         conditioning: Literal["mel", "m2l"] = "mel",
         pin_memory: bool = True,
-        param_spec_name: str = _DEFAULT_PARAM_SPEC_NAME,
+        param_spec_name: str = DEFAULT_PARAM_SPEC_NAME,
     ) -> None:
         """Store dataloader and dataset configuration for later ``setup``.
 

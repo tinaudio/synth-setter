@@ -175,6 +175,14 @@ class TestPrepareBatchCollate:
         batch = clone(self._raw_batch())
         assert _unwrap(batch["noise"]).shape == (4, NUM_PARAMS)
 
+    def test_collate_noise_advances_across_calls_and_varies_by_row(self) -> None:
+        """One instance's cached generator advances: fresh noise per batch, distinct rows."""
+        collate = PrepareBatchCollate(mean=None, std=None, rescale_params=False, ot=False)
+        first = _unwrap(collate(self._raw_batch())["noise"])
+        second = _unwrap(collate(self._raw_batch())["noise"])
+        assert not torch.equal(first, second)
+        assert not torch.equal(first[0], first[1])
+
     def test_collate_same_global_seed_reproduces_noise(self) -> None:
         """Construction draws its seed from the global RNG, so ``seed_everything`` governs."""
 
@@ -306,6 +314,18 @@ class TestLanceMapDataModuleFlows:
         order = np.lexsort(epoch.T[::-1])
         source_order = np.lexsort(source.T[::-1])
         np.testing.assert_array_equal(epoch[order], source[source_order])
+
+    def test_train_loader_drops_ragged_tail(self, dataset_root: Path) -> None:
+        """Train keeps legacy floor-divide semantics: no short trailing batch.
+
+        A trailing batch as small as one row would break batch-statistics
+        layers mid-training; eval loaders keep the tail instead.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        with _set_up_map_module(dataset_root=dataset_root, batch_size=5, ot=False) as module:
+            batches = list(module.train_dataloader())
+        assert [len(_unwrap(b["params"])) for b in batches] == [5, 5, 5]
 
     def test_val_and_test_loaders_do_not_shuffle_or_ot(self, dataset_root: Path) -> None:
         """Eval splits keep source row order even when the module trains with OT.

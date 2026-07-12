@@ -14,6 +14,7 @@ into :func:`synth_setter.data.vst_datamodule.prepare_batch`.
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
@@ -29,13 +30,16 @@ from torch.utils.data import DataLoader
 from synth_setter.data.lance_torch import LanceMapDataset, map_dataloader_over
 from synth_setter.data.vst.param_spec_registry import param_specs
 from synth_setter.data.vst_datamodule import (
-    _DEFAULT_PARAM_SPEC_NAME,
+    DEFAULT_PARAM_SPEC_NAME,
     RawBatch,
     VSTDataModule,
     VSTDataset,
+    draw_generator_seed,
     load_dataset_statistics,
     prepare_batch,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class LanceColumn:
@@ -209,7 +213,7 @@ class PrepareBatchCollate:
         self.std = std
         self.rescale_params = rescale_params
         self.ot = ot
-        self._seed = int(torch.randint(2**63 - 1, (1,)).item())
+        self._seed = draw_generator_seed()
         self._generator: torch.Generator | None = None
 
     def __getstate__(self) -> dict[str, object]:
@@ -296,11 +300,18 @@ class _RepeatFirstBatchSampler(torch.utils.data.Sampler):
             yield i % self._batch_size
 
 
-# DOC601/DOC603: pydoclint can't read sphinx ``:ivar:`` docs, so dataclass
-# fields are documented in the docstring body instead.
 @dataclass(frozen=True)
-class _MapSplit:  # noqa: DOC601, DOC603
-    """One split's map-path pieces: the sample-indexed ``dataset`` and its ``collate``."""
+class _MapSplit:
+    """One split's map-path pieces.
+
+    .. attribute :: dataset
+
+        Sample-indexed dataset the split's loader reads.
+
+    .. attribute :: collate
+
+        Collate carrying the split's batch semantics (stats, rescale, OT).
+    """
 
     dataset: LanceMapDataset
     collate: PrepareBatchCollate
@@ -341,7 +352,7 @@ class LanceVSTDataModule(VSTDataModule):
         predict_file: str | Path | None = None,
         conditioning: Literal["mel", "m2l"] = "mel",
         pin_memory: bool = True,
-        param_spec_name: str = _DEFAULT_PARAM_SPEC_NAME,
+        param_spec_name: str = DEFAULT_PARAM_SPEC_NAME,
         loader: Literal["legacy", "map"] = "legacy",
     ) -> None:
         """Store the loader selection on top of the base datamodule config.
@@ -427,6 +438,10 @@ class LanceVSTDataModule(VSTDataModule):
         :raises KeyError: If ``param_spec_name`` is not in the registry.
         """
         if not self._map_mode:
+            if self.loader == "map" and self.fake:
+                logger.info(
+                    "fake mode ignores loader='map': batches use the legacy in-memory path"
+                )
             super().setup(stage)
             return
         # Legacy-parity fail-fast: an unregistered param_spec_name must error
@@ -465,11 +480,12 @@ class LanceVSTDataModule(VSTDataModule):
             ),
         }
 
-    def _map_dataloader(self, split: str, *, shuffle: bool) -> DataLoader:
+    def _map_dataloader(self, split: str, *, shuffle: bool, drop_last: bool) -> DataLoader:
         """Build the sample-indexed loader for one set-up split.
 
         :param split: Split key in ``_map_splits``.
         :param shuffle: Whether the sampler permutes row order.
+        :param drop_last: Whether a ragged final batch is dropped.
         :returns: DataLoader yielding ``prepare_batch`` model batches.
         """
         pieces = self._map_splits[split]
@@ -486,6 +502,7 @@ class LanceVSTDataModule(VSTDataModule):
             pin_memory=self.pin_memory,
             sampler=sampler,
             shuffle=shuffle if sampler is None else None,
+            drop_last=drop_last,
         )
 
     def train_dataloader(self) -> DataLoader:
@@ -495,7 +512,9 @@ class LanceVSTDataModule(VSTDataModule):
         """
         if not self._map_mode:
             return super().train_dataloader()
-        return self._map_dataloader("train", shuffle=True)
+        # drop_last matches legacy's floor-divide: a trailing short batch (down
+        # to size 1) would break batch-statistics layers during training.
+        return self._map_dataloader("train", shuffle=True, drop_last=True)
 
     def val_dataloader(self) -> DataLoader:
         """Return the validation dataloader for the selected loader path.
@@ -504,7 +523,7 @@ class LanceVSTDataModule(VSTDataModule):
         """
         if not self._map_mode:
             return super().val_dataloader()
-        return self._map_dataloader("val", shuffle=False)
+        return self._map_dataloader("val", shuffle=False, drop_last=False)
 
     def test_dataloader(self) -> DataLoader:
         """Return the test dataloader for the selected loader path.
@@ -513,7 +532,7 @@ class LanceVSTDataModule(VSTDataModule):
         """
         if not self._map_mode:
             return super().test_dataloader()
-        return self._map_dataloader("test", shuffle=False)
+        return self._map_dataloader("test", shuffle=False, drop_last=False)
 
     def predict_dataloader(self) -> DataLoader:
         """Return the prediction dataloader for the selected loader path.
@@ -522,7 +541,7 @@ class LanceVSTDataModule(VSTDataModule):
         """
         if not self._map_mode:
             return super().predict_dataloader()
-        return self._map_dataloader("predict", shuffle=False)
+        return self._map_dataloader("predict", shuffle=False, drop_last=False)
 
     def teardown(self, stage: str | None = None) -> None:
         """Release split resources for the selected loader path.
