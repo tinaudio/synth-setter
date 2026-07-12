@@ -44,9 +44,8 @@ jobs:
       - name: Pull image
         run: docker pull "$IMAGE"
 
-      # Fail fast on a broken plugin / image / mount layout before the fan-out.
-      # Single-line ``python -c`` (like test-vst-slow.yml) — a multi-line body
-      # would keep its YAML indent and raise IndentationError.
+      # Fail fast on a broken plugin / image / mount layout. Single-line
+      # ``python -c`` — a multi-line body keeps its YAML indent (IndentationError).
       - name: Smoke-test Surge XT and OB-Xf plugin load
         run: |
           docker run --rm \
@@ -134,9 +133,8 @@ jobs:
       - name: Pull image
         run: docker pull "$IMAGE"
 
-      # Run under the headless wrapper — pedalboard's VST-host import needs a
-      # live X display. Baked plugins are symlinked into ``plugins/`` because the
-      # render configs use relative paths (e.g. ``plugins/OB-Xf.vst3``).
+      # Run under the headless wrapper (pedalboard's VST-host import needs a live
+      # X display); baked plugins are symlinked into ``plugins/`` (relative-path configs).
       - name: Run VST sweep shard in Docker
         env:
           SHARD_FILES: ${{ matrix.files }}
