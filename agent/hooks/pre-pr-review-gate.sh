@@ -91,16 +91,24 @@ COMMAND=$(jq -r '.tool_input.command // empty' 2>/dev/null <<<"$INPUT" || true)
 shell_wrapper_runs_pr_create() {
   COMMAND="$1" python3 - <<'PY' 2>/dev/null
 import os
+import re
 import shlex
 
 shells = {"sh", "bash", "dash", "ksh", "zsh"}
 
 
 def invokes_pr_create(command: str) -> bool:
+    direct_invocation = re.compile(
+        r"(?:^|[;|&`(]\s*)(?:exec\s+)?gh\s+pr\s+create(?:\s|$)"
+    )
+    if direct_invocation.search(command):
+        return True
     try:
         tokens = shlex.split(command, comments=True)
     except ValueError:
         return False
+    if tokens[:1] == ["exec"]:
+        tokens = tokens[1:]
     return len(tokens) >= 3 and tokens[:3] == ["gh", "pr", "create"]
 
 
@@ -111,7 +119,7 @@ except ValueError:
 
 if len(outer) >= 3 and os.path.basename(outer[0]) in shells:
     for index, token in enumerate(outer[:-1]):
-        if token in ("-c", "--command"):
+        if token == "--command" or (token.startswith("-") and "c" in token[1:]):
             raise SystemExit(0 if invokes_pr_create(outer[index + 1]) else 1)
 raise SystemExit(1)
 PY
