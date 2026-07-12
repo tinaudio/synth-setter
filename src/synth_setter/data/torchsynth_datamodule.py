@@ -98,6 +98,8 @@ class _Renderer:
     lock: threading.Lock
 
 
+# Unbounded cache, but the online path only ever renders batch_size=1 (one entry);
+# batch/GPU rendering would need eviction or a fixed renderer size — see #1820.
 @cache
 def _make_renderer(
     sample_rate: int, signal_length: int, batch_size: int = 1, device: str = "cpu"
@@ -198,6 +200,8 @@ class TorchSynthDataset(Dataset[TorchSynthItem]):
         sample_seed = (self.seed * _SEED_MIXER + index) % sys.maxsize
         generator = torch.Generator().manual_seed(sample_seed)
         params = torch.rand((1, self.num_params), generator=generator)
+        # Per-sample CPU render; render_fn is passed through so a future collate can
+        # batch/GPU-render instead of paying Voice.output() per row — see #1820.
         render_fn = partial(
             render_torchsynth,
             sample_rate=self.sample_rate,
@@ -282,6 +286,8 @@ class TorchSynthDataModule(LightningDataModule):
         :param shuffle: Whether to shuffle logical row indices.
         :returns: Batched online data loader.
         """
+        # persistent_workers / pin_memory are unset — per-epoch worker Voice rebuilds
+        # and the host→GPU copy are tunable throughput wins, deferred to #1820.
         return cast(
             DataLoader[TorchSynthBatch],
             DataLoader(
