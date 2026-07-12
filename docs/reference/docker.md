@@ -454,10 +454,10 @@ docker run --rm -it synth-setter:dev-snapshot bash
 
 - **Local:** Docker Desktop settings → 16 GiB recommended
 - **GitHub Actions:** the standard `ubuntu-latest` runner on this public repo
-  is 4 vCPU / 16 GiB and suffices; `docker-build-validation.yml` additionally
-  caps BuildKit stage concurrency (`max-parallelism = 2`) so independent
-  Dockerfile stages don't stack their RAM peaks, and frees ~25 GiB of
-  preinstalled runner toolchains before building
+  is 4 vCPU / 16 GiB and suffices. `docker-build-validation.yml` additionally:
+  - caps BuildKit stage concurrency (`max-parallelism = 2`) so independent
+    Dockerfile stages don't stack their RAM peaks
+  - frees ~25 GiB of preinstalled runner toolchains before building
 
 ### VST fails to load
 

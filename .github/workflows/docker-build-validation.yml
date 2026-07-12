@@ -59,7 +59,7 @@ jobs:
     name: Validate Docker image build
     if: github.event_name == 'pull_request'
     # Standard runner: on this public repo it is 4 vCPU / 16 GiB RAM — same
-    # CPU/RAM as the retired paid `ubuntu-latest-4core` label (#1724).
+    # CPU/RAM as the paused paid `ubuntu-latest-4core` label (#1824).
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -77,8 +77,10 @@ jobs:
           set -euo pipefail
           df -h /
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
-            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
-          sudo docker image prune --all --force || true
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL \
+            || echo "::warning::toolchain cleanup failed, continuing"
+          sudo docker image prune --all --force \
+            || echo "::warning::docker image prune failed, continuing"
           df -h /
           free -h
           nproc
@@ -171,7 +173,7 @@ jobs:
     name: Build and push Docker image
     if: github.event_name != 'pull_request'
     # Standard runner: on this public repo it is 4 vCPU / 16 GiB RAM — same
-    # CPU/RAM as the retired paid `ubuntu-latest-4core` label (#1724).
+    # CPU/RAM as the paused paid `ubuntu-latest-4core` label (#1824).
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -194,8 +196,10 @@ jobs:
           set -euo pipefail
           df -h /
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
-            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
-          sudo docker image prune --all --force || true
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL \
+            || echo "::warning::toolchain cleanup failed, continuing"
+          sudo docker image prune --all --force \
+            || echo "::warning::docker image prune failed, continuing"
           df -h /
           free -h
           nproc
