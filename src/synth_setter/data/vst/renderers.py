@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-import re
+import hashlib
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from importlib import import_module
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import numpy as np
 
-from synth_setter.data.vst.clap_map import load_clap_map
-from synth_setter.data.vst.dawdreamer_map import dawdreamer_parameter_key
+from synth_setter.data.vst.core import extract_renderer_version
+from synth_setter.data.vst.param_map import SynthParamMap
 
 
 @dataclass
@@ -121,6 +121,10 @@ class DawDreamerRenderer(AudioRenderer):
 
        DawDreamer engine block size.
 
+    .. attribute :: parameter_map
+
+       Validated immutable cross-host identity map.
+
     .. attribute :: engine
 
        DawDreamer render engine instance.
@@ -131,6 +135,7 @@ class DawDreamerRenderer(AudioRenderer):
     """
 
     block_size: int = 2048
+    parameter_map: SynthParamMap = field(kw_only=True)
     engine: Any = field(init=False, repr=False)
     plugin: Any = field(init=False, repr=False)
     _parameter_indices: dict[str, int] = field(init=False, repr=False)
@@ -143,92 +148,44 @@ class DawDreamerRenderer(AudioRenderer):
             self.preset_path = str(Path(self.preset_path).expanduser().resolve())
         self._daw = import_module("dawdreamer")
         self._create_graph()
+        self._load_preset()
+        self._validate_parameter_map()
 
     def _create_graph(self) -> None:
         """Create a fresh engine, plugin processor, graph, and parameter dispatch."""
         self.engine = self._daw.RenderEngine(self.sample_rate, self.block_size)
         self.plugin = self.engine.make_plugin_processor("synth", self.plugin_path)
         self.engine.load_graph([(self.plugin, [])])
-        self._build_parameter_indices()
+        self._parameter_indices = self.parameter_map.dawdreamer_indices()
 
-    def _build_parameter_indices(self) -> None:
-        """Build a collision-free dispatch from the current plugin descriptions.
+    def _validate_parameter_map(self) -> None:
+        """Validate the live plugin and preset against committed provenance.
 
-        :raises ValueError: If normalized host keys collide.
+        :raises ValueError: If the version, count, preset hash, index, or stored name drifted.
         """
         descriptions = self.plugin.get_parameters_description()
-        if "surge" in Path(self.plugin_path).name.lower():
-            self._parameter_indices = self._build_surge_parameter_indices(descriptions)
-            return
-        self._parameter_indices = {}
-        for description in descriptions:
-            key = dawdreamer_parameter_key(str(description["name"]))
-            index = cast(int, description["index"])
-            if key in self._parameter_indices:
-                raise ValueError(f"duplicate DawDreamer parameter key {key!r}")
-            self._parameter_indices[key] = index
-
-    def _build_surge_parameter_indices(
-        self, descriptions: list[dict[str, object]]
-    ) -> dict[str, int]:
-        """Map Surge semantic keys via its committed CLAP display-name contract.
-
-        :param descriptions: DawDreamer parameter descriptions for the loaded Surge plugin.
-        :returns: Repository parameter keys mapped to distinct DawDreamer host indices.
-        :raises ValueError: If indices, display names, or FX slot positions are ambiguous.
-        """
-        by_name: dict[str, list[int]] = {}
-        by_index: dict[int, str] = {}
-        for description in descriptions:
-            name = str(description["name"])
-            index = cast(int, description["index"])
-            by_name.setdefault(name, []).append(index)
-            if index in by_index:
-                raise ValueError(f"duplicate DawDreamer parameter index {index}")
-            by_index[index] = name
-
-        format_map = load_clap_map(Path(__file__).with_name("surge_xt_clap_map.json"))
-        parameter_indices: dict[str, int] = {}
-        for key, ref in format_map.params.items():
-            match = re.fullmatch(r"FX (A[1-4]) Param (\d+)", ref.clap_name)
-            if match:
-                bank, slot_text = match.groups()
-                anchors = by_name.get(f"FX {bank} FX Type", [])
-                if len(anchors) != 1:
-                    continue
-                target = anchors[0] + int(slot_text)
-                name = by_index.get(target)
-                if name is None:
-                    later_slot_exists = any(
-                        index > target and candidate.startswith(f"FX {bank}")
-                        for index, candidate in by_index.items()
-                    )
-                    if later_slot_exists:
-                        raise ValueError(
-                            f"{ref.clap_name} expected DawDreamer parameter index {target}"
-                        )
-                    continue
-                if not name.startswith(f"FX {bank}"):
-                    raise ValueError(
-                        f"{ref.clap_name} expected DawDreamer parameter index {target}, "
-                        f"found {name!r}"
-                    )
-                parameter_indices[key] = target
-                continue
-
-            indices = by_name.get(ref.clap_name, [])
-            if len(indices) > 1:
-                raise ValueError(f"ambiguous Surge parameter display name {ref.clap_name!r}")
-            if indices:
-                parameter_indices[key] = indices[0]
-
-        duplicates: dict[int, list[str]] = {}
-        for key, index in parameter_indices.items():
-            duplicates.setdefault(index, []).append(key)
-        collisions = {index: keys for index, keys in duplicates.items() if len(keys) > 1}
-        if collisions:
-            raise ValueError(f"Surge parameter map has index collisions: {collisions}")
-        return parameter_indices
+        snapshot = self.parameter_map.dawdreamer
+        if len(descriptions) != snapshot.parameter_count:
+            raise ValueError(
+                f"DawDreamer parameter count {len(descriptions)} != map {snapshot.parameter_count}"
+            )
+        version = extract_renderer_version(Path(self.plugin_path)) if snapshot.plugin_version else ""
+        if snapshot.plugin_version and version != snapshot.plugin_version:
+            raise ValueError(f"plugin version {version!r} != map {snapshot.plugin_version!r}")
+        if self.parameter_map.preset_sha256 and self.preset_path is None:
+            raise ValueError("DawDreamer rendering requires the mapped preset")
+        digest = (
+            hashlib.sha256(Path(self.preset_path).read_bytes()).hexdigest()
+            if self.parameter_map.preset_sha256 and self.preset_path
+            else ""
+        )
+        if self.parameter_map.preset_sha256 and digest != self.parameter_map.preset_sha256:
+            raise ValueError("preset SHA-256 does not match the parameter map")
+        by_index = {int(item["index"]): str(item["name"]) for item in descriptions}
+        for name, identity in self.parameter_map.params.items():
+            ref = identity.dawdreamer
+            if by_index.get(ref.index) != ref.name:
+                raise ValueError(f"stale DawDreamer identity for {name!r} at index {ref.index}")
 
     def render(
         self,
@@ -252,7 +209,6 @@ class DawDreamerRenderer(AudioRenderer):
         self._validate_parameter_dispatch(params)
         self._create_graph()
         self._load_preset()
-        self._build_parameter_indices()
         self._validate_parameter_dispatch(params)
         self.plugin.clear_midi()
         try:

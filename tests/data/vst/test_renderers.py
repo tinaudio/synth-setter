@@ -10,11 +10,39 @@ import pytest
 
 from synth_setter.data.vst.generate_vst_dataset import generate_sample
 from synth_setter.data.vst.param_spec import ContinuousParameter, NoteDurationParameter, ParamSpec
+from synth_setter.data.vst.param_map import (
+    BackendSnapshot,
+    DawDreamerParamRef,
+    ParamIdentity,
+    PedalboardParamRef,
+    SynthParamMap,
+)
 from synth_setter.data.vst.renderers import (
     AudioRenderer,
     DawDreamerRenderer,
     PedalboardRenderer,
 )
+
+
+def _test_param_map(params: dict[str, tuple[int, str]], count: int) -> SynthParamMap:
+    snapshot = BackendSnapshot(plugin_version="", parameter_count=count)
+    return SynthParamMap(
+        plugin="test",
+        param_spec_name="test",
+        preset_resource="",
+        preset_sha256="",
+        pedalboard=snapshot,
+        clap=snapshot,
+        dawdreamer=snapshot,
+        params={
+            key: ParamIdentity(
+                pedalboard=PedalboardParamRef(index=index, name=name),
+                clap=None,
+                dawdreamer=DawDreamerParamRef(index=index, name=name),
+            )
+            for key, (index, name) in params.items()
+        },
+    )
 
 
 def test_audio_renderer_is_an_abstract_dataclass() -> None:
@@ -199,7 +227,19 @@ def test_dawdreamer_renderer_loads_graph_and_renders_audio(
 
     monkeypatch.setitem(sys.modules, "dawdreamer", types.SimpleNamespace(RenderEngine=FakeEngine))
 
-    renderer = DawDreamerRenderer("Surge XT.vst3", 44100, 2, 1.0, "preset.vstpreset")
+    parameter_map = _test_param_map(
+        {
+            "a_filter_1_cutoff": (0, "A Filter 1 Cutoff"),
+            "a_osc_1_sawtooth": (1, "A Osc 1 Shape"),
+            "a_osc_1_pulse": (2, "A Osc 1 Width 1"),
+            "a_osc_1_triangle": (3, "A Osc 1 Width 2"),
+            "a_osc_1_width": (4, "A Osc 1 Sub Mix"),
+        },
+        5,
+    )
+    renderer = DawDreamerRenderer(
+        "Surge XT.vst3", 44100, 2, 1.0, "preset.vstpreset", parameter_map=parameter_map
+    )
     result = renderer.render(
         {
             "a_filter_1_cutoff": 0.5,
@@ -220,7 +260,9 @@ def test_dawdreamer_renderer_loads_graph_and_renders_audio(
     assert renderer.plugin.preset == str(Path("preset.vstpreset").resolve())
     assert renderer.engine.rendered_duration == 1.0
 
-    mono_renderer = DawDreamerRenderer("Surge XT.vst3", 44100, 1, 1.0)
+    mono_renderer = DawDreamerRenderer(
+        "Surge XT.vst3", 44100, 1, 1.0, parameter_map=parameter_map
+    )
     assert mono_renderer.render({"a_filter_1_cutoff": 0.5}, 60, 100, (0.1, 0.35)).shape == (
         1,
         16,
@@ -264,7 +306,9 @@ def test_dawdreamer_renderer_rejects_invalid_parameter_dispatch_before_render(
             self.render_calls += 1
 
     monkeypatch.setitem(sys.modules, "dawdreamer", types.SimpleNamespace(RenderEngine=FakeEngine))
-    renderer = DawDreamerRenderer("plugin.vst3", 44100, 2, 1.0)
+    renderer = DawDreamerRenderer(
+        "plugin.vst3", 44100, 2, 1.0, parameter_map=_test_param_map({"cutoff": (7, "Cutoff")}, 1)
+    )
 
     with pytest.raises(KeyError, match="unknown DawDreamer parameter.*missing"):
         renderer.render({"missing": 0.5}, 60, 100, (0.0, 0.2))
@@ -301,17 +345,30 @@ def test_dawdreamer_renderer_uses_explicit_surge_map_for_runtime_names(
 
     monkeypatch.setitem(sys.modules, "dawdreamer", types.SimpleNamespace(RenderEngine=FakeEngine))
 
-    renderer = DawDreamerRenderer("Surge XT.vst3", 44100, 2, 1.0)
+    renderer = DawDreamerRenderer(
+        "Surge XT.vst3",
+        44100,
+        2,
+        1.0,
+        parameter_map=_test_param_map(
+            {
+                "a_osc_1_sawtooth": (40, "A Osc 1 Shape"),
+                "fx_a1_delay_time": (101, "FX A1 -"),
+                "fx_a1_modulation_rate": (102, "FX A1 -"),
+            },
+            4,
+        ),
+    )
 
     assert renderer._parameter_indices["a_osc_1_sawtooth"] == 40
     assert renderer._parameter_indices["fx_a1_delay_time"] == 101
     assert renderer._parameter_indices["fx_a1_modulation_rate"] == 102
 
 
-def test_dawdreamer_renderer_rejects_noncontiguous_surge_fx_slots(
+def test_dawdreamer_renderer_rejects_stale_mapped_index(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Surge FX slots must occupy the verified indices following their type anchor.
+    """A stored index whose live name changed is rejected during initialization.
 
     :param monkeypatch: Installs a fake DawDreamer module.
     """
@@ -335,5 +392,11 @@ def test_dawdreamer_renderer_rejects_noncontiguous_surge_fx_slots(
 
     monkeypatch.setitem(sys.modules, "dawdreamer", types.SimpleNamespace(RenderEngine=FakeEngine))
 
-    with pytest.raises(ValueError, match="FX A1 Param 1.*index 101"):
-        DawDreamerRenderer("surge-xt.vst3", 44100, 2, 1.0)
+    with pytest.raises(ValueError, match="stale DawDreamer identity.*index 101"):
+        DawDreamerRenderer(
+            "surge-xt.vst3",
+            44100,
+            2,
+            1.0,
+            parameter_map=_test_param_map({"fx": (101, "FX A1 -")}, 2),
+        )

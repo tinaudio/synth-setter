@@ -1,0 +1,2936 @@
+{
+  "plugin": "Surge XT",
+  "param_spec_name": "surge_xt",
+  "preset_resource": "presets/surge-base.vstpreset",
+  "preset_sha256": "7c76df64683354fcb60a3ccba58d6c26c14fa8124b23aa1ee0c80f11f3d3b80b",
+  "pedalboard": {
+    "plugin_version": "1.3.4",
+    "parameter_count": 772
+  },
+  "clap": {
+    "plugin_version": "1.3.4",
+    "parameter_count": 772
+  },
+  "dawdreamer": {
+    "plugin_version": "1.3.4",
+    "parameter_count": 2855
+  },
+  "params": {
+    "a_amp_eg_attack": {
+      "pedalboard": {
+        "index": 329,
+        "name": "A Amp EG Attack"
+      },
+      "clap": {
+        "clap_param_id": 2005836581,
+        "clap_name": "A Amp EG Attack",
+        "clap_module_name": "/A Envelopes/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 329,
+        "name": "A Amp EG Attack"
+      }
+    },
+    "a_amp_eg_decay": {
+      "pedalboard": {
+        "index": 331,
+        "name": "A Amp EG Decay"
+      },
+      "clap": {
+        "clap_param_id": 3946337085,
+        "clap_name": "A Amp EG Decay",
+        "clap_module_name": "/A Envelopes/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 331,
+        "name": "A Amp EG Decay"
+      }
+    },
+    "a_amp_eg_sustain": {
+      "pedalboard": {
+        "index": 333,
+        "name": "A Amp EG Sustain"
+      },
+      "clap": {
+        "clap_param_id": 874858726,
+        "clap_name": "A Amp EG Sustain",
+        "clap_module_name": "/A Envelopes/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 333,
+        "name": "A Amp EG Sustain"
+      }
+    },
+    "a_amp_eg_release": {
+      "pedalboard": {
+        "index": 334,
+        "name": "A Amp EG Release"
+      },
+      "clap": {
+        "clap_param_id": 3817344714,
+        "clap_name": "A Amp EG Release",
+        "clap_module_name": "/A Envelopes/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 334,
+        "name": "A Amp EG Release"
+      }
+    },
+    "a_amp_eg_envelope_mode": {
+      "pedalboard": {
+        "index": 336,
+        "name": "A Amp EG Envelope Mode"
+      },
+      "clap": {
+        "clap_param_id": 4006904256,
+        "clap_name": "A Amp EG Envelope Mode",
+        "clap_module_name": "/A Envelopes/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 336,
+        "name": "A Amp EG Envelope Mode"
+      }
+    },
+    "a_filter_eg_attack": {
+      "pedalboard": {
+        "index": 337,
+        "name": "A Filter EG Attack"
+      },
+      "clap": {
+        "clap_param_id": 3748646916,
+        "clap_name": "A Filter EG Attack",
+        "clap_module_name": "/A Envelopes/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 337,
+        "name": "A Filter EG Attack"
+      }
+    },
+    "a_filter_eg_decay": {
+      "pedalboard": {
+        "index": 339,
+        "name": "A Filter EG Decay"
+      },
+      "clap": {
+        "clap_param_id": 538873470,
+        "clap_name": "A Filter EG Decay",
+        "clap_module_name": "/A Envelopes/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 339,
+        "name": "A Filter EG Decay"
+      }
+    },
+    "a_filter_eg_sustain": {
+      "pedalboard": {
+        "index": 341,
+        "name": "A Filter EG Sustain"
+      },
+      "clap": {
+        "clap_param_id": 3362371559,
+        "clap_name": "A Filter EG Sustain",
+        "clap_module_name": "/A Envelopes/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 341,
+        "name": "A Filter EG Sustain"
+      }
+    },
+    "a_filter_eg_release": {
+      "pedalboard": {
+        "index": 342,
+        "name": "A Filter EG Release"
+      },
+      "clap": {
+        "clap_param_id": 2009890251,
+        "clap_name": "A Filter EG Release",
+        "clap_module_name": "/A Envelopes/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 342,
+        "name": "A Filter EG Release"
+      }
+    },
+    "a_filter_eg_envelope_mode": {
+      "pedalboard": {
+        "index": 344,
+        "name": "A Filter EG Envelope Mode"
+      },
+      "clap": {
+        "clap_param_id": 4035533407,
+        "clap_name": "A Filter EG Envelope Mode",
+        "clap_module_name": "/A Envelopes/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 344,
+        "name": "A Filter EG Envelope Mode"
+      }
+    },
+    "a_feedback": {
+      "pedalboard": {
+        "index": 248,
+        "name": "A Feedback"
+      },
+      "clap": {
+        "clap_param_id": 2312042915,
+        "clap_name": "A Feedback",
+        "clap_module_name": "/A Common/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 248,
+        "name": "A Feedback"
+      }
+    },
+    "a_filter_balance": {
+      "pedalboard": {
+        "index": 250,
+        "name": "A Filter Balance"
+      },
+      "clap": {
+        "clap_param_id": 2642740645,
+        "clap_name": "A Filter Balance",
+        "clap_module_name": "/A Common/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 250,
+        "name": "A Filter Balance"
+      }
+    },
+    "a_filter_configuration": {
+      "pedalboard": {
+        "index": 249,
+        "name": "A Filter Configuration"
+      },
+      "clap": {
+        "clap_param_id": 974101959,
+        "clap_name": "A Filter Configuration",
+        "clap_module_name": "/A Common/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 249,
+        "name": "A Filter Configuration"
+      }
+    },
+    "a_highpass": {
+      "pedalboard": {
+        "index": 251,
+        "name": "A Highpass"
+      },
+      "clap": {
+        "clap_param_id": 3160484876,
+        "clap_name": "A Highpass",
+        "clap_module_name": "/A Common/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 251,
+        "name": "A Highpass"
+      }
+    },
+    "a_filter_1_cutoff": {
+      "pedalboard": {
+        "index": 319,
+        "name": "A Filter 1 Cutoff"
+      },
+      "clap": {
+        "clap_param_id": 4092842705,
+        "clap_name": "A Filter 1 Cutoff",
+        "clap_module_name": "/A Filters/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 319,
+        "name": "A Filter 1 Cutoff"
+      }
+    },
+    "a_filter_1_feg_mod_amount": {
+      "pedalboard": {
+        "index": 321,
+        "name": "A Filter 1 FEG Mod Amount"
+      },
+      "clap": {
+        "clap_param_id": 4143694297,
+        "clap_name": "A Filter 1 FEG Mod Amount",
+        "clap_module_name": "/A Filters/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 321,
+        "name": "A Filter 1 FEG Mod Amount"
+      }
+    },
+    "a_filter_1_resonance": {
+      "pedalboard": {
+        "index": 320,
+        "name": "A Filter 1 Resonance"
+      },
+      "clap": {
+        "clap_param_id": 8095466,
+        "clap_name": "A Filter 1 Resonance",
+        "clap_module_name": "/A Filters/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 320,
+        "name": "A Filter 1 Resonance"
+      }
+    },
+    "a_filter_1_type": {
+      "pedalboard": {
+        "index": 317,
+        "name": "A Filter 1 Type"
+      },
+      "clap": {
+        "clap_param_id": 1537728286,
+        "clap_name": "A Filter 1 Type",
+        "clap_module_name": "/A Filters/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 317,
+        "name": "A Filter 1 Type"
+      }
+    },
+    "a_filter_2_cutoff": {
+      "pedalboard": {
+        "index": 325,
+        "name": "A Filter 2 Cutoff"
+      },
+      "clap": {
+        "clap_param_id": 1540685744,
+        "clap_name": "A Filter 2 Cutoff",
+        "clap_module_name": "/A Filters/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 325,
+        "name": "A Filter 2 Cutoff"
+      }
+    },
+    "a_filter_2_feg_mod_amount": {
+      "pedalboard": {
+        "index": 327,
+        "name": "A Filter 2 FEG Mod Amount"
+      },
+      "clap": {
+        "clap_param_id": 1591537336,
+        "clap_name": "A Filter 2 FEG Mod Amount",
+        "clap_module_name": "/A Filters/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 327,
+        "name": "A Filter 2 FEG Mod Amount"
+      }
+    },
+    "a_filter_2_resonance": {
+      "pedalboard": {
+        "index": 326,
+        "name": "A Filter 2 Resonance"
+      },
+      "clap": {
+        "clap_param_id": 2506111403,
+        "clap_name": "A Filter 2 Resonance",
+        "clap_module_name": "/A Filters/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 326,
+        "name": "A Filter 2 Resonance"
+      }
+    },
+    "a_filter_2_type": {
+      "pedalboard": {
+        "index": 323,
+        "name": "A Filter 2 Type"
+      },
+      "clap": {
+        "clap_param_id": 1566357437,
+        "clap_name": "A Filter 2 Type",
+        "clap_module_name": "/A Filters/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 323,
+        "name": "A Filter 2 Type"
+      }
+    },
+    "a_waveshaper_drive": {
+      "pedalboard": {
+        "index": 253,
+        "name": "A Waveshaper Drive"
+      },
+      "clap": {
+        "clap_param_id": 1243907205,
+        "clap_name": "A Waveshaper Drive",
+        "clap_module_name": "/A Common/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 253,
+        "name": "A Waveshaper Drive"
+      }
+    },
+    "a_waveshaper_type": {
+      "pedalboard": {
+        "index": 252,
+        "name": "A Waveshaper Type"
+      },
+      "clap": {
+        "clap_param_id": 456251615,
+        "clap_name": "A Waveshaper Type",
+        "clap_module_name": "/A Common/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 252,
+        "name": "A Waveshaper Type"
+      }
+    },
+    "a_osc_1_mute": {
+      "pedalboard": {
+        "index": 293,
+        "name": "A Osc 1 Mute"
+      },
+      "clap": {
+        "clap_param_id": 247329706,
+        "clap_name": "A Osc 1 Mute",
+        "clap_module_name": "/A Mixer/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 293,
+        "name": "A Osc 1 Mute"
+      }
+    },
+    "a_osc_1_octave": {
+      "pedalboard": {
+        "index": 257,
+        "name": "A Osc 1 Octave"
+      },
+      "clap": {
+        "clap_param_id": 600629919,
+        "clap_name": "A Osc 1 Octave",
+        "clap_module_name": "/A Oscillators/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 257,
+        "name": "A Osc 1 Octave"
+      }
+    },
+    "a_osc_1_pitch": {
+      "pedalboard": {
+        "index": 258,
+        "name": "A Osc 1 Pitch"
+      },
+      "clap": {
+        "clap_param_id": 2791424113,
+        "clap_name": "A Osc 1 Pitch",
+        "clap_module_name": "/A Oscillators/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 258,
+        "name": "A Osc 1 Pitch"
+      }
+    },
+    "a_osc_1_route": {
+      "pedalboard": {
+        "index": 295,
+        "name": "A Osc 1 Route"
+      },
+      "clap": {
+        "clap_param_id": 2508963190,
+        "clap_name": "A Osc 1 Route",
+        "clap_module_name": "/A Mixer/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 295,
+        "name": "A Osc 1 Route"
+      }
+    },
+    "a_osc_1_sawtooth": {
+      "pedalboard": {
+        "index": 259,
+        "name": "A Osc 1 Sawtooth"
+      },
+      "clap": {
+        "clap_param_id": 627352114,
+        "clap_name": "A Osc 1 Shape",
+        "clap_module_name": "/A Oscillators/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 259,
+        "name": "A Osc 1 Shape"
+      }
+    },
+    "a_osc_1_width": {
+      "pedalboard": {
+        "index": 262,
+        "name": "A Osc 1 Width"
+      },
+      "clap": {
+        "clap_param_id": 627352117,
+        "clap_name": "A Osc 1 Sub Mix",
+        "clap_module_name": "/A Oscillators/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 262,
+        "name": "A Osc 1 Sub Mix"
+      }
+    },
+    "a_osc_1_sync": {
+      "pedalboard": {
+        "index": 263,
+        "name": "A Osc 1 Sync"
+      },
+      "clap": {
+        "clap_param_id": 627352118,
+        "clap_name": "A Osc 1 Sync",
+        "clap_module_name": "/A Oscillators/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 263,
+        "name": "A Osc 1 Sync"
+      }
+    },
+    "a_osc_1_unison_detune": {
+      "pedalboard": {
+        "index": 264,
+        "name": "A Osc 1 Unison Detune"
+      },
+      "clap": {
+        "clap_param_id": 627352119,
+        "clap_name": "A Osc 1 Unison Detune",
+        "clap_module_name": "/A Oscillators/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 264,
+        "name": "A Osc 1 Unison Detune"
+      }
+    },
+    "a_osc_1_unison_voices": {
+      "pedalboard": {
+        "index": 265,
+        "name": "A Osc 1 Unison Voices"
+      },
+      "clap": {
+        "clap_param_id": 627352120,
+        "clap_name": "A Osc 1 Unison Voices",
+        "clap_module_name": "/A Oscillators/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 265,
+        "name": "A Osc 1 Unison Voices"
+      }
+    },
+    "a_osc_1_volume": {
+      "pedalboard": {
+        "index": 292,
+        "name": "A Osc 1 Volume"
+      },
+      "clap": {
+        "clap_param_id": 371918427,
+        "clap_name": "A Osc 1 Volume",
+        "clap_module_name": "/A Mixer/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 292,
+        "name": "A Osc 1 Volume"
+      }
+    },
+    "a_osc_1_pulse": {
+      "pedalboard": {
+        "index": 260,
+        "name": "A Osc 1 Pulse"
+      },
+      "clap": {
+        "clap_param_id": 627352115,
+        "clap_name": "A Osc 1 Width 1",
+        "clap_module_name": "/A Oscillators/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 260,
+        "name": "A Osc 1 Width 1"
+      }
+    },
+    "a_osc_1_triangle": {
+      "pedalboard": {
+        "index": 261,
+        "name": "A Osc 1 Triangle"
+      },
+      "clap": {
+        "clap_param_id": 627352116,
+        "clap_name": "A Osc 1 Width 2",
+        "clap_module_name": "/A Oscillators/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 261,
+        "name": "A Osc 1 Width 2"
+      }
+    },
+    "a_osc_2_mute": {
+      "pedalboard": {
+        "index": 297,
+        "name": "A Osc 2 Mute"
+      },
+      "clap": {
+        "clap_param_id": 247329707,
+        "clap_name": "A Osc 2 Mute",
+        "clap_module_name": "/A Mixer/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 297,
+        "name": "A Osc 2 Mute"
+      }
+    },
+    "a_osc_2_octave": {
+      "pedalboard": {
+        "index": 269,
+        "name": "A Osc 2 Octave"
+      },
+      "clap": {
+        "clap_param_id": 2343440254,
+        "clap_name": "A Osc 2 Octave",
+        "clap_module_name": "/A Oscillators/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 269,
+        "name": "A Osc 2 Octave"
+      }
+    },
+    "a_osc_2_pitch": {
+      "pedalboard": {
+        "index": 270,
+        "name": "A Osc 2 Pitch"
+      },
+      "clap": {
+        "clap_param_id": 3678927794,
+        "clap_name": "A Osc 2 Pitch",
+        "clap_module_name": "/A Oscillators/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 270,
+        "name": "A Osc 2 Pitch"
+      }
+    },
+    "a_osc_2_route": {
+      "pedalboard": {
+        "index": 299,
+        "name": "A Osc 2 Route"
+      },
+      "clap": {
+        "clap_param_id": 2508963191,
+        "clap_name": "A Osc 2 Route",
+        "clap_module_name": "/A Mixer/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 299,
+        "name": "A Osc 2 Route"
+      }
+    },
+    "a_osc_2_sawtooth": {
+      "pedalboard": {
+        "index": 271,
+        "name": "A Osc 2 Sawtooth"
+      },
+      "clap": {
+        "clap_param_id": 2370162449,
+        "clap_name": "A Osc 2 Shape",
+        "clap_module_name": "/A Oscillators/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 271,
+        "name": "A Osc 2 Shape"
+      }
+    },
+    "a_osc_2_width": {
+      "pedalboard": {
+        "index": 274,
+        "name": "A Osc 2 Width"
+      },
+      "clap": {
+        "clap_param_id": 2370162452,
+        "clap_name": "A Osc 2 Sub Mix",
+        "clap_module_name": "/A Oscillators/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 274,
+        "name": "A Osc 2 Sub Mix"
+      }
+    },
+    "a_osc_2_sync": {
+      "pedalboard": {
+        "index": 275,
+        "name": "A Osc 2 Sync"
+      },
+      "clap": {
+        "clap_param_id": 2370162453,
+        "clap_name": "A Osc 2 Sync",
+        "clap_module_name": "/A Oscillators/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 275,
+        "name": "A Osc 2 Sync"
+      }
+    },
+    "a_osc_2_unison_detune": {
+      "pedalboard": {
+        "index": 276,
+        "name": "A Osc 2 Unison Detune"
+      },
+      "clap": {
+        "clap_param_id": 2370162454,
+        "clap_name": "A Osc 2 Unison Detune",
+        "clap_module_name": "/A Oscillators/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 276,
+        "name": "A Osc 2 Unison Detune"
+      }
+    },
+    "a_osc_2_unison_voices": {
+      "pedalboard": {
+        "index": 277,
+        "name": "A Osc 2 Unison Voices"
+      },
+      "clap": {
+        "clap_param_id": 2370162455,
+        "clap_name": "A Osc 2 Unison Voices",
+        "clap_module_name": "/A Oscillators/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 277,
+        "name": "A Osc 2 Unison Voices"
+      }
+    },
+    "a_osc_2_volume": {
+      "pedalboard": {
+        "index": 296,
+        "name": "A Osc 2 Volume"
+      },
+      "clap": {
+        "clap_param_id": 371918428,
+        "clap_name": "A Osc 2 Volume",
+        "clap_module_name": "/A Mixer/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 296,
+        "name": "A Osc 2 Volume"
+      }
+    },
+    "a_osc_2_pulse": {
+      "pedalboard": {
+        "index": 272,
+        "name": "A Osc 2 Pulse"
+      },
+      "clap": {
+        "clap_param_id": 2370162450,
+        "clap_name": "A Osc 2 Width 1",
+        "clap_module_name": "/A Oscillators/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 272,
+        "name": "A Osc 2 Width 1"
+      }
+    },
+    "a_osc_2_triangle": {
+      "pedalboard": {
+        "index": 273,
+        "name": "A Osc 2 Triangle"
+      },
+      "clap": {
+        "clap_param_id": 2370162451,
+        "clap_name": "A Osc 2 Width 2",
+        "clap_module_name": "/A Oscillators/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 273,
+        "name": "A Osc 2 Width 2"
+      }
+    },
+    "a_osc_3_mute": {
+      "pedalboard": {
+        "index": 301,
+        "name": "A Osc 3 Mute"
+      },
+      "clap": {
+        "clap_param_id": 247329708,
+        "clap_name": "A Osc 3 Mute",
+        "clap_module_name": "/A Mixer/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 301,
+        "name": "A Osc 3 Mute"
+      }
+    },
+    "a_osc_3_octave": {
+      "pedalboard": {
+        "index": 281,
+        "name": "A Osc 3 Octave"
+      },
+      "clap": {
+        "clap_param_id": 4086250589,
+        "clap_name": "A Osc 3 Octave",
+        "clap_module_name": "/A Oscillators/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 281,
+        "name": "A Osc 3 Octave"
+      }
+    },
+    "a_osc_3_pitch": {
+      "pedalboard": {
+        "index": 282,
+        "name": "A Osc 3 Pitch"
+      },
+      "clap": {
+        "clap_param_id": 271464179,
+        "clap_name": "A Osc 3 Pitch",
+        "clap_module_name": "/A Oscillators/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 282,
+        "name": "A Osc 3 Pitch"
+      }
+    },
+    "a_osc_3_route": {
+      "pedalboard": {
+        "index": 303,
+        "name": "A Osc 3 Route"
+      },
+      "clap": {
+        "clap_param_id": 2508963192,
+        "clap_name": "A Osc 3 Route",
+        "clap_module_name": "/A Mixer/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 303,
+        "name": "A Osc 3 Route"
+      }
+    },
+    "a_osc_3_sawtooth": {
+      "pedalboard": {
+        "index": 283,
+        "name": "A Osc 3 Sawtooth"
+      },
+      "clap": {
+        "clap_param_id": 4112972784,
+        "clap_name": "A Osc 3 Shape",
+        "clap_module_name": "/A Oscillators/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 283,
+        "name": "A Osc 3 Shape"
+      }
+    },
+    "a_osc_3_width": {
+      "pedalboard": {
+        "index": 286,
+        "name": "A Osc 3 Width"
+      },
+      "clap": {
+        "clap_param_id": 4112972787,
+        "clap_name": "A Osc 3 Sub Mix",
+        "clap_module_name": "/A Oscillators/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 286,
+        "name": "A Osc 3 Sub Mix"
+      }
+    },
+    "a_osc_3_sync": {
+      "pedalboard": {
+        "index": 287,
+        "name": "A Osc 3 Sync"
+      },
+      "clap": {
+        "clap_param_id": 4112972788,
+        "clap_name": "A Osc 3 Sync",
+        "clap_module_name": "/A Oscillators/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 287,
+        "name": "A Osc 3 Sync"
+      }
+    },
+    "a_osc_3_unison_detune": {
+      "pedalboard": {
+        "index": 288,
+        "name": "A Osc 3 Unison Detune"
+      },
+      "clap": {
+        "clap_param_id": 4112972789,
+        "clap_name": "A Osc 3 Unison Detune",
+        "clap_module_name": "/A Oscillators/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 288,
+        "name": "A Osc 3 Unison Detune"
+      }
+    },
+    "a_osc_3_unison_voices": {
+      "pedalboard": {
+        "index": 289,
+        "name": "A Osc 3 Unison Voices"
+      },
+      "clap": {
+        "clap_param_id": 4112972790,
+        "clap_name": "A Osc 3 Unison Voices",
+        "clap_module_name": "/A Oscillators/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 289,
+        "name": "A Osc 3 Unison Voices"
+      }
+    },
+    "a_osc_3_volume": {
+      "pedalboard": {
+        "index": 300,
+        "name": "A Osc 3 Volume"
+      },
+      "clap": {
+        "clap_param_id": 371918429,
+        "clap_name": "A Osc 3 Volume",
+        "clap_module_name": "/A Mixer/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 300,
+        "name": "A Osc 3 Volume"
+      }
+    },
+    "a_osc_3_pulse": {
+      "pedalboard": {
+        "index": 284,
+        "name": "A Osc 3 Pulse"
+      },
+      "clap": {
+        "clap_param_id": 4112972785,
+        "clap_name": "A Osc 3 Width 1",
+        "clap_module_name": "/A Oscillators/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 284,
+        "name": "A Osc 3 Width 1"
+      }
+    },
+    "a_osc_3_triangle": {
+      "pedalboard": {
+        "index": 285,
+        "name": "A Osc 3 Triangle"
+      },
+      "clap": {
+        "clap_param_id": 4112972786,
+        "clap_name": "A Osc 3 Width 2",
+        "clap_module_name": "/A Oscillators/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 285,
+        "name": "A Osc 3 Width 2"
+      }
+    },
+    "a_osc_drift": {
+      "pedalboard": {
+        "index": 234,
+        "name": "A Osc Drift"
+      },
+      "clap": {
+        "clap_param_id": 3004132939,
+        "clap_name": "A Osc Drift",
+        "clap_module_name": "/A Common/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 234,
+        "name": "A Osc Drift"
+      }
+    },
+    "a_fm_depth": {
+      "pedalboard": {
+        "index": 233,
+        "name": "A FM Depth"
+      },
+      "clap": {
+        "clap_param_id": 650467177,
+        "clap_name": "A FM Depth",
+        "clap_module_name": "/A Common/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 233,
+        "name": "A FM Depth"
+      }
+    },
+    "a_fm_routing": {
+      "pedalboard": {
+        "index": 232,
+        "name": "A FM Routing"
+      },
+      "clap": {
+        "clap_param_id": 3430465358,
+        "clap_name": "A FM Routing",
+        "clap_module_name": "/A Common/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 232,
+        "name": "A FM Routing"
+      }
+    },
+    "a_lfo_1_amplitude": {
+      "pedalboard": {
+        "index": 348,
+        "name": "A LFO 1 Amplitude"
+      },
+      "clap": {
+        "clap_param_id": 2456464138,
+        "clap_name": "A LFO 1 Amplitude",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 348,
+        "name": "A LFO 1 Amplitude"
+      }
+    },
+    "a_lfo_1_attack": {
+      "pedalboard": {
+        "index": 353,
+        "name": "A LFO 1 Attack"
+      },
+      "clap": {
+        "clap_param_id": 1908656014,
+        "clap_name": "A LFO 1 Attack",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 353,
+        "name": "A LFO 1 Attack"
+      }
+    },
+    "a_lfo_1_decay": {
+      "pedalboard": {
+        "index": 355,
+        "name": "A LFO 1 Decay"
+      },
+      "clap": {
+        "clap_param_id": 3943202228,
+        "clap_name": "A LFO 1 Decay",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 355,
+        "name": "A LFO 1 Decay"
+      }
+    },
+    "a_lfo_1_deform": {
+      "pedalboard": {
+        "index": 349,
+        "name": "A LFO 1 Deform"
+      },
+      "clap": {
+        "clap_param_id": 1980287499,
+        "clap_name": "A LFO 1 Deform",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 349,
+        "name": "A LFO 1 Deform"
+      }
+    },
+    "a_lfo_1_hold": {
+      "pedalboard": {
+        "index": 354,
+        "name": "A LFO 1 Hold"
+      },
+      "clap": {
+        "clap_param_id": 1235707781,
+        "clap_name": "A LFO 1 Hold",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 354,
+        "name": "A LFO 1 Hold"
+      }
+    },
+    "a_lfo_1_phase": {
+      "pedalboard": {
+        "index": 347,
+        "name": "A LFO 1 Phase"
+      },
+      "clap": {
+        "clap_param_id": 3954372469,
+        "clap_name": "A LFO 1 Phase",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 347,
+        "name": "A LFO 1 Phase"
+      }
+    },
+    "a_lfo_1_rate": {
+      "pedalboard": {
+        "index": 346,
+        "name": "A LFO 1 Rate"
+      },
+      "clap": {
+        "clap_param_id": 1235992486,
+        "clap_name": "A LFO 1 Rate",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 346,
+        "name": "A LFO 1 Rate"
+      }
+    },
+    "a_lfo_1_release": {
+      "pedalboard": {
+        "index": 357,
+        "name": "A LFO 1 Release"
+      },
+      "clap": {
+        "clap_param_id": 804747137,
+        "clap_name": "A LFO 1 Release",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 357,
+        "name": "A LFO 1 Release"
+      }
+    },
+    "a_lfo_1_sustain": {
+      "pedalboard": {
+        "index": 356,
+        "name": "A LFO 1 Sustain"
+      },
+      "clap": {
+        "clap_param_id": 2157228445,
+        "clap_name": "A LFO 1 Sustain",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 356,
+        "name": "A LFO 1 Sustain"
+      }
+    },
+    "a_lfo_1_type": {
+      "pedalboard": {
+        "index": 345,
+        "name": "A LFO 1 Type"
+      },
+      "clap": {
+        "clap_param_id": 3957142939,
+        "clap_name": "A LFO 1 Type",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 345,
+        "name": "A LFO 1 Type"
+      }
+    },
+    "a_lfo_2_amplitude": {
+      "pedalboard": {
+        "index": 361,
+        "name": "A LFO 2 Amplitude"
+      },
+      "clap": {
+        "clap_param_id": 659512779,
+        "clap_name": "A LFO 2 Amplitude",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 361,
+        "name": "A LFO 2 Amplitude"
+      }
+    },
+    "a_lfo_2_attack": {
+      "pedalboard": {
+        "index": 366,
+        "name": "A LFO 2 Attack"
+      },
+      "clap": {
+        "clap_param_id": 3651466349,
+        "clap_name": "A LFO 2 Attack",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 366,
+        "name": "A LFO 2 Attack"
+      }
+    },
+    "a_lfo_2_decay": {
+      "pedalboard": {
+        "index": 368,
+        "name": "A LFO 2 Decay"
+      },
+      "clap": {
+        "clap_param_id": 535738613,
+        "clap_name": "A LFO 2 Decay",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 368,
+        "name": "A LFO 2 Decay"
+      }
+    },
+    "a_lfo_2_deform": {
+      "pedalboard": {
+        "index": 362,
+        "name": "A LFO 2 Deform"
+      },
+      "clap": {
+        "clap_param_id": 3723097834,
+        "clap_name": "A LFO 2 Deform",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 362,
+        "name": "A LFO 2 Deform"
+      }
+    },
+    "a_lfo_2_hold": {
+      "pedalboard": {
+        "index": 367,
+        "name": "A LFO 2 Hold"
+      },
+      "clap": {
+        "clap_param_id": 1264336932,
+        "clap_name": "A LFO 2 Hold",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 367,
+        "name": "A LFO 2 Hold"
+      }
+    },
+    "a_lfo_2_phase": {
+      "pedalboard": {
+        "index": 360,
+        "name": "A LFO 2 Phase"
+      },
+      "clap": {
+        "clap_param_id": 546908854,
+        "clap_name": "A LFO 2 Phase",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 360,
+        "name": "A LFO 2 Phase"
+      }
+    },
+    "a_lfo_2_rate": {
+      "pedalboard": {
+        "index": 359,
+        "name": "A LFO 2 Rate"
+      },
+      "clap": {
+        "clap_param_id": 1264621637,
+        "clap_name": "A LFO 2 Rate",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 359,
+        "name": "A LFO 2 Rate"
+      }
+    },
+    "a_lfo_2_release": {
+      "pedalboard": {
+        "index": 370,
+        "name": "A LFO 2 Release"
+      },
+      "clap": {
+        "clap_param_id": 3292259970,
+        "clap_name": "A LFO 2 Release",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 370,
+        "name": "A LFO 2 Release"
+      }
+    },
+    "a_lfo_2_sustain": {
+      "pedalboard": {
+        "index": 369,
+        "name": "A LFO 2 Sustain"
+      },
+      "clap": {
+        "clap_param_id": 349773982,
+        "clap_name": "A LFO 2 Sustain",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 369,
+        "name": "A LFO 2 Sustain"
+      }
+    },
+    "a_lfo_2_type": {
+      "pedalboard": {
+        "index": 358,
+        "name": "A LFO 2 Type"
+      },
+      "clap": {
+        "clap_param_id": 549679324,
+        "clap_name": "A LFO 2 Type",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 358,
+        "name": "A LFO 2 Type"
+      }
+    },
+    "a_lfo_3_amplitude": {
+      "pedalboard": {
+        "index": 374,
+        "name": "A LFO 3 Amplitude"
+      },
+      "clap": {
+        "clap_param_id": 3157528716,
+        "clap_name": "A LFO 3 Amplitude",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 374,
+        "name": "A LFO 3 Amplitude"
+      }
+    },
+    "a_lfo_3_attack": {
+      "pedalboard": {
+        "index": 379,
+        "name": "A LFO 3 Attack"
+      },
+      "clap": {
+        "clap_param_id": 1099309388,
+        "clap_name": "A LFO 3 Attack",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 379,
+        "name": "A LFO 3 Attack"
+      }
+    },
+    "a_lfo_3_decay": {
+      "pedalboard": {
+        "index": 381,
+        "name": "A LFO 3 Decay"
+      },
+      "clap": {
+        "clap_param_id": 1423242294,
+        "clap_name": "A LFO 3 Decay",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 381,
+        "name": "A LFO 3 Decay"
+      }
+    },
+    "a_lfo_3_deform": {
+      "pedalboard": {
+        "index": 375,
+        "name": "A LFO 3 Deform"
+      },
+      "clap": {
+        "clap_param_id": 1170940873,
+        "clap_name": "A LFO 3 Deform",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 375,
+        "name": "A LFO 3 Deform"
+      }
+    },
+    "a_lfo_3_hold": {
+      "pedalboard": {
+        "index": 380,
+        "name": "A LFO 3 Hold"
+      },
+      "clap": {
+        "clap_param_id": 1292966083,
+        "clap_name": "A LFO 3 Hold",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 380,
+        "name": "A LFO 3 Hold"
+      }
+    },
+    "a_lfo_3_phase": {
+      "pedalboard": {
+        "index": 373,
+        "name": "A LFO 3 Phase"
+      },
+      "clap": {
+        "clap_param_id": 1434412535,
+        "clap_name": "A LFO 3 Phase",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 373,
+        "name": "A LFO 3 Phase"
+      }
+    },
+    "a_lfo_3_rate": {
+      "pedalboard": {
+        "index": 372,
+        "name": "A LFO 3 Rate"
+      },
+      "clap": {
+        "clap_param_id": 1293250788,
+        "clap_name": "A LFO 3 Rate",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 372,
+        "name": "A LFO 3 Rate"
+      }
+    },
+    "a_lfo_3_release": {
+      "pedalboard": {
+        "index": 383,
+        "name": "A LFO 3 Release"
+      },
+      "clap": {
+        "clap_param_id": 1484805507,
+        "clap_name": "A LFO 3 Release",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 383,
+        "name": "A LFO 3 Release"
+      }
+    },
+    "a_lfo_3_sustain": {
+      "pedalboard": {
+        "index": 382,
+        "name": "A LFO 3 Sustain"
+      },
+      "clap": {
+        "clap_param_id": 2837286815,
+        "clap_name": "A LFO 3 Sustain",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 382,
+        "name": "A LFO 3 Sustain"
+      }
+    },
+    "a_lfo_3_type": {
+      "pedalboard": {
+        "index": 371,
+        "name": "A LFO 3 Type"
+      },
+      "clap": {
+        "clap_param_id": 1437183005,
+        "clap_name": "A LFO 3 Type",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 371,
+        "name": "A LFO 3 Type"
+      }
+    },
+    "a_lfo_4_amplitude": {
+      "pedalboard": {
+        "index": 387,
+        "name": "A LFO 4 Amplitude"
+      },
+      "clap": {
+        "clap_param_id": 1360577357,
+        "clap_name": "A LFO 4 Amplitude",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 387,
+        "name": "A LFO 4 Amplitude"
+      }
+    },
+    "a_lfo_4_attack": {
+      "pedalboard": {
+        "index": 392,
+        "name": "A LFO 4 Attack"
+      },
+      "clap": {
+        "clap_param_id": 2842119723,
+        "clap_name": "A LFO 4 Attack",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 392,
+        "name": "A LFO 4 Attack"
+      }
+    },
+    "a_lfo_4_decay": {
+      "pedalboard": {
+        "index": 394,
+        "name": "A LFO 4 Decay"
+      },
+      "clap": {
+        "clap_param_id": 2310745975,
+        "clap_name": "A LFO 4 Decay",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 394,
+        "name": "A LFO 4 Decay"
+      }
+    },
+    "a_lfo_4_deform": {
+      "pedalboard": {
+        "index": 388,
+        "name": "A LFO 4 Deform"
+      },
+      "clap": {
+        "clap_param_id": 2913751208,
+        "clap_name": "A LFO 4 Deform",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 388,
+        "name": "A LFO 4 Deform"
+      }
+    },
+    "a_lfo_4_hold": {
+      "pedalboard": {
+        "index": 393,
+        "name": "A LFO 4 Hold"
+      },
+      "clap": {
+        "clap_param_id": 1321595234,
+        "clap_name": "A LFO 4 Hold",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 393,
+        "name": "A LFO 4 Hold"
+      }
+    },
+    "a_lfo_4_phase": {
+      "pedalboard": {
+        "index": 386,
+        "name": "A LFO 4 Phase"
+      },
+      "clap": {
+        "clap_param_id": 2321916216,
+        "clap_name": "A LFO 4 Phase",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 386,
+        "name": "A LFO 4 Phase"
+      }
+    },
+    "a_lfo_4_rate": {
+      "pedalboard": {
+        "index": 385,
+        "name": "A LFO 4 Rate"
+      },
+      "clap": {
+        "clap_param_id": 1321879939,
+        "clap_name": "A LFO 4 Rate",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 385,
+        "name": "A LFO 4 Rate"
+      }
+    },
+    "a_lfo_4_release": {
+      "pedalboard": {
+        "index": 396,
+        "name": "A LFO 4 Release"
+      },
+      "clap": {
+        "clap_param_id": 3972318340,
+        "clap_name": "A LFO 4 Release",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 396,
+        "name": "A LFO 4 Release"
+      }
+    },
+    "a_lfo_4_sustain": {
+      "pedalboard": {
+        "index": 395,
+        "name": "A LFO 4 Sustain"
+      },
+      "clap": {
+        "clap_param_id": 1029832352,
+        "clap_name": "A LFO 4 Sustain",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 395,
+        "name": "A LFO 4 Sustain"
+      }
+    },
+    "a_lfo_4_type": {
+      "pedalboard": {
+        "index": 384,
+        "name": "A LFO 4 Type"
+      },
+      "clap": {
+        "clap_param_id": 2324686686,
+        "clap_name": "A LFO 4 Type",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 384,
+        "name": "A LFO 4 Type"
+      }
+    },
+    "a_lfo_5_amplitude": {
+      "pedalboard": {
+        "index": 400,
+        "name": "A LFO 5 Amplitude"
+      },
+      "clap": {
+        "clap_param_id": 3858593294,
+        "clap_name": "A LFO 5 Amplitude",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 400,
+        "name": "A LFO 5 Amplitude"
+      }
+    },
+    "a_lfo_5_attack": {
+      "pedalboard": {
+        "index": 405,
+        "name": "A LFO 5 Attack"
+      },
+      "clap": {
+        "clap_param_id": 289962762,
+        "clap_name": "A LFO 5 Attack",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 405,
+        "name": "A LFO 5 Attack"
+      }
+    },
+    "a_lfo_5_decay": {
+      "pedalboard": {
+        "index": 407,
+        "name": "A LFO 5 Decay"
+      },
+      "clap": {
+        "clap_param_id": 3198249656,
+        "clap_name": "A LFO 5 Decay",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 407,
+        "name": "A LFO 5 Decay"
+      }
+    },
+    "a_lfo_5_deform": {
+      "pedalboard": {
+        "index": 401,
+        "name": "A LFO 5 Deform"
+      },
+      "clap": {
+        "clap_param_id": 361594247,
+        "clap_name": "A LFO 5 Deform",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 401,
+        "name": "A LFO 5 Deform"
+      }
+    },
+    "a_lfo_5_hold": {
+      "pedalboard": {
+        "index": 406,
+        "name": "A LFO 5 Hold"
+      },
+      "clap": {
+        "clap_param_id": 1350224385,
+        "clap_name": "A LFO 5 Hold",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 406,
+        "name": "A LFO 5 Hold"
+      }
+    },
+    "a_lfo_5_phase": {
+      "pedalboard": {
+        "index": 399,
+        "name": "A LFO 5 Phase"
+      },
+      "clap": {
+        "clap_param_id": 3209419897,
+        "clap_name": "A LFO 5 Phase",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 399,
+        "name": "A LFO 5 Phase"
+      }
+    },
+    "a_lfo_5_rate": {
+      "pedalboard": {
+        "index": 398,
+        "name": "A LFO 5 Rate"
+      },
+      "clap": {
+        "clap_param_id": 1350509090,
+        "clap_name": "A LFO 5 Rate",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 398,
+        "name": "A LFO 5 Rate"
+      }
+    },
+    "a_lfo_5_release": {
+      "pedalboard": {
+        "index": 409,
+        "name": "A LFO 5 Release"
+      },
+      "clap": {
+        "clap_param_id": 2164863877,
+        "clap_name": "A LFO 5 Release",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 409,
+        "name": "A LFO 5 Release"
+      }
+    },
+    "a_lfo_5_sustain": {
+      "pedalboard": {
+        "index": 408,
+        "name": "A LFO 5 Sustain"
+      },
+      "clap": {
+        "clap_param_id": 3517345185,
+        "clap_name": "A LFO 5 Sustain",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 408,
+        "name": "A LFO 5 Sustain"
+      }
+    },
+    "a_lfo_5_type": {
+      "pedalboard": {
+        "index": 397,
+        "name": "A LFO 5 Type"
+      },
+      "clap": {
+        "clap_param_id": 3212190367,
+        "clap_name": "A LFO 5 Type",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 397,
+        "name": "A LFO 5 Type"
+      }
+    },
+    "a_lfo_6_amplitude": {
+      "pedalboard": {
+        "index": 413,
+        "name": "A LFO 6 Amplitude"
+      },
+      "clap": {
+        "clap_param_id": 2061641935,
+        "clap_name": "A LFO 6 Amplitude",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 413,
+        "name": "A LFO 6 Amplitude"
+      }
+    },
+    "a_lfo_6_attack": {
+      "pedalboard": {
+        "index": 418,
+        "name": "A LFO 6 Attack"
+      },
+      "clap": {
+        "clap_param_id": 2032773097,
+        "clap_name": "A LFO 6 Attack",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 418,
+        "name": "A LFO 6 Attack"
+      }
+    },
+    "a_lfo_6_decay": {
+      "pedalboard": {
+        "index": 420,
+        "name": "A LFO 6 Decay"
+      },
+      "clap": {
+        "clap_param_id": 4085753337,
+        "clap_name": "A LFO 6 Decay",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 420,
+        "name": "A LFO 6 Decay"
+      }
+    },
+    "a_lfo_6_deform": {
+      "pedalboard": {
+        "index": 414,
+        "name": "A LFO 6 Deform"
+      },
+      "clap": {
+        "clap_param_id": 2104404582,
+        "clap_name": "A LFO 6 Deform",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 414,
+        "name": "A LFO 6 Deform"
+      }
+    },
+    "a_lfo_6_hold": {
+      "pedalboard": {
+        "index": 419,
+        "name": "A LFO 6 Hold"
+      },
+      "clap": {
+        "clap_param_id": 1378853536,
+        "clap_name": "A LFO 6 Hold",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 419,
+        "name": "A LFO 6 Hold"
+      }
+    },
+    "a_lfo_6_release": {
+      "pedalboard": {
+        "index": 422,
+        "name": "A LFO 6 Release"
+      },
+      "clap": {
+        "clap_param_id": 357409414,
+        "clap_name": "A LFO 6 Release",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 422,
+        "name": "A LFO 6 Release"
+      }
+    },
+    "a_lfo_6_sustain": {
+      "pedalboard": {
+        "index": 421,
+        "name": "A LFO 6 Sustain"
+      },
+      "clap": {
+        "clap_param_id": 1709890722,
+        "clap_name": "A LFO 6 Sustain",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 421,
+        "name": "A LFO 6 Sustain"
+      }
+    },
+    "a_noise_color": {
+      "pedalboard": {
+        "index": 235,
+        "name": "A Noise Color"
+      },
+      "clap": {
+        "clap_param_id": 3783187012,
+        "clap_name": "A Noise Color",
+        "clap_module_name": "/A Common/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 235,
+        "name": "A Noise Color"
+      }
+    },
+    "a_noise_mute": {
+      "pedalboard": {
+        "index": 313,
+        "name": "A Noise Mute"
+      },
+      "clap": {
+        "clap_param_id": 2331386898,
+        "clap_name": "A Noise Mute",
+        "clap_module_name": "/A Mixer/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 313,
+        "name": "A Noise Mute"
+      }
+    },
+    "a_noise_route": {
+      "pedalboard": {
+        "index": 315,
+        "name": "A Noise Route"
+      },
+      "clap": {
+        "clap_param_id": 3502536390,
+        "clap_name": "A Noise Route",
+        "clap_module_name": "/A Mixer/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 315,
+        "name": "A Noise Route"
+      }
+    },
+    "a_noise_volume": {
+      "pedalboard": {
+        "index": 312,
+        "name": "A Noise Volume"
+      },
+      "clap": {
+        "clap_param_id": 3102230465,
+        "clap_name": "A Noise Volume",
+        "clap_module_name": "/A Mixer/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 312,
+        "name": "A Noise Volume"
+      }
+    },
+    "a_pan": {
+      "pedalboard": {
+        "index": 238,
+        "name": "A Pan"
+      },
+      "clap": {
+        "clap_param_id": 92522431,
+        "clap_name": "A Pan",
+        "clap_module_name": "/A Common/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 238,
+        "name": "A Pan"
+      }
+    },
+    "a_ring_modulation_1x2_mute": {
+      "pedalboard": {
+        "index": 305,
+        "name": "A Ring Modulation 1x2 Mute"
+      },
+      "clap": {
+        "clap_param_id": 3662628441,
+        "clap_name": "A Ring Modulation 1x2 Mute",
+        "clap_module_name": "/A Mixer/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 305,
+        "name": "A Ring Modulation 1x2 Mute"
+      }
+    },
+    "a_ring_modulation_1x2_route": {
+      "pedalboard": {
+        "index": 307,
+        "name": "A Ring Modulation 1x2 Route"
+      },
+      "clap": {
+        "clap_param_id": 1313557029,
+        "clap_name": "A Ring Modulation 1x2 Route",
+        "clap_module_name": "/A Mixer/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 307,
+        "name": "A Ring Modulation 1x2 Route"
+      }
+    },
+    "a_ring_modulation_1x2_volume": {
+      "pedalboard": {
+        "index": 304,
+        "name": "A Ring Modulation 1x2 Volume"
+      },
+      "clap": {
+        "clap_param_id": 1788975242,
+        "clap_name": "A Ring Modulation 1x2 Volume",
+        "clap_module_name": "/A Mixer/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 304,
+        "name": "A Ring Modulation 1x2 Volume"
+      }
+    },
+    "a_ring_modulation_2x3_mute": {
+      "pedalboard": {
+        "index": 309,
+        "name": "A Ring Modulation 2x3 Mute"
+      },
+      "clap": {
+        "clap_param_id": 3662628473,
+        "clap_name": "A Ring Modulation 2x3 Mute",
+        "clap_module_name": "/A Mixer/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 309,
+        "name": "A Ring Modulation 2x3 Mute"
+      }
+    },
+    "a_ring_modulation_2x3_route": {
+      "pedalboard": {
+        "index": 311,
+        "name": "A Ring Modulation 2x3 Route"
+      },
+      "clap": {
+        "clap_param_id": 1313557061,
+        "clap_name": "A Ring Modulation 2x3 Route",
+        "clap_module_name": "/A Mixer/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 311,
+        "name": "A Ring Modulation 2x3 Route"
+      }
+    },
+    "a_ring_modulation_2x3_volume": {
+      "pedalboard": {
+        "index": 308,
+        "name": "A Ring Modulation 2x3 Volume"
+      },
+      "clap": {
+        "clap_param_id": 1788975274,
+        "clap_name": "A Ring Modulation 2x3 Volume",
+        "clap_module_name": "/A Mixer/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 308,
+        "name": "A Ring Modulation 2x3 Volume"
+      }
+    },
+    "a_vca_gain": {
+      "pedalboard": {
+        "index": 246,
+        "name": "A VCA Gain"
+      },
+      "clap": {
+        "clap_param_id": 1224911995,
+        "clap_name": "A VCA Gain",
+        "clap_module_name": "/A Common/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 246,
+        "name": "A VCA Gain"
+      }
+    },
+    "a_width": {
+      "pedalboard": {
+        "index": 239,
+        "name": "A Width"
+      },
+      "clap": {
+        "clap_param_id": 2868195411,
+        "clap_name": "A Width",
+        "clap_module_name": "/A Common/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 239,
+        "name": "A Width"
+      }
+    },
+    "fx_a1_delay_time": {
+      "pedalboard": {
+        "index": 20,
+        "name": "FX A1 Delay - Time"
+      },
+      "clap": {
+        "clap_param_id": 3032550496,
+        "clap_name": "FX A1 Param 1",
+        "clap_module_name": "/Global & FX/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 20,
+        "name": "FX A1 -"
+      }
+    },
+    "fx_a1_modulation_rate": {
+      "pedalboard": {
+        "index": 21,
+        "name": "FX A1 Modulation - Rate"
+      },
+      "clap": {
+        "clap_param_id": 3032550497,
+        "clap_name": "FX A1 Param 2",
+        "clap_module_name": "/Global & FX/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 21,
+        "name": "FX A1 -"
+      }
+    },
+    "fx_a1_modulation_depth": {
+      "pedalboard": {
+        "index": 22,
+        "name": "FX A1 Modulation - Depth"
+      },
+      "clap": {
+        "clap_param_id": 3032550498,
+        "clap_name": "FX A1 Param 3",
+        "clap_module_name": "/Global & FX/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 22,
+        "name": "FX A1 -"
+      }
+    },
+    "fx_a1_delay_feedback": {
+      "pedalboard": {
+        "index": 23,
+        "name": "FX A1 Delay - Feedback"
+      },
+      "clap": {
+        "clap_param_id": 3032550499,
+        "clap_name": "FX A1 Param 4",
+        "clap_module_name": "/Global & FX/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 23,
+        "name": "FX A1 -"
+      }
+    },
+    "fx_a1_eq_low_cut": {
+      "pedalboard": {
+        "index": 24,
+        "name": "FX A1 EQ - Low Cut"
+      },
+      "clap": {
+        "clap_param_id": 3032550500,
+        "clap_name": "FX A1 Param 5",
+        "clap_module_name": "/Global & FX/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 24,
+        "name": "FX A1 -"
+      }
+    },
+    "fx_a1_eq_high_cut": {
+      "pedalboard": {
+        "index": 25,
+        "name": "FX A1 EQ - High Cut"
+      },
+      "clap": {
+        "clap_param_id": 3032550501,
+        "clap_name": "FX A1 Param 6",
+        "clap_module_name": "/Global & FX/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 25,
+        "name": "FX A1 -"
+      }
+    },
+    "fx_a1_output_mix": {
+      "pedalboard": {
+        "index": 26,
+        "name": "FX A1 Output - Mix"
+      },
+      "clap": {
+        "clap_param_id": 3032550502,
+        "clap_name": "FX A1 Param 7",
+        "clap_module_name": "/Global & FX/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 26,
+        "name": "FX A1 -"
+      }
+    },
+    "fx_a1_output_width": {
+      "pedalboard": {
+        "index": 27,
+        "name": "FX A1 Output - Width"
+      },
+      "clap": {
+        "clap_param_id": 3032550503,
+        "clap_name": "FX A1 Param 8",
+        "clap_module_name": "/Global & FX/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 27,
+        "name": "FX A1 -"
+      }
+    },
+    "fx_a2_delay_time_left": {
+      "pedalboard": {
+        "index": 33,
+        "name": "FX A2 Delay Time - Left"
+      },
+      "clap": {
+        "clap_param_id": 3032580287,
+        "clap_name": "FX A2 Param 1",
+        "clap_module_name": "/Global & FX/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 33,
+        "name": "FX A2 -"
+      }
+    },
+    "fx_a2_delay_time_right": {
+      "pedalboard": {
+        "index": 34,
+        "name": "FX A2 Delay Time - Right"
+      },
+      "clap": {
+        "clap_param_id": 3032580288,
+        "clap_name": "FX A2 Param 2",
+        "clap_module_name": "/Global & FX/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 34,
+        "name": "FX A2 -"
+      }
+    },
+    "fx_a2_feedback_eq_feedback": {
+      "pedalboard": {
+        "index": 35,
+        "name": "FX A2 Feedback/EQ - Feedback"
+      },
+      "clap": {
+        "clap_param_id": 3032580289,
+        "clap_name": "FX A2 Param 3",
+        "clap_module_name": "/Global & FX/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 35,
+        "name": "FX A2 -"
+      }
+    },
+    "fx_a2_feedback_eq_crossfeed": {
+      "pedalboard": {
+        "index": 36,
+        "name": "FX A2 Feedback/EQ - Crossfeed"
+      },
+      "clap": {
+        "clap_param_id": 3032580290,
+        "clap_name": "FX A2 Param 4",
+        "clap_module_name": "/Global & FX/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 36,
+        "name": "FX A2 -"
+      }
+    },
+    "fx_a2_feedback_eq_low_cut": {
+      "pedalboard": {
+        "index": 37,
+        "name": "FX A2 Feedback/EQ - Low Cut"
+      },
+      "clap": {
+        "clap_param_id": 3032580291,
+        "clap_name": "FX A2 Param 5",
+        "clap_module_name": "/Global & FX/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 37,
+        "name": "FX A2 -"
+      }
+    },
+    "fx_a2_feedback_eq_high_cut": {
+      "pedalboard": {
+        "index": 38,
+        "name": "FX A2 Feedback/EQ - High Cut"
+      },
+      "clap": {
+        "clap_param_id": 3032580292,
+        "clap_name": "FX A2 Param 6",
+        "clap_module_name": "/Global & FX/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 38,
+        "name": "FX A2 -"
+      }
+    },
+    "fx_a2_modulation_rate": {
+      "pedalboard": {
+        "index": 39,
+        "name": "FX A2 Modulation - Rate"
+      },
+      "clap": {
+        "clap_param_id": 3032580293,
+        "clap_name": "FX A2 Param 7",
+        "clap_module_name": "/Global & FX/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 39,
+        "name": "FX A2 -"
+      }
+    },
+    "fx_a2_modulation_depth": {
+      "pedalboard": {
+        "index": 40,
+        "name": "FX A2 Modulation - Depth"
+      },
+      "clap": {
+        "clap_param_id": 3032580294,
+        "clap_name": "FX A2 Param 8",
+        "clap_module_name": "/Global & FX/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 40,
+        "name": "FX A2 -"
+      }
+    },
+    "fx_a2_input_channel": {
+      "pedalboard": {
+        "index": 41,
+        "name": "FX A2 Input - Channel"
+      },
+      "clap": {
+        "clap_param_id": 3032580295,
+        "clap_name": "FX A2 Param 9",
+        "clap_module_name": "/Global & FX/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 41,
+        "name": "FX A2 -"
+      }
+    },
+    "fx_a2_output_mix": {
+      "pedalboard": {
+        "index": 43,
+        "name": "FX A2 Output - Mix"
+      },
+      "clap": {
+        "clap_param_id": 3815675760,
+        "clap_name": "FX A2 Param 11",
+        "clap_module_name": "/Global & FX/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 43,
+        "name": "FX A2 -"
+      }
+    },
+    "fx_a2_output_width": {
+      "pedalboard": {
+        "index": 44,
+        "name": "FX A2 Output - Width"
+      },
+      "clap": {
+        "clap_param_id": 3815675761,
+        "clap_name": "FX A2 Param 12",
+        "clap_module_name": "/Global & FX/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 44,
+        "name": "FX A2 -"
+      }
+    },
+    "fx_a3_pre_delay_pre_delay": {
+      "pedalboard": {
+        "index": 124,
+        "name": "FX A3 Pre-Delay - Pre-Delay"
+      },
+      "clap": {
+        "clap_param_id": 3032788824,
+        "clap_name": "FX A3 Param 1",
+        "clap_module_name": "/Global & FX/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 124,
+        "name": "FX A3 -"
+      }
+    },
+    "fx_a3_reverb_room_size": {
+      "pedalboard": {
+        "index": 125,
+        "name": "FX A3 Reverb - Room Size"
+      },
+      "clap": {
+        "clap_param_id": 3032788825,
+        "clap_name": "FX A3 Param 2",
+        "clap_module_name": "/Global & FX/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 125,
+        "name": "FX A3 -"
+      }
+    },
+    "fx_a3_reverb_decay_time": {
+      "pedalboard": {
+        "index": 126,
+        "name": "FX A3 Reverb - Decay Time"
+      },
+      "clap": {
+        "clap_param_id": 3032788826,
+        "clap_name": "FX A3 Param 3",
+        "clap_module_name": "/Global & FX/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 126,
+        "name": "FX A3 -"
+      }
+    },
+    "fx_a3_reverb_diffusion": {
+      "pedalboard": {
+        "index": 127,
+        "name": "FX A3 Reverb - Diffusion"
+      },
+      "clap": {
+        "clap_param_id": 3032788827,
+        "clap_name": "FX A3 Param 4",
+        "clap_module_name": "/Global & FX/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 127,
+        "name": "FX A3 -"
+      }
+    },
+    "fx_a3_reverb_buildup": {
+      "pedalboard": {
+        "index": 128,
+        "name": "FX A3 Reverb - Buildup"
+      },
+      "clap": {
+        "clap_param_id": 3032788828,
+        "clap_name": "FX A3 Param 5",
+        "clap_module_name": "/Global & FX/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 128,
+        "name": "FX A3 -"
+      }
+    },
+    "fx_a3_reverb_modulation": {
+      "pedalboard": {
+        "index": 129,
+        "name": "FX A3 Reverb - Modulation"
+      },
+      "clap": {
+        "clap_param_id": 3032788829,
+        "clap_name": "FX A3 Param 6",
+        "clap_module_name": "/Global & FX/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 129,
+        "name": "FX A3 -"
+      }
+    },
+    "fx_a3_eq_lf_damping": {
+      "pedalboard": {
+        "index": 130,
+        "name": "FX A3 EQ - LF Damping"
+      },
+      "clap": {
+        "clap_param_id": 3032788830,
+        "clap_name": "FX A3 Param 7",
+        "clap_module_name": "/Global & FX/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 130,
+        "name": "FX A3 -"
+      }
+    },
+    "fx_a3_eq_hf_damping": {
+      "pedalboard": {
+        "index": 131,
+        "name": "FX A3 EQ - HF Damping"
+      },
+      "clap": {
+        "clap_param_id": 3032788831,
+        "clap_name": "FX A3 Param 8",
+        "clap_module_name": "/Global & FX/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 131,
+        "name": "FX A3 -"
+      }
+    },
+    "fx_a3_output_width": {
+      "pedalboard": {
+        "index": 132,
+        "name": "FX A3 Output - Width"
+      },
+      "clap": {
+        "clap_param_id": 3032788832,
+        "clap_name": "FX A3 Param 9",
+        "clap_module_name": "/Global & FX/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 132,
+        "name": "FX A3 -"
+      }
+    },
+    "fx_a3_output_mix": {
+      "pedalboard": {
+        "index": 133,
+        "name": "FX A3 Output - Mix"
+      },
+      "clap": {
+        "clap_param_id": 3032788833,
+        "clap_name": "FX A3 Param 10",
+        "clap_module_name": "/Global & FX/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 133,
+        "name": "FX A3 -"
+      }
+    }
+  }
+}

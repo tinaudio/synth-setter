@@ -10,7 +10,7 @@ re-exported here for backward compat.
 from synth_setter.data.vst.param_spec import ParamSpec
 from synth_setter.data.vst.param_spec_registry import param_specs, preset_paths
 from synth_setter.data.vst.renderers import AudioRenderer, DawDreamerRenderer, PedalboardRenderer
-from synth_setter.data.vst.dawdreamer_map import DawDreamerParamRef, DawDreamerPluginMap
+from synth_setter.data.vst.param_map import DawDreamerParamRef, SynthParamMap
 from synth_setter.data.vst.surge_xt_param_spec import (
     SURGE_4_PARAM_SPEC,
     SURGE_SIMPLE_PARAM_SPEC,
@@ -22,7 +22,7 @@ __all__ = [
     "AudioRenderer",
     "DawDreamerRenderer",
     "DawDreamerParamRef",
-    "DawDreamerPluginMap",
+    "SynthParamMap",
     "PedalboardRenderer",
     "SURGE_4_PARAM_SPEC",
     "SURGE_SIMPLE_PARAM_SPEC",

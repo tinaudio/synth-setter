@@ -304,7 +304,7 @@ namespaces = true
   "configs/**/*.yaml",
   "configs/**/*.yml",
   "scripts/*.sh",
-  "data/vst/*_clap_map.json",
+  "data/vst/*_param_map.json",
 ]
 
 

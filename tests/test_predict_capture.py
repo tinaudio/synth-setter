@@ -30,8 +30,8 @@ from synth_setter.data.vst.clap_map import (
     ClapCsvRow,
     ClapParamRef,
     PluginFormatMap,
-    load_clap_map,
 )
+from synth_setter.data.vst.param_map import load_param_map
 from synth_setter.data.vst.param_spec import (
     CategoricalParameter,
     ContinuousParameter,
@@ -48,7 +48,7 @@ from synth_setter.models.components.transformer import (
 )
 from synth_setter.models.surge_ff_module import VSTFeedForwardModule
 from synth_setter.models.surge_flow_matching_module import VSTFlowMatchingModule
-from synth_setter.resources import as_file, clap_map
+from synth_setter.resources import as_file, param_map
 from tests.data.vst._clap import SURGE_XT_MAPPED_PARAM_COUNT
 
 # Encoded width of the surge_xt spec (297 synth + 3 note dims);
@@ -276,15 +276,15 @@ class TestPackagedMapResolution:
 
         :param spec_name: Registry key under test.
         """
-        with as_file(clap_map(spec_name)) as path:
-            format_map = load_clap_map(path)
+        with as_file(param_map(spec_name)) as path:
+            format_map = load_param_map(path).clap_projection()
 
         assert set(format_map.params) == {p.name for p in param_specs[spec_name].synth_params}
 
     def test_unmapped_spec_raises_file_not_found(self):
         """A spec without a packaged map is a hard error, not a silent fallback."""
         with pytest.raises(FileNotFoundError, match="obxf"):
-            clap_map("obxf")
+            param_map("obxf")
 
 
 class TestDecodeAndConvert:
@@ -873,8 +873,8 @@ def _assert_valid_bridge_csv(csv_path: Path) -> None:
 
     :param csv_path: The ``params.csv`` a CLI run produced.
     """
-    with as_file(clap_map("surge_xt")) as map_path:
-        committed_map = load_clap_map(map_path)
+    with as_file(param_map("surge_xt")) as map_path:
+        committed_map = load_param_map(map_path).clap_projection()
 
     text = csv_path.read_text()
     rows = list(csv.DictReader(text.splitlines()))

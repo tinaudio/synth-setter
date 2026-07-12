@@ -266,12 +266,12 @@ docs:
 
   # ── Eval pipeline design doc ────────────────────────────────────
   - doc: docs/guides/sound-match-bridge.md
-    description: Live sound-match bridge — predict-capture CLI contract and CLAP map rebuild
+    description: Live sound-match bridge — predict-capture CLI contract and joint map rebuild
     sources:
       - pattern: "src/synth_setter/cli/predict_capture.py"
         covers: "Bridge CLI contract: uuid from wav stem, pred-0.pt + atomic params.csv, absence-is-failure semantics, --stats-file normalization, SET ME default checkpoint"
-      - pattern: "src/synth_setter/tools/build_clap_map.py"
-        covers: "dump/build commands, patch-invariant index bridge, init-order + surge_params.csv validation, headless-wrapper requirement for build"
+      - pattern: "src/synth_setter/tools/build_param_map.py"
+        covers: "per-host dump commands and runtime-free joint-map build"
       - pattern: "src/synth_setter/data/vst/clap_introspect.py"
         covers: "First-party ctypes CLAP host used by the dump command"
       - pattern: "src/synth_setter/data/vst/clap_map.py"

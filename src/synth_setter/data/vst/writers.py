@@ -203,7 +203,12 @@ def _make_renderer(render_cfg: RenderConfig, plugin: VST3Plugin | None = None) -
         render_cfg.preset_path,
     )
     if render_cfg.renderer_backend == "dawdreamer":
-        return DawDreamerRenderer(*renderer_args)
+        from synth_setter.data.vst.param_map import load_param_map
+        from synth_setter.resources import as_file, param_map
+
+        with as_file(param_map(render_cfg.param_spec_name)) as path:
+            joint_map = load_param_map(path)
+        return DawDreamerRenderer(*renderer_args, parameter_map=joint_map)
     return PedalboardRenderer(*renderer_args, plugin=plugin)
 
 

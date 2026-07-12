@@ -11,6 +11,7 @@ import pytest
 from hydra import compose, initialize_config_module
 from omegaconf import OmegaConf
 
+from synth_setter.data.vst.param_map import load_param_map
 from synth_setter.data.vst.renderers import DawDreamerRenderer
 from synth_setter.data.vst.writers import make_hdf5_dataset
 from synth_setter.evaluation.compute_audio_metrics import (
@@ -77,6 +78,9 @@ def test_dawdreamer_dataset_audio_is_similar_to_pedalboard(tmp_path: Path) -> No
         dawdreamer_config.channels,
         dawdreamer_config.signal_duration_seconds,
         str(Path(TEST_PRESET_PATH).resolve()),
+        parameter_map=load_param_map(
+            Path("src/synth_setter/data/vst/surge_xt_param_map.json")
+        ),
     )
     missing_keys = _HARDCODED_SYNTH_PARAMS.keys() - dawdreamer_renderer._parameter_indices.keys()
     assert not missing_keys

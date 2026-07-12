@@ -1,0 +1,92 @@
+{
+  "plugin": "Surge XT",
+  "param_spec_name": "surge_4",
+  "preset_resource": "presets/surge-mini.vstpreset",
+  "preset_sha256": "9a8dc107f60bf3dfa6f9f1ab4383b76813a100097fd82dbdf0a9139c11906b40",
+  "pedalboard": {
+    "plugin_version": "1.3.4",
+    "parameter_count": 772
+  },
+  "clap": {
+    "plugin_version": "1.3.4",
+    "parameter_count": 772
+  },
+  "dawdreamer": {
+    "plugin_version": "1.3.4",
+    "parameter_count": 2855
+  },
+  "params": {
+    "a_amp_eg_attack": {
+      "pedalboard": {
+        "index": 329,
+        "name": "A Amp EG Attack"
+      },
+      "clap": {
+        "clap_param_id": 2005836581,
+        "clap_name": "A Amp EG Attack",
+        "clap_module_name": "/A Envelopes/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 329,
+        "name": "A Amp EG Attack"
+      }
+    },
+    "a_filter_1_cutoff": {
+      "pedalboard": {
+        "index": 319,
+        "name": "A Filter 1 Cutoff"
+      },
+      "clap": {
+        "clap_param_id": 4092842705,
+        "clap_name": "A Filter 1 Cutoff",
+        "clap_module_name": "/A Filters/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 319,
+        "name": "A Filter 1 Cutoff"
+      }
+    },
+    "a_lfo_1_amplitude": {
+      "pedalboard": {
+        "index": 348,
+        "name": "A LFO 1 Amplitude"
+      },
+      "clap": {
+        "clap_param_id": 2456464138,
+        "clap_name": "A LFO 1 Amplitude",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 348,
+        "name": "A LFO 1 Amplitude"
+      }
+    },
+    "a_lfo_1_rate": {
+      "pedalboard": {
+        "index": 346,
+        "name": "A LFO 1 Rate"
+      },
+      "clap": {
+        "clap_param_id": 1235992486,
+        "clap_name": "A LFO 1 Rate",
+        "clap_module_name": "/A LFOs/",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "is_stepped": false
+      },
+      "dawdreamer": {
+        "index": 346,
+        "name": "A LFO 1 Rate"
+      }
+    }
+  }
+}
