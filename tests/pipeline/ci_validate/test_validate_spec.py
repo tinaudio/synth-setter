@@ -38,6 +38,7 @@ def _make_valid_spec(*, output_format: str = "hdf5", **overrides: object) -> dic
             "preset_path": "presets/surge-base.vstpreset",
             "param_spec_name": "surge_simple",
             "renderer_version": "1.3.4",
+            "renderer_backend": "pedalboard",
             "sample_rate": 44100,
             "channels": 2,
             "velocity": 100,
