@@ -60,19 +60,19 @@ If `gh pr checks <N>` is easier than parsing the JSON, use it — but capture th
 
 Read the file list from Step 1. Map file types → relevant skills:
 
-| File pattern                                                                | Skills to run                                           |
-| --------------------------------------------------------------------------- | ------------------------------------------------------- |
-| Always                                                                      | `code-health`, `synth-setter-project-standards`         |
-| `*.py`                                                                      | `python-style`, `tdd-implementation`, `comment-hygiene` |
-| `*.sh` or bash inside YAML `run:` blocks                                    | `shell-style`                                           |
-| `.github/workflows/*.{yml,yaml}`                                            | `gha-workflow-validator`, `comment-hygiene`             |
-| Any `*.{yml,yaml}` under `configs/`                                         | `comment-hygiene`                                       |
-| `docs/doc-map.yaml`                                                         | `comment-hygiene`                                       |
-| ML model / pipeline / training code under `src/synth_setter/`               | `ml-data-pipeline`, `ml-test`                           |
-| `*.py` that imports or calls Lance (content-detected — see below)           | `lance-review`                                          |
-| Diff renames or moves files (anything with `R` in `git diff --name-status`) | `tdd-refactor`                                          |
+| File pattern                                                                | Skills to run                                                         |
+| --------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| Always                                                                      | `code-health`, `synth-setter-project-standards`, `correctness-review` |
+| `*.py`                                                                      | `python-style`, `tdd-implementation`, `comment-hygiene`               |
+| `*.sh` or bash inside YAML `run:` blocks                                    | `shell-style`                                                         |
+| `.github/workflows/*.{yml,yaml}`                                            | `gha-workflow-validator`, `comment-hygiene`                           |
+| Any `*.{yml,yaml}` under `configs/`                                         | `comment-hygiene`                                                     |
+| `docs/doc-map.yaml`                                                         | `comment-hygiene`                                                     |
+| ML model / pipeline / training code under `src/synth_setter/`               | `ml-data-pipeline`, `ml-test`                                         |
+| `*.py` that imports or calls Lance (content-detected — see below)           | `lance-review`                                                        |
+| Diff renames or moves files (anything with `R` in `git diff --name-status`) | `tdd-refactor`                                                        |
 
-Always run `code-health` and `synth-setter-project-standards`. Other skills opt in based on file extensions in the diff. `comment-hygiene` deduplicates: even if multiple rows above select it, fan out only one parallel agent per skill. Note which skills you selected; you'll launch one parallel agent per skill.
+Always run `code-health`, `synth-setter-project-standards`, and `correctness-review` — correctness is checked on every diff regardless of file type. Other skills opt in based on file extensions in the diff. `comment-hygiene` deduplicates: even if multiple rows above select it, fan out only one parallel agent per skill. Note which skills you selected; you'll launch one parallel agent per skill.
 
 `lance-review` opts in by **content, not extension** — a `*.py` file selects it
 only when the diff touches the Lance API. Grep the changed Python files:
@@ -93,23 +93,27 @@ skip `lance-review`.
 
 Launch one `general-purpose` Agent per selected skill. **All agents in a single message** so they run concurrently (one message with N tool calls = N parallel agents). You are an orchestrator agent yourself, so these review agents are your sub-agents.
 
-If your harness does not let a sub-agent spawn its own sub-agents, fall back to running each selected skill sequentially in your own context — invoke each `tinaudio-synth-setter-skills:<skill-name>` via the Skill tool one at a time (with the same `lance-review` exception as the parallel path: invoke it bare, not under the `tinaudio-synth-setter-skills:` prefix — see the note below). The fallback must produce the *same* per-skill result as the parallel path: feed each skill the same inputs the sub-agent prompt would carry (PR number, repo, base/head SHA, file list) and capture its findings in the per-agent output contract below (BLOCK/WARN sections, each finding citing `<path>:<line>`), so Step 5 aggregation parses sequential and parallel output identically. Parallel fan-out is preferred; the sequential fallback preserves correctness when nesting is unavailable.
+If your harness does not let a sub-agent spawn its own sub-agents, fall back to running each selected skill sequentially in your own context — invoke each `tinaudio-synth-setter-skills:<skill-name>` via the Skill tool one at a time (with the same repo-local exception as the parallel path for `lance-review` and `correctness-review`: invoke those bare, not under the `tinaudio-synth-setter-skills:` prefix — see the note below). The fallback must produce the *same* per-skill result as the parallel path: feed each skill the same inputs the sub-agent prompt would carry (PR number, repo, base/head SHA, file list) and capture its findings in the per-agent output contract below (BLOCK/WARN sections, each finding citing `<path>:<line>`), so Step 5 aggregation parses sequential and parallel output identically. Parallel fan-out is preferred; the sequential fallback preserves correctness when nesting is unavailable.
 
 Each agent's prompt MUST include:
 
 - The PR number, repo, base SHA, head SHA.
 - The full file list (with per-file line counts is helpful but optional).
-- The exact skill to invoke: `Invoke the tinaudio-synth-setter-skills:<skill-name> skill via the Skill tool and apply its checklist to this PR's diff.` **Exception:** `lance-review` is repo-local, not a plugin skill — instruct its agent to invoke the bare `lance-review` skill (no `tinaudio-synth-setter-skills:` prefix), per the note just below. Do not emit the plugin-prefixed string for it.
+- The exact skill to invoke: `Invoke the tinaudio-synth-setter-skills:<skill-name> skill via the Skill tool and apply its checklist to this PR's diff.` **Exception:** `lance-review` and `correctness-review` are repo-local, not plugin skills — instruct each agent to invoke the bare skill name (no `tinaudio-synth-setter-skills:` prefix), per the note just below. Do not emit the plugin-prefixed string for either.
 - The expected output shape (see below).
 
-`lance-review` is **repo-local**, not a plugin skill: its agent attempts the bare
-`lance-review` skill via the Skill tool first, and only if that call errors (the
-harness has not registered it) falls back to reading and applying
-`agent/skills/lance-review/SKILL.md` directly. The
-per-agent output contract below is unchanged. **Either path** requires web access
-(`WebFetch`/`WebSearch`): the skill's grounding rule only holds if the agent can
-fetch the live Lance docs, so spawn its sub-agent as `general-purpose` (which has
-both tools) regardless of which invocation path it takes.
+`lance-review` and `correctness-review` are **repo-local**, not plugin skills:
+each agent attempts the bare skill name via the Skill tool first, and only if
+that call errors (the harness has not registered it) falls back to reading and
+applying `agent/skills/<skill-name>/SKILL.md` directly. The per-agent output
+contract below is unchanged for both.
+
+`lance-review` additionally requires web access (`WebFetch`/`WebSearch`): its
+grounding rule only holds if the agent can fetch the live Lance docs, so spawn
+its sub-agent as `general-purpose` (which has both tools) regardless of which
+invocation path it takes. `correctness-review` needs no web access — it reasons
+about the diff itself — but is spawned as `general-purpose` like every other
+fan-out agent.
 
 Each agent returns a Markdown report with `BLOCK` and `WARN` sections. Each finding cites `<path>:<line>`. Agents work independently — they should not coordinate.
 
@@ -158,6 +162,7 @@ Skill → tag (short form for comment body):
 | `ml-data-pipeline`               | `ml-pipeline`     |
 | `ml-test`                        | `ml-test`         |
 | `lance-review`                   | `lance`           |
+| `correctness-review`             | `correctness`     |
 
 Each finding (BLOCK or WARN) becomes one entry in the `findings` array, with `<severity>` set to `block` or `warn`:
 
