@@ -345,7 +345,6 @@ def cfg_torchsynth_train(tmp_path: Path) -> Iterator[DictConfig]:
                 "datamodule.train_val_test_sizes=[2,2,2]",
                 "datamodule.batch_size=1",
                 "datamodule.num_workers=0",
-                "model.compile=false",
                 "logger=csv",
             ],
         )

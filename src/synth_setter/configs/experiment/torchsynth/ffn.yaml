@@ -17,6 +17,7 @@ callbacks:
   early_stopping: null
 
 model:
+  compile: false
   params_per_token: 1
   loss_fn: mse
   net:
