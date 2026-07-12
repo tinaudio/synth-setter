@@ -216,8 +216,8 @@ sub-agents; you never launch those directly.
 >   ```markdown
 >   # repo-review-full-no-comments — <target>
 >
->   PASS — no findings across all skills (code-health, comment-hygiene,
->   python-style, shell-style, synth-setter, tdd-impl, ml-test).
+>   PASS — no findings across all skills (code-health, correctness,
+>   comment-hygiene, python-style, shell-style, synth-setter, tdd-impl, ml-test).
 >
 >   ## Summary
 >
