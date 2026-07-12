@@ -18,7 +18,7 @@ import os
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar, Literal, cast
+from typing import ClassVar, Literal, cast
 
 import lance
 import numpy as np
@@ -29,6 +29,7 @@ from torch.utils.data import DataLoader
 from synth_setter.data.lance_torch import LanceMapDataset, map_dataloader_over
 from synth_setter.data.vst.param_spec_registry import param_specs
 from synth_setter.data.vst_datamodule import (
+    _DEFAULT_PARAM_SPEC_NAME,
     RawBatch,
     VSTDataModule,
     VSTDataset,
@@ -268,7 +269,14 @@ class _RepeatFirstBatchSampler(torch.utils.data.Sampler):
 
         :param num_rows: Dataset row count; floored to full batches.
         :param batch_size: Row modulus every index is folded into.
+        :raises ValueError: If the dataset holds less than one full batch — flooring would
+            otherwise yield a silently empty epoch.
         """
+        if num_rows < batch_size:
+            raise ValueError(
+                f"repeat_first_batch needs at least one full batch: "
+                f"{num_rows} rows < batch_size {batch_size}"
+            )
         self._num_indices = num_rows - num_rows % batch_size
         self._batch_size = batch_size
 
@@ -290,7 +298,7 @@ class _RepeatFirstBatchSampler(torch.utils.data.Sampler):
 
 # DOC601/DOC603: pydoclint can't read sphinx ``:ivar:`` docs, so dataclass
 # fields are documented in the docstring body instead.
-@dataclass
+@dataclass(frozen=True)
 class _MapSplit:  # noqa: DOC601, DOC603
     """One split's map-path pieces: the sample-indexed ``dataset`` and its ``collate``."""
 
@@ -321,19 +329,59 @@ class LanceVSTDataModule(VSTDataModule):
     shard_suffix: ClassVar[str] = ".lance"
 
     def __init__(
-        self, *args: Any, loader: Literal["legacy", "map"] = "legacy", **kwargs: Any
+        self,
+        dataset_root: str | Path,
+        download_dataset_root_uri: str | None = None,
+        use_saved_mean_and_variance: bool = True,
+        batch_size: int = 1024,
+        ot: bool = True,
+        num_workers: int = 0,
+        fake: bool = False,
+        repeat_first_batch: bool = False,
+        predict_file: str | Path | None = None,
+        conditioning: Literal["mel", "m2l"] = "mel",
+        pin_memory: bool = True,
+        param_spec_name: str = _DEFAULT_PARAM_SPEC_NAME,
+        loader: Literal["legacy", "map"] = "legacy",
     ) -> None:
         """Store the loader selection on top of the base datamodule config.
 
-        :param \\*args: Positional ``VSTDataModule`` arguments.
+        Mirrors the base signature explicitly (rather than ``*args``
+        pass-through) so call sites keep full type checking.
+
+        :param dataset_root: Local directory holding the per-split ``.lance`` datasets.
+        :param download_dataset_root_uri: R2 URI to hydrate ``dataset_root`` from, or
+            ``None`` to use the local directory as-is.
+        :param use_saved_mean_and_variance: Whether to load and apply saved mel stats.
+        :param batch_size: Number of samples per batch.
+        :param ot: Whether to optimal-transport match noise to params per batch.
+        :param num_workers: Number of dataloader worker processes.
+        :param fake: Whether datasets synthesise random batches instead of reading shards.
+        :param repeat_first_batch: Whether every batch repeats the first one.
+        :param predict_file: Dataset used for prediction; defaults to the test split.
+        :param conditioning: Conditioning feature, either ``"mel"`` or ``"m2l"``.
+        :param pin_memory: Whether dataloaders pin memory for faster host-to-device copies.
+        :param param_spec_name: Registry key selecting the param spec width.
         :param loader: Read path per split: ``"legacy"`` (batch-indexed
             adapter) or ``"map"`` (sample-indexed ``LanceMapDataset``).
-        :param \\*\\*kwargs: Keyword ``VSTDataModule`` arguments.
         :raises ValueError: If ``loader`` names an unknown read path.
         """
         if loader not in ("legacy", "map"):
             raise ValueError(f"loader must be 'legacy' or 'map', got {loader!r}")
-        super().__init__(*args, **kwargs)
+        super().__init__(
+            dataset_root=dataset_root,
+            download_dataset_root_uri=download_dataset_root_uri,
+            use_saved_mean_and_variance=use_saved_mean_and_variance,
+            batch_size=batch_size,
+            ot=ot,
+            num_workers=num_workers,
+            fake=fake,
+            repeat_first_batch=repeat_first_batch,
+            predict_file=predict_file,
+            conditioning=conditioning,
+            pin_memory=pin_memory,
+            param_spec_name=param_spec_name,
+        )
         self.loader = loader
         self._map_splits: dict[str, _MapSplit] = {}
 
@@ -425,18 +473,19 @@ class LanceVSTDataModule(VSTDataModule):
         :returns: DataLoader yielding ``prepare_batch`` model batches.
         """
         pieces = self._map_splits[split]
-        sampling: dict[str, Any] = {"shuffle": shuffle}
         # Legacy parity: train/val/test repeat the first batch when configured;
         # predict never does. The sampler replaces (and overrides) shuffling.
+        sampler = None
         if self.repeat_first_batch and split != "predict":
-            sampling = {"sampler": _RepeatFirstBatchSampler(len(pieces.dataset), self.batch_size)}
+            sampler = _RepeatFirstBatchSampler(len(pieces.dataset), self.batch_size)
         return map_dataloader_over(
             pieces.dataset,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
             collate_fn=pieces.collate,
             pin_memory=self.pin_memory,
-            **sampling,
+            sampler=sampler,
+            shuffle=shuffle if sampler is None else None,
         )
 
     def train_dataloader(self) -> DataLoader:

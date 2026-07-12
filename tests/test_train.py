@@ -512,14 +512,12 @@ def test_train_fast_dev_run_lance_datamodule(cfg_train_lance: DictConfig, loader
 def test_train_same_seed_reproduces_noise_stream(cfg_train_lance: DictConfig, loader: str) -> None:
     """Two ``train(cfg)`` runs under one ``cfg.seed`` consume identical batch noise.
 
-    Pins the operator-facing seeding contract after the noise draw moved off
-    the global RNG onto a per-dataset generator (legacy path) and onto
-    ``PrepareBatchCollate`` (map path): ``seed_everything(cfg.seed,
-    workers=True)`` must still govern the real-read noise path. Runs
+    Pins the operator-facing seeding contract: batch noise is drawn from a
+    per-dataset generator (legacy path) or ``PrepareBatchCollate`` (map path),
+    both governed by ``seed_everything(cfg.seed, workers=True)``. Runs
     ``num_workers=0`` because forking workers over Lance deadlocks on the
-    parent's tokio threadpool (worker-safe opening is #1740 Phase 2 scope);
-    the forked-worker re-seed is covered over HDF5 by
-    ``tests/data/test_surge_datamodule.py::TestNoiseGeneratorSeeding``.
+    parent's tokio threadpool; the forked-worker re-seed is covered over HDF5
+    by ``tests/data/test_surge_datamodule.py::TestNoiseGeneratorSeeding``.
 
     :param cfg_train_lance: Composed ``datamodule=surge_lance`` training config.
     :param loader: Datamodule read path under test (``legacy`` or ``map``).

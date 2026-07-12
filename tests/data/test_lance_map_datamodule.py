@@ -452,6 +452,37 @@ class TestLanceMapDataModuleModes:
         for batch in batches:
             np.testing.assert_array_equal(_unwrap(batch["params"]).numpy(), first_rows)
 
+    def test_repeat_first_batch_smaller_dataset_than_batch_raises(
+        self, dataset_root: Path
+    ) -> None:
+        """A split with less than one full batch fails fast instead of yielding nothing.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        with (
+            pytest.raises(ValueError, match="full batch"),
+            _set_up_map_module(
+                dataset_root=dataset_root, batch_size=64, ot=False, repeat_first_batch=True
+            ) as module,
+        ):
+            next(iter(module.train_dataloader()))
+
+    def test_stats_off_leaves_mel_unnormalized(self, tmp_path: Path) -> None:
+        """``use_saved_mean_and_variance=False`` skips stats even when a file exists.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        root = tmp_path / "data"
+        root.mkdir()
+        for split in ("train", "val", "test"):
+            write_seeded_lance_shard(root / f"{split}.lance", num_rows=4, mel_fill=3.0)
+        write_mel_stats(root, mean=1.0, std=2.0)
+        with _set_up_map_module(
+            dataset_root=root, batch_size=2, ot=False, use_saved_mean_and_variance=False
+        ) as module:
+            mel = _unwrap(next(iter(module.val_dataloader()))["mel_spec"])
+        assert torch.allclose(mel, torch.full_like(mel, 3.0))
+
     def test_repeat_first_batch_folds_val_but_never_predict(self, dataset_root: Path) -> None:
         """Eval splits repeat the first batch like legacy; predict stays unfolded.
 
