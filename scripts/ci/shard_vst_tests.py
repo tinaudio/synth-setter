@@ -51,13 +51,17 @@ def build_matrix(files: list[str], splits: int) -> Matrix:
     :param splits: shard count; must be >= 1.
     :returns: ``{"include": [{"shard": n, "files": "a.py b.py"}, ...]}``; shards
         left empty (fewer files than splits) are omitted.
-    :raises ValueError: if ``splits`` < 1, or ``files`` is empty — an empty
-        matrix would ship a silently-green net.
+    :raises ValueError: if ``splits`` < 1; if ``files`` is empty (an empty matrix
+        would ship a silently-green net); or if any path contains whitespace
+        (the space-join / ``read -ra`` round-trip would misroute it).
     """
     if splits < 1:
         raise ValueError(f"splits must be >= 1, got {splits}")
     if not files:
         raise ValueError("no requires_vst tests collected — refusing an empty matrix")
+    spaced = [path for path in files if any(char.isspace() for char in path)]
+    if spaced:
+        raise ValueError(f"test paths must not contain whitespace (breaks read -ra): {spaced}")
     buckets: list[list[str]] = [[] for _ in range(splits)]
     for index, path in enumerate(files):
         buckets[index % splits].append(path)
@@ -67,27 +71,15 @@ def build_matrix(files: list[str], splits: int) -> Matrix:
     return {"include": include}
 
 
-def _emit_matrix(matrix: Matrix) -> None:
-    """Write ``matrix=<json>`` to ``$GITHUB_OUTPUT`` when set, else to stdout.
-
-    :param matrix: matrix to serialize under the ``matrix`` step-output key.
-    """
-    payload = "matrix=" + json.dumps(matrix)
-    output_path = os.environ.get("GITHUB_OUTPUT")
-    if output_path:
-        with open(output_path, "a", encoding="utf-8") as handle:
-            handle.write(payload + "\n")
-    else:
-        sys.stdout.write(payload + "\n")
-
-
 def main(argv: list[str] | None = None) -> int:
-    """Build the shard matrix from collected node IDs on stdin.
+    """Build the shard matrix from stdin node IDs and emit ``matrix=<json>``.
+
+    Writes the matrix line to ``$GITHUB_OUTPUT`` when set, else to stdout.
 
     :param argv: command-line arguments (defaults to ``sys.argv[1:]``).
     :returns: process exit code — 0 on success, 1 on an empty/invalid selection.
     """
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description="Shard requires_vst tests into a GHA matrix.")
     parser.add_argument(
         "--splits", type=int, required=True, help="Number of shards to spread files across."
     )
@@ -99,7 +91,14 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         sys.stderr.write(f"::error::{exc}\n")
         return 1
-    _emit_matrix(matrix)
+
+    payload = "matrix=" + json.dumps(matrix)
+    output_path = os.environ.get("GITHUB_OUTPUT")
+    if output_path:
+        with open(output_path, "a", encoding="utf-8") as handle:
+            handle.write(payload + "\n")
+    else:
+        sys.stdout.write(payload + "\n")
     sys.stderr.write(f"discovered {len(files)} files across {len(matrix['include'])} shards\n")
     return 0
 

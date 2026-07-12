@@ -76,10 +76,16 @@ def test_build_matrix_raises_on_non_positive_splits() -> None:
         build_matrix(["tests/a.py"], splits=0)
 
 
+def test_build_matrix_raises_on_whitespace_in_path() -> None:
+    """A path with a space is rejected — the shard join splits on whitespace."""
+    with pytest.raises(ValueError, match="must not contain whitespace"):
+        build_matrix(["tests/a b.py"], splits=2)
+
+
 def test_main_appends_matrix_line_to_github_output_file() -> None:
     """With ``$GITHUB_OUTPUT`` set, ``main`` appends the ``matrix=`` line and returns 0."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        output_path = os.path.join(tmpdir, "gh_output")
+        output_path = str(Path(tmpdir) / "gh_output")
         with (
             patch.dict(os.environ, {"GITHUB_OUTPUT": output_path}),
             patch("sys.stdin", io.StringIO(_COLLECTED)),
