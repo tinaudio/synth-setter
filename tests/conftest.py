@@ -328,7 +328,6 @@ def cfg_torchsynth_train(tmp_path: Path) -> Iterator[DictConfig]:
 
     Composes the production experiment through ``train.yaml``, then shrinks
     the online splits and trainer loop so the entrypoint test stays CPU-cheap.
-    Keeping initialization here preserves the entrypoint test boundary.
 
     :param tmp_path: Pinned Hydra output and log directory.
     :yields: Ready-to-run training configuration.

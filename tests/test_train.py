@@ -11,7 +11,6 @@ import os
 from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
-from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -40,7 +39,7 @@ from tests.helpers.eval_fakes import (
     fake_postprocessing_subprocess,
 )
 from tests.helpers.noise_capture import NoiseCaptureCallback
-from tests.helpers.run_if import RunIf as _RunIf
+from tests.helpers.run_if import RunIf
 from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
 
 # Experiments cycled through the Surge XT VST smoke tests below. Single source of truth so
@@ -49,7 +48,6 @@ _ORACLE_EXPERIMENT = "surge/fake_oracle"
 _SURGE_SMOKE_EXPERIMENTS = (_ORACLE_EXPERIMENT, "surge/ffn_full")
 _PREDICTION_PT_PREFIXES = ("pred", "target-audio", "target-params")
 _FAKE_METRICS_CSV = fake_metrics_csv(NUM_FIXTURE_SAMPLES)
-RunIf = cast(Callable[..., pytest.MarkDecorator], _RunIf)
 
 # TODO(#40): add @pytest.mark.ram gate for memory-intensive CPU tests test_train_fast_dev_run
 

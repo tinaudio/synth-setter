@@ -32,9 +32,8 @@ TorchSynthBatch: TypeAlias = tuple[
 ]
 # The odd 64-bit golden-ratio multiplier diffuses nearby split seeds into distinct RNG streams.
 _SEED_MIXER = 0x9E3779B97F4A7C15
-# Params must stay strictly inside the open interval (0, 1). Finite out-of-range
-# values are expected (raw model predictions are unconstrained) and clamp away from
-# the endpoints; NaN/Inf signal divergence or a pipeline bug and raise instead.
+# Finite params clamp into the open interval (0, 1) because model predictions are unconstrained.
+# NaN/Inf signal divergence or a pipeline bug and raise instead.
 _PARAM_CLAMP_EPS = 1e-4
 
 
@@ -75,58 +74,57 @@ class TorchSynthParam:
     symmetric: bool
 
 
-# Snapshot of every torchsynth 1.0.2 Voice parameter in ``get_parameters()`` order.
-# The model's targets map onto these columns positionally, so any drift — a rename,
-# reorder, or range change in a torchsynth bump — must fail loudly (see setup()).
+# Snapshot of torchsynth 1.0.2 Voice parameters in ``get_parameters()`` order.
+# Targets map positionally, so rename/reorder/range drift must fail loudly (see ``setup()``).
 PARAM_SPEC: tuple[TorchSynthParam, ...] = (
     TorchSynthParam("adsr_1", "attack", 0.0, 2.0, 0.5, False),
     TorchSynthParam("adsr_1", "decay", 0.0, 2.0, 0.5, False),
-    TorchSynthParam("adsr_1", "sustain", 0.0, 1.0, 1, False),
+    TorchSynthParam("adsr_1", "sustain", 0.0, 1.0, 1.0, False),
     TorchSynthParam("adsr_1", "release", 0.0, 5.0, 0.5, False),
-    TorchSynthParam("adsr_1", "alpha", 0.1, 6.0, 1, False),
+    TorchSynthParam("adsr_1", "alpha", 0.1, 6.0, 1.0, False),
     TorchSynthParam("adsr_2", "attack", 0.0, 2.0, 0.5, False),
     TorchSynthParam("adsr_2", "decay", 0.0, 2.0, 0.5, False),
-    TorchSynthParam("adsr_2", "sustain", 0.0, 1.0, 1, False),
+    TorchSynthParam("adsr_2", "sustain", 0.0, 1.0, 1.0, False),
     TorchSynthParam("adsr_2", "release", 0.0, 5.0, 0.5, False),
-    TorchSynthParam("adsr_2", "alpha", 0.1, 6.0, 1, False),
+    TorchSynthParam("adsr_2", "alpha", 0.1, 6.0, 1.0, False),
     TorchSynthParam("keyboard", "midi_f0", 0.0, 127.0, 1.0, False),
     TorchSynthParam("keyboard", "duration", 0.01, 4.0, 0.5, False),
     TorchSynthParam("lfo_1", "frequency", 0.0, 20.0, 0.25, False),
     TorchSynthParam("lfo_1", "mod_depth", -10.0, 20.0, 0.5, True),
-    TorchSynthParam("lfo_1", "initial_phase", -3.1415927410125732, 3.1415927410125732, 1, False),
-    TorchSynthParam("lfo_1", "sin", 0.0, 1.0, 1, False),
-    TorchSynthParam("lfo_1", "tri", 0.0, 1.0, 1, False),
-    TorchSynthParam("lfo_1", "saw", 0.0, 1.0, 1, False),
-    TorchSynthParam("lfo_1", "rsaw", 0.0, 1.0, 1, False),
-    TorchSynthParam("lfo_1", "sqr", 0.0, 1.0, 1, False),
+    TorchSynthParam("lfo_1", "initial_phase", -3.1415927410125732, 3.1415927410125732, 1.0, False),
+    TorchSynthParam("lfo_1", "sin", 0.0, 1.0, 1.0, False),
+    TorchSynthParam("lfo_1", "tri", 0.0, 1.0, 1.0, False),
+    TorchSynthParam("lfo_1", "saw", 0.0, 1.0, 1.0, False),
+    TorchSynthParam("lfo_1", "rsaw", 0.0, 1.0, 1.0, False),
+    TorchSynthParam("lfo_1", "sqr", 0.0, 1.0, 1.0, False),
     TorchSynthParam("lfo_1_amp_adsr", "attack", 0.0, 2.0, 0.5, False),
     TorchSynthParam("lfo_1_amp_adsr", "decay", 0.0, 2.0, 0.5, False),
-    TorchSynthParam("lfo_1_amp_adsr", "sustain", 0.0, 1.0, 1, False),
+    TorchSynthParam("lfo_1_amp_adsr", "sustain", 0.0, 1.0, 1.0, False),
     TorchSynthParam("lfo_1_amp_adsr", "release", 0.0, 5.0, 0.5, False),
-    TorchSynthParam("lfo_1_amp_adsr", "alpha", 0.1, 6.0, 1, False),
+    TorchSynthParam("lfo_1_amp_adsr", "alpha", 0.1, 6.0, 1.0, False),
     TorchSynthParam("lfo_1_rate_adsr", "attack", 0.0, 2.0, 0.5, False),
     TorchSynthParam("lfo_1_rate_adsr", "decay", 0.0, 2.0, 0.5, False),
-    TorchSynthParam("lfo_1_rate_adsr", "sustain", 0.0, 1.0, 1, False),
+    TorchSynthParam("lfo_1_rate_adsr", "sustain", 0.0, 1.0, 1.0, False),
     TorchSynthParam("lfo_1_rate_adsr", "release", 0.0, 5.0, 0.5, False),
-    TorchSynthParam("lfo_1_rate_adsr", "alpha", 0.1, 6.0, 1, False),
+    TorchSynthParam("lfo_1_rate_adsr", "alpha", 0.1, 6.0, 1.0, False),
     TorchSynthParam("lfo_2", "frequency", 0.0, 20.0, 0.25, False),
     TorchSynthParam("lfo_2", "mod_depth", -10.0, 20.0, 0.5, True),
-    TorchSynthParam("lfo_2", "initial_phase", -3.1415927410125732, 3.1415927410125732, 1, False),
-    TorchSynthParam("lfo_2", "sin", 0.0, 1.0, 1, False),
-    TorchSynthParam("lfo_2", "tri", 0.0, 1.0, 1, False),
-    TorchSynthParam("lfo_2", "saw", 0.0, 1.0, 1, False),
-    TorchSynthParam("lfo_2", "rsaw", 0.0, 1.0, 1, False),
-    TorchSynthParam("lfo_2", "sqr", 0.0, 1.0, 1, False),
+    TorchSynthParam("lfo_2", "initial_phase", -3.1415927410125732, 3.1415927410125732, 1.0, False),
+    TorchSynthParam("lfo_2", "sin", 0.0, 1.0, 1.0, False),
+    TorchSynthParam("lfo_2", "tri", 0.0, 1.0, 1.0, False),
+    TorchSynthParam("lfo_2", "saw", 0.0, 1.0, 1.0, False),
+    TorchSynthParam("lfo_2", "rsaw", 0.0, 1.0, 1.0, False),
+    TorchSynthParam("lfo_2", "sqr", 0.0, 1.0, 1.0, False),
     TorchSynthParam("lfo_2_amp_adsr", "attack", 0.0, 2.0, 0.5, False),
     TorchSynthParam("lfo_2_amp_adsr", "decay", 0.0, 2.0, 0.5, False),
-    TorchSynthParam("lfo_2_amp_adsr", "sustain", 0.0, 1.0, 1, False),
+    TorchSynthParam("lfo_2_amp_adsr", "sustain", 0.0, 1.0, 1.0, False),
     TorchSynthParam("lfo_2_amp_adsr", "release", 0.0, 5.0, 0.5, False),
-    TorchSynthParam("lfo_2_amp_adsr", "alpha", 0.1, 6.0, 1, False),
+    TorchSynthParam("lfo_2_amp_adsr", "alpha", 0.1, 6.0, 1.0, False),
     TorchSynthParam("lfo_2_rate_adsr", "attack", 0.0, 2.0, 0.5, False),
     TorchSynthParam("lfo_2_rate_adsr", "decay", 0.0, 2.0, 0.5, False),
-    TorchSynthParam("lfo_2_rate_adsr", "sustain", 0.0, 1.0, 1, False),
+    TorchSynthParam("lfo_2_rate_adsr", "sustain", 0.0, 1.0, 1.0, False),
     TorchSynthParam("lfo_2_rate_adsr", "release", 0.0, 5.0, 0.5, False),
-    TorchSynthParam("lfo_2_rate_adsr", "alpha", 0.1, 6.0, 1, False),
+    TorchSynthParam("lfo_2_rate_adsr", "alpha", 0.1, 6.0, 1.0, False),
     TorchSynthParam("mixer", "vco_1", 0.0, 1.0, 1.0, False),
     TorchSynthParam("mixer", "vco_2", 0.0, 1.0, 1.0, False),
     TorchSynthParam("mixer", "noise", 0.0, 1.0, 0.025, False),
@@ -150,13 +148,13 @@ PARAM_SPEC: tuple[TorchSynthParam, ...] = (
     TorchSynthParam("mod_matrix", "lfo_2->vco_2_pitch", 0.0, 1.0, 0.5, False),
     TorchSynthParam("mod_matrix", "lfo_2->vco_2_amp", 0.0, 1.0, 0.5, False),
     TorchSynthParam("mod_matrix", "lfo_2->noise_amp", 0.0, 1.0, 0.5, False),
-    TorchSynthParam("vco_1", "tuning", -24.0, 24.0, 1, False),
+    TorchSynthParam("vco_1", "tuning", -24.0, 24.0, 1.0, False),
     TorchSynthParam("vco_1", "mod_depth", -96.0, 96.0, 0.2, True),
-    TorchSynthParam("vco_1", "initial_phase", -3.1415927410125732, 3.1415927410125732, 1, False),
-    TorchSynthParam("vco_2", "tuning", -24.0, 24.0, 1, False),
+    TorchSynthParam("vco_1", "initial_phase", -3.1415927410125732, 3.1415927410125732, 1.0, False),
+    TorchSynthParam("vco_2", "tuning", -24.0, 24.0, 1.0, False),
     TorchSynthParam("vco_2", "mod_depth", -96.0, 96.0, 0.2, True),
-    TorchSynthParam("vco_2", "initial_phase", -3.1415927410125732, 3.1415927410125732, 1, False),
-    TorchSynthParam("vco_2", "shape", 0.0, 1.0, 1, False),
+    TorchSynthParam("vco_2", "initial_phase", -3.1415927410125732, 3.1415927410125732, 1.0, False),
+    TorchSynthParam("vco_2", "shape", 0.0, 1.0, 1.0, False),
 )
 # The keyboard's midi_f0 and duration are fixed by the renderer (constants of the
 # task), so they are excluded from the model's positional prediction targets.
@@ -175,9 +173,8 @@ def _spec_from_voice(voice: Voice) -> tuple[TorchSynthParam, ...]:
     """
     spec = []
     for (module, name), parameter in voice.get_parameters().items():
-        # getattr: torchsynth sets parameter_range dynamically in __new__, so pyright
-        # cannot see it as a ModuleParameter attribute.
-        parameter_range = getattr(parameter, "parameter_range")
+        # TorchSynth sets parameter_range dynamically in __new__, beyond pyright's stub.
+        parameter_range = parameter.parameter_range  # type: ignore[attr-defined]
         spec.append(
             TorchSynthParam(
                 module,
@@ -269,9 +266,8 @@ class _Renderer:
     lock: threading.Lock
 
 
-# Unbounded cache, but production holds only a few entries: batch_size=1 items plus
-# the metric re-render's val batch sizes; batch/GPU rendering would need eviction or
-# a fixed renderer size — see #1820.
+# Production caches only batch_size=1 items and metric re-render val batch sizes.
+# Batch/GPU rendering needs eviction or a fixed renderer size — see #1820.
 @cache
 def _make_renderer(
     sample_rate: int, signal_length: int, batch_size: int = 1, device: str = "cpu"
@@ -301,25 +297,23 @@ def render_torchsynth(
 ) -> torch.Tensor:
     """Render normalized TorchSynth parameters into a mono audio batch.
 
-    :param params: Finite parameter rows in TorchSynth's native order; values are
-        clamped strictly inside ``(0, 1)``.
+    :param params: Finite float32 parameter rows shaped ``(batch, NUM_PARAMS)`` in
+        TorchSynth's native order; values clamp strictly inside ``(0, 1)``.
     :param sample_rate: Audio sample rate in Hz.
     :param signal_length: Number of output samples.
     :param midi_pitch: Fixed MIDI note rendered for every parameter row.
-    :returns: Audio shaped ``(batch, signal_length)``.
+    :returns: Float32 audio shaped ``(batch, signal_length)``.
     :raises ValueError: The parameter width, a non-finite parameter, or the rendered
         audio violates the data contract.
     """
     if not torch.isfinite(params).all():
         raise ValueError("TorchSynth params must be finite")
+    if params.shape[1] != NUM_PARAMS:
+        raise ValueError(f"Expected {NUM_PARAMS} TorchSynth parameters, got {params.shape[1]}")
     renderer = _make_renderer(sample_rate, signal_length, len(params), str(params.device))
     voice = renderer.voice
     with renderer.lock:
         all_parameters = voice.get_parameters()
-        if params.shape[1] != NUM_PARAMS:
-            raise ValueError(
-                f"Expected {NUM_PARAMS} TorchSynth parameters, got {params.shape[1]}"
-            )
         native = [all_parameters[(spec.module, spec.name)] for spec in INFERABLE_SPEC]
         for values, parameter in zip(params.T, native, strict=True):
             parameter.data.copy_(values.clamp(_PARAM_CLAMP_EPS, 1 - _PARAM_CLAMP_EPS))
@@ -368,11 +362,14 @@ class TorchSynthDataset(Dataset[TorchSynthItem]):
         """Sample and render one deterministic parameter row.
 
         :param index: Logical row index.
-        :returns: Audio, parameters, and the callable used to render them.
+        :returns: Float32 audio shaped ``(1, signal_length)``, float32 parameters shaped ``(1,
+            NUM_PARAMS)``, and the renderer callable.
         """
         sample_seed = (self.seed * _SEED_MIXER + index) % sys.maxsize
         generator = torch.Generator().manual_seed(sample_seed)
-        params = torch.rand((1, self.num_params), generator=generator)
+        params = torch.rand((1, self.num_params), generator=generator).clamp(
+            _PARAM_CLAMP_EPS, 1 - _PARAM_CLAMP_EPS
+        )
         # Per-sample CPU render; render_fn is passed through so a future collate can
         # batch/GPU-render instead of paying Voice.output() per row — see #1820.
         render_fn = partial(
