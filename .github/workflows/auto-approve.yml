@@ -180,8 +180,10 @@ jobs:
               | .[]
               | "\(.status) \(.conclusion // "none") \(.name)"
             ')
-          PENDING=$(echo "$CHECK_DATA" | grep -c "^queued\|^in_progress" || true)
-          FAILED=$(echo "$CHECK_DATA" | grep -v "^completed success\|^completed skipped\|^completed neutral\|^queued\|^in_progress" | grep -c . || true)
+          PENDING=$(echo "$CHECK_DATA" | grep -c "^completed cancelled\|^queued\|^in_progress" || true)
+          # Cancellation commonly comes from a superseding or timed-out CI run;
+          # wait for its replacement instead of publishing a red auto-approve status.
+          FAILED=$(echo "$CHECK_DATA" | grep -v "^completed success\|^completed skipped\|^completed neutral\|^completed cancelled\|^queued\|^in_progress" | grep -c . || true)
           if [ "$PENDING" -gt 0 ]; then
             echo "result=neutral" >> "$GITHUB_OUTPUT"
             echo "reason=${PENDING} check(s) still running" >> "$GITHUB_OUTPUT"
