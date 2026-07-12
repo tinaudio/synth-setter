@@ -23,6 +23,7 @@ from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from hydra.utils import instantiate
+from lightning import seed_everything
 from omegaconf import DictConfig, open_dict
 
 from synth_setter.cli.eval import evaluate
@@ -98,7 +99,9 @@ def _torchsynth_initial_loss(train_cfg: DictConfig) -> float:
     baseline_datamodule = instantiate(train_cfg.datamodule)
     baseline_datamodule.setup("fit")
     baseline_audio, baseline_params, *_ = next(iter(baseline_datamodule.train_dataloader()))
-    torch.manual_seed(train_cfg.seed)
+    # Seed exactly as train() does (L.seed_everything, covering torch/numpy/python RNG)
+    # so this "initial" model matches training's start regardless of what model init draws.
+    seed_everything(train_cfg.seed, workers=True)
     baseline_model = instantiate(train_cfg.model)
     with torch.no_grad():
         loss = torch.nn.functional.mse_loss(baseline_model(baseline_audio), baseline_params).item()

@@ -1,5 +1,8 @@
 """Focused contracts for online TorchSynth sampling and rendering."""
 
+import hashlib
+import subprocess
+import sys
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from typing import cast
@@ -63,6 +66,45 @@ def test_datamodule_setup_num_params_mismatch_raises() -> None:
         datamodule.setup(None)
 
 
+def test_datamodule_test_dataloader_yields_finite_batch() -> None:
+    """``setup('test')`` builds the test split and ``test_dataloader`` yields a finite batch."""
+    datamodule = TorchSynthDataModule(
+        signal_length=4_410,
+        train_val_test_sizes=(1, 1, 2),
+        batch_size=2,
+        num_workers=0,
+    )
+    datamodule.setup("test")
+    audio, params, *_ = next(iter(datamodule.test_dataloader()))
+    assert audio.shape[0] == params.shape[0] == 2
+    assert params.shape[1] == datamodule.num_params
+    assert torch.isfinite(audio).all()
+
+
+@pytest.mark.slow
+def test_datamodule_multiprocessing_workers_render_finite_batches() -> None:
+    """Iterating a split with ``num_workers>0`` renders finite batches through forked workers.
+
+    The production config defaults to ``num_workers=4``; this exercises the per-worker
+    ``@cache`` / PL-shim re-import path (CPU rendering in forked workers, the real
+    train-on-GPU geometry) that the ``num_workers=0`` tests never reach.
+    """
+    datamodule = TorchSynthDataModule(
+        signal_length=4_410,
+        train_val_test_sizes=(4, 1, 1),
+        batch_size=2,
+        num_workers=2,
+    )
+    datamodule.setup("fit")
+    batches = list(datamodule.train_dataloader())
+
+    assert len(batches) == 2
+    for audio, params, *_ in batches:
+        assert audio.shape[0] == params.shape[0] == 2
+        assert params.shape[1] == datamodule.num_params
+        assert torch.isfinite(audio).all()
+
+
 def test_render_torchsynth_multirow_preserves_shape_and_bounds() -> None:
     """A multi-row renderer call preserves batch shape and numeric contracts."""
     params = torch.rand((3, 76), generator=torch.Generator().manual_seed(0))
@@ -72,6 +114,36 @@ def test_render_torchsynth_multirow_preserves_shape_and_bounds() -> None:
     assert audio.dtype == torch.float32
     assert torch.isfinite(audio).all()
     assert torch.all((-1 <= audio) & (audio <= 1))
+
+
+@pytest.mark.slow
+def test_render_torchsynth_deterministic_across_processes() -> None:
+    """Rendering identical params in a fresh interpreter yields byte-identical audio.
+
+    ``reproducible=False`` disables torchsynth's own reproducibility guarantees, so the
+    fixed val/test audio's cross-process stability rests on torchsynth seeding its
+    ``Noise`` buffer deterministically at construction. A fresh subprocess has independent
+    default RNG, so a matching hash *is* the determinism proof — pinned here so a
+    torchsynth upgrade that breaks it fails loudly instead of silently shifting the audio.
+    """
+    params = torch.full((2, 76), 0.3)
+    reference_hash = hashlib.sha256(
+        render_torchsynth(params, **_RENDER_KWARGS).numpy().tobytes()
+    ).hexdigest()
+    script = (
+        "import hashlib, torch;"
+        "from synth_setter.data.torchsynth_datamodule import render_torchsynth;"
+        "audio = render_torchsynth(torch.full((2, 76), 0.3),"
+        f" sample_rate={_RENDER_KWARGS['sample_rate']},"
+        f" signal_length={_RENDER_KWARGS['signal_length']},"
+        f" midi_pitch={_RENDER_KWARGS['midi_pitch']});"
+        "print(hashlib.sha256(audio.numpy().tobytes()).hexdigest())"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, check=True
+    )
+
+    assert result.stdout.strip().splitlines()[-1] == reference_hash
 
 
 def test_render_torchsynth_concurrent_calls_match_serial_results() -> None:
