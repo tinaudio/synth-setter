@@ -1,14 +1,7 @@
 name: Nightly VST Marker Sweep
 
-# Nightly safety net: runs every ``requires_vst`` test by marker, not by the
-# hand-maintained file allowlists the sibling VST workflows use — so a newly
-# added VST test can't run nowhere in CI, as
-# ``tests/data/vst/test_dawdreamer_dataset_e2e.py`` did (#1825). Runs in the
-# ``dev-snapshot`` image under ``run-linux-vst-headless.sh`` (baked plugins +
-# Xvfb), same as ``test-vst-slow.yml``. Sharded via a ``--collect-only`` file
-# matrix, not ``pytest-split`` (absent from the image) or ``pytest-xdist``
-# (unsafe: one Xvfb display, VST-host loads must stay serial). ``nightly.yml``
-# already covers the non-VST suite.
+# Nightly marker-driven safety net: runs every ``requires_vst`` test so a newly
+# added one can't slip past the sibling VST workflows' file allowlists. See #1825.
 
 on:
   # 04:00 UTC — offset from nightly.yml (06:00) and nightly-parallel-datagen.yml
@@ -52,7 +45,8 @@ jobs:
         run: docker pull "$IMAGE"
 
       # Fail fast on a broken plugin / image / mount layout before the fan-out.
-      # Covers the two primary synths the marker sweep exercises.
+      # Single-line ``python -c`` (like test-vst-slow.yml) — a multi-line body
+      # would keep its YAML indent and raise IndentationError.
       - name: Smoke-test Surge XT and OB-Xf plugin load
         run: |
           docker run --rm \
@@ -63,11 +57,7 @@ jobs:
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
               src/synth_setter/scripts/run-linux-vst-headless.sh \
-                python -X faulthandler -c "
-              from synth_setter.data.vst.core import load_plugin
-              load_plugin(\"/usr/lib/vst3/Surge XT.vst3\")
-              load_plugin(\"/usr/lib/vst3/OB-Xf.vst3\")
-              "
+                python -X faulthandler -c "from synth_setter.data.vst.core import load_plugin; load_plugin(\"/usr/lib/vst3/Surge XT.vst3\"); load_plugin(\"/usr/lib/vst3/OB-Xf.vst3\")"
             '
 
       # --collect-only is import-only (no plugin load); keep the headless wrapper
@@ -144,11 +134,9 @@ jobs:
       - name: Pull image
         run: docker pull "$IMAGE"
 
-      # Mount THIS ref's src+tests and run the shard's files under the headless
-      # wrapper (pedalboard's VST-host import needs a live X display). Baked
-      # ``/usr/lib/vst3/*.vst3`` are symlinked into ``plugins/`` because the
-      # render configs use relative paths (e.g. ``plugins/OB-Xf.vst3``);
-      # ``matrix.files`` carries no spaces, so ``read -ra`` splits it safely.
+      # Run under the headless wrapper — pedalboard's VST-host import needs a
+      # live X display. Baked plugins are symlinked into ``plugins/`` because the
+      # render configs use relative paths (e.g. ``plugins/OB-Xf.vst3``).
       - name: Run VST sweep shard in Docker
         env:
           SHARD_FILES: ${{ matrix.files }}
@@ -176,8 +164,8 @@ jobs:
                   "${shard_files[@]}"
             '
 
-      # Name the failing shard in the run log + job summary. A red run is the
-      # signal; auto-filing a ticket is left to nightly.yml's lighter pattern.
+      # Name the failing shard in the log + job summary. A red scheduled run is
+      # the alert (auto-filing a ticket is intentionally omitted, unlike cpu-slow.yml).
       - name: Annotate shard failure
         if: failure()
         env:

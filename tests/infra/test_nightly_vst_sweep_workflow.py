@@ -1,25 +1,22 @@
-"""Pin the invariants that keep ``nightly-vst-sweep.yml`` a marker-driven VST net.
+"""Pin the marker-driven invariants of ``nightly-vst-sweep.yml`` (#1825).
 
-The sibling VST workflows run hand-maintained file allowlists, so a newly added
-``requires_vst`` test that nobody registers runs nowhere — the fall-through that
-shipped ``test_dawdreamer_dataset_e2e.py`` broken (#1825). These tests fail if a
-future edit drops the marker filter or replaces the discovered matrix with a
-static list.
+A future edit that drops the ``requires_vst`` marker or swaps the discovered
+matrix for a static list reintroduces the CI fall-through and fails these tests.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 import pytest
-import yaml
+
+from tests.infra.workflow_fixtures import load_workflow
 
 _WORKFLOW = "nightly-vst-sweep.yml"
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _WORKFLOW_PATH = _PROJECT_ROOT / ".github" / "workflows" / _WORKFLOW
 _WORKFLOW_TEXT = _WORKFLOW_PATH.read_text(encoding="utf-8")
-_WORKFLOW_YAML: dict[str, Any] = yaml.safe_load(_WORKFLOW_TEXT)
+_WORKFLOW_YAML = load_workflow(_PROJECT_ROOT, _WORKFLOW)
 
 # The canonical marker: every ``requires_vst`` test on CPU, gpu/mps excluded.
 _CANONICAL_MARKER = "requires_vst and not gpu and not mps"
