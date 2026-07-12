@@ -153,6 +153,12 @@ jobs:
         #
         # ``matrix.pytest_targets`` is a space-separated node list split into a
         # bash array (``read -ra``); node IDs here carry no spaces or globs.
+        #
+        # ``uv sync --frozen`` re-syncs the mounted branch's locked deps into the
+        # image venv before pytest, so a dependency a PR adds (e.g. dawdreamer)
+        # is present even though the published image predates it. Flags mirror the
+        # build-time sync in ``docker/ubuntu22_04/Dockerfile`` so torch (cu128)
+        # and the dev group are preserved, not uninstalled.
         env:
           PLUGIN_PATH: ${{ matrix.plugin_path }}
           TEST_SYNTH: ${{ matrix.synth }}
@@ -172,6 +178,8 @@ jobs:
               set -euo pipefail
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
+              UV_PROJECT_ENVIRONMENT="$VIRTUAL_ENV" \
+                uv sync --frozen --extra cu128 --no-default-groups --group dev --no-install-project
               read -ra targets <<< "$PYTEST_TARGETS"
               src/synth_setter/scripts/run-linux-vst-headless.sh \
                 pytest -vv -s \
