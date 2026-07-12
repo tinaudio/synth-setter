@@ -46,9 +46,8 @@ jobs:
           set -euo pipefail
           docker pull "$IMAGE"
 
-      # Smoke-test the two primary plugins then collect the requires_vst node IDs
-      # in one container (avoids a third docker-run); smoke output goes to stderr
-      # so only node IDs reach the tee. --collect-only is import-only.
+      # Smoke-test the two primary plugins, then collect requires_vst node IDs in
+      # one container; the smoke load writes to stderr so only IDs reach the tee.
       - name: Smoke-test plugins and collect requires_vst tests
         run: |
           set -euo pipefail
