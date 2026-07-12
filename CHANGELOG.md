@@ -1,6 +1,342 @@
 # CHANGELOG
 
 
+## v8.46.0 (2026-07-12)
+
+### Automation
+
+- Add correctness-review subreviewer to the repo-review fan-out
+  ([#1822](https://github.com/tinaudio/synth-setter/pull/1822),
+  [`b6b491e`](https://github.com/tinaudio/synth-setter/commit/b6b491e2c30b02854ed2d51d056334507b23d4f1))
+
+* automation: add correctness-review subreviewer to the repo-review fan-out
+
+Add a repo-local correctness-review skill that scans the diff for logic errors, boundary/off-by-one
+  mistakes, nullability, numeric/dtype/shape defects, resource and concurrency bugs, and broken
+  caller contracts. It is conservative by design: a genuine correctness defect BLOCKS the merge, and
+  unresolved uncertainty about a path is itself grounds to flag. Every finding must carry a concrete
+  failure scenario (inputs to wrong result) to keep the block-heavy posture trustworthy.
+
+Wire it into the shared repo-review-full analysis so both /repo-review-full and
+  /repo-review-full-no-comments always fan out to it (correctness is checked on every diff,
+  regardless of file type). Like lance-review it is repo-local, so its sub-agent invokes the bare
+  correctness-review skill (or reads the SKILL.md directly); it needs no web access. Adds the
+  correctness tag to the aggregation table.
+
+* docs(repo-review): address dry-run WARNs on the correctness-review skill
+
+Self-review of the branch surfaced advisory WARNs; fix the actionable ones: - Drop the two meta-rule
+  rows (Reachability, Scenario cited) from the correctness-review checklist table — they misused the
+  Severity column — and fold their intent into the caption, which the Posture and Step 3/4 prose
+  already cover. - Qualify the shared analysis Notes: the pipeline no longer depends wholly on the
+  plugin now that repo-local correctness-review runs on every diff. - Add the omitted correctness
+  tag to the no-comments PASS-template skill list.
+
+### Continuous Integration
+
+- Allowlist renamed Copilot review suite in auto-approve filter
+  ([#1806](https://github.com/tinaudio/synth-setter/pull/1806),
+  [`bd87023`](https://github.com/tinaudio/synth-setter/commit/bd8702312595724652b8b1d76af7f7e135d4eb48))
+
+* fix(ci): allowlist renamed Copilot review suite in auto-approve filter
+
+GitHub renamed its managed Copilot review workflow from "Copilot code review" to "Running Copilot
+  Code Review", so the exact-name suite filter from #1033 stopped excluding Copilot check-runs. A
+  failed copilot-pull-request-reviewer run (e.g. today's quota-limit failures) then counts toward
+  Condition 2 and flips "Auto-approve status" to "Not eligible: 1 check(s) failed" on
+  otherwise-green PRs.
+
+Match the suite against a case-insensitive allowlist of both known workflow names, guarding null
+  workflow-run and check-run names (both nullable per GitHub's REST schema) so a null name can no
+  longer abort the whole conditions step under set -euo pipefail. The suite-filter rationale comment
+  moves above the step per the no-yaml-run-comments rule.
+
+Fixes #1805
+
+* chore(ci): point auto-approve suite-filter comment at PR #1033
+
+The prior in-run comment cited PR #1024, which is an unrelated schemas change; the Copilot
+  suite-skip originated in #1033.
+
+Refs #1805
+
+- Keep cancelled checks out of auto-approve failures
+  ([#1814](https://github.com/tinaudio/synth-setter/pull/1814),
+  [`f59b724`](https://github.com/tinaudio/synth-setter/commit/f59b724e532dba4dcc85c712e628403e7bb77e50))
+
+- Nightly requires_vst marker sweep so VST tests can't fall through
+  ([#1830](https://github.com/tinaudio/synth-setter/pull/1830),
+  [`3d33d70`](https://github.com/tinaudio/synth-setter/commit/3d33d709c5d0fe2f75cc8f7d0d6502eb6b8dca70))
+
+* ci: add nightly marker-driven requires_vst test sweep
+
+Run every requires_vst-tagged test nightly via the pytest marker instead of hand-maintained file
+  allowlists, so a newly added VST test can no longer fall through CI (as
+  tests/data/vst/test_dawdreamer_dataset_e2e.py did). A discover job collects the requires_vst set
+  with pytest --collect-only -m and round-robins it across a sharded matrix, run inside the
+  dev-snapshot image + headless X11 wrapper that test-vst-slow.yml uses. Non-VST coverage stays with
+  nightly.yml.
+
+An infra test pins the marker-driven, dynamic-matrix, nightly-only invariants so a future edit can't
+  silently regress to an allowlist.
+
+Refs #1825
+
+* ci: address review — drop triplicated auto-file job, tighten comments
+
+Resolve the pre-PR review BLOCKs and comment-hygiene findings:
+
+- Drop the ~80-line auto-file failure-ticket 'report' job (a near-verbatim third copy of the
+  cpu-slow.yml / nightly-parallel-datagen.yml block) in favor of nightly.yml's lighter ::error:: +
+  job-summary annotation. This removes the code-health duplication BLOCK and the POSIX-test
+  shell-style BLOCK it carried. - Add set -euo pipefail to the shard-failure annotation step and
+  route matrix.shard through env instead of inline interpolation. - Condense the file-header and
+  per-step comments to why-only prose. - Rebuild the infra test on module-level constants (no
+  fixture params, so no boilerplate :param docs), locate steps by name, and split the discover-guard
+  assertions into one-invariant-per-test.
+
+* ci: fix IndentationError in smoke test, correct failure comment
+
+The plugin-load smoke test's multi-line `python -c` kept its YAML indentation and raised
+  IndentationError on every run (the discover job would fail before collection). Collapse it to a
+  single-line `-c`, mirroring test-vst-slow.yml; verified the escaped quoting parses and runs.
+
+Also reword the shard-failure comment to state accurately that auto-filing a tracking ticket is
+  intentionally omitted (a red scheduled run is the alert), and tighten the file header, run-shard
+  comment, and test module docstring to the comment cap. The infra test now reuses the shared
+  load_workflow helper.
+
+* ci: trim two smoke/run comments to the two-line cap
+
+* ci: extract shard builder to a tested script, merge discover steps
+
+Address the pre-PR review BLOCKs:
+
+- Move the inline shard-matrix heredoc into scripts/ci/shard_vst_tests.py (stdlib-only, run by the
+  runner's bare python3) with unit tests covering the round-robin distribution and the
+  empty-selection guard. Fixes the bare-open() python-style BLOCK and makes the bucketing logic
+  testable instead of an unexercised heredoc. - Merge the plugin smoke test and the collect step
+  into one docker-run so the container preamble appears twice, not three times (the code-health DRY
+  BLOCK); the smoke load writes to stderr so only node IDs reach the tee. - Pin VST_MARKER to the
+  make test-vst-cpu marker in the infra test so the workflow can't silently drift from the Makefile
+  source (the #1353 bug class). - Add set -euo pipefail to the runner-level run blocks.
+
+* ci: trim merged discover-step comment to two lines
+
+* ci: address review nits — type alias, fixture-free tests, set -euo
+
+- Add a Matrix TypeAlias in shard_vst_tests.py and reuse it; document the no-spaces shard-file
+  assumption in build_matrix. - Make the shard-builder main tests fixture-free (patch +
+  redirect_stdout) so the file has no stray Sphinx field lists, and add stdout-fallback coverage. -
+  Enrich thin :param docs; rewrite the canonical-marker comment to point at the Makefile drift
+  guard. - Add set -euo pipefail to the vst_sweep Pull image / Run shard run blocks and assert
+  --splits $SHARD_TOTAL in the infra test.
+
+* ci: re-sync branch deps in Docker before pytest; final review nits
+
+Fold in the coordinator's dep-provisioning fix and the last review nits:
+
+- Add uv sync --frozen (cu128 flags mirroring the Dockerfile) to both docker-run steps before
+  pytest, so a dependency a PR adds after the last dev-snapshot publish (e.g. dawdreamer) is present
+  at collection and run time instead of ModuleNotFound-ing. Mirrors the landed fix in
+  test-vst-slow.yml. - Inline _emit_matrix into main (drops a restated :param), swap argparse help
+  off the module docstring, add a build_matrix whitespace guard so an odd-named path fails loudly
+  instead of misrouting, and rename shell loop vars.
+
+* ci: use Sequence params and clearer whitespace-var name in shard script
+
+* ci: re-add editable project after exact uv sync in VST sweep
+
+`uv sync --frozen ... --no-install-project` does an exact sync that prunes the image's editable
+  synth_setter install. In-process tests still import it (src is on sys.path), but subprocess
+  entrypoints launched as `python script.py` (e.g. test_parallel_shard_render_linux) then
+  ModuleNotFound. Re-add it with `uv pip install --no-deps -e .` after each sync, mirroring the
+  Dockerfile's two-step install and the landed fix in test-vst-slow.yml.
+
+- Resolve bash via which for macOS auto-approve test
+  ([#1826](https://github.com/tinaudio/synth-setter/pull/1826),
+  [`d9f0cb0`](https://github.com/tinaudio/synth-setter/commit/d9f0cb00a93b19a06692f45bbf0b5c2ac22c78c4))
+
+The auto-approve workflow regression test hardcoded /usr/bin/bash in its subprocess.run call. That
+  path exists on Ubuntu runners but not on macOS runners (bash lives at /bin/bash there), so
+  run_tests_macos failed with FileNotFoundError while Ubuntu passed.
+
+Resolve bash with shutil.which, which returns a full path present on both platforms, and raise
+  RuntimeError if it is missing (matching the sibling
+  test_generate_dataset_shards_hydra_overrides_validation guard rather than a bare assert, which -O
+  would strip). The S607 partial-path noqa is now unused (shutil.which yields an absolute path) and
+  is removed; the S603 noqa stays since the subprocess call is still flagged.
+
+- Stabilize cpu slow integration checks
+  ([#1809](https://github.com/tinaudio/synth-setter/pull/1809),
+  [`88d5016`](https://github.com/tinaudio/synth-setter/commit/88d5016bed7f617cd44951bf8d4076c954d79699))
+
+- **ci-automation**: Run docker image builds on standard ubuntu-latest
+  ([#1828](https://github.com/tinaudio/synth-setter/pull/1828),
+  [`c473d16`](https://github.com/tinaudio/synth-setter/commit/c473d165982a2dcfbbe5c643ee7661e31d01936b))
+
+* ci(ci-automation): move docker image builds to standard ubuntu-latest runners
+
+The docker-build-validation jobs were pinned to the paid ubuntu-latest-4core large runner and are
+  currently paused for cost — every PR run since the pause sits queued forever. On this public repo
+  the standard ubuntu-latest runner has the same 4 vCPU / 16 GiB as the 4core label, for free.
+
+Historical standard-runner OOMs date from the 2-core / 7 GiB private-tier runner. To hold the 16 GiB
+  budget and the smaller disk:
+
+- cap BuildKit stage concurrency at 2 so independent Dockerfile stages (KR106 JUCE compile, uv sync
+  of cu128 torch, VST fetches) do not stack their RAM peaks - free ~25 GiB of preinstalled runner
+  toolchains before building and log RAM/CPU/disk for exit-137 triage - supersede duplicate queued
+  PR builds via a concurrency group
+
+* ci(ci-automation): tighten disk-free step diagnostics and concurrency comment
+
+Make the runner-image prune best-effort so the post-cleanup RAM/disk diagnostics still print if the
+  docker daemon hiccups, and compress the concurrency comment to two lines per comment-hygiene
+  review.
+
+* ci(ci-automation): correct runner-comment issue ref and surface cleanup failures
+
+Cite tracking issue #1824 (not #1724, which scoped docker builds out) and say the 4-core label is
+  paused rather than retired. Both disk-cleanup commands now emit a workflow warning instead of
+  silently failing or killing the step before its diagnostics print. Split the docker.md runner
+  bullet into sub-bullets per comment-hygiene review.
+
+### Features
+
+- **ci-automation**: Add Claude Code GitHub Actions integration workflow
+  ([#1832](https://github.com/tinaudio/synth-setter/pull/1832),
+  [`8462248`](https://github.com/tinaudio/synth-setter/commit/846224886e7b4e886e31a76c31ebe9a43f887b8a))
+
+* "Claude PR Assistant workflow"
+
+* "Claude Code Review workflow"
+
+* style(ci-automation): fix formatting in Claude Code GitHub Actions workflow
+
+Refs #1833
+
+### Internal-Feat
+
+- **docker**: Enable FUSE for rclone mount in dev containers
+  ([#1801](https://github.com/tinaudio/synth-setter/pull/1801),
+  [`3ed2bdc`](https://github.com/tinaudio/synth-setter/commit/3ed2bdc3f25a50c2f9299fe23f35de61695ef560))
+
+rclone mount --vfs-cache-mode full against R2 fails in every container: the image ships no
+  fuse/fuse3 packages (rclone execs the legacy fusermount name) and no launch path grants the device
+  — fusermount dies with 'failed to open /dev/fuse: Operation not permitted', and mknod'ing the node
+  does not help because the device cgroup blocks opening it.
+
+Install fuse + fuse3 in the runtime apt layer next to rclone and pass --device=/dev/fuse
+  --cap-add=SYS_ADMIN via runArgs in all three devcontainer variants. The OCI compute template needs
+  no change (its nested docker run is already --privileged, a superset); RunPod cannot express the
+  flags at all — SkyPilot creates pods via runpod.create_pod, whose parameter set has no
+  device/capability/privileged field — so rclone mount stays unavailable on RunPod workers. Both
+  invariants are pinned by tests/infra/test_fuse_support.py and documented in
+  docs/reference/docker.md.
+
+Refs #1798
+
+### Refactoring
+
+- **storage**: Centralize object storage settings
+  ([#1747](https://github.com/tinaudio/synth-setter/pull/1747),
+  [`eb4e5b8`](https://github.com/tinaudio/synth-setter/commit/eb4e5b8447cc8766bc006ae10a7dc64920d5a6cd))
+
+* refactor(pipeline): centralize R2 credential resolution in R2Credentials
+
+R2's one logical secret (access key / secret / endpoint) was materialized under several env-var
+  vocabularies, and the RCLONE_CONFIG_R2_* key list was copy-pasted across r2_io, skypilot_launch,
+  tests, and GHA workflows. The type/provider structural constants were defined in two modules.
+
+Add a strict, frozen R2Credentials model (pipeline/schemas/r2_credentials.py) as the single source
+  of truth: it owns the canonical env-var names and structural defaults (a read-only
+  MappingProxyType so aliasing modules cannot mutate it), derives the endpoint from R2_ACCOUNT_ID
+  when the explicit endpoint var is absent, and projects the Lance object-store dialect via
+  lance_storage_options(). The two access secrets are SecretStr so a stray repr/log cannot leak
+  them. from_env() is the imperative shell (accepts dotenv-style str | None mappings); the model and
+  projection are a pure core.
+
+Route every credential-validation path through from_env() so "present and non-blank" has one
+  definition: - r2_io.r2_storage_options() delegates to from_env().lance_storage_options();
+  ensure_r2_env_loaded() and is_r2_reachable() delegate their validation to from_env() too, so the
+  prior presence-only check (which let a blank KEY= through) is gone and account-id endpoint
+  derivation applies uniformly. ensure_r2_env_loaded() also loads R2_ACCOUNT_ID from the .env and
+  persists a derived endpoint back to os.environ so the rclone remote sees it. -
+  skypilot_launch._WORKER_ENV_KEYS is composed from RCLONE_ENV_KEYS and _R2_RCLONE_CONSTANTS shares
+  STRUCTURAL_DEFAULTS; the duplicated tuple and the second copy of the constants are deleted.
+  resolve_worker_env() resolves the first non-blank candidate (.env over process env), so a `.env`
+  line KEY= or KEY=" " never forwards an empty credential to a worker. - Tests that re-spelled the
+  key list import the canonical constants.
+
+Public helpers keep their contracts, so the existing r2_io and launcher suites pass as-is. Adds
+  docs/design/r2-credential-centralization.md documenting the design and the out-of-scope follow-ups
+  (AWS_*/WANDB_* projections, GHA dedup, a storage-env lint gate).
+
+* ci: re-trigger smoke after kind ran out of disk on the lance row
+
+The lance generate+finalize smoke failed on the infra step "Load dev-snapshot image into kind" with
+  "no space left on device" while extracting an image layer — not a code failure (the hdf5/wds rows
+  run the identical credential path and passed, and the rclone env resolved correctly in the job
+  log). Empty commit to re-run on a fresh runner.
+
+* internal-fix(pipeline): skip blank dotenv values; neutral from_env error wording
+
+Addresses Copilot re-review of the credential refactor: - ensure_r2_env_loaded's dotenv mirror now
+  skips blank/whitespace values, so a .env line KEY= can't clobber a real process-env credential
+  (blank-as-absent, matching the launcher and from_env). Adds a regression test. -
+  R2Credentials.from_env's missing-secret error drops the process-env-specific wording (it accepts
+  an explicit mapping in tests).
+
+* ci: re-trigger after run_tests_ubuntu eval-subprocess flake
+
+run_tests_ubuntu failed on
+  tests/test_eval.py::...predict_mode_logs_shuffle_permutation_table_to_wandb[h5] with
+  'get_dataset_stats failed (exit 1)' — a transient eval-e2e subprocess flake (passes locally;
+  touches none of the credential modules). Every other job (incl. the lance/wds/hdf5 smokes +
+  run_tests/macos/conda) is green. Empty commit to re-roll the flaked job.
+
+* ci: re-roll smoke jobs (recurring kind image-load disk flake)
+
+hdf5 smoke failed at 'Load dev-snapshot image into kind' with no-space-left — the same intermittent
+  kind-runner disk flake that hit lance earlier; the smokes passed on the prior d83d7834 and
+  adab0047 runs. No code change since d83d7834 (which carries the final fixes). Re-rolling for a
+  clean board.
+
+* docs(storage): document provider-neutral object storage contracts
+
+* internal-refactor(storage): align credential model with object storage
+
+* internal-fix(storage): expose settings dependency to lite installs
+
+* ci(storage): forward canonical storage env to containers
+
+* internal-fix(storage): support local rclone projection
+
+* internal-fix(storage): pin rclone remote and persist canonical env in preflight
+
+Address the open Copilot review findings on #1747:
+
+- Drop SYNTH_SETTER_STORAGE_RCLONE_REMOTE: every consumer (worker templates, workflow env
+  forwarding, rclone probes, r2:// translation) speaks the pinned r2 remote, so a configurable name
+  could only produce silently broken projections. rclone_type stays configurable because tests point
+  it at rclone's local backend. - ensure_r2_env_loaded writes StorageConfig.storage_env() alongside
+  the rclone projection so a later env-only r2_storage_options() call sees settings that only lived
+  in the loaded dotenv file. - is_r2_reachable injects the projected rclone env into its auth ping
+  so a developer's ambient rclone config cannot make the gate disagree with ensure_r2_env_loaded.
+
+Refs #138
+
+* docs(design): align storage design docs with implemented contracts
+
+- object-storage-contracts.md: StorageSettings snippet matches the shipped model (required
+  endpoint_url, storage_settings_from_sources dotenv precedence, no env_file in model_config);
+  ObjectLocation shows the uri property instead of as_s3_uri(); StorageConfig lists storage_env(). -
+  skypilot-compute-integration.md 4.2: storage settings resolve as a unit and project the rclone env
+  block; only WANDB_API_KEY / WORKER_GIT_REF resolve per key. - r2-credential-centralization.md: the
+  remote name is pinned to r2; only rclone_type remains an adapter setting.
+
+
 ## v8.45.0 (2026-07-11)
 
 ### Documentation
