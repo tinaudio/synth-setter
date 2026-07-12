@@ -1,5 +1,6 @@
 """Regression checks for the auto-approve workflow's CI status policy."""
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -10,6 +11,7 @@ def test_cancelled_checks_keep_auto_approve_status_neutral(project_root: Path) -
     """Cancelled checks must wait for a rerun instead of showing a red status.
 
     :param project_root: Repository root containing the workflow under test.
+    :raises RuntimeError: When ``bash`` isn't available on the test runner.
     """
     workflow = (project_root / WORKFLOW_PATH).read_text()
     pending_line = next(
@@ -19,12 +21,15 @@ def test_cancelled_checks_keep_auto_approve_status_neutral(project_root: Path) -
         line.strip() for line in workflow.splitlines() if line.strip().startswith("FAILED=")
     )
 
+    bash = shutil.which("bash")
+    if bash is None:
+        raise RuntimeError("bash not found on PATH; cannot exercise workflow shell")
     result = subprocess.run(  # noqa: S603 — workflow shell is the behavior under test.
         [
-            "/usr/bin/bash",
+            bash,
             "-c",
             f'{pending_line}\n{failed_line}\nprintf "%s %s\\n" "$PENDING" "$FAILED"',
-        ],  # noqa: S607 — fixed system binary.
+        ],
         env={"CHECK_DATA": "completed cancelled VST slow tests"},
         capture_output=True,
         check=True,
