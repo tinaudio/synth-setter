@@ -247,7 +247,7 @@ class PrepareBatchCollate:
         :returns: ``prepare_batch`` output — ``{"mel_spec", "m2l", "params",
             "noise", "audio"}`` float32 tensors, ``None`` for unread modalities.
         """
-        raw = cast("RawBatch", {name: tensor.numpy() for name, tensor in batch.items()})
+        raw = cast(RawBatch, {name: tensor.numpy() for name, tensor in batch.items()})
         return prepare_batch(
             raw,
             mean=self.mean,
