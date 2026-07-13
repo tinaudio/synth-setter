@@ -13,6 +13,7 @@ def test_devcontainer_tools_installs_hermes_and_pi(project_root: Path) -> None:
     """
     dockerfile = (project_root / "docker" / "ubuntu22_04" / "Dockerfile").read_text()
 
+    assert "node:22-bullseye-slim" in dockerfile
     assert "hermes-agent.nousresearch.com/install.sh" in dockerfile
     assert "--skip-browser" in dockerfile
     assert "@earendil-works/pi-coding-agent@${PI_VERSION}" in dockerfile

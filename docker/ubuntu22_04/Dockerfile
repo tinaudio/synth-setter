@@ -573,8 +573,8 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
 # --- Node.js (system-wide) ---
 # CLI agents (claude-code, codex) install per-user below: a root-owned /usr/local/bin
 # copy would shadow dev's auto-updated ~/.npm-global copy in PATH, pinning the version.
-COPY --from=node:20-bullseye-slim /usr/local/bin/node /usr/local/bin/node
-COPY --from=node:20-bullseye-slim /usr/local/lib/node_modules /usr/local/lib/node_modules
+COPY --from=node:22-bullseye-slim /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:22-bullseye-slim /usr/local/lib/node_modules /usr/local/lib/node_modules
 
 RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
  && ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
