@@ -34,6 +34,7 @@ from synth_setter.cli import finalize_dataset
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.stats import get_stats_hdf5 as real_get_stats_hdf5
 from synth_setter.pipeline.data.stats import stream_stats_wds as real_stream_stats_wds
+from synth_setter.pipeline.schemas.spec import Split
 from tests.helpers.finalize_shards import (
     build_hdf5_smoke_spec,
     build_lance_smoke_spec,
@@ -596,7 +597,7 @@ def test_finalize_lance_downloads_writes_and_uploads_all_splits(
     """
     spec = build_lance_smoke_spec(
         task_name="finalize-lance-local-e2e",
-        train_val_test_sizes=(4, 4, 4),
+        train_val_test_sizes=(8, 4, 4),
     )
     for shard in spec.shards:
         write_minimal_lance_shard(
@@ -607,12 +608,48 @@ def test_finalize_lance_downloads_writes_and_uploads_all_splits(
     finalize_dataset.finalize_lance(spec, work_dir)
     shutil.rmtree(work_dir)
 
-    for split in ("train", "val", "test"):
+    expected_rows: dict[Split, int] = {"train": 8, "val": 4, "test": 4}
+    for split, row_count in expected_rows.items():
         split_dataset = lance.dataset(
             uri_to_local_path(fake_r2_remote, spec.r2.split_lance_uri(split))
         )
-        assert split_dataset.count_rows() == 4
+        assert split_dataset.count_rows() == row_count
     assert uri_to_local_path(fake_r2_remote, spec.r2.stats_uri()).is_file()
+
+
+def test_finalize_lance_skips_empty_split_outputs(fake_r2_remote: Path, tmp_path: Path) -> None:
+    """Only non-empty Lance splits are uploaded.
+
+    :param fake_r2_remote: Local filesystem backing the ``r2:`` rclone remote.
+    :param tmp_path: Test-scoped directory containing finalize scratch space.
+    """
+    spec = build_lance_smoke_spec(
+        task_name="finalize-lance-train-only",
+        train_val_test_sizes=(4, 0, 0),
+    )
+    write_minimal_lance_shard(
+        uri_to_local_path(fake_r2_remote, spec.r2.shard_uri(spec.shards[0])), spec
+    )
+
+    finalize_dataset.finalize_lance(spec, tmp_path / "work")
+
+    assert uri_to_local_path(fake_r2_remote, spec.r2.split_lance_uri("train")).is_dir()
+    assert not uri_to_local_path(fake_r2_remote, spec.r2.split_lance_uri("val")).exists()
+    assert not uri_to_local_path(fake_r2_remote, spec.r2.split_lance_uri("test")).exists()
+
+
+def test_finalize_lance_rejects_empty_train_split(tmp_path: Path) -> None:
+    """An empty Lance train split fails before rclone transfer begins.
+
+    :param tmp_path: Test-scoped directory that would host finalize scratch space.
+    """
+    spec = build_lance_smoke_spec(
+        task_name="finalize-lance-empty-train",
+        train_val_test_sizes=(0, 4, 0),
+    )
+
+    with pytest.raises(ValueError, match="train split is empty"):
+        finalize_dataset.finalize_lance(spec, tmp_path)
 
 
 def test_finalize_wds_raises_on_empty_train_split(fake_r2_remote: Path, tmp_path: Path) -> None:
