@@ -39,7 +39,9 @@ cp agent/hooks/_lib.sh \
    agent/hooks/pr-readiness-stop.sh \
    agent/hooks/worktree-post-setup.sh \
    "$SANDBOX/agent/hooks/"
-cp agent/_shared/review_sentinel.py "$SANDBOX/agent/_shared/"
+cp agent/_shared/review_sentinel.py \
+   agent/_shared/pr_command_classifier.py \
+   "$SANDBOX/agent/_shared/"
 cd "$SANDBOX"
 git init -q
 git config user.email test@test
