@@ -14,6 +14,7 @@ from synth_setter.data.torchsynth_datamodule import (
     _PARAM_CLAMP_EPS,
     NUM_PARAMS,
     PARAM_SPEC,
+    TorchSynthBatch,
     TorchSynthDataModule,
     TorchSynthDataset,
     _make_renderer,
@@ -145,7 +146,7 @@ def test_datamodule_loaders_shuffle_only_training_rows() -> None:
     assert isinstance(datamodule.test_dataloader().sampler, SequentialSampler)
 
 
-def _epoch_param_rows(loader: DataLoader) -> list[tuple[float, ...]]:
+def _epoch_param_rows(loader: DataLoader[TorchSynthBatch]) -> list[tuple[float, ...]]:
     """Collect one epoch of parameter rows as hashable tuples.
 
     :param loader: Batched loader over one online split.
@@ -172,22 +173,26 @@ def test_datamodule_resample_train_per_epoch_yields_fresh_rows_each_epoch() -> N
     assert set(first_epoch).isdisjoint(second_epoch)
 
 
+def _two_epoch_resampled_rows() -> list[tuple[float, ...]]:
+    """Draw two consecutive resampled train epochs from a freshly built datamodule.
+
+    :returns: Concatenated parameter rows of both epochs, in iteration order.
+    """
+    datamodule = TorchSynthDataModule(
+        signal_length=4_410,
+        train_val_test_sizes=(2, 1, 1),
+        batch_size=1,
+        num_workers=0,
+        resample_train_per_epoch=True,
+    )
+    datamodule.setup("fit")
+    loader = datamodule.train_dataloader()
+    return _epoch_param_rows(loader) + _epoch_param_rows(loader)
+
+
 def test_datamodule_resample_train_per_epoch_sequence_reproducible_across_runs() -> None:
     """Two identically seeded runs draw the same fresh-row sequence over two epochs."""
-
-    def two_epoch_rows() -> list[tuple[float, ...]]:
-        datamodule = TorchSynthDataModule(
-            signal_length=4_410,
-            train_val_test_sizes=(2, 1, 1),
-            batch_size=1,
-            num_workers=0,
-            resample_train_per_epoch=True,
-        )
-        datamodule.setup("fit")
-        loader = datamodule.train_dataloader()
-        return _epoch_param_rows(loader) + _epoch_param_rows(loader)
-
-    assert two_epoch_rows() == two_epoch_rows()
+    assert _two_epoch_resampled_rows() == _two_epoch_resampled_rows()
 
 
 def test_datamodule_resample_train_per_epoch_default_repeats_rows_each_epoch() -> None:
@@ -223,9 +228,8 @@ def test_datamodule_resample_train_per_epoch_keeps_val_rows_fixed() -> None:
 def test_datamodule_multiprocessing_workers_render_finite_batches() -> None:
     """Iterating a split with ``num_workers>0`` renders finite batches through forked workers.
 
-    The production config defaults to ``num_workers=4``; this exercises the per-worker
-    ``@cache`` / PL-shim re-import path (CPU rendering in forked workers, the real
-    train-on-GPU geometry) that the ``num_workers=0`` tests never reach.
+    Exercises the per-worker ``@cache`` / PL-shim re-import path (CPU rendering in forked workers)
+    that the single-process tests never reach.
     """
     datamodule = TorchSynthDataModule(
         signal_length=4_410,

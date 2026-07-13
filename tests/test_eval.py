@@ -45,8 +45,8 @@ class _FakeOracleDataset(NamedTuple):
     datamodule_group: str | None
 
 
-# This one-row overfit cannot establish generalization; this is only a finite/no-divergence
-# guard. Uniform targets give a constant-0.5 MSE of 1/12, so 1.0 is not a learning bound.
+# Smoke bound only: a one-row overfit cannot establish generalization, so this guards
+# against non-finite or divergent held-out loss, not learning quality.
 _TORCHSYNTH_HELD_OUT_LOSS_MAX = 1.0
 
 
