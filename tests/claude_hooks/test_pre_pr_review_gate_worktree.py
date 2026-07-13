@@ -260,6 +260,7 @@ def test_gate_blocks_shell_wrapped_pr_create_without_review_path(tmp_path: Path)
         "command gh pr create --title x --body y",
         "env gh pr create --title x --body y",
         "FOO=bar gh pr create --title x --body y",
+        "gh \\\npr create --title x --body y",
     )
 
     for command in commands:
