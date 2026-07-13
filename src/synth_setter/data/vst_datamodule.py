@@ -19,6 +19,9 @@ from synth_setter.pipeline import r2_io
 # datamodule default when no ``param_spec_name`` is configured.
 DEFAULT_PARAM_SPEC_NAME = "surge_xt"
 
+# Exclusive ``torch.randint`` bound keeping drawn seeds in signed-int64 range.
+_SEED_BOUND = torch.iinfo(torch.int64).max
+
 
 # DOC601/DOC603: pydoclint can't read sphinx ``:ivar:`` docs, so TypedDict keys
 # are documented in the docstring body instead.
@@ -111,7 +114,7 @@ def draw_generator_seed() -> int:
 
     :returns: Seed for ``torch.Generator.manual_seed``.
     """
-    return int(torch.randint(2**63 - 1, (1,)).item())
+    return int(torch.randint(_SEED_BOUND, (1,)).item())
 
 
 def load_dataset_statistics(dataset_file: str | Path) -> tuple[np.ndarray, np.ndarray]:
