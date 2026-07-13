@@ -60,9 +60,11 @@
 #   Registered in the agent's settings (e.g. .claude/settings.json) as a
 #   PreToolUse hook on Bash. The handler-level `if: "Bash(gh pr create *)"`
 #   guard is unreliable for PreToolUse hooks (see PR #1090 history), so this
-#   script re-validates the command itself — same defensive pattern
-#   doc-drift.sh uses. Non-matching commands exit 0
-#   silently.
+#   script re-validates the command itself. Matching is delegated to
+#   `agent/_shared/pr_command_classifier.py`: `direct` invocations run the
+#   gates below, `wrapped` (shell-smuggled) and `unparsable` commands that
+#   mention `gh pr create` are blocked outright, and everything else —
+#   including quoted prose mentioning the recipe — exits 0 silently.
 # =============================================================================
 set -euo pipefail
 
@@ -73,6 +75,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/_lib.sh"
 
 readonly SENTINEL_PY="${SCRIPT_DIR}/../_shared/review_sentinel.py"
+readonly CLASSIFIER_PY="${SCRIPT_DIR}/../_shared/pr_command_classifier.py"
 readonly MIN_REVIEW_BYTES=200
 # gitlint ships its CLI in the `gitlint-core` distribution; pin to the rev in
 # .pre-commit-config.yaml so a PR title obeys the same conventional-commit rule
@@ -86,130 +89,78 @@ PR_TITLE_GATE="${PR_TITLE_GATE:-block}"
 INPUT=$(cat)
 COMMAND=$(jq -r '.tool_input.command // empty' 2>/dev/null <<<"$INPUT" || true)
 
-# Print the direct or shell-wrapped invocation mode for a real PR-creation command.
-# Ignore quoted prose that merely mentions ``gh pr create``.
-shell_wrapper_runs_pr_create() {
-  COMMAND="$1" python3 - <<'PY' 2>/dev/null
-import os
-import re
-import shlex
+# shellcheck disable=SC2016  # intentional: no expansion wanted in the help block
+readonly BLOCK_HELP='Run /repo-review-full-no-comments — it writes the rendered report to
+.agent-reviews/repo-review-full-no-comments.<HEAD-sha>.md (filename owned by
+agent/_shared/review_sentinel.py). Then re-run with the path in the command
+— recommended as a trailing comment so other hooks still fire:
 
-shells = {"sh", "bash", "dash", "ksh", "zsh"}
-options_with_values = {
-    "env": {"-C", "--chdir", "-S", "--split-string", "-u", "--unset"},
-    "exec": {"-a"},
-    "nice": {"-n", "--adjustment"},
-    "sudo": {
-        "-C", "-D", "-g", "-h", "-p", "-r", "-R", "-t", "-T", "-u",
-        "--chdir", "--close-from", "--command-timeout", "--group", "--host",
-        "--other-user", "--prompt", "--role", "--type", "--user",
-    },
-    "time": {"-f", "--format", "-o", "--output"},
-}
-prefixes = {"builtin", "command", "env", "eval", "exec", "nice", "sudo", "time"}
+  gh pr create --title "..." --body "..."  # REVIEW_FULL=.agent-reviews/repo-review-full-no-comments.<sha>.md
 
+REVIEW_FULL=<value> runs to the next whitespace or shell metachar. Quoted
+paths are NOT recognized — the value-character class excludes both single
+and double quotes entirely, so REVIEW_FULL="..." reads as missing-REVIEW_FULL.
+Pass the path bare.
 
-def command_segments(command: str) -> list[list[str]]:
-    command = command.replace("\\\n", "")
-    command = re.sub(r"\$'([^']*)'", r"'\1'", command)
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=";|&(){}")
-    lexer.whitespace_split = True
-    lexer.commenters = "#"
-    segments: list[list[str]] = [[]]
-    for token in lexer:
-        if all(char in ";|&(){}" for char in token):
-            segments.append([])
-        else:
-            segments[-1].append(token)
-    return segments
+The encoded SHA must be an ancestor of HEAD and within REVIEW_MAX_LAG
+first-parent commits behind it (default 2; override via the REVIEW_MAX_LAG
+env var, must be a non-negative integer).'
 
+# shellcheck disable=SC2016  # intentional: no expansion wanted in the help block
+readonly TITLE_HELP='The PR title is the squash-merge subject, so it lands on main as a commit
+and must be a conventional commit: <type>(<optional-scope>): <description>.
+Allowed <type>s are defined in .gitlint. Set PR_TITLE_GATE=off to bypass
+(the pr-metadata-gate workflow re-checks the title regardless).'
 
-def option_end(tokens: list[str], index: int, prefix: str) -> int:
-    takes_value = options_with_values.get(prefix, set())
-    while index < len(tokens) and tokens[index].startswith("-"):
-        option = tokens[index]
-        index += 1
-        if option == "--":
-            break
-        if option in takes_value:
-            index += 1
-    return index
-
-
-def executable_index(tokens: list[str]) -> int:
-    index = 0
-    while index < len(tokens) and "=" in tokens[index] and not tokens[index].startswith("="):
-        index += 1
-    while index < len(tokens) and os.path.basename(tokens[index]) in prefixes:
-        prefix = os.path.basename(tokens[index])
-        index += 1
-        if prefix == "builtin":
-            continue
-        index = option_end(tokens, index, prefix)
-        if prefix == "env":
-            while index < len(tokens) and "=" in tokens[index]:
-                index += 1
-    while index < len(tokens) and tokens[index] in {"then", "do"}:
-        index += 1
-    return index
-
-
-def env_split_string(tokens: list[str]) -> str | None:
-    index = 0
-    while index < len(tokens) and "=" in tokens[index] and not tokens[index].startswith("="):
-        index += 1
-    if index >= len(tokens) or os.path.basename(tokens[index]) != "env":
-        return None
-    index += 1
-    while index < len(tokens) and tokens[index].startswith("-"):
-        option = tokens[index]
-        index += 1
-        if option == "--":
-            return None
-        if option in {"-S", "--split-string"} and index < len(tokens):
-            return tokens[index]
-        if option in options_with_values["env"]:
-            index += 1
-    return None
-
-
-def pr_create_mode(command: str) -> str:
-    for tokens in command_segments(command):
-        split_string = env_split_string(tokens)
-        if split_string is not None:
-            nested_mode = pr_create_mode(split_string)
-            if nested_mode:
-                return nested_mode
-        index = executable_index(tokens)
-        if index < len(tokens) and os.path.basename(tokens[index]) in shells:
-            arguments = tokens[index + 1 :]
-            for option_index, token in enumerate(arguments[:-1]):
-                if token == "--":
-                    continue
-                if token == "--command" or (token.startswith("-") and "c" in token[1:]):
-                    command_index = option_index + 1
-                    if arguments[command_index] == "--":
-                        command_index += 1
-                    if command_index < len(arguments) and pr_create_mode(arguments[command_index]):
-                        return "wrapped"
-        if tokens[index : index + 3] == ["gh", "pr", "create"]:
-            return "direct"
-    return ""
-
-
-try:
-    shlex.split(os.environ["COMMAND"], comments=True)
-except ValueError:
-    raise SystemExit(0)
-
-print(pr_create_mode(os.environ["COMMAND"]))
-PY
+block() {
+  local reason="$1"
+  # Optional 2nd arg overrides the help block; defaults to the REVIEW_FULL help.
+  local help="${2:-$BLOCK_HELP}"
+  log "blocking: $reason"
+  printf 'BLOCKED: %s\n\n%s\n' "$reason" "$help" >&2
+  exit 2
 }
 
-PR_CREATE_MODE=$(shell_wrapper_runs_pr_create "$COMMAND")
-if [[ "$PR_CREATE_MODE" != "direct" && "$PR_CREATE_MODE" != "wrapped" ]]; then
+# Shared stderr capture for the Python helpers (classifier + sentinel parser)
+# so their failure diagnostics surface in block messages instead of vanishing.
+helper_stderr=$(mktemp)
+trap 'rm -f "$helper_stderr"' EXIT
+
+#######################################
+# Classify the command's relationship to `gh pr create` via the shared
+# classifier module (single source of truth, unit-tested directly).
+# Arguments:
+#   $1 — the raw Bash tool command string.
+# Outputs:
+#   One of `direct` / `wrapped` / `unparsable` / "" on stdout; classifier
+#   diagnostics on the helper_stderr capture file.
+# Returns:
+#   python3's exit code (0 on any successful classification).
+#######################################
+classify_pr_command() {
+  python3 "$CLASSIFIER_PY" "$1" 2>"$helper_stderr"
+}
+
+# A classifier that cannot run at all (missing python3/module) fails closed
+# for commands on the gated surface and stays out of the way for the rest —
+# blocking every Bash command on an infra failure would brick the session.
+if PR_CREATE_MODE=$(classify_pr_command "$COMMAND"); then
+  :
+else
+  classifier_rc=$?
+  classifier_msg=$(cat "$helper_stderr")
+  if grep -qE 'gh[[:space:]]+pr[[:space:]]+create' <<<"$COMMAND"; then
+    block "internal classifier error (exit ${classifier_rc}) on a command mentioning gh pr create: ${classifier_msg:-no stderr captured}"
+  fi
   exit 0
 fi
+
+case "$PR_CREATE_MODE" in
+  direct) ;;
+  wrapped) block "gh pr create must run directly, not through a shell wrapper" ;;
+  unparsable) block "cannot parse a command that mentions gh pr create — run gh pr create directly, no wrappers" ;;
+  *) exit 0 ;;
+esac
 
 # Extract the PR's head branch from `--head <b>` / `-H <b>` / `--head=<b>`.
 # shlex-tokenize so a value isn't split on spaces and the trailing
@@ -279,42 +230,6 @@ if [[ -n "$TARGET_BRANCH" ]]; then
     REVIEW_REF_LABEL="branch ${TARGET_BRANCH} (${branch_tip})"
   fi
   WORKTREE_ROOT=$(worktree_root_for_branch "$TARGET_BRANCH" || true)
-fi
-
-# shellcheck disable=SC2016  # intentional: no expansion wanted in the help block
-readonly BLOCK_HELP='Run /repo-review-full-no-comments — it writes the rendered report to
-.agent-reviews/repo-review-full-no-comments.<HEAD-sha>.md (filename owned by
-agent/_shared/review_sentinel.py). Then re-run with the path in the command
-— recommended as a trailing comment so other hooks still fire:
-
-  gh pr create --title "..." --body "..."  # REVIEW_FULL=.agent-reviews/repo-review-full-no-comments.<sha>.md
-
-REVIEW_FULL=<value> runs to the next whitespace or shell metachar. Quoted
-paths are NOT recognized — the value-character class excludes both single
-and double quotes entirely, so REVIEW_FULL="..." reads as missing-REVIEW_FULL.
-Pass the path bare.
-
-The encoded SHA must be an ancestor of HEAD and within REVIEW_MAX_LAG
-first-parent commits behind it (default 2; override via the REVIEW_MAX_LAG
-env var, must be a non-negative integer).'
-
-# shellcheck disable=SC2016  # intentional: no expansion wanted in the help block
-readonly TITLE_HELP='The PR title is the squash-merge subject, so it lands on main as a commit
-and must be a conventional commit: <type>(<optional-scope>): <description>.
-Allowed <type>s are defined in .gitlint. Set PR_TITLE_GATE=off to bypass
-(the pr-metadata-gate workflow re-checks the title regardless).'
-
-block() {
-  local reason="$1"
-  # Optional 2nd arg overrides the help block; defaults to the REVIEW_FULL help.
-  local help="${2:-$BLOCK_HELP}"
-  log "blocking: $reason"
-  printf 'BLOCKED: %s\n\n%s\n' "$reason" "$help" >&2
-  exit 2
-}
-
-if [[ "$PR_CREATE_MODE" == "wrapped" ]]; then
-  block "gh pr create must run directly, not through a shell wrapper"
 fi
 
 if [[ ! "$REVIEW_MAX_LAG" =~ ^[0-9]+$ ]]; then
@@ -447,8 +362,6 @@ fi
 # helper exits 1 when the basename doesn't match the sentinel pattern, exit 2
 # on usage error or ValueError — surface those separately so a missing
 # python3 / broken helper isn't misreported as "bad filename".
-helper_stderr=$(mktemp)
-trap 'rm -f "$helper_stderr"' EXIT
 if review_sha=$(python3 "$SENTINEL_PY" parse "$REVIEW_PATH" 2>"$helper_stderr"); then
   :
 else
