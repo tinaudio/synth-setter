@@ -38,8 +38,8 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           plugin_marketplaces: "https://github.com/anthropics/claude-code.git"
           plugins: "code-review@claude-code-plugins"
-          # --comment posts findings to the PR (default only logs, hidden by the
-          # action); the trailing instruction disables the plugin's skip-drafts rule.
+          # --comment posts findings to the PR (default only logs, hidden by the action);
+          # the trailing instruction asks the triage agent not to skip drafts (best-effort).
           prompt: >-
             /code-review:code-review
             ${{ github.repository }}/pull/${{ github.event.pull_request.number }}
