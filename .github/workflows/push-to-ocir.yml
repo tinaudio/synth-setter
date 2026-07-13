@@ -1,8 +1,6 @@
 name: Push To Registries
 
-# Mirrors the dev-snapshot Docker image from Docker Hub to OCIR and GHCR so
-# OCI workers can pull it in-region and GitHub users can pull the image from
-# the repository's package registry.
+# Mirrors dev-snapshot to OCIR and GHCR so OCI workers pull in-region.
 #
 # Required secrets:
 #   OCIR_REGION_KEY        — OCIR region key (e.g. iad, phx, fra); forms the
