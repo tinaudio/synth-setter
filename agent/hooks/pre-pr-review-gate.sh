@@ -91,6 +91,7 @@ COMMAND=$(jq -r '.tool_input.command // empty' 2>/dev/null <<<"$INPUT" || true)
 shell_wrapper_runs_pr_create() {
   COMMAND="$1" python3 - <<'PY' 2>/dev/null
 import os
+import re
 import shlex
 
 shells = {"sh", "bash", "dash", "ksh", "zsh"}
@@ -105,11 +106,12 @@ options_with_values = {
     },
     "time": {"-f", "--format", "-o", "--output"},
 }
-prefixes = {"builtin", "command", "env", "exec", "nice", "sudo", "time"}
+prefixes = {"builtin", "command", "env", "eval", "exec", "nice", "sudo", "time"}
 
 
 def command_segments(command: str) -> list[list[str]]:
     command = command.replace("\\\n", "")
+    command = re.sub(r"\$'([^']*)'", r"'\1'", command)
     lexer = shlex.shlex(command, posix=True, punctuation_chars=";|&(){}")
     lexer.whitespace_split = True
     lexer.commenters = "#"

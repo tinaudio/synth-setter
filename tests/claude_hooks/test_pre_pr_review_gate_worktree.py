@@ -244,6 +244,8 @@ def test_gate_blocks_shell_wrapped_pr_create_without_review_path(tmp_path: Path)
         "bash -c 'echo preflight; gh pr create --title x --body y'",
         "bash -c 'if true; then gh pr create --title x --body y; fi'",
         "bash -c 'FOO=bar gh pr create --title x --body y'",
+        "bash -c $'gh pr create --title x --body y'",
+        "bash -c 'eval gh pr create --title x --body y'",
         "bash -c -- 'gh pr create --title x --body y'",
         "bash -c '{ gh pr create --title x --body y; }'",
         "env bash -c 'gh pr create --title x --body y'",
