@@ -531,7 +531,7 @@ def _build_surge_xt_smoke_cfg(
     accelerator: str,
     param_spec_name: str,
     experiment: str,
-    datamodule_group: Literal["surge", "surge_lance"] = "surge",
+    datamodule_group: Literal["surge", "surge_lance", "surge_lance_map"] = "surge",
 ) -> DictConfig:
     """Construct the Surge XT smoke-test config without the accelerator availability gate.
 
@@ -981,7 +981,9 @@ def cfg_surge_xt(
 # (no public docstring) matching the sibling ``_FakeOracleDataset`` in test_eval.py.
 class _SurgeSmokeVariant(NamedTuple):
     dataset_fixture: str  # conftest fixture yielding the dataset root dir
-    datamodule_group: str  # Hydra ``datamodule=`` group: "surge" (h5) | "surge_lance"
+    datamodule_group: (
+        str  # Hydra ``datamodule=`` group: "surge" (h5) | "surge_lance" | "surge_lance_map"
+    )
     split_ext: str  # split file suffix: ".h5" | ".lance"
     plugin_path: str  # render plugin for eval postprocessing: real PLUGIN_PATH | fake.vst3
 
@@ -999,6 +1001,12 @@ REAL_VST_VARIANTS = [
         _SurgeSmokeVariant("surge_xt_smoke_lance_datasets", "surge_lance", ".lance", PLUGIN_PATH),
         id="lance",
     ),
+    pytest.param(
+        _SurgeSmokeVariant(
+            "surge_xt_smoke_lance_datasets", "surge_lance_map", ".lance", PLUGIN_PATH
+        ),
+        id="lance_map",
+    ),
 ]
 FAKE_VST_VARIANTS = [
     pytest.param(
@@ -1010,6 +1018,12 @@ FAKE_VST_VARIANTS = [
             "fake_surge_smoke_lance_datasets", "surge_lance", ".lance", "plugins/fake.vst3"
         ),
         id="lance",
+    ),
+    pytest.param(
+        _SurgeSmokeVariant(
+            "fake_surge_smoke_lance_datasets", "surge_lance_map", ".lance", "plugins/fake.vst3"
+        ),
+        id="lance_map",
     ),
 ]
 

@@ -661,3 +661,40 @@ class TestTrainerFlowsAcrossParamSpecs:
             trainer.predict(probe, datamodule=module)
 
         assert probe.flows_seen == {"fit", "validate", "test", "predict"}
+
+
+class TestLegacyMapParity:
+    """Cross-loader parity: the map path must reproduce legacy batch values."""
+
+    @pytest.mark.parametrize("split", ["val", "test", "predict"])
+    def test_map_loader_matches_legacy_batches_on_eval_splits(
+        self, dataset_root: Path, split: str
+    ) -> None:
+        """Same root and config: legacy and map eval epochs match batch-for-batch.
+
+        Controls isolate loader mechanics: ``ot=False`` (OT permutes rows), eval
+        splits (no shuffle), ``batch_size`` dividing the 6-row splits (legacy
+        floor-divides ragged tails away; map keeps them). Noise generators are
+        seeded independently per path by design, so noise is compared on shape
+        only.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        :param split: Eval split whose dataloader epoch is compared.
+        """
+        epochs: dict[str, list[dict[str, torch.Tensor | None]]] = {}
+        for loader in ("legacy", "map"):
+            with _set_up_map_module(
+                dataset_root=dataset_root, batch_size=3, ot=False, loader=loader
+            ) as module:
+                epochs[loader] = list(getattr(module, f"{split}_dataloader")())
+
+        for legacy_batch, map_batch in zip(epochs["legacy"], epochs["map"], strict=True):
+            assert legacy_batch.keys() == map_batch.keys()
+            for key in legacy_batch:
+                legacy_value, map_value = legacy_batch[key], map_batch[key]
+                if key == "noise":
+                    assert _unwrap(legacy_value).shape == _unwrap(map_value).shape
+                elif legacy_value is None or map_value is None:
+                    assert legacy_value is None and map_value is None, key
+                else:
+                    torch.testing.assert_close(legacy_value, map_value, msg=key)
