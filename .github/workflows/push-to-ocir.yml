@@ -12,8 +12,15 @@ name: Push To Registries
 #   OCIR_TOKEN             — OCI Auth Token with repos:push scope on the
 #                            target repository.
 
+# TEMPORARY smoke-test scaffolding (revert before merge, like the May 2026
+# ci/push-to-ocir-smoketest run): the pull_request trigger exercises the job on
+# every push to this PR, and TAG_SUFFIX keeps test pushes off the real
+# dev-snapshot tags.
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/push-to-ocir.yml
 
 jobs:
   push-to-registries:
@@ -41,15 +48,16 @@ jobs:
 
       - name: Pull dev-snapshot from Docker Hub, retag, push to registries
         env:
-          GHCR_IMAGE: ghcr.io/tinaudio/synth-setter:dev-snapshot
+          TAG_SUFFIX: ${{ github.event_name == 'pull_request' && '-test' || '' }}
           SOURCE_IMAGE: tinaudio/synth-setter:dev-snapshot
           OCIR_REGION_KEY: ${{ secrets.OCIR_REGION_KEY }}
           OCIR_TENANCY_NAMESPACE: ${{ secrets.OCIR_TENANCY_NAMESPACE }}
         run: |
           set -euo pipefail
           docker pull "$SOURCE_IMAGE"
-          ocir_image="${OCIR_REGION_KEY}.ocir.io/${OCIR_TENANCY_NAMESPACE}/synth-setter:dev-snapshot"
+          ocir_image="${OCIR_REGION_KEY}.ocir.io/${OCIR_TENANCY_NAMESPACE}/synth-setter:dev-snapshot${TAG_SUFFIX}"
+          ghcr_image="ghcr.io/tinaudio/synth-setter:dev-snapshot${TAG_SUFFIX}"
           docker tag "$SOURCE_IMAGE" "$ocir_image"
           docker push "$ocir_image"
-          docker tag "$SOURCE_IMAGE" "$GHCR_IMAGE"
-          docker push "$GHCR_IMAGE"
+          docker tag "$SOURCE_IMAGE" "$ghcr_image"
+          docker push "$ghcr_image"
