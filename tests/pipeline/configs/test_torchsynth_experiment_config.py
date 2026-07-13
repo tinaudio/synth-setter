@@ -11,3 +11,4 @@ def test_torchsynth_ffn_experiment_monitors_lsd_on_four_second_audio() -> None:
     assert cfg.callbacks.model_checkpoint.monitor == "val/lsd"
     assert cfg.datamodule.signal_length == 176_400
     assert cfg.datamodule.sample_rate == 44_100
+    assert cfg.datamodule.resample_train_per_epoch is True

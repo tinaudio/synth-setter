@@ -18,6 +18,11 @@ callbacks:
     monitor: val/lsd
   early_stopping: null
 
+# Fresh train rows each epoch: E2 vs E5 in the PR #1810 log show the fixed split
+# memorizes (val rises past the 0.0833 prior) while resampling crosses below it.
+datamodule:
+  resample_train_per_epoch: true
+
 model:
   compile: false
   params_per_token: 1

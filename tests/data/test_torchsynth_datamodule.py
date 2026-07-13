@@ -145,8 +145,8 @@ def test_datamodule_loaders_shuffle_only_training_rows() -> None:
     assert isinstance(datamodule.test_dataloader().sampler, SequentialSampler)
 
 
-def _train_epoch_rows(loader: DataLoader) -> list[tuple[float, ...]]:
-    """Collect one epoch of train parameter rows as hashable tuples.
+def _epoch_param_rows(loader: DataLoader) -> list[tuple[float, ...]]:
+    """Collect one epoch of parameter rows as hashable tuples.
 
     :param loader: Batched loader over one online split.
     :returns: One flattened parameter tuple per batch, in iteration order.
@@ -165,8 +165,8 @@ def test_datamodule_resample_train_per_epoch_yields_fresh_rows_each_epoch() -> N
     )
     datamodule.setup("fit")
     loader = datamodule.train_dataloader()
-    first_epoch = _train_epoch_rows(loader)
-    second_epoch = _train_epoch_rows(loader)
+    first_epoch = _epoch_param_rows(loader)
+    second_epoch = _epoch_param_rows(loader)
 
     assert len(first_epoch) == len(second_epoch) == 2
     assert set(first_epoch).isdisjoint(second_epoch)
@@ -185,7 +185,7 @@ def test_datamodule_resample_train_per_epoch_sequence_reproducible_across_runs()
         )
         datamodule.setup("fit")
         loader = datamodule.train_dataloader()
-        return _train_epoch_rows(loader) + _train_epoch_rows(loader)
+        return _epoch_param_rows(loader) + _epoch_param_rows(loader)
 
     assert two_epoch_rows() == two_epoch_rows()
 
@@ -201,7 +201,7 @@ def test_datamodule_resample_train_per_epoch_default_repeats_rows_each_epoch() -
     datamodule.setup("fit")
     loader = datamodule.train_dataloader()
 
-    assert set(_train_epoch_rows(loader)) == set(_train_epoch_rows(loader))
+    assert set(_epoch_param_rows(loader)) == set(_epoch_param_rows(loader))
 
 
 def test_datamodule_resample_train_per_epoch_keeps_val_rows_fixed() -> None:
@@ -216,7 +216,7 @@ def test_datamodule_resample_train_per_epoch_keeps_val_rows_fixed() -> None:
     datamodule.setup("fit")
     loader = datamodule.val_dataloader()
 
-    assert _train_epoch_rows(loader) == _train_epoch_rows(loader)
+    assert _epoch_param_rows(loader) == _epoch_param_rows(loader)
 
 
 @pytest.mark.slow
