@@ -20,8 +20,11 @@ callbacks:
 
 # Fresh train rows each epoch: E2 vs E5 in the PR #1810 log show the fixed split
 # memorizes (val rises past the 0.0833 prior) while resampling crosses below it.
+# signal_length pins 0.1 s: the raw-waveform head is O(in_dim**2) via
+# LazyLinear(in_dim // 2), so the 4 s datamodule default needs #1848 first.
 datamodule:
   resample_train_per_epoch: true
+  signal_length: 4_410
 
 model:
   compile: false
