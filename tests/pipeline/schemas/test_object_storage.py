@@ -77,17 +77,27 @@ class TestStorageSettings:
         assert settings.default_bucket == "bucket"
         assert settings.rclone_type == "s3"
 
-    def test_ignores_legacy_rclone_env_names(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Legacy rclone env alone does not satisfy storage settings.
+    def test_reads_legacy_rclone_env_names_as_r2_settings(self, tmp_path: Path) -> None:
+        """Legacy rclone env names remain usable by local dotenv-based commands.
 
-        :param monkeypatch: Pytest fixture used to set process env.
+        :param tmp_path: Temporary directory for the legacy dotenv file.
         """
-        monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", "ak")
-        monkeypatch.setenv("RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", "sk")
-        monkeypatch.setenv("RCLONE_CONFIG_R2_ENDPOINT", _ENDPOINT)
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "RCLONE_CONFIG_R2_ACCESS_KEY_ID=ak\n"
+            "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=sk\n"
+            "RCLONE_CONFIG_R2_TYPE=s3\n"
+            f"RCLONE_CONFIG_R2_ENDPOINT={_ENDPOINT}\n",
+            encoding="utf-8",
+        )
 
-        with pytest.raises(ValidationError):
-            _settings_from_env()
+        settings = storage_settings_from_sources(env_file)
+
+        assert settings.access_key_id.get_secret_value() == "ak"
+        assert settings.secret_access_key.get_secret_value() == "sk"
+        assert settings.endpoint_url == _ENDPOINT
+        assert settings.provider is ObjectStoreProvider.R2
+        assert settings.rclone_type == "s3"
 
     def test_env_file_values_override_process_env(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

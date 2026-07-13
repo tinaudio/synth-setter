@@ -93,6 +93,15 @@ class TestShardSpec:
 class TestRenderConfig:
     """Tests for RenderConfig field validation."""
 
+    def test_render_config_accepts_legacy_preset_path(self) -> None:
+        """Frozen specs using ``preset_path`` load into the current field name."""
+        legacy_kwargs = _valid_render_kwargs()
+        legacy_kwargs["preset_path"] = legacy_kwargs.pop("plugin_state_path")
+
+        cfg = RenderConfig(**legacy_kwargs)
+
+        assert cfg.plugin_state_path == "presets/surge-base.vstpreset"
+
     def test_render_config_rejects_extra_fields(self) -> None:
         """RenderConfig rejects unknown keyword args under ``extra='forbid'``."""
         kwargs = _valid_render_kwargs()

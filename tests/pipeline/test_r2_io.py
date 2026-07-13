@@ -207,18 +207,17 @@ class TestR2StorageOptions:
         with pytest.raises(RuntimeError, match="SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY"):
             r2_io.r2_storage_options()
 
-    def test_legacy_rclone_env_is_not_a_storage_settings_source(
+    def test_legacy_rclone_env_is_a_storage_settings_fallback(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The app no longer treats implementation-specific rclone env as canonical settings.
+        """Legacy rclone env names satisfy local storage loading when canonical keys are absent.
 
         :param monkeypatch: Pytest fixture used to set the R2 secret env vars.
         """
         monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", "ak")
         monkeypatch.setenv("RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", "sk")
         monkeypatch.setenv("RCLONE_CONFIG_R2_ENDPOINT", "https://acct.r2.cloudflarestorage.com")
-        with pytest.raises(RuntimeError, match="SYNTH_SETTER_STORAGE_ACCESS_KEY_ID"):
-            r2_io.r2_storage_options()
+        assert r2_io.r2_storage_options()["access_key_id"] == "ak"
 
 
 class TestR2DirectoryExists:

@@ -362,6 +362,22 @@ class RenderConfig(BaseModel):
         ),
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def _promote_legacy_preset_path(cls, data: Any) -> Any:
+        """Load pre-8.47 specs after the preset field was renamed.
+
+        :param data: Raw RenderConfig input before field validation.
+        :returns: Input with ``preset_path`` promoted when necessary.
+        """
+        if not isinstance(data, dict):
+            return data
+        if "plugin_state_path" in data or "preset_path" not in data:
+            return data
+        promoted = dict(data)
+        promoted["plugin_state_path"] = promoted.pop("preset_path")
+        return promoted
+
     @model_validator(mode="after")
     def _ranges_must_be_sane(self) -> RenderConfig:
         """Reject out-of-range numeric inputs and blank required strings at construction."""

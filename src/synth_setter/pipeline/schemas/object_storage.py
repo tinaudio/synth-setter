@@ -57,6 +57,17 @@ _RCLONE_ENV_ACCESS_KEY_ID: Final = "RCLONE_CONFIG_R2_ACCESS_KEY_ID"
 _RCLONE_ENV_SECRET_ACCESS_KEY: Final = "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY"  # noqa: S105
 _RCLONE_ENV_ENDPOINT: Final = "RCLONE_CONFIG_R2_ENDPOINT"
 
+_LEGACY_RCLONE_TO_FIELD: Final[dict[str, str]] = {
+    _RCLONE_ENV_ACCESS_KEY_ID: "access_key_id",
+    _RCLONE_ENV_SECRET_ACCESS_KEY: "secret_access_key",
+    _RCLONE_ENV_ENDPOINT: "endpoint_url",
+    _RCLONE_ENV_TYPE: "rclone_type",
+}
+
+_LEGACY_RCLONE_CREDENTIAL_FIELDS: Final[frozenset[str]] = frozenset(
+    {"access_key_id", "secret_access_key", "endpoint_url"}
+)
+
 RCLONE_STRUCTURAL_DEFAULTS: Final[Mapping[str, str]] = MappingProxyType(
     {_RCLONE_ENV_TYPE: "s3", _RCLONE_ENV_PROVIDER: "Cloudflare"}
 )
@@ -98,6 +109,17 @@ def _settings_kwargs_from_sources(env_file: Path | None) -> dict[str, str]:
             value = _clean(os.environ.get(env_key))
         if value is not None:
             kwargs[field_name] = value
+    if not _LEGACY_RCLONE_CREDENTIAL_FIELDS.issubset(kwargs):
+        for env_key, field_name in _LEGACY_RCLONE_TO_FIELD.items():
+            if field_name in kwargs:
+                continue
+            value = _clean(candidates.get(env_key))
+            if value is None:
+                value = _clean(os.environ.get(env_key))
+            if value is not None:
+                kwargs[field_name] = value
+    if "provider" not in kwargs and _LEGACY_RCLONE_CREDENTIAL_FIELDS & kwargs.keys():
+        kwargs["provider"] = ObjectStoreProvider.R2.value
     return kwargs
 
 
