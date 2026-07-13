@@ -86,40 +86,65 @@ PR_TITLE_GATE="${PR_TITLE_GATE:-block}"
 INPUT=$(cat)
 COMMAND=$(jq -r '.tool_input.command // empty' 2>/dev/null <<<"$INPUT" || true)
 
-# Shell wrappers hide invocations in one quoted ``-c`` argument; inspect that
-# string without mistaking prose such as ``echo 'gh pr create'`` for a command.
+# Print the direct or shell-wrapped invocation mode for a real PR-creation command.
+# Ignore quoted prose that merely mentions ``gh pr create``.
 shell_wrapper_runs_pr_create() {
   COMMAND="$1" python3 - <<'PY' 2>/dev/null
 import os
 import shlex
 
 shells = {"sh", "bash", "dash", "ksh", "zsh"}
+options_with_values = {
+    "env": {"-C", "--chdir", "-S", "--split-string", "-u", "--unset"},
+    "exec": {"-a"},
+    "nice": {"-n", "--adjustment"},
+    "sudo": {
+        "-C", "-D", "-g", "-h", "-p", "-r", "-R", "-t", "-T", "-u",
+        "--chdir", "--close-from", "--command-timeout", "--group", "--host",
+        "--other-user", "--prompt", "--role", "--type", "--user",
+    },
+    "time": {"-f", "--format", "-o", "--output"},
+}
 
 
 def command_segments(command: str) -> list[list[str]]:
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=";|&()")
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=";|&(){}")
     lexer.whitespace_split = True
     lexer.commenters = "#"
     segments: list[list[str]] = [[]]
     for token in lexer:
-        if all(char in ";|&()" for char in token):
+        if all(char in ";|&(){}" for char in token):
             segments.append([])
         else:
             segments[-1].append(token)
     return segments
 
 
+def option_end(tokens: list[str], index: int, prefix: str) -> int:
+    takes_value = options_with_values.get(prefix, set())
+    while index < len(tokens) and tokens[index].startswith("-"):
+        option = tokens[index]
+        index += 1
+        if option == "--":
+            break
+        if option in takes_value:
+            index += 1
+    return index
+
+
 def executable_index(tokens: list[str]) -> int:
     index = 0
     while index < len(tokens) and "=" in tokens[index] and not tokens[index].startswith("="):
         index += 1
-    while index < len(tokens) and tokens[index] in {"command", "env", "exec", "nice", "sudo", "time"}:
+    while index < len(tokens) and tokens[index] in {
+        "command", "env", "exec", "nice", "sudo", "time"
+    }:
         prefix = tokens[index]
         index += 1
-        while index < len(tokens) and (tokens[index].startswith("-") or "=" in tokens[index]):
-            index += 1
+        index = option_end(tokens, index, prefix)
         if prefix == "env":
-            continue
+            while index < len(tokens) and "=" in tokens[index]:
+                index += 1
     while index < len(tokens) and tokens[index] in {"then", "do"}:
         index += 1
     return index
@@ -134,7 +159,7 @@ def runs_pr_create(command: str) -> bool:
 
 
 try:
-    outer = shlex.split(os.environ["COMMAND"], comments=True)
+    shlex.split(os.environ["COMMAND"], comments=True)
 except ValueError:
     raise SystemExit(0)
 
@@ -144,8 +169,13 @@ for tokens in command_segments(os.environ["COMMAND"]):
         continue
     arguments = tokens[index + 1 :]
     for option_index, token in enumerate(arguments[:-1]):
+        if token == "--":
+            continue
         if token == "--command" or (token.startswith("-") and "c" in token[1:]):
-            if runs_pr_create(arguments[option_index + 1]):
+            command_index = option_index + 1
+            if arguments[command_index] == "--":
+                command_index += 1
+            if command_index < len(arguments) and runs_pr_create(arguments[command_index]):
                 print("wrapped")
                 raise SystemExit(0)
 print("direct" if runs_pr_create(os.environ["COMMAND"]) else "")
