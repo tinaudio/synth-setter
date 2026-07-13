@@ -10,14 +10,19 @@ on:
     #   - "src/**/*.js"
     #   - "src/**/*.jsx"
 
+# One review run per PR; a new push supersedes the in-flight review of the stale diff.
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   claude-review:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
-      pull-requests: read
-      issues: read
+      pull-requests: write
+      issues: write
       id-token: write
 
     steps:
@@ -33,9 +38,8 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           plugin_marketplaces: "https://github.com/anthropics/claude-code.git"
           plugins: "code-review@claude-code-plugins"
-          # --comment posts findings to the PR; without it the review only prints to
-          # the (hidden) action log. The trailing instruction overrides the plugin's
-          # skip-drafts triage rule — this repo wants draft PRs reviewed too.
+          # --comment posts findings to the PR (default only logs, hidden by the
+          # action); the trailing instruction disables the plugin's skip-drafts rule.
           prompt: >-
             /code-review:code-review
             ${{ github.repository }}/pull/${{ github.event.pull_request.number }}
