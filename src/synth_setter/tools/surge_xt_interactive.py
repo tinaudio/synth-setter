@@ -28,7 +28,7 @@ from pedalboard.io import AudioFile, AudioStream, StreamResampler
 from rich.console import Console
 from rich.logging import RichHandler
 
-from synth_setter.data.vst import param_specs, preset_paths
+from synth_setter.data.vst import param_specs, plugin_state_paths
 from synth_setter.data.vst.core import (
     extract_renderer_version,
     load_plugin,
@@ -730,7 +730,7 @@ def _build_predict_vst_audio_argv(
     predictions_output_dir: Path,
     audio_dir: Path,
     param_spec_name: str,
-    preset_path: str,
+    plugin_state_path: str,
     *,
     platform: str | None = None,
     wrapper_path: Path | None = None,
@@ -742,6 +742,10 @@ def _build_predict_vst_audio_argv(
     (or the explicit ``platform`` override) and an existence check on the wrapper path when
     running on Linux.
 
+    :param predictions_output_dir: Directory containing prediction tensors.
+    :param audio_dir: Directory where rendered audio artifacts are written.
+    :param param_spec_name: Registry key for the parameter specification.
+    :param plugin_state_path: Baseline plugin-state file to load.
     :param platform: Override for ``sys.platform``; ``None`` reads ``sys.platform`` at call time.
     :param wrapper_path: Real, on-disk path to the Xvfb wrapper; required on Linux
         (the caller materializes :func:`vst_headless_wrapper` via ``as_file``).
@@ -771,8 +775,8 @@ def _build_predict_vst_audio_argv(
         str(audio_dir),
         "--param_spec",
         param_spec_name,
-        "--preset_path",
-        preset_path,
+        "--plugin_state_path",
+        plugin_state_path,
         "-t",
     ]
     return args
@@ -817,7 +821,7 @@ def _render_predicted_audio(
     audio_dir: Path,
     num_samples: int,
     param_spec_name: str,
-    preset_path: str,
+    plugin_state_path: str,
     *,
     subprocess_runner: SubprocessRunner | None = None,
 ) -> None:
@@ -827,7 +831,7 @@ def _render_predicted_audio(
     :func:`_validate_rendered_audio_dir` (post-render checks); neither helper invokes a
     subprocess, so both are independently testable without a ``subprocess_runner``.
 
-    ``param_spec_name`` and ``preset_path`` must match the values used to capture the patches —
+    ``param_spec_name`` and ``plugin_state_path`` must match the values used to capture the patches —
     otherwise ``predict_vst_audio.py`` would fall back to its own defaults (``surge_xt`` /
     ``presets/surge-base.vstpreset``) and decode/render against a mismatched spec.
 
@@ -835,6 +839,12 @@ def _render_predicted_audio(
         is missing, or if a per-sample artifact (target.wav, pred.wav, spec.png, params.csv) is
         absent.
     :raises ValueError: if a rendered WAV's peak amplitude is below ``SILENCE_PEAK_THRESHOLD``.
+    :param predictions_output_dir: Directory containing prediction tensors.
+    :param audio_dir: Directory where rendered audio artifacts are written.
+    :param num_samples: Number of prediction samples to render.
+    :param param_spec_name: Registry key for the parameter specification.
+    :param plugin_state_path: Baseline plugin-state file to load.
+    :param subprocess_runner: Optional injected subprocess runner.
     """
     # Zipped wheels extract the wrapper to a temp file that only lives while
     # ``as_file()`` is open; keep the context open across the subprocess call.
@@ -846,7 +856,7 @@ def _render_predicted_audio(
             predictions_output_dir,
             audio_dir,
             param_spec_name,
-            preset_path,
+            plugin_state_path,
             wrapper_path=wrapper_path,
         )
         runner = subprocess_runner if subprocess_runner is not None else subprocess.run
@@ -913,7 +923,7 @@ def eval_patches(
     dataset_root_dir: Path,
     checkpoint_path: Path,
     param_spec_name: str,
-    preset_path: str,
+    plugin_state_path: str,
     *,
     subprocess_runner: SubprocessRunner | None = None,
 ) -> None:
@@ -939,7 +949,7 @@ def eval_patches(
     :param param_spec_name: Parameter spec name (key into ``param_specs``) used to set the model's
         ``d_out`` and the decoder used to render predicted audio. Must match the spec used when
         the patches were captured.
-    :param preset_path: Base preset to load when rendering predicted audio. Must match the preset
+    :param plugin_state_path: Base preset to load when rendering predicted audio. Must match the preset
         used when the patches were captured.
     :param subprocess_runner: Test seam (#844) — when set, forwarded to every subprocess-using
         helper so a single fake records all three external invocations. ``None`` (the default)
@@ -985,7 +995,7 @@ def eval_patches(
         audio_dir,
         num_samples,
         param_spec_name,
-        preset_path,
+        plugin_state_path,
         **runner_kwargs,
     )
     _compute_and_validate_metrics(audio_dir, metrics_dir, num_samples, **runner_kwargs)
@@ -1025,7 +1035,7 @@ def eval_patches(
     help=(
         "Parameter spec name used to decode prediction/dataset rows applied to the plugin, "
         "to enumerate which synth params are captured when recording patches, and to select "
-        "the matching base preset via ``preset_paths``. Required — pass one of the registered "
+        "the matching base preset via ``plugin_state_paths``. Required — pass one of the registered "
         "spec names; the matching base preset is loaded automatically."
     ),
 )
@@ -1086,12 +1096,12 @@ def main(
 ) -> None:
     """Open Surge XT GUI with real-time audio streaming and record patches to an HDF5 dataset.
 
-    The base preset is selected by ``preset_paths[param_spec_name]`` so a spec/preset
+    The base preset is selected by ``plugin_state_paths[param_spec_name]`` so a spec/preset
     mismatch is unrepresentable.
 
     Flow:
 
-    1. Resolve the base preset from ``preset_paths[param_spec_name]`` and load it.
+    1. Resolve the base preset from ``plugin_state_paths[param_spec_name]`` and load it.
     2. If ``--pred`` or ``--dataset-ref`` is provided, decode the referenced row and apply
        it to the plugin before the editor opens.
     3. Open the plugin's GUI editor; in parallel, stream audio to the default output device
@@ -1106,7 +1116,7 @@ def main(
        (``predict_vst_audio.py``) and metric computation (``compute_audio_metrics.py``) on
        the captured patches.
     """
-    preset_path = preset_paths[param_spec_name]
+    plugin_state_path = plugin_state_paths[param_spec_name]
     if dataset_ref is not None and pred is not None:
         raise click.UsageError(
             "--pred and --dataset-ref are mutually exclusive; pass at most one."
@@ -1135,7 +1145,7 @@ def main(
     if not isinstance(plugin, VST3Plugin):
         raise TypeError(f"expected VST3Plugin, got {type(plugin).__name__}")
 
-    load_preset(plugin, preset_path)
+    load_preset(plugin, plugin_state_path)
 
     # Two flushes ensure the plugin's full parameter dict is populated and any
     # transient state from preset load is cleared before applying user params.
@@ -1234,7 +1244,7 @@ def main(
     patch_file_path = output_dataset_dir_path / "train.h5"
     render_cfg = RenderConfig(
         plugin_path=plugin_path,
-        preset_path=preset_path,
+        plugin_state_path=plugin_state_path,
         param_spec_name=param_spec_name,
         renderer_version=extract_renderer_version(Path(plugin_path)),
         sample_rate=SAMPLE_RATE,
@@ -1256,7 +1266,7 @@ def main(
         len(synth_patches),
         checkpoint_path,
         param_spec_name,
-        preset_path,
+        plugin_state_path,
     )
 
 
@@ -1269,7 +1279,7 @@ def _maybe_eval_captured_patches(
     num_patches: int,
     checkpoint_path: Path | None,
     param_spec_name: str,
-    preset_path: str,
+    plugin_state_path: str,
     *,
     eval_runner: EvalRunner | None = None,
 ) -> None:
@@ -1278,13 +1288,20 @@ def _maybe_eval_captured_patches(
     No-op if no checkpoint is provided.
     The Click ``--checkpoint-path`` option already validates ``exists=True``, so when this is
     invoked from ``main`` ``checkpoint_path`` is guaranteed to refer to an existing file.
-    ``param_spec_name`` and ``preset_path`` are forwarded to ``eval_patches`` so the predict /
+    ``param_spec_name`` and ``plugin_state_path`` are forwarded to ``eval_patches`` so the predict /
     render / metrics steps decode and re-render against the same spec + preset that were used
     when the patches were captured.
 
     ``eval_runner`` exists for test injection (#844). ``None`` (the default) resolves to the
     module-level :func:`eval_patches` at call time so legacy ``monkeypatch.setattr(module,
     "eval_patches", ...)`` tests keep working until they migrate to direct injection.
+    :param patch_file_path: Captured patch file used as the evaluation input.
+    :param output_dataset_dir_path: Root directory for evaluation outputs.
+    :param num_patches: Number of captured patches to evaluate.
+    :param checkpoint_path: Optional model checkpoint for evaluation.
+    :param param_spec_name: Registry key for the parameter specification.
+    :param plugin_state_path: Baseline plugin-state file used for rendering.
+    :param eval_runner: Optional injected evaluation runner.
     """
     if checkpoint_path is None:
         logger.info("No --checkpoint-path provided; skipping patch evaluation.")
@@ -1305,7 +1322,9 @@ def _maybe_eval_captured_patches(
             except OSError:
                 logger.exception("failed to roll back partial sibling copy at %s", created)
         raise
-    runner(num_patches, output_dataset_dir_path, checkpoint_path, param_spec_name, preset_path)
+    runner(
+        num_patches, output_dataset_dir_path, checkpoint_path, param_spec_name, plugin_state_path
+    )
 
 
 if __name__ == "__main__":

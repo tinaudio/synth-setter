@@ -39,7 +39,7 @@ def _render_kwargs(samples_per_shard: int) -> dict[str, Any]:
     """
     return {
         "plugin_path": "/fake/Plugin.vst3",
-        "preset_path": "presets/surge-base.vstpreset",
+        "plugin_state_path": "presets/surge-base.vstpreset",
         "param_spec_name": "surge_simple",
         "renderer_version": "1.3.4",
         "sample_rate": 44100,

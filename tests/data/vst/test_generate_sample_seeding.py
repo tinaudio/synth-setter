@@ -59,7 +59,7 @@ def _generate(
         channels=_CHANNELS,
         min_loudness=_MIN_LOUDNESS,
         param_spec=param_specs[_SPEC_NAME],
-        preset_path=_PRESET_PATH,
+        plugin_state_path=_PRESET_PATH,
         seed=seed,
     )
 

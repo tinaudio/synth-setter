@@ -27,7 +27,7 @@ from omegaconf import DictConfig, open_dict
 
 from synth_setter.cli.eval import evaluate
 from synth_setter.cli.train import train
-from synth_setter.data.vst import param_specs, preset_paths
+from synth_setter.data.vst import param_specs, plugin_state_paths
 from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
 from tests.conftest import REAL_VST_VARIANTS
@@ -386,7 +386,7 @@ def _compose_fake_oracle_eval_cfg(
         # so render_vst has a config and the per-param-MSE labels line up.
         cfg.render = {
             "param_spec_name": param_spec_name,
-            "preset_path": str(preset_paths[param_spec_name]),
+            "plugin_state_path": str(plugin_state_paths[param_spec_name]),
             "plugin_path": "plugins/fake.vst3",
         }
     return cfg
@@ -756,7 +756,7 @@ def test_eval_render_group_exposes_postprocessing_keys(render_group: str) -> Non
     """Composing ``render=<group>`` into eval exposes the three keys postprocessing reads.
 
     ``_run_predict_postprocessing`` reads ``cfg.render.param_spec_name`` /
-    ``preset_path`` / ``plugin_path`` to build the renderer argv. This composition
+    ``plugin_state_path`` / ``plugin_path`` to build the renderer argv. This composition
     test pins that both shipped render groups supply all three keys, so a future
     rename in a ``render/*.yaml`` surfaces here rather than mid-eval.
 
@@ -770,7 +770,7 @@ def test_eval_render_group_exposes_postprocessing_keys(render_group: str) -> Non
         )
     try:
         assert cfg.render.param_spec_name
-        assert cfg.render.preset_path
+        assert cfg.render.plugin_state_path
         assert cfg.render.plugin_path
     finally:
         GlobalHydra.instance().clear()

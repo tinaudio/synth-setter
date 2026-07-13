@@ -28,14 +28,14 @@ from synth_setter.data.vst import param_specs  # noqa: E402
 from synth_setter.data.vst.param_spec import NoteParams  # noqa: E402
 from synth_setter.data.vst.param_spec_registry import (  # noqa: E402
     default_plugin_path,
-    preset_paths,
+    plugin_state_paths,
 )
 from synth_setter.evaluation import predict_vst_audio  # noqa: E402
 from synth_setter.evaluation.predict_vst_audio import (  # noqa: E402
     main,
     make_spectrogram,
     params_to_csv,
-    resolve_preset_path,
+    resolve_plugin_state_path,
     write_spectrograms,
 )
 from tests.helpers.audio_utils import noise as _noise  # noqa: E402
@@ -52,20 +52,20 @@ def _sine(channels: int, samples: int, *, freq: float, sr: float) -> np.ndarray:
     return sine(freq=freq, channels=channels, sr=sr, samples=samples)
 
 
-def test_resolve_preset_path_explicit_path_wins() -> None:
+def test_resolve_plugin_state_path_explicit_path_wins() -> None:
     """An explicit preset path is returned verbatim, ignoring the registry."""
-    assert resolve_preset_path("/custom/my.vstpreset", "surge_xt") == "/custom/my.vstpreset"
+    assert resolve_plugin_state_path("/custom/my.vstpreset", "surge_xt") == "/custom/my.vstpreset"
 
 
-def test_resolve_preset_path_none_falls_back_to_registry() -> None:
+def test_resolve_plugin_state_path_none_falls_back_to_registry() -> None:
     """``None`` resolves to the registry's hardcoded preset for the given spec."""
-    assert resolve_preset_path(None, "surge_simple") == "presets/surge-simple.vstpreset"
+    assert resolve_plugin_state_path(None, "surge_simple") == "presets/surge-simple.vstpreset"
 
 
-def test_resolve_preset_path_unknown_spec_raises_key_error() -> None:
+def test_resolve_plugin_state_path_unknown_spec_raises_key_error() -> None:
     """A ``None`` path with an unregistered spec raises ``KeyError``."""
     with pytest.raises(KeyError, match="does_not_exist"):
-        resolve_preset_path(None, "does_not_exist")
+        resolve_plugin_state_path(None, "does_not_exist")
 
 
 # ---------- make_spectrogram ----------
@@ -358,11 +358,11 @@ def test_main_rerender_target_renders_pred_and_target_per_sample(
     assert result.exit_code == 0, result.output
     # One render for pred + one for the re-synthesised target, per sample.
     assert len(calls) == batch_size * 2
-    # The CLI passes no --plugin_path / --preset_path, so both must resolve from
-    # the registry: plugin_path from the click default, preset_path from the spec.
+    # The CLI passes no --plugin_path / --plugin_state_path, so both must resolve from
+    # the registry: plugin_path from the click default, plugin_state_path from the spec.
     for args, kwargs in calls:
         assert args[0] == default_plugin_path()
-        assert kwargs["preset_path"] == preset_paths[_PARAM_SPEC_NAME]
+        assert kwargs["plugin_state_path"] == plugin_state_paths[_PARAM_SPEC_NAME]
     for j in range(batch_size):
         df = pd.read_csv(out_dir / f"sample_{j}" / "params.csv", index_col=0)
         assert bool(df["pred"].notna().all())
