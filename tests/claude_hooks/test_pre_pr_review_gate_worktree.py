@@ -318,6 +318,7 @@ def test_gate_blocks_direct_pr_create_missing_review_path(gate_repo: Path, comma
         "bash <<<'gh pr create --title x --body y'",
         'eval "gh pr create --title x --body y"',
         "echo 'gh pr create --title x --body y' | bash",
+        "env --split-string='gh pr create --title x --body y'",
     ],
 )
 def test_gate_blocks_shell_wrapped_pr_create(gate_repo: Path, command: str) -> None:

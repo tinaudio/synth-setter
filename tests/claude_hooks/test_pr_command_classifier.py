@@ -152,6 +152,11 @@ def test_classify_direct_invocation_returns_direct(classifier: ModuleType, comma
         "2>/dev/null env -S 'gh pr create --title x --body y'",
         "nice -n 5 env -S 'gh pr create --title x --body y'",
         "timeout 30 env -S 'gh pr create --title x --body y'",
+        # GNU env -S also accepts the getopt-fused spellings.
+        "env --split-string='gh pr create --title x --body y'",
+        "env -S'gh pr create --title x --body y'",
+        "env -Sgh pr create --title x --body y",
+        "sudo env --split-string='gh pr create --title x --body y'",
         'bash <<< "gh pr create --title x --body y"',
         "bash <<<'gh pr create --title x --body y'",
         # eval re-parses its argument string, hiding the real argv.
@@ -197,6 +202,7 @@ def test_classify_shell_wrapped_invocation_returns_wrapped(
         "cat script.sh | bash",
         # env -S argv reconstruction must not gate unrelated split strings.
         "env -S 'python3 script.py' arg1 arg2",
+        "env --split-string='python3 script.py'",
         # `gh` here is the redirection target; bash runs `pr create ...`.
         "> gh pr create --title x --body y",
     ],

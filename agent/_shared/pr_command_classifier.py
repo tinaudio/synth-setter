@@ -98,10 +98,8 @@ _MENTIONS_PR_CREATE_RE = re.compile(r"gh\s+pr\s+create")
 _REDIRECTION_RE = re.compile(r"^\d*[<>]")
 # A bare redirection operator (`>`, `2>`, `>>`) whose target is the NEXT word.
 _BARE_REDIRECTION_RE = re.compile(r"^\d*[<>]+$")
-# Fused fd-duplication redirections (`2>&1`, `>&2`, `0<&3`): the embedded `&`
-# would otherwise open a bogus segment, hiding the executable that follows.
-# The target class stops at quotes so blanking a `2>&1` that sits inside a
-# quoted string can't swallow the closing quote and desync the lexer.
+# Fused fd-dup redirects (2>&1) embed an `&` that would open a bogus segment;
+# the target class stops at quotes so blanking one can't swallow a closing quote.
 _FD_DUP_RE = re.compile(r"""\d*[<>]&[^\s;|&()<>`{}'"]*""")
 
 
@@ -246,8 +244,14 @@ def _env_split_string(tokens: list[str]) -> str | None:
         index += 1
         if option == "--":
             return None
+        # GNU env appends the argv after the split value, so trailing tokens
+        # fold into the payload for every spelling.
         if option in {"-S", "--split-string"} and index < len(tokens):
             return " ".join(tokens[index:])
+        if option.startswith("--split-string="):
+            return " ".join([option[len("--split-string=") :], *tokens[index:]])
+        if option.startswith("-S") and not option.startswith("--"):
+            return " ".join([option[len("-S") :], *tokens[index:]])
         if option in _OPTIONS_WITH_VALUES["env"]:
             index += 1
     return None
