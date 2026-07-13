@@ -83,21 +83,26 @@ def _settings_kwargs_from_sources(env_file: Path | None) -> dict[str, str]:
     if env_file is not None and env_file.is_file():
         candidates.update(dotenv_values(env_file))
     kwargs: dict[str, str] = {}
-    env_to_field = {
-        ENV_STORAGE_ACCESS_KEY_ID: "access_key_id",
-        ENV_STORAGE_DEFAULT_BUCKET: "default_bucket",
-        ENV_STORAGE_SECRET_ACCESS_KEY: "secret_access_key",
-        ENV_STORAGE_ENDPOINT_URL: "endpoint_url",
-        ENV_STORAGE_PROVIDER: "provider",
-        ENV_STORAGE_RCLONE_TYPE: "rclone_type",
-        ENV_STORAGE_REGION: "region",
+    env_to_field: Mapping[str, tuple[str, ...]] = {
+        ENV_STORAGE_ACCESS_KEY_ID: ("access_key_id", _RCLONE_ENV_ACCESS_KEY_ID),
+        ENV_STORAGE_DEFAULT_BUCKET: ("default_bucket",),
+        ENV_STORAGE_SECRET_ACCESS_KEY: ("secret_access_key", _RCLONE_ENV_SECRET_ACCESS_KEY),
+        ENV_STORAGE_ENDPOINT_URL: ("endpoint_url", _RCLONE_ENV_ENDPOINT),
+        ENV_STORAGE_PROVIDER: ("provider",),
+        ENV_STORAGE_RCLONE_TYPE: ("rclone_type",),
+        ENV_STORAGE_REGION: ("region",),
     }
-    for env_key, field_name in env_to_field.items():
-        value = _clean(candidates.get(env_key))
-        if value is None:
-            value = _clean(os.environ.get(env_key))
-        if value is not None:
-            kwargs[field_name] = value
+    for env_key, (field_name, *legacy_env_keys) in env_to_field.items():
+        for source in (candidates, os.environ):
+            value = _clean(source.get(env_key))
+            if value is None:
+                for legacy_env_key in legacy_env_keys:
+                    value = _clean(source.get(legacy_env_key))
+                    if value is not None:
+                        break
+            if value is not None:
+                kwargs[field_name] = value
+                break
     return kwargs
 
 
@@ -333,13 +338,11 @@ class StorageSettings(BaseSettings):
 
 
 def storage_settings_from_sources(env_file: Path | None = None) -> StorageSettings:
-    """Load settings with dotenv values taking precedence over process env.
+    """Load settings from dotenv then process env, preferring canonical names.
 
     :param env_file: Optional dotenv path to read before falling back to ``os.environ``.
-    :returns: Storage settings parsed from canonical storage environment keys.
+    :returns: Storage settings parsed from canonical storage or legacy rclone keys.
     """
-    if env_file is None:
-        return StorageSettings()  # pyright: ignore[reportCallIssue]
     return StorageSettings(**_settings_kwargs_from_sources(env_file))  # pyright: ignore[reportCallIssue, reportArgumentType]
 
 

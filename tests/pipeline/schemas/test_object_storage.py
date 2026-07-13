@@ -58,7 +58,7 @@ def _settings_from_env() -> StorageSettings:
 
 
 class TestStorageSettings:
-    """Settings load only the canonical application env names."""
+    """Settings accept canonical names and the legacy rclone aliases."""
 
     def test_reads_canonical_storage_env_names(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Canonical env names populate every public settings field.
@@ -77,8 +77,8 @@ class TestStorageSettings:
         assert settings.default_bucket == "bucket"
         assert settings.rclone_type == "s3"
 
-    def test_ignores_legacy_rclone_env_names(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Legacy rclone env alone does not satisfy storage settings.
+    def test_reads_legacy_rclone_env_names(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Legacy rclone names populate settings when canonical names are absent.
 
         :param monkeypatch: Pytest fixture used to set process env.
         """
@@ -86,8 +86,54 @@ class TestStorageSettings:
         monkeypatch.setenv("RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", "sk")
         monkeypatch.setenv("RCLONE_CONFIG_R2_ENDPOINT", _ENDPOINT)
 
-        with pytest.raises(ValidationError):
-            _settings_from_env()
+        settings = storage_settings_from_sources()
+
+        assert settings.access_key_id.get_secret_value() == "ak"
+        assert settings.secret_access_key.get_secret_value() == "sk"
+        assert settings.endpoint_url == _ENDPOINT
+
+    def test_prefers_canonical_names_over_legacy_rclone_names(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Canonical names override legacy aliases when both are populated.
+
+        :param monkeypatch: Pytest fixture used to set process env.
+        """
+        monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", "legacy-access-key")
+        monkeypatch.setenv("RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", "legacy-secret-key")
+        monkeypatch.setenv("RCLONE_CONFIG_R2_ENDPOINT", "https://legacy.example")
+        monkeypatch.setenv("SYNTH_SETTER_STORAGE_ACCESS_KEY_ID", "canonical-access-key")
+        monkeypatch.setenv("SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY", "canonical-secret-key")
+        monkeypatch.setenv("SYNTH_SETTER_STORAGE_ENDPOINT_URL", "https://canonical.example")
+
+        settings = storage_settings_from_sources()
+
+        assert settings.access_key_id.get_secret_value() == "canonical-access-key"
+        assert settings.secret_access_key.get_secret_value() == "canonical-secret-key"
+        assert settings.endpoint_url == "https://canonical.example"
+
+    def test_reads_legacy_rclone_names_from_env_file(self, tmp_path: Path) -> None:
+        """Legacy rclone aliases in a dotenv file resolve storage settings.
+
+        :param tmp_path: Pytest fixture providing a temp directory.
+        """
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "RCLONE_CONFIG_R2_ACCESS_KEY_ID=ak\n"
+            "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=sk\n"
+            f"RCLONE_CONFIG_R2_ENDPOINT={_ENDPOINT}\n",
+            encoding="utf-8",
+        )
+
+        settings = storage_settings_from_sources(env_file)
+
+        assert settings.to_config().rclone_env() == {
+            "RCLONE_CONFIG_R2_TYPE": "s3",
+            "RCLONE_CONFIG_R2_PROVIDER": "Cloudflare",
+            "RCLONE_CONFIG_R2_ACCESS_KEY_ID": "ak",
+            "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY": "sk",
+            "RCLONE_CONFIG_R2_ENDPOINT": _ENDPOINT,
+        }
 
     def test_env_file_values_override_process_env(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
