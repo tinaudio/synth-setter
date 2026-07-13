@@ -126,17 +126,8 @@ block() {
 helper_stderr=$(mktemp)
 trap 'rm -f "$helper_stderr"' EXIT
 
-#######################################
-# Classify the command's relationship to `gh pr create` via the shared
-# classifier module (single source of truth, unit-tested directly).
-# Arguments:
-#   $1 — the raw Bash tool command string.
-# Outputs:
-#   One of `direct` / `wrapped` / `unparsable` / "" on stdout; classifier
-#   diagnostics on the helper_stderr capture file.
-# Returns:
-#   python3's exit code (0 on any successful classification).
-#######################################
+# Classify the command via the shared module: `direct` / `wrapped` /
+# `unparsable` / "" on stdout, diagnostics to helper_stderr, python3's rc.
 classify_pr_command() {
   python3 "$CLASSIFIER_PY" "$1" 2>"$helper_stderr"
 }

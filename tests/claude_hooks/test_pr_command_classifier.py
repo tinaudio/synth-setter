@@ -56,6 +56,7 @@ def classifier_fixture() -> ModuleType:
         "FOO=bar gh pr create --title x --body y",
         "env gh pr create --title x --body y",
         "env FOO=bar gh pr create --title x --body y",
+        "env =x gh pr create --title x --body y",
         "/usr/bin/env gh pr create --title x --body y",
         "sudo gh pr create --title x --body y",
         "sudo -u root gh pr create --title x --body y",

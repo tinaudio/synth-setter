@@ -103,14 +103,21 @@ def _command_segments(command: str) -> list[list[str]]:  # noqa: DOC502
     return segments
 
 
-def _skip_assignments(tokens: list[str], index: int = 0) -> int:
+def _skip_assignments(tokens: list[str], index: int = 0, *, empty_name_ok: bool = False) -> int:
     """Return the index of the first token that is not a ``VAR=val`` assignment.
 
     :param tokens: One segment's tokens.
     :param index: Position to start scanning from.
+    :param empty_name_ok: Accept ``=val`` tokens too. Bash rejects an empty
+        assignment name (the token becomes a command), but GNU ``env`` accepts
+        one and still execs its trailing command.
     :returns: Index of the first non-assignment token (may be ``len(tokens)``).
     """
-    while index < len(tokens) and "=" in tokens[index] and not tokens[index].startswith("="):
+    while (
+        index < len(tokens)
+        and "=" in tokens[index]
+        and (empty_name_ok or not tokens[index].startswith("="))
+    ):
         index += 1
     return index
 
@@ -151,7 +158,7 @@ def _executable_index(tokens: list[str]) -> int:
             continue
         index = _option_end(tokens, index, prefix)
         if prefix == "env":
-            index = _skip_assignments(tokens, index)
+            index = _skip_assignments(tokens, index, empty_name_ok=True)
     while index < len(tokens) and tokens[index] in {"then", "do"}:
         index += 1
     return index
@@ -228,15 +235,14 @@ def _pr_create_mode(command: str) -> str:  # noqa: DOC502
             if nested_mode:
                 return nested_mode
         index = _executable_index(tokens)
-        if index < len(tokens) and os.path.basename(tokens[index]) in SHELLS:
+        if index >= len(tokens):
+            continue
+        executable = os.path.basename(tokens[index])
+        if executable in SHELLS:
             for payload in _shell_script_payloads(tokens[index + 1 :]):
                 if _pr_create_mode(payload):
                     return "wrapped"
-        if (
-            index < len(tokens)
-            and os.path.basename(tokens[index]) == "gh"
-            and tokens[index + 1 : index + 3] == ["pr", "create"]
-        ):
+        elif executable == "gh" and tokens[index + 1 : index + 3] == ["pr", "create"]:
             return "direct"
     return ""
 
