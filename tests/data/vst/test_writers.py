@@ -516,6 +516,39 @@ def test_render_in_batches_caches_plugin_when_reload_cadence_is_once(
     assert sum(len(batch) for batch, _ in flushed) == n
 
 
+@pytest.mark.parametrize(
+    ("cadence", "reload_each_render"),
+    [("once", False), ("render", True)],
+)
+def test_make_renderer_maps_dawdreamer_reload_cadence(
+    monkeypatch: pytest.MonkeyPatch,
+    cadence: str,
+    reload_each_render: bool,
+) -> None:
+    """DawDreamer receives the requested plugin lifecycle policy.
+
+    :param monkeypatch: Replaces renderer construction with a capture seam.
+    :param cadence: Public reload cadence under test.
+    :param reload_each_render: Expected renderer lifecycle flag.
+    """
+    captured: dict[str, object] = {}
+
+    def capture_renderer(**kwargs: object) -> MagicMock:
+        captured.update(kwargs)
+        return MagicMock()
+
+    monkeypatch.setattr(writers, "DawDreamerRenderer", capture_renderer)
+    render_cfg = _smoke_render_cfg(
+        renderer_backend="dawdreamer",
+        plugin_reload_cadence=cadence,
+        gui_toggle_cadence="never",
+    )
+
+    writers._make_renderer(render_cfg)
+
+    assert captured["reload_plugin_each_render"] is reload_each_render
+
+
 def test_render_in_batches_reloads_plugin_per_render_when_reload_cadence_is_render(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

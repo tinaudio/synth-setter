@@ -1,4 +1,15 @@
-"""Common audio-rendering interface and VST backend implementations."""
+"""Common audio-rendering interface and VST backend implementations.
+
+Usage::
+
+    renderer = PedalboardRenderer(
+        plugin_path="synth.vst3",
+        sample_rate=44100,
+        channels=2,
+        signal_duration_seconds=1.0,
+    )
+    audio = renderer.render({"cutoff": 0.5}, 60, 100, (0.0, 0.5))
+"""
 
 from __future__ import annotations
 
@@ -7,14 +18,92 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from importlib import import_module
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Protocol, TypedDict, cast
 
 import numpy as np
 
 from synth_setter.data.vst.param_map import SynthParamMap
 
+if TYPE_CHECKING:
+    from pedalboard import VST3Plugin
 
-@dataclass
+
+class _DawDreamerParameterDescription(TypedDict):
+    """Parameter identity fields returned by DawDreamer.
+
+    .. attribute :: index
+
+       Host parameter index.
+
+    .. attribute :: name
+
+       Host parameter display name.
+    """
+
+    index: int
+    name: str
+
+
+class _DawDreamerPlugin(Protocol):
+    """DawDreamer plugin-processor surface used by the renderer."""
+
+    def get_parameters_description(self) -> list[_DawDreamerParameterDescription]: ...
+
+    def clear_midi(self) -> None: ...
+
+    def set_parameter(self, index: int, value: float) -> None: ...
+
+    def add_midi_note(self, pitch: int, velocity: int, start: float, duration: float) -> None: ...
+
+    def load_vst3_preset(self, path: str) -> None: ...
+
+    def load_preset(self, path: str) -> None: ...
+
+
+class _DawDreamerEngine(Protocol):
+    """DawDreamer render-engine surface used by the renderer."""
+
+    def make_plugin_processor(self, name: str, path: str) -> _DawDreamerPlugin: ...
+
+    def load_graph(self, graph: list[tuple[_DawDreamerPlugin, list[object]]]) -> None: ...
+
+    def render(self, duration: float) -> None: ...
+
+    def get_audio(self) -> np.ndarray: ...
+
+
+class _DawDreamerModule(Protocol):
+    """Lazily imported DawDreamer module surface."""
+
+    def RenderEngine(self, sample_rate: float, block_size: int) -> _DawDreamerEngine: ...
+
+
+def _validate_rendered_audio(
+    audio: np.ndarray,
+    *,
+    channels: int,
+    samples: int,
+) -> np.ndarray:
+    """Validate the shared backend output contract without changing samples.
+
+    :param audio: Channel-leading rendered audio.
+    :param channels: Required output channel count.
+    :param samples: Required output sample count.
+    :returns: The validated audio without clipping or replacement.
+    :raises ValueError: If shape, finiteness, or normalized amplitude is invalid.
+    """
+    if audio.shape != (channels, samples):
+        raise ValueError(
+            f"rendered audio shape {audio.shape} != expected {(channels, samples)}"
+        )
+    if not np.isfinite(audio).all():
+        raise ValueError("rendered audio must contain only finite samples")
+    if np.any(np.abs(audio) > 1.0):
+        raise ValueError("rendered audio samples must be within [-1, 1]")
+    return audio
+
+
+@dataclass(kw_only=True)
 class AudioRenderer(ABC):
     """Render one parameterized MIDI note through a synthesizer plugin.
 
@@ -66,7 +155,7 @@ class AudioRenderer(ABC):
         """
 
 
-@dataclass
+@dataclass(kw_only=True)
 class PedalboardRenderer(AudioRenderer):
     """Render through the existing pedalboard implementation.
 
@@ -75,7 +164,7 @@ class PedalboardRenderer(AudioRenderer):
        Optional preloaded pedalboard plugin instance.
     """
 
-    plugin: Any = field(default=None, repr=False)
+    plugin: VST3Plugin | None = field(default=None, repr=False)
 
     def render(
         self,
@@ -97,22 +186,26 @@ class PedalboardRenderer(AudioRenderer):
         """
         from synth_setter.data.vst.core import render_params
 
-        return render_params(
-            self.plugin_path,
-            params,
-            midi_note,
-            velocity,
-            note_start_and_end,
-            self.signal_duration_seconds,
-            self.sample_rate,
-            self.channels,
-            plugin_state_path=self.plugin_state_path,
-            plugin=self.plugin,
-            warmup=warmup,
+        return _validate_rendered_audio(
+            render_params(
+                self.plugin_path,
+                params,
+                midi_note,
+                velocity,
+                note_start_and_end,
+                self.signal_duration_seconds,
+                self.sample_rate,
+                self.channels,
+                plugin_state_path=self.plugin_state_path,
+                plugin=self.plugin,
+                warmup=warmup,
+            ),
+            channels=self.channels,
+            samples=int(self.sample_rate * self.signal_duration_seconds),
         )
 
 
-@dataclass
+@dataclass(kw_only=True)
 class DawDreamerRenderer(AudioRenderer):
     """Render through DawDreamer's JUCE-backed VST host.
 
@@ -123,6 +216,10 @@ class DawDreamerRenderer(AudioRenderer):
     .. attribute :: parameter_map
 
        Validated immutable cross-host identity map.
+
+    .. attribute :: reload_plugin_each_render
+
+       Whether subsequent calls replace the initialized plugin graph.
 
     .. attribute :: engine
 
@@ -135,17 +232,23 @@ class DawDreamerRenderer(AudioRenderer):
 
     block_size: int = 2048
     parameter_map: SynthParamMap = field(kw_only=True)
-    engine: Any = field(init=False, repr=False)
-    plugin: Any = field(init=False, repr=False)
+    reload_plugin_each_render: bool = True
+    engine: _DawDreamerEngine = field(init=False, repr=False)
+    plugin: _DawDreamerPlugin = field(init=False, repr=False)
     _parameter_indices: dict[str, int] = field(init=False, repr=False)
-    _daw: Any = field(init=False, repr=False)
+    _daw: _DawDreamerModule = field(init=False, repr=False)
+    _has_rendered: bool = field(init=False, default=False, repr=False)
 
     def __post_init__(self) -> None:
         """Create the DawDreamer engine and load the plugin graph."""
         self.plugin_path = str(Path(self.plugin_path).expanduser().resolve())
         if self.plugin_state_path is not None:
             self.plugin_state_path = str(Path(self.plugin_state_path).expanduser().resolve())
-        self._daw = import_module("dawdreamer")
+        self._daw = cast(_DawDreamerModule, import_module("dawdreamer"))
+        self._initialize_graph()
+
+    def _initialize_graph(self) -> None:
+        """Create and validate one preset-loaded plugin graph."""
         self._create_graph()
         self._load_preset()
         self._validate_parameter_map()
@@ -211,9 +314,9 @@ class DawDreamerRenderer(AudioRenderer):
         """
         del warmup
         self._validate_parameter_dispatch(params)
-        self._create_graph()
-        self._load_preset()
-        self._validate_parameter_dispatch(params)
+        if self.reload_plugin_each_render and self._has_rendered:
+            self._initialize_graph()
+        self._has_rendered = True
         self.plugin.clear_midi()
         try:
             for name, value in params.items():
@@ -224,7 +327,12 @@ class DawDreamerRenderer(AudioRenderer):
             audio = np.asarray(self.engine.get_audio())
         finally:
             self.plugin.clear_midi()
-        return self._match_channels(audio)
+        matched = self._match_channels(audio)
+        return _validate_rendered_audio(
+            matched,
+            channels=self.channels,
+            samples=int(self.sample_rate * self.signal_duration_seconds),
+        )
 
     def _validate_parameter_dispatch(self, params: dict[str, float]) -> None:
         """Require every requested key to target exactly one distinct host parameter.
@@ -254,6 +362,11 @@ class DawDreamerRenderer(AudioRenderer):
         """
         if audio.ndim != 2:
             raise ValueError(f"expected channel-leading audio, got shape {audio.shape}")
+        expected_samples = int(self.sample_rate * self.signal_duration_seconds)
+        if audio.shape[1] != expected_samples:
+            raise ValueError(
+                f"DawDreamer sample count {audio.shape[1]} != expected {expected_samples}"
+            )
         if audio.shape[0] == self.channels:
             return audio
         if self.channels == 1:

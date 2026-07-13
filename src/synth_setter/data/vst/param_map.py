@@ -1,4 +1,11 @@
-"""Validated cross-host parameter identities for one registered parameter spec."""
+"""Validated cross-host parameter identities for one registered parameter spec.
+
+Example:
+    >>> from synth_setter.resources import as_file, param_map
+    >>> with as_file(param_map("surge_xt")) as path:
+    ...     joint_map = load_param_map(path)
+    >>> joint_map.dawdreamer_indices()["a_amp_eg_attack"]
+"""
 
 from __future__ import annotations
 
@@ -10,7 +17,7 @@ from synth_setter.data.vst.clap_map import ClapParamRef, PluginFormatMap
 
 
 class PedalboardParamRef(BaseModel):  # noqa: DOC601, DOC603
-    """Pedalboard parameter identity."""
+    """Index and display name from Pedalboard's flushed post-preset enumeration."""
 
     model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
 
@@ -19,7 +26,7 @@ class PedalboardParamRef(BaseModel):  # noqa: DOC601, DOC603
 
 
 class DawDreamerParamRef(BaseModel):  # noqa: DOC601, DOC603
-    """DawDreamer parameter identity."""
+    """Index and display name from DawDreamer's post-preset enumeration."""
 
     model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
 
@@ -64,7 +71,7 @@ class SynthParamMap(BaseModel):  # noqa: DOC601, DOC603
     def _unique_host_indices(self) -> SynthParamMap:
         """Reject maps that alias two model parameters in either indexed host.
 
-        :returns: This validated map.
+        :returns: This map after indexed-host uniqueness validation.
         :raises ValueError: If Pedalboard or DawDreamer indices are duplicated.
         """
         for host in ("pedalboard", "dawdreamer"):
@@ -76,7 +83,7 @@ class SynthParamMap(BaseModel):  # noqa: DOC601, DOC603
     def clap_projection(self) -> PluginFormatMap:
         """Return the legacy CLAP-only view used by capture CSV conversion.
 
-        :returns: Complete CLAP projection.
+        :returns: CLAP projection containing every mapped parameter.
         :raises ValueError: If any parameter lacks a CLAP identity.
         """
         missing = sorted(name for name, identity in self.params.items() if identity.clap is None)
@@ -91,7 +98,7 @@ class SynthParamMap(BaseModel):  # noqa: DOC601, DOC603
     def dawdreamer_indices(self) -> dict[str, int]:
         """Return strict repository-name to DawDreamer-index dispatch.
 
-        :returns: Immutable-map-derived dispatch dictionary.
+        :returns: Repository parameter names mapped to DawDreamer host indices.
         """
         return {name: identity.dawdreamer.index for name, identity in self.params.items()}
 
@@ -100,6 +107,6 @@ def load_param_map(path: Path) -> SynthParamMap:
     """Parse and validate a committed joint parameter map.
 
     :param path: JSON map path.
-    :returns: Validated joint map.
+    :returns: Strict joint map parsed from ``path``.
     """
     return SynthParamMap.model_validate_json(path.read_text(encoding="utf-8"))

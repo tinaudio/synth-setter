@@ -42,11 +42,17 @@ def _patch_render(monkeypatch: pytest.MonkeyPatch, outputs: list[np.ndarray]) ->
 
 
 def _renderer() -> PedalboardRenderer:
-    """Build a renderer backed by the patched core seam.
+    """Keep seeded-retry tests on the production renderer interface.
 
-    :returns: Pedalboard renderer for the test fixture.
+    :returns: Renderer whose calls reach the patched ``core.render_params`` seam.
     """
-    return PedalboardRenderer(_PLUGIN_PATH, _SAMPLE_RATE, _CHANNELS, _DURATION, _PRESET_PATH)
+    return PedalboardRenderer(
+        plugin_path=_PLUGIN_PATH,
+        sample_rate=_SAMPLE_RATE,
+        channels=_CHANNELS,
+        signal_duration_seconds=_DURATION,
+        plugin_state_path=_PRESET_PATH,
+    )
 
 
 def _generate(

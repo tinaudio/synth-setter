@@ -17,6 +17,14 @@ from synth_setter.tools import build_param_map
 from synth_setter.tools.build_param_map import HostDump, HostParam, join_param_map
 
 
+def test_introspection_constants_pin_shared_host_configuration() -> None:
+    """Host dumps share the reviewed introspection configuration."""
+    assert build_param_map.INTROSPECTION_SAMPLE_RATE == 44_100
+    assert build_param_map.INTROSPECTION_BLOCK_SIZE == 2_048
+    assert build_param_map.PEDALBOARD_FLUSH_DURATION_SECONDS == 32.0
+    assert build_param_map.PEDALBOARD_FLUSH_CHANNELS == 2
+
+
 def _host_dump(*params: HostParam, plugin: str = "Test Synth", version: str = "1.0") -> HostDump:
     """Build a host dump.
 
@@ -98,6 +106,19 @@ def _valid_inputs() -> tuple[HostDump, ClapPluginInfo, HostDump]:
     )
 
 
+def _dawdreamer_fx_bank(bank: str, anchor_index: int) -> tuple[HostParam, ...]:
+    """Build one complete DawDreamer FX bank.
+
+    :param bank: Surge FX bank identifier.
+    :param anchor_index: Host-local FX Type index.
+    :returns: Complete anchor-plus-slot enumeration.
+    """
+    return (
+        HostParam(index=anchor_index, name=f"FX {bank} FX Type"),
+        *(HostParam(index=anchor_index + slot, name=f"FX {bank} -") for slot in range(1, 13)),
+    )
+
+
 def test_join_param_map_preserves_verified_host_identities(registry: dict[str, ParamSpec]) -> None:
     """A valid join preserves each host identity.
 
@@ -116,6 +137,92 @@ def test_join_param_map_preserves_verified_host_identities(registry: dict[str, P
     assert identity.dawdreamer.name == "Cutoff"
 
 
+def test_join_param_map_resolves_each_backend_after_independent_permutations(
+    registry: dict[str, ParamSpec],
+) -> None:
+    """Backend list order and numeric identities do not establish correspondence.
+
+    :param registry: Minimal builder registry.
+    """
+    registry["test"] = ParamSpec(
+        [ContinuousParameter("cutoff", 0.0, 1.0), ContinuousParameter("resonance", 0.0, 1.0)],
+        [],
+    )
+    pedalboard = _host_dump(
+        HostParam(index=91, key="resonance", name="Resonance"),
+        HostParam(index=37, key="cutoff", name="Cutoff"),
+    )
+    clap = _clap(_clap_param(800, "Cutoff"), _clap_param(400, "Resonance"))
+    dawdreamer = _host_dump(
+        HostParam(index=600, name="Resonance"),
+        HostParam(index=300, name="Cutoff"),
+    )
+
+    result = join_param_map("test", pedalboard, clap, dawdreamer)
+
+    assert result.params["cutoff"].pedalboard.index == 37
+    assert result.params["cutoff"].clap is not None
+    assert result.params["cutoff"].clap.clap_param_id == 800
+    assert result.params["cutoff"].dawdreamer.index == 300
+    assert result.params["resonance"].pedalboard.index == 91
+    assert result.params["resonance"].clap is not None
+    assert result.params["resonance"].clap.clap_param_id == 400
+    assert result.params["resonance"].dawdreamer.index == 600
+
+
+def test_join_param_map_resolves_separate_clap_and_dawdreamer_oscillator_aliases(
+    registry: dict[str, ParamSpec], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Backend-specific oscillator declarations resolve independently.
+
+    :param registry: Minimal builder registry.
+    :param monkeypatch: Pytest monkeypatch fixture.
+    """
+    semantic_key = "a_osc_1_sawtooth"
+    registry["test"] = ParamSpec([ContinuousParameter(semantic_key, 0.0, 1.0)], [])
+    monkeypatch.setattr(
+        build_param_map, "_SURGE_CLAP_OSCILLATOR_NAMES", {semantic_key: "CLAP Shape"}
+    )
+    monkeypatch.setattr(
+        build_param_map, "_SURGE_DAWDREAMER_OSCILLATOR_NAMES", {semantic_key: "DD Shape"}
+    )
+    pedalboard = _host_dump(HostParam(index=37, key=semantic_key, name="Preset Saw"))
+    clap = _clap(_clap_param(800, "CLAP Shape"))
+    dawdreamer = _host_dump(HostParam(index=300, name="DD Shape"))
+
+    identity = join_param_map("test", pedalboard, clap, dawdreamer).params[semantic_key]
+
+    assert identity.clap is not None
+    assert identity.clap.clap_param_id == 800
+    assert identity.dawdreamer.index == 300
+
+
+def test_join_param_map_resolves_separate_clap_name_and_dawdreamer_fx_bank(
+    registry: dict[str, ParamSpec], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An FX key resolves its CLAP name and DawDreamer bank independently.
+
+    :param registry: Minimal builder registry.
+    :param monkeypatch: Pytest monkeypatch fixture.
+    """
+    semantic_key = "fx_a1_delay_time"
+    registry["test"] = ParamSpec([ContinuousParameter(semantic_key, 0.0, 1.0)], [])
+    monkeypatch.setattr(
+        build_param_map,
+        "_SURGE_FX_IDENTITIES",
+        {semantic_key: ("Independent CLAP FX", "B1", 1)},
+    )
+    pedalboard = _host_dump(HostParam(index=900, key=semantic_key, name="Preset Delay"))
+    clap = _clap(_clap_param(700, "Independent CLAP FX"))
+    dawdreamer = _host_dump(*_dawdreamer_fx_bank("B1", 45))
+
+    identity = join_param_map("test", pedalboard, clap, dawdreamer).params[semantic_key]
+
+    assert identity.clap is not None
+    assert identity.clap.clap_param_id == 700
+    assert identity.dawdreamer.index == 46
+
+
 def test_join_param_map_resolves_fx_slots_by_anchor_position(
     registry: dict[str, ParamSpec],
 ) -> None:
@@ -126,15 +233,12 @@ def test_join_param_map_resolves_fx_slots_by_anchor_position(
     registry["test"] = ParamSpec([ContinuousParameter("fx_a1_delay_time", 0.0, 1.0)], [])
     pedalboard = _host_dump(HostParam(index=0, key="fx_a1_delay_time", name="FX A1 Delay - Time"))
     clap = _clap(_clap_param(7, "FX A1 Param 1"))
-    dawdreamer = _host_dump(
-        HostParam(index=40, name="FX A1 FX Type"),
-        HostParam(index=41, name="FX A1 Param 1"),
-    )
+    dawdreamer = _host_dump(*reversed(_dawdreamer_fx_bank("A1", 40)))
 
     result = join_param_map("test", pedalboard, clap, dawdreamer)
 
     assert result.params["fx_a1_delay_time"].dawdreamer.index == 41
-    assert result.params["fx_a1_delay_time"].dawdreamer.name == "FX A1 Param 1"
+    assert result.params["fx_a1_delay_time"].dawdreamer.name == "FX A1 -"
 
 
 def test_join_param_map_rejects_unanchored_fx_slot(registry: dict[str, ParamSpec]) -> None:
@@ -147,10 +251,46 @@ def test_join_param_map_rejects_unanchored_fx_slot(registry: dict[str, ParamSpec
     clap = _clap(_clap_param(7, "FX A1 Param 1"))
     dawdreamer = _host_dump(HostParam(index=41, name="FX A1 Param 1"))
 
-    with pytest.raises(
-        ValueError, match="DawDreamer name 'FX A1 Param 1' is missing or ambiguous"
-    ):
+    with pytest.raises(ValueError, match="DawDreamer FX A1 anchor is missing or ambiguous"):
         join_param_map("test", pedalboard, clap, dawdreamer)
+
+
+def test_join_param_map_rejects_incomplete_dawdreamer_fx_bank(
+    registry: dict[str, ParamSpec],
+) -> None:
+    """A host-local FX bank with a missing slot is rejected.
+
+    :param registry: Minimal builder registry.
+    """
+    registry["test"] = ParamSpec([ContinuousParameter("fx_a1_delay_time", 0.0, 1.0)], [])
+    pedalboard = _host_dump(HostParam(index=900, key="fx_a1_delay_time", name="Renamed Delay"))
+    clap = _clap(_clap_param(700, "FX A1 Param 1"))
+    dawdreamer = _host_dump(
+        *[param for param in _dawdreamer_fx_bank("A1", 40) if param.index != 45]
+    )
+
+    with pytest.raises(ValueError, match="DawDreamer FX A1 slot 5 is missing or invalid"):
+        join_param_map("test", pedalboard, clap, dawdreamer)
+
+
+def test_join_param_map_resolves_dynamic_fx_from_semantic_key_not_pedalboard_name(
+    registry: dict[str, ParamSpec],
+) -> None:
+    """Preset-specific Pedalboard FX labels do not drive other hosts.
+
+    :param registry: Minimal builder registry.
+    """
+    registry["test"] = ParamSpec([ContinuousParameter("fx_a1_delay_time", 0.0, 1.0)], [])
+    pedalboard = _host_dump(HostParam(index=900, key="fx_a1_delay_time", name="My Delay Time"))
+    clap = _clap(_clap_param(700, "FX A1 Param 1"))
+    dawdreamer = _host_dump(*_dawdreamer_fx_bank("A1", 40))
+
+    result = join_param_map("test", pedalboard, clap, dawdreamer)
+
+    assert result.params["fx_a1_delay_time"].pedalboard.name == "My Delay Time"
+    assert result.params["fx_a1_delay_time"].clap is not None
+    assert result.params["fx_a1_delay_time"].clap.clap_param_id == 700
+    assert result.params["fx_a1_delay_time"].dawdreamer.index == 41
 
 
 @pytest.mark.parametrize(
@@ -259,6 +399,48 @@ def test_join_param_map_rejects_duplicate_host_identities(
         join_param_map("test", pedalboard, clap, dawdreamer)
 
 
+def test_join_param_map_rejects_duplicate_clap_ids(registry: dict[str, ParamSpec]) -> None:
+    """Duplicate CLAP-native identifiers are rejected.
+
+    :param registry: Minimal builder registry.
+    """
+    pedalboard, _, dawdreamer = _valid_inputs()
+    clap = _clap(_clap_param(7, "Cutoff"), _clap_param(7, "Resonance"))
+
+    with pytest.raises(ValueError, match="duplicate CLAP parameter ids"):
+        join_param_map("test", pedalboard, clap, dawdreamer)
+
+
+def test_join_param_map_rejects_ambiguous_clap_name(registry: dict[str, ParamSpec]) -> None:
+    """A semantic key must select exactly one CLAP-native identity.
+
+    :param registry: Minimal builder registry.
+    """
+    pedalboard, _, dawdreamer = _valid_inputs()
+    clap = _clap(_clap_param(7, "Cutoff"), _clap_param(8, "cut_off"))
+
+    with pytest.raises(ValueError, match="CLAP name 'cutoff' is missing or ambiguous"):
+        join_param_map("test", pedalboard, clap, dawdreamer)
+
+
+def test_join_param_map_rejects_duplicate_dawdreamer_fx_anchor(
+    registry: dict[str, ParamSpec],
+) -> None:
+    """An FX bank must have exactly one host-local anchor.
+
+    :param registry: Minimal builder registry.
+    """
+    registry["test"] = ParamSpec([ContinuousParameter("fx_a1_delay_time", 0.0, 1.0)], [])
+    pedalboard = _host_dump(HostParam(index=900, key="fx_a1_delay_time", name="Delay"))
+    clap = _clap(_clap_param(700, "FX A1 Param 1"))
+    dawdreamer = _host_dump(
+        *_dawdreamer_fx_bank("A1", 40), HostParam(index=400, name="FX A1 FX Type")
+    )
+
+    with pytest.raises(ValueError, match="DawDreamer FX A1 anchor is missing or ambiguous"):
+        join_param_map("test", pedalboard, clap, dawdreamer)
+
+
 @pytest.mark.parametrize(
     "pedalboard, clap, dawdreamer, expected",
     [
@@ -270,24 +452,24 @@ def test_join_param_map_rejects_duplicate_host_identities(
         ),
         (
             _host_dump(HostParam(index=2, key="cutoff", name="Cutoff")),
-            _clap(_clap_param(7, "Cutoff")),
+            _clap(_clap_param(7, "Resonance")),
             _host_dump(HostParam(index=11, name="Cutoff")),
-            "outside CLAP dump",
+            "CLAP name 'cutoff' is missing or ambiguous",
         ),
         (
             _host_dump(HostParam(index=0, key="cutoff", name="Cutoff")),
             _clap(_clap_param(7, "Cutoff")),
             _host_dump(),
-            "DawDreamer name 'Cutoff' is missing or ambiguous",
+            "DawDreamer name 'cutoff' is missing or ambiguous",
         ),
         (
             _host_dump(HostParam(index=0, key="cutoff", name="Cutoff")),
             _clap(_clap_param(7, "Cutoff")),
             _host_dump(HostParam(index=11, name="Cutoff"), HostParam(index=12, name="Cutoff")),
-            "DawDreamer name 'Cutoff' is missing or ambiguous",
+            "DawDreamer name 'cutoff' is missing or ambiguous",
         ),
     ],
-    ids=["missing-pedalboard", "clap-index", "missing-dawdreamer", "ambiguous-dawdreamer"],
+    ids=["missing-pedalboard", "missing-clap", "missing-dawdreamer", "ambiguous-dawdreamer"],
 )
 def test_join_param_map_rejects_unresolvable_parameter_identities(
     registry: dict[str, ParamSpec],
@@ -325,7 +507,7 @@ def test_join_param_map_aggregates_independent_errors(registry: dict[str, ParamS
         join_param_map("test", pedalboard, clap, dawdreamer)
 
     assert "plugin identities disagree" in str(caught.value)
-    assert "DawDreamer name 'Cutoff' is missing or ambiguous" in str(caught.value)
+    assert "DawDreamer name 'cutoff' is missing or ambiguous" in str(caught.value)
     assert "resonance: missing Pedalboard identity" in str(caught.value)
 
 
@@ -432,6 +614,8 @@ def test_dump_dawdreamer_writes_raw_host_names(
             """
             return [{"index": 20, "name": "FX A1 Param 1"}]
 
+    engine_config: list[tuple[int, int]] = []
+
     class Engine:
         """Minimal DawDreamer engine fake."""
 
@@ -441,7 +625,7 @@ def test_dump_dawdreamer_writes_raw_host_names(
             :param sample_rate: Render sample rate.
             :param block_size: Render block size.
             """
-            del sample_rate, block_size
+            engine_config.append((sample_rate, block_size))
 
         def make_plugin_processor(self, name: str, path: str) -> Processor:
             """Create the preset-capable processor.
@@ -477,6 +661,7 @@ def test_dump_dawdreamer_writes_raw_host_names(
     )
 
     assert result.exit_code == 0, result.output
+    assert engine_config == [(44_100, 2_048)]
     assert json.loads(output_path.read_text(encoding="utf-8"))["params"] == [
         {"index": 20, "key": None, "name": "FX A1 Param 1"}
     ]
@@ -517,7 +702,7 @@ def test_dump_pedalboard_writes_flushed_preset_provenance(
     output_path = tmp_path / "pedalboard.json"
     plugin_path.touch()
     preset_path.write_bytes(b"preset")
-    calls: list[str] = []
+    calls: list[str | tuple[object, ...]] = []
 
     class Plugin:
         """Minimal Pedalboard plugin fake.
@@ -544,8 +729,7 @@ def test_dump_pedalboard_writes_flushed_preset_provenance(
 
             :param *args: Pedalboard process arguments.
             """
-            del args
-            calls.append("process")
+            calls.append(args)
 
         def reset(self) -> None:
             """Record the post-flush reset."""
@@ -574,7 +758,7 @@ def test_dump_pedalboard_writes_flushed_preset_provenance(
 
     payload = json.loads(output_path.read_text(encoding="utf-8"))
     assert result.exit_code == 0, result.output
-    assert calls == ["preset", "process", "reset"]
+    assert calls == ["preset", ([], 32.0, 44_100.0, 2, 2_048, True), "reset"]
     assert (
         payload["preset_sha256"]
         == "d410850fd5f4e0a3cbffa317eb15d8e3c8fe4bcdb7d77433d8618e0ddaca25cb"

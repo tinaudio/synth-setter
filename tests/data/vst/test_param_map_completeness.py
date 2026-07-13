@@ -15,7 +15,7 @@ def spec_name(request: pytest.FixtureRequest) -> str:
     """Select each supported Surge parameter spec.
 
     :param request: Parameterized fixture request.
-    :returns: Spec name.
+    :returns: A registry key for each supported Surge parameter spec.
     """
     return str(request.param)
 
@@ -25,7 +25,7 @@ def committed_map(spec_name: str) -> SynthParamMap:
     """Load one packaged joint map.
 
     :param spec_name: Registered spec name.
-    :returns: Packaged map.
+    :returns: The joint parameter map resource associated with ``spec_name``.
     """
     with as_file(param_map(spec_name)) as path:
         return load_param_map(path)

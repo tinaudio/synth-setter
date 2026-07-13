@@ -17,7 +17,7 @@ def _identity(index: int) -> ParamIdentity:
     """Build one complete fake identity.
 
     :param index: Fake host index.
-    :returns: Complete identity.
+    :returns: Identity whose DawDreamer index is offset by 10.
     """
     return ParamIdentity(
         pedalboard=PedalboardParamRef(index=index, name=f"Param {index}"),
@@ -37,7 +37,7 @@ def _param_map(params: dict[str, ParamIdentity]) -> SynthParamMap:
     """Build a joint map around fake identities.
 
     :param params: Identities keyed by pyname.
-    :returns: Fake joint map.
+    :returns: Map with the same snapshot metadata for all three backends.
     """
     snapshot = BackendSnapshot(plugin_version="1.2.3", parameter_count=20)
     return SynthParamMap(

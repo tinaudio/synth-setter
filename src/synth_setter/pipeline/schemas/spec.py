@@ -350,7 +350,8 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             "(SIGTRAP after ~3-4 calls, #714); "
             '``"always_on"`` is permitted on Darwin because it opens the editor '
             "once per shard, not cumulatively. The default factory yields "
-            '``"never"`` on Darwin.'
+            '``"never"`` on Darwin. DawDreamer supports only ``"never"`` because '
+            "its editor call blocks the main thread without a close-event API."
         ),
     )
     param_sample_cadence: _ParamSampleCadence = Field(
@@ -403,6 +404,20 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
                 "show_editor accumulates AppKit/CGS commit-handler state per "
                 "call in unbundled python and triggers SIGTRAP after ~3-4 "
                 'plugin reloads (#714). Use "once" or "never" on Darwin.'
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _dawdreamer_forbids_gui_toggle(self) -> RenderConfig:
+        """Reject editor cadences that DawDreamer's blocking API cannot implement.
+
+        :return: ``self`` unchanged for Pedalboard or DawDreamer without editor use.
+        :raises ValueError: DawDreamer combined with a cadence other than ``"never"``.
+        """
+        if self.renderer_backend == "dawdreamer" and self.gui_toggle_cadence != "never":
+            raise ValueError(
+                'DawDreamer requires gui_toggle_cadence="never": its open_editor() '
+                "call blocks the main thread and exposes no close-event API"
             )
         return self
 

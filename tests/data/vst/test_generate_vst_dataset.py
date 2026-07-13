@@ -1131,11 +1131,17 @@ def _loud_audio() -> np.ndarray:
 
 
 def _pedalboard_renderer() -> PedalboardRenderer:
-    """Build a renderer backed by the patched core seam.
+    """Build the renderer used by loudness-loop unit tests.
 
-    :returns: Pedalboard renderer for the test fixture.
+    :returns: Renderer whose calls use monkeypatched ``core.render_params``.
     """
-    return PedalboardRenderer(PLUGIN_PATH, _SAMPLE_RATE, _CHANNELS, _DURATION, _PRESET_PATH)
+    return PedalboardRenderer(
+        plugin_path=PLUGIN_PATH,
+        sample_rate=_SAMPLE_RATE,
+        channels=_CHANNELS,
+        signal_duration_seconds=_DURATION,
+        plugin_state_path=_PRESET_PATH,
+    )
 
 
 def test_generate_sample_raises_when_fixed_synth_params_renders_silent(

@@ -41,11 +41,7 @@ def configs_dir() -> Traversable:
 
 
 def param_map(param_spec_name: str) -> Traversable:
-    """Return the committed CLAP param map for one spec of the sound-match bridge.
-
-    Built by ``synth_setter.tools.build_param_map``; consumed as the default
-    ``--map`` of ``synth-setter-predict-capture``. Wrap in :func:`as_file`
-    when a real filesystem path is required.
+    """Return the committed cross-host parameter map for one registered spec.
 
     :param param_spec_name: ``param_specs`` registry key (e.g. ``surge_xt``).
     :returns: Traversable pointing at ``<param_spec_name>_param_map.json``.

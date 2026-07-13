@@ -9,7 +9,7 @@
   },
   "clap": {
     "plugin_version": "1.3.4",
-    "parameter_count": 772
+    "parameter_count": 775
   },
   "dawdreamer": {
     "plugin_version": "1.3.4",
@@ -2425,7 +2425,7 @@
       },
       "dawdreamer": {
         "index": 20,
-        "name": "FX A1 Param 1"
+        "name": "FX A1 -"
       }
     },
     "fx_a1_modulation_rate": {
@@ -2443,7 +2443,7 @@
       },
       "dawdreamer": {
         "index": 21,
-        "name": "FX A1 Param 2"
+        "name": "FX A1 -"
       }
     },
     "fx_a1_modulation_depth": {
@@ -2461,7 +2461,7 @@
       },
       "dawdreamer": {
         "index": 22,
-        "name": "FX A1 Param 3"
+        "name": "FX A1 -"
       }
     },
     "fx_a1_delay_feedback": {
@@ -2479,7 +2479,7 @@
       },
       "dawdreamer": {
         "index": 23,
-        "name": "FX A1 Param 4"
+        "name": "FX A1 -"
       }
     },
     "fx_a1_eq_low_cut": {
@@ -2497,7 +2497,7 @@
       },
       "dawdreamer": {
         "index": 24,
-        "name": "FX A1 Param 5"
+        "name": "FX A1 -"
       }
     },
     "fx_a1_eq_high_cut": {
@@ -2515,7 +2515,7 @@
       },
       "dawdreamer": {
         "index": 25,
-        "name": "FX A1 Param 6"
+        "name": "FX A1 -"
       }
     },
     "fx_a1_output_mix": {
@@ -2533,7 +2533,7 @@
       },
       "dawdreamer": {
         "index": 26,
-        "name": "FX A1 Param 7"
+        "name": "FX A1 -"
       }
     },
     "fx_a1_output_width": {
@@ -2551,7 +2551,7 @@
       },
       "dawdreamer": {
         "index": 27,
-        "name": "FX A1 Param 8"
+        "name": "FX A1 -"
       }
     },
     "fx_a2_delay_time_left": {
@@ -2569,7 +2569,7 @@
       },
       "dawdreamer": {
         "index": 33,
-        "name": "FX A2 Param 1"
+        "name": "FX A2 -"
       }
     },
     "fx_a2_delay_time_right": {
@@ -2587,7 +2587,7 @@
       },
       "dawdreamer": {
         "index": 34,
-        "name": "FX A2 Param 2"
+        "name": "FX A2 -"
       }
     },
     "fx_a2_feedback_eq_feedback": {
@@ -2605,7 +2605,7 @@
       },
       "dawdreamer": {
         "index": 35,
-        "name": "FX A2 Param 3"
+        "name": "FX A2 -"
       }
     },
     "fx_a2_feedback_eq_crossfeed": {
@@ -2623,7 +2623,7 @@
       },
       "dawdreamer": {
         "index": 36,
-        "name": "FX A2 Param 4"
+        "name": "FX A2 -"
       }
     },
     "fx_a2_feedback_eq_low_cut": {
@@ -2641,7 +2641,7 @@
       },
       "dawdreamer": {
         "index": 37,
-        "name": "FX A2 Param 5"
+        "name": "FX A2 -"
       }
     },
     "fx_a2_feedback_eq_high_cut": {
@@ -2659,7 +2659,7 @@
       },
       "dawdreamer": {
         "index": 38,
-        "name": "FX A2 Param 6"
+        "name": "FX A2 -"
       }
     },
     "fx_a2_modulation_rate": {
@@ -2677,7 +2677,7 @@
       },
       "dawdreamer": {
         "index": 39,
-        "name": "FX A2 Param 7"
+        "name": "FX A2 -"
       }
     },
     "fx_a2_modulation_depth": {
@@ -2695,7 +2695,7 @@
       },
       "dawdreamer": {
         "index": 40,
-        "name": "FX A2 Param 8"
+        "name": "FX A2 -"
       }
     },
     "fx_a2_input_channel": {
@@ -2713,7 +2713,7 @@
       },
       "dawdreamer": {
         "index": 41,
-        "name": "FX A2 Param 9"
+        "name": "FX A2 -"
       }
     },
     "fx_a2_output_mix": {
@@ -2731,7 +2731,7 @@
       },
       "dawdreamer": {
         "index": 43,
-        "name": "FX A2 Param 11"
+        "name": "FX A2 -"
       }
     },
     "fx_a2_output_width": {
@@ -2749,7 +2749,7 @@
       },
       "dawdreamer": {
         "index": 44,
-        "name": "FX A2 Param 12"
+        "name": "FX A2 -"
       }
     },
     "fx_a3_pre_delay_pre_delay": {
@@ -2767,7 +2767,7 @@
       },
       "dawdreamer": {
         "index": 124,
-        "name": "FX A3 Param 1"
+        "name": "FX A3 -"
       }
     },
     "fx_a3_reverb_room_size": {
@@ -2785,7 +2785,7 @@
       },
       "dawdreamer": {
         "index": 125,
-        "name": "FX A3 Param 2"
+        "name": "FX A3 -"
       }
     },
     "fx_a3_reverb_decay_time": {
@@ -2803,7 +2803,7 @@
       },
       "dawdreamer": {
         "index": 126,
-        "name": "FX A3 Param 3"
+        "name": "FX A3 -"
       }
     },
     "fx_a3_reverb_diffusion": {
@@ -2821,7 +2821,7 @@
       },
       "dawdreamer": {
         "index": 127,
-        "name": "FX A3 Param 4"
+        "name": "FX A3 -"
       }
     },
     "fx_a3_reverb_buildup": {
@@ -2839,7 +2839,7 @@
       },
       "dawdreamer": {
         "index": 128,
-        "name": "FX A3 Param 5"
+        "name": "FX A3 -"
       }
     },
     "fx_a3_reverb_modulation": {
@@ -2857,7 +2857,7 @@
       },
       "dawdreamer": {
         "index": 129,
-        "name": "FX A3 Param 6"
+        "name": "FX A3 -"
       }
     },
     "fx_a3_eq_lf_damping": {
@@ -2875,7 +2875,7 @@
       },
       "dawdreamer": {
         "index": 130,
-        "name": "FX A3 Param 7"
+        "name": "FX A3 -"
       }
     },
     "fx_a3_eq_hf_damping": {
@@ -2893,7 +2893,7 @@
       },
       "dawdreamer": {
         "index": 131,
-        "name": "FX A3 Param 8"
+        "name": "FX A3 -"
       }
     },
     "fx_a3_output_width": {
@@ -2911,7 +2911,7 @@
       },
       "dawdreamer": {
         "index": 132,
-        "name": "FX A3 Param 9"
+        "name": "FX A3 -"
       }
     },
     "fx_a3_output_mix": {
@@ -2929,7 +2929,7 @@
       },
       "dawdreamer": {
         "index": 133,
-        "name": "FX A3 Param 10"
+        "name": "FX A3 -"
       }
     }
   }

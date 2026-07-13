@@ -10,8 +10,9 @@ from loguru import logger
 from pydantic_settings import BaseSettings, CliApp, CliPositionalArg, SettingsConfigDict
 from pyloudnorm import Meter
 
-from synth_setter.data.vst.renderers import AudioRenderer
+from synth_setter.data.vst.dawdreamer_runtime import ensure_dawdreamer_runtime
 from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
+from synth_setter.data.vst.renderers import AudioRenderer
 from synth_setter.data.vst.seeding import rng_for_sample
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
@@ -25,11 +26,11 @@ from synth_setter.data.vst.shapes import (
     mel_n_fft,
     param_array_dataset_shape,
 )
+from synth_setter.pipeline.schemas.shard_metadata import DEFAULT_ATTEMPTS_PER_SAMPLE
 from synth_setter.pipeline.schemas.spec import (
     OutputFormat,
     RenderConfig,
 )
-from synth_setter.pipeline.schemas.shard_metadata import DEFAULT_ATTEMPTS_PER_SAMPLE
 from synth_setter.pipeline.spec_io import join_uri, localized_uri
 
 # Loudness-gate retry ceiling when a caller does not override it (#884).
@@ -392,6 +393,7 @@ def main() -> None:
 
     args = CliApp.run(_GenerateCliArgs)
     render_cfg = RenderConfig(**args.model_dump(exclude={"data_file", "copy_dataset_root_uri"}))
+    ensure_dawdreamer_runtime(render_cfg.renderer_backend)
 
     suffix = Path(args.data_file).suffix
     fmt = OutputFormat.from_extension(suffix)

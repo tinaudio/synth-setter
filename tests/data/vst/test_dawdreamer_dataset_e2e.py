@@ -37,7 +37,7 @@ from tests.data.vst.test_generate_vst_dataset import (
 def _dawdreamer_experiment_config() -> RenderConfig:
     """Compose the DawDreamer smoke experiment with the test plugin paths.
 
-    :returns: Render configuration selected by the experiment.
+    :returns: Validated render config with test-only seed and attempt overrides applied.
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
@@ -65,11 +65,11 @@ def test_dawdreamer_parameter_map_matches_live_plugin() -> None:
 
     config = _dawdreamer_experiment_config()
     DawDreamerRenderer(
-        str(Path(PLUGIN_PATH).resolve()),
-        config.sample_rate,
-        config.channels,
-        config.signal_duration_seconds,
-        str(Path(TEST_PRESET_PATH).resolve()),
+        plugin_path=str(Path(PLUGIN_PATH).resolve()),
+        sample_rate=config.sample_rate,
+        channels=config.channels,
+        signal_duration_seconds=config.signal_duration_seconds,
+        plugin_state_path=str(Path(TEST_PRESET_PATH).resolve()),
         parameter_map=load_param_map(Path("src/synth_setter/data/vst/surge_xt_param_map.json")),
     )
 
@@ -84,18 +84,20 @@ def test_dawdreamer_dataset_audio_is_similar_to_pedalboard(tmp_path: Path) -> No
     if TEST_SYNTH != "surge_xt":
         pytest.skip("DawDreamer comparison fixture uses the Surge XT parameter map")
 
-    dawdreamer_config = _dawdreamer_experiment_config()
+    dawdreamer_config = _dawdreamer_experiment_config().model_copy(
+        update={"samples_per_shard": 2}
+    )
     pedalboard_config = dawdreamer_config.model_copy(update={"renderer_backend": "pedalboard"})
     pedalboard_path = tmp_path / "pedalboard.h5"
     dawdreamer_path = tmp_path / "dawdreamer.h5"
-    fixed_synth = [_HARDCODED_SYNTH_PARAMS]
-    fixed_note = [_HARDCODED_NOTE_PARAMS]
+    fixed_synth = [_HARDCODED_SYNTH_PARAMS, _HARDCODED_SYNTH_PARAMS]
+    fixed_note = [_HARDCODED_NOTE_PARAMS, _HARDCODED_NOTE_PARAMS]
     dawdreamer_renderer = DawDreamerRenderer(
-        str(Path(PLUGIN_PATH).resolve()),
-        dawdreamer_config.sample_rate,
-        dawdreamer_config.channels,
-        dawdreamer_config.signal_duration_seconds,
-        str(Path(TEST_PRESET_PATH).resolve()),
+        plugin_path=str(Path(PLUGIN_PATH).resolve()),
+        sample_rate=dawdreamer_config.sample_rate,
+        channels=dawdreamer_config.channels,
+        signal_duration_seconds=dawdreamer_config.signal_duration_seconds,
+        plugin_state_path=str(Path(TEST_PRESET_PATH).resolve()),
         parameter_map=load_param_map(
             Path("src/synth_setter/data/vst/surge_xt_param_map.json")
         ),
@@ -121,12 +123,18 @@ def test_dawdreamer_dataset_audio_is_similar_to_pedalboard(tmp_path: Path) -> No
         h5py.File(pedalboard_path, "r") as pedalboard_file,
         h5py.File(dawdreamer_path, "r") as dawdreamer_file,
     ):
-        pedalboard_audio = cast(h5py.Dataset, pedalboard_file["audio"])[0].astype(np.float32)
-        dawdreamer_audio = cast(h5py.Dataset, dawdreamer_file["audio"])[0].astype(np.float32)
+        pedalboard_rows = cast(h5py.Dataset, pedalboard_file["audio"])[:].astype(np.float32)
+        dawdreamer_rows = cast(h5py.Dataset, dawdreamer_file["audio"])[:].astype(np.float32)
         pedalboard_params = cast(h5py.Dataset, pedalboard_file["param_array"])[0]
         dawdreamer_params = cast(h5py.Dataset, dawdreamer_file["param_array"])[0]
 
     assert np.array_equal(pedalboard_params, dawdreamer_params)
+    assert np.isfinite(pedalboard_rows).all()
+    assert np.isfinite(dawdreamer_rows).all()
+    assert np.max(np.abs(pedalboard_rows)) <= 1.0
+    assert np.max(np.abs(dawdreamer_rows)) <= 1.0
+    pedalboard_audio = pedalboard_rows[0]
+    dawdreamer_audio = dawdreamer_rows[0]
     assert np.max(np.abs(pedalboard_audio)) > 1e-4
     assert np.max(np.abs(dawdreamer_audio)) > 1e-4
 
