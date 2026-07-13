@@ -133,8 +133,8 @@ trap 'rm -f "$helper_stderr"' EXIT
 
 # shellcheck disable=SC2016  # intentional: no expansion wanted in the help block
 # Keep the recipe line in sync with the one in BLOCK_HELP above.
-readonly WRAPPER_HELP='Run the canonical recipe as a single direct command — no bash -c, env -S,
-sudo/exec relays, heredocs, or command substitution around it:
+readonly WRAPPER_HELP='Run the canonical recipe as a single direct command — do not route it
+through bash -c, eval, env -S, a here-string (<<<), or a pipe into a shell:
 
   gh pr create --title "..." --body "..."  # REVIEW_FULL=.agent-reviews/repo-review-full-no-comments.<sha>.md
 

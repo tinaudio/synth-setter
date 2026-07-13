@@ -163,6 +163,8 @@ def test_classify_direct_invocation_returns_direct(classifier: ModuleType, comma
         "env -vS 'gh pr create --title x --body y'",
         'bash <<< "gh pr create --title x --body y"',
         "bash <<<'gh pr create --title x --body y'",
+        # A single-line heredoc keeps the body in the shell's own segment.
+        "bash <<EOF gh pr create --title x --body y",
         # eval re-parses its argument string, hiding the real argv.
         "eval gh pr create --title x --body y",
         'eval "gh pr create --title x --body y"',
