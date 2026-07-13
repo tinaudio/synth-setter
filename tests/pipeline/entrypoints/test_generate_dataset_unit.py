@@ -133,7 +133,7 @@ def _base_spec_kwargs(tmp_path: Path, **overrides: object) -> dict[str, object]:
         },
         "render": {
             "plugin_path": str(TEST_PLUGIN_VST3),
-            "preset_path": "presets/surge-base.vstpreset",
+            "plugin_state_path": "presets/surge-base.vstpreset",
             "param_spec_name": "surge_simple",
             "renderer_version": TEST_PLUGIN_VERSION,
             "sample_rate": 44100,
@@ -2229,7 +2229,7 @@ class TestMainDispatchBranches:
             # The eval inherits the generate run's datamodule worker count verbatim,
             # so a Darwin override (num_workers=0) reaches the predict DataLoader.
             assert call.kwargs["num_workers"] == observed["num_workers"]
-            assert render_arg.preset_path == "presets/surge-simple.vstpreset"
+            assert render_arg.plugin_state_path == "presets/surge-simple.vstpreset"
             # plugin_path is the TEST_PLUGIN_VST3 this test overrode at generation —
             # proving a non-default plugin flows through to the eval re-render.
             assert render_arg.plugin_path == str(TEST_PLUGIN_VST3)
@@ -2279,7 +2279,7 @@ class TestMainDispatchBranches:
         render = spec.render.model_copy(
             update={
                 "param_spec_name": "surge_xt",
-                "preset_path": "presets/surge-base.vstpreset",
+                "plugin_state_path": "presets/surge-base.vstpreset",
                 "plugin_path": "plugins/Surge XT.vst3",
             }
         )
@@ -2321,7 +2321,7 @@ class TestMainDispatchBranches:
         # is overridden from the generation RenderConfig so the re-render matches it.
         assert "render=surge_simple" in called_argv
         assert "render.param_spec_name=surge_xt" in called_argv
-        assert "render.preset_path=presets/surge-base.vstpreset" in called_argv
+        assert "render.plugin_state_path=presets/surge-base.vstpreset" in called_argv
         assert "render.plugin_path=plugins/Surge XT.vst3" in called_argv
         assert f"render.sample_rate={render.sample_rate}" in called_argv
         assert f"render.channels={render.channels}" in called_argv

@@ -29,7 +29,7 @@ def _write_spec(tmp_path: Path, bucket: str = "intermediate-data") -> Path:
         r2={"bucket": bucket},  # type: ignore[arg-type]
         render={  # type: ignore[arg-type]
             "plugin_path": str(tmp_path / "plugin.vst3"),
-            "preset_path": str(tmp_path / "preset.vstpreset"),
+            "plugin_state_path": str(tmp_path / "preset.vstpreset"),
             "param_spec_name": "surge_simple",
             "renderer_version": "1.3.4",
             "sample_rate": 44100,
@@ -82,7 +82,7 @@ class TestComputeSpecUri:
             '"train_val_test_seeds":null,"base_seed":42,'
             '"r2_bucket":"legacy-bucket","r2_prefix_root":"data",'
             '"r2_prefix":"data/t/t-20260328T120000000Z/",'
-            '"render":{"plugin_path":"x","preset_path":"x","param_spec_name":"surge_simple",'
+            '"render":{"plugin_path":"x","plugin_state_path":"x","param_spec_name":"surge_simple",'
             '"renderer_version":"v","sample_rate":44100,"channels":1,"velocity":1,'
             '"signal_duration_seconds":1.0,"min_loudness":-1.0,"samples_per_render_batch":1,'
             '"samples_per_shard":1}}'

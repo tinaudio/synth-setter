@@ -89,8 +89,8 @@ def test_cli_writes_importable_spec_module_and_preset(invoke_cli: InvokeCli) -> 
 
     assert run.exit_code == 0
     spec_path = run.cwd / "fake_synth_param_spec.py"
-    preset_path = run.cwd / "fake_synth-base.vstpreset"
-    assert preset_path.read_bytes() == b"VST3\x01\x00fake-state"
+    plugin_state_path = run.cwd / "fake_synth-base.vstpreset"
+    assert plugin_state_path.read_bytes() == b"VST3\x01\x00fake-state"
 
     spec_text = spec_path.read_text()
     assert "plugin: fake.vst3" in spec_text
@@ -307,19 +307,19 @@ def test_cli_force_keeps_existing_spec_when_capture_fails(
 
 
 def test_cli_loads_starting_preset_before_capture(invoke_cli: InvokeCli, tmp_path: Path) -> None:
-    """``--preset-path`` state is applied before the baseline is captured.
+    """``--plugin-state-path`` state is applied before the baseline is captured.
 
     The fake's ``load_preset`` adopts the file's bytes as ``preset_data``, so
     the captured file carries the loaded bytes only if loading happened first.
 
     :param invoke_cli: Fixture invoking the CLI with plugin loading patched.
-    :param tmp_path: Holds the starting preset passed via ``--preset-path``.
+    :param tmp_path: Holds the starting plugin state passed via ``--plugin-state-path``.
     """
     start = tmp_path / "start.vstpreset"
     start.write_bytes(b"VST3-loaded-state")
 
     run = invoke_cli(
-        "--plugin-path", "fake.vst3", "--spec-name", "fake_synth", "--preset-path", str(start)
+        "--plugin-path", "fake.vst3", "--spec-name", "fake_synth", "--plugin-state-path", str(start)
     )
 
     assert run.exit_code == 0

@@ -84,7 +84,7 @@ class _RegisterTarget:
     help="Factory class to open from a multi-class .vst3 bundle (e.g. 'Six Sines').",
 )
 @click.option(
-    "--preset-path",
+    "--plugin-state-path",
     type=click.Path(exists=True, dir_okay=False),
     default=None,
     help="Optional .vstpreset to load before drafting and capture.",
@@ -160,7 +160,7 @@ class _RegisterTarget:
 def main(
     plugin_path: str,
     plugin_name: str | None,
-    preset_path: str | None,
+    plugin_state_path: str | None,
     spec_name: str,
     out_spec: str | None,
     out_preset: str | None,
@@ -176,7 +176,7 @@ def main(
     :param plugin_path: Path to the ``.vst3`` bundle to introspect.
     :param plugin_name: Factory class to open from a multi-class bundle; ``None``
         opens the sole class.
-    :param preset_path: Optional starting ``.vstpreset`` applied before capture.
+    :param plugin_state_path: Optional starting ``.vstpreset`` applied before capture.
     :param spec_name: Registry key; names the emitted constant and default outputs.
     :param out_spec: Draft module destination; defaults from ``spec_name``.
     :param out_preset: Captured preset destination; defaults from ``spec_name``.
@@ -223,8 +223,8 @@ def main(
     vst_plugin = _load_plugin_loudly(
         plugin_path, plugin_name, load_plugin, timeout_seconds=load_timeout
     )
-    if preset_path is not None:
-        load_preset(vst_plugin, preset_path)
+    if plugin_state_path is not None:
+        load_preset(vst_plugin, plugin_state_path)
     # Cast: pedalboard's plugin surface is dynamic, so VST3Plugin's stubs don't
     # declare the attributes IntrospectablePlugin pins structurally.
     plugin = cast(IntrospectablePlugin, vst_plugin)
@@ -236,7 +236,9 @@ def main(
         plugin_name=plugin.name,
         params=drafted,
         skipped=skipped,
-        provenance=(f"plugin: {plugin_path} (version {version}), preset: {preset_path or 'none'}"),
+        provenance=(
+            f"plugin: {plugin_path} (version {version}), preset: {plugin_state_path or 'none'}"
+        ),
         registered=register,
     )
     # Capture runs before the spec write: under --force a failed capture must

@@ -72,7 +72,7 @@ def registration_paths(repo_root: Path, spec_name: str) -> RegistrationPaths:
 def preset_repo_path(spec_name: str) -> str:
     """Return the checkout-relative baseline-preset path for ``spec_name``.
 
-    Single source for the path recorded in both ``preset_paths`` and the
+    Single source for the path recorded in both ``plugin_state_paths`` and the
     render config, which must agree.
 
     :param spec_name: Registry key for the synth.
@@ -106,7 +106,7 @@ def registry_with_spec(source: str, spec_name: str) -> str:
     """Return ``source`` with ``spec_name`` registered in both registry dicts.
 
     Inserts the generated module's import (in sorted position, so ruff's I001
-    stays clean) plus one entry each in ``param_specs`` and ``preset_paths``.
+    stays clean) plus one entry each in ``param_specs`` and ``plugin_state_paths``.
     Re-applying an identical registration is a no-op so ``--force`` re-runs
     converge instead of erroring.
 
@@ -132,7 +132,7 @@ def registry_with_spec(source: str, spec_name: str) -> str:
 
     lines.insert(_import_insert_index(lines, module), import_line)
     _insert_dict_entry(lines, "param_specs", spec_entry)
-    _insert_dict_entry(lines, "preset_paths", preset_entry)
+    _insert_dict_entry(lines, "plugin_state_paths", preset_entry)
     return "\n".join(lines) + "\n"
 
 
@@ -239,7 +239,7 @@ def render_config_yaml(spec_name: str, *, plugin_path: str, renderer_version: st
             "  - surge_xt",
             "",
             f"plugin_path: {json.dumps(plugin_path)}",
-            f"preset_path: {json.dumps(preset_repo_path(spec_name))}",
+            f"plugin_state_path: {json.dumps(preset_repo_path(spec_name))}",
             f"param_spec_name: {json.dumps(spec_name)}",
             f"renderer_version: {json.dumps(renderer_version)}",
             "",
