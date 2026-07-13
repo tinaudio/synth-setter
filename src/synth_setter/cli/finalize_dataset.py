@@ -8,9 +8,9 @@ and then writes the ``dataset.complete`` marker last per
 ``pipeline/CLAUDE.md``. The wds branch streams train shards through
 Welford row-by-row; the hdf5 branch downloads every shard, reshards into
 ``{train,val,test}.h5``, and computes ``stats.npz`` over the train split;
-the lance branch streams every shard directly from R2 (no local download),
-folds train shards through Welford for ``stats.npz``, and writes each split
-straight back to R2 as a ``{train,val,test}.lance`` dataset directory.
+the lance branch downloads every shard through rclone, folds local train shards
+through Welford for ``stats.npz``, builds each split locally, and uploads each
+``{train,val,test}.lance`` dataset directory through rclone.
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ from synth_setter.pipeline.constants import (
 from synth_setter.pipeline.data.reshard import reshard_dataset
 from synth_setter.pipeline.data.stats import get_stats_hdf5, stream_stats_wds
 from synth_setter.pipeline.schemas.prefix import assert_r2_prefix_matches
-from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat, ShardSpec, Split
+from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat, Split
 from synth_setter.pipeline.spec_io import load_spec_from_root, write_spec_to_path
 from synth_setter.utils import pin_wandb_run_id
 from synth_setter.utils.instantiators import close_loggers, instantiate_loggers
@@ -174,44 +174,40 @@ def finalize_hdf5(spec: DatasetSpec, work_dir: Path) -> None:
     logger.info("uploaded stats to {}", spec.r2.stats_uri())
 
 
-def _lance_split_batches(
-    split: Split, shard_uris: list[str], storage_options: dict[str, str]
-) -> LanceSplitBatches:
+def _lance_split_batches(split: Split, shard_paths: list[Path]) -> LanceSplitBatches:
     """Return the schema and batch iterator for a finalized Lance split.
 
-    Reads shards directly from R2 (no local download) — one sequential pass per
-    shard, which Lance streams natively over object storage.
+    Reads locally staged shards one at a time in split order.
 
     :param split: Finalized split receiving the shard stream.
-    :param shard_uris: Non-empty list of ``s3://`` shard dataset URIs in split order.
-    :param storage_options: Object-store config for the R2 bucket.
+    :param shard_paths: Non-empty local shard dataset paths in split order.
     :returns: ``(schema, batches)`` for :func:`write_lance_dataset`.
     """
     import lance
 
-    schema = lance.dataset(shard_uris[0], storage_options=storage_options).schema
+    schema = lance.dataset(shard_paths[0]).schema
 
     def _batches() -> LanceBatchIterator:
-        total = len(shard_uris)
-        for index, uri in enumerate(shard_uris, start=1):
+        total = len(shard_paths)
+        for index, path in enumerate(shard_paths, start=1):
             logger.info(
                 "writing split {} shard {}/{}: {}",
                 split,
                 index,
                 total,
-                uri.rstrip("/").rsplit("/", 1)[-1],
+                path.name,
             )
-            yield from lance.dataset(uri, storage_options=storage_options).to_batches()
+            yield from lance.dataset(path).to_batches()
 
     return schema, _batches()
 
 
 def finalize_lance(spec: DatasetSpec, work_dir: Path) -> None:
-    """Stream Lance shards from R2 into split datasets, compute stats, upload artifacts.
+    """Build Lance splits locally from R2 shards, then upload each completed directory.
 
-    Shards are read directly from R2 and each split dataset is written straight to
-    its R2 URI via Lance ``storage_options`` — no shard download or split upload.
-    Only ``stats.npz`` (a plain numpy archive) is staged locally and uploaded.
+    Every shard is downloaded through rclone before stats and split construction,
+    avoiding Lance's direct object-storage streaming path. Each split is written
+    locally and uploaded only after its Lance manifest is complete.
 
     :param spec: Validated dataset spec (``output_format == "lance"``).
     :param work_dir: Scratch directory for the finalized ``stats.npz``.
@@ -227,14 +223,15 @@ def finalize_lance(spec: DatasetSpec, work_dir: Path) -> None:
             f"{spec.split_shard_ranges['train']!r}); cannot compute stats "
             f"without at least one train shard."
         )
-    storage_options = r2_io.r2_storage_options()
+    shard_dir = work_dir / "lance-shards"
+    shard_paths = []
+    for shard in spec.shards:
+        shard_path = shard_dir / shard.filename
+        r2_io.download_dir_no_overwrite(spec.r2.shard_uri(shard), shard_path)
+        shard_paths.append(shard_path)
 
-    def _shard_s3_uri(shard: ShardSpec) -> str:
-        return r2_io.to_s3_uri(spec.r2.shard_uri(shard))
-
-    train_uris = [_shard_s3_uri(shard) for shard in spec.shards[train_lo:train_hi]]
     mean, std = stream_stats_lance(
-        train_uris, mask_degenerate=spec.mask_degenerate_bins, storage_options=storage_options
+        shard_paths[train_lo:train_hi], mask_degenerate=spec.mask_degenerate_bins
     )
     stats_npz = work_dir / STATS_NPZ_FILENAME
     np.savez(stats_npz, mean=mean, std=std)
@@ -242,13 +239,12 @@ def finalize_lance(spec: DatasetSpec, work_dir: Path) -> None:
     for split, (lo, hi) in spec.split_shard_ranges.items():
         if lo >= hi:
             continue
-        shard_uris = [_shard_s3_uri(shard) for shard in spec.shards[lo:hi]]
-        schema, batches = _lance_split_batches(split, shard_uris, storage_options)
+        schema, batches = _lance_split_batches(split, shard_paths[lo:hi])
         split_uri = spec.r2.split_lance_uri(split)
-        write_lance_dataset(
-            r2_io.to_s3_uri(split_uri), schema, batches, storage_options=storage_options
-        )
-        logger.info("wrote {} split to {}", split, split_uri)
+        split_path = work_dir / f"{split}.lance"
+        write_lance_dataset(split_path, schema, batches)
+        r2_io.upload_dir(split_path, split_uri)
+        logger.info("uploaded {} split to {}", split, split_uri)
     r2_io.upload(stats_npz, spec.r2.stats_uri())
     logger.info("uploaded stats to {}", spec.r2.stats_uri())
 

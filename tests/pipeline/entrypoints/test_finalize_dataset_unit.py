@@ -26,6 +26,7 @@ from typing import Any, NoReturn, cast
 from unittest.mock import MagicMock, call
 
 import h5py
+import lance
 import numpy as np
 import pytest
 
@@ -43,6 +44,7 @@ from tests.helpers.finalize_shards import (
     seed_train_shards,
     stub_get_stats_hdf5,
     uri_to_local_path,
+    write_minimal_lance_shard,
     write_minimal_wds_shard,
 )
 
@@ -85,29 +87,19 @@ def test_lance_split_batches_logs_shard_progress_when_iterator_is_consumed(
     :param monkeypatch: Pytest fixture used to stub ``lance.dataset`` and the
         module logger.
     """
-    spec = build_lance_smoke_spec(
-        task_name="lance-split-progress",
-        train_val_test_sizes=(8, 0, 0),
-    )
-    shard_uris = [
-        r2_io.to_s3_uri(spec.r2.shard_uri(shard))
-        for shard in spec.shards[
-            spec.split_shard_ranges["train"][0] : spec.split_shard_ranges["train"][1]
-        ]
-    ]
+    shard_paths = [Path("shard-000000.lance"), Path("shard-000001.lance")]
     schema = object()
-    calls: list[str] = []
+    calls: list[Path] = []
 
     class FakeDataset:
-        def __init__(self, uri: str) -> None:
+        def __init__(self, uri: Path) -> None:
             self.schema = schema
             self.uri = uri
 
         def to_batches(self) -> Iterator[str]:
             yield f"batch:{self.uri}"
 
-    def fake_dataset(uri: str, *, storage_options: dict[str, str]) -> FakeDataset:
-        assert storage_options == {"endpoint": "r2"}
+    def fake_dataset(uri: Path) -> FakeDataset:
         calls.append(uri)
         return FakeDataset(uri)
 
@@ -115,23 +107,21 @@ def test_lance_split_batches_logs_shard_progress_when_iterator_is_consumed(
     recording_logger = MagicMock(wraps=finalize_dataset.logger)
     monkeypatch.setattr(finalize_dataset, "logger", recording_logger)
 
-    actual_schema, batches = finalize_dataset._lance_split_batches(
-        "train", shard_uris, {"endpoint": "r2"}
-    )
+    actual_schema, batches = finalize_dataset._lance_split_batches("train", shard_paths)
 
     assert actual_schema is schema
-    assert calls == [shard_uris[0]]
+    assert calls == [shard_paths[0]]
     recording_logger.info.assert_not_called()
 
-    assert next(batches) == f"batch:{shard_uris[0]}"
+    assert next(batches) == f"batch:{shard_paths[0]}"
 
-    assert next(batches) == f"batch:{shard_uris[1]}"
+    assert next(batches) == f"batch:{shard_paths[1]}"
 
     assert recording_logger.info.call_args_list == [
         call("writing split {} shard {}/{}: {}", "train", 1, 2, "shard-000000.lance"),
         call("writing split {} shard {}/{}: {}", "train", 2, 2, "shard-000001.lance"),
     ]
-    assert calls == [shard_uris[0], shard_uris[0], shard_uris[1]]
+    assert calls == [shard_paths[0], shard_paths[0], shard_paths[1]]
 
 
 def test_finalize_from_spec_uploads_stats_then_marker_at_canonical_uris(
@@ -592,9 +582,37 @@ def test_finalize_wds_downloads_every_train_shard_uri(
     assert uri_to_local_path(fake_r2_remote, spec.r2.stats_uri()).is_file()
 
 
-# The Lance finalize path streams shards directly from R2 (real S3), so it can't
-# run against the local-typed fake_r2_remote. Marker-last ordering is format-agnostic
-# (wds/hdf5 cases cover it); the Lance split is covered in test_finalize_dataset_r2.py.
+def test_finalize_lance_downloads_writes_and_uploads_all_splits(
+    fake_r2_remote: Path, tmp_path: Path
+) -> None:
+    """Finalized Lance splits remain readable after local scratch is removed.
+
+    The local-typed R2 fixture drives real rclone directory downloads and uploads.
+    Each split receives one shard, so reopening the uploaded datasets proves the
+    complete local-finalize path without relying on the scratch directories.
+
+    :param fake_r2_remote: Local filesystem backing the ``r2:`` rclone remote.
+    :param tmp_path: Test-scoped directory containing finalize scratch space.
+    """
+    spec = build_lance_smoke_spec(
+        task_name="finalize-lance-local-e2e",
+        train_val_test_sizes=(4, 4, 4),
+    )
+    for shard in spec.shards:
+        write_minimal_lance_shard(
+            uri_to_local_path(fake_r2_remote, spec.r2.shard_uri(shard)), spec
+        )
+
+    work_dir = tmp_path / "work"
+    finalize_dataset.finalize_lance(spec, work_dir)
+    shutil.rmtree(work_dir)
+
+    for split in ("train", "val", "test"):
+        split_dataset = lance.dataset(
+            uri_to_local_path(fake_r2_remote, spec.r2.split_lance_uri(split))
+        )
+        assert split_dataset.count_rows() == 4
+    assert uri_to_local_path(fake_r2_remote, spec.r2.stats_uri()).is_file()
 
 
 def test_finalize_wds_raises_on_empty_train_split(fake_r2_remote: Path, tmp_path: Path) -> None:

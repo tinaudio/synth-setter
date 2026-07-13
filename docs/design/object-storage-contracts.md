@@ -314,7 +314,8 @@ if storage.exists(spec.storage.complete_marker()):
 
 Current examples:
 
-- `finalize_lance()` calls `r2_io.to_s3_uri()` and `r2_io.r2_storage_options()`.
+- `finalize_lance()` downloads shard directories and uploads completed split
+  directories through rclone.
 - `validate_shard` opens each Lance shard from `s3://`.
 - `add_embeddings` and `add_mp3_audio` treat `s3://` as this project's R2.
 

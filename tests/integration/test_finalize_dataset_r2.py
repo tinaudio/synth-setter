@@ -110,7 +110,7 @@ def staged_lance_spec() -> Iterator[DatasetSpec]:
 
     Mirrors :func:`staged_wds_spec` but for the Lance directory format: the shard
     is a dataset directory uploaded under ``spec.r2.shard_uri`` so ``finalize_lance``
-    exercises the real direct-from-R2 streaming read.
+    exercises the real rclone directory download and upload path.
 
     :yields DatasetSpec: A frozen spec whose train split is one 4-row Lance shard
         already present on R2 at ``spec.r2.shard_uri(spec.shards[0])``.
@@ -162,12 +162,11 @@ def staged_lance_spec() -> Iterator[DatasetSpec]:
 def test_finalize_lance_writes_split_and_stats_to_real_r2(
     staged_lance_spec: DatasetSpec,
 ) -> None:
-    """``finalize_lance`` streams the R2 shard into a split dataset written back to R2.
+    """``finalize_lance`` stages the R2 shard before uploading a split dataset.
 
-    Exercises the direct-R2 path end-to-end: read shard from R2 via
-    ``storage_options`` → stream stats → write the train split dataset straight
-    to its ``s3://`` URI → upload ``stats.npz``. The split reads back with the
-    pinned on-disk version and the expected row count.
+    Exercises the local-finalize path end-to-end: rclone download → local stats
+    and split write → rclone directory upload → ``stats.npz`` upload. The split
+    reads back with the pinned on-disk version and the expected row count.
 
     :param staged_lance_spec: Fixture-provided spec whose train shard dataset is on R2.
     """
