@@ -1,9 +1,11 @@
 _target_: synth_setter.data.torchsynth_datamodule.TorchSynthDataModule
 sample_rate: 44_100
-signal_length: 4_410
+# 4 s of audio so envelope/LFO params are audible (identifiability, PR #1810 experiments).
+signal_length: 176_400
 midi_pitch: 60
 num_params: 76
 train_val_test_sizes: [100_000, 10_000, 10_000]
 train_val_test_seeds: [123, 456, 789]
 batch_size: 32
 num_workers: 4
+resample_train_per_epoch: false

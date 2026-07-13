@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 import torch
-from torch.utils.data import RandomSampler, SequentialSampler
+from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 
 from synth_setter.data.torchsynth_datamodule import (
     _PARAM_CLAMP_EPS,
@@ -143,6 +143,80 @@ def test_datamodule_loaders_shuffle_only_training_rows() -> None:
     assert isinstance(datamodule.train_dataloader().sampler, RandomSampler)
     assert isinstance(datamodule.val_dataloader().sampler, SequentialSampler)
     assert isinstance(datamodule.test_dataloader().sampler, SequentialSampler)
+
+
+def _train_epoch_rows(loader: DataLoader) -> list[tuple[float, ...]]:
+    """Collect one epoch of train parameter rows as hashable tuples.
+
+    :param loader: Batched loader over one online split.
+    :returns: One flattened parameter tuple per batch, in iteration order.
+    """
+    return [tuple(params.flatten().tolist()) for _, params, *_ in loader]
+
+
+def test_datamodule_resample_train_per_epoch_yields_fresh_rows_each_epoch() -> None:
+    """With resampling on, every epoch draws parameter rows never seen in prior epochs."""
+    datamodule = TorchSynthDataModule(
+        signal_length=4_410,
+        train_val_test_sizes=(2, 1, 1),
+        batch_size=1,
+        num_workers=0,
+        resample_train_per_epoch=True,
+    )
+    datamodule.setup("fit")
+    loader = datamodule.train_dataloader()
+    first_epoch = _train_epoch_rows(loader)
+    second_epoch = _train_epoch_rows(loader)
+
+    assert len(first_epoch) == len(second_epoch) == 2
+    assert set(first_epoch).isdisjoint(second_epoch)
+
+
+def test_datamodule_resample_train_per_epoch_sequence_reproducible_across_runs() -> None:
+    """Two identically seeded runs draw the same fresh-row sequence over two epochs."""
+
+    def two_epoch_rows() -> list[tuple[float, ...]]:
+        datamodule = TorchSynthDataModule(
+            signal_length=4_410,
+            train_val_test_sizes=(2, 1, 1),
+            batch_size=1,
+            num_workers=0,
+            resample_train_per_epoch=True,
+        )
+        datamodule.setup("fit")
+        loader = datamodule.train_dataloader()
+        return _train_epoch_rows(loader) + _train_epoch_rows(loader)
+
+    assert two_epoch_rows() == two_epoch_rows()
+
+
+def test_datamodule_resample_train_per_epoch_default_repeats_rows_each_epoch() -> None:
+    """Without the option, every epoch revisits the same fixed train rows."""
+    datamodule = TorchSynthDataModule(
+        signal_length=4_410,
+        train_val_test_sizes=(2, 1, 1),
+        batch_size=1,
+        num_workers=0,
+    )
+    datamodule.setup("fit")
+    loader = datamodule.train_dataloader()
+
+    assert set(_train_epoch_rows(loader)) == set(_train_epoch_rows(loader))
+
+
+def test_datamodule_resample_train_per_epoch_keeps_val_rows_fixed() -> None:
+    """Resampling applies to the train split only; validation stays deterministic."""
+    datamodule = TorchSynthDataModule(
+        signal_length=4_410,
+        train_val_test_sizes=(1, 2, 1),
+        batch_size=1,
+        num_workers=0,
+        resample_train_per_epoch=True,
+    )
+    datamodule.setup("fit")
+    loader = datamodule.val_dataloader()
+
+    assert _train_epoch_rows(loader) == _train_epoch_rows(loader)
 
 
 @pytest.mark.slow

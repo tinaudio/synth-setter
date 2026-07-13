@@ -11,9 +11,11 @@ experiment_name: torchsynth
 run_name: ffn
 tags: [torchsynth]
 
+# val/loss has a high irreducible floor (near-inaudible params); the audio-domain
+# metric reflects actual inversion quality — see PR #1810 experiment log.
 callbacks:
   model_checkpoint:
-    monitor: val/loss
+    monitor: val/lsd
   early_stopping: null
 
 model:

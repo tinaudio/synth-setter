@@ -10,14 +10,14 @@ import math
 import sys
 import threading
 import types
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from functools import cache, partial
 from typing import TYPE_CHECKING, TypeAlias, cast
 
 import torch
 from lightning import LightningDataModule
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, Sampler
 
 from synth_setter.data.ot import regular_collate_fn
 
@@ -381,6 +381,38 @@ class TorchSynthDataset(Dataset[TorchSynthItem]):
         return render_fn(params), params, render_fn
 
 
+class _FreshEpochSampler(Sampler[int]):
+    """Yield a never-repeating index block per epoch so each epoch draws fresh rows.
+
+    Indices map to i.i.d. seeded parameter rows, so sequential blocks are already unordered draws
+    and need no within-epoch shuffle.
+    """
+
+    def __init__(self, num_samples: int) -> None:
+        """Bind the per-epoch block length.
+
+        :param num_samples: Number of indices yielded per epoch.
+        """
+        self.num_samples = num_samples
+        self._epoch = 0
+
+    def __iter__(self) -> Iterator[int]:
+        """Advance to the next index block.
+
+        :returns: Iterator over this epoch's fresh logical indices.
+        """
+        start = self._epoch * self.num_samples
+        self._epoch += 1
+        return iter(range(start, start + self.num_samples))
+
+    def __len__(self) -> int:
+        """Return the per-epoch sample count.
+
+        :returns: Configured block length.
+        """
+        return self.num_samples
+
+
 class TorchSynthDataModule(LightningDataModule):
     """Serve train, validation, and test audio rendered locally by TorchSynth."""
 
@@ -394,6 +426,7 @@ class TorchSynthDataModule(LightningDataModule):
         train_val_test_seeds: tuple[int, int, int] = (123, 456, 789),
         batch_size: int = 32,
         num_workers: int = 0,
+        resample_train_per_epoch: bool = False,
     ) -> None:
         """Configure the online TorchSynth train, validation, and test splits.
 
@@ -405,6 +438,8 @@ class TorchSynthDataModule(LightningDataModule):
         :param train_val_test_seeds: Base seeds for the train, validation, and test splits.
         :param batch_size: DataLoader batch size.
         :param num_workers: DataLoader worker process count.
+        :param resample_train_per_epoch: Draw fresh train rows every epoch (truly online
+            training) instead of revisiting one fixed split; validation and test stay fixed.
         """
         super().__init__()
         self.sample_rate = sample_rate
@@ -415,6 +450,7 @@ class TorchSynthDataModule(LightningDataModule):
         self.train_val_test_seeds = train_val_test_seeds
         self.batch_size = batch_size
         self.num_workers = num_workers
+        self.resample_train_per_epoch = resample_train_per_epoch
 
     def setup(self, stage: str | None = None) -> None:
         """Build only the splits required for the requested Lightning stage.
@@ -449,12 +485,17 @@ class TorchSynthDataModule(LightningDataModule):
             )
 
     def _loader(
-        self, dataset: Dataset[TorchSynthItem], *, shuffle: bool = False
+        self,
+        dataset: Dataset[TorchSynthItem],
+        *,
+        shuffle: bool = False,
+        sampler: Sampler[int] | None = None,
     ) -> DataLoader[TorchSynthBatch]:
         """Wrap one online split with the shared tuple collator.
 
         :param dataset: Online split to load.
-        :param shuffle: Whether to shuffle logical row indices.
+        :param shuffle: Whether to shuffle logical row indices; exclusive with ``sampler``.
+        :param sampler: Index sampler overriding the default order.
         :returns: Batched online data loader.
         """
         # persistent_workers / pin_memory are unset — per-epoch worker Voice rebuilds
@@ -465,16 +506,19 @@ class TorchSynthDataModule(LightningDataModule):
                 dataset,
                 batch_size=self.batch_size,
                 shuffle=shuffle,
+                sampler=sampler,
                 num_workers=self.num_workers,
                 collate_fn=regular_collate_fn,
             ),
         )
 
     def train_dataloader(self) -> DataLoader[TorchSynthBatch]:
-        """Return the shuffled online training loader.
+        """Return the online training loader, shuffled or freshly resampled per epoch.
 
         :returns: Batched online training data.
         """
+        if self.resample_train_per_epoch:
+            return self._loader(self.train, sampler=_FreshEpochSampler(len(self.train)))
         return self._loader(self.train, shuffle=True)
 
     def val_dataloader(self) -> DataLoader[TorchSynthBatch]:
