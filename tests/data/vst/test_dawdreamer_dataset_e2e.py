@@ -58,6 +58,24 @@ def _dawdreamer_experiment_config() -> RenderConfig:
 
 @pytest.mark.slow
 @pytest.mark.requires_vst
+def test_dawdreamer_parameter_map_matches_live_plugin() -> None:
+    """The committed DawDreamer identities match the preset-loaded plugin."""
+    if TEST_SYNTH != "surge_xt":
+        pytest.skip("DawDreamer parameter map fixture uses the Surge XT plugin")
+
+    config = _dawdreamer_experiment_config()
+    DawDreamerRenderer(
+        str(Path(PLUGIN_PATH).resolve()),
+        config.sample_rate,
+        config.channels,
+        config.signal_duration_seconds,
+        str(Path(TEST_PRESET_PATH).resolve()),
+        parameter_map=load_param_map(Path("src/synth_setter/data/vst/surge_xt_param_map.json")),
+    )
+
+
+@pytest.mark.slow
+@pytest.mark.requires_vst
 def test_dawdreamer_dataset_audio_is_similar_to_pedalboard(tmp_path: Path) -> None:
     """Both hosts generate a real dataset row with perceptually similar audio.
 
