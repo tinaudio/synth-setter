@@ -68,6 +68,9 @@ def classifier_fixture() -> ModuleType:
         "2> /tmp/errlog gh pr create --title x --body y",
         "< /dev/null gh pr create --title x --body y",
         ">> /tmp/log gh pr create --title x --body y",
+        # A fd-dup substring inside a quoted arg must not swallow the quote.
+        'gh pr "create" --title "release notes 2>&1" --body "desc"',
+        'gh pr create --title "quoted 2>&1" --body y',
         "! gh pr create --title x --body y",
         "if gh pr create --title x --body y; then :; fi",
         "if false; then :; else gh pr create --title x --body y; fi",
@@ -158,6 +161,7 @@ def test_classify_direct_invocation_returns_direct(classifier: ModuleType, comma
         # A bare shell executing piped text whose upstream carries the recipe.
         "echo 'gh pr create --title x --body y' | bash",
         "printf 'gh pr create --title x --body y\\n' | sh",
+        "echo 'gh pr create --title x --body y' |& bash",
     ],
 )
 def test_classify_shell_wrapped_invocation_returns_wrapped(
@@ -183,6 +187,8 @@ def test_classify_shell_wrapped_invocation_returns_wrapped(
         "gh pr list",
         "ls -la",
         "",
+        # A quoted fd-dup mention must not desync the lexer into a false block.
+        'git commit -m "silence gh pr create noise 2>&1"',
         # Documented non-goals (see module docstring): non-shell interpreters,
         # process substitution, and unmentioned pipes into a shell.
         "python3 -c \"import os; os.system('gh pr create -t x -b y')\"",

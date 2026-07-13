@@ -59,6 +59,7 @@ _OPTIONS_WITH_VALUES = {
     "env": frozenset({"-C", "--chdir", "-S", "--split-string", "-u", "--unset"}),
     "exec": frozenset({"-a"}),
     "nice": frozenset({"-n", "--adjustment"}),
+    "stdbuf": frozenset({"-i", "--input", "-o", "--output", "-e", "--error"}),
     "sudo": frozenset(
         {
             "-C",
@@ -83,7 +84,6 @@ _OPTIONS_WITH_VALUES = {
             "--user",
         }
     ),
-    "stdbuf": frozenset({"-i", "--input", "-o", "--output", "-e", "--error"}),
     "time": frozenset({"-f", "--format", "-o", "--output"}),
     "timeout": frozenset({"-k", "--kill-after", "-s", "--signal"}),
     "xargs": frozenset({"-a", "-d", "-E", "-I", "-L", "-n", "-P", "-s"}),
@@ -100,7 +100,9 @@ _REDIRECTION_RE = re.compile(r"^\d*[<>]")
 _BARE_REDIRECTION_RE = re.compile(r"^\d*[<>]+$")
 # Fused fd-duplication redirections (`2>&1`, `>&2`, `0<&3`): the embedded `&`
 # would otherwise open a bogus segment, hiding the executable that follows.
-_FD_DUP_RE = re.compile(r"\d*[<>]&[^\s;|&()<>`{}]*")
+# The target class stops at quotes so blanking a `2>&1` that sits inside a
+# quoted string can't swallow the closing quote and desync the lexer.
+_FD_DUP_RE = re.compile(r"""\d*[<>]&[^\s;|&()<>`{}'"]*""")
 
 
 def _normalize_ansi_c_quotes(command: str) -> str:

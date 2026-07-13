@@ -60,11 +60,10 @@
 #   Registered in the agent's settings (e.g. .claude/settings.json) as a
 #   PreToolUse hook on Bash. The handler-level `if: "Bash(gh pr create *)"`
 #   guard is unreliable for PreToolUse hooks (see PR #1090 history), so this
-#   script re-validates the command itself. Matching is delegated to
-#   `agent/_shared/pr_command_classifier.py`: `direct` invocations run the
-#   gates below, `wrapped` (shell-smuggled) and `unparsable` commands that
-#   mention `gh pr create` are blocked outright, and everything else —
-#   including quoted prose mentioning the recipe — exits 0 silently.
+#   script re-validates the command itself via
+#   `agent/_shared/pr_command_classifier.py::classify` — see that module's
+#   docstring for the direct/wrapped/unparsable/"" contract. `direct` runs the
+#   gates below; `wrapped`/`unparsable` block; everything else exits 0.
 # =============================================================================
 set -euo pipefail
 
@@ -89,10 +88,8 @@ PR_TITLE_GATE="${PR_TITLE_GATE:-block}"
 INPUT=$(cat)
 COMMAND=$(jq -r '.tool_input.command // empty' 2>/dev/null <<<"$INPUT" || true)
 
-# Fast path: every gated invocation carries all three substrings somewhere
-# (`gh\s+pr\s+create` would miss `gh -R owner/repo pr create`). Pure-bash
-# check so the mktemp + python3 classifier spawn is skipped for the
-# overwhelming majority of Bash tool calls.
+# Fast substring pre-check skips the mktemp + python3 classifier spawn for
+# most commands; `gh\s+pr\s+create` alone would miss `gh -R owner/repo pr create`.
 if [[ "$COMMAND" != *gh* || "$COMMAND" != *pr* || "$COMMAND" != *create* ]]; then
   exit 0
 fi
@@ -173,7 +170,10 @@ case "$PR_CREATE_MODE" in
     block "cannot parse a command that mentions gh pr create — run it directly" \
       "$WRAPPER_HELP"
     ;;
-  *) exit 0 ;;
+  "") exit 0 ;;
+  # Any unrecognized classifier output fails closed rather than waving the
+  # command through — the never-fall-open invariant holds by construction here.
+  *) block "unexpected classifier output '${PR_CREATE_MODE}' — treating as gated" "$WRAPPER_HELP" ;;
 esac
 
 # Extract the PR's head branch from `--head <b>` / `-H <b>` / `--head=<b>`.
