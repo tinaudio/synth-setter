@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783889623822,
+  "lastUpdate": 1783986274480,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -8394,6 +8394,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.025592923164367676,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7620b2ce96cd29a29efb0721ec2f16e6647599f4",
+          "message": "feat(data): render torchsynth samples online (#1810)\n\n* feat(data): render torchsynth samples online\n\nAdd an online TorchSynth data module plus train and eval experiments so generated audio stays on the execution machine. Exercise CPU training, GPU rendering, split isolation, and checkpoint validation.\\n\\nRefs #1757\n\n* fix(data): harden online torchsynth contracts\n\nConfigure pitch, isolate split seeds, reuse voices by render geometry and device, enforce numeric bounds, and add focused CPU/GPU plus overfit coverage.\\n\\nRefs #1757\n\n* refactor(data): address torchsynth review findings\n\nSerialize cached voice mutation, tighten loader types and test structure, and pin deterministic learning bounds for the train-to-eval smoke.\\n\\nRefs #1757\n\n* refactor(data): make torchsynth rendering reentrant\n\nEncapsulate cached voices with their locks, cover concurrent rendering, name split construction inputs, and keep focused contracts out of CLI suites.\\n\\nRefs #1757\n\n* refactor(tests): preserve RunIf helper contract\n\nKeep the established shared decorator unchanged and localize the type narrowing to touched entrypoint suites.\\n\\nRefs #1757\n\n* style(data): finalize torchsynth review cleanup\n\nApply authoritative formatting and name deterministic smoke thresholds.\\n\\nRefs #1757\n\n* style(data): format torchsynth renderer\n\nUse the repository's pinned Ruff formatter and document the cached renderer's locking contract.\\n\\nRefs #1757\n\n* refactor(data): use dataclass for renderer state\n\nFollow the repository's internal typed-container convention for cached TorchSynth voice ownership.\\n\\nRefs #1757\n\n* refactor(data): inline torchsynth parameter selection\n\nKeep native parameter ordering visible at its use sites and remove a redundant helper contract.\\n\\nRefs #1757\n\n* style(data): centralize inferable torchsynth modules\n\nKeep keyboard exclusion in one named domain constant and apply the pinned formatter.\\n\\nRefs #1757\n\n* fix(tests): keep train entrypoint config behind fixture\n\nMove TorchSynth Hydra composition into conftest so test_train exercises only the composed entrypoint contract.\\n\\nRefs #1757\n\n* style(tests): tighten torchsynth fixture contract\n\nUse the requested one-line opening contract while retaining the fixture-boundary rationale required for stable formatting and pydoclint fields.\\n\\nRefs #1757\n\n* fix(ci): keep cancelled checks out of auto-approve failures\n\n* Revert \"fix(ci): keep cancelled checks out of auto-approve failures\"\n\nThis reverts commit 8b36a72e57954169b6e180973f300bff3b343e49.\n\n* fix(config): run TorchSynth FFN without compilation\n\n* refactor(data): address PR #1810 review — dedup param logic, harden torchsynth tests\n\nAdvisory review response (no blockers). Source cleanups:\n\n- Extract `_inferable_params()` so the \"which params are inferable\" contract is\n  single-sourced across `render_torchsynth`, `TorchSynthDataset.__init__`, and\n  `setup` — this also removes the duplicate `get_parameters()` call in the render\n  path (iterate the already-fetched mapping).\n- Name the param-sanitization magic numbers (`_NAN_PARAM_FILL`, `_PARAM_CLAMP_EPS`)\n  to capture the strictly-inside-(0,1) rationale.\n- Document why the shim uses `setattr` (pyright rejects direct assignment on a\n  dynamic ModuleType).\n\nTest hardening:\n\n- Mark the real 10-epoch train+eval test `@pytest.mark.slow` so it leaves the\n  default fast loop, matching its siblings.\n- Reframe `_TORCHSYNTH_HELD_OUT_LOSS_MAX`: the single-sample-overfit run can't\n  demonstrate generalization (mean-predictor MSE 1/12 ≈ 0.083 already beats it;\n  observed val/loss ≈ 0.2 sat a hair under the old 0.21), so it is now a\n  documented no-divergence guard, not a brittle learning bound.\n- Broaden the split-seed disjointness test to several indices per split.\n- Add a `setup()` num_params-mismatch regression test.\n- Seed the previously unseeded multirow render params.\n\n* test(data): promote deferred torchsynth review items — coverage + determinism\n\nFollow-up to the PR #1810 review, addressing four items previously deferred:\n\n- ml-test:475 — add a `num_workers>0` dataloader iteration test (slow) so the\n  production multiprocessing render path (per-worker cache / PL-shim re-import,\n  CPU workers feeding a GPU trainer) is exercised, not just num_workers=0.\n- tdd-impl:296 — add a `setup(\"test\")` + `test_dataloader()` smoke test so the\n  test-split branch and loader method are directly covered.\n- ml-test:100 — seed `_torchsynth_initial_loss` via `seed_everything(..., workers=True)`,\n  matching train()'s own seeding path (torch/numpy/python) so the \"initial\" model\n  is training's true start regardless of what model init draws from.\n- ml-pipeline:180 — add a cross-process determinism test (slow): render fixed\n  params in a fresh interpreter and assert byte-identical audio, pinning that the\n  reproducible=False val/test audio survives a torchsynth upgrade rather than\n  silently shifting. Confirmed deterministic across fresh RNG states.\n\n* docs(data): reference tracking issue #1820 at deferred render-perf sites\n\nAdd in-code pointers to #1820 (torchsynth online-render throughput &\nrenderer-cache lifecycle) at the three spots the deferred items touch:\nthe `_make_renderer` cache, the per-sample render / render_fn passthrough\nin `__getitem__`, and the loader's unset persistent_workers/pin_memory.\n\n* feat(data): pin TorchSynth param identity and ranges in a verified PARAM_SPEC\n\nImplements the ParamSpec proposal from #1757 (issue comment): the previous\ncontract with torchsynth's parameter layout was a count-only check (76), which\nwould let a torchsynth bump that renames, reorders, or re-ranges a parameter —\nwhile keeping the count — silently mislabel the model's positional targets.\n\n- TorchSynthParam frozen dataclass: module, name, minimum, maximum, curve,\n  symmetric.\n- PARAM_SPEC: checked-in snapshot of all 78 Voice params in get_parameters()\n  order (76 inferable + 2 keyboard); INFERABLE_SPEC / NUM_PARAMS derived, so\n  the 76 literal is no longer magic.\n- _verify_voice_matches_spec: element-by-element comparison (identity exact,\n  range floats via math.isclose), raising with the exact drifted parameter;\n  called once per run in setup(), off the render hot path.\n- render_torchsynth looks params up by (module, name) in INFERABLE_SPEC order;\n  TorchSynthDataset no longer builds a Voice just to count params;\n  _NON_INFERABLE_MODULES/_inferable_params replaced by the spec.\n- Drift test (live spec == PARAM_SPEC) and a perturbed-spec mismatch test.\n  Sanity-verified: perturbing one PARAM_SPEC range fails both the drift test\n  and setup() naming the exact parameter; reverting restores green.\n\nto_human() denormalization from the proposal is deliberately deferred (YAGNI —\nno consumer yet); the pinned ranges make it a drop-in later.\n\n* fix(data): raise on non-finite TorchSynth params instead of coercing\n\nnan_to_num(0.5) conflated two conditions with opposite semantics. Finite\nout-of-range values are expected — the flow-matching sampler's raw preds flow\nunconstrained into synth_fn (metrics.py LogSpectralDistance.update) — and\nclamping into (0, 1) is the correct render contract for them. NaN/Inf are\nnever legitimate: model divergence would silently render midpoint-0.5 audio\nand report a plausible val/lsd, and a data-pipeline NaN would be masked\nentirely (rand-drawn params are finite by construction). clamp alone also\nswallowed ±Inf by mapping it to the bounds.\n\nParams now mirror the existing finite-audio-out guard: finite in (any range,\nclamped), finite out; NaN/Inf raise naming the contract. Adds the raise test\nand an out-of-range-clamps-equivalence test, closing the review's untested-\nsanitization finding ([tdd-impl:211]) with a stricter contract.\n\n* fix(data): address TorchSynth review feedback\n\nTighten renderer contracts, keep dataset labels aligned with rendered parameters, and expand focused data-module coverage. Simplify the shared RunIf typing shim and remove brittle test calibration.\\n\\nAddresses review comments on PR #1810.\n\n* feat(data): online per-epoch resampling, val/lsd checkpointing, 4 s audio\n\nImplements recommendations 1-3 from the PR #1810 experiment log (rising\nval/loss root-caused to memorization of a fixed finite train split on a\ntask where ~85 % of the MSE target is near-inaudible at 0.1 s):\n\n- resample_train_per_epoch (default off): a train-only sampler yields a\n  never-repeating index block per epoch, so every epoch draws fresh\n  deterministic parameter rows and overfitting a fixed split becomes\n  structurally impossible; val/test stay fixed\n- checkpoint on val/lsd instead of val/loss: param-space MSE has a high\n  irreducible floor, the audio-domain metric reflects inversion quality\n- default signal_length to 4 s (176,400 @ 44.1 kHz) so envelope/LFO\n  params become audible; CPU test fixtures pin the old 0.1 s geometry\n\nRefs #1757\n\n* feat(data): enable per-epoch train resampling in the torchsynth experiment\n\nE5 (E2's exact 2 k geometry + resample_train_per_epoch=true) reproduces\nthe E4 result at fixed-split scale: val/loss falls monotonically to\n0.0797 (below the 0.0833 mean-predictor baseline E2 never crossed),\ntrain tracks val with no memorization gap, and best val/lsd improves\n6.48 -> 6.04.\n\nRefs #1757\n\n* fix(data): pin torchsynth ffn experiment to 0.1 s until #1848 lands\n\nE6 at the composed 4 s default was memory-killed instantiating the\nmodel: ResidualEncoder ends in LazyLinear(in_dim // 2) over flattened\nconv features, so the raw-waveform head scales O(in_dim**2) — 23 M\nparams at 0.1 s but ~36.9 B (~147 GB) at 4 s. Keep the 4 s datamodule\ndefault (identifiability) and pin the experiment's signal_length to the\ninstantiable 0.1 s geometry; the spectral front-end (#1848) is the path\nto training the FFN on 4 s audio.\n\nRefs #1757\n\n* internal-fix(data): correct torchsynth O(L^2) comment to name the FFT head\n\nThe FFN already conditions on abs(rfft(x)) inside ResidualEncoder — the\nsame magnitude-FFT flow as ksin/kosc/fm — so 'raw-waveform head' misnamed\nthe blocker. The quadratic scaling comes from the single global spectrum\nkeeping length-proportional resolution into LazyLinear(in_dim // 2); the\nfix is a time-frequency front-end, tracked in #1848.\n\nRefs #1757\n\n* test(data): address codex review round on torchsynth tests\n\n- type _epoch_param_rows loader as DataLoader[TorchSynthBatch]\n- hoist two_epoch_rows to module-private _two_epoch_resampled_rows\n  (nested function closed over no test-local state)\n- tighten the held-out-bound comment to its smoke-guard semantic\n- drop the production num_workers literal from the forked-worker\n  test docstring, keeping the durable rationale\n\nRefs #1757",
+          "timestamp": "2026-07-13T19:11:48-04:00",
+          "tree_id": "6b1ee1ceeb4d435b79ecbcfb6308f14032aec50e",
+          "url": "https://github.com/tinaudio/synth-setter/commit/7620b2ce96cd29a29efb0721ec2f16e6647599f4"
+        },
+        "date": 1783986272978,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.670076370239258,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.406319120130502,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.02440454065799713,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.021819591522216797,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.400871992111206,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 14.487095763416676,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.049776077270508,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.505917722336017,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.025862500071525574,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.024495840072631836,
             "unit": "1-cos"
           },
           {
