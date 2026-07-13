@@ -350,6 +350,9 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     python3 python3-dev
 COPY --from=ghcr.io/astral-sh/uv:0.11.2 /uv /uvx /usr/local/bin/
 ENV VIRTUAL_ENV=/venv/main
+# Keep the managed interpreter outside root's home so the non-root runtime
+# user can read its standard library through /venv/main.
+ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python
 # HYDRA_FULL_ERROR=1 — full Python traceback instead of Hydra's trimmed output
 # PYTHONDONTWRITEBYTECODE=1 — no .pyc files written in the image
 # PYTHONFAULTHANDLER=1 — C/CUDA segfault traceback (pairs with HYDRA_FULL_ERROR)
@@ -649,11 +652,14 @@ RUN export HOME="/home/${USERNAME}" \
  && codex --version \
  && pi --version
 
-# Hermes uses its upstream installer to create a per-user virtual environment
-# and launcher. Browser automation is intentionally omitted from this image.
+# Hermes owns a separate per-user venv; pin and verify its upstream installer.
+ARG HERMES_GIT_REF=v2026.7.7.2
+ARG HERMES_GIT_SHA=9de9c25f620ff7f1ce0fd5457d596052d5159596
+ARG HERMES_INSTALLER_SHA256=a93c65b01ea392e179cf872e182bd01a2b65c0c15f17833e9f9569033ef10e07
 RUN export HOME="/home/${USERNAME}" \
- && curl -fsSL https://hermes-agent.nousresearch.com/install.sh -o /tmp/hermes-install.sh \
- && bash /tmp/hermes-install.sh --skip-browser \
+ && curl -fsSL "https://raw.githubusercontent.com/NousResearch/hermes-agent/${HERMES_GIT_REF}/scripts/install.sh" -o /tmp/hermes-install.sh \
+ && echo "${HERMES_INSTALLER_SHA256}  /tmp/hermes-install.sh" | sha256sum -c - \
+ && env -u VIRTUAL_ENV bash /tmp/hermes-install.sh --branch "${HERMES_GIT_REF}" --commit "${HERMES_GIT_SHA}" --skip-browser \
  && rm /tmp/hermes-install.sh \
  && hermes --version
 
