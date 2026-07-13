@@ -4,11 +4,10 @@
 to decide whether the review gate applies. The classification contract:
 
 - ``direct`` — the command executes ``gh pr create`` as its own argv, possibly
-  behind benign prefixes (``env``, ``sudo``, ``nice``, ``time``, ``timeout``,
-  ``nohup``, ``setsid``, ``stdbuf``, ``xargs``, ``exec``, ``command``,
-  ``builtin``, leading ``VAR=val`` assignments) or ``gh`` global flags — the
-  gate's sentinel checks apply. Heredoc bodies split into ordinary command
-  lines, so a smuggled heredoc invocation also lands here.
+  behind a benign prefix (:data:`_PREFIXES`: ``sudo``, ``env``, ``timeout``,
+  ...), leading ``VAR=val`` assignments or redirections, or ``gh`` global
+  flags — the gate's sentinel checks apply. Heredoc bodies split into
+  ordinary command lines, so a smuggled heredoc invocation also lands here.
 - ``wrapped`` — the creation is smuggled through a re-parsing layer the gate
   cannot see the argv of: ``bash -c``, ``eval``, ``env -S``, a here-string, or
   piped stdin into a bare shell — the gate blocks outright.
@@ -95,6 +94,8 @@ _PUNCTUATION = ";|&(){}`"
 _ANSI_C_QUOTE_RE = re.compile(r"\$'((?:\\.|[^'\\])*)'")
 # Keep in sync with the bash fallback grep in agent/hooks/pre-pr-review-gate.sh.
 _MENTIONS_PR_CREATE_RE = re.compile(r"gh\s+pr\s+create")
+# A redirection word at command position (`2>/dev/null`, `>out`, `<in`).
+_REDIRECTION_RE = re.compile(r"^\d*[<>]")
 
 
 def _normalize_ansi_c_quotes(command: str) -> str:
@@ -193,6 +194,8 @@ def _executable_index(tokens: list[str]) -> int:
             index += 1
         elif "=" in token and not token.startswith("="):
             index += 1
+        elif _REDIRECTION_RE.match(token):
+            index += 1
         elif os.path.basename(token) in _PREFIXES:
             prefix = os.path.basename(token)
             index += 1
@@ -209,11 +212,15 @@ def _executable_index(tokens: list[str]) -> int:
 
 
 def _env_split_string(tokens: list[str]) -> str | None:
-    """Return the payload of an ``env -S/--split-string`` invocation, if any.
+    """Return the command an ``env -S/--split-string`` invocation would exec.
+
+    GNU ``env -S`` splits the string into words and appends the remaining
+    command-line arguments, so the trailing tokens are folded into the
+    returned payload.
 
     :param tokens: One segment's tokens.
-    :returns: The split-string payload, or ``None`` when the segment is not an
-        ``env -S`` call.
+    :returns: The reconstructed command text, or ``None`` when the segment is
+        not an ``env -S`` call.
     """
     index = _skip_assignments(tokens)
     if index >= len(tokens) or os.path.basename(tokens[index]) != "env":
@@ -225,7 +232,7 @@ def _env_split_string(tokens: list[str]) -> str | None:
         if option == "--":
             return None
         if option in {"-S", "--split-string"} and index < len(tokens):
-            return tokens[index]
+            return " ".join(tokens[index:])
         if option in _OPTIONS_WITH_VALUES["env"]:
             index += 1
     return None
@@ -283,6 +290,33 @@ def _has_pr_create_subcommand(rest: list[str]) -> bool:
     )
 
 
+def _shell_reads_hidden_script(
+    segments: list[tuple[str, list[str]]], position: int, index: int
+) -> bool:
+    """Report whether a shell segment executes script text hidden from the argv.
+
+    Checks explicit payloads (``-c``, here-strings, heredoc remainders) and,
+    for a bare shell after a pipe, whether any upstream token mentions the
+    recipe — the piped text itself is statically unknowable, so fail closed.
+
+    :param segments: All (separator, tokens) pairs of the command.
+    :param position: Index of the shell's segment within ``segments``.
+    :param index: Index of the shell executable within its segment's tokens.
+    :returns: True when the shell would run smuggled ``gh pr create`` text.
+    """
+    separator, tokens = segments[position]
+    payloads = _shell_script_payloads(tokens[index + 1 :])
+    for payload in payloads:
+        if _pr_create_mode(payload):
+            return True
+    if not payloads and separator in {"|", "|&"}:
+        upstream_tokens: list[str] = []
+        for _, upstream_segment in segments[:position]:
+            upstream_tokens.extend(upstream_segment)
+        return bool(_MENTIONS_PR_CREATE_RE.search(" ".join(upstream_tokens)))
+    return False
+
+
 def _pr_create_mode(command: str) -> str:  # noqa: DOC502
     """Classify one (possibly nested) command string.
 
@@ -292,28 +326,19 @@ def _pr_create_mode(command: str) -> str:  # noqa: DOC502
     :raises ValueError: If the command cannot be lexed.
     """
     segments = _command_segments(command)
-    for position, (separator, tokens) in enumerate(segments):
+    for position, (_, tokens) in enumerate(segments):
+        # env -S re-splits its string argument, hiding words from top-level
+        # tokenization — a re-parsing wrapper like eval.
         split_string = _env_split_string(tokens)
-        if split_string is not None:
-            nested_mode = _pr_create_mode(split_string)
-            if nested_mode:
-                return nested_mode
+        if split_string is not None and _pr_create_mode(split_string):
+            return "wrapped"
         index = _executable_index(tokens)
         if index >= len(tokens):
             continue
         executable = os.path.basename(tokens[index])
         if executable in _SHELLS:
-            payloads = _shell_script_payloads(tokens[index + 1 :])
-            for payload in payloads:
-                if _pr_create_mode(payload):
-                    return "wrapped"
-            # A bare shell after a pipe executes whatever the upstream prints;
-            # statically unknowable, so fail closed when the recipe is visible
-            # anywhere upstream.
-            if not payloads and separator in {"|", "|&"}:
-                upstream = " ".join(token for _, seg in segments[:position] for token in seg)
-                if _MENTIONS_PR_CREATE_RE.search(upstream):
-                    return "wrapped"
+            if _shell_reads_hidden_script(segments, position, index):
+                return "wrapped"
         elif executable == "eval":
             # eval re-parses its (joined) arguments as shell code.
             if _pr_create_mode(" ".join(tokens[index + 1 :])):

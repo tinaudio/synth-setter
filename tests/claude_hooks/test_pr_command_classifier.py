@@ -59,6 +59,8 @@ def classifier_fixture() -> ModuleType:
         "stdbuf -o0 gh pr create --title x --body y",
         "timeout 30 gh pr create --title x --body y",
         "xargs gh pr create --title x --body y",
+        "2>/dev/null gh pr create --title x --body y",
+        ">/tmp/out gh pr create --title x --body y",
         "! gh pr create --title x --body y",
         "if gh pr create --title x --body y; then :; fi",
         "if false; then :; else gh pr create --title x --body y; fi",
@@ -131,6 +133,12 @@ def test_classify_direct_invocation_returns_direct(classifier: ModuleType, comma
         "env bash -c 'gh pr create --title x --body y'",
         "sudo bash -c 'gh pr create --title x --body y'",
         "env -S \"bash -c 'gh pr create --title x --body y'\"",
+        # GNU env -S appends the remaining argv to the split string, and the
+        # split string hides its own words from top-level tokenization.
+        "env -S 'gh pr create --title x --body y'",
+        'env -S "gh" pr create --title x --body y',
+        "env -S gh pr create --title x --body y",
+        'env -S "gh pr" create --title x --body y',
         'bash <<< "gh pr create --title x --body y"',
         "bash <<<'gh pr create --title x --body y'",
         # eval re-parses its argument string, hiding the real argv.

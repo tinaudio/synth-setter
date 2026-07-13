@@ -356,6 +356,48 @@ def test_gate_ignores_command_merely_mentioning_pr_create(gate_repo: Path, comma
     assert result.returncode == 0, (command, result.returncode, result.stderr)
 
 
+def _broken_python3_env(tmp_path: Path) -> dict[str, str]:
+    """Build an env overlay whose ``python3`` always fails (exit 3).
+
+    :param tmp_path: Directory the stub interpreter is written to.
+    :returns: Env overlay prepending the stub's dir to ``PATH``.
+    """
+    bin_dir = tmp_path / "broken-bin"
+    bin_dir.mkdir()
+    stub = bin_dir / "python3"
+    stub.write_text("#!/usr/bin/env bash\necho 'stub interpreter down' >&2\nexit 3\n")
+    stub.chmod(0o755)
+    return {"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
+
+
+def test_gate_classifier_failure_blocks_command_mentioning_pr_create(
+    gate_repo: Path, tmp_path: Path
+) -> None:
+    """A classifier that cannot run fails closed on the gated surface (exit 2).
+
+    :param gate_repo: Primary-checkout root the gate runs from.
+    :param tmp_path: pytest tmp dir for the broken python3 stub.
+    """
+    command = "gh pr create --title x --body y"
+    result = _run_gate(gate_repo, command, env=_broken_python3_env(tmp_path))
+
+    assert result.returncode == 2, (result.returncode, result.stderr)
+    assert "internal classifier error" in result.stderr
+
+
+def test_gate_classifier_failure_ignores_unrelated_command(
+    gate_repo: Path, tmp_path: Path
+) -> None:
+    """A classifier that cannot run stays out of unrelated commands' way (exit 0).
+
+    :param gate_repo: Primary-checkout root the gate runs from.
+    :param tmp_path: pytest tmp dir for the broken python3 stub.
+    """
+    result = _run_gate(gate_repo, "ls -la", env=_broken_python3_env(tmp_path))
+
+    assert result.returncode == 0, (result.returncode, result.stderr)
+
+
 def test_gate_blocks_unparsable_pr_create_mention(gate_repo: Path) -> None:
     """A command mentioning ``gh pr create`` that defeats the lexer blocks (exit 2).
 
