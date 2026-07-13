@@ -174,7 +174,10 @@ case "$PR_CREATE_MODE" in
   "") exit 0 ;;
   # Any unrecognized classifier output fails closed rather than waving the
   # command through — the never-fall-open invariant holds by construction here.
-  *) block "unexpected classifier output '${PR_CREATE_MODE}' — treating as gated" "$WRAPPER_HELP" ;;
+  *)
+    block "unexpected classifier output '${PR_CREATE_MODE}' — treating as gated" \
+      "$WRAPPER_HELP"
+    ;;
 esac
 
 # Extract the PR's head branch from `--head <b>` / `-H <b>` / `--head=<b>`.

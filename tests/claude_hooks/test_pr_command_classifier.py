@@ -157,6 +157,10 @@ def test_classify_direct_invocation_returns_direct(classifier: ModuleType, comma
         "env -S'gh pr create --title x --body y'",
         "env -Sgh pr create --title x --body y",
         "sudo env --split-string='gh pr create --title x --body y'",
+        # -S bundled behind no-value short flags (-v debug, -i ignore-env).
+        "env -vSgh pr create --title x --body y",
+        "env -iSgh pr create --title x --body y",
+        "env -vS 'gh pr create --title x --body y'",
         'bash <<< "gh pr create --title x --body y"',
         "bash <<<'gh pr create --title x --body y'",
         # eval re-parses its argument string, hiding the real argv.
@@ -203,6 +207,9 @@ def test_classify_shell_wrapped_invocation_returns_wrapped(
         # env -S argv reconstruction must not gate unrelated split strings.
         "env -S 'python3 script.py' arg1 arg2",
         "env --split-string='python3 script.py'",
+        # -u consumes the rest of the cluster as the var to unset, so `Sgh`
+        # is a variable name and env runs the `pr` command, not gh.
+        "env -uSgh pr create --title x --body y",
         # `gh` here is the redirection target; bash runs `pr create ...`.
         "> gh pr create --title x --body y",
     ],

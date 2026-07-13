@@ -224,6 +224,32 @@ def _executable_index(tokens: list[str], *, stop_at: str = "") -> int:
     return index
 
 
+# env short options that consume the rest of a single-dash cluster as their
+# value, so an `S` after them is that value's text, not a split-string flag.
+_ENV_VALUE_SHORT = frozenset({"C", "u"})
+
+
+def _bundled_split_string(cluster: str) -> str | None:
+    """Return the in-cluster text after a bundled ``env -S``, or ``None``.
+
+    Scans a single-dash short-option cluster (``-vSgh``) left to right and
+    stops at ``S`` — everything after it is the split value (``""`` when ``S``
+    ends the cluster and the value is the following token) — or at a
+    value-taking option that would consume the rest first.
+
+    :param cluster: A single-dash option token (``-...``, not ``--...``).
+    :returns: The value text after ``S`` (``""`` if ``S`` is last), or ``None``
+        when the cluster carries no usable ``-S``.
+    """
+    for position in range(1, len(cluster)):
+        char = cluster[position]
+        if char == "S":
+            return cluster[position + 1 :]
+        if char in _ENV_VALUE_SHORT:
+            return None
+    return None
+
+
 def _env_split_string(tokens: list[str]) -> str | None:
     """Return the command an ``env -S/--split-string`` invocation would exec.
 
@@ -246,12 +272,17 @@ def _env_split_string(tokens: list[str]) -> str | None:
             return None
         # GNU env appends the argv after the split value, so trailing tokens
         # fold into the payload for every spelling.
-        if option in {"-S", "--split-string"} and index < len(tokens):
+        if option == "--split-string" and index < len(tokens):
             return " ".join(tokens[index:])
         if option.startswith("--split-string="):
             return " ".join([option[len("--split-string=") :], *tokens[index:]])
-        if option.startswith("-S") and not option.startswith("--"):
-            return " ".join([option[len("-S") :], *tokens[index:]])
+        if not option.startswith("--"):
+            bundled = _bundled_split_string(option)
+            if bundled is not None:
+                # Non-empty → value starts in-cluster; empty → the following
+                # tokens are the value.
+                trailing = " ".join(tokens[index:])
+                return f"{bundled} {trailing}".strip() if bundled else trailing
         if option in _OPTIONS_WITH_VALUES["env"]:
             index += 1
     return None
