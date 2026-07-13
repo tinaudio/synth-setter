@@ -96,6 +96,8 @@ _ANSI_C_QUOTE_RE = re.compile(r"\$'((?:\\.|[^'\\])*)'")
 _MENTIONS_PR_CREATE_RE = re.compile(r"gh\s+pr\s+create")
 # A redirection word at command position (`2>/dev/null`, `>out`, `<in`).
 _REDIRECTION_RE = re.compile(r"^\d*[<>]")
+# A bare redirection operator (`>`, `2>`, `>>`) whose target is the NEXT word.
+_BARE_REDIRECTION_RE = re.compile(r"^\d*[<>]+$")
 # Fused fd-duplication redirections (`2>&1`, `>&2`, `0<&3`): the embedded `&`
 # would otherwise open a bogus segment, hiding the executable that follows.
 _FD_DUP_RE = re.compile(r"\d*[<>]&[^\s;|&()<>`{}]*")
@@ -203,6 +205,8 @@ def _executable_index(tokens: list[str], *, stop_at: str = "") -> int:
             index += 1
         elif _REDIRECTION_RE.match(token):
             index += 1
+            if _BARE_REDIRECTION_RE.match(token):
+                index += 1  # the spaced redirect-target word
         elif os.path.basename(token) in _PREFIXES:
             prefix = os.path.basename(token)
             if prefix == stop_at:

@@ -65,9 +65,9 @@ def classifier_fixture() -> ModuleType:
         "sudo 2>/dev/null gh pr create --title x --body y",
         "2>&1 gh pr create --title x --body y",
         "1>&2 gh pr create --title x --body y",
-        # Over-block pin: bash would treat `gh` as the redirection target and
-        # run `pr create ...`; misread as direct, fails toward gating.
-        "> gh pr create --title x --body y",
+        "2> /tmp/errlog gh pr create --title x --body y",
+        "< /dev/null gh pr create --title x --body y",
+        ">> /tmp/log gh pr create --title x --body y",
         "! gh pr create --title x --body y",
         "if gh pr create --title x --body y; then :; fi",
         "if false; then :; else gh pr create --title x --body y; fi",
@@ -191,6 +191,8 @@ def test_classify_shell_wrapped_invocation_returns_wrapped(
         "cat script.sh | bash",
         # env -S argv reconstruction must not gate unrelated split strings.
         "env -S 'python3 script.py' arg1 arg2",
+        # `gh` here is the redirection target; bash runs `pr create ...`.
+        "> gh pr create --title x --body y",
     ],
 )
 def test_classify_unrelated_command_returns_empty(classifier: ModuleType, command: str) -> None:
