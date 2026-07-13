@@ -132,6 +132,7 @@ helper_stderr=$(mktemp)
 trap 'rm -f "$helper_stderr"' EXIT
 
 # shellcheck disable=SC2016  # intentional: no expansion wanted in the help block
+# Keep the recipe line in sync with the one in BLOCK_HELP above.
 readonly WRAPPER_HELP='Run the canonical recipe as a single direct command — no bash -c, env -S,
 sudo/exec relays, heredocs, or command substitution around it:
 

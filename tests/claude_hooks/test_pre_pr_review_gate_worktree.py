@@ -390,10 +390,16 @@ def test_gate_classifier_failure_ignores_unrelated_command(
 ) -> None:
     """A classifier that cannot run stays out of unrelated commands' way (exit 0).
 
+    The command carries the ``gh``/``pr``/``create`` substrings so it clears
+    the fast pre-check and actually reaches the classifier-failure branch, but
+    lacks the ``gh pr create`` adjacency the block grep keys on — so the
+    fail-open arm, not the fail-closed arm, must run.
+
     :param gate_repo: Primary-checkout root the gate runs from.
     :param tmp_path: pytest tmp dir for the broken python3 stub.
     """
-    result = _run_gate(gate_repo, "ls -la", env=_broken_python3_env(tmp_path))
+    command = "echo gh; echo pr; echo create"
+    result = _run_gate(gate_repo, command, env=_broken_python3_env(tmp_path))
 
     assert result.returncode == 0, (result.returncode, result.stderr)
 

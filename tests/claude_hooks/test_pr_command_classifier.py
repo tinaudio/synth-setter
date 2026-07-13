@@ -244,10 +244,7 @@ def test_classify_unparsable_command_without_mention_returns_empty(
 
 
 def test_classify_ansi_c_quoted_escapes_stay_quoted(classifier: ModuleType) -> None:
-    """ANSI-C ``$'...'`` payloads with escapes don't unbalance the lexer.
-
-    An escaped quote inside a ``$'...'`` span must not desynchronize the
-    lexer's quote tracking.
+    """ANSI-C ``$'...'`` escapes stay balanced even when they contain an escaped quote.
 
     :param classifier: The loaded classifier module.
     """
