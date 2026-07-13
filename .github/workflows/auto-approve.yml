@@ -145,7 +145,7 @@ jobs:
 
           # --- Condition 1: PR is not a draft ---
           if [ "$IS_DRAFT" = "true" ]; then
-            echo "result=failure" >> "$GITHUB_OUTPUT"
+            echo "result=neutral" >> "$GITHUB_OUTPUT"
             echo "reason=PR is a draft" >> "$GITHUB_OUTPUT"
             exit 0
           fi

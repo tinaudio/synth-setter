@@ -7,6 +7,20 @@ from pathlib import Path
 WORKFLOW_PATH = Path(".github/workflows/auto-approve.yml")
 
 
+def test_draft_prs_keep_auto_approve_status_neutral(project_root: Path) -> None:
+    """Draft PRs must wait instead of publishing a failing auto-approve status.
+
+    :param project_root: Repository root containing the workflow under test.
+    """
+    workflow = (project_root / WORKFLOW_PATH).read_text()
+    draft_block = workflow.split("# --- Condition 1: PR is not a draft ---", maxsplit=1)[1].split(
+        "# --- Condition 1b:", maxsplit=1
+    )[0]
+
+    assert 'echo "result=neutral" >> "$GITHUB_OUTPUT"' in draft_block
+    assert 'echo "result=failure" >> "$GITHUB_OUTPUT"' not in draft_block
+
+
 def test_cancelled_checks_keep_auto_approve_status_neutral(project_root: Path) -> None:
     """Cancelled checks must wait for a rerun instead of showing a red status.
 
