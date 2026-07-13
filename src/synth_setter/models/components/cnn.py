@@ -4,6 +4,9 @@ from typing import Literal
 
 import torch
 import torch.nn as nn
+import torchaudio
+
+from synth_setter.data.vst.shapes import MEL_N_MELS, mel_hop_length, mel_n_fft
 
 
 class ResidualMLPBlock(nn.Module):
@@ -190,3 +193,82 @@ class ResidualEncoder(nn.Module):
         Z = self.conv_net(X)
         Z = Z.view(Z.shape[0], -1)
         return self.net(Z)
+
+
+class LogMelEncoder(nn.Module):
+    """Encode fixed-length waveforms with log-mel features and a pooled 2-D CNN.
+
+    :param in_dim: Expected waveform length in samples.
+    :param hidden_dim: Channel count in the first convolutional block.
+    :param out_dim: Width of the returned embedding.
+    :param sample_rate: Waveform sample rate in Hz.
+    :param num_blocks: Number of convolution and pooling blocks.
+    :param kernel_size: Height and width of each convolutional kernel.
+    :param norm: Normalization applied after each convolution.
+    """
+
+    def __init__(
+        self,
+        in_dim: int,
+        hidden_dim: int,
+        out_dim: int,
+        sample_rate: int,
+        num_blocks: int = 4,
+        kernel_size: int = 3,
+        norm: Literal["bn", "ln"] = "bn",
+    ) -> None:
+        super().__init__()
+        self.in_dim = in_dim
+        self.mel = torchaudio.transforms.MelSpectrogram(
+            sample_rate=sample_rate,
+            n_fft=mel_n_fft(sample_rate),
+            hop_length=mel_hop_length(sample_rate),
+            n_mels=MEL_N_MELS,
+            window_fn=torch.hamming_window,
+            power=2.0,
+            norm="slaney",
+            mel_scale="slaney",
+        )
+
+        conv_layers: list[nn.Module] = []
+        in_channels = 1
+        for block_index in range(num_blocks):
+            out_channels = hidden_dim * 2**block_index
+            normalizer: nn.Module
+            if norm == "bn":
+                normalizer = nn.BatchNorm2d(out_channels)
+            else:
+                normalizer = nn.GroupNorm(1, out_channels)
+            conv_layers.extend(
+                [
+                    nn.Conv2d(
+                        in_channels,
+                        out_channels,
+                        kernel_size=kernel_size,
+                        padding=kernel_size // 2,
+                    ),
+                    nn.GELU(),
+                    normalizer,
+                    nn.MaxPool2d(2, ceil_mode=True),
+                ]
+            )
+            in_channels = out_channels
+
+        self.conv_net = nn.Sequential(*conv_layers)
+        self.pool = nn.AdaptiveAvgPool2d(1)
+        self.projection = nn.Linear(in_channels, out_dim)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Encode a mono waveform batch into fixed-width embeddings.
+
+        :param x: Waveforms shaped ``(batch, samples)``.
+        :returns: Embeddings shaped ``(batch, out_dim)``.
+        :raises ValueError: If the waveform shape differs from the configured input length.
+        """
+        if x.ndim != 2 or x.shape[-1] != self.in_dim:
+            raise ValueError(
+                f"Expected waveform shape (batch, {self.in_dim}), got {tuple(x.shape)}"
+            )
+        mel = torch.log1p(self.mel(x)).unsqueeze(1)
+        features = self.conv_net(mel)
+        return self.projection(self.pool(features).flatten(1))

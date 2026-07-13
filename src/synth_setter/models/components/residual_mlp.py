@@ -5,7 +5,7 @@ from typing import Literal
 import torch
 import torch.nn as nn
 
-from synth_setter.models.components.cnn import ResidualEncoder
+from synth_setter.models.components.cnn import LogMelEncoder, ResidualEncoder
 from synth_setter.models.components.transformer import SinusoidalEncoding
 
 
@@ -189,7 +189,20 @@ class SpectralResidualMLP(ResidualMLP):
 
 
 class CNNResidualMLP(nn.Module):
-    """Spectrum-fronted ResidualEncoder followed by a ResidualMLP trunk."""
+    """Predict parameters with a spectral CNN encoder and residual MLP trunk.
+
+    :param in_dim: Expected waveform length in samples.
+    :param channels: Channel count in the encoder's first convolutional block.
+    :param encoder_blocks: Number of convolution and downsampling blocks.
+    :param trunk_blocks: Number of residual MLP blocks.
+    :param hidden_dim: Encoder output and MLP hidden width.
+    :param out_dim: Number of predicted parameters.
+    :param kernel_size: Encoder convolution kernel size.
+    :param norm: Encoder normalization type.
+    :param frontend: Spectral representation computed from each waveform.
+    :param sample_rate: Waveform sample rate in Hz; required for ``log_mel``.
+    :raises ValueError: If ``frontend`` is unsupported or log-mel has no sample rate.
+    """
 
     def __init__(
         self,
@@ -201,12 +214,29 @@ class CNNResidualMLP(nn.Module):
         out_dim: int = 16,
         kernel_size: int = 7,
         norm: Literal["bn", "ln"] = "bn",
+        frontend: Literal["global_fft", "log_mel"] = "global_fft",
+        sample_rate: int | None = None,
     ):
         super().__init__()
 
-        self.encoder = ResidualEncoder(
-            in_dim, channels, hidden_dim, encoder_blocks, kernel_size, norm
-        )
+        if frontend == "global_fft":
+            self.encoder = ResidualEncoder(
+                in_dim, channels, hidden_dim, encoder_blocks, kernel_size, norm
+            )
+        elif frontend != "log_mel":
+            raise ValueError(f"Unsupported frontend: {frontend}")
+        elif sample_rate is None:
+            raise ValueError("sample_rate is required for the log_mel frontend")
+        else:
+            self.encoder = LogMelEncoder(
+                in_dim=in_dim,
+                hidden_dim=channels,
+                out_dim=hidden_dim,
+                sample_rate=sample_rate,
+                num_blocks=encoder_blocks,
+                kernel_size=kernel_size,
+                norm=norm,
+            )
         self.trunk = ResidualMLP(hidden_dim, hidden_dim, out_dim, trunk_blocks)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
