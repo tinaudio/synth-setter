@@ -7,6 +7,20 @@ from pathlib import Path
 WORKFLOW_PATH = Path(".github/workflows/auto-approve.yml")
 
 
+def test_auto_approve_rechecks_pr_updates(project_root: Path) -> None:
+    """PR creation and pushes must evaluate the workflow from the PR branch.
+
+    :param project_root: Repository root containing the workflow under test.
+    """
+    workflow = (project_root / WORKFLOW_PATH).read_text()
+
+    pull_request_block = workflow.split("  pull_request:\n", maxsplit=1)[1].split(
+        "  workflow_dispatch:", maxsplit=1
+    )[0]
+
+    assert "types: [opened, synchronize, ready_for_review]" in pull_request_block
+
+
 def test_draft_prs_keep_auto_approve_status_neutral(project_root: Path) -> None:
     """Draft PRs must wait instead of publishing a failing auto-approve status.
 
