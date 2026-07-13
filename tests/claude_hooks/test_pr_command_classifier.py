@@ -43,11 +43,26 @@ def classifier_fixture() -> ModuleType:
     return _load_module()
 
 
+# A subset of these commands is exercised end-to-end through the gate hook in
+# test_pre_pr_review_gate_worktree.py — keep new bypass variants in sync there.
 @pytest.mark.parametrize(
     "command",
     [
         "gh pr create --title x --body y",
         "  gh pr create --title x --body y",
+        "echo preflight\ngh pr create --title x --body y",
+        "! gh pr create --title x --body y",
+        "if gh pr create --title x --body y; then :; fi",
+        "if false; then :; else gh pr create --title x --body y; fi",
+        "if false; then :; elif gh pr create --title x --body y; then :; fi",
+        "until gh pr create --title x --body y; do :; done",
+        # Heredoc bodies split into ordinary command segments, so the smuggled
+        # command classifies as the direct invocation it is.
+        "bash <<EOF\ngh pr create --title x --body y\nEOF",
+        "bash - <<'EOF'\ngh pr create --title x --body y\nEOF",
+        # Over-block pin: `-I{}` shreds into brace segments, stranding a
+        # `gh pr create` segment. Wrong reading of xargs, safe direction.
+        "xargs -I{} gh pr create --title x --body y",
         "/usr/bin/gh pr create --title x --body y",
         "./gh pr create --title x --body y",
         "gh \\\npr create --title x --body y",
@@ -85,11 +100,19 @@ def test_classify_direct_invocation_returns_direct(classifier: ModuleType, comma
     assert classifier.classify(command) == "direct"
 
 
+# A subset of these commands is exercised end-to-end through the gate hook in
+# test_pre_pr_review_gate_worktree.py — keep new bypass variants in sync there.
 @pytest.mark.parametrize(
     "command",
     [
         "bash -c 'gh pr create --title x --body y'",
         "bash -lc 'gh pr create --title x --body y'",
+        "bash -c 'echo hi\ngh pr create --title x --body y'",
+        # Over-block pins: a `-c`-bearing flag cluster (not valid bash) and a
+        # `-c` value that itself starts with a dash both read as wrapping.
+        # Wrong readings of the argv, but they fail toward blocking.
+        "bash -norc 'gh pr create --title x --body y'",
+        "bash -c '-x value with a c' 'gh pr create --title x --body y'",
         "bash -c -- 'gh pr create --title x --body y'",
         "bash -c $'gh pr create --title x --body y'",
         "bash --command 'gh pr create --title x --body y'",
@@ -103,8 +126,6 @@ def test_classify_direct_invocation_returns_direct(classifier: ModuleType, comma
         "env -S \"bash -c 'gh pr create --title x --body y'\"",
         'bash <<< "gh pr create --title x --body y"',
         "bash <<<'gh pr create --title x --body y'",
-        "bash <<EOF\ngh pr create --title x --body y\nEOF",
-        "bash - <<'EOF'\ngh pr create --title x --body y\nEOF",
     ],
 )
 def test_classify_shell_wrapped_invocation_returns_wrapped(
@@ -130,6 +151,10 @@ def test_classify_shell_wrapped_invocation_returns_wrapped(
         "gh pr list",
         "ls -la",
         "",
+        # Documented non-goal: non-shell interpreters can execute anything;
+        # the classifier only models the sh-family wrappers (see module doc).
+        "python3 -c \"import os; os.system('gh pr create -t x -b y')\"",
+        "perl -e 'system(qq{gh pr create -t x -b y})'",
     ],
 )
 def test_classify_unrelated_command_returns_empty(classifier: ModuleType, command: str) -> None:
@@ -177,16 +202,29 @@ def test_classify_ansi_c_quoted_escapes_stay_quoted(classifier: ModuleType) -> N
     assert classifier.classify("bash -c $'gh pr create -t \\'x\\''") == "wrapped"
 
 
-def test_cli_prints_mode_and_exits_zero(classifier: ModuleType) -> None:
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ("gh pr create -t x -b y", "direct"),
+        ("bash -c 'gh pr create -t x -b y'", "wrapped"),
+        ('gh pr create --title "unterminated', "unparsable"),
+        ("ls -la", ""),
+    ],
+)
+def test_cli_prints_mode_and_exits_zero(
+    classifier: ModuleType, command: str, expected: str
+) -> None:
     """The CLI prints the classification for argv[1] and returns 0.
 
     :param classifier: The loaded classifier module.
+    :param command: Bash command passed as the CLI's single argument.
+    :param expected: Mode string the CLI must print for it.
     """
     buffer = io.StringIO()
     with redirect_stdout(buffer):
-        rc = classifier._main(["pr_command_classifier.py", "gh pr create -t x -b y"])
+        rc = classifier._main(["pr_command_classifier.py", command])
     assert rc == 0
-    assert buffer.getvalue().strip() == "direct"
+    assert buffer.getvalue().strip() == expected
 
 
 def test_cli_without_argument_exits_two(classifier: ModuleType) -> None:

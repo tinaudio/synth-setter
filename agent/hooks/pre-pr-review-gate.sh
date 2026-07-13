@@ -126,30 +126,36 @@ block() {
 helper_stderr=$(mktemp)
 trap 'rm -f "$helper_stderr"' EXIT
 
+# shellcheck disable=SC2016  # intentional: no expansion wanted in the help block
+readonly WRAPPER_HELP='Run the canonical recipe as a single direct command — no bash -c, env -S,
+sudo/exec relays, heredocs, or command substitution around it:
+
+  gh pr create --title "..." --body "..."  # REVIEW_FULL=.agent-reviews/repo-review-full-no-comments.<sha>.md
+
+The gate must see the real argv to validate the review sentinel and title.'
+
 # Classify the command via the shared module: `direct` / `wrapped` /
 # `unparsable` / "" on stdout, diagnostics to helper_stderr, python3's rc.
 classify_pr_command() {
   python3 "$CLASSIFIER_PY" "$1" 2>"$helper_stderr"
 }
 
-# A classifier that cannot run at all (missing python3/module) fails closed
-# for commands on the gated surface and stays out of the way for the rest —
-# blocking every Bash command on an infra failure would brick the session.
-if PR_CREATE_MODE=$(classify_pr_command "$COMMAND"); then
-  :
-else
-  classifier_rc=$?
-  classifier_msg=$(cat "$helper_stderr")
+# Missing python3/module fails closed only on the gated surface — blocking
+# every Bash command on an infra failure would brick the session.
+PR_CREATE_MODE=$(classify_pr_command "$COMMAND") && classifier_rc=0 || classifier_rc=$?
+if [[ "$classifier_rc" -ne 0 ]]; then
+  classifier_msg=$(<"$helper_stderr") || true
+  # Keep in sync with _MENTIONS_PR_CREATE_RE in agent/_shared/pr_command_classifier.py.
   if grep -qE 'gh[[:space:]]+pr[[:space:]]+create' <<<"$COMMAND"; then
-    block "internal classifier error (exit ${classifier_rc}) on a command mentioning gh pr create: ${classifier_msg:-no stderr captured}"
+    block "internal classifier error (exit ${classifier_rc}) on a command mentioning gh pr create: ${classifier_msg:-no stderr captured}" "$WRAPPER_HELP"
   fi
   exit 0
 fi
 
 case "$PR_CREATE_MODE" in
   direct) ;;
-  wrapped) block "gh pr create must run directly, not through a shell wrapper" ;;
-  unparsable) block "cannot parse a command that mentions gh pr create — run gh pr create directly, no wrappers" ;;
+  wrapped) block "gh pr create must run directly, not through a shell wrapper" "$WRAPPER_HELP" ;;
+  unparsable) block "cannot parse a command that mentions gh pr create — run gh pr create directly, no wrappers" "$WRAPPER_HELP" ;;
   *) exit 0 ;;
 esac
 

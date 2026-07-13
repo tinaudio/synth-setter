@@ -14,6 +14,10 @@ to decide whether the review gate applies. The classification contract:
 - ``""`` — anything else, including quoted prose that merely mentions
   ``gh pr create`` — not gated.
 
+Explicit non-goal: non-shell interpreters (``python3 -c``, ``perl -e``,
+``find -exec``, ...) can execute anything and are not modeled — the gate is an
+honor-system floor over the sh-family wrappers, not a sandbox.
+
 Stdlib-only so the bash gate can run ``python3 pr_command_classifier.py
 "<command>"`` without project deps on PATH.
 """
@@ -27,9 +31,12 @@ import shlex
 import sys
 from collections.abc import Sequence
 
-SHELLS = frozenset({"sh", "bash", "dash", "ksh", "zsh"})
-PREFIXES = frozenset({"builtin", "command", "env", "eval", "exec", "nice", "sudo", "time"})
-OPTIONS_WITH_VALUES = {
+_SHELLS = frozenset({"sh", "bash", "dash", "ksh", "zsh"})
+_PREFIXES = frozenset({"builtin", "command", "env", "eval", "exec", "nice", "sudo", "time"})
+# Reserved words (plus pipeline negation) that may precede the executable at
+# command position: `if gh pr create`, `! gh pr create`, `else gh pr create`.
+_RESERVED_WORDS = frozenset({"if", "then", "elif", "else", "while", "until", "do", "!"})
+_OPTIONS_WITH_VALUES = {
     "env": frozenset({"-C", "--chdir", "-S", "--split-string", "-u", "--unset"}),
     "exec": frozenset({"-a"}),
     "nice": frozenset({"-n", "--adjustment"}),
@@ -63,6 +70,7 @@ OPTIONS_WITH_VALUES = {
 # opens a segment exactly like `;` or `(` — quoted backticks stay in-token.
 _PUNCTUATION = ";|&(){}`"
 _ANSI_C_QUOTE_RE = re.compile(r"\$'((?:\\.|[^'\\])*)'")
+# Keep in sync with the bash fallback grep in agent/hooks/pre-pr-review-gate.sh.
 _MENTIONS_PR_CREATE_RE = re.compile(r"gh\s+pr\s+create")
 
 
@@ -72,7 +80,7 @@ def _normalize_ansi_c_quotes(command: str) -> str:
     Escapes are decoded (``\\'`` no longer unbalances the rewritten string)
     and the result re-quoted with :func:`shlex.quote`.
 
-    :param command: Raw Bash command text.
+    :param command: Bash command text that may carry ``$'...'`` spans.
     :returns: The command with each ANSI-C span replaced by a safe equivalent.
     """
     return _ANSI_C_QUOTE_RE.sub(
@@ -84,13 +92,16 @@ def _normalize_ansi_c_quotes(command: str) -> str:
 def _command_segments(command: str) -> list[list[str]]:  # noqa: DOC502
     """Split a command into token lists, one per shell control segment.
 
-    :param command: Raw Bash command text.
-    :returns: Token lists split on ``;``, ``|``, ``&``, ``()``/``{}``, and backticks; comments
-        dropped.
+    :param command: Bash command text (may span multiple lines).
+    :returns: Token lists split on ``;``, ``|``, ``&``, ``()``/``{}``, backticks, and unescaped
+        newlines; comments dropped.
     :raises ValueError: If the command cannot be lexed (unbalanced quoting).
     """
     command = command.replace("\\\n", "")
     command = _normalize_ansi_c_quotes(command)
+    # An unescaped newline separates commands like `;`. The real newline is
+    # kept (comments must still end at it); the `;` splits the segment.
+    command = command.replace("\n", "\n;")
     lexer = shlex.shlex(command, posix=True, punctuation_chars=_PUNCTUATION)
     lexer.whitespace_split = True
     lexer.commenters = "#"
@@ -130,7 +141,7 @@ def _option_end(tokens: list[str], index: int, prefix: str) -> int:
     :param prefix: The prefix command the options belong to (``sudo``, ...).
     :returns: Index of the first non-option token.
     """
-    takes_value = OPTIONS_WITH_VALUES.get(prefix, frozenset())
+    takes_value = _OPTIONS_WITH_VALUES.get(prefix, frozenset())
     while index < len(tokens) and tokens[index].startswith("-"):
         option = tokens[index]
         index += 1
@@ -144,23 +155,30 @@ def _option_end(tokens: list[str], index: int, prefix: str) -> int:
 def _executable_index(tokens: list[str]) -> int:
     """Return the index of the token that names the executable actually run.
 
-    Skips leading assignments, benign prefix commands with their options and
-    (for ``env``) its own ``VAR=val`` arguments, and ``then``/``do`` keywords.
+    Skips, in any order: reserved words at command position (``if``, ``else``,
+    ``!``, ...), ``VAR=val`` assignments, and benign prefix commands with their
+    options and (for ``env``) its own ``VAR=val`` arguments.
 
     :param tokens: One segment's tokens.
     :returns: Index of the effective executable (may be ``len(tokens)``).
     """
-    index = _skip_assignments(tokens)
-    while index < len(tokens) and os.path.basename(tokens[index]) in PREFIXES:
-        prefix = os.path.basename(tokens[index])
-        index += 1
-        if prefix == "builtin":
-            continue
-        index = _option_end(tokens, index, prefix)
-        if prefix == "env":
-            index = _skip_assignments(tokens, index, empty_name_ok=True)
-    while index < len(tokens) and tokens[index] in {"then", "do"}:
-        index += 1
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token in _RESERVED_WORDS:
+            index += 1
+        elif "=" in token and not token.startswith("="):
+            index += 1
+        elif os.path.basename(token) in _PREFIXES:
+            prefix = os.path.basename(token)
+            index += 1
+            if prefix == "builtin":
+                continue
+            index = _option_end(tokens, index, prefix)
+            if prefix == "env":
+                index = _skip_assignments(tokens, index, empty_name_ok=True)
+        else:
+            break
     return index
 
 
@@ -182,7 +200,7 @@ def _env_split_string(tokens: list[str]) -> str | None:
             return None
         if option in {"-S", "--split-string"} and index < len(tokens):
             return tokens[index]
-        if option in OPTIONS_WITH_VALUES["env"]:
+        if option in _OPTIONS_WITH_VALUES["env"]:
             index += 1
     return None
 
@@ -224,7 +242,8 @@ def _shell_script_payloads(arguments: list[str]) -> list[str]:
 def _pr_create_mode(command: str) -> str:  # noqa: DOC502
     """Classify one (possibly nested) command string.
 
-    :param command: Bash command text.
+    :param command: Bash command text — the full tool call or an extracted
+        wrapper payload being re-classified recursively.
     :returns: ``direct``, ``wrapped``, or ``""``.
     :raises ValueError: If the command cannot be lexed.
     """
@@ -238,7 +257,7 @@ def _pr_create_mode(command: str) -> str:  # noqa: DOC502
         if index >= len(tokens):
             continue
         executable = os.path.basename(tokens[index])
-        if executable in SHELLS:
+        if executable in _SHELLS:
             for payload in _shell_script_payloads(tokens[index + 1 :]):
                 if _pr_create_mode(payload):
                     return "wrapped"
@@ -254,12 +273,13 @@ def classify(command: str) -> str:
     mentions ``gh pr create`` (the gate blocks it) and ``""`` otherwise, so a
     parser gap can only over-block the gated surface, never fall open.
 
-    :param command: Raw Bash command text.
+    :param command: Full, untrusted Bash tool-call text (may be multi-line).
     :returns: ``direct``, ``wrapped``, ``unparsable``, or ``""``.
     """
     try:
         return _pr_create_mode(command)
-    except (ValueError, RecursionError):
+    except (ValueError, RecursionError) as exc:
+        sys.stderr.write(f"pr_command_classifier: cannot lex command: {exc}\n")
         return "unparsable" if _MENTIONS_PR_CREATE_RE.search(command) else ""
 
 

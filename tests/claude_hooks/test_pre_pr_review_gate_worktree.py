@@ -244,6 +244,8 @@ def gate_repo_fixture(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return primary
 
 
+# End-to-end mirror of the classifier unit tests in
+# test_pr_command_classifier.py — keep new bypass variants in sync there.
 @pytest.mark.parametrize(
     "command",
     [
@@ -251,6 +253,10 @@ def gate_repo_fixture(tmp_path_factory: pytest.TempPathFactory) -> Path:
         "/usr/bin/gh pr create --title x --body y",
         "./gh pr create --title x --body y",
         "gh \\\npr create --title x --body y",
+        "echo preflight\ngh pr create --title x --body y",
+        "! gh pr create --title x --body y",
+        "if false; then :; else gh pr create --title x --body y; fi",
+        "bash <<EOF\ngh pr create --title x --body y\nEOF",
         "`gh pr create --title x --body y`",
         "OUT=`gh pr create --title x --body y`",
         "/usr/bin/env gh pr create --title x --body y",
@@ -283,6 +289,8 @@ def test_gate_blocks_direct_pr_create_missing_review_path(gate_repo: Path, comma
     assert "missing REVIEW_FULL" in result.stderr
 
 
+# End-to-end mirror of the classifier unit tests in
+# test_pr_command_classifier.py — keep new bypass variants in sync there.
 @pytest.mark.parametrize(
     "command",
     [
@@ -307,7 +315,6 @@ def test_gate_blocks_direct_pr_create_missing_review_path(gate_repo: Path, comma
         "env -S \"bash -c 'gh pr create --title x --body y'\"",
         'bash <<< "gh pr create --title x --body y"',
         "bash <<<'gh pr create --title x --body y'",
-        "bash <<EOF\ngh pr create --title x --body y\nEOF",
     ],
 )
 def test_gate_blocks_shell_wrapped_pr_create(gate_repo: Path, command: str) -> None:
