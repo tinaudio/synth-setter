@@ -16,9 +16,9 @@ hold. They are AND-ed; failing any one means not ready.
    reports `MERGEABLE`. `UNKNOWN` (GitHub still computing) and `CONFLICTING`
    both fail this gate; keep polling `UNKNOWN` until it resolves.
 3. **Every open review comment has an inline reply** — every unresolved review
-   thread (human reviewers AND Copilot) has either a code change linked by
-   commit SHA or an inline reply with justification. Drive this with
-   `/pr-review-resolver`.
+   thread (human reviewers, Copilot, and the Claude CI review) has either a
+   code change linked by commit SHA or an inline reply with justification.
+   Drive this with `/pr-review-resolver`.
 4. **Copilot has produced no new comments since the last push** — Copilot
    re-reviews after every push, usually within ~60s. Both the inline-comments
    endpoint and the top-level reviews endpoint must be clear.

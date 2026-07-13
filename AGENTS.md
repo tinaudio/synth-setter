@@ -175,7 +175,8 @@ unintended shell expansion. A `PreToolUse` hook
   while gates 1-2 (CI green, `mergeable`) fail for the branch's open PR, and
   points back here for gates 3-4 (`PR_READINESS_GATE`: `block` default /
   `warn` / `off`).
-- **Always reply inline** on each open PR review comment (humans + Copilot),
+- **Always reply inline** on each open PR review comment (humans, Copilot, and
+  the Claude CI review),
   with a fix-commit SHA or justification. Use `/pr-review-resolver`.
 - **Advisory rewakes carry an origin-HEAD stamp.** The `doc-drift`
   PostToolUse hook runs its headless agent in a detached worktree and

@@ -18,7 +18,7 @@ on:
   pull_request_review:
     types: [submitted]
   pull_request:
-    types: [ready_for_review]
+    types: [opened, synchronize, ready_for_review]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -145,7 +145,7 @@ jobs:
 
           # --- Condition 1: PR is not a draft ---
           if [ "$IS_DRAFT" = "true" ]; then
-            echo "result=failure" >> "$GITHUB_OUTPUT"
+            echo "result=neutral" >> "$GITHUB_OUTPUT"
             echo "reason=PR is a draft" >> "$GITHUB_OUTPUT"
             exit 0
           fi

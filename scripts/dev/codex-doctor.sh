@@ -3,6 +3,11 @@ set -euo pipefail
 
 main() {
   local repo_root failures=0 missing_skills=0 skill
+  local codex_path codex_real codex_version
+  local codex_report=""
+  local version_failures=0
+  local codex_reals=$'\n' codex_versions=$'\n'
+  local codex_real_count=0 codex_version_count=0
   repo_root=$(git rev-parse --show-toplevel)
   # has_skill probes repo-relative paths (agent/skills, .agents/skills), so run
   # the checks from the repo root regardless of where the doctor was invoked.
@@ -16,6 +21,37 @@ main() {
 
   if command -v codex >/dev/null 2>&1; then
     printf 'OK: codex CLI found\n'
+    while IFS= read -r codex_path; do
+      codex_real=$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$codex_path")
+      if codex_version=$("$codex_path" --version 2>/dev/null); then
+        :
+      else
+        codex_version="<version failed>"
+        version_failures=$((version_failures + 1))
+      fi
+      printf -v codex_report '%s  %s -> %s (%s)\n' \
+        "$codex_report" "$codex_path" "$codex_real" "$codex_version"
+      if ! contains_line "$codex_real" "$codex_reals"; then
+        codex_reals="${codex_reals}${codex_real}"$'\n'
+        codex_real_count=$((codex_real_count + 1))
+      fi
+      if ! contains_line "$codex_version" "$codex_versions"; then
+        codex_versions="${codex_versions}${codex_version}"$'\n'
+        codex_version_count=$((codex_version_count + 1))
+      fi
+    done < <(type -P -a codex | awk '!seen[$0]++')
+
+    if [[ "$version_failures" -gt 0 ]]; then
+      printf 'MISSING: %s Codex launcher(s) failed to report a version\n' "$version_failures" >&2
+      printf '%s' "$codex_report" >&2
+      failures=$((failures + 1))
+    elif [[ "$codex_real_count" -gt 1 || "$codex_version_count" -gt 1 ]]; then
+      printf 'MISMATCH: Multiple Codex launchers resolve to different installs or versions\n' >&2
+      printf '%s' "$codex_report" >&2
+      failures=$((failures + 1))
+    else
+      printf 'OK: codex launchers resolve to one install\n'
+    fi
   else
     printf 'MISSING: codex CLI not found on PATH\n'
     failures=$((failures + 1))
@@ -67,6 +103,11 @@ main() {
   fi
 
   printf '\nCodex setup looks ready.\n'
+}
+
+contains_line() {
+  local needle=$1 haystack=$2
+  [[ "$haystack" == *$'\n'"$needle"$'\n'* ]]
 }
 
 main "$@"
