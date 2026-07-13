@@ -254,6 +254,7 @@ def gate_repo_fixture(tmp_path_factory: pytest.TempPathFactory) -> Path:
         "./gh pr create --title x --body y",
         "gh \\\npr create --title x --body y",
         "echo preflight\ngh pr create --title x --body y",
+        "gh -R tinaudio/synth-setter pr create --title x --body y",
         "! gh pr create --title x --body y",
         "if false; then :; else gh pr create --title x --body y; fi",
         "bash <<EOF\ngh pr create --title x --body y\nEOF",
@@ -315,6 +316,8 @@ def test_gate_blocks_direct_pr_create_missing_review_path(gate_repo: Path, comma
         "env -S \"bash -c 'gh pr create --title x --body y'\"",
         'bash <<< "gh pr create --title x --body y"',
         "bash <<<'gh pr create --title x --body y'",
+        'eval "gh pr create --title x --body y"',
+        "echo 'gh pr create --title x --body y' | bash",
     ],
 )
 def test_gate_blocks_shell_wrapped_pr_create(gate_repo: Path, command: str) -> None:

@@ -147,15 +147,24 @@ if [[ "$classifier_rc" -ne 0 ]]; then
   classifier_msg=$(<"$helper_stderr") || true
   # Keep in sync with _MENTIONS_PR_CREATE_RE in agent/_shared/pr_command_classifier.py.
   if grep -qE 'gh[[:space:]]+pr[[:space:]]+create' <<<"$COMMAND"; then
-    block "internal classifier error (exit ${classifier_rc}) on a command mentioning gh pr create: ${classifier_msg:-no stderr captured}" "$WRAPPER_HELP"
+    classifier_reason="internal classifier error (exit ${classifier_rc}) on a"
+    classifier_reason+=" command mentioning gh pr create:"
+    classifier_reason+=" ${classifier_msg:-no stderr captured}"
+    block "$classifier_reason" "$WRAPPER_HELP"
   fi
   exit 0
 fi
 
 case "$PR_CREATE_MODE" in
   direct) ;;
-  wrapped) block "gh pr create must run directly, not through a shell wrapper" "$WRAPPER_HELP" ;;
-  unparsable) block "cannot parse a command that mentions gh pr create — run gh pr create directly, no wrappers" "$WRAPPER_HELP" ;;
+  wrapped)
+    block "gh pr create must run directly, not through a shell wrapper" \
+      "$WRAPPER_HELP"
+    ;;
+  unparsable)
+    block "cannot parse a command that mentions gh pr create — run it directly" \
+      "$WRAPPER_HELP"
+    ;;
   *) exit 0 ;;
 esac
 
@@ -363,7 +372,7 @@ if review_sha=$(python3 "$SENTINEL_PY" parse "$REVIEW_PATH" 2>"$helper_stderr");
   :
 else
   helper_rc=$?
-  helper_msg=$(cat "$helper_stderr")
+  helper_msg=$(<"$helper_stderr") || true
   case "$helper_rc" in
     1)
       block "REVIEW_FULL filename does not match the sentinel pattern 'repo-review-full-no-comments.<40-char-sha>.md': $REVIEW_PATH"

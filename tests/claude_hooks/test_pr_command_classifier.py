@@ -50,7 +50,15 @@ def classifier_fixture() -> ModuleType:
     [
         "gh pr create --title x --body y",
         "  gh pr create --title x --body y",
+        "gh -R tinaudio/synth-setter pr create --title x --body y",
+        "gh --repo=tinaudio/synth-setter pr create --title x --body y",
         "echo preflight\ngh pr create --title x --body y",
+        "source .venv/bin/activate && gh pr create --title x --body y",
+        "nohup gh pr create --title x --body y",
+        "setsid gh pr create --title x --body y",
+        "stdbuf -o0 gh pr create --title x --body y",
+        "timeout 30 gh pr create --title x --body y",
+        "xargs gh pr create --title x --body y",
         "! gh pr create --title x --body y",
         "if gh pr create --title x --body y; then :; fi",
         "if false; then :; else gh pr create --title x --body y; fi",
@@ -85,7 +93,6 @@ def classifier_fixture() -> ModuleType:
         "command gh pr create --title x --body y",
         "builtin exec gh pr create --title x --body y",
         "builtin command gh pr create --title x --body y",
-        "eval gh pr create --title x --body y",
         "`gh pr create --title x --body y`",
         "OUT=`gh pr create --title x --body y`",
         "OUT=$(gh pr create --title x --body y)",
@@ -126,6 +133,13 @@ def test_classify_direct_invocation_returns_direct(classifier: ModuleType, comma
         "env -S \"bash -c 'gh pr create --title x --body y'\"",
         'bash <<< "gh pr create --title x --body y"',
         "bash <<<'gh pr create --title x --body y'",
+        # eval re-parses its argument string, hiding the real argv.
+        "eval gh pr create --title x --body y",
+        'eval "gh pr create --title x --body y"',
+        "builtin eval 'gh pr create --title x --body y'",
+        # A bare shell executing piped text whose upstream carries the recipe.
+        "echo 'gh pr create --title x --body y' | bash",
+        "printf 'gh pr create --title x --body y\\n' | sh",
     ],
 )
 def test_classify_shell_wrapped_invocation_returns_wrapped(
@@ -151,10 +165,13 @@ def test_classify_shell_wrapped_invocation_returns_wrapped(
         "gh pr list",
         "ls -la",
         "",
-        # Documented non-goal: non-shell interpreters can execute anything;
-        # the classifier only models the sh-family wrappers (see module doc).
+        # Documented non-goals (see module docstring): non-shell interpreters,
+        # sourced process substitution, and pipes into a shell with no mention
+        # of the recipe upstream.
         "python3 -c \"import os; os.system('gh pr create -t x -b y')\"",
         "perl -e 'system(qq{gh pr create -t x -b y})'",
+        "source <(echo 'gh pr create -t x -b y')",
+        "cat script.sh | bash",
     ],
 )
 def test_classify_unrelated_command_returns_empty(classifier: ModuleType, command: str) -> None:
@@ -193,9 +210,8 @@ def test_classify_unparsable_command_without_mention_returns_empty(
 def test_classify_ansi_c_quoted_escapes_stay_quoted(classifier: ModuleType) -> None:
     """ANSI-C ``$'...'`` payloads with escapes don't unbalance the lexer.
 
-    An escaped quote inside ``$'...'`` previously unbalanced the rewritten
-    string and crashed the parser — which the old hook swallowed into a silent
-    allow.
+    An escaped quote inside a ``$'...'`` span must not desynchronize the
+    lexer's quote tracking.
 
     :param classifier: The loaded classifier module.
     """

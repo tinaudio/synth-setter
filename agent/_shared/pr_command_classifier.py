@@ -4,19 +4,24 @@
 to decide whether the review gate applies. The classification contract:
 
 - ``direct`` — the command executes ``gh pr create`` as its own argv, possibly
-  behind benign prefixes (``env``, ``sudo``, ``nice``, ``time``, ``exec``,
-  ``command``, ``builtin``, ``eval``, leading ``VAR=val`` assignments) — the
-  gate's sentinel checks apply.
-- ``wrapped`` — the creation is smuggled through a shell (``bash -c``,
-  here-string/heredoc stdin, ``env -S``) — the gate blocks outright.
+  behind benign prefixes (``env``, ``sudo``, ``nice``, ``time``, ``timeout``,
+  ``nohup``, ``setsid``, ``stdbuf``, ``xargs``, ``exec``, ``command``,
+  ``builtin``, leading ``VAR=val`` assignments) or ``gh`` global flags — the
+  gate's sentinel checks apply. Heredoc bodies split into ordinary command
+  lines, so a smuggled heredoc invocation also lands here.
+- ``wrapped`` — the creation is smuggled through a re-parsing layer the gate
+  cannot see the argv of: ``bash -c``, ``eval``, ``env -S``, a here-string, or
+  piped stdin into a bare shell — the gate blocks outright.
 - ``unparsable`` — the command mentions ``gh pr create`` but cannot be lexed
   — the gate blocks (fail closed on the gated surface, never fall open).
 - ``""`` — anything else, including quoted prose that merely mentions
   ``gh pr create`` — not gated.
 
-Explicit non-goal: non-shell interpreters (``python3 -c``, ``perl -e``,
-``find -exec``, ...) can execute anything and are not modeled — the gate is an
-honor-system floor over the sh-family wrappers, not a sandbox.
+Explicit non-goals: non-shell interpreters (``python3 -c``, ``perl -e``,
+``find -exec``, ...), ``source``/``.`` of files or process substitutions, and
+pipes into a shell whose upstream text never mentions the recipe — all can
+execute anything; the gate is an honor-system floor over the sh-family
+wrappers, not a sandbox.
 
 Stdlib-only so the bash gate can run ``python3 pr_command_classifier.py
 "<command>"`` without project deps on PATH.
@@ -32,7 +37,22 @@ import sys
 from collections.abc import Sequence
 
 _SHELLS = frozenset({"sh", "bash", "dash", "ksh", "zsh"})
-_PREFIXES = frozenset({"builtin", "command", "env", "eval", "exec", "nice", "sudo", "time"})
+_PREFIXES = frozenset(
+    {
+        "builtin",
+        "command",
+        "env",
+        "exec",
+        "nice",
+        "nohup",
+        "setsid",
+        "stdbuf",
+        "sudo",
+        "time",
+        "timeout",
+        "xargs",
+    }
+)
 # Reserved words (plus pipeline negation) that may precede the executable at
 # command position: `if gh pr create`, `! gh pr create`, `else gh pr create`.
 _RESERVED_WORDS = frozenset({"if", "then", "elif", "else", "while", "until", "do", "!"})
@@ -64,7 +84,10 @@ _OPTIONS_WITH_VALUES = {
             "--user",
         }
     ),
+    "stdbuf": frozenset({"-i", "--input", "-o", "--output", "-e", "--error"}),
     "time": frozenset({"-f", "--format", "-o", "--output"}),
+    "timeout": frozenset({"-k", "--kill-after", "-s", "--signal"}),
+    "xargs": frozenset({"-a", "-d", "-E", "-I", "-L", "-n", "-P", "-s"}),
 }
 # Backtick included: legacy command substitution executes its content, so it
 # opens a segment exactly like `;` or `(` — quoted backticks stay in-token.
@@ -77,8 +100,8 @@ _MENTIONS_PR_CREATE_RE = re.compile(r"gh\s+pr\s+create")
 def _normalize_ansi_c_quotes(command: str) -> str:
     """Rewrite ``$'...'`` spans as plain quoted strings the lexer understands.
 
-    Escapes are decoded (``\\'`` no longer unbalances the rewritten string)
-    and the result re-quoted with :func:`shlex.quote`.
+    Escapes are decoded so an embedded quote can't unbalance the rewritten
+    string, then the result is re-quoted with :func:`shlex.quote`.
 
     :param command: Bash command text that may carry ``$'...'`` spans.
     :returns: The command with each ANSI-C span replaced by a safe equivalent.
@@ -89,12 +112,13 @@ def _normalize_ansi_c_quotes(command: str) -> str:
     )
 
 
-def _command_segments(command: str) -> list[list[str]]:  # noqa: DOC502
-    """Split a command into token lists, one per shell control segment.
+def _command_segments(command: str) -> list[tuple[str, list[str]]]:  # noqa: DOC502
+    """Split a command into (separator, tokens) pairs, one per control segment.
 
     :param command: Bash command text (may span multiple lines).
-    :returns: Token lists split on ``;``, ``|``, ``&``, ``()``/``{}``, backticks, and unescaped
-        newlines; comments dropped.
+    :returns: One pair per segment split on ``;``, ``|``, ``&``, ``()``/``{}``,
+        backticks, and unescaped newlines; ``separator`` is the punctuation run
+        that opened the segment (``""`` for the first). Comments dropped.
     :raises ValueError: If the command cannot be lexed (unbalanced quoting).
     """
     command = command.replace("\\\n", "")
@@ -105,12 +129,12 @@ def _command_segments(command: str) -> list[list[str]]:  # noqa: DOC502
     lexer = shlex.shlex(command, posix=True, punctuation_chars=_PUNCTUATION)
     lexer.whitespace_split = True
     lexer.commenters = "#"
-    segments: list[list[str]] = [[]]
+    segments: list[tuple[str, list[str]]] = [("", [])]
     for token in lexer:
         if all(char in _PUNCTUATION for char in token):
-            segments.append([])
+            segments.append((token, []))
         else:
-            segments[-1].append(token)
+            segments[-1][1].append(token)
     return segments
 
 
@@ -177,6 +201,8 @@ def _executable_index(tokens: list[str]) -> int:
             index = _option_end(tokens, index, prefix)
             if prefix == "env":
                 index = _skip_assignments(tokens, index, empty_name_ok=True)
+            elif prefix == "timeout" and index < len(tokens):
+                index += 1  # the positional DURATION argument
         else:
             break
     return index
@@ -217,13 +243,15 @@ def _shell_script_payloads(arguments: list[str]) -> list[str]:
     """
     payloads = []
     for position, word in enumerate(arguments):
+        # A `-c` anywhere in a single-dash flag cluster (`-lc`, `-norc`).
+        is_short_flag_with_c = (
+            word.startswith("-") and not word.startswith("--") and "c" in word[1:]
+        )
         if word == "--":
             continue
         if word.startswith("--command="):
             payloads.append(word[len("--command=") :])
-        elif word == "--command" or (
-            word.startswith("-") and not word.startswith("--") and "c" in word[1:]
-        ):
+        elif word == "--command" or is_short_flag_with_c:
             value_index = position + 1
             if value_index < len(arguments) and arguments[value_index] == "--":
                 value_index += 1
@@ -239,6 +267,22 @@ def _shell_script_payloads(arguments: list[str]) -> list[str]:
     return payloads
 
 
+def _has_pr_create_subcommand(rest: list[str]) -> bool:
+    """Report whether ``gh``'s trailing tokens invoke the ``pr create`` subcommand.
+
+    An adjacency scan rather than a flag-table walk, so ``gh`` global flags
+    (``-R owner/repo``, ``--repo=...``) before the subcommand still match.
+    Quoted prose stays a single token and can never form the adjacent pair.
+
+    :param rest: Tokens following the ``gh`` executable in its segment.
+    :returns: True when ``pr`` and ``create`` appear as adjacent bare tokens.
+    """
+    return any(
+        rest[position] == "pr" and rest[position + 1] == "create"
+        for position in range(len(rest) - 1)
+    )
+
+
 def _pr_create_mode(command: str) -> str:  # noqa: DOC502
     """Classify one (possibly nested) command string.
 
@@ -247,7 +291,8 @@ def _pr_create_mode(command: str) -> str:  # noqa: DOC502
     :returns: ``direct``, ``wrapped``, or ``""``.
     :raises ValueError: If the command cannot be lexed.
     """
-    for tokens in _command_segments(command):
+    segments = _command_segments(command)
+    for position, (separator, tokens) in enumerate(segments):
         split_string = _env_split_string(tokens)
         if split_string is not None:
             nested_mode = _pr_create_mode(split_string)
@@ -258,10 +303,22 @@ def _pr_create_mode(command: str) -> str:  # noqa: DOC502
             continue
         executable = os.path.basename(tokens[index])
         if executable in _SHELLS:
-            for payload in _shell_script_payloads(tokens[index + 1 :]):
+            payloads = _shell_script_payloads(tokens[index + 1 :])
+            for payload in payloads:
                 if _pr_create_mode(payload):
                     return "wrapped"
-        elif executable == "gh" and tokens[index + 1 : index + 3] == ["pr", "create"]:
+            # A bare shell after a pipe executes whatever the upstream prints;
+            # statically unknowable, so fail closed when the recipe is visible
+            # anywhere upstream.
+            if not payloads and separator in {"|", "|&"}:
+                upstream = " ".join(token for _, seg in segments[:position] for token in seg)
+                if _MENTIONS_PR_CREATE_RE.search(upstream):
+                    return "wrapped"
+        elif executable == "eval":
+            # eval re-parses its (joined) arguments as shell code.
+            if _pr_create_mode(" ".join(tokens[index + 1 :])):
+                return "wrapped"
+        elif executable == "gh" and _has_pr_create_subcommand(tokens[index + 1 :]):
             return "direct"
     return ""
 

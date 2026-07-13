@@ -255,8 +255,7 @@ def test_title_gate_unparsable_command_blocks_before_linting(tmp_path: Path) -> 
     """A command shlex cannot tokenize (unbalanced quote) blocks; gitlint never runs.
 
     The classifier fails closed on an unlexable command that mentions
-    ``gh pr create``, so the gate exits 2 before the title sub-gate is reached
-    — an unparsable command can no longer skip any part of the gate.
+    ``gh pr create``, so the gate exits 2 before the title sub-gate runs.
 
     :param tmp_path: pytest tmp dir.
     """
