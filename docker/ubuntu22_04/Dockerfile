@@ -563,6 +563,7 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
       curl \
       tmux \
+      xz-utils \
   && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
       | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
   && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
@@ -637,13 +638,24 @@ ENV WANDB_DATA_DIR="/home/${USERNAME}/.cache/wandb"
 # that leaks to root sessions).
 ARG CLAUDE_CODE_VERSION=latest
 ARG CODEX_VERSION=latest
+ARG PI_VERSION=latest
 RUN export HOME="/home/${USERNAME}" \
  && npm config set prefix "/home/${USERNAME}/.npm-global" \
  && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
  && npm install -g "@openai/codex@${CODEX_VERSION}" \
+ && npm install -g --ignore-scripts "@earendil-works/pi-coding-agent@${PI_VERSION}" \
  && npm cache clean --force \
  && claude --version \
- && codex --version
+ && codex --version \
+ && pi --version
+
+# Hermes uses its upstream installer to create a per-user virtual environment
+# and launcher. Browser automation is intentionally omitted from this image.
+RUN export HOME="/home/${USERNAME}" \
+ && curl -fsSL https://hermes-agent.nousresearch.com/install.sh -o /tmp/hermes-install.sh \
+ && bash /tmp/hermes-install.sh --skip-browser \
+ && rm /tmp/hermes-install.sh \
+ && hermes --version
 
 # Antigravity (Google) ships the standalone `agy` binary, not on npm; its
 # installer fetches a SHA512-verified release into ~/.local/bin (upstream
