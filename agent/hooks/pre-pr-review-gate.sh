@@ -105,6 +105,7 @@ options_with_values = {
     },
     "time": {"-f", "--format", "-o", "--output"},
 }
+prefixes = {"builtin", "command", "env", "exec", "nice", "sudo", "time"}
 
 
 def command_segments(command: str) -> list[list[str]]:
@@ -136,11 +137,11 @@ def executable_index(tokens: list[str]) -> int:
     index = 0
     while index < len(tokens) and "=" in tokens[index] and not tokens[index].startswith("="):
         index += 1
-    while index < len(tokens) and tokens[index] in {
-        "command", "env", "exec", "nice", "sudo", "time"
-    }:
-        prefix = tokens[index]
+    while index < len(tokens) and os.path.basename(tokens[index]) in prefixes:
+        prefix = os.path.basename(tokens[index])
         index += 1
+        if prefix == "builtin":
+            continue
         index = option_end(tokens, index, prefix)
         if prefix == "env":
             while index < len(tokens) and "=" in tokens[index]:
@@ -150,9 +151,42 @@ def executable_index(tokens: list[str]) -> int:
     return index
 
 
+def env_split_string(tokens: list[str]) -> str | None:
+    index = 0
+    while index < len(tokens) and "=" in tokens[index] and not tokens[index].startswith("="):
+        index += 1
+    if index >= len(tokens) or os.path.basename(tokens[index]) != "env":
+        return None
+    index += 1
+    while index < len(tokens) and tokens[index].startswith("-"):
+        option = tokens[index]
+        index += 1
+        if option == "--":
+            return None
+        if option in {"-S", "--split-string"} and index < len(tokens):
+            return tokens[index]
+        if option in options_with_values["env"]:
+            index += 1
+    return None
+
+
 def runs_pr_create(command: str) -> bool:
     for tokens in command_segments(command):
+        split_string = env_split_string(tokens)
+        if split_string is not None and runs_pr_create(split_string):
+            return True
         index = executable_index(tokens)
+        if index < len(tokens) and os.path.basename(tokens[index]) in shells:
+            arguments = tokens[index + 1 :]
+            for option_index, token in enumerate(arguments[:-1]):
+                if token == "--":
+                    continue
+                if token == "--command" or (token.startswith("-") and "c" in token[1:]):
+                    command_index = option_index + 1
+                    if arguments[command_index] == "--":
+                        command_index += 1
+                    if command_index < len(arguments) and runs_pr_create(arguments[command_index]):
+                        return True
         if tokens[index : index + 3] == ["gh", "pr", "create"]:
             return True
     return False
