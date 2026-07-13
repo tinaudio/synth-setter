@@ -89,6 +89,14 @@ PR_TITLE_GATE="${PR_TITLE_GATE:-block}"
 INPUT=$(cat)
 COMMAND=$(jq -r '.tool_input.command // empty' 2>/dev/null <<<"$INPUT" || true)
 
+# Fast path: every gated invocation carries all three substrings somewhere
+# (`gh\s+pr\s+create` would miss `gh -R owner/repo pr create`). Pure-bash
+# check so the mktemp + python3 classifier spawn is skipped for the
+# overwhelming majority of Bash tool calls.
+if [[ "$COMMAND" != *gh* || "$COMMAND" != *pr* || "$COMMAND" != *create* ]]; then
+  exit 0
+fi
+
 # shellcheck disable=SC2016  # intentional: no expansion wanted in the help block
 readonly BLOCK_HELP='Run /repo-review-full-no-comments — it writes the rendered report to
 .agent-reviews/repo-review-full-no-comments.<HEAD-sha>.md (filename owned by

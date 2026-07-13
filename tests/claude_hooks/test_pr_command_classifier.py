@@ -36,7 +36,7 @@ def _load_module() -> ModuleType:
 
 @pytest.fixture(scope="module", name="classifier")
 def classifier_fixture() -> ModuleType:
-    """Load ``pr_command_classifier`` once per module via path-based import.
+    """Module-scoped wrapper around :func:`_load_module` for test injection.
 
     :returns: The loaded module object.
     """
@@ -61,6 +61,13 @@ def classifier_fixture() -> ModuleType:
         "xargs gh pr create --title x --body y",
         "2>/dev/null gh pr create --title x --body y",
         ">/tmp/out gh pr create --title x --body y",
+        "</dev/null gh pr create --title x --body y",
+        "sudo 2>/dev/null gh pr create --title x --body y",
+        "2>&1 gh pr create --title x --body y",
+        "1>&2 gh pr create --title x --body y",
+        # Over-block pin: bash would treat `gh` as the redirection target and
+        # run `pr create ...`; misread as direct, fails toward gating.
+        "> gh pr create --title x --body y",
         "! gh pr create --title x --body y",
         "if gh pr create --title x --body y; then :; fi",
         "if false; then :; else gh pr create --title x --body y; fi",
@@ -117,9 +124,8 @@ def test_classify_direct_invocation_returns_direct(classifier: ModuleType, comma
         "bash -c 'gh pr create --title x --body y'",
         "bash -lc 'gh pr create --title x --body y'",
         "bash -c 'echo hi\ngh pr create --title x --body y'",
-        # Over-block pins: a `-c`-bearing flag cluster (not valid bash) and a
-        # `-c` value that itself starts with a dash both read as wrapping.
-        # Wrong readings of the argv, but they fail toward blocking.
+        # Over-block pins: a `-c`-bearing flag cluster and a dash-led `-c`
+        # value both misread as wrapping — wrong, but fails toward blocking.
         "bash -norc 'gh pr create --title x --body y'",
         "bash -c '-x value with a c' 'gh pr create --title x --body y'",
         "bash -c -- 'gh pr create --title x --body y'",
@@ -139,6 +145,10 @@ def test_classify_direct_invocation_returns_direct(classifier: ModuleType, comma
         'env -S "gh" pr create --title x --body y',
         "env -S gh pr create --title x --body y",
         'env -S "gh pr" create --title x --body y',
+        "sudo env -S 'gh pr create --title x --body y'",
+        "2>/dev/null env -S 'gh pr create --title x --body y'",
+        "nice -n 5 env -S 'gh pr create --title x --body y'",
+        "timeout 30 env -S 'gh pr create --title x --body y'",
         'bash <<< "gh pr create --title x --body y"',
         "bash <<<'gh pr create --title x --body y'",
         # eval re-parses its argument string, hiding the real argv.
@@ -174,12 +184,13 @@ def test_classify_shell_wrapped_invocation_returns_wrapped(
         "ls -la",
         "",
         # Documented non-goals (see module docstring): non-shell interpreters,
-        # sourced process substitution, and pipes into a shell with no mention
-        # of the recipe upstream.
+        # process substitution, and unmentioned pipes into a shell.
         "python3 -c \"import os; os.system('gh pr create -t x -b y')\"",
         "perl -e 'system(qq{gh pr create -t x -b y})'",
         "source <(echo 'gh pr create -t x -b y')",
         "cat script.sh | bash",
+        # env -S argv reconstruction must not gate unrelated split strings.
+        "env -S 'python3 script.py' arg1 arg2",
     ],
 )
 def test_classify_unrelated_command_returns_empty(classifier: ModuleType, command: str) -> None:
@@ -191,16 +202,25 @@ def test_classify_unrelated_command_returns_empty(classifier: ModuleType, comman
     assert classifier.classify(command) == ""
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        'gh pr create --title "unterminated',
+        "env -S 'gh pr create --title \"unterminated'",
+    ],
+)
 def test_classify_unparsable_command_mentioning_pr_create_fails_closed(
-    classifier: ModuleType,
+    classifier: ModuleType, command: str
 ) -> None:
     """An unlexable command that mentions ``gh pr create`` is ``unparsable``.
 
-    Parse failures on the gated surface must block, never fall open.
+    Parse failures on the gated surface must block, never fall open — also
+    when the broken quoting hides inside an ``env -S`` payload.
 
     :param classifier: The loaded classifier module.
+    :param command: Command whose quoting defeats the lexer.
     """
-    assert classifier.classify('gh pr create --title "unterminated') == "unparsable"
+    assert classifier.classify(command) == "unparsable"
 
 
 def test_classify_unparsable_command_without_mention_returns_empty(

@@ -96,6 +96,9 @@ _ANSI_C_QUOTE_RE = re.compile(r"\$'((?:\\.|[^'\\])*)'")
 _MENTIONS_PR_CREATE_RE = re.compile(r"gh\s+pr\s+create")
 # A redirection word at command position (`2>/dev/null`, `>out`, `<in`).
 _REDIRECTION_RE = re.compile(r"^\d*[<>]")
+# Fused fd-duplication redirections (`2>&1`, `>&2`, `0<&3`): the embedded `&`
+# would otherwise open a bogus segment, hiding the executable that follows.
+_FD_DUP_RE = re.compile(r"\d*[<>]&[^\s;|&()<>`{}]*")
 
 
 def _normalize_ansi_c_quotes(command: str) -> str:
@@ -124,6 +127,7 @@ def _command_segments(command: str) -> list[tuple[str, list[str]]]:  # noqa: DOC
     """
     command = command.replace("\\\n", "")
     command = _normalize_ansi_c_quotes(command)
+    command = _FD_DUP_RE.sub(" ", command)
     # An unescaped newline separates commands like `;`. The real newline is
     # kept (comments must still end at it); the `;` splits the segment.
     command = command.replace("\n", "\n;")
@@ -177,14 +181,17 @@ def _option_end(tokens: list[str], index: int, prefix: str) -> int:
     return index
 
 
-def _executable_index(tokens: list[str]) -> int:
+def _executable_index(tokens: list[str], *, stop_at: str = "") -> int:
     """Return the index of the token that names the executable actually run.
 
     Skips, in any order: reserved words at command position (``if``, ``else``,
-    ``!``, ...), ``VAR=val`` assignments, and benign prefix commands with their
-    options and (for ``env``) its own ``VAR=val`` arguments.
+    ``!``, ...), ``VAR=val`` assignments, redirections, and benign prefix
+    commands with their options and (for ``env``) its own ``VAR=val``
+    arguments.
 
     :param tokens: One segment's tokens.
+    :param stop_at: Prefix basename to halt on instead of skipping past, so a
+        caller can locate that prefix itself behind other prefixes.
     :returns: Index of the effective executable (may be ``len(tokens)``).
     """
     index = 0
@@ -198,6 +205,8 @@ def _executable_index(tokens: list[str]) -> int:
             index += 1
         elif os.path.basename(token) in _PREFIXES:
             prefix = os.path.basename(token)
+            if prefix == stop_at:
+                break
             index += 1
             if prefix == "builtin":
                 continue
@@ -220,9 +229,9 @@ def _env_split_string(tokens: list[str]) -> str | None:
 
     :param tokens: One segment's tokens.
     :returns: The reconstructed command text, or ``None`` when the segment is
-        not an ``env -S`` call.
+        not an ``env -S`` call (possibly behind other benign prefixes).
     """
-    index = _skip_assignments(tokens)
+    index = _executable_index(tokens, stop_at="env")
     if index >= len(tokens) or os.path.basename(tokens[index]) != "env":
         return None
     index += 1
