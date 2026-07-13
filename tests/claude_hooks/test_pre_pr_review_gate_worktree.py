@@ -267,3 +267,21 @@ def test_gate_blocks_shell_wrapped_pr_create_without_review_path(tmp_path: Path)
 
         assert result.returncode == 2, (command, result.returncode, result.stderr)
         assert "REVIEW_FULL=" in result.stderr
+
+
+def test_gate_rejects_env_split_string_shell_wrapper_with_valid_review(tmp_path: Path) -> None:
+    """A valid review file cannot authorize a shell-wrapped PR command.
+
+    :param tmp_path: Pytest temporary directory used for the hermetic repository.
+    """
+    primary, _worktree, _tip = _make_repo_with_worktree(tmp_path)
+    sentinel = _write_sentinel(primary, _git("rev-parse", "HEAD", cwd=primary))
+    command = (
+        "env -S \"bash -c 'gh pr create --title x --body y'\""
+        f"  # REVIEW_FULL={sentinel.relative_to(primary)}"
+    )
+
+    result = _run_gate(primary, command)
+
+    assert result.returncode == 2, (result.returncode, result.stderr)
+    assert "must run directly" in result.stderr

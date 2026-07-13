@@ -170,11 +170,13 @@ def env_split_string(tokens: list[str]) -> str | None:
     return None
 
 
-def runs_pr_create(command: str) -> bool:
+def pr_create_mode(command: str) -> str:
     for tokens in command_segments(command):
         split_string = env_split_string(tokens)
-        if split_string is not None and runs_pr_create(split_string):
-            return True
+        if split_string is not None:
+            nested_mode = pr_create_mode(split_string)
+            if nested_mode:
+                return nested_mode
         index = executable_index(tokens)
         if index < len(tokens) and os.path.basename(tokens[index]) in shells:
             arguments = tokens[index + 1 :]
@@ -185,11 +187,11 @@ def runs_pr_create(command: str) -> bool:
                     command_index = option_index + 1
                     if arguments[command_index] == "--":
                         command_index += 1
-                    if command_index < len(arguments) and runs_pr_create(arguments[command_index]):
-                        return True
+                    if command_index < len(arguments) and pr_create_mode(arguments[command_index]):
+                        return "wrapped"
         if tokens[index : index + 3] == ["gh", "pr", "create"]:
-            return True
-    return False
+            return "direct"
+    return ""
 
 
 try:
@@ -197,22 +199,7 @@ try:
 except ValueError:
     raise SystemExit(0)
 
-for tokens in command_segments(os.environ["COMMAND"]):
-    index = executable_index(tokens)
-    if index >= len(tokens) or os.path.basename(tokens[index]) not in shells:
-        continue
-    arguments = tokens[index + 1 :]
-    for option_index, token in enumerate(arguments[:-1]):
-        if token == "--":
-            continue
-        if token == "--command" or (token.startswith("-") and "c" in token[1:]):
-            command_index = option_index + 1
-            if arguments[command_index] == "--":
-                command_index += 1
-            if command_index < len(arguments) and runs_pr_create(arguments[command_index]):
-                print("wrapped")
-                raise SystemExit(0)
-print("direct" if runs_pr_create(os.environ["COMMAND"]) else "")
+print(pr_create_mode(os.environ["COMMAND"]))
 PY
 }
 
