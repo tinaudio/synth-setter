@@ -36,6 +36,17 @@ Architecture: [docs/architecture.md](docs/architecture.md).
 - **Never run `make docker-*` or RunPod commands without asking.** These
   spend money and burn cluster state.
 
+## File a bug for out-of-scope errors
+
+Hit an error or clearly-wrong behavior **outside your task's scope** — a red
+test on `main`, an unrelated crash, a silently-wrong result, a stale doc, a
+misfiring hook? Don't fix it inline (scope creep) or drop it silently. **File
+a bug** via `/github-taxonomy` (`type: Bug`, `fix(<domain>):` title, as a
+sub-issue of the relevant Phase — ask which if none fits), then continue your
+task; note what you saw, expected, and how to reproduce, and surface the
+`[#N](…)` in your reply. The higher the impact, the more this matters. If it
+blocks you, ask how to proceed.
+
 ## Writing code
 
 - Pydantic `BaseModel(strict=True)` at trust boundaries (config parsing, JSON
