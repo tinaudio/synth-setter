@@ -7,6 +7,7 @@ fakes or mocks anywhere in this module.
 
 from __future__ import annotations
 
+import os
 import warnings
 from collections.abc import Callable
 from pathlib import Path
@@ -200,6 +201,7 @@ class TestMapDataloader:
         dataset = LanceMapDataset(dest, columns=columns)
         recorder = _TakeRecorder(lance.dataset(dest))
         monkeypatch.setattr(dataset, "_ds", recorder)
+        monkeypatch.setattr(dataset, "_opening_pid", os.getpid())
         legacy = LanceShardFile(dest)
         try:
             batch = dataset.__getitems__(indices)
@@ -212,6 +214,31 @@ class TestMapDataloader:
             legacy.close()
 
         assert recorder.calls == [(indices, columns)]
+
+    def test_getitems_reopens_handle_after_process_change(
+        self,
+        lance_dataset: tuple[Path, dict[str, np.ndarray]],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A forked worker never reuses the parent process's Lance handle.
+
+        :param lance_dataset: Module-shared dataset; source arrays are the ground truth.
+        :param monkeypatch: Fixture simulating a worker PID and recording the reopen.
+        """
+        dest, _ = lance_dataset
+        dataset = LanceMapDataset(dest, columns=["param_array"])
+        inherited = _TakeRecorder(lance.dataset(dest))
+        reopened = _TakeRecorder(lance.dataset(dest))
+        monkeypatch.setattr(dataset, "_ds", inherited)
+        monkeypatch.setattr(dataset, "_opening_pid", 100)
+        monkeypatch.setattr("synth_setter.data.lance_torch.os.getpid", lambda: 101)
+        monkeypatch.setattr("synth_setter.data.lance_torch.lance.dataset", lambda *args, **kwargs: reopened)
+
+        dataset.__getitems__([0, 1])
+
+        assert inherited.calls == []
+        assert reopened.calls == [([0, 1], ["param_array"])]
+        assert dataset._opening_pid == 101
 
     def test_columns_projection_returns_only_requested_columns(
         self, lance_dataset: tuple[Path, dict[str, np.ndarray]]

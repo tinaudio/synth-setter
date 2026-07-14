@@ -14,10 +14,14 @@ from tests.helpers.lance_fixtures import write_seeded_lance_shard
 
 
 @pytest.mark.slow
-def test_benchmark_lance_loaders_runs_full_local_matrix(tmp_path: Path) -> None:
+@pytest.mark.parametrize("configured_workers", [0, 1])
+def test_benchmark_lance_loaders_runs_full_local_matrix(
+    tmp_path: Path, configured_workers: int
+) -> None:
     """The harness records throughput, wait time, and scans for every comparison.
 
     :param tmp_path: Temporary root for the local Lance fixtures.
+    :param configured_workers: Configured worker count; zero must not duplicate cells.
     """
     root = tmp_path / "data"
     root.mkdir()
@@ -27,7 +31,7 @@ def test_benchmark_lance_loaders_runs_full_local_matrix(tmp_path: Path) -> None:
     results = benchmark_lance_loaders(
         root,
         batch_size=2,
-        configured_num_workers=1,
+        configured_num_workers=configured_workers,
         max_batches=2,
         repetitions=2,
     )
@@ -36,7 +40,7 @@ def test_benchmark_lance_loaders_runs_full_local_matrix(tmp_path: Path) -> None:
         (loader, conditioning, workers)
         for loader in ("legacy", "map")
         for conditioning in ("mel", "m2l")
-        for workers in (0, 1)
+        for workers in {0, configured_workers}
     }
     for result in results:
         assert result.batches == 2

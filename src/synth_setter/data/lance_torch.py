@@ -16,6 +16,7 @@ Typical usage::
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import Any, cast
@@ -113,6 +114,7 @@ class LanceMapDataset(SafeLanceDataset):
         """
         super().__init__(str(uri), dataset_options=_dataset_options(storage_options))
         self._columns = list(columns) if columns is not None else None
+        self._opening_pid: int | None = None
 
     def __getitems__(self, indices: Sequence[int]) -> dict[str, torch.Tensor]:
         """Fetch a batch of rows in one ``take`` call, already collated.
@@ -125,9 +127,11 @@ class LanceMapDataset(SafeLanceDataset):
         :param indices: Row indices, in the order the batch should carry them.
         :returns: One ``(len(indices), *inner_shape)`` tensor per column.
         """
-        if self._ds is None:
-            # Worker-side first touch: reopen rather than reuse an inherited handle.
+        current_pid = os.getpid()
+        if self._ds is None or self._opening_pid != current_pid:
+            # Forked workers must reopen rather than reuse an inherited Lance handle.
             self._ds = lance.dataset(self.uri, **self.dataset_options)
+            self._opening_pid = current_pid
         table = self._ds.take(list(indices), columns=self._columns)
         return {name: _column_to_tensor(table[name], name) for name in table.column_names}
 

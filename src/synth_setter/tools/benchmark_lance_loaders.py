@@ -181,7 +181,7 @@ def benchmark_lance_loaders(
         raise ValueError("max_batches must be positive")
     if repetitions < 1:
         raise ValueError("repetitions must be positive")
-    worker_counts = (0, configured_num_workers)
+    worker_counts = tuple(dict.fromkeys((0, configured_num_workers)))
     configurations: list[tuple[LoaderName, ConditioningMode, int]] = [
         (loader, conditioning, num_workers)
         for loader in ("legacy", "map")
