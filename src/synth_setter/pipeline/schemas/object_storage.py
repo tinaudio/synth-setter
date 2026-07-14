@@ -73,15 +73,26 @@ RCLONE_ENV_KEYS: Final[tuple[str, ...]] = (
 
 
 def _clean(value: str | None) -> str | None:
+    """Strip a value and convert blank strings to ``None``.
+
+    :param value: Optional raw environment value.
+    :returns: Stripped non-blank value, if present.
+    """
     if value is None:
         return None
     return value.strip() or None
 
 
 def _settings_kwargs_from_sources(env_file: Path | None) -> dict[str, str]:
+    """Resolve canonical settings before compatible legacy aliases.
+
+    :param env_file: Optional dotenv file to inspect before process environment.
+    :returns: Validated field names with their first non-blank resolved values.
+    """
     candidates: dict[str, str | None] = {}
     if env_file is not None and env_file.is_file():
         candidates.update(dotenv_values(env_file))
+    sources = (candidates, os.environ)
     kwargs: dict[str, str] = {}
     env_to_field: Mapping[str, tuple[str, ...]] = {
         ENV_STORAGE_ACCESS_KEY_ID: ("access_key_id", _RCLONE_ENV_ACCESS_KEY_ID),
@@ -93,16 +104,21 @@ def _settings_kwargs_from_sources(env_file: Path | None) -> dict[str, str]:
         ENV_STORAGE_REGION: ("region",),
     }
     for env_key, (field_name, *legacy_env_keys) in env_to_field.items():
-        for source in (candidates, os.environ):
+        value: str | None = None
+        for source in sources:
             value = _clean(source.get(env_key))
-            if value is None:
-                for legacy_env_key in legacy_env_keys:
+            if value is not None:
+                break
+        if value is None:
+            for legacy_env_key in legacy_env_keys:
+                for source in sources:
                     value = _clean(source.get(legacy_env_key))
                     if value is not None:
                         break
-            if value is not None:
-                kwargs[field_name] = value
-                break
+                if value is not None:
+                    break
+        if value is not None:
+            kwargs[field_name] = value
     return kwargs
 
 
@@ -176,6 +192,12 @@ class StorageConfig(BaseModel):
     @field_validator("access_key_id", "secret_access_key")
     @classmethod
     def _secret_is_nonblank(cls, value: SecretStr) -> SecretStr:
+        """Reject blank secret values.
+
+        :param value: Candidate secret setting.
+        :returns: The validated secret.
+        :raises ValueError: The secret is blank.
+        """
         if not value.get_secret_value().strip():
             raise ValueError("must be non-blank")
         return value
@@ -183,6 +205,12 @@ class StorageConfig(BaseModel):
     @field_validator("endpoint_url", "region", "rclone_type")
     @classmethod
     def _string_is_nonblank(cls, value: str) -> str:
+        """Reject blank required string values.
+
+        :param value: Candidate required string setting.
+        :returns: The stripped setting.
+        :raises ValueError: The value is blank.
+        """
         stripped = value.strip()
         if not stripped:
             raise ValueError("must be non-blank")
@@ -191,6 +219,12 @@ class StorageConfig(BaseModel):
     @field_validator("default_bucket")
     @classmethod
     def _optional_string_is_nonblank(cls, value: str | None) -> str | None:
+        """Reject blank optional strings when they are set.
+
+        :param value: Candidate optional string setting.
+        :returns: The stripped setting or ``None``.
+        :raises ValueError: The supplied value is blank.
+        """
         if value is None:
             return None
         stripped = value.strip()
@@ -299,6 +333,12 @@ class StorageSettings(BaseSettings):
     @field_validator("access_key_id", "secret_access_key")
     @classmethod
     def _secret_is_nonblank(cls, value: SecretStr) -> SecretStr:
+        """Reject blank secret values.
+
+        :param value: Candidate secret setting.
+        :returns: The validated secret.
+        :raises ValueError: The secret is blank.
+        """
         if not value.get_secret_value().strip():
             raise ValueError("must be non-blank")
         return value
@@ -306,6 +346,12 @@ class StorageSettings(BaseSettings):
     @field_validator("endpoint_url", "region", "rclone_type")
     @classmethod
     def _string_is_nonblank(cls, value: str) -> str:
+        """Reject blank required string values.
+
+        :param value: Candidate required string setting.
+        :returns: The stripped setting.
+        :raises ValueError: The value is blank.
+        """
         stripped = value.strip()
         if not stripped:
             raise ValueError("must be non-blank")
@@ -314,6 +360,12 @@ class StorageSettings(BaseSettings):
     @field_validator("default_bucket")
     @classmethod
     def _optional_string_is_nonblank(cls, value: str | None) -> str | None:
+        """Reject blank optional strings when they are set.
+
+        :param value: Candidate optional string setting.
+        :returns: The stripped setting or ``None``.
+        :raises ValueError: The supplied value is blank.
+        """
         if value is None:
             return None
         stripped = value.strip()
@@ -338,7 +390,7 @@ class StorageSettings(BaseSettings):
 
 
 def storage_settings_from_sources(env_file: Path | None = None) -> StorageSettings:
-    """Load settings from dotenv then process env, preferring canonical names.
+    """Load canonical settings before legacy aliases from dotenv then process env.
 
     :param env_file: Optional dotenv path to read before falling back to ``os.environ``.
     :returns: Storage settings parsed from canonical storage or legacy rclone keys.

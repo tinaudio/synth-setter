@@ -271,11 +271,11 @@ WANDB_API_KEY=<your-wandb-api-key>
 ```
 
 `SYNTH_SETTER_STORAGE_PROVIDER` is optional because it defaults to `r2`.
-The resolver reads non-blank dotenv values before process-environment values,
-prefers canonical names over the legacy rclone alias within each source, then
-projects rclone's `RCLONE_CONFIG_R2_*` variables for backend calls. Existing
-deployments may continue to use those legacy variables, but new `.env` files
-should use the canonical names above. See
+The resolver uses canonical dotenv values, canonical process-environment values,
+legacy dotenv aliases, then legacy process-environment aliases; blank values
+are absent. It projects rclone's `RCLONE_CONFIG_R2_*` variables for backend
+calls. Existing deployments may continue to use those legacy variables, but
+new `.env` files should use the canonical names above. See
 [docs/reference/docker.md § Runtime environment variables](reference/docker.md#runtime-environment-variables)
 for the runtime contract.
 

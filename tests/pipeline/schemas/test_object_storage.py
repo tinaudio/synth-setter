@@ -93,10 +93,10 @@ class TestStorageSettings:
         assert settings.endpoint_url == _ENDPOINT
         assert settings.provider is ObjectStoreProvider.R2
 
-    def test_reads_legacy_dotenv_before_canonical_process_env(
+    def test_canonical_process_env_overrides_legacy_dotenv(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A non-blank legacy dotenv value takes precedence over process env.
+        """Canonical process credentials override legacy dotenv aliases.
 
         :param tmp_path: Pytest fixture providing a temp directory.
         :param monkeypatch: Pytest fixture used to set process env.
@@ -114,9 +114,78 @@ class TestStorageSettings:
 
         settings = storage_settings_from_sources(env_file)
 
+        assert settings.access_key_id.get_secret_value() == "canonical-access-key"
+        assert settings.secret_access_key.get_secret_value() == "canonical-secret-key"
+        assert settings.endpoint_url == "https://canonical.example"
+
+    def test_canonical_dotenv_overrides_legacy_dotenv(self, tmp_path: Path) -> None:
+        """Canonical dotenv credentials override legacy aliases in the same file.
+
+        :param tmp_path: Pytest fixture providing a temp directory.
+        """
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "SYNTH_SETTER_STORAGE_ACCESS_KEY_ID=canonical-access-key\n"
+            "SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY=canonical-secret-key\n"
+            "SYNTH_SETTER_STORAGE_ENDPOINT_URL=https://canonical.example\n"
+            "RCLONE_CONFIG_R2_ACCESS_KEY_ID=legacy-access-key\n"
+            "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=legacy-secret-key\n"
+            "RCLONE_CONFIG_R2_ENDPOINT=https://legacy.example\n",
+            encoding="utf-8",
+        )
+
+        settings = storage_settings_from_sources(env_file)
+
+        assert settings.access_key_id.get_secret_value() == "canonical-access-key"
+        assert settings.secret_access_key.get_secret_value() == "canonical-secret-key"
+        assert settings.endpoint_url == "https://canonical.example"
+
+    def test_blank_canonical_dotenv_uses_legacy_dotenv(self, tmp_path: Path) -> None:
+        """Blank canonical dotenv values fall back to legacy aliases.
+
+        :param tmp_path: Pytest fixture providing a temp directory.
+        """
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "SYNTH_SETTER_STORAGE_ACCESS_KEY_ID=\n"
+            "SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY=\n"
+            "SYNTH_SETTER_STORAGE_ENDPOINT_URL=\n"
+            "RCLONE_CONFIG_R2_ACCESS_KEY_ID=legacy-access-key\n"
+            "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=legacy-secret-key\n"
+            "RCLONE_CONFIG_R2_ENDPOINT=https://legacy.example\n",
+            encoding="utf-8",
+        )
+
+        settings = storage_settings_from_sources(env_file)
+
         assert settings.access_key_id.get_secret_value() == "legacy-access-key"
         assert settings.secret_access_key.get_secret_value() == "legacy-secret-key"
         assert settings.endpoint_url == "https://legacy.example"
+
+    def test_legacy_dotenv_overrides_legacy_process_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A legacy dotenv value takes precedence over the same process alias.
+
+        :param tmp_path: Pytest fixture providing a temp directory.
+        :param monkeypatch: Pytest fixture used to set process env.
+        """
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "RCLONE_CONFIG_R2_ACCESS_KEY_ID=dotenv-access-key\n"
+            "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=dotenv-secret-key\n"
+            "RCLONE_CONFIG_R2_ENDPOINT=https://dotenv.example\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", "process-access-key")
+        monkeypatch.setenv("RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", "process-secret-key")
+        monkeypatch.setenv("RCLONE_CONFIG_R2_ENDPOINT", "https://process.example")
+
+        settings = storage_settings_from_sources(env_file)
+
+        assert settings.access_key_id.get_secret_value() == "dotenv-access-key"
+        assert settings.secret_access_key.get_secret_value() == "dotenv-secret-key"
+        assert settings.endpoint_url == "https://dotenv.example"
 
     def test_prefers_canonical_names_over_legacy_rclone_names(
         self, monkeypatch: pytest.MonkeyPatch
