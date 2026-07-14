@@ -285,7 +285,7 @@ def dump_clap_plugin(plugin_path: Path, plugin_index: int = 0) -> ClapPluginInfo
         exposes the instrument at 0 and effects bundles separately).
     :returns: Descriptor fields plus all params in the plugin's enumeration
         order (this order matches pedalboard's VST3 parameter indices for
-        Surge XT — the bridge ``tools/build_clap_map.py`` relies on).
+        Surge XT — the bridge ``tools/build_param_map.py`` relies on).
     :raises FileNotFoundError: when the plugin binary is absent.
     :raises RuntimeError: when any CLAP entry/factory/extension step fails.
     """

@@ -451,6 +451,31 @@ def cfg_dataset_obxf(tmp_path: Path) -> Iterator[DictConfig]:
     GlobalHydra.instance().clear()
 
 
+@pytest.fixture(scope="function")
+def cfg_dataset_dawdreamer(tmp_path: Path) -> Iterator[DictConfig]:
+    """Compose the DawDreamer smoke experiment with temporary local paths.
+
+    :param tmp_path: Per-test output/work/log root.
+
+    :yields DictConfig: DawDreamer smoke cfg with ``tmp_path``-pinned paths;
+        teardown clears Hydra's global singleton.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="dataset",
+            overrides=["experiment=generate_dataset/surge-xt-dawdreamer-smoke"],
+        )
+        with open_dict(cfg):
+            _set_workspace_root(cfg)
+            cfg.paths.output_dir = str(tmp_path)
+            cfg.paths.work_dir = str(tmp_path)
+            cfg.paths.log_dir = str(tmp_path)
+
+    yield cfg
+
+    GlobalHydra.instance().clear()
+
+
 @pytest.fixture(scope="package")
 def cfg_finalize_global() -> DictConfig:
     """Build a default Hydra DictConfig for ``finalize_dataset``.

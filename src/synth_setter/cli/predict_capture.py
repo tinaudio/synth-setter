@@ -31,11 +31,12 @@ from synth_setter.data.vst.clap_map import (
     load_clap_map,
     synth_params_to_clap_rows,
 )
+from synth_setter.data.vst.param_map import load_param_map
 from synth_setter.data.vst.param_spec import ParamSpec, decode_model_output
 from synth_setter.data.vst.param_spec_registry import param_specs
 from synth_setter.models.surge_ff_module import VSTFeedForwardModule
 from synth_setter.models.surge_flow_matching_module import VSTFlowMatchingModule
-from synth_setter.resources import as_file, clap_map
+from synth_setter.resources import as_file, param_map
 
 # SET ME: deployment checkpoint — use an absolute path (this placeholder is
 # repo-relative); the C++ bridge passes no --checkpoint (#1787).
@@ -352,8 +353,8 @@ def _run(
     if map_path is not None:
         format_map = load_clap_map(map_path)
     else:
-        with as_file(clap_map(param_spec_name)) as packaged:
-            format_map = load_clap_map(packaged)
+        with as_file(param_map(param_spec_name)) as packaged:
+            format_map = load_param_map(packaged).clap_projection()
     spec = param_specs[param_spec_name]
 
     if model_class is None:
@@ -390,7 +391,7 @@ def _run(
     _say(
         logger,
         f"wrote {len(rows)} params to {uuid_dir / 'params.csv'} "
-        f"(checkpoint={checkpoint} map={map_path or f'packaged {param_spec_name}_clap_map.json'} "
+        f"(checkpoint={checkpoint} map={map_path or f'packaged {param_spec_name}_param_map.json'} "
         f"spec={param_spec_name})",
     )
 
