@@ -559,6 +559,32 @@ class TestVSTDatasetH5Mode:
         with pytest.raises(FileNotFoundError, match="stats.npz"):
             VSTDataset(h5_path, batch_size=2, ot=False, use_saved_mean_and_variance=True)
 
+    @pytest.mark.parametrize(
+        ("mean", "std", "message"),
+        [
+            (np.nan, 1.0, "mean must contain only finite values"),
+            (0.0, np.nan, "std must contain only finite values"),
+            (0.0, 0.0, "std values must be positive"),
+            (0.0, -1.0, "std values must be positive"),
+        ],
+    )
+    def test_invalid_stats_raise_value_error(
+        self, tmp_path: Path, mean: float, std: float, message: str
+    ) -> None:
+        """Corrupt normalization statistics fail before any loader exposes a batch.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param mean: Mean written to the statistics fixture.
+        :param std: Standard deviation written to the statistics fixture.
+        :param message: Expected validation error text.
+        """
+        h5_path = tmp_path / "train.h5"
+        _write_h5_shard(h5_path, num_rows=4)
+        _write_stats(tmp_path, mean=mean, std=std)
+
+        with pytest.raises(ValueError, match=message):
+            VSTDataset(h5_path, batch_size=2, ot=False, use_saved_mean_and_variance=True)
+
     def test_get_stats_file_path_is_sibling_of_dataset(self, tmp_path: Path) -> None:
         """The static helper returns ``parent_dir / 'stats.npz'`` for any input layout.
 
@@ -680,7 +706,9 @@ def _reference_getitem(
     param_array = torch.from_numpy(param_array).to(dtype=torch.float32)
     noise = torch.randn(param_array.shape, generator=torch.Generator().manual_seed(seed))
     if dataset.ot:
-        noise, param_array, mel_spec, audio = _hungarian_match(noise, param_array, mel_spec, audio)
+        noise, param_array, mel_spec, m2l, audio = _hungarian_match(
+            noise, param_array, mel_spec, m2l, audio
+        )
 
     return dict(
         mel_spec=mel_spec.contiguous() if mel_spec is not None else None,

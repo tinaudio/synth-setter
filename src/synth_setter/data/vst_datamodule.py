@@ -144,6 +144,8 @@ def load_dataset_statistics(dataset_file: str | Path) -> tuple[np.ndarray, np.nd
     :param dataset_file: Shard path whose parent directory holds ``stats.npz``.
     :returns: ``(mean, std)`` arrays broadcasting against ``mel_spec`` rows.
     :raises FileNotFoundError: If the expected ``stats.npz`` is missing.
+    :raises ValueError: If the stored statistics are non-finite or ``std`` is
+        not strictly positive.
     """
     stats_file = VSTDataset.get_stats_file_path(dataset_file)
     if not stats_file.exists():
@@ -153,7 +155,15 @@ def load_dataset_statistics(dataset_file: str | Path) -> tuple[np.ndarray, np.nd
         )
 
     with np.load(stats_file) as stats:
-        return stats["mean"], stats["std"]
+        mean = stats["mean"]
+        std = stats["std"]
+    if not np.isfinite(mean).all():
+        raise ValueError("mean must contain only finite values")
+    if not np.isfinite(std).all():
+        raise ValueError("std must contain only finite values")
+    if np.any(std <= 0):
+        raise ValueError("std values must be positive")
+    return mean, std
 
 
 class ShardColumn(Protocol):

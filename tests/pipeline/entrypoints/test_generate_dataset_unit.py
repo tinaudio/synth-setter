@@ -2828,7 +2828,7 @@ def _write_vds_split_with_shard(data_dir: Path) -> np.ndarray:
     audio = np.arange(1, rows * channels * samples + 1, dtype=audio_dtype).reshape(
         rows, channels, samples
     )
-    param = np.arange(1, rows * num_params + 1, dtype=param_dtype).reshape(rows, num_params)
+    param = np.linspace(0.1, 0.8, rows * num_params, dtype=param_dtype).reshape(rows, num_params)
 
     shard = data_dir / "shard-000000.h5"
     with h5py.File(shard, "w") as f:
