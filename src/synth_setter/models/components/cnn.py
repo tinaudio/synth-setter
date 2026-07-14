@@ -1,5 +1,12 @@
-"""Convolutional and residual building blocks used by the spectrum encoders."""
+"""Convolutional and residual building blocks used by spectrum encoders.
 
+Example::
+
+    encoder = LogMelEncoder(176_400, 16, 256, sample_rate=44_100)
+    embeddings = encoder(torch.zeros(2, 176_400))
+"""
+
+import math
 from typing import Literal
 
 import torch
@@ -202,6 +209,8 @@ class LogMelEncoder(nn.Module):
     :param hidden_dim: Channel count in the first convolutional block.
     :param out_dim: Width of the returned embedding.
     :param sample_rate: Waveform sample rate in Hz.
+    :param f_min: Lowest frequency included in the mel filter bank, in Hz.
+    :param f_max: Highest included frequency, in Hz; ``None`` selects Nyquist.
     :param n_fft: Fourier transform size; defaults to 25 ms of audio.
     :param hop_length: Frame stride; defaults to 100 frames per second.
     :param n_mels: Number of mel-frequency bins.
@@ -224,6 +233,8 @@ class LogMelEncoder(nn.Module):
         out_dim: int,
         *,
         sample_rate: int,
+        f_min: float = 0.0,
+        f_max: float | None = None,
         n_fft: int | None = None,
         hop_length: int | None = None,
         n_mels: int = MEL_N_MELS,
@@ -238,6 +249,10 @@ class LogMelEncoder(nn.Module):
         norm: Literal["bn", "ln"] = "bn",
     ) -> None:
         super().__init__()
+        if not math.isfinite(amin) or amin <= 0:
+            raise ValueError(f"amin must be positive and finite, got {amin}")
+        if top_db is not None and (not math.isfinite(top_db) or top_db < 0):
+            raise ValueError(f"top_db must be non-negative and finite, got {top_db}")
         self.in_dim = in_dim
         try:
             window_fn = {"hamming": torch.hamming_window, "hann": torch.hann_window}[window]
@@ -245,6 +260,8 @@ class LogMelEncoder(nn.Module):
             raise ValueError(f"Unsupported window: {window}") from error
         self.mel = torchaudio.transforms.MelSpectrogram(
             sample_rate=sample_rate,
+            f_min=f_min,
+            f_max=f_max,
             n_fft=n_fft if n_fft is not None else mel_n_fft(sample_rate),
             hop_length=hop_length if hop_length is not None else mel_hop_length(sample_rate),
             n_mels=n_mels,

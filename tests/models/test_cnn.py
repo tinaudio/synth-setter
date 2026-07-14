@@ -118,6 +118,38 @@ def test_log_mel_frontend_unknown_norm_raises() -> None:
         )
 
 
+@pytest.mark.parametrize("amin", [0.0, -1.0, float("inf"), float("nan")])
+def test_log_mel_frontend_invalid_amin_raises(amin: float) -> None:
+    """A non-positive or non-finite logarithm floor is rejected.
+
+    :param amin: Invalid power floor.
+    """
+    with pytest.raises(ValueError, match="amin"):
+        LogMelEncoder(4_410, 4, 5, sample_rate=44_100, amin=amin)
+
+
+@pytest.mark.parametrize("top_db", [-1.0, float("inf"), float("nan")])
+def test_log_mel_frontend_invalid_top_db_raises(top_db: float) -> None:
+    """A negative or non-finite dynamic range is rejected.
+
+    :param top_db: Invalid dynamic range.
+    """
+    with pytest.raises(ValueError, match="top_db"):
+        LogMelEncoder(4_410, 4, 5, sample_rate=44_100, top_db=top_db)
+
+
+def test_log_mel_frontend_unknown_window_raises() -> None:
+    """An unsupported Fourier window fails before transform construction."""
+    with pytest.raises(ValueError, match="Unsupported window"):
+        LogMelEncoder(
+            4_410,
+            4,
+            5,
+            sample_rate=44_100,
+            window="blackman",  # type: ignore[arg-type]
+        )
+
+
 def test_log_mel_spectrogram_matches_dataset_frontend() -> None:
     """Interior frames preserve the stored-mel numeric contract."""
     audio = torch.randn(1, 4_410)

@@ -13,7 +13,7 @@ import os
 import subprocess
 from contextlib import nullcontext
 from pathlib import Path
-from typing import NamedTuple, cast
+from typing import Literal, NamedTuple, cast
 
 import pytest
 import torch
@@ -81,35 +81,30 @@ def _compose_torchsynth_overfit_cfg(tmp_path: Path) -> DictConfig:
     return train_cfg
 
 
-def _torchsynth_initial_loss(train_cfg: DictConfig) -> float:
-    """Return the fixed overfit batch's initial model loss.
+def _torchsynth_initial_loss(
+    cfg: DictConfig,
+    *,
+    stage: Literal["fit", "validate"],
+    split: Literal["train", "val"],
+) -> float:
+    """Return an untrained model's loss on a fixed TorchSynth batch.
 
-    :param train_cfg: TorchSynth training configuration.
+    :param cfg: TorchSynth train or evaluation configuration.
+    :param stage: Datamodule setup stage.
+    :param split: Dataloader split used for the baseline batch.
     :returns: Initial MSE for the fixed batch.
     """
-    baseline_datamodule = instantiate(train_cfg.datamodule)
-    baseline_datamodule.setup("fit")
-    baseline_audio, baseline_params, *_ = next(iter(baseline_datamodule.train_dataloader()))
+    baseline_datamodule = instantiate(cfg.datamodule)
+    baseline_datamodule.setup(stage)
+    if split == "train":
+        dataloader = baseline_datamodule.train_dataloader()
+    else:
+        dataloader = baseline_datamodule.val_dataloader()
+    baseline_audio, baseline_params, *_ = next(iter(dataloader))
     # Seed exactly as train() does (L.seed_everything, covering torch/numpy/python RNG)
     # so this "initial" model matches training's start regardless of what model init draws.
-    seed_everything(train_cfg.seed, workers=True)
-    baseline_model = instantiate(train_cfg.model)
-    with torch.no_grad():
-        loss = torch.nn.functional.mse_loss(baseline_model(baseline_audio), baseline_params).item()
-    return loss
-
-
-def _torchsynth_initial_val_loss(eval_cfg: DictConfig) -> float:
-    """Return an untrained model's loss on the evaluation validation batch.
-
-    :param eval_cfg: TorchSynth evaluation configuration.
-    :returns: Initial held-out MSE for the fixed validation batch.
-    """
-    baseline_datamodule = instantiate(eval_cfg.datamodule)
-    baseline_datamodule.setup("validate")
-    baseline_audio, baseline_params, *_ = next(iter(baseline_datamodule.val_dataloader()))
-    seed_everything(eval_cfg.seed, workers=True)
-    baseline_model = instantiate(eval_cfg.model)
+    seed_everything(cfg.seed, workers=True)
+    baseline_model = instantiate(cfg.model)
     with torch.no_grad():
         loss = torch.nn.functional.mse_loss(baseline_model(baseline_audio), baseline_params).item()
     return loss
@@ -151,7 +146,7 @@ def test_eval_torchsynth_experiment_validates_checkpoint(tmp_path: Path) -> None
     :param tmp_path: Shared training, checkpoint, and evaluation directory.
     """
     train_cfg = _compose_torchsynth_overfit_cfg(tmp_path)
-    initial_loss = _torchsynth_initial_loss(train_cfg)
+    initial_loss = _torchsynth_initial_loss(train_cfg, stage="fit", split="train")
     HydraConfig().set_config(train_cfg)
     try:
         train_metrics, train_objects = train(train_cfg)
@@ -165,7 +160,7 @@ def test_eval_torchsynth_experiment_validates_checkpoint(tmp_path: Path) -> None
     checkpoint = Path(train_objects["trainer"].checkpoint_callback.best_model_path)
     assert checkpoint.is_file()
     eval_cfg = _compose_torchsynth_eval_cfg(tmp_path, checkpoint)
-    initial_val_loss = _torchsynth_initial_val_loss(eval_cfg)
+    initial_val_loss = _torchsynth_initial_loss(eval_cfg, stage="validate", split="val")
     HydraConfig().set_config(eval_cfg)
     try:
         metric_dict, eval_objects = evaluate(eval_cfg)

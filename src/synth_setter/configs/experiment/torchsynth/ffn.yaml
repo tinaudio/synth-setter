@@ -29,6 +29,9 @@ model:
   loss_fn: mse
   net:
     amin: 1.0e-10
+    f_max: null
+    f_min: 0.0
+    frontend: log_mel
     hop_length: 441
     in_dim: ${datamodule.signal_length}
     mel_norm: slaney
@@ -37,7 +40,6 @@ model:
     n_mels: 128
     out_dim: ${datamodule.num_params}
     power: 2.0
-    frontend: log_mel
     sample_rate: ${datamodule.sample_rate}
     top_db: 80.0
     window: hamming

@@ -5,7 +5,8 @@ from typing import Literal
 import torch
 import torch.nn as nn
 
-from synth_setter.models.components.cnn import MEL_N_MELS, LogMelEncoder, ResidualEncoder
+from synth_setter.data.vst.shapes import MEL_N_MELS
+from synth_setter.models.components.cnn import LogMelEncoder, ResidualEncoder
 from synth_setter.models.components.transformer import SinusoidalEncoding
 
 
@@ -201,6 +202,8 @@ class CNNResidualMLP(nn.Module):
     :param norm: Encoder normalization type.
     :param frontend: Spectral representation computed from each waveform.
     :param sample_rate: Waveform sample rate in Hz; required for ``log_mel``.
+    :param f_min: Lowest frequency included in the mel filter bank, in Hz.
+    :param f_max: Highest included frequency, in Hz; ``None`` selects Nyquist.
     :param n_fft: Fourier transform size for ``log_mel``.
     :param hop_length: Frame stride for ``log_mel``.
     :param n_mels: Number of mel-frequency bins.
@@ -226,6 +229,8 @@ class CNNResidualMLP(nn.Module):
         *,
         frontend: Literal["global_fft", "log_mel"] = "global_fft",
         sample_rate: int | None = None,
+        f_min: float = 0.0,
+        f_max: float | None = None,
         n_fft: int | None = None,
         hop_length: int | None = None,
         n_mels: int = MEL_N_MELS,
@@ -252,6 +257,8 @@ class CNNResidualMLP(nn.Module):
                 hidden_dim=channels,
                 out_dim=hidden_dim,
                 sample_rate=sample_rate,
+                f_min=f_min,
+                f_max=f_max,
                 n_fft=n_fft,
                 hop_length=hop_length,
                 n_mels=n_mels,
