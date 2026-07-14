@@ -55,7 +55,7 @@ def tiny_lance_spec() -> DatasetSpec:
             "r2": {"bucket": "intermediate-data"},
             "render": {
                 "plugin_path": "plugins/Surge XT.vst3",
-                "preset_path": "presets/surge-base.vstpreset",
+                "plugin_state_path": "presets/surge-base.vstpreset",
                 "param_spec_name": "surge_simple",
                 "renderer_version": "1.3.4",
                 "sample_rate": 100,
@@ -138,11 +138,13 @@ def staging_dir(fake_r2_remote: Path, spec: DatasetSpec, shard_id: int) -> Path:
 
 
 def test_split_for_shard_follows_spec_split_ranges() -> None:
+    """Split lookup follows the spec's half-open shard ranges."""
     spec = tiny_lance_spec()
     assert [split_for_shard(spec, i) for i in range(4)] == ["train", "train", "val", "test"]
 
 
 def test_split_for_shard_out_of_range_raises() -> None:
+    """Shard IDs outside every split range fail explicitly."""
     spec = tiny_lance_spec()
     with pytest.raises(ValueError, match="shard_id 4 outside spec ranges"):
         split_for_shard(spec, 4)
@@ -161,6 +163,11 @@ def test_parse_shard_staging_dir_accepts_seven_digit_shard_id() -> None:
 def test_stage_attempt_writes_fragment_data_into_assigned_split_dataset_dir(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
+    """Staging writes fragment data under the shard's assigned split.
+
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
+    :param tmp_path: Pytest fixture providing a fresh local shard directory.
+    """
     spec = tiny_lance_spec()
     local_shard = write_local_shard(spec, 2, tmp_path)
 
@@ -177,6 +184,11 @@ def test_stage_attempt_writes_fragment_data_into_assigned_split_dataset_dir(
 def test_stage_attempt_sidecar_round_trips_fragment_metadata_with_shard_row_count(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
+    """The staged sidecar preserves Lance metadata and physical row count.
+
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
+    :param tmp_path: Pytest fixture providing a fresh local shard directory.
+    """
     spec = tiny_lance_spec()
     local_shard = write_local_shard(spec, 0, tmp_path)
 
@@ -194,6 +206,11 @@ def test_stage_attempt_sidecar_round_trips_fragment_metadata_with_shard_row_coun
 def test_stage_attempt_stats_sidecar_matches_direct_welford_over_written_mel_rows(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
+    """Staged statistics match direct Welford moments over mel rows.
+
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
+    :param tmp_path: Pytest fixture providing a fresh local shard directory.
+    """
     spec = tiny_lance_spec()
     local_shard = write_local_shard(spec, 0, tmp_path)
 
@@ -214,6 +231,11 @@ def test_stage_attempt_stats_sidecar_matches_direct_welford_over_written_mel_row
 def test_stage_attempt_writes_valid_marker_alongside_sidecars(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
+    """Successful staging publishes a valid marker after both sidecars.
+
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
+    :param tmp_path: Pytest fixture providing a fresh local shard directory.
+    """
     spec = tiny_lance_spec()
     local_shard = write_local_shard(spec, 0, tmp_path)
 
@@ -257,6 +279,10 @@ def test_stage_attempt_sidecar_upload_failure_withholds_valid_marker(
 
 
 def test_write_rendering_marker_records_attempt_start(fake_r2_remote: Path) -> None:
+    """Starting an attempt publishes its rendering marker.
+
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
+    """
     spec = tiny_lance_spec()
 
     write_rendering_marker(spec, 1, worker_id="pod-a", attempt_uuid="a1b2")
@@ -267,6 +293,11 @@ def test_write_rendering_marker_records_attempt_start(fake_r2_remote: Path) -> N
 def test_shard_has_complete_attempt_false_before_staging_true_after(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
+    """Completion detection changes only after a full attempt is staged.
+
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
+    :param tmp_path: Pytest fixture providing a fresh local shard directory.
+    """
     spec = tiny_lance_spec()
     local_shard = write_local_shard(spec, 0, tmp_path)
     assert shard_has_complete_attempt(spec, 0) is False
@@ -281,6 +312,11 @@ def test_shard_has_complete_attempt_false_before_staging_true_after(
 def test_shard_has_complete_attempt_ignores_partial_attempt_missing_stats(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
+    """An attempt missing its statistics sidecar remains incomplete.
+
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
+    :param tmp_path: Pytest fixture providing a fresh local shard directory.
+    """
     spec = tiny_lance_spec()
     local_shard = write_local_shard(spec, 0, tmp_path)
     stage_lance_shard_attempt(
@@ -294,6 +330,11 @@ def test_shard_has_complete_attempt_ignores_partial_attempt_missing_stats(
 def test_stage_attempt_rejects_local_shard_with_wrong_row_count(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
+    """A shard with the wrong row count cannot publish a valid marker.
+
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
+    :param tmp_path: Pytest fixture providing a fresh local shard directory.
+    """
     spec = tiny_lance_spec()
     shard = spec.shards[0]
     render = spec.render.model_copy(update={"base_seed": shard.seed, "samples_per_shard": 3})
@@ -314,6 +355,12 @@ def test_stage_attempt_rejects_local_shard_with_wrong_row_count(
 def test_stage_attempt_rejects_shard_exceeding_single_data_file_bound(
     fake_r2_remote: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """A shard above the single-file bound is rejected before upload.
+
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
+    :param tmp_path: Pytest fixture providing a fresh local shard directory.
+    :param monkeypatch: Replaces the production size ceiling with a test bound.
+    """
     spec = tiny_lance_spec()
     local_shard = write_local_shard(spec, 0, tmp_path)
     # Shrink the bound rather than materializing a >32 GiB shard; the guard's
@@ -333,6 +380,11 @@ def test_stage_attempt_rejects_shard_exceeding_single_data_file_bound(
 def test_staged_sidecar_survives_json_round_trip_from_disk(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
+    """The staged sidecar retains its versioned JSON envelope on disk.
+
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
+    :param tmp_path: Pytest fixture providing a fresh local shard directory.
+    """
     spec = tiny_lance_spec()
     local_shard = write_local_shard(spec, 0, tmp_path)
     stage_lance_shard_attempt(
