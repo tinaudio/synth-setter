@@ -372,8 +372,7 @@ def test_finalize_rejects_fragment_json_that_is_not_lance_metadata(
 def test_finalize_skips_empty_split_and_still_completes(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
-    # train 4 + val 2 samples at 2/shard → 3 shards, test split empty. Rebuilt
-    # from a fresh dump so the frozen spec's cached computed fields re-derive.
+    # Revalidate a modified dump so cached computed split fields are rebuilt.
     spec = DatasetSpec.model_validate(
         {**tiny_lance_spec().model_dump(mode="json"), "train_val_test_sizes": [4, 2, 0]}
     )

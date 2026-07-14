@@ -831,12 +831,10 @@ class TestShardUri:
 
 
 class TestObjectSize:
-    """Tests for object_size — existence + size probe via `rclone lsf --format=s`.
+    """Exercise object-size and absence probes across local and R2 semantics.
 
-    Present, zero-size, and missing-directory cases are state-based against the
-    fake-local remote. The R2-shaped absent case (empty stdout for a missing
-    key under an existing bucket) stays mock-based; both backends normalize to
-    ``None`` since #1776 made the local backend a first-class compute mode.
+    R2 returns empty stdout for a missing key under an existing bucket; both
+    backends normalize absence to ``None``.
     """
 
     @staticmethod

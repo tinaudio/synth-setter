@@ -17,9 +17,7 @@ DATASET_COMPLETE_FILENAME = "dataset.complete"
 # Dataset card (provenance record of the selected attempts) written by finalize.
 DATASET_CARD_FILENAME = "dataset.json"
 
-# Per-attempt staging suffixes under ``metadata/workers/shards/shard-{id}/``.
-# Filenames are ``{worker_id}-{attempt_uuid}{suffix}``; a Lance attempt is
-# staged-valid only when all of sidecar + stats + ``.valid`` exist (#1776).
+# Per-attempt artifact suffixes for the staging reconciliation protocol — see #1776.
 LANCE_FRAGMENT_SIDECAR_SUFFIX = ".fragment.json"
 LANCE_SHARD_STATS_SUFFIX = ".shard-stats.npz"
 ATTEMPT_VALID_SUFFIX = ".valid"

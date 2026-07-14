@@ -204,10 +204,7 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     for shard in spec.shards:
         assert shard.filename.endswith(shard_suffix)
         if output_format == "lance":
-            # A Lance shard stages a complete attempt: ONE shared {worker}-{attempt}
-            # base carrying sidecar + stats + .valid (+ .rendering), fragment data
-            # under its split (#1776). Per-suffix globs alone could pass on a
-            # mismatched set drawn from different attempt names.
+            # Require one shared attempt identity; independent suffix matches can combine partial attempts — see #1776.
             staging = run_root / "metadata" / "workers" / "shards" / f"shard-{shard.shard_id:06d}"
             staged_names = [p.name for p in staging.iterdir()]
             bases_by_suffix = {
