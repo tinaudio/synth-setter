@@ -10,10 +10,10 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal
 
+from synth_setter.conditioning import ConditioningMode
 from synth_setter.data.lance_datamodule import LanceVSTDataModule
 
 LoaderName = Literal["legacy", "map"]
-ConditioningName = Literal["mel", "m2l"]
 
 
 @dataclass(frozen=True)
@@ -39,7 +39,7 @@ class LoaderBenchmarkResult:
     """
 
     loader: LoaderName
-    conditioning: ConditioningName
+    conditioning: ConditioningMode
     num_workers: int
     batches: int
     elapsed_seconds: float
@@ -52,7 +52,7 @@ def _benchmark_one(
     dataset_root: Path,
     *,
     loader: LoaderName,
-    conditioning: ConditioningName,
+    conditioning: ConditioningMode,
     num_workers: int,
     batch_size: int,
     max_batches: int,

@@ -28,6 +28,7 @@ import torch
 from lance.torch.data import get_safe_loader
 from torch.utils.data import DataLoader
 
+from synth_setter.conditioning import ConditioningMode
 from synth_setter.data.lance_torch import LanceMapDataset, map_dataloader_over
 from synth_setter.data.vst.param_spec_registry import param_specs
 from synth_setter.data.vst_datamodule import (
@@ -381,7 +382,7 @@ class LanceVSTDataModule(VSTDataModule):
         fake: bool = False,
         repeat_first_batch: bool = False,
         predict_file: str | Path | None = None,
-        conditioning: Literal["mel", "m2l"] = "mel",
+        conditioning: ConditioningMode = "mel",
         pin_memory: bool = True,
         *,
         param_spec_name: str,
