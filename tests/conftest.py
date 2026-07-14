@@ -102,8 +102,8 @@ def _validate_surge_dataset(path: Path, num_samples: int) -> None:
     """Assert the generated Surge XT dataset is structurally sound.
 
     Verifies the three required datasets exist with the expected shapes, that no NaN/Inf leaked in
-    from the VST/mel pipeline, and that every audio clip is above the silence floor — surface
-    those failures here rather than letting downstream training crash on opaque NaN losses.
+    from the VST/mel pipeline, and that every audio clip is above the silence floor — surface those
+    failures here rather than letting downstream training crash on opaque NaN losses.
     """
     with h5py.File(path, "r") as f:
         for name in ("audio", "mel_spec", "param_array"):
